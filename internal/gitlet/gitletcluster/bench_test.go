@@ -23,70 +23,23 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// BenchmarkCommitChain is ONE REPOSITORY'S COMMIT CHAIN, end to end: a
-// proposal to the repository's committer, the batch it forms, the publisher's
-// snapshot, decide and append, the committer node's applier, WaitApplied, and
-// the answer read from the push's row — the per-repository ceiling every push
-// meets after its receiving node has stored its bundle, and the term group
-// commit amortises.
-//
-// Every push of an iteration creates a distinct ref with NO PACK: the decide
-// checks refs, protections and limits and never reads an object, so the chain
-// is measured without the object store, whose cost a push pays on the
-// receiving node before it proposes (BenchmarkPushSmall). The brokers fsync
-// every write, production's default stream.sync.
-//
-//   - members=1 is one data node on one embedded broker, proposed to in
-//     process.
-//   - members=3 is the gitletcluster topology, three data nodes of one broker
-//     cluster sharing one machine. via=committer hands each push to the
-//     repository's committer member in process; via=router proposes it
-//     through a member that is not the committer, through its production
-//     estate.Router — the keyed hop every push received elsewhere pays.
-//   - batch is how many pushes are proposed at once and waited for together:
-//     1 is a lone push, 8 a burst, 64 the most one record carries
-//     (gitlet.MaxPushesPerRecord), 256 four records' worth, and 1 024 a full
-//     inbox (gitlet.CommitterInbox) — ns/op of that arm is how long the queue
-//     a committer holds takes to drain.
-//   - repos=16|64 spreads an iteration's pushes over that many repositories
-//     declared up front, so their committers spread over the three members
-//     by rendezvous and every member's publisher and write lane carry several
-//     repositories' records at once — the fleet's figure, against repos=1 at
-//     the same pushes. Spread over repositories every push is a record of its
-//     own (a record carries one repository's pushes), so batch=64 over 64
-//     repositories is sixty-four single-push records at once: what ONE code
-//     log appends a second, the company's ceiling for pushes that do not
-//     share a repository.
-//   - mix=packs and mix=compaction are a batch of 64 whose pushes each carry
-//     a pack — named only: the decide reads no object — and mix=compaction
-//     proposes, beside every batch after compactEvery more have landed, ONE
-//     compaction of every pack landed since the last to the same committer,
-//     which queues it among the pushes and decides it alone (internal/gitlet's
-//     "A compaction merges packs, decided alone"). The two differ by the
-//     compactions alone: what a busy repository's compactions cost its
-//     pushes — a record's slot each, its decide reading its inputs' rows,
-//     beside a push batch's.
-//
-// Each arm reports pushes and records a second, pushes a record, and the p50
-// and p99 of one push's latency, from its proposal to its answer; a
-// mix=compaction arm the compactions it applied too. internal/gitlet's doc
-// records the figures.
-//
-// AN ARM MOVES TO REPOSITORIES DECLARED AFRESH, with the timer stopped,
-// before a batch would take one of its repositories past a bound a push
-// meets — gitlet.MaxRefsPerRepo live refs, or in a mix= arm gitlet.MaxPacksPerRepo
-// live packs — where its pushes would be refused (repo_refs,
-// compaction_behind) and the arm would measure refusals. mix=packs meets the
-// pack bound every thirty-two batches, since nothing merges its packs, and
-// mix=compaction about never, its compactions retiring them as they land: so
-// the pair runs for as long as the benchmark time asks, and still differs by
-// the compactions alone.
+// BenchmarkCommitChain is one repository's commit chain end to end, from the
+// proposal to its committer to the answer read from the push's row (package
+// doc, "The commit chain, measured"). Every push creates a ref with no stored
+// pack, since the decide reads no object, so the object store is not timed;
+// brokers fsync every write. members=3 proposes via=committer in process or
+// via=router through another member's estate.Router; batch runs from a lone
+// push to gitlet.CommitterInbox, a committer's whole queue; repos=N spreads a
+// batch over N repositories, a record each; mix=compaction adds to mix=packs'
+// pack per push one compaction per compactEvery pushes, decided alone
+// (internal/gitlet's "A compaction merges packs, decided alone"), and nothing
+// else. Before a batch would pass a bound (room) an arm moves to fresh
+// repositories, untimed. It reports pushes/s, records/s, pushes/record, p50/p99.
 func BenchmarkCommitChain(b *testing.B) {
 	gitlettest.Quiet(b)
 	b.Run("members=1", func(b *testing.B) {
 		d, declare := soloChain(b)
-		// fresh is one repository declared afresh, its committer the one
-		// data node.
+		// fresh is one repository declared afresh, its committer the one node.
 		fresh := func(b *testing.B) target {
 			return target{repos: declare(b, 1), propose: d.Served().Propose,
 				compact: d.Served().ProposeCompaction}
@@ -112,10 +65,8 @@ func BenchmarkCommitChain(b *testing.B) {
 			}
 			return n
 		}
-		// fresh is one repository declared afresh, its pushes proposed as
-		// via says (c.proposer) and its compactions to its committer: both
-		// asked of each repository again, since rendezvous may give a fresh
-		// one another member.
+		// fresh asks each fresh repository's committer anew: rendezvous may
+		// place it on another member.
 		fresh := func(via string) func(*testing.B) target {
 			return func(b *testing.B) target {
 				repos := clusterRepos(b, c, 1)
@@ -136,9 +87,8 @@ func BenchmarkCommitChain(b *testing.B) {
 					chain(b, gitlet.MaxPushesPerRecord, fresh("committer"), appends, newMix(compacting))
 				})
 		}
-		// A FULL INBOX: more than one record holds, so records fill to
-		// MaxPushesPerRecord, and at CommitterInbox the whole queue a
-		// committer holds — an iteration's ns/op is its drain.
+		// Past one record's worth, up to a full inbox: at CommitterInbox an
+		// iteration's ns/op is a whole committer queue's drain.
 		for _, batch := range []int{4 * gitlet.MaxPushesPerRecord, gitlet.CommitterInbox} {
 			b.Run(fmt.Sprintf("via=committer/batch=%d", batch), func(b *testing.B) {
 				chain(b, batch, fresh("committer"), appends, nil)
@@ -146,10 +96,8 @@ func BenchmarkCommitChain(b *testing.B) {
 		}
 		for _, arm := range []struct{ batch, repos int }{{8, 1}, {8, 16}, {64, 16}, {64, 64}} {
 			b.Run(fmt.Sprintf("via=router/batch=%d/repos=%d", arm.batch, arm.repos), func(b *testing.B) {
-				// THROUGH A ROUTER EVERY REPOSITORY'S COMMITTER IS ASKED
-				// FROM: one member proposes every push, so the pushes of a
-				// repository it commits for itself are answered in process
-				// and the rest cross the wire, as a receiving node's are.
+				// One member proposes every push: those it commits for
+				// itself answer in process, the rest cross the wire.
 				chain(b, arm.batch, func(b *testing.B) target {
 					return target{repos: clusterRepos(b, c, arm.repos),
 						propose: c.members[0].router.Load().Code().Propose}
@@ -159,26 +107,22 @@ func BenchmarkCommitChain(b *testing.B) {
 	})
 }
 
-// target is the repositories an arm pushes to and how it proposes to them:
-// its pushes through propose, and a mix=compaction arm's compactions of
-// repos[0] through compact, each to the committer the arm names.
+// target is the repositories an arm pushes to, its pushes going through
+// propose and a mix=compaction arm's compactions of repos[0] through compact.
 type target struct {
 	repos   []string
 	propose func(context.Context, gitlet.Proposal) (gitlet.ProposeResult, error)
 	compact func(context.Context, gitlet.CompactionProposal) (gitlet.CompactResult, error)
 }
 
-// compactEvery is a mix=compaction arm's cadence: one compaction for every 300
-// pushes landed — internal/gitlet/compact's steady arm's rate, a pass of the
-// home's compactor a minute at 300 pushes a minute — merging every pack those
-// pushes landed, as a pass whose roll is due merges what the minute added.
+// compactEvery is a mix=compaction arm's cadence, one compaction of every pack
+// landed per 300 pushes: internal/gitlet/compact's steady arm, a compactor
+// pass a minute at 300 pushes a minute.
 const compactEvery = 300
 
-// compactionMix is a mix= arm's pushes and compactions on the ONE repository
-// it is moved to: every push carries a pack, and where it compacts —
-// mix=compaction — the packs its pushes landed since the last compaction, and
-// the newest position one landed at, are proposed through compact once
-// compactEvery of them have.
+// compactionMix is a mix= arm's state on its one repository: every push
+// carries a pack and, when compacting, the packs landed since the last
+// compaction are proposed through compact once compactEvery have landed.
 type compactionMix struct {
 	compacting bool
 
@@ -187,9 +131,7 @@ type compactionMix struct {
 	compact func(context.Context, gitlet.CompactionProposal) (gitlet.CompactResult, error)
 	landed  []string
 	seen    statelog.Position
-	// live is the packs live in repo as the decide counts them for the pack
-	// bound: one a push that landed, less every pack a compaction retired,
-	// plus its output.
+	// live is repo's live packs as the decide counts them for the pack bound.
 	live int
 	done int
 }
@@ -200,9 +142,8 @@ func newMix(compacting bool) *compactionMix {
 	return &compactionMix{compacting: compacting}
 }
 
-// moveTo points the mix at t's one repository, declared afresh and holding no
-// pack: what it had landed was the last repository's, which it merges no
-// more.
+// moveTo points the mix at t's one fresh repository, dropping what the last
+// one landed.
 func (m *compactionMix) moveTo(t target) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -239,10 +180,9 @@ func (m *compactionMix) land(packID string, at statelog.Position) {
 	}
 }
 
-// due is the compaction of every pack landed since the last, once
-// compactEvery have — planned at the newest position one landed at, its one
-// output holding every object of its inputs — and nil before, or in a mix
-// that does not compact.
+// due is the compaction of every pack landed since the last, planned at the
+// newest position one landed at, once compactEvery have; nil before then or
+// in a mix that does not compact.
 func (m *compactionMix) due() func(context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -271,10 +211,9 @@ func (m *compactionMix) due() func(context.Context) error {
 	}
 }
 
-// benchPack is pack id's row as a mix= arm names it: objects
-// objects, its bundle's sizes the exact ones a bundle of that many has
-// (gitlet.PackRef.Check), under a key minted now — named and never stored,
-// since a decide reads no object.
+// benchPack is pack id's row holding objects objects, with the sizes
+// gitlet.PackRef.Check demands of that many; named, never stored, since a
+// decide reads no object.
 func benchPack(id string, objects int64) *gitlet.PackRef {
 	return &gitlet.PackRef{PackID: id, Object: objstore.KeyAt(time.Now()), Hash: objstore.HashOf([]byte(id)),
 		Size:       32*objects + gitlet.IndexBytesFor(objects) + gitlet.ReverseBytesFor(objects),
@@ -282,13 +221,11 @@ func benchPack(id string, objects int64) *gitlet.PackRef {
 		GitChecksum: randomOID(), Objects: objects}
 }
 
-// chain is one arm: per iteration, batch pushes proposed at once to a target
-// fresh declares — the k-th to repos[k mod len(repos)] — each creating a ref
-// of its own, and waited for until every one is applied with its command ok.
-// With a mix, every push carries a pack and the mix's due compaction is
-// proposed beside the batch, waited for with it. A batch the target has no
-// room left for (room) goes to one fresh declares in its place, declared with
-// the timer stopped.
+// chain is one arm: per iteration, batch pushes, each creating its own ref,
+// proposed at once round robin over the target's repositories and waited for
+// until all apply ok, with a mix's due compaction beside them. A batch the
+// target has no room for goes to a fresh target, declared with the timer
+// stopped.
 func chain(b *testing.B, batch int, fresh func(*testing.B) target, appends func() int, mix *compactionMix) {
 	b.Helper()
 	var (
@@ -296,7 +233,7 @@ func chain(b *testing.B, batch int, fresh func(*testing.B) target, appends func(
 		took []time.Duration
 	)
 	t := renew(b, fresh, batch, mix)
-	// pushes is the arm's, which names its refs; made is t's, which fills it.
+	// pushes counts the arm's, naming its refs; made counts t's, filling it.
 	pushes, made := 0, 0
 	before := appends()
 	for b.Loop() {
@@ -306,7 +243,7 @@ func chain(b *testing.B, batch int, fresh func(*testing.B) target, appends func(
 			b.StartTimer()
 		}
 		var wg sync.WaitGroup
-		// The batch's pushes, and the slot past them the mix's compaction's.
+		// One slot per push, plus the mix's compaction's.
 		errs := make([]error, batch+1)
 		propose := t.propose
 		for k := range batch {
@@ -365,16 +302,14 @@ func chain(b *testing.B, batch int, fresh func(*testing.B) target, appends func(
 	}
 }
 
-// renew is a target fresh declares, with the mix moved onto it: one with room
-// for a batch, or the arm fails, since a batch that passes a bound on
-// repositories holding nothing is refused however the arm runs.
+// renew is a target fresh declares, the mix moved onto it; the arm fails if
+// even an empty target has no room for a batch, which no renewal would cure.
 func renew(b *testing.B, fresh func(*testing.B) target, batch int, mix *compactionMix) target {
 	b.Helper()
 	t := fresh(b)
 	if mix != nil {
-		// ONE REPOSITORY A MIX: its compactions retire what it landed, and
-		// a committer answers a compaction naming another repository's
-		// packs stale.
+		// One repository: a committer answers a compaction naming another
+		// repository's packs stale.
 		if len(t.repos) != 1 {
 			b.Fatalf("a mix= arm pushes to one repository, and this one declares %d", len(t.repos))
 		}
@@ -388,12 +323,11 @@ func renew(b *testing.B, fresh func(*testing.B) target, batch int, mix *compacti
 	return t
 }
 
-// room reports whether t's repositories, holding made of the arm's pushes,
-// take a batch more with every push applied: each repository's live refs —
-// one a push, round robin — at most gitlet.MaxRefsPerRepo, and with a mix its
-// live packs at most gitlet.MaxPacksPerRepo, counted as though the batch's
-// compaction lands last. Past either bound a push is refused, repo_refs or
-// compaction_behind, and the arm would measure refusals.
+// room reports whether t's repositories, holding made pushes, take a batch
+// more within gitlet.MaxRefsPerRepo refs each (one a push, round robin) and,
+// with a mix, gitlet.MaxPacksPerRepo live packs, the batch's compaction
+// counted as landing last. Past either a push is refused (repo_refs,
+// compaction_behind) and the arm would measure refusals.
 func room(t target, made, batch int, mix *compactionMix) bool {
 	n := len(t.repos)
 	if (made+batch+n-1)/n > gitlet.MaxRefsPerRepo {
@@ -412,8 +346,7 @@ func soloChain(b *testing.B) (*gitlettest.DataNode, func(b *testing.B, n int) []
 	if err != nil {
 		b.Fatalf("open the broker: %v", err)
 	}
-	// REGISTERED FIRST, SO IT RUNS LAST: the data node's teardown stops it
-	// before its broker goes.
+	// Registered first so it runs last, after the data node's teardown.
 	b.Cleanup(func() { _ = q.Stop(context.Background()) })
 	d := gitlettest.StartDataNode(b, gitlettest.DataOptions{ID: "solo", Queue: q, Dir: dir, LogBytes: codeLogBytes})
 	base := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
@@ -438,9 +371,9 @@ func soloChain(b *testing.B) (*gitlettest.DataNode, func(b *testing.B, n int) []
 	}
 }
 
-// clusterRepos declares n fresh repositories on c and answers their ids, every
-// member level with the declarations and drained, so each committer decides
-// its first push from a copy that answers.
+// clusterRepos declares n fresh repositories on c and answers their ids once
+// every member has drained the declarations, so each committer decides its
+// first push from a copy that answers.
 func clusterRepos(b *testing.B, c *cluster, n int) []string {
 	b.Helper()
 	declared := make([]gitlet.Declared, n)
@@ -495,31 +428,16 @@ func quantile(sorted []time.Duration, q float64) float64 {
 	return float64(sorted[rank-1]) / float64(time.Millisecond)
 }
 
-// BenchmarkEngineWrite is internal/gitlet/host's BenchmarkEngineWrite where the
-// route a write takes to its repository's home is the production one between
-// members — its route= arms, which one data node cannot have: one seat's
-// commit of one file at a time onto a branch of its own, floored at its last
-// write, asked IN PROCESS AT THE HOME (route=home: the home member's own
-// router, whose walk runs the write on its own git half) and THROUGH ANOTHER
-// MEMBER'S ROUTER (route=router: the walk asks the home over the broker, as a
-// seat's turn on any other node does), each timed from the call a code write
-// tool makes of Gitlet on its member (estate.CodeSeam.GitWrite) to its
-// answer — the push's row applied and its pack adopted — and reported as its
-// p50 and p99. On a cluster every member is a data node and a Gitlet node, so
-// the home is the repository's committer too (gitlettest's F40).
-//
-// FROM GITLET'S CALL, NOT THE TOOL'S: what the tool adds around its
-// write — its caller, its arguments, the repository's resolution at the log's
-// head — is the host benchmark's, and the same on either route, since every
-// member holds the data copy that resolution reads; what the routes differ by
-// is the walk's hop to the home, which is all this arm is for.
-//
-// The object store is the broker's own bucket (natsobj): an in-process
-// store's figure, as every one this benchmark gives is. The three members
-// share one machine's cores and its one disk, every write fsynced, as
-// BenchmarkCommitChain's do. A SOLO benchmark (internal/solo): it runs alone,
-// and the host's arms, not these, decide the budgets an engine write is held
-// to (estate.GitWriteAttempt's terms).
+// BenchmarkEngineWrite is internal/gitlet/host's BenchmarkEngineWrite over the
+// production route between members (package doc, "An engine write's route"):
+// one seat's commit of one file at a time onto its own branch, asked in
+// process at the home (route=home) or through another member's router, which asks the home
+// over the broker (route=router). Each is timed from estate.CodeSeam.GitWrite
+// to the push applied and its pack adopted, not from the tool, whose part is
+// the same on either route. The home is the committer too (gitlettest's F40);
+// the object store is the broker's bucket, every write fsynced. A solo
+// benchmark (internal/solo): the host's arms, not these, decide an engine
+// write's budgets (estate.GitWriteAttempt).
 func BenchmarkEngineWrite(b *testing.B) {
 	gitlettest.Quiet(b)
 	c := startClusterOf(b, "nats", js.Config{SyncAlways: true})
@@ -539,8 +457,7 @@ func BenchmarkEngineWrite(b *testing.B) {
 				who: gitlet.Principal{Kind: gitlet.PrincipalAgent, Seat: gitlettest.FixtureAlice, Run: gitlet.RunProvenance{
 					TurnID: statelog.NewOpID(time.Now(), ""), WorkBackend: "native", WorkKey: "ENG-1234",
 					Model: "fixture-model-2031"}}}
-			// THE BRANCH'S ROOT, with the timer stopped: the arm's first
-			// write creates its branch, and every timed one moves it.
+			// The branch's root, untimed: only moves of the branch are timed.
 			w.land(b)
 			var took []time.Duration
 			for b.Loop() {

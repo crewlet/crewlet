@@ -84,13 +84,11 @@ func (rc *repoCase) chain(n Node) cache.Chain {
 	return ch
 }
 
-// LY8: a repository's publication is placed on the Gitlet node whose advertised
-// background budget holds its maintenance, whatever its home: with two
-// members advertising exactly the small repository's charge and one 64 GiB,
-// every publication of the large repository, whose charge passes theirs, is
-// the large member's — which every other member installs — while the small
-// repository, whose charge every member holds, stays with its home, the
-// maintainer it had while every member advertised alike.
+// LY8: a publication is placed on the Gitlet node whose advertised background
+// budget holds its maintenance, whatever its home: with two members advertising
+// exactly the small repository's charge and one 64 GiB, the large repository's
+// publications are the large member's, which every other member installs,
+// while the small repository, which every member holds, stays with its home.
 func aLargeNodePublishesForEveryNode(t *testing.T, c Cluster) {
 	members := c.Members()
 	for _, m := range members {

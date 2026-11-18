@@ -22,8 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/query"
 )
 
-// logQ and blameQ are a person's reads of repo's history and of a file's
-// blame, asked as the other reads here are.
+// logQ and blameQ are a person's reads of repo's history and of a file's blame.
 func logQ(repo string, l gitlet.LogQuery) gitlet.GitQuery {
 	return gitlet.GitQuery{Kind: gitlet.GitLog, RepoID: repo, Asker: person, Home: true, Log: &l}
 }
@@ -32,12 +31,11 @@ func blameQ(repo string, b gitlet.BlameQuery) gitlet.GitQuery {
 	return gitlet.GitQuery{Kind: gitlet.GitBlame, RepoID: repo, Asker: person, Home: true, Blame: &b}
 }
 
-// historyDay is the first hour of the histories these cases date their
-// commits from.
+// historyDay is the hour these cases date their histories from.
 var historyDay = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// at is the person's git dating the commits it makes hour h of historyDay, as
-// author and committer.
+// at is the person's git dating its commits, as author and committer, hour h
+// of historyDay.
 func (x *fixture) at(h int) *gittest.Client {
 	d := historyDay.Add(time.Duration(h) * time.Hour).Format(time.RFC3339)
 	return x.p.Git().Env("GIT_AUTHOR_DATE="+d, "GIT_COMMITTER_DATE="+d)
@@ -54,20 +52,15 @@ func commits(pages []gitlet.GitAnswer) []string {
 	return out
 }
 
-// A LOG LISTS A PATH'S HISTORY NEWEST FIRST — git's own `log --topo-order` of
-// the same commit and path, exactly, page after page: a renamed file (its
-// commits since the rename, as git keeps them), its old name (its commits
-// before, the rename among them), a directory, the whole history, a since —
-// and one a nanosecond past a commit's date, which that commit, dated in
-// whole seconds, is before — and a history read two commits a page, every
-// page's `s:` cursor resuming where the last ended. Every commit carries its
-// parents, its author as it states them, its dates and its subject, and is
-// named with the push that introduced it; the last page is complete, and
-// every page's Scanned is the commits it covers.
+// A LOG LISTS A PATH'S HISTORY NEWEST FIRST, exactly git's `log --topo-order`
+// of the same commit and path: a renamed file and its old name, a directory,
+// the whole history, a since and one a nanosecond past a whole-second commit
+// date, and two a page through `s:` cursors. Every commit carries its parents,
+// author, dates, subject and introducing push; only the last page is
+// complete, and each page's Scanned is the commits it covers.
 //
-// Mutation: the skip left out of the walk (every page read from the start) →
-// the paged arm red; Since truncated to its second (since.Unix()) → the
-// since-inside-a-second arm lists the commit dated at that second, red.
+// Mutation: no skip in the walk → the paged arm red; Since truncated to its
+// second → the since-inside-a-second arm lists the commit at that second, red.
 func TestALogListsAPathsHistoryNewestFirst(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -97,8 +90,8 @@ func TestALogListsAPathsHistoryNewestFirst(t *testing.T) {
 		{"the whole history", gitlet.LogQuery{Rev: head}, []string{head}},
 		{"since", gitlet.LogQuery{Rev: head[:9], Since: since},
 			[]string{"--max-age=" + strconv.FormatInt(since.Unix(), 10), head}},
-		// A commit is dated in whole seconds, so one dated in the second a
-		// Since falls inside of was committed before it.
+		// Commits are dated in whole seconds: one in the Since's second is
+		// before it.
 		{"since inside a second", gitlet.LogQuery{Rev: head, Since: since.Add(time.Nanosecond)},
 			[]string{"--max-age=" + strconv.FormatInt(since.Unix()+1, 10), head}},
 		{"paged by twos", gitlet.LogQuery{Rev: head, Limit: 2}, []string{head}},
@@ -149,12 +142,10 @@ func TestALogListsAPathsHistoryNewestFirst(t *testing.T) {
 	}
 }
 
-// A LOG'S GREP IS A LITERAL MATCHED IN GO: `a.b` keeps the message that says
-// a.b and not the one that says axb, as a regular expression would; it is
-// folded, so `abc` keeps "The ABC of it"; a message of a mebibyte holding the
-// word at its very end is found; and nothing grep-shaped reaches git's
-// command line, which carries the format with the message in it and nothing
-// of the literal.
+// A LOG'S GREP IS A LITERAL MATCHED IN GO, case-folded: `a.b` keeps a.b but
+// not axb, as a regular expression would; `abc` keeps "The ABC of it"; a word
+// ending a mebibyte message is found; and nothing of the literal reaches
+// git's command line.
 //
 // Mutation: --grep= handed to git → the a.b arm keeps axb too, red.
 func TestALogGrepIsALiteralMatchedInGo(t *testing.T) {
@@ -202,21 +193,16 @@ func TestALogGrepIsALiteralMatchedInGo(t *testing.T) {
 	}
 }
 
-// A GREP PAGE ENDS AT ITS LIMIT-TH MATCH, never walking on to find one more:
-// a history whose two newest commits match and whose six older ones do not,
-// read two a page through a pool that answers every walk git ran to its end
-// as one its budget cut (budgetEnds), is a page that ended its own walk at the
-// second match — those two commits, Scanned 2, Next s:2, not complete — and
-// no walk reached the history's end, so the page is the walk's own and the
-// memo keeps it. A look-ahead for a third match would walk every later
-// message to the root, or to the read's whole budget of git, for a page it
-// had already filled, and be cut there, with nothing memoized to spare the
-// next ask. The page after it, on the node's own pool, is the empty complete
-// one that covers the rest.
+// A GREP PAGE ENDS AT ITS LIMIT-TH MATCH, never walking on for one more: two
+// matching commits over six that don't, read two a page through a pool that
+// reports every walk run to its end as budget-cut (budgetEnds), give a page
+// its own walk ended at the second match (Scanned 2, Next s:2, not complete),
+// which the memo keeps. A look-ahead would walk to the root, or the read's
+// whole git budget, for a full page and be cut there, memoizing nothing. The
+// next page, on the node's own pool, is the empty complete rest.
 //
-// Mutation: the look-ahead kept for a grep (the page ended only at a match
-// past its limit) → the walk runs to the root and the pool cuts it: Next s:8,
-// a walk counted, not memoized, red.
+// Mutation: the look-ahead kept for a grep → the walk runs to the root and the
+// pool cuts it: Next s:8, a walk counted, not memoized, red.
 func TestAGrepPageEndsAtItsLimitthMatch(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -255,12 +241,11 @@ func TestAGrepPageEndsAtItsLimitthMatch(t *testing.T) {
 	}
 }
 
-// A LOG CANNOT BE FORGED BY A MESSAGE: a pushed commit whose subject and body
-// hold \x01 and a whole record's worth of a commit git never made — the id,
-// the parents, an author, a committer spelling the engine's convention, the
-// dates, a subject, each between the separator a record framed by \x01 would
-// have used — is listed as the one commit it is, its subject its own, and the
-// pages hold exactly git rev-list's ids for the path.
+// A LOG CANNOT BE FORGED BY A MESSAGE: a commit whose subject and body hold a
+// whole \x01-framed record of a commit git never made (id, parents, author, a
+// committer in the engine's convention, dates, subject) is listed as the one
+// commit it is, its subject its own, and the pages hold exactly git
+// rev-list's ids for the path.
 //
 // Mutation: the walk's records split on \x01 → the forged commit listed, red.
 func TestALogCannotBeForgedByAMessage(t *testing.T) {
@@ -298,11 +283,8 @@ func TestALogCannotBeForgedByAMessage(t *testing.T) {
 }
 
 // A LOG'S AUTHORS AND COMMITTERS ARE THE COMMITS' OWN, and so are a blame's: a
-// `.mailmap` at the default branch mapping the person to another name renames
-// nobody in a history read from any commit, nor in a blame — git blame would
-// read it, in a bare repository, without the configuration the read gives it
-// (measured on 2.56.0: "Mapped Name" without mailmap.blob emptied, the
-// commit's own with it).
+// `.mailmap` on the default branch renames nobody. In a bare repository git
+// blame reads it unless the read empties mailmap.blob.
 //
 // Mutation: the blame without mailmap.blob emptied → the mapped name, red.
 func TestAHistorysAuthorsAreTheCommitsOwn(t *testing.T) {
@@ -314,12 +296,10 @@ func TestAHistorysAuthorsAreTheCommitsOwn(t *testing.T) {
 	x.push(gitlettest.RepoName, "main")
 	head := strings.TrimSpace(x.git("rev-parse", "HEAD"))
 	repo := x.repo(gitlettest.RepoName)
-	// THE COPY LEVEL WITH THE LOG, its refs written: HEAD resolves to the
-	// branch the .mailmap is on, as it does on every node once a round has
-	// brought the push's ref. A read straight after the push, on the node
-	// that took it, finds the pack the push adopted (cache.Adopt) before any
-	// round writes the ref, so its HEAD names no commit, no mailmap is read
-	// and the case would hold nothing.
+	// Synced, so HEAD names the branch holding the .mailmap: straight after
+	// the push, the pushing node serves the adopted pack (cache.Adopt) before
+	// a round writes the ref, HEAD names no commit, no mailmap is read, and
+	// the case holds nothing.
 	x.synced(0, repo)
 	s := x.server(0, query.Options{})
 	for _, c := range mustRead(t, s, logQ(repo, gitlet.LogQuery{Rev: head})).Log.Commits {
@@ -340,15 +320,13 @@ func TestAHistorysAuthorsAreTheCommitsOwn(t *testing.T) {
 	}
 }
 
-// A LOG USES THE CHANGED-PATH FILTERS: the very walk a read runs — its
-// argument list, the path a literal pathspec after `--` — run by the test's
-// own git over the copy once its maintenance has written a commit-graph, with
-// a trace file of its own (the pool's trace is its fd 3, which decodes no data
-// event), reports bloom statistics naming commits the filters ruled out.
+// A LOG USES THE CHANGED-PATH FILTERS: the read's own walk (the path a
+// literal pathspec after `--`), rerun by the test's git over the
+// commit-graphed copy with its own trace file (the pool traces to fd 3, which
+// decodes no data event), reports bloom statistics ruling commits out.
 //
-// Mutation: the path given with glob magic in place of the literal
-// (`:(glob)`), which git reads the same path through and serves from no
-// filter → none ruled out, red.
+// Mutation: the path given as `:(glob)`, the same path to git but served from
+// no filter → none ruled out, red.
 func TestALogUsesTheChangedPathFilters(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -397,9 +375,8 @@ func TestALogUsesTheChangedPathFilters(t *testing.T) {
 	}
 }
 
-// graphed is the i-th Gitlet node's copy of repo, brought to the log's head once
-// its maintenance has written the copy's commit-graph — its own, or the tip
-// over an installed chain — answering its directory.
+// graphed is the directory of the i-th Gitlet node's copy of repo, synced once
+// maintenance has written its commit-graph, whole or a chain.
 func (x *fixture) graphed(i int, repo string) string {
 	x.t.Helper()
 	c := x.f.Nodes()[i].Cache()
@@ -423,15 +400,13 @@ func (x *fixture) graphed(i int, repo string) string {
 	}
 }
 
-// A LOG THE READ'S BUDGET ENDS ANSWERS WHAT IT FOUND: a walk the pool ends
-// past its budget (a pool answering every log so) is a page of the commits
-// read, with a Next past them and never complete, kept out of the memo — the
-// same page read again runs the walk again; and a walk its budget ended before
-// git wrote one commit's record is too large, naming the narrowing.
+// A LOG THE READ'S BUDGET ENDS ANSWERS WHAT IT FOUND: a cut walk is a page of
+// the commits read, with a Next past them, never complete and never
+// memoized; one cut before git wrote a record is too large, naming the
+// narrowing.
 //
-// Mutations: the cut page memoized → the second read answered from the memo,
-// red; a cut page answered complete → red; a walk that read no commit
-// answered as an empty page (the cut taken at no commit scanned) → red.
+// Mutations: the cut page memoized, or answered complete → red; a walk that
+// read no commit answered as an empty page → red.
 func TestALogTheBudgetEndsAnswersWhatItFound(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -459,10 +434,9 @@ func TestALogTheBudgetEndsAnswersWhatItFound(t *testing.T) {
 	}
 }
 
-// budgetEnds is a query.Pool on which every log runs whole and then answers
-// that its budget ended it, as a pool answers a run killed at its deadline
-// after its output was read — or, once early is set, answers so before git
-// wrote anything, as it answers a run killed before its first record.
+// budgetEnds is a query.Pool that runs every log whole, then reports it killed
+// at its deadline after its output was read; with early set, it reports the
+// kill before git wrote anything.
 type budgetEnds struct {
 	query.Pool
 	walks atomic.Int64

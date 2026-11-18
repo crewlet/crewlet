@@ -24,10 +24,9 @@ func codeFilesQ(repo, commit, file string) gitlet.GitQuery {
 
 // A COMMIT'S DEPLOY AND DEPENDENCY FILES ARE LISTED BY THE CLOSED LIST, AND
 // ONLY A FILE ON IT IS READ: the listing holds the regular files the list
-// admits, in path order, at the commit asked, never a file off it (an .env, a
-// values file, source code) and never a symbolic link at a listed path; one
-// listed file is read whole, by its exact bytes; and a file off the list is
-// refused before any git runs, whatever the commit holds there.
+// admits, in path order, never a file off it (an .env, a values file, source
+// code) nor a symbolic link at a listed path; a listed file is read by its
+// exact bytes; and a file off the list is refused before any git runs.
 //
 // Mutation: drop the Classify call from codeFilesList, and the listing names
 // the .env file.

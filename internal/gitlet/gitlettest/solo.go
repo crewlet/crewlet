@@ -38,9 +38,8 @@ import (
 type Node interface {
 	// ID is the node's id.
 	ID() string
-	// URL is the base URL of the node's server, which serves the host's
-	// three git routes behind the API's guard: Basic on a git route, and the
-	// 401 challenge git answers with its credential.
+	// URL is the base URL of the node's server: the host's three git routes
+	// behind the API's guard (Basic, and the 401 challenge git answers).
 	URL() string
 	// Client is the node's server's own HTTP client, for a request a case
 	// builds by hand (httpxtest's rule: a double's client is its server's).
@@ -48,30 +47,28 @@ type Node interface {
 	Host() *host.Server
 	Cache() *cache.Cache
 	Pool() *gitproc.Pool
-	// Metrics is the recorder the node's pool, cache and host record to —
-	// one, as the engine's are.
+	// Metrics is the one recorder the node's pool, cache and host share, as
+	// the engine's do.
 	Metrics() *metrics.Recorder
 	// CacheDir is the node's cache directory.
 	CacheDir() string
 	// Read is a read of Gitlet's rows, as the API's code reads ask.
 	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
-	// GitRead is a read of a repository by object id, answered by THIS
-	// node's own query server over its cache, as the query names it — its
-	// Home stamp included: a node holding no copy fills one only for a read
-	// stamped its walk's home (gitlet.GitQuery.Home), so a case asking one
-	// node directly as the walk asks its first stamps it. [Fleet.GitRead] is
-	// the read through the fleet's routing.
+	// GitRead is a read by object id answered by THIS node's query server
+	// over its cache, Home stamp included: a node holding no copy fills one
+	// only for a read stamped its walk's home (gitlet.GitQuery.Home), so a
+	// case asking a node directly as a walk asks its first stamps it.
+	// [Fleet.GitRead] reads through the fleet's routing.
 	GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error)
 	// Share is the node's seat git-work share, which its query server's
 	// reads take their units of.
 	Share() *gitlet.GitShare
-	// Compactor is the node's compactor, built as the engine builds a Gitlet
-	// node's and never started: a case drives its Compact or its Poll, its
-	// Publish or its PublishPass, its Expunge or its ExpungePass.
+	// Compactor is the node's compactor, built as the engine builds it and
+	// never started: a case drives its Compact, Poll, Publish, PublishPass,
+	// Expunge or ExpungePass.
 	Compactor() *compact.Compactor
-	// Maintainers is what the node's compactor asks of whether it is a
-	// repository's maintainer (GitOptions.Maintainers): which node a case's
-	// publication is driven on.
+	// Maintainers is what the node's compactor asks about maintainership
+	// (GitOptions.Maintainers): which node a case drives a publication on.
 	Maintainers() compact.Maintainers
 }
 
@@ -82,34 +79,33 @@ type Fleet interface {
 	Declare(t testing.TB, repos ...gitlet.Declared)
 	// Remove deletes the named repository at the next activation.
 	Remove(t testing.TB, name string)
-	// Purge runs code-retention passes with the shortest retention there is
-	// — the domain refuses a zero one — until every purge they began is
-	// done.
+	// Purge runs code-retention passes at the shortest retention the domain
+	// admits (it refuses zero) until every purge they began is done.
 	Purge(t testing.TB)
 	// Collect runs one collection over the code estate, its clock a day and
 	// an hour on, so every object past its grace is judged.
 	Collect(t testing.TB) collect.CollectionReport
 	// CollectAt runs one collection over the code estate with the
-	// collector's clock at at — every table the code domain declares
+	// collector's clock at at, every table the code domain declares
 	// shielding what its rows name.
 	CollectAt(t testing.TB, at time.Time) collect.CollectionReport
-	// Audit runs the collector's audit over the code estate — what raises
-	// objects_missing — handed every table the code domain declares.
+	// Audit runs the collector's audit (what raises objects_missing) over
+	// the code estate, handed every table the code domain declares.
 	Audit(t testing.TB) collect.AuditReport
-	// Retain runs ONE code-retention pass with its clock at now — what a
-	// retired pack's grace and a deletion's age are judged by — so a case
+	// Retain runs ONE code-retention pass with its clock at now (which a
+	// retired pack's grace and a deletion's age are judged by), so a case
 	// moves a grace without moving the broker.
 	Retain(t testing.TB, now time.Time) gitlet.RetentionReport
 	// Token is a token bound to the human seat person; "" is one bound to
 	// nobody.
 	Token(t testing.TB, person string) string
-	// Runs is the fleet's executors' rows — the one store every Gitlet
-	// node's host admits a coding box by (NewBox) — which a case launches,
-	// ends and relaunches runs on.
+	// Runs is the fleet's executors' rows, the one store every host admits
+	// a coding box by (NewBox), on which a case launches, ends and
+	// relaunches runs.
 	Runs() *FixtureRuns
-	// ClientGit is the git every person a case makes runs ([NewPerson]): the
-	// PATH's, held to the client floor, unless the fleet names another (the
-	// floors' arm names the client floor's own build).
+	// ClientGit is the git every person a case makes runs ([NewPerson]):
+	// the PATH's, held to the client floor, unless the fleet names another
+	// (the floors' arm names the client floor's own build).
 	ClientGit() string
 	// Faults is the fleet's fault script, shared across restarts.
 	Faults() *gitletfault.Script
@@ -123,9 +119,9 @@ type Fleet interface {
 	// PauseApplier stops the data node's applier until resume.
 	PauseApplier(t testing.TB, node string) (resume func())
 	// Level waits until the data node's rows hold every record the code
-	// log held when it was asked ([DataNode.Level]): what a case awaits
-	// once it has resumed an applier, before it asks anything of the rows
-	// that applier is catching up to.
+	// log held when asked ([DataNode.Level]): what a case awaits after
+	// resuming an applier, before it reads the rows the applier catches up
+	// to.
 	Level(ctx context.Context, node string) error
 	// Objects is the object store's backend.
 	Objects() objstore.Backend
@@ -141,55 +137,49 @@ type Fleet interface {
 	// name.
 	Rows(ctx context.Context, name string, fresh statelog.Freshness) (Rows, error)
 	// State is one page of a repository's snapshot, read through the data
-	// nodes as a Gitlet node's cache reads one — a delta's retired phase among
-	// what it serves, which Rows does not carry.
+	// nodes as a Gitlet node's cache reads one: it serves a delta's retired
+	// phase, which Rows does not carry.
 	State(ctx context.Context, q gitlet.StateQuery) (gitlet.RepoSnapshot, error)
-	// Propose is a push proposed to the repository's committer through the
-	// data nodes, as a Gitlet node's host proposes one: for a case that names
-	// the packs of a fixture it built and stored itself, a person's git
-	// paying for none of them.
+	// Propose proposes a push to the repository's committer through the
+	// data nodes, as a host does: for a case naming the packs of a fixture
+	// it built and stored itself, no person's git paying for them.
 	Propose(ctx context.Context, p gitlet.Proposal) (gitlet.ProposeResult, error)
 	// PushOutcome is what became of one push, read at its record's position
-	// through the data nodes, as a git node's host reads the outcome of one
-	// it was answered pending: for a case whose own proposal was answered so
-	// ([proposeLanded]).
+	// through the data nodes as a host reads one it was answered pending:
+	// for a case whose own proposal was answered so ([proposeLanded]).
 	PushOutcome(ctx context.Context, q gitlet.OutcomeQuery) (gitlet.PushOutcome, error)
 	// Queued is how many proposals wait in repoID's queue at its committer,
-	// across the fleet's data nodes (gitlet.Committer.Queued): what a case that
-	// holds a batch waits on before it lets the batch go, so that the next
-	// batch is every proposal queued behind it.
+	// across the data nodes (gitlet.Committer.Queued): a case holding a
+	// batch waits on it before letting the batch go, so the next batch is
+	// every proposal queued behind.
 	Queued(repoID string) int
-	// Expunge is an expunge proposal asked of the repository's committer
-	// through the data nodes — a person's purge request, as
-	// code_purge_unreachable asks one, or a begin or a commit, as a Gitlet
-	// node's compactor proposes them — for a case that asks a purge and
-	// drives the maintainer's passes itself (Node.Compactor).
+	// Expunge is an expunge proposal to the repository's committer through
+	// the data nodes: a person's purge request (as code_purge_unreachable
+	// asks) or a compactor's begin or commit, for a case driving the
+	// maintainer's passes itself (Node.Compactor).
 	Expunge(ctx context.Context, p gitlet.ExpungeProposal) (gitlet.ExpungeResult, error)
 	// StopGit stops one Gitlet node as the engine's graceful stop does, its
 	// cache's directory kept, while the rest of the fleet runs on; StartGit
 	// starts it again over that directory.
 	StopGit(t testing.TB, node string)
 	StartGit(t testing.TB, node string)
-	// GitRead is a read of a repository by object id through the fleet's
-	// routing, as a seat's tool asks one: the production estate router,
-	// asking the Gitlet nodes — each serving its git lane on the broker, as the
-	// engine serves one — in the repository's rendezvous order, its home
-	// first (ADR-0089), and stamping the walk's first attempt home itself.
+	// GitRead is a read by object id through the fleet's routing, as a
+	// seat's tool asks one: the production estate router asking the Gitlet
+	// nodes' git lanes on the broker in the repository's rendezvous order,
+	// home first (ADR-0089), stamping the walk's first attempt home.
 	GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error)
 	// Write is an engine write (ADR-0092) through the fleet's routing, as a
 	// seat's or a person's tool asks one: the production estate router
-	// asking the Gitlet nodes — each serving its git writes' lane on the
-	// broker, as the engine serves one — in the repository's rendezvous
-	// order, its home first (ADR-0089), the walk stamping its first attempt
-	// home itself (gitlet.EngineWrite.Home) and asking the next Gitlet node the
-	// same write where one ran nothing or went silent (code.git_write).
+	// asking the Gitlet nodes' git-write lanes in rendezvous order, home
+	// first (ADR-0089), stamping the first attempt home
+	// (gitlet.EngineWrite.Home) and asking the next node the same write
+	// where one ran nothing or went silent (code.git_write).
 	Write(ctx context.Context, w gitlet.EngineWrite) (gitlet.EngineWriteResult, error)
-	// Lifecycle is a repository's lifecycle request — a create, a rename, a
-	// settings change, an archive, a deletion, a restore, a protection or a
-	// turn's hold — through the fleet's routing, as a seat's or a person's
-	// tool asks one: the production estate router asking the data nodes
-	// (code.lifecycle), each deciding it by its own chart in its lifecycle
-	// store.
+	// Lifecycle is a repository's lifecycle request (create, rename,
+	// settings, archive, delete, restore, protection, a turn's hold)
+	// through the fleet's routing: the production estate router asking the
+	// data nodes (code.lifecycle), each deciding it by its own lifecycle
+	// store's chart.
 	Lifecycle(ctx context.Context, r gitlet.LifecycleRequest) (gitlet.LifecycleResult, error)
 }
 
@@ -199,24 +189,23 @@ type Shape struct {
 	GitletNodes int
 	// Limits are code.limits; a zero field takes the default.
 	Limits gitlet.Limits
-	// Timing is every host's; the zero value is host.Production with a
-	// PendingGrace of two seconds and a Keepalive of 200 ms — a case
-	// asserting the production grace sets it.
+	// Timing is every host's; zero is host.Production with a 2 s
+	// PendingGrace and a 200 ms Keepalive, so a case asserting the
+	// production grace sets it.
 	Timing host.Timing
 	// MaxTransfers is each git pool's transfer lane; 0 is the pool's
 	// default.
 	MaxTransfers int
-	// WrapEstate wraps what every Gitlet node's host and cache ask — the
-	// window a case has onto the estate.
+	// WrapEstate wraps what every Gitlet node's host and cache ask: a
+	// case's window onto the estate.
 	WrapEstate func(host.Estate) host.Estate
-	// WrapCompactions wraps what every Gitlet node's compactor proposes its
-	// compactions and publications through — the window a case has onto what
-	// a maintainer asks a committer to decide: a lying publisher's.
+	// WrapCompactions wraps what every compactor proposes compactions and
+	// publications through: a case's window onto what a maintainer asks a
+	// committer to decide (a lying publisher's).
 	WrapCompactions func(Compactions) Compactions
-	// Clock is the fleet's clock, which the case moves on ([Clock]): what
-	// every data node's lifecycle store decides by, and the broker's instant
-	// on every record applied past a move. Nil is the wall clock, moved by
-	// nothing.
+	// Clock is the fleet's clock, which the case moves ([Clock]): every
+	// data node's lifecycle store decides by it, and every record applied
+	// past a move carries its instant. Nil is the wall clock.
 	Clock *Clock
 }
 
@@ -252,35 +241,32 @@ type SoloOptions struct {
 	CacheMaxBytes int64
 	// Logger is every host's; nil is the package's own.
 	Logger *slog.Logger
-	// SyncAlways has the broker fsync every write before it acknowledges it,
-	// as stream.sync's default (always) has a deployment's: what a BENCHMARK
-	// sets, so a figure carries the record's fsync a production push pays. A
-	// case leaves it off — it judges what is written, never when it reaches
-	// the disk, and an fsync a record only slows the suite.
+	// SyncAlways has the broker fsync every write before acknowledging it,
+	// as stream.sync's default (always) does: a BENCHMARK sets it, so its
+	// figure carries the fsync a production push pays. A case leaves it
+	// off: it judges what is written, never when it reaches the disk.
 	SyncAlways bool
 	// Roster, Current and QueryPool are every Gitlet node's query server's
 	// (GitOptions).
 	Roster    func() gitlet.Roster
 	Current   func() bool
 	QueryPool func(query.Pool) query.Pool
-	// WrapReads wraps every Gitlet node's reads of Gitlet (GitOptions'
-	// Reads) — its cache's backfill's pages of pushes among them: the window
-	// a case has onto them, to fail or count them; nil reads the data node.
+	// WrapReads wraps every Gitlet node's reads of Gitlet (GitOptions.Reads),
+	// its cache's backfill pages among them, for a case to fail or count
+	// them; nil reads the data node.
 	WrapReads func(Reads) Reads
 	// LogBytes is the code log's ceiling; 0 is soloLogBytes. A benchmark
-	// whose history outgrows what that ceiling admits beside its gate
-	// reserve — about 7 MB of records, the reserve the larger of a sixteenth
-	// and the fleet term (statelog.Reservation) — raises it.
+	// whose history outgrows what that admits beside its gate reserve
+	// (statelog.Reservation), about 7 MB of records, raises it.
 	LogBytes int64
 	// WrapApplier wraps the data node's applier (DataOptions.WrapApplier).
 	WrapApplier func(statelog.Applier) statelog.Applier
 	// WrapDriver wraps the driver under the data node's store
 	// (DataOptions.WrapDriver).
 	WrapDriver func(driver.Driver) driver.Driver
-	// WrapObjects wraps the object store's backend as the Gitlet node id reads
-	// and writes it, nil for none: a benchmark's window onto what one Gitlet
-	// node downloads, apart from what every other does through the same
-	// store.
+	// WrapObjects wraps the object store's backend as Gitlet node id uses
+	// it, nil for none: a benchmark's window onto what one node downloads,
+	// apart from the others sharing the store.
 	WrapObjects func(id string, b objstore.Backend) objstore.Backend
 	// ResyncClock is every Gitlet node's re-sync buckets' clock
 	// (GitOptions.ResyncClock); nil is the wall clock.
@@ -290,9 +276,9 @@ type SoloOptions struct {
 // Reads is a Gitlet node's read of Gitlet's rows (GitOptions.Reads).
 type Reads = func(context.Context, gitlet.ReadQuery) (gitlet.ReadAnswer, error)
 
-// Solo is a NewFleet of SoloNodes over o, each case's shape laid over it — a
+// Solo is a NewFleet of SoloNodes over o, each case's shape laid over it, a
 // wrapper o carries wrapping the case's. objects, when not nil, is each
-// fleet's own backend (a case's fleet never shares a bucket with another's).
+// fleet's own backend, so no two cases share a bucket.
 func Solo(o SoloOptions, objects func(t *testing.T) objstore.Backend) NewFleet {
 	return func(t *testing.T, s Shape) Fleet {
 		t.Helper()
@@ -321,10 +307,9 @@ const (
 	soloOperatorNode = "solo-operator"
 )
 
-// SoloNode is ONE data node and its Gitlet nodes, in one process: the engine's
-// own composition for the code domain, built from the two blocks every
-// topology is built from (StartDataNode, StartGitletNode) over one embedded
-// broker.
+// SoloNode is ONE data node and its Gitlet nodes in one process: the engine's
+// composition for the code domain, built from every topology's two blocks
+// (StartDataNode, StartGitletNode) over one embedded broker.
 func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	t.Helper()
 	if o.Objects == nil {
@@ -348,9 +333,9 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	}
 	f := &SoloFleet{o: o, dir: brokertest.TempDir(t), creds: NewCredentials(o.People), life: t,
 		runs: NewFixtureRuns(NewBoxTokens(t)),
-		// AN HOUR AGO, so an activation a case mints — a second apart, in
-		// order — is never in the future: a deletion is dated by its
-		// activation, and the purge judges its age on the wall clock.
+		// AN HOUR AGO, so no activation a case mints (a second apart) is in
+		// the future: a deletion is dated by its activation, and the purge
+		// judges its age on the wall clock.
 		base: time.Now().UTC().Add(-time.Hour).Truncate(time.Second)}
 	// REGISTERED FIRST, SO IT RUNS LAST: every node's own teardown stops it
 	// before its broker does.
@@ -393,9 +378,8 @@ func SoloNode(t testing.TB, o SoloOptions) *SoloFleet {
 	return f
 }
 
-// soloEnvelopes are the estate envelopes every Gitlet node of a solo fleet signs
-// and verifies under, and its router: one fleet, one keyring, as every node's
-// estate envelopes are (estate.Envelopes).
+// soloEnvelopes are the estate envelopes every Gitlet node of a solo fleet and
+// its router sign and verify under: one fleet, one keyring (estate.Envelopes).
 var soloEnvelopes = func() *estate.Envelopes {
 	env, err := estate.NewEnvelopes(fleetRing)
 	if err != nil {
@@ -408,22 +392,19 @@ var soloEnvelopes = func() *estate.Envelopes {
 // as a seats-only node's router is.
 const soloRouter = "solo-router"
 
-// route makes every Gitlet node answer the fleet on the running broker as the
-// engine's serveEstate makes a Gitlet node answer — its estate service, its two
-// git lanes over its own git half (GitletNode.Git) among its lanes — and builds
-// the router [SoloFleet.GitRead] and [SoloFleet.Write] ask through, holding
-// nothing of its own. Every Gitlet node holds the estate in this release, and a
-// solo fleet's Gitlet nodes reach its one data node's copy in process, so each
-// serves that copy (soloCopy). A Kill takes every registration with the
-// broker; a Restart routes again over the new one.
+// route serves every Gitlet node's estate service on the running broker as
+// the engine's serveEstate does (its two git lanes over GitletNode.Git), each
+// serving the one data node's copy in process (soloCopy), and builds the
+// router [SoloFleet.GitRead] and [SoloFleet.Write] ask through, holding
+// nothing of its own. A Kill takes every registration with the broker; a
+// Restart routes again over the new one.
 func (f *SoloFleet) route(t testing.TB) {
 	t.Helper()
 	q := f.broker()
 	ids := make([]string, len(f.git))
 	for i, g := range f.git {
 		ids[i] = g.o.ID
-		// ON THE FLEET'S BROKER, whose stop ends the registration: a
-		// process's death takes its subjects with it.
+		// ON THE FLEET'S BROKER, so a process's death takes its subjects.
 		if _, err := estate.Serve(f.life.Context(), q, estate.ServerOptions{Self: g.o.ID,
 			Local: soloCopy{data: f.data}, Git: g, Envelopes: soloEnvelopes}); err != nil {
 			t.Fatalf("gitlettest: %s serves the estate: %v", g.o.ID, err)
@@ -444,11 +425,10 @@ func (f *SoloFleet) route(t testing.TB) {
 		t.Fatalf("gitlettest: the fleet's router: %v", err)
 	}
 	f.router.Store(r)
-	// EVERY GITLET NODE'S OWN ROUTER, which its compactor asks whether it is a
-	// repository's maintainer, as the engine hands each node's compactor the
-	// node's router: over the same git placement, which lists every Gitlet node
-	// with what each advertises, so a killed node — which the solo fleet's
-	// placement still lists — keeps its place as its last beat left it.
+	// EVERY GITLET NODE'S OWN ROUTER, which its compactor asks about
+	// maintainership as the engine's does, over the same git placement: a
+	// killed node, which the placement still lists, keeps its place as its
+	// last beat left it.
 	for i, g := range f.git {
 		own, err := estate.NewRouter(estate.RouterOptions{Self: g.o.ID, Queue: q, Placement: nodes, Git: git,
 			LocalGit: g, Session: estate.NewSession(), Timing: estate.Production(), Envelopes: soloEnvelopes})
@@ -460,9 +440,9 @@ func (f *SoloFleet) route(t testing.TB) {
 }
 
 // soloMaintainers is which repositories a solo fleet's i-th Gitlet node
-// maintains, as its compactor asks it once a pass: that node's own router,
-// read again at every question, so a restarted fleet's is the one asked — and
-// none while the fleet is killed, which is an error rather than an answer.
+// maintains, asked once a pass: that node's own router, read again at every
+// question so a restarted fleet's is asked; while killed, an error, not an
+// answer.
 type soloMaintainers struct {
 	f *SoloFleet
 	i int
@@ -486,10 +466,9 @@ func (m soloMaintainers) Listed() (bool, error) {
 	return r.Listed()
 }
 
-// compact is what every Gitlet node's compactor proposes a compaction to: the
-// data node's committer, in process, read again at every call — a refusal
-// about the node itself (gitlet.ErrNotServing) answered as the router answers a
-// walk in which every node it asked refused, as Propose is.
+// compact is what every compactor proposes a compaction to: the data node's
+// committer in process, read again at every call, a refusal about the node
+// itself (gitlet.ErrNotServing) answered as soloEstate.Propose answers one.
 func (f *SoloFleet) compact(ctx context.Context, p gitlet.CompactionProposal) (gitlet.CompactResult, error) {
 	res, err := f.data.Served().ProposeCompaction(ctx, p)
 	if errors.Is(err, gitlet.ErrNotServing) {
@@ -498,10 +477,9 @@ func (f *SoloFleet) compact(ctx context.Context, p gitlet.CompactionProposal) (g
 	return res, err
 }
 
-// expunge is what every Gitlet node's compactor proposes an expunge's begin and
-// commit to — and a case a person's purge request: the data node's committer,
-// in process, read again at every call, a refusal about the node itself
-// answered as compact answers one.
+// expunge is what every compactor proposes an expunge's begin and commit to,
+// and a case a person's purge request: the data node's committer, as compact
+// asks it.
 func (f *SoloFleet) expunge(ctx context.Context, p gitlet.ExpungeProposal) (gitlet.ExpungeResult, error) {
 	res, err := f.data.Served().ProposeExpunge(ctx, p)
 	if errors.Is(err, gitlet.ErrNotServing) {
@@ -546,12 +524,10 @@ func (f *SoloFleet) GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitA
 	return r.Code().GitRead(ctx, q)
 }
 
-// Code is Gitlet as the fleet routes it — the router [SoloFleet.Write] and
-// [SoloFleet.GitRead] ask through, holding nothing of its own — as a seat's
-// code tools are handed it on such a node (their reads, writes and holds):
-// what a benchmark timing a write from its TOOL'S CALL builds the tools over.
-// The seam is the running router's, so a case that kills or restarts the
-// fleet reads it again afterwards.
+// Code is Gitlet as the fleet's router routes it, as a seat's code tools are
+// handed it (reads, writes and holds): what a benchmark timing a write from
+// its TOOL'S CALL builds the tools over. The seam is the running router's,
+// so a case that kills or restarts the fleet reads it again.
 func (f *SoloFleet) Code(t testing.TB) estate.CodeSeam {
 	t.Helper()
 	r := f.router.Load()
@@ -561,18 +537,17 @@ func (f *SoloFleet) Code(t testing.TB) estate.CodeSeam {
 	return r.Code()
 }
 
-// soloPlacement is a solo fleet's Gitlet nodes as its router's placements read
-// them: every one live for as long as the fleet runs, since a solo fleet's
-// nodes live and die together.
+// soloPlacement is a solo fleet's Gitlet nodes as its routers' placements read
+// them: every one live while the fleet runs, since they live and die together.
 type soloPlacement []string
 
 func (p soloPlacement) Holders() ([]string, error) { return slices.Clone(p), nil }
 func (p soloPlacement) Unanswered(string)          {}
 
-// soloCopy is the data node's copy as a Gitlet node's estate service answers from
-// it: its code half (gitlet.Served), its applier's wait, and whether the copy
-// answers — the state log's own judgement — read again at every request, so a
-// restarted data node's is the one served.
+// soloCopy is the data node's copy as a Gitlet node's estate service answers
+// from it: its code half (gitlet.Served), its applier's wait, and whether it
+// answers (the state log's judgement), read again at every request so a
+// restarted data node's is served.
 type soloCopy struct{ data *DataNode }
 
 func (c soloCopy) For(context.Context, string) (estate.Backend, bool) {
@@ -591,14 +566,13 @@ func (c soloCopy) For(context.Context, string) (estate.Backend, bool) {
 	}, true
 }
 
-// GitletNode is the fleet's i-th Gitlet node, for a benchmark that stops it and
-// starts it again over an emptied directory — a node that has never served the
-// repository — while the rest of the fleet runs on.
+// GitletNode is the fleet's i-th Gitlet node, for a benchmark that restarts it
+// over an emptied directory (a node that never served the repository) while
+// the rest of the fleet runs on.
 func (f *SoloFleet) GitletNode(i int) *GitletNode { return f.git[i] }
 
-// Data is the fleet's one data node, for a benchmark that proposes the pushes
-// of a fixture to its committer directly — refs created by records, without a
-// person's git paying its own cost for them.
+// Data is the fleet's one data node, for a benchmark that proposes a
+// fixture's pushes to its committer directly, no person's git paying for them.
 func (f *SoloFleet) Data() *DataNode { return f.data }
 
 // soloLogBytes is the code log's ceiling on a solo node: 64 MiB holds every
@@ -614,19 +588,16 @@ type SoloFleet struct {
 	// runs is the fleet's one run store, every Gitlet node's host's.
 	runs *FixtureRuns
 	base time.Time
-	// life is the test that started the fleet: what its Gitlet nodes' estate
-	// services are registered under, however often a case restarts it.
+	// life is the test that started the fleet, which its estate services
+	// are registered under across restarts.
 	life testing.TB
 
 	data *DataNode
 	git  []*GitletNode
 
-	// router is the running broker's router, holding nothing of its own,
-	// which [SoloFleet.GitRead] and [SoloFleet.Write] ask through (route);
-	// nil while killed.
+	// router is the running broker's router (route); nil while killed.
 	router atomic.Pointer[estate.Router]
-	// routers is each Gitlet node's own router, which its compactor asks
-	// whether it is a repository's maintainer (soloMaintainers); nil while
+	// routers is each Gitlet node's own router (soloMaintainers); nil while
 	// killed.
 	routers []atomic.Pointer[estate.Router]
 
@@ -741,11 +712,11 @@ func ReposOf(ctx context.Context,
 	}
 }
 
-// RepoIDsOf is the id of EVERY repository the rows hold, whatever its status —
-// read through read, at linearizable, every page: what a case's confinement
-// of its maintenance leaves out (Cluster.ConfineMaintenance), which must name
-// a repository that is deleted or purging as well as one in use, since a
-// maintainer's listings name archived and importing ones and a purge's.
+// RepoIDsOf is the id of EVERY repository the rows hold, whatever its status,
+// read linearizable through read: what a case's confinement of its
+// maintenance leaves out (Cluster.ConfineMaintenance), which must name deleted
+// and purging repositories too, since a maintainer's listings name archived,
+// importing and purging ones.
 func RepoIDsOf(ctx context.Context,
 	read func(context.Context, gitlet.ReadQuery) (gitlet.ReadAnswer, error)) (map[string]bool, error) {
 
@@ -928,11 +899,10 @@ func (f *SoloFleet) mustBeData(t testing.TB, node string) {
 	}
 }
 
-// Kill ends the whole solo process — one data node is one process — as far
-// as git and the store see it: every Gitlet node killed, the data node killed,
-// the broker stopped. It WAITS FOR NOTHING A CRASH MAY HOLD: an HTTP server's
-// Close and the committer's Stop wait for their held work in the teardown,
-// after the crashes are released.
+// Kill ends the whole solo process as far as git and the store see it: every
+// node killed, the broker stopped. It WAITS FOR NOTHING A CRASH MAY HOLD: an
+// HTTP server's Close and the committer's Stop wait in the teardown, after the
+// crashes are released.
 func (f *SoloFleet) Kill(t testing.TB, _ string) {
 	t.Helper()
 	if f.data.proc() == nil {
@@ -952,8 +922,8 @@ func (f *SoloFleet) Kill(t testing.TB, _ string) {
 }
 
 // Restart rebuilds the process over the same directories: a new broker over
-// the old one's files, the data node and every Gitlet node — new listeners, so a
-// node's URL is the new one.
+// the old one's files, the data node and every Gitlet node, on new listeners,
+// so a node's URL changes.
 func (f *SoloFleet) Restart(t testing.TB, _ string) {
 	t.Helper()
 	if f.data.proc() != nil {
@@ -977,8 +947,7 @@ func (f *SoloFleet) Level(ctx context.Context, _ string) error {
 	return f.data.Level(ctx)
 }
 
-// teardown stops every incarnation's broker, the crashes released FIRST —
-// though every node's own teardown, which ran before this one, released them.
+// teardown releases the crashes, then stops every incarnation's broker.
 func (f *SoloFleet) teardown() {
 	f.o.Faults.ReleaseCrashes()
 	f.mu.Lock()
@@ -990,10 +959,10 @@ func (f *SoloFleet) teardown() {
 	}
 }
 
-// soloEstate is the data node's code half as the host and the cache ask it,
-// in-process: gitlet.Served, the one adapter the engine hands the router, read
-// again at every call so a restarted node's is the one asked — with a
-// committer's refusal about itself answered in the router's shape.
+// soloEstate is the data node's code half as the host and the cache ask it in
+// process: gitlet.Served, the adapter the engine hands the router, read again
+// at every call so a restarted node's is asked, a committer's refusal about
+// itself answered in the router's shape.
 type soloEstate struct{ data *DataNode }
 
 func (e *soloEstate) Resolve(ctx context.Context, q gitlet.ResolveQuery) (gitlet.RepoRef, error) {

@@ -27,11 +27,10 @@ func SetConcurrency(l *Loop, n int) { l.turnsAtOnce = n }
 // rather than [MergeabilityPerPass] of them. Before Start.
 func SetMergesPerPass(l *Loop, n int) { l.changes.rechecks.perPass = n }
 
-// BeginStop is the first half of l's Stop and nothing more: stopped set
-// under the loop's mutex and its watches taken, its life NOT yet ended — the
-// window between Stop letting the mutex go and ending the life, which a case
-// cannot otherwise reach, held open so the case proves what a watch that
-// begins inside it does. The case's own Stop ends the rest.
+// BeginStop is the first half of l's Stop alone: stopped set under the
+// loop's mutex and its watches taken, its life NOT yet ended — holding open
+// the window between Stop releasing the mutex and ending the life, which a
+// case cannot otherwise reach, so it proves what a watch begun inside it does. The case's own Stop ends the rest.
 func BeginStop(l *Loop) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -39,31 +38,28 @@ func BeginStop(l *Loop) {
 	l.watches = make([]Watching, len(nudgeFilters))
 }
 
-// ChangeWork is l's change work's turn of repoID, its rows read at floor: what
-// a nudge or a pass schedules for the changes worker, run on the case's own
-// goroutine.
+// ChangeWork is the changes worker's turn of repoID on l, its rows read at
+// floor, run on the case's own goroutine.
 func ChangeWork(ctx context.Context, l *Loop, repoID string, floor statelog.Position) error {
 	return l.changes.Work(ctx, repoID, floor)
 }
 
-// CheckWork is l's check work's turn of repoID, its rows read at floor: what
-// a nudge or a pass schedules for the checks worker, run on the case's own
-// goroutine.
+// CheckWork is the checks worker's turn of repoID on l, its rows read at
+// floor, run on the case's own goroutine.
 func CheckWork(ctx context.Context, l *Loop, repoID string, floor statelog.Position) error {
 	return l.checks.Work(ctx, repoID, floor)
 }
 
-// QueueWork is l's merge queue's turn of repoID, its rows read at floor: what
-// a nudge or a pass schedules for the queue worker, run on the case's own
-// goroutine.
+// QueueWork is the merge queue's turn of repoID on l, its rows read at floor,
+// run on the case's own goroutine.
 func QueueWork(ctx context.Context, l *Loop, repoID string, floor statelog.Position) error {
 	return l.merges.Work(ctx, repoID, floor)
 }
 
 // MergeChange is l's merge step for one due change of repoID, read at the
 // listing's position at — its ancestry, then its merge recorded through the
-// loop's estate — answering whether it landed the change: what
-// BenchmarkMergeability times, one merge a run.
+// loop's estate — answering whether it landed: what BenchmarkMergeability
+// times, one merge a run.
 func MergeChange(ctx context.Context, l *Loop, repoID string, due gitlet.ChangeDue,
 	at statelog.Position) (bool, error) {
 

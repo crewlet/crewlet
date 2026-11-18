@@ -10,45 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 )
 
-// A RE-ANCHORING places ranges of lines, each read in a blob one revision of a
-// change held — a finding's, a comment's — in the files of another revision:
-// the file at each anchor's path in the revision's head, for a line on the new
-// side of the change's diff, or in its base, for the old side. The read's one
-// check of what it names (objects.go) finds each anchor's blob, which must be
-// there, and the object at its path, which may not be: an anchor whose
-// revision holds no file at its path — deleted, or a directory or a submodule
-// now — is GONE, an answer and never a refusal. An anchor whose file is its
-// own blob still is where it was. Every other is placed by the diff between
-// its blob and that file, its hunks fed to its gitlet.Placing — the one rule
-// gitlet.Reanchor is — as they stream: moved by the lines changed above it,
-// OUTDATED where its own lines changed.
+// A RE-ANCHORING places line ranges read in one revision's blob (which must
+// exist) in another's file at the same path: its head's for the new side of
+// the change's diff, its base's for the old. No file there (deleted, now a
+// directory or a submodule) is GONE, an answer and never a refusal; the same
+// blob is unmoved; else a gitlet.Placing, gitlet.Reanchor's rule, moves it by
+// the hunks above, OUTDATED where its own lines changed or the pair is binary.
 //
-// ONE PROCESS DIFFS THEM ALL: `git diff-pairs -z -p -U0`, handed on its
-// standard input one raw record a distinct pair of blobs — the anchored blob
-// and the one at its path — whose answer is git's own zero-context hunks for
-// each, in the order handed, read by their headers alone. Each record's path
-// is the pair's number, never the anchor's path: diff-pairs diffs the two ids
-// a record names and reads nothing by path, so no path of the asker's reaches
-// git at all, and the number says which pair a hunk is of whatever a path
-// would hold. A pair git calls binary has no hunks, and its anchors are
-// outdated: nothing says where their lines went.
-//
-// NO HUNK IS KEPT, so what the read holds is its anchors, whatever the diff:
-// each hunk header is read where it stands in git's output (gitlet.ParseHunk,
-// which allocates nothing), fed to the placings of its pair's anchors that no
-// hunk has settled yet, and dropped; once every anchor of a pair is settled
-// its further lines are not read at all, and no line becomes a string. Two
-// versions of a file of two million one-byte lines, every other line changed,
-// are a million hunks and 32 MB of git's output: kept, they were a slice the
-// engine's heap grew to hold whole, then walked again for every anchor, which
-// a person able to push such a pair and anchor a finding on it could make
-// cost gigabytes each time the change's findings were shown on a later
-// revision. Placed as they stream, they cost the engine O(anchors) of memory
-// and O(hunks + anchors) of work, and git's own diff, held to the read's
-// budget of git, is what remains: BenchmarkReanchor's pathological pair took
-// 246 KB and 1 205 allocations a whole read at 10 000 hunks, and 150 KB and
-// 1 123 at 100 000 (-benchtime 3x, one count, under -race on two E-cores of a
-// Core Ultra 7 265U) — the read's own, flat in the hunks.
+// ONE `git diff-pairs -z -p -U0` diffs every distinct pair by id, reading no
+// path, so a record's path is its pair's number and no asker's path reaches
+// git. NO HUNK IS KEPT: each header is parsed in place (gitlet.ParseHunk), fed
+// to its pair's open placings and dropped, a settled pair's lines unread: any
+// pushed pair costs O(anchors) (package doc, "Measured").
 
 // reanchorRead answers a re-anchoring.
 func (r *read) reanchorRead(ctx context.Context, objs found) (gitlet.GitAnswer, error) {
@@ -59,8 +32,8 @@ func (r *read) reanchorRead(ctx context.Context, objs found) (gitlet.GitAnswer, 
 				"commits", gitlet.ErrInvalid, c.field, c.rev, o.peeledKind)
 		}
 	}
-	// THE PAIRS: each anchor's blob against the file at its path, once each
-	// however many anchors share it.
+	// One pair per distinct anchored blob and file now, however many anchors
+	// share it.
 	type pair struct{ old, new string }
 	var pairs []pair
 	index := map[pair]int{}
@@ -115,9 +88,8 @@ func (r *read) reanchorRead(ctx context.Context, objs found) (gitlet.GitAnswer, 
 			}
 		}
 	}
-	// ONE PAGE, ALWAYS: gitlet.MaxReanchors anchors of ids at their longest,
-	// every byte escaped, are about half a page; measured all the same, as
-	// every answer is — the list beside an envelope that holds an empty one.
+	// gitlet.MaxReanchors anchors at their longest are about half a page, but
+	// the list is measured all the same, as every answer is.
 	envelope := gitlet.GitAnswer{Kind: gitlet.GitReanchor, Reanchor: &gitlet.ReanchorAnswer{Anchors: []gitlet.Reanchored{}}}
 	if room, cost := r.room(envelope), jsonLen(out)-jsonLen([]gitlet.Reanchored{}); cost > room {
 		return gitlet.GitAnswer{}, fmt.Errorf("%w: the %d anchors placed encode past the %d bytes one answer "+
@@ -126,8 +98,8 @@ func (r *read) reanchorRead(ctx context.Context, objs found) (gitlet.GitAnswer, 
 	return a, nil
 }
 
-// place runs ONE diff-pairs over the raw records in, its output's lines fed
-// to pl as they arrive.
+// place runs ONE diff-pairs over the raw records in, feeding its lines to pl
+// as they arrive.
 func (r *read) place(ctx context.Context, in *bytes.Buffer, pl *placer) error {
 	lines := newRecords('\n', gitproc.MaxLine, pl.line)
 	deadline, err := r.budget()
@@ -157,10 +129,9 @@ var (
 )
 
 // placer places a re-anchoring's anchors from its diff-pairs' patch as it
-// streams, line by line, keeping no hunk: anchors is each pair's anchors, by
-// their index in placings, open how many of each pair's no hunk has settled,
-// and binary each pair git called binary; cur is the pair the lines are of,
-// -1 before the first.
+// streams, keeping no hunk. Per pair: anchors holds its anchors' indexes into
+// placings, open how many are unsettled, binary whether git called it binary.
+// cur is the pair the lines are of, -1 before the first.
 type placer struct {
 	placings []gitlet.Placing
 	settled  []bool
@@ -170,17 +141,15 @@ type placer struct {
 	cur      int
 }
 
-// line reads one line of the patch: a pair's header moves to its pair, and
-// while that pair holds an anchor no hunk has settled, a binary line marks it
-// and each hunk header is fed to its open anchors' placings. Every other line
-// — a file's own, or any of a pair whose anchors are all settled — is passed
-// over unread.
+// line reads one line of the patch. Past a pair's header, only a binary line
+// or a hunk header of a pair with an unsettled anchor is read; every other
+// line, a file's own or a settled pair's, is passed over, never refused.
 func (p *placer) line(rec []byte, long bool) error {
 	switch {
 	case long:
 		return nil // a line of a file's, past any header
 	case bytes.HasPrefix(rec, pairHeader):
-		// "diff --git a/<n> b/<n>": the pair the next hunks are of.
+		// "diff --git a/<n> b/<n>"
 		at, ok := pairOf(rec[len(pairHeader):], len(p.anchors))
 		if !ok {
 			return fmt.Errorf("query: diff-pairs answered %q, which names no pair it was handed", truncated(rec))

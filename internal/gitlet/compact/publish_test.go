@@ -45,10 +45,9 @@ func (x *fixture) publicationCandidate() gitlet.PublicationCandidate {
 	return gitlet.PublicationCandidate{}
 }
 
-// publishWhileBusy is c's publication of cand, asked again while it answers
-// busy — a maintenance slot the maintainer holds a moment — or waiting — a
-// layer the maintainer adopted that its installer has not yet placed — for a
-// minute at the most.
+// publishWhileBusy is c's publication of cand, asked again for a minute at
+// most while it answers busy (a maintenance slot held a moment) or waiting (an
+// adopted layer its installer has not yet placed).
 func publishWhileBusy(t testing.TB, c *compact.Compactor, cand gitlet.PublicationCandidate) (compact.Outcome, error) {
 	t.Helper()
 	deadline := time.Now().Add(time.Minute)
@@ -73,9 +72,9 @@ func (x *fixture) chain() cache.Chain {
 	return x.node().Cache().Chain(s)
 }
 
-// awaitInstalled waits for x's Gitlet node's copy to hold the rows' whole chain
-// of n layers installed — its installer places what its maintainer adopted in
-// the background — a minute at most, and answers it.
+// awaitInstalled waits, a minute at most, for x's Gitlet node's copy to hold
+// the rows' whole chain of n layers installed (the installer places adopted
+// layers in the background), and answers it.
 func (x *fixture) awaitInstalled(n int) cache.Chain {
 	x.t.Helper()
 	deadline := time.Now().Add(time.Minute)
@@ -220,10 +219,9 @@ func TestAPublicationIsWrittenOverEveryLivePackAndAdoptedByItsMaintainer(t *test
 
 // A PUBLICATION IS BUILT IN A SCRATCH NAMING EXACTLY ITS BASE: a layer is
 // written over a chain file listing the layers it builds on and none above
-// them — measured on git 2.56.0, the same write with the layers it replaces
-// still named took minutes where it takes a second — so a publication that
-// absorbs the chain's top layer is written in a scratch naming only the layers
-// below it, and every scratch names exactly its plan's base.
+// (with the layers it replaces still named, git 2.56.0's write takes minutes,
+// not a second), so a publication absorbing the chain's top layer is written
+// in a scratch naming only the layers below it.
 //
 // Mutation: link the whole installed chain into the scratch, and the third
 // publication's scratch names the layer it replaces.
@@ -267,12 +265,11 @@ func TestAPublicationIsBuiltInAScratchNamingExactlyItsBase(t *testing.T) {
 }
 
 // A PUBLICATION IS NEVER BUILT OVER A BASE THE STORE LOST: the maintainer
-// installed its own layer from the files it wrote, so its copy holds a layer
-// whose part the store has since lost — and every node that fetches the chain
-// refuses it `missing`, and every layer above it. So before it builds over a
-// base, the maintainer asks the store for every part of it, and a base the
-// store lost is replaced with the new layer's tail in one root: the next
-// publication after the loss repairs it.
+// installed its layer from its own files, so its copy can hold a layer whose
+// part the store lost, which every fetching node refuses `missing` with every
+// layer above it. So the maintainer asks the store for every part of a base
+// before building over it, and a lost base is replaced, with the new tail, by
+// one root.
 //
 // Mutation: build over the base the plan names without asking the store, and
 // the new layer lands over the lost root.
@@ -308,13 +305,11 @@ func busyToPublish(cache.Synced, int64, int64, gitlet.Limits) (*cache.Admission,
 	return nil, fmt.Errorf("cache: publish %s: %w: a case's lane held", gitlettest.RepoName, gitproc.ErrBusy)
 }
 
-// A PUBLICATION REFUSED ITS ADMISSION ASKS THE STORE NOTHING: the base a layer
-// is written over is held to the object store's copy once its build is
-// admitted, never before — so an attempt the node refuses busy, a moment's
-// state asked again at the next pass, or for memory, never remembered and
-// asked again at every pass, costs no request, where it cost one a part of
-// the base at every attempt. Admitted, the publication asks for every part
-// of its base, and lands.
+// A PUBLICATION REFUSED ITS ADMISSION ASKS THE STORE NOTHING: its base is
+// held to the object store's copy once its build is admitted, never before,
+// so an attempt refused busy or for memory (both asked again at the next
+// pass) costs no request. Admitted, it asks for every part of its base, and
+// lands.
 //
 // Mutation: hold the base to the store before the admission, and each refused
 // attempt asks for the root's part.
@@ -360,10 +355,9 @@ func TestAPublicationRefusedItsAdmissionAsksTheStoreNothing(t *testing.T) {
 	}
 }
 
-// statStore is a publication's object store that answers Stat alone — every
-// part held at its size, but those named lost, missized or unread — each
-// answer held until release is closed, counting how many asks are in flight
-// at once.
+// statStore is a publication's object store that answers Stat alone (every
+// part held at its size but those named lost, missized or unread), each answer
+// held until release is closed, counting the asks in flight at once.
 type statStore struct {
 	compact.Uploader
 	release                   chan struct{}
@@ -432,13 +426,12 @@ func baseOf(layers, parts int) ([]gitlet.LayerRow, map[objstore.Key]int64) {
 	return rows, sizes
 }
 
-// THE BASE'S PARTS ARE ASKED AT ONCE, and answered as a walk of them in chain
-// order would answer: on S3 every request waits a first byte, so asked one
-// after another a large repository's base cost a request's wait a part, up to
-// 512 of them. Asked at once, cache.FetchConcurrency are in flight together —
-// never more — and the answer is the walk's: the layer of the first part, in
-// chain order, the store lacks or holds at another size, or the store's
-// error where a part before it could not be read.
+// THE BASE'S PARTS ARE ASKED AT ONCE, and answered as a walk in chain order
+// would answer: on S3 every request waits for a first byte, so asked in turn a
+// base of up to 512 parts costs a wait a part. cache.FetchConcurrency are in
+// flight together, never more, and the answer is the walk's: the layer of the
+// first part, in chain order, the store lacks or holds at another size, or the
+// store's error where a part before it could not be read.
 //
 // Mutations: ask the parts one at a time, and no second ask is ever in flight;
 // lift the bound, and every part is asked at once; answer the first part
@@ -533,9 +526,8 @@ func TestTheBaseIsAskedOfTheStoreAtOnce(t *testing.T) {
 
 // A MAINTAINER WAITS FOR ITS INSTALLER: a layer of the rows' chain this node
 // has neither installed nor refused is still at its installer, so the
-// publication answers waiting — nothing admitted, no scratch made — rather
-// than replace a layer a moment from being installed; once it is installed, the
-// next publication plans over it.
+// publication answers waiting (nothing admitted, no scratch made) rather than
+// replace it; once it is installed, the next publication plans over it.
 //
 // Mutation: treat a layer neither installed nor refused as refused, and the
 // publication replaces it.
@@ -631,9 +623,9 @@ func TestALayerPastItsPartsIsRefusedBeforeItsBuild(t *testing.T) {
 }
 
 // A PUBLICATION UPLOADS ITS PARTS AND OUTPUTS AT ONCE: every part of the layer
-// and every output of its repack has begun its upload before any of them
-// returns — a key is minted as its upload begins, and uploads one after
-// another would age the first past what a record may name.
+// and every output of its repack begins its upload before any returns, since a
+// key is minted as its upload begins and uploads in turn would age the first
+// past what a record may name.
 //
 // Mutation: upload the layer after the outputs, and the first upload waits
 // for one that has not begun.
@@ -680,26 +672,22 @@ func TestAPublicationUploadsItsPartsAndOutputsAtOnce(t *testing.T) {
 }
 
 // A PUBLICATION'S REPACK READS EXACTLY ITS INPUTS, THROUGH ITS ALTERNATE, as a
-// compaction's build does: it runs in a merge's scratch of its own, which
-// holds no pack before its pack-objects runs and whose one alternate is a
-// store holding exactly the packs the repack is handed — each one's .pack,
-// .idx and .rev the copy's own files, linked — and nothing else: never the
-// pack the base layer covers, here a push of two hundred files beside the
-// nine small packs the repack merges. Never in the layer's scratch, which
-// links every pack of the copy, so that there `--stdin-packs`, filling in its
-// name hashes, walked from the inputs' commits down the whole history. The
-// repack's outputs are gathered into the layer's scratch, the layer is
-// written over them, and the publication lands.
+// compaction's build does: in a merge's scratch of its own, empty before
+// pack-objects runs, whose one alternate holds exactly the packs it is handed
+// (their .pack, .idx and .rev, the copy's own files linked), never the base
+// layer's pack (here a push of two hundred files). Never in the layer's
+// scratch, which links every pack, so `--stdin-packs` filling in name hashes
+// walked the whole history. The outputs are gathered into the layer's scratch, the layer
+// is written over them, and the publication lands.
 //
-// Mutation: build the repack in the layer's scratch (Compactor.repack's
-// pack-objects run in sc, as it was), and the build's scratch holds every
-// pack of the copy and names no alternate.
+// Mutation: run the repack's pack-objects in the layer's scratch (sc in
+// Compactor.repack), and the build's scratch holds every pack of the copy and
+// names no alternate.
 func TestAPublicationsRepackReadsExactlyItsInputs(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)
-	// THE BASE: one push of two hundred files, published alone — the layer
-	// the next publication is written over, whose pack its repack never
-	// reads.
+	// THE BASE: one push of two hundred files, published alone: the layer the
+	// next publication is written over, whose pack its repack never reads.
 	history := make([]int, 200)
 	for i := range history {
 		history[i] = 64
@@ -795,11 +783,10 @@ func TestAPublicationsRepackReadsExactlyItsInputs(t *testing.T) {
 
 // A PUBLICATION'S REPACK IS HELD TO ITS RULES BEFORE ITS LAYER IS WRITTEN: the
 // count and bundle rules read the repack's outputs alone, so an output past
-// the bundle rule at the first cut is built once more, at its own ratio,
-// before the multi-pack-index layer and its bitmap — a walk of the whole
-// history, minutes at the largest repository — are written over it: the
-// layer is written ONCE, over outputs that pass both rules, nothing past the
-// bound reaches the store, and the publication lands.
+// the bundle rule at the first cut is rebuilt at its own ratio before the
+// multi-pack-index layer and its bitmap (a walk of the whole history, minutes
+// at the largest repository) are written ONCE, over outputs that pass both
+// rules; nothing past the bound reaches the store, and the publication lands.
 //
 // Mutation: hold the repack's outputs to the rules once the layer is written,
 // and the bundle rule's rebuild writes the multi-pack-index layer twice.
@@ -845,10 +832,10 @@ func TestAPublicationsRepackIsHeldToItsRulesBeforeItsLayerIsWritten(t *testing.T
 }
 
 // THE PUBLICATION'S ADMISSION IS RELEASED BEFORE ITS UPLOADS: once its build's
-// last git process has ended its maintenance slot and its charge — a bitmap
-// over the whole history — are given back, so an upload the store paces never
-// idles the node's maintenance for every other repository. While its upload
-// is held, another publication is admitted.
+// last git process ends, its maintenance slot and charge (a bitmap over the
+// whole history) are given back, so an upload the store paces never idles the
+// node's maintenance for every other repository: another publication is
+// admitted while its upload is held.
 //
 // Mutation: release the admission once the publication is answered, and the
 // second admission is refused busy while the upload is held.
@@ -907,10 +894,9 @@ func TestThePublicationsAdmissionIsReleasedBeforeItsUploads(t *testing.T) {
 
 // A PUBLICATION THE NODE CANNOT HOLD IS PUBLISHED WHEN THE NODE GROWS: an
 // admission the node's memory refuses is counted `memory` and NEVER
-// remembered (M3-decisions M3-O26) — the node's budget is read again at every
-// pass, and the next pass asks again who maintains the repository — so the
-// next pass, with no push between, plans it again and, once the memory holds
-// it, publishes it.
+// remembered (M3-decisions M3-O26), since every pass rereads the budget and
+// asks again who maintains the repository; so the next pass, with no push
+// between, plans it again and, once the memory holds it, publishes it.
 //
 // Mutation: remember the refusal as a plan with nothing to publish, and the
 // second pass skips the repository.
@@ -950,7 +936,7 @@ func TestAPublicationTheNodeCannotHoldIsPublishedWhenTheNodeGrows(t *testing.T) 
 }
 
 // failingOnce fails the first hit of its point, running then before it
-// answers — a build that ran on while a case's clock moved — and passes every
+// answers (a build that ran on while a case's clock moved), and passes every
 // other hit.
 type failingOnce struct {
 	point gitletfault.Point
@@ -997,26 +983,18 @@ func (x *fixture) publicationListed(name string) bool {
 	return slices.ContainsFunc(a.Publish, func(cand gitlet.PublicationCandidate) bool { return cand.Name == name })
 }
 
-// A PUBLICATION THAT DID NOT LAND IS PACED BY ITS BUILD: a build that fails
-// moves no row, and the due listing is least recently published first, so the
-// repository it failed for heads every pass's listing — and where its build
-// ran past the pass's minute, as the largest repositories' builds do, the next
-// pass began at once with it again, rebuilding that one repository back to
-// back while every other the node maintains waited. Held to the duty cycle
-// from when its build began — PublishMinInterval, or PublishDutyCycle times
-// that build, whichever is longer — the repository whose build failed after
-// two minutes is not attempted at the next pass, which publishes another due
-// repository; it is still held ten minutes on, its build's tenfold not yet
-// passed; and once that has passed it is published.
-//
-// ONE CLOCK THE CASE MOVES is the compactor's and the broker's instant on
-// every record the data node applies (stampedBy): a push is settled, and a
-// build's pace spent, by that clock alone, read once from the wall where the
-// case begins and moved only as the case says.
+// A PUBLICATION THAT DID NOT LAND IS PACED BY ITS BUILD: a failed build moves
+// no row, so its repository heads every listing (least recently published
+// first), and a build past the pass's minute would rerun back to back while
+// every other repository waited. Paced from its build's start by the longer of
+// PublishMinInterval and PublishDutyCycle times the build, a repository whose
+// build failed after two minutes is skipped at the next pass, which publishes
+// another, is still held ten minutes on, and is published once its build's
+// tenfold has passed. One clock the case moves is both the compactor's and
+// the broker instant of every record the data node applies (stampedBy).
 //
 // Mutations: skip no repository for a build that did not land, and the next
-// pass builds the failed one again; pace it by PublishMinInterval alone, and
-// it is built again before its build's tenfold has passed.
+// pass rebuilds it; pace by PublishMinInterval alone, and it is rebuilt early.
 func TestAPublicationThatDidNotLandIsPacedByItsBuild(t *testing.T) {
 	t.Parallel()
 	var (
@@ -1073,11 +1051,10 @@ func TestAPublicationThatDidNotLandIsPacedByItsBuild(t *testing.T) {
 	}
 }
 
-// stampedBy has a data node's applier read every record's broker instant off
-// clock — the instant its rows are stamped with, and the one its gates count
-// a rejection at — in place of the broker's own: a case's records stamped by
-// the clock it moves, so what the compactor judges by its clock against a
-// record's instant reads no wall clock between them.
+// stampedBy has a data node's applier read every record's broker instant (its
+// rows' stamp, and the instant its gates count a rejection at) off clock in
+// place of the broker's, so the compactor judges its clock against a record's
+// instant with no wall clock between them.
 func stampedBy(clock func() time.Time) func(statelog.Applier) statelog.Applier {
 	return func(a statelog.Applier) statelog.Applier { return stampedApplier{Applier: a, clock: clock} }
 }
@@ -1103,9 +1080,9 @@ func (a stampedApplier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Reco
 }
 
 // A PASS PUBLISHES ONLY WHAT ITS NODE MAINTAINS, asked by its maintenance's
-// charge: a node that is not a repository's maintainer syncs nothing of it,
-// and the question is asked by Compactor.PlacedBy of the listing's live
-// objects — the figure the maintainer is placed by.
+// charge: a node not a repository's maintainer syncs nothing of it, and the
+// question is asked by Compactor.PlacedBy of the listing's live objects, the
+// figure the maintainer is placed by.
 //
 // Mutation: publish what another node maintains, and the pass syncs it; ask by
 // the layer's own objects, and the charge differs.
@@ -1133,11 +1110,10 @@ func TestAPassPublishesOnlyWhatItsNodeMaintains(t *testing.T) {
 }
 
 // A COMPACTION LEAVES EVERY PUBLISHED PACK ALONE: a node's chain loads only
-// over every pack it names, so the compaction's plan leaves every pack a
-// published layer names out — a tail one push short of a roll, listed beside
-// the pack a root layer covers, is no compaction at all, where without the
-// layer the two are one roll — and nothing the committer would refuse stale is
-// ever built.
+// over every pack it names, so the compaction's plan leaves out every pack a
+// published layer names (a tail one push short of a roll beside a root layer's
+// pack is no compaction, where without the layer the two are one roll), and
+// nothing the committer would refuse stale is built.
 //
 // Mutation: plan over every live pack, and the compaction is built and refused
 // stale.
@@ -1150,10 +1126,9 @@ func TestACompactionLeavesEveryPublishedPackAlone(t *testing.T) {
 		t.Fatalf("the publication of a roll's pushes: %s, %v; want applied", out, err)
 	}
 	x.awaitInstalled(1)
-	// THE TAIL: as many pushes again as make a roll with the packs the root
-	// layer covers — its repack merged the first pushes into one — and one
-	// short of a roll on their own, so only a plan over a published pack is
-	// due.
+	// THE TAIL: as many pushes as make a roll with the packs the root layer
+	// covers (its repack merged the first pushes into one), one short of a
+	// roll on their own, so only a plan over a published pack is due.
 	x.pushN(gitlet.CompactMinMerge-len(x.rows().Packs), 4<<10)
 	before := x.rows()
 	if len(before.Packs) != gitlet.CompactMinMerge {
@@ -1173,11 +1148,11 @@ func TestACompactionLeavesEveryPublishedPackAlone(t *testing.T) {
 	}
 }
 
-// compactBesideSlots is c's compaction of cand, asked again only while the
-// maintenance lane has no slot or room for it (gitproc.ErrBusy: the node's
-// maintainer holds the slot a compaction may take for a moment at a time) —
-// never while the compactor itself answers it busy, which is what a case
-// about the compactor's own claims judges — for a minute at the most.
+// compactBesideSlots is c's compaction of cand, asked again for a minute at
+// most only while the maintenance lane has no slot or room for it
+// (gitproc.ErrBusy: the maintainer holds the slot a moment at a time), never
+// while the compactor itself answers busy, which a case about its own claims
+// judges.
 func compactBesideSlots(t testing.TB, c *compact.Compactor, cand gitlet.CompactionCandidate) (compact.Outcome, error) {
 	t.Helper()
 	deadline := time.Now().Add(time.Minute)
@@ -1190,22 +1165,18 @@ func compactBesideSlots(t testing.TB, c *compact.Compactor, cand gitlet.Compacti
 	}
 }
 
-// A COMPACTION MERGES BESIDE A PUBLICATION, NEVER ITS PACKS: a publication of
-// a large repository runs for minutes, and a busy repository gains packs at up
-// to three hundred a minute, so a repository whose merges waited for its own
-// publication would pass gitlet.MaxPacksPerRepo and have its pushes refused until
-// the publication answered. A compaction asked while a publication of its
-// repository is in flight on the same node — held here once its layer and its
-// repack's output are stored, nothing proposed — merges the roll pushed since
-// the publication's plan, and never a pack that plan covers, the repack's
-// inputs among them; and both records apply: the layer covers the repack's
-// output, and the merge's output stands outside it, a pack pushed after the
-// plan the layer need not name.
+// A COMPACTION MERGES BESIDE A PUBLICATION, NEVER ITS PACKS: a large
+// repository's publication runs for minutes while a busy one gains up to 300
+// packs a minute, so merges that waited for it would pass
+// gitlet.MaxPacksPerRepo and refuse pushes. A compaction asked while its
+// repository's publication is in flight on the node (held once its layer and
+// repack output are stored) merges the roll pushed since the publication's
+// plan, never a pack the plan covers, and both apply: the layer covers the
+// repack's output, and the merge's output stands outside it.
 //
-// Mutations: refuse a compaction while a publication of its repository is in
-// flight at all, and it answers busy; plan it over the publication's packs as
-// well, and it merges the repack's inputs, so the publication is refused
-// stale.
+// Mutations: refuse a compaction while its repository's publication is in
+// flight, and it answers busy; plan it over the publication's packs too, and
+// it merges the repack's inputs, so the publication is refused stale.
 func TestACompactionMergesBesideAPublicationNeverItsPacks(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t)
@@ -1269,9 +1240,8 @@ func TestACompactionMergesBesideAPublicationNeverItsPacks(t *testing.T) {
 	}
 }
 
-// heldSync is a cache whose next sync, once armed, is held — entered closed,
-// then waiting for release — before it reaches the cache: a build stopped
-// before its plan.
+// heldSync is a cache whose next sync, once armed, closes entered and waits
+// for release before it reaches the cache: a build stopped before its plan.
 type heldSync struct {
 	*counted
 	mu      sync.Mutex
@@ -1296,13 +1266,12 @@ func (h *heldSync) Sync(ctx context.Context, repoID string, fresh statelog.Fresh
 }
 
 // A COMPACTION AND A PUBLICATION OF ONE REPOSITORY NEVER PLAN OVER EACH OTHER
-// on one node: a compaction asked while a publication of its repository has
-// not planned yet — held here at its sync — answers busy having synced
-// nothing, since it could merge packs the layer is about to name; and a
-// publication asked while a compaction of its repository is running — held
-// here once its output is stored — answers busy having synced nothing, since
-// its plan would cover the merge's inputs. Each lands once the other is past
-// that point.
+// on one node: a compaction asked while its repository's publication has not
+// planned (held at its sync) answers busy having synced nothing, since it
+// could merge packs the layer is about to name; a publication asked while its
+// repository's compaction runs (held once its output is stored) answers busy
+// having synced nothing, since its plan would cover the merge's inputs. Each
+// lands once the other is past that point.
 //
 // Mutations: let a compaction claim the repository while its publication has
 // no reservation, and it syncs; let a publication claim it beside a running
@@ -1378,11 +1347,10 @@ func TestACompactionAndAPublicationOfOneRepositoryNeverPlanOverEachOther(t *test
 // A FULL STORE HOLDS BOTH LOOPS UNTIL IT HAS ROOM, never as a blip to retry:
 // a compaction whose output, and a publication whose part, the object store
 // refused for room (objstore.ErrFull) are each refused `store_full`, counted
-// so, and their repository planned again by that loop only once the store
-// shows the room — on a store that holds a reservation, once a pass's read of
-// it holds what the build would store; on a provider's bucket, which says
-// nothing, once the collector's interval has passed since the loop's refusal —
-// and never remembered at its version, which no room coming back moves.
+// so, and planned again by that loop only once the store shows the room (on a
+// reserved store, once a pass reads room for what the build would store; on a
+// provider's bucket, which says nothing, once the collector's interval has
+// passed since the refusal), never remembered at a version no room moves.
 //
 // Mutations: answer ErrFull `failed`, and the loops build and upload again at
 // the next pass; hold the repository at its version, and neither loop runs
@@ -1480,13 +1448,11 @@ func TestAFullStoreHoldsBothLoopsUntilItHasRoom(t *testing.T) {
 }
 
 // A REPOSITORY'S STORED PUBLICATION ANSWERS ITS OWN HOLD, as a compaction's
-// outputs do (TestAStoredCompactionReleasesItsOwnHold), on a store that holds a
-// reservation as on any: a repository whose first publication a full store
-// refused is published again, once that one landed, as soon as the room holds
-// its NEXT publication — a small tail's layer over the first — though the room
-// is below what the first would have stored. The refusal it was held back for
-// is answered by its own uploads, stored; a refusal of a later publication
-// would set an estimate of its own.
+// outputs do (TestAStoredCompactionReleasesItsOwnHold), on a reserved store as
+// on any: once the publication a full store refused has landed, the next one
+// (a small tail's layer over the first) runs as soon as the room holds it,
+// though the room is below what the first would have stored. Its own stored uploads
+// answered the refusal; a later publication's refusal sets its own estimate.
 //
 // Mutation: keep the publication loop's own hold once its uploads are stored
 // (Compactor.stored), and the next publication is skipped at every pass — held
@@ -1550,9 +1516,9 @@ func TestAStoredPublicationReleasesItsOwnHold(t *testing.T) {
 	}
 	x.awaitInstalled(1)
 
-	// THE NEXT PUBLICATION: a tail of four small pushes — past the share of
-	// the repository's objects that makes one due — whose layer, over the first,
-	// weighs far less. The duty cycle's interval passed since the first.
+	// THE NEXT PUBLICATION: a tail of four small pushes, past the share of the
+	// repository's objects that makes one due, whose layer over the first
+	// weighs far less, a duty cycle's interval after the first.
 	x.pushN(4, 1<<10)
 	var tail int64
 	for _, p := range x.rows().Packs {

@@ -15,16 +15,15 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// A TURN HOLDS A WHOLE CHAIN: the queue builds its train in its turn, one
-// Backstop, so the git a chain is given at the most (gitlet.ChainBuildDeadline:
-// its merges and its pack) leaves a third of the turn — twenty seconds — for
-// what the turn does around it: its due read before it, and the bundle's
-// store and the candidate record after it, each well under a second in the
-// common case. A chain given more would be cut by its turn's end with its
-// work thrown away, and every turn after it would build it to the same cut.
+// A TURN HOLDS A WHOLE CHAIN: the queue builds its train within one Backstop, so
+// the git a chain is given at most (gitlet.ChainBuildDeadline: its merges and its
+// pack) leaves a third of the turn, twenty seconds, for its due read before and the
+// bundle's store and candidate record after, each commonly well under a second. A
+// chain given more would be cut at the turn's end, its work thrown away, and every
+// later turn would build it to the same cut.
 //
 // Mutation: give a chain's pack as long as its merges (gitlet.ChainPackDeadline
-// thirty seconds) → sixty of a sixty-second turn, red.
+// thirty seconds): sixty of a sixty-second turn, red.
 func TestATurnHoldsAWholeChain(t *testing.T) {
 	t.Parallel()
 	if room := home.Backstop - gitlet.ChainBuildDeadline; room < home.Backstop/3 {
@@ -80,23 +79,18 @@ func (b *busyRepo) turned() ([]statelog.Freshness, int) {
 	return slices.Clone(b.reads), b.most
 }
 
-// A BURST ON A BUSY REPOSITORY COSTS ONE MORE TURN: while a turn of the
-// change work holds a repository, records told about it at positions out of
-// order schedule ONE more turn of it — after the busy one ends, never beside
-// it — read at the FURTHEST position the burst named, so the rows it reads
-// hold every record of it; never a turn a record, and never two turns of one
-// repository at once.
+// A BURST ON A BUSY REPOSITORY COSTS ONE MORE TURN: records told about a repository,
+// at positions out of order, while a turn of the change work holds it schedule ONE
+// more turn, after the busy one, never beside it, read at the FURTHEST position the
+// burst named so its rows hold every record: never a turn a record, never two at once.
 //
-// In a bubble, where synctest.Wait returns once every goroutine but the
-// case's is durably blocked: once the burst has been told, a turn it wrongly
-// scheduled beside the busy one — the loop's second goroutine is idle — has
-// begun its read by then, beside the held one; and once the busy turn is let
-// go, every turn the burst scheduled has run by then, while the bubble's
-// clock, which holds the loop's passes, has not moved.
+// In a bubble (synctest.Wait returns once every other goroutine is durably blocked):
+// once the burst is told, a turn wrongly scheduled beside the busy one (the loop's
+// second goroutine is idle) has begun its read; once the busy turn is let go, every
+// turn the burst scheduled has run, while the clock, holding the loop's passes, stands.
 //
-// Mutations: schedule a busy pair as an idle one, queued at once — a second
-// turn runs beside the first, red; keep the last floor asked rather than the
-// furthest — the turn after reads at 53, red.
+// Mutations: schedule a busy pair as an idle one (a second turn beside the first),
+// red; keep the last floor asked, not the furthest (the next turn reads at 53), red.
 func TestABurstOnABusyRepositoryCostsOneMoreTurn(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -197,14 +191,13 @@ func (l lateReads) GitRead(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAn
 	return l.estate.GitRead(context.WithoutCancel(ctx), q)
 }
 
-// A TURN WHOSE WORK FINISHES PAST ITS BOUND DID IT: a repository's turn whose
-// facts read answers only once its one Backstop has ended, and whose work then
-// finishes, the facts recorded, is counted `worked`. Counted `cut`, it would
-// say the rest of its work is listed again by the next pass when none is left,
-// and a home whose turns all ran a little long would count none worked (#826).
+// A TURN WHOSE WORK FINISHES PAST ITS BOUND DID IT: a turn whose facts read answers
+// only after its Backstop has ended, and whose work then finishes, is counted
+// `worked`. Counted `cut`, it would claim work left for the next pass when none is,
+// and a home whose turns all ran a little long would count none worked.
 //
 // Mutation: count a turn cut whenever its bound has ended, whatever its work
-// answered, and this turn is counted cut, red.
+// answered, red.
 func TestATurnWhoseWorkFinishesPastItsBoundDidIt(t *testing.T) {
 	t.Parallel()
 	e := newEstate()

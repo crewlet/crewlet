@@ -11,16 +11,15 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A LITERAL IS MATCHED FOLDED, WHEREVER A WRITE CUTS IT. Every message is fed
-// whole and in pieces of every size — so a rune, and the literal, are cut at
-// every byte — and found exactly where strings.EqualFold finds the literal in
-// one of the message's windows: across the cases of the Kelvin sign, of a
-// long s and of a Greek sigma; never across a byte that is not UTF-8, which
-// stands for itself; and with a match that begins inside a failed one (aaab).
+// A LITERAL IS MATCHED FOLDED, WHEREVER A WRITE CUTS IT. Each message is fed
+// whole and in pieces of every size, cutting a rune and the literal at every
+// byte, and found exactly where strings.EqualFold finds the literal in one of
+// its windows: across the Kelvin sign, a long s and a Greek sigma; never across
+// a byte that is not UTF-8, which stands for itself; and with a match beginning
+// inside a failed one (aaab).
 //
-// Mutation: fold left out (the literal matched as written) — the cases' arms
-// red; a rune cut by a write read as bytes that are not UTF-8 — the pieces'
-// arms red.
+// Mutation: no fold — the cases' arms red; a rune a write cut read as bytes
+// that are not UTF-8 — the pieces' arms red.
 func TestALiteralIsMatchedFoldedWhereverAWriteCutsIt(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -61,8 +60,8 @@ func TestALiteralIsMatchedFoldedWhereverAWriteCutsIt(t *testing.T) {
 			}
 		}
 	}
-	// AND THE MATCHER IS READY FOR THE NEXT MESSAGE once one ends, a rune
-	// the last ended inside included.
+	// AND THE MATCHER IS READY FOR THE NEXT MESSAGE once one ends, even one
+	// ending inside a rune.
 	l := newLiteral("ab")
 	l.write([]byte("a\xc3"))
 	l.end()
@@ -78,17 +77,14 @@ func logRecordText(fields ...string) string {
 	return strings.Join(fields, "\x00") + "\x00\x00"
 }
 
-// A LOG'S RECORD IS READ EXACTLY: its declared fields, each held to its
-// grammar, and the empty field that ends it — fed whole and a byte at a time —
-// and any record that is not that fails the page as output that does not
-// parse, never answered as a commit: a field too many, a field too few, an id
-// that is no id, a parent list that is no list, a date that is no number, and
-// a stream that ends inside a record. The committer is read apart from the
-// author.
+// A LOG'S RECORD IS READ EXACTLY, whole and a byte at a time: its declared
+// fields, each held to its grammar, the committer apart from the author, and
+// the empty field ending it. Anything else fails the page as output that does
+// not parse, never a commit: a field too many or too few, an id, parent list
+// or date that is none, a stream ending inside a record.
 //
 // Mutation: the terminator's emptiness unchecked (a field too many read as the
-// next record's start) → red; the committer read from the author's field →
-// red.
+// next record's start) → red; the committer read from the author's field → red.
 func TestALogRecordIsReadExactly(t *testing.T) {
 	t.Parallel()
 	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)
@@ -185,10 +181,9 @@ func TestAMergeOfManyParentsIsDescribedByItsCount(t *testing.T) {
 }
 
 // A FIELD IS DESCRIBED PAST ITS ENCODED BOUND: a subject within its bytes but
-// past them once encoded — control bytes, six each — or once neutralised — a
-// fence's marker, `[escaped ` each — is answered by its size, as one past its
-// bytes is; and one within every measure is answered whole, its neutralising
-// counted.
+// past them once encoded (control bytes, six each) or neutralised (a fence's
+// marker, `[escaped ` each) is answered by its size, as one past its bytes is;
+// one within every measure is answered whole, its neutralising counted.
 //
 // Mutation: the bound held to the raw bytes alone → the control bytes' arm red.
 func TestAFieldIsDescribedPastItsEncodedBound(t *testing.T) {
@@ -234,20 +229,18 @@ func porcelain(a, b string) string {
 		a + " 1 4 1\n\tfour\n"
 }
 
-// A BLAME'S PORCELAIN IS READ AS GIT WRITES IT — whole and a byte at a time:
-// each line with its group's commit; a commit's details named once and every
-// later line of it carrying them; its path C-unquoted as git quotes it;
-// git's "(<id>)" stand-in for an empty message answered as no subject; an
-// author's and a committer's address taken out of their brackets, and the
-// engine's convention marked; a detail no answer carries read past. And what
-// is no porcelain fails as output that does not parse: a line with no header,
-// a detail before any header, an id of a header's alone, a stream ending
-// inside a line, a committer's address out of brackets, a committer named
-// twice.
+// A BLAME'S PORCELAIN IS READ AS GIT WRITES IT, whole and a byte at a time:
+// each line with its group's commit; a commit's details named once and carried
+// by its later lines; its path C-unquoted; git's "(<id>)" stand-in for an empty
+// message read as no subject; addresses out of their brackets, the engine's
+// convention marked; a detail no answer carries skipped. What is no porcelain
+// fails as output that does not parse: a line with no header, a detail before
+// any, a header's id alone, a stream ending inside a line, a committer-mail out
+// of brackets, a committer named twice.
 //
-// Mutation: a commit's path taken from the line's group rather than kept for
-// the commit (the fourth line, a's again, with no filename) → red; the
-// committer-mail kept with its brackets → red.
+// Mutation: a commit's path taken from the line's group, not kept for the
+// commit (the fourth line, a's again, has no filename) → red; the
+// committer-mail kept bracketed → red.
 func TestABlamesPorcelainIsReadAsGitWritesIt(t *testing.T) {
 	t.Parallel()
 	a, b := strings.Repeat("a", 40), strings.Repeat("b", 40)

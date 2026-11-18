@@ -39,7 +39,9 @@
 // checks.>`, [Nudges]) tell the loop the subject and the position of every
 // record a repository's subject takes — a push, a change's open, edit or
 // retarget — and every one its checks take — an attempt queued, claimed or
-// ended, a head's dispatch — as the broker stores it, headers alone; the loop asks its
+// ended, a head's dispatch — as the broker stores it, headers alone, each
+// position in the generation this node's applier last committed in (the
+// engine adapts the broker's sequences); the loop asks its
 // placement whether this node is the repository's home ([Placement.Home]) and
 // schedules it only where it is, AT THE RECORD'S POSITION, so the read that
 // follows waits for this node's copy to hold the record before it reads the
@@ -105,7 +107,15 @@
 // scratch and no git, the writer judging the readiness again over the merge
 // the row holds. A change-subject record — a review, an ask — nudges no
 // repository: the watch sees subjects alone, and a change's subject names no
-// repository, so its refresh waits the backstop, a minute at the most. A
+// repository, so its refresh waits the backstop, a minute at the most. So
+// does a configuration apply, which no log record carries: every listing
+// names the activation of the chart this node holds ([Options].Chart), and a
+// change whose readiness an earlier chart judged is listed due a refresh.
+// A repository's first page also names the changes whose asks for review are
+// due a SETTLING — an ended change's asks still waiting, or those its end
+// left on a change reopened since — settled first, one record a change; a
+// close, merge or reopen is a repository record and nudges the home, so an
+// ended change's asks stop waiting at once rather than at the backstop. A
 // refusal that the rows moved since
 // — superseded, stale, a change closed or merged — is the rows answering, left
 // to the next pass, which reads them again; one that decided nothing for a
@@ -149,6 +159,20 @@
 // work's: the rows moving is the next pass's, a write deciding nothing the
 // turn's failure.
 //
+// A protected target's TIP WORK (tips.go, ADR-0098) rides the same turn: each
+// target holding a landing neither green nor broken is read whole, on pages
+// of its own before the heads', so every one is worked within the turn. Its
+// NEWEST landing is dispatched alone and one round at a time — never while a
+// tip round on another of its commits is in flight, so a target landed on
+// faster than its checks run keeps one round in flight, not one a landing —
+// under the checks file at the BASE of the first landing above the green,
+// never at the tip, whose landing could edit the file to define its own
+// measurement. Every required check passed moves the green there; a failure
+// is BISECTED over the landing rows, never git's history, down to the first
+// red landing, recorded broken once. Each step is decided again by its own
+// writer (code.checks or the committer, code.queue), which refuses one read
+// from a snapshot that has moved.
+//
 // # What a turn of the merge queue does
 //
 // One repository's queue work, a target a page (the due-queue read,
@@ -166,6 +190,12 @@
 // entry's row keeps it ([TaskClose.WorkingFor]), through [Tasks] — the
 // engine's tracker, which this package does not import, and which decides the
 // close within that requester's apps. queue.go has the rules of each step.
+//
+// The queue worker also measures each target's MERGE RATE (mergerate.go): its
+// enqueues within an hour against the target's landing capacity at the mean
+// round this node timed its own trains at, raised through [Loop.AlarmReading].
+// It is NODE-LOCAL, as the compactor's last pass is, because only the home
+// builds a queue's trains and so only it can time them.
 //
 // # Merge previews, beside the loop
 //

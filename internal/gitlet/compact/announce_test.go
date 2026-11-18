@@ -47,23 +47,17 @@ func (h *heard) all() ([]types.CodeExpunged, []string) {
 const storeHold = gitlet.RetireGrace + gitlet.RetentionInterval + collect.CollectInterval
 
 // EVERY COMMITTED EXPUNGE IS ANNOUNCED ONCE: a person's purge served and a
-// cycle the maintainer's weekly schedule began each end in exactly one
-// code_expunged on the node's event stream, published on the type's own
-// subject once the commit has applied — naming the repository, the purge it
+// weekly-schedule cycle each end in exactly one code_expunged on the type's
+// own subject once the commit has applied, naming the repository, the purge
 // served (none for the schedule), the expunge, what it dropped, the commit's
-// position and until when the store still holds the dropped bytes — so the
-// event log keeps every expunge where the repository's detail keeps only its
-// latest.
-//
-// THE COMPACTOR'S CLOCK IS THE CASE'S, frozen at one instant: every instant
-// the expunge reads is that one, its commit's among them, so the store is
-// held until exactly storeHold past it — read with no wall clock between the
-// commit and the case.
+// position and until when the store holds the dropped bytes: the event log
+// keeps every expunge, the repository's detail only its latest. Every
+// instant the expunge reads, its commit's included, is the compactor's frozen
+// one, so the store is held until exactly storeHold past it.
 //
 // Mutation: drop the announcement from the commit's applied path, and both
-// cases hear none; announce from the begin as well, and both hear two; hold
-// the store from the wall clock's instant rather than the compactor's, and
-// the event's end is not the commit's.
+// cases hear none; announce from the begin too, and both hear two; hold the
+// store from the wall clock's instant, and the event's end is not the commit's.
 func TestEveryCommittedExpungeIsAnnouncedOnce(t *testing.T) {
 	t.Parallel()
 

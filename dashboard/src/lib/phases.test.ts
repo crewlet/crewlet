@@ -806,11 +806,15 @@ describe("delegated workers", () => {
   // dashboard never draws.
   test("a launch is read as a record of its executor round", () => {
     const launch = fromPhaseEvent(
-      launchEvent({ activity_transcript: "[tool] bash: go test", failed: true, error: "exit 1" }),
+      launchEvent({
+        activity_transcript: "[tool 1] bash: go test\n[failed 1] exit 1",
+        failed: true,
+        error: "exit 1",
+      }),
     )!;
     expect([launch.phase, launch.iteration, launch.launch]).toEqual(["execute", 1, true]);
     expect(launch.response).toBe("Fixed the flake.");
-    expect(launch.transcript).toBe("[tool] bash: go test");
+    expect(launch.transcript).toBe("[tool 1] bash: go test\n[failed 1] exit 1");
     expect([launch.harnessTurns, launch.totalTokens, launch.harness]).toEqual([
       31,
       9_700,
@@ -870,7 +874,7 @@ describe("what a launch's record left out", () => {
   test("is read off the record", () => {
     const run = fromPhaseEvent(
       launchEvent({
-        activity_transcript: "plan\n(3998 line(s), 900 KiB, left out here)\nend",
+        activity_transcript: "plan\n[note] 3998 line(s), 900 KiB, left out here\nend",
         activity_transcript_elided_lines: 3998,
         activity_transcript_elided_bytes: 921_600,
         delivered_refs: ["https://github.com/acme/api/pull/1"],

@@ -98,7 +98,7 @@ func TestAListInAHarnesssRecordCostsItsReaderOneElementAtATime(t *testing.T) {
 	// reader is handed a line it did not copy.
 	stream := func(line string) func() {
 		raw := []byte(line)
-		return func() { (&claudeEvents{tools: map[string]string{}}).Line(raw) }
+		return func() { (&claudeEvents{}).Line(raw) }
 	}
 	parse := func(line string) func() {
 		return func() { _ = ClaudeCode{}.Parse(line) }
@@ -170,7 +170,7 @@ func TestAListIsReadAnElementAtATimeAsItsHarnessReadsIt(t *testing.T) {
 		ending = `{"type":"result","subtype":"error_during_execution","is_error":true,"errors":` + errs + `}`
 	)
 	stream := func(line string) string {
-		d := &claudeEvents{tools: map[string]string{}}
+		d := &claudeEvents{}
 		d.Line([]byte(line))
 		return d.Result().Transcript
 	}
@@ -201,7 +201,7 @@ func TestAListIsReadAnElementAtATimeAsItsHarnessReadsIt(t *testing.T) {
 	for name, tc := range map[string]struct{ got, want string }{
 		"a run's event stream, a message's blocks": {stream(reply), "cut \ufffd\nbad \ufffd\nkept"},
 		"a run's event stream, a failed call's result": {stream(result),
-			"[tool] tool → error: cut \ufffd (+3 more line(s))"},
+			"[failed] cut \ufffd (+3 more line(s))"},
 		"a run's event stream, its result's errors": {stream(ending),
 			"[error] the run ended: error_during_execution: cut \ufffd (+4 more line(s))"},
 		"a run's result, its errors": {func() string {

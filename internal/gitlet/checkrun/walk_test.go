@@ -76,8 +76,8 @@ func (w *walks) walked(t *testing.T, r *checkrun.Runner, n int) {
 // next attempt.
 //
 // The walk that claimed the first attempt read the queue before its claim, so
-// every read of it is counted once the box is named; and the five nudged walks
-// are read once each has ended (walks.walked).
+// its reads are all counted once the box is named; the five nudged walks are
+// counted once each has ended (walks.walked).
 //
 // Mutation: count a cell the catalogue configures as room whatever the
 // company allows — the e2b cell keeps every walk reading the queue, red.

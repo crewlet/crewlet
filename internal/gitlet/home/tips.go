@@ -10,49 +10,23 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// tip is one protected target's TIP WORK (ADR-0098; internal/gitlet's
-// tipwork.go), decided from the one snapshot t was read in — the landings
-// above the target's green, oldest first, each with the latest attempt of
-// each required check on its commit — in this order:
+// tip is a protected target's TIP WORK (ADR-0098; internal/gitlet's tipwork.go), in order:
+//   - no check required: the green row moved onto the newest landing;
+//   - a required check the newest landing holds no attempt of: DISPATCHED there (purpose
+//     tip) under the checks file the BASE holds, one round at a time: never while another
+//     tip round of the target is in flight (gitlet.TipDue.InFlight), so a target landed on
+//     faster than its checks run keeps one round in flight, not one a landing;
+//   - an attempt owed again (landingStates' requeue): queued again;
+//   - all passed (or skipped): the green row moved onto it; one failed: BISECTED, not
+//     waiting on a check the base's file (a commit's, never changing) cannot define.
 //
-//   - a target whose gate requires no check has its green row moved onto its
-//     newest landing as it stands;
-//   - a required check the newest landing holds no attempt of is DISPATCHED
-//     there (purpose tip), under the checks file the window's BASE holds —
-//     coalesced, ONE ROUND AT A TIME: only the newest landing is ever
-//     dispatched, and only once no tip round on another of the target's
-//     commits is still queued or running (gitlet.TipDue.InFlight). A round
-//     superseded by a later landing still runs to its end, and the record
-//     that ends it nudges this work, which then dispatches whatever is
-//     newest — so the landings that arrive while a round runs are measured
-//     together by the next, and a target landed on faster than its checks
-//     run keeps one round in flight rather than one a landing;
-//   - an attempt there its infrastructure ended is queued again below
-//     gitlet.AutoRequeueAttempts, and one a merge queue cancelled giving its
-//     train up below gitlet.MaxCheckAttempts;
-//   - every required check passed (or skipped) there: the green row moved onto
-//     it;
-//   - one failed there: the failed checks BISECTED over the landing rows —
-//     beside a check the base's file cannot define, which errored on the tip
-//     and stays errored until the green moves: the file at the base is a
-//     commit's and never changes, so waiting on that check would leave the
-//     failed ones' first red landing unnamed for as long as the gate asks for
-//     it.
-//
-// Anything else — an attempt still queued or running, one ended in a way
-// nobody but a person's rerun moves — waits for the record that ends it, which
-// nudges this work again.
-//
-// Every write is a record decided where it lands: a check's by the
-// repository's checks writer, a green or a broken by its committer
-// (code.queue), each refusing what its own snapshot does not prove, so a step
-// decided from a snapshot the log has moved past is refused and read again
-// next turn rather than recorded wrong.
+// Anything else waits for the record that ends it. Each writer (code.checks, code.queue)
+// refuses what the one snapshot t was read in no longer proves; the next turn reads again.
 func (k *checks) tip(ctx context.Context, repoID string, t gitlet.TipDue, memo *defsMemo,
 	at statelog.Position) error {
 
-	// THE CULPRIT PAST THE WINDOW is warned of once a tip: forgotten on any
-	// turn that finds the target out of that state.
+	// THE CULPRIT PAST THE WINDOW is warned of once a tip (culpritsPastWindow):
+	// forgotten on any turn that finds the target out of that state.
 	pastWindow := false
 	defer func() {
 		if !pastWindow {
@@ -109,27 +83,18 @@ func (k *checks) green(ctx context.Context, repoID string, t gitlet.TipDue, l gi
 		"move its green row")
 }
 
-// bisect finds the first landing above t's green on which the checks named
-// failed — the tip's failed checks, so a second break behind one already
-// named is found by its own checks — reading each landing's own attempts from
-// the rows, never git's history:
+// bisect finds the first landing above t's green on which one of failed (the tip's
+// failed checks, so a second break behind a named one is found by its own) failed,
+// from each landing's own attempts in the rows, never git's history:
+//   - red is the first landing one of failed FAILED on (the tip at the latest), good
+//     the last before it every one of failed passed on (else the green itself);
+//   - adjacent, red is the culprit, recorded broken once;
+//   - otherwise the landing midway is PROBED (purpose bisect) under the base's file.
 //
-//   - red is the first landing one of failed FAILED on (the tip, at the
-//     latest), good the last landing before it every one of failed passed
-//     on — the green itself, before the window, where none did;
-//   - adjacent, red is the culprit, recorded broken (once: a landing a
-//     bisect already named is left as it is);
-//   - otherwise the landing midway between them is PROBED (purpose bisect):
-//     each of failed it holds no attempt of queued there, under the base's
-//     checks file, and an attempt its infrastructure ended queued again.
-//
-// A probe still running, or one ended in a way only a person's rerun moves,
-// waits; so does a culprit the window cannot name — the window's last landing
-// good and the tip, read past a gap, red — which a green tip beyond it clears,
-// and which bisect answers true for: a condition that stands for as long as
-// the gap does, which every check record of the repository asks a turn
-// about, so it is WARNED ONCE A TIP (code_tip_culprit_past_the_window) and
-// never once a turn, a new tip warned of afresh.
+// A probe still running, or one only a person's rerun moves, waits; so does a culprit
+// the window cannot name (good its last landing, the tip read past a gap) until a green
+// tip beyond clears it. bisect answers true for that, WARNED ONCE A TIP, not once a turn
+// as every check record asks one (code_tip_culprit_past_the_window).
 func (k *checks) bisect(ctx context.Context, repoID string, t gitlet.TipDue, failed []string, memo *defsMemo,
 	at statelog.Position) (bool, error) {
 
@@ -189,14 +154,11 @@ func (k *checks) bisect(ctx context.Context, repoID string, t gitlet.TipDue, fai
 	return false, err
 }
 
-// culpritsPastWindow is, by repository and target, the tip a culprit past
-// its bisect window was last warned of on this node: what makes the warning
-// once a tip rather than once a turn. An entry goes on the first turn that
-// finds its target out of that state, so it holds the targets standing in it
-// now, a few at most; one whose target is never turned here again (its
-// repository deleted, or homed elsewhere) stays, a key and a commit id, until
-// this node restarts. Kept in this node's memory, not the rows, because it
-// decides nothing but a log line: a restarted node, or a new home, warns of
+// culpritsPastWindow is, by repository and target, the tip last warned of on this
+// node as a culprit past its bisect window. An entry goes on the first turn that finds
+// its target out of that state, so it holds a few at most; one whose target never
+// turns here again stays, a key and a commit id, until restart. In memory, not the
+// rows, because it decides only a log line: a restarted node, or a new home, warns of
 // a standing gap once more.
 type culpritsPastWindow struct {
 	mu   sync.Mutex
@@ -257,14 +219,12 @@ func passedAll(l gitlet.TipLanding, names []string) bool {
 	return true
 }
 
-// landingStates is where each of a set of checks stands on one landing by its
-// latest attempt: none (missing), errored at a dispatch for a checks file
-// that did not run (invalid), still to run (pending), ended by its
-// infrastructure below gitlet.AutoRequeueAttempts or cancelled by a merge queue
-// giving its train up below gitlet.MaxCheckAttempts (requeue) — neither
-// measured the commit, and a chain built again is the same commits, so a live
-// train may test one a given-up train's cancellation left — ended otherwise
-// without a measurement (stuck), failed — and, beside them, passed.
+// landingStates is where each of a set of checks stands on one landing by its latest
+// attempt: none (missing); errored at a dispatch for a checks file that did not run
+// (invalid); still to run (pending); ended by its infrastructure below
+// gitlet.AutoRequeueAttempts or cancelled by a merge queue giving its train up below
+// gitlet.MaxCheckAttempts (requeue), since neither measured the commit and a rebuilt
+// chain is the same commits; ended otherwise unmeasured (stuck); failed; or passed.
 type landingStates struct {
 	missing, invalid, pending, requeue, stuck, failed []string
 	latest                                            map[string]int
@@ -308,15 +268,12 @@ func statesOf(check func(name string) (gitlet.TipCheck, bool), names []string) l
 	return s
 }
 
-// probe queues on l what s says it owes of its checks for t's target, under
-// defs, the checks file t's base holds: the first attempt of each it holds
-// none of, the next of each a dispatch errored for a file that did not run
-// once the file runs, and the next of each its infrastructure ended — each
-// under the base's definition, or, where the base's file is none that runs or
-// defines no such check, ERRORED there saying so (a tip's dispatch alone: a
-// bisect probes only checks its tip ran, under the same file). It answers how
-// many attempts it asked: none where everything owed is an attempt the base's
-// file cannot define and the rows already say so.
+// probe queues on l what s says it owes for t's target under defs, the checks file
+// t's base holds: the first attempt of each missing check, the next of each invalid
+// one once the file runs, and the next of each requeue. Where the file is none that
+// runs or defines no such check, a tip's first dispatch is queued ERRORED saying so
+// (a bisect probes only checks its tip ran, under the same file). It answers how many
+// attempts it asked: none where all it owes is already errored on the rows for that.
 func (k *checks) probe(ctx context.Context, repoID string, t gitlet.TipDue, l gitlet.TipLanding,
 	purpose gitlet.CheckPurpose, s landingStates, defs *checksDefs, at statelog.Position) (int, error) {
 

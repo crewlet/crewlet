@@ -18,12 +18,10 @@ import (
 )
 
 // GitPeak is the most memory one git process s ran held while its output was
-// read: Peak is its VmHWM, the high-water mark of its resident memory in
-// bytes, read from /proc each time a piece of its output reached the caller;
-// Wrote is how many bytes of output there were; and Found is whether the
-// process was found at its first output. One that had ended by then — an
-// output small enough to sit in the pipe whole — was never read, and its
-// Peak says nothing.
+// read: Peak is its VmHWM in bytes, read from /proc at each piece of output;
+// Wrote is the output's size; Found is whether the process was found at its
+// first output. One already ended by then (its output fit the pipe whole) was
+// never read, and its Peak says nothing.
 type GitPeak struct {
 	Args  []string
 	Peak  int64
@@ -32,9 +30,9 @@ type GitPeak struct {
 }
 
 // PeakGit has s watch every READ-lane git process it hands the pool from now
-// on whose output a caller of s reads (Cmd.Stdout) — the scans of a push
-// among them — and answers a reader of what each held at most, in order. Set
-// before the request it is to watch. Linux alone: it reads /proc.
+// on whose output a caller of s reads (Cmd.Stdout), a push's scans among
+// them, and answers a reader of each one's peak, in order. Set it before the
+// request it is to watch. Linux alone: it reads /proc.
 func PeakGit(s *Server) func() []GitPeak {
 	var (
 		mu    sync.Mutex
@@ -60,11 +58,10 @@ func PeakGit(s *Server) func() []GitPeak {
 	}
 }
 
-// peakWriter is a Cmd.Stdout reading the high-water mark of the process
-// writing to it each time it is written, before it hands the bytes on: while
-// a Write runs, the process is either done writing or held writing to a full
-// pipe, and every output larger than the pipe and the pool's read of it
-// holds it alive for the first.
+// peakWriter is a Cmd.Stdout reading its writer's high-water mark at each
+// Write, before handing the bytes on: during a Write the process is done or
+// blocked on a full pipe, so an output larger than the pipe and the pool's
+// read of it keeps the process alive for the first.
 type peakWriter struct {
 	w           io.Writer
 	dir         string
@@ -88,9 +85,8 @@ func (p *peakWriter) Write(b []byte) (int, error) {
 	return p.w.Write(b)
 }
 
-// gitPID is the process running in dir — the pool runs git with its
-// repository as its working directory — whose arguments end with args, or 0
-// for none.
+// gitPID is the process running in dir (the pool runs git in its repository)
+// whose arguments end with args, or 0 for none.
 func gitPID(dir string, args []string) int {
 	want, err := filepath.EvalSymlinks(dir)
 	if err != nil {

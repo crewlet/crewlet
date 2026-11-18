@@ -22,83 +22,17 @@ import (
 )
 
 // BenchmarkTransferShare is A PERSON'S CLONE ON A TRANSFER LANE CI HAS FILLED:
-// real upload-packs of the shared history (BenchmarkTransfer's, about 19 MB)
-// as the host runs a clone — protocol v2, the transfer lane, upload-pack's
-// deadline and the stall watchdog — each operation one person's clone, its
-// wait for a slot and its run. What decides ShareClass.Weight and
-// ShareWindow (share.go) is in these arms:
-//
-//   - mix=idle: the person alone. The floor every other arm is read against.
-//   - mix=machine64: sixty-four clones at once by ONE machine credential, every one
-//     of them begun again the moment it ends, while the person clones. The
-//     share grants the person the first slot released.
-//   - mix=machine64-fifo: the same with the lane granting in arrival order
-//     (gitproc.SetArrivalOrder) — the CONTROL, the lane before the share: the
-//     person waits behind every clone queued before them, and past SlotWait is
-//     answered busy (counted, never a failure of the arm).
-//   - mix=machine-alone and mix=machine-alone-fifo: the machine's sixty-four
-//     with nobody else, each operation sixty-four of its clones ending — the lane's
-//     throughput with and without the share, which a WORK-CONSERVING share
-//     leaves equal: a weight decides who goes next, never whether a slot is
-//     used.
-//   - decay=1m and decay=3m: the person's own burst first — sixty-four clones
-//     of their own — then, on a clock moved on by that much
-//     (gitproc.SetShareClock), the machine's sixty-four and the person's
-//     clones as in mix=machine64. What ShareWindow buys: a burst still counts
-//     against its principal a minute on, and three minutes on (e^-3, 5 %
-//     left) the person waits as one who spent nothing does.
-//   - mix=runs/weights=P:M:R: THE CODING BOXES' CLASS AMONG THE OTHERS
-//     (ADR-0093) — the machine's sixty-four, a minute into holding the lane,
-//     then boxClones coding boxes arriving, each a principal of its own (its
-//     launch) making the coding recipe's two transfers again and again
-//     (boxClone: a blobless fetch of the tip, then its checkout's fetch of
-//     the tip's every file), half of them read at objstore.MiBPace's floor,
-//     so a slow box holds its slot for minutes; the person's clones measured
-//     once the boxes have held what the lane lets them for boxesSteady
-//     (boxesHold), with a push of theirs every personPushEvery beside them —
-//     every class contending for every release,
-//     on the lane weighing the classes P:M:R (gitproc.SetWeights): 4:2:1,
-//     ShareClass.Weight's, then 8:4:1 and 16:8:1, the search the weights are
-//     decided by. Its pass rule: the person's clone p99 within twice
-//     mix=idle's, none of their clones or pushes answered busy, and the boxes
-//     never holding more than half the lane (run-held-max, sampled through
-//     gitproc.TransferHeld, and run-share, the run class's part of what the
-//     lane spent lately, which crewlet.code.git.share{share=run} reads).
-//   - mix=runs-uncapped: the same at 4:2:1 with the boxes' cap lifted
-//     (gitproc.SetRunUncapped), measured once the boxes hold every slot — the
-//     CONTROL, the share before ShareClass.Cap: slow boxes holding the whole
-//     lane for minutes, and the person answered busy.
-//
-// The runs arms' lane is as wide as the cores too, unless shareSlotsEnv names
-// a width of its own (runsLaneWidth). ON A LANE OF TWO — the runner's, where
-// these arms were first measured — the boxes' half is one slot and a person's
-// clone shares the other with the machine's: it waits behind at most one
-// machine clone, which takes as long as its own, so its p99 is about twice
-// its idle one whatever the weights, which keep persons at twice the machines
-// in every candidate. That lane CANNOT TELL THE CANDIDATES APART: one count
-// of five hundred clones read 4:2:1 at 1.97 times idle (83.0 ms against
-// 42.2) and 8:4:1 at 2.03, an earlier count of a hundred 4:2:1 at 2.04 and
-// 8:4:1 at 1.96 — which weight passes flips from one count to the next — so
-// ShareClass.Weight's run 1 stays the judgment it was, and the search is to
-// be run on a lane wide enough for the weights to decide who is granted a
-// release, not the lane's width.
-//
-// THE LANE IS AS WIDE AS THE MACHINE'S CORES (gitlet.max_transfers = cores) —
-// the runs arms' unless shareSlotsEnv sets theirs — not the production four
-// a core: the stand-in client here reads as fast as the
-// pipe allows, so every upload-pack is bound by its CPU, and at four a core
-// every running clone would be slowed fourfold by the others whichever was
-// granted first — a cost no grant order changes, while the lane four a core
-// is sized for clients that pace their transfers themselves. At one a core
-// the slots, and nothing else, are what a clone waits for, and a held slot is
-// charged a whole core a second (occupancyRate), as on every lane no wider
-// than its cores.
-//
-// Reported per arm: the person's clone p50 and p99 and the wait for its slot
-// p99, in milliseconds (clone-p50-ms, clone-p99-ms, wait-p99-ms); busy, the
-// person's clones refused for a slot that stayed held past SlotWait; on the
-// machine-alone arms, clones/s; and on the runs arms slots, the lane's width,
-// run-held-max, run-share, pushes and push-busy.
+// real upload-packs of the shared history (BenchmarkTransfer's) as the host
+// runs a clone, each operation one person's clone, its wait for a slot and its
+// run. Its arms decide ShareClass.Weight and ShareWindow (share.go); each loop
+// below says what its arms show. The lane is as wide as the cores (the runs
+// arms' unless shareSlotsEnv sets it), not the production four a core: this
+// client reads as fast as the pipe allows, so at four a core every clone would
+// be slowed by the others whatever the grant order, and a held slot is charged
+// a whole core a second (occupancyRate).
+// Reported: clone-p50-ms, clone-p99-ms and wait-p99-ms of the person's clones;
+// busy, those refused past SlotWait; clones/s on the machine-alone arms; slots,
+// run-held-max, run-share, pushes and push-busy on the runs arms.
 func BenchmarkTransferShare(b *testing.B) {
 	quiet(b)
 	h := sharedHistory(b)
@@ -114,6 +48,12 @@ func BenchmarkTransferShare(b *testing.B) {
 		return p
 	}
 
+	// mix=idle: the person alone, the floor every arm is read against.
+	// mix=machine64: sixty-four clones at once by ONE machine credential, each
+	// begun again as it ends; the share grants the person the first slot
+	// released. mix=machine64-fifo is its CONTROL, arrival order
+	// (gitproc.SetArrivalOrder): the person waits behind every clone queued
+	// first, and past SlotWait is answered busy (counted, never a failure).
 	for _, arm := range []struct {
 		name string
 		fifo bool
@@ -133,6 +73,10 @@ func BenchmarkTransferShare(b *testing.B) {
 		})
 	}
 
+	// mix=machine-alone(-fifo): the machine's sixty-four with nobody else, an
+	// operation sixty-four of its clones ending. A WORK-CONSERVING share leaves
+	// the throughput equal with and without it: a weight decides who goes next,
+	// never whether a slot is used.
 	for _, arm := range []struct {
 		name string
 		fifo bool
@@ -159,6 +103,10 @@ func BenchmarkTransferShare(b *testing.B) {
 		})
 	}
 
+	// decay=1m and decay=3m: the person's own burst of sixty-four clones, then,
+	// on a clock moved on that much (gitproc.SetShareClock), mix=machine64. What
+	// ShareWindow buys: a burst still counts a minute on, and three minutes on
+	// (e^-3, 5 % left) the person waits as one who spent nothing does.
 	for _, after := range []time.Duration{time.Minute, 3 * time.Minute} {
 		b.Run(fmt.Sprintf("decay=%v", after), func(b *testing.B) {
 			p := newLanePool(b, false)
@@ -182,6 +130,17 @@ func BenchmarkTransferShare(b *testing.B) {
 		})
 	}
 
+	// mix=runs/weights=P:M:R: THE CODING BOXES' CLASS AMONG THE OTHERS
+	// (ADR-0093). The machine's sixty-four, then boxClones boxes (half paced at
+	// objstore.MiBPace's floor; boxClone), the person's clones measured once the
+	// boxes hold their cap (boxesHold), with a push every personPushEvery, on
+	// weights P:M:R (gitproc.SetWeights): the search that decides the run's
+	// weight. Pass: clone p99 within twice mix=idle's, no clone or push busy,
+	// the boxes never past half the lane (run-held-max, via gitproc.TransferHeld;
+	// run-share, as crewlet.code.git.share{share=run} reads). A two-slot lane
+	// cannot tell the weights apart (twice idle is its floor under any), so run
+	// it wider (shareSlotsEnv). mix=runs-uncapped is the CONTROL
+	// (gitproc.SetRunUncapped): boxes hold the whole lane; the person is busy.
 	for _, arm := range []struct {
 		name     string
 		weights  [3]int // person, machine, run
@@ -208,13 +167,11 @@ func BenchmarkTransferShare(b *testing.B) {
 			}
 			stopMachines := shareLoad(b, p, h, machine, 64, nil)
 			defer stopMachines()
-			// THE CI TOKEN'S MINUTE: the boxes arrive at a lane the machine's
-			// clones have held whole for a ShareWindow — the clock moved on by
-			// one, as the decay arms move it — so they win its releases until
-			// their own spending catches up with half the machine's: the burst
-			// of launches on a busy node that the boxes' cap is for. Arriving at
-			// a lane the machine had held a moment, they would be weighed
-			// back to a slot of their own within a second, cap or none.
+			// THE CI TOKEN'S MINUTE: the boxes arrive at a lane the machine has
+			// held whole for a ShareWindow, so they win releases until their
+			// spending reaches half the machine's: the burst of launches the
+			// boxes' cap is for. On a lane held only a moment they would be
+			// weighed back to one slot within a second, cap or none.
 			offset.Add(int64(gitproc.ShareWindow))
 			boxes := startBoxes(b, p, h, boxClones)
 			defer boxes.stop(b)
@@ -235,20 +192,13 @@ func BenchmarkTransferShare(b *testing.B) {
 	}
 }
 
-// shareSlotsEnv names the runs arms' lane width, in transfer slots, where it
-// is set: how the run class's weight is searched on a lane as wide as a
-// production node's (four slots a core) or wider than the machine the
-// benchmark runs on.
-//
-// THE RUNS ARMS ALONE take it, since what fills their lane is mostly paced:
-// at the boxes' half held, the slow boxes hold their slots reading thirty
-// seconds a mebibyte and spend almost no CPU, so a lane of twice the cores
-// runs the other half — the machine's and the person's clones, which read as
-// fast as the pipe allows — at one a core, as every other arm runs its
-// whole lane. Wider than that, those clones share cores, a cost every grant
-// order pays alike; the clone-p99-ms the arm reports against mix=idle's,
-// which runs on the cores' own width, then carries it, and the comparison is
-// made against an idle clone on the same machine.
+// shareSlotsEnv names the runs arms' lane width in transfer slots, to search
+// the run class's weight on a lane as wide as a production node's (four a
+// core) or wider than this machine. The runs arms alone take it: their slow
+// boxes hold half the slots at almost no CPU, so a lane of twice the cores
+// runs the fast half at one a core, as every other arm runs. Wider, those
+// clones share cores, a cost every grant order pays alike, which their
+// clone-p99-ms then carries against mix=idle's.
 const shareSlotsEnv = "CREWLET_BENCH_SHARE_SLOTS"
 
 // runsLaneWidth is the runs arms' lane width: shareSlotsEnv's, or cores where
@@ -276,9 +226,8 @@ const boxClones = 64
 // boxesSteady is how long the boxes must hold the slots a runs arm lets them
 // before the person's clones are measured: past a fast box's whole clone and
 // a slow box's blobless fetch (each under a second here), so the slots are
-// held by slow boxes in their checkout's fetch — minutes each, the steady
-// state a burst of launches leaves a lane in — and never by a box about to
-// release one.
+// held by slow boxes in their checkout's fetch (minutes each), the steady
+// state a burst of launches leaves a lane in.
 const boxesSteady = 3 * time.Second
 
 // boxesSteadyWait bounds the wait for that steady state: the boxes' first
@@ -533,11 +482,10 @@ func shareClone(ctx context.Context, p *gitproc.Pool, h *history, s gitproc.Shar
 }
 
 // shareLoad keeps n clones by s running on p, each begun again as it ends,
-// until the answered stop is called — which waits for every one to end. Each
-// clone that ends is announced on ended when it is not nil (and the reader
-// keeps up: it is a buffered channel a reader drains). It returns once the
-// lane is full and every one of the n has asked for a slot, so the arm that
-// measures beside it measures a lane already contended.
+// until the answered stop, which waits for every one. Each clone that ends is
+// announced on ended unless it is nil (a buffered channel its reader drains).
+// It returns once all n have asked for a slot and the lane is full, so the arm
+// beside it measures a lane already contended.
 func shareLoad(b *testing.B, p *gitproc.Pool, h *history, s gitproc.Share, n int, ended chan<- struct{}) (stop func()) {
 	b.Helper()
 	ctx, cancel := context.WithCancel(b.Context())

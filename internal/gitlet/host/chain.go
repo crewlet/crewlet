@@ -18,111 +18,27 @@ import (
 )
 
 // A CHAIN OF MERGES, BUILT IN ONE SCRATCH (M5-D12, M5-D13; gitlet.ChainBuild):
-// the queue's candidates, asked of the repository's home Gitlet node by the
-// home's own worker — one scratch named by the chain's id, each
-// entry merged onto the commit the entry before it made by the very build a
-// merge_change runs (merge.go's mergeOnto: its ancestry, its one merge-tree,
-// its one commit-tree, U43 (a)'s identity), one pack of every object the
-// chain made, checked by `index-pack --strict` as every engine write's is,
-// and one bundle stored. No record is proposed here: the chain's caller
-// proposes the candidate that names its commits and its pack,
-// and SETTLES the chain once that record's outcome is known — adopting the
-// pack into this node's cache only once the record has applied
-// (gitlet.ChainResult.Settle), since a pack linked in before would be objects
-// no row names.
-//
-// # Each entry a merge_change's build, and held to its bounds
-//
-// An entry is merged as a merge_change merges its change (mergeOnto), onto
-// the chain's tip so far — the target's tip the caller read for the first —
-// and held to what a merge_change of it is held to, so the queue lands no
-// merge a merge_change would refuse: its git to a merge's budget,
-// gitlet.MergeBuildDeadline, and the objects it wrote to a merge_change's pack
-// bound, gitlet.MaxWritePackBytes — an entry past either is skipped too_large
-// in a merge_change's own words. The objects an entry wrote are the scratch's
-// loose objects it added; their loose files are each object deflated whole,
-// as a pack stores one at the most (a pack deflates at least as hard and
-// takes a delta only where it is smaller), so an entry under the bound in
-// loose bytes packs under it, and only one past it in loose bytes is packed —
-// its objects alone, counted and never kept — to be measured as a
-// merge_change's pack is.
-//
-// What a pack COSTS follows the bytes it deflates, deltas and checks, which
-// its compressed size hides, so the chain holds those too: its entries'
-// objects together to gitlet.MaxChainObjectBytes UNCOMPRESSED, each object's
-// size read from its loose header (looseSize). An entry holding more alone
-// is skipped too_large — past what any chain may pack — and one that would
-// take the chain past it is NOT REACHED (below). So no chain's pack is
-// larger than the one measured to be made well within
-// gitlet.ChainPackDeadline (doc.go's WHAT A CHAIN COSTS), and every one is
-// under gitlet.MaxChainPackBytes by construction.
-//
-// An entry's author date is its ENTRY's
-// instant — its enqueue's own (gitlet.QueueEntryID keeps it) — and its
-// committer date that or its later parent's (commitDates), so a chain built
-// again from the same rows, on any Gitlet node, is the same commits byte for
-// byte.
-//
-// # A skipped entry leaves nothing
-//
-// An entry that conflicts, a fast-forward its target's history refuses, a
-// head the chain already holds and a merge past any bound are SKIPPED: the
-// chain answers why (gitlet.ChainCommit.Skipped, a conflict with its paths) and
-// builds the next entry onto the same tip. What the skipped merge wrote into
-// the scratch — a conflict's tree and its marked files — is pruned before the
-// next entry (building.prune), so the pack holds exactly the commits the chain
-// made and what they need.
-//
-// # One budget for the chain, and a prefix where it runs out
-//
-// The chain is built in its home's turn, one internal/gitlet/home Backstop, so
-// its git has ONE budget, gitlet.ChainBuildDeadline: its merges share one
-// merge's gitlet.MergeBuildDeadline, and its pack has gitlet.ChainPackDeadline of
-// its own. The FIRST entry is given a merge's whole budget, as a merge_change
-// of it alone is — so every chain decides at least one entry, built or
-// skipped, and a queue whose head entry is slow still moves. Each later entry
-// is given what is left of the merges' share, by the run time its merges
-// were charged and by the time since they began, whichever is less: a node
-// whose git waits on its slots charges nothing for the waits, and the turn's
-// minute passes all the same. An entry not started for want of it, or cut by
-// it short of a merge's whole budget, is NOT REACHED — pruned like a skipped
-// one, left out of the answer with every entry after it, and left queued by
-// the caller for the next chain. Only an entry that ran out a merge's whole
-// budget is too_large, as a merge_change of it would be. So is an entry the
-// chain's objects cannot hold — under gitlet.MaxChainObjectBytes alone, past it
-// with the entries built before it — not reached.
-//
-// # One pack, checked once, an entry's object refused alone
-//
-// The pack is made once every reached entry has been merged. An object
-// `index-pack --strict` refuses is the one entry's that wrote it: that entry
-// is skipped rejected_object in git's own words, it and every entry after it
-// are pruned — the entries after it were merged onto its commit — the entries
-// after it are not reached, and the pack is made again, within what is left of
-// gitlet.ChainPackDeadline. A pack that runs that out is the NODE failing —
-// gitlet.ChainPackDeadline holds the largest pack a chain can make 4.8 times
-// over (doc.go's WHAT A CHAIN COSTS) — so it is unready node_failed,
-// never a refusal of the chain: no answer here refuses a chain whole, since
-// its caller would only build the same chain again and be refused again,
-// wedging its target's queue.
-//
-// The whole build holds ONE unit of the node's
-// seat git-work share (gitlet.SeatWorkWrite): the chain is the queue's batching
-// of the merges its enqueuers asked for, each of which would hold a unit for
-// its own build — so one unit for the batch, never one for each entry, and
-// the chain waits for it as a merge does, unready past gitlet.GitShareWait.
+// the queue's candidates, built on the repository's home Gitlet node by its own
+// worker in one turn (an internal/gitlet/home Backstop), so its git has one
+// budget, gitlet.ChainBuildDeadline. Each entry is merged onto the commit the entry before made by a
+// merge_change's own build (merge.go's mergeOnto) and held to a merge_change's
+// bounds, so the queue lands no merge a merge_change would refuse. The chain
+// makes one pack, checked by `index-pack --strict`, and stores one bundle. No
+// record is proposed here: the caller proposes the candidate and settles the
+// chain (gitlet.ChainResult.Settle), which adopts the pack into this node's
+// cache only once the record has applied, since a pack linked in before is
+// objects no row names. No answer refuses a chain whole: its caller would build
+// the same chain again and be refused again, wedging its target's queue.
 
-// BuildChain builds b in one scratch on this node: see this file's head. It
-// answers the chain — every reached entry's commit or why it was skipped, its
-// tip and its stored pack, with its Settle — or refused by its repository's
-// row before anything is built (gitlet.ChainResult.Status,
-// [Server.mergeStatusRefusal]); or an error about this node or
-// its store: gitlet.ErrNotServing for a host that is stopping,
-// gitlet.ErrGitUnready for a copy it could not sync, a share it could not take
-// or a pack it could not make within its budget, gitlet.ErrRepoNotFound for a
-// repository the rows hold no live row of, and the store's own failure — an
-// *objstore.Full among them — for a bundle it could not store, which nothing
-// names.
+// BuildChain builds b in one scratch on this node (this file's head). It
+// answers every reached entry's commit or why it was skipped, the tip, the
+// stored pack and its Settle; or a refusal by the repository's row before
+// anything is built (gitlet.ChainResult.Status, [Server.mergeStatusRefusal]);
+// or an error about this node or its store: gitlet.ErrNotServing while
+// stopping, gitlet.ErrGitUnready for a copy not synced, a share not taken or a
+// pack not made within its budget, gitlet.ErrRepoNotFound for a repository with
+// no live row, and the store's own failure (an *objstore.Full among them) for a
+// bundle not stored, which nothing names.
 func (s *Server) BuildChain(ctx context.Context, b gitlet.ChainBuild) (gitlet.ChainResult, error) {
 	if err := b.Validate(); err != nil {
 		return gitlet.ChainResult{}, err
@@ -133,9 +49,8 @@ func (s *Server) BuildChain(ctx context.Context, b gitlet.ChainBuild) (gitlet.Ch
 	}
 	defer end()
 	started := s.now()
-	// A CHAIN IS A RUN OF MERGES, and its writing is a merge_change's as far
-	// as its build reads one: its repository, its target, the budget its
-	// kind is given and the words a merge past it is refused in.
+	// A chain is a run of merges: its build reads a merge_change's repository,
+	// target, budget and refusal words off its writing.
 	wr := &writing{s: s, pushID: b.ChainID, started: started,
 		w: gitlet.EngineWrite{Kind: gitlet.WriteMergeChange, RepoID: b.RepoID, Ref: b.TargetRef}}
 	defer func() { wr.synced.Release() }()
@@ -147,11 +62,9 @@ func (s *Server) BuildChain(ctx context.Context, b gitlet.ChainBuild) (gitlet.Ch
 		return gitlet.ChainResult{}, fmt.Errorf("%w: chain %s: repository %s has no live row at %v",
 			gitlet.ErrRepoNotFound, b.ChainID, b.RepoID, b.Seen)
 	}
-	// THE REPOSITORY'S STATUS, BEFORE ANYTHING IS BUILT: a chain is a run of
-	// merges, which a repository being imported, a pull mirror, an archived
-	// one and one being deleted take none of — its candidate is refused from
-	// the same row — so it is refused here, as a merge is, with no scratch, no
-	// share unit and no stored pack.
+	// Refused by the repository's status before anything is built, as a merge
+	// is (its candidate would be refused from the same row): no scratch, no
+	// share unit, no stored pack.
 	if refusal, words := s.mergeStatusRefusal(wr.synced.Repo); refusal != "" {
 		return gitlet.ChainResult{Status: refusal, Detail: words,
 			Settle: func(context.Context, bool) error { return nil }}, nil
@@ -187,9 +100,9 @@ func (s *Server) BuildChain(ctx context.Context, b gitlet.ChainBuild) (gitlet.Ch
 		return gitlet.ChainResult{}, err
 	}
 	pack := res.Pack
-	// THE EPOCH OF THE COPY the chain was built from, which the candidate
-	// record naming its pack states (gitlet.QueueProposal.DropEpoch): its
-	// committer refuses it `expunging` once an expunge has begun since.
+	// The candidate states the epoch of the copy built from
+	// (gitlet.QueueProposal.DropEpoch); its committer refuses it `expunging`
+	// once an expunge has begun since.
 	res.DropEpoch = wr.synced.DropEpoch
 	res.Settle = func(ctx context.Context, applied bool) error {
 		if !applied || pack == nil {
@@ -214,19 +127,26 @@ func (s *Server) BuildChain(ctx context.Context, b gitlet.ChainBuild) (gitlet.Ch
 }
 
 // chainMade is what the chain had made before one entry of its answer: the
-// scratch's loose objects and the tip the entry was merged onto, and the
-// objects the entry added to them, sorted — none for a skipped entry.
+// scratch's loose objects, the tip the entry was merged onto, and the objects
+// the entry added, sorted (none for a skipped entry).
 type chainMade struct {
 	kept  []string
 	tip   string
 	added []string
 }
 
-// buildChain is the chain's build in sc under one unit of the node's seat
-// git-work share: each entry merged onto the tip so far within the chain's
-// budget — skipped, and what it wrote pruned, where its merge was refused;
-// the chain stopped where its budget cannot hold the next — then its one
-// pack (packChain).
+// buildChain merges b's entries in sc, then packs them (packChain), under ONE
+// unit of the seat git-work share (gitlet.SeatWorkWrite) for the batch, as one
+// merge holds, unready past gitlet.GitShareWait. A skipped entry is pruned
+// (building.prune) and the next merged onto the same tip, so the pack holds
+// only the chain's commits. The merges share one gitlet.MergeBuildDeadline of
+// gitlet.ChainBuildDeadline: the first gets a merge's whole budget, so every
+// chain decides at least one entry; each later one what is left, by the run
+// time charged or the time since the merges began, whichever is less (git
+// waiting on its slots charges nothing). An entry cut short of a merge's whole
+// budget, or that would take the chain past its object bound, is NOT REACHED:
+// pruned and left queued, with every later entry, for the next chain. Only an
+// entry that ran out a merge's whole budget is too_large.
 func (wr *writing) buildChain(ctx context.Context, sc *cache.Scratch, b gitlet.ChainBuild) (gitlet.ChainResult,
 	error) {
 
@@ -259,6 +179,8 @@ func (wr *writing) buildChain(ctx context.Context, sc *cache.Scratch, b gitlet.C
 				budget, whole = left, false
 			}
 		}
+		// Dated by its entry's instant (commitDates), never the build's, so a
+		// chain rebuilt from the same rows on any node is the same bytes.
 		at, _ := statelog.OpMintedAt(e.EntryID)
 		wr.metered, wr.left = true, budget
 		commit, refused, done, err := bd.mergeOnto(ctx, mergeOf{change: e.Change, target: b.TargetRef,
@@ -274,9 +196,8 @@ func (wr *writing) buildChain(ctx context.Context, sc *cache.Scratch, b gitlet.C
 		ran += budget - wr.left
 		if errors.Is(err, errBuildSpent) {
 			if !whole {
-				// THE CHAIN'S TIME RAN OUT, NOT THE ENTRY'S: it had less
-				// than a merge is given, so it is no larger for it — it and
-				// the rest are the next chain's.
+				// The chain's time ran out, not the entry's: it and the rest
+				// are the next chain's.
 				if err = bd.prune(kept); err != nil {
 					return gitlet.ChainResult{}, err
 				}
@@ -297,9 +218,8 @@ func (wr *writing) buildChain(ctx context.Context, sc *cache.Scratch, b gitlet.C
 			continue
 		}
 		if wrote+raw > s.chainObjects {
-			// THE CHAIN'S PACK IS FULL, NOT THE ENTRY'S: the entry is under
-			// the bound alone (entryObjects), so it is never the first, and
-			// it and the rest are the next chain's.
+			// The chain is full, not the entry (under the bound alone, so never
+			// the first): it and the rest are the next chain's.
 			if err := bd.prune(kept); err != nil {
 				return gitlet.ChainResult{}, err
 			}
@@ -314,12 +234,15 @@ func (wr *writing) buildChain(ctx context.Context, sc *cache.Scratch, b gitlet.C
 }
 
 // entryObjects is what the entry just merged added to the scratch's loose
-// objects, kept before it: every loose object now and the ones that are new,
-// both sorted, and the bytes the new ones hold uncompressed — or too_large,
-// where they pack past a merge_change's own bound (this file's head: measured
-// by their loose bytes, and packed to be measured only past it), or hold more
-// than bound uncompressed, the most one chain's pack is given to pack and
-// check (gitlet.MaxChainObjectBytes).
+// objects (kept before it): every loose object now and the new ones, both
+// sorted, and the new ones' bytes uncompressed. It refuses too_large where they
+// pack past gitlet.MaxWritePackBytes, a merge_change's bound: a loose file is
+// its object deflated whole, which a pack never exceeds, so only an entry past
+// the bound in loose bytes is packed, alone and into no file, to be measured.
+// It refuses too_large too where they hold more than bound uncompressed
+// (gitlet.MaxChainObjectBytes): a pack's cost follows the bytes it deflates,
+// deltas and checks, which its size hides, so no chain packs more than was
+// measured to pack within gitlet.ChainPackDeadline (package doc, "Measured").
 func (b *building) entryObjects(ctx context.Context, objects string, kept []string, bound int64) (after,
 	added []string, raw int64, refused gitlet.EngineWriteResult, done bool, err error) {
 
@@ -363,17 +286,21 @@ func (b *building) entryObjects(ctx context.Context, objects string, kept []stri
 	return after, added, raw, gitlet.EngineWriteResult{}, false, nil
 }
 
-// packChain is the chain's one pack, of out's entries, within
-// gitlet.ChainPackDeadline: an object git's check refuses skips the entry of
-// made that wrote it — the entries after it not reached — and the pack is
-// made again; a pack its budget cannot hold is the node's failure.
+// packChain makes the chain's one pack, of out's entries, within
+// gitlet.ChainPackDeadline. An object `index-pack --strict` refuses skips the
+// entry of made that wrote it rejected_object, in git's words; it and every
+// later entry (merged onto its commit) are pruned, the later ones not reached,
+// and the pack is made again in what is left. A pack that runs the deadline
+// out is the NODE failing, unready node_failed, never the chain's refusal: the
+// deadline holds the largest pack a chain makes 4.8 times over (package doc,
+// "Measured").
 func (wr *writing) packChain(ctx context.Context, bd *building, b gitlet.ChainBuild, out gitlet.ChainResult,
 	made []chainMade) (gitlet.ChainResult, error) {
 
 	s := wr.s
 	wr.metered, wr.left = true, s.chainPack
 	defer func() { wr.metered = false }()
-	// THE PACK'S BOUND FOLLOWS ITS OBJECTS' (gitlet.MaxChainPackBytes at the
+	// The pack's bound follows its objects' (gitlet.MaxChainPackBytes at the
 	// default), so a suite that scales one scales both.
 	bound := gitlet.ChainPackPerObjectByte * s.chainObjects
 	for {
@@ -393,8 +320,8 @@ func (wr *writing) packChain(ctx context.Context, bd *building, b gitlet.ChainBu
 		case !done:
 			return out, nil
 		case refused.Refusal != gitlet.WriteRejectedObject:
-			// UNREACHABLE BY CONSTRUCTION (gitlet.MaxChainPackBytes): an
-			// invariant broken, so this node's error, never the chain's.
+			// Unreachable by construction (gitlet.MaxChainPackBytes): a broken
+			// invariant is this node's error, never the chain's.
 			return gitlet.ChainResult{}, fmt.Errorf("host: %s", refused.Detail)
 		}
 		k := slices.IndexFunc(made, func(m chainMade) bool {
@@ -415,11 +342,11 @@ func (wr *writing) packChain(ctx context.Context, bd *building, b gitlet.ChainBu
 	}
 }
 
-// storeChain stores the chain's one pack, as one bundle under the chain's id,
-// and answers it — nil for a chain that made no object. Nothing names it
-// until its caller's record does; a bundle stored for a record that never
-// applies is the collector's to remove, as a refused push's is. A bundle its
-// own seal refused is logged here, naming the chain.
+// storeChain stores the chain's one pack as one bundle under the chain's id
+// and answers it, nil for a chain that made no object. Nothing names it until
+// its caller's record does; one whose record never applies is the collector's
+// to remove, as a refused push's is. A bundle its seal refused is logged here,
+// naming the chain.
 func (s *Server) storeChain(ctx context.Context, sc *cache.Scratch, b gitlet.ChainBuild) (*gitlet.PackRef, error) {
 	packPath, checksum, held, err := sc.Pack()
 	if err != nil || !held {

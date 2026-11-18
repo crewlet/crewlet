@@ -12,82 +12,60 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// WHAT ONE EXECUTOR MAY TAKE OF THIS NODE: a box runs generated code, so
-// what its requests cost the node and the code log is bounded by its run —
-// never left to the box to keep small.
-//
-// # Its re-syncs at the log's head
-//
-// A box reads at its run's SESSION (boxadmit.go, step 8) and pays no barrier,
-// but three of its reads go to the log's head: a fetch whose want this node's
-// copy lacks (fetch.go), a request past the bound its admitted row set
-// (boundOf), and the admission's second resolve of a repository its run was
-// given that the session answer would refuse — and a run whose row names no
-// floor reads every ref there. Each appends a barrier to the code log. Every
-// one draws from the run's bucket on its seat in the node's ONE set of
-// re-sync buckets (Options.Resyncs, gitlet.NewResyncs: gitlet.ResyncBurst a run
-// and a seat on this node, refilled at the census's seat term) — the seat's
-// bucket its turns' code tools on this node draw on too, so a seat's box and
-// its tools together hold the seat to its one census term — and a
-// fetch's barrier raises the run's floor to the copy it is served from, so its
-// next request on any node pays none for the same objects — and past it the
-// request is answered AT ITS RUN'S FLOOR: a want the floor's copy lacks
-// in upload-pack's own form (`ERR`, which git prints as `fatal: remote error:
-// …`), naming the object, the repository and when the run's re-syncs come
-// back; a bound read off the admitted row; a refusal the second resolve would
-// have judged again, from the session's answer — a name not found there, or
-// naming another repository, saying it was not judged again. A box asking in a
-// loop for an object nobody pushed thus costs the log sixteen barriers and
-// then one every 11.5 minutes, where it cost one a request.
-//
-// # Its requests in flight
-//
-// At most [MaxRunRequests] of one run's requests are in flight on this node
-// at once; past it a request is answered 503 with Retry-After
-// UnavailableRetryAfter, reason run_busy, before its run's row is read. Taken
-// when its token is verified and given back when the request's work context
-// ends (Server.begin's): at its handler's return, or as soon as its client
-// hangs up or the host stops, which end its git too. A box's own burst — a
-// partial clone's lazy fetches, a tool's parallel `git fetch`es — thus waits
-// on itself: the transfer lane's run class (gitproc.ShareRun) orders who of
-// the boxes is granted a slot next, and the spool's one box credential bounds
-// what they hold of the spool together, but neither stops ONE run holding a
-// node's every admission, run-store read and spooled request at once.
-//
-// # A check's box is bounded as a run is
-//
-// A check's box runs its repository's checks file, code nobody vouches for as
-// much as a seat's box: its git's re-syncs — a want its check's session lacks,
-// a request past its bound, the admission's second resolve and its second
-// read of an attempt the stale copy lacks — draw on its ATTEMPT's bucket on
-// its REPOSITORY's checks (gitlet.CheckKey.Resyncs), the same sixteen and the
-// same refill, and past them are answered at its session saying so; and at
-// most MaxRunRequests of the attempt's git requests are in flight on a node.
-// Its reads at /box/gitlet/ pay the same attempt's bucket at the Gitlet node that
-// answers them (internal/gitlet/query): the query server draws on the node's
-// one Resyncs too, so on a node where Gitlet serves the check's git and
-// answers its reads, the attempt has ONE burst, not one a server. Keyed by
-// the repository, the dozen checks one push fans out share one term, as
-// their transfers share one turn.
+// A box runs generated code, so what its requests cost this node and the code
+// log is bounded by its run, never left to the box.
+
+// A box reads at its run's SESSION (boxadmit.go) and pays no barrier, but
+// three reads go to the log's head: a fetch whose want this node's copy lacks
+// (fetch.go), a request past its admitted row's bound (boundOf), and the
+// admission's second resolve of a repository the session answer would refuse;
+// a run whose row names no floor reads every ref there. Each draws on the
+// run's bucket on its seat in the node's ONE Options.Resyncs (gitlet.NewResyncs:
+// gitlet.ResyncBurst, refilled at the census's seat term), which the seat's code
+// tools on this node share, so box and tools hold the seat to one term. A
+// fetch's barrier raises the run's floor to the copy it is served from, so
+// its next request on any node pays none for those objects.
+
+// Past its re-syncs a request is answered AT ITS RUN'S FLOOR: a missing want as
+// upload-pack's `ERR` (wantNotAtFloor), naming the object, the repository and
+// when the re-syncs come back; a bound read off the admitted row; a refusal the
+// second resolve would have judged, from the session's answer, saying it was
+// not judged again. A box looping on an object nobody pushed thus costs the log
+// sixteen barriers, then one every 11.5 minutes.
+
+// At most MaxRunRequests of one run's requests are in flight on this node;
+// past it a request is answered 503 (Retry-After UnavailableRetryAfter, reason
+// run_busy) before its run's row is read. A place is taken when the token is
+// verified and given back when the request's work context ends (Server.begin):
+// at the handler's return, or when the client hangs up or the host stops,
+// which end its git too. So a box's own burst waits on itself: the transfer
+// lane's run class (gitproc.ShareRun) and the spool's one box credential order
+// and bound the boxes together, but neither stops ONE run holding a node's
+// every admission, run-store read and spooled request.
+
+// A check's box runs its repository's checks file, code nobody vouches for, and
+// is bounded the same way: its re-syncs (the admission's second read of an
+// attempt the stale copy lacks among them) draw on its ATTEMPT's bucket on its
+// REPOSITORY's checks (gitlet.CheckKey.Resyncs), same burst and refill, and past
+// them are answered at its session; at most MaxRunRequests of its attempt's
+// requests are in flight on a node. Its /box/gitlet/ reads draw on the same
+// node's Resyncs (internal/gitlet/query), so the attempt has ONE burst a node,
+// not one a server; keyed by repository, the checks one push fans out share one
+// term.
 
 // MaxRunRequests is how many of one executor's requests may be in flight on
-// one node at once.
-//
-// SIXTEEN — TWICE sandbox.MaxRunRepos (8), the most repositories a run is
-// given (held equal by TestARunsRequestsInFlightAreTwiceItsRepositories, since
-// this package imports no sandbox): a box fetching each of its repositories
-// while it pushes another, or a partial clone's lazy fetch beside its
-// checkout's, is two requests a repository, and a run with more than that in
-// flight on one node is a loop, not a checkout.
+// one node at once: twice sandbox.MaxRunRepos (8), since fetching each
+// repository while pushing another, or a lazy fetch beside a checkout's, is two
+// requests a repository; more is a loop, not a checkout.
+// TestARunsRequestsInFlightAreTwiceItsRepositories holds the two equal, since
+// this package imports no sandbox.
 const MaxRunRequests = 16
 
-// boxResync draws one linearizable re-sync of adm's request from the node's
-// re-sync buckets (Options.Resyncs) — an executor's on its seat, a check's
-// attempt on its repository's checks (admission.resyncKey) — counted by
-// outcome there: nil, taken; or the refusal, its read to be answered at the
-// box's floor. A person's request is never charged: its reads of refs are
-// linearizable by right, its barriers the census's clients' term
-// (gitlet.GitReadsPerDay).
+// boxResync draws one linearizable re-sync of adm's request from
+// Options.Resyncs, keyed by admission.resyncKey: nil, taken; or the refusal,
+// the read then answered at the box's floor. A person's request is never
+// charged: its ref reads are linearizable by right, its barriers the census's
+// clients' term (gitlet.GitReadsPerDay).
 func (s *Server) boxResync(adm admission) *costlimit.Refusal {
 	scope, principal, ok := adm.resyncKey()
 	if !ok {
@@ -104,11 +82,10 @@ func (s *Server) notRejudged(adm admission, spent *costlimit.Refusal) string {
 	return gitlet.NotRejudged(spent, principal, scope, s.now())
 }
 
-// wantNotAtFloor answers a box's fetch whose want oid its floor does not hold,
-// once its re-syncs are spent: in upload-pack's own form for a want it cannot
-// serve — `ERR <sentence>`, which git prints as `fatal: remote error:
-// <sentence>` over protocol v0 and v2 alike — having run no git, and logged
-// INFO code_box_resyncs_spent.
+// wantNotAtFloor answers a box's fetch whose want oid its floor lacks, once its
+// re-syncs are spent, with upload-pack's own `ERR <sentence>` (git prints
+// `fatal: remote error: <sentence>` over v0 and v2 alike), running no git;
+// logged INFO code_box_resyncs_spent.
 func (s *Server) wantNotAtFloor(w http.ResponseWriter, r *http.Request, adm admission, oid string,
 	spent *costlimit.Refusal, command string, start time.Time) {
 
@@ -145,8 +122,7 @@ func (s *Server) holdRun(ctx context.Context, run string) bool {
 	context.AfterFunc(ctx, func() {
 		s.runsMu.Lock()
 		defer s.runsMu.Unlock()
-		// A RUN WITH NOTHING IN FLIGHT LEAVES NO ENTRY: the map holds the
-		// runs with requests here now, never every run this node served.
+		// Drop an idle run's entry, or the map grows with every run served.
 		if s.runRequests[run]--; s.runRequests[run] == 0 {
 			delete(s.runRequests, run)
 		}

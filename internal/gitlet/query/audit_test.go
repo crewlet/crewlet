@@ -12,13 +12,12 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/query"
 )
 
-// A UNIT REPOSITORY'S TOOL READ IS RECORDED — every read the node answered of a
+// A UNIT REPOSITORY'S TOOL READ IS RECORDED: every read the node answered of a
 // `visibility: unit` repository, as its asker, by its kind, its bytes the
-// answer's encoding — and a memo hit as a miss: the memo is the copy's, shared
-// by every asker, so a second seat's read of a page the first one's read cut is
-// a read of the repository too. A refused read records nothing, and neither
-// does any read of a `visibility: company` repository, which every seat reads
-// by declaration, nor the engine's own read, which nobody made.
+// answer's encoding. A memo hit counts as a miss: the memo is the copy's,
+// shared by every asker. A refused read records nothing, nor does a read of a
+// `visibility: company` repository, which every seat reads by declaration,
+// nor the engine's own read, which nobody made.
 //
 // Mutation: drop the visibility check, and the company repository's read is
 // recorded; answer a memo hit at once, as an early return, and the second
@@ -42,16 +41,15 @@ func TestAUnitRepositorysToolReadIsRecorded(t *testing.T) {
 		return mustRead(t, s, q)
 	}
 	first := read(seat("eng-dev"))
-	// THE SAME PAGE again, for another seat: the memo answers it, and no git
-	// runs for it.
+	// THE SAME PAGE for another seat: the memo answers it, no git runs.
 	ran := len(runs.ran())
 	again := read(seat("eng-lead"))
 	if more := runs.ran()[ran:]; len(more) != 0 {
 		t.Fatalf("the premise: the second seat's read of the same page ran git %v, want the memo's answer", more)
 	}
 	theirs := read(person)
-	// A FIND, recorded as its kind: what it answers is the repository's
-	// files, whichever pages of the memo it read them from.
+	// A FIND, recorded as its kind: it answers the repository's files,
+	// whichever memo pages it read.
 	found := mustRead(t, s, findQ(repo, head, "f", 0))
 	// A DIRECTORY'S LAST COMMITS, recorded as their kind.
 	lastCommits := mustRead(t, s, treeCommitsQ(repo, head, ""))
@@ -103,22 +101,19 @@ func TestAUnitRepositorysToolReadIsRecorded(t *testing.T) {
 		t.Errorf("a read of a visibility: company repository was recorded: %+v", after[len(want):])
 	}
 
-	// THE ENGINE'S OWN READ IS NOBODY'S: the home's read of a revision's
-	// facts names no asker, and a read of the unit repository it answers is
-	// recorded as nobody's read of it.
+	// THE ENGINE'S OWN READ IS NOBODY'S: the home's facts read names no asker.
 	mustRead(t, s, factsQ(repo, head, head))
 	if after := rec.all(); len(after) != len(want) {
 		t.Errorf("the engine's own read of a visibility: unit repository was recorded: %+v", after[len(want):])
 	}
 }
 
-// A READ MADE FOR A CHECK IS THE ENGINE'S OWN: a check's box's read of its
-// commit through the API names no asker — the box is no principal, and the
-// attempt's row that admitted it is its authority — so the Gitlet node judges no
-// grant on the `visibility: unit` repository it reads, which a seat outside
-// the owning unit is refused, and records it as nobody's read; and it reads
-// the attempt's commit alone, a read at another commit refused as it is
-// validated, having read nothing.
+// A READ MADE FOR A CHECK IS THE ENGINE'S OWN: a check's box reads its commit
+// through the API naming no asker (the box is no principal; the attempt's row
+// that admitted it is its authority), so the node judges no grant on the
+// `visibility: unit` repository, which a seat outside the owning unit is
+// refused, and records no read. It reads the attempt's commit alone: a read
+// at another is refused at validation, having read nothing.
 //
 // Mutations: judge a read made for a check by its asker's grant (the kind's
 // rule alone in the server's grant step) — refused as nobody, red; record it

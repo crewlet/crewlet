@@ -11,30 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// A COMPARISON is three processes over two whole commit ids: `git merge-base
-// <base> <head>` (exit 1, no common ancestor, is an answer: histories that
-// share nothing), whose answer also says which contains which — base is an
-// ancestor of head exactly when it is their merge base, and the reverse — with
-// no second process; `git rev-list --left-right --count <base>...<head>`, the
-// commits on each side the other lacks; and the first page of the merge base's
-// diff to head — the three-dot reading every code host shows. Both walks go by
-// generation number where the copy holds a commit-graph, which git reads for
-// them unasked and every maintained copy keeps, so a comparison of any two
-// commits runs in milliseconds there (BenchmarkCodeRead's comparison of a
-// 14 080-commit history's middle with its tip, 13 ms).
+// A COMPARISON is three processes over two whole commit ids: `git merge-base`
+// (exit 1, no common ancestor, is an answer), which also says which contains
+// which (base is head's ancestor exactly when it is their merge base, and the
+// reverse); `rev-list --left-right --count base...head`, the commits each side
+// lacks; and the first page of the merge base's diff to head, the three-dot
+// reading. Both walks go by generation number where the copy keeps a
+// commit-graph (BenchmarkCodeRead); a copy not yet maintained walks by date
+// and may run out the budget until it is.
 //
-// THE THREE SHARE THE READ'S ONE BUDGET OF GIT, as every kind's processes do
-// (server.go): a comparison is given the run time a listing is, and one whose
-// walks and stat run out the whole of it is too large to answer — "compare
-// commits closer together". Not a walk of the whole history each
-// (gitproc.HistoryWalk, eleven minutes at the largest repository the
-// defaults admit): no asker waits that long — a git read's attempt is
-// seventeen seconds, on the node that asked as on every other — so that bound
-// was one no comparison could reach, and a comparison it let run past its
-// asker's attempt was answered nothing but late. A copy that holds no
-// commit-graph yet — just filled, before its maintenance — walks by date and
-// may run the budget out over a long history; asked again once the copy is
-// maintained, the same comparison answers.
+// The three share the read's one budget of git (package doc, "Time: one budget
+// of git, and an answer while the asker listens"), never gitproc.HistoryWalk's
+// bound, which outlasts every asker's attempt.
 
 // compareRead answers a comparison — one page, memoized whole where m takes
 // it.

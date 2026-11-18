@@ -157,8 +157,10 @@ ref moved, as you:
 - **Branches**: **New branch** at a branch, a tag or a commit
   (`code_create_branch`), and **Delete** at the head the row shows
   (`code_delete_branch`), after a confirmation;
-- a commit's page: **Revert** and **Cherry-pick** onto a branch you choose
-  (`code_revert`, `code_cherry_pick`); a conflict commits nothing.
+- a commit's page bar: **Browse files**, **Revert** and **Cherry-pick** onto
+  a branch you choose (`code_revert`, `code_cherry_pick`); a conflict commits
+  nothing. A commit's page says how it was pushed and how it landed, with the
+  gate it merged through.
 
 Its protection rules are set on its **Settings** tab ([Protecting a
 branch](#protecting-a-branch)), and it is deleted and restored there too
