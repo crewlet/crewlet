@@ -2036,6 +2036,17 @@ func takeRefusal(ctx context.Context, err error) string {
 func (c *Coordinator) spool(ctx context.Context, run PendingRun, stamp SessionCapture,
 	taken TakenSession) (*spooledCapture, error) {
 
+	// A TAKE WHOSE TIME HAS ENDED SPOOLS NOTHING: its close would race the
+	// first read, and a box's stream is cut at that end whichever wins. Its
+	// deadline is read off the clock too: ctx reports its end only once its
+	// timer has run, after the instant the deadline names.
+	ended := ctx.Err()
+	if deadline, ok := ctx.Deadline(); ended == nil && ok && !time.Now().Before(deadline) {
+		ended = context.DeadlineExceeded
+	}
+	if ended != nil {
+		return nil, fmt.Errorf("sandbox: the take ended before its session was spooled: %w", ended)
+	}
 	file, err := os.CreateTemp(c.spoolDirectory(), spoolPrefix+"*")
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: a spool for the session on this node's disk: %w", err)
