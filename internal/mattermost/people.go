@@ -15,114 +15,16 @@ import (
 
 // The people: the human seats a post can come from.
 //
-// # A person is declared by NAME and posts by ID
-//
-// A human seat's `contact.mattermost_user_id` is a USERNAME, because that is
-// what an agent writes to mention them and what it opens a direct message
-// with. A post names its author by the 26-character user id, and nothing
-// else: so the username, registered as written, was a key no post ever looked
-// up, and everything a person wrote reached the agents as a stranger's —
-// their manager's instructions with no authority behind them, a founder's
-// question read as an outsider's, a thread they started attributed to nobody.
-// The party registry therefore holds each person's USER ID, and this
-// transport is where it comes from: it asks the server which account holds
-// each name ([Client.UsersByUsernames]) and registers what it is answered
-// with. [notify.Registry.ReconcileHumanContacts] leaves the name alone for
-// that reason ([org.Transport.AddressedByName]).
-//
-// # When it asks
-//
-// A name is not a fixed fact about an account: a person renames themselves,
-// and a name the chart declares may belong to nobody yet, because the person
-// has not joined. So it is asked
-//
-//   - AT CONNECT, before any socket is attached, so the first post a socket
-//     hears is attributed — once the seats' identities are read, which proves
-//     the server is up and hands over a token to ask with;
-//   - ON EVERY APPLY ([Transport.Reregister]), because the apply is what can
-//     name a new person or correct a name; the new registry is filled from
-//     what is already known first, with no request, so nobody who resolved a
-//     moment ago is a stranger while the question is asked again;
-//   - and every [PeopleRefresh], because the two changes AT THE SERVER — an
-//     account created under a name the chart already declares, and a rename —
-//     reach this engine by no other route.
-//
-// Mattermost does broadcast both on its websocket (`new_user`,
-// `user_updated`, server/channels/app/user.go), and they are deliberately not
-// what this listens to: a node holds one socket per seat, so each would
-// arrive once per seat; nothing replays one a socket missed while it was down;
-// and the answer they would prompt is the same request asked here on a timer
-// — so they would buy under a minute of latency at the price of a second path
-// that is right only while every socket is.
-//
-// # Absent is an answer; a failure is not
-//
-// A name the server answered for maps to that account's id. A name it answered
-// WITHOUT — no account holds it, or none the bots may see — is withdrawn and
-// reported. And a request that FAILED changes nothing, because a server
-// mid-restart says nothing about who anybody is, and treating it as "nobody"
-// would make every person a stranger for as long as the outage lasted.
-//
-// # A person the directory withholds is nobody's here
-//
-// Whether the person holding a human seat may still be reached is the identity
-// directory's to say, not the chart's, and a registry is built from one reading
-// of it: a seat whose holder is suspended, retired or removed has every contact
-// identity left out ([notify.Registry.Withholding]). The account a name
-// resolves to is one of those identities, so a withheld seat gets none here
-// either — and it is judged against the registry being WRITTEN, the one reading
-// that registry answers for, never against the people handed over beside it: a
-// directory rebuild that lands while a transport is connecting rebuilds a
-// registry this transport is not yet told about, and a list filtered for the
-// previous reading would register a suspended person into the next. Nor is a
-// withheld seat judged at all — not reported, and contending for no account
-// with anybody, as the human reconcile leaves it out of its duplicates —
-// because a name that holds nobody is nothing the operator owes a fix for while
-// its owner is not to be reached. The name is still ASKED about, so the
-// registry that reinstates them is filled from the last answer at once rather
-// than after the next request.
-//
-// # An account is one person's, or nobody's
-//
-// What is registered for a person is attributed to them with their authority,
-// so an account that is not the person's own is refused rather than
-// registered, and reported naming why ([absence]):
-//
-//   - an account one of this company's own seats posts as, bot or not, and
-//     any other BOT's: registered, every post that agent made would reach its
-//     colleagues as the person's word — and the person would win, since a
-//     lookup consults the people's namespace before the bots';
-//   - an account that ANOTHER person's name holds too. The duplicate check
-//     compares what the chart declares, so two `${VAR}`s that resolve to one
-//     name pass it; and one account cannot be two people, so it is
-//     registered for neither rather than for whichever came first, which
-//     would be a guess.
-//
-// # The name is the authority, and a move is said
-//
-// Whoever holds the name on the server is the person, which is what the chart
-// says when it names them by it: the agents already mention and message
-// whoever holds `@jane`, and a person who joins after boot is recognised by
-// exactly this rule. So a name that comes to hold ANOTHER account — the
-// person renamed themselves and somebody took the name, or the account was
-// made again — moves the seat to that account on every node alike, since each
-// one asks the same server. A node that remembered the old account and
-// refused the new one would answer differently from a node started after the
-// move, and one post would then reach a seat as the founder's on one node and
-// a stranger's on another.
-//
-// The move is SAID instead: logged when it is seen, and reported on the
-// integration's status ([integration.FindingContactMoved]) against the
-// account the name held when the company last stated it — the last apply, or
-// the first answer since — until the next apply states it again. ANY apply:
-// the re-activation a provisioning pass makes after sealing a credential it
-// minted clears it too, which is why the log line, not the finding, is the
-// record of a move. But ONLY an apply: a registry the identity directory
-// rebuilds for the same company states nothing about anybody's name, and a
-// suspension elsewhere clearing a report nobody answered would be the report
-// withdrawn by an event that says nothing about it. In memory, so a node started after the move has nothing
-// to compare against; every node running when it happened sees it within a
-// [PeopleRefresh].
+// A person is declared by USERNAME (`contact.mattermost_user_id`, what agents
+// mention and message) and posts by 26-character user ID, so the party registry
+// holds each person's ID, resolved through [Client.UsersByUsernames]; a username
+// registered as written matches no post, and everything a person wrote reached
+// agents as a stranger's ([org.Transport.AddressedByName]). A name is asked at
+// connect (before any socket attaches), on every apply ([Transport.Reregister],
+// filled first from what is known so nobody turns stranger meanwhile) and every
+// [PeopleRefresh], since server-side account creation and renames reach this
+// engine by no other route. The websocket's `new_user` and `user_updated` are
+// not used: one arrives per seat socket and none replays a gap.
 
 // PeopleRefresh is how often a node asks the server again which account each
 // person's username names.
@@ -205,7 +107,17 @@ type people struct {
 }
 
 // absence is why a name the chart gives a person holds no account that is
-// registered for them.
+// registered for them. A name answered WITHOUT an account is withdrawn and
+// reported; a FAILED request changes nothing, as an outage says nothing about
+// who anybody is.
+//
+// An account is refused when a company seat or any other BOT posts as it (the
+// person wins the lookup, so a colleague's post would read as their word), or
+// when ANOTHER person's name holds it too: two `${VAR}`s can resolve to one
+// name, and registering for neither beats a guess. A seat the identity
+// directory withholds ([notify.Registry.Withholding]) gets no account and is
+// not reported, judged against the registry being WRITTEN; its name is still
+// ASKED, so reinstating is instant.
 type absence string
 
 const (
@@ -224,6 +136,14 @@ const (
 )
 
 // move is a name now holding another account than the company last stated.
+//
+// Whoever holds the name on the server is the person, so the seat moves to the
+// new account on every node alike; a node that refused it would answer unlike
+// one started after the move. The move is SAID: logged, and reported
+// ([integration.FindingContactMoved]) until the next APPLY states the name
+// again. Only an apply clears it, not a directory rebuild, which states nothing
+// about names; a re-activation clears it too, so the log is the record. It is
+// in memory, seen within a [PeopleRefresh] by every node running at the time.
 type move struct {
 	from, to string
 }

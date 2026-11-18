@@ -295,20 +295,15 @@ func metadata(body map[string]any, seat Seat, post map[string]any, reach notify.
 
 // targeting reads the server's own answer to "was this seat a target?".
 //
-// A DIRECT MESSAGE short-circuits everything: there is nobody else the
-// message could be for.
-//
-// Otherwise the `mentions` field, which Mattermost rewrites PER CONNECTION —
-// it is present only when this connection's user was mentioned, and its
-// value is then this seat's own id. So it is exact about WHETHER: it resolves
-// `@all` / `@channel` / `@here` against real membership and catches group and
-// keyword mentions no pattern could. It can never say WHY, because a
-// broadcast and being named personally arrive identically. See
+// A DIRECT MESSAGE short-circuits everything. Otherwise the `mentions` field,
+// which Mattermost rewrites PER CONNECTION (present only when this
+// connection's user was mentioned, holding this seat's id), is exact about
+// WHETHER, resolving `@all`/`@channel`/`@here` and group and keyword mentions,
+// but never WHY: a broadcast and a personal name arrive identically. See
 // [notify.Targeting].
 //
-// An absent field is genuinely no answer, not a denial: a post re-read over
-// REST across a reconnect gap carries none, and so does one whose seat
-// identity has not resolved yet.
+// An absent field is no answer, not a denial: a post re-read over REST across a
+// reconnect gap carries none, nor does one whose seat identity is unresolved.
 func targeting(body map[string]any, channelKind, ownID string) notify.Targeting {
 	if isDirect(channelKind) {
 		return notify.TargetingPersonal

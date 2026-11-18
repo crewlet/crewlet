@@ -13,60 +13,13 @@ import (
 
 // WHERE A SEAT'S ATLASSIAN CREDENTIAL LIVES, AND WHO MAY READ IT.
 //
-// One Atlassian account authenticates BOTH products. An agent gets one service
-// account, its token is written into one `mcp_env` slot, and Jira and
-// Confluence each authenticate as it. So "does this seat have an Atlassian
-// credential, and where" is ONE question with one answer.
-//
-// It was answered in three places, by three lists that had drifted:
-//
-//	internal/jira        servers {atlassian, jira}        keys {JIRA_API_TOKEN, JIRA_PERSONAL_TOKEN, JIRA_TOKEN, ATLASSIAN_API_TOKEN, Authorization}
-//	internal/confluence  servers {atlassian, confluence}  keys {CONFLUENCE_API_TOKEN, CONFLUENCE_PERSONAL_TOKEN, CONFLUENCE_TOKEN, ATLASSIAN_API_TOKEN}
-//	internal/atlassian   servers {atlassian, jira, confluence}  keys {JIRA_API_TOKEN, CONFLUENCE_API_TOKEN, ATLASSIAN_API_TOKEN, JIRA_PERSONAL_TOKEN, CONFLUENCE_PERSONAL_TOKEN}
-//
-// Measured: a seat provisioned by this package held `mcp_env.atlassian` with
-// `JIRA_API_TOKEN` and `JIRA_USERNAME` — the spelling this package's own plan
-// note tells operators to use. Jira read it and reported the seat ready.
-// Confluence's list has neither key, so the same account, on the same seat, in
-// the same block, reported "no Confluence credential yet" for ever. Nothing was
-// misconfigured and nothing could be done about it from the configuration.
-//
-// # Why this package
-//
-// It owns the ACCOUNT: it mints the service account, names it, and records the
-// address Atlassian assigned back onto the seat. The products are consumers of
-// an identity this package creates. `internal/jira` and `internal/confluence`
-// therefore import it, which is the real direction of the dependency and
-// introduces no cycle — this package imports neither.
-//
-// # The rules, and why each is the way it is
-//
-// SERVER ORDER IS THE PRODUCT'S OWN NAME, THEN THE SHARED `atlassian` BLOCK.
-// `mcp_env.jira` and `mcp_env.confluence` exist only where an operator
-// deliberately configured a product-specific server, so a specific declaration
-// beats the shared one. This flips Jira's previous order, which tried the
-// shared block first; nothing has shipped, and the alternative — shared-first
-// over a merged key list — would let a split Data Center pair authenticate Jira
-// with its Confluence token.
-//
-// A BLOCK COUNTS ONLY IF IT HOLDS A KEY THIS PRODUCT CAN READ. Selection is by
-// content rather than by position, so an empty or wrong-product `atlassian`
-// block cannot shadow a populated `jira` one.
-//
-// THE CROSS-PRODUCT FALLBACK IS THE FIX, AND IT IS DELIBERATELY NARROW. In the
-// SHARED block only, each product will also read the sibling's `*_API_TOKEN`.
-// On Cloud one API token belongs to the ACCOUNT and authenticates both
-// products, so a shared block holding `JIRA_API_TOKEN` is a Confluence
-// credential too. A `*_PERSONAL_TOKEN` is not: a Data Center PAT is issued by
-// one product and refused by the other, so those spellings — and the bare
-// `*_TOKEN` — never cross. The spelling already carries the distinction, so
-// this needs no deployment flag.
-//
-// THE ADDRESS IS THE ACCOUNT'S, so every spelling counts for both products,
-// the product's own first. Atlassian Cloud authenticates an API token as
-// Basic base64(address:token) and refuses it as a bearer — the same credential,
-// rejected purely on which scheme carried it — so a seat holding only a token
-// authenticates as nobody.
+// One service account authenticates BOTH products from one `mcp_env` slot, so
+// "does this seat have a credential, and where" has one answer. Per-product
+// key lists drift (a seat holding `JIRA_API_TOKEN` and `JIRA_USERNAME` read as
+// ready to Jira and as "no Confluence credential" to Confluence, for ever), so
+// this package, which mints and names the ACCOUNT, owns the one list;
+// `internal/jira` and `internal/confluence` import it. The rules sit on
+// Product's servers, tokenKeys and emailKeys.
 
 // Product is which Atlassian product is asking.
 //
@@ -103,7 +56,13 @@ type Credential struct{ Token, Email string }
 // Held reports a seat that carries a credential at all.
 func (c Credential) Held() bool { return strings.TrimSpace(c.Token) != "" }
 
-// servers is the mcp_env blocks this product reads, in order.
+// servers is the mcp_env blocks this product reads, in order: its own name,
+// then the shared block. `mcp_env.jira` and `mcp_env.confluence` exist only
+// where an operator configured a product-specific server, so it beats the
+// shared one; shared-first over a merged key list would let a split Data
+// Center pair authenticate Jira with its Confluence token. A block counts only
+// if it holds a key this product can read, so an empty or wrong-product
+// `atlassian` block cannot shadow a populated `jira` one.
 func (p Product) servers() []string {
 	switch p {
 	case ProductJira:
@@ -117,8 +76,11 @@ func (p Product) servers() []string {
 
 // tokenKeys is the spellings this product reads a token under, in order.
 //
-// shared says whether the block being read is the SHARED one, which is the only
-// place the sibling product's API token counts.
+// shared says whether the block being read is the SHARED one, the only place
+// the sibling product's `*_API_TOKEN` counts: on Cloud one API token belongs
+// to the ACCOUNT and authenticates both products. A `*_PERSONAL_TOKEN` never
+// crosses (a Data Center PAT is refused by the other product), nor does the
+// bare `*_TOKEN`, so no deployment flag is needed.
 func (p Product) tokenKeys(shared bool) []string {
 	var own, sibling []string
 	switch p {
@@ -153,7 +115,9 @@ func (p Product) tokenKeys(shared bool) []string {
 // emailKeys is the spellings this product reads an address under, in order.
 //
 // ALL FIVE FOR BOTH, because the address belongs to the account rather than to
-// a product: whichever key the operator reached for names the same mailbox.
+// a product. Cloud authenticates an API token as Basic base64(address:token)
+// and refuses it as a bearer, so a token without an address authenticates as
+// nobody.
 func (p Product) emailKeys() []string {
 	jira := []string{"JIRA_USERNAME", "JIRA_EMAIL"}
 	conf := []string{"CONFLUENCE_USERNAME", "CONFLUENCE_EMAIL"}
@@ -324,30 +288,14 @@ func CredentialReads(p Product, env map[string]map[string]string) []string {
 // credentialOfHeader reads a value that may be a whole `Authorization` header,
 // reporting whether it carried an address of its own.
 //
-// # A scheme is a wrapper, and both clients put one back
+// The clients rebuild the header from the pair: an empty address selects
+// `Bearer <token>`, a present one `Basic base64(address:token)`. A `Basic`
+// payload stored whole in the token would send `Bearer Basic <payload>`, an
+// identity failure over a good credential; decoded, it re-encodes byte for
+// byte. The scheme is matched WITHOUT REGARD TO CASE, as HTTP requires.
 //
-// [jira.Client] and [confluence.Client] build their own header from the pair
-// they are given: an empty address selects `Bearer <token>` and a present one
-// selects `Basic base64(address:token)`. So this function's job is not to
-// preserve what was typed — it is to produce the PAIR that rebuilds it.
-//
-// A `Bearer <pat>` needed only its scheme stripped, and that much was already
-// done. A `Basic <payload>` was stored whole, in the token, with no address —
-// which is precisely the shape that selects the bearer scheme, so every one of
-// those seats sent `Authorization: Bearer Basic <payload>`, was refused by both
-// products, and reported an identity failure over a credential that was
-// perfectly good. Decoded into its two halves it re-encodes byte for byte,
-// because [base64.StdEncoding] is what wrote it and what reads it back.
-//
-// THE SCHEME IS MATCHED WITHOUT REGARD TO CASE, which HTTP requires of a
-// reader and which this did not do: a seat that wrote `bearer <pat>` — the
-// spelling curl prints — kept the word in its token and sent
-// `Authorization: Bearer bearer <pat>`, the same failure by the other route.
-//
-// A payload that is not base64, or that carries no colon, is not a Basic
-// credential this can take apart. It is returned as it came rather than
-// guessed at: an invented address would authenticate as somebody else, and the
-// refusal an unusable credential earns is already reported per seat.
+// A payload that is not base64, or has no colon, is returned as it came: an
+// invented address would authenticate as somebody else.
 func credentialOfHeader(raw string) (cred Credential, paired bool) {
 	if rest, ok := cutScheme(raw, "Bearer"); ok {
 		return Credential{Token: rest}, false

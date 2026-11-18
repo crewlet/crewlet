@@ -31,18 +31,15 @@ type TeardownOptions struct {
 
 // Teardown withdraws the webhook this engine registered at Datadog.
 //
-// THE WEBHOOK GOES EITHER WAY. This engine registered it, nothing else at
-// Datadog uses it, and one left behind posts every alert to a company that no
-// longer has a block to route it: the deliveries are refused, counted and
-// dropped, and the monitors that name it go on reporting a healthy target.
-// That is the same rule every other surface's hooks follow; see
+// THE WEBHOOK GOES EITHER WAY. This engine registered it and nothing else uses
+// it; one left behind posts alerts to a company with no block to route them,
+// refused and dropped while monitors report a healthy target. See
 // [setup.TeardownInput].
 //
-// THE AGENTS' ACCOUNTS ARE NOT HERE. A disconnect turns each one off through
-// the per-seat access sync, by the same rule as a seat turned off: every key
-// deleted, the account marked as this engine's off and disabled, never
-// deleted, because deleting a Datadog user detaches it from everything it
-// authored.
+// THE AGENTS' ACCOUNTS ARE NOT HERE. A disconnect turns each off through the
+// per-seat access sync, as for a seat turned off: keys deleted, the account
+// disabled, never deleted, because deleting a Datadog user detaches it from
+// everything it authored.
 func Teardown(ctx context.Context, opts TeardownOptions) error {
 	if opts.Client == nil {
 		return errors.New("datadog: no client")
@@ -64,22 +61,13 @@ func Teardown(ctx context.Context, opts TeardownOptions) error {
 // withdrawWebhook removes the definition this deployment registered, and only
 // that one.
 //
-// IT READS BEFORE IT DELETES. The name is Datadog's primary key but it is not
-// evidence of ownership: an organization may already hold a definition called
-// "crewlet" that somebody else made, and a disconnect that deleted whatever
-// answered to the name would take down an integration this engine never
-// registered. Every other vendor teardown here proves ownership first, and
-// this one issued the DELETE blind.
+// IT READS BEFORE IT DELETES: the name is not evidence of ownership, and
+// somebody else's "crewlet" definition must survive. The read's answers:
 //
-// The three answers a read gives are each acted on differently:
-//
-//   - ABSENT is already gone, which is the state a disconnect wants and what
-//     keeps a repeated teardown safe.
-//   - UNREADABLE is a fault, not a licence: a store that could not answer has
-//     not said the definition is this engine's.
-//   - PRESENT AT ANOTHER ADDRESS is somebody else's, and it is REPORTED
-//     rather than removed, because a wrong deletion is unrecoverable where a
-//     refused disconnect is not.
+//   - ABSENT is already gone, which keeps a repeated teardown safe.
+//   - UNREADABLE is a fault, not a licence to delete.
+//   - PRESENT AT ANOTHER ADDRESS is somebody else's, REPORTED rather than
+//     removed: a wrong deletion is unrecoverable, a refused disconnect is not.
 func withdrawWebhook(ctx context.Context, opts TeardownOptions) error {
 	target := WebhookTarget(opts.WebhookBase)
 	if target == "" {

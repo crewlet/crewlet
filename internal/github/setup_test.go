@@ -43,23 +43,15 @@ func TestOnlyTheOrganizationLeadsTheConnectForm(t *testing.T) {
 
 // THE ORG TOKEN IS OFFERED, AND NEVER ON THE WAY IN.
 //
-// It led the connect form once, for a job it no longer has: participant
-// fan-out is answered by each agent's own app now, scoped to what that agent
-// may see. Asking every company for a personal access token before anything
-// could be connected bought a permanent note on a card with nothing wrong
-// with it, and that half of the decision stands — this pins it, through
-// [TestOnlyTheOrganizationLeadsTheConnectForm] beside it.
+// Participant fan-out is answered by each agent's own app, so the token must
+// not lead the connect form ([TestOnlyTheOrganizationLeadsTheConnectForm]
+// pins that half). But it keeps the organization-level client's job: with
+// none the pass registers nothing, and the finding that says so names
+// `integrations.github.token`, so the dashboard needs a box for it (an app
+// installation carries no `admin:org_hook`).
 //
-// Removing the field entirely went one step too far. It kept its OTHER job,
-// which is the whole organization-level client: with none, the pass registers
-// nothing at GitHub, and the finding that says so names
-// `integrations.github.token` — a field the dashboard then had no box for. So
-// an operator installed every agent's app, which is what the card had been
-// asking for, and watched the same warning sit there, because an App
-// installation carries no `admin:org_hook` and never will.
-//
-// Optional, off the connect step, and declaring the finding it clears, so the
-// screen puts it in front of whoever is reading that warning and nobody else.
+// Optional, off the connect step, and declaring the finding it clears, so
+// the screen shows it to whoever is reading that warning and nobody else.
 func TestTheOrgTokenIsAskableWithoutLeadingTheForm(t *testing.T) {
 	t.Parallel()
 	reqs := byField(github.Requirements(nil, nil))

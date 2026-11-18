@@ -16,66 +16,14 @@ import (
 // What a branch requires to pass before a merge, and how one commit stands
 // against it, read as GitHub judges it.
 //
-// # Required is read from both places GitHub keeps it
-//
-// A branch's required checks live in its classic protection and in every
-// active ruleset that targets it, at the repository or the organization, and
-// GitHub enforces the union. So [Client.RequiredChecks] reads both and unions
-// them: either alone answers "none" for a branch the other protects.
-//
-// # A requirement can name the app that must report it
-//
-// Protection (`checks[].app_id`) and a ruleset (`integration_id`) can bind a
-// context to one GitHub App, and GitHub then counts only that app's report.
-// The binding is kept ([RequiredCheck.AppID]) because an agent's own app may
-// hold Checks: Read and write, which lets it post a check run of any name on
-// any commit: matched by name alone, its report would pass a check the
-// repository's own CI never ran.
-//
-// # Every source must pass
-//
-// GitHub's rule for a name reported both as a check run and as a commit
-// status is that both must pass. So a requirement passes here only when every
-// source reporting it passed: the newest check run of each app, and the
-// commit status. A newer success from one app does not hide another app's
-// failure.
-//
-// # An agent never reports its own change as passing
-//
-// An agent's app that may write checks can post a check run of any name, and
-// a commit status of any context where it may write statuses, on its own
-// head. So a report from one of the company's own agents' apps
-// ([Reporters]) counts for nothing here, whatever GitHub's own merge makes of
-// it: a merge or deploy decision stands only on a report its requester could
-// not have made, and a requirement bound to an agent's app reads missing.
-//
-// # What could not be read is said, never guessed
-//
-// When GitHub refuses the credential one of the two sources (403: the
-// installation lacks Checks for check runs, or Commit statuses for statuses),
-// a requirement that source could report is [CheckUnread] rather than
-// missing, unless what could be read already failed it. "Missing" is a fact
-// about the commit; "unread" is a fact about the credential, and only a
-// person can change that one. Any other failure (a timeout, a 5xx, a rate
-// limit) fails the whole read, since a retry may answer it.
-//
-// # A plan without protection requires nothing of GitHub's own
-//
-// A private repository on a plan without branch protection or rulesets is
-// refused both with a 403 that names the plan ([APIError.PlanLacks]). That is
-// GitHub saying it enforces no check there, so [Client.RequiredChecks] reads
-// it as none from that source; any other refusal still fails the read.
-//
-// # A check the company declares is a check run that succeeded
-//
-// Where GitHub enforces nothing, the company names the checks a delegated
-// merge or deploy needs itself ([RequiredCheck.Declared], [WithDeclared]).
-// Such a check passes only as a check run, the newest of each app that
-// reported it, completed with success on exactly the commit read, by an app
-// that is not one of the company's agents. Neutral and skipped pass a check
-// GitHub requires and not this one ([CheckInconclusive]), and a commit status
-// is neither read nor counted for it: no agent's app is offered Commit
-// statuses, so on a private repository the engine could not read one anyway.
+// GitHub enforces the union of a branch's classic protection and every active
+// ruleset targeting it, so [Client.RequiredChecks] reads both: either alone
+// answers "none" for a branch the other protects. A requirement passes only
+// when every source reporting it passed (the newest check run of each app,
+// and the commit status); one bound to an App ([RequiredCheck.AppID]) counts
+// only that app's report. AN AGENT NEVER REPORTS ITS OWN CHANGE AS PASSING:
+// its app may post any check or status on its own head, so a report from a
+// company agent's app ([Reporters]) counts for nothing.
 
 // RequiredCheck is one status check a branch requires before a merge.
 type RequiredCheck struct {
@@ -86,8 +34,12 @@ type RequiredCheck struct {
 	// AppID is the GitHub App that must report it, or zero for any source.
 	AppID int64 `json:"app_id,omitempty"`
 
-	// Declared is a check the company requires itself rather than one GitHub
-	// enforces: only a successful check run passes it.
+	// Declared is a check the company requires itself where GitHub enforces
+	// nothing ([WithDeclared]). It passes only as a check run, the newest of
+	// each app that reported it, completed with success on exactly the commit
+	// read, by an app that is not a company agent's. Neutral and skipped are
+	// [CheckInconclusive], and a commit status is neither read nor counted:
+	// no agent's app is offered Commit statuses.
 	Declared bool `json:"declared,omitempty"`
 }
 
@@ -110,7 +62,10 @@ const (
 	CheckMissing CheckState = "missing"
 
 	// CheckUnread is a source that could report it being refused to this
-	// credential, and nothing read failing it ([CheckResult.Unreadable]).
+	// credential (403), and nothing read failing it ([CheckResult.Unreadable]).
+	// "Missing" is a fact about the commit, "unread" about the credential,
+	// which only a person can change. Any other failure (timeout, 5xx, rate
+	// limit) fails the whole read, since a retry may answer it.
 	CheckUnread CheckState = "unread"
 
 	// CheckInconclusive is a declared check a source finished neutral or
@@ -648,7 +603,10 @@ func forbidden(err error) bool {
 }
 
 // planLacks reports GitHub refusing a feature the repository's plan does not
-// include ([APIError.PlanLacks]).
+// include ([APIError.PlanLacks]). A private repository on a plan without
+// protection or rulesets is refused with a 403 naming the plan: GitHub
+// enforces no check there, so [Client.RequiredChecks] reads none from that
+// source, and any other refusal still fails the read.
 func planLacks(err error) bool {
 	var apiErr *APIError
 	return errors.As(err, &apiErr) && apiErr.PlanLacks()

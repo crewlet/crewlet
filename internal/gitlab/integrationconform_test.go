@@ -19,18 +19,13 @@ import (
 // provisioning token's expiry, and the webhook with its signing secret. Each
 // seat's account is per-seat access, certified by its own suite.
 //
-// # TWO WORLDS, because a converged one cannot certify half the clauses
+// TWO WORLDS, because a converged one cannot certify half the clauses: four of
+// the nine walk the findings list, which a converged pass leaves empty.
+// [outstandingGitLab] never set its webhook address, so nothing can deliver.
 //
-// Four of the nine clauses walk the findings list, and a converged pass
-// reports none. [outstandingGitLab] is a company that never set its webhook
-// address, so the instance has nowhere to deliver to.
-//
-// # Both hook paths, because the pass has two
-//
-// One hook on the group where the tier serves group webhooks, one per
-// `provisioning.projects` entry where it does not, and the per-project branch
-// multiplies whatever it does by the project count. The CONVERGED world is
-// driven over both.
+// The CONVERGED world is driven over both hook paths (one group hook, or one
+// per `provisioning.projects` entry), since the per-project branch multiplies
+// whatever it does by the project count.
 
 // gitlabWorld is one GitLab the suite drives, plus the pass itself as
 // [integration.Reconciler] sees it.
