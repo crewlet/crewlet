@@ -61,6 +61,7 @@ func BenchmarkAThreadChainAtItsBounds(b *testing.B) {
 		{"windows_merging_at_the_bound", "", benchWindows, benchWindowsRead, false, false},
 		{"the_reading_line_beside_it", "", benchReadingLine, benchReadingLineRead, false, false},
 		{"the_reading_line_past_it", "", benchReadingLinePast, benchReadingLinePastRead, false, true},
+		{"the_reading_line_at_both_bounds", "", benchReadingLineAtBoth, benchReadingLineAtBothRead, false, false},
 		{"a_whole_pdf_line_beside_it", "", benchWholePDF, benchWholePDFRead, false, false},
 		{"a_collections_read", "", benchCollection, benchCollectionRead, false, false},
 		{"a_collections_pass", "", benchCollection, benchCollectionPassRead, true, false},
@@ -720,6 +721,39 @@ func benchReadingLine(t *benchThread) {
 func benchReadingLinePast(t *benchThread) {
 	benchAtTheBound(t)
 	benchReadingLineLast(t, 1)
+}
+
+// benchReadingLineAtBoth writes the_reading_line_at_both_bounds:
+// records_at_the_bound's thread whose last record is the reading's worst line,
+// its results the last of the calls bound, so the chain reaches both bounds
+// at that line and End runs beside its facts. The records before it that
+// would pass the calls bound make no call.
+func benchReadingLineAtBoth(t *benchThread) {
+	n := threadChainMaxRecords
+	head := `{"parentUuid":` + benchAtTheBoundParent(n) + `,"isSidechain":false,"type":"user",` +
+		`"message":{"role":"user","content":`
+	tail := `},"uuid":"` + rcUUID(n) + `","timestamp":"` + rcAt(n) + `","version":"2.1.310"}`
+	t.blocks = benchFactsHeld(head, benchSmallest, tail)
+	for k := 1; k < n; k++ {
+		content := `[{"type":"text","text":"no call"}]`
+		if k <= threadChainMaxCalls-t.blocks {
+			content = benchCall(fmt.Sprintf("toolu_%08d", k))
+		}
+		t.record(benchRecord(benchAtTheBoundParent(k), benchMain, "assistant",
+			benchReply(fmt.Sprintf("msg_%08d", k), content), k, k))
+	}
+	t.record(head + "[" + strings.Repeat(benchSmallest+",", t.blocks-1) + benchSmallest + "]" + tail)
+}
+
+// benchReadingLineAtBothRead holds the_reading_line_at_both_bounds's chain to
+// both bounds reached and neither passed, every result of its last line held.
+func benchReadingLineAtBothRead(b *testing.B, read benchRead, t *benchThread) {
+	if why, unknown := read.c.Unknown(); unknown || read.c.handles != threadChainMaxRecords ||
+		len(read.c.occurs) != threadChainMaxCalls || len(read.held.Calls()) != t.blocks {
+		b.Fatalf("the chain filed %d records and %d calls, reads the thread as %q, and handed back a line of %d "+
+			"results; want %d, %d, a thread it places, and %d", read.c.handles, len(read.c.occurs), why,
+			len(read.held.Calls()), threadChainMaxRecords, threadChainMaxCalls, t.blocks)
+	}
 }
 
 // benchSmallest is the smallest result a user record holds.

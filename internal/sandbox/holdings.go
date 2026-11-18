@@ -258,13 +258,13 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 // run's record is read: the record, the row, the reader's slots, open and read.
 //
 // THIRTY SECONDS, so a reading at its bounds is one: the slowest measured, a
-// line of blocks of an empty kind to the plaintext's bound, reads in
-// 16.5 to 18.2 s on two dedicated cores (BenchmarkAReadingAtItsBounds), about
-// 21 s behind a burst of 32 ordinary ones in the seats' one slot, the rest left
-// to a node whose cores are not its alone. With the keep's
-// ([relaunchCaptureWait]) a kept session costs the relaunch's frame, which
-// holds the seat and an admission slot, 45 s, plus a reader's one overrun step,
-// a 64 KiB fill ([HoldingsReader]), and the keep's settle writes
+// subagent's lines of blocks of an empty kind to the plaintext's and the
+// lines' bounds, reads in 21.4 to 22.6 s on two dedicated cores
+// (BenchmarkAReadingAtItsBounds), about 25 s behind a burst of 32 ordinary ones
+// in the seats' one slot. With the keep's ([relaunchCaptureWait]) a kept
+// session costs the relaunch's frame, which holds the seat and an admission
+// slot, 45 s, plus a reader's one overrun step ([HoldingsReader]), at most an
+// unread member's discard, and the keep's settle writes
 // ([Coordinator.ContinuedCapture]). A reading past it is no reading.
 const holdingsReadWait = 30 * time.Second
 

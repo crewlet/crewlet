@@ -48,11 +48,22 @@ const threadLineMax = 8 << 20
 // left.
 const threadPlainMax = int64(scrubExpansion) * executorkeep.SessionMaxBytes
 
+// threadLinesMax is the most whole lines a reading reads: of one thread, or
+// of every thread member of an archive between them. PAST IT, THE READING
+// FAILS CLOSED ([errThreadBound]): a line costs its reading a few
+// microseconds whatever its length, so [threadPlainMax] alone lets a thread
+// of tiny lines read for minutes. 2^20, where it meets [threadPlainMax] at
+// lines of 256 bytes, eight times the records a main thread is modelled to
+// ([threadChainMaxRecords]) and over a hundred times the most lines any
+// thread measured holds. The package doc, "THE FACTS ARE HELD TO
+// [threadLineMax] IN SUM", has what a reading at it measured.
+const threadLinesMax = 1 << 20
+
 // errThreadBound is a thread past a bound it is read within: a line whose
 // facts pass [threadLineMax], one holding a value it reads whole past
 // [threadValueMax], one whose type turns after a frame the layer passed over
-// for it, or a member past its reader's bound. The reading is over
-// ([threadReader.Next]).
+// for it, or a member past its reader's bound, of bytes or of whole lines.
+// The reading is over ([threadReader.Next]).
 var errThreadBound = errors.New("executor: a Claude Code thread runs past a bound it is read within")
 
 // errNotOneRecord is a whole line that does not open a JSON object: null, a

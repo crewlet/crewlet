@@ -3853,6 +3853,41 @@ func TestEveryThreadOfASessionIsReadThroughOneReader(t *testing.T) {
 	}
 }
 
+// THE LINES' BOUND IS THE READING'S, SHARED BY ITS THREADS
+// ([holdingsWalk.reader]): each thread member the walk reads takes what the
+// ones before it left of [threadLinesMax], as their bytes share
+// [threadPlainMax], so a session of many subagents reads one bound's lines,
+// never one a thread. A session whose main thread and subagent's thread hold
+// the bound between them reads whole; with one line fewer left, the
+// subagent's thread ends the reading with errThreadBound.
+//
+// Mutation: hand each member the whole bound, and the session past it reads
+// whole.
+func TestEveryThreadOfASessionSharesTheLinesBound(t *testing.T) {
+	t.Parallel()
+	s := hsResumed(t)
+	lines := len(s.main) + len(s.thread)
+	for name, tc := range map[string]struct {
+		left int
+		past bool
+	}{
+		"the bound its threads hold between them": {left: lines},
+		"one line fewer left":                     {left: lines - 1, past: true},
+	} {
+		w := newHoldingsWalk(ctSession, hsAsk(hsLogged(hsSubCall, hsSubOut)), hsBounds())
+		w.linesLeft = tc.left
+		err := eachMember(bytes.NewReader(tarOfMembers(t, s.members())), hsBounds(),
+			func(h *tar.Header, member io.Reader) error { return w.member(t.Context(), h, member) })
+		switch {
+		case tc.past && !errors.Is(err, errThreadBound):
+			t.Errorf("%s: the walk ended with %v; want the lines' bound", name, err)
+		case !tc.past && (err != nil || !w.read[hsMain] || !w.read[hsAgentThread]):
+			t.Errorf("%s: the walk ended with %v, its main thread read %t and its subagent's %t; want both read "+
+				"whole", name, err, w.read[hsMain], w.read[hsAgentThread])
+		}
+	}
+}
+
 // NO ID THE CALL-ID RULE REFUSES IS KEPT: an id is the box's word, as long as a
 // line, and nothing can link, answer or notice a call under one, so a leg filed
 // under it would hold the box's bytes until the walk ends, a hundred mebibytes

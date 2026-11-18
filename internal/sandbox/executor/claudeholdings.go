@@ -127,17 +127,17 @@ import (
 // been, the safe direction, condition 4 the backstop of the last.
 
 // THE BOUNDS: the plaintext and what read members hand out at [threadPlainMax],
-// read in one reader's fixed buffers whatever a line's length, a line's facts
-// at [threadLineMax], the model at [threadChainMaxRecords] and
+// the lines of the threads read at [threadLinesMax], a line's facts at
+// [threadLineMax], the model at [threadChainMaxRecords] and
 // [threadChainMaxCalls], a metadata at [holdingsMetaMaxBytes], the ask at
 // [sandbox.MaxBridgeCalls], subagents at [holdingsMaxAgents], legs at
 // [holdingsMaxLegs]; every id kept is one the call-id rule holds
-// ([holdingsWalk.leg], [subagentMetaOf]), since an id is the box's word, as
-// long as [threadValueMax]. MEASURED (BenchmarkAReadingAtItsBounds, whose doc
-// says how; two dedicated cores): the worst, a main thread at both of the
-// model's bounds, holds 43 MiB live and peaks at 70 MiB in 2.3 to 2.5 s; a line
-// of the smallest results at its facts' bound after it, 39 and 60 MiB; a whole
-// PDF's Read 56 to 75 ms; an ordinary session 72 to 88 ms.
+// ([holdingsWalk.leg], [subagentMetaOf]). MEASURED
+// (BenchmarkAReadingAtItsBounds; two dedicated cores): the most held, a main
+// thread at both of the model's bounds, 43 MiB live, peaking at 70 MiB, in 2.3
+// to 2.5 s, and with a line of the smallest results as the record that fills
+// both, 39 and 57 MiB; the slowest, a subagent's lines of blocks to the lines'
+// and the plaintext's bounds, 21.4 to 22.6 s; an ordinary session 72 to 88 ms.
 
 // holdingsWriterFloor is the oldest Claude Code release whose sessions a
 // reading reads ([ClaudeCode.holdingsFloor]).
@@ -346,21 +346,25 @@ type holdingsWalk struct {
 	unnamed map[string]bool
 	kept    int
 	// lines is the one line reader every thread member the walk reads is
-	// read through ([holdingsWalk.reader]).
-	lines *threadReader
+	// read through ([holdingsWalk.reader]), and linesLeft what of
+	// [threadLinesMax] the members before the one it reads left.
+	lines     *threadReader
+	linesLeft int
 }
 
 // reader is the walk's one line reader, made to read member within what the
-// members read so far left of the reading's budget ([threadPlainMax]): one
-// reader for every member, so a session of many subagents costs the walk one
-// reader's buffers ([threadReader.Reset]), never one a member.
+// members read so far left of the reading's budgets ([threadPlainMax] bytes,
+// [threadLinesMax] whole lines): one reader for every member, so a session of
+// many subagents costs the walk one reader's buffers ([threadReader.Reset]),
+// never one a member.
 func (w *holdingsWalk) reader(member io.Reader) *threadReader {
-	handed := &handedReader{r: member, handed: &w.handed}
 	if w.lines == nil {
-		w.lines = newThreadReader(handed, w.bounds.plain-w.handed)
+		w.lines = newThreadReader(nil, 0)
 	} else {
-		w.lines.Reset(handed, w.bounds.plain-w.handed)
+		// The member before's whole lines, read before its reading ended.
+		w.linesLeft -= w.lines.n
 	}
+	w.lines.Reset(&handedReader{r: member, handed: &w.handed}, w.bounds.plain-w.handed, w.linesLeft)
 	return w.lines
 }
 
@@ -487,7 +491,7 @@ type noticeFact struct {
 // calls ask marks asked.
 func newHoldingsWalk(session string, ask sandbox.HoldingsAsk, bounds scrubBounds) *holdingsWalk {
 	main, _ := claudeMainThread(session)
-	w := &holdingsWalk{session: session, main: main, bounds: bounds,
+	w := &holdingsWalk{session: session, main: main, bounds: bounds, linesLeft: threadLinesMax,
 		read: map[string]bool{}, calls: map[string]*callFacts{}, agents: map[string]*subagentFacts{},
 		legs: map[string]*legFact{}, notices: map[legNotice]noticeFact{}, unnamed: map[string]bool{}}
 	for _, c := range ask.Calls {

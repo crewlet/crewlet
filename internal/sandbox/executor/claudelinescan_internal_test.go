@@ -262,7 +262,7 @@ func checkScanReadsAsDecode(t testing.TB, text []byte, chunk int) {
 			member = append(member, rest...)
 			end = fmt.Sprintf("ended by EOF, then EOF, torn %t\n", len(rest) > 0)
 		}
-		r.Reset(bytes.NewReader(member), int64(len(member)))
+		r.Reset(bytes.NewReader(member), int64(len(member)), threadLinesMax)
 		got := scanReading(t.Context(), r)
 		if len(got) != len(wants)+1 || got[len(wants)] != end {
 			t.Fatalf("lines %d to %d, the last %.300q, read in pieces of %d bytes at most, read as %d answers "+
@@ -1191,7 +1191,7 @@ func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
 		for _, bound := range []int64{within, within - 2} {
 			r := newThreadReader(tc.before(), tc.maxBytes)
 			scanReading(tc.ctx, r)
-			r.Reset(strings.NewReader(next), bound)
+			r.Reset(strings.NewReader(next), bound, threadLinesMax)
 			got := strings.Join(scanReading(t.Context(), r), "")
 			if want := strings.Join(scanReading(t.Context(), newThreadReader(strings.NewReader(next), bound)), ""); got != want {
 				t.Errorf("after %s, the next member read within %d bytes reads as\n%swant it read as a fresh "+
@@ -1208,7 +1208,7 @@ func TestAResetReaderReadsAsAFreshOne(t *testing.T) {
 	const members = 1000
 	walk := func() {
 		for range members {
-			r.Reset(strings.NewReader(member), threadPlainMax)
+			r.Reset(strings.NewReader(member), threadPlainMax, threadLinesMax)
 			for {
 				if _, err := r.Next(t.Context()); err != nil {
 					break
@@ -1443,7 +1443,7 @@ func scanAllocated(ctx context.Context, warm, parts []scanPart, runs int) (uint6
 		if _, err = r.Next(ctx); err != nil {
 			return 0, threadLine{}, fmt.Errorf("the line it was warmed on: %w", err)
 		}
-		r.Reset(&scanGenerated{parts: parts}, threadPlainMax)
+		r.Reset(&scanGenerated{parts: parts}, threadPlainMax, threadLinesMax)
 		runtime.ReadMemStats(&before)
 		line, err = r.Next(ctx)
 		runtime.ReadMemStats(&after)

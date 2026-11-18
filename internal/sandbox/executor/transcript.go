@@ -384,8 +384,8 @@ var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
 // one that waits past it tells its session every call after its save point,
 // which is never wrong. On two dedicated cores (BenchmarkAReadingAtItsBounds)
 // an ordinary 1.6 MiB archive reads in 72 to 88 ms, so 32 relaunches in
-// 2.3 to 2.8 s, 255 MiB of ordinary lines in 3.1 to 3.2 s, and the slowest line
-// to that bound in 16.5 to 18.2 s.
+// 2.3 to 2.8 s, 255 MiB of ordinary lines in 3.1 to 3.2 s, and the slowest
+// archive measured at its bounds in 21.4 to 22.6 s.
 const SeatTranscriptReadsAtOnce = 1
 
 // seatTranscriptReads holds a slot for each transcript a seat is reading, at

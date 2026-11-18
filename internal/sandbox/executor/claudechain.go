@@ -278,9 +278,9 @@ type chainCallID int32
 // a call, two records of a block each, about as many ids; two bounds, not one
 // sum, since a thread of ordinary calls fills each about halfway. Past either,
 // See files nothing more (whyBound). HELD AT MOST (GOGC=10, two dedicated
-// cores, BenchmarkAThreadChainAtItsBounds): 43 MiB at both bounds, End
-// 33 to 34 ms of a 2.0 to 2.2 s read; End's worst, windows merging at
-// threadChainMaxSpread, 1.8 to 1.9 s; 39 MiB beside a line at [threadLineMax].
+// cores, BenchmarkAThreadChainAtItsBounds): 43 MiB at both, End 33 to 34 ms of
+// a 2.0 to 2.2 s read, and 41 MiB with a line at [threadLineMax] the record
+// filling both; End's worst, windows merging at the spread's bound, 1.8 to 1.9 s.
 // THE COLLECTION'S PASS charges the chain to the one walk a collection reads
 // its main thread in ([walkThread]), beside the resumed count, in no transcript
 // slot: 2.2 to 2.4 s, within internal/sandbox's MainThreadReadWait, and 39 MiB

@@ -21,13 +21,14 @@ import (
 // MainThreadReadWait bounds the read of a job's main thread at its collection
 // ([Coordinator.readMainThread]): one wait every reading of the read shares.
 //
-// FIFTEEN SECONDS: the main thread at its bound, a quarter of a gibibyte read a
-// line at a time with each line decoded, takes 1.9 to 2.0 s on two cores of
-// the engine host (the executor's BenchmarkTheMainThreadReadAtItsBound), twice
-// that loaded, and more on e2b, streamed through envd. A read past it answers
-// [CountUnread], the safe side: a continuation told as one that may be cut
-// off. It is held inside [BoxReadBudget] for a Claude Code collection, before
-// the take, so the take keeps its own.
+// FIFTEEN SECONDS: the main thread at its bound, a quarter of a gibibyte of
+// ordinary lines, takes 1.96 to 2.00 s on two dedicated cores (the executor's
+// BenchmarkTheMainThreadReadAtItsBound), twice that loaded, and more on e2b,
+// streamed through envd. A read past it answers [CountUnread], the safe side: a
+// continuation told as one that may be cut off. The slowest threads measured at
+// the bound, blocks of an empty kind on one line or on lines of 256 bytes, take
+// 17.8 to 18.5 s and are [CountUnread] so. It is held inside [BoxReadBudget]
+// for a Claude Code collection, before the take, so the take keeps its own.
 const MainThreadReadWait = 15 * time.Second
 
 // mainThreadReader is a [Runner] whose harness reads the main thread of the

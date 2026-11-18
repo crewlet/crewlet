@@ -650,6 +650,69 @@ func TestALineOrAMemberPastItsBoundEndsTheReading(t *testing.T) {
 	}
 }
 
+// A MEMBER OF MORE WHOLE LINES THAN ITS BOUND ENDS THE READING: a line costs
+// its reading whatever its length, so once a reader has read the line past
+// its lines' bound, a line that is no record counted as any other, it ends
+// with errThreadBound and stays over. A member at its bound reads whole, and
+// so does one that ends there in a torn piece, which is no line. A reader of
+// a whole thread reads within [threadLinesMax].
+//
+// Mutation: drop the lines' bound, or make a reader's default any other, and
+// a member past it reads to its end.
+func TestAMemberPastItsLinesBoundEndsTheReading(t *testing.T) {
+	t.Parallel()
+	if r := newThreadReader(strings.NewReader(""), threadPlainMax); r.maxLines != threadLinesMax {
+		t.Errorf("a whole thread is read within %d lines, want %d", r.maxLines, threadLinesMax)
+	}
+	brief := ctBrief(ctUUID(1))
+	for name, tc := range map[string]struct {
+		text           string
+		maxLines       int
+		lines, broken  int
+		past, tornHere bool
+	}{
+		"a member at its bound": {text: ctThread(brief, brief, brief), maxLines: 3, lines: 3},
+		"a member at its bound, then a torn piece": {text: ctThread(brief, brief, brief) + "{", maxLines: 3, lines: 3,
+			tornHere: true},
+		"a member a record past its bound": {text: ctThread(brief, brief, brief, brief), maxLines: 3, lines: 3,
+			past: true},
+		"a member past its bound, a line no record among it": {text: ctThread(brief, "0", brief, "0"), maxLines: 3,
+			lines: 2, broken: 1, past: true},
+		"a line at a bound of none":          {text: "0\n", past: true},
+		"a line at a bound below none":       {text: ctThread(brief), maxLines: -1, past: true},
+		"an empty member at a bound of none": {text: ""},
+	} {
+		r := newThreadReader(strings.NewReader(""), threadPlainMax)
+		r.Reset(strings.NewReader(tc.text), threadPlainMax, tc.maxLines)
+		lines, broken := 0, 0
+		var end error
+		for end == nil {
+			_, err := r.Next(t.Context())
+			var refused *threadLineError
+			switch {
+			case err == nil:
+				lines++
+			case errors.As(err, &refused):
+				broken++
+			default:
+				end = err
+			}
+		}
+		_, again := r.Next(t.Context())
+		if lines != tc.lines || broken != tc.broken {
+			t.Errorf("%s: %d lines read and %d broken, want %d and %d", name, lines, broken, tc.lines, tc.broken)
+		}
+		switch {
+		case tc.past && (!errors.Is(end, errThreadBound) || !errors.Is(again, errThreadBound) ||
+			!strings.Contains(end.Error(), "whole lines it is read within")):
+			t.Errorf("%s: the reading ended with %v and then %v, want errThreadBound both times, past its lines",
+				name, end, again)
+		case !tc.past && (!errors.Is(end, io.EOF) || r.Torn() != tc.tornHere):
+			t.Errorf("%s: the reading ended with %v, torn %t, want io.EOF, torn %t", name, end, r.Torn(), tc.tornHere)
+		}
+	}
+}
+
 // A MEMBER'S READER THAT FAILS ENDS THE READING WITH ITS ERROR, never with the
 // member's end: an archive cut short (tar and gzip answer io.ErrUnexpectedEOF)
 // or a box's stream reset part way through a member ends the reading with that

@@ -70,8 +70,9 @@ type threadReader struct {
 	// maxBytes is the member's bound, and left what of it the lines read so
 	// far have not taken.
 	maxBytes, left int64
-	// n is how many whole lines have been read.
-	n int
+	// n is how many whole lines have been read, and maxLines the most it may
+	// be.
+	n, maxLines int
 	// torn is whether the member ended in a piece with no break.
 	torn bool
 	// end is what ended the reading: io.EOF, errThreadBound, ctx's error, or
@@ -91,8 +92,10 @@ type threadReader struct {
 
 // newThreadReader reads r, one member, a line at a time: at most maxBytes of
 // it, the caller's figure ([threadPlainMax] for a whole thread, what is left
-// of an archive's budget for one member of it); at or below zero, no byte.
-// The member is a thread, never a subagent's metadata ([claudeSubagentMeta]).
+// of an archive's budget for one member of it); at or below zero, no byte;
+// and at most [threadLinesMax] whole lines ([threadReader.Reset] takes
+// another). The member is a thread, never a subagent's metadata
+// ([claudeSubagentMeta]).
 func newThreadReader(r io.Reader, maxBytes int64) *threadReader {
 	return newThreadReaderSize(r, maxBytes, lineChunkBytes)
 }
@@ -108,19 +111,19 @@ func newThreadReaderSize(r io.Reader, maxBytes int64, chunk int) *threadReader {
 	// would then reset the caller's reader.
 	t := &threadReader{r: bufio.NewReaderSize(nil, chunk), valueMax: threadValueMax, meterMax: threadLineMax}
 	t.scan = jsonscan.New(&t.src)
-	t.Reset(r, maxBytes)
+	t.Reset(r, maxBytes, threadLinesMax)
 	return t
 }
 
-// Reset makes t read r, one member, within maxBytes, as [newThreadReader] does:
-// whatever t read before, how it ended among it (a torn piece, a bound, an
-// error, a context that ended), is gone, and t reads r exactly as a fresh
-// reader would, keeping only its buffers.
-func (t *threadReader) Reset(r io.Reader, maxBytes int64) {
+// Reset makes t read r, one member, within maxBytes and maxLines whole lines,
+// as [newThreadReader] does: whatever t read before, how it ended among it (a
+// torn piece, a bound, an error, a context that ended), is gone, and t reads
+// r exactly as a fresh reader would, keeping only its buffers.
+func (t *threadReader) Reset(r io.Reader, maxBytes int64, maxLines int) {
 	maxBytes = max(maxBytes, 0)
 	t.r.Reset(r)
 	t.maxBytes, t.left = maxBytes, maxBytes
-	t.n, t.torn, t.end = 0, false, nil
+	t.n, t.maxLines, t.torn, t.end = 0, max(maxLines, 0), false, nil
 }
 
 // Next is the member's next WHOLE line, one that ends in "\n", read without
@@ -128,7 +131,8 @@ func (t *threadReader) Reset(r io.Reader, maxBytes int64) {
 // no break never a line ([threadReader.Torn]); a *threadLineError for a whole
 // line that is no record, the reader still usable; and, each ending the
 // reading for good, errThreadBound once the member runs past its bound (EVEN
-// RIGHT AFTER A BREAK), once the pass captures a value past [threadValueMax]
+// RIGHT AFTER A BREAK) or holds a whole line past its lines' bound, read
+// whole first, once the pass captures a value past [threadValueMax]
 // or the facts run past [threadLineMax], or once the line's type reads a frame
 // passed over for an earlier type; the member's reader's error AS IT IS, one
 // wrapping the scrub's bound among them; and ctx's error, asked before each
@@ -164,6 +168,11 @@ func (t *threadReader) Next(ctx context.Context) (threadLine, error) {
 	}
 	t.left -= t.src.n + 1
 	t.n++
+	if t.n > t.maxLines {
+		t.end = fmt.Errorf("%w: the member holds more than the %d whole lines it is read within", errThreadBound,
+			t.maxLines)
+		return threadLine{}, t.end
+	}
 	return t.commit(scanned, facts)
 }
 

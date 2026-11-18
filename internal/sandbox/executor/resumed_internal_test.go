@@ -1188,19 +1188,53 @@ func (r *repeating) Read(p []byte) (int, error) {
 }
 
 // BenchmarkTheMainThreadReadAtItsBound measures the collection's walk, with the
-// count's reading, of a main thread at [threadPlainMax] (a quarter gibibyte) on
-// the engine host: the ground for internal/sandbox's MainThreadReadWait, which
-// holds twice this figure on a loaded host within its fifteen seconds.
+// count's reading, of a main thread at its bounds on the engine host: ordinary
+// lines to [threadPlainMax] (a quarter gibibyte), the ground for
+// internal/sandbox's MainThreadReadWait, which holds twice this figure on a
+// loaded host within its fifteen seconds; the slowest measured, a line of
+// blocks of an empty kind to that bound, and lines of such blocks to it and
+// [threadLinesMax] at once, each past that wait; and tiny lines to
+// [threadLinesMax].
 func BenchmarkTheMainThreadReadAtItsBound(b *testing.B) {
 	lines := benchLines(1 << 20)
 	lines = lines[bytes.IndexByte(lines, '\n')+1:]
-	whole := threadPlainMax - threadPlainMax%int64(len(lines))
-	for b.Loop() {
-		var r resumedReading
-		walkThread(b.Context(), &repeating{lines: lines, left: whole}, threadPlainMax, &r)
-		if r.unread {
-			b.Fatal("the thread was not read whole")
-		}
+	tiny := []byte(`{"type":"x"}` + "\n")
+	const block = `{"type":""},`
+	head := `{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":[`
+	tail := block[:len(block)-1] + `]},"uuid":"u1","version":"2.1.310"}` + "\n"
+	blocks := (threadPlainMax - int64(len(head)+len(tail))) / int64(len(block))
+	// short is a record of such blocks of the length at which [threadLinesMax]
+	// of them fill [threadPlainMax].
+	short := []byte(head + strings.Repeat(block, int(threadPlainMax/threadLinesMax-int64(len(head)+len(tail)))/
+		len(block)) + tail)
+	for _, bc := range []struct {
+		name   string
+		thread func() io.Reader
+		whole  int64
+	}{
+		{"ordinary_lines", func() io.Reader {
+			return &repeating{lines: lines, left: threadPlainMax - threadPlainMax%int64(len(lines))}
+		}, threadPlainMax - threadPlainMax%int64(len(lines))},
+		{"a_line_of_blocks_to_the_bound", func() io.Reader {
+			return io.MultiReader(strings.NewReader(head), &repeating{lines: []byte(block),
+				left: blocks * int64(len(block))}, strings.NewReader(tail))
+		}, int64(len(head)+len(tail)) + blocks*int64(len(block))},
+		{"lines_of_blocks_to_both_bounds", func() io.Reader {
+			return &repeating{lines: short, left: threadLinesMax * int64(len(short))}
+		}, threadLinesMax * int64(len(short))},
+		{"tiny_lines_to_the_lines_bound", func() io.Reader {
+			return &repeating{lines: tiny, left: threadLinesMax * int64(len(tiny))}
+		}, threadLinesMax * int64(len(tiny))},
+	} {
+		b.Run(bc.name, func(b *testing.B) {
+			for b.Loop() {
+				var r resumedReading
+				walkThread(b.Context(), bc.thread(), threadPlainMax, &r)
+				if r.unread {
+					b.Fatal("the thread was not read whole")
+				}
+			}
+			b.SetBytes(bc.whole)
+		})
 	}
-	b.SetBytes(whole)
 }

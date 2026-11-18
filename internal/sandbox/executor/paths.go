@@ -74,7 +74,9 @@
 //     stays over: a member past its reader's bound, EVEN WHERE THE BOUND FALLS
 //     RIGHT AFTER A LINE BREAK (metered with io.LimitReader, a member past its
 //     bound would read as whole, the lines past the cut neither read nor
-//     missed); a line whose facts pass [threadLineMax]; a line holding a value
+//     missed); a member of more whole lines than its reader's bound
+//     ([threadLinesMax]); a line whose facts pass [threadLineMax]; a line
+//     holding a value
 //     it reads whole past [threadValueMax]; and a line whose type turns after a
 //     frame the pass passed over for it (the type's gate, below). Each fails
 //     closed: a reader turns a thread with a hole in it into no reading or
@@ -150,7 +152,7 @@
 // holds (claudeholdings.go) reads a kept archive's main thread, and each
 // depth-one subagent's thread and metadata, through the layer, metering the
 // archive at [threadPlainMax] with the scrub's own meter and handing each
-// member it reads what is left of that budget.
+// member it reads what is left of that budget, and of [threadLinesMax].
 //
 // # A thread line is read in one scanner pass, never held
 //
@@ -227,15 +229,13 @@
 // than what a reader keeps of one. Every legitimate line's facts are under a
 // KiB: its readers keep a block's kind, a call's id, name and target, a
 // result's length and digests, a few small values, never a value's text. Of the
-// 59,519 lines of the 1,091 threads the probes kept and this package's testdata
-// holds, the most any line's facts hold is 753 bytes, and the longest line,
-// 2,002,134 bytes, holds 51. So a reading's coincident worst is the resume's
-// model of the thread at its bounds ([threadChain]) beside one line's facts at
-// the bound and the reader's fixed buffers. A larger bound would serve only
-// lines no release writes: what this one refuses is a line of tiny calls by the
-// tens of thousands, a value read whole past [threadValueMax] (an id, a uuid, a
-// usage), or a type that turns after a frame passed over for it, each failing
-// toward no reading or cannot tell.
+// 59,519 lines of the 1,091 JSONL files the probes kept and this package's
+// testdata holds, 564 of them threads, the most any line's facts hold is 753
+// bytes, and the longest thread line, 2,001,196 bytes, holds 556. A larger
+// bound would serve only lines no release writes: what this one refuses is a
+// line of tiny calls by the tens of thousands, a value read whole past
+// [threadValueMax] (an id, a uuid, a usage), or a type that turns after a
+// frame passed over for it, each failing toward no reading or cannot tell.
 //
 // MEASURED on a dedicated two-core build slot, one case a process, a time the
 // spread of three runs; held is the largest live heap under GODEBUG=gctrace=1
@@ -244,15 +244,26 @@
 // automata) hold about 146 KiB, and what no reader reads of a line costs
 // nothing more, whatever its length (BenchmarkAReaderAtALineOfAnyLength): a
 // whole PDF's Read, 55,924,056 bytes on one line, reads in 26 to 35 ms holding
-// 146.5 to 151.5 KiB, and a 64 MiB prompt in 264 to 268 ms holding 145.8 KiB. A
-// line of the smallest results, which no release writes, holds 16,384 of them
-// within the bound, the reader and its facts 2,450 KiB, read in 34 to 42 ms,
-// and one more is refused, a line of about 656 KiB, since a list is charged at
-// every size it doubles through. A line at the bound read beside the resume's
-// model at both its bounds held 39 MiB at most, its heap peaking at 63 MiB, and
-// the whole-PDF line beside it 35 MiB (BenchmarkAThreadChainAtItsBounds):
-// within the about 133 MiB a seat's read for words holds in the same transcript
-// slot ([SeatTranscriptReadsAtOnce]).
+// 146.5 to 151.5 KiB, and a 64 MiB prompt in 264 to 268 ms holding 145.8 KiB.
+// A reader keeps two buffers more once a line's values grow them, the
+// scanner's capture to [threadValueMax] and its scratch up to
+// [lineScratchKeep] each, about 280 KiB in all. A line of the smallest
+// results, which no release writes, holds 16,384 of them within the bound, the
+// reader and its facts 2,450 KiB, read in 34 to 42 ms, and one more is
+// refused, a line of about 656 KiB, since a list is charged at every size it
+// doubles through. A reading's coincident worst is the resume's model of the
+// thread at both its bounds ([threadChain]) alone, 43 MiB held, peaking at
+// 62 MiB: that line as the record that fills both, read while End decides,
+// holds 41 MiB at most, its heap peaking at 55 MiB, since its results replace
+// calls of longer ids (BenchmarkAThreadChainAtItsBounds); within the about
+// 133 MiB a seat's read for words holds in the same transcript slot
+// ([SeatTranscriptReadsAtOnce]). Lines cost a reading time, not memory, about
+// 2.5 µs a line at the least: tiny lines to [threadLinesMax] read in 2.5 to
+// 2.8 s, a line of blocks of an empty kind to [threadPlainMax] in 17.7 to
+// 18.0 s, and the slowest measured, a subagent's thread of 256-byte lines of
+// such blocks to both bounds at once, which the reading reads on past every
+// line that leaves it not whole, in 21.4 to 22.6 s holding 15 MiB
+// (BenchmarkAReadingAtItsBounds).
 //
 // # A run's harness session, carried between boxes
 //
