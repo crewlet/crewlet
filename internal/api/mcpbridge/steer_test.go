@@ -148,6 +148,7 @@ func newSteerFixtureWith(t *testing.T, hold time.Duration, edit func(*mcpbridge.
 	mcpbridge.HoldPollsFor(f.bridge, hold)
 	mux := http.NewServeMux()
 	mux.Handle(mcpbridge.PathPrefix+"{token}", f.bridge.Handler())
+	mux.Handle(mcpbridge.ServerPattern, f.bridge.Handler())
 	mux.Handle(mcpbridge.SteerPattern, f.bridge.SteerHandler())
 	inflight := &atomic.Int32{}
 	f.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
