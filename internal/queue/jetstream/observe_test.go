@@ -36,14 +36,11 @@ func probeDomain() DomainStream {
 
 // A DOMAIN'S LARGEST MESSAGE IS THE STREAM'S, AND THE BROKER REFUSES PAST IT.
 //
-// The publisher refuses a record past its domain's declared largest before
-// sending it; this is what holds a peer on a build that does not ask. So the
-// stream is created carrying the declaration, a message inside it lands, and
-// one a byte past it is refused with the broker's own per-message code — the
-// one the state log's classifier reads as a record too large rather than a
-// full log. And a declaration the broker's 32-bit field cannot carry is
-// refused at the door, since a negative there is how the broker spells
-// unlimited.
+// The publisher refuses an oversized record itself; this holds a peer on a
+// build that does not. A byte past the declaration is refused with the
+// broker's per-message code (10054), which the state log's classifier reads as
+// a record too large rather than a full log. A declaration the broker's 32-bit
+// field cannot carry is refused at the door: a negative there means unlimited.
 func TestADomainsLargestMessageIsEnforcedByTheBroker(t *testing.T) {
 	t.Parallel()
 	spec := probeDomain()
@@ -87,14 +84,10 @@ func TestADomainsLargestMessageIsEnforcedByTheBroker(t *testing.T) {
 
 // A SECOND BOOT WRITES NOTHING to a stream that already exists.
 //
-// The defect this closes has no crash in it: N nodes each applied their own
-// Tier A to one shared stream on every boot, resolved by boot order, so a node
-// coming up late with a smaller ceiling silently lowered one an operator had
-// just raised — with Tier A UNCHANGED on every node, because max(M, M) is M.
-//
-// The assertion is on the stream's own reported configuration before and
-// after, not on a call count: what matters is that the running stream is the
-// same stream, whatever path got there.
+// Otherwise each node applies its own Tier A to the shared stream, and a late
+// boot with a smaller ceiling silently lowers one an operator raised. Asserted
+// on the stream's reported configuration, not a call count: the running stream
+// must be unchanged whatever path got there.
 func TestBootNeverUpdatesAnExistingStream(t *testing.T) {
 	t.Parallel()
 	q := domainQueue(t, probeDomain())
@@ -105,8 +98,8 @@ func TestBootNeverUpdatesAnExistingStream(t *testing.T) {
 	}
 	wantBytes := before.CachedInfo().Config.MaxBytes
 
-	// A SECOND BOOT WITH A DIFFERENT CEILING. Capacity is reported and
-	// never applied, so the running stream keeps the value it has.
+	// A second boot with a different ceiling: capacity is reported, never
+	// applied.
 	q.mu.Lock()
 	delete(q.streams, probeDomain().Name)
 	q.mu.Unlock()
@@ -130,15 +123,13 @@ func TestBootNeverUpdatesAnExistingStream(t *testing.T) {
 // A SAFETY MISMATCH REFUSES TO RUN, naming the field, what is running and what
 // this node expected.
 //
-// Each of these changes what a message on the stream MEANS, so a node that
-// carried on would be publishing durable records into a stream that drops
-// them or lets any client delete them.
+// Each changes what a message on the stream MEANS: a node that carried on
+// could publish durable records into a stream that drops or deletes them.
 func TestASafetyFieldMismatchRefusesToRun(t *testing.T) {
 	t.Parallel()
 
 	for name, tc := range map[string]struct {
-		// mutate is applied to the config the SECOND boot expects, so the
-		// running stream and this node's spec disagree on one field.
+		// mutate makes the SECOND boot's expectation differ on one field.
 		mutate func(*jetstream.StreamConfig)
 		field  string
 	}{
@@ -173,12 +164,9 @@ func TestASafetyFieldMismatchRefusesToRun(t *testing.T) {
 	}
 }
 
-// AN R3-CONFIGURED NODE AGAINST AN R1 STREAM REFUSES, because an acknowledged
-// publish there is proving fewer copies than stream.replicas promises.
-//
-// The other direction is FINE and asserted here too: an R1 development node
-// against an R3 stream starts normally, since it is getting more durability
-// than it asked for rather than less.
+// AN R3-CONFIGURED NODE AGAINST AN R1 STREAM REFUSES: an acknowledged publish
+// there proves fewer copies than stream.replicas promises. The other direction
+// (more durability than asked) starts normally.
 func TestR3ConfiguredAgainstAnR1StreamRefusesDurably(t *testing.T) {
 	t.Parallel()
 	q := domainQueue(t, probeDomain())
@@ -206,9 +194,8 @@ func TestR3ConfiguredAgainstAnR1StreamRefusesDurably(t *testing.T) {
 
 // A CAPACITY MISMATCH IS REPORTED, NOT APPLIED and not refused.
 //
-// The ceiling is an operator's question with an operator's verb behind it, and
-// a boot that refused over it would take a fleet down for a difference nobody
-// is losing data to.
+// The ceiling has an operator's verb behind it; refusing would take a fleet
+// down over a difference nobody loses data to.
 func TestACapacityFieldMismatchIsReportedNotApplied(t *testing.T) {
 	t.Parallel()
 	q := domainQueue(t, probeDomain())
@@ -245,8 +232,8 @@ func TestTwoConcurrentBootsCreateOneStream(t *testing.T) {
 	t.Parallel()
 	q := domainQueue(t, probeDomain())
 
-	// The second "boot" is this process forgetting it provisioned the
-	// stream, which is exactly the state a peer's boot is in.
+	// The second "boot": forgetting the stream was provisioned, as a peer
+	// booting has.
 	q.mu.Lock()
 	delete(q.streams, probeDomain().Name)
 	q.mu.Unlock()
@@ -266,16 +253,9 @@ func TestTwoConcurrentBootsCreateOneStream(t *testing.T) {
 }
 
 // WHAT THE SPEC ASKED FOR IS WHAT THE BROKER IS RUNNING, read back from the
-// stream's own reported configuration rather than from the struct that built
-// it.
-//
-// The distinction is the whole test. Comparing the spec against the config it
-// produced asserts that this package's own translation is self-consistent,
-// which it is by construction and would stay so if every field were dropped
-// on the way to the broker. Six of these fields are safety properties an
-// operator can never set again — a stream is created once and never updated —
-// so a field silently not applied at creation is a stream that spends its
-// life one property short, with nothing anywhere saying so.
+// broker, not from the struct that built it (which would pass even if every
+// field were dropped on the way). A stream is created once and never updated,
+// so a safety field not applied at creation is missing for the stream's life.
 func TestACreatedStreamCarriesEveryFieldTheSpecAsked(t *testing.T) {
 	t.Parallel()
 	spec := probeDomain()
@@ -331,24 +311,16 @@ func TestACreatedStreamCarriesEveryFieldTheSpecAsked(t *testing.T) {
 	}
 }
 
-// THE ENGINE STREAMS ARE BYTE-IDENTICAL to what they were before domain
-// streams existed — the six that predate them, and the custody stream and the
-// failure marks, which were born in their shape — but for the one domain field
-// set on purpose: the dead letters' duplicate window.
+// THE ENGINE STREAMS SET NO DOMAIN FIELD but the dead letters' duplicate
+// window.
 //
-// A stream is created once and never updated, so a spec that changed shape is
-// not a migration — it is a difference between the streams on a deployment
-// that upgraded and the streams on one that installed fresh, and only the
-// second has the new value. This pins every field of every engine stream, so
-// adding a field to streamSpec with a non-zero default is a failing test
-// rather than a fleet that quietly runs two topologies.
+// A stream is created once and never updated, so a changed spec reaches only
+// fresh installs: a new streamSpec field with a non-zero default must fail
+// here rather than leave a fleet quietly running two topologies.
 //
-// THE WINDOW IS THE EXCEPTION, AND IT IS PINNED TOO: a keep carries its
-// identity as its message id, and CREWLET_DLQ's window is what makes a second
-// keep of one identity nothing (queue.DeadLetterWindow), so the window is part
-// of what the dead letters mean. A CREWLET_DLQ an earlier build created keeps
-// the broker's default window — the field is a capacity one, reported at boot
-// and never applied — and no tag shipped such a stream.
+// The window is pinned too: a keep's identity is its message id, and
+// CREWLET_DLQ's window makes a second keep of one identity nothing
+// (queue.DeadLetterWindow).
 func TestTheEngineStreamsAreUnchanged(t *testing.T) {
 	t.Parallel()
 	specs := engineStreams(0)
@@ -357,9 +329,7 @@ func TestTheEngineStreamsAreUnchanged(t *testing.T) {
 	}
 	for _, spec := range specs {
 		t.Run(spec.name, func(t *testing.T) {
-			// Every field a domain stream sets and an engine stream does
-			// not. They were absent before this package grew them, and
-			// absent is what they must stay.
+			// Every field a domain stream sets and an engine stream must not.
 			if spec.maxBytes != 0 {
 				t.Errorf("max_bytes = %d, want unset", spec.maxBytes)
 			}
@@ -382,31 +352,14 @@ func TestTheEngineStreamsAreUnchanged(t *testing.T) {
 	}
 }
 
-// A LOST CREATION RACE WRITES NOTHING EITHER, which is the same rule as
-// [TestBootNeverUpdatesAnExistingStream] on the one path that test cannot
-// reach.
+// A LOST CREATION RACE WRITES NOTHING EITHER: the rule of
+// [TestBootNeverUpdatesAnExistingStream] on the path that test cannot reach.
 //
-// # The path, and why it exists
-//
-// [Queue.createOrObserveStream] reads first and observes what it finds, so a
-// node whose peer created the stream a moment earlier never calls create at
-// all. The case this covers is the other one: N nodes booting TOGETHER all
-// read "absent" in the same instant and all call create. One wins; the rest
-// arrive at a stream that now exists.
-//
-// # What went wrong
-//
-// The loser's call was `CreateOrUpdateStream`, which never returns
-// [jetstream.ErrStreamNameAlreadyInUse] — it UPDATES. So the caller's "a peer
-// won the race, read what it made" branch was unreachable, and every loser
-// rewrote the shared stream's configuration with its own. That is exactly the
-// defect [TestBootNeverUpdatesAnExistingStream] names — a ceiling an operator
-// raised, silently lowered by whichever node booted last — arriving through
-// the one door that test does not open.
-//
-// The assertion is the running stream's own capacity, before and after, for
-// that test's reason: what matters is that the stream is unchanged, whatever
-// path got there.
+// [Queue.createOrObserveStream] reads first, but N nodes booting together all
+// read "absent" and all call create. The loser's create must fail with
+// [jetstream.ErrStreamNameAlreadyInUse] so the caller reads back what the
+// winner made; `CreateOrUpdateStream` never returns it, it UPDATES, so every
+// loser would rewrite the shared stream with its own configuration.
 func TestALostCreationRaceNeverRewritesTheStream(t *testing.T) {
 	t.Parallel()
 	q := domainQueue(t, probeDomain())
@@ -418,8 +371,8 @@ func TestALostCreationRaceNeverRewritesTheStream(t *testing.T) {
 	}
 	want := before.CachedInfo().Config.MaxBytes
 
-	// THE LOSER'S OWN CALL, made directly: this is the moment after a
-	// peer's create committed and before this node has looked again.
+	// The loser's own call: after a peer's create committed, before this
+	// node looks again.
 	lost := before.CachedInfo().Config
 	lost.MaxBytes = want / 2
 	err = q.createStream(t.Context(), lost)

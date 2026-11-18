@@ -19,13 +19,11 @@ import (
 )
 
 // A RECORD ON A STATE LOG SIGNED UNDER A KEY THIS NODE LACKS REACHES THE AUDIT
-// FEED, NAMING THE KEY AND WHAT THE NODE HOLDS.
-//
-// The broker's admission vouches for a connection and never a frame, so a
-// frame under an unknown key is either a keyring rotation half done or
-// something that is not the fleet writing to it — and an administrator
-// watching the dashboard is the reader who needs to know which. The applier logs and counts it either way; the witness the
-// engine hands every runner is what puts it where that reader looks.
+// FEED, NAMING THE KEY AND WHAT THE NODE HOLDS: the broker's admission vouches
+// for a connection, never a frame, so such a frame is a half-done keyring
+// rotation or something that is not the fleet, and the administrator watching
+// the dashboard needs to know which. The applier logs and counts it either
+// way; the witness the engine hands every runner puts it where they look.
 //
 // Mutation: build the runners without `Witness:` and nothing arrives.
 func TestARecordUnderAnUnknownKeyReachesTheAuditFeed(t *testing.T) {
@@ -58,8 +56,8 @@ func TestARecordUnderAnUnknownKeyReachesTheAuditFeed(t *testing.T) {
 		}
 	})
 
-	// A FRAME UNDER A KEY NOBODY IN THIS FLEET HOLDS, appended the way
-	// anything the broker admitted could.
+	// A frame under a key nobody in this fleet holds, appended as anything
+	// the broker admitted could.
 	domain := worklet.Domain{}
 	stranger, err := recordseal.NewSigner(domain.Name(),
 		recordseal.OneKey("stranger", "material-no-node-holds"))

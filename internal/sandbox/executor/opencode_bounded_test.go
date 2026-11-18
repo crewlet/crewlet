@@ -20,7 +20,7 @@ import (
 )
 
 // The calls an OpenCode run's script makes to its run's own server, each
-// bounded (crewlet#1088), over the fake opencode of opencode_script_test.go
+// bounded, over the fake opencode of opencode_script_test.go
 // ([fakeOpenCode]), whose server takes the kinds FAKE_HANG names and never
 // answers them.
 
@@ -31,29 +31,17 @@ var boundedTimes = executor.OpenCodeTimes{Call: time.Second, SessionCall: time.S
 	Clock: heldClock}
 
 // heldClock is the clock the cases here read their bounds on: a second later
-// for every read of it while a call the server took and never answered still
-// runs (its `hung` record names the call's pid), and still otherwise. So a
-// bound runs out when, and only when, the server holds a call, and a call it
-// answers is never ended by its bound however long the machine takes over it.
+// on every read while a call the server took and never answered still runs
+// (its `hung` record names the call's pid), and still otherwise, so a bound
+// runs out only while the server holds a call, however slow the machine.
 //
-// WHY NOT THE WALL CLOCK: it reads whole seconds, so a bound of one runs out at
-// the first tick, anywhere from at once to a second after the call starts. A
-// call the case needs answered was ended on a loaded runner, and the cancels'
-// shared bound, read again after the listing, could have no second left: a
-// leftover steer's cancel was never asked, and the case that holds a cancel's
-// bound failed on a cancel that never came (main's run 43653445196). A bound
-// long enough to outlast a loaded runner would make every case wait it out.
-//
-// WHY IT MOVES ON A READ, NOT ON A HELD CALL'S RECORD: a call's bound is read
-// after the call has started, so a server that holds it may have recorded it
-// first, and a clock that jumped once per record then stood still past it: the
-// bound was set beyond the only time the clock would ever read, and the held
-// call was never ended. Moving a second a read while a held call lives, the
-// clock reaches any bound a case sets for a call it expects ended in as many
-// of the script's polls (a second, the readiness loop's two), and the minute
-// a case expects outlasted in a minute's worth, longer than any case runs.
-// Each read that moves it appends a line to `held-reads`, so two processes
-// reading at once never move it back.
+// Not the wall clock, which reads whole seconds: a bound of one could run out
+// at once, and one long enough for a loaded runner makes every case wait it
+// out. It moves on a read, not on a held call's record: a bound is read after
+// its call starts, so a clock that jumped per record could stop short of it for
+// good. A minute's bound takes a minute's reads, longer than any case runs.
+// Each moving read appends a line to `held-reads`, so two processes reading at
+// once never move it back.
 const heldClock = `for p in $(cut -d ' ' -f 2 "$FAKE_DIR/hung" 2> /dev/null); do ` +
 	`if kill -0 "$p" 2> /dev/null; then echo >> "$FAKE_DIR/held-reads"; break; fi; done; ` +
 	`echo $(( $(cat "$FAKE_DIR/held-reads" 2> /dev/null | wc -l) ))`
@@ -106,13 +94,11 @@ func assertHungEnded(t *testing.T, dir, kind string) {
 
 // A CALL ITS SERVER NEVER ANSWERS GOES AS A CALL TO A SERVER THAT IS GONE GOES,
 // for every kind of call the script makes to its run's own server, under every
-// sh a box may run it with. Unbounded, a server that took a call and never
-// answered it held the script there until the job was stopped: the readiness
-// loop past its own deadline, which it read only between calls; the usage
-// before and after the run; the leftover steers; the export, and the capture
-// with it; the pages that measure the session; the login's exports. Each is
-// ended at its bound and reaped, the script goes on as it goes on where the
-// server is gone, and nothing of the call is left in the job's group.
+// sh a box may run it with: the readiness loop, the usage before and after the
+// run, the leftover steers, the export and its capture, the pages that measure
+// the session, the login's exports. Each is ended at its bound and reaped, the
+// script goes on as it would were the server gone, and nothing of the call is left
+// in the job's group.
 //
 // Mutation: run any one of the calls unbounded, and its case waits out the
 // fake's hour; end it and not reap it, and its pid is left.
@@ -128,10 +114,9 @@ func TestACallItsServerNeverAnswersGoesAsACallToAGoneServerGoes(t *testing.T) {
 		third + `",` + pending + `}]}`
 	steered := sandbox.RunRequest{MCPServers: bridgeOnly, Steer: steerWiring}
 	// THE READINESS CHECK, A CALL A POLL, is held to its own bound and to what
-	// is left of the loop's: its first call left unanswered and every later one
-	// answered, the run starts at the call's bound, long before the loop's; and
-	// every call left unanswered, the loop ends at its own deadline, long
-	// before a call's.
+	// is left of the loop's: with only its first call unanswered, the run
+	// starts at the call's bound, long before the loop's; with every call
+	// unanswered, the loop ends at its own deadline, long before a call's.
 	readyAfterOne := boundedTimes
 	readyAfterOne.MCP = time.Minute
 	readyAtDeadline := boundedTimes
@@ -294,8 +279,8 @@ func readFileBytes(t *testing.T, path string) []byte {
 
 // AN END REQUEST ENDS A CALL BEFORE THE RUN AT ONCE. A request that comes while
 // the run waits for its MCP servers, or for what its continued session had
-// spent, starts no run, and leaves the run's own tail to export the session:
-// so the call it finds in flight is ended then, never waited out to its bound.
+// spent, starts no run and leaves the export to the run's own tail, so the
+// call it finds in flight is ended then, never waited out to its bound.
 // Only that first call hangs: the tail's calls of the same kind, which an end
 // request never ends, are answered.
 //
@@ -386,11 +371,10 @@ func TestACallDeafToItsEndIsKilledAndReaped(t *testing.T) {
 
 // A LOGIN EXPORT IN FLIGHT AS THE LOOP IS STOPPED IS ENDED BEFORE THE LOOP GOES.
 // The loop's export is a bounded call, so the loop is between its polls, not in
-// a foreground command of the export's own, when the run's tail stops it:
-// gone then without the call, it left the export running in the job's group.
-//
-// And a teardown's signal, which reaches every process of the job, ends the
-// last export at once: its subshell says the call is over as it goes.
+// a foreground command of the export's own, when the run's tail stops it, and
+// must end the export itself or leave it running in the job's group. And a
+// teardown's signal, which reaches every process of the job, ends the last
+// export at once: its subshell says the call is over as it goes.
 //
 // Mutation: drop unbound from the loop's trap, and the loop's export outlives
 // it; drop the subshell's trap, and the teardown waits out two graces.
@@ -416,14 +400,12 @@ func TestALoginExportInFlightAsTheLoopStopsIsEnded(t *testing.T) {
 		if _, pids := hungCalls(t, j.dir); runs(pids[0]) {
 			t.Errorf("the loop's export (pid %d) still runs after the loop was stopped", pids[0])
 		}
-		// The last export, through the same server, waits out its own minute
-		// unless the case ends the script first: a teardown, which ends every
-		// call in flight on its way.
+		// The last export waits out its own minute unless a teardown, which
+		// ends every call in flight, ends the script first.
 		j.signal(syscall.SIGTERM)
 		// THE TEARDOWN'S SIGNAL REACHES THE CALL'S SUBSHELL TOO, which says the
-		// call is over as it goes: the script's own stop of the call then
-		// finds it over at once, and spends none of the grace it gives a call
-		// that does not go (two of them, a TERM's and a KILL's).
+		// call is over, so the script's own stop finds it over at once and
+		// spends neither of its graces (a TERM's and a KILL's).
 		run := j.waitWithin(sandbox.JobStopGrace+2*time.Second,
 			"a teardown spent its graces on a call the group's signal had already ended")
 		if run.document != seededLogin {
@@ -456,12 +438,10 @@ func openCodeCalls(line string) (before, after []string) {
 // every `opencode` a line of it runs against the run's own server, `--server
 // "$url"`, is the bounded helper's, but the harness itself, which the end
 // protocol bounds; and no answer of one is read by a command substitution,
-// which would run the call in a subshell an end request never reaches. A
-// call added to the script without the helper fails here before any server
-// can hold it.
+// which would run the call in a subshell an end request never reaches.
 //
-// Mutation: call any of the script's server calls as it was called before
-// crewlet#1088, and its line is named here.
+// Mutation: call any of the script's server calls without the helper, and its
+// line is named here.
 func TestEveryCallToTheRunsServerIsBounded(t *testing.T) {
 	t.Parallel()
 	session := executor.OpenCode{}.Session(sandbox.RunRequest{Resume: carriedOpenCode})
@@ -518,11 +498,10 @@ func firstCommand(text string) string {
 // [sandbox.JobEndWait] for a job its end request reached before it kills the
 // job and packs its session on demand; every call on the script's way out at
 // its bound, and every process it stops at the grace, still end inside it, so
-// the script's own export is never cut short by the kill. And the way out the
-// sum counts is the script's own: every call the rendered script makes to its
-// server that no end request ends — a `bounded` call whose ENDS is `-` — is one
-// the sum holds, and the sum holds no other, so a call added to the way out is
-// counted or this goes red.
+// the kill never cuts the script's own export short. The sum holds exactly the
+// rendered script's calls to its server that no end request ends (a `bounded`
+// call whose ENDS is `-`), so a call added to the way out is counted or this
+// goes red.
 //
 // Mutation: raise any of the calls' bounds past what the wait holds, add a call
 // to the sum, or add one to the script's way out alone, and this goes red.

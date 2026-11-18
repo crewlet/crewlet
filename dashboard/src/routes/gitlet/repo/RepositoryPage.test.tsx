@@ -33,6 +33,9 @@ import { afterMicrotasks } from "~/test/settle.ts";
 import { modules } from "~/test/source.ts";
 import { DECLARED, DECLARED_LIFE, PERSON_ONLY, PURGE_KEEPERS } from "~/lib/repoWrites.ts";
 import { SYNTAX_MAX_BYTES, load } from "~/lib/syntax/index.ts";
+import { forgetDownloadProbes } from "./downloads.ts";
+import { forgetTreeChoice } from "./FileView.tsx";
+import { forgetTrees } from "./tree.ts";
 import { sinceOf } from "./History.tsx";
 import { RepositoryPage } from "./RepositoryPage.tsx";
 
@@ -49,6 +52,9 @@ vi.mock("~/lib/syntax/index.ts", async (real) => {
 
 afterEach(() => {
   cleanup();
+  forgetDownloadProbes();
+  forgetTrees();
+  forgetTreeChoice();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   location.hash = "";
@@ -60,7 +66,7 @@ const OTHER = "89abcdef0123456789abcdef0123456789abcdef";
 
 const ORG = withDerived({
   name: "Acme",
-  roles: [{ name: "CTO", handle: "cto" }],
+  roles: [{ name: "CTO", handle: "cto", avatar: { character: "hexlet", color: "cyan" } }],
   units: [{ id: "engineering", name: "Engineering", roles: [] }],
   services: { tracker: "worklet", knowledge: "doclet", chat: "chatlet", code: "gitlet" },
 }) as unknown as OrgProjection;
@@ -111,6 +117,9 @@ function detail(extra: Record<string, unknown> = {}) {
     ...extra,
   };
 }
+
+/** The address the engine answers a repository is cloned from, on the deployment's own address. */
+const CLONE_URL = "https://crewlet.example.com/git/web.git";
 
 const json = (payload: unknown, status = 200) =>
   new Response(JSON.stringify(payload), {
@@ -412,8 +421,9 @@ function stubEngine(
         case "/query/code_repo": {
           // THE PATH OWNERS AND THE GATES ONLY TO A QUESTION THAT ASKS, as
           // the engine answers them, who set each rule beside the gates.
-          const { gates, rule_sources, path_owners, ...row } = repo;
+          const { gates, rule_sources, path_owners, clone_url = CLONE_URL, ...row } = repo;
           return json({
+            ...(clone_url ? { clone_url } : {}),
             repo: {
               ...row,
               ...(p.get("gates") === "true" ? { gates, rule_sources } : {}),
@@ -436,20 +446,25 @@ function stubEngine(
             position: POSITION,
             level: "session",
           });
-        case "/query/code_tree":
+        case "/query/code_tree": {
+          // THE ROOT, `src` (the file view's tree reads it), and any other directory empty.
+          const dir = p.get("path") ?? "";
+          const entries =
+            dir === ""
+              ? [
+                  { mode: "100644", type: "blob", oid: OTHER, path: "README.md", size: 20 },
+                  { mode: "040000", type: "tree", oid: OTHER, path: "src" },
+                ]
+              : dir === "src"
+                ? [{ mode: "100644", type: "blob", oid: OTHER, path: "src/app.go", size: 30 }]
+                : [];
           return json(
             byRef(url, {
               kind: "tree",
-              tree: {
-                tree: OTHER,
-                entries: [
-                  { mode: "100644", type: "blob", oid: OTHER, path: "README.md", size: 20 },
-                  { mode: "040000", type: "tree", oid: OTHER, path: "src" },
-                ],
-                total: 2,
-              },
+              tree: { tree: OTHER, ...(dir ? { path: dir } : {}), entries, total: entries.length },
             }),
           );
+        }
         case "/query/code_blob": {
           const path = p.get("path");
           const coded = path
@@ -759,7 +774,7 @@ test("the About rail says when the repository was pushed in words, the latest co
   vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
   stubEngine();
   mount("#/gitlet/repos/web");
-  expect(await screen.findByText("Pushed yesterday")).toBeTruthy();
+  expect((await screen.findByText(/^Last pushed/)).textContent).toBe("Last pushed yesterday");
   await waitFor(() =>
     expect(document.querySelector(".code-latest__when")?.textContent).toBe("6d ago"),
   );
@@ -954,17 +969,19 @@ test("refused or failed last commits are said once under the entries, and a fail
   expect(reads(asked, "code_tree_commits")).toHaveLength(2);
 });
 
-// THE BRANCHES AND TAGS ARE READ ONCE FOR THE PAGE, never once a picker: a
-// move from the root to a path draws another picker, and so does the
-// Commits tab, and none of them asks either listing again — each is up to a
-// thousand refs. Mutation: let each picker read its own listings, and this
-// fails.
-test("the revision picker's branches and tags are read once while the reader moves", async () => {
+// THE PICKER READS NOTHING UNTIL IT OPENS: the Code tab, a directory and
+// Commits ask no listing; an opening asks one page of the tab it shows.
+// Mutation: read the listings on the page again, and this fails.
+test("the revision picker reads nothing until it opens, and then one page of the tab it shows", async () => {
   const asked = stubEngine();
   mount("#/gitlet/repos/web");
 
+  // THE RAIL'S OWN READS at the root, the default branch's find and the newest tag, are not the picker's.
+  const picker = (query: "code_refs" | "code_tags") =>
+    reads(asked, query).filter(
+      (u) => !u.searchParams.has("contains") && u.searchParams.get("limit") !== "1",
+    );
   await screen.findByRole("link", { name: "src" });
-  await waitFor(() => expect(reads(asked, "code_refs")).toHaveLength(2));
   act(() => {
     location.hash = "#/gitlet/repos/web?path=src";
   });
@@ -973,9 +990,398 @@ test("the revision picker's branches and tags are read once while the reader mov
     location.hash = "#/gitlet/repos/web?tab=commits";
   });
   expect(await screen.findByRole("group", { name: "History of main" })).toBeTruthy();
+  expect(picker("code_refs")).toHaveLength(0);
+  expect(picker("code_tags")).toHaveLength(0);
 
-  const listings = reads(asked, "code_refs").map((u) => u.searchParams.get("prefix"));
-  expect(listings.sort()).toEqual([null, "refs/tags/"]);
+  fireEvent.click(screen.getByRole("button", { name: "Branch or tag: main" }));
+  const panel = await screen.findByRole("dialog", { name: "Switch branches or tags" });
+  await within(panel).findByRole("option", { name: /^feature/ });
+  const moved = picker("code_refs");
+  expect(moved).toHaveLength(1);
+  expect(Object.fromEntries(moved[0]!.searchParams)).toMatchObject({
+    order: "moved",
+    detail: "true",
+    limit: "10",
+  });
+  fireEvent.click(within(panel).getByRole("tab", { name: /Tags/ }));
+  await within(panel).findByRole("option", { name: /^v3/ });
+  expect(picker("code_tags").map((u) => u.searchParams.get("limit"))).toEqual(["10"]);
+
+  fireEvent.click(within(panel).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Branch or tag: main" }));
+  await screen.findByRole("option", { name: /^feature/ });
+  expect(picker("code_refs")).toHaveLength(2);
+});
+
+/** Six branches by when each moved, main on the page's second row. */
+const MOVED = [
+  ["frontend/stream-shell", "2026-10-27T11:00:00Z"],
+  ["main", "2026-10-27T10:00:00Z"],
+  ["backend/network-token", "2026-10-27T09:00:00Z"],
+  ["frontend/badge-cache", "2026-10-27T08:00:00Z"],
+  ["release/2026.11", "2026-10-26T08:00:00Z"],
+  ["sre/drain", "2026-10-26T07:00:00Z"],
+].map(([name, at]) => ({
+  ref: `refs/heads/${name}`,
+  oid: name === "main" ? HEAD : OTHER,
+  position: POSITION,
+  moved_at: at,
+  ...(name === "main" || name === "release/2026.11"
+    ? { protection: { patterns: [`refs/heads/${name}`], direct_push: "none" } }
+    : {}),
+}));
+
+const openPicker = async (name = "Branch or tag: main") => {
+  fireEvent.click(await screen.findByRole("button", { name }));
+  return screen.findByRole("dialog", { name: "Switch branches or tags" });
+};
+
+const optionNames = (panel: HTMLElement) =>
+  within(panel)
+    .getAllByRole("option")
+    .map((o) => o.querySelector(".code-picker__name")?.textContent ?? o.textContent);
+
+// THE DEFAULT BRANCH IS PINNED FIRST with Default, the rest by when each moved,
+// the protected with their shield named by the rules. Mutation: list the page
+// in its own order, or drop the shield's words, and this fails.
+test("the picker pins the default branch with Default and lists the rest by when they moved, the protected with their shield", async () => {
+  stubListing((p) => json(refsListing(p, MOVED)), detail({ branches: 6 }));
+  mount("#/gitlet/repos/web");
+
+  const panel = await openPicker();
+  await within(panel).findByRole("option", { name: /^sre\/drain/ });
+  expect(optionNames(panel)).toEqual([
+    "main",
+    "frontend/stream-shell",
+    "backend/network-token",
+    "frontend/badge-cache",
+    "release/2026.11",
+    "sre/drain",
+  ]);
+  const main = within(panel).getAllByRole("option")[0]!;
+  expect(main.getAttribute("aria-current")).toBe("true");
+  expect(main.querySelector(".code-picker__check")).not.toBeNull();
+  expect(within(main).getByText("Default")).toBeTruthy();
+  expect(within(main).getByRole("img").getAttribute("aria-label")).toBe(
+    "Protected by main: no force-push, no delete, pushes through changes only",
+  );
+  const when = main.querySelector("time")!;
+  expect(when.getAttribute("datetime")).toBe("2026-10-27T10:00:00Z");
+  expect(when.getAttribute("title")).toBeTruthy();
+  const shields = within(panel)
+    .getAllByRole("img")
+    .map((s) => s.closest("[role=option]")?.querySelector(".code-picker__name")?.textContent);
+  expect(shields).toEqual(["main", "release/2026.11"]);
+  expect(within(panel).getAllByRole("option")[1]!.getAttribute("aria-current")).toBeNull();
+});
+
+// A BRANCH IS CHOSEN FROM THE FIELD: the arrows move the highlight, Enter takes
+// it, the panel closes and its button has the focus back. Mutation: move focus
+// into the list, or leave the panel open, and this fails.
+test("a branch is chosen by the keys, and the panel gives focus back to its button", async () => {
+  stubListing((p) => json(refsListing(p, MOVED)), detail({ branches: 6 }));
+  mount("#/gitlet/repos/web");
+
+  const panel = await openPicker();
+  await within(panel).findByRole("option", { name: /^sre\/drain/ });
+  const field = within(panel).getByRole("combobox", { name: "Find a branch" });
+  await waitFor(() => expect(document.activeElement).toBe(field));
+  fireEvent.keyDown(field, { key: "ArrowDown" });
+  fireEvent.keyDown(field, { key: "ArrowDown" });
+  expect(field.getAttribute("aria-activedescendant")).toBe(
+    within(panel).getAllByRole("option")[2]!.id,
+  );
+  fireEvent.keyDown(field, { key: "Enter" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("ref")).toBe("backend/network-token");
+  const button = await screen.findByRole("button", {
+    name: "Branch or tag: backend/network-token",
+  });
+  await waitFor(() => expect(document.activeElement).toBe(button));
+
+  const again = await openPicker("Branch or tag: backend/network-token");
+  fireEvent.keyDown(within(again).getByRole("combobox"), { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("ref")).toBe("backend/network-token");
+});
+
+// A FIND IS THE ENGINE'S, asked once the typing rests, and an empty page that
+// the engine stopped short offers to keep looking. Mutation: ask on every key,
+// or say "none" of a page the engine cut short, and this fails.
+test("a find asks the engine once the typing stops, and says when nothing matches", async () => {
+  const asked = stubListing(
+    (p) => {
+      if (p.get("contains") === "zzz" && !p.get("cursor")) {
+        return json({ refs_detail: [], next: "c2", position: POSITION, level: "session" });
+      }
+      return json(refsListing(p, MOVED));
+    },
+    detail({ branches: 6 }),
+  );
+  mount("#/gitlet/repos/web");
+
+  const panel = await openPicker();
+  await within(panel).findByRole("option", { name: /^sre\/drain/ });
+  const field = within(panel).getByRole("combobox", { name: "Find a branch" });
+  fireEvent.change(field, { target: { value: "front" } });
+  expect(within(panel).getByText("Looking for “front”…")).toBeTruthy();
+  expect(listed(asked).filter((u) => u.searchParams.get("contains"))).toHaveLength(0);
+  await within(panel).findByRole("option", { name: /^frontend\/badge-cache/ });
+  expect(optionNames(panel)).toEqual(["frontend/stream-shell", "frontend/badge-cache"]);
+  expect(listed(asked).map((u) => u.searchParams.get("contains"))).toEqual([null, "front"]);
+
+  fireEvent.change(field, { target: { value: "nothing" } });
+  expect(await within(panel).findByText("No branch name holds “nothing”")).toBeTruthy();
+  expect(within(panel).getByText("A find matches any part of a name, in any case.")).toBeTruthy();
+
+  fireEvent.change(field, { target: { value: "zzz" } });
+  expect(await within(panel).findByText("None among the branches read so far")).toBeTruthy();
+  fireEvent.mouseDown(within(panel).getByRole("option", { name: "Keep looking" }));
+  await waitFor(() =>
+    expect(listed(asked).map((u) => u.searchParams.get("cursor"))).toContain("c2"),
+  );
+  expect(await within(panel).findByText("No branch name holds “zzz”")).toBeTruthy();
+});
+
+// TAGS ARE NEWEST FIRST, Latest on the first only, dated in View all tags' words, chosen
+// by whole ref; a tag's find asks the names under refs/tags/ and says it carries no date.
+// Mutation: write a tag's short name, or Latest every row, and this fails.
+test("tags are newest first with Latest, and a tag is chosen by its whole ref", async () => {
+  const asked = stubEngine();
+  mount("#/gitlet/repos/web");
+
+  const panel = await openPicker();
+  fireEvent.click(within(panel).getByRole("tab", { name: /Tags/ }));
+  await within(panel).findByRole("option", { name: /^v1/ });
+  expect(optionNames(panel)).toEqual(["v3", "v2", "v1"]);
+  expect(within(panel).getAllByText("Latest")).toHaveLength(1);
+  const [, late, undated] = within(panel).getAllByRole("option");
+  expect(within(late!).getByText("after the year 9999")).toBeTruthy();
+  expect(within(undated!).getByText("undated").getAttribute("title")).toMatch(/no date of its own/);
+
+  const field = within(panel).getByRole("combobox", { name: "Find a tag" });
+  fireEvent.change(field, { target: { value: "v" } });
+  expect(await within(panel).findByText("Found by name; dates are on View all tags.")).toBeTruthy();
+  const found = reads(asked, "code_refs").find((u) => u.searchParams.get("contains") === "v")!;
+  expect(found.searchParams.get("prefix")).toBe("refs/tags/");
+  fireEvent.mouseDown(await within(panel).findByRole("option", { name: /^v1/ }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(new URLSearchParams(location.hash.split("?")[1]).get("ref")).toBe("refs/tags/v1");
+  expect(await screen.findByRole("button", { name: "Branch or tag: v1" })).toBeTruthy();
+});
+
+// A REFUSED MOVED LISTING SAYS THE ENGINE'S SENTENCE and lists nothing by name
+// instead. Mutation: fall back to the listing by name, and this fails.
+test("a refused moved listing says the engine's sentence and lists nothing by name", async () => {
+  const asked = stubListing(() =>
+    json({ error: "bad_params", detail: "order is not a key this build reads" }, 400),
+  );
+  mount("#/gitlet/repos/web");
+
+  const panel = await openPicker();
+  expect(
+    await within(panel).findByText(
+      "Listing branches by when they moved is unavailable: order is not a key this build reads",
+    ),
+  ).toBeTruthy();
+  expect(within(panel).queryAllByRole("option")).toHaveLength(0);
+  expect(
+    reads(asked, "code_refs").filter((u) => u.searchParams.get("detail") !== "true"),
+  ).toHaveLength(0);
+});
+
+const openCode = async () => {
+  const button = await waitFor(() => {
+    const found = screen
+      .getAllByRole("button", { name: "Code" })
+      .find((b) => b.getAttribute("aria-haspopup") === "dialog");
+    expect(found).toBeTruthy();
+    return found!;
+  });
+  fireEvent.click(button);
+  return screen.findByRole("dialog", { name: "Clone web" });
+};
+
+// THE ADDRESS IS THE ENGINE'S, never the page's own origin, and the command is
+// the whole git clone of it. Mutation: build the address from location.origin,
+// and this fails.
+test("the Code menu gives the engine's clone address and its command", async () => {
+  let written = "";
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: (t: string) => ((written = t), Promise.resolve()) },
+  });
+  stubEngine();
+  mount("#/gitlet/repos/web");
+
+  const panel = await openCode();
+  expect(within(panel).getByText(CLONE_URL)).toBeTruthy();
+  expect(within(panel).getByRole("button", { name: "Copy the clone address" })).toBeTruthy();
+  fireEvent.click(within(panel).getByRole("button", { name: "Copy the clone command" }));
+  await waitFor(() => expect(written).toBe(`git clone ${CLONE_URL}`));
+  expect(
+    await within(panel).findByRole("button", { name: "Copied the clone command" }),
+  ).toBeTruthy();
+});
+
+// A DEPLOYMENT WITH NO ADDRESS OF ITS OWN SAYS SO, never the browser's guess,
+// and holds the command with the reason; so does the empty repository's card.
+// Mutation: fall back to the page's origin, and this fails.
+test("a deployment with no address says so and holds the command", async () => {
+  stubEngine(detail({ clone_url: null }));
+  mount("#/gitlet/repos/web");
+
+  const panel = await openCode();
+  expect(panel.querySelector(".code-clone__missing")?.textContent).toMatch(
+    /names no address of its own.*api\.external_url/,
+  );
+  expect(within(panel).queryByText(/git asks for a password/)).toBeNull();
+  const held = within(panel).getByRole("button", { name: "Copy the clone command" });
+  expect(held.getAttribute("aria-disabled")).toBe("true");
+  const why = document.getElementById(held.getAttribute("aria-describedby") ?? "");
+  expect(why?.textContent).toMatch(/names no address of its own/);
+  cleanup();
+
+  stubEngine(detail({ clone_url: null, head: undefined, branches: 0 }));
+  mount("#/gitlet/repos/web");
+  expect(await screen.findByText("This repository is empty")).toBeTruthy();
+  expect(screen.getAllByText(/names no address of its own/).length).toBeGreaterThan(0);
+  expect(screen.queryByText(/git remote add origin/)).toBeNull();
+});
+
+/** The engine as stubEngine answers it, the archive's probe answered `status`; every probe kept. */
+function stubArchive(status: number, repo: Record<string, unknown> = detail()) {
+  const asked = stubEngine(repo);
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  const probes: string[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname !== "/git/web/-/archive.zip") return engine(input, init);
+      probes.push(init?.method ?? "GET");
+      return new Response(null, { status });
+    }),
+  );
+  return { asked, probes };
+}
+
+const zipOf = (panel: HTMLElement) =>
+  within(panel)
+    .getAllByText("Download ZIP")
+    .map((t) => t.closest("a, button") as HTMLElement)[0]!;
+
+// DOWNLOAD ZIP IS THE LISTING'S COMMIT, whole, never the branch's name, which
+// the route refuses. Mutation: link `rev=` to the address's ref, and this fails.
+test("Download ZIP downloads the commit the listing resolved", async () => {
+  stubArchive(405);
+  mount("#/gitlet/repos/web?ref=feature");
+
+  const panel = await openCode();
+  await waitFor(() => expect(zipOf(panel).tagName).toBe("A"));
+  const link = zipOf(panel) as HTMLAnchorElement;
+  expect(link.getAttribute("href")).toBe(`/git/web/-/archive.zip?rev=${HEAD}`);
+  expect(link.hasAttribute("download")).toBe(true);
+  expect(link.getAttribute("title")).toBe("Every file of 0123456, as a ZIP");
+});
+
+// AN OLDER FLEET HOLDS THE DOWNLOAD WITH ITS REASON, asked once per name, on the
+// menu's first opening. Mutation: draw the link on a 404, or probe on the page's
+// mount or on every opening, and this fails.
+test("Download ZIP is held on a fleet that does not serve it, and the probe is asked once", async () => {
+  const { probes } = stubArchive(404);
+  mount("#/gitlet/repos/web");
+  await screen.findByRole("link", { name: "src" });
+  expect(probes).toEqual([]);
+
+  let panel = await openCode();
+  const held = await waitFor(() => {
+    const zip = zipOf(panel);
+    expect(zip.getAttribute("aria-disabled")).toBe("true");
+    const why = document.getElementById(zip.getAttribute("aria-describedby") ?? "");
+    expect(why?.textContent).toBe("Downloading a ZIP is not available on this fleet yet.");
+    return zip;
+  });
+  expect(held.tagName).toBe("BUTTON");
+  fireEvent.keyDown(panel, { key: "Escape" });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  panel = await openCode();
+  await waitFor(() => expect(zipOf(panel).getAttribute("aria-disabled")).toBe("true"));
+  expect(probes).toEqual(["HEAD"]);
+});
+
+// A COMMIT NOT YET KNOWN IS NO DOWNLOAD: held, saying what it waits for.
+test("Download ZIP is held while the listing's commit is unknown", async () => {
+  const { asked } = stubArchive(405);
+  let release = () => {};
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/query/code_tree") {
+        asked.push(url);
+        await new Promise<void>((done) => (release = done));
+      }
+      return engine(input, init);
+    }),
+  );
+  mount("#/gitlet/repos/web");
+
+  const panel = await openCode();
+  const zip = zipOf(panel);
+  expect(zip.getAttribute("aria-disabled")).toBe("true");
+  expect(document.getElementById(zip.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
+    "Waiting for the commit to download.",
+  );
+  release();
+  await waitFor(() => expect(zipOf(panel).tagName).toBe("A"));
+});
+
+// A LISTING THAT FAILED IS NO DOWNLOAD: held, saying the commit could not be read.
+// Mutation: say it waits for the commit instead, and this fails.
+test("Download ZIP is held with its reason when the listing fails", async () => {
+  stubArchive(405);
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) =>
+      new URL(String(input)).pathname === "/query/code_tree"
+        ? engineJson({ error: "query_failed" }, 500)
+        : engine(input, init),
+    ),
+  );
+  mount("#/gitlet/repos/web");
+
+  const panel = await openCode();
+  await waitFor(() => {
+    const zip = zipOf(panel);
+    expect(zip.getAttribute("aria-disabled")).toBe("true");
+    expect(document.getElementById(zip.getAttribute("aria-describedby") ?? "")?.textContent).toBe(
+      "The commit could not be read, so there is nothing to download yet.",
+    );
+  });
+});
+
+// THE EMPTY REPOSITORY CLONES FROM THE ENGINE'S ADDRESS, and Code is at the
+// root's bar only. Mutation: draw the menu under a path, and this fails.
+test("the empty repository clones from the engine's address, and Code is at the root only", async () => {
+  stubEngine(detail({ head: undefined, branches: 0 }));
+  mount("#/gitlet/repos/web");
+  expect(await screen.findByText("This repository is empty")).toBeTruthy();
+  expect(screen.getByText(CLONE_URL)).toBeTruthy();
+  cleanup();
+
+  stubEngine();
+  mount("#/gitlet/repos/web?path=src");
+  expect(await screen.findByRole("link", { name: "app.go" })).toBeTruthy();
+  expect(
+    screen
+      .queryAllByRole("button", { name: "Code" })
+      .filter((b) => b.getAttribute("aria-haspopup") === "dialog"),
+  ).toHaveLength(0);
+  expect(screen.getByRole("button", { name: "Branch or tag: main" })).toBeTruthy();
 });
 
 // THE LINES AN ADDRESS PICKS ARE MARKED, a press on a number writes its line
@@ -992,7 +1398,7 @@ test("a file's picked lines are its address, and its Permalink names the commit"
   expect(screen.getByRole("button", { name: "Line 1" }).getAttribute("aria-pressed")).toBe("false");
   expect(screen.getByText("func Run() {}")).toBeTruthy();
 
-  const permalink = screen.getByRole("link", { name: "Permalink" });
+  const permalink = screen.getByRole("link", { name: "Permalink: this file at 0123456" });
   expect(permalink.getAttribute("href")).toBe(
     `#/gitlet/repos/web?ref=${HEAD}&path=src%2Fapp.go&lines=2`,
   );
@@ -2206,7 +2612,7 @@ test.each([
 // AN IMPORTING REPOSITORY SAYS HOW FAR ITS IMPORT WENT, and where its mirrors
 // stand, on the About rail beside its code. Mutation: drop the import's
 // progress or the pull mirror's line from the rail, and this fails.
-test("the About rail says how far an import went and where the mirrors stand", async () => {
+test("the About rail says how far an import went, and its Mirror where the mirror stands", async () => {
   const source = { url: "https://forge.example.com/acme/web.git" };
   stubEngine(
     detail({
@@ -2222,9 +2628,10 @@ test("the About rail says how far an import went and where the mirrors stand", a
       "Importing from https://forge.example.com/acme/web.git: 3 chunks landed so far.",
     ),
   ).toBeTruthy();
-  expect(
-    screen.getByText("Follows https://forge.example.com/acme/web.git; not synced yet."),
-  ).toBeTruthy();
+  // THE PULL MIRROR IS THE RAIL'S MIRROR: its address, then what it does.
+  const mirror = screen.getByRole("region", { name: "Mirror" });
+  expect(within(mirror).getByRole("link", { name: "forge.example.com/acme/web" })).toBeTruthy();
+  expect(within(mirror).getByText(/^Follows it;/).textContent).toBe("Follows it; not synced yet.");
 });
 
 /** A person the engine serves every repository and branch write for. */
@@ -2473,7 +2880,7 @@ test("a repository whose default branch holds nothing reads its other branches",
   ).toBeTruthy();
   expect(screen.queryByText(/Nobody has pushed/)).toBeNull();
   expect(screen.queryByText("This repository is empty")).toBeNull();
-  expect(screen.getByLabelText("Revision")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Branch or tag: main" })).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Add a file" })).toBeNull();
 });
 
@@ -2781,7 +3188,7 @@ test("a file edited here is one commit on the branch read, at the commit it reso
   stubEngine(detail({ managed_by: "tools" }), acted);
   mount("#/gitlet/repos/web?path=src%2Fapp.go", "web", MAINTAINER);
 
-  const edit = await screen.findByRole("button", { name: "Edit" });
+  const edit = await screen.findByRole("button", { name: "Edit app.go" });
   await waitFor(() => expect(edit.getAttribute("title")).toBeNull());
   fireEvent.click(edit);
   const dialog = await screen.findByRole("dialog", { name: "Edit src/app.go" });
@@ -2841,13 +3248,35 @@ test("an empty repository's first file is a root commit on its default branch", 
   });
 });
 
-// A TAG TAKES NO COMMIT: the controls are drawn and held, saying so.
-test("a file read at a tag is held from a commit, with the reason", async () => {
+// EDIT IS A PENCIL AND DELETE IS IN MORE, each a commit at the head read, and each
+// held with its reason at a tag. Mutation: drop the menu entry's hold, or send the
+// delete without the head read, and this fails.
+test("Edit is a pencil and Delete is in More, each held with its reason at a tag", async () => {
+  const acted: Acted[] = [];
+  stubEngine(detail({ managed_by: "tools" }), acted);
+  mount("#/gitlet/repos/web?path=src%2Fapp.go", "web", MAINTAINER);
+  const edit = await screen.findByRole("button", { name: "Edit app.go" });
+  await waitFor(() => expect(edit.getAttribute("title")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "More file actions" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: /^Delete file/ }));
+  const dialog = await screen.findByRole("dialog", { name: "Delete src/app.go?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Delete file" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]!.args).toMatchObject({
+    branch: "main",
+    expected_head: HEAD,
+    files: [{ op: "delete", path: "src/app.go" }],
+  });
+
+  cleanup();
   stubEngine(detail({ managed_by: "tools" }), []);
   mount("#/gitlet/repos/web?ref=refs%2Ftags%2Fv1&path=src%2Fapp.go", "web", MAINTAINER);
-
-  const edit = await screen.findByRole("button", { name: "Edit" });
-  await waitFor(() => expect(edit.getAttribute("title")).toMatch(/Choose a branch/));
+  const held = await screen.findByRole("button", { name: "Edit app.go" });
+  await waitFor(() => expect(held.getAttribute("title")).toMatch(/^Choose a branch/));
+  fireEvent.click(screen.getByRole("button", { name: "More file actions" }));
+  const del = await screen.findByRole("menuitem", { name: /^Delete file/ });
+  expect(del.getAttribute("aria-disabled")).toBe("true");
+  expect(del.textContent).toContain("Choose a branch to commit to: a tag or a commit takes none.");
 });
 
 // WHO READS A REPOSITORY IS ONE OF ITS DETAILS: the form's Read by sends
@@ -3754,4 +4183,554 @@ test("the root's bar counts the branches and tags, each a link to its list", asy
   expect(screen.getByRole("link", { name: "1 Tag" }).getAttribute("href")).toBe(
     "#/gitlet/repos/web?tab=branches&view=tags",
   );
+});
+
+/** A tree entry as `code_tree` lists it. */
+const entry = (path: string, type: "tree" | "blob" = "blob") => ({
+  mode: type === "tree" ? "040000" : "100644",
+  type,
+  oid: OTHER,
+  path,
+});
+
+/** The repository's tree by directory, each in git's order. */
+const TREE: Record<string, ReturnType<typeof entry>[]> = {
+  "": [
+    entry(".github", "tree"),
+    entry("Makefile"),
+    entry("cmd", "tree"),
+    entry("go.mod"),
+    entry("internal", "tree"),
+  ],
+  ".github": [entry(".github/ci.yml")],
+  cmd: [entry("cmd/web", "tree")],
+  "cmd/web": [entry("cmd/web/main.go")],
+  internal: [entry("internal/render", "tree"), entry("internal/server.go")],
+  "internal/render": [entry("internal/render/page.go")],
+};
+
+/** The engine with TREE as its tree, `answer` taking any directory it answers first. */
+function stubTree(answer?: (url: URL, dir: string) => Response | undefined) {
+  return stubAnswering("code_tree", (url) => {
+    const dir = url.searchParams.get("path") ?? "";
+    const own = answer?.(url, dir);
+    if (own) return own;
+    const entries = TREE[dir] ?? [];
+    return json(
+      byRef(url, {
+        kind: "tree",
+        tree: { tree: OTHER, ...(dir ? { path: dir } : {}), entries, total: entries.length },
+      }),
+    );
+  });
+}
+
+const MAIN_GO_AT = "#/gitlet/repos/web?path=cmd%2Fweb%2Fmain.go";
+const treeDirs = (asked: URL[]) =>
+  reads(asked, "code_tree").map((u) => u.searchParams.get("path") ?? "");
+const item = (tree: HTMLElement, name: string) => within(tree).getByRole("treeitem", { name });
+const levelNames = (tree: HTMLElement, level: number) =>
+  within(tree)
+    .getAllByRole("treeitem")
+    .filter((i) => i.getAttribute("aria-level") === String(level))
+    .map((i) => i.textContent);
+
+// A FILE IS READ BESIDE ITS REPOSITORY'S TREE, opened down to it, each directory
+// read once at the commit the file was read at. Mutation: read the tree at the
+// branch's name, or read every directory on arrival, and this fails.
+test("a file opens beside its repository's tree, opened down to it at the file's commit", async () => {
+  const asked = stubTree();
+  mount(MAIN_GO_AT);
+
+  const tree = await screen.findByRole("tree", { name: "Files of web at main" });
+  const file = await within(tree).findByRole("treeitem", { name: "main.go" });
+  expect(file.getAttribute("aria-current")).toBe("page");
+  expect(file.getAttribute("href")).toBe(MAIN_GO_AT);
+  expect(item(tree, "cmd").getAttribute("aria-expanded")).toBe("true");
+  expect(item(tree, "web").getAttribute("aria-expanded")).toBe("true");
+  expect(item(tree, "internal").getAttribute("aria-expanded")).toBe("false");
+  expect(levelNames(tree, 1)).toEqual([".github", "cmd", "internal", "go.mod", "Makefile"]);
+  expect(treeDirs(asked).sort()).toEqual(["", "cmd", "cmd/web"]);
+  for (const u of reads(asked, "code_tree")) expect(u.searchParams.get("ref")).toBe(HEAD);
+  expect(document.querySelector(".toolbar")).toBeNull();
+});
+
+// A DIRECTORY OPENS IN PLACE, read once for the visit; the address does not move.
+// Mutation: drop the kept levels, or navigate on a directory's press, and this fails.
+test("a directory in the tree opens and closes in place, read once", async () => {
+  const asked = stubTree();
+  mount(MAIN_GO_AT);
+  const tree = await screen.findByRole("tree", { name: "Files of web at main" });
+  await within(tree).findByRole("treeitem", { name: "main.go" });
+
+  fireEvent.click(item(tree, "internal"));
+  const server = await within(tree).findByRole("treeitem", { name: "server.go" });
+  expect(server.getAttribute("aria-level")).toBe("2");
+  expect(item(tree, "internal").getAttribute("aria-expanded")).toBe("true");
+  fireEvent.click(item(tree, "internal"));
+  expect(within(tree).queryByRole("treeitem", { name: "server.go" })).toBeNull();
+  fireEvent.click(item(tree, "internal"));
+  await within(tree).findByRole("treeitem", { name: "server.go" });
+  expect(treeDirs(asked).filter((d) => d === "internal")).toHaveLength(1);
+  expect(location.hash).toBe(MAIN_GO_AT);
+});
+
+// ANOTHER FILE OPENED FROM THE TREE KEEPS THE TREE and the row's focus while it reads.
+// Mutation: hand the pane the live commit ("" while the file reads), and this fails.
+test("opening another file keeps the tree drawn and its row focused while the file reads", async () => {
+  const asked = stubTree();
+  let release!: () => void;
+  const held = new Promise<void>((r) => (release = r));
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/query/code_blob" && url.searchParams.get("path") === "go.mod") {
+        await held;
+      }
+      return engine(input, init);
+    }),
+  );
+  mount(MAIN_GO_AT);
+  const tree = await screen.findByRole("tree", { name: "Files of web at main" });
+  await within(tree).findByRole("treeitem", { name: "main.go" });
+  const goMod = item(tree, "go.mod");
+  act(() => goMod.focus());
+  act(() => {
+    location.hash = goMod.getAttribute("href")!;
+  });
+  await waitFor(() => expect(item(tree, "go.mod").getAttribute("aria-current")).toBe("page"));
+  expect(screen.getByRole("tree", { name: "Files of web at main" })).toBe(tree);
+  expect(item(tree, "main.go")).toBeTruthy();
+  expect(document.activeElement).toBe(goMod);
+  expect(treeDirs(asked).sort()).toEqual(["", "cmd", "cmd/web"]);
+  release();
+  await screen.findByRole("button", { name: "Line 1" });
+  expect(screen.getByRole("tree", { name: "Files of web at main" })).toBe(tree);
+});
+
+// THE TREE MOVES BY THE KEYS with one tab stop, and a file's Enter is its link's own.
+// Mutation: give every row a tab stop, or swallow Enter on a file, and this fails.
+test("the tree moves by the keys, and Enter on a file opens it at the address's revision", async () => {
+  stubTree();
+  mount("#/gitlet/repos/web?ref=feature&path=cmd%2Fweb%2Fmain.go");
+  const tree = await screen.findByRole("tree", { name: "Files of web at feature" });
+  await within(tree).findByRole("treeitem", { name: "main.go" });
+  const focused = () => document.activeElement?.textContent;
+
+  act(() => item(tree, "cmd").focus());
+  fireEvent.keyDown(item(tree, "cmd"), { key: "ArrowDown" });
+  expect(focused()).toBe("web");
+  fireEvent.keyDown(item(tree, "web"), { key: "ArrowLeft" });
+  expect(item(tree, "web").getAttribute("aria-expanded")).toBe("false");
+  fireEvent.keyDown(item(tree, "web"), { key: "ArrowLeft" });
+  expect(focused()).toBe("cmd");
+  fireEvent.keyDown(item(tree, "cmd"), { key: "ArrowRight" });
+  expect(focused()).toBe("web");
+  fireEvent.keyDown(item(tree, "web"), { key: "ArrowRight" });
+  expect(item(tree, "web").getAttribute("aria-expanded")).toBe("true");
+  fireEvent.keyDown(item(tree, "web"), { key: "End" });
+  expect(focused()).toBe("Makefile");
+  fireEvent.keyDown(item(tree, "Makefile"), { key: "Home" });
+  expect(focused()).toBe(".github");
+  fireEvent.keyDown(item(tree, ".github"), { key: "g" });
+  expect(focused()).toBe("go.mod");
+  expect(
+    within(tree)
+      .getAllByRole("treeitem")
+      .filter((i) => i.tabIndex === 0),
+  ).toHaveLength(1);
+
+  const goMod = item(tree, "go.mod");
+  expect(goMod.getAttribute("href")).toBe("#/gitlet/repos/web?ref=feature&path=go.mod");
+  expect(fireEvent.keyDown(goMod, { key: "Enter" })).toBe(true);
+});
+
+// A LONG DIRECTORY PAGES with Load more, in git's order until whole, then a code
+// host's. Mutation: sort a paged directory, or never ask its cursor, and this fails.
+test("a long directory pages with Load more, in git's order until it is whole", async () => {
+  const asked = stubTree((url, dir) => {
+    if (dir !== "internal") return undefined;
+    const second = url.searchParams.get("cursor") === "p2";
+    return json(
+      byRef(url, {
+        kind: "tree",
+        ...(second ? {} : { next: "p2" }),
+        tree: {
+          tree: OTHER,
+          path: dir,
+          entries: second ? [entry("internal/render", "tree")] : [entry("internal/zeta.go")],
+          total: 2,
+        },
+      }),
+    );
+  });
+  mount(MAIN_GO_AT);
+  const tree = await screen.findByRole("tree", { name: "Files of web at main" });
+  await within(tree).findByRole("treeitem", { name: "main.go" });
+  fireEvent.click(item(tree, "internal"));
+  const more = await within(tree).findByRole("treeitem", { name: "Load more in internal" });
+  expect(levelNames(tree, 2)).toEqual(["web", "zeta.go", "Load more in internal"]);
+
+  act(() => more.focus());
+  fireEvent.keyDown(more, { key: "Enter" });
+  await within(tree).findByRole("treeitem", { name: "render" });
+  expect(levelNames(tree, 2)).toEqual(["web", "render", "zeta.go"]);
+  expect(
+    reads(asked, "code_tree").filter((u) => u.searchParams.get("cursor") === "p2"),
+  ).toHaveLength(1);
+});
+
+// A DIRECTORY REFUSED OR FAILED SAYS SO UNDER ITS ROW, and the file still draws.
+// Mutation: drop the refusal's sentence, or blank the file on a tree's failure, and this fails.
+test("a directory refused or failed says so under its row; the file still draws", async () => {
+  let internal = 0;
+  const asked = stubTree((_url, dir) => {
+    if (dir === "internal") {
+      internal++;
+      return internal === 1
+        ? engineJson({ error: "unavailable", detail: "this node lists no trees yet" }, 503)
+        : undefined;
+    }
+    if (dir === ".github") return json({ error: "query_failed" }, 500);
+    return undefined;
+  });
+  mount(MAIN_GO_AT);
+  const tree = await screen.findByRole("tree", { name: "Files of web at main" });
+  await within(tree).findByRole("treeitem", { name: "main.go" });
+  fireEvent.click(item(tree, "internal"));
+  expect(
+    await within(tree).findByText(
+      "This directory's listing is unavailable: this node lists no trees yet",
+    ),
+  ).toBeTruthy();
+
+  fireEvent.click(item(tree, ".github"));
+  const failed = await within(tree).findByRole("treeitem", { name: /could not be read/ });
+  fireEvent.click(failed);
+  await waitFor(() => expect(treeDirs(asked).filter((d) => d === ".github")).toHaveLength(2));
+  expect(screen.getByRole("button", { name: "Line 1" })).toBeTruthy();
+
+  cleanup();
+  forgetTrees();
+  stubTree((_url, dir) =>
+    dir === ""
+      ? engineJson({ error: "unavailable", detail: "this node lists no trees yet" }, 503)
+      : undefined,
+  );
+  mount(MAIN_GO_AT);
+  expect(
+    await screen.findByText(
+      "This directory's listing is unavailable: this node lists no trees yet",
+    ),
+  ).toBeTruthy();
+  expect(screen.queryByRole("tree")).toBeNull();
+  expect(await screen.findByRole("button", { name: "Line 1" })).toBeTruthy();
+});
+
+// THE FILE'S LATEST COMMIT IS A CARD OF ITS OWN, read at the file's commit, and
+// History is in the crumbs' row. Mutation: read it at the branch, or keep History
+// in the card, and this fails.
+test("the file's latest commit is a card over the file, with its check and no History", async () => {
+  const asked = stubTree();
+  mount(MAIN_GO_AT);
+  await headRow("Start the storefront");
+  const card = document.querySelector<HTMLElement>(".code-latest--card")!;
+  const log = reads(asked, "code_log")[0]!.searchParams;
+  expect([log.get("path"), log.get("limit"), log.get("ref")]).toEqual([
+    "cmd/web/main.go",
+    "1",
+    HEAD,
+  ]);
+  await waitFor(() =>
+    expect(card.querySelector(".code-check-mark")?.getAttribute("title")).toMatch(/^2 checks/),
+  );
+  expect(within(card).queryByRole("link", { name: "History" })).toBeNull();
+  const crumbs = document.querySelector<HTMLElement>(".code-file-crumbs")!;
+  expect(within(crumbs).getByRole("link", { name: "History" }).getAttribute("href")).toBe(
+    "#/gitlet/repos/web?tab=commits&path=cmd%2Fweb%2Fmain.go",
+  );
+});
+
+// THE CRUMBS LEAD BACK TO EACH DIRECTORY and copy the path from the root, never a URL.
+// Mutation: copy the address, or reset a refusal, and this fails.
+test("the crumbs lead back to each directory and copy the path", async () => {
+  let written = "";
+  let refuse = false;
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: (t: string) =>
+        refuse ? Promise.reject(new Error("denied")) : ((written = t), Promise.resolve()),
+    },
+  });
+  stubTree();
+  mount("#/gitlet/repos/web?ref=feature&path=cmd%2Fweb%2Fmain.go");
+  const path = await screen.findByRole("navigation", { name: "Path of the file" });
+  expect(
+    within(path)
+      .getAllByRole("link")
+      .map((a) => a.getAttribute("href")),
+  ).toEqual([
+    "#/gitlet/repos/web?ref=feature",
+    "#/gitlet/repos/web?ref=feature&path=cmd",
+    "#/gitlet/repos/web?ref=feature&path=cmd%2Fweb",
+  ]);
+  fireEvent.click(screen.getByRole("button", { name: "Copy the path cmd/web/main.go" }));
+  expect(await screen.findByRole("button", { name: "Copied cmd/web/main.go" })).toBeTruthy();
+  expect(written).toBe("cmd/web/main.go");
+
+  refuse = true;
+  fireEvent.click(screen.getByRole("button", { name: "Copied cmd/web/main.go" }));
+  expect(
+    await screen.findByRole("button", { name: "The browser refused the clipboard" }),
+  ).toBeTruthy();
+});
+
+// `t` FOCUSES GO TO FILE IN THE PANE, showing a hidden pane first; typed into the
+// field it stays a letter. Mutation: bind `t` only in the pane, and this fails.
+test("t on a file's view focuses Go to file in the tree, showing a hidden tree first", async () => {
+  stubTree();
+  mount(MAIN_GO_AT);
+  const pane = await screen.findByRole("complementary", { name: "Files of web at main" });
+  const press = () => {
+    const t = new KeyboardEvent("keydown", { key: "t", bubbles: true, cancelable: true });
+    act(() => {
+      window.dispatchEvent(t);
+    });
+    return t;
+  };
+  expect(press().defaultPrevented).toBe(true);
+  expect(document.activeElement).toBe(within(pane).getByRole("combobox", { name: "Go to file" }));
+
+  fireEvent.click(within(pane).getByRole("button", { name: "Collapse the file tree" }));
+  expect(screen.queryByRole("complementary", { name: "Files of web at main" })).toBeNull();
+  press();
+  const field = await screen.findByRole("combobox", { name: "Go to file" });
+  await waitFor(() => expect(document.activeElement).toBe(field));
+  const typed = new KeyboardEvent("keydown", { key: "t", bubbles: true, cancelable: true });
+  act(() => {
+    field.dispatchEvent(typed);
+  });
+  expect(typed.defaultPrevented).toBe(false);
+});
+
+// THE PANE'S CHOICE LASTS THE VISIT, with the picker kept in reach while it is
+// hidden. Mutation: hold the choice in the component, and the second mount fails.
+test("the tree collapses and comes back for the visit", async () => {
+  stubTree();
+  mount(MAIN_GO_AT);
+  fireEvent.click(await screen.findByRole("button", { name: "Collapse the file tree" }));
+  const show = screen.getByRole("button", { name: "Show the file tree" });
+  await waitFor(() => expect(document.activeElement).toBe(show));
+  const crumbs = document.querySelector<HTMLElement>(".code-file-crumbs")!;
+  expect(within(crumbs).getByRole("button", { name: "Branch or tag: main" })).toBeTruthy();
+
+  cleanup();
+  mount("#/gitlet/repos/web?path=go.mod");
+  await screen.findByRole("button", { name: "Line 1" });
+  expect(screen.queryByRole("tree")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Show the file tree" }));
+  const collapse = await screen.findByRole("button", { name: "Collapse the file tree" });
+  await waitFor(() => expect(document.activeElement).toBe(collapse));
+  expect(await screen.findByRole("tree", { name: "Files of web at main" })).toBeTruthy();
+});
+
+// A REVISION CHOSEN IN THE PANE KEEPS THE FILE, and the tree is read at its commit.
+// Mutation: drop `path` on a choice, or keep the old commit's tree, and this fails.
+test("choosing a revision from the pane keeps the file", async () => {
+  const asked = stubTree();
+  const engine = vi.mocked(fetch).getMockImplementation()!;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const answer = await engine(input, init);
+      if (url.pathname !== "/query/code_blob" || url.searchParams.get("ref") !== "feature") {
+        return answer;
+      }
+      const body = (await answer.json()) as Record<string, unknown>;
+      return json({ ...body, resolved: { ref: { ref: "refs/heads/feature", oid: OTHER } } });
+    }),
+  );
+  mount(MAIN_GO_AT);
+  const pane = await screen.findByRole("complementary", { name: "Files of web at main" });
+  fireEvent.click(within(pane).getByRole("button", { name: "Branch or tag: main" }));
+  const panel = await screen.findByRole("dialog", { name: "Switch branches or tags" });
+  await within(panel).findByRole("option", { name: /^feature/ });
+  const field = within(panel).getByRole("combobox", { name: "Find a branch" });
+  await waitFor(() => expect(document.activeElement).toBe(field));
+  fireEvent.keyDown(field, { key: "ArrowDown" });
+  fireEvent.keyDown(field, { key: "Enter" });
+  await waitFor(() => {
+    const p = new URLSearchParams(location.hash.split("?")[1]);
+    expect([p.get("ref"), p.get("path")]).toEqual(["feature", "cmd/web/main.go"]);
+  });
+  await screen.findByRole("tree", { name: "Files of web at feature" });
+  await waitFor(() =>
+    expect(
+      reads(asked, "code_tree").filter((u) => u.searchParams.get("ref") === OTHER),
+    ).not.toHaveLength(0),
+  );
+});
+
+/** The reason a held control gives, as the kit describes it. */
+const reasonOf = (el: HTMLElement) =>
+  document.getElementById(el.getAttribute("aria-describedby") ?? "")?.textContent;
+
+// RAW AND DOWNLOAD NAME THE FILE'S COMMIT, whole, never the branch or the tag, which
+// the route refuses. Mutation: build `rev` from the address, and this fails.
+test("Raw and Download name the file's commit, never the branch", async () => {
+  stubArchive(405);
+  mount(MAIN_GO_AT);
+  const raw = await screen.findByRole("link", { name: "Raw" });
+  const path = "path=cmd%2Fweb%2Fmain.go";
+  expect(raw.getAttribute("href")).toBe(`/git/web/-/raw?rev=${HEAD}&${path}`);
+  expect(raw.getAttribute("title")).toBe("The file's bytes as committed at 0123456");
+  const download = screen.getByRole("link", { name: "Download main.go" });
+  expect(download.getAttribute("href")).toBe(`/git/web/-/raw?rev=${HEAD}&${path}&download=1`);
+  expect(download.getAttribute("download")).toBe("main.go");
+
+  cleanup();
+  stubArchive(405);
+  mount("#/gitlet/repos/web?ref=refs%2Ftags%2Fv1&path=cmd%2Fweb%2Fmain.go");
+  expect((await screen.findByRole("link", { name: "Raw" })).getAttribute("href")).toBe(
+    `/git/web/-/raw?rev=${HEAD}&${path}`,
+  );
+});
+
+// AN OLDER FLEET HOLDS RAW AND DOWNLOAD with the reason, probed once for the page.
+// Mutation: draw the links on a 404, or probe on every file, and this fails.
+test("Raw and Download are held on a fleet that serves no downloads, probed once", async () => {
+  const { probes } = stubArchive(404);
+  mount(MAIN_GO_AT);
+  const raw = await waitFor(() => {
+    const held = screen.getByRole("button", { name: "Raw" });
+    expect(reasonOf(held)).toBe("Downloading a file is not available on this fleet yet.");
+    return held;
+  });
+  expect(raw.getAttribute("aria-disabled")).toBe("true");
+  const download = screen.getByRole("button", { name: "Download main.go" });
+  expect(reasonOf(download)).toBe("Downloading a file is not available on this fleet yet.");
+  act(() => {
+    location.hash = "#/gitlet/repos/web?path=go.mod";
+  });
+  await screen.findByRole("button", { name: "Download go.mod" });
+  expect(probes).toEqual(["HEAD"]);
+});
+
+/** A file of two pages (BIG_PAGE_LINES and ten more), its lines `l<n>`. */
+const TWO_PAGES: Coded = {
+  oid: BIG_OID,
+  text: Array.from({ length: BIG_PAGE_LINES + 10 }, (_, i) => `l${i + 1}\n`).join(""),
+};
+
+/** The clipboard stubbed: what it was written, or a refusal while `refuse` holds. */
+function stubClipboard() {
+  const box = { written: [] as string[], refuse: false };
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: (t: string) =>
+        box.refuse ? Promise.reject(new Error("denied")) : (box.written.push(t), Promise.resolve()),
+    },
+  });
+  return box;
+}
+
+// COPY COPIES THE WHOLE FILE, reading at the commit the pages not loaded; a file
+// wholly loaded asks nothing. Mutation: copy the loaded pages only, and this fails.
+test("Copy copies the whole file, reading the pages not loaded", async () => {
+  const clip = stubClipboard();
+  const asked = stubEngine(detail(), [], { "src/two.go": TWO_PAGES });
+  mount("#/gitlet/repos/web?path=src%2Ftwo.go");
+  await screen.findByRole("button", { name: "Load more lines" });
+  fireEvent.click(screen.getByRole("button", { name: "Copy the file's contents" }));
+  expect(await screen.findByRole("button", { name: "Copied the file's contents" })).toBeTruthy();
+  expect(clip.written).toEqual([TWO_PAGES.text]);
+  const atCommit = reads(asked, "code_blob").filter((u) => u.searchParams.get("ref") === HEAD);
+  expect(atCommit.map((u) => u.searchParams.get("cursor"))).toEqual([
+    null,
+    `l${BIG_PAGE_LINES + 1}`,
+  ]);
+
+  cleanup();
+  const whole = stubEngine();
+  mount("#/gitlet/repos/web?path=src%2Fapp.go");
+  await screen.findByRole("button", { name: "Line 3" });
+  const before = reads(whole, "code_blob").length;
+  fireEvent.click(screen.getByRole("button", { name: "Copy the file's contents" }));
+  await screen.findByRole("button", { name: "Copied the file's contents" });
+  expect(clip.written.at(-1)).toBe("package app\n\nfunc Run() {}\n");
+  expect(reads(whole, "code_blob")).toHaveLength(before);
+});
+
+// COPY IS HELD WITH ITS REASON for a binary file and past 1 MiB, and says when the
+// browser refused. Mutation: draw Copy on a binary file, or reset a refusal, and this fails.
+test("Copy is held for a binary file and past 1 MiB, and says when the clipboard refused", async () => {
+  stubEngine(detail(), [], {
+    "bin/app": { oid: OTHER, text: "x\n", binary: true },
+    "big.json": { oid: OTHER, text: "{}\n", size: Math.round(3.2 * 1024 * 1024) },
+  });
+  mount("#/gitlet/repos/web?path=bin%2Fapp");
+  const binary = await screen.findByRole("button", { name: "Copy the file's contents" });
+  await waitFor(() =>
+    expect(reasonOf(binary)).toBe("A binary file has no text to copy: download it."),
+  );
+  act(() => {
+    location.hash = "#/gitlet/repos/web?path=big.json";
+  });
+  await waitFor(() =>
+    expect(reasonOf(screen.getByRole("button", { name: "Copy the file's contents" }))).toBe(
+      "This file is 3.2 MiB: copy one past 1 MiB from Raw.",
+    ),
+  );
+
+  cleanup();
+  const clip = stubClipboard();
+  clip.refuse = true;
+  stubEngine();
+  mount("#/gitlet/repos/web?path=src%2Fapp.go");
+  await screen.findByRole("button", { name: "Line 3" });
+  fireEvent.click(screen.getByRole("button", { name: "Copy the file's contents" }));
+  const refused = await screen.findByRole("button", { name: "The browser refused the clipboard" });
+  await act(async () => {
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(refused.getAttribute("aria-label") ?? refused.textContent).toContain("refused");
+});
+
+// A PICKED RUN IS TINTED AND ITS FIRST LINE HOLDS ITS ACTIONS: copy the lines, copy a
+// link to them at the commit, blame them. Mutation: link the branch, or draw the menu
+// on every picked line, and this fails.
+test("a picked run is tinted, and its menu copies its lines, links them at the commit and blames them", async () => {
+  const clip = stubClipboard();
+  stubEngine(detail(), [], { "src/two.go": TWO_PAGES });
+  mount("#/gitlet/repos/web?path=src%2Ftwo.go&lines=17-19");
+  const trigger = await screen.findByRole("button", { name: "Actions for lines 17 to 19" });
+  expect(screen.getAllByRole("button", { name: /^Actions for/ })).toHaveLength(1);
+  expect(trigger.closest(".code-source__line")?.id).toBe("L17");
+  expect(
+    [...document.querySelectorAll(".code-source__line[data-picked]")].map((l) => l.id),
+  ).toEqual(["L17", "L18", "L19"]);
+
+  fireEvent.click(trigger);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Copy lines" }));
+  await waitFor(() => expect(clip.written).toEqual(["l17\nl18\nl19"]));
+  fireEvent.click(screen.getByRole("button", { name: "Actions for lines 17 to 19" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Copy a link to these lines" }));
+  await waitFor(() => expect(clip.written).toHaveLength(2));
+  expect(clip.written[1]).toMatch(
+    new RegExp(`#/gitlet/repos/web\\?ref=${HEAD}&path=src%2Ftwo\\.go&lines=17-19$`),
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Actions for lines 17 to 19" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Blame these lines" }));
+  await waitFor(() => expect(location.hash).toContain("lens=blame"));
+  expect(location.hash).toContain("lines=17-19");
+  const inBlame = await screen.findByRole("button", { name: "Actions for lines 17 to 19" });
+  expect(inBlame.closest("tr")?.id).toBe("L17");
+  fireEvent.click(inBlame);
+  expect(await screen.findByRole("menuitem", { name: "Show these lines' code" })).toBeTruthy();
 });

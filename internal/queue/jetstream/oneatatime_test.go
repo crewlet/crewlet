@@ -16,57 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A HANDLER RUNS INLINE ON THE GOROUTINE THAT TOOK ITS DELIVERY: a Subscribe or
-// SubscribeBatch handler on its attachment's consume loop, which fetches again
-// only once the handler has returned, and a listener's on the goroutine nats.go
-// runs its subscription's callback on, which hands the callback one message
-// after another. That is what makes two of the conformance suite's claims true
-// on this backend — one listener hears one message at a time
-// (one_listener_hears_one_message_at_a_time), and a handler that publishes to
-// its own subscription is not re-entered
-// (a_handler_that_publishes_to_its_own_subscription_is_not_re_entered) — and
-// the suite cannot decide either here exactly: each is an absence it could read
-// only behind a quiet window, which a second delivery the runner made late
-// passed with the bug present. So both are decided where they are made, on the
-// syntax tree (queuetest's doc: any invariant about WHERE code sits belongs on
-// the syntax tree), and the twin's half in a bubble (memory's
-// TestAHandlerNeverRunsBesideItself).
-//
-// THE WALK FOLLOWS EACH HANDLER, hop by hop, from the verb a caller hands it to,
-// to the one call that runs it (inlinePath), and every reference to it on the
-// way must be an ordinary call written directly where its row says: in the
-// declaration the row names, or in the function literal that declaration hands
-// one call — the consume loop it hands attach, a take that loop hands a fetch,
-// the callback Listen hands the client's Subscribe. So a handler handed on in a
-// go statement, from inside any other function literal, or to any function off
-// the path is refused, and with them a hand-off to a worker started earlier,
-// which reaches the handler only through a literal or a function the path does
-// not name. The path's one go statement is attach starting the consume loop,
-// once and outside any loop, and the walk follows that loop and each fetch's
-// take to the calls that run them as well. Beside the path, a function the path
-// hands a handler to may be referred to nowhere else, and a handler type of
-// internal/queue may be named only by a parameter the path follows, so a
-// handler kept in a field, a variable or a channel is refused where it is
-// declared.
-//
-// IT MUST FIND WHAT IT GUARDS. Every row names its function, its parameter and
-// where its calls sit, and the walk fails when one of them is gone or no call
-// of it is found there: a rename, or a delivery rebuilt another way, turns it
-// red rather than leaving it checking nothing (queuetest's doc: a guard
-// asserting an absence must also assert it matched its subject).
-//
-// WHAT IT DOES NOT HOLD, so a reader does not infer coverage it lacks: that
-// nats.go runs one subscription's callbacks one at a time, which is the
-// library's (the package doc says what this package relies on), and what a
-// handler does itself — one that starts a goroutine of its own runs it beside
-// the next delivery, and that is its caller's design. Two attachments of one
-// pair run two loops by the contract's design, so one at a time is per
-// attachment, and the walk holds that one Subscribe call is one attachment
-// (attach is called once, outside any loop).
-//
-// Mutation: hand a delivery to its handler in a go statement, from a worker fed
-// by a channel, or from a helper off the path, or rename a function on the
-// path, and the walk names the line.
+// A HANDLER RUNS INLINE ON THE GOROUTINE THAT TOOK ITS DELIVERY (package doc,
+// "A handler runs inline on the goroutine that took its delivery"): Crewlet's
+// half of the conformance claims one_listener_hears_one_message_at_a_time and
+// a_handler_that_publishes_to_its_own_subscription_is_not_re_entered, held on
+// the syntax tree because the suite sees an absence only behind a quiet window
+// (memory's TestAHandlerNeverRunsBesideItself is the twin). The walk follows
+// each handler hop by hop (inlinePath) and refuses a reference that is not an
+// ordinary call written where its row says, a handler kept in a field, variable
+// or channel, and an attach in a loop. It fails when a row's function,
+// parameter or call is gone, so a rename cannot leave it checking nothing. Not
+// held: nats.go's serial callbacks (the library's) and goroutines a handler
+// starts itself.
 func TestAHandlerRunsInlineOnTheGoroutineThatTookItsDelivery(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)

@@ -91,11 +91,11 @@ func (r *coordRig) watchEnd(box *FakeSandbox) *steps {
 
 // A STOP ENDS ITS JOB BEFORE IT TAKES ITS SESSION. The frame that decides the
 // stop closes the run's bridge session and goes; the ending's retry reads the
-// job's box, and the read ENDS THE JOB first — asks its script, which ends it,
-// and sweeps what is left — and only then takes the session the job's end left,
-// final, before the box is reclaimed; the capture is recorded before the turn's
-// end. And it is stamped INTERRUPTED, though its script packed it after a clean
-// exit: a harness told to stop was stopped mid-step.
+// box, and the read ENDS THE JOB first (asks its script, which ends it, then
+// sweeps what is left), then takes the session final before the box is
+// reclaimed, recording the capture before the turn's end. It is stamped
+// INTERRUPTED though its script packed it after a clean exit: a harness told
+// to stop was stopped mid-step.
 //
 // Mutation: take the session before the job's end, and it is packed as it
 // stands, not final; read a job ended on request as a clean exit, and its
@@ -143,11 +143,10 @@ func TestAStopEndsItsJobBeforeItTakesItsSession(t *testing.T) {
 }
 
 // A LOSS ENDS ITS JOB BEFORE IT TAKES ITS SESSION. A launch whose engine
-// restarted before its turn could park is reaped as its seat is recovered: its
-// job may still be working, so the ending closes its bridge session before
-// anything else — nothing it does after that acts as the seat — then its read
-// ends the job, takes the session its end left, final, and the box is
-// reclaimed after.
+// restarted before its turn could park is reaped as its seat is recovered, its
+// job perhaps still working: the ending first closes its bridge session, so
+// nothing it does after acts as the seat, then the read ends the job and takes
+// the session final, and the box is reclaimed after.
 //
 // Mutations: drop the loss's end, and the job is never asked and its session is
 // packed as it stands; drop the early close of the session, and the job acts as
@@ -186,24 +185,18 @@ func TestALossEndsItsJobBeforeItTakesItsSession(t *testing.T) {
 	})
 }
 
-// A CAPPED JOB IS ENDED BEFORE ITS SESSION IS TAKEN. A job still working when
-// its turn's wall-clock cap passes is announced as if it had finished, and the
-// collection that claims it ends it as a stop's read ends a job: the run's
-// bridge session is closed, its script asked to end the job — which stops its
-// harness and packs the session as its own exit does — and what is left
-// swept; only then is the session taken, as the job's end left it, never
-// packed now beside a harness still writing it. It is stamped FINAL, and
-// INTERRUPTED, since its harness was stopped mid-step. And the read PAUSES the
-// box after the take, as every collection's does, and reclaims nothing: the
-// turn resumes with its box paused, and only the turn's ending reclaims it,
-// after.
+// A CAPPED JOB IS ENDED BEFORE ITS SESSION IS TAKEN. A job still working past
+// its turn's wall-clock cap is announced as finished, and the collection that
+// claims it ends it as a stop's read does (bridge session closed, script asked
+// to end the job, the rest swept), then takes the session FINAL and
+// INTERRUPTED (its harness stopped mid-step), never beside a harness still
+// writing it. The read then PAUSES the box, as every collection's does, and
+// reclaims nothing: only the turn's ending reclaims it.
 //
-// Mutation: read the job past its cap as it stands, as the collection once did,
-// and it is never asked to end and its session is packed now and not final;
-// end it after the take, and the take precedes the request; skip the end where
-// the poll answered running, and the job is taken working; pause nothing after
-// a capped collection's take, as a stop's read does, and the turn resumes with
-// its box running.
+// Mutation: read the job as it stands, and it is never asked to end and is
+// packed not final; end it after the take, and the take precedes the request;
+// skip the end where the poll answered running, and the job is taken working;
+// pause nothing after the take, and the turn resumes with its box running.
 func TestACappedJobIsEndedBeforeItsSessionIsTaken(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -258,11 +251,10 @@ func TestACappedJobIsEndedBeforeItsSessionIsTaken(t *testing.T) {
 	})
 }
 
-// A JOB THAT OUTLIVES ITS END IS KILLED BEFORE ITS TAKE. A script asked to end
-// whose job is not over by the end's wait — a pack stuck, a call wedged — has
-// what is left of its job killed: a kill that ends it leaves a session taken
-// final; one that does not leaves it taken as it stands, not final, and says
-// so.
+// A JOB THAT OUTLIVES ITS END IS KILLED BEFORE ITS TAKE. A job not over by the
+// end's wait (a pack stuck, a call wedged) is killed: a kill that ends it
+// leaves the session taken final; one that does not leaves it taken as it
+// stands, not final, and says so.
 //
 // Mutation: take the session when the wait runs out, killing nothing, and the
 // job is never killed and is taken as it stands.
@@ -316,12 +308,11 @@ func TestAJobThatOutlivesItsEndIsKilledBeforeItsTake(t *testing.T) {
 }
 
 // A JOB ASKED NOTHING IS KILLED, NOT WAITED FOR. A job whose script could not
-// be asked to end — one that records no end protocol, an older build's or one
-// not yet at its first line; one whose recorded pid the box says is no process
-// of the job; one in a box that could not be asked at all — is killed at once:
-// nothing would ever end it within the wait. Each is polled once, whether it
-// was over, before the kill; its session is taken final after it; and the kill
-// says why, the box that could not be asked with the error that said so.
+// be asked to end (no end protocol recorded, as an older build's or one not yet
+// at its first line; a recorded pid the box says is not the job's; a box that
+// could not be asked) is killed at once, since nothing would end it within the
+// wait. Each is polled once, whether it was over, before the kill, its session is taken final after
+// it, and the kill says why, with the error of a box that could not be asked.
 //
 // Mutation: wait out the end's wait for any of the three — an ask's error or a
 // pid that is not the job's taken for a request delivered — and the job is
@@ -444,15 +435,15 @@ func TestAStopOfABoxOnAnotherHostEndsItsJobThere(t *testing.T) {
 	})
 }
 
-// A STOP WITH THE SWITCH OFF ENDS ITS JOB OFF THE FRAME. Ending a job is waiting
-// for it, so every stop of a job that started in a box is read by the ending's
-// retry, whatever `conversation_session.enabled` says: the switch decides what
-// is kept of a session, not how a stop ends a job. The frame that decided the
-// stop touches nothing of the box; the retry ends the job, reads it and
-// reclaims the box, keeping no session.
+// A STOP WITH THE SWITCH OFF ENDS ITS JOB OFF THE FRAME. Ending a job is
+// waiting for it, so the ending's retry reads every stop of a job started in a
+// box, whatever `conversation_session.enabled` says: the switch decides what is
+// kept of a session, not how a stop ends a job. The deciding frame touches
+// nothing of the box; the retry ends the job, reads it and reclaims the box,
+// keeping no session.
 //
 // Mutation: read a local stop with the switch off on the frame that decided it,
-// as a stop once was, and the pause watch waits for the job's end.
+// and the pause watch waits for the job's end.
 func TestAStopWithTheSwitchOffEndsItsJobOffTheFrame(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -487,34 +478,21 @@ func TestAStopWithTheSwitchOffEndsItsJobOffTheFrame(t *testing.T) {
 }
 
 // A READ THAT MAY END ITS JOB IS GIVEN THE END ON TOP OF THE TAKE: a stop's and
-// a loss's always end the job first, and a collection's ends one its turn's cap
-// passed while it still worked — which its host decides on its own clock as it
-// reads, so every collection of a turn with a cap is given the end, whether or
-// not the cap has passed yet. Each such ask waits the take's budget and the
-// end's, counted at the host's share as the take is, so a host's take after an
-// end at its bound is given its whole budget all the same; and a collection of
-// a turn with no cap, which ends nothing, waits for the take alone. A
-// collection's host also records that the cap ended a job it saw working, one
-// more change of the run's row, made on its own context within a teardown's
-// grace and the row's crossing before the end's wait begins, so a collection
-// of a capped turn waits that grace and that change's crossing at the slowest
-// node's pace on top.
+// a loss's always, and every collection of a capped turn, since its host judges
+// the cap on its own clock. Each waits the end's budget beyond the take's, at
+// the host's share, so a take after an end at its bound keeps its whole budget;
+// a capped collection also waits the teardown's grace and slowest crossing of
+// its host's record, made before the end's wait, that the cap ended the job. An uncapped collection waits the take
+// alone. The take's budget is read in a bubble, whose clock stands still, so
+// it is held exactly, on a host whose store is as slow as any node's.
 //
-// THE TAKE'S BUDGET IS READ IN A BUBBLE, where the clock stands still between
-// the read's deadline, the take's and the reading of what is left: the budget
-// is held exactly, never to the second a loaded runner may lose between them —
-// on a host whose store is as slow to reach as any node's may be, so the
-// take's own room and its records' are the most they can be.
-//
-// Mutation: one budget for every read, and the take after an end at its bound
-// is cut short of its own; read the budget off the read alone, and a capped
-// collection's take after the end its host makes is cut short too; count no
-// change for the end's record, or count it without its grace, and a capped
-// collection's take after that record at its bound is cut short.
+// Mutation: one budget for every read, the budget off the read alone, or no
+// change or no grace counted for the end's record, and a take after an end (or
+// that record) at its bound is cut short of its own.
 func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 	t.Parallel()
 	uncapped := PendingRun{TurnID: "t1"}
-	held := SessionTakeBudget + sessionRecordBudget + 2*discardGrace + boxReadChanges*coord.MaxValueCrossing
+	held := SessionTakeBudget + sessionRecordBudget + 3*discardGrace + boxReadChanges*coord.MaxValueCrossing
 	if got, want := BoxReadBudget(uncapped, BoxReadCollect),
 		pollBound+time.Duration(float64(held)/BoxReadAnswerShare); got != want {
 		t.Errorf("a collection's read of a turn with no cap waits %v, want the take alone, %v", got, want)
@@ -547,11 +525,9 @@ func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 		}
 	}
 
-	// THE HOST'S READ, ITS JOB'S END SPENT AT ITS BOUND, the record that the
-	// cap ended it at its grace and the slowest crossing, and the read's own
-	// poll beside them, still hands its take the take's whole budget — on a
-	// host whose store takes that crossing, so each of the take's rooms is
-	// the most it can be.
+	// THE HOST'S READ, with its job's end, the cap's record (its grace and the
+	// slowest crossing, which this host's store takes) and its own poll all
+	// spent at their bounds, still hands its take the take's whole budget.
 	inBubble(t, func(t *testing.T) {
 		rig := newCoordRigWith(t, func(o *CoordinatorOptions) {
 			o.Pending = &crossingWrites{PendingStore: o.Pending, crossing: coord.MaxValueCrossing,
@@ -575,13 +551,12 @@ func TestAReadThatMayEndItsJobIsGivenTheEndOnTopOfTheTake(t *testing.T) {
 	})
 }
 
-// A READ CUT SHORT IS NO JOB THAT OUTLIVED ITS END. The read that ends a job
-// waits for it under the read's own context, and a context that ends first —
-// the node draining, the asker no longer waiting — says nothing of the job.
-// The kill still comes, under a context of its own, since the stop or the loss
-// decided the job's end; but it is said as the read cut short, at info, and
-// never as a job that outlived its end — the warning an operator is told to
-// look into — and nothing is read after it, its read being over.
+// A READ CUT SHORT IS NO JOB THAT OUTLIVED ITS END. A read whose context ends
+// while it waits for its job (the node draining, the asker gone) says nothing
+// of the job. The kill still comes, under its own context, since the stop or
+// loss decided the job's end, but it is logged at info as the read cut short,
+// never as the outlived-end warning an operator is told to look into, and
+// nothing is read after it.
 //
 // Mutation: take the context's end for the wait run out, and the read cut
 // short is said as a job that outlived its end.

@@ -12,12 +12,11 @@ import (
 
 // EVERY RUN'S TOOLS SEE A CALL LOG OF THEIR OWN, a resumed run's included.
 //
-// A derived operation id carries how many different calls to its tool the run
-// made before it, read off the turn's log. A turn built without one counts
-// nothing, so every call is its run's first of its kind and a call made again
-// after a different one takes its first copy's id — the bug the log exists to
-// end, silently back for every turn. And a log SHARED between runs would count
-// another run's calls, so a re-run would not reproduce its own counts.
+// A derived operation id counts the different calls to its tool the run made
+// before it, off the turn's log. Without a log every call is its run's first,
+// so a call repeated after a different one takes its first copy's id; a log
+// SHARED between runs would count another run's calls, so a re-run would not
+// reproduce its own counts.
 func TestEveryRunsToolsSeeACallLogOfTheirOwn(t *testing.T) {
 	t.Parallel()
 	seat := &org.Role{Name: "Engineer", DeclaredHandle: "swe"}

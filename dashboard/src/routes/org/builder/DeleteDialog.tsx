@@ -42,7 +42,7 @@
 
 import { useState, type ReactNode } from "react";
 import { plural } from "~/lib/format.ts";
-import { ConfigField } from "~/components/ConfigField.tsx";
+import { ConfigField, type FieldChoice } from "~/components/ConfigField.tsx";
 import { useAgents, useExecutors } from "~/lib/store-hooks.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { useBuilder } from "./BuilderContext.tsx";
@@ -75,11 +75,15 @@ import { massRemoval, newlyStranded, removedSeats, removedUnits, simulate } from
 import { TrashGlyph } from "@crewlethq/icons/glyphs";
 import { Button, Callout, Checkbox, SegmentedControl } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
+import { useServedLook } from "../structureLive.tsx";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
+import { lookOf } from "~/lib/avatar.ts";
 
 type PlacedChoice = "keep" | "remove";
 
 export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: () => void }) {
   const api = useBuilder();
+  const served = useServedLook();
   const viewer = useViewer();
   const rows = useAgents();
   const executors = useExecutors();
@@ -254,7 +258,19 @@ export function DeleteDialog({ nodeKey, onClose }: { nodeKey: NodeKey; onClose: 
         state={state}
         agents={agents}
         fallbackSeat={fallbackSeat}
-        replacements={replacements.map((c) => ({ value: c.handle, label: c.seat.data.name }))}
+        replacements={replacements.map((c) => ({
+          value: c.handle,
+          label: c.seat.data.name,
+          leading: (
+            <ChoiceFace
+              seat={{
+                name: c.seat.data.name,
+                kind: "agent",
+                avatar: lookOf(c.seat.data.avatar, served(c.handle)),
+              }}
+            />
+          ),
+        }))}
         routeTo={replacement}
         onRouteTo={setRouteTo}
         accessLevels={op?.accessLevels ?? []}
@@ -356,7 +372,7 @@ function OutsideTheChart({
   state: BuilderState;
   agents: readonly DraftSeat[];
   fallbackSeat: DraftSeat | undefined;
-  replacements: { value: string; label: string }[];
+  replacements: FieldChoice[];
   routeTo: string;
   onRouteTo: (handle: string) => void;
   accessLevels: readonly { handle: string; before?: string }[];

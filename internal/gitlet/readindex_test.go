@@ -264,6 +264,12 @@ func TestEveryCodeReadSeeksANamedIndex(t *testing.T) {
 		}
 		judged[name] = st
 	}
+	for name, st := range searchReads() {
+		if _, taken := judged[name]; taken {
+			t.Fatalf("%q names a registered statement, a shape or a claim and a search read", name)
+		}
+		judged[name] = st
+	}
 	scanned := map[string]bool{}
 	for name, st := range judged {
 		plan := storetest.Plan(t, db, st.sql, st.args)

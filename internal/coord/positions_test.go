@@ -8,16 +8,12 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// A POSITIONS ROW AND A TRIM FLOOR ARE THE PINNED BYTES.
-//
-// Both are records the whole fleet shares in the positions bucket, written by
-// one build and read by another through every rolling upgrade, and neither has
-// an age: a row or a floor written today is read for the life of the
-// deployment. So what a current node writes is pinned as literal bytes, field
-// for field — every field of a row with its snapshot and of a floor with a
-// blocked term — because "the same fields" is a claim a reordering, a renamed
-// tag or a field nobody meant to put on the wire would all pass. A key here is
-// a log's domain name and nothing else.
+// A POSITIONS ROW AND A TRIM FLOOR ARE THE PINNED BYTES. Both are shared in
+// the positions bucket with no age, written by one build and read by another
+// through every rolling upgrade, so what a current node writes is pinned as
+// literal bytes, every field included: "the same fields" is a claim a
+// reordering, a renamed tag or an unintended field would all pass. A key here
+// is a log's domain name and nothing else.
 func TestAPositionsRowAndAFloorAreThePinnedBytes(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)

@@ -9,25 +9,15 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
-// WHAT A SEAT CARRIES IS ON THE SEAT, AND THE ENGINE READS IT THERE.
-//
-// # What these are guarding
-//
-// The running organisation is what every per-seat reader asks, ONE model of a
-// seat rather than the document beside it: a reader that walked the document
-// for one fact and the org for another could disagree about which seats exist.
-//
-// Three of those facts were not on the runtime seat at all: a seat's GitHub
-// App, its sandbox round cap and its own provisioning steps. The conversion
-// from the authored document simply dropped them, and the engine read them
-// off the document instead. So the seat had to gain them, and a case that
-// only checked the walk would pass over a seat whose app was silently nil.
+// WHAT A SEAT CARRIES IS ON THE SEAT, AND THE ENGINE READS IT THERE: every
+// per-seat reader asks the running organisation, never the document beside
+// it, so no two readers disagree about which seats exist. The cases check the
+// values the conversion must carry (a seat's GitHub App, sandbox round cap and
+// setup steps), since a walk alone would pass a seat whose app was nil.
 
-// A SEAT'S GITHUB APP RIDES THE SEAT.
-//
-// It is what an @mention of that agent resolves through and what verifies the
-// deliveries its app sends, so a seat that holds one and cannot say so is an
-// agent whose every webhook is refused with nothing to check it against.
+// A SEAT'S GITHUB APP RIDES THE SEAT: an @mention of the agent resolves
+// through it and its deliveries verify against it, so without it every webhook
+// is refused.
 func TestASeatsGitHubAppIsOnTheRuntimeSeat(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, seatSurfaceDoc)})
@@ -49,12 +39,9 @@ func TestASeatsGitHubAppIsOnTheRuntimeSeat(t *testing.T) {
 	}
 }
 
-// AND SO DOES ITS SANDBOX CAP AND ITS OWN PROVISIONING.
-//
-// Both were declared on the config type, mapped onto the runtime seat by
-// nothing, and read off the document — so a seat's round cap silently became
-// the provider default and its setup steps stopped running, which leaves a
-// harness promised an environment its box does not have.
+// AND SO DO ITS SANDBOX CAP AND ITS OWN PROVISIONING: dropped, the round cap
+// silently becomes the provider default and the setup steps never run, leaving
+// a harness promised an environment its box lacks.
 func TestASeatsSandboxCapAndSetupAreOnTheRuntimeSeat(t *testing.T) {
 	t.Parallel()
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, seatSurfaceDoc)})
@@ -76,17 +63,13 @@ func TestASeatsSandboxCapAndSetupAreOnTheRuntimeSeat(t *testing.T) {
 	}
 }
 
-// AND THE WEBHOOK SECRET INDEX FINDS IT, which is the reader that had to walk
-// the document because the app had nowhere else to live.
-//
-// A seat this node has not applied yet answers EMPTY rather than the
-// organization's key, which the route reads as "cannot verify" and answers
-// 503 to — never as a forgery. Verifying an agent's delivery against a
-// different app's secret would refuse every one of them while GitHub's own
-// hook page showed the app healthy.
+// AND THE WEBHOOK SECRET INDEX FINDS IT. A seat this node has not applied
+// answers EMPTY, never the organization's key: the route answers "cannot
+// verify" with a 503, where another app's secret would refuse every delivery
+// while GitHub showed the app healthy.
 func TestTheWebhookSecretIndexCarriesEachSeatsOwnApp(t *testing.T) {
-	// NOT PARALLEL: it sets an environment variable, which is what the
-	// seat's ${VAR} has to resolve through on this node.
+	// NOT PARALLEL: it sets the environment variable the seat's ${VAR}
+	// resolves through.
 	t.Setenv("DEV_HOOK", "whsec_dev")
 	e := newEngine(t, engine.Options{Company: parsedCompany(t, seatSurfaceDoc)})
 
@@ -98,10 +81,8 @@ func TestTheWebhookSecretIndexCarriesEachSeatsOwnApp(t *testing.T) {
 	if _, held := secrets.GitHubSeat["nobody"]; held {
 		t.Error("the index holds a secret for a seat nobody has hired")
 	}
-	// AND IT IS THE SAME INDEX FOR THE SAME COMPANY. Assembling it walks
-	// every seat and resolves every reference, and this is on the path of
-	// every inbound delivery — so a second read of one published company
-	// must not do that work again.
+	// THE SAME INDEX FOR THE SAME COMPANY: assembling it walks every seat
+	// and resolves every reference, on every inbound delivery's path.
 	again := e.WebhookSecrets()
 	if mapOf(secrets.GitHubSeat) != mapOf(again.GitHubSeat) {
 		t.Error("two reads of one published company built two indexes, so " +
@@ -110,12 +91,12 @@ func TestTheWebhookSecretIndexCarriesEachSeatsOwnApp(t *testing.T) {
 	}
 }
 
-// mapOf identifies a map by the table it points at, which is what says two
-// readings are the same value rather than two equal ones.
+// mapOf identifies a map by the table it points at, telling the same value
+// from two equal ones.
 func mapOf(m map[string]string) uintptr { return reflect.ValueOf(m).Pointer() }
 
 // seatSurfaceDoc is a company whose one agent carries every per-seat fact
-// that used to be read off the document.
+// these cases check.
 var seatSurfaceDoc = strings.TrimSpace(`
 name: Acme
 providers:

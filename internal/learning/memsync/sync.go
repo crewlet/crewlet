@@ -177,8 +177,12 @@ type Syncer struct {
 	pace time.Duration
 
 	// window is what a replay pull carries at most across a link
-	// ([Syncer.pullBound]), and 0 in a member's own process.
+	// ([pullWindow], [Syncer.pullBound]), and 0 in a member's own process.
 	window int
+
+	// link is the meter of the link this node's connection crosses
+	// ([Config.Link]), and nil where it crosses none or nobody meters it.
+	link Link
 
 	// copies, when set, is where a hydration's replays make their consumers
 	// ([Syncer.replays]): a test's seam, nil in production, where they are
@@ -216,8 +220,8 @@ type Syncer struct {
 // pulls, which are bounded by this connection's own limit ([Syncer.pullBytes]),
 // so no answer of its can be larger than the link carries ([Syncer.replay]).
 // What the topology changes is how long each request is given and how much a
-// pull carries across a link ([Config]). A node across a link that names no
-// lease heartbeat is refused, by name.
+// pull carries across a link ([Config]). A node in its broker's own process
+// handed a link's meter is refused, by name: it crosses no link to meter.
 func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, cfg Config) (*Syncer, error) {
 	if db == nil || js == nil || agentID == nil {
 		return nil, nil
@@ -225,15 +229,21 @@ func New(db *store.DB, js jetstream.JetStream, agentID AgentIDFor, cfg Config) (
 	s := &Syncer{db: db, js: js, agentID: agentID, marks: map[markKey]int64{},
 		holdings: map[string]*seatHolding{}, timing: jsprovision.Clustered(cfg.Clustered).Timing()}
 	if cfg.AcrossLink {
-		if cfg.LeaseHeartbeat <= 0 {
-			return nil, fmt.Errorf("memsync: a node that reaches the memory changelog across a "+
-				"link needs its lease heartbeat (Config.LeaseHeartbeat), which sizes the window "+
-				"its replays' pulls share with its lease renewals; got %v", cfg.LeaseHeartbeat)
-		}
-		s.pace, s.window = objstore.MiBPace, windowFor(cfg.LeaseHeartbeat)
+		s.pace, s.window, s.link = objstore.MiBPace, pullWindow, cfg.Link
+	} else if cfg.Link != nil {
+		return nil, errors.New("memsync: a node whose connection reaches the memory changelog " +
+			"in its own process crosses no link, so it has none to meter (Config.Link is set " +
+			"without Config.AcrossLink)")
 	}
 	return s, nil
 }
+
+// Window is the most a replay pull carries across this node's link
+// ([pullWindow]), or 0 where [Config.AcrossLink] said the connection crosses
+// none and a pull carries the connection's own bound ([Syncer.pullBytes]).
+// Whoever builds the syncer decides which, and the engine's choice — by the
+// node's broker kind — is held by a test of its own that reads it here.
+func (s *Syncer) Window() int { return s.window }
 
 // info logs one of a hydration's lines at info, and hands it to the said seam
 // where a case set one.
@@ -1105,7 +1115,8 @@ func (s *Syncer) checkIdentity(ctx context.Context) error {
 	// its own to hold it to less. A handle of each request's own, because
 	// the requests can be out together and the client caches each reply on
 	// its handle with no lock.
-	info, err := jsprovision.ReadWith(ctx, s.timing.Arriving(jsapi.Crossing(apiBytes, s.pace)),
+	timing := s.waits(jsapi.Crossing(apiBytes, s.pace))
+	info, err := jsprovision.ReadWith(ctx, timing,
 		func(ctx context.Context) (*jetstream.StreamInfo, error) {
 			stream, err := s.js.Stream(ctx, topics.MemoryStream)
 			if err != nil {
@@ -1113,6 +1124,12 @@ func (s *Syncer) checkIdentity(ctx context.Context) error {
 			}
 			return stream.CachedInfo(), nil
 		}, nil)
+	if err != nil && jsprovision.Unanswered(ctx, err) {
+		return fmt.Errorf("memsync: read the memory changelog's identity: nobody answered it in %s: %w — "+
+			"a seat is not admitted from a stream this node cannot identify, "+
+			"because a recreated one is EMPTY and would hydrate every seat to "+
+			"nothing while reporting success", s.heldFor(timing, timing.Lookup), err)
+	}
 	if err != nil {
 		return fmt.Errorf("memsync: read the memory changelog's identity: %w — "+
 			"a seat is not admitted from a stream this node cannot identify, "+
@@ -1186,8 +1203,8 @@ func (s *Syncer) checkIdentity(ctx context.Context) error {
 // has out, which the acknowledgement queues behind on the same connection
 // ([Syncer.endBarrierArrival]) — so an end barrier is presumed lost after
 // about 9.0 seconds in a member's own process at the transport's bound and
-// asked again at 10, and across a link at the window after about 16.5 seconds
-// and asked again at 17.5, rather than asked again behind the bytes the first
+// asked again at 10, and across a link at the window after about 5.2 seconds
+// and asked again at 6.2, rather than asked again behind the bytes the first
 // is waiting on; the identity reads and the hydration's first barrier, which
 // wait behind no pull, are asked every two seconds. Only the stream's leader takes a publish — no other member
 // subscribes to the stream's subjects (nats-server stream.go, setLeader) — and
@@ -1239,7 +1256,7 @@ func (s *Syncer) checkIdentity(ctx context.Context) error {
 // unanswered that long.
 func (s *Syncer) barrier(ctx context.Context, agentID, what string, arrival time.Duration) (uint64, error) {
 	subject := barrierSubject(agentID)
-	timing := s.timing.Arriving(arrival)
+	timing := s.waits(arrival)
 	ack, err := jsprovision.ReadWith(ctx, timing,
 		func(ctx context.Context) (*jetstream.PubAck, error) {
 			ack, err := s.js.Publish(ctx, subject, nil)
@@ -1261,10 +1278,10 @@ func (s *Syncer) barrier(ctx context.Context, agentID, what string, arrival time
 			what, subject, refused, topics.MemoryPrefix, err)
 	}
 	return 0, fmt.Errorf("memsync: publish %s to %s: no member of the changelog acknowledged it "+
-		"in the %v it is asked for: the changelog had no leader that long, or the broker refused "+
+		"in the %s it is asked for: the changelog had no leader that long, or the broker refused "+
 		"the publish without an answer, as it refuses a connection without publish permission "+
 		"on %s> (jetstream_client_error says so): %w",
-		what, subject, timing.Lookup, topics.MemoryPrefix, err)
+		what, subject, s.heldFor(timing, timing.Lookup), topics.MemoryPrefix, err)
 }
 
 // unacknowledged reports a publish nobody answered: the silence the hedge

@@ -17,21 +17,14 @@ import (
 // EVERY UNAVAILABLE REFUSAL SAYS WHETHER A WAIT CLEARS IT, AND ONE NO WAIT
 // CLEARS CARRIES NO WAIT.
 //
-// An unavailable refusal is answered by every surface under this node's
-// undecided hint unless its cause says otherwise ([RetryAfter]), so a tool
-// that told a person "skill synthesis is not configured on this deployment" or
-// "this company does not run Chatlet" told them in the same answer to come
-// back in two seconds: nothing about a deployment's configuration, a company's
-// choice of backend or a surface built without a seam changes by waiting. So
-// no unavailable refusal is a bare [refused]: each states its cause, [waits],
-// [waitless] or what it met, and this walk refuses a bare one. It used to
-// judge a bare one by its wording, matching "not configured" and the rest,
-// which a sentence reworded in this package's own voice ("isn't configured")
-// passed. The wording is still read, but only to catch a refusal marked
-// [waits] that says what no wait clears, in either voice. Mutation: put
-// `refused(tools.RefusalUnavailable, ...)` back on any of them, or mark
-// memory.go's "not configured" or chat.go's "does not run Chatlet"
-// [waits], and this fails naming its line.
+// An unavailable refusal carries the node's undecided wait unless its cause
+// says otherwise ([RetryAfter]), but no wait changes a deployment's
+// configuration or a company's backend. So no unavailable refusal is a bare
+// [refused]: each states [waits], [waitless] or what it met. The wording is
+// read only to catch a [waits] refusal saying what no wait clears, in either
+// voice. Mutation: put `refused(tools.RefusalUnavailable, ...)` back on any of
+// them, or mark memory.go's "not configured" or chat.go's "does not run
+// Chatlet" [waits], and this fails naming its line.
 func TestEveryUnavailableRefusalSaysWhetherAWaitClearsIt(t *testing.T) {
 	t.Parallel()
 	files, err := filepath.Glob("*.go")

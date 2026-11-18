@@ -12,50 +12,38 @@ import (
 )
 
 // The sub-agent spawner, wired onto Execute.
-//
-// internal/agent/subagent was imported by nothing outside its own test, so
-// spawn_subagent was never registered and every turn_engine.subagent_* knob
-// was validated, schema'd, documented and read by nobody. The package's whole
-// contract — the grant, the caps, the batch, the panic containment — could
-// not run.
 
 // Remaining is the seat's remaining token allowance, as the spawner needs it.
 //
-// THREE-VALUED, and the third value is why this is an interface rather than
-// an int: [subagent.Config.ParentRemaining] reads ZERO AS UNCAPPED, so a
-// counter that answered 0 for "I could not reach the store" would un-cap every
-// child in the fleet on exactly the failure the rest of coordination fails
-// closed for. An error here refuses the spawn instead.
+// THREE-VALUED, hence an interface: [subagent.Config.ParentRemaining] reads
+// ZERO AS UNCAPPED, so answering 0 for an unreachable store would un-cap every
+// child. An error refuses the spawn instead.
 type Remaining interface {
 	Remaining(ctx context.Context) (int, error)
 }
 
 // SubagentConfig is what a turn needs to spawn sub-agents. Nil on
-// [Config.Subagent] leaves the tool off the surface entirely, which is the
-// honest shape for a build with no budget source and for a test.
+// [Config.Subagent] leaves the tool off the surface entirely.
 type SubagentConfig struct {
 	// Limits are the company's own caps, mapped from
 	// turn_engine.delegation.
 	Limits subagent.Limits
 
 	// Workers are the delegate templates this seat may name, already
-	// narrowed by its role's own visibility list. Empty is a company that
-	// publishes none, and every task then has to write its own prompt.
+	// narrowed by its role's visibility list. Empty: every task writes its
+	// own prompt.
 	Workers map[string]config.Worker
 
-	// Remaining reads the seat's headroom. Nil means the seat is uncapped,
-	// which is the same thing a company with no token budget already is —
-	// distinct from a read that FAILED, which refuses the spawn.
+	// Remaining reads the seat's headroom. Nil means uncapped, distinct
+	// from a read that FAILED, which refuses the spawn.
 	Remaining Remaining
 }
 
 // workerCatalogue renders the `## Your workers` block, or "".
 //
-// SORTED, because it reaches a system prompt: a block whose lines reshuffle
-// between two turns of one seat costs the provider's prompt cache the whole
-// prefix, on every turn, for no reason a reader could ever find. The line's
-// shape belongs to config.DescribeWorker, so the prompt and the delegate
-// tool's own refusal message cannot describe one worker two ways.
+// SORTED, because it reaches a system prompt: lines reshuffled between turns
+// cost the provider's prompt cache the whole prefix. The line's shape is
+// config.DescribeWorker's, shared with the delegate tool's refusal.
 func (r *Runner) workerCatalogue() string {
 	if r.cfg.Subagent == nil || len(r.cfg.Subagent.Workers) == 0 {
 		return ""
@@ -71,10 +59,8 @@ func (r *Runner) workerCatalogue() string {
 // spawnEntry is the sub-agent tool as it goes onto a phase surface, or the
 // zero Entry when this turn cannot spawn.
 //
-// EXECUTE ONLY. Review is judging work that is already finished, so a spawner
-// there is a phase that can spend a batch of model calls on work the turn has
-// already done. Onboarding is a seat reading its own team's pages, which is
-// not fan-out work.
+// EXECUTE ONLY: review judges finished work, and onboarding reads the team's
+// own pages; neither is fan-out work.
 func (r *Runner) spawnEntry(ctx context.Context, m meter, ph phase.Phase, round int,
 	snapshot tools.Snapshot, surface func() *tools.Surface,
 ) tools.Entry {
@@ -85,21 +71,18 @@ func (r *Runner) spawnEntry(ctx context.Context, m meter, ph phase.Phase, round 
 	if !ok {
 		return tools.Entry{}
 	}
-	// ONE OFFER FOR THE PHASE'S WORKERS, drained as each one finishes, so
-	// every worker prompt's catalogue is recorded once — see
-	// [emitter.skillsInjected]. Drained on the completion path because
-	// that is the one hook the subagent package calls on every path a
-	// child can take, after its prompt was built.
+	// ONE OFFER FOR THE PHASE'S WORKERS, drained as each finishes, so each
+	// worker prompt's catalogue is recorded once ([emitter.skillsInjected]):
+	// completion is the one hook subagent calls on every path, after the
+	// prompt is built.
 	offer := r.cfg.Skills.Offer()
 	// The workers' spend is the SURFACE's: a bridged executor's workers
 	// run after this segment ended, and are paid by the one that resumes.
 	emit := r.emitter().nestedAt(round).talliedOn(m.spend, m.mu)
 	tool := subagent.NewTool(subagent.Config{
 		Seat: r.cfg.Seat, Models: r.cfg.Models,
-		// The parent's UNIVERSE and its LIVE active list. The second is a
-		// getter because an executor that discovers a tool mid-phase and
-		// activates it has widened what it may call, and a child spawned
-		// afterwards inherits that.
+		// The parent's UNIVERSE and its LIVE active list: a getter, so a
+		// child spawned after a mid-phase activation inherits it.
 		Universe: snapshot,
 		Parent: func() []string {
 			s := surface()
@@ -112,32 +95,24 @@ func (r *Runner) spawnEntry(ctx context.Context, m meter, ph phase.Phase, round 
 		Compact:   m.compact,
 		Skills:    offer.Catalogue(),
 		Budget:    r.cfg.Budget,
-		// The parent's OWN fence, not a second one: a worker has no grant
-		// of its own, and building a fresh check here would close on a
-		// different epoch than the turn that spawned it.
+		// The parent's OWN fence: a worker has no grant, and a fresh check
+		// could close on a different epoch than the spawning turn.
 		Fence: r.cfg.Fence,
 		// The same host the parent's tools are served from.
 		Sessions: r.cfg.Sessions,
-		// Read ONCE, here, rather than per child: the fraction has to be
-		// one number for a whole batch, or later children get a share of
-		// a total their siblings have already spent from.
+		// Read ONCE, not per child: the fraction is of one number for the
+		// batch, not of a total siblings already spent from.
 		ParentRemaining: remaining,
 		Limits:          r.cfg.Subagent.Limits,
 		Publisher:       r.cfg.Publisher,
 		Trace:           r.cfg.Turn.Trace,
-		// The executor's surface is its run's, and every call the run
-		// makes is recorded on the run's one round — see [runRound].
+		// Every call the run makes is recorded on its one round ([runRound]).
 		Round: runRound,
-		// The parent turn, so every seat-scoped tool in the grant works.
-		// Without it a child is handed tools that always fail.
+		// The parent turn, or every seat-scoped tool in the grant fails.
 		Turn: m.turn,
-		// And the parent's own load-before-use gate, so a child cannot
-		// reach by being spawned what its parent would have had to load a
-		// skill for.
-		// Built from the CHILD's own surface, for the same reason the
-		// parent's is built from a finished one: what the guard enforces
-		// and what the catalogue showed must come from the same active
-		// list, and the child's does not exist until subagent builds it.
+		// The parent's load-before-use gate, so spawning reaches nothing
+		// the parent would need a skill for; built from the CHILD's
+		// surface, so the guard and the catalogue read one active list.
 		Workers: r.cfg.Subagent.Workers,
 		Guard: func(child *tools.Surface) tools.Guard {
 			return r.guardFor(phase.Subagent, round, child, nil).tools()
@@ -150,13 +125,10 @@ func (r *Runner) spawnEntry(ctx context.Context, m meter, ph phase.Phase, round 
 	})
 	return tools.Entry{
 		Tool: tool, Origin: tools.OriginBuiltin,
-		// NOT a known read, or the delivery check would count a turn
-		// that only spawned as having delivered something. NOT a
-		// shared-surface write either: a spawn is
-		// in-process work under the parent's own name, and marking it one
-		// would say something about the child's effects rather than about
-		// this call. It is already on subagent's own denylist, so a child
-		// can never reach it whatever these say.
+		// NOT a known read, or a turn that only spawned would count as
+		// delivering; NOT a shared-surface write, since a spawn is in-process
+		// work and the child's effects are not this call's. Subagent's
+		// denylist keeps it from children regardless.
 		Annotations: tools.Annotations{
 			ReadOnly: mcp.No, Destructive: mcp.No, OpenWorld: mcp.No,
 		},
@@ -166,24 +138,17 @@ func (r *Runner) spawnEntry(ctx context.Context, m meter, ph phase.Phase, round 
 // parentRemaining reads the seat's headroom, reporting whether spawning is
 // allowed at all.
 //
-// FAILS CLOSED, which is the opposite of what the surrounding package does
-// with a nil budget and is deliberate: nil means the operator configured no
-// cap, while an ERROR means the counter that enforces one could not be read.
-// Answering zero for the second would read as UNCAPPED and let a fan-out spend
-// without a ceiling on exactly the failure a budget exists for.
+// FAILS CLOSED on an ERROR, unlike a nil reader (no cap configured): subagent
+// reads zero as UNCAPPED, so answering zero would let a fan-out spend without
+// a ceiling on exactly the failure a budget exists for.
 //
-// AND SO DOES A READER THAT ANSWERS NOTHING LEFT. Zero from a reader is a
-// capped seat whose tightest window is spent — the engine hands no reader at
-// all to a seat nothing caps — and subagent reads a ParentRemaining of zero as
-// UNCAPPED. Passed on, an exhausted seat's fan-out got no slice, which is the
-// fail-open direction the error case is refused for; and there is nothing to
-// share, since the phase's own first call is refused in a window with no room
-// for a single token — held by the turn's meter before it is sent where the
-// meter has seen the window full, and its charge refused where it has not.
+// AND ON A READER ANSWERING NOTHING LEFT: zero from a reader is a capped seat
+// with its tightest window spent (an uncapped seat gets no reader), and passed
+// on it would read as uncapped too. Nothing is left to share: the phase's own
+// first call is refused in that window anyway.
 func (r *Runner) parentRemaining(ctx context.Context) (int, bool) {
 	if r.cfg.Subagent == nil || r.cfg.Subagent.Remaining == nil {
-		// No counter configured: the seat itself runs uncapped, so its
-		// children do too. Zero is what subagent reads as uncapped.
+		// No counter: the seat is uncapped, so its children are (zero).
 		return 0, true
 	}
 	remaining, err := r.cfg.Subagent.Remaining.Remaining(ctx)

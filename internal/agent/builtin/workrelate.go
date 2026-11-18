@@ -18,19 +18,15 @@ import (
 
 // The set-valued arguments, and why a bare list is refused.
 //
-// A collection on a work item is carried WHOLE by the record that touches it,
-// so `waiting_on: ["ENG-7"]` read as the whole set replaces every other
-// blocker the item had — silently, and with a wake announcing the removal of
-// edges nobody meant to touch. That exact shape is what `watchers: [me]` did
-// to the watcher set before the watch gesture existed.
-//
-// So these arguments take ONE of two explicit shapes and never a bare list:
+// A record carries a work item's collection WHOLE, so `waiting_on: ["ENG-7"]`
+// read as the whole set silently replaces every other blocker, with a wake
+// announcing removals nobody meant. So these take one of two shapes:
 //
 //	{"set": ["ENG-7", "ENG-9"]}          — the whole set, replacing
 //	{"add": ["ENG-7"], "remove": ["ENG-2"]} — a delta against what is there
 //
-// and a bare list is refused NAMING BOTH, because the two readings of it are
-// opposite and a tool that guessed would be right half the time.
+// and a bare list is refused naming both: its two readings are opposite, and
+// a guess is right half the time.
 
 // setArg is one set-valued argument as a model stated it.
 type setArg struct {
@@ -58,9 +54,8 @@ func parseSetArg(args map[string]any, name string) (setArg, bool, string) {
 	if !held || raw == nil {
 		return setArg{}, false, ""
 	}
-	// NULL IS ABSENT ([argval.Object]), as the check reads it: `{"set":
-	// null}` is a set this call does not state, never an empty one, which
-	// cleared every relation.
+	// Null is absent ([argval.Object]), as the check reads it: `{"set":
+	// null}` states no set, never an empty one clearing every relation.
 	object, ok := argval.Object(raw)
 	if !ok {
 		return setArg{}, false, fmt.Sprintf("`%s` takes an object saying which "+
@@ -107,11 +102,10 @@ func parseSetArg(args map[string]any, name string) (setArg, bool, string) {
 }
 
 // refList is one list of references, trimmed and deduped, order preserved,
-// read as every list of strings is ([argval.Strings]): the single reference a
-// model sends for a list of one is that list, and a number is the reference it
-// spells. ok is false for anything else, which the caller refuses by name:
-// read as no list, `{"set": 12}` cleared every relation and was answered
-// applied.
+// read as every list of strings is ([argval.Strings]): a single reference is a
+// list of one, and a number the reference it spells. ok is false for anything
+// else, which the caller refuses by name: read as no list, a `set` would
+// clear every relation and be answered applied.
 func refList(raw any) ([]string, bool) {
 	if raw == nil {
 		return nil, true
@@ -147,11 +141,9 @@ func (d WorkDeps) resolveRefs(ctx context.Context, tool, field string,
 // dependencyChange composes the two dependency arguments into the sequence's
 // own request, resolving each reference to an id.
 //
-// THE `set` SHAPE IS A DELTA HERE, computed against what the item already has,
-// because the two ends of a dependency are two commits: the sequence has to
-// know which edges ARRIVED and which LEFT to write the right mirror on the
-// right counterparty. A whole-set gesture that reached the writer as a set
-// would give it no way to tell one from the other.
+// A `set` becomes a delta against the item's edges here: a dependency's two
+// ends are two commits, and the sequence must know which edges arrived and
+// which left to write each mirror on the right counterparty.
 func (d WorkDeps) dependencyChange(ctx context.Context, tool string,
 	args map[string]any, task worklet.Task) (worklet.DependencyChange, *tools.Result) {
 
@@ -218,13 +210,11 @@ func delta(have, want []string) (add, remove []string) {
 }
 
 // inertRelations is the `linked` and `linked_pages` half: edges that cost
-// bytes and nothing else, so they ride the item's own patch rather than a
-// sequence.
+// bytes and nothing else, so they ride the item's own patch, not a sequence.
 //
-// A PAGE REFERENCE IS NOT RESOLVED AS A TASK. Its other end is a knowledge-base
-// page id, the edge rides the task's own record and there is no write to the
-// pages log at all — which is why it is a separate argument rather than a
-// `kind` on one list.
+// A page reference is not resolved as a task: its other end is a knowledge
+// base page id, and the edge rides the task's own record with no write to the
+// pages log, hence a separate argument rather than a `kind` on one list.
 func (d WorkDeps) inertRelations(ctx context.Context, turn *turnctx.Turn, tool string,
 	args map[string]any, task worklet.Task) (*worklet.RelationIntent, *tools.Result) {
 
@@ -256,18 +246,14 @@ func (d WorkDeps) inertRelations(ctx context.Context, turn *turnctx.Turn, tool s
 		}
 		touched = true
 		if stated.Whole {
-			// A WHOLE SET OF ONE KIND IS A DELTA OVER THAT KIND ALONE,
-			// never over the collection: the relation set holds every
-			// kind together, and a `set` that reached the writer whole
-			// would drop the item's duplicates, pages and dependency
-			// edges along with the links it replaced.
+			// A whole set of one kind is a delta over that kind alone: the
+			// relation set holds every kind, and a whole `set` would drop
+			// duplicates, pages and dependency edges with the links.
 			stated.Add, stated.Remove = delta(othersOfKind(task, side.kind), stated.Values)
 		}
 		for _, id := range stated.Add {
-			// UNSIGNED HERE, because the writer signs the edges it
-			// authors with the actor it is already acting as — and a
-			// second rule stating the same handle is how one of them
-			// comes to state a different one.
+			// Unsigned: the writer signs with the actor it acts as, and a
+			// second rule stating the handle is how the two come to differ.
 			intent.Add = append(intent.Add, worklet.Relation{
 				Kind: side.kind, Other: id,
 			})
@@ -278,26 +264,15 @@ func (d WorkDeps) inertRelations(ctx context.Context, turn *turnctx.Turn, tool s
 			})
 		}
 	}
-	// AND THE DUPLICATE LINK, which belongs here and nowhere else: it is
-	// one edge on one item with no second end, exactly as a link is.
-	//
-	// IN THE SAME INTENT, because a patch carries ONE relation gesture —
-	// stated apart, whichever ran last silently dropped the other's edges,
-	// and stated as the whole collection (which is what this used to do)
-	// it dropped every relation the item already had.
-	//
-	// A SCALAR rather than the `set` grammar the two above use: an item is
-	// a duplicate of ONE other item, and offering a list would invite one
-	// nothing downstream means.
-	//
-	// AND IT IS TAKEN OFF THE WAY `assignee` IS: null or "" clears it. A
-	// link drawn by mistake was otherwise there for good, since no argument
-	// named the edge to remove; the item's own duplicate edges are what it
-	// clears, and an item that marks nothing a duplicate clears nothing.
+	// The duplicate link: one edge on one item with no second end, as a
+	// link is. In the same intent, because a patch carries ONE relation
+	// gesture and separate ones drop each other's edges. A scalar, not the
+	// `set` grammar: an item duplicates ONE other. Null or "" clears the
+	// item's own duplicate edges, as for `assignee`, so a mistaken link can
+	// be taken off.
 	if raw, held := args["duplicate_of"]; held {
-		// READ AS EVERY STRING ARGUMENT IS ([argval.String]): null and "" are
-		// the clear, and an object or a list is no reference and no clear,
-		// left to the schema check that names it.
+		// Read as every string argument is ([argval.String]): null and "" clear;
+		// an object or a list is neither, left to the schema check that names it.
 		text, readable := argval.String(raw)
 		switch ref := strings.TrimSpace(text); {
 		case ref != "":
@@ -415,15 +390,14 @@ func othersOfKind(task worklet.Task, kind worklet.RelationKind) []string {
 }
 
 // resolveThread reads the conversation a comment is joining, or returns the
-// refusal — as a result carrying a read's error where one failed, for the
-// reason [WorkDeps.resolveRef] gives.
+// refusal, carrying a failed read's error for the reason [WorkDeps.resolveRef]
+// gives.
 //
-// THE PARTICIPANTS ARE BEST EFFORT AND THE ANSWER IS NOT, which is the reader's
-// own split: a participant list that came up short wakes somebody as a watcher
-// instead of under `thread`, while an `answers` resolved wrongly closes
-// somebody else's question. So a read failure here empties the first and
-// refuses the second — and the refusal is the reader's own text, which already
-// names the candidates when the ask is ambiguous.
+// Participants are best effort and the answer is not (the reader's own split):
+// a short participant list wakes somebody as a watcher rather than under
+// `thread`, while a wrong `answers` closes somebody else's question. So a read
+// failure empties the first and refuses the second, in the reader's own text,
+// which names the candidates when the ask is ambiguous.
 func (d WorkDeps) resolveThread(ctx context.Context,
 	q worklet.ThreadQuery) (worklet.ResolvedThread, *tools.Result) {
 
@@ -431,11 +405,8 @@ func (d WorkDeps) resolveThread(ctx context.Context,
 		return worklet.ResolvedThread{}, refusalOf(unconfigured(CommentOnWorkTool))
 	}
 	if q.ReplyTo == "" && q.Answers == "" && q.Ask == "" {
-		// NOTHING TO RESOLVE. A top-level remark that asks nobody and
-		// answers nothing still has to be checked for an INFERRED
-		// answer, though — which is why this returns early only when
-		// the caller named no thread at all and is not the kind of
-		// comment an inference would apply to.
+		// No thread named, but a top-level remark may still close an
+		// INFERRED answer, which inferOnly checks.
 		return d.inferOnly(ctx, q)
 	}
 	return d.readThread(ctx, q)
@@ -465,16 +436,13 @@ func (d WorkDeps) readThread(ctx context.Context,
 // answerRefusal is the reader's refusal of an `answers`, in its own words, or
 // false when the read itself failed.
 //
-// NOT A READ FAILURE, which is what every one of these used to be reported as:
-// a comment that answered a remark, somebody else's question or one already
-// answered was told "could not read the tracker … do not conclude the item
-// does not exist" and to try again — a retry that refused identically, over a
-// sentence that had dropped the one thing the reader said, which comment was
-// wrong and why. The reader's error rides beneath the class ([refusedBy]), so a
-// caller branching on the tracker's sentinel still finds it. Each has its own
-// class because each asks something different of the caller: a mistyped id is not_found, a question that was somebody
-// else's is forbidden, an answered one is already_answered, and a remark or a
-// removed comment is an argument to change.
+// Not a read failure, whose "try again" invites a retry that refuses
+// identically and drops the reader's sentence saying which comment was wrong.
+// The reader's error rides beneath the class ([refusedBy]) for a caller
+// branching on the tracker's sentinel. Each class asks something different: a
+// mistyped id is not_found, somebody else's question forbidden, an answered
+// one already_answered, and a remark or a removed comment an argument to
+// change.
 func answerRefusal(err error) (tools.Result, bool) {
 	var class tools.Refusal
 	switch {
@@ -490,16 +458,13 @@ func answerRefusal(err error) (tools.Result, bool) {
 		return tools.Result{}, false
 	}
 	if class == tools.RefusalAlreadyAnswered {
-		// NOT "CHANGE `answers`": nothing about the call is wrong, the
-		// question simply has its answer — and the reader's sentence
-		// names who gave it and when, which is where to look.
+		// Not "change `answers`": the call is right and the question has its
+		// answer; the reader's sentence names who gave it and when.
 		return refusedBy(class, err, fmt.Sprintf("%s was refused: %s. Nothing "+
 			"was posted.", CommentOnWorkTool, worklet.Sentence(err))), true
 	}
-	// THE ARGUMENT THE SENTENCE NAMES, not always `answers`: a choice
-	// that is not one of the ask's options is refused through this same
-	// read, and telling that caller to change `answers` sent it to edit
-	// the one argument that was right.
+	// The argument the sentence names, not always `answers`: a choice
+	// outside the ask's options is refused through this same read.
 	return refusedBy(class, err, fmt.Sprintf("%s was refused: %s. Nothing was "+
 		"posted — change the argument this names (`answers`, or `choice`) "+
 		"and comment again.", CommentOnWorkTool, worklet.Sentence(err))), true
@@ -516,11 +481,9 @@ func (d WorkDeps) inferOnly(ctx context.Context,
 		if errors.As(err, &ambiguous) {
 			return worklet.ResolvedThread{}, refusalOf(failed(ambiguousText(ambiguous)))
 		}
-		// BEST EFFORT ON THIS PATH ALONE. The caller asked for no
-		// answer and named no thread, so a read failure costs an
-		// inference nobody requested — failing their comment for it
-		// would refuse a write for a reason unrelated to what they
-		// asked.
+		// Best effort on this path alone: the caller asked for no answer,
+		// so a read failure costs only an unrequested inference, never
+		// their comment.
 		return worklet.ResolvedThread{}, nil
 	}
 	return resolved, nil
@@ -529,19 +492,16 @@ func (d WorkDeps) inferOnly(ctx context.Context,
 // ambiguousQuestionBytes is how much prose question text the refusal carries
 // whole before it names the rest by id.
 //
-// Eight kibibytes: a structured ask's question is at most
-// [decision.MaxQuestion] and always carried, and an ask in prose is
-// carried whole while they fit — the refusal is read as a tool result, and
-// five questions at their 32 KiB cap would be most of an answer spent on
-// asking which one.
+// 8 KiB: a structured ask's question ([decision.MaxQuestion]) is always
+// carried, prose ones whole while they fit. The refusal is a tool result, and
+// five questions at their 32 KiB cap would spend most of it asking which one.
 const ambiguousQuestionBytes = 8 << 10
 
 // ambiguousText is the refusal that lists the open questions, because "which
 // one" is the whole of what the caller has to decide.
 //
-// EACH QUESTION WHOLE OR BY REFERENCE, never cut. It used to show the first
-// hundred and twenty characters of each, unmarked — so two questions that
-// opened the same way read as one question asked twice.
+// Each question whole or by reference, never cut: two cut questions that open
+// alike read as one asked twice.
 func ambiguousText(e *worklet.ErrAmbiguousAnswer) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d open questions on this item are addressed to you, so "+
@@ -572,16 +532,11 @@ func ambiguousText(e *worklet.ErrAmbiguousAnswer) string {
 // fieldMap turns a model's `fields` object into the raw values a record
 // carries, or returns the model-facing refusal.
 //
-// THE KEYS ARE LEFT AS THEY CAME — a slug, a name or an id — because the
-// resolution belongs in the same snapshot as the declarations it resolves
-// against: a slug resolved here, against a catalogue the write then lands
-// beside, is a value filed under whichever field held that spelling a moment
-// ago. The writer does it inside its own decide.
-//
-// THE VALUES ARE LEFT AS THEY CAME TOO, uncoerced. The whole coercion table is
-// the writer's, for the same reason and one more: it is the place that can
-// REFUSE, and a tool that pre-coerced would be a second implementation of
-// rules stated once.
+// Keys (slug, name or id) and values are left as they came. The writer
+// resolves keys inside its own decide, in the snapshot of the declarations the
+// write lands beside; resolved here, a slug could file under whichever field
+// held that spelling a moment ago. Coercion is the writer's too: it is where a
+// value is refused, and pre-coercing would be a second copy of those rules.
 func fieldMap(raw any) (map[string]json.RawMessage, string) {
 	object, ok := raw.(map[string]any)
 	if !ok {

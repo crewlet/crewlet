@@ -18,11 +18,10 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// claudeAssistant is one assistant line of a Claude Code stream, as 2.1.310
-// streams one (probe P2's run streams): a block of message id, its usage (raw
-// JSON, "" for none) and, on a subagent's line, the subagent's own keys; on the
-// main thread's where parent is "null", a subagent's where it is a call's
-// quoted id, and with no parent_tool_use_id at all where it is "".
+// claudeAssistant is one assistant line of a Claude Code 2.1.310 stream (probe
+// P2's): message id, its usage (raw JSON, "" for none) and its thread. Parent
+// "null" is the main thread's, a call's quoted id a subagent's (with the
+// subagent's own keys), and "" leaves parent_tool_use_id out.
 func claudeAssistant(id, parent, usage string) string {
 	line := `{"type":"assistant","message":{"id":"` + id + `","type":"message","role":"assistant",` +
 		`"model":"claude-sonnet-4-5","content":[{"type":"text","text":"working"}]`
@@ -39,21 +38,20 @@ func claudeAssistant(id, parent, usage string) string {
 	return line + `,"session_id":"5e55f1d0-0000-4000-8000-00000000c1a0","uuid":"u-` + id + `"}`
 }
 
-// claudeUsageOf is a usage of input uncached tokens, read from the cache and
-// written to it: the request's input side, input + read + write.
+// claudeUsageOf is a usage whose input side is input + read + write: uncached,
+// cache-read and cache-written tokens.
 func claudeUsageOf(input, read, write int) string {
 	return fmt.Sprintf(`{"input_tokens":%d,"output_tokens":1,"cache_creation_input_tokens":%d,`+
 		`"cache_read_input_tokens":%d}`, input, write, read)
 }
 
 // THE NEWEST MAIN-THREAD REQUEST OF A CLAUDE CODE RUN IS READ OFF ITS STREAM, and
-// never a later subagent's line. Lines shaped as the measured streams of probe
-// P2 (2.1.310, cases c, g and h): every main-thread assistant line carries
-// `parent_tool_use_id` null, every subagent's, a foreground's and a background's,
-// the id of the call that started it, and a message's lines repeat its usage;
-// a background subagent's line can come after the main thread's newest. The
-// figure is the newest main-thread request's input side, its uncached input,
-// cache reads and cache writes, the run's own.
+// never a later subagent's line. Shaped as probe P2's measured streams (2.1.310,
+// cases c, g and h): main-thread lines carry `parent_tool_use_id` null, a
+// foreground or background subagent's the id of the call that started it, a
+// message's lines repeat its usage, and a background subagent's line can follow
+// the main thread's newest. The figure is the newest main-thread request's
+// uncached input, cache reads and cache writes, the run's own.
 //
 // Mutation: read the usage whatever its parent_tool_use_id, and a later
 // subagent's figure is taken; sum the figures, and a message's lines and its
@@ -78,12 +76,11 @@ func TestAClaudeRunsLastMainThreadRequestIsReadOffItsStream(t *testing.T) {
 	}
 }
 
-// A LINE WITH NO THREAD KEY IS NO MAIN-THREAD REQUEST. Every stream line measured
-// carries parent_tool_use_id, null on the main thread's own; a line that carries
-// none is of a shape this build does not read, so its usage is no figure, never
-// read as the main thread's, which a subagent's could then be. And the
-// collection says so at warning, since a release that drops the key leaves
-// every job unmeasured.
+// A LINE WITH NO THREAD KEY IS NO MAIN-THREAD REQUEST. Every measured stream line
+// carries parent_tool_use_id; one without it is of a shape this build does not
+// read, so its usage is no figure (read as the main thread's, a subagent's
+// could be). It is said at warning: a release that drops the key leaves every
+// job unmeasured.
 //
 // Mutation: read an absent key as the main thread's, and the figure is taken.
 func TestALineWithNoThreadKeyIsNoMainThreadRequest(t *testing.T) {
@@ -101,12 +98,10 @@ func TestALineWithNoThreadKeyIsNoMainThreadRequest(t *testing.T) {
 }
 
 // A MAIN-THREAD USAGE THAT DOES NOT READ GIVES NO FIGURE, NEVER AN EARLIER ONE. The
-// usage is read by the layer's one rule for a usage object (claudethread.go's
-// readUsage): each count a whole number in digits where present, so a null count
-// and a negative one are no reading, and the newest request's figure is then
-// unknown. An earlier request's figure taken in its place could be far less than
-// the newest carried, and the floor of a relaunch that continues the copy would
-// be held to less than it sends.
+// usage is read by claudethread.go's readUsage, each count present a whole
+// number in digits, so a null or negative count leaves the newest figure
+// unknown. An earlier, possibly far smaller figure in its place would hold a
+// continuing relaunch's floor to less than it sends.
 //
 // Mutation: read the usage loosely, a null count as 0 and a negative one as
 // written, and the line's figure is taken.
@@ -136,11 +131,10 @@ func TestAMainThreadUsageThatDoesNotReadGivesNoFigure(t *testing.T) {
 }
 
 // A LINE PAST THE STREAM'S BOUND GIVES NO FIGURE, NEVER AN EARLIER ONE. The line is
-// skipped unread, and it may be a later request's, which carried anything: so a
-// Claude Code stream's newest figure is cleared by a skipped line after it, and
-// an OpenCode stream's reading of its session's message list ends with none at
-// one before any page that measured a prompt, since the page it may be held the
-// figure, and a later page's would be an older request's.
+// skipped unread and may be a later request's: so it clears a Claude Code
+// stream's figure before it, and ends an OpenCode stream's reading of the
+// message list with none when it comes before any page that measured a prompt,
+// since it may have held the figure and a later page is an older request's.
 //
 // Mutation: keep a Claude Code figure across a skipped line, or read on past one
 // in an OpenCode stream, and a figure is taken.
@@ -166,11 +160,9 @@ func TestAContextLinePastTheLineBoundGivesNoFigure(t *testing.T) {
 }
 
 // A LINE CUT SHORT GIVES NO FIGURE, NEVER AN EARLIER ONE. A harness killed while it
-// writes a line, by its memory limit with no end asked, leaves its stream's last
-// line cut short, which no read ever has whole and the decoder cannot read: it
-// may be the newest request's assistant line, which carried anything, so the
-// figure before it is no measure of the newest request, as it is not before a
-// line past the stream's bound, and the collection says why at info, since the
+// writes a line (by its memory limit, no end asked) leaves its last line cut
+// short; it may be the newest request's assistant line, so the figure before it
+// measures nothing, as before a line past the bound. It is said at info: the
 // stream is of a shape this build reads.
 //
 // Mutation: pass over a line that does not decode as though it were not there,
@@ -223,9 +215,8 @@ func openCodeAbortedWith(id string, n int) string {
 		`"tokens":{"input":5000,"output":30,"reasoning":0,"cache":{"read":200,"write":0}}}`, id, strings.Repeat("a", n))
 }
 
-// openCodeSettledWith is a settled step, as [openCodeSettled] is with 1015
-// tokens of input uncached and 200 read from the cache, whose content holds a
-// text of n bytes: a step whose page is about that size.
+// openCodeSettledWith is [openCodeSettled] with 1015 uncached and 200 cache-read
+// input tokens, its content a text of n bytes: a page of about that size.
 func openCodeSettledWith(id string, n int) string {
 	return fmt.Sprintf(`{"id":%q,"time":{"created":1794632160771,"completed":1794632160784},"type":"assistant",`+
 		`"agent":"build","content":[{"type":"text","text":%q}],"finish":"stop","cost":0,`+
@@ -256,12 +247,10 @@ func openCodeRunStep(message string) string {
 }
 
 // OPENCODE'S FIGURE IS ITS SESSION'S NEWEST SETTLED MESSAGE THAT MEASURED A PROMPT,
-// read off the pages of its message list the run's script printed, newest first,
-// one message a page: a step interrupted or refused, the step still in flight
-// and one whose prompt measured nothing are passed over, as an export's are
-// (measure.go's measuredPrompt), and the first that measured one is the figure;
-// the run's own where its stream named that step, and else an earlier job's
-// request of the session it took up.
+// read off the message-list pages the run's script printed, newest first, one
+// message a page. Interrupted, refused, in-flight and unmeasured steps are
+// passed over, as an export's are (measure.go's measuredPrompt); the figure is
+// the run's own where its stream named that step, else an earlier job's.
 //
 // Mutation: take the newest message whatever it holds, or one in flight, and a
 // failed or an unsettled step's figure is taken; read every figure as the run's
@@ -297,13 +286,11 @@ func TestOpenCodesFigureIsItsNewestSettledMeasuredMessage(t *testing.T) {
 }
 
 // THE RULES FOR AN EXPORT AND FOR THE MESSAGE LIST ARE ONE. A session's measure is
-// read off two documents: the export a take streams out of its box (the
-// capture's), and the session's own message list as the job ends (the job's
-// record's). Both read a message by the one rule, so the real export each
-// release this build drives printed for a real session gives one figure either
-// way: its steps handed to the list's reading one a page, newest first, give
-// the export's own 1215, the step that answered "Carry on.", behind two the
-// session was interrupted in and one its provider refused.
+// read off the export a take streams out of its box (the capture's) and the
+// message list as the job ends (the job's record's), both by one rule. So each
+// release's real export gives one figure either way: its steps handed to the
+// list's reading one a page, newest first, give the export's own 1215, the step
+// that answered "Carry on.", behind two interrupted and one its provider refused.
 //
 // Mutation: drop the error check from the rule, and an interrupted step's
 // figure is taken, by both readings alike.
@@ -344,11 +331,10 @@ func TestTheRulesForAnExportAndForTheAPIAreOne(t *testing.T) {
 	}
 }
 
-// AN EXPORT'S TOKENS ARE READ BY THEIR KEYS EXACTLY AS WRITTEN. A step's tokens are
-// decoded as OpenCode's own JSON.parse reads them, so a key that differs from
-// one they hold only in case is no count: decoded by encoding/json into the
-// message's fields, `INPUT` was taken for `input`, the last of the two written
-// winning, and a step's prompt read as what that key said.
+// AN EXPORT'S TOKENS ARE READ BY THEIR KEYS EXACTLY AS WRITTEN, as OpenCode's own
+// JSON.parse reads them: a key differing from one only in case is no count,
+// where encoding/json's case-insensitive match takes `INPUT` for `input`, the
+// last written winning.
 //
 // Mutation: decode the tokens by encoding/json into the message's fields again,
 // and the step reads as the case-differing key's 999,990 tokens.
@@ -363,12 +349,11 @@ func TestAnExportsTokensAreReadByTheirKeysExactlyAsWritten(t *testing.T) {
 }
 
 // A MESSAGE THAT DOES NOT READ ENDS THE READING WITH NONE, NEVER AN OLDER FIGURE. A
-// step whose measured values are of another type than OpenCode writes them, its
-// tokens a string, is no message read as one that measured nothing: it may be the
-// newest request's step, which carried anything. So on a page of the session's
-// list it ends the reading with no figure, said as a reading that failed, and in
-// an export it leaves the capture unmeasured; passed over, either would hand the
-// older step's figure on as the newest request's.
+// step whose measured values are of another type than OpenCode writes (its
+// tokens a string) may be the newest request's, which carried anything. So on a
+// list page it ends the reading with no figure, as a failed reading, and in an
+// export it leaves the capture unmeasured; passed over, either would hand on the
+// older step's figure.
 //
 // Mutation: read on past a page that does not decode, or pass over a value of
 // another type than its field's, and the older step's 1215 is taken.
@@ -395,11 +380,10 @@ func TestAMessageThatDoesNotReadEndsTheReadingWithNone(t *testing.T) {
 	})
 }
 
-// ONLY WHAT THE MEASURE READS IS HELD TO ITS TYPE. Of a step's time the measure reads
-// when it settled, and of its tokens the prompt's counts: a value it never reads, a
-// step's `created` or its reply's `output`, of another type than OpenCode writes
-// it is no reason to lose the figure the step's prompt and its completion state,
-// on a page of the session's list and in an export alike.
+// ONLY WHAT THE MEASURE READS IS HELD TO ITS TYPE: when a step settled and its
+// prompt's counts. A value it never reads (a step's `created`, its reply's
+// `output`) of another type than OpenCode writes loses no figure, on a list
+// page and in an export alike.
 //
 // Mutation: decode the step's time whole, its `created` among it, or its reply's
 // count with its prompt's, and the step reads as a message that does not.
@@ -417,11 +401,11 @@ func TestOnlyWhatTheMeasureReadsIsHeldToItsType(t *testing.T) {
 }
 
 // A FOLLOWED OPENCODE STREAM KEEPS NO MESSAGE IDS. Only a collection asks whose
-// step its session's newest request was, so the decoder keeps the steps its
-// run's events name while no live reading follows the stream: a live reading
-// holds its decoder for as long as somebody watches, and what it holds is to
-// stay bounded however long the run. So neither the ids it read before the
-// reading first took its entries, nor any it reads after, are held.
+// step the newest request was, so the decoder keeps the ids its run's events
+// name only while no live reading follows: a live reading holds its decoder as
+// long as somebody watches, and what it holds stays bounded however long the
+// run. Neither the ids read before it first took its entries nor any after are
+// kept.
 //
 // Mutation: keep the ids while following, or keep the ones read before the
 // first entries were taken, and the decoder holds them.
@@ -432,11 +416,10 @@ func TestAFollowedOpenCodeStreamKeepsNoMessageIds(t *testing.T) {
 	}
 }
 
-// THE MEASURE RIDES OUT OF THE COLLECTION, for both harnesses. A job's collection
-// hands back what its newest request carried beside the rest of its result
-// (sandbox.Result.LastRequest), whichever document the result is: Claude Code's
-// result file, read in place of the stream's own result, and OpenCode's stream,
-// which is its result and names no result file.
+// THE MEASURE RIDES OUT OF THE COLLECTION, for both harnesses: a collection hands
+// back sandbox.Result.LastRequest whichever document the result is, Claude
+// Code's result file (read in place of the stream's own result) or OpenCode's
+// stream, which is its result and names no result file.
 //
 // Mutation: set the measure inside the block that reads the result file, and an
 // OpenCode job, which has none, hands back no figure.
@@ -478,13 +461,11 @@ func TestTheMeasureRidesOutOfTheCollection(t *testing.T) {
 }
 
 // A READING THAT FAILED IS SAID AT WARNING, and a run that left nothing to read at
-// info. A Claude Code stream whose assistant lines carry a usage and none says it is
-// the main thread's is of a shape this build does not read, a release that dropped
-// the key, and every job of that release goes unmeasured, which an operator has to
-// hear of; a run that made no request is no such thing.
+// info. A Claude Code stream whose usage lines lack the main-thread key is a
+// release that dropped it, and every job of that release goes unmeasured, which
+// an operator has to hear of; a run that made no request is no such thing.
 //
-// NOT PARALLEL: it reads the process's log, which every parallel case writes to,
-// and a sequential test runs with none of them.
+// NOT PARALLEL: it reads the process's log, which every parallel case writes to.
 //
 // Mutation: say every reading with no figure at info, and the first case is red.
 func TestAReadingThatFailedIsSaidAtWarning(t *testing.T) {
@@ -531,15 +512,14 @@ func TestAReadingThatFailedIsSaidAtWarning(t *testing.T) {
 	}
 }
 
-// openCodeContextFixture is one file a real OpenCode run left of its session's
-// message list, testdata/opencode/<version>/context/<name>: a REAL one, of the
-// releases a run's script was read against, 2.0.32 and 2.2.7, each run in a
-// container against an OpenAI-compatible stub model API (C8's probe): run1.jsonl
-// is the `--format json` stream of a run that made one call and answered, and
-// page-a1.json what `session.message.list` answered after it, the newest
-// assistant message a page; run2.jsonl is the stream of the next run, which its
-// provider refused, page-b1.json the list's first page after it and page-b2.json
-// the page its cursor names. Byte for byte as OpenCode printed them.
+// openCodeContextFixture is testdata/opencode/<version>/context/<name>, byte for
+// byte what a REAL OpenCode run printed, for each release in
+// [openCodeContextVersions], run in a container against an OpenAI-compatible
+// stub (C8's probe). run1.jsonl is the `--format json` stream of a run that made
+// one call and answered, page-a1.json what `session.message.list` answered after
+// it (the newest assistant message a page); run2.jsonl is the next run's, which
+// its provider refused, page-b1.json the list's first page after it and
+// page-b2.json the page its cursor names.
 func openCodeContextFixture(t *testing.T, version, name string) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", "opencode", version, "context", name))
@@ -557,15 +537,12 @@ func streamLines(stream string) []string {
 	return strings.Split(strings.TrimRight(stream, "\n"), "\n")
 }
 
-// A REAL RUN'S STREAM NAMES THE STEPS ITS SESSION'S LIST HOLDS, by the one id: what
-// OpenCode 2.0.32 and 2.2.7 printed of two real runs of one session and of its
-// message list after each. The run that made one call and answered named both
-// its steps in its stream (`part.messageID`), and the list's newest page after it
-// holds the step that answered under that id, so the figure is that run's own;
-// the next run, which its provider refused, made no step that measured a
-// prompt, so the list's second page after it, by the first's cursor, holds the
-// earlier run's step, which this run's stream never named: the session's,
-// never this run's own.
+// A REAL RUN'S STREAM NAMES THE STEPS ITS SESSION'S LIST HOLDS, by one id, in two
+// real runs of one session ([openCodeContextFixture]). The run that answered
+// named its steps (`part.messageID`), and the list's newest page after it holds
+// the answering step under that id: the run's own figure. The next run, refused,
+// measured no prompt, so the list's second page holds the earlier run's step,
+// which its stream never named: the session's figure, never the run's own.
 //
 // Mutation: keep none of the ids the run's stream names, and the run that
 // answered reads as one that made no request of its own.
@@ -592,14 +569,11 @@ func TestARealRunsStreamNamesTheStepsItsSessionsListHolds(t *testing.T) {
 }
 
 // THE SCRIPT ASKS THE SESSION'S NEWEST ASSISTANT MESSAGES A PAGE AT A TIME, of the
-// run's own server, once the run has ended and its session is exported: by the
-// session's id, its assistant messages alone, one a page, and the next page by
-// the cursor the page before answered, read off the answer's own text. Against
-// the pages a real OpenCode run's server answered after a run its provider
-// refused, the first page is that refused step and the second the step that
-// answered before it, which is the figure; the run's own stream named neither
-// as a step of its own, so the figure is an earlier job's request of the
-// session.
+// run's own server, after the run ended and its session is exported: by session
+// id, assistant messages only, one a page, the next page by the cursor read off
+// the previous answer's text. Against a real server's pages after a refused run,
+// the first page is the refused step and the second the earlier answering step,
+// the figure; the run's stream named neither, so it is an earlier job's.
 //
 // Mutation: ask an operation OpenCode's API has no such name for, and nothing is
 // asked; ask one page only, and the refused step's page gives no figure.
@@ -681,10 +655,9 @@ func listed(t *testing.T, run scriptRun) []string {
 }
 
 // THE SCRIPT STOPS AT A PAGE WITH NO FAILED MESSAGE: the newest message that did
-// not fail is the figure, or a reason to stop with none, so a run that ended
-// cleanly asks one page. Against the page a real OpenCode run's server answered
-// after a run that made one call and answered, which names that answer's step,
-// the figure is that step's, the run's own.
+// not fail is the figure, or a reason to stop with none, so a cleanly ended run
+// asks one page. Against a real server's page after a run that answered, which
+// names that step, the figure is the run's own.
 //
 // Mutation: ask every page the bound allows, and a page past the one with no
 // failed message is asked.
@@ -718,11 +691,11 @@ func TestTheScriptStopsAtAPageWithNoError(t *testing.T) {
 	}
 }
 
-// A PAGE PAST THE BUDGET IS SAID AND ENDS THE READING. A message carries its content
-// whole, an image a tool read among it as a data URI, so a page is bounded in
-// count alone: one that would take the pages past what they may put into the
-// stream in all is said by its size alone, never printed, and nothing after it
-// is asked, so the figure is none, never an older page's.
+// A PAGE PAST THE BUDGET IS SAID AND ENDS THE READING. A message carries its
+// content whole (an image a tool read as a data URI), so a page is bounded in
+// count alone: one that would take the pages past their total budget is said
+// by its size, never printed, and nothing after it is asked, so the figure is
+// none, never an older page's.
 //
 // Mutation: print the page whatever its size, and the collection reads a page
 // past what its read may carry back.
@@ -748,11 +721,10 @@ func TestAPagePastTheBudgetIsSaidAndEndsTheReading(t *testing.T) {
 }
 
 // A PAGE PAST WHAT A PIPE HOLDS IS READ WHOLE. Into a pipe, OpenCode 2.0.32 and
-// 2.1.4 stop writing an answer after a 64 KiB multiple and exit 0, and a page is
-// bounded in count alone, so the script has OpenCode write each page into a file
-// and prints it from there, as it reads every other answer of OpenCode's: a page
-// of a settled step three times what a pipe holds, from an OpenCode that cuts
-// what it writes into one, is printed whole and gives its figure.
+// 2.1.4 stop writing an answer after a 64 KiB multiple and exit 0, so the
+// script has OpenCode write each page to a file and prints it from there, as
+// with its other answers: a settled step's page three times what a pipe holds,
+// from an OpenCode that cuts what it pipes, is printed whole and gives its figure.
 //
 // Mutation: pipe the page into its file, and the page is cut at 64 KiB, which
 // reads as no figure.
@@ -775,13 +747,11 @@ func TestAPagePastWhatAPipeHoldsIsReadWhole(t *testing.T) {
 	})
 }
 
-// THE PAGES' BUDGET IS THEIRS IN ALL, NEVER A PAGE'S. What the pages put into the
-// run's stream is what the read that collects the job carries back for them, so
-// pages each within the budget and past it together are printed only while they
-// fit what is left of it: the first that does not is said by its size, and
-// nothing after it is asked. Pages of failed steps, each two fifths of the
-// budget: the first two are printed, the third is said, and the figure is none,
-// never the older page's after it.
+// THE PAGES' BUDGET IS THEIRS IN ALL, NEVER A PAGE'S: it is what the collecting
+// read carries back for them, so pages are printed only while they fit what is
+// left, the first that does not is said by its size, and nothing after it is
+// asked. With failed steps' pages of two fifths of the budget each, two are
+// printed, the third said, and the figure is none, never the older page's.
 //
 // Mutation: hold each page to the whole budget, and the third page is printed
 // and a fourth asked, the stream carrying past the budget.
@@ -820,10 +790,9 @@ func TestThePagesBudgetIsTheirsInAll(t *testing.T) {
 }
 
 // THE SCRIPT ASKS NO MORE PAGES THAN ITS BOUND. A page past the first is asked only
-// where the one before held a failed message, and never past openCodeContextPages
-// however many failed steps the session holds, newest first: a session whose
-// newest steps all failed is unmeasured rather than paged back without end, and
-// the figure is none, never one that far back.
+// where the one before held a failed message, and never past openCodeContextPages:
+// a session whose newest steps all failed is unmeasured rather than paged back
+// without end.
 //
 // Mutation: lift the bound, and every page the cursors name is asked, down to
 // the step that answered.
@@ -848,11 +817,10 @@ func TestTheScriptAsksNoMorePagesThanItsBound(t *testing.T) {
 	})
 }
 
-// THE SCRIPT ASKS NOTHING ON AN END REQUEST: a stop's, a loss's and a turn's cap end
+// THE SCRIPT ASKS NOTHING ON AN END REQUEST: a stop, a loss or a turn's cap ends
 // the job's round, which no relaunch continues in place, and the pages would
-// spend the end's wait the export needs. So a run ended on request goes from its
-// export to its login's and its server's end without asking the session's
-// message list.
+// spend the end's wait the export needs. So the run goes from its export to its
+// login's and server's end without asking the message list.
 //
 // Mutation: drop the test of the end request, and the list is asked.
 func TestTheScriptAsksNothingOnAnEndRequest(t *testing.T) {
@@ -875,12 +843,10 @@ func TestTheScriptAsksNothingOnAnEndRequest(t *testing.T) {
 	})
 }
 
-// A REQUEST WHILE THE PAGES ARE ASKED STOPS THE ASKING AT ONCE. The round a
-// request ends is one no relaunch continues in place, and the pages would spend the
-// end's wait the export needs: so a request that comes while the script waits on
-// a page — a failed step's, whose cursor names another — ends that page's call
-// (crewlet#1088's bounded call, which an end request ends where it is a page),
-// and asks no other.
+// A REQUEST WHILE THE PAGES ARE ASKED STOPS THE ASKING AT ONCE, for the reason
+// [TestTheScriptAsksNothingOnAnEndRequest] gives: a request while the script
+// waits on a failed step's page, whose cursor names another, ends that page's
+// bounded call (crewlet#1088's) and asks no other.
 //
 // Mutation: test for a request once, before the first page, and the page the
 // cursor names is asked after the request came.
@@ -907,9 +873,9 @@ func TestARequestWhileThePagesAreAskedStopsTheAsking(t *testing.T) {
 }
 
 // THE CURSOR IS THE ANSWER'S OWN. A box may have no JSON parser, so the script reads
-// the cursor as text, anchored at the answer's end, where the list puts its
-// cursor's next: a `next` key inside a message's content, which a tool's answer
-// may well hold, comes before it, and is never taken for it.
+// the cursor as text anchored at the answer's end, where the list puts it: a
+// `next` key inside a message's content, which a tool's answer may hold, comes
+// before it and is never taken for it.
 //
 // Mutation: take the first `next` key of the answer, and the page a message's
 // content named is asked.

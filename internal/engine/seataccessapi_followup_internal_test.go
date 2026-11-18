@@ -19,13 +19,11 @@ func syncingNow(a *SeatAccessAPI, kind integration.Kind) bool {
 
 // EVERY ACCESS SYNC ENDS IN ITS FOLLOW-UP, AND READS AS SYNCING UNTIL IT DOES.
 //
-// The follow-up is the check route's pass, which records what the whole
-// integration looks like after the sync. A person's action (a retry, a Done) is
-// answered once the seat's own sync is done and a save's sync runs after the
-// apply; either way the tab keeps reading again for as long as the follow-up
-// runs, so the issues, notes and card it draws are the ones the follow-up
-// records. The engine here holds no secret store, so the sync itself fails
-// with its own record, which is a sync that ran.
+// The follow-up is the check route's pass over the whole integration. Whether
+// a person's action (answered once the seat's sync is done) or a save's sync
+// (run after the apply), the tab reads as syncing while it runs, so it draws
+// what the follow-up records. With no secret store here the sync fails with
+// its own record, which still counts as a sync that ran.
 //
 // Mutation: drop the follow-up from either path, or release the mark before it
 // runs, and a case here fails.

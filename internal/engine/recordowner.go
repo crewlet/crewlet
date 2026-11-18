@@ -11,59 +11,35 @@ import (
 )
 
 // WHOSE RECORD SOMEBODY ELSE'S LOGIN NAMES: the identity directory's half of
-// [iam.OwnerOf].
+// [iam.OwnerOf]. It is the name that person ACTS under ([iam.RecordOwner]),
+// asked through the SAME tables a request of theirs resolves through — the
+// directory's row for the login, then [session.ResolveSeat] for the seat it
+// binds, refused once that seat is gone — so a second resolution here cannot
+// drift from the request path.
 //
-// # The answer is the name that person ACTS under
-//
-// A person's inbox, pins and priorities are kept under the name every write
-// they make is attributed to — [iam.RecordOwner] of the principal a request of
-// theirs resolves to. So the question "whose record is `jane.doe`'s?" has the
-// SAME answer as "what would a request from jane.doe act as?", and it is asked
-// through the SAME tables: the directory's row for the login, and
-// [session.ResolveSeat] over the organisation this node runs for the seat it
-// binds — refused once the seat is gone. A second
-// resolution written here would be the place the two drifted, and the one it
-// replaced had no directory in it at all: the login was read literally, so a
-// bound person's record was looked for, and written, where nothing of theirs
-// is kept.
-//
-// # A Tier A token is held by the configuration, not by a row
-//
-// `token:<id>` acts from the configuration alone; the directory only BINDS it,
-// through [boundRowOf]'s rule — an active machine bound to a seat — which is
-// the rule the request path applies to it. So a token login with no row names
-// the token's own record rather than nobody: its absence from the directory is
-// the ordinary state of a break-glass credential, not the absence of one.
-//
-// BUT ONLY A TOKEN THIS NODE'S `api.auth.tokens` DECLARES. The holder of a
-// token login is its Tier A entry, and a login no entry declares is held by
-// nobody — whatever the directory says, since no credential can act as it.
-// Answered as its own record, a mistyped `token:opps` was somebody's record:
-// an administrator's `set_priorities` wrote and woke a priority queue under a
-// name no credential has, and the inbox and pins routes wrote the same
-// phantom. The colleague resolver it replaced had refused that name, which is
-// the typo guard `set_priorities` exists to keep.
+// A Tier A `token:<id>` is held by its configuration entry, not a row: the
+// directory only binds it ([boundRowOf]'s rule, the request path's), so a
+// token with no row is its own record. But only a token THIS node's
+// `api.auth.tokens` declares: any other is nobody's whatever the directory
+// says, as no credential acts as it — the typo guard `set_priorities` keeps.
 
 // HolderRecord answers whose record a login names — see [iam.Holders].
 //
-// BOUNDED BY [requestReadBudget] where it reads this node's own rows, for
-// [Engine.BoundSeat]'s reason: it is one keyed local read in front of a
-// request, and running out is the unknown answer — a 503 — never "nobody".
+// Its local read is bounded by [requestReadBudget], for [Engine.BoundSeat]'s
+// reason: running out is the unknown answer (a 503), never "nobody".
 func (e *Engine) HolderRecord(ctx context.Context, login string) (string, error) {
 	if e == nil {
 		return "", errNoDirectory
 	}
-	// THIS NODE'S OWN ROWS on a data node, and a data node's through the
-	// router on one without `data` — whose seats ask this as often as any —
-	// with this node's chart and its own Tier A tokens applied to either.
+	// This node's rows on a data node, a data node's through the router
+	// otherwise; this node's chart and Tier A tokens apply to either.
 	dir, ok := e.identityDirectory()
 	if !ok {
 		return "", errNoDirectory
 	}
-	// THE LOCAL READ IS BOUNDED HERE; a routed one is bounded by the router,
-	// per data node it asks ([estate.Router]), and by the caller as a whole —
-	// a two-second ceiling over a failover would end it at the first silent
-	// node and answer unknown where the next one would have answered.
+	// Only the LOCAL read is bounded here: a routed one is bounded per data
+	// node by [estate.Router], and a two-second ceiling over a failover would
+	// answer unknown at the first silent node where the next would answer.
 	if _, routed := dir.(routedIdentity); !routed {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, requestReadBudget)
@@ -74,9 +50,9 @@ func (e *Engine) HolderRecord(ctx context.Context, login string) (string, error)
 
 // declaresToken reports whether this node's Tier A declares a token by id.
 //
-// THIS NODE'S, because it is this node's guard that authenticates the token:
-// a fleet mid-rollout may legally disagree about the list, and a login the
-// node answering cannot authenticate is one nobody acts as here.
+// THIS NODE'S, because this node's guard authenticates the token: a fleet
+// mid-rollout may legally disagree about the list, and a token this node
+// cannot authenticate is one nobody acts as here.
 func (e *Engine) declaresToken(id string) bool {
 	_, held := e.tierATokens[id]
 	return held
@@ -89,14 +65,14 @@ func holderRecordOf(ctx context.Context, dir bindingDirectory, chart session.Cha
 	declared func(id string) bool, login string) (string, error) {
 
 	if id, isToken := strings.CutPrefix(login, iam.TokenLoginPrefix); isToken {
-		// THE CONFIGURATION FIRST, and it needs no read: a login no
-		// entry declares is nobody's, bound row or not.
+		// The configuration first, with no read: a login no entry
+		// declares is nobody's, bound row or not.
 		if declared == nil || !declared(id) {
 			return "", fmt.Errorf("%w: %s (no `api.auth.tokens` entry on this "+
 				"node has the id %q)", iam.ErrNoHolder, login, id)
 		}
-		// THE TOKEN'S OWN TABLE, which already refuses a row it cannot
-		// vouch for in the direction that widens.
+		// The token's own table, which refuses a row it cannot vouch
+		// for in the direction that widens.
 		row, err := boundRowOf(ctx, dir, login)
 		if err != nil {
 			return "", err
@@ -109,14 +85,11 @@ func holderRecordOf(ctx context.Context, dir bindingDirectory, chart session.Cha
 			"whether this node holds a record about it that it has not "+
 			"applied: %w", login, err)
 	}
-	// A ROW THIS NODE CANNOT VOUCH FOR IS UNKNOWN IN BOTH DIRECTIONS — the
-	// opposite of a token's binding, where only the widening one is. A
-	// stale binding names a seat the person may since have left and a
-	// stale absence one they may since have joined, and either wrong
-	// answer writes a record under a name nothing of theirs reads. An
-	// absent row is vouched for over the ROOT, which every deferral covers:
-	// nothing can say which bucket a record this node could not decode is
-	// about, and it may be the enrolment that took this login.
+	// A ROW THIS NODE CANNOT VOUCH FOR IS UNKNOWN IN BOTH DIRECTIONS (a
+	// token's binding only in the widening one): a stale binding or a stale
+	// absence each writes a record where nothing of theirs reads. An absent
+	// row is vouched for over the ROOT, which every deferral covers: a record
+	// this node could not decode may be the enrolment that took this login.
 	switch {
 	case vouch.Lag > statelog.StallGrace:
 		return "", fmt.Errorf("engine: this node is %s behind on identity "+
@@ -140,11 +113,10 @@ func holderRecordOf(ctx context.Context, dir bindingDirectory, chart session.Cha
 // under: the seat the chart resolves its binding to, or the login for a row
 // bound to none.
 //
-// THE STAGE DOES NOT MOVE IT. A suspended person's record is still their
-// seat's — an administrator unsticking the queue of somebody who is away is
-// what writing another person's record is for — and a Tier A token's inactive
-// binding was already dropped by [boundRowOf], because that token then acts
-// as itself.
+// THE STAGE DOES NOT MOVE IT: a suspended person's record is still their
+// seat's, since unsticking an absent person's queue is what writing another's
+// record is for. A Tier A token's inactive binding was already dropped by
+// [boundRowOf], as that token then acts as itself.
 func recordThrough(ctx context.Context, chart session.Chart, login string,
 	row session.PersonRow) (string, error) {
 

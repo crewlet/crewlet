@@ -254,9 +254,9 @@ func TestAReportsTopologyIsTheClosedSets(t *testing.T) {
 	}
 }
 
-// A NODE WITHOUT `data` SENDS WHAT IT DETECTS. It builds a reporter and listens to
-// its own publishes like any other, and runs no core, so a sender tied to the core
-// left it counting and queueing for nobody.
+// A NODE WITHOUT `data` SENDS WHAT IT DETECTS: it builds a reporter like any
+// other but runs no core, so a sender tied to the core counts and queues for
+// nobody.
 func TestANodeThatBuildsAReporterRunsItsSender(t *testing.T) {
 	t.Parallel()
 	boot := config.DefaultBootstrap()

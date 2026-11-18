@@ -25,14 +25,12 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A captured session read back as its transcript. Every archive a run can
-// pack here is PACKED BY THE RUNNER'S OWN SCRIPT — a run in a real box whose
-// stand-in harness files its record where the pinned layout names, or the
-// OpenCode run's script exporting through the fake opencode — so a case reads
-// exactly the bytes a collection keeps. The archives no pack makes — bytes that
-// are no gzip, a gzip of no tar, a tar member that is sparse — are built here,
-// each saying why: they are what a box's own agent could leave in place of
-// what its run packed.
+// A captured session read back as its transcript. Every archive a run can pack
+// is PACKED BY THE RUNNER'S OWN SCRIPT (a real box's stand-in harness filing
+// where the pinned layout names, or the OpenCode script exporting through the
+// fake opencode), so a case reads exactly the bytes a collection keeps. The
+// archives no pack makes (no gzip, a gzip of no tar, a sparse member) are built
+// here: a box's own agent can leave them in place of what its run packed.
 
 // plantedToken is a GitHub token's shape, which the redaction knows: what a
 // harness's record carries when a run read a file holding one.
@@ -216,21 +214,17 @@ func sameEntries(t *testing.T, got []executor.TranscriptEntry, want []shown) {
 	}
 }
 
-// A CLAUDE CODE SESSION READS AS THE TRANSCRIPT ITS HARNESS RECORDED. The
-// archive a run packed reads as its entries in order: the brief, the model's
-// words, each tool call with its input as JSON and the result that answered
-// it — named by the call's tool, a failure marked — the compaction summary,
-// a line that is no record said where it was, and then the subagent's own
-// transcript, each of its entries naming it. The harness's bookkeeping (a
-// record it wrote for itself, a snapshot of files, its system notice, a
-// session title) and the model's thinking are no entry, and neither is a tool
-// result spilled to a file or the task list. The entries carry the instant the
-// harness recorded, the page is the whole transcript, and the token a tool
-// result quoted reads redacted.
+// A CLAUDE CODE SESSION READS AS THE TRANSCRIPT ITS HARNESS RECORDED, in
+// order: the brief, the model's words, each tool call (input as JSON) and the
+// result answering it (named by the call's tool, a failure marked), the
+// compaction summary, a non-record line said where it was, then the subagent's
+// transcript, each entry naming it. The harness's bookkeeping (meta record,
+// file snapshot, system notice, session title), the thinking, a spilled tool
+// result and the task list are no entry. Entries carry the harness's instant,
+// the page is whole, and a quoted token reads redacted.
 //
 // Mutation: read the thinking or the meta record as entries, drop the
-// subagents' sidecars, name a result by nothing, or skip the redaction, and
-// the case goes red.
+// sidecars, name a result by nothing, or skip the redaction, and it goes red.
 func TestAClaudeCodeSessionReadsAsTheTranscriptItsHarnessRecorded(t *testing.T) {
 	t.Parallel()
 	failure := "FAIL cache_test.go:40 GITHUB_TOKEN=" + plantedToken
@@ -292,8 +286,7 @@ func openCodeDoc(messages ...string) string {
 
 // openCodeUser is a person's message saying text, as OpenCode 2 exports one.
 func openCodeUser(text string) string {
-	// A STRING ALWAYS ENCODES: json.Marshal fails only on a value no JSON
-	// spells, which a string never is.
+	// json.Marshal cannot fail on a string.
 	quoted, _ := json.Marshal(text)
 	return `{"id":"msg_1","type":"user","text":` + string(quoted) + `,"time":{"created":1793361600000}}`
 }
@@ -303,20 +296,16 @@ func openCodeUser(text string) string {
 // runner's floor, and the newest 2.x.
 var openCodeFixtureVersions = []string{"2.0.32", "2.2.5"}
 
-// openCodeExportFixture is the export OpenCode version printed for one
-// session: a REAL one, `opencode session export` of a session the release
-// itself ran — `@opencode/cli` installed in a container, its server's provider
-// an OpenAI-compatible stub model API answering a script — byte for byte but
-// for the container's paths, its run directory written as /work and its home
-// as /home/crewlet. The session is a run's brief, and its steps: a call that
-// completed, a read of a missing file that failed, a note steered in while that
-// read ran, a shell command run in the background and its notice, a subagent;
-// then a notice through the server's API, a shell command a person ran, a
-// skill a person activated, the agent switched to plan and back, the model
-// switched, and a compaction asked for; then, on a server started again after
-// the run's instructions changed, a run that answered, one whose provider
-// refused it, one interrupted while a call ran and one while the model was
-// writing a call; and last the session moved to another directory.
+// openCodeExportFixture is the export OpenCode version printed for one session:
+// a REAL `opencode session export` of a session the release ran (@opencode/cli
+// in a container, against an OpenAI-compatible stub model), byte for byte but for
+// the container's paths (run directory /work, home /home/crewlet). It holds a
+// brief and its steps (a completed call, a failed read with a note steered in
+// meanwhile, a background shell command and its notice, a subagent); then an
+// API notice, a person's shell command and skill, the agent switched to plan
+// and back, the model switched, a compaction; then, on a server restarted with
+// changed instructions, a run that answered, one its provider refused, one
+// interrupted mid-call and one mid-write; and last a directory move.
 func openCodeExportFixture(t *testing.T, version string) string {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", "opencode", version, "export.json"))
@@ -409,22 +398,18 @@ func openCodeFixtureTranscript(version string) []shown {
 	)
 }
 
-// AN OPENCODE SESSION READS AS THE TRANSCRIPT ITS EXPORT HOLDS — the export
-// each release this build drives printed for one session, which holds every
-// kind of message OpenCode 2 writes, packed by the run's script and read back:
-// the briefs; the model's words; each tool it called, its input as JSON, and
-// what answered it, a failure marked; the note a person steered in while a call
-// ran, as the note; and the compaction's summary. OpenCode's own messages — its
-// notices in the person's turn, an update of the instructions, a skill and a
-// shell command a person ran, an execution's end, a switched agent, model and
-// directory — the steps' reasoning, and the step its provider refused, which
-// wrote nothing, are no entry. Every entry is dated, as every message of the
-// export says when it was recorded.
+// AN OPENCODE SESSION READS AS THE TRANSCRIPT ITS EXPORT HOLDS: each driven
+// release's real export (every kind of message OpenCode 2 writes), packed by
+// the run's script, reads as the briefs, the model's words, each call (input
+// as JSON) and its answer, a failure marked, a steered-in note as the note, and
+// the compaction's summary. OpenCode's own messages (notices, instruction
+// updates, a person's skill or shell command, an execution's end, a switched
+// agent, model or directory), the reasoning and a refused step are no entry.
+// Every entry is dated, as every exported message says when.
 //
-// Mutation: read a message by OpenCode 1.x's `info.role` and `parts`, read a
-// notice, an update, a skill, a shell command or the reasoning as an entry,
-// drop a call's result, or read a failed call's answer without its failure,
-// and the case goes red.
+// Mutation: read by OpenCode 1.x's `info.role` and `parts`, read a notice,
+// update, skill, shell command or reasoning as an entry, drop a call's result,
+// or read a failed call's answer without its failure, and the case goes red.
 func TestAnOpenCodeSessionReadsAsTheTranscriptItsExportHolds(t *testing.T) {
 	t.Parallel()
 	for _, version := range openCodeFixtureVersions {
@@ -464,36 +449,26 @@ func openCodeCall(name, state string) string {
 }
 
 // EACH KIND OF OPENCODE MESSAGE READS AS WHAT IT IS, OR AS NOTHING. A person's
-// message is the brief, or a note where it opens with one; an assistant's
-// step is the model's words and each tool it called, and never its reasoning:
-// a completed call is the call and its answer, the answer's text items a line
-// apart and a file in the words a file reads in; a failed call is the call and
-// its failure, marked, with what it answered before it failed; a call OpenCode
-// stopped while it ran, or while the model was still writing it, is the call
-// alone, its input as written so far; and a completed compaction is its
-// summary. Every other kind is OpenCode's own and no entry: a compaction that
-// failed or is still running, a notice in the person's turn — one quoting a
-// note's heading included, as a background job's output can — an update of
-// the instructions, a skill and a shell command a person ran, an execution's
-// end, and a switched agent, model or directory.
+// message is the brief, or a note where it opens with one. A step is the
+// model's words and its calls, never its reasoning: a completed call is the
+// call and its answer (text items a line apart, a file said as a file), a
+// failed one the call and its failure, marked, with what it answered first,
+// and one stopped running or mid-write the call alone, its input so far. A
+// completed compaction is its summary. Every other kind is OpenCode's own and
+// no entry, a notice quoting a note's heading (as a job's output can) included.
 //
-// Each message's shape is one the fixture's real export holds
-// (testdata/opencode), its ids and times the case's own — but for what that
-// session left no example of, written from OpenCode 2.0.32's own schema: a
-// file a call answered with (packages/schema/src/tool.ts:73-79); a call still
-// streaming or running (packages/schema/src/session-message.ts:126-137), where
-// the session interrupted settled each of its calls as failed; a compaction
-// that failed (session-message.ts:269-276); and one still running
-// (session-message.ts:247-254), which an export leaves out
-// (packages/core/src/session/transfer.ts:165-169) and a document a box's own
-// agent wrote can hold all the same.
-//
-// Mutation: read any of OpenCode's own kinds as an entry, search a notice for
-// notes, read a failed or running compaction as a summary, give an unsettled
-// call a result, drop a failure's message or the answer before it, or read the
-// reasoning, and that kind's row goes red.
+// Mutation: read any OpenCode kind as an entry, search a notice for notes, read
+// a failed or running compaction as a summary, give an unsettled call a result,
+// drop a failure's message or prior answer, or read reasoning: that row is red.
 func TestEachKindOfOpenCodeMessageReadsAsWhatItIsOrAsNothing(t *testing.T) {
 	t.Parallel()
+	// Shapes are the fixture's (testdata/opencode) but where it has no example,
+	// written from OpenCode 2.0.32's schema: a file answer
+	// (packages/schema/src/tool.ts:73-79), a streaming or running call
+	// (packages/schema/src/session-message.ts:126-137; the interrupted session
+	// settled its calls as failed), a failed compaction (:269-276) and a running
+	// one (:247-254), which an export omits
+	// (packages/core/src/session/transfer.ts:165-169) but a box's agent can write.
 	for name, c := range map[string]struct {
 		message string
 		want    []shown
@@ -692,21 +667,17 @@ func jsonText(t *testing.T, text string) string {
 }
 
 // A NOTE A PERSON SENT THE RUN READS AS A NOTE, WHEREVER ITS HARNESS FILED IT.
-// Claude Code hands a note to its model as a hook's additional context, and
-// keeps it in a record of its own: whichever record, under whichever field,
-// a note there reads as a note in its place — framed in a system reminder or
-// not, two of one step's notes as two — and the line the run's own hook
-// printed as it handed them over, which the live transcript shows as
-// `[steer]`, reads as a note saying whose reached the run. OpenCode admits a
-// note as a person's message, and it reads as a note rather than a brief. A
-// brief that carries a note further down, as a launch's brief carries the
-// notes that arrived before it, is still the brief, and a tool's result
-// quoting a note's heading is still the tool's: text a tool produced is never
-// a note.
+// Claude Code hands a note over as a hook's additional context and keeps it in
+// a record of its own: in whichever record and field, framed in a system
+// reminder or not, each reads as a note in its place (two in one step as two),
+// and the hook's own line (the live `[steer]`) as a note saying whose reached
+// the run. OpenCode's note, a person's message, reads as a note, not a brief.
+// A brief carrying notes further down (a launch's) is still the brief, and a
+// tool result quoting a note's heading is the tool's: tool text is never a note.
 //
-// Mutation: skip the records the harness wrote for itself, read a note by its
-// record's shape alone, drop the hook's line, take a heading anywhere in a
-// brief for a note, or read OpenCode's note as a brief, and a row goes red.
+// Mutation: skip the harness's own records, read a note by record shape alone,
+// drop the hook's line, take a heading anywhere in a brief for a note, or read
+// OpenCode's note as a brief, and a row goes red.
 func TestANoteAPersonSentTheRunReadsAsANote(t *testing.T) {
 	t.Parallel()
 	batch := note("ada", "Target the release branch.") + "\n\n" + note("cy", "And keep the old flag.")
@@ -802,20 +773,16 @@ func TestTheLineTheRunsHookPrintedIsANoteAsTheHarnessRecordedIt(t *testing.T) {
 	}
 }
 
-// A RECORD OF NO SHAPE THIS READ KNOWS IS SAID, NEVER READ AS SILENCE. A line
-// of Claude Code's record that is JSON but no object — an array, a number — is
-// no record; a person's or the model's record whose message is no object, or
-// whose content is neither text nor a list, has no shape this read knows; and
-// a message of an OpenCode export that is no object, a step whose content is
-// no list, and a message that names no kind, or one OpenCode 2 does not write
-// (a kind a later release adds, or OpenCode 1.x's message, which names none),
-// are said too. Each is an entry where it was. A field a release retyped
-// inside a record is still skipped, the record read.
+// A RECORD OF NO SHAPE THIS READ KNOWS IS SAID, NEVER READ AS SILENCE: a line
+// of Claude Code's record that is JSON but no object; a person's or model's
+// record whose message is no object, or whose content is neither text nor a
+// list; an OpenCode message that is no object, a step whose content is no
+// list, and a message naming no kind or one OpenCode 2 does not write (a later
+// release's, or 1.x's, which names none). Each is an entry where it was. A
+// retyped field inside a record is skipped, the record read.
 //
-// Mutation: tolerate a record that is no object, a message or content of
-// another shape, content that is no list, or a message of no kind this read
-// knows, and the entry vanishes; refuse a retyped field and the record that
-// held it does.
+// Mutation: tolerate any of these and its entry vanishes; refuse a retyped
+// field and the record that held it does.
 func TestARecordOfNoShapeThisReadKnowsIsSaid(t *testing.T) {
 	t.Parallel()
 	described, raw := claudeCaptureOf(t, []string{
@@ -957,18 +924,14 @@ func TestATranscriptIsReadAPageAtATimeWithNothingLostBetweenPages(t *testing.T) 
 	}
 }
 
-// A CLAUDE CODE TRANSCRIPT READ A PAGE AT A TIME IS THE WHOLE READ, its tools
-// and its threads included. Read at every bound from one entry a page to five,
-// the pages of a session whose calls and their results fall on two pages, and
-// whose subagent's transcript follows the run's own, joined are the whole
-// read entry for entry: a result read on a page after its call's names the
-// call's tool, and every entry of the subagent its thread. A page is read
-// from the archive's start, and a call before the page is remembered for a
-// result on it.
+// A CLAUDE CODE TRANSCRIPT READ A PAGE AT A TIME IS THE WHOLE READ, tools and
+// threads included: at one to five entries a page, the pages of a session whose
+// calls and results straddle pages, its subagent after the run, join to the
+// whole read entry for entry. A page is read from the archive's start and
+// remembers the calls before it, so a result names its call's tool on any page.
 //
 // Mutation: remember a call only where its entry lands on the page, or forget
-// the calls a page holds when it starts, and a result on a later page than its
-// call names no tool.
+// a page's calls when it starts, and a later page's result names no tool.
 func TestAClaudeCodeTranscriptReadAPageAtATimeIsTheWholeRead(t *testing.T) {
 	t.Parallel()
 	_, raw := claudeCaptureOf(t, claudeSessionRecord, claudeSidecar)
@@ -989,20 +952,17 @@ func TestAClaudeCodeTranscriptReadAPageAtATimeIsTheWholeRead(t *testing.T) {
 	}
 }
 
-// AN ENTRY IS REDACTED BEFORE IT IS CUT. A tool's output longer than an
-// entry's bound, a token straddling the bound, reads cut to the bound and
-// marked, the size of what its whole text redacts to stated — and with no
-// part of the token in it: cut first, the token's opening would no longer be a
-// token the redaction knows. And a private key whose body begins inside the
-// bound and whose END is many KiB past it — a line of prose straight after its
-// BEGIN, so the body inside the bound is reached only by reading back from the
-// END — is read whole and redacted as one: what is redacted reaches a key
-// block's length past the bound.
+// AN ENTRY IS REDACTED BEFORE IT IS CUT. A tool output past the entry's bound,
+// a token straddling it, reads cut to the bound and marked, stating the size
+// its whole text redacts to, with no part of the token: cut first, the token's
+// opening is no longer one the redaction knows. A private key whose body begins
+// inside the bound and whose END lies many KiB past it (prose straight after
+// its BEGIN, so only reading back from the END reaches the body) is redacted
+// whole: the redaction reaches a key block's length past the bound.
 //
-// Mutation: cut the text before redacting it, redact only the bound's own
-// bytes of a long text, or read a window short of a key block past the bound,
-// and the opening of the token or the key's body is handed out; state the
-// size as recorded, and the size counts the bytes of the token and the key
+// Mutation: cut before redacting, redact only the bound's own bytes, or read a
+// window short of a key block past the bound, and the token's opening or the
+// key's body is handed out; state the recorded size, and it counts the bytes
 // the redaction took out.
 func TestAnEntryIsRedactedBeforeItIsCut(t *testing.T) {
 	t.Parallel()
@@ -1030,10 +990,9 @@ func TestAnEntryIsRedactedBeforeItIsCut(t *testing.T) {
 		t.Errorf("the cut result is %q, want the output up to the token's redaction", result.Text)
 	}
 
-	// THE KEY'S BODY BEGINS INSIDE THE BOUND, and its END — the one thing
-	// that reaches the body, past the prose that ends the BEGIN's own block
-	// — is two hundred lines past it, about 13 KiB: further than any window
-	// short of a key block reads.
+	// THE KEY'S BODY BEGINS INSIDE THE BOUND; its END, the only thing reaching
+	// the body past the prose closing the BEGIN's block, is 200 lines (~13 KiB)
+	// past it: further than any window short of a key block reads.
 	body := strings.Repeat("MIIEowIBAAKCAQEAu1SU1LfVLPHCozMxH2Mo4lgOEePzNm0tRgeLezV6ffAt0gun\n", 200)
 	key := "-----BEGIN RSA PRIVATE KEY-----\nsee below\n" + body + "-----END RSA PRIVATE KEY-----\ndone\n"
 	got = readOpenCode(t, openCodeCaptureOf(t, tool(key)), small)
@@ -1273,20 +1232,17 @@ func TestAnArchiveIsBlamedOnlyForItsOwnFaults(t *testing.T) {
 }
 
 // A MALFORMED ARCHIVE IS SAID IN THIS PACKAGE'S WORDS ALONE. Each way an
-// archive is not one its format describes — no gzip, compressed bytes that do
-// not inflate, a stream cut short, a gzip of no tar, an export that is no
-// export document — is a malformed archive whose reason is the one sentence
-// this package writes for that way, and nothing the archive holds reaches the
-// reason or the error: an export whose document is a string planted with a
-// token and a mebibyte of a box's words is said as no export document, and
-// carries neither. An export that ends before it closes ends part way through
-// wherever it was cut — in its list's opening, after a whole message, after
-// the comma before the next — whatever the JSON decoder calls the end it met.
+// archive is not what its format describes (no gzip, bytes that do not inflate,
+// a stream cut short, a gzip of no tar, no export document) is a malformed
+// archive whose reason is this package's one sentence for that way, and nothing
+// the archive holds reaches them: a string export with a planted token and a
+// MiB of a box's words is no export document, carrying neither. An export
+// ending before it closes is cut short wherever it ends (in its list's opening,
+// after a message, after a comma), whatever the JSON decoder calls that end.
 //
-// Mutation: say a malformed archive in the decoder's words, or name the token
-// the export held where an object belonged, and the token, or the mebibyte,
-// reaches the reason; read every syntax error an export's walk meets as no
-// export document, and an export cut between its messages is said as one.
+// Mutation: say it in the decoder's words or name the planted token, and the
+// token or the MiB reaches the reason; read every syntax error an export's walk
+// meets as no export document, and one cut between messages is said as that.
 func TestAMalformedArchiveIsSaidInThisPackagesWordsAlone(t *testing.T) {
 	t.Parallel()
 	_, capture := claudeCaptureOf(t, claudeSessionRecord, nil)
@@ -1340,19 +1296,17 @@ func TestAMalformedArchiveIsSaidInThisPackagesWordsAlone(t *testing.T) {
 	}
 }
 
-// A READ STOPS WHEN ITS CALLER IS GONE. A read whose caller leaves as its
-// archive opens stops at the next line or message it would read, with the
-// context's own error — never a transcript, and never a malformed archive; one
-// whose open fails as its caller leaves is answered as left, whatever the store
-// made of the open stopping under it; and a read whose caller had left before
-// it began opens nothing at all, a slot free or not.
+// A READ STOPS WHEN ITS CALLER IS GONE. A caller leaving as its archive opens
+// stops the read at the next line or message, with the context's own error,
+// never a transcript or a malformed archive; an open failing as its caller
+// leaves is answered as left, whatever the store made of it; and a caller gone
+// before the read began has it open nothing, a slot free or not.
 //
-// Mutation: drop the check between lines, and the read answers the whole
-// transcript to a caller that left; answer a failed open as it failed whether
-// or not the caller is still there, and the store's words reach a caller that
-// left; take a slot for a caller already gone, and the read opens its archive
-// for nobody — at random, as a select between a free slot and a done context
-// picks, which is why that half asks thirty-two times.
+// Mutation: drop the check between lines and a departed caller gets the whole
+// transcript; answer a failed open as failed and the store's words reach it;
+// take a slot for a caller already gone and the read opens its archive for
+// nobody, at random (a select between a free slot and a done context picks),
+// hence the thirty-two tries.
 func TestAReadStopsWhenItsCallerIsGone(t *testing.T) {
 	t.Parallel()
 	_, claude := claudeCaptureOf(t, claudeSessionRecord, nil)
@@ -1365,9 +1319,8 @@ func TestAReadStopsWhenItsCallerIsGone(t *testing.T) {
 		"claude-code": {executor.ClaudeCodeName, executor.ClaudeArchiveFormat, claude},
 		"opencode":    {executor.OpenCodeName, executor.OpenCodeArchiveFormat, open},
 	} {
-		// THE CALLER LEAVES AS THE ARCHIVE OPENS: a caller gone before the
-		// read began would have it open nothing (below), so only one who
-		// leaves once the read is under way reaches the check between lines.
+		// THE CALLER LEAVES AS THE ARCHIVE OPENS: one gone before the read
+		// began opens nothing (below), so never reaches the check between lines.
 		gone, leave := context.WithCancel(t.Context())
 		got, err := executor.ReadTranscript(gone, c.harness, c.format,
 			func(context.Context) (io.ReadCloser, error) {
@@ -1469,13 +1422,12 @@ func TestAReadStopsBetweenTheNotesAndTheValuesOneLineHolds(t *testing.T) {
 }
 
 // THE TRANSCRIPT'S BOUNDS ARE THE ENGINE'S OWN, and hold to what their values
-// argue: a page holds sixty-four entries at the entry's bound, a line is read to
-// the bound every read of a run's record takes, the read budget is eight times
-// the most an archive is stored as — gzip's ratio over text — so an ordinary
-// session at its bound reads whole, and the reads a process runs at once are at
-// least two, which at their worst — each a line at its bound, as much again
-// while the slice gathering it grows, and its decoded copy — come to about
-// 200 MiB.
+// argue: a page holds sixty-four entries at the entry's bound; a line is read
+// to the bound every read of a run's record takes; the read budget is eight
+// times an archive's largest stored size (gzip's ratio over text), so an
+// ordinary session at its bound reads whole; and at least two reads run at
+// once, at worst (each a line at its bound, as much again while its slice
+// grows, its decoded copy) about 200 MiB.
 //
 // Mutation: raise the entry's bound past a sixty-fourth of the page's, read
 // lines to a bound of their own, shrink the budget under eight archives, or let
@@ -1532,11 +1484,11 @@ func TestEveryHarnessThisBuildDrivesCarriesItsSession(t *testing.T) {
 
 // ---- how many transcripts a process reads at once ----------------------- //
 //
-// NONE OF THESE CASES IS PARALLEL, and each lets go of every read it holds and
-// waits for it before it ends: the slots are the process's own
-// ([executor.TranscriptReadsAtOnce]), shared by every read in this binary, so a
-// parallel case reading beside one of these would hold a slot it counts on.
-// Every case that is not parallel runs before the parallel ones are let go.
+// NONE OF THESE CASES IS PARALLEL, and each lets go of and waits for every read
+// it holds before it ends: the slots ([executor.TranscriptReadsAtOnce]) are the
+// process's own, shared by every read in this binary, so a parallel read beside
+// one would hold a slot it counts on. Non-parallel cases all run before the
+// parallel ones are let go.
 
 // slotWaitBound is how long a case here waits for what it is about to see
 // before it fails: a bound on a hang, far past what any of these waits takes,

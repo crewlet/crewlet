@@ -42,20 +42,15 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// handsOverWords is EVERY TOOL WHOSE ANSWER HANDS A MODEL WORDS SOMEBODY ELSE
-// WROTE, on either surface — the set the sweep below DERIVES — and the case
-// that holds what each reads those words as: the surface, the writers and the
-// trust on each fence, and the envelope. A case is `<TestName>` or
-// `<TestName>/<subtest>`, and must exist.
+// handsOverWords is every tool, on either surface, whose answer hands a model
+// words somebody else wrote, beside the case that holds its labels: the
+// surface, the writers and the trust on each fence, and the envelope. A case
+// is `<TestName>` or `<TestName>/<subtest>`, and must exist.
 //
 // The sweep decides membership and this table only follows it: a tool the
-// sweep finds handing words over that is not here fails until somebody writes
-// the case that holds its labels, and a tool here that hands nothing over
-// fails until its entry goes. It replaced a hand list in
-// TestEveryUntrustedReadIsFenced's doc that named the reads somebody had
-// remembered — and the tracker's listings, the inbox, the activity feed, a
-// knowledge answer's sources and a parked executor's question were the ones
-// nobody had.
+// sweep finds handing words over that is missing here fails until its case is
+// written, and an entry that hands nothing over fails until it goes. Never a
+// hand-kept list: the reads somebody remembers are not the reads there are.
 var handsOverWords = map[string]string{
 	builtin.AnswerKnowledgeTool:      "TestEveryUntrustedReadIsFenced/answer_knowledge",
 	builtin.AnswerExecutorTool:       "TestEveryUntrustedReadIsFenced/answer_executor",
@@ -102,32 +97,17 @@ var handsOverWords = map[string]string{
 }
 
 // EVERY TOOL THAT HANDS A MODEL SOMEBODY ELSE'S WORDS IS FENCED, AND THE SET
-// OF THEM IS DERIVED (ADR-0040).
+// OF THEM IS DERIVED (ADR-0040). Every tool on both surfaces is called once
+// over stores where every declared field ([provenance.FieldTag]) and every
+// body held outside a record spells the reader's closer and a forged opener.
+// A string holding the reader's token must be one whole fence opening no
+// marker, no other string may open or close one, and an answer carrying the
+// words carries the envelope (or, as prose, a fence). The set is what the
+// answers carry ([handsOverWords]); a tool the sweep cannot reach fails rather
+// than drops out of it.
 //
-// Every tool this build registers, on a seat's surface and on the operator
-// catalogue, is called once against stores where EVERY field a record
-// declares somebody's words ([provenance.FieldTag]) — and every body a store
-// holds outside a record (a file's bytes, a datastore row, a page a search
-// found, a past turn's ask, a parked run's question, a repository's text git
-// answers, a conflict's marked lines) — holds words spelling
-// the reader's own closer and a forged opener. Each answer is then held to the
-// fence's property whatever it carries: a string holding the reader's token is
-// one whole fence whose content opens no marker, and no other string opens or
-// closes one; and an answer that carries the words carries the envelope (or,
-// written as prose, a fence) saying whose they are.
-//
-// THE SET IS WHAT THE ANSWERS CARRY, never a list somebody keeps: every tool
-// whose answer carries the words is in [handsOverWords] beside the case that
-// holds its labels, and every tool there carries them. A tool the sweep cannot
-// reach — refused for its arguments, unwired — fails rather than drops out of
-// the set, so a tool added with no arguments here is a failure naming it, not
-// a tool nobody looked at.
-//
-// Mutation: answer list_work_items through jsonAnswer and its call is refused
-// for carrying words it does not label; drop the foreignRead in
-// answer_executor and its question reaches the operator's model with a forged
-// opener bare; delete a handsOverWords entry, or add one, and the table no
-// longer matches.
+// Mutation: answer list_work_items through jsonAnswer, drop answer_executor's
+// foreignRead, or add or delete a handsOverWords entry, and this goes red.
 func TestEveryToolThatHandsOverSomebodysWordsIsFenced(t *testing.T) {
 	t.Parallel()
 	calls := sweepCalls(t)
@@ -159,9 +139,8 @@ func TestEveryToolThatHandsOverSomebodysWordsIsFenced(t *testing.T) {
 		}
 	})
 	if t.Failed() {
-		// A call that did not answer leaves the set short: comparing it
-		// would report its tool as a stale entry rather than as the call
-		// that failed.
+		// A failed call leaves the set short: comparing would blame its
+		// tool as a stale entry rather than the call.
 		return
 	}
 	for tool, via := range found {
@@ -276,14 +255,12 @@ func sweepCalls(t *testing.T) []sweepCall {
 		for _, name := range reg.Names() {
 			c := sweepCall{surface: surface, tool: name, args: r.args[name]}
 			// A PERSON'S VERB ON A SEAT'S SURFACE is refused by the table
-			// before anything is read, whatever the seat holds: its answer
-			// to a seat is that refusal and nothing a store holds.
+			// before anything is read.
 			if human, _ := authz.HumanOnlyOf(authz.Action(name)); human && surface == "seat" {
 				c.refused = tools.RefusalForbidden
 			}
-			// A CALL HELD FOR APPROVAL answers nothing until it is approved:
-			// called bare, it is refused before it reads anything, and once
-			// approved a merge answers as code_merge_change does.
+			// A CALL HELD FOR APPROVAL is refused bare before it reads
+			// anything; once approved it answers as code_merge_change does.
 			if name == builtin.AskToMergeTool || name == builtin.AskToDeployTool {
 				c.refused = tools.RefusalForbidden
 			}
@@ -325,10 +302,9 @@ const sweepWords = "SWEEP-WORDS"
 func newSweepRig(t *testing.T) *sweepRig {
 	t.Helper()
 	turn, b := readerTurn(t)
-	// THE TURN AS THE ENGINE BUILDS ONE: its lookups, holds and call log, a
-	// time-ordered run id and the instant its work began — what a code tool
-	// resolves a repository through and every code write derives its
-	// operation from.
+	// THE TURN AS THE ENGINE BUILDS ONE: a code tool resolves a repository
+	// through its lookups, and a code write derives its operation from its
+	// run id and work start.
 	turn.Lookups, turn.Holds, turn.Calls = turnctx.NewLookups(), turnctx.NewHolds(nil), turnctx.NewCallLog()
 	turn.RunID, turn.WorkSince = statelog.NewOpID(time.Now(), ""), time.Now().UTC().Truncate(time.Second)
 	words := sweepWords + " " + attack(b, "somebody's words")
@@ -420,16 +396,16 @@ func newSweepRig(t *testing.T) *sweepRig {
 	episodes := &episodeStore{episodes: []learning.Episode{{Handle: "agent-cto", Kind: learning.KindRaw,
 		Ask: words, AskProvenance: &askedBy}}}
 
-	// GITLET: the scratch repository every code tool's [holdingCall]
-	// names, its change !7, and Gitlet's writes, landing but for a
-	// revert's or a pick's onto [sweepConflicted]; a search of the company's
-	// code, whose every hit is a file's line — the sweep's words — and a
-	// check's kept log, which is what the commit's tests printed; and the
-	// fleet's placement a purge's answer names.
+	// GITLET: the scratch repository [holdingCall] names, its change !7, and
+	// writes that land but for a revert or pick onto [sweepConflicted]; a code
+	// search and a check's kept log holding the sweep's words; and the
+	// placement a purge's answer names.
 	host := sweepGitletHost(t, words)
 	codeWire := writeDeps(host, sweepCodeWrites(words))
 	codeWire.Searcher = &codeSearches{answer: func(int, codesearch.Query) (codesearch.Answer, error) {
-		return codesearch.Answer{Hits: []codesearch.Hit{searchHit(host.detail.Name, "a.txt", 1, words)}}, nil
+		hit := searchHit(host.detail.Name, "a.txt", 2, words)
+		hit.Before, hit.After = []string{words}, []string{words}
+		return codesearch.Answer{Hits: []codesearch.Hit{hit}}, nil
 	}}
 	codeWire.Logs = &checkLogs{text: words}
 	codeWire.Placement = purgePlacement{}
@@ -529,11 +505,9 @@ func (r *sweepRig) registry(surface string) *tools.Registry {
 	return r.seat
 }
 
-// call makes one sweep call: on a seat's surface in agent-cto's turn, as its
-// own principal, and on the operator catalogue as the founder at the
-// dashboard, outside any turn, with a fresh proof of who they are — so a
-// gesture that asks a step-up (a purge) reaches its answer rather than the
-// ceremony's.
+// call makes one sweep call: on a seat's surface in agent-cto's turn, and on
+// the operator catalogue as the founder outside any turn, freshly
+// re-authenticated so a step-up gesture (a purge) reaches its answer.
 func (r *sweepRig) call(t *testing.T, c sweepCall) (tools.Result, error) {
 	t.Helper()
 	entry, ok := r.registry(c.surface).Lookup(c.tool)
@@ -619,13 +593,11 @@ func sweepArgs(artifact string) map[string]map[string]any {
 	}
 }
 
-// codeSweepArgs is what each code tool is called with: the call of it
-// [holdingCall] makes on the scratch repository, which lands on Gitlet in
-// this rig as it does in the hold's — a change read for its summary, which the
-// variants follow part by part, and a diff for one file's patch — a person's
-// own code writes, which no seat's turn sends and [holdingCall] so names no
-// call of, and the operator's own code and health reads, which name nothing
-// the stores hold.
+// codeSweepArgs is what each code tool is called with: [holdingCall]'s call
+// on the scratch repository (a change read for its summary, the variants
+// taking its parts; a diff for one file's patch), plus the person-only code
+// writes and the operator's code and health reads, which [holdingCall] does
+// not name.
 func codeSweepArgs() map[string]map[string]any {
 	out := map[string]map[string]any{}
 	for _, name := range slices.Concat(builtin.CodeToolNames(), []string{builtin.CodeSearchTool},
@@ -658,15 +630,11 @@ func codeSweepArgs() map[string]map[string]any {
 // is the sweep's words ([sweepCodeWrites]).
 const sweepConflicted = "conflicted"
 
-// sweepGitletHost is the scratch repository [scratchHost] holds, its change !7
-// with suggestions besides a review and a comment, in its target's queue as
-// scratchHost's is — so a dequeue takes it out and reaches its answer — and a
-// Gitlet node answering by object id. poison fills every field the code records
-// declare; and the bodies the code tools read as somebody's words — a
-// change's description, a finding's body, a review's summary, a comment, and
-// the file's lines, a patch, a history's subjects and a blame's lines git
-// answers — hold the words whether or not a record declares them, as every
-// body a store holds outside a record does.
+// sweepGitletHost is [scratchHost]'s repository with change !7 (suggestions,
+// a review and a comment) queued so a dequeue reaches its answer, and a Gitlet
+// node answering by object id. Besides the declared fields poison fills, every
+// body a code tool reads as somebody's words (descriptions, findings, reviews,
+// comments, and git's file lines, patches, subjects and blame) holds the words.
 func sweepGitletHost(t *testing.T, words string) *gitletHost {
 	t.Helper()
 	host := scratchHost(time.Hour)
@@ -687,9 +655,9 @@ func sweepGitletHost(t *testing.T, words string) *gitletHost {
 	poison(t, reflect.ValueOf(&change.comments).Elem(), words)
 	change.listing = []gitlet.ChangeSummary{change.detail.ChangeSummary}
 	host.changes = change.read
-	// A CHECK OF main THAT FAILED, which the change's head is checked by too:
-	// its summary, the tail of its output and its failure's message are what
-	// the commit's tests printed, as its kept log is ([checkLogs]).
+	// A FAILED CHECK OF main, which also checks the change's head: its
+	// summary, output tail and failure message are the tests' own output, as
+	// its kept log ([checkLogs]) is.
 	host.checks = []gitlet.CheckDetail{failedCheck(words, words, words, "a.go", len(words))}
 	poison(t, reflect.ValueOf(&host.checks).Elem(), words)
 	lines := strings.Count(words, "\n") + 1

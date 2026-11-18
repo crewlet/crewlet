@@ -45,8 +45,8 @@
  */
 
 import { useMemo } from "react";
-import { isNodeHue, type AvatarStatus, type Principal } from "@crewlethq/ui";
-import { avatarOf, type AgentAvatar } from "./avatar.ts";
+import type { AvatarStatus, Principal } from "@crewlethq/ui";
+import { avatarOf, faceOf, type AgentAvatar } from "./avatar.ts";
 import { parseUTC, plural } from "./format.ts";
 import { useLeadScope } from "./leadScope.ts";
 import { ADMIN, accessNames, holds } from "./access.ts";
@@ -220,11 +220,7 @@ export function principalOfSeat(seat: Seat | undefined, handle: string): Princip
     name: seat.name,
   };
   if (seat.unit) out.detail = seat.unit.name;
-  if (seat.kind === "agent" && seat.avatar) {
-    out.character = seat.avatar.character as Principal["character"];
-    if (isNodeHue(seat.avatar.color)) out.hue = seat.avatar.color;
-  }
-  return out;
+  return { ...out, ...faceOf(seat.kind, seat.avatar) };
 }
 
 /**
@@ -1108,13 +1104,18 @@ export function seatLookup(index: OrgIndex): (handle: string) => SeatBadge {
  */
 export interface SeatBadge {
   name: string;
-  kind?: SeatKind;
-  avatar?: AgentAvatar | null;
+  kind: SeatKind | undefined;
+  avatar: AgentAvatar | null | undefined;
 }
+
+/** A seat as a picker offers it: its handle, and what its face is drawn from. */
+export type SeatChoice = Pick<Seat, "handle" | "name" | "kind" | "avatar">;
 
 /** A seat's badge, or the key's own words where the chart has no such seat. */
 function badgeOfSeat(seat: Seat | undefined, key: string): SeatBadge {
-  return seat ? { name: seat.name, kind: seat.kind, avatar: seat.avatar } : { name: key };
+  return seat
+    ? { name: seat.name, kind: seat.kind, avatar: seat.avatar }
+    : { name: key, kind: undefined, avatar: undefined };
 }
 
 /**

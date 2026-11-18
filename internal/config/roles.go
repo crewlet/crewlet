@@ -52,7 +52,7 @@ type Role struct {
 	// Avatar is how an AGENT seat is drawn wherever the dashboard shows who
 	// it is: a Crewlet character in a colour of its own. Presentation only;
 	// see [RoleAvatar].
-	Avatar *RoleAvatar `yaml:"avatar,omitempty" json:"avatar,omitempty" desc:"Agent seats: the Crewlet character and colour the seat is drawn as. Absent = the original Crewlet, in purple."`
+	Avatar *RoleAvatar `yaml:"avatar,omitempty" json:"avatar,omitempty" desc:"Agent seats: the Crewlet character and colour the seat is drawn as. Absent = a character and colour picked from the seat's handle."`
 
 	// Handle is the canonical identity slug, and WHAT EVERY REFERENCE TO
 	// THIS SEAT RESOLVES: a unit's `lead:` and every `manages:` entry. A

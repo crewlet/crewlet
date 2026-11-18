@@ -37,13 +37,12 @@ import (
 
 // ---- fixtures ------------------------------------------------------------ //
 
-// statusAsker is the Gitlet nodes' roster and status scatter as the health tools
-// see them, over one fleet: report is every Gitlet node's status and its part in
-// the coverage, the roster every node either names — listed in reverse and
-// twice, so a reader that does not sort it reads it wrong — and each question
-// is answered as the engine answers it, by the nodes it asks alone, each with
-// its hot list only where asked, complete where every one answered. It keeps
-// every repository it was asked about, and every question.
+// statusAsker is the Gitlet nodes' roster and status scatter over one fleet:
+// the roster is every node report names, listed in reverse and twice so a
+// reader that does not sort it reads it wrong, and each question is answered
+// as the engine answers it: by the nodes it asks alone, hot lists only where
+// asked, complete where every one answered. It keeps every repository and
+// every question it was asked.
 type statusAsker struct {
 	mu        sync.Mutex
 	report    builtin.CodeStatusReport
@@ -123,11 +122,10 @@ func (s *statusAsker) questions() []builtin.CodeStatusAsk {
 	return out
 }
 
-// grantHost is Gitlet answering a read of one repository by name as
-// the repository's grant does: the repository, a refusal of the asker, a
-// refusal of the seat the read is made for, or no such repository — the asker
-// judged first, as gitlet.JudgeRead does — and counts the reads it was asked and
-// whom each was made for.
+// grantHost is Gitlet answering a read of one repository by name as its grant
+// does: the repository, a refusal of the asker (judged first, as
+// gitlet.JudgeRead does), a refusal of the ceiling seat, or no such
+// repository. It counts the reads and whom each was made for.
 type grantHost struct {
 	mu      sync.Mutex
 	repos   map[string]gitlet.RepoRef // name -> the repository it names
@@ -204,11 +202,10 @@ func healthChart(t *testing.T) (*org.Organization, authz.Chart) {
 	return o, orgchart.Of(o)
 }
 
-// healthRequesters is who a health tool's turn may be acting for, composed as
-// the engine composes them: dev, a colleague seat; the founder, a person of
-// the company who holds every app and not admin; and "departed", a person
-// whose seat's holder was removed, who acts as nobody now. Any other handle is
-// a requester this node cannot compose.
+// healthRequesters is who a health tool's turn may be acting for, as the
+// engine composes them: dev, a colleague seat; the founder, a person holding
+// every app and not admin; and "departed", a removed holder who acts as nobody
+// now. Any other handle is a requester this node cannot compose.
 func healthRequesters() requesters {
 	return requesters{
 		"dev":     {Kind: iam.KindSeat, Seat: "dev", Stage: iam.StageActive, Grants: iam.Apps},
@@ -225,17 +222,14 @@ func healthRequesters() requesters {
 }
 
 // healthFleet is fleet_health's deps over leases, wired as every surface wires
-// them: who a turn may be acting for with the chart that decides them (the
-// requester ceiling), without which no fleet_health is served.
+// them: with the requester ceiling, without which no fleet_health is served.
 func healthFleet(leases builtin.LeaseLister, chart authz.Chart) builtin.HealthDeps {
 	return builtin.HealthDeps{Leases: leases, Self: "node-a", Requesters: healthRequesters(), Chart: chart}
 }
 
 // healthCode is the code tools' deps code_status reads through, wired as every
-// surface wires them: Gitlet, the caller named by the request's
-// principal, and who a turn may be acting for with the chart that decides them
-// (the requester ceiling), without which no code read — and no code_status —
-// is served.
+// surface wires them: Gitlet, the request's principal as caller, and the
+// requester ceiling, without which no code read (so no code_status) is served.
 func healthCode(host builtin.CodeReader, chart authz.Chart) builtin.CodeDeps {
 	return builtin.CodeDeps{Code: host, Actor: builtin.PrincipalActor, Chart: chart,
 		Requesters: healthRequesters()}
@@ -249,12 +243,11 @@ func asSeat(handle string) context.Context {
 	})
 }
 
-// heldBackend is a coordination store whose clock stands still at the instant
-// it was made, so a presence lease [node] takes there stays live however late
-// a case's parallel subtests run. On the wall clock, a one-minute lease taken
-// before its subtests lapsed while they waited for a slot on a loaded race
-// shard, and fleet_health then answered no live node: the case's claim is who
-// may read the fleet, never how long a presence lasts.
+// heldBackend is a coordination store whose clock stands still, so a presence
+// lease [node] takes stays live however late a case's parallel subtests run:
+// on the wall clock it can lapse while they wait on a loaded race shard, and
+// fleet_health answers no live node. The claim is who may read the fleet,
+// never how long a presence lasts.
 func heldBackend() *coordmem.Backend {
 	at := time.Now()
 	return &coordmem.Backend{Clock: func() time.Time { return at }}
@@ -310,11 +303,10 @@ func healthTools(deps builtin.HealthDeps, chart authz.Chart) map[string]tools.Ca
 }
 
 // seatHealthTools are the health tools over deps as a seat's registry offers
-// them, decided by chart, by name. A turn somebody woke reaches a seat's
-// registry alone, whose gate binds the turn's requester ceiling from the
-// composer the registry is handed (builtin.Deps.Requesters) — never the
-// operator catalogue, which no seat calls through — so a case about whoever
-// woke a turn takes its tool from here.
+// them, decided by chart, by name. A woken turn reaches a seat's registry
+// alone, whose gate binds its requester ceiling (from builtin.Deps.Requesters);
+// no seat calls through the operator catalogue, so a case about whoever woke a
+// turn takes its tool here.
 func seatHealthTools(t *testing.T, deps builtin.HealthDeps, chart authz.Chart) map[string]tools.Callable {
 	t.Helper()
 	composer := deps.Requesters
@@ -362,20 +354,16 @@ func keysOf(t *testing.T, v any) []string {
 
 // THE HEALTH TOOLS REPORT ONLY THE TABLE'S VERDICTS.
 //
-// fleet_health hands every node's alarm marks back exactly as its heartbeat
-// carried them — each kind and since, in the node's order — reads a node that
-// looked and found nothing as an empty list, and a node with no table it has
-// evaluated as saying nothing, never as healthy; and beside the marks it
-// carries the heartbeat's facts and no judgement of its own: a node running a
-// thousand turns, draining and stuck on its config, with nothing firing, is
-// reported with nothing firing. code_status hands each Gitlet node's own account
-// back as the node gave it — a cache past its budget is two numbers, not a
-// flag — with the coverage its asker heard. Every key either answer carries is
-// one the tool declares, so a verdict added beside the facts fails here.
+// fleet_health hands every node's alarm marks back as its heartbeat carried
+// them (kind and since, in the node's order), a node that found nothing as an
+// empty list and one with no evaluated table as saying nothing, never healthy,
+// and adds no judgement: a busy, draining, config-stuck node with nothing
+// firing is reported with nothing firing. code_status hands each Gitlet node's
+// account back as given (a cache past budget is two numbers, not a flag). Every
+// key either answer carries is one the tool declares.
 //
-// Mutation: mark a draining node as firing, read an unevaluated table as an
-// empty one, or drop a node's since, and fleet_health goes red; add an
-// over-budget flag to a node's cache, and code_status does.
+// Mutation: mark a draining node firing, read an unevaluated table as empty, or
+// drop a since → fleet_health red; add an over-budget flag → code_status red.
 func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 	t.Parallel()
 	backend := heldBackend()
@@ -501,21 +489,15 @@ func TestTheHealthToolsReportOnlyTheTablesVerdicts(t *testing.T) {
 // A SEAT GRANT ADMITS ONLY ITS GRANTED SEATS, and a surface offers the health
 // tools exactly where the table admits.
 //
-// One decision, three questions of it: the gate on a call (the seat whose role
-// carries `health_tools` is answered, the seat whose role does not is refused),
-// Admits (which a surface asks before anything is named), and Withheld (what a
-// seat's surfaces leave out: both health tools for the ungranted seat, nothing
-// of them for the granted one, and no other builtin but those the table holds
-// human-only — code_report_check, a person's own CI's,
-// code_purge_unreachable, a person's purge, and code_import_repo, a person's
-// import — which it refuses every seat,
-// chart or none). A person is the class's: admin admitted, everybody
-// else refused.
+// One decision, three questions: the gate on a call (the seat whose role
+// carries `health_tools` answered, the other refused), Admits, and Withheld
+// (both health tools for the ungranted seat, none for the granted, and no
+// other builtin but the table's human-only code_report_check,
+// code_purge_unreachable and code_import_repo, refused every seat, chart or
+// none). A person is the class's: admin admitted, everybody else refused.
 //
-// Mutation: decide a seat on a granted row by the class instead of its role's
-// grant (ignore the grant), and the granted seat is refused and offered
-// nothing; admit every seat on such a row, and the ungranted one is offered
-// and answered.
+// Mutation: decide a granted row by class (ignore the grant), and the granted
+// seat is refused; admit every seat on it, and the ungranted one is answered.
 func TestASeatGrantAdmitsOnlyItsGrantedSeats(t *testing.T) {
 	t.Parallel()
 	_, chart := healthChart(t)
@@ -673,11 +655,10 @@ func TestACodeStatusAnswerIsHeldToTheSeatsRepositoryGrant(t *testing.T) {
 }
 
 // manyHotRepos is a report of nodes Gitlet nodes naming per repositories each,
-// every repository on one node alone, as repository homes spread them: the
-// fleet's r-th is "repo-<r>" with the r-th smallest id, the hour's use falling
-// with r and the day's rising — so the hottest of the hour is the first and
-// the hottest of the day the last — and the Gitlet nodes take them in turn. And
-// every repository it names, by name, for Gitlet resolving them all.
+// every repository on one node alone, dealt in turn: the r-th is "repo-<r>"
+// with the r-th smallest id, the hour's use falling with r and the day's
+// rising (the hour's hottest first, the day's last). It also returns every
+// repository by name, for a Gitlet resolving them all.
 func manyHotRepos(nodes, per int) (builtin.CodeStatusReport, map[string]gitlet.RepoRef) {
 	report := builtin.CodeStatusReport{Statuses: make([]host.CodeStatus, nodes)}
 	repos := map[string]gitlet.RepoRef{}
@@ -726,18 +707,15 @@ func (*stalledGrants) FloorOf(string) statelog.Position { return statelog.Positi
 // A CODE STATUS JUDGEMENT ENDS AT ITS FIRST FAILED READ.
 //
 // A failure answers the whole call unavailable, so nothing read after it can
-// change the answer: with three Gitlet nodes naming forty repositories each, the
-// hottest one's grant read failing at once and every other read holding until
-// its context ends — the code log out of quorum, whose reads fail only once
-// their barrier's budget is spent — the call answers unavailable as soon as
-// that one read has failed, having made at most codeStatusJudges reads, and
-// names no repository: the one it could not judge may be one the seat may not
-// read. Run in a bubble, so "as soon as" is every goroutine the call started
-// being done or blocked, never a clock.
+// change the answer: three Gitlet nodes naming forty repositories each, the
+// hottest one's grant read failing at once and every other holding until its
+// context ends (the code log out of quorum), answer unavailable once that read
+// failed, after at most codeStatusJudges reads, naming no repository (the
+// unjudged one may be one the seat may not read). A bubble makes "once" every
+// goroutine done or blocked, never a clock.
 //
-// Mutation: judge in a group whose first failure cancels nothing, and the
-// reads in flight hold the call; start the reads still waiting once one has
-// failed, and the call makes every one of them.
+// Mutation: a group whose first failure cancels nothing holds the call; start
+// the waiting reads after a failure, and the call makes every one of them.
 func TestACodeStatusJudgementEndsAtItsFirstFailedRead(t *testing.T) {
 	t.Parallel()
 	synctest.Test(t, func(t *testing.T) {
@@ -790,20 +768,16 @@ func TestACodeStatusJudgementEndsAtItsFirstFailedRead(t *testing.T) {
 
 // A CODE STATUS ANSWER COSTS THE READS IT ANSWERS, NOT THE FLEET'S.
 //
-// A seat's hot list keeps at most cache.HotRepos of each window, and judging
-// every repository the Gitlet nodes name made a grant read apiece — a barrier on
-// the code log a wave — that grew with the Gitlet nodes and not with the list. So
-// ten Gitlet nodes naming forty repositories each, four hundred in all, are
-// judged hottest first and only to the list's cut: the seat is answered
-// exactly the list a judgement of every repository answers — the twenty
-// hottest of the hour and of the day that it may read — having read only the
-// repositories that list keeps and the ones above its cut it may not read, and
-// is told how many of those it left out: never one below the cut, which is not
-// in the list whoever reads it.
+// A hot list keeps at most cache.HotRepos a window and each grant read is a
+// barrier on the code log, so ten Gitlet nodes naming forty repositories each
+// are judged hottest first, only to the list's cut: the seat gets exactly the
+// list judging all four hundred gives (the twenty hottest of the hour and of
+// the day it may read), reading only those and the unreadable ones above the
+// cut, whose count it is told, never counting one below the cut.
 //
-// Mutation: judge every repository the nodes name, and the reads count the
-// fleet and the cut's withheld count takes in repo-200; stop judging after the
-// first wave, and a repository the seat may not read is listed on a guess.
+// Mutation: judge every repository, and the reads count the fleet and the
+// withheld count takes in repo-200; stop after the first wave, and a
+// repository the seat may not read is listed on a guess.
 func TestACodeStatusAnswerCostsTheReadsItAnswers(t *testing.T) {
 	t.Parallel()
 	report, repos := manyHotRepos(10, 2*cache.HotRepos)
@@ -862,11 +836,10 @@ func TestACodeStatusAnswerCostsTheReadsItAnswers(t *testing.T) {
 
 // THE HEALTH TOOLS ARE ONE LIST: a seat's registry and the operator catalogue,
 // built over the same deps, hold the same two tools with byte-identical
-// descriptions and schemas, each a proven read; deps that reach no lease
-// table and nothing of Gitlet serve neither; and each is served only with the
-// requester ceiling's halves beside it — fleet_health never over the leases
-// alone, and code_status on the code reads' own terms, never over Gitlet
-// wired without them — since either would read for whoever woke a turn.
+// descriptions and schemas, each a proven read; deps reaching no lease table
+// and no Gitlet serve neither; and each is served only beside the requester
+// ceiling's halves (fleet_health never over the leases alone, code_status
+// never over Gitlet alone), since either would read for whoever woke a turn.
 //
 // Mutation: OperatorTools omitting healthCandidates, a health tool annotated
 // as a write, fleet_health served over the leases alone or code_status over
@@ -951,23 +924,16 @@ func TestTheHealthToolsAreOneList(t *testing.T) {
 
 // A CODE STATUS ANSWER IN A TURN SOMEBODY WOKE IS HELD TO THEIR GRANT TOO.
 //
-// Its repository reads are code reads, and the requester ceiling holds every
-// code read (ADR-0088): in a turn a colleague seat woke, each grant read names
-// that seat, so the hot list also leaves out a repository the seat may read
-// and the colleague may not — counted withheld beside the one the seat itself
-// may not read — and that repository asked by name is refused as the code
-// tools refuse a read above the ceiling, forbidden with the ceiling's reason
-// over gitlet.ErrAboveCeiling, and never asked of the Gitlet nodes. A turn nobody
-// woke, and one a person woke, read for nobody but the seat — a person bounds
-// nothing, since every person reads every repository — and the person who
-// woke it need not hold admin: whoever woke the turn is decided on
-// Gitlet's read verb, not on the health row, which the ceiling does not hold.
-// A turn a stranger woke, or a person who may not act in the company now, is
-// answered nothing, and nothing is read or asked.
+// The requester ceiling holds every code read (ADR-0088): in a turn a colleague
+// woke, each grant read names that seat, so the hot list also withholds (and
+// counts) one the colleague may not read, refused by name over
+// gitlet.ErrAboveCeiling without asking the nodes. A turn nobody or a person
+// woke reads for the seat alone (every person reads every repository), the
+// waker decided on Gitlet's read verb, not the health row, so needing no
+// admin. A stranger's or departed person's turn is answered nothing, unread.
 //
-// Mutation: read the hot list for the seat alone (no ceiling seat on the
-// reads), keep a repository answered ErrAboveCeiling, or decide whoever woke
-// the turn on code_status's own row → red.
+// Mutation: no ceiling seat on the reads, keep an ErrAboveCeiling repository,
+// or decide the waker on code_status's own row → red.
 func TestACodeStatusInATurnSomebodyWokeIsHeldToTheirGrantToo(t *testing.T) {
 	t.Parallel()
 	const vaultID, infraID = "0192f6c1-0000-7000-8000-000000000001", "0192f6c1-0000-7000-8000-000000000004"
@@ -1119,20 +1085,16 @@ func (l *countingLeases) ListLive(ctx context.Context, class coord.Class) ([]coo
 
 // A FLEET HEALTH ANSWER IN A TURN SOMEBODY WOKE IS READ ONLY FOR THE COMPANY.
 //
-// The seat's grant opens an administrator's view of the deployment, and a seat
-// that read it out for whoever messaged it would hand that view to anybody on
-// a chat surface it listens on: in a turn a stranger woke, or a person who may
-// not act in the company now, fleet_health answers nothing — refused with the
-// ceiling's reason, before the presence leases are read — and a requester this
-// node cannot compose is undecidable, never a turn nobody woke. A turn nobody
-// woke, a colleague seat's and that of a person of the company who holds no
-// admin are answered the seat's whole view: whoever woke the turn is decided
-// on fleet.health.read, which everybody of the company who may act holds, never
-// on the health row, which no requester holds.
+// The grant opens an administrator's view, which a seat reading it out for
+// whoever messaged it would hand to anybody on its chat surfaces: a stranger's
+// or departed person's turn is refused with the ceiling's reason before the
+// leases are read, and an uncomposable requester is undecidable, never a turn
+// nobody woke. A turn nobody woke, a colleague's and a non-admin person's get
+// the seat's whole view: the waker is decided on fleet.health.read, which all
+// who may act hold, never the health row, which no requester holds.
 //
-// Mutation: drop the ceiling, and the stranger's turn is answered; decide the
-// requester on fleet_health's own row, and the colleague's and the person's
-// turns are refused.
+// Mutation: drop the ceiling, and the stranger is answered; decide the
+// requester on fleet_health's own row, and the colleague and person are refused.
 func TestAFleetHealthInATurnSomebodyWokeIsReadOnlyForTheCompany(t *testing.T) {
 	t.Parallel()
 	o, chart := healthChart(t)
@@ -1200,21 +1162,16 @@ func TestAFleetHealthInATurnSomebodyWokeIsReadOnlyForTheCompany(t *testing.T) {
 
 // A FLEET PAST ONE ANSWER IS PAGED, NEVER REFUSED.
 //
-// fleet_health's answer grows with the fleet — some three hundred bytes a node
-// as it is sent, more for its labels and its alarms — so three hundred nodes,
-// half of them with long labels and well past where the whole fleet in one
-// answer was refused, are read a page at a time by id: twenty-five by default,
-// up to the hundred `limit` may ask for, fewer where the labels would make a
-// page outgrow one answer, every page compact and within ToolAnswerBytes, and
-// every node exactly once across the pages, in id order. `firing` narrows the
-// fleet to the nodes whose own table has an alarm firing, counting the nodes
-// that cannot say (`unevaluated`) rather than listing them; `node` reads one
-// node, a node that is not live is not found, and arguments that cannot be
-// read are refused.
+// fleet_health's answer grows some three hundred bytes a node, more for labels
+// and alarms, so three hundred nodes, half with long labels, are read a page
+// at a time by id: twenty-five by default, up to `limit`'s hundred, fewer where
+// labels would outgrow one answer; every page compact, within ToolAnswerBytes,
+// every node once across the pages in id order. `firing` keeps the nodes with
+// an alarm firing, counting those that cannot say (`unevaluated`); `node` reads
+// one, a node not live is not found, and unreadable arguments are refused.
 //
-// Mutation: render a page indented, ignore `cursor`, cap a page by `limit`
-// alone, or let `firing` keep a node with nothing firing or one that cannot
-// say, and a case is red.
+// Mutation: indent a page, ignore `cursor`, cap a page by `limit` alone, or let
+// `firing` keep a node with nothing firing or one that cannot say → red.
 func TestAFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 	t.Parallel()
 	const nodes = 300
@@ -1354,35 +1311,18 @@ func TestAFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 	}
 }
 
-// A FLEET OF GITLET NODES PAST ONE ANSWER IS PAGED, NEVER REFUSED — code_status's
-// answer about the fleet and its answer about one repository alike — AND A
-// PAGE ASKS ITS OWN GITLET NODES ALONE.
+// GITLET NODES PAST ONE ANSWER ARE PAGED, NEVER REFUSED, AND A PAGE ASKS ITS OWN.
 //
-// Four hundred Gitlet nodes, half with ids long enough that a hundred rows outgrow
-// one answer, and a tenth that did not answer: whole, either answer is far past
-// ToolAnswerBytes. Read a page at a time, every page fits one answer and goes
-// out compact; walking the pages by `next` lists every Gitlet node once and in id
-// order — each answered node's row, and every node's part in the coverage, an
-// unanswered node's included — the roster sorted however it was listed; a
-// page of a hundred is cut whole-row; the hot list rides the fleet's first page
-// alone; `node` reads one Gitlet node, one that did not answer as its coverage;
-// and arguments that cannot be read are refused.
+// Four hundred Gitlet nodes, half with long ids, a tenth unanswered: each page
+// of the fleet's or a repository's answer fits one, compact, cut whole-row, and
+// `next` walks every node once in id order (row and coverage) however the roster
+// is listed. One question a call: the fleet's first page asks every node for hot
+// lists, complete when all answered; any other page asks only the `limit` after
+// its cursor, complete when they did (a walk costs N answers, never N a page);
+// `node` that node. A refused call, dead node or unreadable roster asks nobody.
 //
-// Every call asks the Gitlet nodes exactly one question, and only the fleet's
-// first page asks every Gitlet node, each for its hot list: a later page — and
-// every page of a repository — asks the `limit` nodes after its cursor, and no
-// hot list, and `node` asks that node alone, so walking N Gitlet nodes costs the
-// N answers of its pages plus one fleet-wide first page, never N answers a
-// page. A page's `complete` is whether every node it lists answered — on the
-// fleet's first page, whether every Gitlet node did, its hot list drawn from all
-// of them. A refused call, a node that is no live Gitlet node among them, asks
-// nobody; and a roster that cannot be read is refused, unavailable, before
-// anybody is asked.
-//
-// Mutation: send the page `limit` asks whole rather than cut to one answer,
-// ignore `cursor`, send the hot list on every page, ask every Gitlet node for
-// every page, read the roster in the order it was listed, or give the fleet's
-// first page its listed nodes' `complete`, and a case is red.
+// Mutation: `limit` uncut, `cursor` ignored, hot lists or every node asked per
+// page, the roster read as listed, or the first page's listed `complete` → red.
 func TestAGitFleetPastOneAnswerIsPagedNeverRefused(t *testing.T) {
 	t.Parallel()
 	const nodes = 400

@@ -9,18 +9,14 @@ import (
 )
 
 // ONLY A NODE ON AN EXTERNAL BROKER IS ASKED FOR ITS ACCOUNT'S LIMIT, AND ONLY
-// AN ACCOUNT THAT ANSWERED WITH NONE IS REFUSED. A member reads its own
-// server's cap and a leaf its members' account, which the engine's own broker
-// never limits, so neither is refused however its account reads. A budget the
-// broker did not answer is load rather than the case's declaration, and an
-// account that states zero refuses every create alike on any machine, so
-// neither is refused either; nor is a case opened under SizedByTheMachine.
+// AN ACCOUNT THAT ANSWERED WITH NONE IS REFUSED: not a member or a leaf, a
+// budget the broker did not answer, an account stating zero, or a case opened
+// under SizedByTheMachine (undeclaredBrokerLimit has why).
 //
 // Mutations: drop the broker-kind check (the member and leaf rows are
 // refused); refuse whatever the account states (the stated row is refused);
-// refuse a budget that was not read (its row is refused); read a limit of
-// zero as unstated (its row is refused); ignore the opt-out (its row is
-// refused).
+// refuse a budget that was not read, read a limit of zero as unstated, or
+// ignore the opt-out (each one's row is refused).
 func TestOnlyANodeOnAnExternalBrokerIsAskedForItsAccountsLimit(t *testing.T) {
 	t.Parallel()
 	client := func(b *config.Bootstrap) {

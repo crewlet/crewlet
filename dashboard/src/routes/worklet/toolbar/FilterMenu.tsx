@@ -32,7 +32,7 @@
  * spelling would be a second copy of a table the engine refuses against.
  */
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Button, Input, Popover, SegmentedControl, Tag } from "@crewlethq/ui";
 import { CheckGlyph, ChevronLeftGlyph, SearchGlyph, PlusGlyph } from "@crewlethq/icons/glyphs";
 import {
@@ -53,12 +53,15 @@ import {
   type TrackerFilters,
 } from "~/lib/work.ts";
 import { humanize } from "~/lib/format.ts";
+import type { SeatChoice } from "~/lib/seats.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 import type { WorkFieldDef, WorkProjectTag, WorkStatusDef, WorkTypeDef } from "~/protocol/index.ts";
 
-/** One value a field can be filtered to. */
+/** One value a field can be filtered to; `face` is a seat's, before its name. */
 interface FilterOption {
   value: string;
   label: string;
+  face?: ReactNode;
 }
 
 /**
@@ -87,7 +90,7 @@ export interface FilterMenuProps {
   statuses?: WorkStatusDef[];
   tags?: WorkProjectTag[];
   fields?: WorkFieldDef[];
-  seats: { handle: string; name: string }[];
+  seats: readonly SeatChoice[];
   /**
    * The handle the HOST screen fixed, where one did.
    *
@@ -176,8 +179,8 @@ function useFilterFields({
         // UNASSIGNED IS A VALUE, not a missing filter — it is the one question
         // a lead actually opens a board to ask.
         options: [
-          { value: "none", label: "Unassigned" },
-          ...seats.map((s) => ({ value: s.handle, label: s.name })),
+          { value: "none", label: "Unassigned", face: <ChoiceFace seat={null} /> },
+          ...seats.map((s) => ({ value: s.handle, label: s.name, face: <ChoiceFace seat={s} /> })),
         ],
       });
     }
@@ -249,7 +252,7 @@ const SET_QUESTIONS: FilterOption[] = [
  * [SET_QUESTIONS] ends every list this returns; on the typed branch, which
  * returns no list at all, the panel draws the same two rows beside the box.
  */
-function customField(def: WorkFieldDef, seats: { handle: string; name: string }[]): FilterField {
+function customField(def: WorkFieldDef, seats: readonly SeatChoice[]): FilterField {
   const param = `f.${def.slug}`;
   const declared = def.config?.options ?? [];
   if (declared.length > 0) {
@@ -283,7 +286,10 @@ function customField(def: WorkFieldDef, seats: { handle: string; name: string }[
     return {
       param,
       label: def.name,
-      options: [...seats.map((s) => ({ value: s.handle, label: s.name })), ...SET_QUESTIONS],
+      options: [
+        ...seats.map((s) => ({ value: s.handle, label: s.name, face: <ChoiceFace seat={s} /> })),
+        ...SET_QUESTIONS,
+      ],
     };
   }
   return { param, label: def.name, placeholder: placeholderFor(def.type) };
@@ -676,6 +682,7 @@ function ValueRows({
           <span className="work-menu-check">
             {current === option.value ? <CheckGlyph size="sm" /> : null}
           </span>
+          {option.face}
           <span className="truncate">{option.label}</span>
         </button>
       ))}

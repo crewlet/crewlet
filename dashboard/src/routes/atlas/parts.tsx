@@ -44,6 +44,7 @@ import {
 import { KindGlyph } from "./glyph.tsx";
 // THE ATLAS'S OWN SHEET, with the chunk: every atlas screen draws these parts.
 import "~/styles/atlas.css";
+import { seatBadge } from "~/ui/SeatAvatar.tsx";
 
 export { KindGlyph };
 
@@ -111,8 +112,7 @@ export function OwnerChip({
     const seat = index.byHandle.get(owner.name);
     return (
       <EntityChip
-        name={seat?.name ?? owner.name}
-        kind={seat?.kind}
+        {...seatBadge(seat?.name ?? owner.name, seat?.kind, seat?.avatar)}
         size="xs"
         href={link && seat ? href(seatPath(seat)) : undefined}
       />

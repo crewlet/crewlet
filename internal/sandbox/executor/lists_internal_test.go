@@ -10,35 +10,29 @@ import (
 	"time"
 )
 
-// The lists a harness's record holds, as the readers that are no thread
-// layer's read them: a run's event stream ([claudeEvents]), its result
-// ([ClaudeCode.Parse]) and a person's transcript of a Claude Code or an
-// OpenCode session ([transcriptBuilder]).
+// The lists a harness's record holds, as the readers outside the thread layer
+// read them: a run's event stream ([claudeEvents]), its result
+// ([ClaudeCode.Parse]) and a person's transcript of either harness's session
+// ([transcriptBuilder]).
 
-// listBytes is how long a list the cost case reads is: hundreds of thousands
-// of elements, so that a reader that spends an allocation an element spends
-// hundreds of thousands, and short enough that the whole decode a mutant puts
-// back still fits a test's memory. What a list costs is per element, so a list
-// this long shows what one at the 32 MiB a line may hold ([maxLineBytes])
-// costs.
+// listBytes is how long a list the cost case reads: hundreds of thousands of
+// elements, so a per-element allocation shows, yet small enough that a mutant's
+// whole decode still fits a test's memory. Cost is per element, so this stands
+// for a list at the 32 MiB a line may hold ([maxLineBytes]).
 const listBytes = 1 << 20
 
 // listCopies is how many copies of the list a reader may make: three at most,
-// measured, where a decode of a line keeps the line's message raw, the
-// message's decode its content, and a call's block its result (the stream and
-// a person's transcript make two or three, a result's errors one in the
-// stream and two in the result file, an OpenCode step none or two), and one
-// more for headroom. What a reader may never spend is anything for each
-// element: read whole, a list cost from 56 to 519 times its size.
+// measured (a line's decode keeps the message raw, the message's decode its
+// content, a call's block its result), plus one for headroom. A reader may
+// never spend anything per element.
 const listCopies = 4
 
-// listSlack is how many more allocations a list read to its end may cost than
-// a list of one, though it keeps nothing more of it: the count is the
-// process's, and a list's copy can set off a collection while it is measured,
-// which empties the process's pools (the decoders, fmt's printers), so a read
-// builds what it takes from them afresh, a few allocations each. Under the
-// race detector a pool also drops a quarter of what is put in it. An
-// allocation an element is hundreds of thousands.
+// listSlack is how many more allocations a list read to its end may cost than a
+// list of one: the count is the process's, and a collection set off mid-measure
+// empties the pools (the decoders, fmt's printers), which a read then refills
+// at a few allocations each; under the race detector a pool also drops a
+// quarter of what is put in it. A per-element allocation is hundreds of
+// thousands.
 const listSlack = 64
 
 // listBuilder is a transcript read's builder, as a read from the archive's
@@ -48,10 +42,10 @@ func listBuilder() *transcriptBuilder {
 		places: []EntryPlace{}, calls: map[string]string{}}
 }
 
-// allocationsOf is what read allocates, the fewest of three calls after one
-// that warms it up: how many heap objects, and how many bytes. GOMAXPROCS is
-// one while it measures, as testing.AllocsPerRun's is, so another goroutine's
-// allocations are counted no more than they must be.
+// allocationsOf is what read allocates, heap objects and bytes, the fewest of
+// three calls after a warm-up. GOMAXPROCS is one while it measures, as
+// testing.AllocsPerRun's is, so other goroutines' allocations count as little
+// as they can.
 func allocationsOf(read func()) (objects, bytes uint64) {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	read()
@@ -68,12 +62,9 @@ func allocationsOf(read func()) (objects, bytes uint64) {
 }
 
 // heldBy is how many bytes what read returns keeps alive, the fewest of three
-// calls: the heap in use after a collection with what it returned still held,
-// less the heap in use after a collection before it was called. What a read
-// allocates and lets go of along the way is no part of it, so this is what a
-// reader that keeps the read's answer holds, where [allocationsOf]'s bytes are
-// what the read cost while it ran. GOMAXPROCS is one while it measures, as
-// [allocationsOf]'s is.
+// calls: heap in use after a collection with the answer held, less that after a
+// collection before the call. Unlike [allocationsOf]'s bytes, what the read let
+// go of along the way is no part of it. GOMAXPROCS is one while it measures.
 func heldBy(read func() any) uint64 {
 	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
 	held := uint64(math.MaxUint64)
@@ -91,24 +82,17 @@ func heldBy(read func() any) uint64 {
 }
 
 // A LIST IN A HARNESS'S RECORD COSTS ITS READER ONE ELEMENT AT A TIME: every
-// list a run's event stream, its result and a person's transcript read (a
-// message's blocks, a call's result, a result's errors, an OpenCode step's
-// items and a tool's answer) is read an element at a time, each checked as it
-// is read, so a list of hundreds of thousands of elements, none of which says
-// anything, costs no more allocations than a list of one and no more bytes than
-// a few copies of itself. Decoded whole, each was a slice of every element
-// first: a block's 136 bytes, an item's 160, a part's 32 or 48, an error's 16,
-// and an error of its own for each element of another kind, before any was
-// looked at.
+// list the event stream, the result and a transcript read (a message's blocks,
+// a call's result, a result's errors, an OpenCode step's items, a tool's
+// answer) is read and checked an element at a time, so hundreds of thousands of
+// elements that say nothing cost no more allocations than one, and no more
+// bytes than a few copies of the list.
 //
-// Not parallel: the counts are the process's, and a parallel test's
-// allocations would be counted with this one's.
+// Not parallel: the counts are the process's.
 //
-// Mutation: decode a message's blocks, a tool's answer, a step's items or a
-// result's errors whole before reading the first, or have the walk of the
-// blocks collect them before it hands out the first, and its reader's list
-// costs hundreds of thousands of allocations, or tens of MiB, more than a list
-// of one.
+// Mutation: decode any of those lists whole before reading the first element,
+// or have the blocks' walk collect them before handing out the first, and the
+// list costs hundreds of thousands of allocations, or tens of MiB, more.
 func TestAListInAHarnesssRecordCostsItsReaderOneElementAtATime(t *testing.T) {
 	// Each read is handed bytes made once, outside what is measured, as a
 	// reader is handed a line it did not copy.
@@ -162,21 +146,18 @@ func TestAListInAHarnesssRecordCostsItsReaderOneElementAtATime(t *testing.T) {
 	}
 }
 
-// A LIST IS READ AN ELEMENT AT A TIME, AS ITS HARNESS READS IT: an element
-// that is no object (a number, a string, null, a list) is no block, item or
-// part, a key of another kind than its field's reads as nothing, and each
-// costs itself alone, the elements after it read; a key is read exactly as
-// written, as JSON.parse, which both harnesses read their records with, reads
-// it, so `Type` is no block's type; and a string's lone surrogate or invalid
-// UTF-8 reads as U+FFFD, never as no list. A result's errors are read the same
-// way: each that is a string as written, each of another kind as nothing, a
-// line apart, trimmed, as the list decoded into strings and joined read.
+// A LIST IS READ AN ELEMENT AT A TIME, AS ITS HARNESS READS IT: an element that
+// is no object is no block, item or part, a key of the wrong kind reads as
+// nothing, and each costs itself alone, the elements after it still read; a key
+// is matched exactly, as both harnesses' JSON.parse does, so `Type` is no
+// block's type; a lone surrogate or invalid UTF-8 reads as U+FFFD, never as no
+// list. A result's errors likewise: each string as written, anything else as
+// nothing, a line apart, trimmed, as a decode into strings joined would read.
 //
-// Mutation: read a key by its case, as encoding/json matches a struct's
-// fields, and the block, the part or the item spelled `Type` is read as text;
-// end a walk at an element that is no object, and the elements after it are
-// lost; write one line between two errors however many said nothing between
-// them, and the errors read as fewer lines than they were.
+// Mutation: match keys by case, as encoding/json does, and `Type` reads as text;
+// end a walk at a non-object, and the elements after it are lost; write one
+// line between two errors however many said nothing between them, and the
+// errors read as fewer lines than they were.
 func TestAListIsReadAnElementAtATimeAsItsHarnessReadsIt(t *testing.T) {
 	t.Parallel()
 	const (

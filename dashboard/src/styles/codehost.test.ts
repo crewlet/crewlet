@@ -8,12 +8,10 @@ import {
   CODE_GROUNDS,
   CODE_PICK,
   CODE_REF,
-  DIFF_HUNK,
-  DIFF_ROWS,
   SYNTAX_INKS,
 } from "@crewlethq/tokens/test/palette";
 
-import { declared, sheetRules, splitSelectors, type SheetRule } from "../test/sheets.ts";
+import { declared, sheetRules, type SheetRule } from "../test/sheets.ts";
 import {
   SRC,
   classWrites,
@@ -23,13 +21,13 @@ import {
   parse,
   resolveSource,
   shippedText,
+  spelled,
   stringValue,
   walk,
   type Lang,
   type Module,
   type Node,
 } from "../test/source.ts";
-import { spelled } from "../test/kit.ts";
 
 /**
  * THE CODE HOST'S COLOURS ARE GITLET'S (the one rule's seventh exception): its
@@ -37,7 +35,7 @@ import { spelled } from "../test/kit.ts";
  * by its token sheet alone, and its marks drawn by Gitlet's modules and hosts.
  */
 
-/** The change, syntax, ref and file families; the diff family is `diffs.test.ts`'s. */
+/** The change, syntax, ref and file families; the diff family is every diff's. */
 const FAMILY = /--color-(?:syntax|change-(?:open|merged|closed|draft)|code|file)-[\w-]+/g;
 
 /** Every code host token, the diff family's included. */
@@ -61,8 +59,8 @@ const READERS: { file: string; family: RegExp; why: string }[] = [
 const HOSTS: { file: string; names: string[]; why: string }[] = [
   {
     file: "routes/home/CodeWaiting.tsx",
-    names: ["ChangeStateTag"],
-    why: "Home's code card lists Gitlet's changes, each with its state as Gitlet draws it.",
+    names: ["ChangeRows"],
+    why: "Home's code card lists Gitlet's changes in Gitlet's change row, compact, its halves one peek order.",
   },
   {
     file: "routes/inbox/InboxPane.tsx",
@@ -72,17 +70,17 @@ const HOSTS: { file: string; names: string[]; why: string }[] = [
   {
     file: "routes/me/MyWork.tsx",
     names: ["ChangeList"],
-    why: "My work's Reviews mount Gitlet's Changes grid for the reviews and fixes a person owes.",
+    why: "My work's Reviews mount Gitlet's change rows for the reviews and fixes a person owes.",
   },
   {
     file: "routes/agents/seat/Code.tsx",
     names: ["ChangeList", "ReviewList"],
-    why: "A seat's Code section mounts Gitlet's Changes grid for the changes the seat opened.",
+    why: "A seat's Code section mounts Gitlet's change rows for the changes the seat opened.",
   },
   {
     file: "routes/worklet/WorkItem.tsx",
     names: ["ChangeList"],
-    why: "A task's Changes tab mounts Gitlet's Changes grid for the changes that carry it out.",
+    why: "A task's Changes tab mounts Gitlet's change rows for the changes that carry it out.",
   },
 ];
 
@@ -92,7 +90,8 @@ const ANYWHERE = new Set(["CODE_LIST_POLL_MS"]);
 
 /** The one module that writes each mark's class, and each token's. */
 const WRITERS: Record<string, string> = {
-  "code-state": "routes/gitlet/Changes.tsx",
+  "code-state": "routes/gitlet/ChangeRow.tsx",
+  "code-state-glyph": "routes/gitlet/ChangeRow.tsx",
   "code-branch-chip": "routes/gitlet/ui.tsx",
   ...Object.fromEntries(
     SYNTAX_INKS.map((ink) => [`code-syn-${kindOf(ink)}`, "routes/gitlet/syntax.tsx"]),
@@ -214,12 +213,14 @@ export function lazyPicks(path: string, text: string, lang: Lang): string[] {
 const MARK_TOKENS = /--color-(?:change-(?:open|merged|closed|draft)|code-ref)-[\w-]+/;
 const MARK_CLASSES = /\.code-(?:state|branch-chip)(?![\w-])/;
 
-/** The pill's and the chip's rules: the four states, the pill's word, the chip and its selected row. */
+/** The pill's, the glyph's and the chip's rules: the four states each, the pill's word, the chip and its selected rows. */
 const MARK_RULES = new Set([
   ...CHANGE_STATES.map(([state]) => `.code-state[data-state="${state}"]`),
+  ...CHANGE_STATES.map(([state]) => `.code-state-glyph[data-state="${state}"]`),
   ".code-state[data-state] > :last-child",
   ".code-branch-chip",
   '[role="row"]:is([aria-current="true"], :has([aria-current="true"])) .code-branch-chip',
+  ".code-list__row[data-current] .code-branch-chip",
 ]);
 
 /**
@@ -252,11 +253,12 @@ export function unmeasuredPaints(rules: readonly SheetRule[]): string[] {
       out.push(`${file} ${selector} ${property}: ${got}, not ${token}`);
     }
   };
-  for (const [state, fill, label] of CHANGE_STATES) {
+  for (const [state, fill, label, ink] of CHANGE_STATES) {
     const selector = `.code-state[data-state="${state}"]`;
     want(selector, "background", fill);
     want(selector, "color", label);
     if (state === "draft") want(selector, "border-color", CHANGE_DRAFT_CHIP[1]);
+    want(`.code-state-glyph[data-state="${state}"]`, "color", ink!);
   }
   want(".code-branch-chip", "background", CODE_REF[1]);
   want(".code-branch-chip", "color", CODE_REF[0]);
@@ -373,34 +375,22 @@ export function syntaxSites(path: string, text: string, lang: Lang): string[] {
 /** A class whose element holds coloured code: its grounds are the ones the inks are measured on. */
 const CODE_HOLDERS =
   /\.code-(?:source|blame|search-(?:file|lines|line))(?:__(?:line|text))?(?![\w-])/;
-/** A coloured diff, whose lines, hunk row and body hold coloured code. */
-const CODE_DIFF = /\.diff-view--code(?![\w-])/;
-const RUN = /\.diff-view__run(?![\w-])/;
-
 /**
  * A rule painting a ground under coloured code with anything but the kit's
- * code grounds, their hover or the pick (in a coloured diff its rows and hunk
- * row too, and a word tint on a changed run alone), as `file selector property: value`.
+ * code grounds, their hover or the pick, as `file selector property: value`.
+ * A diff's grounds are the design system's `DiffView`'s.
  */
 export function unmeasuredCodeGrounds(rules: readonly SheetRule[]): string[] {
   const allowed = new Set([...CODE_GROUNDS, "--color-surface-hover", CODE_PICK]);
-  const lines = new Set([...allowed, ...DIFF_ROWS.map((d) => d.row), DIFF_HUNK.row]);
-  const words = new Set(DIFF_ROWS.map((d) => d.word));
   const out: string[] = [];
   for (const rule of rules) {
-    const diff = CODE_DIFF.test(rule.selector);
-    if (!diff && !CODE_HOLDERS.test(rule.selector)) continue;
-    const run = diff && splitSelectors(rule.selector).every((s) => RUN.test(s));
+    if (!CODE_HOLDERS.test(rule.selector)) continue;
     for (const decl of rule.body.split(";")) {
       const at = /^\s*(background(?:-color)?)\s*:\s*([\s\S]*?)\s*$/.exec(decl);
       if (!at) continue;
       const value = at[2]!;
       const token = /^var\((--color-[\w-]+)\)$/.exec(value)?.[1];
-      const ok =
-        value === "none" ||
-        value === "transparent" ||
-        (token && (diff ? lines : allowed).has(token)) ||
-        (token && run && words.has(token));
+      const ok = value === "none" || value === "transparent" || (token && allowed.has(token));
       if (!ok) out.push(`${rule.file} ${rule.selector} ${at[1]}: ${value}`);
     }
   }
@@ -533,13 +523,10 @@ describe("in the palette", () => {
 
   test("the code the inks colour stands on the grounds they are measured on", () => {
     const rules = sheetRules();
-    // A VACUITY FLOOR: the search lines and a coloured diff's rows, runs, hunk row and pick.
+    // A VACUITY FLOOR: the search lines.
     expect(
       rules.filter((r) => /\.code-search-line(?![\w-])/.test(r.selector)).length,
     ).toBeGreaterThan(0);
-    expect(
-      rules.filter((r) => CODE_DIFF.test(r.selector) && /background/.test(r.body)).length,
-    ).toBeGreaterThanOrEqual(6);
     expect(unmeasuredCodeGrounds(rules)).toEqual([]);
   });
 
@@ -587,7 +574,11 @@ describe("it can tell", () => {
       "routes/settings/Foo.tsx:1 imports ChangeStateTag",
     ]);
     expect(markSites("routes/gitlet/Foo.tsx", tag, "tsx")).toEqual([]);
-    expect(markSites("routes/home/CodeWaiting.tsx", tag, "tsx")).toEqual([]);
+    const rows = 'import { ChangeRows } from "~/routes/gitlet/ChangeRow.tsx";';
+    expect(markSites("routes/home/CodeWaiting.tsx", rows, "tsx")).toEqual([]);
+    expect(markSites("routes/home/CodeWaiting.tsx", tag, "tsx")).toEqual([
+      "routes/home/CodeWaiting.tsx:1 imports ChangeStateTag",
+    ]);
     expect(
       markSites(
         "routes/settings/Foo.tsx",
@@ -693,6 +684,9 @@ describe("it can tell", () => {
         '.code-state[data-state="draft"]',
         "border-color: var(--color-change-draft-edge); background: var(--color-change-draft-fill); color: var(--color-change-draft-label);",
       ),
+      ...CHANGE_STATES.map(([s, , , ink]) =>
+        rule("gitlet.css", `.code-state-glyph[data-state="${s}"]`, `color: var(${ink});`),
+      ),
       rule("gitlet.css", ".code-branch-chip", chip),
     ];
     const good =
@@ -718,6 +712,15 @@ describe("it can tell", () => {
       "gitlet.css .code-branch-chip background: --color-code-ref-ink, not --color-code-ref-fill",
       "gitlet.css .code-branch-chip color: --color-code-ref-fill, not --color-code-ref-ink",
     ]);
+    // A ROW'S STATE GLYPH in its pill's label step, which is measured on the fill, not the row.
+    const labelled = sheet(good, chip).map((r) =>
+      r.selector === '.code-state-glyph[data-state="open"]'
+        ? { ...r, body: "color: var(--color-change-open-label);" }
+        : r,
+    );
+    expect(unmeasuredPaints(labelled)).toEqual([
+      'gitlet.css .code-state-glyph[data-state="open"] color: --color-change-open-label, not --color-change-open-ink',
+    ]);
   });
 
   test("a pill's or a chip's colour read, or its class named, by another rule", () => {
@@ -736,11 +739,14 @@ describe("it can tell", () => {
         ),
         rule("screens.css", ".code-branch-chip", "background: none;"),
         rule("gitlet.css", ".code-ftree__status", "color: var(--color-change-mark);"),
+        rule("screens.css", ".code-list__row[data-current] .code-branch-chip", "background: none;"),
+        rule("gitlet.css", ".code-list__row[data-current] .code-branch-chip", "background: none;"),
       ]),
     ).toEqual([
       "gitlet.css .code-ftree__status",
       'gitlet.css [role="row"] .code-state[data-state="open"]',
       "screens.css .code-branch-chip",
+      "screens.css .code-list__row[data-current] .code-branch-chip",
     ]);
   });
 
@@ -867,12 +873,11 @@ describe("it can tell", () => {
     expect(syntaxSites("routes/home/X.tsx", 'import "~/styles/gitlet-code.css";', "tsx")).toEqual([
       "routes/home/X.tsx:1 imports ~/styles/gitlet-code.css",
     ]);
-    // DiffView takes spans, never grammars, and so does the run it cuts them at.
-    for (const path of ["components/DiffView.tsx", "lib/wordDiff.ts"]) {
-      expect(syntaxSites(path, 'import { statesOf } from "~/lib/syntax/index.ts";', "tsx")).toEqual(
-        [`${path}:1 reaches ~/lib/syntax/index.ts`],
-      );
-    }
+    // DiffView takes spans, never grammars.
+    const path = "components/DiffView.tsx";
+    expect(syntaxSites(path, 'import { statesOf } from "~/lib/syntax/index.ts";', "tsx")).toEqual([
+      `${path}:1 reaches ~/lib/syntax/index.ts`,
+    ]);
   });
 
   test("a ground under coloured code the inks are not measured on", () => {
@@ -890,32 +895,10 @@ describe("it can tell", () => {
         rule("gitlet.css", ".code-search-line", "background: var(--color-brand-accent-soft);"),
         rule("gitlet.css", ".code-search-line:hover", "background: var(--color-surface-hover);"),
         rule("gitlet.css", ".code-search-line__number", "background: var(--color-surface-raised);"),
-        rule(
-          "diff.css",
-          '.diff-view--code .diff-view__line[data-kind="add"]',
-          "background: var(--color-diff-added-word);",
-        ),
-        rule(
-          "diff.css",
-          '.diff-view--code .diff-view__line[data-kind="remove"]',
-          "background: var(--color-feedback-danger-soft);",
-        ),
-        rule(
-          "diff.css",
-          '.diff-view--code .diff-view__line[data-kind="add"] .diff-view__run',
-          "background: var(--color-diff-added-word);",
-        ),
-        rule(
-          "diff.css",
-          ".diff-view--code .diff-view__skip",
-          "background: var(--color-diff-hunk-row);",
-        ),
       ]),
     ).toEqual([
       "gitlet.css .code-source__line[data-picked] background: var(--color-brand-accent-soft)",
       "gitlet.css .code-search-line background: var(--color-brand-accent-soft)",
-      'diff.css .diff-view--code .diff-view__line[data-kind="add"] background: var(--color-diff-added-word)',
-      'diff.css .diff-view--code .diff-view__line[data-kind="remove"] background: var(--color-feedback-danger-soft)',
     ]);
   });
 });

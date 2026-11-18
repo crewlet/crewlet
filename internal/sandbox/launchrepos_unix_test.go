@@ -12,14 +12,12 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc/gittest"
 )
 
-// A REUSED BOX KEEPS WHAT IT HOLDS AND IS GIVEN NOTHING AGAIN. A job that
-// continues its turn's run reattaches to the box the job before it left,
-// whose checkout holds the agent's work. No launch clones a repository — the
-// run checks each out itself, running the commands `code_checkout` answers —
-// so the second launch clones and fetches nothing though it carries the first
-// job's grant, the agent's file in its checkout survives, and the operator's
-// setup is not applied twice. On the direct cell, where the steps run for real,
-// against a stand-in git that records every call.
+// A REUSED BOX KEEPS WHAT IT HOLDS AND IS GIVEN NOTHING AGAIN. A continuing job
+// reattaches to the box whose checkout holds the agent's work. The run, not the
+// launch, checks out each repository (from `code_checkout`'s commands), so the
+// second launch clones and fetches nothing though it carries the first job's
+// grant, the agent's file survives, and the operator's setup is not applied
+// twice. Run on the direct cell, against a stand-in git that records every call.
 //
 // Mutation: apply the operator's setup to a reused box as well — it is
 // applied twice, red.
@@ -87,12 +85,10 @@ exit 0`)
 	}
 }
 
-// SETUP AND THE RUN SHARE ONE WORKING DIRECTORY. A setup step writes at a path
-// relative to where it runs, and the harness is told to find what it
-// made at that path from where IT starts, so the two must start in the same
-// directory: every backend runs a command with no directory of its
-// own in one default (the box's workspace here). A file a setup step writes
-// is the job's to find.
+// SETUP AND THE RUN SHARE ONE WORKING DIRECTORY: a setup step writes relative
+// to where it runs and the harness looks from where it starts, so every backend
+// runs a command with no directory of its own in one default (here the box's
+// workspace).
 //
 // Mutation: give ApplySetup's commands a directory of their own (the box's
 // .tmp) — the job finds no marker, red.

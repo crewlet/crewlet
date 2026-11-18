@@ -313,33 +313,6 @@ func TestTheBrokerWarnings(t *testing.T) {
 	}
 }
 
-// A LEASE TOO SHORT FOR AN UPLOAD ACROSS A LINK IS REFUSED BY THE LEASE
-// FLOOR. Under [LinkLeaseFloor] one message of an upload to the broker's
-// object store crosses a link at the floor in more than the lease's
-// heartbeat, so a leaf, a client of an external cluster or a member serving
-// leaves would lose its seats to its own upload. Nothing warns of that,
-// because [MinLeaseTTL] refuses every lease under it: this holds the floor
-// over the link's figure, and a leaf's document on a lease between the two is
-// refused at the field rather than accepted with a lease its uploads outrun.
-func TestALeaseTooShortForAnUploadAcrossALinkIsRefused(t *testing.T) {
-	t.Parallel()
-	if MinLeaseTTL < LinkLeaseFloor {
-		t.Fatalf("the lease floor is %v and an upload across a link needs %v: a lease between "+
-			"the two is accepted and loses a leaf its seats to its own upload, so either keep "+
-			"the floor over it or refuse such a lease where uploads cross a link",
-			MinLeaseTTL, LinkLeaseFloor)
-	}
-	doc := "node:\n  roles: [seats]\nstore:\n  scratch: true\n" +
-		"stream:\n  leaf:\n    urls: [nats-leaf://data-a.example.com:7422]\n" +
-		"coordination:\n  type: embedded-kv\n  lease_ttl_seconds: 11\n"
-	_, err := ParseRunnableBootstrap([]byte(doc), EnvOnly())
-	problems := Problems(err)
-	if len(problems) != 1 || problems[0].Path != "coordination.lease_ttl_seconds" {
-		t.Fatalf("a leaf on an 11 s lease, under the %v an upload across its link needs: "+
-			"problems = %+v, want the lease refused", LinkLeaseFloor, problems)
-	}
-}
-
 // THE IN-MEMORY STREAM IS A MEMBER'S REFUSAL, because only a member holds a
 // stream: it is the one broker running JetStream in this process, and a member
 // keeps the estate's state logs on it from boot, solo or in a fleet

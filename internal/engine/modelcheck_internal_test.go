@@ -42,9 +42,8 @@ func TestACheckDiagnosesTheEntryOrItsDraft(t *testing.T) {
 	}
 }
 
-// THE RUNS STILL OUT ON AN ENTRY ARE COUNTED from the runs' own rows, by the
-// entry each job was launched on: what a credential write tells the person
-// keeps the old credential until its segment ends.
+// THE RUNS STILL OUT ON AN ENTRY ARE COUNTED from the runs' own rows, by launch
+// entry: a credential write tells the person they keep the old credential.
 func TestTheRunsOutOnAnEntryAreCounted(t *testing.T) {
 	t.Parallel()
 	c, seat := chainCompany(t, chainMember{key: "plan", agent: "claude-code", model: "opus"})
@@ -65,13 +64,12 @@ func TestTheRunsOutOnAnEntryAreCounted(t *testing.T) {
 }
 
 // A CANDIDATE IS TESTED IN A HOME THAT IS GONE AFTERWARD, AND IS NEVER KEPT.
-// Whatever way the test ends (the harness answered or failed, or the caller's
-// context was already cancelled), the throwaway home the candidate ran in is
-// removed, and the value reaches neither the fleet's secret store nor any log
-// line: a credential nobody chose to store must not outlive its test.
+// However the test ends (answered, failed, or a context already cancelled),
+// its throwaway home is removed and the value reaches neither the secret store
+// nor any log line.
 //
-// NOT PARALLEL: it reads the process's log output, which only a test running
-// alone may install a sink for.
+// Not parallel: it installs a sink for the process's log output, which only a
+// test running alone may do.
 //
 // Mutation: drop the home's removal, run the candidate in the entry's own
 // state directory, or log the values, and this fails.

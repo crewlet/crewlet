@@ -212,3 +212,31 @@ test("declining answers at once and saves nothing", async () => {
   expect(sent[0]).toMatchObject({ choice: "decline" });
   expect(put).not.toHaveBeenCalled();
 });
+
+// A REQUEST FOR ONE CHANGE NAMES ITS TARGET, WHAT ELSE IT ALLOWS AND ITS BOUND
+// before Grant. Mutation: drop the caution and a bucket's lifecycle rules are
+// granted untold.
+test("a grant for one change shows its target, what else it allows and its bound", async () => {
+  const bucket = { ...REQUEST, permission: "Bucket Write", hours: 1, target: "user-uploads" };
+  const access = structuredClone(ACCESS);
+  access.options[0]!.grants.push({
+    id: "Bucket Write",
+    name: "Bucket Settings: Edit",
+    group: "Zone",
+    scope_kind: "zone",
+    write: true,
+    note: "It also changes lifecycle rules, which can delete objects.",
+    max_hours: 4,
+  } as (typeof access.options)[0]["grants"][0]);
+  get.mockImplementation(async (path: string) =>
+    path.startsWith("/setup/access/requests/") ? bucket : access,
+  );
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: /Grant for this change/ }));
+  expect(await screen.findByText("user-uploads")).toBeTruthy();
+  expect(screen.getByText("For one change to")).toBeTruthy();
+  expect(screen.getByText("1 hour")).toBeTruthy();
+  const caution = screen.getByText(/lifecycle rules, which can delete objects/);
+  expect(caution.textContent).toContain("for at most 4 hours, never permanently");
+  expect(caution.textContent).toContain("asks you to sign in again");
+});

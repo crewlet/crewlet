@@ -55,14 +55,12 @@ func (leavingWorker) Complete(ctx context.Context, req llm.Request) (*llm.Comple
 }
 
 // A BRIDGED DELEGATE'S WORKERS ARE COUNTED ON ITS OWN RECORD. The real
-// `delegate`, made over an executor's bridged surface the way the bridge makes
-// a call — admitted, then run — forks its workers' call logs from the call's
-// own log, so the call's result hands on what they called
-// (toolloop.ToolResult.Absorbed), which the bridge records with the call and
-// the run's log tallies. A log seeded from that record — the call by its
-// identity, and what it absorbed — counts the worker's call exactly as the run's
-// own log does: a later call to the family after the worker's leave is no
-// retry of a call before it.
+// `delegate`, called over an executor's bridged surface as the bridge calls
+// (admitted, then run), forks its workers' call logs from the call's own log,
+// so its result hands on what they called (toolloop.ToolResult.Absorbed), which
+// the bridge records with the call. A log seeded from that record counts the
+// worker's call exactly as the run's own log does: a later call to the family
+// after the worker's leave is no retry of a call before it.
 //
 // Mutation: fork the workers from the tool's own turn rather than the one the
 // call was admitted under, and the worker's call reaches the run's log and no
@@ -117,9 +115,8 @@ func TestABridgedDelegatesWorkersAreCountedOnItsOwnRecord(t *testing.T) {
 		t.Fatalf("the run's own log counts %d of the worker's calls, want its one: the case proves nothing "+
 			"(the delegate answered %q)", live, res.Output)
 	}
-	// EVERY CALL THE RUN'S LOG TOOK IN FROM THE DELEGATE, after the delegate
-	// itself — the worker's leave, and its submission of its result — is what
-	// the call's result carries, in the order the log took them in.
+	// EVERY CALL THE RUN'S LOG TOOK IN AFTER THE DELEGATE (the worker's leave
+	// and its submission) is what the call's result carries, in that order.
 	entries := calls.Own()
 	at := slices.IndexFunc(entries, func(c turnctx.Called) bool { return c.Tool == subagent.ToolName })
 	if at < 0 {

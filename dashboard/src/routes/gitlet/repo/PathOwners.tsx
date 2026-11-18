@@ -29,6 +29,7 @@ import { useOrgIndex } from "~/lib/seats.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type { CodePathOwner, CodeRepoDetail } from "~/protocol/index.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /** "Add a path owner": the button that opens the form for an owner and its globs. */
 export function AddPathOwnerButton({
@@ -167,7 +168,11 @@ function PathOwnerDialog({
         .map((u) => ({ value: ownerKey({ kind: "unit", ref: u.id }), label: u.name }))
         .filter((o) => !taken.has(o.value)),
       ...index.seats
-        .map((s) => ({ value: ownerKey({ kind: "seat", ref: s.handle }), label: s.name }))
+        .map((s) => ({
+          value: ownerKey({ kind: "seat", ref: s.handle }),
+          label: s.name,
+          leading: <ChoiceFace seat={s} />,
+        }))
         .filter((o) => !taken.has(o.value)),
     ];
   }, [index, owners]);

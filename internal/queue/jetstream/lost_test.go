@@ -25,25 +25,20 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// lostWithin bounds a wait for a close the server has already decided: the
-// client reads the server's -ERR, or fails its one reconnect a second later,
-// and dispatches the handler on its own goroutine. Generous because it costs
-// nothing when the close comes; a wait that times out is the defect.
+// lostWithin bounds a wait for a close the server has already decided (the
+// client reads its -ERR, or fails its one reconnect a second later). Generous
+// because it costs nothing when the close comes; a timeout is the defect.
 const lostWithin = 30 * time.Second
 
 // reloadedLimit is the max_payload a case lowers the server to by a live
 // reload before sending a message past it.
 //
-// SMALL ENOUGH THAT THE CLIENT HANDS THE WHOLE MESSAGE TO THE SOCKET IN ONE
-// WRITE, which is what makes the close for good the outcome rather than one of
-// two. The server refuses a message on its header and closes the connection
-// without reading the body; a message larger than the socket takes at once is
-// still being written then, and since nats.go 1.55.0 a write that fails part
-// way closes the socket on the client's side and drops the server's refusal
-// unread, so the client reconnects instead. At a quarter of the contract,
-// about one close in ten under -race was such a reconnect, and the case staged
-// nothing. A few KiB is far below any socket buffer and above anything the
-// cases' own connections send unprompted.
+// SMALL ENOUGH THAT THE CLIENT WRITES THE WHOLE MESSAGE TO THE SOCKET AT ONCE,
+// so a close for good is the only outcome. The server refuses on the header
+// and closes without reading the body; a message still being written then
+// fails part way, and since nats.go 1.55.0 the client drops the server's
+// refusal unread and reconnects, staging nothing. A few KiB is far below any
+// socket buffer and above anything the cases' connections send unprompted.
 const reloadedLimit = 4 << 10
 
 // oversized is an event larger than reloadedLimit bytes on the wire and well
@@ -62,14 +57,12 @@ func oversized(t *testing.T) []byte {
 	return body
 }
 
-// sendPast sends nc a message past reloadedLimit, which the server has lowered
-// under it by a live reload.
+// sendPast sends nc a message past reloadedLimit, which a live reload has
+// lowered the server to.
 //
-// The Flush after it can fail, and that is not a failure of the case: the
-// server closes the connection over the message, so the PING behind it may
-// meet a reset. What the case cannot go on from is the client refusing the
-// message ITSELF, since it would have learned the reloaded limit and nothing
-// would reach the server to refuse.
+// The Flush may fail, since the server closes the connection over the message;
+// only the client refusing the message ITSELF stops the case, as it would then
+// have learned the reloaded limit and nothing would reach the server.
 func sendPast(t *testing.T, nc *nats.Conn) {
 	t.Helper()
 	if err := nc.Publish("crewlet.lost.oversized", oversized(t)); errors.Is(err, nats.ErrMaxPayload) {
@@ -95,22 +88,18 @@ func lost(t *testing.T, q *Queue) error {
 	return cause
 }
 
-// closeHandled sets nc's closed handler to the one nc was dialled with, if it
-// has one, followed by a close of the channel it returns: the witness that
-// whatever a close for good does about a loss — records it, or leaves it alone
-// — is done.
+// closeHandled wraps nc's closed handler (the one it was dialled with, if any)
+// with a close of the returned channel: the witness that whatever a close for
+// good does about a loss is done.
 //
-// THE CLIENT RUNS THE HANDLER, NOT THE CLOSE. It queues the handler while it
-// closes the connection and calls it a moment later on the connection's own
-// callback goroutine, so a case that reads the loss once the connection reads
-// as closed reads it in a race with that goroutine, and one that waits a while
-// for a record that should not come is a bet on how late the goroutine runs.
-// Read once this channel is closed, the loss holds whatever the handler
-// recorded, and a record it did not make is one it never makes.
+// The client runs the handler later, on the connection's callback goroutine,
+// so a loss read once the connection reads as closed races that goroutine.
+// Read after this channel closes, the loss holds whatever the handler recorded,
+// and nothing it lacks comes later.
 //
-// Only for a close the CLIENT makes: a close the connection's owner makes
-// calls no handler under [nats.NoCallbacksAfterClientClose], so the channel
-// never closes. [clientGoroutines] is the witness for that one.
+// Only for a close the CLIENT makes: an owner's close calls no handler under
+// [nats.NoCallbacksAfterClientClose], so the channel never closes;
+// [clientGoroutines] witnesses that one.
 func closeHandled(nc *nats.Conn) <-chan struct{} {
 	dialled := nc.ClosedHandler()
 	handled := make(chan struct{})
@@ -138,30 +127,23 @@ func awaitHandled(t *testing.T, handled <-chan struct{}, what string) {
 // clientLabel is the profiler label [clientGoroutines] runs a dial under.
 const clientLabel = "crewlet.lost.case"
 
-// clientGoroutines runs dial under a profiler label naming this case — which
-// every goroutine started inside it inherits, the ones the NATS client starts
-// for the connection dial opens among them — and returns a count of the
-// goroutines carrying it that are running the client's code.
+// clientGoroutines runs dial under a profiler label naming this case, which
+// every goroutine the NATS client starts for the connection inherits, and
+// returns a count of the labelled goroutines running the client's code.
 //
-// THE WITNESS FOR A CLOSE THAT QUEUES NO HANDLER, which leaves nothing the
-// client dispatches to wait behind. The client calls a connection's handlers
-// on a goroutine of its own, one at a time in the order they were queued, and
-// a close queues every handler it calls and then that goroutine's end, where
-// it returns. A close the connection's owner makes queues none under
-// [nats.NoCallbacksAfterClientClose], so the one thing behind a handler it
-// should not have queued is that return: once none of the connection's
-// goroutines is left, any handler its close queued has run, and the loss that
-// handler recorded is there to read.
-//
-// A goroutine profile is the one place that return shows: at debug level 1
-// it prints each goroutine's labels beside its stack.
+// THE WITNESS FOR A CLOSE THAT QUEUES NO HANDLER. The client calls a
+// connection's handlers in order on one goroutine of its own, and a close
+// queues its handlers and then that goroutine's return. An owner's close
+// queues none under [nats.NoCallbacksAfterClientClose], so once none of the
+// connection's goroutines is left, any handler it wrongly queued has run. A
+// goroutine profile at debug level 1 is the one place that shows: it prints
+// each goroutine's labels beside its stack.
 func clientGoroutines(t *testing.T, dial func()) (running func() int) {
 	t.Helper()
 	pprof.Do(t.Context(), pprof.Labels(clientLabel, t.Name()), func(context.Context) { dial() })
 	labelled := fmt.Sprintf("%q:%q", clientLabel, t.Name())
-	// THE CLIENT'S PACKAGE AS A STACK NAMES IT, read off one of its own
-	// functions rather than spelled: the linker writes the dot in nats.go
-	// as %2e there.
+	// THE CLIENT'S PACKAGE AS A STACK NAMES IT, read off one of its functions:
+	// the linker writes nats.go's dot as %2e there.
 	client := strings.TrimSuffix(
 		runtime.FuncForPC(reflect.ValueOf(nats.Connect).Pointer()).Name(), ".Connect")
 	running = func() int {
@@ -195,9 +177,8 @@ func clientGoroutines(t *testing.T, dial func()) (running func() int) {
 // awaitClientGone waits for every goroutine running counts ([clientGoroutines])
 // to have returned, once the owner of what was dialled has closed it.
 //
-// Asked every 10 ms: the goroutines return within microseconds of the close,
-// so the pace only sets how often a goroutine profile — which stops the world
-// to take — is taken while they do.
+// Every 10 ms: the goroutines return within microseconds of the close, and
+// each poll takes a stop-the-world goroutine profile.
 func awaitClientGone(t *testing.T, running func() int, what string) {
 	t.Helper()
 	deadline := time.Now().Add(lostWithin)
@@ -212,14 +193,12 @@ func awaitClientGone(t *testing.T, running func() int, what string) {
 
 // A CONNECTION NATS CLOSES FOR GOOD IS REPORTED, ONCE, WITH ITS CAUSE.
 //
-// The client stops reconnecting on its own in two ordinary shapes, each staged
-// here as an operator produces it under a running node — a max_payload lowered
-// by a LIVE RELOAD, and the server's credentials rotated, which it restarts
-// for — and each closed the node's broker connection with nothing told: no
-// publish, no consumer, no lease renewal, and a process that looked alive
-// until a person restarted it. The cause is the sentence the node stops
-// with, so each row holds it to the remedy its cause has, never to a single
-// sentence for all of them.
+// Staged in the two ordinary shapes an operator produces under a running node,
+// where the client stops reconnecting on its own: a max_payload lowered by a
+// LIVE RELOAD, and the server's credentials rotated. Unreported, either leaves
+// a node that looks alive with no publish, consumer or lease renewal. The
+// cause is the sentence the node stops with, so each row holds it to its own
+// remedy.
 //
 // Mutation: drop watchClose from dial and every row goes red; drop the
 // classification and the two rows each lose their remedy; record a second
@@ -273,10 +252,9 @@ func TestAConnectionClosedForGoodIsReportedOnceWithItsCause(t *testing.T) {
 				"stops with; it should end a line with:\n%s", printed)
 		}
 
-		// AND ONCE: the second connection is closed for good too, by the
-		// server refusing its credentials, and the cause stays the first —
-		// read once that close's handler has run, which is where a second
-		// record writing over the first would have written.
+		// AND ONCE: the server's refusing the second connection's credentials
+		// closes it for good too, and the cause stays the first, read once that
+		// close's handler (where a second record would write) has run.
 		srv.RestartAs(func(o *server.Options) { o.Authorization = "rotated" })
 		awaitHandled(t, secondHandled, "the second connection")
 		if got := q.LostCause(); got == nil || got.Error() != cause.Error() {
@@ -312,22 +290,12 @@ func TestAConnectionClosedForGoodIsReportedOnceWithItsCause(t *testing.T) {
 
 // ONLY THE QUEUE'S OWN CONNECTION CLOSING LOSES THE ACKS.
 //
-// Every delivery the queue made is settled over its own connection, so that one
-// closing for good is what makes a running turn's outcome unrecordable — and
-// what a drain stops waiting on. A second watched connection closing (the
-// coordination store's, on an embedded broker) stops the node too, but every
-// ack still lands, so it must NOT read as lost acks: a drain cut there would
-// cancel turns whose outcome the broker was about to record.
-//
-// Staged on an operator's server, through the one gesture that closes ONE
-// connection and leaves the other: a max_payload lowered by a live reload and a
-// message past it, sent first on the second connection and then on the queue's.
-//
-// The first half is read once the second connection's close has been HANDLED
-// ([closeHandled]): its handler is what records the loss, so read after it,
-// whether that close lost the acks is decided, where a quarter of a second of
-// waiting for an AcksLost that should not close was a bet on how soon the
-// client ran it.
+// Every delivery settles over the queue's own connection, so only its close
+// leaves a turn's outcome unrecordable and ends a drain's wait. A second
+// watched connection (the coordination store's, on an embedded broker) closing
+// stops the node, but acks still land: read as lost, a drain would cancel turns
+// about to be recorded. Staged by a live reload and a message past it, on the
+// second connection (read once HANDLED, [closeHandled]) and then the queue's.
 //
 // Mutation: dial DialWatched's connection as the one that settles and the first
 // half goes red; dial the queue's own without it, or record a close without
@@ -374,27 +342,14 @@ func TestOnlyTheQueuesOwnConnectionClosingLosesTheAcks(t *testing.T) {
 
 // A READER THAT HAS SEEN THE LOSS SEES WHETHER IT LOST THE ACKS.
 //
-// `crewlet run` wakes on Lost and then asks AcksLost without waiting, to say
-// before the drain whether the turns still running finish or are cancelled. So
-// the queue's own connection closing has to close AcksLost no later than Lost:
-// recorded the other way round, a reader woken in between promised an operator
-// that turns finish while the drain was cancelling them.
+// `crewlet run` wakes on Lost and asks AcksLost without waiting, to say before
+// the drain whether running turns finish, so record closes AcksLost no later
+// than Lost, or that reader promises turns the drain is cancelling.
 //
-// THE WINDOW IS HELD OPEN rather than raced for. Left to the scheduler, a
-// reader parked on Lost landed between the two closes in under one round in
-// twenty under -race and about one in twenty thousand without it, which is a
-// case that passes over the very defect it names. So the case enters the Lost
-// close itself, through the same sync.Once record goes through, and holds it:
-// record is then stopped exactly where Lost is about to close, which it reaches
-// only past the acks close, so AcksLost closes while it waits. Released, both
-// are closed.
-//
-// HELD AT THE LOST CLOSE, never at the acks one. Held there, with Lost asserted
-// still open, the case waited a quarter of a second for a close that should
-// not come, and a record the scheduler started late passed it with the two
-// closes the wrong way round. Held here, a record that closes Lost first is
-// stopped before it closes the acks at all, and AcksLost stays open for as
-// long as the case looks.
+// THE WINDOW IS HELD OPEN, as a race hit it under one run in twenty: the
+// case enters Lost's close via the sync.Once record uses, and holds it. A
+// correct record has closed AcksLost by then; one closing Lost first never
+// reaches the acks close. Held at the acks close, it would wait in vain.
 //
 // Mutation: close done before acks in record and this goes red on every run.
 func TestAReaderThatHasSeenTheLossSeesWhetherItLostTheAcks(t *testing.T) {
@@ -453,12 +408,11 @@ func closedYet(ch <-chan struct{}) bool {
 // A START THAT FAILED ON A LOST CONNECTION CARRIES THE CAUSE, AND ONE THAT DID
 // NOT IS LEFT ALONE.
 //
-// The step that meets a connection NATS closed for good fails in its own words —
-// "connection closed" — while the sentence naming why and what to change is
-// recorded beside it. The composition every start reads it through (this
-// queue's own open and an engine's boot over it) has to put the cause FIRST,
-// keep the step's own error in the chain, and touch no error at all when
-// nothing was lost: a boot refused over a bad config is not a lost broker.
+// The step that meets a connection NATS closed for good fails as "connection
+// closed", while the sentence naming why and what to change is recorded beside
+// it. The composition every start reads it through (the queue's open, an
+// engine's boot) puts the cause FIRST, keeps the step's error in the chain, and
+// touches no error when nothing was lost: a bad config is not a lost broker.
 //
 // Mutation: answer err unchanged with a cause recorded and the second half goes
 // red; compose a nil cause into a failure that had nothing to do with the
@@ -495,31 +449,19 @@ func TestAStartThatFailedOnALostConnectionCarriesTheCause(t *testing.T) {
 // A START WAITS FOR THE CAUSE OF A CONNECTION THE CLIENT HAS ALREADY CLOSED —
 // and waits for nothing where no watched connection is closed.
 //
-// The client closes a connection for good under its own lock, queues the closed
-// handler before it lets go, and runs the handler on a goroutine of its own, so
-// the step that met the close is released, fails and reaches its caller's
-// composition a moment before the cause is recorded. Read when it happened to
-// be there, the cause was named most of the time and dropped whenever the
-// caller's own cleanup was short. The composition has to wait for a handler the
-// client has queued, which it can tell by the connection reading as closed.
-//
-// The handler is the CASE's here — the connection is dialled unwatched and
-// tracked by hand, and the case records its cause late on purpose — so the
-// order is the case's rather than the scheduler's.
-//
-// EACH COMPOSITION RUNS IN A BUBBLE, where [synctest.Wait] returns only once it
-// has answered or is parked waiting for a record. So "at once" is an answer
-// there by then, and "not before the cause is recorded" is none there by then
-// with the cause still unrecorded — where a quarter of a second of nothing was
-// as true of a composition the scheduler started late as of one that waited.
-// The connection itself stays outside: it reaches a real server.
+// The client queues the closed handler under its lock and runs it on its own
+// goroutine, so the failed step reaches the composition before the cause is
+// recorded; the composition waits while the connection reads as closed. Here
+// the handler is the case's (nc is dialled unwatched), so the case orders it.
+// Each composition runs in a bubble, where [synctest.Wait] returns once it has
+// answered or parked; the connection stays outside, on a real server.
 //
 // Mutation: drop the settle from during and the second half goes red; settle
 // on a connection that is still open and the first half does.
 func TestAStartWaitsForTheCauseOfAConnectionAlreadyClosed(t *testing.T) {
 	t.Parallel()
 	srv := externaltest.Start(t, queue.MaxPayloadBytes)
-	nc, err := dial(Config{URL: srv.URL(), Token: externaltest.Token}, watched{})
+	nc, err := dial(Config{URL: srv.URL(), Token: externaltest.Token}, watched{}, nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -527,9 +469,8 @@ func TestAStartWaitsForTheCauseOfAConnectionAlreadyClosed(t *testing.T) {
 	step := fmt.Errorf("ensure stream CREWLET_AGENT: %w", nats.ErrConnectionClosed)
 
 	// composing starts a start's composition over l, which tracks nc, and
-	// returns once that composition has answered or is parked: what it
-	// composed is in the channel by then, and nothing is if it waits. Called
-	// inside a bubble, where l was made.
+	// returns once it has answered (into the channel) or parked. Called inside
+	// the bubble l was made in.
 	composing := func(l *connectionLoss) <-chan error {
 		watched{loss: l}.track(nc)
 		out := make(chan error, 1)
@@ -583,15 +524,11 @@ func TestAStartWaitsForTheCauseOfAConnectionAlreadyClosed(t *testing.T) {
 
 // A STOPPED QUEUE IS ANSWERED FROM WHAT IS RECORDED, AND NEVER WAITED ON.
 //
-// Its own Stop closed its connection, so the connection reads as closed — and
-// under NoCallbacksAfterClientClose no handler is coming for a close its owner
-// made. A start that asked once the queue had stopped would wait for ever on a
-// loss nobody will record.
-//
-// And an open that fails for a reason of its own — a context cancelled under
-// it — reads the cause before it closes the one connection it holds, for the
-// same reason: closed first, that connection reads as closed and the read would
-// wait for a handler its own close suppressed.
+// Its own Stop closed its connection, and under NoCallbacksAfterClientClose no
+// handler comes for an owner's close, so a wait would be for ever. Likewise an
+// open that fails for a reason of its own (a cancelled context) reads the cause
+// before it closes its connection: closed first, the read would wait for a
+// handler its own close suppressed.
 //
 // Mutation: drop the stopped-queue branch from LostDuring and the first half
 // hangs; close the connection before the read in abandonOpen and the second
@@ -643,23 +580,12 @@ func TestAStartIsNeverWaitedOnForItsOwnClose(t *testing.T) {
 // A CLOSE THIS NODE MADE ITSELF IS NOT A LOSS — and nor is a close of a
 // connection whose owner is the one to notice it.
 //
-// The client calls a closed handler for its owner's own Close unless it is told
-// not to, so a handler installed alone made every graceful stop a lost broker:
-// the queue's Stop, and the coordination store's connection the engine closes
-// itself on the way down. And a snapshot donor's connection, dialled through
-// DialOwned, serves peers rather than this node — closed for good under it,
-// the node still serves its own company, so that close is the donor's to
-// redial and never a reason to stop.
-//
-// EACH ROW IS READ ONCE WHATEVER COULD HAVE RECORDED A LOSS IS DONE, never after
-// a quarter of a second in which a handler the client ran late had recorded
-// nothing yet. The donor's connection is closed for good by the CLIENT, which
-// queues a handler however the connection was dialled, and is read once that
-// close has been handled ([closeHandled]). The first two are closed by their
-// OWNER, which queues no handler at all: read once every goroutine the client
-// started for the connection has returned ([clientGoroutines]), the one it
-// calls handlers on among them, which returns only behind every handler the
-// close queued.
+// Without NoCallbacksAfterClientClose the client calls the closed handler on an
+// owner's own Close, making every graceful stop (the queue's, the coordination
+// store's) a lost broker. A donor's DialOwned connection serves peers, so its
+// close is the donor's to redial. Each row is read once anything that could
+// record a loss is done: the donor's CLIENT close once handled ([closeHandled]),
+// the owners' closes once the client's goroutines are gone ([clientGoroutines]).
 //
 // Mutation: drop NoCallbacksAfterClientClose from watchClose and the first two
 // rows go red; give DialOwned the queue's loss and the third does.
@@ -726,16 +652,12 @@ func TestACloseThisNodeMadeIsNotALoss(t *testing.T) {
 // EVERY CONNECTION A NODE DEPENDS ON IS WATCHED, ON BOTH DIALS — and the one
 // whose loss is its owner's is not.
 //
-// The embedded broker's connections cannot be closed for good from a test
-// without stopping the broker, which ends the case's own connections with it,
-// so this is the structural half: what each connection was dialled with. The
-// behavioural half is the external rows above, through the dial an operator's
-// server takes; the embedded one takes [embeddedServer.connect], and only a
-// handler installed there makes the coordination store's connection — the one
-// holding every lease on that topology — a loss the node hears of.
-//
-// It is the gate ADR-0001 names: the coordination store has a connection of its
-// own on an embedded broker, and that is safe only because both are watched.
+// The structural half: what each connection was dialled with, since an
+// embedded broker's connection cannot be closed for good without stopping the
+// broker under the case. The external rows above are the behavioural half; on
+// the embedded topology only [embeddedServer.connect]'s handler makes the
+// coordination store's connection, holding every lease, a loss the node hears
+// of. This is the gate ADR-0001 names.
 //
 // Mutation: drop watchClose from connect and the embedded rows go red; hand
 // DialOwned the queue's loss and the owned rows do.
@@ -794,11 +716,10 @@ func TestEveryConnectionANodeDependsOnIsWatched(t *testing.T) {
 
 // THE CAUSE HAS FOUR REMEDIES, and each sentence names its own.
 //
-// Asserted on the sentence directly for the two shapes no case above can stage
-// without stopping a broker under itself: the embedded server's, where no
-// setting reaches the server and the remedy is the restart; and a cause the
-// client does not recognise, where the server's own log is the only place that
-// says why.
+// Asserted on the sentence for the two shapes no case above can stage without
+// stopping a broker under itself: the embedded server's, where no setting
+// reaches it and the remedy is the restart; and a cause the client does not
+// recognise, where only the server's own log says why.
 //
 // Mutation: send the embedded sentence to stream.url, or drop the default's
 // pointer at the server's log, and a row goes red.

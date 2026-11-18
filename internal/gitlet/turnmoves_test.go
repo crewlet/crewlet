@@ -11,8 +11,9 @@ import (
 )
 
 // A TURN MOVED CODE WHERE IT PUSHED, OPENED A CHANGE OR GAVE A REVIEW: a turn
-// that only commented on a change did not, and one that wrote nothing is not
-// named.
+// that only commented on a change did not, one whose only push a protection
+// refused whole (an attempt) did not, and one that wrote nothing is not named.
+// Mutation: count every push row, and the attempt's turn reads as moved.
 func TestATurnMovedCodeWhereItPushedOpenedAChangeOrReviewed(t *testing.T) {
 	t.Parallel()
 	n := newNode(t)
@@ -27,6 +28,15 @@ func TestATurnMovedCodeWhereItPushedOpenedAChangeOrReviewed(t *testing.T) {
 		set(seatRef, gitlet.ZeroOID, oidOf("B")))
 	push.Principal.Run = gitlet.RunProvenance{TurnID: "turn-push"}
 	n.push(repo, push)
+	refused := set(mainRef, oidOf("A"), oidOf("C"))
+	refused.Result, refused.Reason = gitlet.ResultNG, gitlet.RefusalProtectedDirect
+	attempt := entry(uuid.Must(uuid.NewV7()).String(), refused)
+	attempt.Pack, attempt.Offered = nil, 1
+	attempt.Principal.Run = gitlet.RunProvenance{TurnID: "turn-refused"}
+	n.push(repo, attempt)
+	if rows := n.count(`SELECT COUNT(*) FROM code_pushes WHERE turn_id = 'turn-refused'`); rows != 1 {
+		t.Fatalf("%d rows of the attempt, want its one", rows)
+	}
 	open := opening(repo, seatRef, mainRef, dev)
 	open.Open.TurnID = "turn-open"
 	opened, err := c.ProposeChange(t.Context(), open)
@@ -39,7 +49,7 @@ func TestATurnMovedCodeWhereItPushedOpenedAChangeOrReviewed(t *testing.T) {
 	converse(t, w, review)
 
 	got, err := n.reader.TurnsMovedCode(t.Context(), gitlet.TurnsMovedQuery{
-		Turns: []string{"turn-push", "turn-open", "turn-words", "turn-review", "turn-idle"},
+		Turns: []string{"turn-push", "turn-refused", "turn-open", "turn-words", "turn-review", "turn-idle"},
 		Level: statelog.ReadStale})
 	if err != nil {
 		t.Fatal(err)

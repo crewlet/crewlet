@@ -24,7 +24,7 @@ function shownValue(value: unknown): string {
 
 /**
  * One side of a setting as the diff's lines: ONE DIFF LINE PER LINE OF THE
- * VALUE, so every line of it carries its glyph and its surface step.
+ * VALUE, so every line of it carries its glyph and its tint.
  *
  * Handed to the diff as one line, a value of twelve lines (a seat,
  * `roles[1]`) was marked on its first row alone: the glyph sat beside the
@@ -32,7 +32,7 @@ function shownValue(value: unknown): string {
  * removed seat read as one removed line over eleven of nothing. Every line
  * names its setting's path, which is what pairs it with the other side's
  * lines of that setting; the diff writes the path once, on the first line of
- * the run (`components/DiffView.tsx`).
+ * the run.
  */
 function valueLines(kind: "add" | "remove", value: unknown, path: string): DiffLine[] {
   return shownValue(value)
@@ -41,7 +41,7 @@ function valueLines(kind: "add" | "remove", value: unknown, path: string): DiffL
 }
 
 /**
- * A comparison as the one diff the dashboard draws (`components/DiffView.tsx`),
+ * A comparison as `DiffView` draws it,
  * KEYED by path: an added setting is its new value added, a removed one its
  * old value removed, and a CHANGED one is both, its old value removed and its
  * new value added, so the diff underlines what moved inside the value rather

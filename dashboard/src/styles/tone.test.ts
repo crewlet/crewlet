@@ -80,6 +80,11 @@ const ACCENT: Site[] = [
     why: "The badge in the sidebar's account row IS the reader — `ring` is the kit's selected badge, and this is the one badge that means \"you\". Nobody, and an answer still out, are not ringed.",
   },
   {
+    file: "routes/gitlet/ChangeRow.tsx",
+    line: `ring={f.handle === me ? "brand" : undefined}`,
+    why: "The reader's own face in a change's row: the kit's selected badge, the one face there that means \"you\".",
+  },
+  {
     file: "routes/worklet/SavedViews.tsx",
     line: `<Tag key="pinned" variant="brand" title="Pinned by you">`,
     why: "A pin is PER READER; the view's own facts beside it are outline. The screen's own comment states the rule, and `viewMarks` is the ONE place that draws it — the grid and the facts block each had their own copy, already drifted.",
@@ -169,14 +174,14 @@ interface SheetSite {
 
 const ACCENT_RULES: SheetSite[] = [
   {
-    file: "diff.css",
-    selector: ".diff-view--code .diff-view__skip",
-    why: "The hunk row of code read in Gitlet, on the kit's hunk tint, the accent's soft step: where a hunk opens, never an action.",
-  },
-  {
     file: "gitlet.css",
     selector: '.code-state[data-state="merged"]',
     why: "A merged change on the kit's merged pill, the accent under its label, beside its glyph and word: a kind of change, never an action.",
+  },
+  {
+    file: "gitlet.css",
+    selector: '.code-state-glyph[data-state="merged"]',
+    why: "A merged change's glyph leading its row, in the kit's merged ink beside the state's word: a kind of change, never an action.",
   },
   {
     file: "gitlet.css",

@@ -15,28 +15,18 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// THE DOCTOR AND THE RUN COUNT, as the Models page asks them of a node.
+// The doctor and the run count, as the Models page asks them of a node.
 
 // CheckModel diagnoses a model entry on this node, as `crewlet llm doctor`
 // does ([harness.Provider.Diagnose]): the active entry, or, with draft, the
 // entry as a create or an edit would write it. values are candidate credential
-// values by the variable the harness is handed each under, tested and never
-// stored.
+// values keyed by the variable the harness gets each under, tested and never stored.
 //
-// THE ACTIVE ENTRY LEARNS FROM IT, a draft never does. A diagnosis of the
-// entry as it runs is a real call on its sign-in, recorded on its plan as any
-// call is; a draft is built here with no plan registry of the node's, so what
-// a candidate met says nothing about the sign-in the entry runs on.
-//
-// A DRAFT OR A CANDIDATE NEVER WRITES THE LIVE ENTRY'S DISK but as a seat on
-// it does. A candidate runs in a throwaway home made here and removed on every
-// way out, an answer, a refusal, a cancelled context or a panic alike. A draft
-// that would sign in with a login the active revision keeps on this node runs
-// on that login as the entry's seats do, and any other draft runs in the
-// throwaway home with only its own bundle ([Engine.draftAgent]). Built on the
-// live entry's directory with a bundle of its own, a draft replaced the login
-// every seat on the entry was signed in with, before anything was stored or
-// applied.
+// Only the active entry's diagnosis is recorded on its plan: a draft is built
+// with no plan registry, so what it met says nothing about the live sign-in.
+// Neither a draft nor a candidate writes the live entry's disk other than as a
+// seat on it would: a candidate runs in a throwaway home removed on every way
+// out (a panic included), and a draft is placed by [Engine.draftAgent].
 //
 // [ErrNoModel] for an existing entry the active revision does not have.
 func (e *Engine) CheckModel(ctx context.Context, key string, draft *config.LLMProvider,
@@ -68,8 +58,8 @@ func (e *Engine) CheckModel(ctx context.Context, key string, draft *config.LLMPr
 			return harness.Diagnosis{}, fmt.Errorf("%w: %q", ErrNoModel, key)
 		}
 	} else {
-		// THE DRAFT IN THE COMPANY IT WOULD JOIN: which seats launch on
-		// it and which cell it runs in are read off that document.
+		// The draft in the company it would join: its seats and cell are read
+		// off that document.
 		spliced := *company
 		spliced.Providers.LLM = maps.Clone(company.Providers.LLM)
 		if spliced.Providers.LLM == nil {
@@ -101,22 +91,14 @@ func (e *Engine) CheckModel(ctx context.Context, key string, draft *config.LLMPr
 // draftAgent builds draft for its check, writing the live entry's disk only as
 // every seat on it does.
 //
-// A DRAFT ON A LIVE LOGIN is built on that login's own state directory: it is
-// on the directory and the harness of an active entry, and names no bundle other
-// than that entry's, so it would sign in exactly as that entry's seats do. Its
-// calls check the login out of the shared directory under the shared login's
-// lock, and carry a login the harness refreshed back into it
-// ([harness.Checkout.Release]); nothing is restored, the bundle being the one
-// the apply already restored there. A COPY of the live login in a throwaway
-// home was the wrong move: a harness that refreshed its token during the check
-// rotated the vendor's refresh token inside the copy, the copy was removed, and
-// the live directory kept the retired token, which signs every seat out at the
-// next expiry; and the copy was read without the lock.
-//
-// ANY OTHER DRAFT runs in home, the check's throwaway home: one that names a
-// bundle of its own, restored into home and never over the live login, and
-// one on a directory no active entry keeps, which it would otherwise make on
-// the node's disk. Nothing of a live login is copied into home.
+// A draft on an active entry's directory and harness, naming no other bundle,
+// signs in as that entry's seats do, so it runs on that directory: its calls
+// check the login out under the shared lock and carry a refreshed login back
+// ([harness.Checkout.Release]). Never a copy in a throwaway home: a refresh
+// there rotates the vendor's token in the copy, leaving the live directory a
+// retired one that signs every seat out at expiry. Any other draft (its own
+// bundle, or a directory no active entry keeps, which it would create on the
+// node's disk) runs in home, its bundle restored there, copying in nothing live.
 func (e *Engine) draftAgent(ctx context.Context, c *Company, key string, draft config.LLMProvider,
 	home string) (*harness.Provider, error) {
 
@@ -177,11 +159,9 @@ func (e *Engine) checkHomeRoot() string {
 }
 
 // RunningRunsOn counts the executor runs out in a box on any of keys now,
-// across the fleet: the runs that keep the credential they were launched with
-// until their segment ends, which a credential write tells the person about.
-//
-// FROM THE RUNS' OWN ROWS, which every node shares, by the entry each job was
-// launched on ([sandbox.LaunchRecord.ProviderKey]).
+// across the fleet: they keep their launch credential until their segment ends,
+// which a credential write tells the person. Counted from the runs' shared rows
+// by launch entry ([sandbox.LaunchRecord.ProviderKey]).
 func (e *Engine) RunningRunsOn(ctx context.Context, keys []string) (int, error) {
 	rt := e.sandbox.Load()
 	if rt == nil || rt.pending == nil || len(keys) == 0 {

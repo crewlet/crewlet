@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -187,6 +188,60 @@ func TestACountsReadIsHeldToItsScope(t *testing.T) {
 	}
 }
 
+// THE QUEUE COUNT IS THE LIVE ENTRIES THE ASKER READS: deals, which vp-sales reads, holds two
+// live entries and an ended one, and web, Engineering's own, three and an ended one. Vp-sales
+// counts deals' two across the company and named, is refused web, and within a bound of one entry
+// counts at most that one and says there are more.
+// Mutations: count ended entries, count a repository the asker does not read, or never set More.
+func TestTheQueueCountIsTheLiveEntriesTheAskerReads(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	deals := countsRepo(t, n, "deals", gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Sales"}, gitlet.VisibilityUnit)
+	web := countsRepo(t, n, "web", gitlet.Owner{Kind: gitlet.OwnerUnit, Ref: "Engineering"}, gitlet.VisibilityUnit)
+	for repo, live := range map[string]int{deals: 2, web: 3} {
+		for i := range live {
+			state := gitlet.QueueWaiting
+			if i == 0 {
+				state = gitlet.QueueTesting
+			}
+			n.insertEntry(repo, mainRef, int64(i+1), state, time.Time{})
+		}
+		n.insertEntry(repo, mainRef, 100, gitlet.QueueLanded, harnessAt.Add(-time.Hour))
+	}
+	queued := func(repo string) (*gitlet.QueueCounts, error) {
+		t.Helper()
+		answer, err := n.reader.Read(t.Context(), gitlet.ReadQuery{Kind: gitlet.ReadCounts, Asker: vpSales,
+			Repo: repo, Counts: &gitlet.CountsQuery{Queue: true}, Fresh: stale})
+		if err != nil {
+			return nil, err
+		}
+		if answer.Counts == nil || answer.Counts.Queue == nil || answer.Counts.Changes != nil {
+			t.Fatalf("a counts read of the queue answered %+v, want the queue part alone", answer.Counts)
+		}
+		return answer.Counts.Queue, nil
+	}
+	for _, repo := range []string{"", "deals"} {
+		if got, err := queued(repo); err != nil || *got != (gitlet.QueueCounts{Live: 2}) {
+			t.Errorf("vp-sales counting %q's queue = %+v, %v; want deals' two live entries", repo, got, err)
+		}
+	}
+	if got, err := queued("web"); !errors.Is(err, gitlet.ErrNotPermitted) {
+		t.Errorf("vp-sales counting web's queue = %+v, %v; want ErrNotPermitted", got, err)
+	}
+	gitlet.SetQueueCountBound(n.reader, 1)
+	want := gitlet.QueueCounts{More: true}
+	if deals < web {
+		want.Live = 1
+	}
+	if got, err := queued(""); err != nil || *got != want {
+		t.Errorf("vp-sales counting within a bound of one = %+v, %v; want %+v", got, err, want)
+	}
+	if got, err := queued("deals"); err != nil || *got != (gitlet.QueueCounts{Live: 1, More: true}) {
+		t.Errorf("vp-sales counting deals within a bound of one = %+v, %v; want one and more", got, err)
+	}
+}
+
 // A COUNTS READ IS REFUSED WHERE IT MEANS NOTHING: no part, a cursor, a limit, counts on another
 // kind, facts on a read with none and an unknown name are each ErrInvalid naming the field.
 // Mutation: a refusal relaxed into an empty answer.
@@ -201,6 +256,7 @@ func TestACountsReadIsRefusedWhereItMeansNothing(t *testing.T) {
 		{"counts", gitlet.ReadQuery{Kind: gitlet.ReadCounts}},
 		{"counts", gitlet.ReadQuery{Kind: gitlet.ReadCounts, Counts: &gitlet.CountsQuery{}}},
 		{"cursor", gitlet.ReadQuery{Kind: gitlet.ReadCounts, Counts: asks, Cursor: "web"}},
+		{"cursor", gitlet.ReadQuery{Kind: gitlet.ReadCounts, Counts: &gitlet.CountsQuery{Queue: true}, Cursor: "web"}},
 		{"limit", gitlet.ReadQuery{Kind: gitlet.ReadCounts, Counts: asks, Limit: 10}},
 		{"counts", gitlet.ReadQuery{Kind: gitlet.ReadChanges, Counts: asks}},
 		{"repo_facts", gitlet.ReadQuery{Kind: gitlet.ReadChanges, RepoFacts: true}},

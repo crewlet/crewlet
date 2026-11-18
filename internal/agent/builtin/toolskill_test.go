@@ -18,9 +18,7 @@ func (k keyedSkills) Load(string) (skills.Loaded, bool) { return skills.Loaded{}
 func (k keyedSkills) Keys() []string { return k }
 
 // A KEY NOBODY PUBLISHED IS ANSWERED WITH THE KEYS THAT EXIST, the near ones
-// first, so a model that guessed corrects itself in one step: GP-38 tried
-// "artifacts", then "artifact", for "skill:artifacts", and was told only that
-// each was wrong.
+// first, so a model that guessed corrects itself in one step.
 //
 // Mutation: answer the miss without the keys and the second guess follows.
 func TestAMissedToolSkillNamesTheKeysThatExist(t *testing.T) {

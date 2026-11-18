@@ -29,13 +29,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// The register is the one place a domain is declared, so these are the tests
-// that make "one place" true: every entry is complete, every decision it holds
-// is stated rather than inferred from an omission, and the order every
-// operator surface reports in is the order written down here.
-//
-// Each carries the control that makes it fail, because a completeness walk
-// that cannot go red is a claim rather than a check.
+// The register is the one place a domain is declared: these tests hold every
+// entry complete, every decision stated rather than inferred from an omission,
+// and the written order the one every operator surface reports in. Each carries
+// the control that makes it fail.
 
 // TestEveryRegisteredDomainHasEveryConstructor is the walk itself: the
 // register this build ships passes its own boot check.
@@ -102,12 +99,9 @@ func TestNoWriteAuthorityFailsTheBootCheck(t *testing.T) {
 	}
 }
 
-// TestABarrierDecisionIsExplicit is the reason the table exists.
-//
-// A domain that grants no linearizable read is a legitimate declaration — the
-// vectors are one — and used to be indistinguishable from a domain whose
-// author never thought about it, because both are "absent from the switch".
-// Stating neither is now a boot failure, and so is stating both.
+// TestABarrierDecisionIsExplicit: granting no linearizable read (the vectors)
+// is a legitimate declaration that must be told from an author who never
+// decided, so stating neither is a boot failure, and so is stating both.
 func TestABarrierDecisionIsExplicit(t *testing.T) {
 	stated := map[string]bool{}
 	for _, entry := range register() {
@@ -116,11 +110,8 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 		}
 		stated[entry.Domain.Name()] = entry.Barrier != nil
 	}
-	// The shipped answers, so that a domain silently losing its read index
-	// is a failure here rather than a strongest read level nobody notices
-	// has stopped being available — for EVERY registered domain, since a
-	// table naming three of six pinned nothing about the identity
-	// estate's, and docs/guides/consistency.md publishes all of them.
+	// The shipped answers for EVERY registered domain, so one silently losing
+	// its read index fails here; docs/guides/consistency.md publishes them all.
 	shipped := map[string]bool{
 		worklet.Domain{}.Name():   true,
 		doclet.Domain{}.Name():    true,
@@ -178,20 +169,15 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 // EVERY BARRIER DECLARES ITS READ MODEL, AND NOTHING ELSE DOES.
 //
 // A domain's read model is how many linearizable reads a day each agent seat
-// puts on its log — the census `census_drift` holds the log to, and a term in
-// its ceiling. It was one figure charged to every log with a read index, so the
-// identity estate's log, which no read takes a barrier on, was held to the
-// whole company's reads while its ceiling was sized with none. Declared per
-// domain it is the domain's own number, and a boot refuses a barrier stated
-// without one, a model stated beside NoBarrier, and a negative rate.
+// puts on its own log: the census `census_drift` holds the log to, and a term
+// in its ceiling. A boot refuses a barrier stated without one, a model stated
+// beside NoBarrier, and a negative rate.
 //
 // The shipped figures are pinned AS LITERALS, so moving one is a change in this
-// diff and never a constant moved somewhere else: the reference company's 125 a
-// day per seat on the tracker's, the knowledge base's, the artifacts log's, the
-// artifact datastore's and Gitlet's logs, chat's own 120 on its log, the
-// executor log's own 150 — its launches' four reads a turn and one of the
-// executor's own reads of the seat's sessions — and zero on the identity
-// estate's and the Dashboard Assistant's.
+// diff: 125 a seat a day on the tracker's, the knowledge base's, the artifacts',
+// the artifact datastore's and Gitlet's logs, chat's 120, the executor log's 150
+// (its launches' four reads a turn plus one executor read of the seat's
+// sessions), and zero on the identity estate's and the Dashboard Assistant's.
 func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 	shipped := map[string]*int{
 		worklet.Domain{}.Name():   new(125),
@@ -263,12 +249,9 @@ func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 
 // A REGISTERED DOMAIN WITH NO GENERATION RECORD FAILS THE BOOT CHECK.
 //
-// A reanchor opens a generation with the domain's own record, and the engine
-// once refused every log but the tracker's for want of one — so the identity
-// estate's log, which a restored broker can leave behind as readily as the
-// tracker's, could never be re-anchored, and nobody learned it until an
-// incident asked. A domain that keeps none says so through its own
-// encoder, as the vectors do.
+// A reanchor opens a generation with the domain's own record, so without one a
+// log a restored broker left behind could never be re-anchored. A domain that
+// keeps none says so through its own encoder, as the vectors do.
 func TestADomainWithNoGenerationRecordFailsTheBootCheck(t *testing.T) {
 	for _, entry := range register() {
 		if entry.Generation == nil {
@@ -292,10 +275,7 @@ func TestADomainWithNoGenerationRecordFailsTheBootCheck(t *testing.T) {
 // EVERY IDENTITY-CLAIMING LOG CAN BE WRITTEN BY THE NODE GATE, AND NO OTHER.
 //
 // The trim counts nodes on a log that claims identity, so a log the gate could
-// not write kept an evicted node counted there for ever — which is what the
-// tracker-only gesture did to the pages log. The identity estate joined the
-// register after the gate did, and a gate that walked a switch of its own
-// did not reach it.
+// not write would keep an evicted node counted there for ever.
 func TestEveryIdentityLogHasANodeGateWriter(t *testing.T) {
 	claims := 0
 	for _, entry := range register() {
@@ -343,12 +323,11 @@ func TestEveryIdentityLogHasANodeGateWriter(t *testing.T) {
 // A DOMAIN KEEPS A GENERATION RECORD EXACTLY WHERE IT CLAIMS IDENTITY, and
 // the boot check refuses either mismatch naming the domain.
 //
-// The record a reanchor appends is the first-writer-wins between two
-// operators re-anchoring one log at once, and the audit row of who opened
-// which generation is applied from it. An identity log whose encoder kept none
-// could be opened at one generation by two nodes with nothing reporting it;
-// a log that claims no identity and keeps one writes an audit row nobody
-// reads. Both are reached only when an operator re-anchors, mid-incident.
+// The record a reanchor appends is the first-writer-wins between two operators
+// re-anchoring one log at once, and the audit row of who opened which
+// generation. An identity log keeping none could be opened at one generation by
+// two nodes unreported; a log claiming no identity and keeping one writes an
+// audit row nobody reads. Both surface only on a re-anchor, mid-incident.
 //
 // Mutation: drop either arm of the check in checkIdentityEntry and the matching
 // control passes the boot check.
@@ -395,15 +374,12 @@ func TestAGenerationRecordIsKeptExactlyWhereIdentityIsClaimed(t *testing.T) {
 }
 
 // A WAKE FEED THAT DISAGREES WITH ITS DOMAIN'S DECLARATION FAILS THE BOOT CHECK
-// — on every node and before anything is provisioned, where it used to be
-// asked only as a feed started, which a node that publishes nothing never
-// does.
+// — on every node and before anything is provisioned, since a node that
+// publishes nothing never starts a feed.
 //
 // The trim waits on the group a domain DECLARES, and the wakes advance the one
 // its feed RUNS AS; each way of making the two disagree is a trim that silently
-// waits for ever or silently waits for nothing. Every arm is a register this
-// build could ship if the feed were a switch beside the declaration, which is
-// what it was.
+// waits for ever or for nothing.
 func TestAFeedThatDisagreesWithItsDeclarationFailsTheBootCheck(t *testing.T) {
 	trackerFeed := func() func(*Engine, domainFeed) (changefeed.Translator, changefeed.Opener) {
 		for _, entry := range register() {
@@ -445,8 +421,7 @@ func TestAFeedThatDisagreesWithItsDeclarationFailsTheBootCheck(t *testing.T) {
 }
 
 // AN IDENTITY-CLAIMING DOMAIN THAT CANNOT SAY WHO IS EVICTED ON IT FAILS THE
-// BOOT CHECK — before anything is provisioned, where it used to be asked only
-// once the logs were up.
+// BOOT CHECK, before anything is provisioned.
 func TestAnIdentityDomainThatCannotSayWhoIsEvictedFailsTheBootCheck(t *testing.T) {
 	for _, c := range []struct {
 		name   string
@@ -571,9 +546,9 @@ func TestADomainDeclaredTwiceFailsTheBootCheck(t *testing.T) {
 	}
 }
 
-// TestRegistrationForAnUnknownDomainIsNotFound: the lookup every switch now
-// goes through answers honestly for a name the register does not hold, which
-// is what turns each of those switches' default arms into one answer.
+// TestRegistrationForAnUnknownDomainIsNotFound: the lookup every switch goes
+// through answers not-found for a name the register does not hold, so every
+// switch's default arm is that one answer.
 func TestRegistrationForAnUnknownDomainIsNotFound(t *testing.T) {
 	if _, found := registrationFor("no-such-domain"); found {
 		t.Fatal("the register answered for a domain it does not hold")
@@ -620,24 +595,16 @@ func (unregisteredDomain) ClaimsIdentity() bool { return false }
 
 // EVERY REGISTERED DOMAIN'S WRITE AUTHORITY BUILDS, over a real store.
 //
-// [statelog.NewPublisher] refuses a nil Rows, Fence or Gates BY NAME, so a
-// half-built write authority is a boot failure with an explanation rather than
-// a node that appends records the fleet drops one at a time. But `NewSeams` is
-// a closure the boot reaches one domain at a time, so a gap in the fifth entry
-// is found only after four domains have started.
-//
-// So every entry is built HERE the way [stateLog.start] builds it: over a
-// migrated store, beside a real runner, through [stateLog.publisherFrom].
-// A case with no store could not tell a constructor that needs one from a
-// broken one, and an error it skipped past certified nothing — which is what
-// this case did while it handed every constructor a nil database. And each
-// fence is ASKED, because one built over the wrong handle constructs fine and
-// fails on the first append.
-//
-// A STRICT domain needs its eviction reader too: readiness asks it whether
-// this node was evicted, and one without it serves reads from rows the fleet
-// has abandoned. Only a compacted log may leave it nil — its values are derived
-// and a re-embed replaces anything an evicted node held.
+// [statelog.NewPublisher] refuses a nil Rows, Fence or Gates by name, but the
+// boot reaches `NewSeams` one domain at a time, so a gap in the fifth entry is
+// found only after four domains have started. So every entry is built HERE as
+// [stateLog.start] builds it: over a migrated store (with none, a constructor
+// that needs one looks broken), beside a real runner, through
+// [stateLog.publisherFrom]. Each fence is ASKED: one over the wrong handle
+// constructs fine and fails on the first append. A STRICT domain needs its
+// eviction reader too: readiness asks it whether this node was evicted, and
+// without it reads are served from rows the fleet abandoned. Only a compacted
+// log, whose values a re-embed replaces, may omit it.
 func TestEveryRegisteredDomainsSeamsAreComplete(t *testing.T) {
 	t.Parallel()
 	s := seamsStateLog(t)
@@ -824,10 +791,9 @@ func (nothingToFetch) Pending(context.Context) (uint64, error) { return 0, nil }
 // THE IDENTITY LEDGER'S SESSION ROWS GO IN AN HOUR, and only a SHORTER kind
 // horizon is a declaration the boot accepts.
 //
-// The shipped answer first: the identity entry declares its session subjects'
-// own horizon, and it is an hour — the design's number, a resolve budget plus
-// a margin — with every other domain keeping one horizon for the whole ledger.
-// Then the controls: a kind horizon at or past the domain's would never be what
+// The identity entry declares its session subjects' own horizon, an hour (a
+// resolve budget plus a margin); every other domain keeps one horizon for the
+// whole ledger. The controls: a kind horizon at or past the domain's never
 // sweeps a row, and one of zero sweeps a row before its writer could re-ask.
 func TestTheIdentityLedgersSessionRowsGoInAnHour(t *testing.T) {
 	for _, entry := range register() {
@@ -864,11 +830,10 @@ func TestTheIdentityLedgersSessionRowsGoInAnHour(t *testing.T) {
 
 // A LEDGER HORIZON IS DECLARED EXACTLY WHERE A LEDGER IS KEPT.
 //
-// The shipped register first: every domain that keeps an operation ledger
-// states a horizon for it, and every domain that keeps none — the two
-// compacted logs — states none. Then both controls: a ledger with no horizon
-// is a table that grows for ever, and a horizon on a domain with no ledger is
-// the sweep every node ran against a `vectors_ops` table that does not exist.
+// Every domain keeping an operation ledger states a horizon for it, and the
+// two compacted logs, which keep none, state none. A ledger with no horizon
+// grows for ever; a horizon with no ledger sweeps a table that does not exist
+// (`vectors_ops`).
 func TestALedgerHorizonIsDeclaredExactlyWhereALedgerIsKept(t *testing.T) {
 	for _, entry := range register() {
 		name, ledger := entry.Domain.Name(), entry.Domain.OpsTable()

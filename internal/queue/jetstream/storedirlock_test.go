@@ -15,11 +15,9 @@ import (
 // A SECOND BROKER ON ONE STORE DIRECTORY IS REFUSED, before it reads anything,
 // and told who holds it.
 //
-// nats-server accepts the second one and both write the directory, so without
-// this the corruption is silent until a read meets it. In-process here, which
-// is the harder half: two brokers in one process are exactly as bad as two
-// processes, so a lock that only excluded other processes would wave this
-// through.
+// nats-server accepts the second and both write the directory, silently
+// corrupting it until a read meets it. In-process here, the harder half: a
+// lock that excluded only other processes would wave this through.
 //
 // Mutation: drop the lock from startEmbedded (or take it per process rather
 // than per descriptor) and the second start succeeds.
@@ -75,9 +73,8 @@ func TestAStoppedBrokerReleasesItsStoreDirectory(t *testing.T) {
 // lock would refuse every retry for as long as the failed process lived — in
 // a test binary, every later case on the directory.
 //
-// The start fails on its caller's context, cancelled before it begins: the
-// lock is taken, the server built and started, and the wait for it ends on the
-// cancel, which shuts the server down again.
+// It fails on a context cancelled before it begins: the lock is taken, the
+// server built and started, and the wait for it ends on the cancel.
 //
 // Mutation: drop the release from startEmbedded's failure path and the next
 // start on the directory is refused.

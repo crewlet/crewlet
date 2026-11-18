@@ -29,28 +29,16 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// scriptedProvider is the model behind every phase's harness runs that the engine
-// drives — which the executor is not: its run is played by a [playLauncher] —
-// scripted PER PHASE: each phase reads its own stream of responses, one per
-// model request, and a run is told which phase it is by the tools its harness was
-// offered.
+// scriptedProvider is the model behind the harness runs the engine drives (the
+// executor's is played by a [playLauncher]), scripted PER PHASE and told the
+// phase by the tools its harness was offered: a shared index would drift once a
+// phase made one more call than the fixture counted.
 //
-// Not a flat sequence: each phase runs its own loop and a phase that calls a
-// tool takes another round, so a shared index drifts as soon as any phase
-// makes one more call than the fixture author counted. Dispatching on the
-// surface is both robust and closer to the truth — the offered tools ARE what
-// distinguishes the phases.
-//
-// A STREAM OF RESPONSES, NOT A LIST OF RUNS, because the runs are not the
-// model's to choose: its harness asks it again after every call it makes, and the
-// engine ends a run when the phase finishes, parks or is corrected. So a run
-// plays the phase's next responses until one calls nothing — the model's
-// answer — or the engine ends it, and the next run of the phase picks the
-// stream up where that one left it. Past the end, the last response repeats: a
-// model that keeps answering the same way.
-//
-// THROUGH THE REAL SESSION: every response reaches the phase's dispatcher as a
-// harness's record does, and every call reaches the phase's tools over MCP
+// Each phase is a stream of responses, not a list of runs: the harness re-asks
+// after every call and the engine ends a run, so a run plays responses until one
+// calls nothing or the engine ends it, the next run resuming there; past the
+// end the last repeats. Responses go through the real session: each reaches
+// the dispatcher as a harness record, each call the tools over MCP
 // (llmtest.Conn).
 type scriptedProvider struct {
 	review, onboarding []llmtest.Response
@@ -66,8 +54,8 @@ type scriptedRun struct {
 	req   llm.Request
 	conn  *llmtest.Conn
 
-	// offered is the tool list the harness read before each response it played
-	// — one per model request, an activation's effect included.
+	// offered is the tool list read before each response, one per request,
+	// an activation's effect included.
 	offered [][]llm.ToolDef
 }
 
@@ -111,10 +99,8 @@ func phaseOffering(offered []string) string {
 	case slices.Contains(offered, toolname.MarkOnboarded):
 		return "onboarding"
 	default:
-		// Nothing else runs a harness through the engine's loop on a seat's
-		// turn: the executor is its harness's own run. A run landing here is a
-		// phase this fixture does not know, and it is answered with nothing
-		// a phase could mistake for a decision.
+		// A phase this fixture does not know (the executor is its harness's
+		// own run): answered with nothing a phase could take for a decision.
 		return "other"
 	}
 }
@@ -150,7 +136,7 @@ func (p *scriptedProvider) allRuns() []*scriptedRun {
 	return slices.Clone(p.runs)
 }
 
-// requestsFor returns the request each of one phase's harness runs was handed, in
+// requestsFor returns the request each of one phase's runs was handed, in
 // order: the conversation a run opens on.
 func (p *scriptedProvider) requestsFor(which string) []llm.Request {
 	var out []llm.Request
@@ -160,7 +146,7 @@ func (p *scriptedProvider) requestsFor(which string) []llm.Request {
 	return out
 }
 
-// roundsOf is how many model requests — responses — one phase was asked for.
+// roundsOf is how many model requests (responses) one phase was asked for.
 func (p *scriptedProvider) roundsOf(which string) int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -182,8 +168,7 @@ func (p *scriptedProvider) offeredFor(which string) [][]string {
 	return out
 }
 
-// answered is what every call one phase's harness made was answered, in order:
-// what the model read back from its tools.
+// answered is what each call one phase's harness made was answered, in order.
 func (p *scriptedProvider) answered(which string) []llmtest.Result {
 	var out []llmtest.Result
 	for _, run := range p.runsFor(which) {
@@ -221,8 +206,7 @@ func calling(calls ...llmtest.Call) llmtest.Response {
 	return llmtest.Response{Calls: calls}
 }
 
-// submitCall builds a response whose only content is a call to a tool with the
-// given JSON arguments.
+// submitCall builds a response whose only content is a call to tool with args.
 func submitCall(t *testing.T, name, argsJSON string) llmtest.Response {
 	t.Helper()
 	if !json.Valid([]byte(argsJSON)) {
@@ -231,24 +215,21 @@ func submitCall(t *testing.T, name, argsJSON string) llmtest.Response {
 	return calling(llmtest.Call{Name: name, Args: argsJSON})
 }
 
-// submitWork is the ordinary ending for a run that delivered nothing: the
-// executor's starting surface carries no MCP tool, so a run that has not
-// discovered one cannot honestly cite a delivery.
+// submitWork is the ordinary ending for a run that delivered nothing, so it
+// cites no delivery.
 func submitWork(t *testing.T) llm.ToolCall {
 	t.Helper()
 	return call(t, runner.SubmitWorkTool,
 		`{"outcome":"blocked","summary":"nothing to do here","evidence":"no write tool yet"}`)
 }
 
-// activating is an engine-driven phase promoting one tool onto its surface:
-// the onboarding pass, which reaches its knowledge-base tools by discovery.
-// An executor never does — it holds every tool its seat does from its launch.
+// activating is an engine-driven phase (onboarding) promoting one tool onto its
+// surface by discovery; an executor holds every seat tool from launch.
 func activating(name string) llmtest.Response {
 	return calling(llmtest.Call{Name: toolname.Activate, Args: `{"name":"` + name + `"}`})
 }
 
-// deliver is the ordinary delivery a run makes: call, report. The MCP tool is
-// on its surface from its launch, as every tool its seat holds is.
+// deliver is the ordinary delivery a run makes: call, report.
 func deliver(t *testing.T, summary string) run {
 	t.Helper()
 	return run{calls: []llm.ToolCall{
@@ -260,8 +241,7 @@ func deliver(t *testing.T, summary string) run {
 
 func text(s string) llmtest.Response { return llmtest.Response{Text: s} }
 
-// workFor is a plain delivered submission, for tests that drive Review
-// directly and do not care what the executor did.
+// workFor is a plain delivered submission, for tests that drive Review directly.
 func workFor(summary string) turn.Work {
 	return turn.Work{Outcome: turn.OutcomeDelivered, Summary: summary}
 }
@@ -284,8 +264,7 @@ func (s stubTool) Call(context.Context, map[string]any) (tools.Result, error) {
 	return tools.Result{Output: s.out}, nil
 }
 
-// fixture is the shared runner on one provider, for a turn somebody is
-// waiting on.
+// fixture is the shared runner on one provider, for a turn somebody waits on.
 func fixture(t *testing.T, prov *scriptedProvider) (*runner.Runner, *scriptedProvider, *tools.Registry) {
 	t.Helper()
 	r, reg := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{})
@@ -296,91 +275,76 @@ func fixture(t *testing.T, prov *scriptedProvider) (*runner.Runner, *scriptedPro
 // somebody is waiting on, whose executor's launches start nothing.
 type buildOpts struct {
 	reply turn.Reply
-	// launcher is the executor's launch seam. Nil is a [playLauncher] of
-	// the fixture's own, which records the launch and starts nothing.
+	// launcher is the executor's launch seam; nil is the fixture's own
+	// [playLauncher], which records the launch and starts nothing.
 	launcher runner.AgentLauncher
-	// reads is the reading of what a cut-off session holds that a relaunch's
-	// launcher answers ([readingLauncher]), where a case's rig builds that
-	// launcher itself ([lostRelaunchWith]); nil reads none.
+	// reads is what a relaunch's [readingLauncher] answers a cut-off
+	// session holds, for rigs that build it ([lostRelaunchWith]); nil reads none.
 	reads  *reading
 	resume *runner.Resume
 	pub    queue.Publisher
-	// reviewChain overrides the reviewer's provider keys (`llm_review`), so
-	// a test can give the phase a real fallback chain rather than the
-	// single key the fixture's seat runs it on.
+	// reviewChain overrides the reviewer's provider keys (`llm_review`), for
+	// a real fallback chain.
 	reviewChain org.ProviderKeys
-	// task overrides the brief, which is the one piece of the prompt a test
-	// can put arbitrary text into — so a case about how the prompt is
-	// MEASURED can make it carry multi-byte runes.
+	// task overrides the brief, the one prompt piece a test can fill freely
+	// (e.g. multi-byte runes for how the prompt is measured).
 	task string
 
-	// context is the turn's frozen prefetch, and endings how its
-	// conversation's earlier turns ended, for the cases about what reaches a
-	// prompt rather than what a phase decides. A collection is handed
-	// neither, as the engine's is: its runner takes them from the park
-	// ([collect]).
+	// context is the turn's frozen prefetch and endings how its
+	// conversation's earlier turns ended. A collection is handed neither, as
+	// the engine's is: it takes them from the park ([collect]).
 	context prefetch.Blocks
 	endings string
 	// access and changes are the seat's "Your access" section and what
-	// changed in it, frozen at the dispatch beside the endings.
+	// changed in it, frozen at dispatch.
 	access  string
 	changes string
 	// onPhase is the working indicator's seam. See [runner.Config.OnPhase].
 	onPhase func(phase.Phase)
-	// register adds tools beyond the fixture's standard catalogue, for a
-	// case whose behaviour depends on a first-party tool the seat holds.
+	// register adds tools beyond the fixture's standard catalogue.
 	register func(t *testing.T, reg *tools.Registry)
-	// steer is where the turn's notes wait, for the cases about a person's
-	// note: a box, or a source a case plays.
+	// steer is where the turn's notes wait: a box, or a source a case plays.
 	steer runner.SteerSource
 	// subagent arms delegate on the executor's surface.
 	subagent *runner.SubagentConfig
-	// ask is the tool the executor's run asks a person through, which the
-	// engine hands the runner from outside the seat's registry
-	// ([runner.Config.Ask]). Nil offers none.
+	// ask is the tool the executor asks a person through, from outside the
+	// seat's registry ([runner.Config.Ask]). Nil offers none.
 	ask runner.RunAsk
-	// checkout is the tool the executor's run checks a repository of
-	// Gitlet out with ([runner.Config.Checkout]). Nil
-	// offers none: a company that hosts no code.
+	// checkout is the tool the executor checks a Gitlet repository out with
+	// ([runner.Config.Checkout]). Nil offers none: a company hosting no code.
 	checkout tools.Callable
 
 	// calls, when set, is the run's call log, on a turn context the
-	// surfaces are bound to — for the cases about what a run has called.
+	// surfaces are bound to.
 	calls *turnctx.CallLog
 
-	// boundary pins the token every fence of the turn context calls builds
-	// carries ([turnctx.Turn.Boundary]), for the cases about which token a
-	// brief fences somebody's words under. Unset, each fence of a brief mints a
-	// token of its own ([turnctx.Turn.FenceBoundary]), so no case could tell
-	// the turn's token from another valid one. Set only beside calls, whose
-	// context carries it.
+	// boundary pins the token every fence of calls' turn context carries
+	// ([turnctx.Turn.Boundary]); unset, each fence mints its own
+	// ([turnctx.Turn.FenceBoundary]) and no case could tell the turn's token
+	// from another. Set only beside calls, whose context carries it.
 	boundary provenance.Boundary
 
 	// budget is the turn's meter, for the cases about what a refusal stops.
 	budget toolloop.BudgetMeter
 
-	// compact is the seat's compactor, for the cases about what a rewrite
-	// the prompt's assembly asks for costs.
+	// compact is the seat's compactor, for what an assembly's rewrite costs.
 	compact compact.Bound
 
 	// fence is the seat fence, for the cases about what a closed one stops.
 	fence func() error
 
-	// withheld is what the seat's surfaces leave out (runner.Config.Withheld),
-	// for the cases about a tool the authority table refuses the seat.
+	// withheld is what the seat's surfaces leave out (runner.Config.Withheld).
 	withheld []string
 
 	// boxServers are the seat's MCP servers that run in its executor's box
-	// (role.sandbox.mcp.servers), for the cases about what the bridge
-	// leaves to the box.
+	// (role.sandbox.mcp.servers).
 	boxServers []string
 
-	// conversation is the conversation the turn serves, for the cases about
-	// what a run is told of it: none unless a case serves one.
+	// conversation is the conversation the turn serves; none unless set.
 	conversation string
 
 	// answer is the engine's read of a pickup's answer
-	// (runner.Config.PickupAnswer), for the cases about a pickup's turn.
+	// (runner.Config.PickupAnswer).
 	answer func(context.Context) (types.PickupAnswer, error)
 }
 
@@ -400,18 +364,16 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		tools.Origin("slack"), tools.Annotations{}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	// A MULTI-LINE description, because a real MCP server publishes
-	// paragraphs and a listing is a list: an entry that spilled onto a
-	// second line would break the one-tool-per-line shape a model reads it
-	// as.
+	// A MULTI-LINE description, as real MCP servers publish: an entry
+	// spilling onto a second line would break one tool per line.
 	if err := reg.RegisterWith(stubTool{
 		name: "slack_history", out: "history",
 		desc: "Read a channel's history.\n\nAccepts a cursor for paging, and\nreturns up to 200 messages.",
 	}, tools.Origin("slack"), tools.Annotations{ReadOnly: mcp.Yes}); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	// A SECOND server, so "list one server's tools" is distinguishable from
-	// "list every MCP tool". With one server the filter is unobservable.
+	// A SECOND server, so listing one server's tools differs observably from
+	// listing every MCP tool.
 	if err := reg.RegisterWith(stubTool{name: "jira_create", out: "created"},
 		tools.Origin("jira"), tools.Annotations{}); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -428,11 +390,9 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 	if len(opts.boxServers) > 0 {
 		role.Sandbox = &org.RoleSandbox{MCP: org.RoleSandboxMCP{Servers: opts.boxServers}}
 	}
-	// The reviewer names its own key when one is configured; the executor
-	// runs on `llm`, which is what makes it the seat's model rather than a
-	// second spelling of one. With only a default present both miss and
-	// resolution falls back to it, which is the counterfactual the golden
-	// suite asserts.
+	// The reviewer names its own key when configured; the executor runs on
+	// `llm`, the seat's model. With only a default both miss and fall back
+	// to it, the counterfactual the golden suite asserts.
 	role.LLM = org.ProviderKeys{"executor"}
 	role.LLMReview = org.ProviderKeys{"reviewer"}
 	if len(opts.reviewChain) > 0 {
@@ -518,10 +478,9 @@ func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 	if len(w.Calls) != 2 || w.Calls[0].Name != "slack_post" || w.Calls[0].Args["channel"] != "C1" {
 		t.Errorf("calls = %+v, want the run's own two", w.Calls)
 	}
-	// The surface handed back is what the delivery check judges against, so
-	// it must describe the whole catalogue and not just what was offered.
-	// And WHERE each one lands, which is what the gate compares against the
-	// surface the ask arrived on.
+	// The delivery check judges against this surface, so it describes the
+	// whole catalogue, not just what was offered, and where each one lands,
+	// which the gate compares with the surface the ask arrived on.
 	if surface.Deliveries["slack_post"] != "slack" {
 		t.Errorf("surface deliveries = %v, want slack_post on its own server",
 			surface.Deliveries)
@@ -533,16 +492,11 @@ func TestTheExecutorReturnsWhatTheModelSubmitted(t *testing.T) {
 	}
 }
 
-// EVERY FIRST-PARTY TOOL, and the MCP surface behind discovery. Choosing in
-// advance is what the planner used to do — against a catalogue it was never
-// shown — and every wrong guess became a tool the actor did not have when it
-// turned out to need it.
-// THE EXECUTOR HOLDS EVERY TOOL ITS SEAT DOES, from its launch: the first-party
-// ones and every MCP server's, and no discovery pair. Its harness keeps a large
-// server's tools out of the requests that do not need them itself — Claude
-// Code's tool search, OpenCode's Code Mode — which is what the pair used to do
-// by hand, two rounds at a time. And the prompt names none of them: each one's
-// definition reaches the run over the bridge, under the server it comes from.
+// THE EXECUTOR HOLDS EVERY TOOL ITS SEAT DOES, from its launch: first-party and
+// every MCP server's, with no discovery pair, since its harness keeps a large
+// server's tools out of requests itself (Claude Code's tool search, OpenCode's
+// Code Mode). The prompt names none: each definition reaches the run over the
+// bridge, under its server.
 //
 // Mutation: put the discovery pair back on the executor's surface, or offer the
 // first-party tools alone, and this goes red.
@@ -570,10 +524,9 @@ func TestTheExecutorHoldsEveryToolItsSeatDoes(t *testing.T) {
 	}
 }
 
-// A SERVER THAT RUNS IN THE BOX IS NOT OFFERED OVER THE BRIDGE: its harness
-// reaches it in the box, under the same name, and a run that held it twice —
-// once in its box and once over the bridge — would see every one of its tools
-// twice. The seat's other servers are still offered.
+// A SERVER THAT RUNS IN THE BOX IS NOT OFFERED OVER THE BRIDGE: the harness
+// reaches it in the box under the same name, so offering it too would show
+// every tool twice. The seat's other servers are still offered.
 //
 // Mutation: drop the box's servers from executorActive's filter, and slack_post
 // is offered over the bridge too.
@@ -604,10 +557,9 @@ func isFinishingCorrective(m llm.Message, tool string) bool {
 		strings.Contains(m.Content, "`"+tool+"`")
 }
 
-// A DELIVERY AN EARLIER ROUND MADE IS CITABLE. The prior-work ledger tells a
-// round sent back for a re-read not to comment again, so a check reading only
-// the round refused the one citation that was true — eleven times, in the
-// measured turn, until the round cap ended it.
+// A DELIVERY AN EARLIER ROUND MADE IS CITABLE: the prior-work ledger tells a
+// round sent back not to comment again, so a check reading only this round
+// would refuse the one true citation until the round cap ended the turn.
 func TestAnEarlierRoundsDeliveryIsCitableInALaterOne(t *testing.T) {
 	t.Parallel()
 	tracker := func(t *testing.T, reg *tools.Registry) {
@@ -630,8 +582,8 @@ func TestAnEarlierRoundsDeliveryIsCitableInALaterOne(t *testing.T) {
 			"accepted", w.Outcome, w.Rescued)
 	}
 
-	// The counterfactual: with no such round behind it, the same citation
-	// is refused when the run makes it, and the phase ends in the rescue.
+	// Counterfactual: with no such round, the same citation is refused and
+	// the phase ends in the rescue.
 	w = executeRound(t, entries, opts, 1, "", nil, cite, runner.RunRecord{}).work
 	if !w.Rescued {
 		t.Errorf("outcome = %s, want a citation of a comment nobody made refused", w.Outcome)
@@ -640,10 +592,8 @@ func TestAnEarlierRoundsDeliveryIsCitableInALaterOne(t *testing.T) {
 
 func TestTheReviewersCorrectionReachesTheNextRoundWithoutRewritingTheAsk(t *testing.T) {
 	t.Parallel()
-	// The task text also feeds knowledge search and the episode record,
-	// both of which want the requester's actual ask and not the engine's
-	// running commentary on it. So the correction is prefixed to the BRIEF,
-	// not merged into the task.
+	// The correction is prefixed to the BRIEF, not merged into the task:
+	// knowledge search and the episode record want the requester's own ask.
 	launcher := &playLauncher{}
 	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
 		buildOpts{launcher: launcher})
@@ -657,8 +607,8 @@ func TestTheReviewersCorrectionReachesTheNextRoundWithoutRewritingTheAsk(t *test
 	if !strings.Contains(brief, "post the weekly summary") {
 		t.Errorf("the original ask was lost:\n%s", brief)
 	}
-	// And with no correction the brief is byte-identical to its
-	// pre-correction form, which is what keeps the prompt prefix cacheable.
+	// With no correction the brief is byte-identical to its plain form,
+	// which keeps the prompt prefix cacheable.
 	plain := &playLauncher{}
 	r2, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: &scriptedProvider{}}},
 		buildOpts{launcher: plain})
@@ -670,10 +620,9 @@ func TestTheReviewersCorrectionReachesTheNextRoundWithoutRewritingTheAsk(t *test
 	}
 }
 
-// mark_onboarded is the whole phase-scoped list, and it earns its place:
-// onboarding is its own pass, and a seat that could mark itself from inside
-// the executor would permanently skip orientation. Registered here, so the
-// case is about the narrowing and not about a registry that never held it.
+// mark_onboarded is the whole phase-scoped list: a seat that could mark itself
+// from the executor would skip orientation for good. Registered here, so the
+// case tests the narrowing, not a registry that never held it.
 func TestTheExecutorIsNotOfferedTheOnboardingMarker(t *testing.T) {
 	t.Parallel()
 	launcher := &playLauncher{}
@@ -693,9 +642,8 @@ func TestTheExecutorIsNotOfferedTheOnboardingMarker(t *testing.T) {
 
 func TestReviewJudgesAgainstTheToolLogVerbatim(t *testing.T) {
 	t.Parallel()
-	// The header points at the log as the primary evidence. A reviewer
-	// judging an ELIDED log is judging a summary and calling it evidence —
-	// the budgets belong to the cross-round ledger, not here.
+	// The header points at the log as the primary evidence, unelided: the
+	// budgets belong to the cross-round ledger, not here.
 	body := strings.Repeat("x", 3000)
 	r, prov, _ := fixture(t, &scriptedProvider{
 		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
@@ -716,11 +664,10 @@ func TestReviewJudgesAgainstTheToolLogVerbatim(t *testing.T) {
 	}
 }
 
-// A REVIEWER IS TOLD WHAT THE RUN'S RECORD DROPPED. A long run's record keeps its
-// middle only as identities (internal/sandbox's MaxBridgeCalls and
-// bridge_elided_calls), so the calls a reviewer reads verbatim are not the
-// whole run: the log ends with the line that says how many calls it does not
-// show and, by tool, what they were and how many failed.
+// A REVIEWER IS TOLD WHAT THE RUN'S RECORD DROPPED. A long run's record keeps
+// its middle only as identities (internal/sandbox's MaxBridgeCalls and
+// bridge_elided_calls), so the log ends with a line counting the calls it does
+// not show, by tool, and how many failed.
 //
 // Mutation: hand the reviewer the kept calls alone (reviewLog without its
 // ledger.FormatElided line), and it judges an elision as the run.
@@ -746,8 +693,8 @@ func TestAReviewerIsToldWhatTheRunsRecordDropped(t *testing.T) {
 	}
 }
 
-// An empty log renders as "(none)" rather than being omitted: a missing
-// heading reads as "log unavailable", not "no calls were made".
+// An empty log renders as "(none)": a missing heading reads as "log
+// unavailable", not "no calls were made".
 func TestAnEmptyToolLogStillLeavesATrace(t *testing.T) {
 	t.Parallel()
 	r, prov, _ := fixture(t, &scriptedProvider{
@@ -763,9 +710,8 @@ func TestAnEmptyToolLogStillLeavesATrace(t *testing.T) {
 
 func TestAReviewerThatNeverDecidedDoesNotSilentlyPassTheTurn(t *testing.T) {
 	t.Parallel()
-	// Defaulting to done here is the difference between "the work was
-	// judged good" and "nothing judged it", and those look identical
-	// downstream.
+	// Defaulting to done would make "nothing judged it" look like "judged
+	// good" downstream.
 	r, _, _ := fixture(t, &scriptedProvider{review: []llmtest.Response{text("looks fine to me")}})
 	got, err := r.Review(context.Background(), 1, turn.Work{}, nil)
 	if err != nil {
@@ -779,13 +725,10 @@ func TestAReviewerThatNeverDecidedDoesNotSilentlyPassTheTurn(t *testing.T) {
 	}
 }
 
-// THE REVIEWER IS NEVER FORCED, its corrective round included — a request has
-// no way to force a call. Its only tool is its submission, so a forced choice
-// once looked free — but Claude Opus 5.5, Sonnet 5.5, Fable 5.1 and Mythos 5.1
-// answer one with a 400, which the chain does not retry, so on those models
-// every review died before the corrective that actually enforces the call
-// could run. The submission it names is what re-asks a reviewer that answered
-// in prose.
+// THE REVIEWER IS NEVER FORCED, its corrective round included: Claude Opus 5.5,
+// Sonnet 5.5, Fable 5.1 and Mythos 5.1 answer a forced tool choice with a 400
+// the chain does not retry. The corrective naming the submission is what
+// re-asks a reviewer that answered in prose.
 func TestTheReviewerAsksOnAutoAndIsReAskedForItsSubmission(t *testing.T) {
 	t.Parallel()
 	r, prov, _ := fixture(t, &scriptedProvider{review: []llmtest.Response{
@@ -810,14 +753,13 @@ func TestTheReviewerAsksOnAutoAndIsReAskedForItsSubmission(t *testing.T) {
 
 func TestEachPhaseGetsItsOwnSubmissionToolAndNoneLeaks(t *testing.T) {
 	t.Parallel()
-	// The submission tool is per-phase state. Registering it into the
-	// shared registry would leave one phase's answer visible to the next —
-	// or to the next turn, still holding the last one's decision.
+	// The submission tool is per-phase state: in the shared registry one
+	// phase's answer would leak to the next phase or turn.
 	prov := &scriptedProvider{
 		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
 	}
-	// The launching segment's registry and the collecting one's: the run
-	// is launched in one process and collected and reviewed in another.
+	// The launching and collecting segments' registries: launch and
+	// collection run in different processes.
 	var regs []*tools.Registry
 	got := executeRound(t, []phase.Entry{{Key: "default", Provider: prov}},
 		buildOpts{register: func(_ *testing.T, r *tools.Registry) { regs = append(regs, r) }},
@@ -852,17 +794,14 @@ func TestEachPhaseGetsItsOwnSubmissionToolAndNoneLeaks(t *testing.T) {
 	}
 }
 
-// THE REVIEWER HAS NO KNOB. It holds one submission tool, so its budget is a
-// structural fact rather than an operator preference — it used to be silently
-// borrowed from the executor's cap, which gave a phase that calls one tool
-// twenty rounds.
+// THE REVIEWER HAS NO KNOB: it holds one submission tool, so its round budget
+// is a structural constant, not an operator preference or another phase's cap.
 func TestTheReviewerRunsOnItsOwnBudgetNotTheExecutors(t *testing.T) {
 	t.Parallel()
-	// A reviewer that never submits burns its whole budget and then
-	// rescues, so the round count is observable. Its submission is the one
-	// tool it holds, so it keeps CALLING it — a self_iterate with no
-	// correction, which the decoder refuses — and every refused call is a
-	// round the budget counts.
+	// A reviewer that never submits burns its budget then rescues, so the
+	// round count is observable: it keeps calling its submission with a
+	// self_iterate lacking a correction, which the decoder refuses, each
+	// refusal a round.
 	r, prov, _ := fixture(t, &scriptedProvider{
 		review: []llmtest.Response{
 			submitCall(t, runner.SubmitReviewTool, `{"decision":"self_iterate"}`),
@@ -875,19 +814,15 @@ func TestTheReviewerRunsOnItsOwnBudgetNotTheExecutors(t *testing.T) {
 	if got.Decision != phase.SelfIterate || !strings.Contains(got.Notes, "produced no decision") {
 		t.Fatalf("review = %+v, want the rescue a reviewer that never decided gets", got)
 	}
-	// The reviewer's budget is its own unexported constant, and must be
-	// neither unbounded nor borrowed from any other phase's.
+	// The budget is the reviewer's own constant: bounded, not borrowed.
 	if rounds := prov.roundsOf("review"); rounds == 0 || rounds > 5 {
 		t.Errorf("the reviewer ran %d rounds, want its own small budget", rounds)
 	}
 }
 
 // A RUNNER NEEDS ITS REGISTRIES, ITS SESSION HOST AND ITS LAUNCHER, and
-// refuses at assembly without one: every phase the engine drives reaches its
-// harness's tools through the host, and every executor is a launched run — so a
-// runner missing either cannot run a phase every turn has, and finding that
-// out at the first one fails a turn on a mistake made where the runner was
-// built.
+// refuses at assembly without one: every turn's phases need the host and the
+// launcher, and finding out at the first phase fails a turn on a build mistake.
 func TestARunnerNeedsItsRegistriesAndItsLauncher(t *testing.T) {
 	t.Parallel()
 	launcher := &playLauncher{}
@@ -911,10 +846,9 @@ func TestARunnerNeedsItsRegistriesAndItsLauncher(t *testing.T) {
 	}
 }
 
-// A COLLECTION HANDED A SECOND CONTEXT IS REFUSED where it is assembled. The
-// park froze what the turn started with, and a context fetched again for the
-// resume is a second answer to the same question: taking either silently
-// would launch the turn's next run on a prompt nobody chose.
+// A COLLECTION HANDED A SECOND CONTEXT IS REFUSED where it is assembled: the
+// park froze the turn's context, a refetch is a second answer, and taking
+// either silently would launch the next run on a prompt nobody chose.
 func TestACollectionHandedASecondContextIsRefused(t *testing.T) {
 	t.Parallel()
 	resume := &runner.Resume{State: execstate.State{Version: execstate.Version, Round: 1}}

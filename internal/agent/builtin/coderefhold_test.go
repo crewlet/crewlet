@@ -23,11 +23,11 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE REF HOLD (M3-decisions M3-O61, M3-O65): a seat's turn holds every seat's
-// branch it reads, writes or launches on BEFORE the request that depends on
-// what the branch names — through one seam — records the hold where the
-// branch has gone unset long enough that a deletion's listing could be in
-// flight, and pays the read a hold is decided from once a turn and branch.
+// THE REF HOLD (M3-decisions M3-O61, M3-O65): through one seam, a seat's turn
+// holds every seat's branch it reads, writes or launches on BEFORE the request
+// that depends on it, records the hold where the branch has gone unset long
+// enough for a deletion's listing to be in flight, and reads once per turn and
+// branch to decide it.
 
 // seatBranch is the seat's branch the ref hold cases name: another seat's,
 // qa's, which a turn of agent-cto reads and writes as any colleague may.
@@ -101,12 +101,11 @@ func count(seen []string, what string) int {
 	return n
 }
 
-// refArgs classifies every argument a code tool's schema may declare: true
-// for one that names a ref — a revision, a target, a branch — whose seat's
-// branch the call must hold before the request that reads or writes through
-// it; false for one that names none, with why. An argument in neither fails
-// TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest, so neither a new
-// tool nor a new argument escapes the hold unclassified.
+// refArgs lists the code tools' arguments that name a ref, which the call must
+// hold before its request; notRefArgs those that name none, with why. An
+// argument in neither fails
+// TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest, so no new tool or
+// argument escapes the hold unclassified.
 var refArgs = map[string]bool{
 	"rev": true, "ref": true, "base": true, "head": true, "commit": true, "target": true, "at": true,
 	"branch": true,
@@ -135,6 +134,8 @@ var notRefArgs = map[string]string{
 	"mode":               "how a search's text is read",
 	"ignore_case":        "how a search's text is read",
 	"limit":              "a page's size",
+	"context":            "how many lines around a search's hit it answers",
+	"per_file":           "how many of a file's lines a search answers",
 	"status":             "a repository status filter, or the state a check is reported in",
 	"branches_prefix":    "a listing's prefix: it reads every ref under it and depends on none",
 	"branches_cursor":    "a listing's place",
@@ -201,6 +202,9 @@ var notRefArgs = map[string]string{
 	"tail":               "a reported check's output",
 	"failures":           "a reported check's failures",
 	"failures_omitted":   "how many failures a reported check counted past those it names",
+	"tests":              "a reported check's JUnit counts",
+	"log_lines":          "how many lines a reported check's output has",
+	"tail_cut":           "whether a reported check's tail begins inside a line",
 	"duration_ms":        "a reported check's duration",
 	"url":                "a reported check's page on its CI, or an import's source at another host",
 	"credential":         "an import's credential: the name of a variable, never anything of a repository",
@@ -212,8 +216,8 @@ var notRefArgs = map[string]string{
 	"merge":              "whether a revert's change is merged as its call's second write",
 }
 
-// refCallDrops is the arguments a tool's holdingCall row carries that the call
-// leaves out when it names a ref: code_update_change writes ONE thing a call,
+// refCallDrops is the arguments of a tool's holdingCall row that the call
+// leaves out when it names a ref: code_update_change writes one thing a call,
 // so its retarget names no title.
 var refCallDrops = map[string][]string{
 	builtin.CodeUpdateChangeTool: {"title"},
@@ -231,13 +235,12 @@ func refArgDefault(arg string) any {
 	return mainOID
 }
 
-// EVERY CODE TOOL HOLDS THE SEAT REFS IT NAMES BEFORE ITS REQUEST: every
-// argument of every code tool is classified as naming a ref or not, and each
-// tool, called by a seat's turn with each of its ref arguments naming a seat's
-// branch — in a project repository and in a scratch one — has the branch's key
-// in the turn's holds before Gitlet is asked anything that reads or
-// writes through it (a read by object id, an engine write). A whole object id,
-// main, a tag and an operator's call hold nothing.
+// EVERY CODE TOOL HOLDS THE SEAT REFS IT NAMES BEFORE ITS REQUEST: every code
+// tool's argument is classified as a ref or not, and each tool, called by a
+// seat's turn with a ref argument naming a seat's branch (in a project and a
+// scratch repository), holds the branch's key before Gitlet is asked anything
+// that reads or writes through it. A whole object id, main, a tag and an
+// operator's call hold nothing.
 //
 // Mutations: skip HoldRef in the one ref read (CodeDeps.refsOf) → red; skip it
 // in CodeDeps.branch → red; add an argument to a tool's schema without
@@ -289,10 +292,8 @@ func TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest(t *testing.T) {
 							mu.Unlock()
 						}
 					})
-					// THE TOOL'S OWN CALL, its other ref arguments naming
-					// what holds nothing, and this one the seat's branch —
-					// a commit from `base` being a create, which names no
-					// head.
+					// Only this argument names the seat's branch; a commit
+					// from `base` is a create, which names no head.
 					args := maps.Clone(base)
 					args["repo"] = host.detail.Name
 					for _, other := range named {
@@ -350,12 +351,11 @@ func TestEveryCodeToolHoldsTheSeatRefsItNamesBeforeItsRequest(t *testing.T) {
 	}
 }
 
-// A CHANGE'S WRITE HOLDS THE SEAT BRANCH IT DEPENDS ON: a write that sends
-// what a seat's branch names without naming the branch as an argument — a
-// suggestions apply, which commits onto the change's source, and a reopen,
-// which reopens the change at its source's head — holds the source before the
-// request goes out, as does an open naming a seat's branch as its source. A
-// change whose source is no seat's branch holds nothing.
+// A CHANGE'S WRITE HOLDS THE SEAT BRANCH IT DEPENDS ON: a suggestions apply
+// (commits onto the change's source) and a reopen (at the source's head) depend
+// on a branch no argument names, and hold the source before the request, as
+// does an open from a seat's branch. A source that is no seat's branch holds
+// nothing.
 //
 // Mutations: drop CodeDeps.branch from the apply, from steer's reopen, or
 // from the open → red.
@@ -409,13 +409,10 @@ func TestAChangeWriteHoldsTheSeatBranchItDependsOn(t *testing.T) {
 }
 
 // A CALL'S SEAT BRANCHES ARE HELD IN ONE ROW WRITE (M3-boxes §10.6.5): a turn
-// with a run row — a resumed executor, a run's bridged calls —
-// whose call depends on two seats' branches (a comparison's base and head, a
-// commit and the branch it asks about, a change's source and target) writes
-// both keys on its row in ONE compare-and-set, not one each, before the
-// request; and an open between the two resolves them in one read — two
-// branches neither of which exists yet included, which it holds with no
-// read.
+// with a run row (a resumed executor, a run's bridged calls) whose call depends
+// on two seats' branches (compare, landed_in, a change's source and target)
+// writes both keys in ONE compare-and-set before the request; an open between
+// them resolves both in one read, and two unborn branches with none.
 //
 // Mutations: refsOf leaving each ref's Take to its HoldRef → two writes for
 // compare and landed_in, red; the open holding its branches one call of
@@ -532,14 +529,13 @@ func TestOnlyTheSeamResolvesARefForATurn(t *testing.T) {
 }
 
 // A REF HOLD OF AN IDLE SEAT BRANCH IS RECORDED FIRST: a read through a seat's
-// branch unset gitlet.RefHoldRecordAfter or more sends a hold request — naming
-// the whole ref, decided at the resolve's checkpoint — before its read by
-// object id; one unset less, or a branch no seat set, sends none. A hold
-// answered ref_deleted refuses the call naming the commit the read answered,
-// and one whose outcome is unknown refuses it too — each with nothing sent
-// through the branch. A WRITE naming the branch's head is held as a read is:
-// a revert that conflicts and stores nothing still sends the resolve and the
-// hold before its write; a branch a write creates sends neither.
+// branch unset gitlet.RefHoldRecordAfter or more sends a hold request (the
+// whole ref, at the resolve's checkpoint) before its read by object id; one
+// unset less, or a branch no seat set, sends none. A hold answered ref_deleted
+// refuses the call naming the commit read, and an unknown outcome refuses too,
+// nothing sent through the branch either way. A WRITE at the branch's head is
+// held as a read is, even a conflicting revert; a branch a write creates sends
+// neither.
 //
 // Mutations: skip the record → red; record on a branch no seat set → red;
 // proceed on an unknown outcome → red; CodeDeps.branch holding an existing
@@ -637,13 +633,11 @@ func TestARefHoldOfAnIdleSeatBranchIsRecordedFirst(t *testing.T) {
 	}
 }
 
-// A TURN RESOLVES A BRANCH IT WRITES ONCE (M3-decisions M3-O65): a turn that
-// reads a seat's branch with code_resolve and then writes it twice at the head
-// it read sends one resolve — its code_resolve's — and none before either
-// write; a turn whose first contact with the branch is a write resolves it
-// before that write, and not before the next; a branch the turn created, held
-// with no read, is resolved once, before the first write that names its head;
-// and a write no hold covers — on main, or an operator's — resolves nothing.
+// A TURN RESOLVES A BRANCH IT WRITES ONCE (M3-decisions M3-O65): code_resolve
+// then two writes at its head send only code_resolve's resolve; a first write
+// is resolved before it and not before the next; a branch the turn created
+// (held with no read) is resolved once, before the first write at its head;
+// and a write no hold covers (main, an operator's) resolves nothing.
 //
 // Mutations: CodeDeps.branch ignoring the mark → a resolve before every write,
 // red; resolving every existing branch → the main and operator rows red;
@@ -720,10 +714,10 @@ func TestATurnResolvesABranchItWritesOnce(t *testing.T) {
 }
 
 // A FAILED HOLD RECORD LEAVES THE BRANCH UNCONFIRMED (M3-decisions M3-O65): a
-// write on a seat's branch unset past the threshold whose hold record is
-// answered unknown, deleted, or not served is refused, and the same write again
-// resolves the branch and asks for the record again; answered applied, a third
-// write sends neither — the hold is confirmed only once its record is.
+// write on an idle seat's branch whose hold record is answered unknown, deleted
+// or not served is refused, and the same write again resolves and records
+// again; once answered applied, a third write sends neither: the hold is
+// confirmed only once its record is.
 //
 // Mutation: confirm at the Take, before the record's answer → the second write
 // sends neither, red.
@@ -773,10 +767,9 @@ func TestAFailedHoldRecordLeavesTheBranchUnconfirmed(t *testing.T) {
 }
 
 // AN IDLE SCRATCH REPOSITORY IS RECORDED ONCE PER TURN (M3-decisions M3-O65):
-// two reads of one scratch repository last active 23 h ago, in one turn, send
-// one hold request, before the first read; and the seam itself, asked again
-// for a repository it has confirmed — a second resolution in the turn, the
-// lookups forgotten — sends nothing more.
+// two reads in one turn of a scratch repository idle 23 h send one hold
+// request, before the first read; the seam asked again for a repository it
+// confirmed (lookups forgotten) sends nothing more.
 //
 // Mutation: HoldRepo ignoring the mark → the seam's second hold sends a second
 // request, red.

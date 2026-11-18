@@ -169,7 +169,9 @@
 // page read, so a page is the rows it read and never scans past its limit
 // for the few it keeps. A live state asked by when its changes moved
 // ([ChangeSortUpdated]) walks its lifecycle's and its conversations' indexes
-// in step (changesort.go). One change ([ReadChange]) is read by its number on
+// in step (changesort.go). A listing narrowed by its words takes its candidates
+// from this node's own index of them and judges each in its snapshot
+// (changetext.go, ADR-0156). One change ([ReadChange]) is read by its number on
 // its repository, its revisions paged newest first beside it. Both are held to
 // the asker's grant on the change's repository ([JudgeRead]): a listing that
 // names a repository, and a read of one change, are refused whole where the
@@ -177,7 +179,8 @@
 // leaves out the changes of every repository either may not, and of a
 // deleted one. Both carry each live change's readiness, judged in the read's
 // own transaction (readiness.go); and what waits on a person ([NeedPerson])
-// walks the changes whose stored readiness does, keeping those the read
+// walks the changes whose stored readiness does, as the ready bucket
+// ([ReadinessBucket]) walks the ones stored ready, keeping those the read
 // judges still do. What a surface reads of a change's CODE — a revision's
 // files from the base its facts record, what changed between two revisions,
 // where each finding is in the revision asked about, and the floor those
@@ -187,6 +190,7 @@
 // ITS COUNTS (apply_counts.go, counts.go): code_repos counts each repository's changes by
 // state and code_change_tallies those in use by owner and visibility, kept by every apply and
 // re-derived when their rules change; a counts read sums the tallies the asker's grant reads.
+// The queue part counts the live entries at read time, within MaxQueueCounted.
 //
 // # A change's conversation is rows on its own subject
 //
@@ -271,7 +275,8 @@
 // [NeedPerson] seeks — a home refreshing it, merging nothing, once a review,
 // an ask, an answer to findings, facts or the change's own row moves them
 // ([Mergeability.Refresh]). It reads the change's own review objects, never a
-// decision of the tracker's.
+// decision of the tracker's. A listing narrowed to [BucketReady] seeks the
+// stored answer too, as [NeedPerson] does.
 //
 // AND IT IS JUDGED UNDER ITS TARGET'S MERGE GATE (gatejudge.go): every reader
 // and every decide of a merge asks ONE pure [JudgeGate] over the facts one
@@ -295,7 +300,9 @@
 // pushes that move its head have one writer, and every record that leaves the
 // change no longer what was enqueued ends its entry in its own apply: a close,
 // a draft, a retarget and a landing dequeue it, and a push that moves its head
-// ejects it.
+// ejects it. An ejection for a check that failed names the train it failed on
+// (its candidate, base and commit, version 7), since the train's rows go with
+// it.
 //
 // A CHANGE MERGES BY ONE RECORD ITS GATE DECIDES (merge.go, ADR-0096): a merge
 // ([Merge]) built on the repository's home onto the tip it read of the target
@@ -376,7 +383,9 @@
 // PatternAdditive requires: the state is derived and only rises, a claim
 // tie keeps the lower (StartedAt, Runner) and its box is set once, an
 // ending tie keeps a measurement over infrastructure's, the log follows
-// the ending kept, and a dispatch's rows keep the reading of the later tip.
+// the ending kept, and so do its test counts and its output's lines (version
+// 6, [CheckCountsVersion]), and a dispatch's rows keep the reading of the
+// later tip.
 // Its attempts' rows are kept [CheckHistory] — a dispatch's until the
 // repository's purge, one a head and a target — and every ending removes
 // its own repository's oldest past its broker instant, bounded by
@@ -622,13 +631,15 @@
 // entry, where an index of the push
 // rows serving that one-day question would have kept an entry of some forty
 // bytes for every seat's push for its 181 days, about 1.8 GB at 250 000
-// pushes a day. That is one of THREE INDEXES THE PUSH ROWS ARE NOT GIVEN,
+// pushes a day. That is one of FOUR INDEXES THE PUSH ROWS ARE NOT GIVEN,
 // each an entry every push would keep on every data node for its 181 days
 // to answer a question the one index the rows have already answers: that
 // one; a second index of the rows in log order beside the repository's,
 // where the one was reordered instead (replicated 0084; a second would have
 // added about a quarter to the 395.3 bytes a push's row weighed then,
-// measured, # Measured); and an index
+// measured, # Measured); an index of each pusher's pushes, where a history
+// narrowed to one pusher scans the repository's pushes newest first and skips
+// the days its pusher's counts hold none of ([PushFilter]); and an index
 // of each executor's pushes, where a collected run's report scans its
 // repositories' pushes since its launch ([ReadRunPushes], below) — some 40
 // to 100 bytes a push each, 1.8 to 4.5 GB each at 250 000 pushes a day. Its
@@ -802,6 +813,12 @@
 // company's configuration ([CommitterOptions.Current]), decides none of its
 // pushes and hands them to the repository's next committer.
 //
+// A PUSH A RULE REFUSES WHOLE, one git received every command of which is
+// refused, one by a rule on who may move which ref ([Attempted]), is recorded
+// as an attempt that moves nothing and names no pack, so the push history says
+// who tried, with how many commits it offered since [OfferedVersion]; any other
+// push left with no ok command writes nothing.
+//
 // # Reads are held to who asks
 //
 // Every read a principal makes names its ASKER ([ReadQuery.Asker], refused
@@ -921,6 +938,10 @@
 // reader of the index's first shape — the listing, the history horizon, a
 // purge part and its count — reads the reordered one, so it is one index,
 // not two.
+//
+// A history NARROWED to a pusher or a window ([PushFilter]) reads the same index newest
+// first, [MaxPushesScanned] pushes a page at most, skipping and stopping by instants with
+// [PushInstantSkew] for a margin: at most about 140 ms a page (BenchmarkANarrowedPushHistory).
 //
 // A read of a repository's CONTENT is a Gitlet node's (internal/gitlet/query), and
 // this package holds only what both ends of one import: its wire — [GitQuery]

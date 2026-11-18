@@ -12,9 +12,12 @@
  *
  * THE STATUS IS A LETTER AND THE COUNTS ARE WORDS, in the tertiary ink, each
  * with its word in the title (`dashboard-design.md#the-gitlet-workspace`).
+ *
+ * Its row ([TreeRow]) is drawn by both trees, the diff's and the repository's
+ * (`repo/RepoTree.tsx`).
  */
 
-import { useMemo } from "react";
+import { useMemo, type CSSProperties, type ReactNode } from "react";
 import { FolderGlyph } from "@crewlethq/icons/glyphs";
 import { baseName } from "~/lib/code.ts";
 import { fmtCount } from "~/lib/format.ts";
@@ -22,6 +25,16 @@ import type { CodeDiffFile } from "~/protocol/index.ts";
 import "~/styles/gitlet.css";
 
 /** What git's status letter says of a file, in a word. */
+/** `+207 −51`: lines added and removed, each figure in its diff ink. */
+export function DiffCounts({ added, deleted }: { added: number; deleted: number }) {
+  return (
+    <>
+      <span className="code-diffstat__added">+{fmtCount(added)}</span>{" "}
+      <span className="code-diffstat__removed">−{fmtCount(deleted)}</span>
+    </>
+  );
+}
+
 export function statusWord(f: Pick<CodeDiffFile, "status" | "old_path">): string {
   switch (f.status) {
     case "A":
@@ -80,6 +93,33 @@ function fold(dir: Dir): Dir {
   return { ...dir, dirs };
 }
 
+/** One row of a tree: its depth, an optional chevron, its glyph, its name and what ends it. */
+export function TreeRow({
+  depth = 0,
+  chevron,
+  glyph,
+  name,
+  end,
+}: {
+  depth?: number;
+  chevron?: ReactNode;
+  glyph: ReactNode;
+  name: ReactNode;
+  end?: ReactNode;
+}) {
+  return (
+    <span
+      className="code-ftree__row"
+      style={depth ? ({ "--code-depth": depth } as CSSProperties) : undefined}
+    >
+      {chevron}
+      {glyph}
+      <span className="code-ftree__name">{name}</span>
+      {end !== undefined && <span className="code-ftree__end">{end}</span>}
+    </span>
+  );
+}
+
 /** A file's row: its status letter, its name and its counts, a press that opens it. */
 function FileRow({
   file,
@@ -104,13 +144,19 @@ function FileRow({
       disabled={Boolean(file.path_b64)}
       onClick={() => onOpen(file)}
     >
-      <span className="code-ftree__status" aria-hidden="true">
-        {file.status}
-      </span>
-      <span className="code-ftree__name">{baseName(file.path)}</span>
-      <span className="code-ftree__counts" aria-hidden="true">
-        {counts}
-      </span>
+      <TreeRow
+        glyph={
+          <span className="code-ftree__status" aria-hidden="true">
+            {file.status}
+          </span>
+        }
+        name={baseName(file.path)}
+        end={
+          <span className="code-ftree__counts" aria-hidden="true">
+            {file.binary ? counts : <DiffCounts added={file.added} deleted={file.deleted} />}
+          </span>
+        }
+      />
     </button>
   );
 }
@@ -187,7 +233,12 @@ export function DiffHead({
       {file && (
         <span className="code-diff-head__facts">
           {statusWord(file)}
-          {!file.binary && ` · +${fmtCount(file.added)} −${fmtCount(file.deleted)}`}
+          {!file.binary && (
+            <>
+              {" · "}
+              <DiffCounts added={file.added} deleted={file.deleted} />
+            </>
+          )}
         </span>
       )}
       {viewHref && file?.status !== "D" && (

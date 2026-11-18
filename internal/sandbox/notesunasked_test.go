@@ -32,13 +32,12 @@ func (r *coordRig) launchAnchored(turnID string) PendingRun {
 }
 
 // A RUN THAT SUCCEEDED WITHOUT ONCE ASKING FOR ITS NOTES IS SAID, as
-// steer_reader_never_ran, at its collection: for a harness that reads notes, a run
-// that finishes always asks at its last step, so one that never did had its
-// reading switched off in its box — and every note sent while it worked waited
-// for its review. Said only where it means that: not for a run whose harness asked
-// (its record names the job as having pulled), not for a harness that reads no
-// notes, not for a run its launch wired to none (its record names no seat), and
-// not for a run that did not succeed, which may never have reached its end.
+// steer_reader_never_ran, at its collection: a notes-reading harness asks at a
+// finished run's last step, so one that never did had reading switched off in
+// its box, and every note sent meanwhile waited for review. Not said for a run
+// whose harness asked (its record names the job pulled), a harness that reads
+// no notes, a run its launch wired to none (no seat), or a run that did not
+// succeed, which may never have reached its end.
 //
 // Not parallel: it captures the process-wide logger ([captureLogs]).
 //

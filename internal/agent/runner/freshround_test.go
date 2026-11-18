@@ -21,13 +21,11 @@ import (
 )
 
 // WHAT A FRESH RUN CARRYING A ROUND ON IS TOLD OF THE ROUND, AND WHAT A SESSION
-// HOLDS OF WHAT ITS BRIEFS TOLD. A run that starts a session of its own carrying
-// a round on (a lost job's, an answered one's, one a replaced sign-in cut off,
-// one whose continued session its provider refused) remembers none of the
-// round's calls, so its brief tells every one of them, within the prior-work
-// ledger's budgets; and a brief that counts reads past the ledger's read cap
-// rather than listing them leaves a session that holds those reads only as a
-// count, which the next brief to it tells.
+// HOLDS OF WHAT ITS BRIEFS TOLD. A run starting a session of its own carrying a
+// round on (a lost job's, an answered one's, a rotated one's, a refused one's)
+// remembers none of the round's calls, so its brief tells them all within the
+// prior-work ledger's budgets; reads a brief counts past the ledger's read cap
+// are held only as a count, so the next brief to that session tells them.
 
 const (
 	// calledBeforeHeading opens the calls a run of its own is told the runs
@@ -65,10 +63,9 @@ func readLine(n int) string {
 	return fmt.Sprintf("- slack_history({\"channel\":\"C%d\"}) → success (read)", n)
 }
 
-// relaunchOf is the request a relaunch carrying the round on with resume makes,
-// the round's launch parked first and its parked state handed on, at the place
-// the job's session opened that resume names (execstate.State.BridgeFrom):
-// through launcher, which a case gives a probe of its own or none.
+// relaunchOf is the request a relaunch carrying the round on with resume makes
+// through launcher, after parking the round's launch and handing on its state,
+// opened where resume says the job's session did (execstate.State.BridgeFrom).
 func relaunchOf(t *testing.T, resume runner.Resume, launcher interface {
 	runner.AgentLauncher
 	last(*testing.T) runner.AgentRunRequest
@@ -88,9 +85,8 @@ func relaunchOf(t *testing.T, resume runner.Resume, launcher interface {
 }
 
 // freshRelaunch is the request a relaunch carrying the round on with resume
-// makes where its launcher continues no kept capture: a lost job's, an answered
-// or a rotated one's whose box is gone, or a refused one's, which continues no
-// session at all, so its run is handed the fresh brief.
+// makes where it continues no session (a lost job, an answered or rotated one
+// whose box is gone, a refused one), so its run is handed the fresh brief.
 func freshRelaunch(t *testing.T, resume runner.Resume, opts buildOpts) runner.AgentRunRequest {
 	t.Helper()
 	again := relaunchOf(t, resume, &playLauncher{}, opts)
@@ -107,15 +103,14 @@ func lostWithItsBox() *runner.Lost {
 }
 
 // A FRESH RUN CARRYING A LOST ROUND ON IS TOLD EVERY CALL OF IT. Its job was lost
-// with its box, and the turn keeps no capture of its session, so the round is
-// carried on in a session of its own, which remembers nothing the round did:
-// after the account of how the run before it was cut off, it is told every call
-// of the round, in the order the runs made them, under words that speak of runs
-// before it rather than of a session above. Told only that the run before it
-// did things through the seat's tools, it could make them again.
+// with its box and the turn keeps no capture, so the round goes on in a session
+// that remembers nothing: after how the run before it was cut off, it is told
+// every call of the round in order, under words that speak of runs before it,
+// not of a session above. Told only that those runs did things, it could make
+// them again.
 //
-// Mutation: build the reseed as before this change, the task and the account
-// alone, and the case goes red.
+// Mutation: build the reseed from the task and the account alone, and the case
+// goes red.
 func TestAFreshRunCarryingALostRoundIsToldEveryCallOfIt(t *testing.T) {
 	t.Parallel()
 	posted := numbered("slack_post", map[string]any{"text": "the lost job's post"}, 1, 1)
@@ -148,7 +143,7 @@ func TestAFreshRunCarryingALostRoundIsToldEveryCallOfIt(t *testing.T) {
 // on a sign-in replaced while it ran, whose box is gone, is carried on in a
 // session of its own: told how it was cut off, and then every call of the round.
 //
-// Mutation: keep the reseed as before this change for a replaced sign-in, and
+// Mutation: leave the round's calls out of a rotated round's fresh brief, and
 // the case goes red.
 func TestAFreshRunCarryingARotatedRoundIsToldEveryCallOfIt(t *testing.T) {
 	t.Parallel()
@@ -165,11 +160,10 @@ func TestAFreshRunCarryingARotatedRoundIsToldEveryCallOfIt(t *testing.T) {
 }
 
 // A FRESH RUN CARRYING A REFUSED ROUND ON IS TOLD EVERY CALL OF IT. A job whose
-// provider refused every request of the session it continued did nothing, and
-// that session is retired, so the round is carried on in a session of its own,
-// which remembers nothing the round's earlier jobs did: told why the run before
-// it could not start its work, and then every call of the round, the post of
-// the job whose session the refused one continued among them.
+// provider refused every request of its continued session did nothing, and that
+// session is retired, so the round goes on in a session that remembers nothing
+// of the earlier jobs: told why the run before it could not start, then every
+// call of the round, the continued session's own post among them.
 //
 // Mutation: leave the round's calls out of a refused round's fresh brief alone,
 // and the case goes red.
@@ -190,11 +184,10 @@ func TestAFreshRunCarryingARefusedRoundIsToldEveryCallOfIt(t *testing.T) {
 // A FRESH RUN CARRYING AN ANSWERED ROUND ON IS TOLD EVERY CALL OF IT, AND THE CALL
 // A PERSON APPROVED BY THE LEAD ALONE. The asking job's box was reclaimed while
 // its question waited, so the answer carries the round on in a session of its
-// own: told every call of the round (the asking job's post, and the call it
-// held for the person's approval, its question) but the call the person
-// approved, which an earlier attempt at the same answer marked and made, the log
-// placing it last: the reseed's lead says what it returned, and listed beside it
-// it would be told twice, the second time as a call of its own.
+// own, told every call (the asking job's post, and the held call that was its
+// question) but the approved one an earlier attempt at the answer made, last in
+// the log: the reseed's lead says what it returned, and listed too it would be
+// told twice, the second time as a call of its own.
 //
 // Mutation: leave out the held call the lead tells as the fresh brief tells the
 // round's calls, and the approved call is told twice.
@@ -225,15 +218,12 @@ func TestAFreshRunCarryingAnAnsweredRoundIsToldEveryCallOfIt(t *testing.T) {
 	}
 }
 
-// EVERY ASKED FRESH RUN IS TOLD WHAT THE RUN BEFORE IT DID HAPPENED. A fresh run
-// carrying a lost or a rotated round on is told that what the run before it did
-// through the seat's tools did happen, and to check before doing any of it
-// again; one carrying an asking run's work on was told no such thing, in any of
-// its forms. The list of the round's calls beside it cannot say it alone: it
-// tells only what the round's record kept one by one, never the run's work
-// outside the seat's tools, nor a call counted past the read cap or in a tally.
-// So every form says it, once, at the end of its account of the run before it
-// and before where its work is.
+// EVERY ASKED FRESH RUN IS TOLD WHAT THE RUN BEFORE IT DID HAPPENED, as a lost or
+// rotated one is, and to check before doing any of it again. The list of the
+// round's calls cannot say it alone: it tells only what the record kept one by
+// one, never work outside the seat's tools, nor a call counted past the read cap
+// or in a tally. So every form of [runner.Asked] says it once, ending its account
+// of the run before it, before where its work is.
 //
 // Mutation: drop the sentence from any one form, and its row goes red.
 func TestEveryAskedFreshRunIsToldWhatTheRunBeforeItDidHappened(t *testing.T) {
@@ -262,11 +252,10 @@ func TestEveryAskedFreshRunIsToldWhatTheRunBeforeItDidHappened(t *testing.T) {
 }
 
 // A RELAUNCH CONTINUING THE BASE IS TOLD EVERY CALL OF THE ROUND. A round carried
-// on in a turn that has kept no session of its own continues the session its
-// conversation's last turn left, handed the lead and then the reseed whole, so
-// that session, which holds another turn and none of this round, is told every
-// call of the round the reseed tells, and leaves out what the reseed leaves
-// out, which the launch records for the brief it hands.
+// on in a turn with no kept session of its own continues the session the
+// conversation's last turn left, which holds none of this round, handed the lead
+// and then the reseed whole: so it is told every call the reseed tells, leaves
+// out what the reseed leaves out, and the launch records that for its brief.
 //
 // Mutation: hand the base the reseed before the round's calls are joined to it,
 // or tell it the reads the reseed left out as told, and the case goes red.
@@ -291,13 +280,12 @@ func TestARelaunchContinuingTheBaseIsToldEveryCallOfTheRound(t *testing.T) {
 	}
 }
 
-// A FRESH RUN IS TOLD WHAT THE BUDGETS LEAVE OUT OF THE ROUND. A long round's
-// calls are told as the prior-work ledger tells a round: twelve reads listed and
-// the rest counted, every write listed, a failed call with its error, and the
-// calls the round's log dropped from its middle counted with the log's tally:
-// all of them, the round being told from its start. And the reads the cap
-// counted rather than listed are what the launch records its fresh brief left
-// out, so a later brief to that run's session tells them.
+// A FRESH RUN IS TOLD WHAT THE BUDGETS LEAVE OUT OF THE ROUND. A long round is told
+// as the prior-work ledger tells one: twelve reads listed and the rest counted,
+// every write listed, a failed call with its error, and the calls the log dropped
+// from its middle counted by its tally, all of them since the round is told from
+// its start. The reads the cap counted are what the launch records its fresh
+// brief left out, for a later brief to that session to tell.
 //
 // Mutation: read the reads left out off the round's calls before the cap, or
 // count the dropped calls only past a save point above zero, and a check goes
@@ -330,9 +318,8 @@ func TestAFreshRunIsToldWhatTheBudgetsLeaveOutOfTheRound(t *testing.T) {
 }
 
 // inPlaceRelaunch is the request carry carries a round on with in its job's own
-// box, the launcher continuing no kept session, where the job's session opened
-// once the round held from calls, its box still there, and with tells the
-// resume what else the job's record says.
+// box, continuing no kept session: the job's session opened once the round held
+// from calls, and with sets what else the job's record says.
 func inPlaceRelaunch(t *testing.T, carry inBoxCarry, from int, with func(*runner.Resume)) runner.AgentRunRequest {
 	t.Helper()
 	resume := runner.Resume{}
@@ -348,13 +335,11 @@ func inPlaceRelaunch(t *testing.T, carry inBoxCarry, from int, with func(*runner
 }
 
 // A RESEED OVER BUDGET, CONTINUED IN PLACE, IS TOLD EXACTLY THE READS IT LEFT
-// OUT. A fresh run carrying a round of fifteen reads on was told twelve and
-// counted three, so the copy of its session in its box holds those three only as
-// that count. Continued in that box by a person's answer once its harness ended
-// its own run, the copy is read as holding every call of the round but those
-// three, which its job's record says the brief left out: it is told exactly
-// them, first, under words that say an earlier message counted them, and no
-// other earlier call; and its brief, which lists them all, leaves out none.
+// OUT. A fresh run told twelve of a round's fifteen reads and counted three holds
+// those three only as a count. Its copy, continued in its box by a person's answer
+// once its harness ended its own run, holds every other call, so it is told
+// exactly the three its record says the brief left out, first, under words that
+// say an earlier message counted them; and the brief listing them leaves out none.
 //
 // Mutation: read the copy as holding the reads its brief left out, and it is
 // told none of them.
@@ -384,10 +369,9 @@ func TestAReseedOverBudgetContinuedInPlaceIsToldExactlyTheReadsItLeftOut(t *test
 }
 
 // A COPY CONTINUED IN PLACE SEVERAL TIMES IS TOLD EVERY OWED READ ONCE. A copy
-// that owes twenty reads is told twelve, the read cap, and its launch records
-// the eight it counted again; the copy continued after that, owing those eight,
-// is told them and records none. So a read left out is told by the next brief
-// with room for it, and the copy owes exactly what its newest brief left out.
+// owing twenty reads is told the cap's twelve and its launch records the other
+// eight; continued again, it is told those eight and records none. So a copy
+// owes exactly what its newest brief left out.
 //
 // Mutation: record only the reads after the save the cap left out, never the
 // owed ones it left out again, and the eight are never told.
@@ -424,19 +408,18 @@ func TestACopyContinuedInPlaceSeveralTimesIsToldEveryOwedReadOnce(t *testing.T) 
 	}
 }
 
-// AN OWED READ THE LOG DROPPED IS COUNTED. A read a brief counted without listing
-// it can be dropped from the middle of a long round's log before the next brief
-// tells it, which keeps it only in its tally: that brief counts it under the
-// owed reads' own words, with the log's tally once, beside the last count that
-// needs it (here the only one), and lists the owed reads the log still lists.
+// AN OWED READ THE LOG DROPPED IS COUNTED. An owed read dropped from the middle of
+// a long round's log survives only in its tally, so the next brief counts it
+// under the owed reads' words, with the log's tally once beside the last count
+// that needs it, and lists the owed reads the log still holds.
 //
 // Mutation: count none of the owed reads the log dropped, and the case goes red.
 func TestAnOwedReadTheLogDroppedIsCounted(t *testing.T) {
 	t.Parallel()
 	asked := numbered(toolname.AskAndWait, map[string]any{"question": "which branch?"}, 300, 300)
 	again := inPlaceRelaunch(t, inBoxCarryNamed(t, "a replaced sign-in"), 299, func(r *runner.Resume) {
-		// THE LOG'S FIRST HUNDRED AND ITS LAST, the ninety-nine between
-		// dropped, two of the owed reads among them.
+		// THE LOG'S FIRST HUNDRED AND LAST: the ninety-nine between dropped,
+		// two owed reads among them.
 		r.Bridged = append(append(readsOf(1, 100), readsOf(200, 299)...), asked)
 		r.Elided = []ledger.Elided{{Name: "slack_history", Calls: 99}}
 		r.HarnessEnd, r.Owed = sandbox.HarnessEndOwnRun, []int{99, 150, 160}
@@ -454,11 +437,10 @@ func TestAnOwedReadTheLogDroppedIsCounted(t *testing.T) {
 }
 
 // A KEPT CAPTURE WHOSE BRIEF LEFT READS OUT IS TOLD THEM. A capture placed by its
-// own read counts every call the log had taken by then as held, the reads its
-// job's brief counted without listing them among them; the capture states those
-// (sandbox.SessionCapture.Omitted), and the brief continuing it tells them, in
-// a section of their own before the calls after its save, and no other call at
-// or below the save.
+// own read counts every call the log had taken as held, its brief's counted reads
+// among them, so it states those (sandbox.SessionCapture.Omitted) and the brief
+// continuing it tells them in their own section before the calls after its save,
+// and no other call at or below the save.
 //
 // Mutation: continue a kept capture without the reads it owes, and they are
 // never told.
@@ -488,11 +470,10 @@ func TestAKeptCaptureWhoseBriefLeftReadsOutIsToldThem(t *testing.T) {
 	}
 }
 
-// THE FRESH BRIEF KEEPS ITS OUTLINE. The prompt published as the round's opening
-// frame where its box starts a session of its own is the reseed, so it carries
-// the map its builder recorded (the task, what became of the run before it,
-// and the round's calls so far, each a section of its own that tiles the text)
-// rather than one undivided text the dashboard cannot draw the parts of.
+// THE FRESH BRIEF KEEPS ITS OUTLINE. A fresh session's opening frame publishes the
+// reseed with the sections its builder recorded (the task, what became of the run
+// before it, the round's calls so far, tiling the text), not one undivided text
+// the dashboard cannot draw the parts of.
 //
 // Mutation: build the reseed by joining texts, and its frame carries no outline.
 func TestTheFreshBriefKeepsItsOutline(t *testing.T) {
@@ -522,9 +503,8 @@ func TestTheFreshBriefKeepsItsOutline(t *testing.T) {
 }
 
 // A FRESH RUN'S TOLD CALLS ARE DEFUSED UNDER ITS TOKEN. A call's arguments are a
-// model's, and a failed call's error is whatever the tool said: told to a run of
-// its own, neither opens or closes a fence of any token, as the calls told a
-// continued session are not.
+// model's and a failed call's error the tool's, so, as for a continued session,
+// neither opens or closes a fence of any token.
 //
 // Mutation: tell the round's calls as rendered, undefused, and a marker reaches
 // the run's brief live.
@@ -547,15 +527,12 @@ func TestAFreshRunsToldCallsAreDefusedUnderItsToken(t *testing.T) {
 	}
 }
 
-// A HELD SUBMISSION IS ONE THE SESSION SHOWS. A job submitted and then asked, and
-// the answer's relaunch, its box reclaimed, carried the round on in a session of
-// its own: that run's brief lists the submission, under the line that says it
-// does not stand. So the copy of that run's session its box holds, continued in
-// place by a later answer once its harness ended its own run, and a capture of
-// it placed by its read, continued by a later answer too, are each told that a
-// submission the session above shows does not stand, which is then true: the
-// session shows it, in the brief it was handed. Wherever a continuation is told
-// that line, the session it continues shows the submission.
+// A HELD SUBMISSION IS ONE THE SESSION SHOWS: wherever a continuation is told that
+// a submission the session above shows does not stand, the session shows it. A
+// job submitted then asked, and the answer, its box reclaimed, carried the round
+// on in a fresh session whose brief lists the submission as not standing; that
+// session's copy in its box and a capture of it placed by its read, each
+// continued by a later answer, are told the line, truly.
 //
 // Mutation: build the fresh brief without the round's calls, and its run's
 // session shows no submission while its continuations are still told it does.
@@ -603,14 +580,12 @@ func TestAHeldSubmissionIsOneTheSessionShows(t *testing.T) {
 }
 
 // A FRESH RUN CARRYING A ROUND ON LAUNCHES NOTHING WHEN ITS CALLS FILL THE WINDOW.
-// Telling a run of its own the round's calls rewrites a payload past its budget
-// with the seat's auxiliary model, charged to the turn's counters, and that
-// rewrite can take the window past its ceiling. Every relaunch carrying a round
-// on builds that telling, whatever else it offers, and asks the meter once every
-// rewrite its briefs make is spent, before anything is launched: so a run the
-// rewrite left no room for is never launched and paid for whole past the
-// ceiling. Here the fresh brief is the only brief, its job lost with its box and
-// the turn keeping no capture of its session, so the rewrite is its alone.
+// Telling the round's calls rewrites a payload past its budget with the seat's
+// auxiliary model, charged to the turn, which can take the window past its
+// ceiling. So every relaunch carrying a round on builds that telling and asks the
+// meter after every rewrite is spent, before launching: a run with no room left
+// is never launched and paid for whole past the ceiling. Here the fresh brief
+// (a lost job, no capture) is the only one, so the rewrite is its alone.
 //
 // Mutation: build the fresh telling after the relaunch asks the meter, and the
 // run is launched.
@@ -620,8 +595,7 @@ func TestAFreshRunCarryingARoundOnLaunchesNothingWhenItsCallsFillTheWindow(t *te
 	launched, req := launch(t, entries, buildOpts{}, 1, "", nil)
 	parked, _ := launched.Suspended()
 	parked.State.ActiveTools = req.Surface.Active()
-	// THE ONE CALL THE LOST JOB MADE, its argument past the ledger's value
-	// budget.
+	// THE LOST JOB'S ONE CALL, its argument past the ledger's value budget.
 	posted := numbered("slack_post", map[string]any{"text": strings.Repeat("b", 2000)}, 1, 1)
 	meter := &ceilingMeter{ceiling: 100}
 	relauncher := &playLauncher{}
@@ -643,26 +617,21 @@ func TestAFreshRunCarryingARoundOnLaunchesNothingWhenItsCallsFillTheWindow(t *te
 	}
 }
 
-// EVERY BRIEF RECORDS THE READS ITS CAP LEFT OUT. A brief that tells a round's
-// calls counts the reads past the ledger's read cap without listing them, so the
-// session it is handed holds those reads only as a count, and its launch records
-// them for the next brief to that session to tell. Every brief a relaunch hands
-// its run hands its launch exactly the reads it counted past the cap: the fresh
-// brief, told the round from its start; the base's continuation, which takes it
-// whole; a kept capture's continuation, the reads after whose save run past the
-// cap; and the copy in its job's box, told the round from its start where its
-// harness is not known to have ended its own run, or, where it did, the reads
-// its job's brief counted. Handed none, the job's record names none, and the next
-// brief to that session, or to a capture of it placed by its own read, counts
-// them held and tells them to nobody.
+// EVERY BRIEF RECORDS THE READS ITS CAP LEFT OUT. Reads a brief counts past the
+// ledger's read cap are held only as a count, so every brief a relaunch hands
+// records exactly those for the next brief to tell: the fresh brief; the base's
+// continuation, which takes it whole; a kept capture's continuation, past its
+// save; and the copy in its job's box, from the round's start unless its harness
+// ended its own run, else the reads its job's brief counted. Unrecorded, the next
+// brief counts them held and tells them to nobody.
 //
 // Mutation: hand any brief's continuation on without its set, or drop the set a
 // brief's telling answers, and its row goes red.
 func TestEveryBriefRecordsTheReadsItsCapLeftOut(t *testing.T) {
 	t.Parallel()
-	// inBox is the set the relaunch carrying a person's answer on in its job's
-	// box records for the copy there, its harness's end as the record says,
-	// owing what the job's brief counted: the job read fifteen times and asked.
+	// inBox is what a person's answer's relaunch in the job's box records for
+	// the copy there, given its harness's end and what it owes; the job read
+	// fifteen times and asked.
 	inBox := func(end sandbox.HarnessEnd, owed []int) func(*testing.T) []int {
 		return func(t *testing.T) []int {
 			asked := numbered(toolname.AskAndWait, map[string]any{"question": "which branch?"}, 16, 16)
@@ -709,12 +678,11 @@ func TestEveryBriefRecordsTheReadsItsCapLeftOut(t *testing.T) {
 	}
 }
 
-// A READ WITH NO PLACE IS NEVER RECORDED LEFT OUT. A call an older build appended,
-// in a fleet mid-upgrade, carries no place in the round's log, so no record can
-// name it: a brief that counts such a read past the read cap without listing it
-// records the numbered reads it left out beside it, and never place zero, which
-// no log holds and which a later brief would read as an owed read the log has
-// since dropped, telling the session a further read was dropped that never was.
+// A READ WITH NO PLACE IS NEVER RECORDED LEFT OUT. A call an older build appended
+// mid-upgrade has no place in the round's log, so a brief counting it past the
+// cap records only the numbered reads beside it, never place zero: a later brief
+// would read zero as an owed read the log dropped, and tell of a drop that never
+// was.
 //
 // Mutation: record the place of every read left out, a read with none among
 // them, and the case goes red.

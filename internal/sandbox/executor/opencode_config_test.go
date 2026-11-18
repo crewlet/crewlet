@@ -239,16 +239,14 @@ func TestTheRunsConfigurationIsWrittenUnderItsWorkDirectory(t *testing.T) {
 	}
 }
 
-// EVERY SERVER VALUE IS READ FROM A FILE OF ITS OWN. Each MCP server's url, each
-// header value and each environment value is a `{file:<path>}` reference to a
-// file under the run's values directory, written 0600 and holding the value as
-// it is; the configuration's content holds none of them. And the configuration
-// OpenCode reads once it has replaced every reference — the text read as it
-// reads it — gives every server exactly the values the run was launched with,
-// a value holding a quote, a backslash or a line break included.
-//
-// The box's home holds a `&`, which encoding/json writes as `\u0026` unless told
-// not to: a reference so written names a file that is not there.
+// EVERY SERVER VALUE IS READ FROM A FILE OF ITS OWN. Each MCP server's url,
+// header value and environment value is a `{file:<path>}` reference to a 0600
+// file under the run's values directory holding the value as it is, and the
+// configuration's content holds none of them. The configuration OpenCode reads
+// once it replaces every reference gives every server exactly the values the
+// run was launched with, a quote, a backslash or a line break included. The
+// box's home holds a `&`, which encoding/json writes as `\u0026` unless told
+// not to, and a reference so written names no file.
 //
 // Mutation: write a header's value into the configuration rather than a
 // reference, and the content holds it; let encoding/json escape the text for
@@ -444,12 +442,11 @@ func (h homed) Home() string { return h.home }
 // reference is found in the configuration's text before it is parsed, so a
 // `}` ends it early, a `{` opens one of its own (`{file:…}`, `{env:…}`), a
 // character JSON escapes is read as part of the path, and a relative one is
-// resolved against the checkout — each a server OpenCode would be handed empty
-// values for, a plugin with no route, or an instruction file that is not
-// there, with a warning only in its own log. Such a home is refused before
-// anything is written, whichever of them the run names, naming the home and the
-// setting that places a local box's. A `&`, `<` or `>` is carried as itself, and
-// is no reason to refuse.
+// resolved against the checkout: each leaves a server empty values, a plugin no
+// route or an instruction file missing, warned of only in OpenCode's own log.
+// Such a home is refused before anything is written, whichever of these the run
+// names, naming the home and the setting that places a local box's. A `&`,
+// `<` or `>` is carried as itself, and is no reason to refuse.
 //
 // Mutation: drop the check, or the brace's part of it, and a refused home
 // writes a configuration.

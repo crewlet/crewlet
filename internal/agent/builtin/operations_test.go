@@ -19,31 +19,17 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// EVERY FAMILY OF WRITE TOOLS NAMES ITS OPERATION BY ONE RULE.
+// EVERY FAMILY OF WRITE TOOLS NAMES ITS OPERATION BY ONE RULE, builtin's
+// operations: a copy drifts, and one that took a brought-back `op_id` without
+// holding it to its call would make a second write under an operation
+// promised to make nothing twice.
 //
-// # What was wrong
-//
-// Which operation a write tool's call is was decided in two places. The
-// tracker's writes carried the rule, and the artifacts' writes — the
-// datastore's with them, through the same deps — carried a copy: a turn's call
-// and a request carrying its own key derive their operation from what they
-// carry and are refused an `op_id`, while the operator's assistant over MCP is
-// minted one for each call, or brings back the one it was answered and is held
-// to the call that op_id names. The copy had already reworded every refusal
-// and the argument's own description, and a copy is where the next drift is a
-// CHECK rather than a word: one that took a brought-back `op_id` without
-// holding it to its call would run another call under an operation promised to
-// make nothing twice, and make a second write under it.
-//
-// # What is asserted
-//
-// One write of each family is made on every surface a write is made on — a
-// seat's turn, a request carrying its own operation key (the act route's
-// path) and the operator's assistant over MCP, with every kind of `op_id` it
-// can bring — and every family accepts the same calls, derives or mints their
-// operation alike, refuses the same calls in the same words before anything
-// reaches its writer, and offers the argument on the same surfaces under the
-// same description.
+// One write of each family is made on every surface (a seat's turn, a request
+// carrying its own operation key as the act route does, and the operator's
+// assistant over MCP with every kind of `op_id` it can bring), and every family
+// accepts the same calls, derives or mints their operation alike, refuses the
+// same calls in the same words before its writer, and offers the argument on
+// the same surfaces under the same description.
 func TestEveryWriteFamilyBindsOneWay(t *testing.T) {
 	t.Parallel()
 	key := statelog.NewOpID(time.Now(), "request")

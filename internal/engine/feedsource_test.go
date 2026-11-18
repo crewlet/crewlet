@@ -10,24 +10,13 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE DURABLE CONSUMER NAMES ARE FROZEN, and this is the assertion that keeps
-// them so.
-//
-// The group name IS the fleet's position. A rename does not fail, log, or
-// error: it creates a fresh durable consumer, and every group starts from the
-// log's first retained record, so the fleet REPLAYS every change the log still
-// holds as a wake — collapsed only by the change feed's claim and wake-id
-// dedupe, and only within their own windows — and the log's trim stalls
-// behind the new consumer's acknowledgement floor until it catches up. The
-// only symptoms are notifications people already had and a log that stopped
-// shrinking.
-//
-// The tracker's group changed ONCE, when its estate did — a bucket feed and a
-// log feed are two different consumers over two different things, and the old
-// name would have been a position on an estate that no longer exists. The
-// SOURCE name did not change with it, deliberately: it appears in every event's
-// source column and every dashboard filter, and a company's existing
-// notification rules go on meaning what they meant.
+// THE DURABLE CONSUMER NAMES ARE FROZEN. The group name IS the fleet's
+// position: a rename fails nowhere, it creates a fresh durable consumer that
+// starts from the log's first retained record, so the fleet replays every
+// change the log still holds as a wake (collapsed only within the change
+// feed's claim and wake-id windows) and the log's trim stalls behind the new
+// consumer's floor until it catches up. The source name is frozen too: dashboard
+// filters and a company's notification rules match on it.
 func TestTheNativeFeedGroupNamesNeverMove(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

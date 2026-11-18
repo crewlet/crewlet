@@ -22,11 +22,9 @@ import (
 // record both ways leave.
 
 // launchWithNoConversation starts a run the way an assignment's or a
-// colleague's turn does: with NO conversation at all, because its trigger named
-// none. The run the chat route can never answer. A schedule's fire is not one
-// any more: it names its schedule's conversation, which the dispatcher keeps
-// every delivery off before the coordinator is asked (internal/notify's
-// Derived).
+// colleague's turn does: with NO conversation, so the chat route can never
+// answer it. (A schedule's fire names its schedule's conversation; see
+// internal/notify's Derived.)
 func launchWithNoConversation(t *testing.T, rig *coordRig, turnID string) {
 	t.Helper()
 	box, err := rig.provider.Create(t.Context(), Spec{})
@@ -65,8 +63,8 @@ func parksOnAQuestion(t *testing.T, rig *coordRig, turnID string) {
 	}
 }
 
-// givenFor is an operator's answer to one run that names the run alone and no
-// question — which no answer this build delivers does.
+// givenFor is an operator's answer naming the run alone and no question,
+// which no answer this build delivers does.
 func givenFor(turnID string) (types.ExecutorAnswerGiven, *events.Event) {
 	given := types.ExecutorAnswerGiven{
 		TurnID: turnID, Agent: sweID, AgentHandle: "swe", Answer: "use the release branch",
@@ -85,9 +83,8 @@ func givenAgainst(t *testing.T, rig *coordRig, turnID string) (types.ExecutorAns
 	return given, events.New(given, events.TraceContext{})
 }
 
-// asksAgain is a resumed turn that relaunches its executor, and the new job
-// parks on a question of its own: the run waits on a NEW question, under a new
-// launch, asked an hour after the first.
+// asksAgain is a resumed turn whose relaunched job parks on a NEW question,
+// under a new launch, asked an hour after the first.
 func asksAgain(t *testing.T, rig *coordRig) func(context.Context, PendingRun) {
 	return func(ctx context.Context, run PendingRun) {
 		if _, err := rig.pending.BeginLaunch(ctx, run, Fence{}); err != nil {
@@ -124,9 +121,8 @@ func (r *coordRig) answeredRecords() []types.ExecutorAnswered {
 }
 
 // THE PARK PUTS THE QUESTION TO WHOM THE CHART SAYS, and writes it with the
-// question. The label the harness chose is resolved for the run that
-// asked — its requester is on the row — and a row read back carries the seats
-// and whether they are a fallback.
+// question: the harness's label is resolved for the asking run, and the row
+// carries the seats and whether they are a fallback.
 func TestTheParkRecordsWhomTheQuestionIsPutTo(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -144,9 +140,8 @@ func TestTheParkRecordsWhomTheQuestionIsPutTo(t *testing.T) {
 	}
 }
 
-// A RUN WITH NO CONVERSATION IS ANSWERED BY ITS TURN. Nothing a person could
-// say in chat would reach it — its row names no conversation to match — so the
-// answer names the run, resumes the suspended turn with it, attributed, and
+// A RUN WITH NO CONVERSATION IS ANSWERED BY ITS TURN: no chat reply can reach
+// it, so the answer names the run, resumes the suspended turn attributed, and
 // the resume is on the record with who gave it.
 func TestAnAnswerByTurnResumesARunWithNoConversation(t *testing.T) {
 	t.Parallel()
@@ -253,8 +248,8 @@ func TestAnAnswerByTurnRecordsTheOptionItChose(t *testing.T) {
 	}
 
 	// AND THE RECORD THAT OUTLIVES THE RUN SAYS THE SAME (ADR-0068): the
-	// question with its options, the option chosen by id and the person's own
-	// words apart from it, which is what their answered decisions read back.
+	// question with its options, the choice by id, and the person's words apart
+	// from it, as their answered decisions read back.
 	rig.finished("t1")
 	records := rig.answeredRecords()
 	if len(records) != 1 {
@@ -270,11 +265,8 @@ func TestAnAnswerByTurnRecordsTheOptionItChose(t *testing.T) {
 }
 
 // AN ANSWER BY TURN CHOOSING WHAT THE QUESTION DOES NOT OFFER IS SPENT, NOT
-// RECORDED. `answer_executor` checks the choice against the same question
-// before it delivers, so one arriving here was checked against another;
-// handed to the run, it would be told it chose something nobody offered.
-// Nothing is resumed, the question stays open for an answer it can take, and
-// the person is told on the record that theirs did not land.
+// RECORDED: `answer_executor` checked it against another question. Nothing is
+// resumed, the question stays open, and the record tells the person.
 //
 // Mutation: record the answer whatever its choice, and the run resumes on an
 // option it never offered.
@@ -299,7 +291,7 @@ func TestAnAnswerByTurnChoosingWhatWasNotOfferedIsSpentUnrecorded(t *testing.T) 
 	}
 	records := rig.answeredRecords()
 	// UNDER ITS OWN OUTCOME: the run was waiting, so "not awaiting" would
-	// tell the person the wrong thing about why their answer was not used.
+	// misstate why the answer was not used.
 	if len(records) != 1 || records[0].Outcome != types.AnswerUnoffered {
 		t.Fatalf("recorded %+v, want one unoffered", records)
 	}
@@ -314,12 +306,10 @@ func TestAnAnswerByTurnChoosingWhatWasNotOfferedIsSpentUnrecorded(t *testing.T) 
 }
 
 // AN ANSWER BY TURN PAST A PAGE IS REFUSED AS TOO LARGE, AND SAID. The record
-// holds an answer by turn to the bound `answer_executor` holds it to
-// ([MaxAnswerTextBytes]), so one that did not come through the tool is held
-// all the same: spent unrecorded, the run still waiting on its question, and
-// the refusal recorded as `too_large` with what it said and what an answer
-// may — and none of its words — never as `declined`, which names an answer the
-// run held and let go.
+// holds it to `answer_executor`'s bound ([MaxAnswerTextBytes]) even off the
+// tool: spent unrecorded, the run still waiting, and recorded as `too_large`
+// with both sizes and none of its words — never `declined`, which names an
+// answer the run held and let go.
 //
 // Mutation: drop the record's own measure, and the answer is recorded and
 // resumes the run.
@@ -350,13 +340,10 @@ func TestAnAnswerByTurnPastAPageIsRefusedAsTooLarge(t *testing.T) {
 	}
 }
 
-// AN ANSWER BY TURN IS MEASURED AS ITS AUTHOR GAVE IT, the string
-// `answer_executor` measured: trimmed, and before any secret in it is
-// redacted. A redaction's marker is longer than many a secret it replaces, so
-// a page that names a password, accepted by the tool, would be past the page
-// once redacted, and measured there it was refused after the tool had told
-// its giver it was taken. Measured as given, it is recorded — redacted, as
-// every answer is.
+// AN ANSWER BY TURN IS MEASURED AS ITS AUTHOR GAVE IT, as `answer_executor`
+// measured it: trimmed and before redaction. A redaction marker can outgrow
+// the secret it replaces, so a page the tool accepted would otherwise be
+// refused after its giver was told it was taken. It is still recorded redacted.
 //
 // Mutation: measure the answer redacted, or untrimmed, and the page is
 // refused as too large.
@@ -389,18 +376,16 @@ func TestAnAnswerByTurnIsMeasuredAsItsAuthorGaveIt(t *testing.T) {
 }
 
 // AN ANSWER TO A RUN SOMEBODY ALREADY ANSWERED IS NOT ITS. The record is the
-// same compare-and-set the chat route's is, so a question another answer was
-// recorded against is not answered a second time — and the person who answered
-// late is told so on the record rather than left to wonder.
+// chat route's compare-and-set, so the question is not answered twice, and the
+// late answerer is told so on the record.
 func TestAnAnswerByTurnToARunAlreadyAnsweredIsNotMine(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	launchWithNoConversation(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
 	late, lateEv := givenAgainst(t, rig, "t1")
-	// READ BEFORE THE OTHER ANSWER WAS RECORDED, which is the race the record
-	// exists for: this answer saw the question open, and the record is what
-	// finds it answered.
+	// READ BEFORE THE OTHER ANSWER WAS RECORDED, the race the record exists
+	// for: this answer saw the question open.
 	stale := rig.get("t1")
 	rig.resumer.failWith(errors.New("the first answer's resume is still being retried"))
 	first, firstEv := givenAgainst(t, rig, "t1")
@@ -438,16 +423,12 @@ func (s *staleOnce) Get(ctx context.Context, turnID string) (PendingRun, bool, e
 	return s.PendingStore.Get(ctx, turnID)
 }
 
-// TWO ANSWERS TO ONE QUESTION RESUME THE RUN ONCE. Two people answering the same
-// question — or one person's retry racing their own first try — contend for one
-// record, and the loser is spent rather than resumed or handed back; and the
-// same answer delivered twice is the one answer, spent as it. And when the two
-// are SEPARATED BY A RELAUNCH — the first resumed the run, its turn relaunched
-// its executor and the new job parked on a question of its own before the
-// second arrived — the second is still an answer to the FIRST question, and spent
-// as `not_awaiting`: it used to claim whatever the run waited on by then,
-// resuming it a second time with the first question's answer presented as the
-// second's.
+// TWO ANSWERS TO ONE QUESTION RESUME THE RUN ONCE. Two answers (or a retry
+// racing its first try) contend for one record and the loser is spent, not
+// resumed or handed back; one answer delivered twice is that one answer. Two
+// SEPARATED BY A RELAUNCH, after which the run parked on a new question: the
+// second still answers the FIRST question and is spent as `not_awaiting`,
+// never resuming the run with it as the new question's answer.
 func TestTwoAnswersByTurnResumeOnce(t *testing.T) {
 	t.Parallel()
 	t.Run("two answers at once", func(t *testing.T) {
@@ -537,11 +518,9 @@ func TestTwoAnswersByTurnResumeOnce(t *testing.T) {
 	})
 }
 
-// AN ANSWER THAT NAMES NO QUESTION IS SPENT, NOT RESUMED WITH. Which question it
-// answers cannot be known: the run may have moved on to a question its giver
-// never saw, and resuming it with the answer would pair the two exactly as the
-// question's name exists to stop. It is spent with the reason — not handed back,
-// since no retry can supply what it lacks — and the run keeps waiting.
+// AN ANSWER THAT NAMES NO QUESTION IS SPENT, NOT RESUMED WITH: the run may
+// have moved on to a question its giver never saw. It is spent with the reason,
+// not handed back (no retry supplies what it lacks), and the run keeps waiting.
 func TestAnAnswerByTurnNamingNoQuestionIsSpentUnread(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -567,10 +546,9 @@ func TestAnAnswerByTurnNamingNoQuestionIsSpentUnread(t *testing.T) {
 	}
 }
 
-// THE DESK WILL NOT DELIVER ONE: an answer naming no question would only be
-// spent by the node holding the seat, so it is refused before anything is read
-// or put on the seat's inbox. The run exists, so the answer naming its question
-// afterwards is delivered — the desk reads the row for the seat it addresses.
+// THE DESK WILL NOT DELIVER ONE: the seat's holder would only spend it, so it
+// is refused before anything is read or published. The same answer naming its
+// question is then delivered, so the refusal is the missing question alone.
 func TestTheAnswerDeskRefusesAnAnswerNamingNoQuestion(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -596,8 +574,8 @@ func TestTheAnswerDeskRefusesAnAnswerNamingNoQuestion(t *testing.T) {
 }
 
 // A RUN THAT IS NOT WAITING IS NOT ANSWERED, and a run that is gone is gone:
-// neither is resumed, neither is handed back — there is nothing to retry for —
-// and each says what it found.
+// neither is resumed or handed back (nothing to retry for), and each is
+// recorded with what it found.
 func TestAnAnswerByTurnToARunNotWaitingIsSpentAndSaysWhy(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -625,9 +603,8 @@ func TestAnAnswerByTurnToARunNotWaitingIsSpentAndSaysWhy(t *testing.T) {
 	}
 }
 
-// A STORE THAT CANNOT BE READ IS NOT A RUN THAT IS GONE. The answer is handed
-// back for the broker's spaced retry, and nothing is announced: it has not
-// become anything yet.
+// A STORE THAT CANNOT BE READ IS NOT A RUN THAT IS GONE: the answer is handed
+// back for the broker's retry, and nothing is announced yet.
 func TestAnAnswerByTurnOverAnUnreadableStoreComesBack(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -645,12 +622,11 @@ func TestAnAnswerByTurnOverAnUnreadableStoreComesBack(t *testing.T) {
 	}
 }
 
-// AN ANSWER BY TURN WHOSE RESUME FAILED IS THE RUN'S TO RETRY, as a chat reply's
-// is: it is recorded on the run before the resume is attempted, so the delivery
-// is spent, the run owes the resume, and the coordinator retries it — nothing
-// announced until it has become something, then announced once, by its route.
-// It used to be handed back to the broker instead, held only by the claim the
-// resume took, so a node that stopped between that claim and the turn lost it.
+// AN ANSWER BY TURN WHOSE RESUME FAILED IS THE RUN'S TO RETRY, as a chat
+// reply's is: recorded on the run before the resume, so the delivery is spent
+// and the coordinator retries the resume, announcing once, by its route, when
+// it lands. Handed back to the broker instead, it would be held only by the
+// resume's claim, lost if the node stopped before the turn.
 func TestAnAnswerByTurnWhoseResumeFailedIsRetriedFromItsRecord(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -696,10 +672,9 @@ func TestAnAnswerByTurnWhoseResumeFailedIsRetriedFromItsRecord(t *testing.T) {
 }
 
 // AN ANSWER BY TURN ITS RUN COULD NOT BE RESUMED WITH IS LET GO OF, and the
-// person told: past the attempts a recorded answer gets, the run waits on its
-// question again and the answer's copy goes back to the seat's control topic, where,
-// having no ordinary form, it is spent as `declined`. It is never recorded
-// against the question again, so it cannot circle the run it failed to reach.
+// person told: past [MaxAnswerAttempts] the run waits on its question again and
+// the answer's copy, back on the seat's control topic, is spent as `declined`.
+// It is never recorded against the question again, so it cannot circle the run.
 func TestAnAnswerByTurnItsRunCannotTakeIsDeclined(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -762,9 +737,8 @@ func (r *coordRig) lastHandedBack(t *testing.T) *events.Event {
 	return nil
 }
 
-// THE CHAT ROUTE RECORDS WHO ANSWERED. A reply on the run's own conversation
-// was taken as the answer and resumed the run, and nothing said so; now the
-// resume is on the record, with the route and the sender.
+// THE CHAT ROUTE RECORDS WHO ANSWERED: a reply on the run's own conversation
+// that resumes it is on the record with the route and the sender.
 func TestTheChatAnswerPathRecordsWhoAnswered(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -798,8 +772,8 @@ func TestTheChatAnswerPathRecordsWhoAnswered(t *testing.T) {
 }
 
 // A CHAT REPLY THAT REACHED NOTHING IS NOT AN ANSWER, and publishes nothing:
-// every ordinary message on a seat with a parked run is offered to the match,
-// and a record per message would bury the answers that were.
+// every message on a seat with a parked run is offered to the match, and a
+// record per message would bury the real answers.
 func TestAChatMessageThatMatchedNoRunRecordsNothing(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -817,18 +791,16 @@ func TestAChatMessageThatMatchedNoRunRecordsNothing(t *testing.T) {
 	}
 }
 
-// AN ANSWER IS ROUTED BY THE SEAT'S ID. One that reaches a seat that does not
-// hold the run is dropped — resuming it would re-enter another seat's
-// conversation as this one.
+// AN ANSWER IS ROUTED BY THE SEAT'S ID: one reaching a seat that does not hold
+// the run is dropped, or it would re-enter another seat's conversation.
 func TestAnAnswerByTurnIsMatchedToItsRunBySeatID(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
 	launchWithNoConversation(t, rig, "t1")
 	parksOnAQuestion(t, rig, "t1")
 
-	// Against the question the run waits on, so the seat is the one thing
-	// wrong with it: an answer naming no question is spent before the run
-	// is read at all.
+	// Against the run's own question, so the seat is the one thing wrong:
+	// an answer naming no question is spent before the run is read.
 	given, _ := givenAgainst(t, rig, "t1")
 	given.Agent = "0198f3a4-0000-7000-8000-000000000002"
 	ev := events.New(given, events.TraceContext{})
@@ -847,11 +819,10 @@ func TestAnAnswerByTurnIsMatchedToItsRunBySeatID(t *testing.T) {
 	}
 }
 
-// THE DESK ADDRESSES THE RUN'S OWN SEAT. Whatever the caller's copy of the run
-// said, the answer goes to the inbox of the seat ID on the row, stamped with
-// it, so the dispatcher's own check against the row passes on the holder and
-// nowhere else — and the question it answers stays the one the caller named,
-// never the one the desk's own read finds.
+// THE DESK ADDRESSES THE RUN'S OWN SEAT: whatever the caller's copy said, the
+// answer goes to the control topic of the row's seat ID, stamped with it, so
+// the holder's check against the row passes there alone — and the question
+// stays the caller's, never the one the desk's read finds.
 func TestTheAnswerDeskDeliversToTheRunsSeatID(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -909,14 +880,10 @@ func TestTheAnswerDeskDeliversToTheRunsSeatID(t *testing.T) {
 	}
 }
 
-// AN ANSWER BY TURN SURVIVES ITS CLAIM'S NODE STOPPING. It is recorded on the
-// run before the resume claims it, so a node that stops between the claim and
-// the turn leaves the answer on the row for the seat's next holder — never a
-// claim that is reaped as an abandoned tail with nothing on it, which is how
-// the answer was lost: it was held only by the claim, and its delivery, coming
-// round to the new holder, found the run gone. The next holder gives it back to
-// the run and resumes the run with it, attributed to the person who gave it, as
-// it does a chat reply's ([Coordinator.reapTail]).
+// AN ANSWER BY TURN SURVIVES ITS CLAIM'S NODE STOPPING. Recorded on the run
+// before the resume claims it, it stays on the row for the seat's next holder
+// rather than dying with a claim reaped as an empty tail; that holder resumes
+// the run with it, attributed, as it does a chat reply's ([Coordinator.reapTail]).
 func TestAnAnswerByTurnOutlivesItsClaimsNode(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -928,8 +895,8 @@ func TestAnAnswerByTurnOutlivesItsClaimsNode(t *testing.T) {
 		t.Fatalf("AnswerByTurn = %q, want the answer recorded", d)
 	}
 	launch := rig.get("t1").LaunchID
-	// THE NODE CLAIMS THE RUN FOR THE ANSWER'S RESUME, AND STOPS before its
-	// turn takes the answer.
+	// THE NODE CLAIMS THE RUN FOR THE RESUME, AND STOPS before its turn
+	// takes the answer.
 	if _, won, err := rig.pending.ClaimForResume(t.Context(), "t1", RecordedAnswerTail(launch), rigLease); err != nil || !won {
 		t.Fatalf("the dying node's claim = %v, %v", won, err)
 	}
@@ -952,8 +919,8 @@ func TestAnAnswerByTurnOutlivesItsClaimsNode(t *testing.T) {
 	}
 }
 
-// recordLandsThenFails records an answer and then reports that it could not:
-// the write committed, and the store's reply was lost.
+// recordLandsThenFails commits an answer's record, then reports failure, as a
+// lost reply does.
 type recordLandsThenFails struct{ PendingStore }
 
 func (s recordLandsThenFails) RecordAnswer(ctx context.Context, turnID, launch string, answer RecordedAnswer,
@@ -991,12 +958,10 @@ func heldThroughResumes(rig *coordRig) *[]bool {
 }
 
 // AN ANSWER BY TURN WHOSE RECORD LANDED UNSEEN STARTS ITS RESUME WHEN IT COMES
-// BACK. The record committed and its reply was lost, so the delivery was handed
-// back and nothing was scheduled: the run is answered, owed a resume nothing on
-// this node drives, and nothing holds the seat's mail behind it. The redelivery
-// finds this very answer on the run, is spent as it — and starts the resume, the
-// seat's inbox held through it. Without that, the person's answer waited on the
-// run until the seat changed hands.
+// BACK. The reply was lost, so the delivery was handed back with no resume
+// scheduled and nothing holding the seat's mail. The redelivery finds this
+// answer on the run, is spent as it, and starts the resume with the seat's
+// inbox held; otherwise the answer waits until the seat changes hands.
 func TestAnAnswerByTurnWhoseRecordLandedUnseenStartsItsResumeWhenItComesBack(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -1026,8 +991,8 @@ func TestAnAnswerByTurnWhoseRecordLandedUnseenStartsItsResumeWhenItComesBack(t *
 	resumedOnceHeld(t, rig, heldDuring)
 }
 
-// AND THE SAME ON THE CHAT ROUTE: a reply whose record landed unseen comes back,
-// is recognised as the answer on the run, and starts the resume.
+// AND THE SAME ON THE CHAT ROUTE: a reply whose record landed unseen comes
+// back, is recognised as the run's answer, and starts the resume.
 func TestAReplyWhoseRecordLandedUnseenStartsItsResumeWhenItComesBack(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)

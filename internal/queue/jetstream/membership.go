@@ -17,54 +17,23 @@ import (
 	"github.com/crewlet/crewlet/internal/jsprovision"
 )
 
-// THE METADATA GROUP'S MEMBERSHIP, read and changed from inside a member.
-//
-// A clustered broker's members are the voters of one raft group, the metadata
-// group, which places every stream and consumer. A member that is gone for
-// good stays a voter until something removes it: every election and every
-// create goes on counting it, and a fleet that lost two of three members for
-// good has no quorum left to create anything with. nats-server removes one on
-// `$JS.API.SERVER.REMOVE` — and answers that request ONLY when it arrives on
-// the SYSTEM account (server/jetstream_api.go, jsLeaderServerRemoveRequest).
-//
-// # How this process reaches its own system account
-//
-// Every connection to the embedded broker presents a key, and the broker's one
-// authenticator ([brokerAuth]) decides which account each is bound to: this
-// process's own clients to the global account, a fleet member's routes to
-// none, a leaf's link and an operator's tool to the global account. So a
-// CLUSTERED member declares the system account and the authenticator admits
-// ONE key to it: a key pair this process mints at start, whose private half
-// never leaves it, and which it accepts only over the in-memory pipe — never
-// over a socket. No file, no log line and no peer ever holds anything that
-// authenticates as it.
-//
-// NO USER LIST BESIDE IT. The server's own user table could hold the system
-// key as well, but it is consulted only where no custom authenticator is set,
-// so an entry there would be a second list that nothing reads. And the no-auth
-// user nats-server adds to the global account when exactly the global and the
-// system account are declared (server/server.go, configureAccounts) — which is
-// how every anonymous client used to land in the global account — is still
-// added and is unreachable: with a custom authenticator the server never
-// consults it, and a client is bound to the global account it starts in only
-// until the authenticator binds or refuses it.
-//
-// AN NKEY RATHER THAN A PASSWORD: what the pipe carries is a public key and a
-// signature over the server's nonce, so the server is handed no secret, and
-// nothing about it warns on every start the way a plaintext password does
-// ("Plaintext passwords detected").
-//
-// THE SYSTEM ACCOUNT KEEPS ITS DEFAULT NAME, `$SYS`. The metadata group's own
-// state is stored under the system account's name, so a member that renamed
-// it would come back from an upgrade having forgotten which streams exist.
-//
-// A SOLO MEMBER DECLARES NOTHING. It has no metadata group to read or change.
+// THE METADATA GROUP'S MEMBERSHIP, read and changed from inside a member. A
+// member gone for good stays a voter of the metadata group (the raft group
+// placing every stream and consumer) until removed, so a fleet that lost two
+// of three has no quorum left to create anything with. nats-server removes one
+// on `$JS.API.SERVER.REMOVE`, answered ONLY on the system account
+// (server/jetstream_api.go, jsLeaderServerRemoveRequest). So a CLUSTERED member
+// declares it and [brokerAuth] admits one key to it: minted at start, accepted
+// only over the in-memory pipe, held by nothing outside this process (package
+// doc, "Every connection presents a key"). An nkey hands the server no secret.
+// The account keeps its default name, `$SYS`: the group's state is stored under
+// it, and a rename would forget every stream across an upgrade. A solo member
+// has no metadata group and declares nothing.
 
-// processUser is an identity this process alone holds on its own broker: its
-// public key, which the authenticator accepts, and the key pair that signs for
-// it, which nothing outside this process ever sees. The engine's own clients
-// carry one ([brokerAuth.engine]) and the membership code another
-// ([brokerAuth.system]).
+// processUser is an identity this process alone holds on its own broker: the
+// public key the authenticator accepts and the key pair that signs for it. The
+// engine's own clients carry one ([brokerAuth.engine]) and the membership code
+// another ([brokerAuth.system]).
 type processUser struct {
 	public string
 	keys   nkeys.KeyPair
@@ -124,20 +93,17 @@ var ErrNotAMetaPeer = errors.New("jetstream: the metadata group counts no such v
 var ErrMembershipChanging = errors.New("jetstream: another change to the " +
 	"metadata group's membership is still being committed")
 
-// ErrNoMetaLeader is a removal nobody answered for the whole wait: only the
-// metadata group's leader answers one, and [Server.RemovePeer] asks again
-// every [removeResend] — so an election is waited out, and a group that
-// answers nobody for that long has lost the quorum it would elect a leader
-// with, and can change nothing about itself.
+// ErrNoMetaLeader is a removal nobody answered for the whole wait. Only the
+// leader answers, and [Server.RemovePeer] asks again every [removeResend], so
+// an election is waited out: a group silent that long has lost its quorum and
+// can change nothing about itself.
 var ErrNoMetaLeader = errors.New("jetstream: the metadata group has no leader " +
 	"to commit a membership change — it has lost its quorum, or has been " +
 	"electing a leader for longer than the removal waits")
 
-// ErrRemovingSelf is a member asked to carry its own removal. It could not see
-// the group drop it — its own view goes on counting it until the server turns
-// its JetStream off, which nats-server does the moment the change commits — so
-// the answer would be lost with the member that owed it. Another member
-// carries it.
+// ErrRemovingSelf is a member asked to carry its own removal. nats-server
+// turns its JetStream off the moment the change commits, so the answer would
+// be lost with the member that owed it. Another member carries it.
 var ErrRemovingSelf = errors.New("jetstream: a member cannot carry its own " +
 	"removal from the metadata group — ask another member")
 
@@ -151,22 +117,15 @@ const (
 )
 
 // PeerIDOf is the raft peer id the metadata group counts the server of this
-// name by — derived from the name exactly as nats-server derives it, since a
-// server's raft node id is the hash of its own name.
+// name by, derived exactly as nats-server hashes a server's name into its raft
+// node id.
 //
-// DERIVED RATHER THAN LOOKED UP, because the lookup fails exactly when it is
-// needed. A member learns another server's NAME only from that server itself
-// (server/events.go, processNewServer), so once the survivors of a member lost
-// for good have restarted — a rolling upgrade does it, and so do the restarts
-// a capacity seal takes — none of them can name the dead one: the group lists
-// it as "Server name unknown at this time", and nats-server resolves a removal
-// by name through that same lookup and answers that there is no such server,
-// while every election goes on counting it. Its id never leaves the group, and
-// the node id an operator knows the member by is enough to compute it.
-//
-// A derivation written down from another project is a claim until something
-// holds it: the membership suites pin it against running servers, and an
-// upgrade of nats-server that changed it fails there rather than here.
+// DERIVED, NOT LOOKED UP: a member learns another server's name only from that
+// server (server/events.go, processNewServer), so once a dead member's
+// survivors have restarted none can name it — the group lists it as "Server
+// name unknown at this time", and a removal by name finds no such server while
+// every election goes on counting it. The membership suites pin the derivation
+// against running servers, so a nats-server upgrade that changed it fails there.
 func PeerIDOf(name string) string {
 	sum := sha256.Sum256([]byte(name))
 	out := make([]byte, peerIDLength)
@@ -176,9 +135,8 @@ func PeerIDOf(name string) string {
 	return string(out)
 }
 
-// ValidPeerID reports whether s is spelled as a raft peer id — the check an
-// operator's gesture naming a voter by its id is held to before anything asks
-// the group about it.
+// ValidPeerID reports whether s is spelled as a raft peer id, the check an
+// operator's gesture naming a voter is held to before the group is asked.
 func ValidPeerID(s string) bool {
 	if len(s) != peerIDLength {
 		return false
@@ -193,10 +151,9 @@ func ValidPeerID(s string) bool {
 
 // MetaPeer is one voter of the metadata group, as this member's broker sees it.
 type MetaPeer struct {
-	// Name is the server's name, which is the engine's node id — and EMPTY
-	// for a voter this member has not heard from since it started, whose
-	// name nats-server learns only from the server itself. Such a voter is
-	// still counted, and is named by Peer.
+	// Name is the server's name, the engine's node id; EMPTY for a voter this
+	// member has not heard from since it started ([PeerIDOf]), which is
+	// still counted and named by Peer.
 	Name string `json:"name"`
 	// Peer is the raft peer id: what the group counts the voter by, and
 	// what a removal names ([PeerIDOf]).
@@ -220,8 +177,7 @@ type MetaGroup struct {
 	// Leader names the group's leader, empty while it has none.
 	Leader string `json:"leader,omitempty"`
 	// Peers are every voter, this member included while the group counts
-	// it, sorted by name and then by peer id — so a voter nobody can name
-	// sorts first.
+	// it, sorted by name then peer id, so a nameless voter sorts first.
 	Peers []MetaPeer `json:"peers"`
 }
 
@@ -232,10 +188,9 @@ func (g MetaGroup) Counts(peer string) bool {
 
 // MetaGroup reads the metadata group as this member's broker sees it.
 //
-// IN PROCESS, from the server's own monitoring, rather than over a request: it
-// is this member's view, which is the one a removal made through it would act
-// on, and every member holds one — a group without a leader still reports its
-// voters, which is exactly when an operator needs to see them.
+// IN PROCESS, from the server's own monitoring, not over a request: it is the
+// view a removal through this member acts on, and a group without a leader
+// still reports its voters, which is when an operator needs them.
 func (s *Server) MetaGroup() (MetaGroup, error) {
 	e := s.embedded
 	if e == nil || e.leaf || !e.clustered {
@@ -251,28 +206,18 @@ func (s *Server) MetaGroup() (MetaGroup, error) {
 	return metaGroupOf(jsz.Meta, e.ns.Name(), e.ns.Node()), nil
 }
 
-// metaGroupOf is the metadata group as nats-server's monitoring reports it,
-// read into this package's terms.
+// metaGroupOf reads nats-server's monitoring report of the metadata group into
+// this package's terms.
 //
-// THIS MEMBER IS A VOTER ONLY WHILE THE GROUP COUNTS IT. The monitoring leaves
-// the answering server out of its own peer list whenever the group has a
-// leader, and a member removed from the group goes on answering until the
-// server turns its JetStream off — so a member that reported itself
-// unconditionally would claim a vote the group had already taken away. What
-// says whether it is still counted is the group's own size: the peers listed
-// beside it are every voter but itself, and fall short of the size by exactly
-// one while it is among them. Leaderless, the monitoring lists it like any
-// other peer, and it is read from the list.
+// THIS MEMBER IS A VOTER ONLY WHILE THE GROUP COUNTS IT. With a leader, the
+// report leaves the answering server out of its peer list, and a removed
+// member answers until its JetStream turns off; so it counts while the peers
+// beside it fall exactly one short of the group's size. Leaderless, it is
+// listed like any other peer. A name that does not hash to its peer id is
+// nats-server's placeholder for a voter it has not heard from, and is dropped.
 //
-// A NAME THAT DOES NOT HASH TO ITS PEER ID IS NOT A NAME: it is nats-server's
-// placeholder for a voter it has not heard from ("Server name unknown at this
-// time"), and it is dropped rather than passed on as though some node were
-// called that.
-//
-// A PURE FUNCTION OVER THE REPORT, because the two states it decides — a
-// member removed while it still answers, and a voter whose name nobody knows —
-// are ones a cluster reaches only through a removal or a restart, and a rule
-// exercised only through one of those is a rule nobody re-reads.
+// A PURE FUNCTION, because a cluster reaches both states only through a
+// removal or a restart (TestTheGroupCountsThisMemberOnlyWhileItDoes holds them).
 func metaGroupOf(meta *server.MetaClusterInfo, selfName, selfPeer string) MetaGroup {
 	group := MetaGroup{Cluster: meta.Name, Leader: meta.Leader}
 	others := 0
@@ -312,85 +257,33 @@ func metaGroupOf(meta *server.MetaClusterInfo, selfName, selfPeer string) MetaGr
 }
 
 // removeResend is how long [Server.RemovePeer] waits on one ask before asking
-// again.
-//
-// THE RAFT HEARTBEAT, and [jsprovision.ReAsk] is where the tree states it —
-// nats-server's one second (server/raft.go, hbInterval), the shortest interval
-// over which the group's leadership can have changed: a request that reaches no
-// leader is dropped rather than answered, and a newly elected leader makes
-// itself known on its first heartbeat, so asking once a heartbeat reaches a new
-// leader within one heartbeat of its election. Shorter buys nothing but more
-// "in flight" answers from a leader still committing an earlier ask; longer
-// adds that much to every removal made across an election. Borrowed rather
-// than written again, because a removal is re-sent for exactly the reason a
-// provisioning request is, and two copies of one server constant drift.
+// again: nats-server's one-second raft heartbeat (server/raft.go, hbInterval),
+// borrowed from [jsprovision.ReAsk], which re-sends for the same reason, so two
+// copies of one server constant cannot drift. A request reaching no leader is
+// dropped, and a new leader announces itself on its first heartbeat, so one
+// ask a heartbeat reaches it within one heartbeat of its election. Shorter
+// only draws more "in flight" answers; longer adds that much to every removal
+// made across an election.
 const removeResend = jsprovision.ReAsk
 
-// appliedPoll is how often [Server.RemovePeer] reads this member's own view of
-// the group while waiting for it to apply a committed removal.
-//
-// A TENTH OF THE HEARTBEAT that carries a commit to a follower: at most a tenth
-// of a heartbeat added to the answer, for at most ten in-process reads of the
-// server's own monitoring per heartbeat of lag.
+// appliedPoll is how often [Server.RemovePeer] reads this member's own view
+// while waiting for it to apply a committed removal: a tenth of the heartbeat
+// that carries the commit, adding at most that to the answer for ten
+// in-process reads per heartbeat of lag.
 const appliedPoll = removeResend / 10
 
-// RemovePeer removes a voter from the metadata group, by its raft peer id
-// ([PeerIDOf] of the server's name), and returns once the group has committed
-// the change AND this member has applied it — so the group this member reports
-// next no longer counts the voter.
+// RemovePeer removes a voter from the metadata group by its raft peer id, never
+// its name ([PeerIDOf]), and returns once the group committed the change AND
+// this member applied it ([awaitApplied]); the leader answers, on the system
+// account. It refuses only its own removal ([ErrRemovingSelf]): a removed voter
+// still running rejoins on restart, so whether one may go is the caller's call.
 //
-// BY PEER ID, NEVER BY NAME. nats-server resolves a name through the names it
-// has heard, and a member whose survivors have restarted since it died is one
-// none of them has heard: asked by name, the group answers that it counts no
-// such server while every election goes on counting it — see [PeerIDOf].
-//
-// THROUGH THIS MEMBER'S SYSTEM ACCOUNT — the only account the request is
-// answered on — and answered by the group's leader, wherever that is: the
-// request is routed to every member and only the leader replies. What it does
-// not do is decide whether the voter SHOULD go: a removed server that is still
-// running as a member rejoins as a voter when it restarts, and the caller
-// decides whether one that is running may be removed at all. It refuses only
-// ITSELF ([ErrRemovingSelf]), which it could never see removed.
-//
-// # Asked until a leader answers, on one inbox
-//
-// nats-server's leader answers a removal only once a quorum has committed it,
-// and it keeps nothing a lost ask could be recovered from
-// (server/jetstream_api.go, jsLeaderServerRemoveRequest;
-// server/jetstream_cluster.go, processLeaderChange):
-//
-//   - a member that is not the leader DROPS the request, so an ask that
-//     arrives while the group is electing is never answered at all — and the
-//     member an operator removes is often the one that WAS the leader, whose
-//     death is what started the election;
-//   - a leader that loses its leadership FORGETS the answers it owed, although
-//     what it proposed may still be committed by its successor.
-//
-// A single request therefore waited out the whole budget for an answer nobody
-// was ever going to send, and was reported as a group without a leader while
-// the survivors had long since elected one. So this asks again every
-// [removeResend] until an answer comes, and every ask names the SAME reply
-// inbox: an earlier ask's success, sent when its commit lands, is read by
-// whichever wait is running then. Two answers are only what they say on the
-// FIRST ask, because from the second on they may be about this call's own
-// earlier one:
-//
-//   - "in flight" from the second ask on is most likely this call's own
-//     proposal still being committed, so it is waited out — the success comes
-//     to the same inbox when it lands, and somebody else's change landing
-//     first only means this one is proposed after it;
-//   - "not a member" from the second ask on, for a voter this member counted
-//     before anything was asked, may be this call's own earlier ask already
-//     committed: it is a success once this member's own view no longer counts
-//     the voter, and asked again until then. A voter this member never
-//     counted is not a member, whichever ask says so — the typo is never
-//     reported removed.
-//
-// THE WAIT IS BOUNDED BY THE BUDGET ONE CLUSTERED METADATA CHANGE GETS
-// ([jsprovision.Budget]) — a removal is a proposal to the same group a
-// replicated create is, committed by the same quorum — or by the caller's
-// context if that ends sooner. Either abandons the answer, not the change: once
-// the leader has proposed it, the group commits it without anybody listening.
+// A non-leader DROPS the ask and a deposed leader FORGETS the answers it owed
+// (server/jetstream_api.go, jsLeaderServerRemoveRequest; jetstream_cluster.go,
+// processLeaderChange), so it asks again every [removeResend] on ONE reply
+// inbox, where an earlier ask's late success lands too ([judgeRemoval]). The
+// wait is [jsprovision.Budget] of a clustered metadata change, or ctx's if
+// sooner; either abandons the answer, never the change.
 func (s *Server) RemovePeer(ctx context.Context, peer string) error {
 	e := s.embedded
 	if e == nil || e.leaf || !e.clustered || e.auth == nil || !e.auth.system.declared() {
@@ -479,16 +372,16 @@ type removalAsked struct {
 	counted func() (bool, error)
 }
 
-// judgeRemoval decides what one answer to a removal settles. Settled with no
-// error is a removal the group has committed, settled with one is the answer
-// the caller gets, and unsettled carries the answer that settled nothing yet —
-// the one reported if the wait runs out before another comes.
+// judgeRemoval decides what one answer to a removal settles: settled with no
+// error is a committed removal, settled with one is the caller's answer, and
+// unsettled carries the answer reported if the wait runs out first.
 //
-// A PURE DECISION OVER THE ANSWER, because the two cases it exists for — an
-// earlier ask's commit landing while its answer was lost to a change of
-// leader, and a commit slower than the resend — are races no cluster stages on
-// demand, and a rule exercised only through one is a rule nobody re-reads. See
-// [Server.RemovePeer] for why each answer means what it does here.
+// From the second ask on an answer may be about an earlier one: "in flight" is
+// most likely this call's own proposal and is waited out, and "not a member",
+// for a voter this member counted before asking, is a success once this member
+// no longer counts it. A voter never counted is never reported removed. A PURE
+// DECISION, because a commit outliving its leader or the resend is a race no
+// cluster stages on demand.
 func judgeRemoval(peer string, data []byte, asked removalAsked) (settled bool, why error) {
 	var resp server.JSApiMetaServerRemoveResponse
 	if err := json.Unmarshal(data, &resp); err != nil {
@@ -507,9 +400,8 @@ func judgeRemoval(peer string, data []byte, asked removalAsked) (settled bool, w
 			case err != nil:
 				return true, err
 			case !still:
-				// AN EARLIER ASK'S COMMIT, or somebody else's: either way
-				// the group no longer counts the voter, which is what was
-				// asked for.
+				// An earlier ask's commit, or somebody else's: the voter is
+				// gone either way.
 				return true, nil
 			}
 			return false, fmt.Errorf("%w, though this member still counts it", notMember)
@@ -527,10 +419,9 @@ func judgeRemoval(peer string, data []byte, asked removalAsked) (settled bool, w
 	return true, nil
 }
 
-// removalUnsettled is a removal whose wait ran out: nobody answered at all,
-// which is a group with no leader, or the last answer that settled nothing.
-// Either way the removal may yet be committed, which is what the operator
-// has to be told before asking again.
+// removalUnsettled is a removal whose wait ran out, with no answer (a group
+// with no leader) or one that settled nothing. Either way it may yet commit,
+// which the operator must be told before asking again.
 func removalUnsettled(peer string, asks int, pending, cause error) error {
 	if pending == nil {
 		return fmt.Errorf("%w: nobody answered the removal of %s, asked %d times, "+
@@ -555,13 +446,10 @@ func counts(view func() (MetaGroup, error), peer string) (bool, error) {
 // awaitApplied waits for this member's own view of the group to stop counting a
 // voter whose removal the group has committed.
 //
-// A MEMBER DROPS A REMOVED PEER WHEN IT STORES THE CHANGE, before the commit
-// (server/raft.go, processAppendEntry), and the leader answers once a QUORUM
-// has stored it — which need not include the member that carried the removal:
-// in a group of five, a follower outside the two that acknowledged first, or
-// one still catching up, has not stored it yet. Without this wait the group a
-// removal reports, read from the member that carried it, could still count the
-// voter it just removed.
+// A member drops a removed peer when it stores the change (server/raft.go,
+// processAppendEntry), and the leader answers once a QUORUM has, which need
+// not include the member that carried the removal; without this wait the group
+// it reports next could still count the voter it just removed.
 func awaitApplied(ctx context.Context, view func() (MetaGroup, error), peer string) error {
 	for {
 		still, err := counts(view, peer)

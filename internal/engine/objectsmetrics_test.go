@@ -12,11 +12,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// s3Bootstrap is a node's Tier A for a case whose object store is a bucket on
-// srv: path style, with STATIC keys — with none, the SDK's own chain would
-// look for credentials on the machine, the instance's metadata endpoint among
-// them, before its first request — and the embedded stream in the case's own
-// directory.
+// s3Bootstrap is a node's Tier A whose object store is a bucket on srv, path
+// style, with the embedded stream in the case's own directory. The keys are
+// STATIC: without them the SDK's chain probes the machine for credentials
+// (the instance metadata endpoint among them) before its first request.
 func s3Bootstrap(t *testing.T, srv *s3fake.Server) *config.Bootstrap {
 	t.Helper()
 	return bootstrap(t, func(b *config.Bootstrap) {
@@ -28,11 +27,10 @@ func s3Bootstrap(t *testing.T, srv *s3fake.Server) *config.Bootstrap {
 	})
 }
 
-// answeredProbePuts is how many attempts of the put the bucket's probe at open
-// makes through the engine's own path (s3obj's probe.go) rec holds as
-// answered: `crewlet.objects.s3.attempts{operation=PutObject,
-// outcome=answered}`, zero where the series is absent. Nothing else a node
-// does while it opens puts an object, so the probe's is the only one.
+// answeredProbePuts is rec's count of answered PutObject attempts
+// (`crewlet.objects.s3.attempts{operation=PutObject,outcome=answered}`), zero
+// where absent. Opening a node puts no object but the bucket probe's (s3obj's
+// probe.go), so this counts that probe.
 func answeredProbePuts(rec *metrics.Recorder) uint64 {
 	for _, s := range rec.Read() {
 		if s.Name == metrics.ObjectsS3Attempts && s.Attrs["operation"] == "PutObject" &&
@@ -43,14 +41,12 @@ func answeredProbePuts(rec *metrics.Recorder) uint64 {
 	return 0
 }
 
-// THE NODE'S RECORDER REACHES ITS BUCKET, from the engine's own constructor
-// down: engine.New hands Options.Metrics to OpenBackends, OpenBackends to the
-// broker's opening, and that to the object store's — and an `s3` node's
-// probe of its bucket at open is the first attempt it counts. A recorder
-// dropped at any hop is a node publishing none of the four S3 series, which
-// reads exactly as a bucket that never throttled or failed anybody; the one
-// test of the last hop alone (TestTheObjectStoresBucketCountsIntoTheNodesRecorder)
-// passes whatever the hops above it pass.
+// THE NODE'S RECORDER REACHES ITS BUCKET through every hop: engine.New hands
+// Options.Metrics to OpenBackends, which hands it to the broker's opening and
+// on to the object store's, whose bucket probe is the first attempt counted. A
+// recorder dropped at any hop publishes none of the four S3 series, which
+// reads as a bucket that never failed anybody;
+// TestTheObjectStoresBucketCountsIntoTheNodesRecorder covers the last hop only.
 func TestTheNodesRecorderReachesItsBucket(t *testing.T) {
 	t.Parallel()
 	t.Run("through OpenBackends", func(t *testing.T) {

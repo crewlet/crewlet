@@ -11,11 +11,10 @@ import (
 // each turn segment has spent, charged once per operation key, so a turn
 // retrying a call it lost the answer to is not charged twice.
 //
-// THE NODE'S, and enough: a turn segment runs on the node that holds its seat,
-// and every tool call it makes is a call on that node. A segment is named by
-// its run id. A call outside a turn (a person's assistant) is held to none of
-// it. An untouched turn's tally is forgotten after [turnBudgetIdle], swept at
-// most once a minute.
+// Per node is enough: a turn segment (named by its run id) runs, and makes
+// every tool call, on the node holding its seat. A call outside a turn (a
+// person's assistant) is held to none of it. An untouched turn's tally is
+// forgotten after [turnBudgetIdle], swept at most once a minute.
 type turnBudget struct {
 	limit int
 	now   func() time.Time
@@ -45,12 +44,10 @@ func newTurnBudget(limit int, now func() time.Time) *turnBudget {
 	return &turnBudget{limit: limit, now: now, turns: map[string]*turnSpend{}}
 }
 
-// spend charges n to turn under key: false (and what the turn had used) past
-// the bound, in which case nothing is charged. An empty turn is charged
-// nothing; a key already charged is a retry, charged nothing again. refund
-// gives back what this call charged, for a write that turned out to write
-// nothing; it is safe to call more than once, and a no-op where nothing was
-// charged.
+// spend charges n to turn under key: past the bound it charges nothing and
+// returns false with what the turn had used. An empty turn, or a key already
+// charged (a retry), is charged nothing. refund gives back this call's
+// charge, for a write that wrote nothing; it is idempotent.
 func (g *turnBudget) spend(turn, key string, n int) (refund func(), used int, ok bool) {
 	none := func() {}
 	if turn == "" {

@@ -12,12 +12,11 @@ import (
 // A MAILBOX WHOSE LANE IS GONE IS LISTED AS PARTIAL, AND ENSURING IT REPAIRS IT.
 //
 // Under interest retention a priority event published to a lane no consumer
-// covers is dropped at the broker with no error anywhere, so a seat whose
-// lane went missing (a mailbox made before lanes existed, a consumer somebody
-// deleted) would lose every message a person sent it. The listing is how a
-// node's mailbox pass learns that, and EnsureSubscription is what it then
-// calls; both halves are held here because the conformance suite cannot
-// remove one consumer of a subscription without the backend's own client.
+// covers is dropped silently, so a seat whose lane consumer was deleted would
+// lose every message a person sent it. A node's mailbox pass learns it from
+// the listing and calls EnsureSubscription; both halves are held here because
+// the conformance suite cannot remove one consumer without the backend's own
+// client.
 func TestALaneThatWentMissingIsListedPartialAndEnsuredBack(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

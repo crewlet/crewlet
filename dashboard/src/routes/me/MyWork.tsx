@@ -87,12 +87,15 @@
  * on the list.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { NamedGlyph } from "@crewlethq/icons/glyphs/registry";
 import { href, useNavigator, useParam } from "~/app/router.tsx";
 import type { MeSection } from "~/app/routes.ts";
 import { useServicesAsk } from "~/lib/services.ts";
 import { ChangeList } from "~/routes/gitlet/ChangeList.tsx";
+import { changeObject } from "~/routes/gitlet/paths.ts";
+import { usePeekNeighbours } from "~/app/frame/PeekHost.tsx";
+import type { CodeChangeSummary } from "~/protocol/index.ts";
 import { QueryState } from "~/components/common.tsx";
 import { UnboundRemedy } from "~/components/people.tsx";
 import { usePageCoverage, usePageMenu, useSectionCounts } from "~/app/Shell.tsx";
@@ -136,6 +139,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { PriorityQueue } from "./Priorities.tsx";
 import { listTotal, useOwnQueueCount, useQueueCountRead } from "~/lib/useQueueCount.ts";
 import { ago } from "~/lib/ago.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /**
  * What the Queue OPENS on, as the list's own parameters.
@@ -730,10 +734,23 @@ export function MyWork({ section }: { section: MeSection }) {
  * takes a seat's handle as a reviewer and an owner, and refuses anything else.
  */
 function DayReviews({ whose, they }: { whose: string; they: string }) {
+  // ONE PEEK ORDER ACROSS THE TWO LISTS: the reviews owed, then the fixes, each change once.
+  const [reviews, setReviews] = useState<readonly CodeChangeSummary[]>([]);
+  const [fixes, setFixes] = useState<readonly CodeChangeSummary[]>([]);
+  const order = useMemo(() => {
+    const seen = new Set<string>();
+    return [...reviews, ...fixes]
+      .filter((c) => !seen.has(c.id) && Boolean(seen.add(c.id)))
+      .map((c) => changeObject(c.repo, c.number));
+  }, [reviews, fixes]);
+  usePeekNeighbours(order);
   return (
     <div className="col gap-4">
       <ChangeList
         params={{ needs: "review", reviewer: whose }}
+        name="Waiting on review"
+        neighbours={false}
+        onRows={setReviews}
         label={<h3 className="t-label">Waiting on {they === "you" ? "your" : "their"} review</h3>}
         empty={{
           title: "No review waiting",
@@ -742,6 +759,9 @@ function DayReviews({ whose, they }: { whose: string; they: string }) {
       />
       <ChangeList
         params={{ needs: "fix", owner: whose }}
+        name="Waiting on a fix"
+        neighbours={false}
+        onRows={setFixes}
         label={
           <h3 className="t-label">{they === "you" ? "Your" : "Their"} changes waiting on a fix</h3>
         }
@@ -887,6 +907,7 @@ export function whoseDayOptions(
   const row = (seat: Seat, group: string): SelectOption => ({
     value: seat.handle,
     label: seat.name,
+    leading: <ChoiceFace seat={seat} />,
     description: describe(seat.handle),
     group,
     // WHAT THE SEARCH MATCHES. A reader types either the name they know or

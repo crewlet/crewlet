@@ -31,6 +31,7 @@ import {
   Text,
   useToast,
   type DataGridColumn,
+  TableEntityCell,
 } from "@crewlethq/ui";
 import type { McpMemberServerStatus, McpReach, McpServerAnswer } from "~/contract/mcp.ts";
 import { DataGrid } from "~/app/frame/DataGrid.tsx";
@@ -41,6 +42,7 @@ import { saveAccess } from "../api.ts";
 import { useServerEntry, type McpData } from "../data.ts";
 import { accessOf, GrantPicker, sameAccess, type Access } from "../GrantPicker.tsx";
 import { limitWords, reasonWords, STATE, writeRefusalWords } from "../words.ts";
+import { plainSeat } from "~/app/frame/cells.tsx";
 
 interface ReachRow {
   seat: string;
@@ -83,11 +85,7 @@ export function AccessTab({
       header: "Agent",
       floor: "12rem",
       sortValue: (r) => r.name,
-      cell: (r) => (
-        <Text as="span" variant="inherit" truncate>
-          {r.name}
-        </Text>
-      ),
+      cell: (r) => <TableEntityCell {...plainSeat({ ...data.seat(r.seat), name: r.name })} />,
     },
     {
       key: "why",

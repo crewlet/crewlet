@@ -123,13 +123,10 @@ func (rig *tailRig) serveWith(t *testing.T, owner string, q TailServer, feeds *L
 	t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
 }
 
-// reader is the asking node's reader.
-//
-// ITS BUDGET IS ROOM TO ANSWER, not the case's clock: a scatter returns the
-// moment its one reply lands, so a generous budget costs a passing case
-// nothing, while the 200 ms it was flaked every answering case on a loaded
-// race-enabled run — the owner's reply was simply later than that, and the
-// case read it as a silent owner. The one case that waits the budget OUT sets
+// reader is the asking node's reader. ITS BUDGET IS ROOM TO ANSWER, not the
+// case's clock: a scatter returns on its one reply, so a generous budget costs
+// a passing case nothing, while a tight one reads a loaded race-enabled run's
+// late reply as a silent owner. The one case that waits the budget out sets
 // its own ([TestASilentOwnerIsNamedNotEmpty]).
 func (rig *tailRig) reader(t *testing.T) *TailReader {
 	return &TailReader{
@@ -184,12 +181,10 @@ func TestOnlyTheOwnerAnswersATailRequest(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
 	rig.runner.Say(SourceTranscript, "running go test ./...\n")
-	// A bystander that serves too, and CAN read the box: it drives the same
-	// backend, so the only thing keeping it from answering with its own read
-	// is the addressing. Its handler is captured so the refusal is asserted
-	// directly below — through the broker it would be a race the asker's
-	// owner filter hides, and a test that catches the regression only when
-	// the wrong node happens to answer first is not a test of it.
+	// A bystander that serves too and CAN read the box (the same backend), so
+	// only the addressing keeps it from answering. Its handler is captured so
+	// the refusal is asserted directly below: through the broker it is a race
+	// the asker's owner filter hides.
 	bystander := &capturingServer{TailServer: rig.client(t)}
 	rig.serveWith(t, "n3:bystander", bystander, rig.feeds(t))
 	rig.serve(t, boxOwner)
@@ -236,10 +231,9 @@ func (c *capturingServer) Serve(ctx context.Context, subject string, answers int
 
 // A SILENT OWNER IS NAMED, NOT EMPTY.
 //
-// Nobody serving the subject is the shape of a node that is gone, wedged or
-// partitioned. Read as an empty tail, a person watching would see a run that
-// has "said nothing" — the opposite of the truth, and a screen that polls has
-// no way to notice the difference.
+// Nobody serving the subject is a node gone, wedged or partitioned. Read as an
+// empty tail, a viewer would see a run that "said nothing", and a polling
+// screen could never tell the difference.
 func TestASilentOwnerIsNamedNotEmpty(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
@@ -277,8 +271,8 @@ func TestATailOfAJobThatIsNotRunningSaysWhy(t *testing.T) {
 // A JOB BEING LAUNCHED IS NOT A JOB THAT STOPPED. Its row exists, with its
 // launch id, from before its box does, and it stays `launching` through the
 // box's creation, its provisioning and the agent's start — minutes, on a
-// cold template. Answered `not_running`, a screen opened in that window
-// stopped asking for good and said the run was over before it had begun.
+// cold template. Answered `not_running`, a screen opened in that window would
+// stop asking for good and call the run over before it began.
 //
 // Mutation: answer `launching` as `not_running`, and the outcome is terminal.
 func TestALaunchingJobIsLaunchingNotStopped(t *testing.T) {
@@ -318,10 +312,8 @@ var errBoxHost = errors.New("e2b: GET https://49983-box.e2b.example.com/files: 5
 // a wait clears, a setup somebody fixes is one no wait does, a condition of
 // the owner's own is [ErrTailUnanswered], and a fault is classed as nothing;
 // the asker's error names the owner and the run, which is where the detail is.
-//
-// The text crossed once, and the asker could only answer it as a fault of its
-// own: a provider outage read, on the screen and over REST, as a node that
-// broke.
+// Sent the text, the asker could only answer it as a fault of its own: a
+// provider outage read as a node that broke.
 //
 // Mutation: put the error's text back on the reply, class every failure as a
 // fault, or read a condition of the owner's as a fault, and a row goes red.
@@ -545,8 +537,7 @@ func TestAPeekNeverWakesAPausedBox(t *testing.T) {
 // A BOX THAT IS GONE IS SAID TO BE, not failed: its backend says it is gone for
 // good — reaped, or a local box whose root did not outlive its node — so
 // nothing more will be read from it, and its waiter records its job lost.
-// Answered as an error, the query surface told a person watching that the node
-// had broken.
+// Answered as an error, it would tell a person watching that the node broke.
 //
 // Mutation: drop either arm that answers ErrBoxGone, and that path's answer is
 // an error.
@@ -628,12 +619,11 @@ func TestAStoppedLaunchsReadingIsLetGo(t *testing.T) {
 // prompt it. In a fleet the owner is never told a launch stopped: the node
 // serving the dashboard reads the run's record, answers `not_running` itself
 // and never asks the owner again — and a viewer who closes the tab asks
-// nobody anything. The sweep used to run inside the next request to reach the
-// owner's readings, so on a quiet owner every reading somebody had watched
-// stayed in memory until the node stopped.
+// nobody anything. Swept only inside a request, a quiet owner would keep every
+// watched reading until the node stopped.
 //
-// Mutation: sweep only inside a request again (drop the tick's drop), and the
-// owner keeps the reading however long nobody asks.
+// Mutation: sweep only inside a request (drop the tick's drop), and the owner
+// keeps the reading however long nobody asks.
 func TestAReadingNobodyAsksAboutIsLetGoOnItsOwnClock(t *testing.T) {
 	t.Parallel()
 	rig := newTailRig(t)
@@ -706,8 +696,8 @@ func (c *stepClock) advance(d time.Duration) {
 //
 // GONE IS READ, NOT WAITED OUT, in a bubble: once Stop has returned and every
 // goroutine of the case is blocked, a sweep still running waits on its ticks,
-// and a tick offered without waiting reaches it. A quiet window after Stop saw
-// only a sweep quick enough to take its tick inside it.
+// and a tick offered without waiting reaches it. A quiet window after Stop
+// would catch only a sweep quick enough to take a tick inside it.
 //
 // Mutation: leave the sweep running past the readings' end, and Stop never
 // returns; return from Stop without waiting for it as well, and the sweep
@@ -806,11 +796,11 @@ func TestAViewerIsSentOnlyWhatItLacks(t *testing.T) {
 
 // A CURSOR ANSWER ALWAYS STATES ITS OFFSETS, zero included, as the wire
 // carries it. A reading that has settled nothing yet answers at end 0 and is
-// followed from start 0; with the offsets dropped as empty, a screen compared a
-// missing start with the 0 it held through, threw the delta away and asked for
-// a reset a poll later — and a REST caller told to send `end` back had none.
+// followed from start 0. Dropped as empty, a screen would compare a missing
+// start with the 0 it holds through, discard the delta and reset a poll later,
+// and a REST caller told to send `end` back would have none.
 //
-// Mutation: tag the offsets `omitempty` again, and the answers at zero carry
+// Mutation: tag the offsets `omitempty`, and the answers at zero carry
 // neither.
 func TestACursorAnswerAlwaysStatesItsOffsets(t *testing.T) {
 	t.Parallel()
@@ -867,7 +857,8 @@ func waitPastReuse(feeds *LiveFeeds) {
 
 // A CURSOR THAT DOES NOT MATCH IS A RESET, NEVER A SPLICE: another reading's
 // epoch, a digest of text this reading never settled, an offset past its end
-// or before its start. Each would otherwise append the reading's tail to text it does not follow.
+// or before its start. Each would otherwise append the reading's tail to text
+// it does not follow.
 //
 // Mutation: skip the digest check, and a viewer holding different text of the
 // same length is sent a delta.
@@ -960,16 +951,14 @@ func TestAViewerTooFarBehindIsReset(t *testing.T) {
 	}
 }
 
-// N VIEWERS COST ONE READ OF THE BOX. A read used to be made per request, so
-// every viewer added a whole read of the box every three seconds; requests
-// arriving together now share the one read in flight, and requests inside
-// [LiveReuse] of it share its answer.
+// N VIEWERS COST ONE READ OF THE BOX: requests arriving together share the one
+// read in flight, and requests inside [LiveReuse] of it share its answer.
 //
-// EVERY VIEWER WAITS ON THE ONE READ before it is let through, as the bubble
-// says: Wait returns once every goroutine of the case is blocked, so each
-// viewer's request has reached the owner and waits on the read in flight. A
-// nap for a head start let a late viewer ride the reuse window instead, and
-// left the sharing of a read in flight untested.
+// EVERY VIEWER WAITS ON THE ONE READ before it is let through: synctest.Wait
+// returns once every goroutine of the case is blocked, so each request has
+// reached the owner and waits on the read in flight. A nap for a head start
+// would let a late viewer ride the reuse window and leave the in-flight
+// sharing untested.
 //
 // Mutation: read the box per request, or start a read for a request that
 // finds one in flight, and the count is the viewers'.
@@ -1013,23 +1002,15 @@ func TestManyViewersCostOneReadOfTheBox(t *testing.T) {
 	})
 }
 
-// AN ABANDONED REQUEST FREES ITS ANSWER SLOT. The owner's answer waits for the
-// box only its share of the asker's budget, and then says the read is still
-// going — and the read goes on, for the reading rather than the request, so
-// the next request is answered from what it found without reading again.
+// AN ABANDONED REQUEST FREES ITS ANSWER SLOT. The owner waits for the box only
+// its share of the asker's budget, then says the read is still going; the read
+// goes on for the reading, so the next request is answered from it unread.
 //
-// PUT TO THE OWNER ITSELF, through its own handler, because what is asserted
-// is the OWNER's bound. Asked across the broker with a short budget, the case
-// measured the reply crossing it too: the owner answers at three quarters of
-// the budget, and under a loaded race-enabled run the last quarter was not
-// always enough for the reply to land, so the asker reported a silent owner
-// and the case failed on a bound the owner had kept.
-//
-// IN A BUBBLE, the owner's bound is its answer's own timer: the box's read
-// waits on the gate, so the clock moves to that timer and the answer comes at
-// exactly the share. A bound of seconds on the machine's clock passed an owner
-// that waited past its share, and failed one a loaded runner kept from
-// answering for as long.
+// Put to the owner's own handler, since the owner answers at three quarters of
+// the budget and across the broker a loaded run's reply can miss the last
+// quarter and read as a silent owner. In a bubble, with the box's read held on
+// the gate, the answer comes at exactly its timer's share, where a wall-clock
+// bound would pass an owner that overstays and fail one a loaded runner delays.
 //
 // Mutation: answer under the registration's own context, and the answer waits
 // as long as the box does.
@@ -1129,14 +1110,12 @@ func eventually(t *testing.T, done func() bool, msg string) {
 	}
 }
 
-// THE OWNER LOGS WHAT IT MET, with its text, which is the one place the text
-// goes: at WARN for a fault and for a class no wait clears, at DEBUG for one a
-// wait clears. ONE EVENT FOR EVERY OWNER, however the person asked it: a peer
-// that serves the request writes `sandbox_tail_failed`, and so does the node
-// asked when it owns the run itself, which is every single-node deployment.
-// What reaches the query surface is marked as logged there, so its own line is
-// a trace. And a class a newer owner named that this build doesn't know is
-// said by the asker, since nothing here can read it.
+// THE OWNER LOGS WHAT IT MET, with its text, the one place the text goes: at
+// WARN for a fault or a class no wait clears, at DEBUG for one a wait clears.
+// ONE EVENT, `sandbox_tail_failed`, whether the owner serves a peer or answers
+// for itself (every single-node deployment). What reaches the query surface is
+// marked as logged there, so its own line is a trace. A class a newer owner
+// named that this build doesn't know is said by the asker.
 //
 // NOT PARALLEL: it swaps the process-wide logger.
 //

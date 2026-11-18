@@ -9,25 +9,17 @@ import (
 )
 
 // A NODE THAT STOPS VOUCHING FOR ITS IDENTITY ROWS SAYS SO, as a move naming
-// everyone — and that is all this watch does.
+// everyone, and that is all this watch does.
 //
-// An identity applier HALTED on a record it cannot read — a removal or a
-// company-wide invalidation signed under a keyring key this node was not
-// restarted with, a record that fails its signature, a recreated stream — or
-// frozen behind a broker it cannot reach commits no batch, so the credential
-// listener ([Engine.identityMoved]) never hears the record meant to end an
-// open socket. What does move is the identity log's lag ([runningLog.Lag],
-// which a halted applier cannot hold down: [progress.frozenFor]), and past
-// [statelog.StallGrace] every identity read on the node answers unknown, so a
-// REST request is 503 and a handshake is refused before any snapshot.
-//
-// So the CROSSING is the event: the reading that finds the lag past the grace
-// hands the listener a move naming everyone, which closes every open socket
-// for its reconnect's handshake to decide. ONCE PER CROSSING — a node that
-// stays past the grace has nothing new to say — and re-armed when it catches
-// up. Not at the halt itself: inside the grace the guard still serves the rows
-// this node has, as it serves a node briefly behind. SEATS ARE NOT NAMED:
-// contact routing is rebuilt from rows, and a stall wrote none.
+// An identity applier halted on a record it cannot read (a key this node
+// lacks, a bad signature, a recreated stream) or frozen behind an unreachable
+// broker commits no batch, so [Engine.identityMoved] never hears the record
+// meant to end an open socket. Its lag still grows ([progress.frozenFor]), and
+// past [statelog.StallGrace] every identity read here answers unknown. So the
+// crossing is the event: it closes every open socket for its reconnect's
+// handshake to decide, once per crossing, re-armed on catching up. Not at the
+// halt: inside the grace the guard still serves this node's rows. Seats are not
+// named: contact routing is rebuilt from rows, and a stall wrote none.
 type vouching struct {
 	// lag is the identity log's lag as of an instant — the figure every
 	// identity read on this node carries, [runningLog.lagAt].
@@ -42,21 +34,16 @@ type vouching struct {
 	stalled bool
 }
 
-// vouchInterval is how often [vouching] reads the identity log's lag.
-//
-// ONE SECOND, because the figure crosses the grace on the WALL CLOCK rather
-// than at any event — the frozen term grows every instant from the
-// checkpoint's last move — so a poll is the only way to see the crossing, and
-// its interval is how long past the guard's own refusal an open socket can
-// still be served. A read is an atomic load and one mutex.
+// vouchInterval is how often [vouching] reads the identity log's lag: the
+// figure crosses the grace on the wall clock, not at any event, so only a poll
+// sees it, and the interval bounds how long past the guard's refusal an open
+// socket is still served. A read is an atomic load and one mutex.
 const vouchInterval = time.Second
 
 // observe takes one reading at now and hands the listener a move naming
-// everyone if it is the reading that crossed the grace.
-//
-// PAST, as every reader of the figure compares it ([session.RowStalled], a
-// token's check, a binding's vouch): a lag of exactly the grace is still
-// served, so it is not yet a crossing.
+// everyone if it is the reading that crossed the grace. PAST, as every reader
+// of the figure compares it ([session.RowStalled]): a lag of exactly the grace
+// is still served.
 func (v *vouching) observe(now time.Time) {
 	stalled := v.lag(now) > statelog.StallGrace
 	if stalled && !v.stalled {
@@ -80,12 +67,9 @@ func (v *vouching) run(ctx context.Context) {
 }
 
 // identityVouching is the watch over this node's identity log, handing what it
-// sees to e's credential listener.
-//
-// THE LAG IS THE RUNNING LOG'S OWN, the function the identity reader is
-// built with ([core.openIAM]), so the crossing this sees is the one every
-// identity read on this node answers by — never a second reading of a stall
-// that could cross at another instant.
+// sees to e's credential listener. The lag is the running log's own
+// ([core.openIAM] builds the identity reader with it), so it crosses at the
+// instant every identity read here answers by.
 func identityVouching(e *Engine, running *runningLog) *vouching {
 	return &vouching{lag: running.lagAt, moved: e.identityMoved}
 }

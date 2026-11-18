@@ -15,88 +15,33 @@ import (
 )
 
 // connectionLoss records the first connection a queue depends on that NATS
-// closed FOR GOOD, which is what [Queue.Lost] and [Queue.LostCause] report.
-//
-// # Why a node has to be told
-//
-// This package dials an operator's server to reconnect for ever, so a broker
-// that goes away and comes back costs a node nothing it does not get back. A
-// close for good is the other outcome, and the client reaches it on its own:
-//
-//   - a message past a max_payload the server lowered by a LIVE RELOAD, which
-//     the server answers with `Maximum Payload Violation` and the client treats
-//     as final ([carriesTheContract] says why nothing on this side can see
-//     such a limit before it is crossed). Final only where the client READS
-//     that answer: a message larger than the socket takes at once can have its
-//     write fail part way when the server closes the connection, and the
-//     client (since nats.go 1.55.0) then closes the socket itself, drops the
-//     unread refusal and reconnects. That connection is not closed for good,
-//     and it reads the lowered limit on the reconnect, which [reconnectWatch]
-//     names and every later write past it is refused against;
-//   - an authorization error the server repeats on the reconnect after it —
-//     credentials revoked or expired, or the server's own authorization
-//     reloaded under a running node — since two identical ones in a row are
-//     where the client stops asking;
-//   - any other -ERR the client does not recognise as transient;
-//   - and the reconnect attempts running out, which is how a connection to
-//     this node's own embedded broker ends once that broker has stopped.
-//
-// Nothing was told. The process stayed up with no connection to publish,
-// consume or renew a lease over — healthy to a liveness probe, its seats lapsing
-// to peers while it still believed it held them — until a person noticed and
-// restarted it. The honest move for a node whose broker connection is gone is
-// the seat watchdog's for a wedged event loop: stop, and let whatever
-// supervises the process start it again. That restart is also where a server
-// still below the contract is refused BY NAME ([carriesTheContract]), so the
-// one recovery path ends at the sentence naming the setting.
-//
-// # Why only a close this package did not ask for
-//
-// Every connection this package hands out is closed by its owner at shutdown,
-// and the client calls a closed handler for that close too unless it is told
-// not to — so each watched connection is dialled with
-// [nats.NoCallbacksAfterClientClose], which is the client's own line between a
-// close user code made (a [Queue.Stop], an owner's Close, a Drain, which ends
-// in one) and a close the client made because the server or the reconnect
-// budget left it no other move. Recording a node's own shutdown as a lost
-// broker would turn every graceful stop into a failed exit.
-//
-// # Why once
-//
-// The first close is the cause. A node that lost its connection to an operator's
-// server for one of the reasons above tends to lose the second one for the same
-// reason a moment later — the coordination store's on an embedded broker, or
-// the next connection a peer-facing subsystem dials — and every such close is
-// LOGGED, but the node is stopping already, and a cause that changed between
-// the reader looking and the reader reporting would name the wrong one.
-//
-// # Why the queue's own connection is told apart
-//
-// The node stops for any of them; what differs is what the turns it is still
-// running can achieve on the way down. Every delivery this
-// queue made is acknowledged, nacked or deferred over the queue's OWN
-// connection, so once that one is gone nothing a running turn concludes can be
-// recorded: the broker hands the message to whichever node takes the seat once
-// its ack window elapses, and that node runs it again — every chat post, every
-// comment, every tracker write a second time. Its loss therefore ends the drain
-// at once ([Queue.AcksLost]), while the coordination store's connection closing
-// alone leaves every ack still landing, and the drain waits for the turns as a
-// signal's does. A second [sync.Once] rather than a flag on the first close,
-// because the queue's own connection is routinely the SECOND to go — the
-// coordination store's can close first on an embedded broker that stopped —
-// and the first close names the cause while this one decides the drain.
+// closed FOR GOOD, which [Queue.Lost] and [Queue.LostCause] report. A client
+// that reconnects for ever still reaches that on its own: a write past a
+// max_payload lowered by a live reload ([carriesTheContract]; a write cut part
+// way instead reconnects and reads the new limit, [reconnectWatch]), an
+// authorization error repeated on the reconnect, an -ERR it does not treat as
+// transient, or reconnects running out once the embedded broker stopped. Such a
+// node stays live to a probe while its seats lapse to peers, so it stops and
+// its supervisor restarts it, where [carriesTheContract] names a setting still
+// wrong. Only a close this package did not ask for counts ([watchClose]). The
+// FIRST close is the cause: later ones, often the same reason a moment later,
+// are only logged, so the cause a reader reports cannot change under it.
 type connectionLoss struct {
 	once  sync.Once
 	done  chan struct{}
 	cause error
 
+	// acks closes when the queue's OWN connection goes: nothing a running turn
+	// concludes can be settled then and the broker redelivers it elsewhere, so
+	// the drain ends at once ([Queue.AcksLost]); with only the coordination
+	// connection gone every ack still lands. A second Once, not a flag on the
+	// first close, since the queue's own is routinely the second to go.
 	acksOnce sync.Once
 	acks     chan struct{}
 
-	// conns is every connection whose close for good is recorded here, so a
-	// start that failed can wait for the handler of one the client has
-	// already closed ([connectionLoss.settle]). Appended once a dial hands
-	// the connection out, and never pruned: a queue holds two.
+	// conns is every watched connection, so a failed start can wait for the
+	// handler of one the client has already closed ([connectionLoss.settle]).
+	// Never pruned: a queue holds two.
 	mu    sync.Mutex
 	conns []*nats.Conn
 }
@@ -105,18 +50,11 @@ func newConnectionLoss() *connectionLoss {
 	return &connectionLoss{done: make(chan struct{}), acks: make(chan struct{})}
 }
 
-// record keeps the first cause and closes done, and closes acks as well when
-// the connection that closed is the one deliveries settle over. The cause is
-// written before done is closed, so a reader that has seen done closed reads
-// the cause it was closed for.
-//
-// ACKS BEFORE DONE, for the same reason: done is the fact a reader wakes on,
-// and what it reads next has to be settled by then. `crewlet run` wakes on
-// [Queue.Lost] and asks [Queue.AcksLost] without waiting, to say whether the
-// drain finishes the running turns or cancels them; with done closed first,
-// a reader that woke between the two closes promised turns that finish while
-// the drain was cancelling them. Nothing reads the two the other way round,
-// so acks closing a moment before done misleads nobody.
+// record keeps the first cause and closes done, closing acks first when the
+// connection is the one deliveries settle over. The cause is written, and acks
+// closed, BEFORE done: a reader woken by done (`crewlet run` on [Queue.Lost])
+// asks [Queue.AcksLost] at once to decide whether the drain finishes or
+// cancels the running turns, so both must be settled by then.
 func (l *connectionLoss) record(cause error, settles bool) {
 	if settles {
 		l.acksOnce.Do(func() { close(l.acks) })
@@ -127,10 +65,9 @@ func (l *connectionLoss) record(cause error, settles bool) {
 	})
 }
 
-// lostCause is the recorded cause, or nil while nothing has been lost.
-//
-// Read only once done is closed, which is what makes it safe without a lock:
-// [connectionLoss.record] writes the cause before it closes the channel.
+// lostCause is the recorded cause, or nil while nothing has been lost. Read
+// only once done is closed, so lock-free: [connectionLoss.record] writes the
+// cause first.
 func (l *connectionLoss) lostCause() error {
 	select {
 	case <-l.done:
@@ -141,24 +78,20 @@ func (l *connectionLoss) lostCause() error {
 }
 
 // watched is what a dial is told about the connection it opens: where NATS
-// closing it for good is recorded, and whether it is the queue's OWN.
-//
-// The zero value is an UNWATCHED connection, whose owner is the one to notice
-// its loss — a snapshot donor's ([Queue.DialOwned]).
+// closing it for good is recorded, and whether it is the queue's OWN. The zero
+// value is UNWATCHED: its owner notices its loss ([Queue.DialOwned]).
 type watched struct {
 	loss *connectionLoss
-	// settles marks the queue's own connection: the one every delivery the
-	// queue made is acknowledged, nacked and deferred over, whose loss
-	// [Queue.AcksLost] reports. Exactly one connection per queue carries
-	// it; a second one [Queue.DialWatched] opens does not, because a node
-	// whose coordination connection is gone still settles what it runs.
+	// settles marks the queue's own connection, which every delivery is
+	// settled over and whose loss [Queue.AcksLost] reports. Exactly one per
+	// queue: one [Queue.DialWatched] opens does not, since a node whose
+	// coordination connection is gone still settles what it runs.
 	settles bool
 }
 
-// track notes nc as a connection whose close for good is recorded where at
-// says, once a dial is about to hand it out — after the contract check, which
-// closes a connection it refuses itself and so leaves no handler to wait for.
-// Nothing for an unwatched one.
+// track notes nc as watched once a dial is about to hand it out — after the
+// contract check, which closes a connection it refuses itself and so leaves no
+// handler to wait for.
 func (at watched) track(nc *nats.Conn) {
 	if at.loss == nil {
 		return
@@ -169,18 +102,11 @@ func (at watched) track(nc *nats.Conn) {
 }
 
 // during is err as a start that failed beside a loss says it: the classified
-// sentence first, because it names what to change, and the failing step's own
-// error after it, because it says where the start was — both in the chain, for
-// a caller that asks either. err itself, unchanged, where nothing was lost: a
-// failure that had nothing to do with the broker is not dressed as one.
-//
-// ONE COMPOSITION for every start that can meet a loss — this queue's own open
-// ([newQueueOn]) and an engine's boot over it ([Queue.LostDuring]) — so the two
-// cannot word the same fact two ways.
-//
-// It SETTLES first ([connectionLoss.settle]), so a connection the client has
-// already closed is named whether or not its handler has run yet — which is
-// why it is asked BEFORE the start's own cleanup closes anything.
+// cause first, since it names what to change, then the step's own error, both
+// in the chain; err unchanged where nothing was lost. The one composition for
+// [newQueueOn] and [Queue.LostDuring], so the two cannot word it two ways. It
+// settles first ([connectionLoss.settle]), so it is asked BEFORE the start's
+// own cleanup closes anything.
 func (l *connectionLoss) during(err error) error {
 	if err == nil {
 		return nil
@@ -189,9 +115,8 @@ func (l *connectionLoss) during(err error) error {
 	return l.recorded(err)
 }
 
-// recorded is [connectionLoss.during] without the settle: the composition over
-// whatever is recorded now. For a queue whose own Stop has closed its
-// connection, where no handler is coming and a settle would wait for one.
+// recorded is [connectionLoss.during] without the settle, for a queue whose
+// own Stop closed its connection: no handler is coming to wait for.
 func (l *connectionLoss) recorded(err error) error {
 	if err == nil {
 		return nil
@@ -204,23 +129,13 @@ func (l *connectionLoss) recorded(err error) error {
 }
 
 // settle returns once the loss is recorded where a watched connection is
-// already closed, and at once where none is.
-//
-// THE HANDLER IS QUEUED BEFORE IsClosed CAN ANSWER TRUE. The client closes a
-// connection for good under its own lock and queues the closed handler before
-// it lets go, and IsClosed reads under that lock — so a watched connection that
-// reads as closed to a caller who has closed none of them is one whose handler
-// WILL run, on the client's own goroutine, and the wait for it ends. Without
-// this the cause was read whenever it happened to be there: the step that met
-// the close returns once the client releases it, the handler runs a moment
-// later, and a caller whose own cleanup was short — a queue's open closing its
-// one connection — composed the step's bare "connection closed" while the
-// sentence naming why was a moment from being recorded.
-//
-// HENCE BEFORE THE CALLER'S CLEANUP, never after it. A connection its owner
-// closed reads as closed too, and under [nats.NoCallbacksAfterClientClose] its
-// handler never runs, so asked after the cleanup this would wait on a loss
-// nobody will record.
+// already closed, and at once where none is. The client queues the closed
+// handler under the lock IsClosed reads, so a closed connection the caller did
+// not close has a handler that WILL run; without the wait, a step's bare
+// "connection closed" is composed while its cause is about to be recorded.
+// Hence BEFORE the caller's cleanup: a connection its owner closed reads as
+// closed too, and under [nats.NoCallbacksAfterClientClose] its handler never
+// runs, so this would wait for ever.
 func (l *connectionLoss) settle() {
 	l.mu.Lock()
 	conns := slices.Clone(l.conns)
@@ -233,30 +148,24 @@ func (l *connectionLoss) settle() {
 	}
 }
 
-// lossWatch is the closed handler a watched connection is given: what a
-// sentence about that connection names, and where its close is recorded.
-//
-// A METHOD rather than a closure, for [reconnectWatch]'s reason: a case can
-// then tell the handler a connection was given is this one.
+// lossWatch is a watched connection's closed handler. A METHOD rather than a
+// closure, for [reconnectWatch]'s reason: a case can tell the handler a
+// connection was given is this one.
 type lossWatch struct {
 	loss     *connectionLoss
 	settles  bool
 	log      *slog.Logger
 	embedded bool
-	// server names the server for a sentence. Fixed at the dial, because
-	// the handler runs once the connection has closed and a closed
-	// connection no longer says which member it was talking to — and an
-	// operator's remedy is the same on every member stream.url reaches.
+	// server is fixed at the dial: a closed connection no longer says which
+	// member it talked to, and the remedy is the same on every one.
 	server string
 }
 
 // watchClose is the option pair that makes a connection's close for good a
-// node's loss — or nothing, where the connection is unwatched and its owner is
-// the one to notice (a snapshot donor's: see [Queue.DialOwned]).
-//
-// The pair, never the handler alone: without NoCallbacksAfterClientClose the
-// client calls the handler for its owner's own Close as well, and every
-// graceful stop would read as a lost broker.
+// node's loss, or nothing for an unwatched one ([Queue.DialOwned]). The pair,
+// never the handler alone: without NoCallbacksAfterClientClose the handler
+// runs for the owner's own Close too (a Stop, a Drain), and every graceful
+// stop would read as a lost broker.
 func watchClose(at watched, embedded bool, url string) []nats.Option {
 	if at.loss == nil {
 		return nil
@@ -267,10 +176,9 @@ func watchClose(at watched, embedded bool, url string) []nats.Option {
 	return []nats.Option{nats.NoCallbacksAfterClientClose(), nats.ClosedHandler(w.closed)}
 }
 
-// lostServer is how a sentence about a lost connection names its server: this
-// node's own for the embedded broker, and for an operator's the addresses
-// stream.url names — never the URL itself, which may carry a password or a
-// token as its userinfo (see [serverAddresses]).
+// lostServer names a lost connection's server: for an operator's, the
+// addresses stream.url names — never the URL, whose userinfo may carry a
+// password or token ([serverAddresses]).
 func lostServer(embedded bool, url string) string {
 	if embedded {
 		return "this node's embedded NATS server"
@@ -278,15 +186,9 @@ func lostServer(embedded bool, url string) string {
 	return "the NATS server stream.url reaches (" + serverAddresses(url) + ")"
 }
 
-// closed records the close and says so.
-//
-// LOGGED ON EVERY WATCHED CONNECTION and recorded only for the first, for the
-// reason [connectionLoss] gives: each close is a fact an operator may want, the
-// cause a node stops for is one.
-//
-// The line says WHETHER IT WAS THE QUEUE'S OWN, because the two outcomes differ
-// for the turns still running: with the queue's own gone none of them can be
-// acknowledged any more, and with only a second one gone every ack still lands.
+// closed logs every watched connection's close and records the first
+// ([connectionLoss]). The line says whether it carried acks, since only the
+// queue's own leaves running turns unable to settle.
 func (w lossWatch) closed(nc *nats.Conn) {
 	cause := lostConnection(w.server, nc.LastError(), w.embedded)
 	w.log.Error("jetstream_connection_closed_for_good",
@@ -295,15 +197,10 @@ func (w lossWatch) closed(nc *nats.Conn) {
 }
 
 // lostConnection is the sentence a node stops with: what closed, why, and what
-// to change.
-//
-// FOUR SENTENCES, because the causes have four remedies and one sentence for
-// all of them would send an operator after the wrong one: a max_payload lowered
-// under the node is fixed in the server's configuration, an authorization
-// refusal in the credentials this node presents or the user they name, an error
-// the client does not recognise in whatever the server's own log says it was —
-// and the embedded broker has no setting at all, so its sentence sends nobody
-// to a file.
+// to change. FOUR SENTENCES for four remedies — the server's max_payload, the
+// credentials presented, the server's own log, and for the embedded broker,
+// which has no setting, a restart — since one would send an operator after
+// the wrong one.
 func lostConnection(server string, cause error, embedded bool) error {
 	said := "no reason given"
 	if cause != nil {

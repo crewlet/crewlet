@@ -13,23 +13,13 @@ import (
 // ([stateLog.judgeCopy] says what that means), and of the rest, which answer
 // requests now.
 //
-// # Why per domain, and never one verdict for the node
-//
-// The domains are separate logs with separate appliers, and a fault is always
-// one log's: an applier halted at one page, one log a node fell below, one
-// record past the deferral grace. A verdict for the whole copy took every
-// domain out of service for it — a knowledge-base applier halted on one page
-// sent every tracker call the node's seats made to a peer — and judged only
-// the domains a seat depends on, so a wrong vectors or usage copy was served
-// for ever. An operation's routing is on its own domain, and so are its
-// floors: the rows it answers from are that domain's, so no operation is
-// routed away for another domain's fault it does not read. The reads that
-// cross into a second domain's rows ask that domain's verdict too: an
-// operation that declares one runs only where both copies serve (a page's
-// backlinks, over the tracker's), and a search's semantic half, over the
-// vectors, is best effort and never moves the search it belongs to — the
-// scanner asks the vectors' verdict itself and skips the half
-// ([searchCopies]).
+// Never one verdict for the node: each domain is its own log and applier, so a
+// fault is always one log's. An operation's routing and floors are its own
+// domain's, so no fault in rows it never reads routes it away, nor may a
+// domain no seat depends on go unjudged. A read crossing into a second domain asks that domain's verdict
+// too: a declared one runs only where both copies serve (a page's backlinks),
+// and a search's semantic half is best effort, skipped rather than moving the
+// search ([searchCopies]).
 type copyVerdict struct {
 	// shut is a copy whose FILE is not open: no log is to blame, and every
 	// domain's copy is out of service at once.
@@ -48,10 +38,9 @@ type domainVerdict struct {
 	unread bool
 
 	// wrong is [statelog.Health.Healthy] false: the copy cannot become
-	// current by applying more records, so it is out of service — and why
-	// is the fault that holds ([statelog.Health.Fault]), which the line
-	// announcing it names, since which one holds is what an operator acts
-	// on. Empty while the copy is sound.
+	// current by applying more records, so it is out of service. why is the
+	// fault that holds ([statelog.Health.Fault]), named in the announcing
+	// line because it is what an operator acts on; empty while sound.
 	wrong bool
 	why   statelog.ReadRefusal
 
@@ -70,8 +59,8 @@ const shutEstate = "estate"
 
 // serves reports whether this node's copy of domain is in service — or, for
 // [estate.SeatCopy], whether every domain that gates seat admission is. A
-// domain never judged is in service: nobody has found it wrong, and a request
-// on it is held to [copyVerdict.answers], which it fails.
+// domain never judged is in service, since nobody found it wrong; a request on
+// it still fails [copyVerdict.answers].
 func (v copyVerdict) serves(domain string) bool {
 	if v.shut {
 		return false
@@ -89,8 +78,8 @@ func (v copyVerdict) serves(domain string) bool {
 
 // answers reports whether this node's copy of domain answers requests now —
 // for [estate.SeatCopy], whether every domain that gates seat admission does,
-// which is false where none was judged. A domain never judged answers
-// nothing: nobody has measured it.
+// false where none was judged. A domain never judged answers nothing: nobody
+// has measured it.
 func (v copyVerdict) answers(domain string) bool {
 	if v.shut {
 		return false
@@ -113,15 +102,11 @@ func (v copyVerdict) answers(domain string) bool {
 
 // carried is v as it is STORED over held, the verdict before it (valid where
 // known): every domain this reading could not read keeps what held said of it,
-// and every domain it did read takes what it found.
-//
-// A BROKER BLIP CHANGES NOTHING IT COULD NOT SEE — a copy that was answering
-// keeps answering, and one that was wrong stays wrong — and it is PER DOMAIN:
-// one domain's health going unread brings no OTHER domain's copy back and
-// takes none out, so a reading that found the tracker sound and could not
-// read the knowledge base serves the tracker at once. A copy never judged
-// before answers nothing on an unread reading. A shut reading is definite —
-// the file's state needs no broker — and carries nothing.
+// and every domain it did read takes what it found. So a broker blip changes
+// nothing it could not see, and only for the domain it hid: a tracker found
+// sound is served at once beside an unread knowledge base. A copy never judged
+// answers nothing on an unread reading; a shut reading needs no broker, so it
+// is definite and carries nothing.
 func (v copyVerdict) carried(held copyVerdict, known bool) copyVerdict {
 	if v.shut {
 		return v
@@ -132,9 +117,8 @@ func (v copyVerdict) carried(held copyVerdict, known bool) copyVerdict {
 			before, had := held.domains[name]
 			had = known && had
 			d.answers = had && before.answers
-			// A COPY THAT WAS SHUT is still out of service on no
-			// information: the reading that would bring it back is the
-			// one that could not be made.
+			// A copy that was shut stays out: the reading that would
+			// bring it back is the one that could not be made.
 			d.wrong = known && (held.shut || (had && before.wrong))
 			d.why = ""
 			if d.wrong && had {

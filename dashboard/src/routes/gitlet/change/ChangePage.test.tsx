@@ -30,6 +30,8 @@ import { settled } from "~/test/settle.ts";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
 import { ADMIN_VIEWER } from "~/test/viewer.ts";
 import { ChangePage } from "./ChangePage.tsx";
+import { EDIT_MOVED } from "./Description.tsx";
+import { NOT_AUTHOR_RESOLVE } from "./Finding.tsx";
 import { CHANGE_POLL_MS } from "./reads.ts";
 
 beforeEach(() => sessionStorage.clear());
@@ -264,6 +266,8 @@ function stubEngine(
           return ONE_STANDING();
         case "comments":
         case "reviews":
+        case "reviewers":
+        case "excerpts":
           return json(page);
         default:
           return json({
@@ -298,6 +302,12 @@ function mount(hash = "#/gitlet/repos/web/changes/42", viewer: unknown = VIEWER)
   );
 }
 
+/** Opens the page bar's Review menu and presses its item `name`. */
+async function review(name: string) {
+  fireEvent.click(await screen.findByRole("button", { name: "Review web!42" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name }));
+}
+
 // ONE REVIEW, ONE PRESS: Approve sends one code_review_change of the head
 // revision with every finding drafted on its lines and the reader's standing
 // findings it carries — and nothing moves until the engine answers, the
@@ -325,9 +335,15 @@ test("Approve is one review of the head carrying the drafts and the standing fin
   );
   mount();
 
-  fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+  await review("Approve");
   const dialog = await screen.findByRole("dialog");
-  expect(within(dialog).getByText(/1 drafted finding on revision 2/)).toBeTruthy();
+  // THE REVISION IS NAMED ONCE, by the subtitle; the drafts are "on this revision".
+  expect(within(dialog).getByText(/1 drafted finding on this revision/)).toBeTruthy();
+  expect(
+    within(dialog)
+      .getAllByText(/revision 2/i)
+      .map((e) => e.textContent),
+  ).toEqual(["Revision 2"]);
   await within(dialog).findByText("The retry never stops");
   fireEvent.click(within(dialog).getByRole("button", { name: "Approve" }));
 
@@ -380,7 +396,7 @@ test("a review carries a standing finding on the standing read's second page", a
     },
   );
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Request changes" }));
+  await review("Request changes");
   const dialog = await screen.findByRole("dialog");
   await within(dialog).findByText("The retry never stops");
   expect(within(dialog).getByText("The backoff never grows")).toBeTruthy();
@@ -401,7 +417,7 @@ test("a review is held while the reader's standing findings are being read", asy
     standing: () => new Promise<Response>(() => {}),
   });
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+  await review("Approve");
   const dialog = await screen.findByRole("dialog");
   const press = within(dialog).getByRole("button", { name: "Approve" });
   await waitFor(() =>
@@ -427,7 +443,7 @@ test("a refused standing read holds the review until it is read again", async ()
     },
   );
   mount();
-  fireEvent.click(await screen.findByRole("button", { name: "Approve" }));
+  await review("Approve");
   const dialog = await screen.findByRole("dialog");
   const press = within(dialog).getByRole("button", { name: "Approve" });
   await waitFor(() => expect(press.getAttribute("title")).toMatch(/were not read/));
@@ -482,26 +498,27 @@ test("the Files tab asks for a diff again only when the change moves", async () 
     changeAsked.filter((u) => u.searchParams.get("part") === part).length;
   const details = () => changeAsked.filter((u) => !u.searchParams.get("part")).length;
   await waitFor(() => expect(askedFor("diff")).toBe(1));
-  expect(askedFor("files")).toBe(1);
+  // THE TAB ROW'S COUNTS ask the head's files beside the tab's own read, on its key.
+  expect(askedFor("files")).toBe(2);
 
   const before = details();
   for (let minute = 0; minute < 3; minute++) {
     await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
   }
   await waitFor(() => expect(details()).toBeGreaterThanOrEqual(before + 3));
-  expect(askedFor("files")).toBe(1);
+  expect(askedFor("files")).toBe(2);
   expect(askedFor("diff")).toBe(1);
 
   version = 6;
   await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
-  await waitFor(() => expect(askedFor("files")).toBe(2));
+  await waitFor(() => expect(askedFor("files")).toBe(4));
   await waitFor(() => expect(askedFor("diff")).toBe(2));
 
   // A RETARGET'S NEW FACTS land in a record of the home's own, after the one
   // that moved the version: the base they record moves the diff too.
   base = "fedcba9876543210fedcba9876543210fedcba98";
   await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
-  await waitFor(() => expect(askedFor("files")).toBe(3));
+  await waitFor(() => expect(askedFor("files")).toBe(6));
   await waitFor(() => expect(askedFor("diff")).toBe(3));
 });
 
@@ -784,6 +801,936 @@ test("the header's state is its pill, and its branches are chips in the byline a
   expect(rail.textContent).toBe("retry into main");
 });
 
+// THE HEADER IS ONE SENTENCE: the pill, who wants to merge which revision of
+// which branch into which, when it was opened and its work item.
+// Mutation: draw the time as a cell (no "opened"), or drop the copy, and this fails.
+test("the header says who wants to merge which revision of which branch into which, and when", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-27T13:00:00Z"));
+  stubEngine(
+    detail({ work_item: { backend: "worklet", id: "ENG-415", key: "ENG-415", project: "ENG" } }),
+    () => json({}),
+  );
+  mount();
+  const line = await waitFor(() => {
+    const said = document.querySelector<HTMLElement>(".code-change-byline");
+    expect(said?.textContent).toMatch(/opened 3 hours ago/);
+    return said!;
+  });
+  expect(line.firstElementChild?.querySelector(".code-state")).not.toBeNull();
+  expect(line.textContent).toMatch(
+    /^OpenEngineer\s*wants to merge revision 2 of retry\s*into main\s*·?opened 3 hours agoENG-415$/,
+  );
+  expect(within(line).getByRole("button", { name: "Copy the branch name" })).toBeTruthy();
+  expect(within(line).getByRole("link", { name: "ENG-415" }).getAttribute("href")).toBe(
+    "#/gitlet?work=worklet%3AENG-415&state=all",
+  );
+  expect(line.querySelector("time")?.getAttribute("title")).toBe(
+    fmtDateTime("2026-10-27T10:00:00Z"),
+  );
+});
+
+// REVIEW IS ONE DEFAULT BUTTON, its menu the three verdicts and Request review,
+// each opening its dialog. Mutation: make the trigger primary, and this fails.
+test("Review is one default button whose menu holds the verdicts and Request review", async () => {
+  stubEngine(detail(), () => json({}));
+  mount();
+  const trigger = await screen.findByRole("button", { name: "Review web!42" });
+  expect(trigger.className).not.toMatch(/primary/);
+  for (const button of document.querySelectorAll(".page-actions button")) {
+    expect(button.className, button.textContent ?? "").not.toMatch(/primary/);
+  }
+  fireEvent.click(trigger);
+  const items = await screen.findAllByRole("menuitem");
+  expect(items.map((i) => i.textContent)).toEqual([
+    "Approve",
+    "Request changes",
+    "Comment",
+    "Request review",
+  ]);
+  fireEvent.click(screen.getByRole("menuitem", { name: "Request review" }));
+  expect(await screen.findByRole("dialog", { name: "Request review of web!42" })).toBeTruthy();
+});
+
+/** The detail with a conversation of `comments` comments and two reviews. */
+const talked = (comments: number) =>
+  detail({
+    conversation: {
+      comments,
+      reviews: 2,
+      open_findings: 0,
+      open_blockers: 0,
+      changes_requested: 0,
+      version: 1,
+      position: POSITION,
+    },
+  });
+
+// THE TABS AND THEIR COUNTS: Conversation counts comments alone, Revisions the
+// head's number, Files changed the head's files (the diffstat note is a layout case).
+// Mutation: count reviews in Conversation's figure, and this fails.
+test("the tabs are Conversation, Revisions, Checks, Files changed and More, with their counts", async () => {
+  stubEngine(talked(3), () => json({}));
+  mount();
+  const row = await screen.findByRole("tablist", { name: "The change's sections" });
+  await waitFor(() =>
+    expect(within(row).getByRole("tab", { name: /^Files changed/ }).textContent).toBe(
+      "Files changed1",
+    ),
+  );
+  expect(
+    within(row)
+      .getAllByRole("tab")
+      .map((t) => t.textContent),
+  ).toEqual(["Conversation3", "Revisions2", "Checks", "Files changed1", "More"]);
+});
+
+// THE DIGITS FOLLOW THE TAB ORDER, and one past the end is left alone.
+// Mutation: reorder CHANGE_TABS, and this fails.
+test("the digits open the change's tabs in their order", async () => {
+  stubEngine(detail(), () => json({}));
+  mount();
+  await screen.findByRole("tabpanel");
+  const press = (key: string) =>
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    });
+  press("2");
+  await waitFor(() => expect(location.hash).toBe("#/gitlet/repos/web/changes/42?tab=revisions"));
+  press("5");
+  await waitFor(() => expect(location.hash).toBe("#/gitlet/repos/web/changes/42?tab=more"));
+  press("6");
+  await settled(() => location.hash.length);
+  expect(location.hash).toBe("#/gitlet/repos/web/changes/42?tab=more");
+});
+
+// MORE HOLDS PROVENANCE AND NOTIFIED one under the other; an old key lands on
+// the conversation. Mutation: keep a notified tab, and this fails.
+test("More holds where the change came from and whom it notified, and an old key lands on Conversation", async () => {
+  stubEngine(detail(), () => json({}));
+  mount("#/gitlet/repos/web/changes/42?tab=more");
+  expect(await screen.findByRole("heading", { name: "Where it came from" })).toBeTruthy();
+  expect(screen.getByRole("heading", { name: "Whom its records notified" })).toBeTruthy();
+  expect(await screen.findByRole("list", { name: "Whom it notified" })).toBeTruthy();
+  cleanup();
+  stubEngine(detail(), () => json({}));
+  mount("#/gitlet/repos/web/changes/42?tab=notified");
+  const selected = await screen.findByRole("tab", { selected: true });
+  expect(selected.textContent).toMatch(/^Conversation/);
+});
+
+// THE COUNTS' FILES READ IS FILES CHANGED'S OWN FIRST QUESTION.
+// Mutation: ask the counts with other parameters, and this fails.
+test("the files read for the counts is the Files changed tab's own first question", async () => {
+  // A REVISION NO OTHER CASE READS: the tab's kept answers outlive a case.
+  stubEngine(detail({ revision: 9 }), () => json({}), {
+    files: () =>
+      engineJson(
+        {
+          position: POSITION,
+          level: "session",
+          revision: 9,
+          diff: {
+            base: HEAD,
+            head: HEAD,
+            files: [{ path: "app.go", status: "M", added: 1, deleted: 1 }],
+            total: 1,
+            added: 1,
+            deleted: 1,
+          },
+        },
+        200,
+        { "Cache-Control": "private, max-age=31536000, immutable", ETag: '"files-2"' },
+      ),
+  });
+  mount();
+  await screen.findByRole("tab", { name: /^Files changed/ });
+  const files = () => changeAsked.filter((u) => u.searchParams.get("part") === "files");
+  await waitFor(() => expect(files()).toHaveLength(1));
+  fireEvent.click(screen.getByRole("tab", { name: /^Files changed/ }));
+  expect(await screen.findByRole("region", { name: "Changes to app.go" })).toBeTruthy();
+  expect(files().length).toBeGreaterThan(0);
+  for (const u of files()) {
+    expect([u.searchParams.get("revision"), u.searchParams.get("since_revision")]).toEqual([
+      "9",
+      null,
+    ]);
+  }
+});
+
+// THE COUNTS ARE ASKED AGAIN ON FILES CHANGED'S OWN KEY: a base the head's
+// facts record anew moves them on Conversation too, once. Mutation: read the
+// counts once per head revision, and the tab keeps its old count.
+test("a moved base asks the tab row's counts again once", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let base = HEAD;
+  let total = 1;
+  const revision = () => ({
+    n: 2,
+    head: HEAD,
+    pusher: "dev",
+    pusher_kind: "agent",
+    position: POSITION,
+    at: "2026-10-27T10:00:00Z",
+    facts: { target_ref: "refs/heads/main", target_oid: HEAD, base_oid: base, touched: [] },
+  });
+  stubEngine(detail(), () => json({}), {
+    "": () =>
+      json({ position: POSITION, level: "session", change: detail(), revisions: [revision()] }),
+    files: () =>
+      json({
+        position: POSITION,
+        level: "session",
+        revision: 2,
+        diff: { base, head: HEAD, files: [], total, added: total, deleted: 0 },
+      }),
+  });
+  mount();
+  const tab = await screen.findByRole("tab", { name: /^Files changed/ });
+  await waitFor(() => expect(tab.textContent).toBe("Files changed1"));
+  const files = () => changeAsked.filter((u) => u.searchParams.get("part") === "files").length;
+  const details = () => changeAsked.filter((u) => !u.searchParams.get("part")).length;
+  expect(files()).toBe(1);
+  let before = details();
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(details()).toBeGreaterThan(before));
+  await settled(() => changeAsked.length);
+  expect(files()).toBe(1);
+  base = "fedcba9876543210fedcba9876543210fedcba98";
+  total = 7;
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(tab.textContent).toBe("Files changed7"));
+  await settled(() => changeAsked.length);
+  expect(files()).toBe(2);
+});
+
+/** The detail with a description. */
+const described = (extra: Record<string, unknown> = {}) =>
+  detail({ body: "Retry with a backoff.\nUp to three times.", ...extra });
+
+/** Opens the description's menu and presses Edit. */
+async function edit() {
+  fireEvent.click(await screen.findByRole("button", { name: "More actions on the description" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Edit" }));
+  return screen.findByRole("form", { name: "Edit web!42" });
+}
+
+// EDIT IS ONE UPDATE of the fields that moved, against the version on screen.
+// Mutation: send both fields always, and the second press sends the title too.
+test("Edit sends the title and the description in one update against the version on screen", async () => {
+  let acted = stubEngine(described(), () => json({ outcome: "applied" }));
+  mount();
+  let form = await edit();
+  const title = within(form).getByRole("textbox", { name: "Title" });
+  expect(document.activeElement).toBe(title);
+  fireEvent.change(title, { target: { value: "Retry the upload with a backoff" } });
+  fireEvent.change(within(form).getByRole("textbox", { name: "Description" }), {
+    target: { value: "Three tries." },
+  });
+  fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_update_change",
+    args: {
+      change: "web!42",
+      expected_version: 5,
+      title: "Retry the upload with a backoff",
+      body: "Three tries.",
+    },
+  });
+  await waitFor(() => expect(screen.queryByRole("form", { name: "Edit web!42" })).toBeNull());
+  cleanup();
+
+  acted = stubEngine(described(), () => json({ outcome: "applied" }));
+  mount();
+  form = await edit();
+  fireEvent.change(within(form).getByRole("textbox", { name: "Description" }), {
+    target: { value: "Three tries." },
+  });
+  fireEvent.submit(form);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]!.args).toEqual({ change: "web!42", expected_version: 5, body: "Three tries." });
+});
+
+// EDIT IS HELD while nothing moved, without a title, and when the words on
+// screen moved under the reader; a push's version alone holds nothing.
+// Mutation: hold on a moved version, and the push case is held.
+test("Edit is held while nothing moved, without a title, and when the words changed under the reader", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let version = 5;
+  let body = "Retry with a backoff.\nUp to three times.";
+  const acted = stubEngine(
+    () => detail({ version, body }),
+    () => json({ outcome: "applied" }),
+  );
+  mount();
+  const form = await edit();
+  const save = within(form).getByRole("button", { name: "Save" });
+  await waitFor(() =>
+    expect(save.getAttribute("title")).toBe("Change the title or the description first."),
+  );
+  const title = within(form).getByRole("textbox", { name: "Title" });
+  fireEvent.change(title, { target: { value: "  " } });
+  expect(save.getAttribute("title")).toBe("A change needs a title.");
+  fireEvent.change(title, { target: { value: "Retry, with a backoff" } });
+  expect(save.getAttribute("title")).toBeNull();
+
+  // A PUSH moves the version and nothing the reader is editing.
+  version = 6;
+  const details = () => changeAsked.filter((u) => !u.searchParams.get("part")).length;
+  let before = details();
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(details()).toBeGreaterThan(before));
+  await settled(() => changeAsked.length);
+  expect(save.getAttribute("title")).toBeNull();
+
+  // A SEAT'S EDIT of the description, under the reader.
+  body = "Retry three times.";
+  before = details();
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(save.getAttribute("title")).toBe(EDIT_MOVED));
+  fireEvent.click(save);
+  expect(acted).toHaveLength(0);
+  fireEvent.click(within(form).getByRole("button", { name: "Start again from the latest" }));
+  expect(
+    (within(form).getByRole("textbox", { name: "Description" }) as HTMLTextAreaElement).value,
+  ).toBe("Retry three times.");
+  expect((title as HTMLInputElement).value).toBe("Retry the flaky upload");
+});
+
+// A REFUSED EDIT KEEPS THE READER'S WORDS and says why. Mutation: close the
+// form on any answer, and the words are lost.
+test("a refused edit keeps the reader's words and says the engine's reason", async () => {
+  const acted = stubEngine(described(), () =>
+    json({ error: "stale_version", detail: "It changed since you loaded it." }, 409),
+  );
+  mount();
+  const form = await edit();
+  fireEvent.change(within(form).getByRole("textbox", { name: "Title" }), {
+    target: { value: "Mine" },
+  });
+  fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(await within(form).findByText(/changed since you loaded it/i)).toBeTruthy();
+  expect(screen.getByRole("form", { name: "Edit web!42" })).toBeTruthy();
+  expect((within(form).getByRole("textbox", { name: "Title" }) as HTMLInputElement).value).toBe(
+    "Mine",
+  );
+});
+
+// A FINISHED CHANGE OFFERS NO EDIT, and its link and Quote stay; Quote puts the
+// description in the comment box as `> ` lines and focuses it.
+// Mutation: offer Edit on every state, and the merged change offers it.
+test("a merged or closed change offers no Edit, and Copy link and Quote stay", async () => {
+  for (const state of ["merged", "closed"]) {
+    stubEngine(described({ state, readiness: undefined }), () => json({}));
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "More actions on the description" }));
+    const items = (await screen.findAllByRole("menuitem")).map((i) => i.textContent);
+    expect(items, state).toEqual(["Copy link", "Quote"]);
+    cleanup();
+  }
+  stubEngine(described(), () => json({}));
+  mount();
+  const box = (await screen.findByRole("textbox", { name: "Comment" })) as HTMLTextAreaElement;
+  fireEvent.change(box, { target: { value: "Agreed." } });
+  fireEvent.click(await screen.findByRole("button", { name: "More actions on the description" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Quote" }));
+  await waitFor(() =>
+    expect(box.value).toBe("Agreed.\n\n> Retry with a backoff.\n> Up to three times.\n\n"),
+  );
+  expect(document.activeElement).toBe(box);
+});
+
+// ---- The timeline ---------------------------------------------------------- //
+
+const at = (seq: number) => ({ ...POSITION, seq });
+const reviewRow = (id: string, seq: number, verdict: string, revision = 1, extra = {}) => ({
+  id,
+  revision,
+  reviewer: "cto",
+  reviewer_kind: "agent",
+  verdict,
+  summary: `Summary of ${id}`,
+  findings: 0,
+  position: at(seq),
+  at: "2026-10-27T11:00:00Z",
+  ...extra,
+});
+const askRow = (reviewer: string, seq: number, extra: Record<string, unknown> = {}) => ({
+  reviewer,
+  kind: "agent",
+  reason: "requested",
+  state: "requested",
+  requested_by: "dev",
+  requested_by_kind: "agent",
+  position: at(seq),
+  at: "2026-10-27T11:36:00Z",
+  ...extra,
+});
+const revisionRow = (n: number, seq: number) => ({
+  n,
+  head: HEAD,
+  pusher: "dev",
+  pusher_kind: "agent",
+  position: at(seq),
+  at: "2026-10-27T10:00:00Z",
+});
+const page = (rows: Record<string, unknown>) => () =>
+  json({ position: POSITION, level: "session", ...rows });
+
+/** An element's words, each text node apart, as a reader hears them. */
+function spoken(el: Element): string {
+  const words: string[] = [];
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) words.push(n.textContent ?? "");
+  return words
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .replace(/ ([,.])/g, "$1")
+    .trim();
+}
+
+/** The timeline's entries, in order, by a word each says. */
+function timelineWords(): string[] {
+  const list = screen.getByRole("list", { name: "What was said and done" });
+  return [...list.children].map(spoken);
+}
+
+// THE TIMELINE IS THE LOG'S ORDER across every part, the description first.
+// Mutation: sort by the records' clock times, and the old push lands last.
+test("the timeline starts with the description and draws every record in the order it landed", async () => {
+  stubEngine(described(), () => json({}), {
+    "": page({ change: described(), revisions: [revisionRow(2, 40), revisionRow(1, 10)] }),
+    reviews: page({ reviews: [reviewRow("r1", 20, "request_changes")] }),
+    comments: page({
+      comments: [
+        {
+          id: "c1",
+          thread_id: "c1",
+          author: "cto",
+          author_kind: "agent",
+          body: "Why three?",
+          position: at(30),
+          at: "2026-10-27T09:00:00Z",
+        },
+      ],
+    }),
+    reviewers: page({ reviewers: [askRow("sre", 50)] }),
+  });
+  mount();
+  await screen.findByText("Why three?");
+  await waitFor(() => expect(timelineWords()).toHaveLength(6));
+  const words = timelineWords();
+  expect(words[0]).toMatch(/^Engineer opened this change/);
+  expect(words[1]).toMatch(/pushed revision 1/);
+  expect(words[2]).toMatch(/requested changes on revision 1/);
+  expect(words[3]).toMatch(/commented/);
+  expect(words[4]).toMatch(/pushed revision 2/);
+  expect(words[5]).toMatch(/asked .*sre for a review/);
+});
+
+// A REVIEW'S DISC WEARS ITS VERDICT'S TONE, the verdict said in words beside
+// it (rule C7). Mutation: drop the Comment tag, and a comment reads as no verdict.
+test("a review's disc wears its verdict's tone, and the verdict is said in words", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviews: page({
+      reviews: [
+        reviewRow("r1", 20, "request_changes", 1),
+        reviewRow("r2", 30, "approve", 2),
+        reviewRow("r3", 40, "comment", 2),
+      ],
+    }),
+  });
+  mount();
+  await screen.findByText("Summary of r3");
+  const rows = [...document.querySelectorAll<HTMLElement>(".code-tl-event")];
+  const said = rows.map((li) => [
+    li.querySelector(".code-disc")?.getAttribute("data-tone"),
+    spoken(li.querySelector(".code-tl-event__said")!),
+  ]);
+  expect(said).toEqual([
+    ["danger", expect.stringMatching(/^CTO requested changes on revision 1/)],
+    ["success", expect.stringMatching(/^CTO approved revision 2/)],
+    ["neutral", expect.stringMatching(/^CTO reviewed revision 2.*Comment$/)],
+  ]);
+  for (const disc of document.querySelectorAll(".code-disc")) {
+    expect(disc.getAttribute("aria-hidden")).toBe("true");
+  }
+});
+
+// AN ASK THAT STANDS IS DRAWN WHERE IT WAS MADE, with when; a path owner's
+// says which paths. Mutation: draw a reviewed ask, and a fourth row appears.
+test("an ask that stands is drawn where it was made, with when, and a path owner's says which paths", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-27T12:00:00Z"));
+  stubEngine(detail(), () => json({}), {
+    reviewers: page({
+      reviewers: [
+        askRow("cto", 20),
+        askRow("dev", 21, { reason: "path_owner", owned_paths: ["internal/server"] }),
+        askRow("sre", 22, {
+          reason: "path_owner",
+          owned_paths: ["a/**", "b/**", "c/**"],
+          owned_paths_omitted: 2,
+        }),
+        askRow("qa", 23, { reason: "path_owner" }),
+        askRow("ops", 24, { state: "reviewed" }),
+        askRow("ux", 25, { state: "ended" }),
+      ],
+    }),
+  });
+  mount();
+  await screen.findByText(/for a review/);
+  const asks = [...document.querySelectorAll<HTMLElement>(".code-tl-event__said")].map(spoken);
+  expect(asks).toEqual([
+    "Engineer asked CTO for a review 24 minutes ago",
+    "Engineer was asked to review, as the owner of internal/server 24 minutes ago",
+    // A HANDLE THE CHART DOES NOT HOLD is drawn by its initials and its handle.
+    "SR sre was asked to review, as the owner of a/**, b/**, c/** and 2 more 24 minutes ago",
+    "QA qa was asked to review, as an owner of paths it touches 24 minutes ago",
+  ]);
+  // EACH GLOB IS CODE in the sentence; "2 more" is words.
+  const rows = document.querySelectorAll<HTMLElement>(".code-tl-event__said");
+  const globs = (row: HTMLElement) => [...row.querySelectorAll("code")].map((c) => c.textContent);
+  expect(globs(rows[1]!)).toEqual(["internal/server"]);
+  expect(globs(rows[2]!)).toEqual(["a/**", "b/**", "c/**"]);
+});
+
+// PAST THE NOTICES' HORIZON an ask's time is said as earlier, never guessed.
+// Mutation: draw the time from the position, and "earlier" goes.
+test("an ask past the notices' horizon says it was asked earlier, never a time", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviewers: page({
+      reviewers: [
+        askRow("cto", 20, { at: undefined }),
+        askRow("dev", 21, { at: undefined, reason: "path_owner", owned_paths: ["web/**"] }),
+      ],
+    }),
+  });
+  mount();
+  await screen.findByText(/for a review/);
+  const asks = [...document.querySelectorAll<HTMLElement>(".code-tl-event__said")];
+  expect(asks.map(spoken)).toEqual([
+    "Engineer asked CTO for a review earlier",
+    "Engineer was asked to review earlier, as the owner of web/**",
+  ]);
+  for (const a of asks) {
+    expect(within(a).getByText("earlier").getAttribute("title")).toBe(
+      "When this was recorded is not kept here: its notices have passed their horizon, or it told nobody.",
+    );
+    expect(a.querySelector("time")).toBeNull();
+  }
+});
+
+// A WITHDRAWN ASK SAYS SO, and a withdrawal tells nobody, so it carries no
+// time: none is drawn, not even "earlier". Mutation: drop withdrawn asks from
+// the timeline, or say "earlier" of a withdrawal, and this fails.
+test("a withdrawn ask says the reviewer is no longer asked", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviewers: page({ reviewers: [askRow("cto", 20, { state: "withdrawn", at: undefined })] }),
+  });
+  mount();
+  expect(await screen.findByText("is no longer asked to review")).toBeTruthy();
+  const row = document.querySelector<HTMLElement>(".code-tl-event__said")!;
+  expect(spoken(row)).toBe("CTO is no longer asked to review");
+  expect(row.querySelector(".code-byline__when")).toBeNull();
+});
+
+// ASKS ONE RECORD MADE share its position, and each is its own row: one
+// request naming two reviewers draws both. Mutation: key an entry by its
+// position, and React's duplicate key fails the console gate.
+test("two asks one record made are two rows", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviewers: page({ reviewers: [askRow("cto", 20), askRow("sre", 20)] }),
+  });
+  mount();
+  await waitFor(() =>
+    expect([...document.querySelectorAll<HTMLElement>(".code-tl-event__said")].map(spoken)).toEqual(
+      [
+        expect.stringMatching(/^Engineer asked CTO for a review/),
+        expect.stringMatching(/^Engineer asked SR sre for a review/),
+      ],
+    ),
+  );
+});
+
+// AN ASK AFTER THE REVIEWER'S OWN REVIEW is asked again, and names no asker:
+// the engine keeps the first ask's asker and note when it asks again.
+// Mutation: say the first asker, and the row reads as theirs at a later time.
+test("an ask after the reviewer's review says it was asked again, without the first asker", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-27T12:00:00Z"));
+  stubEngine(detail(), () => json({}), {
+    reviews: page({ reviews: [reviewRow("r1", 20, "request_changes", 1)] }),
+    reviewers: page({ reviewers: [askRow("cto", 30, { note: "Look at the retry" })] }),
+  });
+  mount();
+  await screen.findByText("Summary of r1");
+  const said = await waitFor(() => {
+    const rows = [...document.querySelectorAll<HTMLElement>(".code-tl-event__said")];
+    expect(rows).toHaveLength(2);
+    return rows.map(spoken);
+  });
+  expect(said[1]).toBe("CTO was asked to review again 24 minutes ago");
+  expect(screen.queryByText("Look at the retry")).toBeNull();
+});
+
+// WHO WAS ASKED, REFUSED, is said in the engine's words, never by its code.
+// Mutation: print the refusal's code, and "query_failed" is on the page.
+test("a refused reviewers read is said without its code", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviewers: () => json({ error: "query_failed" }, 500),
+  });
+  mount();
+  expect(await screen.findByText("Who was asked to review is unavailable.")).toBeTruthy();
+  const timeline = screen.getByRole("region", { name: "Timeline" });
+  expect(timeline.textContent).not.toContain("query_failed");
+});
+
+// LOAD MORE ASKS EVERY PART'S NEXT PAGE at one press: reviews, comments and
+// whom it asked. Mutation: page the reviewers on the rail's press alone.
+test("Load more asks the next page of every part that has one", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviews: (url) =>
+      url.searchParams.get("cursor")
+        ? page({ reviews: [reviewRow("r2", 60, "comment")] })()
+        : page({ reviews: [reviewRow("r1", 20, "comment")], next: "r1" })(),
+    reviewers: (url) =>
+      url.searchParams.get("cursor")
+        ? page({ reviewers: [askRow("dev", 70)] })()
+        : page({ reviewers: [askRow("cto", 30)], next: "a1" })(),
+  });
+  mount();
+  await screen.findByText("Summary of r1");
+  fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+  expect(await screen.findByText("Summary of r2")).toBeTruthy();
+  await waitFor(() =>
+    expect(
+      changeAsked
+        .filter((u) => u.searchParams.get("cursor"))
+        .map((u) => [u.searchParams.get("part"), u.searchParams.get("cursor")])
+        .sort(),
+    ).toEqual([
+      ["reviewers", "a1"],
+      ["reviews", "r1"],
+    ]),
+  );
+});
+
+// ---- Findings under their review ------------------------------------------- //
+
+/** Revision 1's two findings, raised by review r1: f-1 with a suggestion, f-2 without. */
+const F1 = {
+  ...MINE,
+  id: "f-1",
+  review_id: "r1",
+  raiser: "cto",
+  raiser_kind: "agent",
+  path: "internal/server/routes.go",
+  line_start: 19,
+  line_end: 19,
+  severity: "major",
+  category: "security",
+  title: "The shell flushes before the CSP nonce is set",
+  body: "Set the nonce first.",
+  suggestion: '\tmux.Handle("GET /p/{slug}", withCSPNonce(r.Stream("product")))\n',
+  raised_at: "2026-10-27T10:00:00Z",
+};
+const F2 = {
+  ...F1,
+  id: "f-2",
+  path: "internal/render/stream.go",
+  line_start: 42,
+  line_end: 42,
+  severity: "minor",
+  category: "correctness",
+  title: "The shell is never flushed after the preload",
+  suggestion: undefined,
+};
+const EXCERPTS = {
+  "f-1": {
+    id: "f-1",
+    status: "M",
+    lines: [
+      { mark: "+", new: 18, text: "\t// reads land" },
+      { mark: "+", new: 19, text: '\tmux.Handle("GET /p/{slug}", r.Stream("product"))' },
+      { mark: "+", new: 20, text: '\tmux.Handle("GET /c/{slug}", r.Page("category"))' },
+    ],
+  },
+  "f-2": {
+    id: "f-2",
+    status: "M",
+    lines: [
+      { mark: " ", old: 41, new: 41, text: "\tw.Write(shell.Head)" },
+      { mark: "+", new: 42, text: "\tw.Write(shell.Preload(hero))" },
+      { mark: " ", old: 42, new: 43, text: "\treturn s.islands(ctx, w, page)" },
+    ],
+  },
+};
+
+/** The engine with review r1 of revision 1 raising `findings`, and their excerpts as `excerpts` answers. */
+function stubFindings(
+  findings: readonly Record<string, unknown>[],
+  excerpts: (url: URL) => Response,
+  extra: Record<string, unknown> = {},
+) {
+  return stubEngine(detail(extra), () => json({ outcome: "applied" }), {
+    reviews: page({
+      reviews: [reviewRow("r1", 20, "request_changes", 1, { findings: findings.length })],
+    }),
+    findings: page({ revision: 2, findings }),
+    excerpts,
+  });
+}
+
+// A REVIEW'S FINDINGS ARE CARDS UNDER IT, each with its excerpt, its own lines
+// marked. Mutation: mark every line of the excerpt, and three rows are marked.
+test("a review's findings are cards under it, each with its excerpt marked at its lines", async () => {
+  stubFindings([F1, F2], page({ excerpts: EXCERPTS, context: 3 }));
+  mount();
+  const card = await screen.findByRole("article", { name: `Finding: ${F1.title}` });
+  const box = screen.getByRole("region", { name: "Findings of the review by cto" });
+  expect(spoken(box.firstElementChild!)).toBe("2 findings on revision 1 2 open");
+  const excerpt = await within(card).findByRole("group", {
+    name: "Lines 18 to 20 of internal/server/routes.go at revision 1, line 19 marked",
+  });
+  const marked = [...excerpt.querySelectorAll(".crewlet-diff-view__line--picked")];
+  expect(marked).toHaveLength(1);
+  expect(marked[0]!.textContent).toContain('r.Stream("product")');
+  expect(
+    within(card)
+      .getByRole("link", { name: /routes\.go:19/ })
+      .getAttribute("href"),
+  ).toBe("#/gitlet/repos/web/changes/42?tab=files&rev=1&file=internal%2Fserver%2Froutes.go");
+  expect(within(card).getByText("Major")).toBeTruthy();
+  expect(within(card).getByText("Security")).toBeTruthy();
+});
+
+// A SUGGESTION IS A SMALL DIFF of the finding's lines and the lines suggested;
+// Apply suggestion only on the head's open finding. Mutation: offer it on
+// revision 1's finding when the head is 2.
+test("a suggestion is a small diff of the finding's lines and the lines suggested", async () => {
+  stubFindings([F1], page({ excerpts: EXCERPTS }));
+  mount();
+  const card = await screen.findByRole("article", { name: `Finding: ${F1.title}` });
+  const diff = await within(card).findByRole("group", {
+    name: "The lines suggested in place of line 19 of internal/server/routes.go",
+  });
+  const rows = [...diff.querySelectorAll("[data-kind]")].map((r) => r.getAttribute("data-kind"));
+  expect(rows).toEqual(["remove", "add"]);
+  expect(diff.textContent).toContain("withCSPNonce");
+  expect(within(card).queryByRole("button", { name: "Apply suggestion" })).toBeNull();
+  cleanup();
+  stubFindings([F1], page({ excerpts: EXCERPTS }), { revision: 1 });
+  mount();
+  const head = await screen.findByRole("article", { name: `Finding: ${F1.title}` });
+  expect(await within(head).findByRole("button", { name: "Apply suggestion" })).toBeTruthy();
+});
+
+// A FINDING SAYS WHERE ITS LINES CANNOT BE SHOWN, and why, the rest of it drawn.
+// Mutation: draw nothing for a refused excerpts read, and the sentence goes.
+test("a finding says where its lines cannot be shown and why", async () => {
+  stubFindings([F1, F2], () => json({ error: "bad_params", detail: "unknown part" }, 400));
+  mount();
+  await screen.findByRole("article", { name: `Finding: ${F2.title}` });
+  expect(
+    await screen.findAllByText("The lines around it are unavailable on this fleet yet."),
+  ).toHaveLength(2);
+  expect(screen.getAllByText("Set the nonce first.")).toHaveLength(2);
+  cleanup();
+  // A READ THAT FAILED is no older fleet: it says so in the engine's words.
+  stubFindings([F1], () => json({ error: "query_failed" }, 500));
+  mount();
+  expect(await screen.findByText("The lines around it are unavailable.")).toBeTruthy();
+  expect(screen.queryByText(/on this fleet yet/)).toBeNull();
+  cleanup();
+  stubFindings(
+    [F1, F2],
+    page({
+      excerpts: {
+        "f-1": { id: "f-1", binary: true, lines: [] },
+        "f-2": {
+          ...EXCERPTS["f-2"],
+          more: true,
+          lines: [{ mark: "+", new: 42, text_bytes: 12_600 }],
+        },
+      },
+    }),
+  );
+  mount();
+  const f2 = await screen.findByRole("article", { name: `Finding: ${F2.title}` });
+  expect(await screen.findByText("A binary file: there are no lines to show.")).toBeTruthy();
+  expect(within(f2).getByRole("group").textContent).toContain(
+    "A line of 12 KiB, too long to show here",
+  );
+  // ITS SENTENCE IS WORDS, never painted as code.
+  const elided = await waitFor(() => {
+    const span = within(f2).getByRole("group").querySelector(".code-excerpt__elided");
+    expect(span).not.toBeNull();
+    return span!;
+  });
+  expect(elided.textContent).toBe("A line of 12 KiB, too long to show here");
+  expect(within(f2).getByRole("group").querySelector('[class^="code-syn-"]')).toBeNull();
+  expect(
+    within(f2)
+      .getByRole("link", { name: /read them on Files changed/ })
+      .getAttribute("href"),
+  ).toContain("file=internal%2Frender%2Fstream.go");
+  cleanup();
+  stubFindings([F1], page({ excerpts: {} }));
+  mount();
+  expect(
+    await screen.findByText("Its lines are shown once its revision's files are recorded."),
+  ).toBeTruthy();
+});
+
+// THE FINDINGS AND THEIR EXCERPTS ARE READ AGAIN ONLY WHEN SOMEBODY REVIEWS:
+// a push and a conversation version moved ask neither. Mutation: key either
+// on the change's or the conversation's version, and every push asks it again.
+test("the findings and their excerpts are asked again only when somebody reviews", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  let version = 5;
+  let conversation = { reviews: 1, spoken_at: "2026-10-27T11:00:00Z", version: 1 };
+  const facts = () => ({
+    comments: 0,
+    open_findings: 1,
+    open_blockers: 0,
+    changes_requested: 1,
+    position: POSITION,
+    ...conversation,
+  });
+  stubEngine(
+    () => detail({ version, conversation: facts() }),
+    () => json({}),
+    {
+      reviews: page({ reviews: [reviewRow("r1", 20, "request_changes", 1, { findings: 1 })] }),
+      findings: page({ revision: 2, findings: [F1] }),
+      excerpts: page({ excerpts: EXCERPTS }),
+    },
+  );
+  mount();
+  await screen.findByRole("article", { name: `Finding: ${F1.title}` });
+  const asked = () => changeAsked.filter((u) => u.searchParams.get("part") === "excerpts").length;
+  const findings = () =>
+    changeAsked.filter((u) => u.searchParams.get("part") === "findings").length;
+  const details = () => changeAsked.filter((u) => !u.searchParams.get("part")).length;
+  expect([asked(), findings()]).toEqual([1, 1]);
+  version = 6;
+  conversation = { ...conversation, version: 2 };
+  const before = details();
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(details()).toBeGreaterThan(before));
+  await settled(() => changeAsked.length);
+  expect([asked(), findings()]).toEqual([1, 1]);
+  conversation = { reviews: 2, spoken_at: "2026-10-27T12:00:00Z", version: 3 };
+  await act(async () => void vi.advanceTimersByTime(CHANGE_POLL_MS));
+  await waitFor(() => expect(asked()).toBe(2));
+  await settled(() => changeAsked.length);
+  expect(findings()).toBe(2);
+});
+
+// LOAD MORE PAGES THE FINDINGS AND THEIR EXCERPTS together, with the same cursor.
+// Mutation: page the findings alone, and the second card has no lines.
+test("Load more asks the findings' and the excerpts' next pages with the same cursor", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviews: page({ reviews: [reviewRow("r1", 20, "request_changes", 1, { findings: 2 })] }),
+    findings: (url) =>
+      url.searchParams.get("cursor")
+        ? page({ revision: 2, findings: [F2] })()
+        : page({ revision: 2, findings: [F1], next: "f-1" })(),
+    excerpts: (url) =>
+      url.searchParams.get("cursor")
+        ? page({ excerpts: { "f-2": EXCERPTS["f-2"] } })()
+        : page({ excerpts: { "f-1": EXCERPTS["f-1"] }, next: "f-1" })(),
+  });
+  mount();
+  await screen.findByRole("article", { name: `Finding: ${F1.title}` });
+  expect(screen.getByText("1 more on a later page.")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+  const f2 = await screen.findByRole("article", { name: `Finding: ${F2.title}` });
+  expect(await within(f2).findByRole("group", { name: /^Lines 41 to 43/ })).toBeTruthy();
+  const later = changeAsked.filter((u) => u.searchParams.get("cursor") === "f-1");
+  expect(later.map((u) => u.searchParams.get("part")).sort()).toEqual(["excerpts", "findings"]);
+});
+
+// A REFUSED FINDINGS READ IS SAID, never counted as findings on a later page.
+// Mutation: draw the review's findings box from the counts alone, and it
+// says "2 more on a later page" with no Load more to reach them.
+test("a refused findings read says its findings are unavailable", async () => {
+  stubEngine(detail(), () => json({}), {
+    reviews: page({ reviews: [reviewRow("r1", 20, "request_changes", 1, { findings: 2 })] }),
+    findings: () => json({ error: "query_failed" }, 500),
+  });
+  mount();
+  const box = await screen.findByRole("region", { name: "Findings of the review by cto" });
+  expect(await within(box).findByText("Its findings are unavailable.")).toBeTruthy();
+  expect(spoken(box.firstElementChild!)).toBe("2 findings on revision 1");
+  expect(box.textContent).not.toMatch(/later page|loaded/);
+  expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+});
+
+// RESOLVE ANSWERS A STANDING FINDING IN ONE PRESS, an author's; Reply opens its box.
+// Mutation: send Resolve without its resolution, and this fails.
+test("Resolve answers a standing finding in one press, and Reply opens its box", async () => {
+  const authors = [
+    { author: "dev", kind: "agent", first_revision: 1, position: POSITION },
+    { author: "jane", kind: "person", first_revision: 2, position: POSITION },
+  ];
+  const acted = stubEngine(detail({ authors }), () => json({ outcome: "applied" }), {
+    reviews: page({ reviews: [reviewRow("r1", 20, "request_changes", 1, { findings: 1 })] }),
+    findings: page({ revision: 2, findings: [F1] }),
+  });
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+  const card = await screen.findByRole("article", { name: `Finding: ${F1.title}` });
+  expect(within(card).queryByRole("textbox", { name: "Reply" })).toBeNull();
+  fireEvent.click(within(card).getByRole("button", { name: "Reply" }));
+  expect(document.activeElement).toBe(within(card).getByRole("textbox", { name: "Reply" }));
+  const resolve = within(card).getByRole("button", { name: "Resolve" });
+  await waitFor(() => expect(resolve.getAttribute("title")).toBeNull());
+  fireEvent.click(resolve);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_resolve_finding",
+    args: { change: "web!42", findings: ["f-1"], resolution: "resolved" },
+  });
+});
+
+// RESOLVED IS AN AUTHOR'S ANSWER, which the engine refuses anybody else: a
+// reader who did not write the change finds Resolve held with why.
+// Mutation: hold Resolve only on a resolved finding, and it is live here.
+test("Resolve is held for a reader who did not write the change", async () => {
+  stubEngine(detail(), () => json({ outcome: "applied" }), {
+    reviews: page({ reviews: [reviewRow("r1", 20, "request_changes", 1, { findings: 1 })] }),
+    findings: page({ revision: 2, findings: [F1] }),
+  });
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+  const card = await screen.findByRole("article", { name: `Finding: ${F1.title}` });
+  const resolve = within(card).getByRole("button", { name: "Resolve" });
+  await waitFor(() => expect(resolve.getAttribute("title")).toBe(NOT_AUTHOR_RESOLVE));
+  expect(resolve.getAttribute("aria-disabled")).toBe("true");
+});
+
+// FILES CHANGED DRAWS THE SAME CARD, with when the finding was raised.
+// Mutation: draw the card without its byline on Files changed.
+test("Files changed draws the same finding card, with when it was raised", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-27T12:00:00Z"));
+  stubEngine(detail(), () => json({}), {
+    findings: page({
+      revision: 2,
+      findings: [{ ...MINE, raised_at: "2026-10-27T10:00:00Z" }],
+      placed: { "f-mine": { start: 9, end: 9, outdated: true } },
+    }),
+  });
+  mount("#/gitlet/repos/web/changes/42?tab=files&file=app.go");
+  fireEvent.click(await screen.findByText("1 outdated on this file"));
+  const card = await screen.findByRole("article", { name: `Finding: ${MINE.title}` });
+  expect(spoken(card.querySelector(".code-finding__by")!)).toMatch(
+    /raised it on revision 1 2 hours ago$/,
+  );
+});
+
 // A FINISHED CHANGE OFFERS ONLY WHAT STILL APPLIES: a merged change takes no
 // review, no ask and no close from anybody, so its bar draws none of them and
 // its Revert stands where the merge controls were; a closed one offers its
@@ -793,7 +1740,7 @@ test("a merged change offers no review, no ask and no close, only its revert", a
   stubEngine(detail({ state: "merged", readiness: undefined }), () => json({}));
   mount();
   await screen.findByRole("button", { name: "Revert" });
-  for (const name of ["Approve", "Request changes", "Request review", "Close", "Reopen"]) {
+  for (const name of ["Review web!42", "Close change", "Reopen"]) {
     expect(screen.queryByRole("button", { name }), name).toBeNull();
   }
 });
@@ -804,7 +1751,7 @@ test("a closed change offers its reopen alone", async () => {
   );
   mount();
   const reopen = await screen.findByRole("button", { name: "Reopen" });
-  for (const name of ["Approve", "Request changes", "Request review", "Close"]) {
+  for (const name of ["Review web!42", "Close change"]) {
     expect(screen.queryByRole("button", { name }), name).toBeNull();
   }
   await waitFor(() => expect(reopen.getAttribute("title")).toBeNull());
@@ -818,12 +1765,10 @@ test("a closed change offers its reopen alone", async () => {
   });
 });
 
-// AN AUTHOR'S REVIEW COUNTS FOR NOTHING, so the engine takes none: the reader
-// who wrote the change is held from every verdict with the reason, and asking
-// for a review is the step that leads their bar, the one kept in view on a
-// phone. Mutation: draw the verdicts for every reader, and the author is
-// offered Approve and then refused.
-test("the change's author is held from reviewing it, and asks for a review instead", async () => {
+// AN AUTHOR'S REVIEW COUNTS FOR NOTHING, so the engine takes none: the Review
+// menu holds the author's verdicts with the reason, and Request review stays open.
+// Mutation: draw the verdicts for every reader, and the author is offered Approve.
+test("the change's author finds the verdicts held in the Review menu, with why", async () => {
   stubEngine(
     detail({
       authors: [
@@ -834,19 +1779,17 @@ test("the change's author is held from reviewing it, and asks for a review inste
     () => json({}),
   );
   mount();
-  const ask = await screen.findByRole("button", { name: "Request review" });
-  // THE BAR'S OWN: the Conversation tab's comment box has a Comment of its own.
+  await screen.findByRole("tabpanel");
+  fireEvent.click(await screen.findByRole("button", { name: "Review web!42" }));
   for (const name of ["Approve", "Request changes", "Comment"]) {
-    const verdict = screen
-      .getAllByRole("button", { name })
-      .find((b) => b.closest(".page-action-folds") !== null);
-    await waitFor(() =>
-      expect(verdict?.getAttribute("title"), name).toBe(
-        "You wrote this change, so your review would not count. Ask somebody else to review it.",
-      ),
+    const verdict = await screen.findByRole("menuitem", { name: new RegExp(`^${name}`) });
+    await waitFor(() => expect(verdict.getAttribute("aria-disabled"), name).toBe("true"));
+    expect(verdict.textContent).toContain(
+      "You wrote this change, so your review would not count. Ask somebody else to review it.",
     );
   }
-  expect(ask.closest(".page-action-folds")).toBeNull();
+  const ask = screen.getByRole("menuitem", { name: /^Request review/ });
+  expect(ask.getAttribute("aria-disabled")).not.toBe("true");
 });
 
 // A LINE PICKED ON THE HEAD DRAFTS A FINDING INTO THE TAB, never to the
@@ -947,9 +1890,9 @@ test("the Checks tab lists the attempts that judge the change, asked by its numb
 
 // WHOM IT WOKE IS SAID IN SOMEBODY ELSE'S VOICE: a recipient is named with
 // why they heard, never "asked for your review" beside a colleague's name.
-test("the Notified tab names each recipient with why they heard, in the third person", async () => {
+test("More names each recipient with why they heard, in the third person", async () => {
   stubEngine(detail(), () => json({}));
-  mount("#/gitlet/repos/web/changes/42?tab=notified");
+  mount("#/gitlet/repos/web/changes/42?tab=more");
   const list = await screen.findByRole("list", { name: "Whom it notified" });
   expect(within(list).getByText(/asked to review/)).toBeTruthy();
   expect(within(list).queryByText(/your review/)).toBeNull();
@@ -969,20 +1912,34 @@ test.each([
   const acted = stubEngine(detail(), () => json({ outcome: "applied" }));
   mount("#/gitlet/repos/web/changes/42", viewer);
   await screen.findByRole("tabpanel");
-  for (const name of ["Approve", "Request changes", "Request review", "Close"]) {
-    const button = await screen.findByRole("button", { name });
-    await waitFor(() => expect(button.getAttribute("title"), name).toBe(reason));
+  const close = await screen.findByRole("button", { name: "Close change" });
+  await waitFor(() => expect(close.getAttribute("title")).toBe(reason));
+  fireEvent.click(screen.getByRole("button", { name: "Review web!42" }));
+  for (const name of ["Approve", "Request changes", "Comment", "Request review"]) {
+    const item = await screen.findByRole("menuitem", { name: new RegExp(`^${name}`) });
+    expect(item.getAttribute("aria-disabled"), name).toBe("true");
+    expect(item.textContent, name).toContain(reason);
   }
-  for (const button of screen.getAllByRole("button", { name: "Comment" })) {
-    expect(button.getAttribute("title")).toBe(reason);
-  }
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+  expect(screen.getByRole("button", { name: "Comment" }).getAttribute("title")).toBe(reason);
+  fireEvent.click(screen.getByRole("button", { name: "More actions on the description" }));
+  const editItem = await screen.findByRole("menuitem", { name: /^Edit/ });
+  expect(editItem.getAttribute("aria-disabled")).toBe("true");
+  expect(editItem.textContent).toContain(reason);
   cleanup();
 
   mount("#/gitlet/repos/web/changes/42?tab=files&file=app.go", viewer);
   // THE OUTDATED FINDING, under its Disclosure: opened, its reply is drawn.
   fireEvent.click(await screen.findByText("1 outdated on this file"));
-  const reply = await screen.findByRole("button", { name: "Reply" });
+  fireEvent.click(await screen.findByRole("button", { name: "Reply", expanded: false }));
+  const reply = screen
+    .getAllByRole("button", { name: "Reply" })
+    .find((b) => b.getAttribute("aria-expanded") === null)!;
   await waitFor(() => expect(reply.getAttribute("title")).toBe(reason));
+  for (const name of ["Resolve", /^Answer the finding/]) {
+    const held = screen.getByRole("button", { name });
+    expect(held.getAttribute("title"), String(name)).toBe(reason);
+  }
   expect(acted).toHaveLength(0);
 });
 
@@ -1010,7 +1967,7 @@ test("a comment on the change sends on Enter, and Shift+Enter is a new line", as
 });
 
 // A DRAFT'S NEXT STEP IS BEING MARKED READY, and the page offers it: Ready
-// for review is the bar's primary action, one code_update_change against the
+// for review is in the bar, one code_update_change against the
 // version on screen; and a draft is offered no merge. Mutation: drop the
 // action, send another version, or draw the merge controls on a draft, and
 // this fails.
@@ -1053,19 +2010,15 @@ test("a draft is marked ready for review from the page bar, and offers no merge"
   });
 });
 
-// ONE ACTION IN VIEW ON A PHONE: the bar hides `page-action-folds` at that
-// width and the same writes are in its More menu, so only the primary action
-// is left outside a fold. Mutation: draw the secondary writes bare, and the
-// bar runs off a phone's edge again, and this fails.
-test("the change's secondary writes fold on a phone, its primary action stays", async () => {
+// REVIEW STAYS IN VIEW ON A PHONE: the bar hides `page-action-folds` at that
+// width, and Close change is in its More menu. Mutation: fold Review, and this fails.
+test("Close change folds on a phone, and Review stays", async () => {
   stubEngine(detail(), () => json({ outcome: "applied" }));
   mount();
-  const approve = await screen.findByRole("button", { name: "Approve" });
-  expect(approve.closest(".page-action-folds")).toBeNull();
-  for (const name of ["Request changes", "Request review", "Close"]) {
-    const button = await screen.findByRole("button", { name });
-    expect(button.closest(".page-action-folds"), name).not.toBeNull();
-  }
+  const trigger = await screen.findByRole("button", { name: "Review web!42" });
+  expect(trigger.closest(".page-action-folds")).toBeNull();
+  const close = await screen.findByRole("button", { name: "Close change" });
+  expect(close.closest(".page-action-folds")).not.toBeNull();
 });
 
 // A DIFF IS READ FOR ITS CHANGES: with no file in the address the tab opens

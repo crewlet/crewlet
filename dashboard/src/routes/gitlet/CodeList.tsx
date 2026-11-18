@@ -60,12 +60,20 @@ export interface CodeListProps<T> {
   lead?: (row: T) => ReactNode;
   title: (row: T) => ReactNode;
   titleAfter?: (row: T) => ReactNode;
+  /** A line under the title: a repository's description. */
+  summary?: (row: T) => ReactNode;
   meta?: (row: T) => ReactNode;
   facts?: (row: T) => ReactNode;
   below?: (row: T) => ReactNode;
   density?: "default" | "compact";
-  /** A band at the card's head: a state bar, pickers, a sort. */
+  /** A band at the card's head: a state bar, pickers, a sort; drawn inside the card. */
   head?: ReactNode;
+  /** Drawn where there is no row, under the head: the list's loading, empty or refused state. */
+  placeholder?: ReactNode;
+  /** False leaves `[` and `]` to the host, which publishes one order across its lists. */
+  neighbours?: boolean;
+  /** True: j and k drive this list only once the reader points or focuses in it (a box above the page's list). */
+  keysOnceClaimed?: boolean;
   /** Load more, as usePaged answers it. */
   paged?: Pick<Paged<unknown, unknown>, "more" | "next" | "paging" | "pageError">;
   /** The press's words: "Load older commits". */
@@ -135,12 +143,20 @@ export function useListKeys(opts: {
   root: RefObject<HTMLElement | null>;
   keys: readonly string[];
   onOpen?: (key: string, e: KeyboardEvent) => void;
+  /** Take part in the keys only once claimed, so another list drives them on landing. */
+  onceClaimed?: boolean;
 }): { cursor: string | null; claim: () => void; focusRow: (key: string) => void } {
-  const { root, keys, onOpen } = opts;
+  const { root, keys, onOpen, onceClaimed = false } = opts;
   const [held, setHeld] = useState<string | null>(null);
+  const [claimed, setClaimed] = useState(false);
   // BY KEY, so a row gained at the top keeps the reader on theirs; a key that left is none.
   const cursor = held !== null && keys.includes(held) ? held : null;
-  const { driving, claim } = useDataGridDriving(keys.length > 0);
+  const drivable = keys.length > 0;
+  const { driving, claim: claimKeys } = useDataGridDriving(drivable && (!onceClaimed || claimed));
+  const claim = useCallback(() => {
+    setClaimed(true);
+    claimKeys();
+  }, [claimKeys]);
 
   const focusRow = useCallback(
     (key: string) => {
@@ -162,7 +178,6 @@ export function useListKeys(opts: {
   };
 
   // A POINTER OR FOCUS INSIDE says which list the reader is in; focus also moves the cursor.
-  const drivable = keys.length > 0;
   useEffect(() => {
     const el = root.current;
     if (!el || !drivable) return undefined;
@@ -230,11 +245,15 @@ export function CodeList<T>({
   lead,
   title,
   titleAfter,
+  summary,
   meta,
   facts,
   below,
   density = "default",
   head,
+  placeholder,
+  neighbours = true,
+  keysOnceClaimed = false,
   paged,
   moreLabel = "Load more",
   foot,
@@ -249,7 +268,7 @@ export function CodeList<T>({
     [groups, rows],
   );
   const keys = useMemo(() => all.map(rowKey), [all, rowKey]);
-  const { cursor, focusRow } = useListKeys({ root, keys });
+  const { cursor, focusRow } = useListKeys({ root, keys, onceClaimed: keysOnceClaimed });
 
   const { open } = usePeekControls();
   const peeked = usePeek();
@@ -312,6 +331,7 @@ export function CodeList<T>({
             )}
             {titleAfter?.(item)}
           </p>
+          {summary && <p className="code-list__summary">{summary(item)}</p>}
           {meta && <div className="code-list__meta">{meta(item)}</div>}
         </div>
         {facts && <div className="code-list__facts">{facts(item)}</div>}
@@ -323,6 +343,12 @@ export function CodeList<T>({
   const Heading = `h${headingLevel}` as const;
   const busy = paged?.paging ? "true" : "false";
   const card = !groups;
+  const cardRows = (
+    <ol className="code-list__rows" aria-label={label} aria-busy={busy}>
+      {all.map(row)}
+    </ol>
+  );
+  const held = placeholder ? <div className="code-list__placeholder">{placeholder}</div> : null;
   return (
     <div
       ref={root}
@@ -336,30 +362,33 @@ export function CodeList<T>({
       aria-label={card ? undefined : label}
       aria-busy={card ? undefined : busy}
     >
-      {peek && <Neighbours refs={refs} />}
-      {head && <div className="code-list__head">{head}</div>}
-      {card
-        ? all.length > 0 && (
-            <ol className="code-list__rows" aria-label={label} aria-busy={busy}>
-              {all.map(row)}
+      {peek && neighbours && <Neighbours refs={refs} />}
+      {card && head ? (
+        <div className="code-list__card">
+          <div className="code-list__head">{head}</div>
+          {all.length > 0 ? cardRows : held}
+        </div>
+      ) : (
+        head && <div className="code-list__head">{head}</div>
+      )}
+      {card && !head && (all.length > 0 ? cardRows : held)}
+      {!card &&
+        groups.map((group, index) => (
+          <div key={group.key} className="code-list__group">
+            <Heading className="code-list__heading" id={`${id}-${index}`}>
+              {Spine && (
+                <span className="code-list__node" aria-hidden="true">
+                  <Spine size="sm" />
+                </span>
+              )}
+              {group.heading}
+              {group.aside && <span className="code-list__aside">{group.aside}</span>}
+            </Heading>
+            <ol className="code-list__rows" aria-labelledby={`${id}-${index}`}>
+              {group.rows.map(row)}
             </ol>
-          )
-        : groups.map((group, index) => (
-            <div key={group.key} className="code-list__group">
-              <Heading className="code-list__heading" id={`${id}-${index}`}>
-                {Spine && (
-                  <span className="code-list__node" aria-hidden="true">
-                    <Spine size="sm" />
-                  </span>
-                )}
-                {group.heading}
-                {group.aside && <span className="code-list__aside">{group.aside}</span>}
-              </Heading>
-              <ol className="code-list__rows" aria-labelledby={`${id}-${index}`}>
-                {group.rows.map(row)}
-              </ol>
-            </div>
-          ))}
+          </div>
+        ))}
       {(paged?.more || paged?.pageError || foot) && (
         <div className="code-list__foot">
           {paged?.more && (

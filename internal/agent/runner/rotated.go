@@ -5,36 +5,22 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// Rotated is a run whose job ended refused by its vendor on a SIGN-IN THAT WAS
-// REPLACED WHILE IT RAN: what a resume carries the round on from
-// ([Resume.Rotated]).
+// Rotated is a run whose job its vendor refused on a sign-in REPLACED WHILE IT
+// RAN: a resume carries its round on ([Resume.Rotated]). A process's
+// environment cannot change and harnesses re-read no token file, so the job
+// kept the revoked credential; judging that refusal the round's outcome would
+// fail the turn for a reason it no longer has. The relaunch runs on the same
+// entry, now handing out the new credential, continuing the job's harness
+// session where it can (continued.go).
 //
-// # Why the round is carried on, not collected
-//
-// A process's environment cannot change, and the harnesses re-read no file
-// for a token, so a job that was running when its entry's credential was
-// rotated keeps the old one until it ends. Where the vendor revoked the old
-// one, the job ends refused, though the entry already signs in with the new
-// credential. Judged as the round's outcome, that refusal would fail the turn
-// for a reason the round no longer has. So the resumed turn relaunches its
-// executor for the same round, on the entry that ran it, which now hands the
-// new credential to every launch, continuing the job's harness session where
-// the launch can — the turn's kept capture of it, in whatever box the launch
-// gets (continued.go), or the copy the job's own box holds — so its
-// conversation carries on, and its working tree too where the box is the job's.
-//
-// ONCE. The relaunched job is recorded as a follow-up for this reason, and a
-// follow-up refused again is an ordinary refusal (the engine decides; see
-// internal/engine's signInReplaced), so a credential that keeps failing fails
-// the turn rather than relaunching it for ever.
-//
-// UNLESS THE ROUND WAS ALREADY SUBMITTED, as for [Lost]: a job whose
-// `submit_work` is on the round's calls had finished its work, and the round
-// is collected from those calls.
+// ONCE: the relaunch is recorded as a follow-up for this reason, and one
+// refused again is an ordinary refusal (internal/engine's signInReplaced), so a
+// failing credential fails the turn rather than looping.
+// Unless the round was already submitted, as for [Lost]: then it is collected.
 type Rotated struct {
-	// SessionID is the refused job's harness session, which the relaunch
-	// continues in place where it runs in that job's box and the turn kept no
-	// capture of it to restore (continued.go).
+	// SessionID is the refused job's harness session, continued in place where
+	// the relaunch runs in that job's box with no kept capture to restore
+	// (continued.go).
 	SessionID string
 
 	// BoxKept is whether that job's box is still there.

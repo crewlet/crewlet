@@ -10,11 +10,10 @@ import (
 // A PLAYED JOB DOES ITS WORK WHEN IT IS POLLED, NOT WHEN IT IS STARTED, and
 // finishes with what its play answered.
 //
-// The double is what a `providers.sandbox.fake: true` company runs every
-// executor on, and what every engine test drives a turn's run through, so its
-// shape is the shape those runs have: the work happens after the launch has
-// returned — a play inside Start would land the run's bridged calls while its
-// launch is still in flight — and it happens once, however often the job is
+// Every `providers.sandbox.fake: true` company and every engine test runs its
+// executors on this double, so it keeps a real run's shape: the work happens
+// after the launch returned (a play inside Start would land the run's bridged
+// calls while the launch is in flight), and once, however often the job is
 // polled and collected.
 //
 // Mutation: play at Start and the first assertion fails; drop the once and the
@@ -79,8 +78,8 @@ func TestEachPlayedJobIsPlayedFromItsOwnRequest(t *testing.T) {
 }
 
 // A JOB THIS RUNNER NEVER STARTED IS OVER, AND SAYS WHY: under a player, a job
-// a previous process launched has no play here to finish it, and a job left
-// running for ever would park its turn for ever.
+// a previous process launched has no play here, and left running it would park
+// its turn for ever.
 func TestAPlayedRunnerEndsAJobItDidNotStart(t *testing.T) {
 	t.Parallel()
 	runner := NewFakeRunner("claude-code")

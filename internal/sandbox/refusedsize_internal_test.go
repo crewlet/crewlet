@@ -8,15 +8,13 @@ import (
 	"github.com/crewlet/crewlet/internal/kept"
 )
 
-// A REFUSAL ON THE RUN'S ROW STATES A SIZE PAST ITS BOUND ROUNDED UP. Two of
-// the row's refusals say what they refused beside the bound they refused it
-// against: an answer past what the row carries as one (the error a reply too
-// large for its run is logged with, `sandbox_answer_refused`), and a held
-// call's arguments past their share. The bound is stated in kept.Size's units,
-// which round whole KiB down, so a figure stated in the same units a byte past
-// the bound read as the bound itself — "weighs 512 KiB on its row, and an
-// answer may weigh 512 KiB" — and the operator reading it saw nothing wrong.
-// Stated rounded up (kept.SizeUp), it reads past.
+// A REFUSAL ON THE RUN'S ROW STATES A SIZE PAST ITS BOUND ROUNDED UP: an answer
+// past what the row carries (AnswerTooLargeError, logged as
+// `sandbox_answer_refused`) and a held call's arguments past their share. The
+// bound is in kept.Size's units, which round whole KiB down, so a figure a byte
+// past it in the same units reads as the bound itself ("weighs 512 KiB ..., and
+// an answer may weigh 512 KiB") and the operator sees nothing wrong; stated in
+// kept.SizeUp, it reads past.
 //
 // Mutation: state either refused figure in kept.Size, and a byte past its
 // bound reads as the bound.

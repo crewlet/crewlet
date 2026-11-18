@@ -20,77 +20,27 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE FLEET'S BROKER MEMBERSHIP, as an operator reads and changes it.
-//
-// Two records say who the broker's members are, and they can disagree. Every
-// node ADVERTISES its broker kind on its presence lease ([placement.BrokerKind]),
-// and the broker's METADATA GROUP counts its voters for itself. A member that is
-// gone for good is the disagreement that matters: its presence lapses with its
-// process, and the metadata group goes on counting it in every election and
-// every create until it is removed — so a three-member fleet that lost two for
-// good has no quorum left to create anything with, and nothing on the presence
-// side says why.
-//
-// # Read through a member, from any node
-//
-// Only a member holds the metadata group, and its view is read in process
-// ([jetstream.Server.MetaGroup]). A node that is not a member — a leaf, or a
-// member lent no broker handle — asks a live member over its own core subject,
-// `crewlet.fleet.broker.<member>`, one member at a time. The same subject
-// carries a removal, because nats-server answers one only on the system
-// account, which a member reaches in its own process and nothing else can.
-//
-// A fleet on an EXTERNAL cluster has no members of its own: the cluster's
-// membership is its operator's, and both gestures say so rather than
-// answering about a broker this fleet does not run.
-//
-// # Every request and every reply is signed
-//
-// A removal on that subject is an INSTRUCTION a member carries out through its
-// own system account — the one action the design keeps off the global account
-// every node's connections, a leaf's link included, are bound to — and it
-// changes the quorum every election and every create runs on. The broker's
-// admission vouches for a CONNECTION, never a message: an embedded broker
-// admits only a key derived from the keyring (ADR-0094), but a route's
-// password crosses the fleet network in clear, and an external cluster admits
-// whom its operator chooses. So unsigned, anything the broker admitted could
-// remove a voter, past the grant, the step-up, the confirmation and the
-// live-member refusal the operator's route puts in front of the gesture — all
-// of which run on the ASKING node. So the subject is a channel of
-// internal/signedask's, in domains of its own
-// ([fleetBrokerChannel]): a member carries out only a request the fleet
-// signed, bound to an id it has not taken and a deadline still ahead
-// ([signedask.Channel.Admit]), and the asker believes only a reply the fleet
-// signed for the request it sent. What arrives otherwise runs nothing:
-// a request the fleet did not sign is refused and logged at error; one under
-// a key this member does not hold is answered "did not run", so the asker
-// asks the next member, as it does a member with no metadata group; and the
-// reads go through the same channel, because a forged listing is what an
-// operator removes a voter on.
-//
-// WHO ASKED travels inside the signature as the author, kind and credential
-// [iam.ActorFor] makes of the operator's principal, so the carrying member's
-// `fleet_broker_member_removed` line names the credential the removal was
-// pressed through, and nothing on the broker can choose it.
-//
-// # A voter is its raft peer id
-//
-// The metadata group counts a voter by its peer id, which nats-server derives
-// from the server's name ([jetstream.PeerIDOf]); the NAME is only what the
-// answering member happens to have heard. A member lost for good whose
-// survivors have since restarted is one none of them has heard, so the group
-// lists it nameless. Both records are therefore held against each other by
-// PEER ID — a live node's id is computed from its node id, which also names a
-// nameless voter whenever its node is alive under another kind — and a removal
-// names the voter by id: the operator's node id, hashed, or the id the listing
-// shows for a voter nobody can name.
+// THE FLEET'S BROKER MEMBERSHIP, as an operator reads and changes it (package
+// doc, "Broker membership"). Two records can disagree: every node advertises
+// its broker kind on its presence lease ([placement.BrokerKind]), and the
+// metadata group counts its own voters, so a member gone for good goes on
+// counting in every election and create until it is removed. A non-member asks
+// a live member on `crewlet.fleet.broker.<member>`, which also carries a
+// removal, since only a member reaches the system account nats-server answers
+// one on. Every request and reply is signed ([fleetBrokerChannel]), and voters
+// are held against nodes by raft peer id ([jetstream.PeerIDOf]): a voter's name
+// is only what the answering member happened to hear. An EXTERNAL cluster's
+// membership is its operator's, and both gestures say so.
 
 // fleetBrokerSubjectPrefix prefixes every member's broker-membership subject.
 const fleetBrokerSubjectPrefix = "crewlet.fleet.broker"
 
 // fleetBrokerChannel is the broker-membership channel, and so the stem of the
 // two key domains its envelopes are signed under — its own, so no estate
-// envelope, steer note or state-log record verifies as one.
+// envelope, steer note or state-log record verifies as one. Signed because the
+// broker's admission vouches for a connection, never a message: unsigned,
+// anything it admitted could remove a voter past the checks the operator's
+// route runs on the asking node (package doc, "Broker membership").
 const fleetBrokerChannel = "fleet.broker"
 
 // brokerWire is the broker-membership channel's envelopes: one per node, both
@@ -116,43 +66,36 @@ var errNoBrokerWire = errors.New("engine: no envelopes for the fleet broker's " 
 	"keyring (Tier A secrets.keys)")
 
 // fleetBrokerSubject is the one subject a member answers the fleet's broker
-// questions on. THE NODE ID IS ESCAPED as a subject token, for the estate
-// subject's reason: an id may carry a dot, which would split it in two.
+// questions on. The node id is escaped as a subject token: an id may carry a
+// dot, which would split it in two.
 func fleetBrokerSubject(node string) string {
 	return fleetBrokerSubjectPrefix + "." + coord.DocumentKey(node)
 }
 
-// brokerReadWait bounds a read of the metadata group through the members —
-// every member asked at once, the first to report the group answering.
-//
-// FIVE SECONDS, and what fixes it is who waits on the listing: the command
-// line's call and the dashboard's socket query each give a node ten seconds
-// for the whole answer ([BrokerReadWait] is held under both), and the node
-// also lists the fleet's presence before it asks anybody. Half of that wait
-// leaves the other half for the presence read and the answer's way back. A
-// live member answers out of its own memory in one round trip — a leaf link
-// included — so one silent for five seconds is gone rather than slow, and
-// asking every member at once means a silent one costs the listing nothing
-// while another answers.
+// brokerReadWait bounds a read of the metadata group, every member asked at
+// once and the first to report it answering. FIVE SECONDS: the command line's
+// call and the dashboard's socket query give a node ten seconds for the whole
+// answer ([BrokerReadWait] is held under both), and the other half is the
+// presence read's and the answer's way back. A live member answers from its
+// own memory in one round trip, a leaf link included, so one silent for five
+// seconds is gone rather than slow.
 const brokerReadWait = 5 * time.Second
 
 // BrokerReadWait is [brokerReadWait], for the gates that hold the callers'
 // waits above it.
 func BrokerReadWait() time.Duration { return brokerReadWait }
 
-// BrokerRemoveWait bounds a whole removal: the carrying member waits for the
-// metadata group to commit it within the budget one clustered metadata change
-// gets ([jsprovision.Budget]), and its answer takes a fleet round trip back —
-// bounded as a read of the group is ([brokerReadWait]). ONE DEADLINE FOR THE
-// GESTURE, never one per member asked: a member that cannot carry it says so
-// at once and the next is asked inside what is left, and a member that does
-// not answer ends the gesture ([ErrRemovalOutcomeUnknown]). Exported for the
-// surfaces that wait on the gesture, which have to wait longer still.
+// BrokerRemoveWait bounds a whole removal: one clustered metadata change's
+// commit budget ([jsprovision.Budget]) plus a fleet round trip back, bounded
+// as a read is ([brokerReadWait]). ONE DEADLINE FOR THE GESTURE, never one per
+// member asked: one that cannot carry it says so at once and the next is asked
+// in what is left, and one that does not answer ends the gesture
+// ([ErrRemovalOutcomeUnknown]). The surfaces waiting on it wait longer still.
 func BrokerRemoveWait() time.Duration { return jsprovision.Budget(true) + brokerReadWait }
 
-// brokerMembership is what the engine asks of its own embedded broker.
-// Declared here, by the consumer; a leaf's and a solo member's answer
-// [jetstream.ErrNoMetaGroup], and name no client listener.
+// brokerMembership is what the engine asks of its own embedded broker. A
+// leaf's and a solo member's MetaGroup answer [jetstream.ErrNoMetaGroup], and
+// they name no client listener.
 type brokerMembership interface {
 	MetaGroup() (jetstream.MetaGroup, error)
 	RemovePeer(ctx context.Context, peer string) error
@@ -210,11 +153,10 @@ type BrokerFinding struct {
 type BrokerNode struct {
 	Node string `json:"node"`
 	// Peer is the raft peer id the metadata group counts this node by when
-	// it is a voter ([jetstream.PeerIDOf] of its node id) — what a client
-	// matches a voter to its node by, since the voter's name is only what
-	// the answering member has heard. Carried rather than left to each
-	// client to derive, because the derivation is nats-server's and a
-	// browser has no synchronous hash to repeat it with.
+	// it is a voter ([jetstream.PeerIDOf] of its node id), which a client
+	// matches voters to nodes by. Carried rather than derived by each
+	// client: the derivation is nats-server's, and a browser has no
+	// synchronous hash to repeat it with.
 	Peer string `json:"peer"`
 	// Kind is the advertised kind as an operator reads it — "unknown" for
 	// a presence that does not say.
@@ -229,12 +171,11 @@ type BrokerView struct {
 	Kind string `json:"kind"`
 
 	// Client is the ANSWERING node's own loopback client listener,
-	// host:port — where an operator on that node's host reaches its broker
-	// with the nats tool and the operator key `crewlet fleet broker
-	// credential` writes (ADR-0094) — and absent where it opens none: a solo
-	// member, a member with only a leaf listener, a leaf, an external
-	// cluster's client. The node's, as Node and Kind are, never the fleet's:
-	// a client listener is reachable from its own host alone.
+	// host:port, where an operator on its host reaches its broker with the
+	// nats tool and the key `crewlet fleet broker credential` writes
+	// (ADR-0094); absent where it opens none (a solo member, a leaf-only
+	// member, a leaf, an external cluster's client). Never the fleet's: a
+	// client listener is reachable from its own host alone.
 	Client string `json:"client,omitempty"`
 
 	// External is a fleet whose broker is an external cluster: its
@@ -473,13 +414,10 @@ func replyFor(node string, err error) brokerReply {
 }
 
 // serveFleetBroker makes this member answer the fleet's broker questions on its
-// own subject. Only a MEMBER serves — a leaf and a client hold no metadata
-// group — and every member does, so a node that is not one always has somebody
-// to ask.
-//
-// A MEMBER WITHOUT ITS ENVELOPES IS REFUSED rather than serving unsigned: the
-// subject carries an instruction, and a member that answered it unsigned is
-// the hole the envelopes close.
+// own subject. Only a MEMBER serves (a leaf and a client hold no metadata
+// group), and every member does, so a non-member always has somebody to ask.
+// A member without its envelopes is refused rather than serving unsigned: the
+// subject carries an instruction.
 func (e *Engine) serveFleetBroker(ctx context.Context) error {
 	if e.profile.Broker != placement.BrokerMember || e.backends == nil ||
 		e.backends.Queue == nil || e.backends.broker == nil {
@@ -512,31 +450,26 @@ func (e *Engine) stopServingFleetBroker(ctx context.Context) {
 	e.stopFleetBroker = nil
 }
 
-// answerBroker runs one request and ALWAYS answers, for the estate server's
-// reason: a member that stayed silent would be indistinguishable from one that
-// is down, and the asker would wait out its budget before asking the next.
-//
-// IT RUNS ONLY WHAT IT ADMITS ([signedask.Channel.Admit]), judged on now and
-// against the ids taken: every other request is answered with what it is and
-// runs nothing — and a removal above all, which is an instruction to this
-// member's system account.
+// answerBroker runs one request and ALWAYS answers: a silent member is
+// indistinguishable from one that is down, and the asker would wait out its
+// budget before asking the next. It runs only what it admits
+// ([signedask.Channel.Admit]) against now and the ids taken; every other
+// request is answered with what it is and runs nothing.
 func (e *Engine) answerBroker(ctx context.Context, raw []byte, taken *signedask.Guard,
 	now time.Time) brokerReply {
 
 	admitted := e.brokerWire.Admit(raw, taken, now)
 	switch admitted.Disposition {
 	case signedask.Tampered:
-		// NOT THE FLEET'S: nothing in it is believed, not even the id a
-		// reply would name. At ERROR — no member will ever take it, so
-		// whoever sent it reached the broker and is not the fleet.
+		// NOT THE FLEET'S: nothing in it is believed, not even its id. At
+		// ERROR: whoever sent it reached the broker and is not the fleet.
 		log.ErrorContext(ctx, "fleet_broker_request_refused", "node", e.id,
 			"disposition", string(admitted.Disposition), "detail", admitted.Why+"; nothing in it ran")
 		return brokerReply{Node: e.id, Code: brokerCodeUnauthenticated,
 			Detail: fmt.Sprintf("%s refused a request that is not signed by this fleet", e.id)}
 	case signedask.KeyUnknown:
-		// A FACT ABOUT THIS MEMBER, which an operator changes by adding the
-		// key: "did not run", bound to the id the asker sent, so it asks
-		// the next member.
+		// A FACT ABOUT THIS MEMBER, cured by adding the key: "did not run",
+		// bound to the asker's id, so it asks the next member.
 		log.WarnContext(ctx, "fleet_broker_request_refused", "node", e.id,
 			"disposition", string(admitted.Disposition), "claimed_from", admitted.Request.From,
 			"detail", admitted.Why+"; nothing in it ran")
@@ -578,13 +511,10 @@ func (e *Engine) runBroker(ctx context.Context, req brokerRequest) brokerReply {
 		Detail: fmt.Sprintf("%s does not know the operation %q", e.id, req.Op)}
 }
 
-// removeHere removes a voter through THIS member's system account. node is
-// the operator's name for it, and by who asked — the author, the kind and the
-// credential — each for the log alone.
-//
-// ON ITS OWN BUDGET, detached from the request that asked: once the leader has
-// proposed the change the group commits it whoever is listening, so an asker
-// that gave up changes nothing but who hears the answer.
+// removeHere removes a voter through THIS member's system account; node and
+// by (who asked) are for the log alone. ON ITS OWN BUDGET, detached from the
+// request: once proposed, the group commits the change whoever is listening,
+// so an asker that gave up changes nothing but who hears the answer.
 func (e *Engine) removeHere(ctx context.Context, peer, node string, by iam.Actor, from string) brokerReply {
 	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), jsprovision.Budget(true))
 	defer cancel()
@@ -623,9 +553,8 @@ func (f *FleetBroker) livePresence(ctx context.Context) (map[string]placement.No
 			out[profile.ID] = profile
 		}
 	}
-	// THIS NODE AS IT IS, whether or not its presence has landed yet and
-	// whatever an earlier incarnation's row says — the rule
-	// [placement.Compute] follows for the same reason.
+	// THIS NODE AS IT IS, whether or not its presence has landed and
+	// whatever an earlier incarnation's row says, as [placement.Compute].
 	out[f.e.id] = f.e.profile
 	return out, nil
 }
@@ -665,9 +594,9 @@ const (
 // signed, bound to an id of its own and to ctx's deadline, and believed only
 // where the reply is the fleet's answer to it.
 //
-// A REPLY THAT IS NOT BELIEVED IS NO ANSWER, and it is reported as answered
-// with an error: the member heard the request and may have acted on it, so
-// what it did is not known — which is what a removal reports for it.
+// A REPLY THAT IS NOT BELIEVED is reported as answered with an error: the
+// member heard the request and may have acted on it, so a removal reports its
+// outcome unknown.
 func (f *FleetBroker) ask(ctx context.Context, member string, req brokerRequest) (brokerReply, asked, error) {
 	wire := f.e.brokerWire
 	if wire == nil {
@@ -729,16 +658,11 @@ func (f *FleetBroker) List(ctx context.Context) (BrokerView, error) {
 }
 
 // readGroup reads the metadata group from this member in process, or else
-// from whichever other member reports it first.
-//
-// EVERY OTHER MEMBER AT ONCE, within one [brokerReadWait]: asked one after
-// another, a member that died with its presence lease still live would spend
-// the whole wait of everybody reading the listing before the next was asked.
-// The first report of the group answers; the reasons the others gave, or their
-// silence, are what the listing says when nobody reports one.
-//
-// A LONE MEMBER WITH NO GROUP IS SOLO, the last value: this node is the
-// fleet's only broker member and runs unclustered, which is a state.
+// from whichever other member reports it first. EVERY OTHER MEMBER AT ONCE,
+// within one [brokerReadWait]: asked in turn, a member that died with its
+// presence lease still live would spend the whole wait. When none reports it,
+// the others' reasons or silence are what the listing says. The last value is
+// Solo: a lone member with no group runs unclustered, which is a state.
 func (f *FleetBroker) readGroup(ctx context.Context, live map[string]placement.NodeProfile) (
 	*jetstream.MetaGroup, string, string, bool) {
 
@@ -785,9 +709,8 @@ func (f *FleetBroker) readGroup(ctx context.Context, live map[string]placement.N
 		case a.how == askSilent:
 			why = append(why, a.member+" did not answer")
 		case a.reply.Group != nil:
-			// THE REST ARE ABANDONED, not awaited: the deferred cancel
-			// ends their asks, and the channel holds every answer, so
-			// none of them blocks on a reader that has gone.
+			// THE REST ARE ABANDONED: the deferred cancel ends their asks,
+			// and the buffered channel keeps any from blocking.
 			return a.reply.Group, a.reply.Node, "", false
 		default:
 			why = append(why, fmt.Sprintf("%s: %v", a.member, a.reply.errorOf()))
@@ -798,13 +721,11 @@ func (f *FleetBroker) readGroup(ctx context.Context, live map[string]placement.N
 }
 
 // brokerFindings holds what the nodes advertise against what the metadata
-// group counts. A group that could not be read yields only the findings the
-// presence rows carry on their own.
-//
+// group counts; an unread group yields only the presence rows' own findings.
 // BY PEER ID, both ways: a voter is the node whose id hashes to it, whatever
-// name — or none — the member that answered has for it. So a voter nobody can
-// name is still recognised as the live node it is, and a live member the group
-// counts under an unknown name is not reported uncounted.
+// name (or none) the answering member has for it, so a voter nobody can name
+// is still recognised as the live node it is, and a live member counted under
+// an unknown name is not reported uncounted.
 func brokerFindings(live map[string]placement.NodeProfile, group *jetstream.MetaGroup) []BrokerFinding {
 	out := []BrokerFinding{}
 	nodeOf := map[string]string{}
@@ -857,27 +778,18 @@ func brokerFindings(live map[string]placement.NodeProfile, group *jetstream.Meta
 	return out
 }
 
-// Remove removes a voter from the metadata group, through a live member's
-// system account.
+// Remove removes a voter from the metadata group through a live member's
+// system account. Unless forced, it is REFUSED while the voter's node holds a
+// live presence lease as a member or an unknown kind: a running member removed
+// rejoins as a voter at its next restart; one alive as a LEAF or a CLIENT
+// never rejoins. The voter never carries its own removal
+// ([jetstream.ErrRemovingSelf]): with no other member, it is refused, saying so.
 //
-// REFUSED WHILE THE VOTER'S NODE HOLDS A LIVE PRESENCE LEASE AS A MEMBER, or
-// without saying what its broker is, unless forced: a running member removed
-// from the group rejoins it as a voter at its next restart, so the gesture is
-// for a member that is gone for good, and the lease is the fleet's own evidence
-// that this one is not. A node alive under the voter's name as a LEAF or a
-// CLIENT is the member it was gone for good — its broker runs no JetStream and
-// never rejoins — so it is removed without force.
-//
-// THE VOTER NEVER CARRIES ITS OWN REMOVAL ([jetstream.ErrRemovingSelf]). With
-// no other member to carry it the gesture is refused, naming why.
-//
-// ONE DEADLINE, [BrokerRemoveWait], FOR THE WHOLE GESTURE: members are asked
-// one after another, in [FleetBroker.askOrder]; one that cannot carry it
-// answers at once and the next is asked inside what is left, and one that does
-// not answer ENDS the gesture — it may have proposed the change before it went
-// silent, and a second proposal through another member would answer as a
-// membership change in flight at best. What the operator is told then is that
-// the outcome is unknown ([ErrRemovalOutcomeUnknown]).
+// ONE DEADLINE, [BrokerRemoveWait], for the whole gesture, members asked in
+// [FleetBroker.askOrder]: one that cannot carry it answers at once and the
+// next is asked; one that does not answer ENDS it ([ErrRemovalOutcomeUnknown]),
+// since it may have proposed the change and a second proposal would at best
+// meet a membership change in flight.
 func (f *FleetBroker) Remove(ctx context.Context, req BrokerRemoval) (BrokerRemoved, error) {
 	peer, node, err := req.target()
 	if err != nil {
@@ -907,10 +819,9 @@ func (f *FleetBroker) Remove(ctx context.Context, req BrokerRemoval) (BrokerRemo
 	done := func(reply brokerReply) BrokerRemoved {
 		return BrokerRemoved{Node: node, Peer: peer, By: reply.Node, Group: reply.Group}
 	}
-	// cannotCarry is an answer that says nothing about the group: this member
-	// holds no metadata group to carry it through, does not know the
-	// operation, or ran nothing it was sent because it could not verify it.
-	// The next member is asked.
+	// cannotCarry is an answer that says nothing about the group: no metadata
+	// group, an unknown operation, or a request it could not verify and so
+	// ran nothing of. The next member is asked.
 	cannotCarry := func(reply brokerReply, err error) bool {
 		return errors.Is(err, jetstream.ErrNoMetaGroup) || errors.Is(err, errUnverifiedRequest) ||
 			reply.Code == brokerCodeUnknownOp
@@ -944,8 +855,8 @@ func (f *FleetBroker) Remove(ctx context.Context, req BrokerRemoval) (BrokerRemo
 				"(`crewlet fleet broker list`) before asking again",
 				ErrRemovalOutcomeUnknown, member, voterName(peer, node), BrokerRemoveWait())
 		case err != nil:
-			// AN ANSWER NOTHING HERE CAN READ OR BELIEVE from a member
-			// that heard the request: what it did is not known either.
+			// AN ANSWER NOTHING HERE CAN READ OR BELIEVE: what the member
+			// did is not known either.
 			return BrokerRemoved{}, fmt.Errorf("%w: %w", ErrRemovalOutcomeUnknown, err)
 		}
 		if err := reply.errorOf(); err != nil {

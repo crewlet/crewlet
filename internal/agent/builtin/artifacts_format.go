@@ -20,29 +20,21 @@ import (
 // ---- get_artifact_format ------------------------------------------------ //
 
 // ArtifactsToolSkillKey is the key of the tool skill that teaches the artifact
-// design contract (examples/tool-skills/artifacts.md), as create_artifact's
-// description names it: a description that named it in words ("the artifacts
-// tool skill") sent a model to load_tool_skill("artifacts"), which no
-// catalogue lists.
+// design contract (examples/tool-skills/artifacts.md). create_artifact's
+// description names the key, not the words: "artifacts" is no catalogue's key.
 const ArtifactsToolSkillKey = "skill:artifacts"
 
 // artifactFormat answers the exact format a kind's files are validated
-// against at publish, BEFORE the agent writes one.
-//
-// WHY A READ, AND WHY THE FORMAT PACKAGES WRITE IT. A turn on the Acme
-// engine (GP-38, a brand kit) spent fourteen rounds and eight minutes on
-// create_artifact refusals, one structural fault per attempt, and probed the
-// schema with keys it knew to be wrong to learn the keys it could write:
-// nothing it could read named `brand.json`'s shape. Each reference is built by
-// its format package from the form its strict decode reads with and the
-// constants its rules check against ([brandformat.Reference]), so what an
-// agent is told and what a publish admits are one source, and cannot drift.
+// against at publish, so an agent reads it before writing rather than learning
+// it from refusals. Each reference is built by its format package from its
+// strict decode's form and its rules' constants ([brandformat.Reference]), so
+// what an agent is told and what a publish admits cannot drift.
 type artifactFormat struct{}
 
 var _ tools.SeatCallable = (*artifactFormat)(nil)
 
 // formatReferences are the references by format: every format the kind table
-// validates, but none, which a kind with no closed format holds.
+// validates except [artifacts.FormatNone].
 var formatReferences = map[artifacts.Format]func() string{
 	artifacts.FormatBrand:     brandformat.Reference,
 	artifacts.FormatSlides:    slideformat.Reference,
@@ -109,8 +101,7 @@ func (t *artifactFormat) CallForTurn(_ context.Context, _ *turnctx.Turn,
 }
 
 // formatHint is the sentence a refusal of a kind's format ends with, pointing
-// at the reference rather than at another attempt; "" for a kind with no
-// reference.
+// at the reference; "" for a kind with no reference.
 func formatHint(kind artifacts.Kind) string {
 	spec, ok := kind.Spec()
 	if !ok {
@@ -125,13 +116,11 @@ func formatHint(kind artifacts.Kind) string {
 }
 
 // MaxRefusalFindings bounds the findings one policy refusal lists, so a
-// version far outside its format answers in a tool answer's room; the count of
-// the rest is said, and fixing those listed brings the rest into the next
-// answer.
+// version far outside its format still fits a tool answer; the rest are
+// counted, and surface on the next publish.
 const MaxRefusalFindings = 20
 
-// formatCodes are the policy codes a kind's closed format refuses with, and
-// the kind each is about.
+// formatCodes maps each closed format's policy code to its kind.
 var formatCodes = map[lint.Code]artifacts.Kind{
 	lint.CodeBrandFormat:     artifacts.KindBrand,
 	lint.CodeSlideFormat:     artifacts.KindSlides,
@@ -140,9 +129,9 @@ var formatCodes = map[lint.Code]artifacts.Kind{
 	lint.CodeDesignFormat:    artifacts.KindDesign,
 }
 
-// policyFindings is a policy refusal's findings as a model reads them: one
-// line each, at most [MaxRefusalFindings] with the count of the rest, and,
-// where they are a closed format's, where that format is read whole.
+// policyFindings is a policy refusal's findings as a model reads them: a line
+// each, at most [MaxRefusalFindings] plus the rest's count, and a closed
+// format's [formatHint].
 func policyFindings(findings []lint.Finding) string {
 	lines := make([]string, 0, min(len(findings), MaxRefusalFindings)+2)
 	hinted := map[artifacts.Kind]bool{}

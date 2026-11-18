@@ -341,12 +341,13 @@ the end), and a delivery the link lost. A placement that delivered nothing is
 followed by the next a second after it, so a broker that refuses every pull is
 asked for a consumer once a second, not as fast as it answers. Each placement
 after a table's first logs `memory_replay_placed_again`, with the reason
-(`behind`, `gone`, `unpulled` or `gap`) and what the broker or the link said
-(`detail`: a refusal's status line, a lost delivery's counts). A replay that
-nothing has been delivered to for a minute, across every placement and
-whatever each ended with, refuses the seat, until the next sweep, rather than
-admitting it without its newest memory, and names what ended its last
-placement. A pull asks no more messages than the consumer it was given takes:
+(`behind`, `gone`, `unpulled`, `gap`, or `quiet` across a link, below) and what
+the broker or the link said (`detail`: a refusal's status line, a lost
+delivery's counts, what the link carried). A replay that nothing has been
+delivered to for a minute, across every placement and whatever each ended
+with but `quiet`, which neither starts nor reads that minute (below), refuses
+the seat, until the next sweep, rather than admitting it without its newest
+memory, and names what ended its last placement. A pull asks no more messages than the consumer it was given takes:
 a server whose JetStream limits set `max_request_batch` gives every consumer
 that limit, and refuses a pull asking more.
 
@@ -380,14 +381,14 @@ leads after an election does, is published again, as a read the leader did not
 answer is asked again: the hydration's first barrier two seconds later, and an
 end barrier, whose acknowledgement queues behind the rest of its replay's
 pull, once that pull's bytes could have arrived too (asked again at 10 seconds
-in a member's own process at the broker's limit, and at 17.5 across a link at
+in a member's own process at the broker's limit, and at 6.2 across a link at
 the window below). Published twice, it is one barrier, the later.
 
 **A hydration has no deadline: it takes what its bytes take.** Time refuses it
 only where nothing arrives. A pull that hears nothing at all (no row, no
 barrier, no heartbeat, no status) for its **stall**, the client's five-second
 request term and what the pull's bytes take to arrive, refuses the seat: 13
-seconds in a member's own process, 20.5 across a link at the window below, and
+seconds in a member's own process, 9.1 across a link at the window below, and
 about 253 for a pull of one row at the broker's limit across a link at the
 floor of thirty seconds a mebibyte. The stall counts from the pull's last word
 or the return of the replay's own end barrier, never from before it, and a
@@ -409,7 +410,60 @@ to thirty seconds and its pull's arrival, each consumer's creation is asked as
 a write, for up to thirty seconds, and a deletion is hygiene, one request of
 five seconds, whose failure leaves the consumer for the broker to reap once it
 has had no pull for longer than a live replay goes between two (46 seconds in
-a member's own process, about nine minutes across a link).
+a member's own process, about thirteen minutes across a link). Across a link,
+each of those bounds runs only while the link is still (below).
+
+**Across a link, silence is the link's.** A node whose connection crosses a
+link (a satellite's leaf link, or a dial to an external cluster) meters it at
+its own socket: the bytes it read, and the bytes the far end acknowledged of
+what it wrote ([what a satellite still needs](../guides/satellite-nodes.md#what-a-satellite-still-needs)).
+Neither the broker nor the client sees a message cross until its last byte is
+in, so a replay whose rows wait on the link behind the node's own download, or
+behind an event of megabytes, hears nothing for as long as that takes, and
+only the link says whether anything is crossing. So a replay that hears
+nothing for its stall is refused for **silence** only where its link carried
+less than seven tenths of the floor over that stall, in either direction; the
+error says what the link carried. While the link moves, the replay waits, and
+is judged again every second, over the stall before each judgment, its
+consumer asked about itself before each as before the stall; a link that falls
+still ends the wait within a stall and a second of its last byte. Two caps
+hold the wait:
+
+- **Placed again past one message and a window.** Once the link has read one
+  message at the broker's limit and one of the replay's pulls since the replay
+  last heard anything (8.5 MB across a link), the replay is placed
+  again on a copy the broker chooses afresh (`memory_replay_placed_again`,
+  `why=quiet`): on a link of 100 Mbit/s, under a second's worth. The figure is
+  a choice, not a bound on what the link may carry ahead of a word: the
+  replay's own bytes ahead of it are one pull's, since it keeps one pull out
+  at a time, and the cap allows one other message at the broker's limit; any
+  number of other messages may be ahead, and the object store's transfers
+  ride the same connection. Behind more, the replay is placed again
+  needlessly, which costs the seat a consumer, and at worst is refused at the
+  cap below. Such a placement starts no minute of the replay being behind
+  (above), since the link it waits on carries other traffic, which may hold
+  its words longer than a minute.
+- **Refused at one pull at the broker's limit.** A replay that hears nothing
+  for the stall of one pull at the broker's limit since its last word, across
+  every placement (about 253 seconds at the floor), while its link moves too
+  slowly to reach the first cap, is refused: the link carries the node's other
+  traffic too slowly for the replay's words to cross, or the copy stopped
+  answering behind it.
+
+The identity reads, the barriers and each consumer's creation are held the same
+way: each is refused at its bound only where the link did not move over that
+bound, and is held past it while the link moves, by one message at the
+broker's limit crossing at the floor at most (about 248 seconds), asking
+nothing more past its bound and waiting for the requests already out. A
+member crosses no link and has no meter, and time alone refuses its
+hydrations. Where a link carries a hydration nothing (a dead link, a member
+that stopped answering on a quiet link), the seat is refused at the same
+stall as before; where it moves, a hydration that used to be refused behind a
+download or a large event completes. One case is slower than it was: a copy
+that stops answering altogether on a link saturated at the floor, which waits
+for the caps rather than its stall. A consumer that is gone, or a pull it
+never got, still answers the replay's probe behind the traffic and places it
+again sooner.
 
 Its fixed cost is round trips. Two read the changelog's identity, before the
 barrier and after the last table, and one publishes the barrier; each of the
@@ -426,9 +480,20 @@ another (at most four a pass), so the rest of that pass waits for it, and so
 does the next pass, with the releases it would make: a seat whose role was
 removed, a re-pin, a shed for capacity. So does anything else that takes that
 seat's lock, a sandbox apply preparing the held seats among them, and a seats
-node's first `/ready`, which waits for its first pass. None of it touches
-ownership: the seat's lease is renewed throughout, and a lost lease, a drain or
-a stop cuts the hydration rather than waiting for it (above).
+node's first `/ready`, which waits for its first pass. Across a moving link
+those waits are the longer ones above: a replay that hears nothing waits up to
+its 253-second cap, where a still link refuses it at its 9.1-second stall, and its
+identity reads, barriers and consumer creations up to 248 seconds past their
+bounds, about 278 seconds where they ended at 30 (282 for an end barrier,
+where it ended at 34.2). That is
+the price of not refusing a seat behind traffic that is crossing, and only a
+copy or a link that stops answering while other traffic keeps the link moving
+pays it in full; a link that falls still ends the wait within a stall and a
+second of its last byte, and a request's within its bound and a quarter of a
+second. None of
+it touches ownership: the seat's lease is renewed throughout, and a lost
+lease, a drain or a stop cuts the hydration rather than waiting for it
+(above).
 
 **A replay holds one pull of rows at a time, bounded in messages and in
 bytes.** A pull asks for at most 1024 messages, which sets how many round
@@ -438,21 +503,29 @@ for the subjects the broker counts beside it, which is what a hydration holds
 of the changelog's rows at once, and all it holds of them: an ordinary row of
 some 10 KiB fills a pull's bytes at about 795 rows, so a year of episodes takes
 23 pulls in a member's own process. **Across a link a pull carries a window**,
-what the link carries within one lease heartbeat at the floor of thirty seconds
-a mebibyte (512 KiB at the shipped lease, renewed every fifteen seconds),
-because the node's lease renewals cross the same link behind whatever pull is
-in flight, as the object store windows an upload. A row larger than the window
-crosses alone, in a pull of one message at the broker's limit. The window's
-price is round trips on a fast distant link: a year of episodes takes 368
-pulls, about a minute with its writes across 100 ms at 100 Mbit/s. What it does
-not cover is [#1035](https://github.com/crewlet/crewlet/issues/1035)'s, shared
-with uploads: a renewal's own five-second request term is shorter than a full
-window below 0.84 Mbit/s; the window is the hydration's own, and the object
-store's upload window is another on the same connection, so a renewal whose
-request crosses behind an upload and whose reply crosses behind a pull waits
-behind both, which misses its term below 1.68 Mbit/s at the shipped lease; and
-one row larger than the window holds the link for its own crossing. A memory
-row is bounded only by the broker (an episode keeps its ask whole), so a pull
+what the link carries in four seconds at the floor of thirty seconds a mebibyte
+(139,810 bytes), because the answer to every request the node sends after a pull
+on that link waits behind whatever of it is still crossing — a read, a small
+write or a lease renewal, on the coordination connection the replay and every
+renewal ride or on another crossing the same link — and each is held to a
+five-second term: a request behind a full window still has the second its own
+round trip needs, at every lease TTL, as the object store windows an upload. A
+row larger than the window crosses alone, in a pull of one message at the
+broker's limit. The window's price is round trips on a fast distant link: a
+year of episodes takes 1,380 pulls, about two and a half minutes with its
+writes across 100 ms at 100 Mbit/s. What it does not cover
+([#1035](https://github.com/crewlet/crewlet/issues/1035)): the window is the
+hydration's own, one for the link's inbound direction, and the object store's
+upload window is another, for its outbound, so a request whose bytes cross
+behind an upload and whose reply crosses behind a pull waits behind both, 7.75
+seconds at the floor beyond its own round trip, past its term, a lease renewal
+sent there among them; and nothing windows the rest of what crosses the link
+toward the node — a download holds four of the object store's 128 KiB messages
+in hand, fifteen seconds at the floor, for each download in flight, and an
+event for one of the node's seats crosses whole — so a request whose reply
+crosses behind them waits for all of it, a lease renewal among them. A pull's
+next row waiting there refuses no seat: the replay waits while the link moves
+(above). One row larger than the window holds the link for its own crossing. A memory row is bounded only by the broker (an episode keeps its ask whole), so a pull
 bounded by its rows alone
 held up to 256 rows of 8 MiB each, 2 GiB, inside seat acquisition
 ([#1052](https://github.com/crewlet/crewlet/issues/1052)). The broker sends a

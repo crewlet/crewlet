@@ -56,10 +56,9 @@ func TestEveryCellIsAnsweredAndOnlyADeclaredOneIsProbed(t *testing.T) {
 // revision that declares a cell is answered for at once, not five minutes
 // later.
 //
-// IN A SYNCTEST BUBBLE: synctest.Wait returns once the probe loop is blocked
-// again, which it is only after storing its answer. A signal sent from inside
-// the probe came before that store, and the beat was read as nil (CI run
-// 41766528494).
+// IN A SYNCTEST BUBBLE: synctest.Wait returns once the probe loop blocks again,
+// which is only after it stores its answer; a signal sent from inside the
+// probe precedes that store.
 //
 // Mutation: drop the store, or the kick's probe, and the beat carries no
 // answer or the boot probe's.

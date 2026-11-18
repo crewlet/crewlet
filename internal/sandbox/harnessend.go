@@ -7,78 +7,30 @@ import (
 )
 
 // HOW A JOB'S HARNESS ENDED, AND WHAT ITS NEWEST REQUEST CARRIED, ON THE JOB'S
-// OWN RECORD.
-//
-// A relaunch that carries a round on IN THE JOB'S OWN BOX — a person's answer to
-// a run that parked, or a sign-in replaced while it ran, where the relaunch
-// takes up no kept capture of the job ([LaunchRequest.Continue]) — continues the
-// copy of the session that box holds, and no capture's stamp tells it what that
-// copy is: a company that keeps no session takes none, and a capture the
-// relaunch does not continue — its keep still under way past the relaunch's
-// wait, or refused — is one the relaunch does not read. That copy holds every
-// call the job made — of one its harness gave up on, only that it timed out
-// ([BridgeCall.Abandoned]) — only where its harness ENDED ITS OWN RUN — the
-// job over, its harness gone cleanly by itself, its script packing it — by the
-// line a
-// capture's save point is drawn by ([readCapture], savepoint.go): a harness can
-// make a call, and have it answered, before it writes the call to its record
-// (measured on Claude Code 2.1.310), so one killed, crashed, told to stop or
-// ended on an error can leave a copy that lacks calls it made and had answered,
-// and one whose job ended before it started holds the session it was handed,
-// which never read the job's brief. Nor is a copy known to hold that brief: no
-// probe has measured whether 2.1.310 writes the message a continued session is
-// handed before it answers a call, and a copy whose job continued a session and
-// lacks it lacks everything that brief told. (Its first calls were measured
-// answered before a FRESH session's transcript file existed; a fresh session cut
-// off then leaves its box nothing to continue, and the relaunch starts a
-// session of its own.)
-//
-// So the read that collects a job ([Coordinator.readBox]) records how its
-// harness ended on the job's own record ([LaunchRecord.HarnessEnd],
-// [PendingStore.MarkHarnessEnd]), whether or not it takes or keeps a capture of
-// the session, and carries it back with the job's result ([Result.HarnessEnd])
-// for the claim it collects for, which was read before the record was written.
-// Unless the record says its harness ended its own run (internal/agent/runner's
-// Resume.HarnessEnd), a relaunch that carries the round on in the job's box
-// tells the session there that it was cut off — or, where nothing was
-// recorded, that it may have been — every call of the round and every note
-// the turn has read.
-//
-// THE JOB'S RECORD AND NO OTHER, because the fact is the job's: the turn's row
-// outlives each job on it, a capture's stamp exists only where a capture was
-// taken, and the job's record is replaced whole by the next launch
-// ([PendingStore.BeginLaunch]), which is after the relaunch that reads it has
-// written its briefs. A read made while the run's ending is decided — a stop's,
-// and the read a loss's ending makes ([Coordinator.keepLostSession]) — records
-// nothing: no relaunch carries that run's round on. A lost job whose round IS
-// carried on is read by a collection ([Coordinator.carryOnLost]), which records
-// it as any collection does.
-//
-// AND WHAT THE COPY'S NEWEST REQUEST CARRIED, on the same record in the same
-// write ([LaunchRecord.Context]). A relaunch that continues the copy a job's box
-// holds sends that session's whole context again before it reads a word of its
-// brief, so its floor is that context with the brief (internal/engine's
-// continuedFloor). A capture's stamp measures its archive as it is taken
-// ([SessionCapture.ContextTokens]), but a company that keeps no session takes
-// none, and a job's newest capture can be missing or unmeasured: such a copy
-// was held to the floor with its brief beside it whatever it carried, bounded
-// only by its harness's own compaction. So the read that collects a job takes,
-// off the run's own account of its requests ([Result.LastRequest]: Claude Code's
-// event stream, OpenCode's session message list as the job ends), what the
-// newest request of the copy's harness carried, its uncached input, cache reads
-// and cache writes, and records it beside the harness's end, with NO READ OF THE
-// BOX OF ITS OWN. A job that made no request of its own carries the figure along
-// its copy's lineage, and says where it came from ([MeasureSource]), so no
-// reader takes a carried figure for a fresh measure of the job: a relaunch that
-// continues the copy in place, the record of the job whose copy it is; one that
-// continues a kept capture, that capture's own measure; one that continues the
-// session the conversation's last turn left, the base's; a fresh one, none.
-//
-// AND WHAT CLAUDE CODE COUNTS THAT COPY AT before its next request
-// ([LaunchRecord.ResumedCount], resumed.go), as the same read found it in one
-// read of the job's main thread (mainthread.go), in the same write: never
-// carried, the read of this job's copy at its collection or nothing, so the
-// next launch's record starts with none.
+// OWN RECORD. A relaunch carrying a round on in the job's own box
+// ([LaunchRequest.Continue]) continues the copy that box holds, which no
+// capture's stamp describes and which holds every call the job made only where
+// its harness ended its own run ([readCapture]): Claude Code 2.1.310 can have a
+// call answered before it writes it, a job ended before its harness started
+// never read its brief, and a continued session's brief is not known written.
+// So the read collecting a job ([Coordinator.readBox]) records the end
+// ([PendingStore.MarkHarnessEnd]) and carries it to its claim, read before that
+// record ([Result.HarnessEnd]); a relaunch not finding its own run there tells
+// the session it was, or may have been, cut off, with every call of the round
+// and note the turn read (internal/agent/runner's Resume.HarnessEnd).
+
+// On the job's record because the fact is the job's: the turn's row outlives
+// it, and [PendingStore.BeginLaunch] replaces the record only after the
+// relaunch reading it wrote its briefs. A read made while the run's ending is
+// decided (a stop's, [Coordinator.keepLostSession]) records nothing, since no
+// relaunch carries that round on; [Coordinator.carryOnLost]'s collection
+// records as any does. The same write records [LaunchRecord.Context], what the
+// copy's newest request carried ([Result.LastRequest], with no read of the
+// box), the floor of a relaunch continuing the copy (internal/engine's
+// continuedFloor) where no capture measured it; a job that made no request
+// carries its copy's lineage's figure and says from where ([MeasureSource]).
+// And [LaunchRecord.ResumedCount], Claude Code's count of the copy
+// (resumed.go), never carried, so the next launch's record starts with none.
 
 // HarnessEnd is how a job's harness ended, as the read that collected the job
 // found it ([LaunchRecord.HarnessEnd]).
@@ -86,16 +38,15 @@ type HarnessEnd string
 
 const (
 	// HarnessEndOwnRun is a harness that ended its own run: the job over, its
-	// harness gone cleanly by itself, its script packing its session. The copy
-	// its box holds has every call it made, and the outcome of each but one it
-	// gave up on ([BridgeCall.Abandoned]), which it holds as timed out.
+	// harness gone cleanly by itself, its script packing its session. Its box's
+	// copy holds every call it made, one it gave up on as timed out
+	// ([BridgeCall.Abandoned]).
 	HarnessEndOwnRun HarnessEnd = "own_run"
-	// HarnessEndCutOff is every other end ([readCapture]): a harness killed —
-	// past its end's grace, by its memory limit, by a crash — told to stop, or
-	// gone with any status but 0 ([Result.HarnessCutOff]), as one that exits on
-	// an error is, its vendor's refusal of a replaced sign-in among them where
-	// it exits so; one whose job ended before it started, one whose box packed
-	// no session, and a job still working once its end was done.
+	// HarnessEndCutOff is every other end ([readCapture]): a harness killed
+	// (past its grace, by its memory limit, by a crash), told to stop, or gone
+	// with a nonzero status ([Result.HarnessCutOff]), a vendor refusing a
+	// replaced sign-in among them; a job ended before its harness started; a box
+	// that packed no session; and a job still working once its end was done.
 	HarnessEndCutOff HarnessEnd = "cut_off"
 )
 
@@ -106,19 +57,16 @@ var HarnessEnds = []HarnessEnd{HarnessEndOwnRun, HarnessEndCutOff}
 func (e HarnessEnd) Valid() bool { return slices.Contains(HarnessEnds, e) }
 
 // EndedOwnRun reports whether e says the job's harness ended its own run. An
-// end nobody recorded — a job an older build collected, one no collection read,
-// a record the coordination store did not take — says no, and so does a word
-// this build does not know: the safe direction, since a copy said to be whole is
-// told none of the calls it may lack.
+// unrecorded end (an older build's job, one no collection read, a write the
+// store refused) or a word this build does not know says no: the safe
+// direction, since a copy said to be whole is told none of the calls it may lack.
 func (e HarnessEnd) EndedOwnRun() bool { return e == HarnessEndOwnRun }
 
 // after is what a job's record holds once a read of the job finds read, where
-// it held e. CUT OFF ONCE, CUT OFF FOR THE JOB: a read that finds the harness
-// cut off is recorded over one that found it ended its own run, and never the
-// reverse, nor over a word this build does not know, which a later build may
-// have written for an end of its own; a read that says nothing changes nothing.
-// The safe direction again: a later read never says whole a copy an earlier one
-// found cut off.
+// it held e. CUT OFF ONCE, CUT OFF FOR THE JOB: a cut-off read replaces an own
+// run, never the reverse, nor a word a later build may have written; a read
+// that says nothing changes nothing. So no later read says whole a copy an
+// earlier one found cut off.
 func (e HarnessEnd) after(read HarnessEnd) HarnessEnd {
 	if !read.Valid() || (e != "" && e != HarnessEndOwnRun) {
 		return e
@@ -126,8 +74,8 @@ func (e HarnessEnd) after(read HarnessEnd) HarnessEnd {
 	return read
 }
 
-// harnessEnd is how the job's harness ended as this capture point found it: its
-// own run where the point is not cut off, by the one line both are drawn by.
+// harnessEnd is how the job's harness ended as this capture point found it:
+// the end and the save point are drawn by one line.
 func (p capturePoint) harnessEnd() HarnessEnd {
 	if p.cutOff {
 		return HarnessEndCutOff
@@ -137,10 +85,10 @@ func (p capturePoint) harnessEnd() HarnessEnd {
 
 // RequestMeasure is what the newest request of the session a job's box ran
 // carried, as the run's own account measured it ([Result.LastRequest]): its
-// uncached input, its cache reads and its cache writes, the input a launch that
-// continues the session sends again; and whether the job's own run made it,
-// rather than an earlier job of the session it took up (an OpenCode session's
-// newest request that measured a prompt can be one). Tokens 0 measured none.
+// uncached input, cache reads and cache writes, which a launch continuing the
+// session sends again. Own says the job's own run made it, not an earlier job
+// of the session (as OpenCode's newest prompt-measuring request can be).
+// Tokens 0 measured none.
 type RequestMeasure struct {
 	Tokens int64
 	Own    bool
@@ -169,10 +117,9 @@ const (
 // MeasureSources are the four.
 var MeasureSources = []MeasureSource{MeasureRequest, MeasureCapture, MeasureBase, MeasureSession}
 
-// Valid reports whether this build knows s. A record a later build wrote may
-// name a source this build does not know, which is read as the value it is: its
-// figure still holds the copy to a floor, and no reader takes it for a fresh
-// measure of the job, which only [MeasureRequest] is.
+// Valid reports whether this build knows s. A source a later build wrote is
+// kept as it is: its figure still holds the copy to a floor, and only
+// [MeasureRequest] is a fresh measure of the job.
 func (s MeasureSource) Valid() bool { return slices.Contains(MeasureSources, s) }
 
 // SessionMeasure is what the session a job's box ran carried at its newest
@@ -195,8 +142,8 @@ type SessionMeasure struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// ContextTokens is the figure m holds, 0 where there is none: a record with no
-// measure, and a figure that is no count of a session's context.
+// ContextTokens is the figure m holds, 0 where there is none: no measure, or a
+// negative figure.
 func (m *SessionMeasure) ContextTokens() int64 {
 	if m == nil {
 		return 0
@@ -244,12 +191,10 @@ type EndRead struct {
 }
 
 // counted is the count l, a job's record, holds once a read of the job found
-// read: the read's wherever it made one, a mark among them, so a later read of
-// the job that could not bound the copy replaces an earlier bound, which tells
-// more and never less; and l's own where the read made none (a read that asked
-// nothing, or a host of an older build). Held to what a record carries
-// ([ResumedCount.bounded]): a mark past its bound, or a restart past a uuid's
-// whatever the mark, is [CountUnread].
+// read: the read's wherever it made one, a mark among them, since a later read
+// that could not bound the copy tells more than an earlier bound; l's own where
+// it made none (it asked nothing, or an older build's host). Held to what a
+// record carries ([ResumedCount.bounded]).
 func (l LaunchRecord) counted(read *ResumedCount) *ResumedCount {
 	if read == nil {
 		return l.ResumedCount
@@ -258,29 +203,17 @@ func (l LaunchRecord) counted(read *ResumedCount) *ResumedCount {
 }
 
 // measured is the measure l, the record of job launch, holds once a read of the
-// job found read, the newest request its run's account measured:
+// job found read:
+//   - the job's own request: that figure, as the job's;
+//   - an earlier job's (OpenCode's newest prompt-measuring request): l's own
+//     where it holds that figure and the box did not say it started afresh,
+//     which says whose it is, else the figure as the session's;
+//   - none: l's, the lineage's, unless the box said it started afresh, an
+//     over-estimate at worst, the safe direction for a floor.
 //
-//   - one the job's own run made: that figure, a request of the job's own;
-//   - one an earlier job of the session made (OpenCode's newest request that
-//     measured a prompt, its step not among the run's own): the measure l
-//     carried where its figure is the read's and the job's box did not say it
-//     started a session of its own, which says whose it is, and else that
-//     figure, as the session's, whose job is not known;
-//   - none, where the job's box did not say it started a session of its own
-//     (it continued the one it was handed, never said which, or said it in a
-//     word this build does not know): the measure l carried, which is the
-//     copy's lineage's, an over-estimate where the box started afresh after
-//     all, the safe direction for a floor;
-//   - none, where the box said it started a session of its own: none, since
-//     what l carried is another session's.
-//
-// A figure that is no count of a session's context is none.
-//
-// AND THE RECORD'S OWN MEASURE WHERE IT SAYS THAT ALREADY, its Extra with it:
-// a collection made again (a claim handed back after a resume that failed) of
-// a job a later build collected first finds the measure that build wrote, with
-// its word on where the figure came from, and a measure built afresh would
-// drop that word in a write that changes nothing this build knows.
+// A non-positive figure is none. Where l already says the same, l's own is
+// kept, Extra with it: a collection made again of a job a later build collected
+// first must not drop that build's word in a write that changes nothing here.
 func (l LaunchRecord) measured(read RequestMeasure, launch string) *SessionMeasure {
 	var m *SessionMeasure
 	switch {
@@ -303,28 +236,17 @@ func (l LaunchRecord) measured(read RequestMeasure, launch string) *SessionMeasu
 }
 
 // markHarnessEnd records on run's job's record how its harness ended, what its
-// newest request carried and what Claude Code counts the copy at, as the read
-// that collects the job found them ([PendingStore.MarkHarnessEnd]), in ONE
-// WRITE: neither the measure nor the count adds a write of its own.
-//
-// UNDER A CONTEXT OF ITS OWN ([Coordinator.recordContext]), as the take's own
-// records are, within a teardown's grace and the time the run's row takes to
-// cross to the store: the record is owed to a relaunch that may come days
-// later, on another node — a person's answer — whatever becomes of this read's
-// context. AND IN THE ROOM THE READ LEAVES THOSE RECORDS
-// ([Coordinator.recordsBy], [Coordinator.takeRecordsRoom]), after the take,
-// which counts this write's crossing as the read's budget does
-// ([BoxReadBudget]): made before the take, a store slow to answer it cut the
-// take's time, and made past that room, the box's pause and the read's answer.
-// A record that does not land is said, and the job then reads as one whose
-// harness may have been cut off: a relaunch
-// that reads the record later carries its round on in its box telling the
-// session there what such a copy may lack, which it may already hold, and that
-// longer brief counts toward the launch's floor, beside the copy's context
-// where its record carries a measure of it and beside the static floor where
-// it carries none (internal/engine's continuedFloor). The claim this read
-// collects for is told what the read found whether or not the record landed
-// ([Coordinator.collectClaimed]).
+// newest request carried and what Claude Code counts the copy at
+// ([PendingStore.MarkHarnessEnd]), in ONE write. Under a context of its own
+// ([Coordinator.recordContext]), since a relaunch may read it days later on
+// another node; after the take, in the room the read leaves its records
+// ([Coordinator.recordsBy], [Coordinator.takeRecordsRoom], [BoxReadBudget]):
+// made before the take, a slow store would cut the take's time, and past that
+// room, the box's pause and the read's answer. A record that does not land is
+// logged, and a later relaunch reads the harness as maybe cut off, telling its
+// session what it may already hold in a longer brief counted toward its floor
+// (internal/engine's continuedFloor); the claim is told what this read found
+// either way ([Coordinator.collectClaimed]).
 func (c *Coordinator) markHarnessEnd(ctx context.Context, run PendingRun, read EndRead) {
 	markCtx, cancel := c.recordContext(ctx, c.recordsBy(ctx))
 	defer cancel()

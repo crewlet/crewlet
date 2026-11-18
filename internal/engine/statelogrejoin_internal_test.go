@@ -30,33 +30,19 @@ import (
 
 // A NODE THAT FALLS BELOW THE FLOOR WHILE RUNNING ADOPTS WITHOUT A RESTART.
 //
-// # Why this is the case that matters
-//
-// Falling below the trim floor is what happens to a node that was paused,
-// partitioned or slow for longer than the log's replay window — and such a
-// node is RUNNING when it finds out. Until this existed the state was
-// detected (its reads refused `below_floor`, its seats moved) and repaired
-// only by a restart an operator had to know to perform; the join ran at boot
-// and nowhere else.
-//
-// # The staging
-//
-// The node's appliers are halted so two records land on its log that it never
-// applies, and the log is purged past them — which is exactly what the fleet's
-// trim does to a node that has been away. A donor is stood up on the same
-// broker holding a snapshot of the node's own rows at the purged position,
-// which is what a peer that applied those two barriers would hold, since a
-// barrier writes no rows. Then one heartbeat's publish is run, which is what
-// notices: the heartbeat running it again on every tick is
-// [TestTheHeartbeatPublishesOnEveryTickAndNudge]'s, and waiting here for its
-// next ten-second tick certified nothing that case does not.
+// A node paused, partitioned or slow past the log's replay window is RUNNING
+// when it finds out, so the join cannot run at boot alone. Staging: appliers
+// halted, two barriers land unapplied, the log is purged past them (what the
+// fleet's trim does), and a donor on the same broker holds this node's rows at
+// the purged position, as a peer would (a barrier writes no rows). One
+// heartbeat publish is run rather than waited for: the per-tick publish is
+// [TestTheHeartbeatPublishesOnEveryTickAndNudge]'s.
 func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
 	running, at, last := pushBelowTheFloor(t, e, q)
 
-	// THE DONOR: this node's own rows at the purged position, which is
-	// what a peer that applied those barriers holds.
+	// THE DONOR: this node's own rows at the purged position.
 	donorDir := t.TempDir()
 	replicated := filepath.Join(donorDir, "crewlet-replicated.db")
 	copyAdvancedTo(t, back, running, at, last, replicated)
@@ -89,9 +75,8 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 		Dial:   func(context.Context) (*nats.Conn, error) { return q.DialOwned() },
 		Newest: func() (statelog.Manifest, bool) { return manifest, true },
 		Path: func(m statelog.Manifest) string {
-			// THE NAME THE MANIFEST CARRIES, which is what the engine's
-			// own donor does: a name derived here would be a fourth
-			// independent derivation of what the file is called.
+			// THE NAME THE MANIFEST CARRIES, as the engine's own donor
+			// uses: never another derivation of the file's name.
 			return filepath.Join(snapDir, m.Artifact)
 		},
 	})
@@ -130,10 +115,9 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 		t.Fatalf("the newest adoption row names artefact %s, want the donor's %s",
 			recorded, manifest.SHA256)
 	}
-	// AND THE LEDGER LOST NOTHING: the ledger travels with the snapshot, so
-	// the adopter holds its donor's rows and inherits its donor's watermark —
-	// which says nothing lost, on a donor that never swept. An adopter that
-	// recorded a loss here would answer its own backlog `unknown`.
+	// AND THE LEDGER LOST NOTHING: it travels with the snapshot, so the
+	// adopter inherits its donor's watermark (no loss, on a donor that never
+	// swept). One recording a loss would answer its own backlog `unknown`.
 	rows, err := worklet.NewRows(back.Store.Replicated().Reader(), worklet.Domain{}.Stream())
 	if err != nil {
 		t.Fatalf("build the tracker's read seam: %v", err)
@@ -143,11 +127,10 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 			"ledger that travelled lost nothing, and every first attempt minted "+
 			"before the join would be refused", before, lost, err)
 	}
-	// AND ITS APPLIERS CAME BACK OVER THE ARTEFACT: a write this node makes
-	// is applied. Only a relaunched loop that got past its start check can
-	// apply it, and that check is the one a wrong artefact fails — so this is
-	// what holds the adoption to its promise. Its committed position says
-	// nothing of the kind: Rejoined moves it before anything is relaunched.
+	// AND ITS APPLIERS CAME BACK OVER THE ARTEFACT: only a relaunched loop
+	// past its start check, which a wrong artefact fails, applies this write.
+	// The committed position proves nothing: Rejoined moves it before any
+	// relaunch.
 	res, err := e.native.Load().writer.EvictNode(t.Context(), "op-after", "node-y")
 	if err != nil || res.Outcome != statelog.OutcomeApplied || res.Position.Generation != at.Generation {
 		t.Fatalf("a write after the adoption: %+v, %v (tracker applier stopped: %v) — "+
@@ -157,10 +140,9 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 	if ok, domain := e.SeatsServiceable(t.Context()); !ok {
 		t.Fatalf("the node cannot keep its seats after adopting: %s", domain)
 	}
-	// AND THE NEXT BEAT FINDS THE SAME HISTORY: a running node's heartbeat
-	// compares the record its checkpoint names with the log's record there
-	// every ten seconds, so an adoption the node only keeps until that beat
-	// is no adoption. Run once rather than waited for, as above.
+	// AND THE NEXT BEAT FINDS THE SAME HISTORY: every beat compares the
+	// checkpoint's record with the log's at that sequence, so an adoption
+	// kept only until then is none.
 	e.core.Load().log.publishPositions(t.Context())
 	if !e.StateLogHydrated(t.Context()) {
 		t.Fatal("the node withdrew its seats at the first heartbeat after " +
@@ -180,27 +162,15 @@ func TestANodeBelowTheFloorAdoptsWhileRunning(t *testing.T) {
 
 // A STOP THAT LANDS MID-REJOIN ENDS THE JOIN, AND WAITS FOR WHAT IT RELAUNCHED.
 //
-// # Why both halves
+// A running rejoin is a goroutine Stop waits for, and it relaunches the
+// appliers on its way out whatever the join concluded. So the ask must read
+// its context, or Stop sits out the offer window; and Stop must wait for the
+// rejoin before halting the appliers, or the set it relaunched runs on against
+// a store the caller closes next.
 //
-// A node that finds itself below the floor while running asks the fleet from a
-// goroutine the state log's Stop waits for, and that goroutine starts the
-// appliers again on its way out whatever the join concluded. Two things went
-// wrong on that path. The ask ignored the context it was given, so a Stop sat
-// out the rest of the offer window before anything else could shut down. And
-// Stop halted the appliers BEFORE it waited — found them already halted by the
-// rejoin, waited for the rejoin, and returned while the set the rejoin had
-// just relaunched was still running against a store its caller closes next.
-//
-// # The staging
-//
-// A SILENT listener on the offer subject tells the case the moment the rejoin
-// has asked, so the Stop lands inside the window rather than before the ask or
-// after it. A join collects until every donor it names has answered — every
-// live data node among them — so the window stays open only while one has
-// not: a live data node is named here whose donor never answers — one not up
-// yet, or gone — which is the window spent exactly as it would be in
-// production. The heartbeat's publish is run once rather than waited for, as
-// in [TestANodeBelowTheFloorAdoptsWhileRunning].
+// A silent listener on the offer subject marks the ask, so the Stop lands
+// inside the window; a live data node whose donor never answers (not up yet,
+// or gone) holds the window open, as in production.
 func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 	t.Parallel()
 	e, _, q := bootRejoinNode(t)
@@ -233,10 +203,9 @@ func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 		t.Fatal("the heartbeat never asked the fleet for a snapshot, so this " +
 			"case has no rejoin to stop")
 	}
-	// PAST THE ASK'S FLUSH, so the Stop lands in the collection itself: the
-	// listener hears the ask before the broker has answered the joiner's
-	// flush, and a Stop inside that flush says nothing about the window.
-	// An in-process broker answers a flush in microseconds.
+	// PAST THE ASK'S FLUSH: the listener hears the ask before the broker
+	// answers the joiner's flush, and a Stop inside it says nothing about the
+	// window. An in-process broker answers a flush in microseconds.
 	time.Sleep(200 * time.Millisecond)
 	s := e.core.Load().log
 	started := time.Now()
@@ -251,9 +220,8 @@ func TestAStopMidRejoinEndsTheJoinAndWaitsForItsAppliers(t *testing.T) {
 			"registered — nothing will ever join them, and they run against a " +
 			"store the engine closes next")
 	}
-	// HALF THE WINDOW, which separates the two outcomes with room on both
-	// sides: a Stop that sat the window out takes all of it less the
-	// settle above, and one that cancelled it takes a context switch.
+	// HALF THE WINDOW separates the outcomes with room on both sides: sitting
+	// it out takes all of it less the settle, cancelling a context switch.
 	if limit := statelog.OfferWindow / 2; took >= limit {
 		t.Fatalf("Stop took %s mid-rejoin — the join sat out the offer window "+
 			"(%s) rather than reading the context it was stopped through",
@@ -267,17 +235,15 @@ func bootRejoinNode(t testing.TB) (*Engine, *Backends, *jetstream.Queue) {
 	t.Helper()
 	n := openRejoinNode(t)
 	e := n.start(t)
-	// PRESENT, as a running data node is from its seat host's start: a join
-	// waits for the live data nodes' donors and no others, and this node's
-	// own is one of them.
+	// PRESENT, as a running data node is: a join waits for the live data
+	// nodes' donors only, this node's own among them.
 	presentAsDataNode(t, e, e.id)
 	return e, n.back, n.q
 }
 
-// rejoinNode is the node [bootRejoinNode] stands up, before it is started: a
-// case that has to reach its backends first — to put a register of its own in
-// front of the fleet's — or boot the same node a second time over them, starts
-// it itself.
+// rejoinNode is the node [bootRejoinNode] stands up, unstarted, for a case
+// that reaches its backends first (to front the fleet's register) or boots the
+// same node twice.
 type rejoinNode struct {
 	boot    config.Bootstrap
 	company *config.Company
@@ -291,16 +257,14 @@ func openRejoinNode(t testing.TB) *rejoinNode {
 	return openRejoinNodeOver(t, nil)
 }
 
-// openRejoinNodeOver is [openRejoinNode] with wrap, when it is not nil, round
-// the driver of the store the engine is handed ([store.Options.WrapDriver]) —
-// which the node's replicated estate is opened through too, so a case can
-// fail one step of an install as the store would.
+// openRejoinNodeOver is [openRejoinNode] with wrap, when not nil, round the
+// engine's store driver ([store.Options.WrapDriver]), which the replicated
+// estate opens through too, so a case can fail one step of an install.
 //
-// A SECOND HANDLE ON THE NODE'S FILE, beside the one [OpenBackends] opened:
-// that one is what the queue's publish listener writes the event log through,
-// and nothing detaches the listener, so closed early it would be written into
-// on every publish. The store shares a path's claim within a process, and the
-// first handle is closed after the queue that writes through it.
+// The wrapped store is a SECOND HANDLE on the node's file (a path's claim is
+// shared within a process): [OpenBackends]' handle is what the queue's
+// publish listener writes through, and nothing detaches the listener, so that
+// handle closes only after the queue.
 func openRejoinNodeOver(t testing.TB, wrap func(driver.Driver) driver.Driver) *rejoinNode {
 	t.Helper()
 	b := testBootstrap(t)
@@ -351,11 +315,10 @@ func (n *rejoinNode) start(t testing.TB) *Engine {
 	return e
 }
 
-// refusingHolds is a register whose every trim hold is refused, as a
-// coordination store that cannot take this node's write refuses it: a fault of
-// the joining node's own, which every offer would meet. asked counts the pins
-// it refused, so a case can tell a join that met the fault from one that never
-// asked.
+// refusingHolds is a register refusing every trim hold, as a coordination
+// store refusing this node's write does: a fault of the joiner's own, which
+// every offer would meet. asked counts the refusals, telling a join that met
+// the fault from one that never asked.
 type refusingHolds struct {
 	fleetRegister
 	asked atomic.Int64
@@ -386,20 +349,17 @@ func (r *refusingPositions) Positions(ctx context.Context) ([]coord.NodePosition
 }
 
 // refuseInstalled is a driver wrapper ([store.Options.WrapDriver]) that, once
-// armed on the node's replicated file, refuses a connection to whatever file
-// is put at that path in its place — as a store that cannot open what it was
-// handed refuses it — and lets every connection to the file it was armed on
-// through. So a join over it reads, closes and replaces its estate as it
-// always does, and fails at exactly one step: opening the artefact its install
-// renamed into place.
+// armed on the node's replicated file, refuses connections to any file put at
+// that path in its place and lets the armed file through. So a join reads,
+// closes and replaces its estate as always, and fails at exactly one step:
+// opening the artefact its install renamed into place.
 type refuseInstalled struct {
 	mu      sync.Mutex
 	path    string
 	armedOn os.FileInfo
 
-	// refused counts the connections it turned away, so a case can tell a
-	// join that met the failure from one that never got as far as the
-	// install.
+	// refused counts the connections turned away, telling a join that met
+	// the failure from one that never reached the install.
 	refused atomic.Int64
 }
 
@@ -463,13 +423,11 @@ func trackerCheckpoint(t *testing.T, e *Engine) statelog.Position {
 	return at
 }
 
-// pushBelowTheFloor leaves a running node below its tracker log's floor, which
-// is exactly what the fleet's trim does to a node that has been away: its
-// appliers stop, two barriers land on the log that it never applies, and the
-// log is purged up to the second of them. It returns the tracker's running
-// domain, the position the node had applied, and the last sequence appended —
-// the position a peer that applied those barriers would hold, and, since a
-// purge at N leaves N itself, the log's first record.
+// pushBelowTheFloor leaves a running node below its tracker log's floor, as
+// the fleet's trim does to a node that has been away: [appendPastTheNode],
+// then a purge up to the second barrier. It returns the tracker's running
+// domain, the position the node had applied, and the last sequence appended:
+// a peer's position and, since a purge at N keeps N, the log's first record.
 func pushBelowTheFloor(t *testing.T, e *Engine, q *jetstream.Queue) (
 	running *runningLog, at statelog.Position, last uint64) {
 
@@ -513,11 +471,9 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 	if err != nil {
 		t.Fatalf("encode a barrier: %v", err)
 	}
-	// THE NODE HAS APPLIED HISTORY of its own before it falls behind: one
-	// barrier it applies, so its tracker rows hold a checkpoint, as every
-	// node that has been away does. Stated here rather than left to the
-	// collector's first pass, which writes no barrier when it has nothing
-	// to judge.
+	// THE NODE HAS APPLIED HISTORY of its own before it falls behind, so its
+	// tracker rows hold a checkpoint. Not left to the collector's first
+	// pass, which writes no barrier when it has nothing to judge.
 	if _, _, err := log.Append(t.Context(), spec.SubjectPrefix+"."+statelog.BarrierKind,
 		"", nil, running.signer.Seal(body)); err != nil {
 		t.Fatalf("append the node's own barrier: %v", err)
@@ -531,13 +487,10 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 	at = running.runner.Committed()
 
 	s.haltAppliers()
-	// AND NOTHING OF IT IS STILL WAITING ON THE LOG. The halted loop's
-	// last fetch leaves its request standing on the broker for the rest of
-	// its wait, and a record appended into it is DELIVERED — to the
-	// consumer's standing buffer, where the next loop on this handle takes
-	// it, which is the whole point of that buffer. A node that has been away
-	// long enough to fall below a floor has nothing standing, so the
-	// barriers below wait until nothing is.
+	// AND NOTHING OF IT IS STILL WAITING ON THE LOG: the halted loop's last
+	// fetch stays standing on the broker, and a record appended into it is
+	// DELIVERED to the consumer's buffer for the next loop. A node long away
+	// has nothing standing, so the barriers wait until nothing is.
 	waitUntil(t, 20*time.Second, "the halted loop's last request to end", func() bool {
 		cons, err := q.JetStream().Consumer(t.Context(), spec.Name, running.consumer.Name())
 		if err != nil {
@@ -558,18 +511,12 @@ func appendPastTheNode(t *testing.T, e *Engine, q *jetstream.Queue) (
 	return running, at, log, last
 }
 
-// copyAdvancedTo writes a copy of the node's replicated estate to path with its
-// tracker checkpoint advanced to last — what a peer holds that applied the
-// barriers past at, since a barrier writes no rows — and quiesces it, so the
-// file is self-contained for whatever opens or installs it.
-//
-// THE CHECKPOINT NAMES THE RECORD AT last, by the instant the broker stored it,
-// as a peer's commit of that barrier wrote it ([moveCheckpoint]). Advancing the
-// sequence alone left it naming the node's own record at at — another record
-// than the log holds at last, which the purge keeps — so the adopter's first
-// heartbeat found the log diverged from the rows it had just installed and
-// took its copy out of service, and a case that read the node before that
-// beat passed on the race.
+// copyAdvancedTo writes a quiesced, self-contained copy of the node's
+// replicated estate to path with its tracker checkpoint advanced to last: what
+// a peer holds that applied the barriers past at (a barrier writes no rows).
+// The checkpoint NAMES THE RECORD AT last by its broker instant, as a peer's
+// commit wrote it ([moveCheckpoint]); one naming the node's record at at reads
+// as diverged at the adopter's first heartbeat.
 func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 	at statelog.Position, last uint64, path string) {
 
@@ -595,17 +542,12 @@ func copyAdvancedTo(t *testing.T, back *Backends, running *runningLog,
 // quietTheCollector lets the object collector finish its first pass and stops
 // it, so nothing but the case itself appends to the tracker's log from here.
 //
-// A PASS THAT HAS AN OBJECT TO JUDGE PINS THE TRACKER'S ESTATE WITH A BARRIER
-// of its own, and the first runs as the node boots, on its own goroutine, whenever its duty claim and
-// its decline check come back — under load, now and then after the node
-// admits seats and after a case's first write. A case that reads the log's
-// end, or stages records at chosen sequences, around a pin landing where it
-// pleases is reading a log it does not know: a probe of the restored reanchor
-// case caught the pin 46 ms after the case's own write, between its copy of
-// the estate and its read of the checkpoint, and the donor it stood up named
-// a record the log did not hold at that sequence. Stopping it mid-pass is not
-// enough: a barrier's publish outlives the read that asked for it, so the
-// pass is waited out first.
+// A pass with an object to judge pins the tracker's estate with a barrier of
+// its own, and the first runs at boot on its own goroutine, landing whenever
+// its duty claim and decline check return, even after a case's first write: a
+// case reading the log's end or staging records at chosen sequences must not
+// race it. The pass is waited out, not stopped mid-way: a barrier's publish
+// outlives the read that asked for it.
 func quietTheCollector(t testing.TB, e *Engine) {
 	t.Helper()
 	waitUntil(t, 20*time.Second, "the collector's first pass to be recorded", func() bool {
@@ -617,14 +559,11 @@ func quietTheCollector(t testing.TB, e *Engine) {
 
 // moveCheckpoint moves db's checkpoint on at's stream to at, keyed to created,
 // NAMING THE RECORD log holds at that sequence by its broker instant, as every
-// checkpoint an applier commits does (statelog's setCursor): a checkpoint is a
-// record, not only a sequence. Moved by its sequence alone, a checkpoint goes
-// on naming the record it stood on before; the applier that loads it finds
-// another record there and stops, rightly, as diverged, and the staged rows
-// are ones no peer could hold. A case passed on them only while its waits beat
-// that stop. A checkpoint at sequence zero, or at one the log does not hold —
-// below a rebuilt log's first record, where a reanchor puts it — names no
-// record, as a reanchor's own checkpoint does.
+// checkpoint an applier commits does (statelog's setCursor). Moved by sequence
+// alone it would name the record it stood on before, and the applier loading
+// it stops as diverged. A checkpoint at sequence zero, or at one the log does
+// not hold (below a rebuilt log's first record, as a reanchor puts it), names
+// no record.
 func moveCheckpoint(t *testing.T, log *jetstream.DomainLog, db *store.DB,
 	at statelog.Position, created time.Time) {
 
@@ -669,25 +608,15 @@ func waitUntil(t testing.TB, within time.Duration, what string, cond func() bool
 
 // A LOST ESTATE IS REOPENED, AND ONLY THEN IS ANYTHING ASKED OF IT.
 //
-// A join whose install failed and whose rollback could not reopen the live
-// database — or one that installed an artefact and could not open it — leaves
-// the node with no replicated estate at all. Nothing else in a running node
-// reopens one: its appliers retry against ErrNoEstate, its reads refuse, and
-// every step of a join reads the estate that is gone. So the heartbeat's
-// restore opens it, and the rejoin then asks the ordinary question of what it
-// opened.
-//
-// Both answers are staged, each as a failed join leaves a node — appliers
-// halted, estate closed — with the heartbeat's own requests switched off so the
-// calls under test are the only ones. Below the floor, a lone node then finds
-// no donor, which is only reachable by a join that ran over an open estate.
-// With nothing missing — the state an earlier rejoin leaves when the artefact
-// it installed is what failed to open — the restore alone is the recovery.
-//
-// AND A REOPENED ESTATE NAMES EVERYONE TO THE LISTENER, because the file it
-// opened may be a donor's whose revocations no committed batch here ever named
-// — while a rejoin that found nobody to ask changed no row and says nothing,
-// which is the control.
+// A join whose rollback could not reopen the database, or that could not open
+// the artefact it installed, leaves no replicated estate, which nothing else in
+// a running node reopens and every step of a join reads. So the heartbeat's restore opens it, then the rejoin
+// asks of what it opened. Staged as a failed join leaves a node (appliers
+// halted, estate closed, heartbeat quiet): below the floor a lone node then
+// finds no donor, reachable only over an open estate; with nothing missing
+// the restore alone recovers. A reopened estate names everyone to the
+// listener, its file maybe a donor's whose revocations no batch here named;
+// a rejoin that found nobody changed no row and says nothing.
 func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -712,11 +641,9 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 			}
 			heard := &heardMoves{}
 			e.SetOnIdentityMoved(heard.hear)
-			// WHILE IT IS SHUT THE COPY IS NOT SERVED: every read of it
-			// fails, and with the appliers halted on a log nobody writes
-			// nothing else would ever call it wrong — so this node's own
-			// seats would be answered that failure rather than asked of
-			// a peer.
+			// WHILE IT IS SHUT THE COPY IS NOT SERVED: with the appliers
+			// halted nothing else calls it wrong, and this node's seats
+			// would be answered the failure rather than asked of a peer.
 			if v := s.judgeCopy(t.Context()); !v.shut || v.answers(worklet.Domain{}.Name()) {
 				t.Fatalf("a copy whose file is shut is judged %+v, want it shut — "+
 					"every domain's copy out of service at once", v)
@@ -757,12 +684,10 @@ func TestALostEstateIsReopenedBeforeAnythingIsAskedOfIt(t *testing.T) {
 
 // A JOIN NOBODY CAN DONATE TO ENDS ON THE FLEET'S ANSWERS, NOT ON THE WINDOW.
 //
-// A node below the floor refuses every read and write while it asks, and it
-// asked for the whole offer window whatever the fleet said: a donor holding
-// nothing stayed silent, and every data node runs a donor — the asking node's
-// own among them. So a lone node below the floor spent five seconds refusing
-// everything to hear itself say nothing. Its donor now declines, and the join
-// waits for the live data nodes it lists and no longer.
+// A node below the floor refuses every read and write while it asks. Every
+// data node runs a donor, the asker's own included, and one holding nothing
+// declines rather than staying silent, so the join waits for the live data
+// nodes it lists and no longer.
 func TestALoneNodesJoinEndsOnItsOwnDonorsAnswer(t *testing.T) {
 	t.Parallel()
 	e, _, q := bootRejoinNode(t)
@@ -774,10 +699,8 @@ func TestALoneNodesJoinEndsOnItsOwnDonorsAnswer(t *testing.T) {
 	if err := e.rejoin(s.run, s); !errors.Is(err, errNoDonor) {
 		t.Fatalf("a lone node's rejoin = %v, want %v", err, errNoDonor)
 	}
-	// HALF THE WINDOW, which separates the two outcomes with room on both
-	// sides: a join that waited for the window takes all of it, and one
-	// that stopped on its own donor's decline takes a round trip and the
-	// reads around it.
+	// HALF THE WINDOW: waiting it out takes all of it, stopping on its own
+	// donor's decline a round trip and the reads around it.
 	if took := time.Since(started); took >= statelog.OfferWindow/2 {
 		t.Fatalf("a lone node's join took %v — it waited out the %v offer "+
 			"window rather than stopping on its own donor's answer",
@@ -795,19 +718,14 @@ func quietHeartbeat(s *stateLog) {
 
 // AN INSTALLED ARTEFACT MOVES THE CONSUMERS, WHICHEVER STEP OPENS IT.
 //
-// A join that installs an artefact and then cannot open it leaves the DONOR'S
-// file under the node, at a checkpoint no consumer was ever moved to. Two
-// steps open it afterwards: the heartbeat's restore, and a rejoin that runs
-// over it once it is open and finds every domain CURRENT, because the artefact
-// is. Each must move every consumer to the file's checkpoint, or the broker
-// delivers everything in between for the applier to drop one at a time.
-//
-// The artefact is ahead of the node by two records the log still holds, so a
-// join over it finds it current rather than behind. What is read is the
-// broker's own consumer configuration, because only a reset writes it: an
-// applier relaunched over the file drains and drops the stale records either
-// way, and the runner's position comes from the checkpoint rather than from
-// the consumer — so neither says whether the consumer moved.
+// A join that installed an artefact and could not open it leaves the DONOR'S
+// file at a checkpoint no consumer was moved to. Both steps that open it later
+// (the heartbeat's restore, and a rejoin finding every domain current) must
+// move every consumer there, or the broker delivers everything between for the
+// applier to drop. The artefact is two records ahead, still on the log, so it
+// reads current. The broker's consumer config is read because only a reset
+// writes it: the applier drops stale records either way, and the runner's
+// position comes from the checkpoint.
 func TestAnInstalledArtefactMovesTheConsumersWhicheverStepOpensIt(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -871,17 +789,12 @@ func TestAnInstalledArtefactMovesTheConsumersWhicheverStepOpensIt(t *testing.T) 
 // A REJOIN WHOSE OWN RECORD FAILS AFTER THE INSTALL IS STILL AN ADOPTION.
 //
 // The rename is the join's point of no return: from it the donor's file is the
-// live database, open, with every applier resuming from its checkpoint. What
-// can still fail is this node's HISTORY row of the adoption, in the node
-// estate — a different file, with writers of its own while the node runs.
-// Reported as "no donor", the rejoin skipped everything an adoption owes: no
-// consumer was moved to the file's checkpoint, and no listener was told the
-// rows were replaced, so a dashboard socket a donor's rows had revoked kept
-// streaming the company — and the node, now current, never asked again, so
-// nothing ever told them.
-//
-// The row's advance is refused by a trigger on the node estate, which is the
-// store failing a write it was asked for and nothing else.
+// live database. A later failure of this node's HISTORY row (in the node
+// estate, another file) must not read as "no donor", which skips moving the
+// consumers and telling listeners the rows were replaced: a socket the donor's
+// rows revoked streams on, and the now-current node never asks again. A
+// trigger refuses the row's advance: the store failing that write, nothing
+// else.
 func TestARejoinWhoseRecordFailsAfterTheInstallIsAnAdoption(t *testing.T) {
 	t.Parallel()
 	e, back, q := bootRejoinNode(t)
@@ -953,11 +866,10 @@ func TestARejoinWhoseRecordFailsAfterTheInstallIsAnAdoption(t *testing.T) {
 // A REJOIN THAT MET A FAULT OF THIS NODE'S OWN REPLACED NOTHING, AND SAYS SO.
 //
 // The coordination store refuses the pin on the log's tail, which every offer
-// would meet: the join ends there, nothing was installed, and the live
-// database was never closed. So the rejoin must not announce the estate
-// replaced — that closes every dashboard socket on the node and resets every
-// artifact room, and it would do it again on every retry for as long as the
-// fault lasted — and must answer as a node still behind, so its retry widens.
+// would meet: nothing was installed or closed. So the rejoin must not announce
+// the estate replaced (closing every dashboard socket and resetting every
+// artifact room, on every retry), and answers as a node still behind, so its
+// retry widens.
 func TestARejoinThatMetAFaultOfItsOwnReplacesNothing(t *testing.T) {
 	t.Parallel()
 	n := openRejoinNode(t)
@@ -1000,14 +912,12 @@ func TestARejoinThatMetAFaultOfItsOwnReplacesNothing(t *testing.T) {
 // A REJOIN THAT FAILED BEFORE IT ASKED ANYBODY REPLACED NOTHING, AND SAYS
 // NOTHING.
 //
-// The join's first fleet read — the positions register, which names the
-// generation each log is on — is refused, as a coordination store that cannot
-// be reached refuses it. Nothing was asked, fetched or installed, and the live
-// database was never closed, so the rejoin fails with that refusal and must
-// not announce the estate replaced: that closes every dashboard socket on the
-// node and resets every artifact room, and it would do it again on every
-// retry for as long as the store stayed out of reach. The one failure that
-// does announce it is [TestARejoinThatCouldNotOpenWhatItInstalledSaysTheRowsWereReplaced]'s.
+// The join's first fleet read, the positions register, is refused as by an
+// unreachable coordination store. Nothing was asked, fetched, installed or
+// closed, so the rejoin fails with that refusal and announces nothing (which
+// would close every socket and reset every artifact room, on every retry).
+// The one failure that does announce is
+// [TestARejoinThatCouldNotOpenWhatItInstalledSaysTheRowsWereReplaced]'s.
 func TestARejoinThatFailedBeforeItAskedReplacesNothing(t *testing.T) {
 	t.Parallel()
 	n := openRejoinNode(t)
@@ -1051,14 +961,12 @@ func TestARejoinThatFailedBeforeItAskedReplacesNothing(t *testing.T) {
 
 // A REJOIN THAT COULD NOT OPEN WHAT IT INSTALLED SAYS THE ROWS WERE REPLACED.
 //
-// The install renamed the donor's file to the live path and the store would
-// not open it, so the node holds no replicated estate — and the file under it
-// is the donor's, whose revocations no committed batch here ever named. That
-// is [statelog.ErrEstateNotRestored], and it is the one failed join that
-// announces the rows replaced: the heartbeat's restore says it again once it
-// opens the file, which is a heartbeat away at the soonest and never while
-// the cause lasts, and until then nothing else names a socket the donor's
-// rows ended. The control is [TestARejoinThatFailedBeforeItAskedReplacesNothing].
+// The donor's file was renamed to the live path and the store would not open
+// it ([statelog.ErrEstateNotRestored]). Its revocations were never named here,
+// and the restore that announces them is a heartbeat away at the soonest
+// (never while the cause lasts), so this is the one failed join that
+// announces the rows replaced. The control is
+// [TestARejoinThatFailedBeforeItAskedReplacesNothing].
 func TestARejoinThatCouldNotOpenWhatItInstalledSaysTheRowsWereReplaced(t *testing.T) {
 	t.Parallel()
 	refuse := &refuseInstalled{}
@@ -1101,13 +1009,11 @@ func TestARejoinThatCouldNotOpenWhatItInstalledSaysTheRowsWereReplaced(t *testin
 
 // A BOOT WHOSE JOIN MET A FAULT OF ITS OWN COMES UP BEHIND.
 //
-// The same refused pin at boot. The node's own database is open and untouched
-// — the join never reached the install — so it is exactly a node nobody could
-// donate to: it comes up on the history it has, its coverage and seat admission
-// say what it cannot answer for, and it asks again on its widening interval.
-// Stopping the boot on it would make a coordination store that refused one
-// write a process exit, and a fault that lasts a crash loop paying the broker's
-// recovery on every attempt.
+// The same refused pin at boot. The join never reached the install, so this is
+// a node nobody could donate to: it comes up on its own history, its coverage
+// and seat admission say what it cannot answer for, and it asks again on its
+// widening interval. Failing the boot would turn one refused write into a
+// crash loop paying the broker's recovery on every attempt.
 func TestABootWhoseJoinMetAFaultOfItsOwnComesUpBehind(t *testing.T) {
 	t.Parallel()
 	n := openRejoinNode(t)
@@ -1147,22 +1053,14 @@ func TestABootWhoseJoinMetAFaultOfItsOwnComesUpBehind(t *testing.T) {
 // A LOST ESTATE IS REOPENED ON THE NEXT HEARTBEAT; THE FLEET IS ASKED ON ITS
 // OWN INTERVAL.
 //
-// The widening pause after a failed rejoin exists to bound how often the fleet
-// is asked, each ask an offer window the node spends refusing — and one that
-// finds a donor, a whole artefact's transfer. A reopen of this node's own
-// database asks nobody, and the node serves nothing until it succeeds. So the
-// two run on two schedules, and each case pins one edge between them:
-//
-//   - an ask that found no donor widens the pause, and the next heartbeat asks
-//     nobody;
-//   - an ask that lost the estate on its way out widens it too — it fetched,
-//     and the next ask would fetch again — while the next heartbeat still
-//     reopens the estate, and asks nothing;
-//   - a reopen that fails moves no schedule, and the heartbeat after the cause
-//     is gone reopens the estate and only then asks the fleet.
-//
-// The node's store is real, because what the heartbeat decides on is whether
-// that store has a replicated estate open.
+// The widening pause bounds how often the fleet is asked (an offer window spent
+// refusing, or a whole transfer); a reopen of the node's own database asks
+// nobody, and the node serves nothing until it succeeds. So they run on two
+// schedules: no donor widens the pause and the next beat asks nobody; a lost
+// estate widens it too (the next ask would fetch again) while the next beat
+// still reopens, asking nothing; a failed reopen moves no schedule, and the
+// beat after the cause reopens and only then asks. The store is real: the
+// heartbeat decides on whether it has a replicated estate open.
 func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) {
 	t.Parallel()
 	type harness struct {
@@ -1177,8 +1075,7 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 			store.Options{}, estateLogs())
 		t.Cleanup(func() { _ = db.Close() })
 		ctx, cancel := context.WithCancel(t.Context())
-		// THE NODE'S STORE IS WHAT A HEARTBEAT ASKS whether the replicated
-		// estate is open, so the harness's state log runs over this one.
+		// THE HEARTBEAT ASKS THIS STORE whether the replicated estate is open.
 		h := &harness{s: &stateLog{nodeID: "node-0", db: db,
 			run: ctx, stop: cancel}}
 		t.Cleanup(h.s.Stop)
@@ -1264,9 +1161,8 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 	t.Run("a reopen that fails", func(t *testing.T) {
 		t.Parallel()
 		h := boot(t, func(*harness) error { return errNoDonor })
-		// A DIRECTORY WHERE THE FILE WAS: the store cannot open it, for a
-		// reason an operator fixes, and it is fixed below by putting the
-		// file back.
+		// A DIRECTORY WHERE THE FILE WAS: an open failure an operator fixes,
+		// fixed below by putting the file back.
 		path := h.s.db.ReplicatedFile()
 		if err := h.s.db.CloseReplicated(); err != nil {
 			t.Fatalf("close the replicated estate: %v", err)
@@ -1311,18 +1207,12 @@ func TestALostEstateIsReopenedAtOnceAndTheFleetAskedOnItsInterval(t *testing.T) 
 
 // A RECREATION VERDICT ITS ROWS NO LONGER BEAR OUT IS RE-KEYED BY A JOIN.
 //
-// The join re-keys every runner to the file it leaves, against the live
-// instant it read; the restore of an estate a failed join left closed reads the
-// instant itself and cannot always. A runner whose re-key did not happen, over
-// rows keyed to a stream it has never read, judges them by the one instant it
-// has — and stops as recreated over rows that are the fleet's history, where a
-// reanchor refuses because the rows ARE keyed to the live stream. The heartbeat
-// reads the live instant every beat, so it is what names the verdict as stale
-// and asks for the join that re-keys it.
-//
-// The verdict is staged as a failed re-key leaves it: recorded against an
-// instant that is not the live stream's, over rows that are keyed to the live
-// stream.
+// A join re-keys every runner to the file it leaves against the live instant;
+// the restore after a failed join cannot always. A runner left un-re-keyed
+// judges rows keyed to the live stream by its stale instant and stops as
+// recreated, where a reanchor refuses because the rows ARE the live stream's.
+// The heartbeat reads the live instant every beat, so it names the verdict
+// stale and asks for the re-keying join. Staged as a failed re-key leaves it.
 func TestARecreationVerdictItsRowsNoLongerBearOutIsReKeyedByAJoin(t *testing.T) {
 	t.Parallel()
 	e, _, _ := bootRejoinNode(t)
@@ -1370,11 +1260,10 @@ func TestARecreationVerdictItsRowsNoLongerBearOutIsReKeyedByAJoin(t *testing.T) 
 
 // A RESTORE WAITS FOR A RECOVERY IN PROGRESS.
 //
-// The restore re-keys every runner to the checkpoint the file it reopens keeps,
-// and relaunches every applier. A reanchor between its reopen and that re-key
-// would have its new checkpoint re-keyed back to the one the restore read
-// before it, and its halted applier relaunched in the middle of its transition
-// — so the restore takes the same exclusion the join and the reanchor take.
+// The restore re-keys every runner to the reopened file's checkpoint and
+// relaunches every applier, so a reanchor between its reopen and re-key would
+// be re-keyed back and relaunched mid-transition: the restore takes the
+// exclusion the join and the reanchor take.
 func TestARestoreWaitsForARecoveryInProgress(t *testing.T) {
 	t.Parallel()
 	e, back, _ := bootRejoinNode(t)

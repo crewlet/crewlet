@@ -24,16 +24,12 @@ type ttlBackend struct {
 func (b ttlBackend) TTL() time.Duration { return b.ttl }
 
 // THE TTL IN FORCE IS WHAT THIS NODE ACQUIRES WITH, not the one its own file
-// asks for.
-//
-// The KV backend ADOPTS the lease bucket rather than rewriting it, so on a
-// fleet the TTL is whichever member created it first — and validateTTL refuses
-// a claim longer than the bucket's own age. A node that kept acquiring at its
-// configured value would, when configured LONGER, have every acquire refused:
-// it holds no seats at all while answering every health check, which is the
-// worst shape this failure has. Configured SHORTER is quieter and still wrong
-// — the heartbeat and the release budget are fractions of this number, so the
-// node would renew on a cadence the bucket outlives.
+// asks for. The KV backend ADOPTS the lease bucket, so on a fleet the TTL is
+// whichever member created it, and validateTTL refuses a claim longer than the
+// bucket's. Configured LONGER, every acquire is refused: the node holds no
+// seats while passing every health check. Configured SHORTER, it renews on a
+// cadence the bucket outlives, since the heartbeat and the release budget are
+// fractions of the TTL.
 func TestTheLeaseTTLInForceBeatsThisNodesOwnConfig(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -68,14 +64,12 @@ func TestTheLeaseTTLInForceBeatsThisNodesOwnConfig(t *testing.T) {
 	}
 }
 
-// THE DEFAULT LEASE TTL IS ONE A DEPLOYMENT COULD HAVE WRITTEN.
-//
-// An unset coordination.lease_ttl_seconds takes the seat layer's measured
-// constant here ([leaseTTL]), because config must not import it, and Tier A
-// refuses anything set below [config.MinLeaseTTL] for the watchdog's sake. The
-// two live in packages that cannot see each other, so a default lowered past
-// the floor would boot every deployment that set nothing on a TTL the floor
-// exists to refuse — the one place the rule would not reach.
+// THE DEFAULT LEASE TTL IS ONE A DEPLOYMENT COULD HAVE WRITTEN: an unset
+// coordination.lease_ttl_seconds takes the seat layer's constant here
+// ([leaseTTL]; config must not import it), and Tier A refuses a set one below
+// [config.MinLeaseTTL] for the watchdog's sake. The two packages cannot see
+// each other, so only this test keeps a lowered default from booting every
+// deployment that set nothing on a TTL the floor exists to refuse.
 func TestTheDefaultLeaseTTLIsNotBelowTheFloor(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -87,20 +81,14 @@ func TestTheDefaultLeaseTTLIsNotBelowTheFloor(t *testing.T) {
 }
 
 // A DATA NODE HOLDS THE REPLICATED ESTATE SIZED FOR THE WHOLE REGISTER, AND A
-// NODE WITHOUT `data` HOLDS NONE.
-//
-// Every domain's apply loop pins one connection of the replicated pool for its
-// life, and the pool is sized for exactly the logs it was opened for: a pin
-// short and the applier that finds none refuses at its first round, so its
-// domain's rows never move. Every DATA node runs every domain, so [holdEstate]
-// opens the estate for the whole register — and the store refuses opening it
-// again for any other count, so opening it for the register's count after
-// [holdEstate] is the check. Its own file pins nothing, since no apply loop
-// writes it ([storeOptions]).
-//
-// A node without data holds no estate at all: a scratch store, discarded at
-// every boot, that answers [store.ErrNoEstate] to every reach for one rather
-// than an empty database that reads as a company with nothing in it.
+// NODE WITHOUT `data` HOLDS NONE. Each domain's apply loop pins one connection
+// of the replicated pool for life, and an applier short of one never moves its
+// domain's rows; every data node runs every domain, so [holdEstate] opens the
+// estate for the whole register, and since the store refuses reopening it for
+// another count, reopening for the register's is the check. The node's own
+// file pins nothing: no apply loop writes it ([storeOptions]). A node without
+// data gets a scratch store, discarded at boot, answering [store.ErrNoEstate],
+// never an empty database that reads as a company with nothing in it.
 //
 // Mutation: size holdEstate's open from anything but the register and the
 // second open refuses; drop its role check and the stateless node holds one.

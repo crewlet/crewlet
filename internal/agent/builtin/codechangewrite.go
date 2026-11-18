@@ -21,65 +21,18 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE CHANGE WRITES: a seat's and a person's assistant's writes of a
-// repository's changes, made through a tool — a change opened, edited (its
-// title, description or work item, a draft's state, its target), closed and
-// reopened — each ONE write of Gitlet's change domain, decided where
-// the change is decided: a change's lifecycle by the repository's committer,
-// from its own chart (gitlet.ChangeProposal), on the repository's subject beside
-// its pushes. Every one is in [CodeTools] beside the reads and the other code
-// writes ([CodeWrites]), so a seat's registry and the operator catalogue take
-// one list, and each delivers to Gitlet's surface (gitlet.Source): a turn
-// woken about a change that answered by writing it delivered on the surface
-// the work came from.
-//
-// # Who may is the change's to say
-//
-// The gate admits every principal (`authz.ClassEverybody`), as it admits a
-// push: whether a caller may open a change from a branch — whether they may
-// push it — and whether they may steer one — its owner, a principal that
-// maintains the repository, or a person (the domain's rule D21) — is decided
-// by the repository's committer from its own chart, which no row keyed on the
-// verb can answer before the change is read. A person writes as the human seat
-// they hold; a credential bound to nobody writes nothing, refused before
-// anything is read or routed ([CodeDeps.writeCaller]). [changeToolNeeds] names
-// the least access each one's call may be admitted at — and, inside a seat's
-// turn somebody woke, the access the committer holds them to as well
-// (gitlet.ChangeProposal.Ceiling and gitlet.ConversationWrite.Ceiling, which every
-// write here carries beside whom it is made for, their WrittenFor, ADR-0109),
-// the seat's own work excepted.
-//
-// # One operation, so a retry is the same write
-//
-// Every call names its operation by the one rule every family of write tools
-// takes ([operations], [opIDFor]): verb `code-change`, object the repository's
-// id — bounded, so no branch or title carries an id past
-// statelog.MaxCallerOpIDBytes. An open's change is derived from it
-// (gitlet.OpenChangeID), so the same call made again — after an `unknown`, by a
-// re-run turn — opens the change the first opened, which the ledger collapses,
-// and never a second. A second write the call makes is a STEP of the first's
-// operation ([stepTwo]): an open's ask of its reviewers, made once the change
-// is open, so a repeat of the call asks them as the first did.
-//
-// # Each write is held to what its caller read
-//
-// An edit, a draft's state, a retarget, a close and a reopen name the version
-// of the change they were formed against (`expected_version`, Gitlet's
-// code_changes.version, which every read of the change answers and every write
-// of it answers anew): a change moved since — an edit, a push that moved its
-// head — refuses the write stale, and the caller reads it again. A write
-// asking for what the change already says is answered unchanged, with no
-// record. And each is decided at or past where its caller read: the
-// repository's resolution for an open, the call's own read of the change for
-// the rest (gitlet.ChangeProposal.Seen).
-//
-// # The work a change carries
-//
-// An open carries a work item: the one the turn is charged to, unless the call
-// names another — a Worklet item by its key, resolved by Worklet's own
-// read ([CodeDeps.Tasks]), or any tracker's by its identity, `<backend>:<id>`
-// — or `none`. A change implements one work item and carries no spend of its
-// own (the turn that opened it is charged as ever).
+// The change writes: a change opened, edited (title, body, work item, draft
+// state, target), closed and reopened, each ONE write the repository's
+// committer decides from its own chart (gitlet.ChangeProposal) beside its
+// pushes, delivered on Gitlet's surface (gitlet.Source). The gate admits
+// everybody (`authz.ClassEverybody`), as a push's does: who may open or steer
+// a change (rule D21) is the committer's to decide, which no verb-keyed row
+// can answer before the change is read. [changeToolNeeds] names each call's
+// least access; in a woken turn the Ceiling and WrittenFor every write carries
+// hold it to its waker's too (ADR-0109), the seat's own work excepted. Each
+// call's operation follows the package doc ("How a write is made once"), and
+// an open's change id derives from it (gitlet.OpenChangeID), so a repeated
+// open opens no second change.
 
 // The change write tools' names: each is its authority row's action.
 const (
@@ -111,23 +64,20 @@ func changeWriteTools(deps CodeDeps) []tools.Callable {
 		&codeRevertChange{deps: deps}}
 }
 
-// changeVerb is the verb a change write's operation is named by (m3-w1's op
-// rule): one for every change write, since the tool is in the arguments a
-// turn's id digests and in the name an operator's operation carries.
+// changeVerb names every change write's operation ([opIDFor]), its object the
+// repository's id, so no branch or title pushes an id past
+// statelog.MaxCallerOpIDBytes. One verb serves all: the tool is already in the
+// arguments a turn's id digests and in an operator's operation.
 const changeVerb = "code-change"
 
-// stepTwo names the second write of a gesture that makes two — an open's ask
-// of its reviewers — as a STEP of the first's operation
-// (statelog.StepOpID), so the same call made again makes the same second
-// write, which the ledger collapses.
+// stepTwo names the second write of a call that makes two (an open's ask of
+// its reviewers) as a STEP of the first's operation (statelog.StepOpID), so a
+// repeat makes the same second write, which the ledger collapses.
 //
-// ONE BYTE, BY ITS PLACE: the step's name rides an id of at most
-// statelog.MaxCallerOpIDBytes, and the operator's step of a change write's
-// operation is already 125 bytes at the longest change tool's name — its
-// operation (a UUID, the tool and a digest of its call) and the step that
-// names the verb and the repository — so the step's own name has room for two
-// bytes and its separator, and a word naming it would push every id past
-// what every party holds one to (TestEveryChangeWriteStaysInsideTheOpIDBound).
+// ONE BYTE: the operator's step of a change write's operation is already 125
+// bytes at the longest change tool's name, leaving the step's name two bytes
+// and a separator under statelog.MaxCallerOpIDBytes; a word would push every
+// id past it (TestEveryChangeWriteStaysInsideTheOpIDBound).
 const stepTwo = "2"
 
 // ---- the change a call names ------------------------------------------------ //
@@ -140,14 +90,12 @@ type changeWritten struct {
 	at     statelog.Position
 }
 
-// changeOf reads the change g names, at the seat's level — ONE read a call, of
-// its detail alone (gitlet.ReadQuery.DetailOnly: no write reads a revision),
-// held to the caller's grant on the repository where it is answered, and the
-// call's resolution of the repository too where the turn has none
-// ([changeRead.ask]) — for the id a write names it by and the position the
-// write is decided at or past. A detail naming another repository than the
-// one the turn resolved the name to is refused as a name taken again between
-// the two reads ([changeRead.read]).
+// changeOf reads the change g names: ONE seat-level read of its detail alone
+// (gitlet.ReadQuery.DetailOnly: no write reads a revision), held to the
+// caller's grant and resolving the repository where the turn has not
+// ([changeRead.ask]), for the id a write names and the position it is decided
+// at or past. A detail naming another repository than the turn resolved is
+// refused as the name taken again between reads ([changeRead.read]).
 func (d CodeDeps) changeOf(ctx context.Context, g *changeRead) (changeWritten, *tools.Result) {
 	answer, refusal := g.read(ctx, gitlet.ReadQuery{DetailOnly: true}, statelog.Position{})
 	if refusal != nil {
@@ -172,13 +120,12 @@ func (d CodeDeps) openSeen(c codeCaller, repo gitlet.RepoRef) statelog.Position 
 	return furthestOnLog(d.Code.FloorOf(repo.ID), repo.Position)
 }
 
-// mentionsOf is the handles texts name that are seats of the company
-// ([CodeDeps.Mentions]), each once in the order first named — what a change
-// write's Mentions carries (rule D38: a mention is resolved at the write, by
-// its asker, and held to the deciding node's chart there) — or the refusal of
-// a write naming more than gitlet.MaxMentions of them, made before anything is
-// read: the deciding node refuses that list anyway, and refusing here names
-// the bound rather than letting a mention go unheard.
+// mentionsOf is the company's seat handles texts name ([CodeDeps.Mentions]),
+// each once in first-named order, for a change write's Mentions (rule D38:
+// resolved at the write by its asker, held to the deciding node's chart), or
+// the refusal, before anything is read, of more than gitlet.MaxMentions: the
+// deciding node refuses that list anyway, and this names the bound rather
+// than letting a mention go unheard.
 func (d CodeDeps) mentionsOf(tool string, texts ...string) ([]string, *tools.Result) {
 	if d.Mentions == nil {
 		return nil, nil
@@ -199,9 +146,9 @@ func (d CodeDeps) mentionsOf(tool string, texts ...string) ([]string, *tools.Res
 	return out, nil
 }
 
-// expectedVersionArg is a write's `expected_version`, REQUIRED: the version of
-// the change the caller read, which every read of it answers — or the refusal
-// of a call that names none.
+// expectedVersionArg is a write's REQUIRED `expected_version`: the change's
+// code_changes.version the caller read, so a change moved since (an edit, a
+// push moving its head) refuses the write stale. Or the refusal of none.
 func expectedVersionArg(tool string, args map[string]any) (int64, *tools.Result) {
 	v := int64(argInt(args, "expected_version", 0))
 	if v < 1 {
@@ -231,10 +178,10 @@ func branchArg(tool, arg string, args map[string]any) (string, *tools.Result) {
 // noWorkItem is what `work_item` says to carry none.
 const noWorkItem = "none"
 
-// workItemArg is the `work_item` a call names — an item as
-// [CodeDeps.workItemOf] resolves one, or `none` — read before anything of the
-// change is: given false where the call names none, and clear where it names
-// `none`.
+// workItemArg is the `work_item` a call names, an item [CodeDeps.workItemOf]
+// resolves or `none`, read before anything of the change is: given false where
+// the call names none (an open then carries the turn's item), clear for
+// `none`. A change carries no spend of its own.
 func (d CodeDeps) workItemArg(ctx context.Context, tool string, args map[string]any) (item *types.WorkItem,
 	given, clear bool, refusal *tools.Result) {
 
@@ -256,21 +203,17 @@ func (d CodeDeps) workItemArg(ctx context.Context, tool string, args map[string]
 	return item, true, false, nil
 }
 
-// workItemAsked is whether a call names a `work_item` at all, read from the
-// argument's presence alone — so a call is judged by what it asks before
-// anything is read to resolve the item it names. A null one is no ask: the
-// entry leaves it out (toolargs.Of).
+// workItemAsked is whether a call names a `work_item`, from presence alone, so
+// a call is judged before anything is read to resolve it. A null one is no
+// ask: the entry leaves it out (toolargs.Of).
 func workItemAsked(args map[string]any) bool { return args["work_item"] != nil }
 
-// workItemOf is the work item a change write names: a Worklet item's key or
-// id, resolved by Worklet's own read ([CodeDeps.workletItem]) — bare, or
-// under Worklet's backend (`native:`) — or any other tracker's item by its
-// identity, `<backend>:<id>`; or the refusal, naming arg, of a name that is
-// none. A WORKLET ID IS READ TOO, never taken as named: a write files the
-// change under the item, and a change carrying an item that does not exist
-// names nothing it implements, so the write proves the task is there.
-// code_list_changes names its `work` the same way and resolves only what needs
-// resolving ([CodeDeps.listedWorkItem]).
+// workItemOf is the work item a change write names: a Worklet key or id, bare
+// or under `native:`, resolved by [CodeDeps.workletItem], or another
+// tracker's `<backend>:<id>`; or the refusal, naming arg, of a name that is
+// none. A WORKLET ID IS READ TOO: a change carrying an item that does not
+// exist names nothing it implements. code_list_changes names `work` the same
+// way but resolves less ([CodeDeps.listedWorkItem]).
 func (d CodeDeps) workItemOf(ctx context.Context, tool, arg, named string) (*types.WorkItem, *tools.Result) {
 	item, local, refusal := namedWorkItem(tool, arg, named)
 	if item != nil || refusal != nil {
@@ -281,21 +224,14 @@ func (d CodeDeps) workItemOf(ctx context.Context, tool, arg, named string) (*typ
 }
 
 // listedWorkItem is the work item code_list_changes' `work` names, spelled as
-// a change's row holds it, which is all the listing's reader takes. It is
-// named as a change write names one ([CodeDeps.workItemOf]), so ONE PART'S
-// TOOLS NAME AN ITEM ONE WAY and the key a seat was woken on lists the changes
-// a write filed under it.
-//
-// ONLY A KEY IS RESOLVED, through Worklet's own read. An identity — any
-// tracker's `<backend>:<id>`, or a Worklet id, bare or under `native:`
-// ([worklet.IsTaskID]) — is listed as named, with no read of the tracker,
-// because the write's proof that the task exists is no listing's business:
-// it would cost every listing by the identity a seat copied off a change's
-// row a second linearizable barrier, and a hop over the estate router on a
-// node that does not hold the estate, to prove nothing the listing uses. And
-// it would refuse a true answer: Gitlet does not follow a tracker
-// purge, so a change still carries an item whose task is gone, and that
-// change's siblings are listed by the item it carries.
+// a change's row holds it and named as a change write names one
+// ([CodeDeps.workItemOf]), so the key a seat was woken on lists the changes
+// filed under it. ONLY A KEY IS RESOLVED; an identity (`<backend>:<id>`, or a
+// Worklet id per [worklet.IsTaskID]) is listed as named. Proving its task
+// exists would cost every listing a second linearizable barrier (and an
+// estate-router hop off a data node) for nothing it uses, and would refuse a
+// true answer: Gitlet does not follow a tracker purge, so a change still
+// carries an item whose task is gone.
 func (d CodeDeps) listedWorkItem(ctx context.Context, tool, arg, named string) (*types.WorkItem, *tools.Result) {
 	item, local, refusal := namedWorkItem(tool, arg, named)
 	switch {
@@ -309,15 +245,12 @@ func (d CodeDeps) listedWorkItem(ctx context.Context, tool, arg, named string) (
 			"`native:<id>`, is listed as named")
 }
 
-// namedWorkItem parses a work item's name and reads nothing: another
-// tracker's item, `<backend>:<id>`, which is its identity and comes back
-// fitted; or the Worklet name, a key or an id, bare or under `native:`, left
-// as local for the caller to resolve; or the refusal, naming arg, of a
-// tracker named with no item in it. Every field is FITTED to the bound a
-// change's row holds a label to (gitlet.FitProvenance), as the run a seat's
-// write names is: an item is another system's label, copied as it arrived,
-// and never a reason to refuse a write — and a listing asks for the item as
-// its rows hold it.
+// namedWorkItem parses a work item's name, reading nothing: another tracker's
+// `<backend>:<id>`, fitted; a Worklet key or id, bare or under `native:`, left
+// as local for the caller to resolve; or the refusal, naming arg, of a tracker
+// named with no item. Every field is FITTED (gitlet.FitProvenance): an item
+// is another system's label, never a reason to refuse a write, and a listing
+// asks for it as rows hold it.
 func namedWorkItem(tool, arg, named string) (item *types.WorkItem, local string, refusal *tools.Result) {
 	backend, id, ok := strings.Cut(named, ":")
 	if !ok || !types.WorkBackend(backend).Valid() {
@@ -333,11 +266,10 @@ func namedWorkItem(tool, arg, named string) (item *types.WorkItem, local string,
 	return nil, id, nil
 }
 
-// workletItem is the Worklet item named, a key or an id, read by Worklet's
-// own read ([CodeDeps.Tasks]) so the item carries its identity — its id,
-// which a key renamed or moved does not change — beside the key a reader is
-// shown; or the refusal, naming arg, of a name no task holds, which why
-// closes.
+// workletItem is the Worklet item named, a key or an id, read through
+// [CodeDeps.Tasks] so it carries its id (which renaming or moving a key does
+// not change) beside its key; or the refusal, naming arg and ending with why,
+// of a name no task holds.
 func (d CodeDeps) workletItem(ctx context.Context, tool, arg, named, why string) (*types.WorkItem, *tools.Result) {
 	if d.Tasks == nil {
 		r := failed(fmt.Sprintf("%s: %q is no item this company's tracker can name here — Worklet "+
@@ -387,11 +319,9 @@ func (t *codeOpenChange) Description() string {
 		"carrying the turn's work item unless `work_item` names another, and asking `reviewers` once it is open."
 }
 
-// workItemParam is the `work_item` argument as the change writes describe it:
-// a Worklet item's key or id by Worklet's own rule — its id where the row
-// a model read it from carries `key_collision`, whose key opens the task that
-// claimed it first (workaddress.go's itemRef) — any tracker's identity, or
-// none.
+// workItemParam is the change writes' `work_item`: a Worklet key or id (the id
+// where the row read carries `key_collision`, whose key opens the task that
+// claimed it first: workaddress.go's itemRef), any tracker's identity, or none.
 func workItemParam() map[string]any {
 	return map[string]any{"type": "string",
 		"description": "Its key (ENG-42) or id — its id where you read it with `key_collision` — " +
@@ -428,9 +358,8 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		return *refusal, nil
 	}
 	// EVERY ARGUMENT FIRST, so a malformed call costs no read and mints no
-	// operation — the reviewers among them, since they are asked only once
-	// the change is open, and a call whose second write could never be made
-	// opens nothing.
+	// operation; the reviewers too, since a call whose second write could never
+	// be made opens nothing.
 	name, refusal := repoArg(tool, args)
 	if refusal != nil {
 		return *refusal, nil
@@ -475,11 +404,9 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if open.TargetRef == "" {
 		open.TargetRef = branchRoot + repo.DefaultBranch
 	}
-	// THE BRANCHES' HOLDS, before the open is sent ([CodeDeps.branch]): the
-	// change proposes what its source names onto what its target names, so
-	// each — where it is a seat's branch — is held as a read is, and a source
-	// the resolve finds missing is held with no read, as a write's is: both in
-	// one read and one Take.
+	// THE BRANCHES' HOLDS before the open is sent ([CodeDeps.branch]): source
+	// and target, where a seat's branch, are held as a read is, and a source
+	// the resolve finds missing as a write's is, in one read and one Take.
 	if refusal = t.deps.branch(ctx, turn, tool, c, repo, true, open.SourceRef, open.TargetRef); refusal != nil {
 		return *refusal, nil
 	}
@@ -506,12 +433,11 @@ func (t *codeOpenChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return newForeignRead(turn, c.asker.Seat).page(ctx, tool, out, "")
 }
 
-// reviewersArg is a call's list of reviewers to ask — handles, each a seat's
-// or the human seat a person holds — or the refusal of one no ask could name:
-// a handle no seat may have, past gitlet.MaxReviewersPerChange, or the caller
-// themselves, the change's author, whose review of their own change counts
-// for nothing. Refused before anything is written, so a call whose ask could
-// never be made writes nothing.
+// reviewersArg is a call's reviewers to ask (seat handles, a person's being
+// their human seat's), or the refusal, before anything is written, of one no
+// ask could name: a handle no seat may have, past
+// gitlet.MaxReviewersPerChange, or the caller, whose review of their own
+// change counts for nothing.
 func reviewersArg(tool, arg string, args map[string]any, asker gitlet.Principal) ([]string, *tools.Result) {
 	handles := argStrings(args, arg)
 	if len(handles) > gitlet.MaxReviewersPerChange {
@@ -533,14 +459,11 @@ func reviewersArg(tool, arg string, args map[string]any, asker gitlet.Principal)
 	return handles, nil
 }
 
-// askOpened makes an open's second write — the ask of the reviewers it names —
-// once the change is open (applied or pending: a pending open's change is on
-// the log, and the writer decides the ask at or past where it landed), as a
-// STEP of the open's operation, decided at or past the open's own record. An
-// open that landed nothing asks nobody. Whatever became of the ask is said on
-// the answer beside the change it was made of, never as the open's failure:
-// the change WAS opened, and a call made again to finish the ask opens nothing
-// twice.
+// askOpened makes an open's second write, the ask of its reviewers, once the
+// change is open (applied, or pending: on the log, so the ask is decided at or
+// past it), as a STEP of the open's operation. An open that landed nothing
+// asks nobody. The ask's fate is said beside the change, never as the open's
+// failure: the change WAS opened, and the same call again opens nothing twice.
 func (d CodeDeps) askOpened(ctx context.Context, c codeCaller, repo gitlet.RepoRef,
 	openOp string, opened gitlet.ChangeResult, reviewers []string, out *codeChangeWriteAnswer) {
 
@@ -562,9 +485,8 @@ func (d CodeDeps) askOpened(ctx context.Context, c codeCaller, repo gitlet.RepoR
 	case err != nil:
 		out.ReviewersNotAsked = notAsked(named, writeErrWords(err), sameCall(c.actor, CodeOpenChangeTool))
 	case res.Refusal != "":
-		// A REFUSAL IS REFUSED AGAIN by the same call, which opens nothing
-		// twice and asks the same reviewers: asking others is a call of its
-		// own, of the change the open made.
+		// A REFUSAL IS REFUSED AGAIN by the same call, which asks the same
+		// reviewers: asking others is a call of its own.
 		out.ReviewersNotAsked = notAsked(named, fmt.Sprintf("%s (%s)", res.Detail, res.Refusal), "") +
 			fmt.Sprintf(" Ask others with %s.", CodeRequestReviewTool)
 	case res.Outcome == statelog.OutcomeApplied || res.Outcome == statelog.OutcomePending:
@@ -575,10 +497,9 @@ func (d CodeDeps) askOpened(ctx context.Context, c codeCaller, repo gitlet.RepoR
 	}
 }
 
-// notAsked is the sentence of an open whose ask of its reviewers did not
-// finish: the change WAS opened, so opening it again is never the way — the
-// same call is the same operation, and finishes the ask where waiting clears
-// what stopped it (again, "" where this caller has no such repeat).
+// notAsked is the sentence of an open whose ask did not finish: the change WAS
+// opened, so the way on is the same call, never another open (again; "" where
+// this caller has no such repeat).
 func notAsked(change, why, again string) string {
 	said := fmt.Sprintf("The change WAS opened, as %s, but asking its reviewers did not finish: %s.", change, why)
 	if again != "" {
@@ -668,17 +589,14 @@ func (t *codeUpdateChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	return t.deps.steer(ctx, turn, tool, c, args, name, number, version, p)
 }
 
-// update is the one write a call's arguments ask for — an edit of what the
-// change says, a draft's state or a retarget — with every field but the
-// change's own ids, which the call fills once it has read the change, or the
-// refusal of a call that asks for none of them or for more than one.
+// update is the one write a call asks for (an edit, a draft's state or a
+// retarget) with every field but the change's ids, filled once it is read; or
+// the refusal of a call asking for none or more than one.
 func (t *codeUpdateChange) update(ctx context.Context, args map[string]any) (gitlet.ChangeProposal, *tools.Result) {
 	tool := t.Name()
 	var edit gitlet.ChangeEdit
-	// PRESENCE IS THE ASK, read by the check's own text reader: a null
-	// `title` never reaches a tool (the entry leaves it out, toolargs.Of),
-	// and an empty one is an edit to an empty title, which the change
-	// writer refuses by its own rule.
+	// PRESENCE IS THE ASK: a null `title` never reaches a tool (toolargs.Of),
+	// and an empty one is an edit the change writer refuses by its own rule.
 	if _, held := args["title"]; held {
 		title := argString(args, "title")
 		edit.Title = &title
@@ -687,10 +605,8 @@ func (t *codeUpdateChange) update(ctx context.Context, args map[string]any) (git
 		body := argString(args, "body")
 		edit.Body = &body
 	}
-	// THE ASK IS COUNTED BEFORE THE ITEM IS RESOLVED, from the arguments'
-	// presence alone: a Worklet key is resolved by a read of the tracker, and
-	// a call asking for more than one thing is refused without one, as the
-	// open refuses every malformed call before anything is read.
+	// COUNTED FROM PRESENCE, BEFORE THE ITEM IS RESOLVED: a Worklet key costs
+	// a tracker read, which a call asking for more than one thing never makes.
 	edits := edit.Title != nil || edit.Body != nil || workItemAsked(args)
 	_, draft := argval.Bool(args["draft"])
 	retarget := strings.TrimSpace(argString(args, "target")) != ""
@@ -794,12 +710,10 @@ func (t *codeCloseChange) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 
 // ---- a write of an existing change ------------------------------------------- //
 
-// steer makes a write of an existing change — p, an edit, a draft's state, a
-// retarget, a close or a reopen, with every field but its ids — named by its
-// number on repository name, held to the version its caller read: the
-// change read, ONE read at the seat's level for its id — the repository's
-// resolution too where the turn has none ([CodeDeps.changeOf]) — then the
-// write decided at or past that read, and its answer.
+// steer makes p, a write of change number on repository name with every field
+// but its ids, held to the version its caller read: ONE seat-level read of the
+// change for its id ([CodeDeps.changeOf]), then the write decided at or past
+// that read.
 func (d CodeDeps) steer(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	args map[string]any, name string, number, version int64, p gitlet.ChangeProposal) (tools.Result, error) {
 
@@ -814,9 +728,8 @@ func (d CodeDeps) steer(ctx context.Context, turn *turnctx.Turn, tool string, c 
 		return *refusal, nil
 	}
 	repo := g.repo
-	// A RETARGET OR A REOPEN DEPENDS ON A BRANCH — the target it moves the
-	// change onto, the source whose head it reopens at — so where that is a
-	// seat's branch it is held before the proposal is sent, as a read is
+	// A RETARGET OR A REOPEN DEPENDS ON A BRANCH (the new target, the source
+	// it reopens at), so a seat's branch is held first, as a read is
 	// ([CodeDeps.branch]).
 	held := ""
 	switch {
@@ -854,10 +767,10 @@ func (d CodeDeps) steer(ctx context.Context, turn *turnctx.Turn, tool string, c 
 	return newForeignRead(turn, c.asker.Seat).page(ctx, tool, out, "")
 }
 
-// codeChangeWriteAnswer is a change write's answer: the change, what became of
-// the write, and the version the caller's next write of it names — 0 where a
-// later record moved the change since, which is read again before it is
-// written.
+// codeChangeWriteAnswer is a change write's answer: the change, the write's
+// outcome (Unchanged, with no record, where it asked what the change already
+// says), and the version the caller's next write names (0 where a later
+// record moved the change, which is then read again).
 type codeChangeWriteAnswer struct {
 	Repo          string           `json:"repo"`
 	RenamedTo     string           `json:"renamed_to,omitempty"`
@@ -867,23 +780,19 @@ type codeChangeWriteAnswer struct {
 	Unchanged     bool             `json:"unchanged,omitempty"`
 	Version       int64            `json:"version,omitempty"`
 	Position      string           `json:"position,omitempty"`
-	// Reviewers are the reviewers an open asked once the change was open,
-	// and ReviewersNotAsked why it asked none: the change opened all the
-	// same.
+	// Reviewers are those an open asked once the change was open, and
+	// ReviewersNotAsked why it asked none: the change opened all the same.
 	Reviewers         []string `json:"reviewers,omitempty"`
 	ReviewersNotAsked string   `json:"reviewers_not_asked,omitempty"`
 	OpID              string   `json:"op_id,omitempty"`
 }
 
-// proposeChange asks the repository's committer to decide p as c asks it —
-// its asker, the ceiling whoever the turn works for bounds it by and whom it is
-// made for, the three stamped together here from the call's caller, the
-// carrier composed from the call's own bound ceiling and never from a tool's
-// arguments — held first to the rule every committer holds a proposal to
-// (gitlet.ChangeProposal.Validate), so one no node would decide is refused
-// naming its field before it is routed, and answers what it came to, or the
-// refusal the call is answered with: a refusal of the write in its class, an
-// outcome unknown, or a failure to reach any committer.
+// proposeChange asks the repository's committer to decide p for c: its asker,
+// ceiling and WrittenFor stamped together from the caller, never from a tool's
+// arguments, and held first to gitlet.ChangeProposal.Validate, so a proposal
+// no node would decide is refused naming its field before it is routed. It
+// answers what p came to, or the call's refusal: the write refused in its
+// class, an outcome unknown, or no committer reached.
 func (d CodeDeps) proposeChange(ctx context.Context, turn *turnctx.Turn, tool string, c codeCaller,
 	repo gitlet.RepoRef, p gitlet.ChangeProposal) (gitlet.ChangeResult, *tools.Result) {
 
@@ -926,19 +835,15 @@ func (d CodeDeps) converse(ctx context.Context, w gitlet.ConversationWrite) (git
 	return d.Writer.Converse(ctx, w)
 }
 
-// changeClass is the class a refusal of a change's lifecycle is answered in, by
-// the one rule a push's are ([pushClass]): a rule of the repository or the
-// change refusing the caller FORBIDDEN; a change that moved since the caller
-// read it STALE_VERSION; a branch already heading a live change EXISTS; a
-// write naming branches no change can be about INVALID — the fix is another
-// call; the change or its repository in a state that refuses the write until
-// somebody changes it CONFLICT — a change closed or merged, a repository
-// archived or a pull mirror, as a push's repo_archived and repo_mirrored are;
-// a repository or a change gone NOT_FOUND; and what waiting clears
-// UNAVAILABLE, the same call again being the same write — an import finishing
-// among it, as a push's repo_importing is. The two only a push's receiver
-// answers (ambiguous_source, bad_option) are INVALID on the same reading,
-// though no tool's write is ever refused either.
+// changeClass is the class a change lifecycle refusal is answered in, by
+// [pushClass]'s rule: a rule refusing the caller FORBIDDEN; a change moved
+// since read STALE_VERSION; a branch already heading a live change EXISTS;
+// branches no change can be about INVALID (the fix is another call); a state
+// refusing the write until somebody changes it CONFLICT (closed, merged, an
+// archived or pull-mirrored repository); gone NOT_FOUND; what waiting clears
+// UNAVAILABLE (an import finishing among it). The two only a push's receiver
+// answers (ambiguous_source, bad_option) are INVALID too, though no tool's
+// write draws them.
 func changeClass(r gitlet.ChangeRefusal) (tools.Refusal, bool) {
 	switch r {
 	case gitlet.ChangeRefusalNotPermitted:

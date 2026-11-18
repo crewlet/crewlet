@@ -39,10 +39,10 @@ func rotatedRound(t *testing.T, before run, rotated runner.Rotated) (*playLaunch
 }
 
 // A ROUND A REPLACED SIGN-IN CUT OFF IS CARRIED ON, NOT COLLECTED: the job was
-// refused on the credential it started with, which the entry no longer signs in
-// with, so the refusal is no account of the round. The same round is relaunched
-// continuing the job's own session where it runs in the job's box, told why, and
-// marked as a follow-up for this reason so it is not carried on again for it.
+// refused on a credential the entry no longer signs in with, so the refusal is
+// no account of the round. The round is relaunched continuing the job's own
+// session in the job's box, told why, and marked a follow-up for this reason so
+// it is not carried on again for it.
 //
 // Mutation: collect the refusal as resumeAgentRun does, continue no session, or
 // leave the launch unmarked, and this fails.
@@ -93,13 +93,12 @@ func TestARoundSubmittedBeforeTheRefusalIsCollected(t *testing.T) {
 	}
 }
 
-// A RESUME SAYS WHETHER IT CARRIES THE ROUND ON BY THE ONE DECISION IT TAKES. A
-// person's answer, a job lost with its host and one refused on a replaced
-// sign-in carry the round on — the latter two unless the round's calls hold its
-// submission since the last answer, when the round is collected — and a
-// completion is collected: what the engine records on the run as the resumed
-// turn begins, for every reader of whether a relaunch would continue the job's
-// session, and so the very branch [runner.Runner.Resume] takes.
+// A RESUME SAYS WHETHER IT CARRIES THE ROUND ON BY ONE DECISION: what the engine
+// records on the run as the resumed turn begins, for every reader of whether a
+// relaunch continues the job's session, and the branch [runner.Runner.Resume]
+// takes. A person's answer, a job lost with its host and one refused on a
+// replaced sign-in carry the round on, the latter two unless the round's calls
+// since the last answer hold its submission; a completion is collected.
 //
 // Mutation: answer a submitted loss or replaced sign-in as carried on, read a
 // submission made before the answer as the round's, or answer an answer as

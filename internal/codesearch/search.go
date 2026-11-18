@@ -49,8 +49,13 @@ type Query struct {
 	// and ref: filters — codeindex's one grammar.
 	Search codeindex.Query
 	// Limit is the most hits answered, 1 to gitlet.MaxSearchHits; 0 is
-	// gitlet.MaxSearchHits.
+	// gitlet.MaxSearchHits, or gitlet.MaxSearchContextHits asking Context.
 	Limit int
+	// Context is as gitlet.SearchQuery's: the lines around each hit, 0 to
+	// gitlet.MaxSearchContext.
+	Context int
+	// PerFile is as gitlet.SearchQuery's: the most hits of one file, 0 for every one.
+	PerFile int
 	// After, where set, is the place in the search's order the answer
 	// continues from ([Key]): the lines after it, Limit of them. A page of
 	// a long search is asked after the last line of the page before.
@@ -196,7 +201,9 @@ const MaxGrepRepos = 8
 // seat git-work share (gitlet.GitShareWait, 2 s), then the search's own budget
 // (gitlet.SearchBudget, 5 s) — and a reply's margin each way
 // (gitlet.ReplyMargin), so a node whose read ran its whole budget answers
-// while the asker listens. A SUM OF WHOLE BUDGETS (M3-O6), 9 s; a round ends
+// while the asker listens; a grep search's context pass, read after its
+// budget, ends at the answer's due instant, inside the same sum. A SUM OF
+// WHOLE BUDGETS (M3-O6), 9 s; a round ends
 // sooner, as soon as every node it asked has answered, and a search takes two
 // rounds only where a node did not answer the first.
 const RoundBudget = gitlet.GitShareWait + gitlet.SearchBudget + 2*gitlet.ReplyMargin
@@ -260,7 +267,7 @@ func (s *Searcher) Search(ctx context.Context, q Query) (Answer, error) {
 		return Answer{}, err
 	}
 	sq := gitlet.SearchQuery{Text: q.Search.Text, Mode: q.Search.Mode, IgnoreCase: q.Search.IgnoreCase,
-		Paths: q.Search.Paths, Ref: q.Search.Ref, Limit: q.Limit}
+		Paths: q.Search.Paths, Ref: q.Search.Ref, Limit: q.Limit, Context: q.Context, PerFile: q.PerFile}
 	var (
 		out Answer
 		via = "scatter"
@@ -311,9 +318,8 @@ func (e *RepoRefusal) Unwrap() error { return e.Err }
 
 // validate refuses what no node would answer.
 func (q Query) validate() error {
-	if q.Limit < 0 || q.Limit > gitlet.MaxSearchHits {
-		return fmt.Errorf("%w: limit: %d is not 1 to %d (0 is %d)", gitlet.ErrInvalid, q.Limit, gitlet.MaxSearchHits,
-			gitlet.MaxSearchHits)
+	if err := (gitlet.SearchQuery{Limit: q.Limit, Context: q.Context, PerFile: q.PerFile}).ValidateBounds(); err != nil {
+		return err
 	}
 	if err := q.Search.Validate(); err != nil {
 		return fmt.Errorf("%w: %w", gitlet.ErrInvalid, err)
@@ -824,7 +830,7 @@ func (s *Searcher) round(ctx context.Context, q Query, sq gitlet.SearchQuery, he
 	rctx, cancel := context.WithTimeout(ctx, RoundBudget)
 	defer cancel()
 	deadline, _ := rctx.Deadline()
-	req := Request{Version: Protocol, ID: signedask.NewID(), Deadline: deadline, Asker: q.Asker,
+	req := Request{Version: requestProtocol(sq), ID: signedask.NewID(), Deadline: deadline, Asker: q.Asker,
 		CeilingSeat: q.CeilingSeat, Turn: q.Turn, Fresh: q.Git, Head: head, Search: sq, Assign: assign}
 	sealed, err := s.wire.SealRequest(req)
 	if err != nil {
@@ -838,7 +844,7 @@ func (s *Searcher) round(ctx context.Context, q Query, sq gitlet.SearchQuery, he
 			s.log.Warn("code_search_reply_unreadable", "error", openErr)
 		case why != "":
 			s.log.Warn("code_search_reply_refused", "why", why)
-		case rep.Version != Protocol:
+		case rep.Version != req.Version:
 			s.log.Warn("code_search_reply_unreadable", "node", rep.Node, "version", rep.Version)
 		case assign[rep.Node] == nil:
 		default:

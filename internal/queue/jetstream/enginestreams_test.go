@@ -15,14 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// ENGINE STREAMS ARE WHAT A QUEUE PROVISIONS.
-//
-// A test that stands a broker up without the queue, so that its account holds
-// what a node's broker holds, provisions it from [EngineStreams]. What that
-// makes and what a queue opened with the same Config makes are the same
-// streams: read back from each broker rather than compared as the structs
-// that asked for them, every field of every stream alike but the creation
-// stamp, which each create mints for itself and both must carry.
+// ENGINE STREAMS ARE WHAT A QUEUE PROVISIONS: a test that provisions a bare
+// broker from [EngineStreams] gets the streams a queue opened with the same
+// Config makes, compared as each broker reports them, every field alike but
+// the creation stamp, which each create mints and both must carry.
 func TestEngineStreamsAreWhatAQueueProvisions(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

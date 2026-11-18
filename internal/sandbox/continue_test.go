@@ -7,10 +7,10 @@ import (
 	"time"
 )
 
-// askAndAnswer launches t1, has its job park on a question in the box it ran
-// in — its harness's session named by its launch — with one bridged call made
-// before it asked, and answers it, running relaunch inside the resume the
-// answer drives, as a turn that carries the run on does.
+// askAndAnswer launches t1, has its job make one bridged call and park on a
+// question in its box (its session named by its launch), and answers it,
+// running relaunch inside the resume the answer drives, as a turn that carries
+// the run on does.
 func askAndAnswer(t *testing.T, rig *coordRig, reap bool,
 	relaunch func(ctx context.Context, r PendingRun, asked *AskedRun),
 ) PendingRun {
@@ -65,14 +65,11 @@ func continuing(asked *AskedRun) LaunchRequest {
 	return req
 }
 
-// AN ANSWERED RUN CARRIES ON IN ITS OWN CONVERSATION, IN ITS OWN BOX. The run
-// that asked knew what it had read, tried and decided, and all of that is in
-// its harness's session in the box it asked from — so the relaunch continues that
-// session there, with the answer as its next prompt, rather than starting a
-// conversation told only the question and the answer. The session is the one
-// the job's launch named, never one its collection read off the box, which the
-// run's model could have rewritten. And the round goes on: the call the run
-// made before it asked is still the round's, on the row.
+// AN ANSWERED RUN CARRIES ON IN ITS OWN CONVERSATION, IN ITS OWN BOX: its
+// harness's session there holds what it read, tried and decided, so the
+// relaunch continues it with the answer as its next prompt. The session is the
+// one the job's launch named, never one read off the box, which the run's model
+// could have rewritten; and the call made before it asked stays the round's.
 //
 // Mutation: start the continued job on the round's brief with no session, park
 // the run on the session its collection read off the box, or empty the bridged
@@ -116,15 +113,11 @@ func TestAnAnsweredRunCarriesOnInItsOwnSessionInItsOwnBox(t *testing.T) {
 	}
 }
 
-// A CARRIED-ON JOB NUMBERS ITS CALLS AFTER THE ASKING JOB'S. The log keeps the
-// asking job's calls as the round's, and the collection that closes the round
-// reads the round's calls in the order the run made them, by their place
-// ([BridgeCall.Seq]): numbered from one again, the carried-on job's calls were
-// sorted in among the asking job's, its record, its reviewer's log and its
-// last submission with them. So the launch tells what serves the new job
-// where the log's calls end — the highest place, not the last call's, since a
-// call made first can finish last — and a job that starts a new round, whose
-// log starts afresh, is told zero.
+// A CARRIED-ON JOB NUMBERS ITS CALLS AFTER THE ASKING JOB'S. The collection
+// orders the round's calls by [BridgeCall.Seq], so numbered from one again the
+// new job's calls would sort in among the asking job's. The launch tells it the
+// highest place in the log, not the last call's (a call made first can finish
+// last); a job starting a new round, whose log starts afresh, is told zero.
 //
 // Mutation: tell Opened zero, or the place of the last call in the log's
 // list, and this goes red.
@@ -166,9 +159,8 @@ func TestACarriedOnJobIsNumberedAfterTheAskingJobsCalls(t *testing.T) {
 }
 
 // A RUN WHOSE BOX WAS RECLAIMED WHILE ITS QUESTION WAITED CARRIES ON FRESH.
-// Its session lived in that box, so there is nothing to continue: the job
-// starts a conversation of its own on the round's brief — which tells it the
-// question, the answer and the branch — in a fresh box.
+// Its session lived in that box, so the job starts afresh in a new box on the
+// round's brief, which tells it the question, the answer and the branch.
 func TestARunWhoseBoxWasReclaimedCarriesOnFresh(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -223,13 +215,10 @@ func TestAnAnsweredQuestionIsRedacted(t *testing.T) {
 }
 
 // A JOB CONTINUED IN ITS KEPT BOX STARTS ON FILES BROUGHT UP TO DATE. A kept
-// box runs no setup, and no poll reached it while it was paused, so a
-// credential file in it holds what the last poll of the asking job wrote —
-// expired, after a long enough wait for the answer. The job carried on acts on
-// the answer at once ("push it"), so the launch hands the box to the refresh
-// hook the waiters poll with, live again and named by the row, BEFORE the job
-// starts. A fresh box is not handed over: its setup has just written every
-// file from the launch's own values.
+// box runs no setup and no poll reached it while paused, so its credential
+// files may have expired, and the job acts on the answer at once; the launch
+// hands the box, live and named by the row, to the waiters' refresh hook BEFORE
+// the job starts. A fresh box is not handed over: its setup just wrote them.
 //
 // Mutation: drop the launch's call to the refresh, or move it after the job's
 // start, and this goes red.

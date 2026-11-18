@@ -8,9 +8,9 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// A RUN THAT CONTINUES A SESSION ASKS ITS HARNESS FOR THAT SESSION: deep work
-// parks on a proposal and its approval continues the same conversation in the
-// same box, so the brief is the next message in it rather than a new task.
+// A RUN THAT CONTINUES A SESSION ASKS ITS HARNESS FOR THAT SESSION: an approval
+// continues the parked conversation in the same box, so the brief is its next
+// message rather than a new task.
 func TestAClaudeRunContinuesTheSessionItIsGiven(t *testing.T) {
 	t.Parallel()
 	cmd := scriptOf(t, commandOf(claude(), sandbox.RunRequest{Brief: "approved", Resume: "4f1c-session"},
@@ -23,10 +23,9 @@ func TestAClaudeRunContinuesTheSessionItIsGiven(t *testing.T) {
 	}
 }
 
-// AN OPENCODE RUN CONTINUES THE SESSION IT IS GIVEN, without the `ses_` its
-// session report adds: OpenCode continues a session by being handed its id,
-// so a continued run that named a fresh one would answer an approval or an
-// answer in a conversation that never asked for it.
+// AN OPENCODE RUN CONTINUES THE SESSION IT IS GIVEN, with or without the `ses_`
+// its session report adds; naming a fresh one would deliver an approval or an
+// answer to a conversation that never asked for it.
 func TestAnOpenCodeRunContinuesTheSessionItIsGiven(t *testing.T) {
 	t.Parallel()
 	const session = "0123456789abcdef0123456789abcdef"
@@ -51,7 +50,7 @@ func TestAnOpenCodeRunContinuesTheSessionItIsGiven(t *testing.T) {
 type noResume struct{ executor.Harness }
 
 // A HARNESS THAT CANNOT CONTINUE A SESSION REFUSES A RUN THAT ASKS IT TO, rather
-// than start a new conversation the caller believes is the old one.
+// than start a new conversation the caller takes for the old one.
 //
 // Mutation: drop the resumer gate from Runner.Start, and the run starts.
 func TestARunnerThatCannotResumeRefusesToPretend(t *testing.T) {
@@ -64,14 +63,11 @@ func TestARunnerThatCannotResumeRefusesToPretend(t *testing.T) {
 }
 
 // AN OPENCODE RUN'S START NAMES BOTH SESSIONS ITS SCRIPT MAY START: the one it
-// continues, and — for a run that continues one — the session minted for its
-// script to start in that one's place where its box neither holds nor imports
-// it, which is the session its fall back runs under. What a relaunch carrying
-// the job's round on in its box reads which session that box holds from
-// ([sandbox.PendingRun.SessionRan]) is these and the box's word, so a start
-// that named another than the one its script falls back to would have the
-// round continued in a session the box never ran. A run that continues none
-// names no second session.
+// continues, and the one minted for the script to fall back to where the box
+// neither holds nor imports it. A relaunch reads which session the box holds
+// from these and the box's word ([sandbox.PendingRun.SessionRan]), so naming
+// any other fallback would continue the round in a session the box never ran.
+// A run that continues none names no second session.
 //
 // Mutation: name the continued session as the one the script starts of its
 // own, or none, and this goes red.

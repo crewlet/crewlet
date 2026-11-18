@@ -2,6 +2,7 @@ package engine_test
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -9,26 +10,23 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/engine"
+	"github.com/crewlet/crewlet/internal/learning/memsync"
 	"github.com/crewlet/crewlet/internal/objstore/natsobj"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/queue/jetstream/externaltest"
-	"github.com/crewlet/crewlet/internal/seat"
+	"github.com/crewlet/crewlet/internal/store"
+	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// A NODE'S UPLOADS SHARE THE WINDOW ITS BROKER KIND CALLS FOR, AT THE LEASE
-// IT HOLDS: the small one where its connection crosses a link to the stream —
-// a dial to an external cluster here, a leaf's link alike — because a lease
-// renewal queues behind whatever the puts have out there, sized by the
-// heartbeat of the lease IN FORCE; and the large one on a member's own
-// client, where nothing lies between. natsobj's own cases open the bucket
-// with the choice made for them; this holds the engine to making it, since a
-// node opened across a link with the member's window holds a renewal four
-// times as long at the floor, past its lease — and one opened with a window
-// sized for the shipped lease while it holds a shorter one does the same.
-//
-// The lease in force is the fleet's bucket's, which the first node to make it
-// set: a node configured for another TTL renews at the bucket's, and its
-// window follows that, not its own file.
+// A NODE'S UPLOADS SHARE THE WINDOW ITS BROKER KIND CALLS FOR: the small one
+// where its connection crosses a link to the stream — a dial to an external
+// cluster here, a leaf's link alike — because every request sent after a put
+// on that link waits behind whatever the puts have out, and the large one on
+// a member's own client, where nothing lies between. natsobj's own cases open
+// the bucket with the choice made for them; this holds the engine to making
+// it, since a node opened across a link with the member's window holds a
+// request sent behind it a minute at the floor, past its five-second term.
 func TestANodesUploadsShareTheWindowItsBrokerKindCallsFor(t *testing.T) {
 	t.Parallel()
 	// The windows natsobj gives, read from backends opened with the choice
@@ -55,9 +53,6 @@ func TestANodesUploadsShareTheWindowItsBrokerKindCallsFor(t *testing.T) {
 		}
 		return b.Window()
 	}
-	linkAt := func(ttl time.Duration) natsobj.Config {
-		return natsobj.Config{Replicas: 1, AcrossLink: true, LeaseHeartbeat: ttl / seat.HeartbeatRatio}
-	}
 	window := func(t *testing.T, b *config.Bootstrap) int {
 		t.Helper()
 		back, err := openBackends(t, b)
@@ -71,16 +66,14 @@ func TestANodesUploadsShareTheWindowItsBrokerKindCallsFor(t *testing.T) {
 		}
 		return objects.Window()
 	}
-	client := func(url string, ttl time.Duration) func(*config.Bootstrap) {
+	client := func(url string) func(*config.Bootstrap) {
 		return func(b *config.Bootstrap) {
 			b.Stream.Type = config.StreamNATS
 			b.Stream.URL = url
 			b.Stream.Token = externaltest.Token
 			b.Coordination.Type = config.CoordinationEmbeddedKV
-			b.Coordination.LeaseTTLSeconds = ttl.Seconds()
 		}
 	}
-	const shortLease = 15 * time.Second
 
 	t.Run("a member", func(t *testing.T) {
 		t.Parallel()
@@ -93,45 +86,80 @@ func TestANodesUploadsShareTheWindowItsBrokerKindCallsFor(t *testing.T) {
 	t.Run("a client of an external cluster", func(t *testing.T) {
 		t.Parallel()
 		url := externalBroker(t)
-		want, member := reference(t, url, linkAt(seat.SeatLeaseTTL)), reference(t, url, natsobj.Config{Replicas: 1})
+		want := reference(t, url, natsobj.Config{Replicas: 1, AcrossLink: true})
+		member := reference(t, url, natsobj.Config{Replicas: 1})
 		if want >= member {
 			t.Fatalf("natsobj's window across a link is %d and on a member's client %d; the case needs "+
 				"the first smaller to tell them apart", want, member)
 		}
-		if got := window(t, bootstrap(t, client(url, 0))); got != want {
-			t.Fatalf("a node dialling an external cluster at the shipped lease shares a window of %d "+
-				"messages, want the %d its lease renewals are sized for", got, want)
+		if got := window(t, bootstrap(t, client(url))); got != want {
+			t.Fatalf("a node dialling an external cluster shares a window of %d messages, want the %d "+
+				"a request queued behind it on the link is sized for", got, want)
 		}
 	})
-	t.Run("a client whose lease is shorter", func(t *testing.T) {
-		t.Parallel()
-		url := externalBroker(t)
-		want := reference(t, url, linkAt(shortLease))
-		if shipped := reference(t, url, linkAt(seat.SeatLeaseTTL)); want >= shipped {
-			t.Fatalf("natsobj's window on a %v lease is %d and on the shipped one %d; the case needs the "+
-				"first smaller to tell them apart", shortLease, want, shipped)
+}
+
+// A NODE'S MEMORY REPLAYS PULL THE WINDOW ITS BROKER KIND CALLS FOR: across a
+// link — a dial to an external cluster here, a leaf's link alike — a replay's
+// pull carries the window a request whose answer queues behind it on the link
+// is sized for, and in a member's own process the connection's whole bound.
+// memsync's own cases build the syncer with the choice made for them; this
+// holds the engine to making it, since a node across a link whose syncer was
+// built as a member's pulls up to 8 MiB at a time, which holds the answer to a
+// request sent behind it four minutes at the floor, past its five-second
+// term.
+//
+// Mutation: build the engine's syncer as a member's (memsync.Config's
+// AcrossLink false), and the client's half goes red.
+func TestANodesReplaysPullTheWindowItsBrokerKindCallsFor(t *testing.T) {
+	t.Parallel()
+	// The window memsync gives a syncer, read from one built with the choice
+	// made explicitly, so the case names no figure of its own.
+	reference := func(t *testing.T, url string, cfg memsync.Config) int {
+		t.Helper()
+		conn, err := nats.Connect(url, nats.Token(externaltest.Token))
+		if err != nil {
+			t.Fatalf("dial the external broker: %v", err)
 		}
-		if got := window(t, bootstrap(t, client(url, shortLease))); got != want {
-			t.Fatalf("a node dialling an external cluster with coordination.lease_ttl_seconds %v shares "+
-				"a window of %d messages, want the %d its own lease's renewals are sized for", shortLease,
-				got, want)
+		t.Cleanup(conn.Close)
+		js, err := jetstream.New(conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		db := storetest.OpenNode(t, filepath.Join(t.TempDir(), "node.db"), store.Options{})
+		s, err := memsync.New(db, js, func(handle string) string { return handle }, cfg)
+		if err != nil {
+			t.Fatalf("memsync.New with %+v: %v", cfg, err)
+		}
+		return s.Window()
+	}
+	url := externalBroker(t)
+	across := reference(t, url, memsync.Config{AcrossLink: true})
+	own := reference(t, url, memsync.Config{})
+	if across <= 0 || own != 0 {
+		t.Fatalf("memsync windows a pull across a link at %d bytes and in a member's own process at %d; "+
+			"the case needs a window across a link and none in a member's own process to tell the "+
+			"two apart", across, own)
+	}
+
+	t.Run("a member", func(t *testing.T) {
+		t.Parallel()
+		if got := engine.MemoryWindow(newEngine(t, engine.Options{})); got != own {
+			t.Fatalf("a member's replays pull a window of %d bytes, want none (%d): its own process "+
+				"crosses no link", got, own)
 		}
 	})
-	t.Run("a client adopting the fleet's lease", func(t *testing.T) {
+	t.Run("a client of an external cluster", func(t *testing.T) {
 		t.Parallel()
-		url := externalBroker(t)
-		// The fleet's first node makes the lease bucket at the shipped TTL;
-		// this one, configured shorter, renews at the bucket's.
-		window(t, bootstrap(t, client(url, 0)))
-		want := reference(t, url, linkAt(seat.SeatLeaseTTL))
-		if short := reference(t, url, linkAt(shortLease)); short >= want {
-			t.Fatalf("natsobj's window on a %v lease is %d and on the shipped one %d; the case needs the "+
-				"first smaller to tell them apart", shortLease, short, want)
-		}
-		if got := window(t, bootstrap(t, client(url, shortLease))); got != want {
-			t.Fatalf("a node configured for a %v lease on a fleet whose lease bucket holds %v shares a "+
-				"window of %d messages, want the %d the lease in force is renewed by", shortLease,
-				seat.SeatLeaseTTL, got, want)
+		b := bootstrap(t, func(b *config.Bootstrap) {
+			b.Stream.Type = config.StreamNATS
+			b.Stream.URL = externalBroker(t)
+			b.Stream.Token = externaltest.Token
+			b.Coordination.Type = config.CoordinationEmbeddedKV
+		})
+		if got := engine.MemoryWindow(newEngine(t, engine.Options{Bootstrap: b})); got != across {
+			t.Fatalf("a node dialling an external cluster pulls a window of %d bytes, want the %d a "+
+				"request whose answer queues behind it on the link is sized for", got, across)
 		}
 	})
 }

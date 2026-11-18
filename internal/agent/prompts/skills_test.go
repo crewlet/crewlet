@@ -108,12 +108,10 @@ func TestACatalogueFiresOnToolsAndServers(t *testing.T) {
 	excludes(t, worker(lead(), cat, nil, nil), "mcp:github", "skill:platform_mentions")
 }
 
-// A SERVER SKILL FIRES ON THE SERVERS THE SURFACE HOLDS, which is the set the
-// skill guard arms its triggers against, and never on the keys of the seat's
-// mcp_env. A block there names the seat's credentials, not a server it
-// reaches: a server the company turned off keeps every block that names it and
-// reaches nobody, and a shared server reaches every agent with no block at all.
-// Read off the keys, the catalogue offered the first and missed the second.
+// A SERVER SKILL FIRES ON THE SERVERS THE SURFACE HOLDS, the set the skill
+// guard arms against, never on the seat's mcp_env keys: a block names
+// credentials, not a reached server, so a turned-off server keeps its blocks
+// and a shared one reaches every agent with none.
 func TestAServerSkillFiresOnTheServersTheSurfaceHolds(t *testing.T) {
 	t.Parallel()
 	cat := allSkills()
@@ -204,8 +202,7 @@ func TestRequiredSkillsAreMarkedInEnforceablePhases(t *testing.T) {
 	contains(t, rv, "- `mcp:github` — GITHUB-SUMMARY")
 	excludes(t, rv, "(required — load before use)", "engine rejects calls")
 	// Nor is the reviewer told to LOAD anything: its only tool is its
-	// submission, and its loop asks again until it makes that call, so an instruction
-	// naming the loader is an instruction it can only fail.
+	// submission, so an instruction naming the loader is one it can only fail.
 	contains(t, rv, "## Tool skills")
 	excludes(t, rv, "load_tool_skill")
 

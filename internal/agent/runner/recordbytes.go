@@ -14,59 +14,18 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// A durable agent record keeps each of its variable payloads to a share of one
-// message, and says what it left out.
+// A durable agent record holds each variable payload (its calls, its model's
+// prose, its prompts, none bounded by a phase's caps) to a SHARE of one
+// message, measured as the event encodes it (internal/kept's Len), and says
+// what it cut. A phase's or turn's record is ONE event, and one past
+// internal/queue's MaxPayloadBytes is refused at publish ([emitter.publish]):
+// it does not arrive at all, with every fact of the phase. A record within
+// every share is published byte for byte as built.
 //
-// # Why shares
-//
-// A phase's record ([types.AgentPhaseCompleted]) and a turn's
-// ([types.AgentTurnCompleted]) are each ONE EVENT, and an event past the
-// queue's ceiling (internal/queue's MaxPayloadBytes, 8 MiB) is refused at its
-// publish, which logs and moves on ([emitter.publish]). So a record too large
-// does not arrive long. It does not arrive at all, and takes every fact of the
-// phase with it: what it spent, what it decided, why it failed, and, for a
-// turn's record, the end of the seat's live row.
-//
-// What grows on a record is what its phase was handed and made: the calls its
-// loop made, each with its arguments and its answer (a host phase's MCP tool
-// can answer megabytes, and a page of HTML is six bytes a `<` once escaped);
-// what its model said between them; and the prompts it was sent. None of them
-// is bounded by the number of calls or rounds a phase may make, and a turn's
-// record carries every phase's calls at once.
-//
-// So each such payload has a SHARE of the message, measured as the event
-// encodes it (internal/kept's Len: every escape counted), and a payload past
-// its share is kept in part with the cut said, never dropped in silence. A
-// record within every share is published as it was built, byte for byte:
-// nothing below changes an ordinary record.
-//
-// # The tool list
-//
-// A record's calls ([types.ToolExecution] rows) past [toolListBytes] are kept
-// as the run's own record keeps them (internal/sandbox's bridged call log),
-// in two tiers, each tried only where the one before it left the list past
-// its share:
-//
-//  1. EVERY ROW TO THE BRIDGED CALL'S SHARES: its name past
-//     sandbox.MaxBridgeCallNameBytes cut, an id its harness gave it that the
-//     log would not keep left off (sandbox.ValidCallID), its arguments past
-//     sandbox.MaxBridgeArgsBytes kept with their largest values left out
-//     (internal/kept's Args) — the newest successful submission's up to
-//     sandbox.MaxSubmissionArgsBytes, as the log keeps it — and its answer
-//     past sandbox.MaxBridgeOutputBytes kept as its opening, a failed one's
-//     error with it. A row of an executor's run already is: the bridge kept
-//     it so.
-//  2. THE MIDDLE PAST sandbox.MaxBridgeCalls, dropped into a tally by tool
-//     ([types.ElidedCalls]: how many calls, how many failed), the first half
-//     and the newest half kept: how a phase began and how it ended are what
-//     explain it. The tally names at most [maxTallyNames] tools, and counts
-//     the calls of any more under no name, which a reader says as calls to
-//     tools the record did not keep either: a model can call names no tool
-//     has, and a tally that named every one would grow with them.
-//
-// A record's tally merges with the one its run's record already kept (a
-// collected executor's, [phaseResult.RunElided]), and a turn's record merges
-// every phase's.
+// The tool list past [toolListBytes] is kept as internal/sandbox's bridged
+// call log keeps a run's, each tier only where the one before left it past its
+// share: tier 1 holds every row to the bridged call's shares ([keptRow]); tier
+// 2 drops the middle past sandbox.MaxBridgeCalls into a tally ([keptList]).
 
 // recordTally is the record a cut payload of a durable agent record says it is
 // not kept on.
@@ -74,50 +33,44 @@ const recordTally kept.Record = "this record"
 
 // The tool list's share, and what makes it up.
 const (
-	// toolRowBytes is one row of a record's tool list at every bound of tier
-	// 1, as the event encodes it: the bridged call's own share
-	// (sandbox.MaxBridgeCallBytes: its name at its worst, its arguments,
-	// its answer, every other field and room for more), and its answer a
-	// second time, since a failed row carries it as its `error` too.
+	// toolRowBytes is one tier-1 row at its worst as the event encodes it: the
+	// bridged call's share (sandbox.MaxBridgeCallBytes) plus its answer again,
+	// which a failed row also carries as its `error`.
 	toolRowBytes = sandbox.MaxBridgeCallBytes + sandbox.MaxBridgeOutputBytes
 
-	// maxTallyNames is how many tools a record's tally names. SIXTY-FOUR is
-	// more than the distinct tools a phase calls in any record this tree's
-	// suites or its e2e make, and the census is held anyway because the names
-	// are the model's: an unknown name it invents is a row like any other.
+	// maxTallyNames is how many tools a record's tally names: more than any
+	// phase in this tree's suites or e2e calls, held anyway because the names
+	// are the model's, and it can invent any number.
 	maxTallyNames = 64
 
 	// tallyEntryBytes is one tally entry at its worst: a name at
 	// sandbox.MaxBridgeCallNameBytes escaped six-fold and quoted (1,538
-	// bytes), its keys and two counts — 1,600 rounded up to leave the
-	// counts their digits.
+	// bytes), its keys and two counts, rounded up.
 	tallyEntryBytes = 1600
 
-	// toolListBytes is the share of a record's tool list: sandbox.MaxBridgeCalls
-	// rows at their worst, the newest submission's room past an ordinary
-	// row's arguments, and the tally at its census, its unnamed entry too:
-	// 200 × 20 KiB + 56 KiB + 65 × 1,600 bytes, 4,264,000 bytes.
+	// toolListBytes is sandbox.MaxBridgeCalls rows at their worst, the newest
+	// submission's room past an ordinary row's arguments, and the tally at its
+	// census plus its unnamed entry: 200 × 20 KiB + 56 KiB + 65 × 1,600 bytes,
+	// 4,264,000 bytes.
 	toolListBytes = sandbox.MaxBridgeCalls*toolRowBytes +
 		sandbox.MaxSubmissionArgsBytes - sandbox.MaxBridgeArgsBytes +
 		(maxTallyNames+1)*tallyEntryBytes
 )
 
-// RecordCalls is a record's tool list as [keptExecutions] keeps it: the rows
-// it lists, and the calls it does not — how many, and by tool how many and how
-// many of them failed ([keptTally]) — which the record carries as its
-// `tool_executions`, `calls_elided` and `elided_calls`.
+// RecordCalls is a record's tool list as [keptExecutions] keeps it: the rows it
+// lists, and how many calls it does not, in all and by tool ([keptTally]), the
+// record's `tool_executions`, `calls_elided` and `elided_calls`.
 type RecordCalls struct {
 	Rows   []types.ToolExecution
 	Elided int
 	ByTool []types.ElidedCalls
 }
 
-// keptExecutions is a record's tool list held to [toolListBytes] as the event
-// encodes it (see the file comment), merged with tally — what the list's own
-// record already kept of calls it does not list, counted in Elided too. A list
-// within its share is kept as it is.
-//
-// rows is never changed: a row it cuts is a copy.
+// keptExecutions is a record's tool list held to [toolListBytes] (the file
+// comment's tiers), merged with tally: the calls its run's record already left
+// out ([phaseResult.RunElided]), counted in Elided too; a turn's record merges
+// every phase's. A list within its share is kept as it is; rows is never
+// changed, a cut row being a copy.
 func keptExecutions(rows []types.ToolExecution, tally []types.ElidedCalls) RecordCalls {
 	return keptList(rows, recordList, tally)
 }
@@ -131,18 +84,17 @@ type listRule struct {
 	row               func(row types.ToolExecution, submission bool) types.ToolExecution
 }
 
-// recordList is a durable record's rule (see the file comment): its first
-// half and newest half of sandbox.MaxBridgeCalls, as the run's own record
-// keeps a long run's.
+// recordList is a durable record's rule: the first and newest halves of
+// sandbox.MaxBridgeCalls, as the run's own record keeps a long run's, since
+// how a phase began and ended are what explain it.
 var recordList = listRule{share: toolListBytes, rows: sandbox.MaxBridgeCalls,
 	head: sandbox.MaxBridgeCalls / 2, row: keptRow}
 
-// keptList is rows held to rule's share as the event encodes them: whole
-// within it; past it every row held to the bridged call's shares (rule.row);
-// and past that the rows between the first rule.head and the newest dropped
-// into the tally — as few as leave the list within its share, the tally's own
-// room taken off it, and never more listed than rule.rows. A row past what is
-// left of the share after the rows before it is dropped like the rest.
+// keptList is rows held to rule's share: whole within it; past it every row
+// held by rule.row; past that the rows between the first rule.head and the
+// newest dropped into the tally, as few as fit the share less the tally's own
+// room, never more than rule.rows listed. A row past what the rows before it
+// left of the share is dropped like the rest.
 func keptList(rows []types.ToolExecution, rule listRule, tally []types.ElidedCalls) RecordCalls {
 	total := tallied(tally)
 	if listBytes(rows) <= rule.share {
@@ -156,9 +108,9 @@ func keptList(rows []types.ToolExecution, rule listRule, tally []types.ElidedCal
 	if listBytes(kept) <= rule.share {
 		return RecordCalls{Rows: kept, Elided: total, ByTool: keptTally(tally)}
 	}
-	// WHAT IS LEFT FOR THE ROWS: the share less the list's brackets and the
-	// most its tally could take — every row's call counted, held to its
-	// census — measured before any row is chosen, so no choice can outgrow it.
+	// The rows' budget is the share less the brackets and the tally at its
+	// largest (every row counted), measured before any row is chosen so no
+	// choice can outgrow it.
 	all := slices.Clone(tally)
 	for _, row := range kept {
 		all = append(all, droppedCall(row))
@@ -219,17 +171,17 @@ func listBytes(rows []types.ToolExecution) int {
 	}
 	raw, err := json.Marshal(rows)
 	if err != nil {
-		// A row the encoder refuses is refused by the publish too, whatever
-		// its size; weighing it as past every share keeps it out of a
-		// record rather than taking the record with it.
+		// The publish would refuse it too: weighing it past every share keeps
+		// it off the record rather than losing the record.
 		return int(^uint(0) >> 1)
 	}
 	return len(raw)
 }
 
-// keptRow is row held to the bridged call's shares (tier 1 of the file
-// comment), its arguments to the submission's share where it is the list's
-// newest successful submission. A copy: row is not changed.
+// keptRow is a copy of row held to the bridged call's shares (tier 1): its
+// identity and arguments as [liveRow] holds them, and its answer, a failed
+// row's error too, past sandbox.MaxBridgeOutputBytes kept as its opening. An
+// executor's row already is so: the bridge kept it.
 func keptRow(row types.ToolExecution, submission bool) types.ToolExecution {
 	out := liveRow(row, submission)
 	for _, key := range []string{"result", "error"} {
@@ -243,9 +195,8 @@ func keptRow(row types.ToolExecution, submission bool) types.ToolExecution {
 }
 
 // keptIdentity is a copy of row with its name held to
-// sandbox.MaxBridgeCallNameBytes and an id its harness gave it that the log
-// would not keep left off (sandbox.ValidCallID): what a row says of which call
-// it was, held as the run's own record holds it.
+// sandbox.MaxBridgeCallNameBytes and a harness's id the bridged call log would
+// not keep left off (sandbox.ValidCallID).
 func keptIdentity(row types.ToolExecution) types.ToolExecution {
 	out := make(types.ToolExecution, len(row))
 	for k, v := range row {
@@ -261,8 +212,7 @@ func keptIdentity(row types.ToolExecution) types.ToolExecution {
 }
 
 // newestSubmission is the index of rows' newest successful submission, or -1:
-// the call the phase handed its work in with, which a reader reads whole as
-// the run's record keeps it.
+// the call that handed the work in, kept to its own larger share.
 func newestSubmission(rows []types.ToolExecution) int {
 	for i := len(rows) - 1; i >= 0; i-- {
 		name, _ := rows[i]["name"].(string)
@@ -283,11 +233,10 @@ func tallied(tally []types.ElidedCalls) int {
 	return n
 }
 
-// keptTally is tally folded by tool and held to its census
-// ([maxTallyNames]): the tools in name order, each name to
-// sandbox.MaxBridgeCallNameBytes, the calls of the tools past the census —
-// the ones with the fewest calls — counted under no name, and the calls whose
-// tool no record kept last. Nil for a tally of no calls.
+// keptTally is tally folded by tool and held to [maxTallyNames]: names to
+// sandbox.MaxBridgeCallNameBytes in name order, then one unnamed entry for the
+// calls of the tools past the census (the fewest called) and of tools no
+// record kept, so a model's invented names cannot grow it. Nil for no calls.
 func keptTally(tally []types.ElidedCalls) []types.ElidedCalls {
 	byName := map[string]*types.ElidedCalls{}
 	for _, e := range tally {
@@ -316,9 +265,8 @@ func keptTally(tally []types.ElidedCalls) []types.ElidedCalls {
 		named = append(named, *entry)
 	}
 	if len(named) > maxTallyNames {
-		// THE TOOLS CALLED MOST KEEP THEIR NAMES: a census past its bound
-		// is a model calling names no tool has, once each, beside the tools
-		// it worked with.
+		// The most-called tools keep their names: a census past its bound is
+		// a model calling invented names, once each.
 		slices.SortFunc(named, func(a, b types.ElidedCalls) int {
 			return cmp.Or(cmp.Compare(b.Calls, a.Calls), cmp.Compare(a.Name, b.Name))
 		})
@@ -339,61 +287,48 @@ func keptTally(tally []types.ElidedCalls) []types.ElidedCalls {
 // it. Their sum with the tool list's is held under one message by
 // [TestAPhaseRecordAtEveryBoundFitsOneMessage].
 const (
-	// responseBytes is a record's response: a run's own report at its bound
-	// (sandbox.MaxRunTextBytes) escaped at its worst and quoted, so a
-	// collected run's report is never cut on its record, and a host phase's
-	// model text past it keeps its opening. A review's final artifact is held
-	// to the same where it is made ([finalArtifactBytes]).
+	// responseBytes is a run's report at its bound (sandbox.MaxRunTextBytes)
+	// escaped at its worst and quoted, so a collected run's report is never
+	// cut on its record; a host phase's text past it keeps its opening. A
+	// review's final artifact is held to it where made ([finalArtifactBytes]).
 	responseBytes = 6*sandbox.MaxRunTextBytes + 2
 
-	// promptBytes is each of a record's two prompts, its outline with it.
-	// A QUARTER MIB is several times the widest prompt this tree's suites
-	// build, its seat's whole profile and every turn-start block among it;
-	// what goes past it is a company document's own words at length, or the
-	// prior-work ledger of a turn of very many rounds, and what the record
-	// keeps of each part is its opening ([keptPrompt]). The prompt the model
-	// was sent is not changed: this is the record's copy.
+	// promptBytes is each of a record's two prompts, outline included: several
+	// times the widest prompt this tree's suites build. Past it is a company
+	// document at length or a very long prior-work ledger, and each part keeps
+	// its opening ([keptPrompt]). The prompt the model was sent is unchanged.
 	promptBytes = 256 << 10
 
-	// narrationBytes is what a record keeps of its model's prose between
-	// calls, every round's together. A QUARTER MIB is a long phase's
-	// narration whole; past it every round keeps an opening, the longest cut
-	// first ([keptNarration]).
+	// narrationBytes is a record's model prose, every round's together: a long
+	// phase's whole; past it each round keeps an opening ([keptNarration]).
 	narrationBytes = 256 << 10
 
-	// notesBytes is a record's notes: what a review's own notes may weigh
-	// where they are made ([reviewProseBytes]), and every other phase's
-	// verdict text — a judge's reason, a worker's refused tools — to the same.
+	// notesBytes is a review's notes as bounded where made
+	// ([reviewProseBytes]), and every other phase's verdict text to the same.
 	notesBytes = reviewProseBytes
 
-	// namesBytes is each of a record's two lists of tool names. 64 KIB is
-	// five hundred names at the longest an MCP server's tool may have
-	// (coord.MaxMCPToolNameBytes), several times what any one listing holds,
-	// and a record of a seat that holds more lists the first of them and
-	// says how many more.
+	// namesBytes is each of a record's two tool-name lists: five hundred names
+	// at coord.MaxMCPToolNameBytes, several times any one listing; past it the
+	// list keeps its first names and counts the rest.
 	namesBytes = 64 << 10
 
-	// maxRecordRounds is how many of its rounds a record lists: their
-	// provider calls, prose, harness runs and the notes read in them, and
-	// the calls made in them. A phase's rounds are bounded by caps a company
-	// sets without a ceiling (a worker's `max_turns`, the onboarding pass's
-	// and the ceiling a judge may extend it to), and a record past this
-	// keeps the first half and the newest half, saying how many it left out.
-	// TWO HUNDRED AND FIFTY-SIX is more than ten times the largest cap this
-	// tree defaults to, a worker's twenty.
+	// maxRecordRounds is how many rounds a record lists, each with everything
+	// of it ([keptRounds]); past it the first and newest halves. A company
+	// sets round caps without a ceiling (a worker's `max_turns`, onboarding's
+	// and a judge's extension); this is over ten times the largest default
+	// cap, a worker's twenty.
 	maxRecordRounds = 256
 )
 
 // answerCopy is what a collected run's copy of its answer on its round's prose
-// says of what it does not keep, and answerCopyBytes its share: the record's
-// prose share less the round row's own keys, so the copy is never cut again
-// where the record keeps its prose ([keptNarration]).
+// says it cut, and answerCopyBytes its share: the prose share less the round
+// row's keys, so [keptNarration] never cuts the copy again.
 const (
 	answerCopy      kept.Record = "this copy; the phase's response holds it whole"
 	answerCopyBytes             = narrationBytes - narrationRowRoom
 
-	// narrationRowRoom is a round's prose row less its prose: its round, its
-	// flags and their keys, 32 bytes measured at their widest, rounded up.
+	// narrationRowRoom is a prose row less its prose: its round, flags and
+	// keys, 32 bytes at their widest, rounded up.
 	narrationRowRoom = 256
 )
 
@@ -406,13 +341,11 @@ func keptText(s string, share int) string {
 	return s
 }
 
-// keptPrompt is p as a record keeps it within [promptBytes], as the event
-// encodes the text: whole within it, and past it PART BY PART, every part's
-// opening kept and the longest cut first, with the outline rewritten to the
-// kept text, so it still tiles it — the dashboard reads a prompt by its
-// outline only where the outline tiles it, and falls back to the text's own
-// headings otherwise, which is what the outline exists to replace. A prompt
-// with no valid outline keeps the opening of its whole text, and none.
+// keptPrompt is p within [promptBytes]: whole within it, past it PART BY PART
+// ([keptParts]) with the outline rewritten to the kept text, since the
+// dashboard reads the outline only where it tiles the text and otherwise falls
+// back to the headings the outline replaces. A prompt with no valid outline
+// keeps its text's opening, and no outline.
 func keptPrompt(p prompts.Prompt) prompts.Prompt {
 	if kept.Quoted(p.Text) <= promptBytes {
 		return p
@@ -441,10 +374,9 @@ func keptPrompt(p prompts.Prompt) prompts.Prompt {
 	return out
 }
 
-// keptParts is parts held to budget bytes together as the event encodes them,
-// each its opening within the one cap that fits them all — the longest cut
-// first, the shortest whole — so no part is left out and none is cut further
-// than the others need.
+// keptParts is parts held to budget bytes together, each its opening within
+// the one cap that fits them all ([fairCap]), so no part is left out and none
+// is cut further than the others need.
 func keptParts(parts []string, budget int) []string {
 	costs := make([]int, len(parts))
 	total := 0
@@ -460,8 +392,8 @@ func keptParts(parts []string, budget int) []string {
 	for i, part := range parts {
 		out[i] = part
 		if costs[i] > limit {
-			// The cap counts the part's quotes, which a part inside one
-			// string does not carry: two bytes of slack, and never past.
+			// The cap counts quotes a part inside one string lacks: two
+			// bytes of slack, never past.
 			out[i] = keptText(part, limit)
 		}
 	}
@@ -485,14 +417,12 @@ func fairCap(costs []int, budget int) int {
 	return sorted[len(sorted)-1]
 }
 
-// minCutPart is the least a cut part keeps: its marker, which says how much of
-// how much is not kept, and an opening of a few words.
+// minCutPart is the least a cut part keeps: its marker and a few words.
 const minCutPart = 160
 
-// keptNarration is a record's model prose, every round's together within
-// share bytes as the event encodes it — a durable record's [narrationBytes], a
-// live frame's [liveNarrationBytes] — whole within it, and past it each round's
-// opening within the one cap that fits them all ([keptParts]).
+// keptNarration is model prose, every round's together, within share
+// ([narrationBytes] or [liveNarrationBytes]): whole within it, past it each
+// round's opening ([keptParts]).
 func keptNarration(rows []types.RoundNarration, share int) []types.RoundNarration {
 	if listBytes(rows) <= share {
 		return rows
@@ -501,8 +431,7 @@ func keptNarration(rows []types.RoundNarration, share int) []types.RoundNarratio
 	for i, row := range rows {
 		contents[i], _ = row["content"].(string)
 	}
-	// THE ROWS' OWN KEYS, rounds and flags, ride beside the prose: measured
-	// whole, their room is taken off the prose's.
+	// The rows' own keys come off the prose's room.
 	shells := 0
 	for _, row := range rows {
 		bare := maps.Clone(row)
@@ -529,9 +458,8 @@ func mapBytes(m map[string]any) int {
 	return len(raw)
 }
 
-// keptNames is a record's list of tool names within [namesBytes] as the event
-// encodes it: the names in their order while they fit, and how many more the
-// list held.
+// keptNames is a tool-name list within [namesBytes]: the names in order while
+// they fit, and how many more it held.
 func keptNames(names []string) ([]string, int) {
 	used := 2
 	for i, name := range names {
@@ -556,13 +484,11 @@ type recordRounds struct {
 	Dropped []types.ElidedCalls
 }
 
-// keptRounds is a record's rounds within [maxRecordRounds]: every one where
-// it ran no more, and past it the first half and the newest half, each kept
-// round with its provider call, its prose, the harness runs over it and the
-// notes read in it, and the calls made in it; the calls of the rounds it
-// leaves out are tallied by tool for the tool list ([keptExecutions]), so a
-// round the record does not list is not half drawn. The rounds are the
-// numbers the round records carry, the loop's own count.
+// keptRounds is a record's rounds within [maxRecordRounds], past it the first
+// and newest halves, each kept round with its provider call, prose, harness
+// runs, notes read and calls; a left-out round's calls go to Dropped for the
+// tool list's tally, so no round is half drawn. Rounds are the loop's own
+// numbers, as the round records carry them.
 func keptRounds(r recordRounds) recordRounds {
 	var numbers []int
 	for _, round := range r.Rounds {
@@ -631,52 +557,46 @@ func roundOf(row map[string]any) int {
 // # The live frame
 //
 // A running phase's live frame ([types.AgentTurnProgress]) is republished
-// whole five times a second for the length of the phase (internal/agent/
-// toolloop's partialInterval), to every dashboard open on its seat, and the
-// socket hub queues up to 512 frames for a client that falls behind: so its
-// shares answer a tab's stream and a slow client's queue, not one message.
-// Past them the frame keeps the NEWEST of what grows — what a reader of a
-// running phase is watching arrive — and says what it left out; the phase's
-// record keeps the first and the newest once the phase completes. A frame
-// within every share is published as it was built.
+// whole five times a second (internal/agent/toolloop's partialInterval) to
+// every dashboard open on its seat, and the socket hub queues up to 512 frames
+// for a slow client: its shares answer that stream, not one message. Past them
+// the frame keeps the NEWEST of what grows, what a reader is watching arrive,
+// and says what it cut; the record keeps the first and newest once the phase
+// completes. A frame within every share is published as built.
 const (
-	// liveListBytes is the frame's tool list. A QUARTER MIB is 1.25 MiB a
-	// second at five frames, a long phase's whole list of ordinary calls, and
-	// what a slow client's queue holds of the list at its fullest is 128 MiB.
+	// liveListBytes is the frame's tool list: a long phase's ordinary calls
+	// whole, 1.25 MiB a second at five frames, 128 MiB in a full slow queue.
 	liveListBytes = 256 << 10
 
-	// liveNarrationBytes is the frame's prose of the rounds it has committed,
-	// every round's together: the round in flight rides beside it, held to
-	// its tail ([partialTail]), and the rounds before are on the record once
-	// the phase completes. SIXTY-FOUR KIB is a long round's prose whole.
+	// liveNarrationBytes is the committed rounds' prose, every round's
+	// together, a long round's whole; the round in flight rides beside it held
+	// to its tail ([partialTail]).
 	liveNarrationBytes = 64 << 10
 
-	// liveAbandonedBytes is the attempts at the round in flight that a
-	// provider gave up on partway, the newest liveAbandonedAttempts of them,
-	// each its END within its even part of the share ([liveTail]): what a
-	// reader watched arrive last before the attempt died. FOUR is more than
-	// a fallback chain gives up in one round but on an outage, and the
-	// round's own text replaces every attempt once it completes.
+	// liveAbandonedBytes is the attempts at the round in flight a provider gave
+	// up on partway, the newest liveAbandonedAttempts, each its END within an
+	// even part ([liveTail]): what a reader saw last before it died. FOUR is
+	// more than a fallback chain gives up in a round short of an outage, and
+	// the round's own text replaces them once it completes.
 	liveAbandonedBytes    = 16 << 10
 	liveAbandonedAttempts = 4
 
-	// liveRunningBytes is the frame's calls in flight, and
-	// liveRunningArgsBytes each one's arguments: TWO KIB is the identifiers a
-	// reader scans a running call for ("which file is it reading now?"), its
-	// body on the record once it settles, and THIRTY-TWO KIB a dozen such
-	// calls at once at their widest, more than a harness runs side by side.
+	// liveRunningBytes is the frame's calls in flight, liveRunningArgsBytes
+	// each one's arguments: TWO KIB holds the identifiers a reader scans a
+	// running call for (its body is on the record once it settles), and
+	// THIRTY-TWO KIB a dozen such calls, more than a harness runs at once.
 	liveRunningBytes     = 32 << 10
 	liveRunningArgsBytes = 2 << 10
 )
 
-// liveList is the live frame's rule: its newest calls that fit its share, the
-// first of them none, since a reader watches what is arriving and the record
-// keeps how the phase began.
+// liveList is the live frame's rule: only its newest calls that fit, since a
+// reader watches what arrives and the record keeps how the phase began.
 var liveList = listRule{share: liveListBytes, rows: sandbox.MaxBridgeCalls, row: liveRow}
 
-// liveRow is a row of the live frame's list held to the bridged call's shares
-// for its name, its id and its arguments; its answer is already held to its
-// tail ([liveExecutions]), what a reader of a running call watches arrive.
+// liveRow is a live row's identity ([keptIdentity]) and arguments held to the
+// bridged call's shares (internal/kept's Args drops the largest values first),
+// a submission's to sandbox.MaxSubmissionArgsBytes; its answer is already held
+// to its tail ([liveExecutions]).
 func liveRow(row types.ToolExecution, submission bool) types.ToolExecution {
 	out := keptIdentity(row)
 	argsShare := sandbox.MaxBridgeArgsBytes
@@ -691,10 +611,9 @@ func liveRow(row types.ToolExecution, submission bool) types.ToolExecution {
 	return out
 }
 
-// keptRunning is the frame's calls in flight within [liveRunningBytes], each
-// one's name and arguments held to their shares, in the order they began
-// while they fit, and how many more were running: a call the frame does not
-// list as running is on the list once it settles.
+// keptRunning is the calls in flight within [liveRunningBytes], names and
+// arguments held to their shares, in start order while they fit, and how many
+// more were running: an unlisted one reaches the list once it settles.
 func keptRunning(calls []types.RunningCall) ([]types.RunningCall, int) {
 	used := 2
 	for i := range calls {
@@ -714,9 +633,8 @@ func keptRunning(calls []types.RunningCall) ([]types.RunningCall, int) {
 	return calls, 0
 }
 
-// liveTail is s's END within budget bytes as the event encodes it — what a
-// reader of a running phase watched arrive last — cut on a character, with the
-// cut marked at its start as internal/textcut's Tail marks it.
+// liveTail is s's END within budget bytes, cut on a character and marked at
+// its start as internal/textcut's Tail marks it.
 func liveTail(s string, budget int) string {
 	if kept.Quoted(s) <= budget {
 		return s

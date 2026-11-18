@@ -17,20 +17,13 @@ import (
 
 // A NODE WITH NO CHECKPOINT TAKES THE FLEET'S GENERATION, AND ADOPTS.
 //
-// An absent checkpoint row used to be read as `{generation 0, sequence 0}`,
-// which in a fleet that has never re-anchored is exactly right: a fresh node
-// has the whole log ahead of it. In one that HAS re-anchored it is a lie in
-// the direction nothing recovers from.
-//
-// The stream still begins at sequence 1, so the behind test passed and the
-// node replayed — stamping every row it wrote at generation 0 while its peers
-// held the same records at N, reporting itself caught up over a database
-// holding only what was published since the re-anchor, and blocking the
-// fleet's trim, whose applied term reads a counted node at a lower generation
-// as unknown. Then the first floor published at N failed the node's own boot
-// on the floor comparison, which is the call that would have sent it to adopt:
-// the state is terminal, and this test would have reported it as the error
-// below rather than as a decision.
+// An absent checkpoint is `{generation 0, sequence 0}` only in a fleet never
+// re-anchored. In one that HAS, the stream still begins at 1, so such a node
+// would replay: stamping its rows at generation 0 while peers hold them at N,
+// reporting itself caught up over only what followed the re-anchor, blocking
+// the trim (a counted node at a lower generation reads as unknown), then
+// failing its own boot on the first floor at N, the very comparison that
+// should send it to adopt.
 func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -54,24 +47,17 @@ func TestANodeWithNoCheckpointTakesTheFleetsGeneration(t *testing.T) {
 	s := e.core.Load().log
 	waitUntil(t, 20*time.Second, "the node to admit seats", hydrated(t, e))
 
-	// THE TRIM IS QUIESCED FIRST, because it is the other writer of the
-	// floor this case forges. `PutFloor` replaces a domain's floor
-	// wholesale, and this node's own retention loop publishes one per
-	// domain per tick at the generation its rows are on — zero — so a tick
-	// landing after the write below erases the fleet's generation 3 and the
-	// case asserts against a floor it did not publish. `stopRetention`
-	// waits for an in-flight tick, so after it returns nothing else writes.
+	// THE TRIM IS QUIESCED FIRST, as the other writer of the floor forged
+	// here: `PutFloor` replaces a domain's floor wholesale, and this node's
+	// retention publishes one per tick at its rows' generation, zero,
+	// erasing the fleet's 3. `stopRetention` waits for an in-flight tick.
 	e.stopRetention()
 
-	// AND THE APPLIERS ARE HALTED, because they are the other writer of the
-	// checkpoint this case deletes. The node goes on writing its own logs
-	// once it admits seats — a barrier record for a linearizable read lands
-	// on the tracker log at boot — and a batch its applier commits after the
-	// DELETE below writes the row straight back (`setCursor` upserts it), so
-	// the node reads as one whose rows the re-anchor passed, not as one with
-	// no checkpoint at all: one run in six to twelve, measured.
-	// `haltAppliers` waits for every loop, so after it returns nothing else
-	// writes the row.
+	// AND THE APPLIERS ARE HALTED, as the other writer of the checkpoint
+	// deleted here: the node writes its own logs once it admits seats (a
+	// read barrier at boot), and a batch committed after the DELETE writes
+	// the row back (`setCursor` upserts). `haltAppliers` waits for every
+	// loop.
 	s.haltAppliers()
 
 	name := worklet.Domain{}.Name()

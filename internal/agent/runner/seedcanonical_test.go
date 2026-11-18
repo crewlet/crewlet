@@ -59,15 +59,12 @@ var draft = map[string]any{"item": "GP-12", "status": "draft"}
 // the canonical arguments, the run's first of its kind.
 func firstWrite() string { return turnctx.ArgsDigest(draft) + "#0" }
 
-// A RESUMED RUN'S REPEAT SPELT ANOTHER WAY IS THE SAME WRITE (#423 re-verify):
-// the run's log is seeded from the calls it made before this segment, which
-// the bridge records in the model's own spelling ("Draft"), and was seeded
-// with that spelling, so the same call made after the resume ("draft")
-// counted as a different one, took a fresh operation id and wrote twice.
-// Seeded by the canonical arguments, through the surface each segment serves,
-// the repeat is the first write's operation on all three paths an executor
-// run's calls are read back on: its collection, its continuation after a
-// person's answer, and its reopening on a node that took it over.
+// A RESUMED RUN'S REPEAT SPELT ANOTHER WAY IS THE SAME WRITE: the run's log is
+// seeded with the canonical arguments, through the surface each segment
+// serves, not the bridge's record in the model's spelling ("Draft"), or the
+// same call after the resume ("draft") takes a fresh operation id and writes
+// twice. It holds on all three paths a run's calls are read back on: its
+// collection, its continuation after an answer, and its reopening elsewhere.
 //
 // Mutation: seed the log with the recorded arguments as written and every
 // case counts the repeat as the run's second; drop any one segment's seed and
@@ -165,11 +162,10 @@ func TestAResumedRunsRepeatSpeltAnotherWayIsTheSameWrite(t *testing.T) {
 	})
 }
 
-// A TOOL THE SURFACE ADDS IS SEEDED BY ITS CANONICAL FORM TOO (#423 review):
-// submit_work is no tool of the registry; the resumed surface adds it. Seeded
-// through the registry's snapshot, a bridged submission spelt "Delivered"
-// fell back to the spelling sent, and the same submission after the resume
-// counted it as a different call. Seeded through the surface, it is one.
+// A TOOL THE SURFACE ADDS IS SEEDED BY ITS CANONICAL FORM TOO: submit_work is
+// no tool of the registry but the resumed surface's, so seeding through the
+// registry's snapshot would keep a bridged "Delivered" as sent and count the
+// same submission after the resume as a different call.
 //
 // Mutation: seed through the registry's snapshot and the repeat counts 1.
 func TestASeededSubmissionIsReadByTheSurfacesUniverse(t *testing.T) {

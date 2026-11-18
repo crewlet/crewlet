@@ -26,21 +26,16 @@ import (
 )
 
 // listingsHeld is a coordination store whose every LISTING of the positions
-// register — a key class read whole, or watched — is held from the moment it
-// is armed until the case lets it go, while every read of one key answers at
-// once. Which methods list is not this file's opinion:
-// [TestListingsHeldHoldsEveryListingOfTheRegister] reads them off the KV
-// backend's own source.
+// register (a key class read whole, or watched) is held from when it is armed
+// until the case lets go, while every read of one key answers at once; which
+// methods list is read off the KV backend's own source
+// ([TestListingsHeldHoldsEveryListingOfTheRegister]).
 //
-// That is the shape of a loaded clustered broker, measured: a listing there is
-// a key index read plus an ordered consumer created and deleted on the
-// register's stream, and the create and the delete are proposals to the
-// metadata group every stream and consumer in the fleet is placed through, so
-// under load a listing runs for seconds — past the client's five-second API
-// timeout on the worst of them — while a key read is one request to the
-// stream's leader and answers in milliseconds. Held rather than slowed, so a
-// path that waits on a listing waits for the case's whole bound and cannot
-// pass by being quick enough.
+// That is a loaded clustered broker's shape: a listing creates and deletes an
+// ordered consumer through the metadata group and can run past the client's
+// API timeout, while a key read is one request to the stream's leader. Held
+// rather than slowed, so a path that waits on a listing waits for the case's
+// whole bound and cannot pass by being quick.
 type listingsHeld struct {
 	wrappedFleet
 
@@ -224,24 +219,18 @@ func (f *listingsHeld) GrantRequests(ctx context.Context) (map[string][]byte, er
 }
 
 // listingBound is how long a case waits on a read the write path makes: the
-// nats client's default API timeout, the bound a floor listing ran past on a
-// loaded three-member fleet and refused a page create `floor_unknown` with
-// the register perfectly readable.
+// nats client's default API timeout, which a listing on a loaded fleet runs
+// past.
 const listingBound = 5 * time.Second
 
 // A WRITE FENCE READS ITS OWN DOMAIN'S FLOOR, BY ITS KEY, AND LISTS NOTHING.
-//
-// The fence at an expectation of zero must read the floor FRESH, after the
-// write's own read of its subject — the floor theorem's order (statelog's
-// package doc) — so it cannot be served from a memo or moved off the request
-// path. What it can do is take the cheapest read that order allows. It used to
-// list every domain's floor to answer for one, and a listing is a consumer
-// created and deleted through the metadata group: every write at zero then
-// waited on two metadata proposals, and on a loaded fleet a page create was
-// refused `floor_unknown` when the consumer's create ran past the client's
-// API timeout. With every listing of the register held, the fence still
-// answers, the floor it answers is its own domain's, and the one read it made
-// named that domain alone.
+// The fence at an expectation of zero must read the floor fresh, after the
+// write's own read of its subject (the floor theorem, statelog's package doc),
+// so it is never a memo and stays on the request path; it takes the cheapest
+// read that order allows, since a listing is a consumer created through the
+// metadata group and can run past the API timeout, refusing the write
+// `floor_unknown`. With every listing held, the fence still answers its own
+// domain's floor, and its one read named that domain alone.
 func TestAWriteFenceReadsItsFloorWithoutListingTheRegister(t *testing.T) {
 	t.Parallel()
 	fleet := newListingsHeld(coordmem.NewFleet())
@@ -283,11 +272,9 @@ func TestAWriteFenceReadsItsFloorWithoutListingTheRegister(t *testing.T) {
 }
 
 // AND A PAGE CREATE AND A TRACKER WRITE AT AN EXPECTATION OF ZERO LAND WHILE
-// EVERY LISTING OF THE REGISTER IS HELD, through the engine's own wiring: the
-// incident this replaces was exactly this write, refused while the register
-// answered every key read in milliseconds. The node's own loops that do list —
-// the heartbeat, the readiness verdict, the trim — wait behind the hold, and
-// no write may wait with them.
+// EVERY LISTING OF THE REGISTER IS HELD, through the engine's own wiring. The
+// node's own loops that do list (the heartbeat, the readiness verdict, the
+// trim) wait behind the hold, and no write may wait with them.
 func TestAWriteAtZeroLandsWhileTheRegistersListingsAreHeld(t *testing.T) {
 	t.Parallel()
 	b := testBootstrap(t)
@@ -322,10 +309,10 @@ func TestAWriteAtZeroLandsWhileTheRegistersListingsAreHeld(t *testing.T) {
 	fleet.armed.Store(true)
 	ctx, cancel := context.WithTimeout(t.Context(), listingBound)
 	defer cancel()
-	// EACH WRITE'S CONTEXT IS MARKED, so the floor reads asserted below are
-	// that write's own fence's — never the heartbeat's or the readiness
-	// verdict's, which read every domain's floor by its key on their own
-	// clocks and would answer for a fence that read nothing.
+	// EACH WRITE'S CONTEXT IS MARKED, so the floor reads asserted below are its
+	// own fence's, never the heartbeat's or the readiness verdict's, which read
+	// every domain's floor on their own clocks and would answer for a fence
+	// that read nothing.
 	if _, _, err := native.pages.EnsureContainer(markedWrite(ctx, "page create"),
 		testActivation, "HELD", "Held", ""); err != nil {
 		t.Fatalf("a page create at an expectation of zero was refused with every "+
@@ -354,13 +341,11 @@ func TestAWriteAtZeroLandsWhileTheRegistersListingsAreHeld(t *testing.T) {
 	}
 }
 
-// AND THE HOLD COVERS EVERY LISTING THERE IS. The case above proves a write
-// waits on no listing only for the listings [listingsHeld] holds, so a listing
-// of the register it forgot — a key class read whole, or watched — is one a
-// write could wait on and still pass. The set is read off the KV backend's own
-// source: every kv.FleetStore method that walks a class of the positions
-// bucket (eachPositionKey, or eachUnder, watchUnder or watchRecords over
-// f.positions), or calls one that does, must be a method listingsHeld holds.
+// AND THE HOLD COVERS EVERY LISTING THERE IS: a listing [listingsHeld] forgot
+// is one a write could wait on and still pass the case above. The set is read
+// off the KV backend's own source: every kv.FleetStore method that walks a
+// class of the positions bucket (eachPositionKey, or eachUnder, watchUnder or
+// watchRecords over f.positions), or calls one that does, must be held.
 func TestListingsHeldHoldsEveryListingOfTheRegister(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)

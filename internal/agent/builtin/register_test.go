@@ -13,11 +13,10 @@ import (
 // but this holds them together.
 //
 // The gate compares a delivery's declared surface against the
-// NotificationSource an inbound wake carried. The native feeds publish under
-// [worklet.Source] and [doclet.Source]; registering their writes under any
-// other spelling makes every native obligation unreachable, and the check then
-// falls back to "any delivery counts" — silently, with a passing suite, which
-// is exactly what `tracker`/`pages` did in place of `work`/`page`.
+// NotificationSource an inbound wake carried, and the native feeds publish
+// under [worklet.Source] and [doclet.Source]. Any other spelling makes every
+// native obligation unreachable, and the check silently falls back to "any
+// delivery counts".
 func TestTheNativeWritesDeliverToTheirOwnFeedSource(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()

@@ -11,23 +11,17 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// THE CODE TOOLS ARE OFFERED WHERE GITLET IS SERVED, through the running
-// wiring: a company whose node's runtime serves its repositories holds the
-// twelve reads and code_search, over the engine's own search, in every seat's
-// registry — equipped at the apply, after the runtime it
-// starts — and the operator's halves read the same deps, a change write's
-// mentions among them, resolved against the company's chart; a company that hosts
-// no code is given none, whose tools would answer every call that no
-// repository is served. The terms are [OperatorCode]'s, Gitlet's REST
-// reads' own, and a node with no runtime serves none.
+// THE CODE TOOLS ARE OFFERED WHERE GITLET IS SERVED, on [OperatorCode]'s
+// terms: a company whose runtime serves its repositories holds the reads and
+// code_search in every seat's registry (equipped at the apply), and the deps
+// resolve a change's mentions against the chart; a company hosting no code,
+// or a node with no runtime, is given none.
 //
-// Mutation: CodeToolDeps ignoring OperatorCode's answer (deps over the bare
-// router) → the company hosting none holds the tools, red; equip dropping
-// deps.Code, or CodeToolDeps leaving out who a turn is acting for or the chart
-// that decides them (the requester ceiling) → the company hosting code holds
-// none, red; CodeToolDeps leaving out the search → no code_search, red;
-// CodeToolDeps leaving out the mentions' resolver → a change write's mentions
-// resolve to nobody, red.
+// Mutation: CodeToolDeps ignoring OperatorCode → the company hosting none
+// holds the tools, red; equip dropping deps.Code, or CodeToolDeps leaving out
+// the requesters or the chart → the company hosting code holds none, red;
+// leaving out the search → no code_search, red; leaving out the mentions'
+// resolver → a change's mentions resolve to nobody, red.
 func TestTheCodeToolsAreOfferedWhereGitletIsServed(t *testing.T) {
 	t.Parallel()
 	t.Run("hosting code", func(t *testing.T) {
@@ -70,9 +64,9 @@ func TestTheCodeToolsAreOfferedWhereGitletIsServed(t *testing.T) {
 	}
 }
 
-// A PERSON'S CLONE URL IS THE ONE THE CLI CONFIGURES GIT WITH: the deployment's
-// `api.external_url` and the one path a repository is served at — and nothing
-// where the deployment names no address, which no answer then invents.
+// A PERSON'S CLONE URL IS THE ONE THE CLI CONFIGURES GIT WITH:
+// `api.external_url` plus the repository's path, and nothing where the
+// deployment names no address.
 func TestAClonesURLIsTheDeploymentsGitAddress(t *testing.T) {
 	t.Parallel()
 	e := &Engine{externalBase: "https://crewlet.example.com"}
@@ -112,26 +106,18 @@ roles:
 // writes needs a writer, and a hold's recorder with it.
 type unwrittenCode struct{ builtin.CodeWriter }
 
-// A SEAT'S MODEL IS SHOWN THE CODE WRITES ONLY WHERE ITS TIER REACHES THEM.
-// Every seat's registry holds every code write, as it holds every builtin;
-// the runner the epoch builds for a turn leaves off a seat whose code tier
-// caps it below write every write no repository's grant would let one of its
-// calls through — all but a change's conversation: a read_only seat comments,
-// and a review seat also asks for reviews, reviews and dismisses its own
-// findings — and so does the executor's guidance on changing code, which is
-// gated on holding the commit and the repository writes; and a human-only
-// write (code_report_check, a person's own CI's report,
-// code_purge_unreachable, a person's purge, and code_import_repo, a person's
-// import) is shown to no seat at any tier, since the authority table refuses
-// every seat it. Every seat is shown the reads. Read off what the executor
-// sends its model, because the decision is the epoch's and the leaving out is
-// the runner's, and either half alone could drop it.
+// A SEAT'S MODEL IS SHOWN THE CODE WRITES ONLY WHERE ITS TIER REACHES THEM,
+// and every read. The runner leaves off every write a tier below write caps,
+// except a change's conversation (read_only comments; review also requests
+// reviews, reviews and resolves its own findings), and the commit guidance with
+// them; a human-only write (authz.HumanOnlyOf) reaches no seat. Read off what
+// the executor sends its model: the epoch decides and the runner leaves out,
+// and either alone could drop it.
 //
-// Mutation: withheldFrom leaving the code writes to the authority table alone
-// → the read_only and review seats are shown every write and told how to
-// commit, red; withholding them at every tier → the full_access seat is shown
-// none, red; withholding every write below write → the review seat is shown no
-// review, red.
+// Mutation: withheldFrom leaving writes to the authority table → read_only and
+// review are shown every write and the guidance, red; withholding at every
+// tier → full_access is shown none, red; withholding all below write → review
+// is shown no review, red.
 func TestASeatsModelIsShownTheCodeWritesOnlyWhereItsTierReachesThem(t *testing.T) {
 	t.Parallel()
 	c, err := NewCompany(parseCompany(t, codeTiersCompany))

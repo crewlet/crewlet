@@ -9,34 +9,18 @@ import (
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
-// Turning one conversation's partition into one ask.
-//
-// [notify.Coalesce] renders the digest — the chronological list of what was
-// said, the latest message in full, the per-integration supersede rules and the
-// same-sender duplicate collapse. This file is the frame that decides WHEN it
-// runs, what the merged event has to carry, and what happens when a partition
-// cannot be merged at all.
-//
-// IT HAD NO CALLER. The coalescer, its rules and the constituent list were
-// written, documented, schema'd into an event type and covered by their own
-// suite, and nothing in the engine ever called them — the exact shape of the
-// two config knobs that reached queue.BatchOptions through nothing (see
-// [Engine.tuneBatching]), one layer up. What shipped was the BATCHING half:
-// five comments on one issue did become one turn rather than five. What that
-// turn was handed was the five enriched bodies concatenated — five copies of
-// the third-party app's triage scaffolding, five "how to get full context" blocks
-// pointing at progressively staler state, and five separate asks, which a
-// model answers separately. The doc's headline promise, one notification for
-// the remaining messages, was half true: one TURN, five NOTIFICATIONS in it.
+// Turning one conversation's partition into one ask. [notify.Coalesce]
+// renders the digest (the chronological list, the latest message in full, the
+// per-integration supersede rules, the same-sender duplicate collapse); this
+// file decides when it runs, what the merged event carries, and what happens
+// when a partition cannot be merged. Batching alone would hand one turn every
+// enriched body concatenated, as separate asks a model answers separately.
 
 // mergePartition merges a multi-event partition into the ONE event its turn is
-// asked about, reporting false when it cannot.
-//
-// TWO KINDS OF PARTITION MERGE, and each has its own rule. A conversation's
-// notifications become a digest of everything said ([mergeNotifications]); a
-// schedule's waiting fires become its latest fire, standing for the rest
-// ([mergeScheduledFires]). Anything else is a key-scheme bug, answered by the
-// caller's per-event fallback.
+// asked about, reporting false when it cannot. A conversation's notifications
+// become a digest ([mergeNotifications]); a schedule's waiting fires become its
+// latest fire ([mergeScheduledFires]). Anything else is a key-scheme bug,
+// answered by the caller's per-event fallback.
 func mergePartition(prompts notify.Prompts, evs []*events.Event) (*events.Event, bool) {
 	if merged, ok := mergeScheduledFires(evs); ok {
 		return merged, true
@@ -46,30 +30,16 @@ func mergePartition(prompts notify.Prompts, evs []*events.Event) (*events.Event,
 
 // mergeScheduledFires turns fires of one schedule that reached the seat
 // together into ONE run: the latest fire, told which earlier fires it stands
-// for ([types.TaskAssigned.Missed]).
-//
-// # Why the latest and not a digest
-//
-// A fire carries no messages to summarise: every fire of a schedule asks for
-// the same work, and the work is done as of now whichever tick asked for it.
-// What a seat needs from the earlier ones is only that they existed, so it
-// does the duty once and does not read a late run as an anomaly.
-//
-// ON THE SCHEDULE'S ONE CONVERSATION: every fire carries it as both keys
-// (internal/notify's ScheduleConversation), so the merged fire is stamped with
-// it like its constituents, and the run reads the head the schedule's last run
-// left once, for every fire it stands for.
-//
-// THE LATEST BY THE INSTANT IT CAME DUE, and the envelope's own instant only
-// for a fire that carries none, so a fire republished by a park cannot pass
-// for a later tick than it is.
-//
-// ITS TRACE IS THE LATEST FIRE'S, unlike a digest's, which takes its first
-// constituent's: the run IS the latest fire, so the schedule's history links
-// that fire to the turn and each earlier fire to its own superseded record
-// ([Dispatcher.noteSuperseded]).
-//
+// for ([types.TaskAssigned.Missed]), not a digest: every fire asks for the
+// same work, done as of now, so the seat need only know the others existed.
 // Reports false for anything that is not two or more fires of one schedule.
+//
+// Every fire carries the schedule's one conversation as both keys (notify's
+// ScheduleConversation), so the merged fire is stamped alike. The latest is by
+// [dueAt], so a fire republished by a park cannot pass for a later tick. Its
+// trace is the latest fire's, not the first constituent's as a digest's: the
+// run IS that fire, and each earlier one links to its superseded record
+// ([Dispatcher.noteSuperseded]).
 func mergeScheduledFires(evs []*events.Event) (*events.Event, bool) {
 	if len(evs) < 2 {
 		return nil, false
@@ -124,27 +94,17 @@ func dueAt(ev *events.Event, fire *types.TaskAssigned) time.Time {
 }
 
 // mergeNotifications merges a partition of external notifications into ONE
-// event carrying the digest.
+// event carrying the digest. It reports false when a constituent is not an
+// external notification or its body did not decode (a build that renamed the
+// payload): both a key-scheme bug ([inbox.Route]), which the caller answers
+// with per-event dispatch rather than by losing an event.
 //
-// Reports false when the partition is not mergeable, which the caller answers
-// by degrading to per-event dispatch rather than by losing an event. Two ways
-// that happens, and both are a key-scheme bug rather than an ordinary case
-// (see [inbox.Route]): a constituent that is not an external notification at
-// all, and one whose typed body did not decode — an event from a build that
-// renamed the payload, which reaches this build as an envelope with nothing
-// in it.
-//
-// THE ENVELOPE IS THE LATEST CONSTITUENT'S, because the merged body ends with
-// that message in full and every pointer a reply follows — a thread ts, an
-// issue key, a "reply here" — is read off it. The two exceptions are the two
-// facts a merge must not be allowed to launder, and each takes the same value
-// the dispatcher derives for the turn itself: the trace comes from the FIRST
-// constituent, matching [triggerTrace] and the event [DescribeTrigger] leads
-// with, and the delegation depth is the DEEPEST, matching [delegationOf].
-//
-// The id is FRESH, which is why the work key is derived from the constituents
-// before this runs: a digest minted on every drain would key differently on
-// every redelivery and match nothing the completion ledger holds.
+// The envelope is the LATEST constituent's: the body ends with that message in
+// full, and every reply pointer is read off it. The two facts a merge must not
+// launder match the dispatcher's: the trace is the FIRST constituent's
+// ([triggerTrace], [DescribeTrigger]), the delegation depth the DEEPEST
+// ([delegationOf]). The id is FRESH, so the work key is derived from the
+// constituents first, or a redelivery would match nothing the ledger holds.
 func mergeNotifications(prompts notify.Prompts, evs []*events.Event) (*events.Event, bool) {
 	if len(evs) < 2 {
 		return nil, false
@@ -173,37 +133,21 @@ func mergeNotifications(prompts notify.Prompts, evs []*events.Event) (*events.Ev
 	out.Source = latest.Source
 	out.ParentTurnID = latest.ParentTurnID
 	out.DelegationDepth, out.DelegationChain = delegationOf(evs)
-	// BOTH KEYS ride the merged envelope, because it REPLACES its
-	// constituents: from here on this one event is the partition, and a
-	// reader handed it must be able to ask either question. Every reader
-	// downstream of the merge is such a reader — the dispatcher deriving the
-	// turn's conversation from the trigger, and anything re-reading a stored
-	// digest later.
-	//
-	// The stamp is NOT for the sandbox coordinator, which is what this
-	// comment used to say: the answer match runs on screening.Events, before
-	// the merge, and never sees this envelope.
-	//
-	// The constituents all carry the same pair by construction — the
-	// partition key because that is what the broker grouped them on, the
-	// identity because a source's partition key refines it — so taking both
-	// through the dispatcher's own derivations keeps the "first non-empty"
-	// rule in one place rather than two.
+	// BOTH KEYS ride the merged envelope because it REPLACES its constituents:
+	// every reader downstream (the dispatcher deriving the turn's conversation,
+	// anything re-reading a stored digest) must be able to ask either. Not for
+	// the sandbox coordinator, whose answer match runs on screening.Events
+	// before the merge. The constituents share the pair by construction, so the
+	// dispatcher's own derivations keep "first non-empty" in one place.
 	notify.Stamp(out, partitionKeyOf(evs), conversationIdentityOf(evs))
 	return out, true
 }
 
-// prompts is the third-party app registry the merge renders with.
-//
-// A FUNCTION on the dispatcher rather than a captured value: the dispatcher is
-// built once and the registry belongs to an epoch a live apply replaces. A
-// captured copy would keep merging with the integrations the process started
-// with.
-//
-// An empty registry is a working answer rather than a missing one: every
-// source falls back to [notify.Generic], whose DigestBody passes a body
-// through unchanged — so a node with no integrations configured still merges,
-// it just supersedes nothing.
+// promptRegistry is the third-party app registry the merge renders with: a
+// FUNCTION, not a captured value, since the dispatcher is built once and the
+// registry belongs to an epoch a live apply replaces. An empty registry still
+// merges: every source falls back to [notify.Generic], whose DigestBody passes
+// a body through unchanged, so it supersedes nothing.
 func (d *Dispatcher) promptRegistry() notify.Prompts {
 	if d.Prompts == nil {
 		return notify.NewPrompts()
@@ -211,15 +155,11 @@ func (d *Dispatcher) promptRegistry() notify.Prompts {
 	return d.Prompts()
 }
 
-// notifyPrompts is the live third-party app registry, or an empty one before the
-// notification service has been started.
-//
-// ASKED OF THE SERVICE, never cached here. An apply calls [notify.Service.Replace]
-// for every integration the new revision enables, and the service is where
-// those land — so a copy taken when the service was built would go on merging
-// with the third-party apps the PROCESS started with, and a company that added Jira on
-// a later revision would silently lose that third-party app's supersede rules from
-// every digest for the life of the node.
+// notifyPrompts is the live third-party app registry, or an empty one before
+// the notification service has started. Asked of the service, never cached: an
+// apply calls [notify.Service.Replace] for every integration the new revision
+// enables, so a copy would keep the process's first set and drop a later-added
+// integration's supersede rules from every digest.
 func (e *Engine) notifyPrompts() notify.Prompts {
 	e.notify.mu.Lock()
 	svc := e.notify.service

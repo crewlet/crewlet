@@ -11,32 +11,26 @@ import (
 	"github.com/crewlet/crewlet/internal/setup"
 )
 
-// What a Slack disconnect takes away beyond the access sync's work.
+// What a Slack disconnect takes away beyond the access sync's work. The sync
+// has turned every seat off and revoked its bot token and, when the accounts
+// go, deleted each agent's app and cleared its sealed values once Slack
+// confirmed ([Engine.tearDownSeatAccess]), refusing the disconnect while a
+// removal waits. What is left is each agent's `integrations.slack` block,
+// naming an app that no longer exists.
 //
-// The access sync has already turned every seat off and revoked its bot token,
-// and, where the accounts are to be removed, deleted each agent's app with the
-// app-configuration token and cleared its sealed values once Slack confirmed
-// the deletion ([Engine.tearDownSeatAccess]); it refuses the disconnect while
-// a removal still waits. What is left is the document: each agent's
-// `integrations.slack` block, naming an app that no longer exists.
-//
-// A seat is addressed through the entity route because a merge patch on
-// `roles` replaces the whole list, and seats nest inside `units:` to any
-// depth, so N seats are N revisions. A disconnect is a thing an operator does
-// rarely and deliberately.
+// One entity-route write per seat, so N seats are N revisions (fine for a
+// rare, deliberate disconnect): a merge patch on `roles` replaces the whole
+// list, and seats nest in `units:` at any depth.
 func (e *Engine) tearDownSlack(ctx context.Context, removeSeats bool, by iam.Actor) error {
-	// KEPT, NOT CLEARED, when the operator did not ask for the accounts:
-	// the apps and their OAuth clients stay, so a reconnect turns the
-	// agents back on with an install.
+	// Kept when the operator did not ask for the accounts: the apps and
+	// their OAuth clients stay, so a reconnect is just an install.
 	if !removeSeats {
 		return nil
 	}
 	company := e.Company()
 	if company == nil || company.Config == nil {
-		// UNREACHABLE THROUGH THE LOOP, which guards this in
-		// [Engine.dropBlock] before any vendor step runs. Answered
-		// anyway rather than dereferenced, because this is a method on
-		// the engine and the guard is in another file.
+		// [Engine.dropBlock] guards this before any vendor step; answered
+		// rather than dereferenced, since that guard is in another file.
 		return fmt.Errorf("%w: this node has no active company revision",
 			integration.ErrDisconnectUnavailable)
 	}
@@ -44,9 +38,8 @@ func (e *Engine) tearDownSlack(ctx context.Context, removeSeats bool, by iam.Act
 		if seat.Slack.IsZero() {
 			continue
 		}
-		// EVERY STEP IS "REMOVE THIS IF IT IS THERE", so a failure is
-		// returned for the loop to retry, and the seats cleared before it
-		// stay cleared.
+		// Every step is "remove this if it is there", so a failure goes
+		// back to the loop to retry and seats already cleared stay so.
 		if err := e.clearSlackSeat(ctx, seat.Handle(), by); err != nil {
 			return err
 		}
@@ -54,21 +47,16 @@ func (e *Engine) tearDownSlack(ctx context.Context, removeSeats bool, by iam.Act
 	return nil
 }
 
-// clearSlackSeat removes one seat's whole `integrations.slack` block.
-//
-// THE WHOLE BLOCK, not the fields inside it: a seat left holding
-// `slack: {enabled: true}` after its app was deleted would ask the next
-// connect to create an app nobody chose again.
-//
-// RECORDED AS BY'S, whoever asked for the disconnect — see
-// [integration.State.RequestedBy].
+// clearSlackSeat removes one seat's whole `integrations.slack` block, not its
+// fields: a seat left with `slack: {enabled: true}` would have the next
+// connect create an app nobody chose. Recorded as by's, whoever asked for the
+// disconnect ([integration.State.RequestedBy]).
 func (e *Engine) clearSlackSeat(ctx context.Context, handle string, by iam.Actor) error {
 	writer := e.configWriterOrNil()
 	if writer == nil {
-		// THE SENTINEL, WRAPPED WITH WHAT IT IS REFUSING, for the reason
-		// [Engine.editGitHubSeat] gives: the loop keys on errors.Is and
-		// leaves the row alone, so a node that has a config surface
-		// finishes the disconnect.
+		// The sentinel, wrapped, for [Engine.editGitHubSeat]'s reason: the
+		// loop keys on errors.Is and leaves the row for a node with a
+		// config surface to finish.
 		return fmt.Errorf(
 			"%w: no config surface is wired on this node, so %s's Slack "+
 				"block cannot be removed", integration.ErrDisconnectUnavailable, handle)
@@ -83,9 +71,7 @@ func (e *Engine) clearSlackSeat(ctx context.Context, handle string, by iam.Actor
 	}
 	integrations, _ := role["integrations"].(map[string]any)
 	if _, held := integrations["slack"]; !held {
-		// ALREADY GONE, which is what a retry finds, and a retry is how
-		// this runs whenever a later seat failed. Every step here is
-		// "remove this if it is there".
+		// Already gone: what a retry finds after a later seat failed.
 		return nil
 	}
 	delete(integrations, "slack")
@@ -99,15 +85,10 @@ func (e *Engine) clearSlackSeat(ctx context.Context, handle string, by iam.Actor
 }
 
 // slackTeardown is Slack's disconnect step, in the shape every other
-// surface's already has.
-//
-// A TYPE RATHER THAN A BRANCH in [vendorDisconnect.Disconnect]. That branch
-// existed for "a surface with no teardown", and folding Slack's work into it
-// would have made the one case it covers indistinguishable from the surface
-// it was written for: the next kind with no vendor pass would inherit a Slack
-// teardown. Here the work joins the same seam as the other seven, which is
-// also what routes it through [Engine.forgetRemoved] without a second call
-// site knowing to.
+// surface's has. A type rather than a branch in [vendorDisconnect.Disconnect],
+// whose branch is for a surface with no teardown: folded in there, the next
+// kind with no vendor pass would inherit a Slack teardown. The shared seam
+// also routes it through [Engine.forgetRemoved].
 type slackTeardown struct{ engine *Engine }
 
 // Teardown reports nothing removed: every credential the agents' apps held

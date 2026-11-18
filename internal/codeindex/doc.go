@@ -109,7 +109,9 @@
 // longer line that could match is COUNTED, never run, and never answered as
 // holding no match. And Confirm takes its caller's context and checks it
 // between lines, so a search's budget holds to within one line's run, which
-// MaxLineWork bounds to 0.22 s on the cores it was measured on.
+// MaxLineWork bounds to 0.22 s on the cores it was measured on. Plan.Matches,
+// every match of a line a search answers, runs the expression over that line
+// once more, for the answered lines alone.
 //
 // The obvious alternatives are worse. A bound on a line's bytes alone,
 // whatever its pattern, would keep a literal search out of the minified files

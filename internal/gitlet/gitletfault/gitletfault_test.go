@@ -171,11 +171,11 @@ func TestEveryPointIsValidAndThePushPathIsInPipelineOrder(t *testing.T) {
 	if got, wantAll := gitletfault.Points(), slices.Concat(want, syncPoints, compactPoints, publishPoints,
 		[]gitletfault.Point{gitletfault.WriteAfterBuild, gitletfault.MergeAfterBuild, gitletfault.ChainAfterBuild},
 		[]gitletfault.Point{gitletfault.CheckAfterClaim}, expungePoints, importPoints,
-		mirrorPoints, []gitletfault.Point{gitletfault.CommitterBeforeAdmit},
+		mirrorPoints, []gitletfault.Point{gitletfault.CommitterBeforeAdmit, gitletfault.HostBeforeOffered},
 		[]gitletfault.Point{gitletfault.MaintainBeforeStep, gitletfault.WriteJoined}); !slices.Equal(got, wantAll) {
 		t.Fatalf("Points() = %v\nwant the push path, then the sync's, the compaction's and the publication's, "+
 			"then the write's own, the merge's and the chain's, then a check's run's, then the expunge's, "+
-			"an import's and a pull mirror's sync's, then the committer's admission, then a maintenance "+
+			"an import's and a pull mirror's sync's, then the committer's admission and an attempt's count, then a maintenance "+
 			"run's step and an engine write's join: %v", got, wantAll)
 	}
 

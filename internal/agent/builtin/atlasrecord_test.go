@@ -184,8 +184,8 @@ func ordersDB() map[string]any {
 // entry, its facts and where it runs, each a claim in the seat's voice naming
 // the turn, at the confidence the engine reads off the cited call. An SSH
 // read of a server makes the entry likely, and the agent passed no confidence.
-// Each claim names the tool of the call it cited, as the turn recorded it, so
-// a person reviewing it is told which call it rests on.
+// Each claim names the cited call's tool, as the turn recorded it, so a
+// reviewer is told which call it rests on.
 //
 // Mutation: make grounded.shownBy answer true for every claim (the grounding
 // check, broken on purpose) and TestAnUncitedValueIsRefused goes red; make

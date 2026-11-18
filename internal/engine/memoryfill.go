@@ -14,124 +14,68 @@ import (
 )
 
 // Filling the vectors a seat's memory is missing, on the node that holds it.
-//
-// A note is embedded as it is written ([learning.Diary.Write]). Two kinds of
-// note are left with no vector of the current model anyway, and nothing else
-// would ever give them one:
-//
-//   - a note written while the provider did not answer inside its budget, or
-//     answered a vector with no direction;
-//   - every note written under a model the company has since moved off,
-//     which recall no longer compares (see learning.RecallQuery.Model).
-//
-// The similarity half of `## Personal memory` reaches none of those, so a
-// durable fact older than the newest fifty is unreachable and — never
-// selected — is the first thing the 500-entry trim evicts.
-//
-// An EPISODE is the same story. Its vector is of the turn whole — label, ask
-// and what it did — and is made as the episode is written; a turn written while
-// the provider did not answer, and after a model change every turn the seat
-// ever took, has none that recall compares. The row keeps its ask (node
-// migration 0042), which is what lets one be made again, so the raw episodes
-// are filled beside the notes ([learning.Episodes.Unfilled]), and `## Similar
-// prior work` and `query_episodes` reach the seat's whole history rather than
-// only what it did since the change.
-//
-// # The holder, and only once the seat is established
-//
-// Only the node holding a seat writes its memory and carries it on the
-// changelog; every other node's copy is a stale one the next hydration
-// repairs. So a tick fills only seats this node HOLDS, and only once the seat
-// may start a turn ([seat.Host.MayStart]) — which is after its acquisition
-// hydrated its memory, so the tick fills the rows the seat actually has. A
-// filled row takes a fresh change sequence, which is what carries it to the
-// next holder (see learning.Diary.FillEmbeddings).
-//
-// # Every request under one discipline, across every seat
-//
-// A tick is ONE [embeddings.Pass] over every seat it visits, so what the
-// provider answers about one seat's request governs the next seat's too: a
-// rate limit, a timeout, a revoked key or a model the endpoint does not serve
-// ends the TICK, not the seat — every held seat would otherwise send its own
-// full batch into the same answer, every minute — and a refusal is split until
-// the input it refuses is alone, then held back for the hour
-// ([embeddings.RefusalRetry]) by a memory kept across ticks for as long as the
-// provider is configured the same ([embedConfiguration]). A row the provider
-// accepts and answers with a vector that has no direction is held back the
-// same way: it can keep no vector, and sent again every tick it was paid for
-// every tick. The pass is bounded in what it SENDS, refused requests included,
-// never in what came of it.
-//
-// AND A LONG ROW IS SENT A REQUEST AT A TIME. An episode's ask is stored whole
-// and bounded only by the event that carried it, so one row's text can need
-// more requests than a tick sends, more bytes than its share of the account's
-// minute, or longer than the tick to embed. Sent as one call it went out
-// whatever it cost, and a call that ran past the tick or met a rate limit part
-// way kept nothing: the next tick began with the same row, newest first, and
-// the node's fill stopped there for good — every seat after it included. So
-// the pass sends such a row as many requests as the tick has left, keeps what
-// each embedded of it in the memory, and the next tick sends the rest
-// ([embeddings.Pass]); the row's vector is still of its whole text.
-//
-// # Its own loop, beside the memory sync rather than inside it
-//
-// The memory sync's cycle sets the crash window for what a seat learns
-// ([memorySyncInterval]), and a provider having a slow minute must not widen
-// it: a fill waits on an embeddings API, a publish on the broker. So the two
-// run apart. A filled row is stamped again, so the memory sync carries it like
-// a new row the seat wrote: in its next own pass, which a cycle carries ahead
-// of every seat's backlog while the seats' own passes leave the backlogs'
-// turn the time to move a mark ([memorySync.resume]), whether the row was the
-// seat's own or one this node held for it when it took it.
+// A note or episode is embedded as it is written, but one written while the
+// provider did not answer (or answered a vector with no direction), and every
+// row written under a model the company has since moved off, has no vector
+// recall compares (learning.RecallQuery.Model). Nothing else would give it
+// one: the similarity half of `## Personal memory`, `## Similar prior work`
+// and `query_episodes` would never reach it, and the 500-entry trim evicts it
+// first. An episode's stored ask (node migration 0042) is what lets its vector
+// be made again ([learning.Episodes.Unfilled]).
+
+// Only the holder fills, and only once the seat may start a turn
+// ([seat.Host.MayStart]), after acquisition hydrated its memory: every other
+// node's copy is stale until the next hydration. A filled row takes a fresh
+// change sequence, which carries it to the next holder
+// (learning.Diary.FillEmbeddings).
+
+// A tick is ONE [embeddings.Pass] over every seat it visits, bounded in what it
+// sends: a rate limit, timeout, revoked key or unserved model ends the TICK,
+// not the seat, or every held seat would send its full batch into the same
+// answer every minute. A refused request is split until its input is alone,
+// then held back for [embeddings.RefusalRetry] by a memory kept while the
+// provider's configuration is unchanged ([embedConfiguration]); a row answered
+// with a directionless vector is held back the same way, or it is paid for
+// every tick. A row too long for one tick (an episode's ask is stored whole) is
+// sent a request at a time, what each embedded kept in that memory and the rest
+// sent next tick, its vector still of its whole text; sent as one call, a row
+// that overran the tick kept nothing and stalled the fill for good.
+
+// The fill runs in its own loop, apart from the memory sync, so a slow provider
+// cannot widen the sync's crash window ([memorySyncInterval]). A filled row is
+// stamped again, so the sync carries it like a new row in the seat's next own
+// pass ([memorySync.resume]).
 
 const (
-	// memoryFillInterval is how often the holder looks for rows to fill.
-	//
-	// A MINUTE, the knowledge corpus's own embedding cadence
-	// (search.EmbedInterval), for the same reason it gives: a tick with
-	// nothing to fill costs one indexed read per table per held seat and
-	// stops, and a faster tick would not fill anything sooner — what is
-	// slow is the provider.
+	// memoryFillInterval is how often the holder looks for rows to fill: a
+	// minute, the knowledge corpus's cadence (search.EmbedInterval). An idle
+	// tick costs one indexed read per table per held seat, and a faster tick
+	// fills nothing sooner: the provider is what is slow.
 	memoryFillInterval = time.Minute
 
 	// memoryFillPage is how many rows one read of a seat's table takes —
 	// one full call of the pass ([embeddings.PassBatch]).
 	memoryFillPage = embeddings.PassBatch
 
-	// memoryFillRequestsPerTick bounds the provider requests one node's
-	// tick sends.
-	//
-	// SIXTEEN: exactly what isolating one refused input among a full call
-	// costs inside the tick that meets it — 1 + 2·log₂128 = 15, and the one
-	// canary that judges the refusal when it is the tick's first answer
-	// (embeddings.Pass) — and what bounds the tick's wall clock. A provider
-	// refusing its configuration costs two of them (the refused call and the
-	// canary) before the tick concludes so. Per node rather than shared: a
-	// provider limits these models by the token rather than by the request,
-	// and sixteen a minute is far inside any request rate a vendor publishes.
+	// memoryFillRequestsPerTick bounds the provider requests one node's tick
+	// sends, and so its wall clock. Sixteen isolates one refused input in a
+	// full call within one tick: 1 + 2·log₂128 = 15, plus the canary that
+	// judges a refusal that is the tick's first answer (embeddings.Pass). Per
+	// node, since providers limit these models by the token, and sixteen a
+	// minute is far inside any published request rate.
 	memoryFillRequestsPerTick = 16
 
-	// memoryFillBytesPerTick bounds what the COMPANY's holders send in one
-	// tick between them, in prepared bytes: each node takes an equal share
-	// of it, divided by the live nodes that run seats
-	// ([seat.SweepResult.LiveNodes]).
-	//
-	// AN ACCOUNT'S BUDGET, because the rate it is sized against is one: a
-	// provider limits tokens a minute per ACCOUNT, and every node's fill
-	// draws on the one account the company configured. Stated per node, as
-	// it was, the burst a model change puts on the account multiplied with
-	// the fleet. A MILLION BYTES bounds a million tokens — a token is at
-	// least one byte (config.EmbeddingModels) — which is the tokens a minute
-	// of OpenAI's lowest paid tier for these models, so a model change alone
-	// cannot exhaust such an account's minute: about 500 notes at the
-	// 2 000-byte note bound a minute, and many more of a typical few hundred
-	// bytes, so a company of fifty seats at the 500-note cap re-embeds its
-	// diaries in under an hour. A JUDGEMENT CALL: a higher tier could take
-	// more, the knowledge corpus's own duty draws on the same account, and a
-	// seat's similarity search reaches only its filled rows meanwhile — so
-	// this trades the catch-up time against the share of the account's
-	// minute a model change takes. A tick that meets a rate limit anyway
-	// ends there, and the next is the retry.
+	// memoryFillBytesPerTick bounds the prepared bytes the COMPANY's holders
+	// send in one tick between them, each node taking an equal share over the
+	// live nodes that run seats ([seat.SweepResult.LiveNodes]): a provider
+	// limits tokens a minute per account, and every node draws on the one.
+	// A million bytes bounds a million tokens (a token is at least one byte,
+	// config.EmbeddingModels), OpenAI's lowest paid tier's minute for these
+	// models, so a model change alone cannot exhaust it, and fifty seats at the
+	// 500-note cap still re-embed in under an hour. A JUDGEMENT CALL trading
+	// catch-up time against the account share a model change takes (the corpus
+	// duty draws on it too); a tick that meets a rate limit ends, and the next
+	// is the retry.
 	memoryFillBytesPerTick = 1_000_000
 )
 
@@ -142,30 +86,26 @@ type memoryFill struct {
 	done   sync.WaitGroup
 
 	// refusals is what the provider refused, kept across ticks, and
-	// refusalsFor the configuration it belongs to ([embedConfiguration]) —
-	// the corpus duty's identity, so the two memories this node keeps of
-	// one provider move together. A refusal is a fact about the provider
-	// as it was configured, so a provider configured otherwise starts with
-	// none and a configuration concluded refused is judged again at once;
-	// one an apply merely built again the same — an unrelated change, a
-	// re-activation that rotated the key — keeps the rows it holds back
-	// and the pause it is in. Touched only by the loop's own goroutine.
+	// refusalsFor the configuration it belongs to ([embedConfiguration], the
+	// corpus duty's identity, so the node's two memories move together). A
+	// provider configured otherwise starts with none, so a concluded refusal
+	// is judged again at once; one an apply merely rebuilt the same (an
+	// unrelated change, a rotated key) keeps its held-back rows and pause.
+	// Touched only by the loop's goroutine.
 	refusals    *embeddings.Refusals
 	refusalsFor embedConfiguration
 
 	// resume is the seat the last tick's pass ran out at, where the next
-	// tick starts — so a budget spent before the last seat does not leave
-	// the seats after it for ever behind the ones before.
+	// tick starts, so a budget spent early never leaves later seats behind.
 	resume string
 }
 
 // startMemoryFill runs the fill loop until [Engine.stopMemoryFill].
 //
-// DETACHED from the signal context, like the memory sync: the drain still has
-// seats to release when SIGTERM lands. Unlike the memory sync it is CANCELLED
-// on stop rather than waited out: a tick mid-call holds a provider request,
-// not a broker write, and abandoning it loses nothing a later holder will not
-// fill again — its transaction rolls back whole.
+// Detached from the signal context, like the memory sync, since the drain
+// still releases seats after SIGTERM; but CANCELLED on stop rather than waited
+// out: a tick mid-call holds only a provider request, and its transaction
+// rolls back whole for a later holder to fill again.
 func (e *Engine) startMemoryFill(ctx context.Context) {
 	if e.backends == nil || e.backends.Store == nil || e.node == nil {
 		return
@@ -199,8 +139,8 @@ func (e *Engine) stopMemoryFill() {
 
 // fillMemory is one tick of the loop over the seats this node holds.
 //
-// BOUNDED BY THE INTERVAL ITSELF: a tick that cannot finish before the next is
-// due has fallen behind whatever it does next.
+// Bounded by the interval: a tick that overruns it has fallen behind whatever
+// it does next.
 func (e *Engine) fillMemory(ctx context.Context, loop *memoryFill) {
 	provider, ok := batchOf(e.embeddings.Load())
 	if !ok {
@@ -219,9 +159,8 @@ func (e *Engine) fillMemory(ctx context.Context, loop *memoryFill) {
 	defer cancel()
 	pass := embeddings.NewPass(memory, time.Now().UTC(), memoryFillRequestsPerTick,
 		shareOf(memoryFillBytesPerTick, liveNodes))
-	// THE SEAT'S DERIVED ID, the diary's key — never a roster lookup, for
-	// [memoryAgentID]'s reason: a seat this node still holds after an apply
-	// removed it keeps an address its rows can be found under.
+	// The seat's derived id, never a roster lookup ([memoryAgentID]): a seat
+	// still held after an apply removed it keeps an address for its rows.
 	agentIDOf := func(handle string) string { return memoryAgentID(e.Company(), handle) }
 	report := fillHeldMemory(ctx, host, memorySources(e.backends.Store, agentIDOf),
 		provider, pass, loop.resume)
@@ -230,12 +169,10 @@ func (e *Engine) fillMemory(ctx context.Context, loop *memoryFill) {
 }
 
 // memoryFor is the refusal memory a tick embedding with provider sends under:
-// the one the loop holds while the provider is configured as it was, and a new
-// one once it is configured otherwise ([embedConfiguration]).
-//
-// THE MEMORY FOLLOWS THE CONFIGURATION, read off the very provider the tick
-// embeds with — the corpus duty's rule ([embedDuty.tick]) — so no apply
-// landing between two reads can pair one provider's refusals with another's.
+// the loop's while the provider's configuration is unchanged
+// ([embedConfiguration]), else a new one. It is read off the very provider the
+// tick embeds with, as [embedDuty.tick] does, so an apply landing between two
+// reads cannot pair one provider's refusals with another's.
 func (loop *memoryFill) memoryFor(provider embeddings.Embedder) *embeddings.Refusals {
 	if configuration := configurationOf(provider); loop.refusals == nil ||
 		loop.refusalsFor != configuration {
@@ -330,8 +267,8 @@ func fillHeldMemory(ctx context.Context, held heldSeats, sources []fillSource,
 			return report
 		}
 		if _, may := held.MayStart(handle); !may {
-			// Still establishing — its memory is not hydrated yet — or
-			// no longer renewing. Either way not this tick's to fill.
+			// Still establishing (memory not hydrated) or no longer
+			// renewing: not this tick's to fill.
 			continue
 		}
 		for _, source := range sources {
@@ -347,14 +284,14 @@ func fillHeldMemory(ctx context.Context, held heldSeats, sources []fillSource,
 				report.storeErr, report.resume = stored.err, handle
 				return report
 			case err != nil:
-				// A READ OF ONE SEAT'S ROWS that failed costs that
-				// seat's table this tick, not the others'.
+				// A failed read costs this seat's table this tick, not
+				// the others'.
 				log.WarnContext(ctx, "memory_fill_read_failed", "seat", handle,
 					"table", source.table, "error", err)
 			}
 			if !pass.Open() {
-				// SPENT OR STOPPED HERE, so the next tick starts at this
-				// seat: it may have rows left that the pass never reached.
+				// Spent or stopped here: the next tick starts at this
+				// seat, which may have rows the pass never reached.
 				report.resume = handle
 				return report
 			}
@@ -432,8 +369,7 @@ func (r fillReport) log(ctx context.Context, provider embeddings.BatchEmbedder) 
 // refused alone, the requests it had refused while it was still narrowing them
 // down, and why it stopped where it did.
 //
-// A VALUE, so what a tick says is a fact a test reads rather than a side
-// effect on the process's logger.
+// A value, so a test reads what a tick says rather than the process's logger.
 func (r fillReport) lines(provider embeddings.BatchEmbedder) []reportLine {
 	model, pass := provider.Model(), r.pass
 	var out []reportLine
@@ -483,10 +419,9 @@ func (r fillReport) lines(provider embeddings.BatchEmbedder) []reportLine {
 	}
 	if isolating := pass.Refused - len(pass.RefusedAlone); isolating > 0 && total == 0 &&
 		!pass.Concluded {
-		// A TICK THAT FILLED NOTHING AND NAMED NO ROW, and still had
-		// requests refused, is narrowing down rows a refusal concerned —
-		// several to a call, more than one tick's requests can isolate.
-		// Silent, it read as a tick that sent nothing at all.
+		// Filled nothing and named no row, yet had requests refused: it is
+		// narrowing multi-row refusals one tick cannot isolate, and silent
+		// it would read as a tick that sent nothing.
 		add(slog.LevelInfo, "memory_fill_refusals_isolating", "model", model,
 			"requests", pass.Requests, "refused", pass.Refused,
 			"refused_alone", len(pass.RefusedAlone),
@@ -524,10 +459,8 @@ func (r fillReport) lines(provider embeddings.BatchEmbedder) []reportLine {
 // batchOf is the embedder in slot as a caller embedding many texts needs it,
 // and false when the company configures none or its provider cannot batch.
 //
-// A PROVIDER THAT CANNOT BATCH DOES NOT FILL, for the corpus duty's reason
-// (see [Engine.embedModel]): a seat's whole memory one row per round trip is
-// the cost the batch interface exists to avoid, and every provider this build
-// ships batches.
+// A provider that cannot batch does not fill, for the corpus duty's reason
+// ([Engine.embedModel]); every provider this build ships batches.
 func batchOf(slot *embeddings.Embedder) (embeddings.BatchEmbedder, bool) {
 	if slot == nil || *slot == nil {
 		return nil, false

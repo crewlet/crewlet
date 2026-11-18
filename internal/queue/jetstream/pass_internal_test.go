@@ -15,22 +15,13 @@ import (
 // A PASS IS SPACED BY ITS MESSAGE'S DELIVERY COUNT, RECORDS NO FAILURE AND
 // QUIESCES NOTHING.
 //
-// A pass hands a delivery to a peer ([queue.OutcomePass]), so the count its
-// spacing ages by is the one every node shares, the broker's count of the
-// message's deliveries: a per-node count would bring a message the group's
-// older nodes pass round back at each one's first second, and spend its budget
-// in a fraction of the ten minutes it spans. It is no failure, so this node's
-// record of the message's failures does not move, which would start its first
-// genuine failure up the curve. And nothing is wrong with the node, so its
-// attachment keeps taking mail.
-//
-// Read off the message the pass answers rather than off a broker, because what
-// is asserted is what the attachment asks the broker for, which no broker
-// reports back.
-//
-// Mutation: space a pass by this attachment's failures (nakOrDeadLetter), and
-// the fourth delivery's pass waits a second and records a failure; quiesce on
-// a pass, and the attachment stops taking mail.
+// A pass hands a delivery to a peer ([queue.OutcomePass]), so its spacing ages
+// by the count every node shares, the broker's delivery count: a per-node count
+// would return a message each older node passes at that node's first second,
+// spending its budget in a fraction of the ten minutes it spans. Recording a
+// failure would start its first genuine failure up the curve, and nothing is
+// wrong with the node, so it keeps taking mail. Read off the message, since no
+// broker reports back what the attachment asked of it.
 func TestAPassIsSpacedByItsDeliveriesAndIsNoFailure(t *testing.T) {
 	t.Parallel()
 	a := &attachment{
@@ -48,7 +39,7 @@ func TestAPassIsSpacedByItsDeliveriesAndIsNoFailure(t *testing.T) {
 			"immediate ones and %d terminations; want one spaced return",
 			msg.delays, msg.naked, msg.termed)
 	}
-	// The fourth spacing is eight seconds — 1, 2, 4, 8 — spread by a fifth
+	// The fourth spacing is eight seconds (1, 2, 4, 8), spread by a fifth
 	// either way.
 	spacing := a.q.nakSpacing(4)
 	if low, high := spacing-spacing/5, spacing+spacing/5; msg.delays[0] < low || msg.delays[0] > high {
@@ -71,19 +62,13 @@ func TestAPassIsSpacedByItsDeliveriesAndIsNoFailure(t *testing.T) {
 // A PASSED PARTITION IS SPACED, MESSAGE BY MESSAGE, BY EACH ONE'S OWN DELIVERY
 // COUNT, RECORDS NO FAILURE AND QUIESCES NOTHING.
 //
-// The batch path answers a partition's outcome in a switch of its own
-// ([attachment.applyPartition]), so it owes each of its messages what the single
-// path owes a pass. Spaced, a passed partition comes back behind the mail that
-// was waiting when it was passed — the order queuetest's
-// a_passed_partition_returns_for_a_peer_and_the_rest_of_its_drain_runs asserts
-// on every backend. On the broker that order is the spacing's, because a
-// return made at once and the next fetch reach the broker through two queues
-// of its own, and which it takes first is theirs: the conformance case cannot
-// catch a return made at once here, so what the attachment asks the broker for
-// is read off the messages, as for the single path.
-//
-// Mutation: return a passed partition at once, as a hand-back (handBack), and
-// neither message is spaced.
+// [attachment.applyPartition] answers a partition in a switch of its own, so it
+// owes each message what the single path owes a pass. Spacing is what puts a
+// passed partition behind the mail already waiting (queuetest's
+// a_passed_partition_returns_for_a_peer_and_the_rest_of_its_drain_runs): an
+// immediate return and the next fetch reach the broker through two queues in
+// either order, so that case cannot catch an immediate return (handBack) here,
+// and the spacing is read off the messages instead.
 func TestAPassedPartitionIsSpacedByEachMessagesDeliveries(t *testing.T) {
 	t.Parallel()
 	a := &attachment{
@@ -124,11 +109,10 @@ func TestAPassedPartitionIsSpacedByEachMessagesDeliveries(t *testing.T) {
 	}
 }
 
-// answeredMsg is a delivered message that records what it was answered: the
-// spaced returns ([jetstream.Msg.NakWithDelay]), the immediate ones and the
-// terminations, each termination told to onTerm where a case set one. Its
-// payload is data. Anything else it is asked panics on the nil interface it
-// embeds, which is a case asking for more than it set up.
+// answeredMsg is a delivered message that records how it was answered (spaced
+// returns, immediate ones, terminations, each also told to onTerm when set).
+// Anything else asked of it panics on the nil embedded interface: a case asking
+// for more than it set up.
 type answeredMsg struct {
 	jetstream.Msg
 	md     *jetstream.MsgMetadata

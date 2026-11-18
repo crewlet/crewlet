@@ -6,20 +6,13 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// THE RESERVE IS PER MESSAGE, AND ONE MESSAGE WITH ROOM IS ENOUGH.
-//
-// Driven here rather than only through the dispatcher because it is a pure
-// fold over values: a rule reachable only through a queue, a screening and a
-// turn is one nobody re-measures. The boundary is the assertion — one
-// delivery either side of the reserve decides whether a parked run is offered
-// the message at all.
-//
-// The case that matters most is the mixed partition. A conversation whose
-// earlier message has been handed back until it is inside the reserve keeps
-// collecting replies, and each arrives with a whole budget; folding those two
-// into the SMALLEST refuses the fresh reply and keeps refusing every later
-// one, which spends a person's answer on an ordinary turn while an executor
-// is still parked on the question it answers.
+// THE RESERVE IS PER MESSAGE, AND ONE MESSAGE WITH ROOM IS ENOUGH. The
+// boundary is the assertion: one delivery either side of the reserve decides
+// whether a parked run is offered the message at all. The case that matters
+// most is the mixed partition: a conversation whose earlier message is inside
+// the reserve keeps collecting replies with whole budgets, and folding to the
+// SMALLEST refuses every one, spending a person's answer on an ordinary turn
+// while an executor is still parked on the question it answers.
 func TestOneMessageWithDeliveriesToSpareKeepsTheOfferOpen(t *testing.T) {
 	t.Parallel()
 	const reserve = sandbox.AnswerDeliveryReserve
@@ -38,22 +31,18 @@ func TestOneMessageWithDeliveriesToSpareKeepsTheOfferOpen(t *testing.T) {
 		"none left at all":                 {[]sandbox.AnswerHeadroom{known(0)}, false},
 		"a full budget":                    {[]sandbox.AnswerHeadroom{known(24)}, true},
 
-		// A FRESH REPLY BESIDE A SPENT SIBLING is the shape the fold
-		// exists for, in both orders so nothing depends on which one a
-		// backend listed first.
+		// A FRESH REPLY BESIDE A SPENT SIBLING, in both orders so nothing
+		// depends on which a backend lists first.
 		"a fresh reply after a spent sibling": {[]sandbox.AnswerHeadroom{known(1), known(24)}, true},
 		"a fresh reply before a spent one":    {[]sandbox.AnswerHeadroom{known(24), known(1)}, true},
 
-		// AND WHEN EVERY MESSAGE IS SPENT THE ROUTE LETS GO. "Any" is
-		// not "always": without this the per-message read would simply
-		// have removed the bound.
+		// WHEN EVERY MESSAGE IS SPENT THE ROUTE LETS GO: "any" is not
+		// "always", or the per-message read would remove the bound.
 		"every message inside the reserve": {[]sandbox.AnswerHeadroom{known(reserve), known(2)}, false},
 
-		// AN ABSENT COUNT IS NOT A SPENT ONE. A transport that did not
-		// say leaves the route as it was before this clause existed,
-		// bounded by the per-process attempt count alone — reading
-		// silence as "no headroom" spends the reply on the exact
-		// failure the route exists to prevent.
+		// AN ABSENT COUNT IS NOT A SPENT ONE: read as spent, the reply is
+		// spent on an ordinary turn; the per-process attempt count alone
+		// bounds the route.
 		"nothing stated at all":        {[]sandbox.AnswerHeadroom{unstated}, true},
 		"no messages at all":           {nil, true},
 		"one unstated beside a spent":  {[]sandbox.AnswerHeadroom{known(1), unstated}, true},

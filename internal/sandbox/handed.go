@@ -15,231 +15,82 @@ import (
 	"time"
 )
 
-// THE SECRETS A LAUNCH HANDS ITS BOX, kept for the scrub its session leaves
-// through (session.go).
-//
-// # Every credential position, and only those
-//
-// A kept session must carry no secret the engine put in its box, and must keep
-// everything else, since a transcript scrubbed of an ordinary word is one the
-// next launch reads wrong. So the scrub takes out by value what sits in a
-// CREDENTIAL POSITION of the launch:
-//
-//   - every value a `${...}` reference resolved to — in the run's
-//     environment, in a setup file that is one reference whole, in an MCP
-//     server's url — what the operator kept out of the document
-//     ([LaunchRequest.Secrets], [MCPServer.Secrets]);
-//   - every variable of the run's environment whose name says it carries a
-//     credential, and the entry's sign-in, written or referenced alike
-//     ([LaunchRequest.Secrets]);
-//   - every MCP server's env and headers, written or referenced — where a
-//     tool server's credentials are declared;
-//   - the run's own export token, in its telemetry endpoint, and its
-//     credential on Gitlet ([GitTokenVar]);
-//   - and the login the box was seeded with.
-//
-// NOT the engine's identity facts (the seat's handle and email, which a
-// transcript names in every commit), a setting written in the document, the
-// name of an MCP server the launch declares, whatever position also holds it
-// ([withoutServerNames]), the
-// unresolved text of a reference, or a setup step's script or file: none is a
-// secret, and scrubbed by value each was lost from every kept session — the
-// seat's own name read as a redacted secret throughout — and a setup step's
-// large file put a launch past [MaxHandedBytes], which refused every capture of
-// the seat. A credential written in the document is the shape pass's
-// (internal/redact): the document keeps it in every revision anyway.
-//
-// # Taken at the launch, from what the box was given
-//
-// Read again at the capture, off the company the node runs THEN, they were not
-// what the box was given: a rotated secret resolved to its new value while the
-// box held the old one, and an entry renamed since resolved to nothing at all,
-// so the scrub took out less than the box was handed and said nothing. So the
-// launch collects them from the very request it starts the job with
-// ([handedSecrets]), and the run keeps them SEALED under the fleet keyring
-// ([SessionKeep.SealHanded]), bound to the turn, BESIDE its row and named for
-// the job ([PendingStore.Handed]): the coordination store is not encrypted, a
-// capture may be made on any node whose host the box is on, and the row, which
-// every git request of a coding box and every listing reads whole, is kept
-// small of what only a capture, the next launch and the poll's record of a
-// renewed token (below) read.
-//
-// # Carried forward where a box is kept
-//
-// A job that continues in the box the turn's previous job ran in — its
-// reviewer's send-back, a person's answer — runs no setup, and resumes the
-// previous job's session, which holds that job's lines. So its launch carries
-// the previous job's sealed set forward and seals both together
-// ([PriorBox.Handed]): a secret rotated while the box waited, or a step removed
-// since, was otherwise handed to the box by the first launch and scrubbed by no
-// later capture of it.
-//
-// # And read again, or recorded, where they change
-//
-// A login is refreshed while the run works — in the box, by its harness, and
-// on the engine host, by the entry's own calls — and each refresh mints values
-// the launch never saw. So the sealed set also keeps where each seeded login lives,
-// and the capture reads it again in the box and on the host before it scrubs
-// ([Coordinator.scrubValues]).
-//
-// A token the engine issues the seat is RENEWED in a running box's files by the
-// completion poll (internal/engine's issued.go): an AWS session every ten
-// minutes, a GitHub or Google Cloud token about once an hour. Read again at a
-// capture it would be another issue, never the token the box holds; and the
-// shapes do not catch every one — an AWS session's secret key and its token,
-// printed bare, have none. So the value is RECORDED IN THE JOB'S SEALED
-// SET BEFORE IT IS WRITTEN: on the poll, beside the job's row
-// ([Coordinator.RecordHanded], [PendingStore.AddHanded]); at the launch of a job
-// that continues in its turn's kept box, whose files the launch brings up to
-// date before the job starts, in the set that job is sealed with
-// ([Coordinator.sealHanded]). A value that cannot be recorded — the store did
-// not answer, or the row no longer holds the job running — is not written, and
-// the next poll asks again. So the set holds every value the box was given
-// before the box holds it, and a capture made once its job has stopped reading
-// files holds every value the box could hold. A capture of a job its box
-// would not end, taken as it stands, reads the set before its pack
-// ([Coordinator.takeCapture]), so a token the poll renews while that pack is
-// made is not among the values it scrubs by: printed meanwhile by the job
-// still working, it goes only where a shape names it.
-//
-// IN [HandedSecrets.Values] ITSELF, where an older build's scrub, which decodes
-// that alone, takes the renewed values too; when each one lapses rides beside
-// them ([HandedSecrets.Expires]), which only this build reads, and a value is
-// dropped [handedLapse] past it, so a long run's renewals do not grow the set
-// without bound. A set still past [MaxHandedBytes] after the drop would hold
-// less than its box, and is MARKED INCOMPLETE instead ([handedSet.Incomplete]):
-// every later capture of the job is refused, as one of a launch past the bound
-// is, and the token is written all the same, since the run needs a good token
-// more than it needs a kept session.
-//
-// # Whole, and by every string a document holds
-//
-// A value is taken out whole and, where it is a JSON document, by every string
-// it holds ([secretValues]), as a login is ([loginValues]): an AWS session
-// reaches its box as the document its credential_process prints, and a
-// transcript prints the session's token bare, which the whole document never
-// matches and no shape names.
-//
-// EVERY STRING, NOT ONLY THOSE UNDER A CREDENTIAL'S KEY, of every document in a
-// credential position, the operator's own as much as the engine's: the engine
-// cannot tell a document's credential from its settings but by the names its
-// members are written under, and a secret under a name no credential's rule
-// reads, printed bare, would be kept. So what else a document holds goes with
-// it: a Google Cloud service-account key handed through a reference gives up
-// its project ID and its client email, which every kept transcript of the
-// seat loses wherever it names them. A setting kept beside the secret instead
-// — written in the document, or in a variable of its own — is never taken out
-// by value; and a seat on the engine's own Google Cloud integration is issued a
-// bare token.
-//
-// BUT NOT A FORMAT'S OWN PUBLISHED CONSTANTS, which cannot be secrets: of a
-// Google service-account key — a document whose `type` is exactly
-// `service_account` — the values of its `type`, `auth_uri`, `token_uri`,
-// `auth_provider_x509_cert_url` and `universe_domain` are fixed by Google's
-// format, not by the account, and are kept, so the seat's transcripts keep
-// every googleapis.com URL its tools print ([serviceAccountConstant]). One
-// closed list for one format; every other document gives up every string.
-//
-// AT THE FLOOR EVERY VALUE IS HELD TO, and of its strings alone. The scrub
-// takes nothing out by value under eight bytes (internal/sandbox/executor's
-// minScrubBytes), a document's strings as much as a whole value, since a
-// string that short is as likely ordinary text as a secret; and a document's
-// members' names, numbers, booleans and nulls are no strings it holds. So a
-// `true`, a `1` or a short word in a document, and the registry host a Docker
-// config files its credentials under, are never taken out by value; a longer
-// setting, such as a service-account key's project ID, is, which is the cost
-// above.
-//
-// # A capture that cannot know them keeps nothing
-//
-// A job with no sealed secrets beside its row — a launch whose secrets could
-// not be sealed, or whose write of them did not land — or a seal this node
-// cannot open is a
-// session that cannot be scrubbed of what the engine put in its box, and it is
-// refused rather than kept scrubbed of less.
-
-// HandedSecrets is every value a launch handed its box that a capture of the
-// box's session scrubs out by value, and where its seeded logins live.
+// HandedSecrets is every value a launch handed its box out of a credential
+// position ([handedSecrets]), which a capture of the box's session (session.go)
+// scrubs out by value, and where its seeded logins live. Nothing else goes, since
+// a transcript scrubbed of an ordinary word misleads the next launch: the seat's
+// handle and email, a setting written in the document (internal/redact's shapes
+// take a credential written there), an MCP server's name ([withoutServerNames]),
+// a reference's unresolved text and a setup step's script or file all stay.
+// Taken from the launch's own request, since read again at a capture a rotated or
+// renamed secret resolves to what the box was not given; kept sealed under the
+// fleet keyring ([SessionKeep.SealHanded]) beside the run's row, never on it
+// ([PendingStore.Handed]): the coordination store is unencrypted, a capture may
+// run on any node, and every git request and listing reads the row whole.
 type HandedSecrets struct {
-	// Values is every value the launch handed the box out of a credential
-	// position (see the file comment), each whole and by every string a
-	// document of them holds ([secretValues]), the strings its seeded login
-	// held, and every token a refresh wrote into the box since
-	// ([HandedSecrets.record]): ONE LIST, the one an older build's scrub
-	// reads.
+	// Values is every value from a credential position, whole and by every
+	// JSON string ([secretValues]), the strings of each seeded login, and
+	// every token a refresh recorded since ([HandedSecrets.record]): ONE LIST,
+	// since an older build's scrub decodes this field alone.
 	Values []string `json:"values"`
 
-	// Logins maps each login file the box was seeded with — its path
-	// relative to the box's home ([Spec.CredentialFiles]) — to the file on
-	// the engine host it was seeded from, both of which are read again at a
-	// capture.
+	// Logins maps each seeded login file, relative to the box's home
+	// ([Spec.CredentialFiles]), to the engine-host file it was seeded from.
+	// A capture reads both again ([Coordinator.scrubValues]): the harness in
+	// the box and the entry's calls on the host refresh a login while the run
+	// works, minting values the launch never saw.
 	Logins map[string]string `json:"logins,omitempty"`
 
-	// Expires is when each value a refresh recorded lapses, by
-	// [expiryKey] of the value: the expiry its issuer gave the token it
-	// belongs to, past which the value is dropped ([HandedSecrets.drop]). A
-	// value with none is kept for as long as the set is, which is every value
-	// a launch handed. KEYED BY A DIGEST, not by the value, so the expiries
-	// cost the set a few dozen bytes a value rather than every value twice;
-	// and BESIDE Values rather than in it, so an older build, which knows
-	// nothing of a lapse, still decodes and scrubs every value, and carries
-	// every one forward — never dropped, which only costs it room.
+	// Expires is when each value a refresh recorded lapses, by [expiryKey]:
+	// its issuer's expiry, [handedLapse] past which it is dropped
+	// ([HandedSecrets.drop]). A value with none, as every launch-handed one,
+	// is kept as long as the set. KEYED BY A DIGEST, so an expiry costs a few
+	// dozen bytes rather than the value again; BESIDE Values, so an older
+	// build still decodes, scrubs and carries forward every value, merely
+	// never dropping one.
 	Expires map[string]time.Time `json:"expires,omitempty"`
 
 	// Extra is every key of the set this build does not know, kept verbatim
-	// through every write of the set this build makes — a renewal's record,
-	// a launch's carry of it into the box's next job ([HandedSecrets.union])
-	// — so a later build's fact about the values it holds survives this
-	// build's poll on a fleet running both (wirekeys.go). Filled by the
-	// decode, never by a caller.
+	// through every write this build makes (a renewal's record, a launch's
+	// carry via [HandedSecrets.union]), so a later build's fact survives this
+	// build's poll on a mixed fleet (wirekeys.go). Filled by the decode, never
+	// by a caller.
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// MaxHandedBytes bounds the secrets one launch keeps, encoded, before
-// they are sealed — its own, those carried from the jobs before it in the
-// same box, and the tokens a refresh renewed in the box since.
+// MaxHandedBytes bounds the secrets one launch keeps, encoded, before they are
+// sealed: its own, those carried from earlier jobs in the same box, and the
+// tokens a refresh renewed there since.
 //
-// SIXTY-FOUR KIBIBYTES. A box is handed a handful of tokens, a few MCP servers'
-// headers, a deploy key a setup step writes from a reference, and a login
-// document of a kibibyte or two: a few kibibytes in all, a key file the
-// largest single value. Sixty-four is room for a dozen keys beside everything
-// else, carried across a turn's relaunches — kept beside the run's row, never
-// on it, since even this much on the row would ride every read of it. A launch
-// handed more keeps none, and its captures are refused saying so, rather than
-// a set grown without bound or a scrub of only some of them.
-//
-// AND A RUN'S RENEWALS, which the drop holds to the last hour and a quarter of
-// them ([handedLapse]): an AWS session, the largest and most often renewed, is
-// a document of about a kibibyte and a kibibyte more of the strings it holds,
-// renewed every ten minutes and lapsing fifteen after its issue, so about eight
-// are held at once — some eighteen kibibytes — and a GitHub or a Google Cloud
-// token a few hundred bytes more. A set the renewals take past the bound is
-// marked incomplete, as a launch past it keeps none ([PendingStore.AddHanded]).
+// 64 KiB: a box is handed a few kibibytes (tokens, MCP headers, a deploy key, a
+// login document of a kibibyte or two), so this is room for a dozen key files
+// across a turn's relaunches, plus a run's renewals, which the drop holds to
+// about eight AWS sessions of ~2 KiB each ([handedLapse]). A launch past it keeps
+// none, and a set renewals take past it is marked incomplete
+// ([PendingStore.AddHanded]); either way its captures are refused, never scrubbed
+// of only some values.
 const MaxHandedBytes = 64 << 10
 
 // handedLapse is how long past its expiry a token a refresh recorded stays in
-// the set ([HandedSecrets.drop]).
-//
-// AN HOUR. A lapsed token opens nothing, so a session that keeps one keeps no
-// secret; an hour is far past any clock's error between the issuer, the node
-// that recorded the token and the node that drops it, so nothing still good is
-// dropped. And it is what bounds the set on a long run: an AWS session renewed
-// every ten minutes is 144 renewals a day, a kibibyte or two each, past
-// [MaxHandedBytes] within a few hours were none dropped, and about eight at
-// once with the drop.
+// the set ([HandedSecrets.drop]). An hour: a lapsed token opens nothing, and an
+// hour is far past any clock error between the issuer and the nodes that record
+// and drop it, so nothing still good is dropped. It is what bounds a long run:
+// an AWS session renewed every ten minutes, lapsing fifteen after, would pass
+// [MaxHandedBytes] within hours undropped, and holds about eight at once with it.
 const handedLapse = time.Hour
 
 // expiryKey is what [HandedSecrets.Expires] holds value's expiry under: the
-// first sixteen bytes of its SHA-256, in hex — a hundred and twenty-eight bits,
-// so two values of one set never share a key.
+// first sixteen bytes of its SHA-256 in hex, 128 bits, so two values of one set
+// never share a key.
 func expiryKey(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:16])
 }
 
-// ErrHandedUnknown is a capture refused because the secrets its box was
-// handed cannot be known: the run keeps none for the job, or a seal this node
-// cannot open.
+// ErrHandedUnknown is a capture refused because the secrets its box was handed
+// cannot be known: the run keeps none for the job (its launch could not seal
+// them, or their write did not land), or a seal this node cannot open. Such a
+// session is refused rather than kept scrubbed of less.
 var ErrHandedUnknown = errors.New("sandbox: the secrets the engine handed the box cannot be read back")
 
 // ErrHandedIncomplete is a job's set marked as holding less than its box does
@@ -247,11 +98,10 @@ var ErrHandedUnknown = errors.New("sandbox: the secrets the engine handed the bo
 // wrapped in [ErrHandedUnknown], saying why.
 var ErrHandedIncomplete = errors.New("sandbox: the secrets kept for the job's scrub hold less than its box does")
 
-// ErrJobNotRunning is a token a refresh was about to write into a box that
-// was not recorded because the run's record no longer holds the job running,
-// its ending undecided ([PendingStore.AddHanded]): the poll that read it is a
-// moment old, and the job is over or ending. Nothing more is written into the
-// box for it.
+// ErrJobNotRunning is a token a refresh was about to write into a box, left
+// unrecorded because the run's record no longer holds the job running with its
+// ending undecided ([PendingStore.AddHanded]): the poll is a moment old and the
+// job is over or ending, so nothing more is written into the box.
 var ErrJobNotRunning = errors.New("sandbox: the run's record no longer holds the job running")
 
 // Why a job's set is marked as holding less than its box does
@@ -272,14 +122,14 @@ const (
 	handedUnsealable = "the set could not be sealed again on the node that renewed a token in the box"
 )
 
-// handedSecrets is what req hands its box out of a credential position — see
-// the file comment — env being the environment the job is started with
-// ([withTelemetry]), whose run export token and Gitlet credential
-// ([GitTokenVar], minted for the launch by [LaunchRequest.RunEnv]) are the
-// secrets of it no request field names: both minted for this job alone, after
-// the request was built. Each value is kept whole and by every string it holds
-// where it is a JSON document ([secretValues]): a seat's AWS session is handed
-// as one, in the file its credential_process reads.
+// handedSecrets is what req hands its box out of a credential position: what
+// [LaunchRequest.Secrets] names (every `${...}` it resolved, every variable whose
+// name says credential, the entry's sign-in), every MCP server's env, headers and
+// resolved references, the strings of each seeded login, and two secrets no
+// request field names, minted for this job after the request was built: the run's
+// export token in env's telemetry endpoint ([withTelemetry]) and its Gitlet
+// credential ([GitTokenVar], from [LaunchRequest.RunEnv]). Each is kept whole and
+// by its JSON strings ([secretValues]).
 func handedSecrets(req LaunchRequest, env map[string]string) HandedSecrets {
 	var values []string
 	add := func(vs ...string) {
@@ -321,14 +171,11 @@ func handedSecrets(req LaunchRequest, env map[string]string) HandedSecrets {
 }
 
 // withoutServerNames is values less every one that is exactly the name of an
-// MCP server the launch declares.
-//
-// A NAME THE DOCUMENT DECLARES IS NO SECRET, whatever position also holds it:
-// the company document states it in every revision, and it is part of every
-// tool name of that server (`mcp__<server>__<tool>`). Taken out by value, a
-// kept session lost the name wherever it stood, and a tool definition its
-// harness restores and sends again was named outside the provider's pattern,
-// which refused every request of the session.
+// MCP server the launch declares, whatever position also holds it: the document
+// states the name in every revision, and it is part of every tool name of that
+// server (`mcp__<server>__<tool>`), so scrubbing it would rename a tool
+// definition the harness restores outside the provider's pattern, which then
+// refuses every request of the session.
 func withoutServerNames(values []string, servers map[string]MCPServer) []string {
 	return slices.DeleteFunc(values, func(v string) bool {
 		_, declared := servers[v]
@@ -510,14 +357,11 @@ func decodeHanded(raw []byte) (HandedSecrets, error) {
 	return h, nil
 }
 
-// loginValues is every string a login document holds — a harness's
-// credentials file, the document its login export printed — for the scrub: its
-// tokens and its keys, however its harness spells their names. Every string,
-// not only those under a credential's key; what else such a document holds is a
-// scope or a plan's name, whose occurrences a transcript loses nothing by. A
-// login that is a Google service-account key keeps its format's constants, as
-// a secret that is one does ([jsonStrings]). A document that is not JSON is
-// taken whole, a line at a time, as a setup step's file is.
+// loginValues is every string a login document holds (a harness's credentials
+// file, a login export's output), however its harness names its tokens and keys;
+// the rest is a scope or plan name a transcript loses nothing by. A Google
+// service-account key keeps its format's constants ([jsonStrings]). A document
+// that is not JSON is taken whole, a line at a time, as a setup step's file is.
 func loginValues(doc []byte) []string {
 	strs, isJSON := jsonStrings(doc)
 	if !isJSON {
@@ -527,21 +371,17 @@ func loginValues(doc []byte) []string {
 }
 
 // secretValues is value as the scrub takes it out: whole, then, where it is a
-// JSON document, every string it holds ([jsonStrings]).
-//
-// WHOLE AND BY ITS STRINGS, because a transcript holds either: the whole where
-// the run printed the file it was written to, a string alone where it printed
-// what it read out of it. An AWS session reaches its box as the document its
-// credential_process prints (internal/engine's awstoken.go), and its session
-// token printed alone is matched by no whole document and named by no shape.
-// What else such a document holds goes with it, as the file comment says — an
-// AWS session's expiry, as the instant it is written in, and every setting of a
-// document the operator put in a credential position, but for the constants a
-// Google service-account key's format fixes ([serviceAccountConstant]). Its
-// members' names, its numbers, booleans and nulls are no strings it holds, and
-// a string under eight bytes is left to the shapes, as every value is: the
-// scrub's floor (internal/sandbox/executor's minScrubBytes) is applied to every
-// value it is handed, these among them, so it is not applied here.
+// JSON document, every string it holds ([jsonStrings]), since a transcript prints
+// either the file or one string read out of it: an AWS session reaches its box as
+// the document its credential_process prints (internal/engine's awstoken.go), and
+// its token printed bare matches no whole document and no shape. EVERY string, as
+// only member names tell a credential from a setting and a secret under an unknown
+// name would be kept, so a referenced key's project ID and client email go too (a
+// setting written in the document or its own variable never does); but for
+// [serviceAccountConstant]. Names, numbers, booleans and nulls are no strings,
+// and the scrub's 8-byte floor (internal/sandbox/executor's minScrubBytes) keeps
+// a `true` or a short word: it applies to every value the scrub is handed, so
+// not here.
 func secretValues(value string) []string {
 	strs, _ := jsonStrings([]byte(value))
 	return append([]string{value}, strs...)
@@ -591,19 +431,14 @@ const serviceAccountType = "service_account"
 
 // serviceAccountConstant reports whether member is one whose value Google's
 // service-account key format fixes: its `type`, the endpoints its token is
-// asked of and its certificates are read from, and the universe it belongs to.
-//
-// A FORMAT'S OWN PUBLISHED CONSTANTS CANNOT BE SECRETS: they are the same in
-// every key Google issues for a universe, printed in its documentation, and
-// open nothing. Taken out by value, they blanked every googleapis.com URL in
-// every tool output of a seat handed such a key, from the very sessions the
-// next turn continues. So one closed list, for one format the engine has a
-// first-class integration for, and decided on the key's declared `type` alone.
-// Everything else of the key — its private key and that key's id, its
-// client's email and id, its project, and its client certificate's URL, which
-// names the client's email — is the account's and goes as every string of a
-// document in a credential position does; a document of any other format
-// keeps no constant, its `type` going with the rest.
+// asked of and its certificates are read from, and its universe. These are the
+// same in every key of a universe, published, and open nothing; scrubbed, they
+// would blank every googleapis.com URL the seat's tools print. One closed list,
+// for one format the engine integrates first-class, decided on the key's
+// declared `type` alone. The rest of the key (its private key and that key's id,
+// client email and id, project, and client certificate URL, which names the
+// email) goes as any document's strings do, and a document of any other format
+// keeps no constant, its `type` included.
 func serviceAccountConstant(member string) bool {
 	switch member {
 	case "type", "auth_uri", "token_uri", "auth_provider_x509_cert_url", "universe_domain":
@@ -618,17 +453,17 @@ func boxLoginPath(box Sandbox, rel string) string {
 	return path.Join(box.Home(), rel)
 }
 
-// sealHanded is what a launch keeps beside its row of the secrets it handed its box
-// ([PendingStore.Handed]): sealed — with, where the job continues in the box the
-// job before it ran in (continues), what prior's job and those before it handed
-// that box ([PriorBox.Handed]), and the tokens the launch's refresh wrote into
-// that box before the job started (renewed, [CoordinatorOptions.Refresh]),
-// those lapsed past [handedLapse] dropped — or "" where they cannot be: a
-// company that keeps no session ([Coordinator.capturing]), a box continued
-// whose record says nothing of what it was handed or holds a seal this node
-// cannot open, secrets past [MaxHandedBytes], a keyring that cannot seal. Each
-// but the first is logged, and refuses every capture of the job rather than
-// one scrubbed of less than its box holds.
+// sealHanded is what a launch keeps beside its row ([PendingStore.Handed]): the
+// secrets it handed its box and the tokens its refresh wrote there before the job
+// started (renewed, [CoordinatorOptions.Refresh]), sealed, those lapsed past
+// [handedLapse] dropped. A job continuing in its turn's kept box (continues)
+// runs no setup and resumes the previous job's session, which holds that job's
+// lines, so it also carries what prior's job and those before it handed the box
+// ([PriorBox.Handed]). It is "" where none can be kept: a company that keeps no
+// session ([Coordinator.capturing]), or, logged and refusing every capture of the
+// job rather than one scrubbed of less, a continued box whose record says nothing
+// of its set or holds a seal this node cannot open, secrets past
+// [MaxHandedBytes], or a keyring that cannot seal.
 func (c *Coordinator) sealHanded(ctx context.Context, req LaunchRequest, env map[string]string,
 	prior PriorBox, continues bool, renewed HandedSecrets) string {
 
@@ -676,25 +511,18 @@ func (c *Coordinator) carryHanded(turnID string, handed HandedSecrets, carried s
 	return handed.union(before), nil
 }
 
-// RecordHanded records value — a token the poll's refresh of run's box is
-// about to write there, which its issuer said lapses at expires — in the
-// sealed set beside the job's row that every capture of the job's session is
-// scrubbed by ([PendingStore.AddHanded]): the waiter's [WaiterOptions.Record]
-// in the engine, the recorder a poll hands its refresh ([RecordHanded]).
-//
-// NIL IS A VALUE THE REFRESH MAY WRITE: recorded now, recorded by an earlier
-// poll whose write did not land, or one the job's set already refuses every
-// capture over. An ERROR IS A VALUE THE REFRESH DOES NOT WRITE: the store did
-// not answer, and the next poll asks again; or [ErrJobNotRunning], a poll a
-// moment old whose job is over or ending.
-//
-// ADDED THROUGH THE SET'S OWN SEAL ([Coordinator.addHanded]), and where the
-// set cannot take it — this node cannot open, read or seal it again, or the
-// token takes it past [MaxHandedBytes] with every lapsed value dropped — the
-// set is MARKED INCOMPLETE rather than left without it, logged once here, and
-// the value is written all the same: the run needs a good token more than a
-// kept session, and a set that holds less than its box refuses every later
-// capture of the job ([ErrHandedIncomplete]).
+// RecordHanded records value, a token the engine's poll (internal/engine's
+// issued.go, via [WaiterOptions.Record]) is about to write into run's box,
+// lapsing at expires, in the job's sealed set ([PendingStore.AddHanded]) BEFORE
+// it is written: re-read at a capture it would be a fresh issue, and no shape
+// names a bare AWS secret key. Nil means write it (recorded now or before, or
+// the set already refuses every capture); an error means do not, and the next
+// poll asks again (the store did not answer, or [ErrJobNotRunning]). A set that
+// cannot take it ([Coordinator.addHanded]) is marked incomplete
+// ([ErrHandedIncomplete]), logged, and nil returned all the same: the run needs a
+// good token more than a kept session. A still-working job's capture reads the
+// set before its pack ([Coordinator.takeCapture]), so a token renewed mid-pack
+// is caught only by a shape.
 func (c *Coordinator) RecordHanded(ctx context.Context, run PendingRun, value string, expires time.Time) error {
 	if strings.TrimSpace(value) == "" {
 		return nil

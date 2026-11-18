@@ -11,49 +11,18 @@ import (
 	"unicode/utf8"
 )
 
-// The owner's side of the live view: one READING per launch being watched,
-// shared by everybody watching it, answered by cursor.
+// The owner's side of the live view (docs/concepts/code-sandbox.md, "Watching
+// a run live"): ONE [LiveReading] per watched launch, read from the box at
+// most once per [LiveReuse] however many watch, each answer the slice of it
+// the asker's cursor lacks.
 //
-// # Why a reading, and not a peek per request
-//
-// A peek used to be a whole read of the box per request: a reconnect, three
-// files, a decode and a redaction, for every viewer every three seconds, with
-// nothing shared between them and nothing bounding how long one took — the
-// asker gave up after its budget and the owner's answer ran on regardless, in
-// one of the answer slots every run this node owns shares. And each answer
-// re-sent the whole window it had sent three seconds before, which is why the
-// window was eight kilobytes: a hundred lines of a run that can go on for
-// hours, and nothing older than that on any screen until it was collected.
-//
-// So the owner keeps ONE [LiveReading] per watched launch, advanced from the
-// box at most once per [LiveReuse] however many people are watching, and each
-// answer is a slice of what that reading has settled: the bytes the asker does
-// not hold yet. A viewer holds what the run's record will hold
-// ([MaxRunTextBytes]) and is sent only what is new.
-//
-// # Why a cursor is safe here
-//
-// A reading's text is APPEND-ONLY by construction: a runner settles a line
-// only once nothing written after it can change how it redacts
-// ([github.com/crewlet/crewlet/internal/redact.Settled]), and a transcript
-// entry, once decoded, is never decoded again. So an offset into it names the
-// same byte for as long as the reading lasts, and a viewer at offset N lacks
-// exactly the text after N. What can still go wrong is everything that is not
-// this reading — the owner restarted, the run moved to a node on another
-// build, the reading began again further on, the account switched from the
-// error stream to the transcript, the viewer fell further behind than the
-// owner keeps — and every one of those is a RESET carrying the last
-// [MaxRunTextBytes] in whole lines, never a splice. Three things decide it,
-// each catching what the others cannot: the EPOCH names the reading's origin
-// (its account and where in the stream it began), the OFFSET says how far the
-// viewer holds, and the DIGEST covers the window the viewer holds ending
-// there, so a node that derived different text under the same origin — a
-// parser or a redaction rule changed between builds — is caught too.
-//
-// An owner move on the same build CONTINUES: the new owner's reading of the
-// same stream from the same origin derives the same text, and the digest
-// says so. A LOCAL box cannot be reached from another host at all, so a move
-// there is an error the answer names (the local backend's own sentence).
+// The text is APPEND-ONLY (a line settles only once no later write can change
+// its redaction: [github.com/crewlet/crewlet/internal/redact.Settled]), so an
+// offset names one byte for the reading's life. Anything else is a RESET of the
+// last [MaxRunTextBytes] in whole lines, never a splice: the EPOCH names the
+// origin, the OFFSET how far the viewer holds, the DIGEST the window ending
+// there (catching a build that derives other text). A same-build owner move
+// continues; a local box's move is an error its backend names.
 
 // LiveReading is one live reading of one job's account of itself, advanced a
 // read at a time by the node that reads the run's box — what [Runner.Follow]
@@ -67,13 +36,10 @@ type LiveReading interface {
 
 // LiveRead is what one [LiveReading.Read] added.
 type LiveRead struct {
-	// Origin names the reading this read continues: which account, and
-	// where in its stream the reading began. Text continues the text
-	// every earlier read of the same Origin settled; a read naming another
-	// Origin begins anew, and nothing read before is a prefix of it.
-	//
-	// DETERMINISTIC, so two owners reading the same stream from the same
-	// place name the same origin and derive the same text.
+	// Origin names the reading this read continues: its account, and where
+	// in its stream it began. Text continues every earlier read of the same
+	// Origin; another Origin begins anew. DETERMINISTIC, so two owners
+	// reading the same stream from the same place derive the same text.
 	Origin string
 	Source OutputSource
 	// Text is the display text this read SETTLED: whole lines, redacted
@@ -98,48 +64,37 @@ type LiveRead struct {
 	Spent int
 }
 
-// LiveReuse is how long one read of a box answers everybody watching it before
-// the box is read again.
-//
-// BELOW THE DASHBOARD'S POLL, three seconds chained after each answer, so a
-// single viewer is read fresh on every poll, while any number of viewers cost
-// at most one read of the box every two seconds rather than one each. Held to
-// the dashboard's interval by a gate (client_gate_test.go).
+// LiveReuse is how long one read of a box answers everybody watching it.
+// Below the dashboard's three-second poll (chained after each answer), so one
+// viewer is read fresh every poll while any number cost one read per two
+// seconds. A gate holds it to the dashboard's interval (client_gate_test.go).
 const LiveReuse = 2 * time.Second
 
-// liveRefreshBudget bounds one read of a box, which runs for the reading and
-// not for any one request: a request waits for it only as long as its own
-// budget, and an abandoned request leaves it to finish for the next.
-//
-// The completion poll's interval, because a box that takes longer than the
-// poll's whole interval to read is one that is not answering — and a person
-// watching is better told so on the next poll than kept waiting a minute on
-// a remote box's per-request client timeout.
+// liveRefreshBudget bounds one read of a box. The read is the reading's, not a
+// request's: a request waits only its own budget, and an abandoned one leaves
+// the read to finish for the next. The completion poll's interval: a box slower
+// than that is not answering, and a viewer is better told so on the next poll
+// than kept waiting a minute on a remote box's per-request client timeout.
 const liveRefreshBudget = DefaultPollInterval
 
-// liveIdle is how long a reading nobody asks about is kept. Ten of the
-// dashboard's polls: a viewer who looked away for a moment comes back to the
-// same reading, and one who left costs nothing for long.
-//
-// A PROPERTY OF THE READINGS, NOT OF THE TRAFFIC: [LiveFeeds] sweeps on its
-// own clock ([liveSweep]). The sweep used to run inside the next request to
-// reach this node's readings, which on a quiet node may never come — and in a
-// fleet the owner is not told when a launch it was read for stops (the node
-// serving the dashboard reads the run's record first, answers `not_running`
-// itself and never asks the owner again), so every reading a person had been
-// watching stayed in memory until the node stopped.
+// liveIdle is how long a reading nobody asks about is kept: ten dashboard
+// polls, so a viewer who looked away returns to the same reading and one who
+// left soon costs nothing. [LiveFeeds] sweeps on its own clock ([liveSweep]),
+// never inside a request: a quiet node may get none, and in a fleet the owner
+// is never told a launch stopped (the serving node answers `not_running` from
+// the record and stops asking), so a watched reading would stay until the node
+// stopped.
 const liveIdle = 30 * time.Second
 
-// liveSweep is how often the readings nobody has asked about for [liveIdle]
-// are looked for: a third of it, so a reading is let go between liveIdle and
-// four thirds of it after its last request. A finer sweep would buy a few
-// seconds of a reading's memory for a walk of every reading each time.
+// liveSweep is how often idle readings are looked for: a third of [liveIdle],
+// so a reading is let go between liveIdle and four thirds of it after its last
+// request; a finer sweep walks every reading more often for a few seconds of
+// memory.
 const liveSweep = liveIdle / 3
 
 // liveHold is how much of a reading's settled text the owner keeps: twice what
-// a viewer holds, because a viewer up to [MaxRunTextBytes] behind is answered
-// from it, and its digest covers the [MaxRunTextBytes] before where it holds
-// to — so the owner needs both.
+// a viewer holds, since a viewer up to [MaxRunTextBytes] behind is answered
+// from it and its digest covers the [MaxRunTextBytes] before its offset.
 const liveHold = 2 * MaxRunTextBytes
 
 // LiveFeeds is one node's live readings, keyed by the launch they read.
@@ -227,10 +182,9 @@ func (fs *LiveFeeds) dropIdle() {
 // the sweep to return — for a node that stops answering before its context
 // ends. Safe to call more than once.
 //
-// A read runs under the node's context rather than a request's, because it
-// must outlive the request that started it ([liveFeed.current]). A request
-// that arrives after Stop is answered with the read's own failure, rather
-// than reading a box this node is letting go of.
+// A read runs under the node's context, not a request's, since it outlives the
+// request that started it ([liveFeed.current]); a request after Stop gets the
+// read's own failure rather than reading a box this node is letting go of.
 func (fs *LiveFeeds) Stop() {
 	fs.end()
 	<-fs.swept
@@ -257,10 +211,9 @@ func (fs *LiveFeeds) Forget(turnID, launchID string) {
 // request: what the asker's cursor lacks, or a reset (the zero cursor's
 // answer included).
 //
-// It waits for the reading at most until ctx ends — which a caller sets from
-// the asker's budget — and then answers with the last read there was, stamped
-// with when it was taken. A reading that has never read anything by then is an
-// error saying so.
+// It waits for the reading until ctx ends (the caller sets it from the asker's
+// budget), then answers with the last read, stamped with when it was taken; a
+// reading that has read nothing by then is an error saying so.
 func (fs *LiveFeeds) Answer(ctx context.Context, run PendingRun, cursor TailCursor) (Output, error) {
 	feed := fs.feed(run)
 	snap, err := feed.current(ctx)
@@ -358,9 +311,8 @@ func (f *liveFeed) current(ctx context.Context) (liveSnapshot, error) {
 	case f.err != nil:
 		return liveSnapshot{}, f.err
 	}
-	// THE BOX HAS NOT ANSWERED YET, which is the box not answering in the
-	// time this request had: the read goes on, and the next request is
-	// answered from what it finds.
+	// The box has not answered in this request's time: the read goes on,
+	// and the next request is answered from what it finds.
 	return liveSnapshot{}, unanswered(ctx, fmt.Errorf("sandbox: reading the box of run %s "+
 		"took longer than this request could wait; it goes on, and the next request reads "+
 		"what it found: %w", f.run.TurnID, ctx.Err()))
@@ -390,12 +342,10 @@ func (f *liveFeed) refresh(done chan struct{}) {
 // readBox attaches to the run's box — never resuming it — and advances the
 // reading from it.
 func (f *liveFeed) readBox(ctx context.Context) (LiveRead, error) {
-	// A reading that ended — the node stopped, or the launch was let go —
-	// reads nothing, whatever a backend would make of a dead context.
-	//
-	// A WAIT CLEARS IT ([ErrTailUnanswered]): the node is stopping and its
-	// seats go elsewhere, or the launch stopped running and the next request
-	// reads that.
+	// A reading that ended (the node stopped, or the launch was let go)
+	// reads nothing, whatever a backend would make of a dead context. A WAIT
+	// CLEARS IT ([ErrTailUnanswered]): the node's seats go elsewhere, or the
+	// next request reads that the launch stopped.
 	if err := ctx.Err(); err != nil {
 		return LiveRead{}, fmt.Errorf("sandbox: the reading of run %s has ended: %w: %w",
 			f.run.TurnID, ErrTailUnanswered, err)
@@ -408,9 +358,8 @@ func (f *liveFeed) readBox(ctx context.Context) (LiveRead, error) {
 		return LiveRead{}, errNoBackend()
 	}
 	run := f.run
-	// ATTACHED, NEVER RECONNECTED: a read changes nothing, and Connect wakes
-	// a paused box — which a read that took a running record a moment
-	// before the collection paused the box would have done.
+	// ATTACHED, NEVER RECONNECTED: a read changes nothing, and Connect would
+	// wake a box a collection paused just after the read took its running record.
 	box, runner, err := m.Attach(ctx, Placement(run.Placement), run.SandboxID, run.Harness)
 	if err != nil {
 		return LiveRead{}, fmt.Errorf("sandbox: reach the box of run %s: %w", run.TurnID, err)
@@ -460,9 +409,9 @@ func (s *liveSnapshot) apply(read LiveRead) {
 	s.text += read.Text
 	s.end += int64(len(read.Text))
 	if len(s.text) > liveHold+MaxRunTextBytes {
-		// Trimmed in steps rather than on every read, and on a line where
-		// there is one — a single line longer than the whole hold is cut
-		// on a character, which a reset window marks as the part it is.
+		// Trimmed in steps, not on every read, and on a line where there is
+		// one; a line longer than the whole hold is cut on a character,
+		// which a reset window marks as the part it is.
 		cut := len(s.text) - liveHold
 		if i := strings.LastIndexByte(s.text[:cut], '\n'); i >= 0 {
 			cut = i + 1

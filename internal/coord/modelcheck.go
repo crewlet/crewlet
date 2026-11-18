@@ -13,45 +13,22 @@ import (
 )
 
 // A MODEL CHECK is the doctor over the API (`POST /llm/providers/{key}/check`)
-// for one model entry: running, or how it ended.
-//
-// # Who has to agree on it
-//
-// The whole company, now. One node runs the check, and its harness runs take
-// longer than a proxy in front of the API lets a request stay silent, so the
-// request is answered while the check runs and the person's page polls for
-// how it ended — and a poll may reach any node. So the check is one record in
-// the coordination store, written by the node running it and read by every
-// node that answers a poll.
-//
-// # One record per entry
-//
-// Filed under the ENTRY's key, as a device sign-in is, so "one check of an
-// entry at a time across the fleet" is the store's own create-if-absent
-// rather than a lock kept beside it: a check asked while one runs is handed
-// the running one or refused naming it, and one asked over a check that has
-// ended, lapsed or been lost replaces it at the version read.
-//
-// # A lifetime the readers keep, and no bucket age
-//
-// A check answers only long enough for the page that asked to read how it
-// ended: [ModelCheckLinger] past its end, or past its deadline while it is
-// still running. That is a per-record lifetime, which a bucket age cannot hold
-// (an update would restart it; internal/coord/kv's package doc has the
-// measurement), so the record lives in the positions register, the bucket with
-// no age, and is LAPSED by its own fields ([ModelCheck.Lapsed]): every reader
-// answers a lapsed record absent. A node that stops while its check runs
-// leaves a record no process will end, and past its deadline it reads as LOST
-// ([ModelCheck.Lost]), so nobody waits on a check nobody is running.
-//
-// # Bounded
-//
-// What a check found is its answer as the API renders it, carried here whole
-// and opaque, and held to [MaxModelCheckAnswerBytes] by its writer, which cuts
-// the lines that would take it past; [ModelCheck.Validate] refuses one it did
-// not. The answer is what the person who asked is shown, the harness's own
-// words among it, never a credential value: the doctor names variables, not
-// what they hold.
+// for one model entry: running, or how it ended. Its harness runs outlast what
+// a proxy lets a request stay silent, so the page polls, and a poll may reach
+// any node: the check is one record in the coordination store, written by the
+// node running it. Filed under the ENTRY's key, so one check per entry across
+// the fleet is the store's create-if-absent, not a lock: a check asked while
+// one runs is handed it or refused, and one asked over an ended, lapsed or
+// lost check replaces it at the version read.
+
+// A record lives [ModelCheckLinger] past its end, or past its deadline while
+// running: a per-record lifetime a bucket age cannot hold (an update restarts
+// it; internal/coord/kv's package doc), so it lives in the positions register
+// and every reader answers a [ModelCheck.Lapsed] record absent. A check whose
+// node stopped reads [ModelCheck.Lost] past its deadline. Its answer is the
+// API's rendering, cut to [MaxModelCheckAnswerBytes] by its writer
+// ([ModelCheck.Validate] refuses a longer one), and never holds a credential
+// value: the doctor names variables, not what they hold.
 
 // ModelCheckClass is the key class a check is filed under in the positions
 // register.

@@ -65,6 +65,7 @@ import {
   type Draft,
   type ValueRow,
 } from "./draft.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 type Set = (patch: Partial<Draft>) => void;
 
@@ -863,7 +864,11 @@ export function TestStep({
               id={field.id}
               value={seat}
               disabled={test.kind === "running" || agents === null}
-              options={testers.map((s) => ({ value: s.handle, label: s.name }))}
+              options={testers.map((s) => ({
+                value: s.handle,
+                label: s.name,
+                leading: <ChoiceFace seat={s} />,
+              }))}
               onChange={(v) => onSeat(String(v))}
             />
           )}

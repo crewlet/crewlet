@@ -94,7 +94,8 @@ func decideSeats(t *testing.T, e *estate, limits Limits, batch ...Proposal) ([]P
 // principal on the deciding epoch's chart: refused not_permitted with the
 // rule's own sentence, or decided by the rules after it, which every command
 // here passes. A refusal is RECORDED — on its command, in the entry of a push
-// that has an ok command left — and a push left with none is no entry. The
+// that has an ok command left — and a push git received left with none is an
+// attempt: an entry of its refused commands alone. The
 // principals are a full_access seat of the owning unit, which writes; a
 // read_only seat of it, which reads; a full_access seat of another unit,
 // which writes its own namespace on a company repository and nothing on a
@@ -158,13 +159,7 @@ func TestTheDecideRefusesWhatTheGrantRefuses(t *testing.T) {
 						got.Result, got.Reason, got.Detail, why)
 				}
 			}
-			if len(tc.ok) == 0 {
-				if len(entries) != 0 || answers[0].inRecord {
-					t.Fatalf("a push the grant refuses whole is in the record (%d entries)", len(entries))
-				}
-				return
-			}
-			if len(entries) != 1 {
+			if len(entries) != 1 || !answers[0].inRecord {
 				t.Fatalf("%d entries, want the push's one", len(entries))
 			}
 			for i, c := range entries[0].Commands {

@@ -16,13 +16,9 @@ import (
 )
 
 // EVERY LOG COUNTS THE LIVE DATA NODES, AND ONE THAT HAS NOT REPORTED COUNTS AT
-// ZERO.
-//
-// The trim may not remove a record a node that applies the log has not
-// applied, and every data node applies every log from boot. So a live data
-// node whose row has not landed — no position yet — counts at zero on every
-// log and blocks it: what it has still to apply is exactly what the trim must
-// keep.
+// ZERO: the trim may not remove a record a node applying the log has not
+// applied, and every data node applies every log from boot, so a live data node
+// with no position row yet holds every log at zero.
 func TestEveryLogCountsTheLiveDataNodes(t *testing.T) {
 	t.Parallel()
 	e, _ := aRunningNode(t)
@@ -55,10 +51,9 @@ func TestEveryLogCountsTheLiveDataNodes(t *testing.T) {
 	}
 }
 
-// THE HOLDERS ARE THE LIVE DATA NODES, LISTED AFRESH: the estate is held whole
-// by every data node and by nothing else, so the counted set's live half is the
-// presence the trim has always counted — data nodes only, since a node without
-// `data` applies no log — the same nodes the router asks.
+// THE HOLDERS ARE THE LIVE DATA NODES, LISTED AFRESH: every data node and
+// nothing else holds the estate whole (a node without `data` applies no log),
+// so the counted set's live half is the nodes the router asks.
 func TestTheHoldersAreTheLiveDataNodes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -80,11 +75,10 @@ func TestTheHoldersAreTheLiveDataNodes(t *testing.T) {
 	}
 }
 
-// THE ROUTED DATA NODES ARE THE ROUTER'S OWN PLACEMENT: every live data node
-// the WATCHED view names, sorted — the set a keyed operation's rendezvous order
-// is computed over — and never a node without `data`; and a view that has not
-// listed is UNKNOWN, never "none", since a caller waiting for the fleet's
-// routing to be whole must not read an unlisted view as a fleet of nobody.
+// THE ROUTED DATA NODES ARE THE ROUTER'S OWN PLACEMENT: every live data node the
+// WATCHED view names, sorted (the set a keyed operation's rendezvous order is
+// computed over), never a node without `data`; and an unlisted view is UNKNOWN,
+// never "none", or a caller waiting for whole routing reads a fleet of nobody.
 func TestTheRoutedDataNodesAreTheRoutersPlacement(t *testing.T) {
 	t.Parallel()
 	backend := coordmem.New()
@@ -119,16 +113,15 @@ func TestTheRoutedDataNodesAreTheRoutersPlacement(t *testing.T) {
 	}
 }
 
-// THE GIT PLACEMENT IS THE LIVE GITLET NODES: every node the router's WATCHED view
-// names whose profile has the gitlet role, sorted — the set a repository's git
-// order is computed over (ADR-0089) — a node that declares no roles among
-// them, since such a node has every role, and never a data node that lists its
-// roles without gitlet or a node with seats alone; off the same view as the data
-// placement, so the two cannot disagree about who is live, and UNKNOWN before
-// the view has listed, never a fleet of no Gitlet node.
+// THE GIT PLACEMENT IS THE LIVE GITLET NODES: every node the router's WATCHED
+// view names with the gitlet role, sorted (the set a repository's git order is
+// computed over, ADR-0089) — a node declaring no roles has every role; a data
+// node listing roles without gitlet, or a seats-only node, is out. It reads the
+// data placement's view, so the two cannot disagree on who is live, and is
+// UNKNOWN before the view has listed, never a fleet of no Gitlet node.
 //
-// Mutation: read the data role for the gitlet one — the data node listing no gitlet
-// role is named a Gitlet node, red.
+// Mutation: read the data role for the gitlet one — the data node listing no
+// gitlet role is named a Gitlet node, red.
 func TestTheGitPlacementIsTheLiveGitletNodes(t *testing.T) {
 	t.Parallel()
 	backend := coordmem.New()
@@ -159,24 +152,18 @@ func TestTheGitPlacementIsTheLiveGitletNodes(t *testing.T) {
 	}
 }
 
-// WHAT EACH GITLET NODE ADVERTISES IS READ OFF THE ROUTER'S OWN WATCHED VIEW, ONE
-// LISTING FOR THE NODES AND THEIR FIGURES: the listing names exactly the Gitlet
-// nodes the git placement names — a node that declares no roles among them,
-// since such a node has every role, and never one whose roles leave gitlet out,
-// whatever its row says — and beside each, what its presence row says beside
-// its status: a budget the row names, across the store's JSON round trip, said
-// — a beat that carried no status at all included, since the figure is not in
-// the status; a zero said as zero, a node with nothing to give its background
-// work; and no entry for a row that names no figure, a node NOT SAYING (absent
-// is not zero), whatever its status says. A view that has never listed is
-// UNKNOWN, never a fleet of no Gitlet node; a node with no view has no fleet, and
-// its listing names nobody.
+// WHAT EACH GITLET NODE ADVERTISES IS READ OFF THE ROUTER'S WATCHED VIEW, IN ONE
+// LISTING: exactly the git placement's nodes (no-roles nodes in, a node whose
+// roles leave gitlet out never, whatever its row says), each with the budget
+// its presence row names — across the JSON round trip, from a beat with no
+// status too (the figure is not in the status), zero as zero, and no entry for
+// a row naming none (absent is NOT SAYING, not zero). An unlisted view is
+// UNKNOWN; a node with no view lists nobody.
 //
-// Mutations: read a row that names no figure as a node with nothing to give —
-// the quiet node says zero, red; read the figure out of the status — the node
-// whose beat dropped its status says nothing, red; list every node of the view
-// rather than its Gitlet nodes — the data node that writes a figure is listed,
-// red; read a view that has never listed as nobody — no error, red.
+// Mutations, each red: a row naming no figure read as zero (the quiet node says
+// zero); the figure read out of the status (the statusless beat says nothing);
+// every node of the view listed (the data node with a figure appears); an
+// unlisted view read as nobody (no error).
 func TestTheGitListingIsWhatEachGitletNodesPresenceSays(t *testing.T) {
 	t.Parallel()
 	const budget = int64(64)<<30 + 12_345
@@ -229,15 +216,14 @@ func TestTheGitListingIsWhatEachGitletNodesPresenceSays(t *testing.T) {
 }
 
 // THE ROUTER A NODE BUILDS PLACES A REPOSITORY'S MAINTENANCE BY WHAT EACH GITLET
-// NODE ADVERTISES: over three Gitlet nodes whose presence rows say 8, 64 and 8
-// GiB — the large one's beat carrying no status, as a beat whose status read
-// overran carries none — the router [Engine.newRouter] builds — on a node
-// holding nothing, as a seats node's is — places work only the large node
-// holds on it for every one of two hundred repositories, and work every node
-// holds on each repository's home.
+// NODE ADVERTISES: with Gitlet nodes saying 8, 64 and 8 GiB (the large one's
+// beat carrying no status, as an overrun status read leaves it), the router
+// [Engine.newRouter] builds on a seats node places work only the large node
+// holds on it for all two hundred repositories, and work every node holds on
+// each repository's home.
 //
-// Mutation: answer newRouter's git placement's listing with no figure in it —
-// nobody saying anything, the 40 GiB work stays with each home, red.
+// Mutation: answer newRouter's git placement's listing with no figure — the
+// 40 GiB work stays with each home, red.
 func TestTheRoutersMaintainerWeighsWhatEachGitletNodeAdvertises(t *testing.T) {
 	t.Parallel()
 	const gib = int64(1) << 30

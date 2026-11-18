@@ -15,10 +15,8 @@ import (
 )
 
 // bindBucket binds bucket through js as the product does
-// ([jsprovision.LookupBucket]): re-asked while nobody answers. A cluster case
-// that bound it with one bare request failed whenever the stream's group was
-// between leaders when it asked, which on a cluster seconds old and under
-// load it sometimes is.
+// ([jsprovision.LookupBucket]): re-asked while nobody answers, since one bare
+// request fails whenever a young, loaded cluster's group is between leaders.
 func bindBucket(ctx context.Context, t *testing.T, js jetstream.JetStream, bucket string) jetstream.KeyValue {
 	t.Helper()
 	kv, err := jsprovision.LookupBucket(ctx, js, bucket)
@@ -40,15 +38,12 @@ func streamOf(ctx context.Context, t *testing.T, js jetstream.JetStream, name st
 }
 
 // A BUCKET IS FOUND ACROSS A STEP-DOWN OF ITS LEADER: a smoke test of the
-// product's lookup on a real cluster. The stream's leader is asked to step
-// down, once, and the bucket is then bound through another member and its
-// leader read back, each looked up as the product looks one up.
+// product's lookup on a real cluster. The leader is asked to step down once,
+// then the bucket is bound through another member and its leader read back.
 //
-// NOT THE PROOF OF THE RE-ASK: leadership usually moves in milliseconds, so a
-// bare request would mostly pass here too. That the lookup asks again while
-// nobody answers, and gives up within its budget, is held deterministically
-// in internal/jsprovision (TestALookupIsAskedAgainUntilItIsAnswered and its
-// neighbours).
+// NOT THE PROOF OF THE RE-ASK, which a bare request would mostly pass too:
+// internal/jsprovision's TestALookupIsAskedAgainUntilItIsAnswered and its
+// neighbours hold that deterministically.
 func TestABucketIsFoundAcrossAStepDownOfItsLeader(t *testing.T) {
 	t.Parallel()
 	c := jetstreamtest.StartCluster(t, 3, js.Config{})
@@ -81,10 +76,8 @@ func TestABucketIsFoundAcrossAStepDownOfItsLeader(t *testing.T) {
 		}
 	}
 
-	// THE STEP-DOWN, SENT ONCE. Whatever it answers (stepped down, a leader
-	// that already moved, or nothing within the term) the lookups below
-	// must find the bucket and a leader; a re-sent step-down could only
-	// move leadership again.
+	// THE STEP-DOWN, SENT ONCE: whatever it answers, the lookups below must
+	// find the bucket and a leader; a re-send could only move leadership again.
 	stepCtx, cancel := context.WithTimeout(ctx, jsprovision.AskTerm(true))
 	defer cancel()
 	if msg, err := nc.RequestWithContext(stepCtx, "$JS.API.STREAM.LEADER.STEPDOWN."+stream, nil); err != nil {

@@ -42,10 +42,9 @@ roles:
 `)
 }
 
-// A SERVER TURNED OFF IS NOBODY'S MISSING CREDENTIAL. Its references are not
-// resolved at all, so one that resolves to nothing is not held back, logged or
-// reported as waiting for a value: the status record carries no row for either
-// server, and nothing reaches a bridge.
+// A SERVER TURNED OFF IS NOBODY'S MISSING CREDENTIAL: its references are never
+// resolved, so an unset one is not held back, logged or reported as waiting;
+// the status record has no row for either server, and nothing reaches a bridge.
 func TestAServerTurnedOffIsNotHeldBackForItsCredentials(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -72,23 +71,21 @@ func TestAServerTurnedOffIsNotHeldBackForItsCredentials(t *testing.T) {
 }
 
 // AN EXECUTOR'S BOX IS NOT GIVEN A SERVER TURNED OFF, though the seat's box
-// block still lists it: the listing is kept for the day the server is turned
-// back on. Nothing is withheld for its credentials either, since a server
-// nobody runs needs none.
+// block still lists it (kept for when it is turned back on), and nothing is
+// withheld for its credentials, since a server nobody runs needs none.
 func TestABoxIsNotGivenAServerTurnedOff(t *testing.T) {
 	t.Parallel()
 	company := offCompany(t)
 	seat := company.Org.AgentSeatByHandle("ceo")
 	gate := &org.RoleSandbox{MCP: org.RoleSandboxMCP{Servers: []string{"search", "tracker"}}}
 
-	// Nothing resolves: nothing is withheld, since a server turned off needs
-	// no credential.
+	// Nothing resolves, and nothing is withheld.
 	got, withheld := sandboxMCP(config.EnvOnly(), company, seat, gate, nil)
 	if len(got) != 0 || len(withheld) != 0 {
 		t.Errorf("the box is given %v and withholds %+v, want neither for servers turned off", got, withheld)
 	}
-	// Everything resolves: still nothing, so it is the switch that keeps
-	// the servers out and not their credentials.
+	// Everything resolves, and still nothing: the switch keeps them out, not
+	// their credentials.
 	everyValue := config.NewResolver(config.MapSource{
 		"SEARCH_KEY_NOBODY_SET": "search-key", "CEO_TRACKER_TOKEN_NOBODY_SET": "tracker-token",
 	})

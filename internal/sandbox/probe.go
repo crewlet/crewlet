@@ -13,47 +13,40 @@ import (
 )
 
 // A CELL PROBE answers "can a box start in this cell on this node, now?" for
-// the Models page's "where it runs" step and for a person reading why a run did
-// not start. Each probe asks the cell's own mechanism, through the same
-// functions its backend uses, so the probe and the launch cannot disagree about
-// what the cell needs:
+// the Models page and for a person reading why a run did not start. Each asks
+// the cell's own mechanism through the functions its backend uses, so probe
+// and launch cannot disagree about what the cell needs:
 //
-//   - direct: the platform runs the local backend, and the box root
-//     ([BoxRoot]) is writable;
+//   - direct: the platform runs the local backend, and [BoxRoot] is writable;
 //   - container: the runtime resolves on PATH ([ResolveContainerRuntime]) and
 //     its daemon answers a version read within [CellProbeBudget];
-//   - e2b: the cell's API key resolved on this node, and one authenticated
-//     read of the API answers within [CellProbeBudget].
+//   - e2b: the API key resolved on this node, and one authenticated read of
+//     the API answers within [CellProbeBudget].
 //
-// A probe never makes a box. Every refusal carries the one thing to do about
-// it, in the operator's words.
+// A probe never makes a box; every refusal names the one thing to do.
 
-// CellProbeBudget bounds a probe's one network or daemon round trip: FIVE
-// SECONDS, past a healthy daemon's version read (milliseconds) and a cloud
-// API's p99, and short enough that a probe of every cell on a node that has
-// lost its network still finishes well inside one heartbeat.
+// CellProbeBudget bounds a probe's one network or daemon round trip: past a
+// daemon's version read (milliseconds) and a cloud API's p99, and short enough
+// that probing every cell on a node without network ends inside a heartbeat.
 const CellProbeBudget = 5 * time.Second
 
 // CellProbe is what one probe found.
 type CellProbe struct {
 	// Ready is whether a box can start in the cell here.
 	Ready bool
-	// Detail is what the probe found, ready or not: "Docker 24.0.7", or the
-	// refusal.
+	// Detail is what the probe found: "Docker 24.0.7", or the refusal.
 	Detail string
-	// Fix is the one thing to do about a cell that is not ready; empty for
-	// one that is.
+	// Fix is the one thing to do about a cell that is not ready; "" if ready.
 	Fix string
 }
 
 // ProbeDirect probes the direct cell: a platform the local backend runs on,
 // and a box root it can write.
 //
-// NOT THE HOST CONFINEMENT. An executor's direct box is not confined (its harness
-// runs fully permissioned, and the box is its home and working tree); only the
-// assistant's deep work runs under [ProbeConfinement]'s mechanism. Probing it
-// here would call a cell that launches fine not ready on every host without
-// bubblewrap or Landlock.
+// NOT THE HOST CONFINEMENT: an executor's direct box is not confined (its
+// harness runs fully permissioned); only the assistant's deep work is
+// ([ProbeConfinement]). Probing it here would call a
+// working cell not ready on every host without bubblewrap or Landlock.
 func ProbeDirect(stateDir string) CellProbe {
 	if !localSupported {
 		return CellProbe{Detail: unsupportedReason,
@@ -97,8 +90,8 @@ func probeRuntime(ctx context.Context, path string, budget time.Duration) CellPr
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, "version", "--format", "{{.Server.Version}}")
-	// A runtime that forks a helper holding the output open would keep the
-	// read going past the budget; WaitDelay ends it with the context.
+	// A forked helper holding the output open would outlast the budget;
+	// WaitDelay ends the read with the context.
 	cmd.WaitDelay = time.Second
 	out, err := cmd.CombinedOutput()
 	answer := strings.TrimSpace(string(out))

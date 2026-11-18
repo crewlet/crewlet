@@ -31,6 +31,7 @@ import { plural } from "~/lib/format.ts";
 import { testServer } from "../api.ts";
 import type { McpData } from "../data.ts";
 import { FAILURE, failureWords, STAGE, STAGE_STATE } from "../words.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /** A stage's time, as the step list prints it. */
 function took(ms: number): string {
@@ -226,7 +227,11 @@ export function TestDialog({
                 id={field.id}
                 value={as}
                 disabled={running}
-                options={reach.map((s) => ({ value: s.handle, label: s.name }))}
+                options={reach.map((s) => ({
+                  value: s.handle,
+                  label: s.name,
+                  leading: <ChoiceFace seat={s} />,
+                }))}
                 onChange={(v) => setAs(String(v))}
               />
             )}

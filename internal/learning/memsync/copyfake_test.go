@@ -152,6 +152,9 @@ type copyScript struct {
 	// says nothing more: no delivery, no heartbeat, no status, no answer
 	// to its consumer's info.
 	silentAfter int
+	// mute is a copy that says nothing at all, from its placement on, as
+	// one past silentAfter does.
+	mute bool
 	// dropFirstPull is a consumer whose first pull never reached it, as a
 	// cluster drops a new consumer's first pull.
 	dropFirstPull bool
@@ -398,7 +401,7 @@ func (f *fakeConsumer) pending() uint64 {
 
 // silent reports a copy that says nothing more.
 func (f *fakeConsumer) silent() bool {
-	return f.script.silentAfter > 0 && f.sent >= uint64(f.script.silentAfter)
+	return f.script.mute || f.script.silentAfter > 0 && f.sent >= uint64(f.script.silentAfter)
 }
 
 // fakeReply is the acknowledgement subject a delivery comes with, which the
@@ -453,6 +456,10 @@ type fakeJS struct {
 
 	// identityUnanswered is a changelog whose info nobody answers.
 	identityUnanswered bool
+	// identityAt, when set, is when the changelog's info is first answered:
+	// every read of it asked before waits until then, as one whose reply is
+	// held behind a link's other traffic.
+	identityAt time.Time
 	// ackAfter, when set, is how long the acknowledgement of the nth
 	// publish of a barrier asked (from 1, each request counted) takes to
 	// come, the publish stored as it comes; a negative one never comes.
@@ -480,6 +487,15 @@ func (j *fakeJS) Stream(ctx context.Context, _ string) (jetstream.Stream, error)
 	if j.identityUnanswered {
 		<-ctx.Done()
 		return nil, ctx.Err()
+	}
+	if wait := time.Until(j.identityAt); !j.identityAt.IsZero() && wait > 0 { //fixedwait:measure how long the bubble's clock has to run to the instant the case scripted
+		answered := time.NewTimer(wait) //fixedwait:simulated an identity reply held behind a link's other traffic
+		defer answered.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-answered.C:
+		}
 	}
 	return fakeStream{info: &jetstream.StreamInfo{Config: jetstream.StreamConfig{
 		Name:     topics.MemoryStream,

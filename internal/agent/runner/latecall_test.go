@@ -17,17 +17,13 @@ import (
 )
 
 // A LATE CALL: one the round's log took after its job was replaced by a
-// relaunch that carried the round on (runner.BridgedCall.Late), so after the
-// brief of the job carrying the round on was built. No brief of the round had
-// told it when the log took it, the session of the job that made it may not
-// hold it, and no save point holds it.
+// relaunch carrying the round on (runner.BridgedCall.Late), so after that
+// relaunch's brief was built. No brief of the round told it, the session of
+// the job that made it may not hold it, and no save point holds it.
 
-// EVERY CONTINUATION OF THE ROUND IS TOLD A LATE CALL, WHATEVER ITS SAVE POINT.
-// A later capture of the job that carried the round on, placed by its own read
-// of the log, has a save point past the late call's number, and every other
-// call at or below it is one its session holds — so the continuation of that
-// capture is told the late call with its outcome all the same, and still none
-// of the calls its session holds.
+// EVERY CONTINUATION OF THE ROUND IS TOLD A LATE CALL, WHATEVER ITS SAVE POINT:
+// even one whose save point lies past the late call's number, where every
+// other call at or below it is one its session holds and stays untold.
 //
 // Mutation: read a late call against the save point as any other, and it goes
 // untold.
@@ -51,16 +47,15 @@ func TestEveryContinuationOfTheRoundIsToldALateCall(t *testing.T) {
 	}
 }
 
-// NO GUARD COUNTS A LOAD THE LOG TOOK LATE. No brief of the round had told a
-// skill a late call loaded when the log took the call, and the session of the
-// job that made it may not hold it, yet the call's place can fall past the calls the round held when the next
-// job's session opened — its own job's session gave it — and its number at or
-// below that job's save point. So neither the guard of a relaunch that
-// continues a kept session, nor the one of a relaunch that continues its job's
-// own copy in its box after its harness ended its own run, which holds every
-// load its job made, nor the one a node rebuilds for a run it took over while
-// it works holds the skill: the tool it covers is refused until the skill is
-// loaded again, the safe direction.
+// NO GUARD COUNTS A LOAD THE LOG TOOK LATE. No brief told the round the skill
+// a late call loaded and the session may not hold it, yet the call's place
+// (its own job's session gave it) can fall past the calls the round held when
+// the next job's session opened, and its number at or below that job's save
+// point. So no guard holds the skill: not a relaunch's continuing a kept
+// session, nor one continuing its job's own copy in its box after its harness
+// ended its own run (which holds every load its job made), nor a node's for a
+// run it took over while it works. The covered tool is refused until the skill
+// is loaded again, the safe direction.
 //
 // Mutation: count a late call's load as any other's, and the covered tool is
 // let through.
@@ -122,9 +117,9 @@ func TestNoGuardCountsALoadTheLogTookLate(t *testing.T) {
 
 // A LATE SUBMISSION IS NEVER THE ROUND'S. A `submit_work` the round's log took
 // after its job was replaced was made by a job that is over; the job carrying
-// the round on was never told it and goes on to make the round's submission
-// itself. So a lost job's round whose only submission is late is carried on
-// rather than collected on it, and one its own job submitted is collected.
+// the round on was never told it and makes the round's submission itself. So a
+// lost round whose only submission is late is carried on, and one its own job
+// submitted is collected.
 //
 // Mutation: read a late call as the round's submission, and the lost round is
 // collected on it.
@@ -144,15 +139,12 @@ func TestALateSubmissionIsNeverTheRounds(t *testing.T) {
 }
 
 // A LATE CALL IS TOLD APART, UNDER WORDS OF ITS OWN, WHATEVER THE SESSION'S END.
-// A call the round's log took after its job was replaced finished only after
-// that job's harness died, gave up on it or was replaced, so the session may
-// show it with no outcome or an interrupted one, and every continuation of the
-// round tells it again. Told among the calls after the save, a session saved
-// where it ends reads it as a call it lacks, and one that shows it interrupted
-// takes it for a second call, or a call to make again. So it is told in a
-// section of its own, after the calls since the save, under the same words
-// whether the session's harness ended its own run or was cut off, and never
-// among the calls after the save.
+// It finished only after its job's harness died, gave up on it or was replaced,
+// so the session may show it with no outcome or an interrupted one. Told among
+// the calls after the save, a session saved where it ends reads it as a call it
+// lacks, and one showing it interrupted takes it for a second call or one to
+// make again. So it has a section of its own after the calls since the save,
+// under the same words whether the harness ended its own run or was cut off.
 //
 // Mutation: tell a late call among the calls after the save, and it is told
 // under words that say the session lacks it.
@@ -182,11 +174,10 @@ func TestALateCallIsToldApartUnderWordsOfItsOwn(t *testing.T) {
 			t.Errorf("a session (cut off: %v) is told the call after its save apart from them:\n%s",
 				interrupted, brief)
 		}
-		// HELD, so told in no list of calls the session may lack; and LISTED
-		// AGAIN where it was cut off, under words that say the session may
-		// show it: its call after the save, told as one it may already show,
-		// names the held call's tool, and neither call's arguments carry the
-		// digest that would let their lines read apart.
+		// HELD, so in no list of calls the session may lack, and LISTED AGAIN
+		// only where it was cut off. The call after the save, told as one the
+		// session may already show, names the same tool, and neither call's
+		// arguments carry a digest that would let their lines read apart.
 		told, again, _ := strings.Cut(since, listedAgainHeading)
 		if strings.Contains(told, "the held one") || strings.Contains(apart, "the held one") {
 			t.Errorf("a session (cut off: %v) is told a call it holds as one it may lack:\n%s", interrupted, brief)
@@ -198,14 +189,11 @@ func TestALateCallIsToldApartUnderWordsOfItsOwn(t *testing.T) {
 	}
 }
 
-// A LATE SUBMISSION IS TOLD AS NONE OF THE ROUND'S. A `submit_work` the round's
-// log took late was made by a job that is over, and is never the round's
-// submission: a lost round whose only submission is late is carried on, and
-// every continuation after the first, which was never told it, is told the call
-// with the line that it does not stand, so the run submits its own rather than
-// ending on one it reads as done — and is collected as one that submitted
-// nothing. A late submission that failed is told as any failed call, without
-// it.
+// A LATE SUBMISSION IS TOLD AS NONE OF THE ROUND'S. Every continuation after
+// the first, which was never told it, is told the call with the line that it
+// does not stand, so the run submits its own rather than ending on one it reads
+// as done and being collected as one that submitted nothing. A late submission
+// that failed is told as any failed call, without the line.
 //
 // Mutation: leave the line out, and a run told a late submission ran is not told
 // it must make its own.
@@ -228,28 +216,17 @@ func TestALateSubmissionIsToldAsNoneOfTheRounds(t *testing.T) {
 }
 
 // A RUN CARRIED ON IN ITS BOX IS TOLD THE CALLS THE LOG TOOK LATE, WHATEVER ITS
-// HARNESS'S END. A person's answer or a replaced sign-in that continues the copy
-// of the session its job's box holds tells it, after what carries it on, every
-// call of the round the log took after the job that made it was replaced —
-// here an earlier job's worker that finished after this job opened, which this
-// job's brief never told — under the late calls' own words, a submission among
-// them as none of the round's, once each, and how many of them the log dropped
-// from its middle, whatever the harness's end. Where the job's harness ended its
-// own run, its copy holds every other call of the round — here its job's own,
-// and the rest its job's brief told — so it is told the late ones alone, with
-// the round's tally, and nothing that says it was or may have been cut off, nor
-// the notes the turn has read, which it holds; where it was cut off, every call
-// of the round, the late ones apart from the rest. Where the job's box is gone,
-// which no launch continues in, nothing of it is built, whatever its harness's
-// end. All of it is in the brief the launch continues the copy with, which the
-// floor of that launch counts, whether or not a capture measured the copy.
+// HARNESS'S END. An answer or replaced sign-in continuing the box's copy tells
+// it, after what carries it on, each late call once under the late calls' words
+// (a submission as none of the round's) and how many the log dropped. Ended its
+// own run: the copy holds every other call and the notes read, so it gets the
+// late ones alone with the round's tally and no word of being cut off. Cut off:
+// every call, the late ones apart. Box gone: nothing, as no launch continues
+// there. It all goes in the brief the launch's floor counts, measured or not.
 //
-// Mutation: tell an own run's copy nothing, read a late call as one it holds,
-// tell a cut-off copy's late calls among the round's other calls, leave the
-// late submission's line out, leave the dropped late calls uncounted or count
-// them under the late calls' words only for an own run's copy, tell an own
-// run's copy it was or may have been cut off or the notes the turn has read, or
-// build an own run's telling where its box is gone, and a case goes red.
+// Mutation: tell an own run's copy nothing, a late call as held, a cut-off word
+// or the notes; mix a cut-off copy's late calls in; drop the submission's line
+// or either end's dropped count; or tell a copy whose box is gone, and a case goes red.
 func TestARunCarriedOnInItsBoxIsToldTheCallsTheLogTookLate(t *testing.T) {
 	t.Parallel()
 	const lateHeading = "## Calls the run that made them stopped waiting for, or whose outcome is unknown"
@@ -324,13 +301,10 @@ func TestARunCarriedOnInItsBoxIsToldTheCallsTheLogTookLate(t *testing.T) {
 	}
 }
 
-// A LATE SUBMISSION IS TOLD ONCE, UNDER ITS OWN WORDS. A `submit_work` the
-// round's log took late is told in the late calls' section with the line that
-// it does not stand because the run that made it had stopped waiting for it.
-// The calls after the save beside it hold no submission, so their section
-// carries no line of its own: the session reads one line on one submission,
-// in words true of it, never a second saying the work was carried on after a
-// call that finished only once its run was replaced.
+// A LATE SUBMISSION IS TOLD ONCE, UNDER ITS OWN WORDS: in the late calls'
+// section, with the line that it does not stand because the run that made it
+// had stopped waiting for it. The calls after the save hold no submission, so
+// their section carries no line saying the work was carried on after one.
 //
 // Mutation: say a late submission among the calls after the save as well, and
 // the case goes red.

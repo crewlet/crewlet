@@ -364,8 +364,9 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 	if _, err = store.InsertRows(ctx, tx, at.maxVariables,
 		`INSERT INTO code_pushes (push_id, repo_id, position, at, actor, actor_kind, actor_seat,
 			via, turn_id, work_backend, work_key, model, run_id, harness, node, atomic, commands,
-			pack_id, pack_bytes, introduced, introduced_count, received_at, row_bytes, working_for) VALUES `,
-		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ``,
+			pack_id, pack_bytes, introduced, introduced_count, offered, received_at, row_bytes,
+			working_for) VALUES `,
+		`(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ``,
 		len(pushRows), func(i int) []any {
 			e := pushRows[i]
 			packID, size := "", int64(0)
@@ -376,7 +377,7 @@ func (a *Applier) landPushes(ctx context.Context, tx *sql.Tx, at applyContext, p
 			return []any{e.PushID, p.RepoID, at.packed, at.at(), e.Principal.Actor(),
 				string(e.Principal.Kind), e.Principal.Seat, string(e.Via), run.TurnID, run.WorkBackend,
 				run.WorkKey, run.Model, run.RunID, run.Harness, e.Node, e.Atomic, wide[i].commands, packID, size,
-				wide[i].introduced, e.IntroducedCount, store.EncodeTime(e.ReceivedAt), wide[i].bytes,
+				wide[i].introduced, e.IntroducedCount, e.Offered, store.EncodeTime(e.ReceivedAt), wide[i].bytes,
 				wide[i].madeFor}
 		}); err != nil {
 		return 0, fmt.Errorf("gitlet: write the pushes at %s: %w", at.position, err)

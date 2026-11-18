@@ -13,15 +13,12 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
 )
 
-// THE STREAM IS SAID TO STAND IN FOR THE RESULT FILE ONLY WHERE IT DID. The
-// wrapper writes the result file whatever the harness did, so a harness that exited at
-// once — not installed, a bad flag — leaves it empty beside an empty stream,
-// and a warning that "the result file was never written" stood beside every
-// such run's real failure, false twice over. The line is logged where the
-// stream's last line was read in the file's place, and says what the file was.
+// THE STREAM IS SAID TO STAND IN FOR THE RESULT FILE ONLY WHERE IT DID: the
+// wrapper always writes the result file, so a harness that exited at once
+// leaves it empty beside an empty stream, and a stand-in line there would be
+// false. The line says what the file was.
 //
-// NOT PARALLEL: it reads the process's log, which every parallel case writes
-// to, and a sequential test runs with none of them.
+// NOT PARALLEL: it reads the process's log, which parallel cases write to.
 //
 // Mutation: log whenever the file reads empty, and the first case is red.
 func TestTheStreamIsSaidToStandInForTheResultFileOnlyWhereItDid(t *testing.T) {

@@ -11,11 +11,10 @@ import (
 )
 
 // THE POINTER RECORD IS PINNED ON THE WIRE. Its bytes are a contract between
-// builds sharing one bucket in a rolling upgrade: this build reads a later
-// build's pointer, so a later build must keep every key here with the meaning
-// it has here, and a change to this record cannot go unnoticed. The origin —
-// its author, the author's kind, the credential, the source and the creation
-// instant — and the body ride in it, the body as the JSON object it is.
+// builds sharing one bucket in a rolling upgrade, so a later build must keep
+// every key here with the meaning it has here. The origin (author, its kind,
+// the credential, the source and the creation instant) and the body ride in
+// it, the body as the JSON object it is.
 func TestThePointerRecordIsPinnedOnTheWire(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 9, 2, 8, 0, 0, 0, time.UTC)
@@ -61,24 +60,17 @@ func TestThePointerRecordIsPinnedOnTheWire(t *testing.T) {
 	}
 }
 
-// A POINTER REMOVED UNDER A WRITER IS A RACE THE WRITER LOST, whether it was
-// deleted or purged, and whether the marker that removal left is still on the
-// subject or has been swept since ([coord.MarkerRetention]): what an expecting
-// write was built on is gone, so it edits a company the fleet no longer runs.
-// A create-only write is the one that lands over each, and the suite cannot
-// reach these cases: the memory twin has no way to remove its pointer, and
-// nothing in the engine removes one — an operator or a rebuilt bucket does.
+// A POINTER REMOVED UNDER A WRITER IS A RACE THE WRITER LOST, deleted or
+// purged, its marker standing or swept ([coord.MarkerRetention]): an expecting
+// write would edit a company the fleet no longer runs, so only a create-only
+// write lands. The suite cannot reach this: the memory twin cannot remove its
+// pointer, and only an operator or a rebuilt bucket removes one.
 //
-// THE SWEPT MARKER IS THE CASE THAT MATTERS. While a marker stands, the
-// subject has a last sequence, so even a write that compared against nothing
-// would be refused by the broker's compare-and-set. Once it is swept the
-// subject holds no message at all, and only expectedSeq's own refusal stands
-// between an expecting write and a pointer recreated over the fleet's loss.
-// Every case also asserts the refusal is expectedSeq's, by its words.
-//
-// Mutation: answer an unheld pointer as "nothing to have raced with" in
-// expectedSeq, as it once did, and every case fails — the swept ones by
-// landing, the others by naming the broker's refusal instead.
+// THE SWEPT MARKER MATTERS: while a marker stands the broker's compare-and-set
+// refuses even a write that compared against nothing; once swept, only
+// expectedSeq's own refusal stands, so every case asserts the refusal is
+// expectedSeq's, by its words. Mutation: answer an unheld pointer as "nothing
+// to have raced with" in expectedSeq and every case fails.
 func TestAnExpectationOverARemovedPointerIsARace(t *testing.T) {
 	t.Parallel()
 	origin := coord.RevisionOrigin{

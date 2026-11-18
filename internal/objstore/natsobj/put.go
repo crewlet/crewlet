@@ -15,6 +15,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/nats-io/nuid"
 
+	"github.com/crewlet/crewlet/internal/jsapi"
 	"github.com/crewlet/crewlet/internal/objstore"
 )
 
@@ -23,61 +24,20 @@ import (
 // 3.75 seconds.
 const messageCrossing = objstore.MiBPace * MessageBytes / objstore.MiB
 
-// linkWindow is the window across a link for a node that renews its leases
-// every heartbeat: the most whole messages a link at the floor carries within
-// one heartbeat, at least one and at most [memberWindow] — four, half a
-// mebibyte, at the shipped lease (45 s, renewed every 15 s).
-//
-// SIZED BY THE LEASES QUEUED BEHIND IT. A link carries the node's lease
-// renewals in the order they were sent, so a renewal sent while the window
-// is full crosses only once the window has: a window that crosses within a
-// heartbeat lands a renewal sent a heartbeat after the last with a whole
-// interval of its lease to spare — the margin the lease's own doc keeps for a
-// missed beat. The HEARTBEAT IS THE NODE'S, never the shipped one:
-// `coordination.lease_ttl_seconds` moves it (the TTL in force over
-// seat.HeartbeatRatio), and a window sized against the shipped fifteen
-// seconds held a renewal on a 15-second lease (renewed every five) for 20 s,
-// past the lease — the node lost its seats to its own uploads. A test holds
-// the arithmetic against the lease's own constants, over the shipped TTL and
-// others.
-//
-// AT LEAST ONE, because a put holds a message out to move at all. A heartbeat
-// shorter than one message's crossing — a lease under 11.25 s — cannot keep
-// that margin behind even one, and under 5.6 s a renewal behind it at the
-// floor lands after its lease. No node holds such a lease: config refuses
-// one under config.MinLeaseTTL, which is over config.LinkLeaseFloor.
-//
-// AT MOST [memberWindow], the window sized by throughput: a longer lease buys
-// a link no wider window, because sixty-four messages bought nothing over
-// sixteen through a leaf as on a member's own client, and sixteen is the
-// widest whose acknowledgements were measured at the floor across a leaf's
-// compressed link (blocks 26.4 s apart, under [objstore.Stall]).
-//
-// It is also what keeps a stall honest across the link: no message waits
-// behind more than the window, so at the floor every one is acknowledged
-// within a heartbeat of its publish, and a leaf's compressed link, which
-// delivers what it flushed as one block, never more than the window in one.
-//
-// What a small window costs is throughput on a fast link (the package doc's
-// figures, through a leaf on loopback at `stream.sync: always`): a lone
-// 16 MiB put ran at 122–134 MB/s with four out against 129–153 with sixteen
-// a put, and eight puts at once at 119–140 MB/s together against 158. A
-// lease under 22.5 s gets a window of ONE, a message a round trip: measured
-// the same way (interleaved, 2026-10-18, on four vCPUs shared with other
-// work), a lone 16 MiB put at 47–83 MB/s and eight at once at 56–78 together,
-// against 120–139 and 130–135 with four, and two out at 109–125 and 102–122
-// — about half a fast link's throughput, and on a link with a longer round
-// trip than loopback's the share lost is larger, since a window of one moves
-// 128 KiB a round trip. That is the price, on a link that did not need the
-// bound, of a node that does not lose its seats to its own uploads on one
-// that does.
-func linkWindow(heartbeat time.Duration) int {
-	return min(max(int(heartbeat/messageCrossing), 1), memberWindow)
-}
+// linkWindow is the window across a link: the most whole messages a link at
+// the floor every leg is promised ([objstore.MiBPace]) carries within
+// [jsapi.WindowCrossing], at least one — ONE message, 128 KiB, crossing the
+// floor in 3.75 seconds, whatever lease the node holds — so a request sent
+// behind a full window of puts alone is still answered inside its term. Neither
+// a lease's heartbeat nor a measured rate sizes it, and one message costs a
+// fast link half its throughput: the package doc's "The window across a link"
+// says why, and what a request also behind the inbound traffic waits. A test
+// holds the arithmetic against the terms' own constants.
+const linkWindow = max(int(jsapi.WindowCrossing/messageCrossing), 1)
 
 // memberWindow is the window on a MEMBER's own client — a data node, whose
 // connection reaches its own embedded member in its own process, so no link
-// lies between the put and the stream for a renewal to queue on: sixteen
+// lies between the put and the stream for a request to queue on: sixteen
 // messages, two mebibytes.
 //
 // SIZED BY THROUGHPUT, the smallest window measured at the client library's
@@ -101,9 +61,12 @@ const memberWindow = 16
 //
 // THE CONNECTION'S, NEVER A PUT'S, because what it protects is shared: every
 // put a node makes — a person's upload, a push's bundle, a seat's file — goes
-// out on the one connection its leases, its events and its coordination ride
-// ([Backend.Put]), and a window counted per put let K puts at once hold K
-// windows on it.
+// out on the one connection the bucket was opened on ([Backend.Put]), which
+// the engine opens on the connection its coordination store rides, beside
+// every lease renewal the node makes (on an external broker, the queue's own,
+// which its events ride as well); across a link every request sent after it
+// on that link waits behind what it has out, and a window counted per put let
+// K puts at once hold K windows on it.
 //
 // FIRST COME, FIRST SERVED, A PLACE AT A TIME, so puts sharing the window
 // interleave rather than one taking it whole: a put asks for a place for each
@@ -291,11 +254,13 @@ const purgeWait = 5 * time.Second
 // — nothing out — is not waiting on the broker; nor is one waiting for a place
 // in the window, which ends only when the connection has had nothing
 // acknowledged for the minute ([window]). No message waits behind more than
-// the window, so across a link at the floor each is acknowledged within a
-// heartbeat of the node's lease of its publish ([linkWindow]; fifteen seconds
-// at the shipped lease) — a leaf's compressed link, which delivers what it
-// flushed as one block, included: a window of two mebibytes, the widest a link
-// is given, came in blocks up to 26.4 s apart there (3.1 s over TCP).
+// the window, so across a link at the floor each one's bytes have crossed
+// within four seconds of its publish ([linkWindow]), and its acknowledgement
+// follows a round trip later, behind whatever the link carries back — a
+// leaf's compressed link, which delivers what it flushed as one block,
+// included: sixteen messages out through a leaf at the floor, two mebibytes,
+// the window a member's own client is given, were acknowledged in blocks up
+// to 26.4 s apart (3.1 s over TCP), under the minute.
 //
 // # A failed put leaves nothing a stat or a listing finds
 //

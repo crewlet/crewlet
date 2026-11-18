@@ -12,14 +12,10 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A CREATE STORES THE CHART'S OWN KEY, not the string the model typed.
-//
-// A model names a team the way it remembers it — the name, the id, in
-// whatever case — and `filed_unit` is written once and never rewritten. So a
-// tool that stored the argument verbatim left one team's work under as many
-// spellings as its colleagues have ways of writing it, each of them a filter
-// the others miss, and the id a founder added to survive a corrected name
-// went unwritten by the surface that files most of the company's work.
+// A create stores the chart's own key, not the string the model typed: a model
+// names a team by name or id in any case, and `filed_unit` is written once, so
+// a verbatim argument splits one team's work across spellings each filter
+// misses, and loses the id that survives a corrected name.
 func TestACreateStoresTheUnitsOwnKey(t *testing.T) {
 	t.Parallel()
 	for _, typed := range []string{"platform", "Platform", "PLAT", "plat"} {
@@ -44,8 +40,8 @@ func TestACreateStoresTheUnitsOwnKey(t *testing.T) {
 	}
 }
 
-// AND A TEAM THE CHART DOES NOT HAVE IS REFUSED BY NAME, rather than stored
-// as a unit nothing can route to or filter on.
+// A team the chart does not have is refused by name, rather than stored as a
+// unit nothing can route to or filter on.
 func TestACreateRefusesAUnitTheChartDoesNotHave(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -66,9 +62,8 @@ func TestACreateRefusesAUnitTheChartDoesNotHave(t *testing.T) {
 	}
 }
 
-// A RE-ROUTE STORES THE KEY FOR THE SAME REASON: the wake resolves the stored
-// value back to a lead, and a spelling the document did not choose is one a
-// corrected name walks away from.
+// A re-route stores the key too: the wake resolves the stored value to a lead,
+// and a spelling the document did not choose breaks when the name is corrected.
 func TestARerouteStoresTheUnitsOwnKey(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -95,15 +90,10 @@ func TestARerouteStoresTheUnitsOwnKey(t *testing.T) {
 	}
 }
 
-// GET_WORK_ITEM READS WITH THE CHART, so its answer carries the team's NAME
-// beside the key the row holds.
-//
-// A model acts on the key — it is what a `unit=` filter takes, and that filter
-// takes the name too — but a model also writes PROSE about the item it just
-// read, into a comment, a chat message or a hand-off, and "filed into eng" is
-// a sentence about a slug nobody outside the config file has seen. It is also
-// the only way this surface can say a team has LEFT the chart, which is the
-// difference between a stale unit and a typo.
+// get_work_item reads with the chart, so its answer carries the team's name
+// beside the key the row holds: a model writes prose about the item, where a
+// slug means nothing outside the config, and it is the only way this surface
+// says a team has left the chart (a stale unit, not a typo).
 func TestGetWorkItemReadsWithTheChart(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -164,18 +154,15 @@ func (s *viewSpy) DeleteView(_ context.Context, opID, _ string,
 	return worklet.WriteResult{Outcome: statelog.OutcomeApplied}, nil
 }
 
-// ViewPrior answers that no view is stored under the id, which is what every
-// case using this spy saves: a new view, or the same one again.
+// ViewPrior answers that no view is stored under the id: every case using this
+// spy saves a new view, or the same one again.
 func (s *viewSpy) ViewPrior(context.Context, string) (worklet.ViewPrior, error) {
 	return worklet.ViewPrior{}, nil
 }
 
-// A VIEW'S UNIT CONTAINER IS STORED UNDER THE TEAM'S KEY.
-//
-// A container is an ADDRESS, and this tool already upper-cases a project key
-// for exactly that reason. A unit is the kind with two spellings, so a view
-// saved as `unit:Engineering` sat in a different strip from one saved as
-// `unit:eng` — and nothing on either strip says the other exists.
+// A view's unit container is stored under the team's key: a container is an
+// address (as a project key is upper-cased), and a unit has two spellings, so
+// `unit:Engineering` and `unit:eng` would be strips blind to each other.
 func TestASavedViewsUnitContainerIsStoredUnderTheKey(t *testing.T) {
 	t.Parallel()
 	for _, typed := range []string{"unit:Platform", "unit:plat", "unit:PLATFORM"} {
@@ -199,8 +186,8 @@ func TestASavedViewsUnitContainerIsStoredUnderTheKey(t *testing.T) {
 	}
 }
 
-// AND THE STRIP IS READ WITH THE CHART BEHIND IT, which is what lets a strip
-// asked for under one spelling carry the views saved under the other.
+// The strip is read with the chart behind it, so a strip asked for under one
+// spelling carries the views saved under the other.
 func TestAViewStripIsReadWithTheChart(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()

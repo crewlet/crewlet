@@ -24,8 +24,7 @@ import {
 } from "~/lib/syntax/index.ts";
 import { KINDS, type Grammar, type Kind, type State, type Token } from "~/lib/syntax/types.ts";
 import { codeRest } from "~/lib/useCodeQuery.ts";
-import type { DiffSpan } from "~/lib/wordDiff.ts";
-import type { DiffHunk } from "~/components/DiffView.tsx";
+import type { DiffHunk, DiffSpan } from "~/components/DiffView.tsx";
 import type { CodeBlobAnswer, CodeDiffFile } from "~/protocol/index.ts";
 import "~/styles/gitlet-code.css";
 
@@ -411,4 +410,30 @@ export function useDiffTokens(args: {
       return cache.get(n)!;
     };
   }, [present, binary, hunks, gb, lb, sb, fb, ga, la, sa, fa]);
+}
+
+/**
+ * A few lines' spans with no blob read (an excerpt, a suggestion): each side
+ * walked from the first line drawn, as a search hit's lines are.
+ */
+export function useHunkTokens(
+  path: string,
+  hunks: readonly DiffHunk[],
+): ((side: Side, n: number) => readonly DiffSpan[] | null) | undefined {
+  const grammar = useGrammar(path);
+  return useMemo(() => {
+    if (!grammar) return undefined;
+    const texts = { before: patchLines(hunks, "before"), after: patchLines(hunks, "after") };
+    const states = {
+      before: hunkStates(grammar, hunks, "before"),
+      after: hunkStates(grammar, hunks, "after"),
+    };
+    return (side, n) => {
+      const text = texts[side].get(n);
+      if (text === undefined || text.length > SYNTAX_MAX_LINE) return null;
+      return grammar
+        .line(text, states[side].get(n) ?? "")
+        .tokens.map((t) => ({ end: t.end, className: t.kind ? SYNTAX_CLASS[t.kind] : null }));
+    };
+  }, [grammar, hunks]);
 }

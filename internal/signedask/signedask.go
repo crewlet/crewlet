@@ -81,7 +81,24 @@
 // for THIS question. So a request carries an id and a deadline inside its
 // signed body ([Request]), and the node that takes it refuses one whose
 // deadline has passed or whose id it has already taken ([Guard]) — remembering
-// an id only until its deadline, after which the deadline refuses it anyway.
+// an id exactly as long as its deadline could still admit it, after which the
+// deadline refuses it anyway.
+//
+// THE DEADLINE IS THE SENDING NODE'S INSTANT, JUDGED ON THE TAKING NODE'S
+// CLOCK, and two machines' clocks stand apart. A channel says how far it lets
+// them ([ClockAllowance]): its taking node admits a request until the deadline
+// plus that allowance by its own clock, and remembers the id as long — the
+// memory moves with the admission, or a replay arriving after the id was
+// forgotten, but inside the allowance, would be taken again. A channel built
+// without one judges the deadline on the taking node's clock alone. It is the
+// channel's to state, and none unless it does, because what a wider window
+// costs is a longer replay window, and what a replay does is the channel's
+// receiver's to weigh. And what a node remembers lives in its memory: a node
+// that restarted inside a request's window has forgotten the ids it took, so a
+// replay there is refused only once the deadline and the allowance have
+// passed, and what keeps it harmless meanwhile is what the channel's receiver
+// makes of it.
+//
 // And a reply names the request it answers ([Reply]): an asker believes only a
 // reply that verifies AND is bound to the id it sent, so a reply to another
 // question — a captured success, a refusal saying nothing ran — cannot be
@@ -106,8 +123,9 @@
 //   - UNDECODABLE: the fleet signed it and this build cannot read it — a peer
 //     on another build. Runs nothing.
 //   - STALE: the fleet's, and not to be taken now: it names no id or no
-//     deadline, its deadline had passed when it arrived, or this node has
-//     already taken its id. Runs nothing.
+//     deadline, its deadline and the allowance its channel gives two nodes'
+//     clocks had passed when it arrived, or this node has already taken its
+//     id. Runs nothing.
 //
 // # And one way, for a frame a node shows to people
 //
@@ -168,7 +186,8 @@ import (
 // a sender can set that the MAC does not cover.
 type Request interface {
 	// Binding is the id the request was minted under ([NewID]) and the
-	// instant after which nobody is waiting for its answer.
+	// instant, by the sending node's clock, after which nobody is waiting
+	// for its answer.
 	Binding() (id string, deadline time.Time)
 }
 
@@ -195,19 +214,56 @@ type Channel[Q Request, R Reply] struct {
 	requestsOpened *recordseal.Verifier
 	replies        *recordseal.Signer
 	repliesOpened  *recordseal.Verifier
+
+	// apart is how far this channel lets the sending and the taking node's
+	// clocks stand apart ([ClockAllowance]); zero unless it was built with
+	// one.
+	apart time.Duration
+}
+
+// Option is a choice a channel is built with ([New]).
+type Option func(*options)
+
+// options is what the [Option]s a channel was built with chose.
+type options struct {
+	apart time.Duration
+}
+
+// ClockAllowance is how far apart, at most, the clocks of the node that sends a
+// request and the node that takes it may stand: the taking node admits a request
+// until its deadline plus apart by its own clock, and remembers its id exactly as
+// long — or a replay arriving after it forgot the id, inside the allowance, would
+// be taken again. Each channel states its own, because what a wider window costs
+// is a replay at a node that restarted inside it, and what a replay does is the
+// channel's to weigh. A channel built without it judges the sender's deadline on
+// its own clock, as every channel did. [New] refuses a negative one.
+func ClockAllowance(apart time.Duration) Option {
+	return func(o *options) { o.apart = apart }
 }
 
 // New builds a node's half of the channel name from the fleet keyring — Tier A
 // `secrets.keys` and `secrets.active_key_id`, the ring every state-log record
-// is signed under. It refuses a keyring that names no active key or holds no
-// key at all, for the state log's reason: a node that signed under nothing
-// would be refused by every peer, one request at a time, for ever.
-func New[Q Request, R Reply](name string, ring recordseal.Keyring) (*Channel[Q, R], error) {
+// is signed under — with the choices opts make ([ClockAllowance]). It refuses
+// a keyring that names no active key or holds no key at all, for the state
+// log's reason: a node that signed under nothing would be refused by every
+// peer, one request at a time, for ever. And it refuses a negative clock
+// allowance, which would refuse a request before its own deadline and is a
+// wiring fault in the channel that states it.
+func New[Q Request, R Reply](name string, ring recordseal.Keyring, opts ...Option) (*Channel[Q, R], error) {
 	if name == "" {
 		return nil, errors.New("signedask: a channel needs a name — it is the key domain " +
 			"its envelopes are signed under")
 	}
-	c := &Channel[Q, R]{requestDomain: name + ".request", replyDomain: name + ".reply"}
+	var chosen options
+	for _, opt := range opts {
+		opt(&chosen)
+	}
+	if chosen.apart < 0 {
+		return nil, fmt.Errorf("signedask: %s: a clock allowance of %v is negative — it is how "+
+			"far two nodes' clocks may stand apart, zero or more", name, chosen.apart)
+	}
+	c := &Channel[Q, R]{requestDomain: name + ".request", replyDomain: name + ".reply",
+		apart: chosen.apart}
 	var err error
 	if c.requests, err = recordseal.NewSigner(c.requestDomain, ring); err != nil {
 		return nil, fmt.Errorf("signedask: %s: sign the requests this node sends: %w", name, err)
@@ -298,11 +354,12 @@ type Admission[Q Request] struct {
 }
 
 // Admit opens one request a serving node was sent and decides what it may do
-// with it, judging its deadline on now and its id against what seen has
-// taken. An id is TAKEN only when the request is admitted — and taken whether
-// or not the caller then runs it, because every asker mints a fresh id for
-// every ask: a second arrival of one id is a replay whatever the first was
-// answered.
+// with it, judging its deadline on now — this node's clock — within the
+// allowance the channel gives two nodes' clocks ([ClockAllowance]), and its id
+// against what seen has taken. An id is TAKEN only when the request is
+// admitted — and taken whether or not the caller then runs it, because every
+// asker mints a fresh id for every ask: a second arrival of one id is a replay
+// whatever the first was answered.
 func (c *Channel[Q, R]) Admit(sealed []byte, seen *Guard, now time.Time) Admission[Q] {
 	var out Admission[Q]
 	body, verdict := c.requestsOpened.Open(sealed)
@@ -330,7 +387,7 @@ func (c *Channel[Q, R]) Admit(sealed []byte, seen *Guard, now time.Time) Admissi
 	out.Request = req
 	id, deadline := req.Binding()
 	out.ID = id
-	if why := seen.take(id, deadline, now); why != "" {
+	if why := seen.take(id, deadline, c.apart, now); why != "" {
 		out.Disposition, out.Why = Stale, why
 		return out
 	}
@@ -383,10 +440,12 @@ func (c *Channel[Q, R]) OpenReply(sealed []byte, asked string) (rep R, why strin
 }
 
 // Guard is the ids of the requests one serving node has taken, each until its
-// deadline: a request whose id it holds is a replay, and one whose deadline
-// has passed is refused before it is looked up — so an id forgotten at its
-// deadline is refused either way, and the set never holds more than the
-// requests still in flight.
+// channel would refuse it anyway — its deadline plus the allowance the channel
+// gives two nodes' clocks ([ClockAllowance]): a request whose id it holds is a
+// replay, and one past that instant is refused before it is looked up — so an
+// id forgotten then is refused either way, and the set never holds more than
+// the requests its channel could still admit. Each entry keeps its own instant,
+// and a guard serves one channel, so one allowance.
 //
 // ONE PER SERVING NODE AND CHANNEL, never shared between nodes: a scatter
 // hands the same request to every node, and each of them takes it once.
@@ -395,7 +454,7 @@ type Guard struct {
 	seen map[string]time.Time
 
 	// sweepAt is the size at which the next admission sweeps out the ids
-	// whose deadlines have passed — twice what survived the last sweep, so
+	// their channel would refuse now — twice what survived the last sweep, so
 	// the cost of sweeping is spread across as many admissions as it has
 	// entries to visit.
 	sweepAt int
@@ -411,9 +470,13 @@ func NewGuard() *Guard {
 	return &Guard{seen: map[string]time.Time{}, sweepAt: sweepFloor}
 }
 
-// take records one request's id until its deadline, answering why it may not
-// be taken now — empty where it was taken.
-func (g *Guard) take(id string, deadline, now time.Time) string {
+// take records one request's id until its deadline plus apart — the last
+// instant its channel admits it, by this node's clock — answering why it may
+// not be taken now: empty where it was taken. The id is remembered exactly as
+// long as it is admitted, never only to the deadline, or a replay arriving
+// after a sweep forgot it but inside the allowance would be taken again.
+func (g *Guard) take(id string, deadline time.Time, apart time.Duration, now time.Time) string {
+	until := deadline.Add(apart)
 	switch {
 	case g == nil:
 		// A WIRING FAULT, answered as refusals rather than a panic in a
@@ -426,15 +489,19 @@ func (g *Guard) take(id string, deadline, now time.Time) string {
 	case deadline.IsZero():
 		return "the request names no deadline, so nothing bounds how long its id " +
 			"would have to be remembered"
-	case !now.Before(deadline):
-		return fmt.Sprintf("the request's deadline %s had passed when it arrived — "+
-			"nobody is waiting for its answer", deadline.UTC().Format(time.RFC3339Nano))
+	case !now.Before(until):
+		allowed := ""
+		if apart > 0 {
+			allowed = fmt.Sprintf(", and the %v this channel allows two nodes' clocks to stand apart,", apart)
+		}
+		return fmt.Sprintf("the request's deadline %s%s had passed when it arrived — "+
+			"nobody is waiting for its answer", deadline.UTC().Format(time.RFC3339Nano), allowed)
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if len(g.seen) >= g.sweepAt {
-		for held, until := range g.seen {
-			if !now.Before(until) {
+		for held, forgetAt := range g.seen {
+			if !now.Before(forgetAt) {
 				delete(g.seen, held)
 			}
 		}
@@ -443,6 +510,6 @@ func (g *Guard) take(id string, deadline, now time.Time) string {
 	if _, held := g.seen[id]; held {
 		return fmt.Sprintf("request %s was taken already, so this is a replay of it", id)
 	}
-	g.seen[id] = deadline
+	g.seen[id] = until
 	return ""
 }

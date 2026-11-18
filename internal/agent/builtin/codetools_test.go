@@ -67,46 +67,41 @@ func siteDetail() gitlet.RepoDetail {
 	}
 }
 
-// gitletHost is Gitlet as the code tools see it, routed: one repository,
-// its refs, and a Gitlet node answering by object id — recording every question
-// it is asked, at the level it was asked.
+// gitletHost is a routed Gitlet holding one repository and answering by
+// object id, recording every question at the level it was asked.
 type gitletHost struct {
 	mu sync.Mutex
 
 	detail  gitlet.RepoDetail
 	listing []gitlet.RepoSummary // the repos listing; the one repository when nil
 	refs    map[string]string    // whole ref → oid
-	// moved is where each ref last moved, the push that set it (movedAt):
-	// below at, as every row a read answers is below its checkpoint.
+	// moved is where each ref last moved (movedAt): below at, as every row
+	// a read answers is below its checkpoint.
 	moved map[string]statelog.Position
 	floor statelog.Position
 	at    statelog.Position
 
-	// replaced, set, is the repository every read BY NAME after the first
-	// names: a name deleted and declared again between two reads — and a
-	// read by object id of any other repository is answered gone.
+	// replaced, set, is what every read BY NAME after the first answers (the
+	// name deleted and declared again); a read by object id of any other
+	// repository is answered gone.
 	replaced *gitlet.RepoRef
 	readErr  error
 	gitErr   error
 	git      func(q gitlet.GitQuery) gitlet.GitAnswer
-	// changes, set, answers the reads of a repository's changes — a listing,
-	// and one change a part at a time (codechanges_test.go) — under the
-	// host's lock, every one recorded with the rest.
+	// changes, set, answers the change reads (codechanges_test.go), under
+	// the host's lock, recorded with the rest.
 	changes func(q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
-	// checks is every attempt of every check the repository holds, read
-	// whole: a `checks` read answers their rows — a commit's, or every one
-	// for a change's, narrowed to the check its question names as the data
-	// node narrows them — and a `check` read the one its question names
-	// (codechecks_test.go). newGitletHost holds one: attempt 1 of `unit` at
-	// main, for main, ended errored.
+	// checks is every attempt of every check: a `checks` read answers their
+	// rows narrowed as the data node narrows them, a `check` read the one
+	// its question names (codechecks_test.go). newGitletHost holds attempt
+	// 1 of `unit` at main, errored.
 	checks []gitlet.CheckDetail
-	// before, set, is called with each question's kind before it is
-	// answered, outside the host's lock — so a case can read what the asking
-	// turn held when the question arrived.
+	// before, set, is called with each question's kind before answering,
+	// outside the host's lock, so a case can read what the asking turn held.
 	before func(what string)
-	// seats and ats are, for a ref a case gives them, the seat that set it in
-	// its own namespace and when — what a resolve answers beside its oid, and
-	// what a turn's hold on a seat's branch decides its record from.
+	// seats and ats are the seat that set a ref in its own namespace and
+	// when: what a resolve answers beside the oid, and what a turn's hold on
+	// a seat's branch decides its record from.
 	seats map[string]string
 	ats   map[string]time.Time
 
@@ -172,8 +167,7 @@ func (h *gitletHost) Read(_ context.Context, q gitlet.ReadQuery) (gitlet.ReadAns
 		if listing == nil {
 			listing = []gitlet.RepoSummary{h.detail.RepoSummary}
 		}
-		// KEYSET BY NAME, as the reader's listing is: the rows after the
-		// cursor.
+		// KEYSET BY NAME, as the reader's listing is.
 		for _, s := range listing {
 			if s.Name > q.Cursor {
 				out.Repos = append(out.Repos, s)
@@ -310,8 +304,7 @@ func (h *gitletHost) GitRead(_ context.Context, q gitlet.GitQuery) (gitlet.GitAn
 		return gitlet.GitAnswer{}, h.gitErr
 	}
 	if h.replaced != nil && q.RepoID != h.replaced.ID {
-		// THE ID THE NAME NAMED BEFORE, purged: what a Gitlet node answers a
-		// read of it.
+		// THE ID THE NAME NAMED BEFORE, answered purged as a Gitlet node does.
 		return gitlet.GitAnswer{}, fmt.Errorf("%w: %s", gitlet.ErrRepoNotFound,
 			gitlet.RepoGone{ID: q.RepoID, Name: h.detail.Name, Purged: true}.Detail())
 	}
@@ -338,9 +331,8 @@ func (h *gitletHost) GitRead(_ context.Context, q gitlet.GitQuery) (gitlet.GitAn
 	return out, nil
 }
 
-// FloorOf is this node's floor on the one repository it wrote to, site's id,
-// and none on any other: what a read of the repository a name names now — a
-// name declared again — carries.
+// FloorOf is this node's floor on site, the one repository it wrote to, and
+// none on any other, such as the one a name declared again names.
 func (h *gitletHost) FloorOf(repoID string) statelog.Position {
 	if repoID != siteID {
 		return statelog.Position{}
@@ -366,11 +358,10 @@ func readsOf(reads []gitlet.ReadQuery, kind gitlet.ReadKind) int {
 	return n
 }
 
-// codeRequesters is who a turn reading code may be acting for, composed as the
-// engine composes them: the founder, a person of the company; agent-ceo, a
-// colleague seat; and "departed", a person whose seat's holder was removed,
-// who acts as nobody now. Any other handle is a requester this node cannot
-// compose.
+// codeRequesters is who a code-reading turn may act for, composed as the
+// engine composes them: the founder (a person), agent-ceo (a colleague seat)
+// and "departed" (a person whose seat's holder was removed, acting as
+// nobody). Any other handle is one this node cannot compose.
 func codeRequesters() requesters {
 	return requesters{
 		"founder":   founderPrincipal(iam.Apps...),
@@ -383,11 +374,9 @@ func codeRequesters() requesters {
 	}
 }
 
-// codeDeps is the code read tools wired over host as every surface wires them:
-// Gitlet, beside who a turn is acting for and the chart that decides
-// them (the requester ceiling), without either of which no code tool is
-// offered. The writes join where Gitlet's writes are wired
-// ([writeDeps]).
+// codeDeps is the code read tools over host as every surface wires them:
+// Gitlet beside the requesters and the chart (the requester ceiling),
+// without either of which no code tool is offered. [writeDeps] adds writes.
 func codeDeps(host builtin.CodeReader) builtin.CodeDeps {
 	return builtin.CodeDeps{Code: host, Requesters: codeRequesters(), Chart: chartLeads}
 }
@@ -466,12 +455,10 @@ func asBoundPerson() context.Context {
 	})
 }
 
-// asUnboundToken is a machine token bound to nobody, as CI holds one —
-// carrying the gitlet permission a CI token is given to fetch (ADR-0110), and
-// stepped up, as the node composes every machine token
-// (iam.Principal.MachineToken), so a gesture asking a fresh proof reaches the
-// tool and is refused there for the binding it lacks, never for the app or
-// the proof.
+// asUnboundToken is a CI machine token bound to nobody, holding the gitlet
+// grant a CI token fetches with (ADR-0110) and stepped up as the node composes
+// every machine token (iam.Principal.MachineToken): a gesture asking a fresh
+// proof is refused at the tool for the binding it lacks, never the app or proof.
 func asUnboundToken() context.Context {
 	return iam.WithPrincipal(context.Background(), iam.Principal{
 		ID:   uuid.MustParse("018f3a9c-0000-7000-8000-00000000fee4"),
@@ -482,16 +469,12 @@ func asUnboundToken() context.Context {
 
 // ---- one list, two surfaces --------------------------------------------- //
 
-// THE CODE TOOLS ARE ONE LIST: a seat's registry and the operator catalogue,
-// built over the same deps, hold the same code tools — the twelve reads,
-// then the writes, every one the authority table names, in the list's own
-// order — with byte-identical descriptions and schemas but for the one
-// argument the operator surface alone offers, the writes' `op_id`, which no
-// read and no seat's tool offers; because both take [builtin.CodeTools]. A
-// company that hosts no code is given none on either — nor is a surface that
-// wired Gitlet and left out who a turn is acting for, or the chart that
-// decides them, which would read for whoever messaged a seat whatever the seat
-// itself may.
+// THE CODE TOOLS ARE ONE LIST: a seat's registry and the operator catalogue
+// both take [builtin.CodeTools], so they hold the same code tools in the same
+// order with byte-identical descriptions and schemas, but for the writes'
+// `op_id`, which only the operator surface offers. A company hosting no code
+// gets none, nor does a surface wiring Gitlet without the requesters or the
+// chart, which would read for whoever messaged a seat whatever the seat may.
 //
 // Mutation: OperatorTools omitting codeCandidates, or building a list of its
 // own with one schema edited; CodeTools serving over Gitlet alone; the
@@ -567,11 +550,10 @@ func TestTheCodeToolsAreOneList(t *testing.T) {
 	}
 }
 
-// EVERY CODE READ IS A PROVEN READ, on both surfaces: the registry carries the
-// hint the delivery check reads, and the operator catalogue advertises the one
-// it audits nothing on — every code tool that is not one of the writes,
-// on a registry that holds the writes too. Mutation: one code read off
-// codeAnnotations (the default arm's shared write) → red.
+// EVERY CODE READ IS A PROVEN READ on both surfaces: every code tool but the
+// writes carries the hint the delivery check reads and the operator catalogue
+// audits nothing on. Mutation: one code read off codeAnnotations (the default
+// arm's shared write) → red.
 func TestEveryCodeToolIsAProvenRead(t *testing.T) {
 	t.Parallel()
 	reg := codeRegistry(t, writeDeps(newGitletHost(), &codeWrites{}))
@@ -601,11 +583,10 @@ func TestEveryCodeToolIsAProvenRead(t *testing.T) {
 
 // ---- who asks ------------------------------------------------------------ //
 
-// A CODE READ IS JUDGED AS ITS CALLER and nobody else: a seat's turn asks as
-// the seat by its handle, a person's assistant as the credential they came
-// through bound to their seat, a token bound to nobody as itself — the one
-// conversion the REST reads use too — and no argument names who reads: one
-// trying is refused before anything is read.
+// A CODE READ IS JUDGED AS ITS CALLER: a seat's turn asks as the seat, a
+// person's assistant as their credential bound to their seat, an unbound
+// token as itself (the conversion the REST reads use too), and an argument
+// naming who reads is refused before anything is read.
 //
 // Mutation: the asker taken from the turn's requester, or a person asked as
 // their seat with no credential → red.
@@ -661,8 +642,7 @@ func TestACodeReadIsJudgedAsItsCaller(t *testing.T) {
 		}
 	}
 
-	// NO ARGUMENT NAMES WHO READS: one that tries is refused before
-	// Gitlet is asked anything.
+	// NO ARGUMENT NAMES WHO READS.
 	host := newGitletHost()
 	got := refusedCode(t, codeRegistry(t, codeDeps(host)), codeTurn(t),
 		builtin.CodeListReposTool, map[string]any{"seat": "founder"})
@@ -674,8 +654,8 @@ func TestACodeReadIsJudgedAsItsCaller(t *testing.T) {
 	}
 }
 
-// EVERY FILE'S PATCH IS ASKED BY ITS ARGUMENT: `patches` sets the diff's Patches, and beside
-// `file` it is refused before Gitlet is asked a git read.
+// EVERY FILE'S PATCH IS ASKED BY ITS ARGUMENT: `patches` sets the diff's
+// Patches, and beside `file` is refused before Gitlet is asked a git read.
 //
 // Mutation: drop Patches from code_diff's query → red.
 func TestCodeDiffAsksEveryPatchByItsArgument(t *testing.T) {
@@ -711,10 +691,9 @@ func mustActor(ctx context.Context, t *testing.T) builtin.Actor {
 
 // ---- whom a turn reads for ------------------------------------------------ //
 
-// everyCodeQuestion makes, in turn, a call asking each kind of question a code
-// tool asks Gitlet: the listing, a repository's first page of branches
-// (which reads its detail), a file at a branch (a ref resolved, then a read by
-// object id) and a diff of two branches.
+// everyCodeQuestion asks, in turn, each kind of question a code tool asks
+// Gitlet: the listing, a repository's first page of branches, a file at a
+// branch (a resolve, then a read by object id) and a diff of two branches.
 func everyCodeQuestion(t *testing.T, reg *tools.Registry, turn *turnctx.Turn) {
 	t.Helper()
 	callCode(t, reg, turn, builtin.CodeListReposTool, map[string]any{})
@@ -724,7 +703,7 @@ func everyCodeQuestion(t *testing.T, reg *tools.Registry, turn *turnctx.Turn) {
 }
 
 // readsFor holds every question host was asked to name ceiling as the seat it
-// is made for — "" for none — and to have asked each kind at least once.
+// is made for ("" for none), and each kind to have been asked.
 func readsFor(t *testing.T, host *gitletHost, ceiling string) {
 	t.Helper()
 	reads, resolves, gits := host.asked()
@@ -749,34 +728,22 @@ func readsFor(t *testing.T, host *gitletHost, ceiling string) {
 	}
 }
 
-// A CODE READ IS DECIDED AGAIN FOR WHOEVER WOKE THE TURN — the requester
-// ceiling the artifacts tools apply, here on a repository's grant. A turn
-// nobody woke, one the seat woke itself — the outcome of its own act among
-// them, with the seat as its sender — and one a person woke read for nobody
-// but the seat, since a person maintains every repository and so bounds
-// nothing; a turn a colleague seat woke names that seat on every question it
-// asks — the listing, a repository, the refs it resolves, every read by object
-// id — for the node that answers to judge the colleague's grant beside the
-// seat's own. A turn a stranger woke, or a person who may not act in the
-// company now, reads nothing: refused with the ceiling's reason before
-// Gitlet is asked anything, whoever else spoke in the turn, the seat
-// itself included. A requester this node cannot compose is told as a node
-// that could not tell, and never read as a turn nobody woke. The operator
-// surface has no turn: a person's assistant reads as its caller, for nobody
-// else.
+// A CODE READ IS DECIDED AGAIN FOR WHOEVER WOKE THE TURN (the requester
+// ceiling, on a repository's grant). A turn nobody, the seat or a person woke
+// reads for the seat alone: a person maintains every repository. A colleague's
+// turn names that colleague on every question, for the node to judge it too.
+// A stranger's or departed person's turn, whoever else spoke, is refused with
+// the ceiling's reason unasked; an uncomposable requester is a node that could
+// not tell, never nobody. The operator surface's assistant reads as its caller.
 //
-// Mutations: CodeDeps.caller skipping the ceiling → the stranger's and the
-// departed person's turns read; the colleague left off any one kind of
-// question (CodeDeps.read, resolveRef, gitRead) → red; a person's seat sent
-// as the ceiling → red; a requester this node cannot compose read as nobody →
-// red; the turn's senders read before its requester → the person's and the
-// colleague's turns refused as a stranger's; the seat's own voice counted as
-// a stranger's → the outcome of its own act refused; every sender beside the
-// seat's own ignored → the stranger in its thread reads.
+// Mutations (each red): CodeDeps.caller skipping the ceiling; the colleague
+// off any kind of question; a person's seat as ceiling; an uncomposable
+// requester as nobody; senders before requester; the seat a stranger; senders
+// beside the seat's ignored.
 func TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	t.Parallel()
-	// A turn's senders: somebody no seat or person maps to, the seat itself —
-	// the sender of the outcome of its own act — and a known requester.
+	// Senders: somebody nothing maps to, the seat itself (the outcome of its
+	// own act) and a known requester.
 	unknown := []types.CanonicalIdentity{{ExternalID: "U-out", Platform: "slack"}}
 	itself := []types.CanonicalIdentity{{Handle: "agent-cto"}}
 	speaker := func(handle string) []types.CanonicalIdentity {
@@ -815,8 +782,7 @@ func TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	}{
 		{"a turn a stranger woke", "", unknown, tools.RefusalForbidden,
 			"woken by somebody the company does not know", true},
-		// A STRANGER WHO SPOKE IN THE SEAT'S OWN THREAD still bounds it:
-		// only the seat's own voice is no stranger's.
+		// A STRANGER IN THE SEAT'S OWN THREAD still bounds it.
 		{"a turn a stranger spoke in beside the seat itself", "agent-cto", append(itself, unknown...),
 			tools.RefusalForbidden, "woken by somebody the company does not know", true},
 		{"a turn a departed person woke", "departed", speaker("departed"), tools.RefusalForbidden,
@@ -879,19 +845,14 @@ func TestACodeReadIsDecidedAgainForWhoeverWokeTheTurn(t *testing.T) {
 	})
 }
 
-// A READ REFUSED FOR WHOM THE TURN READS IS THE CEILING'S REFUSAL: a node that
-// answers a read made for a colleague ErrAboveCeiling — the colleague's own
-// grant reads nothing of the repository — is told as the requester ceiling
-// refuses, forbidden, carrying the authority table's ceiling reason over
-// Gitlet's own sentence, which names the colleague and the visibility that
-// shuts it out; whether the read was of the repository's rows or one by object
-// id. Never as the seat's own not_permitted: the same seat reads the
-// repository in a turn nobody woke, and asking for more access would change
-// nothing.
+// A READ REFUSED FOR WHOM THE TURN READS IS THE CEILING'S REFUSAL: a node's
+// ErrAboveCeiling for a colleague's read, of rows or by object id, is told
+// forbidden with the ceiling reason over Gitlet's sentence naming the
+// colleague and the visibility. Never the seat's own not_permitted: the seat
+// reads the repository in a turn nobody woke, so more access changes nothing.
 //
-// Mutation: the ErrAboveCeiling arm dropped from codeFailure → the refusal is
-// a fault of this node, red; answered as ErrNotPermitted → it carries no
-// ceiling, red.
+// Mutation: the ErrAboveCeiling arm dropped from codeFailure (a fault of this
+// node), or answered as ErrNotPermitted (no ceiling) → red.
 func TestAReadRefusedForWhomTheTurnReadsIsTheCeilings(t *testing.T) {
 	t.Parallel()
 	above := fmt.Errorf("estate: data-a answered: %w: seat \"agent-ceo\" holds no access to repository "+
@@ -935,20 +896,17 @@ func TestAReadRefusedForWhomTheTurnReadsIsTheCeilings(t *testing.T) {
 
 // ---- what a turn pays ----------------------------------------------------- //
 
-// A TURN PAYS ONE BARRIER PER REPOSITORY, AND ONE PER CALL THAT NAMES REFS.
-// Every row read is at the seat's level (linearizable); the repository is read
-// once a turn and never again in it; the refs a call names are resolved in ONE
-// read — a diff of two branches pays one barrier, not two — and an id never
-// is; and every read by object id carries the furthest of the node's own
-// floor and the positions its refs LAST MOVED at, so the copy that answers
-// holds both — never the checkpoint a resolve read its ref at, which its own
-// barrier takes past every push, so a copy current to them all would sync for
-// nothing to answer it. A landed-in read is judged up to its tip's own move.
-// The operator surface has no turn, and reads the repository once a call.
+// A TURN PAYS ONE BARRIER PER REPOSITORY, AND ONE PER CALL THAT NAMES REFS:
+// rows are read linearizable, the repository once a turn, a call's refs in
+// ONE resolve and an id never. A read by object id is floored at the furthest
+// of the node's own floor and where its refs LAST MOVED, never the resolve's
+// checkpoint, which is past every push and would make the copy sync for
+// nothing. A landed-in read is judged up to its tip's own move. The operator
+// surface has no turn and reads the repository once a call.
 //
 // Mutation: resolveRevs resolving an oid as a ref or a call's refs one read
-// each, repo() reading past the turn's lookups, or a read floored at where its
-// ref was read (the resolve's checkpoint) → red.
+// each, repo() reading past the turn's lookups, or a read floored at the
+// resolve's checkpoint → red.
 func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 	t.Parallel()
 	host := newGitletHost()
@@ -985,8 +943,8 @@ func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 	}
 
 	reads, resolves, gits := host.asked()
-	// THE TURN'S ONE ROW READ OF THE REPOSITORY is code_get_repo's page of
-	// branches, whose detail resolved it: no read of kind repo, ever.
+	// THE TURN'S ONE ROW READ is code_get_repo's page of branches, whose
+	// detail resolved the repository: no read of kind repo.
 	if len(reads) != 1 || reads[0].Kind != gitlet.ReadRefs || readsOf(reads, gitlet.ReadRepo) != 0 {
 		t.Errorf("the turn read %+v, want one read, code_get_repo's page of branches, which resolved the "+
 			"repository", reads)
@@ -1024,8 +982,7 @@ func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 		}
 	}
 
-	// A WORKER IS ITS PARENT'S TURN: what the executor resolved, a worker it
-	// delegated to reads with no barrier of its own.
+	// A WORKER IS ITS PARENT'S TURN: it reuses what the executor resolved.
 	worker := turn.WithCalls(turnctx.NewCallLog())
 	callCode(t, reg, worker, builtin.CodeReadTool, map[string]any{"repo": "site", "rev": mainOID})
 	if reads, _, _ := host.asked(); len(reads) != 1 {
@@ -1046,13 +1003,11 @@ func TestATurnPaysOneBarrierPerRefItNames(t *testing.T) {
 	}
 }
 
-// CODE_GET_REPO ANSWERS WHERE A REPOSITORY'S PURGE AND ITS IMPORT STAND. A
-// purge's answer sends whoever asked for it to the repository's detail to read
-// when it was served, and an import tells nobody how it ended but the
-// repository's detail: so the detail answers the expunge (a purge asked and
-// not yet served, and the last one committed) and the remotes (a mirror's
-// address, and the import's source, its chunks and the sentence it ended
-// short on), every credential a ${VAR} reference as the row holds it.
+// CODE_GET_REPO ANSWERS WHERE A REPOSITORY'S PURGE AND ITS IMPORT STAND: the
+// detail is the only place either outcome is read, so it answers the expunge
+// (the purge asked, the last committed) and the remotes (a mirror's address,
+// an import's source, chunks and the sentence it ended short on), every
+// credential a ${VAR} reference as the row holds it.
 //
 // Mutation: leave Expunge out of code_get_repo's detail, or Remotes → red.
 func TestCodeGetRepoAnswersWhereAPurgeAndAnImportStand(t *testing.T) {
@@ -1103,12 +1058,10 @@ func TestCodeGetRepoAnswersWhereAPurgeAndAnImportStand(t *testing.T) {
 }
 
 // CODE_GET_REPO'S FIRST CALL IN A TURN IS ONE READ: its first page of branches
-// carries the repository in detail, so that page resolves the repository too —
-// one linearizable read and one barrier, not a read of kind repo and then the
-// page — and every later call in the turn reuses the resolution. A call asking
-// a LATER page first carries no detail, so it resolves the repository by a
-// read of its own before the page. The operator surface, which has no turn,
-// pays the one read each call.
+// carries the detail, so it resolves the repository too (one barrier, not a
+// repo read then the page), and later calls reuse it. A LATER page asked first
+// carries no detail, so it resolves the repository by a read of its own. The
+// operator surface, with no turn, pays the one read each call.
 //
 // Mutation: repoRead ignoring the call's first read (reading kind repo, then
 // the page) → red.
@@ -1129,7 +1082,7 @@ func TestCodeGetReposFirstCallIsOneRead(t *testing.T) {
 			"%s by the id the first resolved", reads, gits, siteID)
 	}
 
-	// A LATER PAGE FIRST: the repository is resolved by a read of its own.
+	// A LATER PAGE FIRST.
 	later := newGitletHost()
 	callCode(t, codeRegistry(t, codeDeps(later)), codeTurn(t), builtin.CodeGetRepoTool,
 		map[string]any{"repo": "site", "branches_cursor": "refs/heads/feature"})
@@ -1138,7 +1091,7 @@ func TestCodeGetReposFirstCallIsOneRead(t *testing.T) {
 		t.Errorf("a later page asked first read %+v, want the repository, then the page", reads)
 	}
 
-	// THE OPERATOR SURFACE: no turn, one read a call.
+	// THE OPERATOR SURFACE.
 	opHost := newGitletHost()
 	op := operatorCode(t, opHost, nil)
 	for range 2 {
@@ -1152,13 +1105,11 @@ func TestCodeGetReposFirstCallIsOneRead(t *testing.T) {
 	}
 }
 
-// A NAME THAT NAMES ANOTHER REPOSITORY MID-TURN IS RESOLVED AGAIN, whichever
-// read finds it out — the name deleted and declared again since the turn
-// resolved it. A ref read by NAME that answers another repository reads nothing
-// and is refused stale; a read by COMMIT ID of the repository the turn resolved,
-// which its Gitlet node answers gone, is refused not found. Either way the turn
-// forgets its resolution, so the same call made again reads the repository the
-// name names now, rather than asking again about an id nothing serves.
+// A NAME THAT NAMES ANOTHER REPOSITORY MID-TURN IS RESOLVED AGAIN (deleted and
+// declared again): a read by NAME answering another repository is refused
+// stale, one by COMMIT ID that its Gitlet node answers gone is refused not
+// found. Either way the turn forgets its resolution, so the call made again
+// reads what the name names now rather than an id nothing serves.
 //
 // Mutation: sameRepo ignoring the id or refusing without forgetting (by name),
 // or a read by id answered gone leaving the turn's resolution in place (by
@@ -1169,9 +1120,8 @@ func TestANameReplacedMidTurnIsResolvedAgain(t *testing.T) {
 		name string
 		args map[string]any
 		want tools.Refusal
-		// asked is how many git reads the refused call makes: none for a
-		// ref that already names another repository, one of the old id for
-		// a read by commit id.
+		// asked is how many git reads the refused call makes: none by name,
+		// one of the old id by commit id.
 		asked int
 	}{
 		{"a read by name", map[string]any{"repo": "site", "rev": "main"}, tools.RefusalStaleVersion, 0},
@@ -1212,9 +1162,8 @@ func TestANameReplacedMidTurnIsResolvedAgain(t *testing.T) {
 // ---- refusals ------------------------------------------------------------ //
 
 // A NODE THAT CANNOT JUDGE IS NEVER A REFUSAL OF THE CALLER (M3-O82): a data
-// node with no chart answers a seat's read about itself, a Gitlet node unready,
-// and a walk nobody served the fleet's condition — each told unavailable, which
-// a retry clears, and never `not_permitted`, which only the grant answers.
+// node with no chart, a Gitlet node unready and a walk nobody served are told
+// unavailable, which a retry clears, never `not_permitted`, the grant's alone.
 //
 // Mutation: ErrNotServing or ErrGitUnready classed forbidden → red.
 func TestANodeThatCannotJudgeIsNeverARefusalOfTheCaller(t *testing.T) {
@@ -1250,12 +1199,10 @@ func TestANodeThatCannotJudgeIsNeverARefusalOfTheCaller(t *testing.T) {
 	}
 }
 
-// EVERY REFUSAL IS THE DOMAIN'S, IN ITS CLASS: a repository nobody declared, a
-// ref no branch or tag holds, an object the repository lacks and a read too
-// large to answer whole are each told in Gitlet's own sentence — the
-// narrowing a too-large read names included — classed as what the caller must
-// change, and a call missing what it reads is refused before anything is
-// asked.
+// EVERY REFUSAL IS THE DOMAIN'S, IN ITS CLASS: an undeclared repository, an
+// unheld ref, a missing object and a read too large (with its narrowing) are
+// told in Gitlet's own sentence, classed as what the caller must change; a
+// call missing what it reads is refused before anything is asked.
 //
 // Mutation: a domain refusal told as this node's fault, or its sentence
 // dropped → red.
@@ -1305,9 +1252,8 @@ func TestEveryCodeRefusalIsTheDomainsInItsClass(t *testing.T) {
 	}
 }
 
-// A PERSON IS HANDED THE CLONE URL, AND A SEAT IS NOT: a seat reads through the
-// tools and could not authenticate to the address, while a person's git — and
-// a token's — clones from it.
+// A PERSON IS HANDED THE CLONE URL, AND A SEAT IS NOT: a seat could not
+// authenticate to it, while a person's or a token's git clones from it.
 func TestAPersonIsHandedTheCloneURLAndASeatIsNot(t *testing.T) {
 	t.Parallel()
 	clone := func(name string) string { return "https://crewlet.example.com/git/" + name + ".git" }
@@ -1339,19 +1285,17 @@ func TestAPersonIsHandedTheCloneURLAndASeatIsNot(t *testing.T) {
 
 // ---- one page, one answer ------------------------------------------------ //
 
-// longRef is the longest ref a push may create, every byte one JSON writes as
-// six: what an answer naming a resolved ref weighs at its most.
+// longRef is the longest ref a push may create, in a byte JSON writes as six:
+// the most a resolved ref weighs in an answer.
 var longRef = "refs/heads/" + strings.Repeat("<", gitlet.MaxRefNameBytes-len("refs/heads/"))
 
 // widest is a position at its widest encoding.
 var widest = statelog.Position{Stream: topics.CodeLogStream, Generation: math.MaxUint32,
 	Seq: math.MaxUint64}
 
-// atTheBound is the fullest page fill makes — fill(a, n) the page holding n
-// units of its filler, a byte of text or an entry of a list — whose JSON a Gitlet
-// node still sends: at most gitlet.MaxGitAnswerBytes, with one unit more past
-// it, so the page is cut where the Gitlet node cuts one. Every other field is at
-// its widest.
+// atTheBound is the fullest page fill(a, n) makes (n units: text bytes or list
+// entries) within gitlet.MaxGitAnswerBytes of JSON, one unit more past it: cut
+// where a Gitlet node cuts. Every other field is at its widest.
 func atTheBound(t *testing.T, a gitlet.GitAnswer, fill func(a gitlet.GitAnswer, n int) gitlet.GitAnswer) gitlet.GitAnswer {
 	t.Helper()
 	a.Position, a.Next = widest, fmt.Sprintf("b:%d:%d", math.MaxInt, math.MaxInt)
@@ -1380,13 +1324,11 @@ func atTheBound(t *testing.T, a gitlet.GitAnswer, fill func(a gitlet.GitAnswer, 
 	return fill(a, fits)
 }
 
-// A GIT ANSWER FITS ONE TOOL ANSWER: a page the Gitlet node cut at its bound,
-// wrapped as each code tool wraps it — the longest repository name, every ref
-// its call names at the longest a ref may be and spelled in the characters JSON
-// writes six bytes for, the fence's label and closer and the answer's
-// provenance envelope where its text is fenced — is answered whole, and within
-// builtin.ToolAnswerBytes. What gitlet.MaxGitAnswerBytes leaves for the envelope
-// is what this measures.
+// A GIT ANSWER FITS ONE TOOL ANSWER: a page cut at the Gitlet node's bound,
+// wrapped as each code tool wraps it (the longest repository name, every ref
+// at its longest in six-byte JSON characters, the fence and its provenance
+// envelope), is answered whole within builtin.ToolAnswerBytes. This measures
+// what gitlet.MaxGitAnswerBytes leaves for the envelope.
 //
 // Mutation: rendering the page indented (jsonAnswer) → the tree and stat pages
 // refused for their structure → red.
@@ -1427,8 +1369,7 @@ func TestAGitAnswerFitsOneToolAnswer(t *testing.T) {
 			func(t *testing.T, q gitlet.GitQuery) gitlet.GitAnswer {
 				return atTheBound(t, gitlet.GitAnswer{Kind: gitlet.GitTree, RepoID: q.RepoID, Rev: mainOID},
 					func(a gitlet.GitAnswer, n int) gitlet.GitAnswer {
-						// SHORT ENTRIES, the most structure a page can carry:
-						// what indenting would grow by.
+						// SHORT ENTRIES: the most structure, which indenting grows.
 						entries := make([]gitlet.TreeEntry, n)
 						for i := range entries {
 							entries[i] = gitlet.TreeEntry{Mode: "100644", Type: "blob", OID: blobOID,
@@ -1497,10 +1438,9 @@ func TestAGitAnswerFitsOneToolAnswer(t *testing.T) {
 		})
 	}
 
-	// AND A HISTORY'S AND A BLAME'S PAGES, which fence a field per commit and
-	// per line — a hundred subjects of 4 KiB, five hundred lines of 8 KiB —
-	// cut by a Gitlet node's own query server (historyNode) and sent through the
-	// tool's fences: every page whole, and within one tool answer.
+	// AND A HISTORY'S AND A BLAME'S PAGES, fencing a field per commit or line
+	// (a hundred 4 KiB subjects, five hundred 8 KiB lines), cut by a Gitlet
+	// node's own query server (historyNode): every page whole, in one answer.
 	//
 	// Mutation: the log's page bounded by its limit alone (a hundred fenced
 	// subjects in one page) → its arm refused for its size, red.
@@ -1559,9 +1499,9 @@ func TestAGitAnswerFitsOneToolAnswer(t *testing.T) {
 	}
 }
 
-// CODE_LOG NARROWS BY TIME AND BY WHO PUSHED: `until` and `pushed_by` reach Gitlet
-// as given and `unjudged` comes back; a bad `until` or handle is refused unasked.
-// Mutation: the tool dropping `until` or `pushed_by`.
+// CODE_LOG NARROWS BY TIME AND BY WHO PUSHED: `until` and `pushed_by` reach
+// Gitlet as given and `unjudged` comes back; a bad `until` or handle is
+// refused unasked. Mutation: the tool dropping `until` or `pushed_by`.
 func TestCodeLogNarrowsByTimeAndWhoPushed(t *testing.T) {
 	t.Parallel()
 	host := newGitletHost()
@@ -1604,9 +1544,9 @@ func TestCodeLogNarrowsByTimeAndWhoPushed(t *testing.T) {
 	}
 }
 
-// closerSpelled is a subject spelling the fence's closer as often as it can and
-// still be answered: past `bound` once neutralised, it would be described by
-// its size instead — so each spelling costs its escape too.
+// closerSpelled spells the fence's closer as often as fits within bound once
+// neutralised (each spelling paying its escape); past it, a subject would be
+// described by its size instead.
 func closerSpelled(bound int) string {
 	const closer = "[/untrusted:AAAAAAAAAAAAAAAA] "
 	var b strings.Builder
@@ -1616,17 +1556,16 @@ func closerSpelled(bound int) string {
 	return b.String()
 }
 
-// A FENCED PAGE THAT OVERFLOWS IS REFUSED WITH ITS NARROWING, never cut: a page
-// of a file's lines the Gitlet node cut at its bound, whose every line spells a
-// fence marker — each longer once the fence escapes it — is past one tool
-// answer once fenced, and the read is refused naming a narrower line range; a
-// patch that does the same is refused naming the file's lines to read instead.
+// A FENCED PAGE THAT OVERFLOWS IS REFUSED WITH ITS NARROWING, never cut: a
+// page within the Gitlet node's bound whose every line is a fence marker,
+// grown past one tool answer by escaping, is refused naming a narrower line
+// range; such a patch, naming the file's lines to read instead.
 //
 // Mutation: the tool cutting the text to fit, or answering it unfenced → red.
 func TestAFencedPageThatOverflowsIsRefusedWithItsNarrowing(t *testing.T) {
 	t.Parallel()
 	const marker = "[untrusted\n"
-	// A LINE AS ITS PAGE WEIGHS IT, in JSON: the newline is two bytes there.
+	// A LINE AS ITS PAGE WEIGHS IT: the newline is two bytes in JSON.
 	encoded, _ := json.Marshal(marker)
 	lines := (gitlet.MaxGitAnswerBytes - 1024) / (len(encoded) - len(`""`))
 	text := strings.Repeat(marker, lines)
@@ -1673,14 +1612,12 @@ func TestAFencedPageThatOverflowsIsRefusedWithItsNarrowing(t *testing.T) {
 }
 
 // branchesPastAnAnswer is how many of the longest branches the listing case
-// gives a repository: at about 490 bytes each as an answer writes them, two
-// hundred are half again one answer.
+// gives a repository: at about 490 bytes each, half again one answer.
 const branchesPastAnAnswer = 200
 
-// A LISTING IS CUT WHOLE-ROW AT THE ANSWER: a page of repositories the reader
-// served that would outgrow one tool answer is answered with the rows that fit
-// — every one whole — and `next` naming the last kept, where the reader's own
-// keyset continues; so are a repository's branches.
+// A LISTING IS CUT WHOLE-ROW AT THE ANSWER: a page of repositories, or of a
+// repository's branches, past one tool answer is answered with the whole rows
+// that fit and `next` naming the last kept, where the reader's keyset goes on.
 //
 // Mutation: answering the reader's page whole (refused for its size), or next
 // left as the reader's → red.
@@ -1692,9 +1629,8 @@ func TestAListingIsCutWholeRowAtTheAnswer(t *testing.T) {
 		s.Name, s.Description = fmt.Sprintf("repo-%03d", i), strings.Repeat(`"`, gitlet.MaxDescriptionBytes)
 		host.listing = append(host.listing, s)
 	}
-	// BRANCHES AT THEIR LONGEST, in the byte JSON writes as two (`"`): the
-	// answers are encoded plainly, so `<` weighs one byte and a hundred
-	// branches of it fit in one answer with room to spare.
+	// BRANCHES AT THEIR LONGEST, in `"`, which JSON writes as two bytes: the
+	// answers are encoded plainly, so `<` would weigh one.
 	for i := range branchesPastAnAnswer {
 		host.refs[fmt.Sprintf("refs/heads/%03d-", i)+strings.Repeat(`"`, gitref.MaxBranchBytes-4)] = mainOID
 	}
@@ -1721,12 +1657,10 @@ func TestAListingIsCutWholeRowAtTheAnswer(t *testing.T) {
 	}
 }
 
-// widestGate is a merge gate as wide as a record may carry one: within a few
-// bytes of gitlet.MaxGateBytes of JSON, its required checks at their count and
-// length and its human paths spelled in a byte every JSON encoder writes as two
-// (`"`). Not `&`: the record's encoder writes it as six and the answers' plain
-// one as one, so a gate filled with it reaches the record's bound while its
-// answer is a fraction of it.
+// widestGate is a merge gate just short of gitlet.MaxGateBytes of JSON: its
+// required checks at their count and length, its human paths in `"`, which
+// every JSON encoder writes as two. Not `&`: the record's encoder writes it as
+// six and the answers' as one, so its answer would be a fraction of the bound.
 func widestGate(t *testing.T) gitlet.MergeGate {
 	t.Helper()
 	g := gitlet.MergeGate{MergeBy: gitlet.MergeByPersons, Approvals: gitlet.ApprovalsOne,
@@ -1742,9 +1676,8 @@ func widestGate(t *testing.T) gitlet.MergeGate {
 		}
 		return len(raw)
 	}
-	// WHAT A HUMAN PATH WEIGHS BESIDE ITS GLOB'S BYTES: `,"human_paths":[`,
-	// `{"glob":"`, its two digits and `"}]` for the first, at most thirty
-	// bytes, and less for every later one.
+	// WHAT A HUMAN PATH WEIGHS BESIDE ITS GLOB'S BYTES: at most thirty, for
+	// the first (`,"human_paths":[`, `{"glob":"`, two digits, `"}]`).
 	const frame = 30
 	for len(g.HumanPaths) < gitlet.MaxHumanPaths {
 		room := gitlet.MaxGateBytes - weigh() - frame
@@ -1761,28 +1694,18 @@ func widestGate(t *testing.T) gitlet.MergeGate {
 	return g
 }
 
-// EVERY REPOSITORY AT THE DOMAIN'S BOUNDS IS ANSWERED BY THE TOOLS. A
-// repository may carry gitlet.MaxProtectionsPerRepo rules, each a pattern at
-// gitref's longest — every byte one that any JSON encoder writes as two — with
-// a merge gate of gitlet.MaxGateBytes: half a mebibyte, eight tool answers.
-// code_list_repos lists such a repository with its rules, which carry no gate
-// there, and lists every repository after it; code_get_repo answers its detail
-// — its remotes and its expunge at their widest among it — a page of
-// its branches and as many of its rules as fit, and the rest of the rules a
-// page at a time through protections_next, every rule once, in order and with
-// its gate and its source — who last set it, a login at iam.MaxLogin — each
-// answer within ToolAnswerBytes, and each making progress on its list.
+// EVERY REPOSITORY AT THE DOMAIN'S BOUNDS IS ANSWERED: gitlet.MaxProtectionsPerRepo
+// rules at gitref's longest in two-byte JSON characters, each with a
+// gitlet.MaxGateBytes gate, are half a mebibyte. code_list_repos lists it with
+// its gateless rules and every repository after it; code_get_repo answers its
+// detail, a page of branches and the rules that fit, then the rest through
+// protections_next, each rule once, in order, with its gate and source. Every
+// answer fits ToolAnswerBytes and makes progress. A row whose rules alone are
+// past an answer is built past today's limits, as a raised limit would make.
 //
-// A row whose rules alone are past an answer, which the bounds no longer make
-// at today's limits, is held with rules past them, as a raised limit would
-// make one.
-//
-// Mutations: refuse a row whose rules alone are past an answer, with no
-// `next`, as code_list_repos did — zed is listed by nobody, red; drop
-// protections_next — the rules past the first answer are answered by nobody,
-// red; cut the first page's rules with no room kept for a branch — it answers
-// no branch, red; leave a rule's source off either page — its rule reads as
-// set by nobody, red.
+// Mutations: such a row refused with no `next` (zed unlisted); protections_next
+// dropped; no room kept for a branch on the first page; a rule's source left
+// off either page → red.
 func TestEveryRepositoryAtTheDomainsBoundsIsAnswered(t *testing.T) {
 	t.Parallel()
 	wide := func(n int) string { return strings.Repeat(`"`, n) }
@@ -1799,11 +1722,9 @@ func TestEveryRepositoryAtTheDomainsBoundsIsAnswered(t *testing.T) {
 		d.RuleSources = append(d.RuleSources, gitlet.RuleSource{Pattern: rule.Pattern, SetBy: wide(iam.MaxLogin),
 			SetByKind: gitlet.ActorOperator, SetAt: time.Date(2026, 10, 30, 9, i, 0, 0, time.UTC)})
 	}
-	// ITS REMOTES AND ITS EXPUNGE AT THEIR WIDEST TOO, which the detail answers
-	// beside its row: each address at gitlet.MaxRemoteURLBytes and each variable at
-	// gitlet.MaxCredentialRefBytes, a push mirror's every ref pattern at its
-	// longest, and an import's sentence — the engine's, a few hundred bytes at
-	// most, held here at a kilobyte.
+	// ITS REMOTES AND EXPUNGE AT THEIR WIDEST TOO: addresses and variables at
+	// their bounds, a push mirror's ref patterns at their longest, and an
+	// import's sentence (the engine's few hundred bytes) held at a kilobyte.
 	remote := func() (string, string) {
 		return wide(gitlet.MaxRemoteURLBytes), wide(gitlet.MaxCredentialRefBytes)
 	}
@@ -1872,9 +1793,8 @@ func TestEveryRepositoryAtTheDomainsBoundsIsAnswered(t *testing.T) {
 			cursor = page.Next
 		}
 	}
-	// AT THE BOUNDS, A ROW FITS WHOLE: the answers are written plainly, so a
-	// rule's pattern weighs at most twice its bytes, and the row's rules
-	// carry no gate, which is what makes them half a mebibyte on the detail.
+	// AT THE BOUNDS, A ROW FITS WHOLE: written plainly, a pattern weighs at
+	// most twice its bytes, and listed rules carry no gate.
 	listed, big := list(reg)
 	if want := []string{"alpha", "big", "zed"}; !slices.Equal(listed, want) {
 		t.Errorf("the listing answered %v, want %v", listed, want)
@@ -1883,9 +1803,8 @@ func TestEveryRepositoryAtTheDomainsBoundsIsAnswered(t *testing.T) {
 		t.Errorf("big is listed with %d of its %d rules and %q, want them whole", len(big.Protections),
 			len(d.Protections), big.ProtectionsLeftOut)
 	}
-	// AND A ROW PAST ONE ANSWER, as no record the domain takes today carries
-	// one, is listed without its rules, saying where they are read, and every
-	// repository after it is listed too.
+	// AND A ROW PAST ONE ANSWER (no record today's limits take) is listed
+	// without its rules, saying where they are read, and the rest after it.
 	past := wideRow
 	for len(past.Protections)*2*gitref.MaxRefNameBytes <= builtin.ToolAnswerBytes {
 		past.Protections = append(slices.Clone(past.Protections), d.Protections...)
@@ -1969,9 +1888,9 @@ func TestEveryRepositoryAtTheDomainsBoundsIsAnswered(t *testing.T) {
 
 // ---- the fences ---------------------------------------------------------- //
 
-// codeFenced runs one code read whose page answer builds — handed the turn's
-// boundary, so its text can try to break out of the fence — and holds the
-// answer to the fence's property (TestEveryUntrustedReadIsFenced's code rows).
+// codeFenced runs one code read whose page answer builds from the turn's
+// boundary, so its text can try to break out of the fence, and returns the
+// fences seen (TestEveryUntrustedReadIsFenced's code rows).
 func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b provenance.Boundary,
 	q gitlet.GitQuery) gitlet.GitAnswer) ([]fenceSeen, map[string]any) {
 
@@ -1988,150 +1907,46 @@ func codeFenced(t *testing.T, tool string, args map[string]any, answer func(b pr
 // ---- the catalogue, the guidance and the docs --------------------------- //
 
 // codeCatalogueBudget is the most bytes the thirty-nine code tools'
-// definitions may add to the tool list a run's session serves its harness
-// ([listedBytes]): what a seat at full_access carries, the one tier offered
-// every write (CodeWritesWithheld), but for code_report_check,
-// code_purge_unreachable and code_import_repo, each a person's alone, and
-// what the operator catalogue serves; every other seat carries the reads and
-// what its tier reaches of a change's conversation
-// ([codeReviewCatalogueBudget], [codeReadsCatalogueBudget]).
+// definitions may add to a run's tool list ([listedBytes]): a full_access
+// seat's (the one tier offered every write, CodeWritesWithheld, but the
+// person-only code_report_check, code_purge_unreachable and code_import_repo)
+// and the operator catalogue's. Other tiers are held by
+// [codeReviewCatalogueBudget] and [codeReadsCatalogueBudget].
 //
-// THE FIGURES BELOW WERE MEASURED ON THE CATALOGUE A HARNESS'S PROMPT ONCE CARRIED
-// (indented, HTML-escaped, in the user text), which is larger than the compact
-// JSON of a tools/list answer, so each budget held there holds here; the
-// history is kept because each step in it was a deliberate cost.
-//
-// 43 200: measured at 40 680 (~10 170 tokens), so ~6% headroom — a sentence can
-// be added and a tool cannot, the executor prompt's rule (a code tool a later
-// part adds raises this deliberately, with its measured cost). 10 654 → 9 570
-// when the revision grammar, written into each of the six revision arguments,
-// was stated once in code_resolve's description; 9 570 → 9 627 when
-// code_list_repos said that a turn a colleague woke lists only what the
-// colleague may read too, so a seat reading a short page for them knows why.
-// The budget 10 300 → 14 000 when code_log and code_blame joined, 9 627 →
-// 13 070 measured: 3 443 bytes (~861 tokens) for the two, each a history's or
-// a blame's question answered on the server in place of a clone, with their
-// descriptions cut to what a model needs (how a page goes on is `cursor`'s to
-// say, and only it says it). And 14 000 → 24 400 when the ten code writes
-// joined the list, deliberately, with their measured cost: 13 070 → 22 802,
-// the writes' 9 732 bytes after each argument was cut to what its name and
-// type do not say (15 120 as first written: an owner's and a path owner's
-// nested schemas spelled out three times over); 22 802 → 22 787 when
-// code_protect_branch's direct_push said what leaving it out sends. And
-// 24 400 → 26 800 when code_protect_branch took a branch's merge gate — its
-// ten fields and remove_gate — deliberately, with their measured cost: 22 787
-// → 24 990, 2 203 bytes (~551 tokens), each field its type and its values
-// alone (what a field does is Gitlet's documentation), the call's
-// field-at-a-time rule said once in the tool's description; 24 990 → 25 528
-// when code_update_repo took a repository's search mode, code_list_repos said
-// its rules come without their merge gates, which code_get_repo answers with
-// each rule, and code_get_repo how rules too many for one answer go on
-// (`protections_cursor`). And 26 800 → 31 300 when the two change reads joined
-// the list, deliberately, with their measured cost: 25 528 → 29 628, 4 100
-// bytes (~1 025 tokens) for code_list_changes and code_get_change, the parts
-// named once in the description and each argument cut to what its name and
-// type do not say (326 bytes more as first written: the listing's fields
-// spelled out, and each part in a sentence of its own). And 31 300 → 34 800
-// when a change's three lifecycle writes joined the list, deliberately, with
-// their measured cost: 29 628 → 32 899, 3 271 bytes (~818 tokens) for
-// code_open_change, code_update_change and code_close_change, each argument
-// its name and type but where they do not say it — a change named by number
-// or reference, the version a write is held to, the forms a work item takes —
-// and update's one-thing-a-call rule said once, in its description. And
-// 34 800 → 42 000 when a change's four conversation writes joined the list,
-// deliberately, with their measured cost: 32 899 → 39 603, 6 704 bytes (~1 676
-// tokens) for code_request_review, code_review_change (2 906 of them: its
-// findings' nine fields, each a name, a type and an enum where it has one),
-// code_comment_on_change and code_resolve_finding, the rules of who may answer
-// what said once in each description. And 42 000 → 43 200 when
-// code_apply_suggestions joined, deliberately, with its measured cost:
-// 39 603 → 40 680, 1 077 bytes (~269 tokens), what it applies and that the
-// applier becomes an author said once, in its description. And 43 200 →
-// 49 400 when the check tools joined, deliberately, with their measured cost:
-// 41 644 → 46 587 (~11 647 tokens), 4 943 bytes (~1 236 tokens) —
-// code_get_check_failures 1 433, code_rerun_checks 1 709 and
-// code_report_check 1 801, which no seat is shown (it is human-only, so a
-// full_access seat carries 44 786) — each argument its name and type but
-// where they do not say it, who may rerun what and that a report is a
-// person's said once, in each description; ~6% headroom again. And 49 400 →
-// 52 900 when a change's merge, dequeue and revert joined beside its rebase,
-// deliberately, with their measured cost: 46 587 → 49 963 (~12 491 tokens),
-// 3 376 bytes (~844 tokens), what a refused merge names and that a revert is a
-// change of its own said once, in each description, and every argument cut
-// to its name and type; ~6% headroom again. And code_purge_unreachable joined
-// within it, deliberately, with its measured cost: 49 963 → 50 535 (~12 634
-// tokens), 572 bytes (~143 tokens), which no seat is shown (it is human-only),
-// its one argument the repository and what it is answered with said once, in
-// its description; ~4% headroom left, so the next tool raises this. And
-// 52 900 → 55 600 when code_import_repo joined, deliberately: all thirty-eight
-// measured 52 427 (~13 107 tokens) with it, 473 bytes under the old budget —
-// 1 892 above the purge's 50 535, which is the import's definition (its seven
-// arguments, the owner's shape and the credential's one rule said once) and
-// code_protect_branch's item-at-a-time list changes landed between, not
-// measured apart — none of which a seat is shown (the import is human-only);
-// ~6% headroom again. And 55 600 → 57 500 when code_search joined,
-// deliberately, with its measured cost: 52 427 → 54 223 (~13 556 tokens),
-// 1 796 bytes (~449 tokens) — the one grammar's filters said once in
-// `query`'s description, the answer's shape (hits, tips, coverage, pages)
-// once in the tool's — the cost codeReadsCatalogueBudget pays too, since
-// every seat carries it; ~6% headroom again. And code_log took `until` and
-// `pushed_by` within it, deliberately, with their measured cost: 41 167 →
-// 41 556, 389 bytes (~97 tokens).
+// 57 500 is ~6% over 54 223, measured on the larger form a harness's prompt
+// once carried (indented, HTML-escaped), so it holds for compact tools/list
+// JSON (42 235 at last measure). Headroom admits a sentence, not a tool: a
+// tool added raises this deliberately, with its measured cost (the executor
+// prompt's rule).
 const codeCatalogueBudget = 57_500
 
 // codeReadsCatalogueBudget is the most bytes the thirteen code reads'
-// definitions may add to the tool list a run's session serves its harness: what
-// every seat of a company hosting code carries on every round, whatever its
-// tier — a seat below full_access beside the few writes of a change's
-// conversation its tier reaches ([codeReviewCatalogueBudget]).
+// definitions may add to a run's tool list: what every seat of a company
+// hosting code carries every round, whatever its tier.
 //
-// 18 600: measured at 17 575 (~4 394 tokens) when the code writes were first
-// withheld below full_access, so ~6% headroom, the rule [codeCatalogueBudget]
-// states — a code read a later part adds raises this deliberately, with its
-// measured cost, as it raises that. The ten writes were the 12 053 bytes
-// (~3 013 tokens) between the two budgets' figures then, and a change's three
-// lifecycle writes, four conversation writes and the apply of its suggestions
-// beside them make the eighteen 23 105 (~5 776 tokens), carried whole by a
-// full_access seat alone. And 18 600 → 20 300 when code_get_check_failures
-// joined, deliberately, with its measured cost: 17 649 → 19 082 (~4 771
-// tokens), 1 433 bytes (~358 tokens), the check named as its siblings name a
-// commit and how its log is paged said once, in `cursor`'s description; ~6%
-// headroom again. And 20 300 → 22 100 when code_search joined the reads,
-// deliberately, with its measured cost: 19 082 → 20 878 (~5 220 tokens),
-// 1 796 bytes (~449 tokens), its grammar said once in `query`'s description
-// and its answer's shape once in its own; ~6% headroom again. And code_log
-// took `until` and `pushed_by` within it, deliberately, with their measured
-// cost: 17 097 → 17 486 (~4 372 tokens), 389 bytes (~97 tokens).
+// 22 100 is ~6% over 20 878, measured on the same larger form as
+// [codeCatalogueBudget] (18 165 as served at last measure); a read added
+// raises it as a tool raises that.
 const codeReadsCatalogueBudget = 22_100
 
 // codeReviewCatalogueBudget is the most bytes a review seat's code tools may
-// add to the tool list a run's session serves its harness: the thirteen reads and
-// the four writes of a change's conversation its tier reaches — an ask for
-// review, a review, a comment and an answer to the findings it raised
-// (CodeWritesWithheld) — the most any tier below full_access carries, since a
-// read_only seat carries the comment alone of the four.
+// add to a run's tool list: the thirteen reads and the four conversation
+// writes its tier reaches (CodeWritesWithheld), the most below full_access,
+// since a read_only seat carries only the comment of the four.
 //
-// 22 500: measured at 21 232 (~5 308 tokens) when the review tier was first
-// offered the conversation's writes — the four 4 278 bytes (~1 070 tokens)
-// above the thirteen reads' 16 954 as the session serves them now — so ~6%
-// headroom, the rule [codeCatalogueBudget] states. And code_log took `until`
-// and `pushed_by` within it, deliberately, with their measured cost: 21 375 →
-// 21 764 (~5 441 tokens), 389 bytes (~97 tokens), ~3% headroom left.
-const codeReviewCatalogueBudget = 22_500
+// 23 800 is ~6% over 22 443 measured as the session serves them, the rule
+// [codeCatalogueBudget] states.
+const codeReviewCatalogueBudget = 23_800
 
-// THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET. A seat of a company hosting
-// code is offered the thirteen reads on every run of every turn, a review seat
-// the four writes of a change's conversation beside them, and a seat at
-// full_access twenty-three writes beside them: the harness lists them from the
-// run's tool session (internal/toolsession) and carries every listed tool's
-// name, description, schema and hints into its model's context, each byte
-// paid again on every request it makes. Measured as that list reaches a
-// client — the SDK's own serialisation, through a real MCP session, since what
-// a harness is handed is what arrives rather than what was registered — the reads
-// alone, a review seat's and all thirty-nine, each held to a budget, so a
-// later description edit is
-// a decision rather than drift, as the executor prompt's budgets make a
-// sentence one (internal/agent/prompts budget_test.go).
+// THE CODE TOOLS' CATALOGUE STAYS UNDER ITS BUDGET: every listed tool's name,
+// description, schema and hints reach the model's context and are paid again
+// on every request. A seat of a company hosting code gets the reads every
+// run, a review seat four conversation writes beside them, full_access
+// twenty-three. Each
+// set is measured as a client receives it through a real MCP session (what a
+// harness is handed, not what was registered) and held to a budget, so a
+// description edit is a decision rather than drift, as the executor prompt's
+// budgets make a sentence one (internal/agent/prompts budget_test.go).
 func TestTheCodeToolsCatalogueStaysUnderBudget(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -2167,12 +1982,10 @@ func offeredAt(tier gitlet.Tier, every []tools.Callable) []tools.Callable {
 	})
 }
 
-// listedBytes is what offered costs in the tools/list answer a run's tool
-// session serves: each listed tool's JSON as an MCP client receives it, its
-// name, description, input schema and hints, summed. Served by the session's
-// own server over the SDK's in-memory transport, with the hints the seat's
-// registry advertises (builtin.AnnotationsFor), so the bytes are the ones a
-// harness is handed.
+// listedBytes is what offered costs in a run's tools/list answer: each tool's
+// JSON as an MCP client receives it, summed, served by the session's own
+// server over the SDK's in-memory transport with the registry's hints
+// (builtin.AnnotationsFor).
 func listedBytes(t *testing.T, offered []tools.Callable) int {
 	t.Helper()
 	catalogue := make(listedOnly, 0, len(offered))
@@ -2229,9 +2042,8 @@ func (listedOnly) Call(toolsession.Call) toolsession.Result {
 // ---- the guidance and the docs ------------------------------------------ //
 
 // THE CODE GUIDANCE NAMES THE CODE TOOLS: every tool the executor's guidance
-// is gated on is one this package registers as a code tool, so the section
-// never sends a seat to a tool that does not exist — prompts cannot import this
-// package to read the list itself.
+// is gated on is a code tool here, so it never sends a seat to a missing one;
+// prompts cannot import this package to check for itself.
 func TestTheCodeGuidanceNamesTheCodeTools(t *testing.T) {
 	t.Parallel()
 	if len(prompts.CodeHistoryTools()) == 0 {
@@ -2244,10 +2056,9 @@ func TestTheCodeGuidanceNamesTheCodeTools(t *testing.T) {
 	}
 }
 
-// THE PAGES NAME EVERY CODE TOOL THE REGISTRY HOLDS: the tools guide's table of
-// them lists exactly the code tools, and the operator reference's account of what
-// `/operator/mcp` serves names each — two hand-kept copies of one list, which is
-// how a page comes to describe a catalogue the engine no longer serves.
+// THE PAGES NAME EVERY CODE TOOL THE REGISTRY HOLDS: the tools guide's table
+// lists exactly the code tools and the operator reference's account of
+// `/operator/mcp` names each, two hand-kept copies that otherwise drift.
 func TestThePagesNameEveryCodeTool(t *testing.T) {
 	t.Parallel()
 	guide := readPage(t, "docs/guides/tools-and-mcp.md")
@@ -2276,15 +2087,12 @@ func TestThePagesNameEveryCodeTool(t *testing.T) {
 
 // A CODE READ IN A TURN A PERSON WITHOUT GITLET WOKE IS REFUSED (ADR-0110).
 //
-// Reaching a repository takes the gitlet app, and inside a turn somebody woke
-// a seat uses only the apps they use (ADR-0109), so a turn woken by a person
-// who holds every app but Gitlet reads no repository for them: each code read
-// is refused for whoever woke the turn, the refusal naming Gitlet and who can
-// give it, and Gitlet is asked nothing — no listing, no file, no count says
-// what a repository holds. The CONTROL is the founder, who holds Gitlet, whose
-// turn reads as ever. A CREDENTIAL acting as no seat without Gitlet — a
-// pipeline's `[worklet]` token — is refused the same way, the refusal naming
-// the credential rather than a person.
+// A woken seat uses only the apps its waker uses (ADR-0109), so each code read
+// is refused for a person holding every app but Gitlet, naming Gitlet and who
+// can give it, and Gitlet is asked nothing: no listing, file or count leaks.
+// A credential acting as no seat without Gitlet (a `[worklet]` token) is
+// refused the same way, naming the credential. The CONTROL is the founder,
+// who holds Gitlet.
 //
 // Mutation: put the code rows back on ClassEverybody, and the contractor's
 // turn and the token's list the repositories.

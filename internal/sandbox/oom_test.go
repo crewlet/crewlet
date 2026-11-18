@@ -3,9 +3,8 @@ package sandbox
 import "testing"
 
 // A box stands the kernel's whole scale ahead of its engine, held to the
-// kernel's ceiling: the one lead at which the kernel takes a box's largest
-// process before the engine whatever the two hold, placed from the engine's
-// own value — its deployment's decision — rather than over it.
+// kernel's ceiling: the one lead that puts a box first whatever the two hold,
+// placed from the engine's own value (its deployment's decision).
 func TestABoxStandsAWholeScaleAheadOfItsEngineUpToTheKernelsCeiling(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

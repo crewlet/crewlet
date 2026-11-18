@@ -45,10 +45,9 @@ func folderRig(t *testing.T) (artifactRig, map[string]artifactsdomain.Folder) {
 }
 
 // A FOLDER PATH NAMING SEVERAL FOLDERS IS REFUSED WITH EACH CANDIDATE, and
-// nothing is created: a company "Drafts" and the agent's own private "Drafts"
-// share a name at the top level, so the agent is told both ids, owners and
-// audiences and passes the one it means. The argument to change, `invalid`:
-// the same path never lands, an id does.
+// nothing is created: a company "Drafts" and the agent's private "drafts" are
+// both named with id, owner and audience. `invalid`, since the same path never
+// lands and an id does.
 func TestAFolderPathNamingSeveralFoldersIsRefusedWithItsCandidates(t *testing.T) {
 	t.Parallel()
 	r, _ := folderRig(t)
@@ -80,9 +79,8 @@ func TestAFolderPathNamingSeveralFoldersIsRefusedWithItsCandidates(t *testing.T)
 }
 
 // A STRANGER'S TURN SEES NO FOLDER AND FILES IN NONE: it creates no folder,
-// moves nothing into one, lists no prefix and is shown no folder's name,
-// though the company's own tree is visible to everyone at the company. The
-// brand, the company's public face, stays readable (see the brand tests).
+// moves nothing into one, lists no prefix and is shown no folder's name, even
+// of the company-wide tree. The brand stays readable (see the brand tests).
 func TestAStrangersTurnSeesNoFolderAndFilesInNone(t *testing.T) {
 	t.Parallel()
 	r, fs := folderRig(t)
@@ -115,9 +113,9 @@ func TestAStrangersTurnSeesNoFolderAndFilesInNone(t *testing.T) {
 }
 
 // FILING ASKS THE FOLDER AND THE ARTIFACT: an agent that may edit its own
-// artifact still files only where it holds contributor (a folder shared with
-// it as a viewer is refused, naming the role), and only where the person it
-// works for could file too (the requester ceiling).
+// artifact files only where it holds contributor (a viewer-only folder is
+// refused, naming the role) and the person it works for could file too (the
+// requester ceiling).
 func TestFilingAsksContributorOnTheFolderForBothPrincipals(t *testing.T) {
 	t.Parallel()
 	r, fs := folderRig(t)
@@ -134,9 +132,8 @@ func TestFilingAsksContributorOnTheFolderForBothPrincipals(t *testing.T) {
 		t.Fatalf("a subfolder of a viewer-only folder answered %v: %s", tools.RefusalOf(got), got.Output)
 	}
 
-	// THE AGENT'S OWN PRIVATE FOLDER, which the founder cannot see: the
-	// founder's request cannot even name it, and a turn nobody woke files
-	// there freely.
+	// THE AGENT'S OWN PRIVATE FOLDER: the founder's request cannot name it,
+	// and a turn nobody woke files there freely.
 	mine := r.f.folder("f-mine", "", "Scratch", "agent-cto", iam.ActorAgent)
 	got = r.call(t, asked(t), builtin.MoveArtifactTool,
 		map[string]any{"artifacts": []any{h.ID.String()}, "folder": "Scratch"})
@@ -166,8 +163,8 @@ func TestAMissingFolderIsRefusedWithTheNearestPaths(t *testing.T) {
 	if !strings.Contains(got.Output, "Marketing/Campaigns") {
 		t.Errorf("the refusal does not name the nearest path:\n%s", got.Output)
 	}
-	// THE FOUNDER'S PRIVATE BOARD is the founder's to see, and the agent's
-	// own view never includes it, so it is never suggested.
+	// THE FOUNDER'S PRIVATE BOARD is outside the agent's view, so it is never
+	// suggested.
 	if strings.Contains(got.Output, "Board") {
 		t.Errorf("the refusal names a folder the agent cannot see:\n%s", got.Output)
 	}
@@ -176,9 +173,9 @@ func TestAMissingFolderIsRefusedWithTheNearestPaths(t *testing.T) {
 	}
 }
 
-// loggedCall runs one tool in turn and records it in the turn's call log
-// afterwards, as the engine's tool loop does, so each distinct call derives
-// its own operation key.
+// loggedCall runs one tool in turn and then records it in the turn's call
+// log, as the engine's tool loop does, so each distinct call derives its own
+// operation key.
 func (r artifactRig) loggedCall(t *testing.T, turn *turnctx.Turn, name string, args map[string]any) tools.Result {
 	t.Helper()
 	got := r.call(t, turn, name, args)
@@ -187,8 +184,8 @@ func (r artifactRig) loggedCall(t *testing.T, turn *turnctx.Turn, name string, a
 }
 
 // A FOLDER CHAIN IS MADE ONCE AND ANSWERED AFTER, AND A TURN MAKES FEW: the
-// same path again answers the folder it made without charging the turn, and a
-// turn segment's sixth new folder record is refused as its quota.
+// same path again answers the folder without charging the turn, and a turn
+// segment's sixth new folder is refused as its quota.
 func TestCreatingAFolderIsIdempotentAndBoundedPerTurn(t *testing.T) {
 	t.Parallel()
 	r, fs := folderRig(t)
@@ -246,9 +243,8 @@ func TestCreatingAFolderIsIdempotentAndBoundedPerTurn(t *testing.T) {
 }
 
 // EACH MOVE IS ITS OWN DECISION AND ITS OWN RECORD: in one call, the agent's
-// own artifact is filed, one already there is left as it is, a colleague's
-// artifact the agent may not edit is refused (in the words an unknown id is),
-// and only the one that changed is written.
+// artifact is filed, one already there is left, a colleague's it may not edit
+// is refused (as an unknown id is), and only the changed one is written.
 func TestMovingArtifactsDecidesAndFilesEachOnItsOwn(t *testing.T) {
 	t.Parallel()
 	r, fs := folderRig(t)
@@ -301,8 +297,8 @@ func TestMovingArtifactsDecidesAndFilesEachOnItsOwn(t *testing.T) {
 
 // THE LISTING SPEAKS S3 AND NAMES ONLY WHAT BOTH MAY SEE: prefix and delimiter
 // reach the domain with the requester beside the agent, the answer carries
-// contents, common prefixes and the key count, every row names its folder,
-// and an invisible prefix is a refusal, never an empty page.
+// contents, common prefixes and the key count, each row names its folder, and
+// an invisible prefix is a refusal, never an empty page.
 func TestTheListingTakesPrefixesAndAnswersCommonPrefixes(t *testing.T) {
 	t.Parallel()
 	r, fs := folderRig(t)
@@ -352,9 +348,9 @@ func TestTheListingTakesPrefixesAndAnswersCommonPrefixes(t *testing.T) {
 	}
 }
 
-// A NEW ARTIFACT IS FILED WHERE THE CALL NAMES, under both decisions: the
-// resolved folder's id reaches the pipeline, a folder the agent may only view
-// is refused, and a missing one is never created.
+// A NEW ARTIFACT IS FILED WHERE THE CALL NAMES: the resolved folder's id
+// reaches the pipeline, a viewer-only folder is refused, and a missing one is
+// never created.
 func TestCreatingAnArtifactFilesItInTheNamedFolder(t *testing.T) {
 	t.Parallel()
 	r, fs := folderRig(t)

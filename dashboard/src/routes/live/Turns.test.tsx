@@ -516,12 +516,15 @@ test("the seat menu offers every agent in every unit, by name", async () => {
   // A SEAT FROM THE ADDRESS IS NAMED, not echoed as its handle.
   expect(menu.textContent).toContain("Agent CTO");
   fireEvent.click(menu);
-  const options = await waitFor(() => {
-    const rows = screen.getAllByRole("option");
-    if (rows.length < 2) throw new Error("the listbox has not opened");
-    return rows.map((r) => r.textContent?.trim());
+  const rows = await waitFor(() => {
+    const found = screen.getAllByRole("option");
+    if (found.length < 2) throw new Error("the listbox has not opened");
+    return found;
   });
-  expect(options).toEqual(["Every seat", "Agent CEO", "Agent CTO", "Agent SWE"]);
+  const label = (r: HTMLElement) => r.querySelector(".crewlet-select__option-label")?.textContent;
+  expect(rows.map(label)).toEqual(["Every seat", "Agent CEO", "Agent CTO", "Agent SWE"]);
+  // EACH SEAT WEARS ITS FACE beside its name.
+  expect(rows.slice(1).every((r) => r.querySelector(".crewlet-avatar") !== null)).toBe(true);
 });
 
 // THE STATE COLUMN IS HEADED. It sat under an empty heading between What it did

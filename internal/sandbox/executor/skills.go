@@ -11,55 +11,35 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A run's OWN SKILLS, in the shapes the harnesses take them.
+// A run's OWN SKILLS ([sandbox.RunRequest.Skills]): how each harness is handed
+// them, and how it reports a load to the run's tool bridge.
+//   - CLAUDE CODE: a plugin named [sandbox.SkillNamespace], loaded with
+//     `--plugin-dir` ([Paths.ClaudeSkillsPlugin]), listing each skill as
+//     `crewlet:<name>`, whose PostToolUse mcp_tool hook on the Skill tool calls
+//     the bridge as the run's notes do (steer.go): no new credential, URL or
+//     program reaches the box. Skills and hook switch together ([claudeSkillsGate]).
+//   - OPENCODE: a directory per skill named `crewlet:<name>` ([Paths.OpenCodeSkills]),
+//     and a plugin (opencode_skills.js) reporting each load its `skill` tool makes.
 //
-// A run can be handed skills of its own ([sandbox.RunRequest.Skills]): skills
-// its harness lists to its model beside the ones the box and the checkout hold,
-// and its model loads with the harness's own skill tool, which puts the
-// skill's text in front of it. What is here is only how each harness is handed
-// them, and how it reports a load back to the run's tool bridge:
-//
-//   - CLAUDE CODE takes them as a PLUGIN of the run's own, named
-//     [sandbox.SkillNamespace] and loaded with `--plugin-dir`
-//     ([Paths.ClaudeSkillsPlugin]): a directory per skill under its `skills/`,
-//     which the harness lists as `crewlet:<name>`, and in its `hooks/` one
-//     PostToolUse hook on the Skill tool — an mcp_tool hook that calls the
-//     run's bridge with the name of the skill the tool loaded, the mechanism
-//     the run's notes ride (steer.go), so nothing new reaches the box: no
-//     credential, no URL to allow, no program. The plugin carries its hook, so
-//     a run's skills and the report of their loads go on or off together
-//     ([claudeSkillsGate]).
-//   - OPENCODE takes them as a directory its configuration's `skills` names
-//     ([Paths.OpenCodeSkills]): a directory per skill named `crewlet:<name>`,
-//     the id OpenCode lists and loads a skill by. A plugin of the run's own
-//     (opencode_skills.js) reports each load its `skill` tool makes to the
-//     bridge's skill route.
-//
-// THE ENGINE DECIDES WHAT A LOAD UNLOCKS; the harness only says it happened
-// (internal/api/mcpbridge, skills.go). Its hook is the one party that can say a
-// skill's text was put in front of its model, and a tool the model could call
-// to say so instead would unlock a skill it never read — so the tool the hook
-// calls is never listed.
+// The engine decides what a load unlocks (internal/api/mcpbridge, skills.go). The
+// hook's tool is never listed: only the hook can attest the model read the skill.
 
-// skillHolder is a harness whose runner hands it skills of its own
-// ([sandbox.RunRequest.Skills]): written where it reads them, and their loads
-// reported to the run's bridge.
+// skillHolder is a harness that can be handed skills of its own
+// ([sandbox.RunRequest.Skills]) and report their loads to the run's bridge.
 type skillHolder interface {
 	HandsSkills() bool
 }
 
-// HandsSkills reports that a Claude Code run is handed skills of its own — see
-// the file's doc.
+// HandsSkills reports that a Claude Code run takes skills of its own.
 func (ClaudeCode) HandsSkills() bool { return true }
 
-// HandsSkills reports that an OpenCode run is handed skills of its own — see
-// the file's doc.
+// HandsSkills reports that an OpenCode run takes skills of its own.
 func (OpenCode) HandsSkills() bool { return true }
 
-// refuseSkills refuses a run handed skills that its harness cannot take, with
-// nowhere to report a load, or under names no harness reads a skill by — each
-// a run that would start without skills the engine is holding its tools to, or
-// on a skill directory named outside the box.
+// refuseSkills refuses a run handed skills its harness cannot take, with
+// nowhere to report a load, or under a name no harness reads a skill by: each
+// would start without skills the engine holds its tools to, or name a skill
+// directory outside the box.
 func (r *Runner) refuseSkills(req sandbox.RunRequest) error {
 	if len(req.Skills) == 0 {
 		return nil
@@ -86,13 +66,12 @@ func (r *Runner) refuseSkills(req sandbox.RunRequest) error {
 	return nil
 }
 
-// skillFile is one skill's SKILL.md: its frontmatter, naming it and saying
-// what it is for, then its body.
+// skillFile is one skill's SKILL.md: its name and description as frontmatter,
+// then its body.
 //
-// EACH VALUE A JSON STRING, which is a YAML double-quoted scalar: a description
-// is somebody's prose, holding colons, quotes and line breaks a plain YAML
-// scalar would read as structure, and both harnesses parse the frontmatter as
-// YAML. `&`, `<` and `>` are written as themselves.
+// Each value is a JSON string, which is a YAML double-quoted scalar: a
+// description's colons, quotes and line breaks would read as structure in a
+// plain scalar. `&`, `<` and `>` are written as themselves.
 func skillFile(name, description, body string) ([]byte, error) {
 	quoted := func(v string) (string, error) {
 		var b bytes.Buffer
@@ -114,34 +93,33 @@ func skillFile(name, description, body string) ([]byte, error) {
 	return []byte("---\nname: " + n + "\ndescription: " + d + "\n---\n\n" + body), nil
 }
 
-// claudeSkillsManifest is the run's skills plugin's manifest
-// (`.claude-plugin/plugin.json`): its name, which every skill in it is listed
-// under — `name` is the one field Claude Code requires.
+// claudeSkillsManifest is the skills plugin's `.claude-plugin/plugin.json`;
+// `name`, which its skills are listed under, is the one field Claude Code requires.
 type claudeSkillsManifest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
 
-// claudeSkillsDescription is the plugin's description, which a person reading
-// the run's session sees for it.
+// claudeSkillsDescription is the plugin's description, shown to a person
+// reading the run's session.
 const claudeSkillsDescription = "The company's own skills, handed to this run by Crewlet."
 
-// claudeSkillHooks is the plugin's `hooks/hooks.json`: the shape of a settings
-// file's `hooks` object, under a key of its own.
+// claudeSkillHooks is the plugin's `hooks/hooks.json`: a settings file's
+// `hooks` object under a key of its own.
 type claudeSkillHooks struct {
 	Hooks map[string][]claudeHookMatcher `json:"hooks"`
 }
 
-// claudeSkillTool is the Claude Code tool a model loads a skill with, which is
-// the matcher the report hook fires on.
+// claudeSkillTool is the Claude Code tool that loads a skill: the report
+// hook's matcher.
 const claudeSkillTool = "Skill"
 
 // claudeEventToolUsed is the hook event that fires once a tool has answered
 // successfully: a skill that failed to load reports nothing.
 const claudeEventToolUsed = "PostToolUse"
 
-// claudeSkillLoad is what the report hook hands the bridge's tool: the skill the
-// Skill tool loaded, as the model named it, filled in by the harness.
+// claudeSkillLoad is the report hook's input to the bridge's tool: the skill
+// the Skill tool loaded, as the model named it, filled in by the harness.
 type claudeSkillLoad struct {
 	Skill string `json:"skill"`
 }
@@ -162,8 +140,7 @@ func writeClaudeSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbo
 		return fmt.Errorf("executor: writing the run's skills plugin: %w", err)
 	}
 	for _, s := range skills {
-		// The skill's own name: the plugin's prefixes it, which is the name
-		// the harness lists it under ([sandbox.Skill.Listed]).
+		// The bare name: the harness prefixes the plugin's ([sandbox.Skill.Listed]).
 		var file []byte
 		if file, err = skillFile(s.Name, s.Description, s.Body); err != nil {
 			return err
@@ -188,25 +165,19 @@ func writeClaudeSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbo
 	return nil
 }
 
-// claudeSkillsFloor is the oldest Claude Code release a run is handed skills of
-// its own on: 2.1.118, the first that runs an mcp_tool hook (its changelog:
-// "Hooks can now invoke MCP tools directly via `type: "mcp_tool"`"), whose
-// `${tool_input.skill}` names the skill the Skill tool loaded. An older release
-// could list the skills and load them, and never say it had.
+// claudeSkillsFloor is the oldest Claude Code release a run is handed skills
+// on: 2.1.118 is the first that runs an mcp_tool hook (its changelog says so),
+// which the load report needs. An older one would load skills and never say so.
 const claudeSkillsFloor = "2.1.118"
 
-// claudeSkillsGate is the part of a run's script, handed skills of its own, that
-// adds the plugin holding them to the script's arguments by the harness's
-// release ([claudeRelease]): at or after [claudeSkillsFloor] it is
-// `--plugin-dir <plugin>`, and the run's settings (cs) are those that switch
-// hooks on (settings, [Paths.ClaudeSkillsSettings]) — the plugin's hook is the
-// engine's, which a repository's own `disableAllHooks: true` would switch off
-// with no error, so a load would never be reported and a required skill never
-// unlock. On an older release a run with a REQUIRED skill is refused before
-// the harness starts — every call to a tool the skill covers would be refused,
-// the load that unlocks them never reported, so the run could only fail its
-// task — and any other run starts without its skills, and on every run's
-// settings, which its error stream says: an advisory skill held nothing back.
+// claudeSkillsGate is the script part that, by the harness's release
+// ([claudeRelease]), at or after [claudeSkillsFloor] adds `--plugin-dir <plugin>`
+// and sets cs to settings ([Paths.ClaudeSkillsSettings]), which switch hooks on:
+// a repository's `disableAllHooks: true` would silently drop the load report,
+// and a required skill would never unlock. On an older release a run with a
+// REQUIRED skill is refused before the harness starts (it could only fail its
+// task); any other starts without its skills, on the usual settings, and says
+// so on stderr.
 func claudeSkillsGate(plugin, settings string, required bool) string {
 	older := `echo "crewlet: this box runs Claude Code $n, older than ` + claudeSkillsFloor + `, the oldest ` +
 		`that reports loading a skill; the run starts without its company's skills" >&2`
@@ -229,10 +200,9 @@ func anyRequired(skills []sandbox.Skill) bool {
 	return false
 }
 
-// writeOpenCodeSkills writes an OpenCode run's skills into the directory its
-// configuration names ([Paths.OpenCodeSkills]): a directory per skill, named as
-// the skill is listed ([sandbox.Skill.Listed]) — the id OpenCode lists and loads
-// a skill by is its directory's name — holding its SKILL.md.
+// writeOpenCodeSkills writes each skill's SKILL.md into [Paths.OpenCodeSkills],
+// in a directory named as the skill is listed ([sandbox.Skill.Listed]): OpenCode
+// loads a skill by its directory's name.
 func writeOpenCodeSkills(ctx context.Context, box sandbox.Sandbox, skills []sandbox.Skill, paths Paths) error {
 	for _, s := range skills {
 		file, err := skillFile(s.Listed(), s.Description, s.Body)
@@ -246,12 +216,10 @@ func writeOpenCodeSkills(ctx context.Context, box sandbox.Sandbox, skills []sand
 	return nil
 }
 
-// openCodeSkillsPlugin is the plugin an OpenCode run's server loads to report
-// each skill its model loads to the run's bridge: opencode_skills.js, whose
-// header says how. Embedded, as the notes plugin is, so the plugin a run is
-// handed is the one this build's bridge answers. Written as the `index`
-// module of its own directory ([Paths.OpenCodeSkillsPlugin],
-// [openCodeSteerEntry]).
+// openCodeSkillsPlugin is opencode_skills.js, which reports each skill an
+// OpenCode run's model loads to the run's bridge. Embedded so it matches this
+// build's bridge; written as its directory's `index` module
+// ([Paths.OpenCodeSkillsPlugin], [openCodeSteerEntry]).
 //
 //go:embed opencode_skills.js
 var openCodeSkillsPlugin []byte

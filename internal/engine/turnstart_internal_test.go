@@ -22,12 +22,10 @@ import (
 )
 
 // The turn's opening record, agent_turn_started, from the two frames that
-// publish it.
-//
-// Driven through the REAL frames rather than through [Engine.publishTurnStarted]
-// alone, because every property below is about WHERE the frame calls it — before
-// the prefetch, after a resume's retries, and paired with a completion on every
-// path — and a test of the builder cannot see any of that.
+// publish it, driven through the REAL frames rather than
+// [Engine.publishTurnStarted] alone: every property below is about WHERE the
+// frame calls it (before the prefetch, after a resume's retries, paired with a
+// completion on every path), which a test of the builder cannot see.
 
 // starting builds an engine whose only wired backend is a capturing queue,
 // over a one-seat company that refuses a turn at its DEPTH GUARD: the frame
@@ -40,11 +38,9 @@ func starting(t *testing.T, models *phase.Registry) (*Engine, *pub) {
 	// the case's models carry ([runnable]).
 	seat := &org.Role{Name: "SWE", DeclaredHandle: "swe", LLM: org.ProviderKeys{"only", runnerKey}}
 	p := &pub{}
-	// A COORDINATION STORE, as every engine `crewlet run` builds has one
-	// (local coordination is an in-memory fleet): a turn whose identity
-	// carries no start — these cases' literal run ids carry none — rebases
-	// there (rebase.go), and an engine with nowhere to record that refuses
-	// the turn rather than guess.
+	// A COORDINATION STORE, as every `crewlet run` engine has: these literal
+	// run ids carry no start, so the turn rebases there (rebase.go), and an
+	// engine with nowhere to record that refuses the turn.
 	e := withSessions(t, &Engine{backends: &Backends{Queue: p, Fleet: coordmem.NewFleet()}})
 	e.epoch.current.Store(&Company{
 		Org:    &org.Organization{Name: "Acme", Roles: []*org.Role{seat}},
@@ -91,12 +87,11 @@ func startsOf(evs []*events.Event) []*events.Event {
 
 // A DISPATCHED TURN IS ON THE RECORD BEFORE IT GATHERS ITS CONTEXT.
 //
-// The prefetch reads a chat thread and searches the knowledge base over the
-// network, and it is the first thing a turn does that takes time — so a start
-// published after it, or from inside the first phase, leaves exactly the
-// window this event exists for with nothing saying a turn is running, and a
-// turn that dies in it with no row naming its run. The prefetch's own summary
-// is the witness: it is published the moment the context is assembled.
+// The prefetch (a chat thread read, a knowledge search) is the first thing a
+// turn does that takes time, so a start published after it leaves exactly the
+// window this event exists for with nothing saying a turn runs, and a turn
+// dying in it with no row naming its run. The prefetch's summary, published
+// once the context is assembled, is the witness.
 func TestATurnAnnouncesItselfBeforeItsPrefetch(t *testing.T) {
 	t.Parallel()
 	e, p := starting(t, refusingModels(t))
@@ -176,12 +171,9 @@ func TestATurnAnnouncesItselfBeforeItsPrefetch(t *testing.T) {
 	}
 }
 
-// A TURN WHOSE RUNNER COULD NOT BE BUILT IS CLOSED, because it was opened.
-//
-// This path published nothing while a turn's first record was its first
-// phase; once the turn announces itself before the build, a failed build that
-// stays silent leaves a start nothing ends — which a reader takes for a turn
-// still running, or one whose process died under it.
+// A TURN WHOSE RUNNER COULD NOT BE BUILT IS CLOSED, because it was opened:
+// the turn announces itself before the build, and a start nothing ends reads
+// as a turn still running, or one whose process died under it.
 func TestATurnWhoseRunnerCouldNotBeBuiltIsClosed(t *testing.T) {
 	t.Parallel()
 	e, p := starting(t, nil)
@@ -268,11 +260,10 @@ func TestAResumeAnnouncesItsSegment(t *testing.T) {
 
 // A RESUME THAT CANNOT RUN ANNOUNCES NOTHING.
 //
-// Every early return of the resume is a retry of the SAME run: the claim
-// reverts and the resume comes round again under one turn id. A start
-// published before them leaves a segment nothing closes — and closing it would
-// record as ended a run that is still parked — so the segment is announced
-// only once it is certain to run.
+// Every early return of the resume is a retry of the SAME run under one turn
+// id. A start published before them leaves a segment nothing closes, and
+// closing it would record as ended a run still parked, so the segment is
+// announced only once it is certain to run.
 func TestAResumeThatCannotRunAnnouncesNothing(t *testing.T) {
 	t.Parallel()
 	e, p := starting(t, nil)
@@ -317,12 +308,11 @@ func (b *begins) begin(_ context.Context, carry sandbox.ResumeCarry) error {
 }
 
 // A RESUME BEGINS ITS TURN BEFORE ANY OF IT RUNS, and once: the coordinator's
-// commit — for a recorded answer, the record that this turn took it — is made
+// commit (for a recorded answer, the record that this turn took it) is made
 // after every check that can still send the resume back, and before the
-// segment is so much as announced. Through the engine's own resumer, so the
-// commit the coordinator hands over is the one the frame calls. And it says
-// what the turn does with the round of the job it resumes from, as the runner
-// decides it: a completion's is collected.
+// segment is announced. Driven through the engine's own resumer, so the commit
+// the frame calls is the coordinator's. And it says what the turn does with
+// the resumed job's round, as the runner decides: a completion's is collected.
 //
 // Mutation: hand the commit any other word than the runner's decision, and a
 // reader of the run is told a collected job's round is carried on.

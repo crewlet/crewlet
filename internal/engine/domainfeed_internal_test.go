@@ -19,18 +19,11 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE CHANGE FEED IS THE SECOND READER OF A SIGNED LOG, and these cases are
-// what say it reads it the way the framework requires: the frame first, and a
-// domain decoder handed the body or nothing.
-//
-// It shipped the other way for exactly one commit, and the failure is worth
-// naming because it looks like anything but a signature bug. The feed handed a
-// domain's `Envelope` the raw stream bytes, which now begin with four magic
-// characters, so every record in the company came back `invalid character 'c'
-// looking for beginning of value` — and the feed's own rule for a record it
-// cannot decode is to acknowledge and skip it. Every notification in the
-// company stopped, the log blamed the records, and the applier beside it was
-// applying the same bytes without complaint.
+// THE CHANGE FEED IS THE SECOND READER OF A SIGNED LOG, and reads it as the
+// framework requires: the frame first, and a domain decoder handed the body or
+// nothing. Handed the raw frame, a decoder fails every record (`invalid
+// character 'c' looking for beginning of value`), the feed skips each, and
+// every notification stops with no sign of a signature bug.
 func TestTheChangeFeedOpensTheFrameBeforeADomainDecodes(t *testing.T) {
 	t.Parallel()
 	body, err := json.Marshal(statelog.Envelope{V: 1, Kind: "task.create", OpID: "op-1", Gen: 3})
@@ -49,9 +42,8 @@ func TestTheChangeFeedOpensTheFrameBeforeADomainDecodes(t *testing.T) {
 	}
 
 	// THE CONTROL THAT MAKES THIS CASE ABLE TO FAIL: the frame is opaque
-	// to a domain decoder, so a reader that skipped Open is not merely
-	// impolite — it gets nothing through. Without this the case below
-	// would pass against a feed that never framed anything at all.
+	// to a domain decoder, or the case would pass against a feed that never
+	// framed anything at all.
 	if _, err := decodeEnvelope(framed); err == nil {
 		t.Fatal("a domain decoder read the frame, so skipping the verifier would " +
 			"be invisible and this case proves nothing")
@@ -67,9 +59,8 @@ func TestTheChangeFeedOpensTheFrameBeforeADomainDecodes(t *testing.T) {
 	if env.OpID != "op-1" || env.Gen != 3 {
 		t.Errorf("envelope = %+v, want the one that was signed", env)
 	}
-	// THE BODY, NOT THE FRAME. The wake's own translators decode this
-	// again in packages that have never heard of a signature, so a framed
-	// payload travelling out of here fails there instead.
+	// THE BODY, NOT THE FRAME: the wake's translators decode it again in
+	// packages that know no signature.
 	if !bytes.Equal(got, body) {
 		t.Errorf("the record travelling to the wake is %q, want the unframed body %q",
 			got, body)
@@ -156,14 +147,10 @@ func decodeEnvelope(payload []byte) (statelog.Envelope, error) {
 	return env, err
 }
 
-// EVERY REGISTERED DOMAIN'S FEED IS THE ONE IT DECLARES.
-//
-// Two parties name a log's wake consumer: the feed that advances it and the
-// trim that waits for it, from a node that may build no feed at all. The trim
-// reads the domain's declaration, so a feed running under any other group —
-// or a feed nobody declared, or a declaration nobody runs — leaves the trim
-// waiting for ever or waiting for nothing. Every registered domain has to
-// build cleanly, so this build cannot boot into either.
+// EVERY REGISTERED DOMAIN'S FEED IS THE ONE IT DECLARES: the trim waits on
+// the declared group from nodes that may build no feed, so a feed under
+// another group, an undeclared feed or a declaration nobody runs leaves it
+// waiting for ever or for nothing.
 func TestEveryRegisteredDomainsFeedIsTheOneItDeclares(t *testing.T) {
 	t.Parallel()
 	e := &Engine{}
@@ -191,7 +178,7 @@ func TestEveryRegisteredDomainsFeedIsTheOneItDeclares(t *testing.T) {
 }
 
 // pagesOnTrackersGroup is the knowledge base declaring the tracker's
-// consumer, which is the answer the trim used to give on its behalf.
+// consumer.
 type pagesOnTrackersGroup struct{ doclet.Domain }
 
 func (pagesOnTrackersGroup) FeedGroup() string { return worklet.FeedGroup }
@@ -247,12 +234,9 @@ func TestAFeedThatDisagreesWithItsDeclarationIsRefused(t *testing.T) {
 }
 
 // THE CODE FEED IS DECLARED WITH ITS TRANSLATOR: the code log declares
-// `crewlet-code-feed`, its trim waits on that consumer, and the register's
-// entry runs the code translator over the log under exactly that group, on
-// Gitlet's own source — the name every code write delivers to, so a wake
-// about a change is answered by a write to one. Pinned rather than left to the
-// register's sweep above, which would pass a log that declared no feed and ran
-// none just as well.
+// `crewlet-code-feed` and the register's entry runs the code translator under
+// that group on Gitlet's own source, the name every code write delivers to.
+// Pinned here because the sweep above passes a log declaring and running none.
 //
 // Mutation: drop the entry's Feed → feedFor refuses the declaration nobody
 // runs; declare no group → it refuses the feed nobody declared.
@@ -301,13 +285,10 @@ func TestTheArtifactsFeedIsDeclaredWithItsTranslator(t *testing.T) {
 }
 
 // A FEED RECORD CARRIES ITS DELIVERY'S PLACE, THE BROKER'S INSTANT FOR IT AND
-// ITS DELIVERY COUNT.
-//
-// The position, the stream and the generation are what a woken seat reads no
-// older than; the stored instant is what the wake is timed from (wake
-// latency) and what a deferral's age is read from; the count is what a
-// deferral backs off by. Each is read off the delivery or the envelope every
-// build reads, never off a clock or a field the domain's own decoder fills.
+// ITS DELIVERY COUNT: the position, stream and generation a woken seat reads
+// no older than, the instant a wake is timed and a deferral aged from, and the
+// count a deferral backs off by, each off the delivery or the envelope every
+// build reads, never a clock or the domain's decoder.
 //
 // Mutation: drop the stored instant, and no wake is ever timed nor any record
 // dead-lettered; drop the count, and every deferral waits the first step.

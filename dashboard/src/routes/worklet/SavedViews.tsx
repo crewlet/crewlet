@@ -443,7 +443,9 @@ function deletable(view: WorkView): DeletableView {
 function OwnerCell({ owner, index }: { owner: string; index: OrgIndex }) {
   const seat = index.byHandle.get(owner);
   return seat ? (
-    <TableEntityCell {...linkedSeat({ handle: owner, name: seat.name, kind: seat.kind })} />
+    <TableEntityCell
+      {...linkedSeat({ handle: owner, name: seat.name, kind: seat.kind, avatar: seat.avatar })}
+    />
   ) : (
     <span className="mono truncate" title={`${owner} holds no seat`}>
       {owner}

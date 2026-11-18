@@ -9,10 +9,8 @@ import (
 
 // backendSources is every non-test Go file of each backend this contract
 // certifies, keyed "backend/file", for a guard that refuses a backend spelling
-// a line the contract owns.
-//
-// A backend whose files stopped being found would pass such a guard by reading
-// nothing at all, so a backend with no source file fails the test here.
+// a line the contract owns. A backend with no source file fails here, or the
+// guard would pass by reading nothing.
 func backendSources(t *testing.T) map[string][]byte {
 	t.Helper()
 	dir, err := os.Getwd()

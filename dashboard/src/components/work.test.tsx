@@ -2,9 +2,8 @@
  * How the tracker's shared pieces draw a PERSON.
  *
  * The rule is `docs/reference/dashboard-design.md`'s "A person in a grid cell
- * is a resolved name", and its avatar clause: an identity badge is initials,
- * and the ONE variant it has is structural — its OUTLINE, a circle for a
- * person and a squircle for an agent.
+ * is a resolved name", and its avatar clause: an agent is its character, a
+ * person their initials, and the badge's kind is structural.
  *
  * These are the pieces every tracker surface draws rather than one screen's
  * columns, which is why they are asserted here: the board card, the compact
@@ -35,6 +34,12 @@ const chrome: RowChrome = {
   seatName: (handle) =>
     handle === "ada" ? "Ada Okonkwo" : handle === "iris" ? "Iris Chen" : handle,
   seatKind: (handle) => (handle === "ada" ? "agent" : handle === "iris" ? "human" : undefined),
+  seatAvatar: (handle) =>
+    handle === "ada"
+      ? { character: "foxlet", color: "amber" }
+      : handle === "iris"
+        ? null
+        : undefined,
 };
 
 const row = (over: Partial<WorkSummary> = {}): WorkSummary => ({
@@ -73,7 +78,12 @@ function outline(container: HTMLElement): "human" | "agent" {
 // as on the row under it.
 test("a human assignee is drawn as a person", () => {
   const { container } = render(
-    <Assignee handle="iris" seatName={chrome.seatName} seatKind={chrome.seatKind} />,
+    <Assignee
+      seatAvatar={chrome.seatAvatar}
+      handle="iris"
+      seatName={chrome.seatName}
+      seatKind={chrome.seatKind}
+    />,
   );
   expect(outline(container)).toBe("human");
 });
@@ -81,7 +91,12 @@ test("a human assignee is drawn as a person", () => {
 // AND AN AGENT IS DRAWN AS AN AGENT.
 test("an agent assignee is drawn as an agent", () => {
   const { container } = render(
-    <Assignee handle="ada" seatName={chrome.seatName} seatKind={chrome.seatKind} />,
+    <Assignee
+      seatAvatar={chrome.seatAvatar}
+      handle="ada"
+      seatName={chrome.seatName}
+      seatKind={chrome.seatKind}
+    />,
   );
   expect(outline(container)).toBe("agent");
 });
@@ -92,7 +107,12 @@ test("an agent assignee is drawn as an agent", () => {
 // the chart answered when it did not.
 test("a handle the chart does not hold is never drawn as a person", () => {
   const { container } = render(
-    <Assignee handle="departed" seatName={chrome.seatName} seatKind={chrome.seatKind} />,
+    <Assignee
+      seatAvatar={chrome.seatAvatar}
+      handle="departed"
+      seatName={chrome.seatName}
+      seatKind={chrome.seatKind}
+    />,
   );
   expect(outline(container)).toBe("agent");
   // AND THE HANDLE IS STILL THE LABEL, never a blank: "somebody the chart has
@@ -104,32 +124,35 @@ test("a handle the chart does not hold is never drawn as a person", () => {
 // guessing: every prop on this component is optional, and a surface that has
 // no chart yet is an ordinary state.
 test("no kind resolver never draws a person", () => {
-  const { container } = render(<Assignee handle="iris" seatName={chrome.seatName} />);
+  const { container } = render(
+    <Assignee seatAvatar={chrome.seatAvatar} handle="iris" seatName={chrome.seatName} />,
+  );
   expect(outline(container)).toBe("agent");
 });
 
-// A BADGE DRAWN ALONE IS ITS SEAT'S INITIALS. Every agent that chose no look
-// carries the same one (the original Crewlet, in purple), so a column of
-// badges with no names beside them drew seven agents as one picture and
-// Agent CTO could not be told from Agent SWE without hovering. Alone, the
-// badge is the identity rule's initials; with its name printed beside it, the
-// seat's chosen character is decoration and stays.
-test("agents drawn alone are told apart by their initials, whatever look they share", () => {
-  const look = { character: "crewlet", color: "purple" } as const;
-  const named = (handle: string) =>
-    handle === "cto" ? "Agent CTO" : handle === "swe" ? "Agent SWE" : handle;
-  const props = { seatName: named, seatKind: () => "agent" as const, seatAvatar: () => look };
-  const cto = render(<Assignee handle="cto" {...props} />).container;
-  expect(badge(cto).classList.contains("crewlet-avatar--character")).toBe(false);
-  expect(badge(cto).textContent).toBe("CT");
+// AN AGENT IS ITS CHARACTER WHEREVER IT IS DRAWN, alone in a column or beside
+// its name, and a person their initials: the Assignee column drew agents as
+// initials tiles while every other surface drew their faces.
+test("an agent assignee draws its character, a person without a picture their initials", () => {
+  const alone = render(
+    <Assignee handle="ada" {...chrome} seatAvatar={chrome.seatAvatar} />,
+  ).container;
+  expect(badge(alone).classList.contains("crewlet-avatar--character")).toBe(true);
+  expect(badge(alone).classList.contains("crewlet-avatar--hue-amber")).toBe(true);
+  // ALONE IT NAMES ITSELF, so a column of faces still says who.
+  expect(badge(alone).getAttribute("aria-label")).toBe("Ada Okonkwo avatar");
   cleanup();
-  const swe = render(<Assignee handle="swe" {...props} />).container;
-  expect(badge(swe).textContent).toBe("SW");
-  cleanup();
-  // NAMED BESIDE IT, the character the seat chose is drawn.
-  const beside = render(<Assignee handle="cto" {...props} name />).container;
+  const beside = render(
+    <Assignee handle="ada" {...chrome} seatAvatar={chrome.seatAvatar} name />,
+  ).container;
   expect(badge(beside).classList.contains("crewlet-avatar--character")).toBe(true);
-  expect(beside.textContent).toContain("Agent CTO");
+  expect(beside.textContent).toContain("Ada Okonkwo");
+  cleanup();
+  const person = render(
+    <Assignee handle="iris" {...chrome} seatAvatar={chrome.seatAvatar} />,
+  ).container;
+  expect(badge(person).classList.contains("crewlet-avatar--character")).toBe(false);
+  expect(badge(person).textContent).toBe("IC");
 });
 
 // THE BOARD CARD READS THE SAME CHROME. It was the surface with the least
@@ -156,15 +179,15 @@ test("the board card draws a human seat as a person and an agent as an agent", (
 // squeezed column and dropped Type, Priority, Due and Updated to make room
 // for a word no width could fit. Beside it, the word is the cell's to size.
 test("a named unassigned holder prints its word beside the square, never inside it", () => {
-  const named = render(<Assignee name />).container;
-  const square = named.querySelector(".work-nobody");
+  const named = render(<Assignee seatAvatar={chrome.seatAvatar} name />).container;
+  const square = named.querySelector(".seat-nobody");
   expect(square).toBeTruthy();
   expect(square!.textContent).toBe("");
   expect(named.textContent).toBe("Unassigned");
   cleanup();
   // Unnamed, the square alone carries the name — for a screen reader.
-  const bare = render(<Assignee />).container;
-  expect(bare.querySelector(".work-nobody .sr-only")?.textContent).toBe("Unassigned");
+  const bare = render(<Assignee seatAvatar={chrome.seatAvatar} />).container;
+  expect(bare.querySelector(".seat-nobody .sr-only")?.textContent).toBe("Unassigned");
 });
 
 // A READER MAY PUT AWAY WHAT DESCRIBES A TASK, NEVER WHAT SAYS SOMETHING IS

@@ -69,20 +69,16 @@ func answered(t *testing.T, e *Engine, b *heldBroker) bool {
 	}
 }
 
-// A UNIT REPOSITORY'S READ IS ANSWERED WHILE THE BROKER HOLDS ITS RECORD.
-//
-// Gitlet's git surface and the git reads are handed [Engine.recordCodeRead] as their
-// Fetched, and each calls it before the read it records has answered: a
-// fetch's response, a server-side read's slot on the git lane and every read
-// waiting on the page it cuts. It used to publish the record there, so a
-// broker that had not answered — an events stream with no leader — held each
-// of them up to the client's five seconds. It files the read in the node's
-// reads ledger instead: neither a broker holding nothing, nor one holding the
-// ledger's own flush, holds a read, and the reads reach the stream on the
+// A UNIT REPOSITORY'S READ IS ANSWERED WHILE THE BROKER HOLDS ITS RECORD:
+// [Engine.recordCodeRead] runs before the read it records has answered (a
+// fetch's response, a server-side read's slot on the git lane, every read
+// waiting on its page), so it files the record in the node's reads ledger
+// rather than publishing it. Neither a broker holding nothing nor one holding
+// the ledger's own flush holds a read; the reads reach the stream on the
 // flush after.
 //
-// Mutation: publish the record in recordCodeRead, as it used to be, and the
-// first read waits for the broker — this case's hang detector goes red.
+// Mutation: publish the record in recordCodeRead, and the first read waits
+// for the broker — this case's hang detector goes red.
 func TestAUnitRepositorysReadIsAnsweredWhileTheBrokerHoldsItsRecord(t *testing.T) {
 	t.Parallel()
 	b := &heldBroker{entered: make(chan struct{}, 4), hold: make(chan struct{})}

@@ -17,14 +17,11 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// sendsJS answers each send of a write from its script — an acknowledgement
-// once the script has run out — and records, of every send it was handed, the
-// instant, the deadline of the context it was handed and the bytes its message
-// carried beside its subject, measured here rather than by the code under
-// test.
-//
-// EMBEDS THE INTERFACE for the reason notYetVisibleJS gives: the two methods a
-// write calls are two of dozens.
+// sendsJS answers each send of a write from its script (an acknowledgement once
+// it runs out) and records each send's instant, its context's deadline and the
+// bytes its message carried beside its subject, measured here rather than by
+// the code under test. It embeds the interface for the reason notYetVisibleJS
+// gives.
 type sendsJS struct {
 	jetstream.JetStream
 	answers []error
@@ -69,10 +66,8 @@ var (
 	budgetLetters = topics.DeadLetter("budget.probe", "grp")
 )
 
-// everyWrite is every acknowledged write the queue makes, each at a size of
-// its own and with the headers it sends: a publish, a keep, the delivery
-// budget's dead letter, and a state log's append carrying its operation's id
-// and its expectation.
+// everyWrite is every acknowledged write the queue makes, each at its own size
+// and with the headers it sends.
 func everyWrite() []aWrite {
 	return []aWrite{
 		{"a publish", func(ctx context.Context, q *Queue) error {
@@ -99,9 +94,8 @@ var anAppend = aWrite{"a state log's append", func(ctx context.Context, q *Queue
 	return err
 }}
 
-// budgetedQueue is a queue over js whose connection is paced at pace, every
-// stream its writes resolve already known to it, so a write goes straight to
-// its sends.
+// budgetedQueue is a queue over js paced at pace, knowing every stream its
+// writes resolve, so a write goes straight to its sends.
 func budgetedQueue(t *testing.T, js jetstream.JetStream, pace time.Duration) *Queue {
 	t.Helper()
 	streams := map[string]struct{}{}
@@ -115,30 +109,26 @@ func budgetedQueue(t *testing.T, js jetstream.JetStream, pace time.Duration) *Qu
 	return &Queue{js: js, link: link{pace: pace}, streams: streams}
 }
 
-// EACH WRITE IS BUDGETED FOR THE BYTES IT SENDS, through the one budget a
-// write of the queue's is given.
+// EACH WRITE IS BUDGETED FOR THE BYTES IT SENDS, through the queue's one
+// budget. With no caller deadline, a write on a member's own connection waits
+// the request term alone, and one across a link the request term plus the
+// crossing of exactly its header block and payload, measured here. A caller's
+// longer deadline is the send's as it is. Each write is driven whole, so what
+// is held is the context its send was handed. Exact, in a bubble.
 //
-// Where its caller set no deadline, a write on a member's own connection waits
-// the request term alone, and one across a link the request term and the
-// crossing of exactly the bytes it sends — its header block and its payload,
-// as the client handed the send them, measured here. A caller's deadline,
-// longer than any budget, is the send's as it is. Each write is driven whole,
-// so what is held is the context its send was handed, never a helper's answer
-// beside it. Exact, in a bubble.
-//
-// Mutation: budget an append for its record alone, pace a write by the object
-// store's floor rather than by its connection, or hold a write to its budget
-// with a timeout of its own rather than through the queue's one budget, and a
-// row goes red: the append across a link a header block short, every write on
-// a member a crossing over, and the caller's hour cut to the budget.
+// Mutation: budget an append for its record alone (the append across a link
+// goes a header block short), pace by the object store's floor rather than the
+// connection (every member write a crossing over), or time a write out on its
+// own rather than through the one budget (the caller's hour cut), and a row
+// goes red.
 func TestEachWriteIsBudgetedForTheBytesItSends(t *testing.T) {
 	t.Parallel()
 	for _, link := range []struct {
 		name string
 		pace time.Duration
 	}{
-		{"on a member's own connection", linkOf(&embeddedServer{}).pace},
-		{"across a leaf's link", linkOf(&embeddedServer{leaf: true}).pace},
+		{"on a member's own connection", linkOf(&embeddedServer{}, nil).pace},
+		{"across a leaf's link", linkOf(&embeddedServer{leaf: true}, nil).pace},
 	} {
 		for _, w := range everyWrite() {
 			t.Run(w.name+" "+link.name, func(t *testing.T) {
@@ -179,13 +169,11 @@ func TestEachWriteIsBudgetedForTheBytesItSends(t *testing.T) {
 // A WRITE SENT AGAIN IS GIVEN ITS OWN CROSSING.
 //
 // A write is sent again where its answer decided nothing: nobody heard it, or
-// the leader refused an append without comparing anything because another
-// write to its subject was in flight. Every send carries the whole message
-// across the link again, so where the caller set no deadline each one after
-// the first is given a crossing more than the one before; given the first
-// send's budget, the second had what the first left of the request term, and
-// a large record across a slow link read as no answer while it was crossing.
-// Exact, in a bubble.
+// the leader refused an append because another write to its subject was in
+// flight. Each send carries the whole message across again, so with no caller
+// deadline each later send gets a crossing more than the one before; given only
+// the first's budget, a large record on a slow link read as no answer while
+// still crossing. Exact, in a bubble.
 //
 // Mutation: give every send the first send's budget, and each second send is
 // a crossing short.
@@ -207,7 +195,7 @@ func TestAWriteSentAgainIsGivenItsOwnCrossing(t *testing.T) {
 				t.Parallel()
 				synctest.Test(t, func(t *testing.T) {
 					js := &sendsJS{answers: []error{c.err}}
-					q := budgetedQueue(t, js, linkOf(&embeddedServer{leaf: true}).pace)
+					q := budgetedQueue(t, js, linkOf(&embeddedServer{leaf: true}, nil).pace)
 					if err := w.write(context.Background(), q); err != nil {
 						t.Fatalf("the write sent again: %v", err)
 					}
@@ -238,16 +226,10 @@ func (c *countedJS) PublishMsg(ctx context.Context, msg *nats.Msg, opts ...jetst
 	return c.JetStream.PublishMsg(ctx, msg, opts...)
 }
 
-// A WRITE NOBODY HEARD IS SENT AGAIN BY THE QUEUE, NEVER BY ITS CLIENT.
-//
-// The client sends a message nobody heard again inside the ONE context it was
-// handed, and across a link to an external cluster that answer comes after the
-// message has crossed whole — so a re-send the client made crossed again
-// inside a budget sized for one crossing. The queue turns the client's
-// re-sends off and makes them itself, each in a context of its own. Here a
-// responder of the case's own answers the first send as a server answers one
-// nobody heard, and acknowledges the second: the client was handed two sends,
-// and the responder heard two.
+// A WRITE NOBODY HEARD IS SENT AGAIN BY THE QUEUE, NEVER BY ITS CLIENT
+// ([sendWithin] says why). A responder of the case's own answers the first send
+// as a server answers one nobody heard and acknowledges the second: the client
+// was handed two sends, and the responder heard two.
 //
 // Mutation: leave the client's own re-sends on, and the responder hears two
 // sends inside the one the queue handed its client.
@@ -271,8 +253,7 @@ func TestAWriteNobodyHeardIsSentAgainByTheQueueNeverItsClient(t *testing.T) {
 	if err := q.nc.Flush(); err != nil {
 		t.Fatalf("flush the responder: %v", err)
 	}
-	// THE ONE LOOP EVERY WRITE OF THE QUEUE'S IS SENT BY, over a client
-	// that counts what it is handed.
+	// The one loop every write is sent by, over a counting client.
 	msg := &nats.Msg{Subject: subject, Data: []byte("probe")}
 	ack, err := sendWithin(t.Context(), q.writing(msg), counted, msg)
 	if err != nil || ack == nil || ack.Sequence != 7 {
@@ -287,14 +268,11 @@ func TestAWriteNobodyHeardIsSentAgainByTheQueueNeverItsClient(t *testing.T) {
 
 // A WRITE COUNTS WHAT IT SENDS.
 //
-// The budget a write is given counts its message — its header block and its
-// payload — read off the message as it is built ([carried]), so the count
-// holds only while the message built is the whole of what crosses: a header
-// the client wrote from an option, after the count was taken, would cross
-// uncounted. So each shape a write builds — a publish, a keep with a header
-// and without, an append with each of its headers, both or neither — is sent
-// to a responder of the case's own, and the count held to what the responder
-// was handed as it crossed.
+// A write's budget counts its header block and payload as read off the built
+// message ([carried]), which holds only while that message is all that
+// crosses: a header a client option wrote after the count would cross
+// uncounted. So each shape a write builds is sent to a responder of the case's
+// own, and the count held to what crossed.
 //
 // Mutation: count a message's payload alone, or have a write's send add a
 // header the message did not carry, and a row with headers goes red.
@@ -344,22 +322,18 @@ func TestAWriteCountsWhatItSends(t *testing.T) {
 	}
 }
 
-// A CONNECTION'S READS AND WRITES ARE PACED BY ONE DECISION.
+// A CONNECTION'S READS AND WRITES ARE PACED BY ONE DECISION ([link]).
 //
-// How slow a connection may be is decided once, where it is made ([linkOf]),
-// and every crossing on it reads that one decision: a state log record's read
-// by its position from the leader — given its log's largest record's
-// arrival, or on a log read through its copies the record's own — and read
-// raw; a dead letter's frame from the leader and raw; and a write's request.
-// Decided apart, a pace changed for one of them — made configurable, or per
-// link — would leave the others at the old one. Held here at a pace no link
-// is given today, so a crossing that decided its own pace is told from one
-// that read the connection's, across a leaf's link, where every one of them
-// is made.
+// Every crossing reads the connection's pace: a state log record's read from
+// the leader (at its log's largest record's arrival, or its own on a log read
+// through copies) and raw, a dead letter's frame from the leader and raw, and
+// a write's request. Held at a pace no link is given today, across a leaf's
+// link where all of them are made, so a crossing that decided its own pace is
+// told from one that read the connection's.
 //
-// Mutation: pace a record's read — from the leader or raw — a frame's read or
-// a write by the object store's floor itself rather than by the connection's
-// pace, and its row goes red.
+// Mutation: pace a record's read (from the leader or raw), a frame's read or
+// a write by the object store's floor rather than the connection's pace, and
+// its row goes red.
 func TestAConnectionsReadsAndWritesArePacedByOneDecision(t *testing.T) {
 	t.Parallel()
 	const pace = 7 * time.Second
@@ -375,10 +349,9 @@ func TestAConnectionsReadsAndWritesArePacedByOneDecision(t *testing.T) {
 		t.Errorf("a record's read is given %v to arrive, want its largest record's arrival at "+
 			"the connection's pace, %v", log.arrival, want)
 	}
-	// A LOG READ THROUGH ITS COPIES: its records as large as the transport,
-	// each read from the leader at its own reply's arrival where the leaf's
-	// server carries that reply, and otherwise raw, waited for its own
-	// crossing.
+	// A log read through its copies (records as large as the transport):
+	// from the leader at its reply's arrival where the leaf carries it,
+	// otherwise raw, waited for its own crossing.
 	copied := DomainStream{Name: "CREWLET_PACED_LOG", Subjects: []string{"crewlet.paced.log.>"},
 		MaxBytes: 4 * queue.MaxPayloadBytes, MaxMessageBytes: queue.MaxPayloadBytes,
 		Duplicates: 2 * time.Minute}
@@ -406,10 +379,8 @@ func TestAConnectionsReadsAndWritesArePacedByOneDecision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the dead letters: %v", err)
 	}
-	// A DEAD LETTER'S FRAME across the leaf's link: read from the leader at a
-	// term of its reply's arrival where the leaf's server carries that
-	// reply, and otherwise raw, waited for the entry's own crossing — each at
-	// the connection's pace.
+	// A dead letter's frame across the leaf's link, likewise at the
+	// connection's pace.
 	if letters.copies == nil {
 		t.Fatal("a connection across a leaf's link reads its dead letters from the leader " +
 			"alone, whose reply of an entry as large as the transport cannot cross it")

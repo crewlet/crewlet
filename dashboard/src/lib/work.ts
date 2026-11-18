@@ -2510,6 +2510,8 @@ export interface FilterChipSpec {
   verb?: string;
   /** What it was set to, in the company's own words. */
   value?: string;
+  /** The seat the value names, by handle, for its face; "" for nobody. */
+  seat?: string;
   /**
    * Why this shape does not apply it, where it does not: a board draws every
    * column, and a calendar's window is its own `due`. The narrowing stays in
@@ -2569,6 +2571,7 @@ export function filterChips(
       // lead opens a board to ask for — printed raw it reads as a filter that
       // failed to resolve somebody's name.
       value: f.assignee === "none" ? "Unassigned" : (ctx.seatName?.(f.assignee) ?? f.assignee),
+      seat: f.assignee === "none" ? "" : f.assignee,
     });
   }
   if (f.tag) {

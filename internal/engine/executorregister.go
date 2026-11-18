@@ -21,30 +21,26 @@ import (
 	"github.com/crewlet/crewlet/internal/trashreap"
 )
 
-// THE EXECUTOR LOG, wired: its entry in the register, its two sides over the
-// running log and the store a session's sealed bytes stream through, its
-// retention through the trash reaper, and a removed seat's sessions through
-// the mailbox retirement (ADR-0073).
+// THE EXECUTOR LOG, wired: its register entry, its read and write sides, the
+// session store, its retention through the trash reaper, and a removed seat's
+// sessions through the mailbox retirement (ADR-0073).
 //
-// EVERY DATA NODE RUNS IT, whatever its company keeps: the register runs every
-// domain or none ([register]), and every data node serves the sides built here
-// to the estate router ([Engine.estateBackend]), whose estate.ExecutorReads and
-// estate.ExecutorWrites are how a node without `data` reaches the log — the
-// writes the engine's alone. The sandbox runtime records every capture of a
-// launch's session and every turn's end through those writes
-// (executorsession.go), wherever the seat runs.
+// EVERY DATA NODE RUNS IT, whatever its company keeps (the register runs every
+// domain or none, [register]), and serves these sides to the estate router
+// ([Engine.estateBackend]): its estate.ExecutorReads and estate.ExecutorWrites
+// are how a node without `data` reaches the log, the writes the engine's alone.
+// The sandbox runtime records every capture and every turn's end through them,
+// wherever the seat runs (executorsession.go).
 
-// executorRegistrations is the executor domain's entry in the register: the
-// TENTH domain and the EIGHTH strict, identity-claiming one. Its declaration,
-// applier, write seams, barrier, read model, trimmed record, generation
-// record, node gate and Tier A ceiling (`stream.executor_log_max_bytes`, read through
-// config.Stream.ExecutorMaxBytes).
+// executorRegistrations is the executor domain's register entry, a strict,
+// identity-claiming domain whose Tier A ceiling is
+// `stream.executor_log_max_bytes` (config.Stream.ExecutorMaxBytes).
 //
 // A BARRIER AND A READ MODEL, because a seat reads this log at `linearizable`:
 // a conversation's next turn reads its head through the read index, so a node
 // that has not applied the previous turn's end (published by another node)
-// waits for it rather than serving an older head. And no wake feed: no record
-// on it wakes a seat.
+// waits for it rather than serving an older head. No wake feed: no record on
+// it wakes a seat.
 func executorRegistrations() []registration {
 	return []registration{{
 		Domain: executordomain.Domain{},
@@ -67,21 +63,20 @@ func executorRegistrations() []registration {
 				Gates: executordomain.NewGates(s.estate().Reader()), Evicted: fence.Evicted}, nil
 		},
 		Barrier: executordomain.EncodeBarrier,
-		// AND ITS TRIMMED RECORD, for every strict log's reason: its
-		// arbitration anchors are replicated rows, removed below the trim
-		// floor by a record every applier takes at one position (ADR-0080).
+		// A TRIMMED RECORD, as every strict log: its arbitration anchors are
+		// replicated rows, removed below the trim floor by a record every
+		// applier takes at one position (ADR-0080).
 		Trimmed: executordomain.EncodeTrimmed,
-		// ITS OWN READ MODEL, counted from what a turn's launches read at
-		// `linearizable` — see [executordomain.LinearizableReadsPerSeatDay],
-		// which is also the barrier term in the log's ceiling
-		// ([config.DefaultExecutorLogMaxBytes]).
+		// Counted from what a turn's launches read at `linearizable`
+		// ([executordomain.LinearizableReadsPerSeatDay]), also the barrier
+		// term in the log's ceiling ([config.DefaultExecutorLogMaxBytes]).
 		Reads:      &statelog.ReadModel{PerSeatDay: executordomain.LinearizableReadsPerSeatDay},
 		Generation: executordomain.GenerationRecord{},
 		NewGate: func(_ *stateLog, _ *runningLog,
 			publisher *statelog.Publisher) (gateWrite, error) {
 
-			// A GATE WRITER, which reads nothing of a seat's sessions: an
-			// eviction names a machine.
+			// A GATE WRITER reads nothing of a seat's sessions: an eviction
+			// names a machine.
 			w, err := executordomain.NewGateWriter(publisher)
 			if err != nil {
 				return nil, err
@@ -96,19 +91,16 @@ func executorRegistrations() []registration {
 				return w.EvictNode(ctx, actor, opID, node)
 			}, nil
 		},
-		// THE FRAMEWORK'S ONE HORIZON: ADR-0029 judges a retry against it.
-		// A capture's or an end's operation is re-asked by the turn that
-		// owns it, on the rhythm every turn re-asks its writes.
+		// THE FRAMEWORK'S ONE HORIZON, which ADR-0029 judges a retry against:
+		// a capture's or an end's operation is re-asked by the turn that owns
+		// it, as every turn re-asks its writes.
 		OpsRetention: statelog.OpsRetention,
-		// NOT DERIVED FROM THE DISK, like the assistant's: the log grows with
-		// the turns the company's seats run, and a larger volume buys none of
-		// them ([config.DefaultExecutorLogMaxBytes]).
-		//
-		// AND SCALED DOWN TO ITS FIELD'S FLOOR where the broker is short, for
-		// the assistant's reason: counted at its 512 MiB on every fresh node
-		// it would move the least a node boots in past the smallest data
-		// volume crewlet-operator admits; scaled, it reserves its 64 MiB
-		// floor there, inside the room the other logs leave
+		// NOT DERIVED FROM THE DISK: the log grows with the turns the seats
+		// run, which a larger volume does not add
+		// ([config.DefaultExecutorLogMaxBytes]). SCALED DOWN TO ITS FLOOR
+		// where the broker is short: its 512 MiB on every fresh node would
+		// push the least a node boots in past crewlet-operator's smallest
+		// data volume, so there it reserves its 64 MiB floor
 		// (TestTheExecutorLogFitsBesideTheOtherLogsAtTheOperatorsSmallestVolumes).
 		Ceiling: func(stream config.Stream, _ int64) domainCeiling {
 			bytes, derived := stream.ExecutorMaxBytes()
@@ -163,15 +155,12 @@ func (e *Engine) ExecutorWriter() *executordomain.Writer {
 	return nil
 }
 
-// ExecutorSessionReads is the executor log's reads as a person's surface
-// reaches them — a seat's sessions and one turn's row, which the API's
-// sessions questions read — through the estate router on every node, and
-// false on an engine built with no router.
+// ExecutorSessionReads is the executor log's reads a person's surface reaches
+// (a seat's sessions, one turn's row), through the estate router, and false on
+// an engine built with no router.
 //
-// THE ROUTER'S ON EVERY NODE, for [OperatorWork]'s reason: a data node whose
-// copy is out of service answers from a peer's, and a node without `data`
-// reaches a data node's. The reads alone: the log's writes are the engine's
-// record of what its own runs did, and no surface holds them.
+// THE ROUTER'S ON EVERY NODE, for [OperatorWork]'s reason. The reads alone:
+// the writes are the engine's record of its own runs, and no surface holds them.
 func ExecutorSessionReads(e *Engine) (estate.ExecutorReads, bool) {
 	if e.router == nil {
 		return estate.ExecutorReads{}, false
@@ -182,14 +171,13 @@ func ExecutorSessionReads(e *Engine) (estate.ExecutorReads, bool) {
 // ExecutorSessions is the store a session's sealed bytes stream into and out
 // of: the fleet's object store, sealed under the Tier A keyring's stream
 // format. Nil on a node with no object store, which captures and restores no
-// session, and an error where the keyring cannot seal a stream (a key id no
-// header can name), which is the operator's to fix.
+// session; an error where the keyring cannot seal a stream (a key id no header
+// can name), the operator's to fix.
 //
-// OVER THE TIER A KEYRING, the one that seals the company's secret store and
-// signs every state-log record, so a keyring rotation is one gesture for all
-// of them; a session sealed under a key the ring has since dropped reads as
-// executordomain.ErrUnreadable, and the census GET /secrets keeps of sessions
-// by key (`executor_values`) is what an operator waits out before dropping it.
+// THE TIER A KEYRING, so one rotation covers it, the secret store and the
+// state-log signatures. A session sealed under a dropped key reads as
+// executordomain.ErrUnreadable; GET /secrets' census of sessions by key
+// (`executor_values`) is what an operator waits out before dropping one.
 func (e *Engine) ExecutorSessions() (*executordomain.SessionStore, error) {
 	objects := e.Objects()
 	if objects == nil || e.boot == nil {
@@ -208,15 +196,13 @@ func (e *Engine) ExecutorSessions() (*executordomain.SessionStore, error) {
 
 // executorRetention is how long a seat's executor session is kept after its
 // row was last touched, asked at every reaper pass: the
-// `turn_engine.conversation_session.retention_days` of the revision the fleet's
-// activation pointer names, read on a node that runs that very activation
-// ([Engine.servedFleetRevision]), or an error saying why this node cannot know it.
+// `turn_engine.conversation_session.retention_days` of the fleet's activated
+// revision, read on a node that runs it ([Engine.servedFleetRevision]), or why
+// this node cannot know it.
 //
 // THE FLEET'S REVISION, NEVER THIS NODE'S OWN, for [Engine.assistantRetention]'s
-// reason: a retention delete is a record every data node applies, and a node
-// that refused the fleet's revision, or booted on an import the fleet did not
-// take, may read a term the company has since lengthened. An unknown term
-// deletes nothing of this source ([trashreap.Termed]).
+// reason: a retention delete is a record every data node applies. An unknown
+// term deletes nothing of this source ([trashreap.Termed]).
 func (e *Engine) executorRetention(ctx context.Context) (time.Duration, error) {
 	company, err := e.servedFleetRevision(ctx)
 	if err != nil {
@@ -226,12 +212,11 @@ func (e *Engine) executorRetention(ctx context.Context) (time.Duration, error) {
 }
 
 // executorRetentionOf is the retention a company's document states, the
-// block's own default where a company built in code states none.
+// block's default where it states none.
 //
-// UNSET IS THE DEFAULT, NEVER A TERM OF NOTHING: a document is decoded onto
-// the defaults and validation refuses fewer than one day, so only a block
-// built in code holds zero, and read as it stands it would age out every
-// session at once.
+// UNSET IS THE DEFAULT, NEVER A TERM OF NOTHING: a document decodes onto the
+// defaults and validation refuses fewer than one day, so only a block built in
+// code holds zero, and read as it stands it would age out every session at once.
 func executorRetentionOf(c *Company) time.Duration {
 	days := config.DefaultConversationSession().RetentionDays
 	if c.Config != nil && c.Config.TurnEngine.ConversationSession.RetentionDays > 0 {
@@ -254,12 +239,10 @@ const (
 )
 
 // executorTrash is the executor sessions' retention as the trash reaper
-// reaches it: every turn whose row (or, once an absorption took the row, its
-// tombstone) was last touched before the term, never one whose run is live;
-// every removed seat's removal past the term; and, first, every turn whose end
-// was lost. The reaper is the fleet singleton that already runs hourly with a
-// lease, a report and derived operation ids, so a retention delete is decided
-// by exactly the machinery every other domain's trash is.
+// reaches it: every turn whose row (or its tombstone, once absorbed) was last
+// touched before the term, never one whose run is live; every removed seat's
+// removal past the term; and, first, every turn whose end was lost. The reaper's
+// fleet lease, report and derived operation ids decide it, as every domain's trash.
 //
 // ONE SOURCE FOR ALL THREE, so a pass that cannot read this source's term (a
 // node not serving the fleet's revision) ends no lost turn either.
@@ -299,14 +282,14 @@ func (executorTrash) Name() string { return executordomain.Domain{}.Name() }
 func (x executorTrash) Term(ctx context.Context) (time.Duration, error) { return x.term(ctx) }
 
 // TrashedBefore nominates, at most limit of them, the turns whose end was lost
-// first — each holds its session against the seat's budget until it is ended —
-// and then what is past the retention, the longest untouched first: turns,
-// and removed seats' removals. It leaves out every turn whose run is live.
+// first (each holds its session against the seat's budget until ended), then
+// what is past the retention, longest untouched first: turns and removed
+// seats' removals. It leaves out every turn whose run is live.
 //
-// A RUN THE FLEET STILL HOLDS IS NEVER ENDED OR AGED OUT, whatever its row's
-// age: a turn parked on a person's answer for longer than the retention is
-// resumed from the session its row names. And a pass that cannot read the run
-// records nominates nothing, because unknown is never "nothing is running".
+// A RUN THE FLEET STILL HOLDS IS NEVER ENDED OR AGED OUT: a turn parked on a
+// person's answer past the retention resumes from the session its row names. A
+// pass that cannot read the run records nominates nothing: unknown is never
+// "nothing is running".
 func (x executorTrash) TrashedBefore(ctx context.Context, cutoff time.Time,
 	limit int) ([]string, error) {
 
@@ -412,15 +395,12 @@ func (e *Engine) executorSource() (executorTrash, bool) {
 
 // liveTurns reads every turn the fleet's run records hold.
 //
-// EVERY RECORD IS A LIVE TURN, WHATEVER IT HOLDS. A run's record is deleted
-// once its ending is decided and it owes the seat nothing (sandbox's Finish),
-// so a record that is there is a run nobody has finished: one of a status this
-// build does not know (a newer build's), and one this build cannot decode, as
-// much as any other. Its key is the run's turn id, which needs no decoding. Read
-// through the sandbox's listings instead, both would be skipped — a record that
-// does not decode is left out of every listing, and one of an unknown status
-// matches none of this build's — and the retention would age out the session
-// of a run a newer build has parked on a person's answer.
+// EVERY RECORD IS A LIVE TURN, WHATEVER IT HOLDS: a run's record is deleted
+// once its ending is decided (sandbox's Finish), so one still there is
+// unfinished, even of a status this build does not know or bytes it cannot
+// decode. Its key is the turn id, which needs no decoding. The sandbox's
+// listings skip both, so read through them the retention would age out the
+// session of a run a newer build parked on a person's answer.
 func liveTurns(runs interface {
 	SandboxRuns(ctx context.Context) ([]coord.Record, error)
 }) func(context.Context) (map[string]bool, error) {
@@ -441,35 +421,23 @@ func liveTurns(runs interface {
 // apply it before it answers `pending`.
 //
 // A SECOND, against the publisher's five: the retirement needs the removal
-// durable in the log, where every node applies it in order whether or not
-// this one has caught up, and not this node's copy current — and it spends its
-// wait out of a budget a lease bounds (maintenance's mailboxRetireBudget).
+// durable in the log, which every node applies in order, not this node's copy
+// current, and it waits out of a lease-bounded budget (maintenance's
+// mailboxRetireBudget).
 const executorRemovalResolve = time.Second
 
-// retireSeatSessions removes a retired seat's executor sessions, for the
-// mailbox retirement that has established the seat's absence past its grace
-// ([maintenance.SeatSessionRetirer]), under an operation derived from the
-// instant the retirement was marked at ([executordomain.SeatDeleteOpID]).
+// retireSeatSessions removes a retired seat's executor sessions for the mailbox
+// retirement ([maintenance.SeatSessionRetirer]), under an operation derived
+// from the instant it was marked at ([executordomain.SeatDeleteOpID]).
 //
-// BY THE SEAT'S ID: a session row is keyed on the handle, and the record the
-// retirement holds may carry none (a mailbox the broker alone remembered). So
-// the handle it names is used where there is one, and otherwise every handle
-// holding sessions is matched against the seat's id under the running
-// company's organisation (ADR-0013), read at `linearizable` so a seat whose
-// rows this node has not applied yet is not missed. A handle the running
-// company still gives an agent seat is left alone either way: under a renamed
-// organisation the same handle is another seat, whose sessions these are now.
-//
-// UNKNOWN IS AN ERROR, AND A REFUSED REMOVAL IS NOT. A node that cannot read
-// the revision the fleet runs, or whose copy of the log cannot list the seats
-// whole, answers an error, and the retirement is undone and retried. A removal
-// the log will not take now (it is full, stalled, or this node is fenced off
-// it), or whose outcome is unknown, is logged and left: the company's
-// conversation retention removes those sessions in its time, and a mailbox
-// held for as long as the log is unhealthy would be held without bound. The
-// removal is always published ([executordomain.Writer.DeleteSeat]), so a node
-// whose copy is behind removes what the log holds rather than what it has
-// applied.
+// BY THE SEAT'S ID: a record with no handle matches every handle holding
+// sessions against the seat's id under the running organisation (ADR-0013),
+// at `linearizable` so unapplied rows are not missed; a handle the running
+// company still gives an agent seat is kept (renamed, it is another seat's).
+// UNKNOWN IS AN ERROR (revision or list unread), undone and retried; a REFUSED
+// or unknown removal is logged, left to the conversation retention, lest the
+// mailbox be held while the log is unhealthy. Always published, so a lagging
+// node removes what the log holds ([executordomain.Writer.DeleteSeat]).
 func (e *Engine) retireSeatSessions(ctx context.Context, seat uuid.UUID, handle string,
 	retiring time.Time) error {
 

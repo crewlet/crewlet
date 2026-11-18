@@ -27,10 +27,8 @@ type fakeKB struct {
 	edits    []commentEdit
 	actors   []doclet.Actor
 
-	// keys is the operation key every write's actor arrived with
-	// ([doclet.Actor.OpKey]), in order, so a tool that derived its operation
-	// from something other than the caller's own key — or forgot to pass
-	// one — is visible.
+	// keys is every write's operation key ([doclet.Actor.OpKey]), in order,
+	// so a key derived from anything but the caller's own, or none, is visible.
 	keys []string
 
 	readErr  error
@@ -41,24 +39,20 @@ type fakeKB struct {
 	renameErr error
 
 	// awaited is every position [builtin.PageDeps.Await] was handed, in
-	// order, so a tool that waited for the wrong write — or waited before
-	// making the write that needs it — is visible rather than merely
-	// plausible.
+	// order, so waiting for the wrong write, or before making it, is visible.
 	awaited []uint64
 
-	// renameResult is what Rename answers. Nil takes an ordinary rename
-	// that landed a record; a test pins it to model the idempotent shape,
-	// where nothing was appended and the answer carries the revision this
-	// node had already applied.
+	// rename, when set, is what Rename answers; nil is an ordinary rename
+	// that landed a record. A test sets it for the idempotent shape: nothing
+	// appended, the revision the one this node had already applied.
 	rename func(pageID, title string) doclet.Written
 
-	// levels is every read level these tools asked for, so a tool that
-	// stopped naming one — or named the wrong one — is visible. A seat
-	// reads at `session` because it must see its own writes.
+	// levels is every read level these tools asked for, so a missing or
+	// wrong one is visible: a seat must see its own writes.
 	levels []statelog.ReadLevel
 
-	// outcome, when set, is every write's outcome — which is how a case
-	// makes a write answer `unknown` without a broker.
+	// outcome, when set, is every write's outcome: how a case makes a write
+	// answer `unknown` without a broker.
 	outcome *statelog.Result
 }
 
@@ -129,9 +123,8 @@ func (f *fakeKB) SavePage(_ context.Context, actor doclet.Actor, _ string, save 
 	}), nil
 }
 
-// renamed is one Rename call the fake took, with everything the fake had
-// already been asked to wait for when it arrived — which is what makes the
-// ORDER of the save, the settle and the rename assertable.
+// renamed is one Rename call, with every position the fake had been asked to
+// wait for before it: what makes the ORDER of save, settle and rename assertable.
 type renamed struct {
 	pageID, title string
 	awaitedBefore []uint64
@@ -224,10 +217,9 @@ func TestThePageWritesCountAsDeliveries(t *testing.T) {
 	reg := kbRegistry(t, builtin.PageDeps{Reader: kb, Writer: kb})
 	deliveries := reg.Deliveries()
 	for _, name := range builtin.PageWrites() {
-		// AND ON THE KNOWLEDGE BASE, not just "somewhere". A page write
-		// answers a turn asked to document something; it does not answer
-		// somebody waiting in a chat thread, and the surface is what keeps
-		// those two apart.
+		// AND ON THE KNOWLEDGE BASE: a page write answers a turn asked to
+		// document something, not somebody waiting in a chat thread, and the
+		// surface keeps the two apart.
 		if deliveries[name] != doclet.Source {
 			t.Errorf("%s delivers to %q, want %q", name, deliveries[name], doclet.Source)
 		}
@@ -364,9 +356,8 @@ func TestPageWritesAreAttributedAndFailuresAreHonest(t *testing.T) {
 	if len(kb.actors) == 0 || kb.actors[0].Handle != "eng" || kb.actors[0].Kind != doclet.AuthorAgent {
 		t.Errorf("attributed to %+v, want the turn's own seat", kb.actors)
 	}
-	// AND ITS OPERATION KEY IS THE TURN'S: an id the engine's grammar
-	// minted, and the same one when the turn is re-run — so a re-run posts
-	// once rather than twice.
+	// AND ITS OPERATION KEY IS THE TURN'S: an id the engine minted, the same
+	// when the turn is re-run, so a re-run posts once.
 	if len(kb.keys) == 0 || statelog.CheckCallerOpID(kb.keys[0]) != nil {
 		t.Fatalf("the comment carries operation key %q, which is no id this "+
 			"engine minted", kb.keys)
@@ -424,9 +415,8 @@ func TestThePageWritesAreClassifiedAsSharedWrites(t *testing.T) {
 	}
 }
 
-// AN EDIT IS THE SAME TOOL, because it is the same gesture: a model
-// correcting its own remark is putting words on a page, and a second name in
-// the registry is a second thing to learn and a second thing to get wrong.
+// AN EDIT IS THE SAME TOOL, because it is the same gesture, putting words on a
+// page: a second name in the registry is a second thing to learn and get wrong.
 func TestCommentOnPageEditsWhenGivenACommentID(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
@@ -444,8 +434,7 @@ func TestCommentOnPageEditsWhenGivenACommentID(t *testing.T) {
 	if kb.edits[0].commentID != "m1" || kb.edits[0].body != "a better thought" {
 		t.Errorf("edit = %+v", kb.edits[0])
 	}
-	// AND IT DID NOT ALSO POST ONE. An edit that added a comment beside the
-	// one it edited would leave the page saying the thing twice.
+	// AND IT DID NOT ALSO POST ONE, which would say the thing twice.
 	if len(kb.comments) != 0 {
 		t.Errorf("the edit also posted %d new comment(s)", len(kb.comments))
 	}
@@ -470,19 +459,13 @@ func TestCommentOnPageStillPostsWithoutAnEditID(t *testing.T) {
 	}
 }
 
-// EVERY PAGE READ A SEAT MAKES NAMES ITS LEVEL, and it is the seat surface's.
+// EVERY PAGE READ A SEAT MAKES NAMES ITS LEVEL, the seat surface's default.
 //
-// A seat must see its own writes. A turn that created a page and then read the
-// container back at whatever this node happened to hold would find the page
-// missing and create it again — which is the duplicate the whole read contract
-// exists to prevent, arriving through the tool surface rather than the API.
-//
-// Until the level reached the reader at all, every one of these calls was
-// served from local rows and reported back at the level the caller had asked
-// for, so the degradation was invisible in the answer. Naming `session` as a
-// literal was the second half of that same bug: nothing populates a seat
-// query's [statelog.Query.Session], so the level named a position the read
-// never carried and degraded to the same local prefix under a stronger name.
+// A seat must see its own writes: a turn that created a page and read the
+// container back at whatever this node held would find it missing and create
+// it again. Not a literal `session` either: nothing populates a seat query's
+// [statelog.Query.Session], so that level degrades to the local prefix under a
+// stronger name.
 func TestEveryPageToolReadsAtTheSeatDefault(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -516,11 +499,9 @@ func TestEveryPageToolReadsAtTheSeatDefault(t *testing.T) {
 
 // A LISTING THAT COULD NOT ACCOUNT FOR EVERYTHING SAYS SO TO THE MODEL.
 //
-// `complete: false` is the coverage answer, and it is a different fact from
-// staleness: the rows may be missing pages a deferred record would have
-// created. A model that reads a short list as the whole truth writes the
-// duplicate, which is the same failure the level prevents through the other
-// door.
+// `complete: false` is coverage, not staleness: the rows may miss pages a
+// deferred record would have created, and a model that reads a short list as
+// the whole truth writes the duplicate.
 func TestAnIncompleteListingTellsTheModel(t *testing.T) {
 	t.Parallel()
 	kb := &partialKB{}
@@ -564,22 +545,17 @@ func (p *partialKB) List(_ context.Context, _ doclet.Filter,
 // A SAVE THAT ALSO RENAMES REPORTS THE LATER OF THE TWO WRITES, AND WAITS FOR
 // BOTH.
 //
-// save_page is two records — the content contends for the page and the address
-// for the title, and one record cannot arbitrate both — so the tool makes two
-// writes and has to combine their answers rather than let the second overwrite
-// the first.
-//
-// THE RENAME'S ANSWER IS NOT ALWAYS THE LATER ONE. A rename to the title a
-// page already displays appends no record at all: its position is zero and its
-// revision is whatever this node had applied when it decided, which is BELOW
-// the save's. Taking it outright told the model its edit was at a revision
-// that predates the edit, and handed the settle the earlier position — so a
-// re-read in the same turn could still show the page before either write.
+// save_page is two records (the content contends for the page, the address for
+// the title), so the tool combines their answers. The rename's is not always
+// the later: a rename to the title the page already has appends nothing, so its
+// position is zero and its revision what this node had applied, BELOW the
+// save's. Taken outright, it reports the edit at a revision predating it and
+// settles on the earlier position.
 func TestASaveThatAlsoRenamesReportsTheLaterWriteAndWaitsForBoth(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
-	// The idempotent rename: nothing appended, and the revision is the one
-	// this node had already applied — three behind the save's.
+	// The idempotent rename: nothing appended, and the revision this node
+	// had already applied, three behind the save's.
 	kb.rename = func(pageID, title string) doclet.Written {
 		return doclet.Written{
 			Page:     doclet.Page{ID: pageID, Title: title, Version: 5},
@@ -603,21 +579,17 @@ func TestASaveThatAlsoRenamesReportsTheLaterWriteAndWaitsForBoth(t *testing.T) {
 	if len(kb.renames) != 1 {
 		t.Fatalf("%d renames reached the store", len(kb.renames))
 	}
-	// THE SAVE IS WAITED FOR BEFORE THE RENAME IS MADE. A rename decides
-	// from this node's own applied rows, so one issued first reads the
-	// pre-save head and answers with its version — which this tool hands
-	// back as `version` and the model passes to the next save.
+	// THE SAVE IS WAITED FOR BEFORE THE RENAME. A rename decides from this
+	// node's applied rows, so one issued first answers with the pre-save
+	// version, which the model passes to its next save.
 	if len(kb.renames[0].awaitedBefore) != 1 || kb.renames[0].awaitedBefore[0] != 11 {
 		t.Errorf("the rename was made having waited for %v, want the save's "+
 			"own position", kb.renames[0].awaitedBefore)
 	}
 }
 
-// AND WHEN THE RENAME DOES LAND A RECORD, THAT IS WHAT THE TURN WAITS FOR.
-//
-// The rename is the second write, so its position is strictly later. Settling
-// on the save's instead leaves a turn that renames and re-reads looking at the
-// old title — the projection has caught up to the edit and not to the move.
+// AND WHEN THE RENAME LANDS A RECORD, THE TURN WAITS FOR IT: it is the second
+// write, so settling on the save's leaves a re-read looking at the old title.
 func TestASaveThatAlsoRenamesWaitsForTheRenamesOwnPosition(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
@@ -642,14 +614,11 @@ func TestASaveThatAlsoRenamesWaitsForTheRenamesOwnPosition(t *testing.T) {
 // A RENAME THROUGH save_page IS STILL A RENAME, and it is the container
 // lead's.
 //
-// The tool's own gate decides the SAVE, which any colleague may make; the
-// address change a `title` asks for is [authz.ActionPageRename], decided on
-// the stored page's container. Without the ask a colleague renamed any page
-// by editing it, which the rename verb itself would have refused them.
-//
-// And the refusal lands NOTHING: the body half of the same call is not saved
-// either, because a caller who may not do what they asked should not find a
-// different half of it done. The control is the same edit without a title.
+// The tool's gate decides the SAVE, which any colleague may make; a `title` is
+// [authz.ActionPageRename] on the stored page's container, or a colleague
+// renames any page by editing it. The refusal lands NOTHING, the body half
+// included: a caller refused part of a call finds no other part done. The
+// control is the same edit without a title.
 func TestARenameThroughSaveIsDecidedAsARename(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
@@ -681,17 +650,12 @@ func TestARenameThroughSaveIsDecidedAsARename(t *testing.T) {
 
 // A DRAFT IS PUBLISHED THROUGH save_page, AND ONLY BY WHOEVER TIDIES THE PAGE.
 //
-// A page saved as a draft had no way out of it: the save took no status, so
-// nothing a person or an agent could call moved a draft to published. The
-// status the call names reaches the store, which is the one place a draft is
-// published. A status the page already has moves nothing; one the call does
-// not name leaves the page as it is, so an edit to a draft keeps it a draft;
-// and the trash is refused before anything lands, as a new page's is.
-//
-// Moving the status decides whether the company reads the page at all, so it
-// is [authz.ActionPagePublish] on the stored page, never the save any
-// colleague may make. The refusal lands NOTHING, the body half included, and
-// the control is the same colleague naming the status the page already has.
+// The status the call names reaches the store, the one place a draft is
+// published. A status the page has moves nothing; none named leaves it, so an
+// edit to a draft keeps it a draft; the trash is refused before anything lands.
+// Moving the status decides whether the company reads the page, so it is
+// [authz.ActionPagePublish] on the stored page, never the save. The refusal
+// lands NOTHING, the body included; the control names the page's own status.
 //
 // Mutation: leave `status` out of the doclet.Save the tool builds and the
 // publish saves nothing; skip the ask and a colleague who leads nothing
@@ -757,13 +721,11 @@ func TestADraftIsPublishedThroughSaveByWhoeverTidiesThePage(t *testing.T) {
 	}
 }
 
-// A PAGE WRITE STATES ITS OUTCOME AND ITS POSITION, as every work write does:
-// they are what a caller outside a turn — a person's assistant, the dashboard —
-// hands back as `min_position` so the read after its write includes it. And a
-// save that also renames answers for BOTH records: its position is the later
-// one, and its outcome the less certain, because `applied` over a rename the
-// broker never confirmed would tell a caller it can stop looking at a write
-// nobody can vouch for.
+// A PAGE WRITE STATES ITS OUTCOME AND ITS POSITION, which a caller outside a
+// turn (an assistant, the dashboard) hands back as `min_position` so its next
+// read includes the write. A save that also renames answers for BOTH records:
+// the later position and the less certain outcome, since `applied` over an
+// unconfirmed rename would vouch for a write nobody can.
 func TestAPageWriteAnswersItsOutcomeAndPosition(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
@@ -797,10 +759,9 @@ func TestAPageWriteAnswersItsOutcomeAndPosition(t *testing.T) {
 	}
 }
 
-// A LISTING CUT AT ITS LIMIT SAYS HOW MANY THERE ARE IN ALL. Without the
-// total, fifty pages of a container of four hundred read to a model as the
-// whole container — and a model that believes a short list writes the page
-// that is already there.
+// A LISTING CUT AT ITS LIMIT SAYS HOW MANY THERE ARE IN ALL, or a model reads
+// fifty pages of four hundred as the whole container and writes a page that
+// is already there.
 func TestACutListingTellsTheModelTheTotal(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -808,8 +769,8 @@ func TestACutListingTellsTheModelTheTotal(t *testing.T) {
 		want  bool
 	}{
 		"cut at its limit": {total: 412, want: true},
-		// THE CONTROL: a listing that is everything carries no total, or
-		// the assertion above would pass on a tool that always renders it.
+		// THE CONTROL: a whole listing carries no total, or the case would
+		// pass on a tool that always renders it.
 		"whole": {total: 1, want: false},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -842,11 +803,10 @@ func (c *cutKB) List(_ context.Context, _ doclet.Filter,
 	}, nil
 }
 
-// A PAGE BODY IS TOLD THE ADDRESS THE BACKLINKS READ. Nothing else tells a
-// seat how to link a page, and left to guess it writes `[[ENG/Title]]` — a
-// grammar nothing resolves, drawn as literal brackets and invisible to the
-// target's "Linked from". The example each writing tool carries must be one
-// [doclet.Links] reads back, or the help teaches a link that counts for nothing.
+// A PAGE BODY IS TOLD THE ADDRESS THE BACKLINKS READ. Left to guess, a seat
+// writes `[[ENG/Title]]`, which nothing resolves. The example each writing
+// tool carries must be one [doclet.Links] reads back, or the help teaches a
+// link the target's "Linked from" never sees.
 func TestAPageBodyIsToldTheLinkTheBacklinksRead(t *testing.T) {
 	t.Parallel()
 	kb := newFakeKB()
@@ -911,12 +871,11 @@ func TestAPageRemarkCarriesItsRepeatCount(t *testing.T) {
 
 // A PAGE REMARK CARRIES THE CALL'S OWN ARGUMENTS in its operation key, so a
 // call that named the page another way is another call. The repeat count
-// compares the arguments as typed and the store's parts are what the call
-// resolved to, so without the digest "ok" on p1, the same again, "ok" on "p1 "
-// (trimmed to p1), "other" on p1 and "ok" on p1 once more gave the last call
-// the third one's key: it was answered with that comment's success and
-// nothing was written. Held end to end over the real store in internal/doclet
-// (TestASeatsRemarkAfterAnotherCallIsAnotherCommentHoweverItNamedThePage).
+// compares arguments as typed while the store's parts are what the call
+// resolved to, so without the digest the last call below takes the "p1 "
+// call's key and is answered with that comment's success, writing nothing.
+// Held end to end in internal/doclet by
+// TestASeatsRemarkAfterAnotherCallIsAnotherCommentHoweverItNamedThePage.
 //
 // Mutation: drop the digest from callOpKey's identity and keys[4] equals
 // keys[2].
@@ -954,14 +913,11 @@ func TestAPageRemarkNamedAnotherWayIsAnotherCall(t *testing.T) {
 	}
 }
 
-// A PAGE WRITE WHOSE OUTCOME IS UNKNOWN IS NEVER REPORTED AS DONE.
-//
-// Every page tool answered with an id and a revision whatever the write's
-// outcome was. A comment the engine answered `unknown` WITHOUT publishing — its
-// operation minted before this node's ledger lost rows, which a seat re-running
-// a turn whose trigger predates the ledger's sweep is — came back as a
-// comment_id and revision 0, the seat said it had commented, and nobody ever
-// saw the remark.
+// A PAGE WRITE WHOSE OUTCOME IS UNKNOWN IS NEVER REPORTED AS DONE: no id, no
+// revision. A comment answered `unknown` WITHOUT publishing (its operation
+// minted before this node's ledger lost rows, as a re-run of a turn whose
+// trigger predates the ledger's sweep is) would otherwise read as posted, and
+// nobody would see the remark.
 func TestAPageWriteWhoseOutcomeIsUnknownIsNotReportedAsDone(t *testing.T) {
 	t.Parallel()
 	calls := map[string]map[string]any{
@@ -1004,11 +960,10 @@ func TestAPageWriteWhoseOutcomeIsUnknownIsNotReportedAsDone(t *testing.T) {
 	}
 
 	// WHAT A REPEAT IS DEPENDS ON THE CALLER. A seat's comment is derived
-	// from its turn, so its repeat is the same comment: under a lost
-	// acknowledgement it posts once, and unvouched it publishes nothing and
-	// answers the same way — so it is SAFE, never "a second comment", which
-	// is what a seat was told. An operator's comment has no turn to derive
-	// from, so its repeat is a new one.
+	// from its turn, so its repeat is the same comment (posted once under a
+	// lost acknowledgement; unvouched, nothing published and the same
+	// answer): SAFE, never "a second comment". An operator's has no turn to
+	// derive from, so its repeat is a new one.
 	operator := func(context.Context, *turnctx.Turn) (doclet.Actor, error) {
 		return doclet.Actor{Handle: "founder", Kind: doclet.AuthorOperator,
 			OperatorID: "founder"}, nil
@@ -1168,8 +1123,7 @@ func TestSavePageRefusesAWatchThatIsNotABoolean(t *testing.T) {
 
 // A RENAME IS TO THE TITLE THE CHECK READS (ADR-0059): one reader per declared
 // type, so a string argument is read by argString, which writes a number as
-// JSON writes it. The rename read its title with fmt.Sprint, a reader of its
-// own, which writes a float by `%g`.
+// JSON does, never by fmt.Sprint, which writes a float by `%g`.
 //
 // Mutation: read the title with fmt.Sprint again and the rename is to "1e+06".
 func TestARenameIsToTheTitleTheCheckReads(t *testing.T) {

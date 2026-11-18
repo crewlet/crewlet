@@ -3,19 +3,16 @@ package engine
 import "testing"
 
 // THE PROBE NAMES THE KEPT SESSION IT READ, CONTINUED OR NOT, so a run that
-// starts a session of its own is told the session it could read: a relaunch's
-// probe names the turn's own where a capture of it is kept — continued, and
-// not, where no member of the seat's chain restores its archive — and else the
-// base the turn's first launch froze, continued and not, where the turn's row
-// holds it; a first launch names the head its dispatch read, continued and
-// not; and a first launch whose conversation left nothing names none, as a
-// relaunch names none whose turn's begin did not hold its base — which may be
-// gone, so its run is never sent to read it.
+// starts its own session is told which one it could read. A relaunch names
+// the turn's own capture where one is kept, else the base the first launch
+// froze where the turn's row holds it; a first launch names the head its
+// dispatch read. Each is named whether or not a chain member continues it. A
+// conversation that left nothing names none, as does a relaunch whose turn's
+// begin did not hold its base, which may be gone.
 //
-// Mutation: name the session only where the launch continues it, and the cases
-// not continued go red; name only the turn's own on a relaunch, and the frozen
-// base's go red; name a frozen base the turn's row does not hold, and the last
-// case goes red.
+// Mutation: name the session only where continued, and the not-continued
+// cases go red; only the turn's own on a relaunch, and the frozen base's go
+// red; a frozen base the row does not hold, and the last case goes red.
 func TestTheProbeNamesTheKeptCaptureItRead(t *testing.T) {
 	t.Parallel()
 	k := newKeptLaunch(t, 40000, 0, 0)

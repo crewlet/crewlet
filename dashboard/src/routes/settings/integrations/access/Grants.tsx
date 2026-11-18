@@ -28,7 +28,9 @@ import { Modal } from "~/components/Modal.tsx";
 import { useClock } from "~/lib/clock.ts";
 import {
   GRANT_HOURS,
+  grantCaution,
   grantEntry,
+  grantHours,
   grantReach,
   grantScopeLabel,
   grantWhole,
@@ -44,7 +46,8 @@ const MAX_REASON = 1500;
 /** One grant as its tag says it: the permission in the vendor's words, where, and for how long. */
 function grantLabel(lane: Lane, g: AccessGrant, now: number): string {
   const name = grantEntry(lane, g.permission)?.name ?? g.permission;
-  return `${name} · ${grantReach(lane, g)} · ${grantExpiry(g, now)}`;
+  const target = g.target ? ` · for ${g.target}` : "";
+  return `${name} · ${grantReach(lane, g)}${target} · ${grantExpiry(g, now)}`;
 }
 
 /** Who granted it and why, for the tag's title: never shown alone. */
@@ -140,6 +143,14 @@ export function AddGrantDialog({
   const [reason, setReason] = useState("");
   const entry = grantEntry(lane, permission);
   const scoped = entry !== undefined && entry.scope_kind !== "account";
+  const caution = [
+    grantCaution(entry),
+    entry?.write
+      ? `${entry.name} can change things at ${lane.name}, so saving it asks you to sign in again, as the most trusted level does.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   const options: SelectOption[] = (lane.grants ?? []).map((e) => ({
     value: e.id,
     label: e.name,
@@ -147,9 +158,11 @@ export function AddGrantDialog({
     hint: e.write ? "Edit" : "Read",
     ...(e.in_level
       ? { description: `Already in ${levelName(lane, e.in_level)} and above` }
-      : e.name !== e.id
-        ? { description: e.id }
-        : {}),
+      : e.max_hours
+        ? { description: `For one change, up to ${hoursWords(e.max_hours)}` }
+        : e.name !== e.id
+          ? { description: e.id }
+          : {}),
     ...(e.unavailable ? { description: e.unavailable, disabled: true } : {}),
     group: e.group ?? "Permissions",
   }));
@@ -205,14 +218,11 @@ export function AddGrantDialog({
             onChange={(v) => {
               setPermission(String(v));
               setZones([]);
+              setHours(grantHours(grantEntry(lane, String(v)))[0]!);
             }}
           />
         </FormField>
-        {entry?.write && (
-          <Callout variant="warning">
-            {`${entry.name} can change things at ${lane.name}, so saving it asks you to sign in again, as the most trusted level does.`}
-          </Callout>
-        )}
+        {caution && <Callout variant="warning">{caution}</Callout>}
         {scoped && entry && (lane.grant_scope ?? []).length > 0 && (
           <FormField
             as="fieldset"
@@ -240,7 +250,7 @@ export function AddGrantDialog({
             label={`How long ${seat.name} holds it`}
             value={String(hours)}
             onValueChange={(v) => setHours(Number(v))}
-            options={GRANT_HOURS.map((h) => ({ value: String(h), label: hoursWords(h) }))}
+            options={grantHours(entry).map((h) => ({ value: String(h), label: hoursWords(h) }))}
           />
         </FormField>
         <FormField

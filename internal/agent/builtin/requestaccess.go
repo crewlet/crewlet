@@ -81,8 +81,13 @@ func (t *requestAccess) Parameters() map[string]any {
 			"hours": map[string]any{"type": "integer", "minimum": seataccess.MinGrantHours,
 				"maximum": seataccess.MaxGrantHours,
 				"description": fmt.Sprintf("How long the change needs it, %d to %d hours; %d when left out. "+
-					"The person may grant it for good instead.", seataccess.MinGrantHours,
-					seataccess.MaxGrantHours, seataccess.DefaultGrantHours)},
+					"The person may grant it for good instead, except a permission granted for one change, "+
+					"which lasts %d hour when left out and never past its own bound.", seataccess.MinGrantHours,
+					seataccess.MaxGrantHours, seataccess.DefaultGrantHours, seataccess.MinGrantHours)},
+			"target": map[string]any{"type": "string",
+				"description": "What the one change you need it for changes, as the integration names it, " +
+					"such as a bucket's name. Required for a permission granted for one change; the person " +
+					"and your access are told it."},
 			"why": map[string]any{"type": "string",
 				"description": fmt.Sprintf("What you tried and what the access is for, in at "+
 					"most %d bytes. It is the person's reason to say yes.", MaxAccessReasonBytes)},

@@ -11,15 +11,11 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// A PERSON'S READ STATE CARRIES ONLY WHAT IS TRUE OF THEM.
-//
-// The record goes onto the wire as it is stored — the answer to a flush and
-// the cursor push are both this struct — and the dashboard reads a present
-// `dnd_until` as an instant somebody's do-not-disturb ends. `omitempty` never
-// omits a struct, so a zero instant under it went out as
-// "0001-01-01T00:00:00Z": a person never in do-not-disturb was sent a
-// do-not-disturb two thousand years over. So the zero state is pinned as the
-// literal bytes with no instant in it at all, and a set one round-trips.
+// A PERSON'S READ STATE CARRIES ONLY WHAT IS TRUE OF THEM. The record goes on
+// the wire as stored, and the dashboard reads a present `dnd_until` as when a
+// do-not-disturb ends; `omitempty` never omits a struct, so a zero instant
+// would send everybody one long over. The zero state is pinned as bytes with
+// no instant in them, and a set one round-trips.
 func TestAReadStateCarriesNoInstantItDoesNotHave(t *testing.T) {
 	t.Parallel()
 	raw, err := json.Marshal(coord.ChatReadState{Cursors: map[string]int64{"room-a": 7}})
@@ -51,12 +47,10 @@ func TestAReadStateCarriesNoInstantItDoesNotHave(t *testing.T) {
 	}
 }
 
-// A REFUSED FLUSH READS AS ITS OWN SENTENCE, because the caller that sent it
-// is told it: the operator catalogue's tool answers a refused flush in it to
-// the model that made the call, and "coord: a chat read flush was refused:
-// muting that …" is a Go package path and a doubled "refused" where an
-// instruction belongs. Only the merge's own refusal is shortened — a wrap a
-// caller added is context, and anything else is not this sentinel's to tidy.
+// A REFUSED FLUSH READS AS ITS OWN SENTENCE: the operator catalogue's tool
+// hands it to the model that made the call, so the package path and a doubled
+// "refused" go from the merge's own refusal only — a caller's wrap is context,
+// and any other error is not this sentinel's to tidy.
 func TestARefusedFlushReadsAsItsOwnSentence(t *testing.T) {
 	t.Parallel()
 	muted := make([]string, coord.MaxReadCursors+1)
@@ -87,14 +81,9 @@ func TestARefusedFlushReadsAsItsOwnSentence(t *testing.T) {
 }
 
 // A RECORD OVER THE MUTE CAP STILL TAKES EVERY FLUSH THAT DOES NOT GROW IT.
-//
-// The merge refuses a mute that would take the set past the cap, and checks
-// the set the flush would LEAVE — so a set already over it, which no flush
-// through this merge can write but a record kept from a build with a larger
-// cap would hold, must still take a cursor and an unmute. Checked against the
-// size alone, every flush to that record would be refused for good, its
-// cursors frozen and the unmute that would bring it back under refused with
-// them.
+// The merge checks the set a flush would LEAVE, so a record kept from a build
+// with a larger cap still takes a cursor and an unmute; checked by size alone,
+// it would refuse every flush for good, the unmute that cures it included.
 func TestARecordOverTheMuteCapTakesEveryFlushThatDoesNotGrowIt(t *testing.T) {
 	t.Parallel()
 	over := make([]string, coord.MaxReadCursors+8)

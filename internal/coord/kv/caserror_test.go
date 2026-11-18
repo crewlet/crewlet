@@ -10,19 +10,15 @@ import (
 
 // A COMPARE-AND-SET REFUSAL IS MATCHED ON ITS CODE — the DECIDED one.
 //
-// The leader refuses a conditional write with 10071 once it has compared the
-// revision the write named with the one the subject is at, on a solo stream
-// and a replicated one alike. 10164 says the same three words and decides
-// nothing: another write to the subject is still in process at the leader, and
-// it may be this caller's own, already acknowledged. Read as a refusal it gave
-// a create race over a just-removed record no winner, so it is NOT one here —
-// every bucket handle is [settled], which waits it out instead.
+// 10071 is the leader's refusal once it has compared revisions, on a solo
+// stream or a replicated one. 10164 says the same three words and decides
+// nothing: another write to the subject, maybe this caller's own and already
+// acknowledged, is still in process. Read as a refusal it left a create race
+// over a just-removed record with no winner, so it is none here: every bucket
+// handle is [settled], which waits it out instead.
 //
-// The message in each fixture below is DELIBERATELY UNRELATED: a test whose
-// error text says "wrong last sequence" passes for a substring match too, and
-// would prove nothing about matching on the code.
-//
-// Mutation: match 10164 as well, and the in-process case fails here.
+// Each fixture's message is DELIBERATELY UNRELATED, so a substring match
+// cannot pass. Mutation: match 10164 as well, and the in-process case fails.
 func TestACompareAndSetRefusalIsMatchedOnItsDecidedCode(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

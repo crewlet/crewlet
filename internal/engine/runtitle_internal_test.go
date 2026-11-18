@@ -16,26 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// AN EXECUTOR IS LISTED UNDER WHAT ITS TURN WAS ASKED, IN A PERSON'S WORDS.
+// AN EXECUTOR IS LISTED UNDER WHAT ITS TURN WAS ASKED, IN A PERSON'S WORDS:
+// only the run's brief fences somebody's words for the model; its description
+// and label (its title on Live › Executors, Now running and Home, and in
+// executor_launched) carry the ask as written, with no fence line, token or
+// escape, which are a model's (ADR-0040). So for every wake surface
+// ([wakeSurfaces]) and every other wake that runs a turn ([wakeTypes]). A chat
+// message that says nothing is listed under the line a feed shows it by; a
+// resumed segment, re-reading no trigger, off its turn's first run's row.
 //
-// A wake reaches swe, and the turn launches its executor's run. The run's
-// brief carries the turn's task, whatever somebody else wrote in it fenced
-// under the turn's token for the model that reads it; the run's description
-// and label, which Live › Executors, Now running and Home draw as its title
-// and executor_launched announces, carry what the turn was asked, as it was
-// written, with no fence line, token or escape: a fence is a model's
-// (ADR-0040). So for every surface a seat is woken from ([wakeSurfaces]) and
-// every other kind of wake that runs a turn ([wakeTypes]). A chat message that
-// says nothing (an attachment alone) asks nothing, and its run is listed under
-// the line a feed shows the message by, never under nothing. A run a resumed
-// segment launches (a reviewer's send-back, or a person's answer carried on)
-// is listed as its turn's first run is, off that run's row: the resumed
-// segment re-reads no trigger.
-//
-// Mutation: write the row from the turn's Task, as the launch did, and every
-// case whose trigger fences somebody's words is red; list a turn that was
-// asked nothing under its ask alone, or a resumed segment's run under the
-// parked ask alone, and the silent message's case is.
+// Mutation: write the row from the turn's Task, and every case whose trigger
+// fences somebody's words is red; list a turn asked nothing under its ask
+// alone, or a resumed run under the parked ask alone, and the silent case is.
 func TestAnExecutorIsListedUnderWhatItsTurnWasAskedWithNoFence(t *testing.T) {
 	t.Parallel()
 	c, seat := executorCompany(t)

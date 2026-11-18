@@ -14,33 +14,16 @@ import (
 
 // AN MCP SERVER'S OAUTH GRANT, and a sign-in in progress that makes one.
 //
-// A remote MCP server signed in to with OAuth has one grant for the company
-// (internal/engine's mcpoauth.go). Its SECRET half (the refresh token, and the
-// client a registration issued) is sealed in the secret store under the
-// engine's own name for it, `mcp/<server>/refresh`, which no operator surface
-// reaches (internal/fleetsecrets' Estate). Its PUBLIC half is here: who signed
-// in and when, the authorization server and the client, the scopes granted,
-// when it runs out, and why its last renewal failed. Nothing here is a token.
-//
-// # Who has to agree on them
-//
-// The whole company, now. Every node that runs the server sends its requests
-// under the grant, and every node's status answer says whether it is signed
-// in, so a sign-in completed through one node, a renewal refused on another
-// and a sign-out on a third are each one record every node watches. A
-// sign-in in progress is one record per server for the reason a device
-// sign-in is (devicesignin.go): the callback that ends it may arrive at any
-// node, and a second sign-in started for the server meanwhile must replace
-// the first rather than race it to one grant.
-//
-// # In the positions register, aged by their own fields
-//
-// Neither may age by a bucket: a grant is good until somebody signs out or
-// removes the server, and a sign-in lapses at its own expiry, which an update
-// would restart under a bucket's age (internal/coord/kv's package doc). So
-// both live in the register with no age: a grant removed by the decision that
-// ends it, and a sign-in read as absent once [MCPSignIn.Lapsed], and replaced
-// by the next one started.
+// One grant per server for the company (internal/engine's mcpoauth.go). Its
+// SECRET half (refresh token, registered client) is sealed under
+// `mcp/<server>/refresh`, which no operator surface reaches
+// (internal/fleetsecrets' Estate); its PUBLIC half, here, holds no token. The
+// whole company agrees on both: every node sends under the grant, and a
+// sign-in's callback may reach any node, so a new sign-in replaces the one in
+// progress rather than racing it to one grant (as devicesignin.go's does).
+// Neither ages by a bucket, which an update would restart (internal/coord/kv's
+// package doc): both live in the positions register, a grant until the
+// decision that ends it, a sign-in until [MCPSignIn.Lapsed].
 
 // MaxMCPGrantWords bounds each sentence a grant record carries: the vendor's
 // words for a renewal it refused, which a person reads beside the server.

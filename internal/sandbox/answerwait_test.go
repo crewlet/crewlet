@@ -65,14 +65,11 @@ func answeredAndOwed(t *testing.T, rig *coordRig) *seatConditions {
 
 const conditionPaused Condition = "paused"
 
-// A REFUSED RETRY WAITS FOR ITS SIGNAL, AND NOTHING RUNS WHILE IT WAITS.
-//
-// A person paused the seat. The retry is refused once and then WAITS — on the
-// backstop, not on the 30-second ceiling it used to re-check at, so a pause
-// that lasts the afternoon costs one admission check every five minutes
-// rather than every thirty seconds — and a signal for any OTHER condition, or
-// for another seat, wakes nothing. The resume runs only when the pause's own
-// signal says it may have cleared, at once, and charges nothing for the wait.
+// A REFUSED RETRY WAITS FOR ITS SIGNAL, AND NOTHING RUNS WHILE IT WAITS. A
+// person paused the seat: the retry is refused once, then waits for its
+// signal, re-checked only on the backstop, so a long pause costs one admission
+// check per backstop, and a signal for another condition or seat wakes nothing. The pause's own
+// signal runs the resume at once, charging nothing for the wait.
 func TestARefusedRetryWaitsForItsSignalAndNothingRunsMeanwhile(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -139,10 +136,8 @@ func TestARefusalTheClockLiftsIsRecheckedWhenItLifts(t *testing.T) {
 
 // A REFUSAL NAMING AN INSTANT ALREADY PAST WAITS FOR ITS SIGNAL, NOT AT ONCE.
 // The clock reached the instant without lifting the condition, so only its
-// event, or the backstop, can: re-checked at the instant it names, the retry
-// was refused at once and re-checked at once for as long as the condition
-// stood, as an answer on a seat whose provider park's probe was out did,
-// thousands of times a second. The condition's own signal still resumes it.
+// event or the backstop can; re-checked at once, the retry would spin for as
+// long as the condition stood. The condition's own signal still resumes it.
 //
 // Mutation: wait out a past instant as the zero it subtracts to, and the retry
 // is scheduled at once.
@@ -178,12 +173,10 @@ func TestARefusalNamingAnInstantAlreadyPastWaitsForItsSignal(t *testing.T) {
 }
 
 // A SIGNAL THAT LANDS WHILE THE RETRY IS BEING REFUSED IS NOT SLEPT THROUGH.
-//
 // The check and the wait are two steps, and Readmit wakes only an attempt
-// already marked waiting. The seat finishing its establishment while its
-// inherited answer is being refused for establishing is exactly that race:
-// the signal found nothing waiting, and the wait that followed slept to the
-// clock — a heartbeat — or the backstop.
+// already marked waiting: a seat established while its inherited answer is
+// refused for establishing would find nothing waiting, and the wait after it
+// would sleep to the clock or the backstop.
 func TestASignalThatRacesTheRefusalIsNotSleptThrough(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -194,7 +187,7 @@ func TestASignalThatRacesTheRefusalIsNotSleptThrough(t *testing.T) {
 			return Refusal{}, false
 		}
 		// THE SEAT IS ESTABLISHED WHILE THIS CHECK DECIDES: the refusal
-		// below was true when it was read, and is no longer.
+		// below is stale by the time it returns.
 		signalled = true
 		rig.coordinator.Readmit(conditionOwnership, "swe")
 		return Refusal{Condition: conditionOwnership, Reason: "the seat is being established",

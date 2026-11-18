@@ -8,60 +8,18 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// WHAT CARRIED A SESSION ON, KEPT TO TELL AGAIN.
-//
-// A relaunch's brief opens with what carries the session on: the answer to the
-// run's question, a review that sent the round back, or, for a job that
-// continued the session its conversation's last turn left, the turn's task. A
-// session is known to hold the brief it was handed only where its harness ended
-// its own run: one cut off, the copy a job's own box holds whose harness was
-// not known to have ended cleanly and a capture cut off alike, may lack it, and
-// lack the lead it opened with. The next brief to such a session was told every
-// call and every note again, and never that lead, since nothing kept it: the
-// reset that opens the next job clears the answer, its question and the held
-// call in the write that names the job, and a review and a task are the
-// engine's to recompose but nothing said which of them a job's brief opened
-// with. A session cut off before its harness wrote its brief, continued in
-// place, was then told "continue from where you are", and continued the turn
-// before it, or the round before the review.
-//
-// So THE RUN KEEPS THE TURN'S LEADS BESIDE ITS ROW ([leadsPart],
-// [PendingStore.Leads]), oldest first: each sealed once, by the job whose
-// brief first told it, taken in by the attach that names its job's command
-// ([PendingStore.AttachSandbox]) and kept as sealed through every relaunch, so
-// a lead a later build wrote keys into survives, and one under a key this node
-// lacks is kept for a node that holds it. Each job's record marks the ones its
-// own brief told ([LaunchRecord.LeadMarks]): its own, and every earlier one it
-// told again. A continuation of a session that may lack its job's brief is
-// told again the leads that brief told ([LaunchRecord.ToldLeads]), under a
-// header that says the session may already show them; one whose harness ended
-// its own run holds its brief, and is told none.
-//
-// WHY BESIDE THE ROW. Half a mebibyte of leads on the row would ride every read
-// of it (every flip, every listing, every git request of a coding box) and take
-// the room the row keeps for the fields a later build adds, though only a
-// resume reads them and only the attach that names a job's command writes
-// them. A part lives and dies with its record, held by the store
-// ([coord.RunLeads]): a take racing the run's end is undone, and the record's
-// delete takes the part with it. So the row keeps only what a reader needs
-// beside the part: each job's marks, the run the part is of
-// ([PendingRun.LeadsRun]) and how many leads the part has taken
-// ([PendingRun.LeadsAppended]), so a part that is gone, short, unreadable or
-// another run's tells every lead it cannot give back as not kept, never as
-// none.
-//
-// WHAT IS KEPT, AND WHAT IS RECOMPOSED. An answer is kept as the run was told
-// it ([LeadAnswer]), its words cut to [MaxLeadWordsBytes] with the cut said,
-// and a held call with what it returned, sealed as its row sealed it
-// ([HeldKept]): no record holds either once the next job opens. A review and a
-// task are the engine's own words over records the turn keeps (the round's
-// review notes, the turn's task, its closed rounds and the session its
-// conversation's last turn left), so a lead of either keeps only what says
-// which: the round a review closed, and the last of the closed rounds a task's
-// brief rendered ([LeadTask]). Where a park has since dropped that round into a
-// span of the rounds it folded (internal/agent/ledger's Iteration.Through),
-// which keeps their calls and none of their reviews, a review is said in its
-// place as not kept, never told as one that said nothing.
+// A relaunch's brief opens with a lead (an answer, a review that sent the round
+// back, or a continued session's task) that no record keeps once the next job
+// opens, and only a session whose harness ended its own run is known to hold.
+// So the run keeps the turn's leads, oldest first, in a part beside its row
+// ([leadsPart]), each taken in by the attach naming its job's command
+// ([PendingStore.AttachSandbox]) and sealed once, so a later build's keys and a
+// lead under a key this node lacks survive; a continuation that may lack its
+// brief is told them again ([LaunchRecord.ToldLeads]). The part lives and dies
+// with the record ([coord.RunLeads]): a take racing the run's end is undone.
+// Beside the row, as only a resume reads them and half a MiB would ride its
+// every read; the row keeps each job's marks and [PendingRun.LeadsAppended], so
+// a part gone, short, unreadable or another run's tells its leads as not kept.
 
 // LeadKind is what carried a session of the work on, as a later brief tells it
 // again.
@@ -84,18 +42,15 @@ const (
 // LeadKinds are the three.
 var LeadKinds = []LeadKind{LeadKindAnswer, LeadKindReview, LeadKindTask}
 
-// Valid reports whether k is one of [LeadKinds]. A lead a newer build sealed may
-// name one this build does not know, read as the value it is: kept as sealed
-// beside the run's record, and told as a message that cannot be read here.
+// Valid reports whether k is one of [LeadKinds]. A newer build's kind is kept as
+// sealed and told as a message that cannot be read here.
 func (k LeadKind) Valid() bool { return slices.Contains(LeadKinds, k) }
 
 // KeptLead is one lead as its run's leads part keeps it ([leadsPart]): in the
-// clear what a reader orders, filters and logs it by, and the whole of it sealed
-// once, by the job whose brief first told it ([LeadSeal]), and kept as sealed
-// through every take of the part.
-//
-// THE JSON TAGS ARE A WIRE FORMAT, as the row's are, and the section carries the
-// keys a later build adds to it ([KeptLead.Extra]).
+// clear what a reader orders, filters and logs it by, and the whole sealed once,
+// by the job whose brief first told it ([LeadSeal]), kept as sealed through every
+// take. THE JSON TAGS ARE A WIRE FORMAT, as the row's are, carrying a later
+// build's keys ([KeptLead.Extra]).
 type KeptLead struct {
 	Kind LeadKind `json:"kind"`
 
@@ -108,10 +63,10 @@ type KeptLead struct {
 	// closed.
 	Round int `json:"round"`
 
-	// Appended is the lead's number in the order its run's leads part took
-	// leads in, from 1 ([leadsPart.Appends]): what a job's record names it by
-	// ([LaunchRecord.LeadMarks]). Given by the take, outside the seal, and
-	// never changed.
+	// Appended is the lead's number in the order the part took leads in, from
+	// 1 ([leadsPart.Appends]), which a job's record names it by
+	// ([LaunchRecord.LeadMarks]): given by the take, outside the seal, never
+	// changed.
 	Appended int `json:"appended"`
 
 	// Sealed is the lead itself ([LeadSeal.Seal]), never re-sealed.
@@ -165,38 +120,34 @@ type Lead struct {
 	Answer *LeadAnswer
 	Task   *LeadTask
 
-	// Unread is why the lead did not open on this node, set only on a lead a
-	// resume read beside a run's record ([PendingStore.Leads],
-	// [ErrLeadKeyUnknown], [ErrLeadUnopened]), and nothing else of its source
-	// is then set: it is told as a message that cannot be read here, never
+	// Unread is why a lead a resume read ([PendingStore.Leads]) did not open on
+	// this node ([ErrLeadKeyUnknown], [ErrLeadUnopened]); its source is then
+	// unset, and it is told as a message that cannot be read here, never
 	// dropped.
 	Unread string
 }
 
-// LeadAnswer is an answer lead's source: what the run was told, as it was told
-// it, in the parts a later brief tells again in words of its own.
-//
-// SEALED WHOLE ([sealedLead]): a fixed struct and no omitempty, so the bytes a
-// seal covers are a function of the values alone.
+// LeadAnswer is an answer lead's source: what the run was told, in the parts a
+// later brief tells again. SEALED WHOLE ([sealedLead]): a fixed struct with no
+// omitempty, so the sealed bytes are a function of the values alone.
 type LeadAnswer struct {
 	// Question is the run's own question, as its brief read it back.
 	Question string `json:"question"`
 
 	// Words is the answer's words, or a withdrawal's reason, cut to
-	// [MaxLeadWordsBytes]; Cut is how many bytes of them are not kept, said
-	// where the lead is told again.
+	// [MaxLeadWordsBytes]; Cut is how many bytes were cut, said when told.
 	Words string `json:"words"`
 	Cut   int    `json:"cut"`
 
-	// By is who answered, "" where the route that carried the reply did not
-	// say; Label who wrote the words, as the fence around a chat reply
-	// labelled them, nil for an answer by turn (ADR-0040, ADR-0068).
+	// By is who answered, "" where the reply's route did not say; Label who
+	// wrote the words, as a chat reply's fence labelled them, nil for an
+	// answer by turn (ADR-0040, ADR-0068).
 	By    string            `json:"by"`
 	Label *provenance.Label `json:"label"`
 
-	// Withdrawn says the seat withdrew the question, or the held call, itself
-	// (ADR-0111); Refused that the outcome was the refusal of a reply too
-	// large to hand the run (ADR-0114).
+	// Withdrawn says the seat withdrew the question or held call itself
+	// (ADR-0111); Refused that a reply too large to hand the run was refused
+	// (ADR-0114).
 	Withdrawn bool         `json:"withdrawn"`
 	Refused   *LeadRefused `json:"refused"`
 
@@ -205,9 +156,8 @@ type LeadAnswer struct {
 	Held *LeadHeld `json:"held"`
 }
 
-// LeadRefused is a refused reply's figures, as the run was told them: how many
-// messages, what they came to as the engine records an answer, and what an
-// answer to a run may come to.
+// LeadRefused is a refused reply's figures as the run was told them: its
+// messages, their bytes as the engine records an answer, and the bound.
 type LeadRefused struct {
 	Messages int `json:"messages"`
 	Bytes    int `json:"bytes"`
@@ -220,9 +170,8 @@ type LeadHeldOutcome string
 const (
 	// LeadHeldMade is a call made, whose result the lead keeps.
 	LeadHeldMade LeadHeldOutcome = "made"
-	// LeadHeldMadeUnread is a call made whose recorded result could not be
-	// opened where the lead was told: the lead keeps it sealed for a node
-	// that holds its key.
+	// LeadHeldMadeUnread is a call made whose result could not be opened where
+	// the lead was told: kept sealed for a node that holds its key.
 	LeadHeldMadeUnread LeadHeldOutcome = "made_unread"
 	// LeadHeldDenied is a call the person refused.
 	LeadHeldDenied LeadHeldOutcome = "denied"
@@ -246,8 +195,8 @@ func (o LeadHeldOutcome) Valid() bool { return slices.Contains(LeadHeldOutcomes,
 // it.
 type LeadHeld struct {
 	// Tool is the tool as the run called it, Server its MCP server, HeldID the
-	// held call's id: what a list of the round's calls leaves out where the
-	// lead is told again, the lead telling that call ([BridgeCall.HeldID]).
+	// held call's id, which a list of the round's calls leaves out where the
+	// lead tells that call ([BridgeCall.HeldID]).
 	Tool   string `json:"tool"`
 	Server string `json:"server"`
 	HeldID string `json:"held_id"`
@@ -261,25 +210,21 @@ type LeadHeld struct {
 	Failed  bool            `json:"failed"`
 	Why     string          `json:"why"`
 
-	// Result is what the call returned, as the run's row sealed it ([HeldKept]),
-	// for a call made: no record holds it once the next job opens, and the lead
-	// is what told it.
+	// Result is what a call made returned, as the run's row sealed it
+	// ([HeldKept]): once the next job opens, only the lead holds it.
 	Result *HeldKept `json:"result"`
 }
 
 // LeadTask is a task lead's own facts; the rest is recomposed from the turn's
 // records.
 type LeadTask struct {
-	// Rounds is the last of the closed rounds the brief's prior-work block
-	// rendered, by its number, zero for none: the task is told again with the
-	// rounds up to it, since a round closed after it is told by its own rule,
-	// and with a span a park has since folded them into whole, though it runs
-	// on past it, since that span holds their calls too (internal/agent/runner's
-	// roundsThrough). A NUMBER, NEVER HOW MANY ENTRIES THE BRIEF RENDERED: a
-	// park past its share folds whole closed rounds into one span of them
-	// (internal/agent/ledger's Iteration.Through), so once a later park has
-	// folded rounds the brief rendered, a count of its entries reaches past
-	// them into rounds closed after it.
+	// Rounds is the number of the last closed round the brief's prior-work
+	// block rendered, zero for none: the task is told again with the rounds up
+	// to it (a later round is told by its own rule), and whole with any span a
+	// park has since folded them into, which holds their calls
+	// (internal/agent/runner's roundsThrough). A NUMBER, NEVER A COUNT OF
+	// RENDERED ENTRIES: once a park folds rounds into one span
+	// (internal/agent/ledger's Iteration.Through), a count reaches past them.
 	Rounds int `json:"rounds"`
 
 	// Reviewed is the iteration whose review the task carried (a send-back's
@@ -288,49 +233,39 @@ type LeadTask struct {
 }
 
 // MaxLeadWordsBytes bounds an answer's words as a lead keeps them
-// ([LeadAnswer.Words]), cut past it with the cut said: THE PAGE AN ANSWER BY TURN
-// AND A HELD CALL'S RESULT ARE HELD TO ([MaxAnswerTextBytes],
-// [MaxHeldResultBytes]). A chat reply can reach the row's answer share
-// ([MaxAnswerBytes]), every byte of which a lead would otherwise carry into the
-// run's leads, whose whole share ([MaxKeptLeadBytes]), read by every resume,
-// one such reply would overrun once sealed; the session it is told again to
-// may well show it, and a run that needs the rest asks again.
+// ([LeadAnswer.Words]), cut past it with the cut said: the page an answer by
+// turn and a held call's result are held to ([MaxAnswerTextBytes],
+// [MaxHeldResultBytes]). A chat reply can reach [MaxAnswerBytes], and one such
+// reply, sealed, would overrun [MaxKeptLeadBytes]; a run that needs the rest
+// asks again.
 const MaxLeadWordsBytes = MaxAnswerTextBytes
 
 // MaxKeptLeadBytes bounds the leads a run's leads part keeps, as the part holds
-// them ([leadsPart.Leads]): past it the oldest are dropped, each still counted
+// them ([leadsPart.Leads]): past it the oldest are dropped, still counted
 // ([leadsPart.Appends]), and the count is told wherever leads are told again.
 //
-// HALF A MEBIBYTE holds one lead at its worst and many ordinary ones: a held
-// call's lead with its words at [MaxLeadWordsBytes] in markup the encoder
-// escapes six-fold and its result at [MaxHeldResultBytes], escaped and sealed,
-// sealed again inside the lead and written as base64, weighs about 300 KiB as
-// the part holds it, while an answer of a few lines weighs a few KiB. And it is
-// what every resume reads beside the row and what a brief to a session cut off
-// can tell again, so the bound holds the newest leads, the ones such a session
-// most likely lacks, rather than every lead of a long turn.
+// HALF A MEBIBYTE holds one lead at its worst (a held call's, words at
+// [MaxLeadWordsBytes] escaped six-fold and result at [MaxHeldResultBytes],
+// sealed twice and base64: about 300 KiB) and many of a few KiB. Every resume
+// reads it, so it holds the newest leads, which a cut-off session most likely
+// lacks, not every lead of a long turn.
 const MaxKeptLeadBytes = 512 << 10
 
-// MaxKeptLeads bounds how many leads a run's leads part keeps, beside their
-// bytes: so that the numbers a job's record names them by
-// ([LaunchRecord.LeadMarks]), each a lead the part keeps, are held to a count
-// by construction, at most 2,048 of them, about 40 KiB as the row holds them
-// at their widest. TWO HUNDRED AND FIFTY-SIX BYTES is under the least any lead
-// this build seals weighs as the part holds it: a review lead, which carries
-// no source, of a one-byte turn under a one-byte key weighs 318 bytes, its
-// comma counted, as
-// TestTheCountOfKeptLeadsNeverDropsALeadTheirBytesWouldKeep measures it. So
-// the count never drops a lead the bytes would keep of this build's; it drops
-// only the many small leads of a build that seals smaller ones.
+// MaxKeptLeads bounds how many leads a run's leads part keeps, so the numbers a
+// job's record names them by ([LaunchRecord.LeadMarks]) are bounded by
+// construction: 2,048, about 40 KiB on the row at their widest. 256 bytes is
+// under the least any lead this build seals weighs in the part (318, a review
+// lead of a one-byte turn under a one-byte key, as
+// TestTheCountOfKeptLeadsNeverDropsALeadTheirBytesWouldKeep measures), so the
+// count drops only the small leads of a build that seals smaller ones.
 const MaxKeptLeads = MaxKeptLeadBytes / 256
 
-// ToldLeads is the leads the brief the job's run read told, its own and every
-// earlier one it told again or was to and could not read, by their numbers in
-// the run's leads part ([LaunchRecord.LeadMarks]): what a continuation of the
-// job's session tells again where that session may lack its brief. NONE where
-// the job started a session of its own, its brief fresh or its box having
-// started one in a continued one's place: a fresh session holds its opening
-// message wherever it can be continued.
+// ToldLeads is the leads the job's brief told (its own, and every earlier one it
+// told again or could not read), by their numbers in the run's leads part
+// ([LaunchRecord.LeadMarks]): what a continuation tells again where the session
+// may lack its brief. None where the job started a fresh session (a fresh brief,
+// or a box that started one in place of a continued one), which holds its
+// opening message wherever it can be continued.
 func (l LaunchRecord) ToldLeads() []int {
 	if l.Brief == BriefFresh || l.SessionStart == SessionStartFresh {
 		return nil
@@ -341,52 +276,46 @@ func (l LaunchRecord) ToldLeads() []int {
 // BriefLeads is the leads of the brief a launch hands its job's run, as the
 // attach that names the job's command keeps them ([PendingStore.AttachSandbox]).
 type BriefLeads struct {
-	// Run and Job are the run and the job as the launch opened the row
-	// ([PendingRun.LeadsRun], [PendingRun.LaunchID]): the part of another run
-	// takes none of it, and a row naming another job is marked with none.
+	// Run and Job are as the launch opened the row ([PendingRun.LeadsRun],
+	// [PendingRun.LaunchID]): another run's part takes none of it, and a row
+	// naming another job is marked with none.
 	Run, Job string
 
-	// Counted is how many leads the row counted for the run as the launch
-	// opened it ([PendingRun.LeadsAppended]): a part the take starts anew, or
-	// one holding fewer, numbers its next lead past them, so a part the store
-	// lost or one replaced as unreadable never has its leads numbered over,
-	// and every one of them is still counted as not kept.
+	// Counted is [PendingRun.LeadsAppended] as the launch opened the row: a
+	// part the take starts anew, or one holding fewer, numbers its next lead
+	// past it, so a lost or replaced part's leads are never numbered over and
+	// still count as not kept.
 	Counted int
 
-	// Own is the leads the brief opened with of its own, sealed for the job
-	// ([LeadSeal.Seal]); Told the earlier leads it told again, by name; and
-	// ToldUnread the earlier ones it was to tell again and could not read, by
-	// their numbers ([BriefTold.ToldUnread]), marked as Told is.
+	// Own is the brief's own leads, sealed for the job ([LeadSeal.Seal]); Told
+	// the earlier leads it told again, by name; ToldUnread the earlier ones it
+	// could not read, by number ([BriefTold.ToldUnread]), marked as Told is.
 	Own        []KeptLead
 	Told       []LeadRef
 	ToldUnread []int
 }
 
 // TurnLeads is the turn's leads as a resume reads them beside its run's row
-// ([PendingStore.Leads]): every lead of the run the part keeps, oldest first,
-// and how many earlier ones are not kept: past the part's bound, and every one
-// the row counts that the part could not give back ([PendingRun.LeadsAppended]).
+// ([PendingStore.Leads]): the run's kept leads, oldest first, and how many
+// earlier ones are not kept, past the bound or counted by the row
+// ([PendingRun.LeadsAppended]) but not given back by the part.
 type TurnLeads struct {
 	Kept []KeptLead
 	Cut  int
 
 	// Unread says the store could not give the part back at all
-	// ([Coordinator.leadsAt]): Kept is none and Cut is every lead the row
-	// counts, though the part may keep each of them still. So the leads the
-	// job's record marks are handed on by their numbers instead
-	// ([BriefTold.ToldUnread]), marked again on the job the relaunch opens,
-	// and told by the first later read that answers. False wherever the
-	// store answered, for a part gone, short or another run's too: what such
-	// a part lacks, no later read gives back.
+	// ([Coordinator.leadsAt]): Kept is none and Cut every lead the row counts,
+	// though the part may still keep them. The job's marked leads are then
+	// handed on by number ([BriefTold.ToldUnread]), marked again on the
+	// relaunched job, and told by the first later read that answers. False
+	// wherever the store answered, even for a part gone, short or another
+	// run's: what such a part lacks, no later read gives back.
 	Unread bool
 }
 
-// leadsPart is the part kept beside a run's row holding the turn's leads
-// ([coord.RunLeads]): what carried each session of the run on, oldest first,
-// each numbered as the part took it in ([KeptLead.Appended]).
-//
-// THE PART IS ONE VALUE OF ITS OWN, held to [RowBytes] as the row and the log
-// are ([RowBytes]: what one key of the store holds), and split:
+// leadsPart is the part beside a run's row holding the turn's leads
+// ([coord.RunLeads]), oldest first, each numbered as taken ([KeptLead.Appended]).
+// It is one store value, held to [RowBytes] as the row is, and split:
 //
 //	the leads it keeps .............. MaxKeptLeadBytes          524,288  (512 KiB)
 //	its own fields, measured ........ measuredLeadsFields            85
@@ -394,23 +323,19 @@ type TurnLeads struct {
 //	                                                          ---------
 //	                                  RowBytes                6,290,542
 //
-// Its own fields are the run it is of, a launch id, and how many leads it has
-// taken, at their widest, with the keys and the braces around the leads; the
-// spare is the room a later build adds keys to the part in ([leadsPart.Extra]).
-// A key a later build adds to a LEAD comes out of the leads' own share, which a
-// take holds them to with every key they carry.
+// The spare is room for a later build's part keys ([leadsPart.Extra]); a key
+// added to a LEAD comes out of the leads' own share.
 type leadsPart struct {
-	// Run is the run the leads are of ([PendingRun.LeadsRun]): a part of any
-	// other run of the turn, which the store may leave beside a row its turn
-	// created again, holds none of this run's.
+	// Run is the run the leads are of ([PendingRun.LeadsRun]): the store may
+	// leave another run's part beside a row its turn created again.
 	Run string `json:"run"`
 
 	// Leads is the leads the part keeps, oldest first, held to
 	// [MaxKeptLeadBytes] and [MaxKeptLeads] ([heldLeads]).
 	Leads []KeptLead `json:"leads"`
 
-	// Appends is how many leads the part has taken in all, those it no longer
-	// keeps among them: the cut is Appends less what Leads holds.
+	// Appends is how many leads the part has ever taken: the cut is Appends
+	// less what Leads holds.
 	Appends int `json:"appends"`
 
 	// Extra is every key of the part this build does not know (wirekeys.go),
@@ -418,12 +343,11 @@ type leadsPart struct {
 	Extra map[string]json.RawMessage `json:"-"`
 }
 
-// The two figures the part's table measures rather than shares out: what its
-// own fields weigh at their worst, and what [RowBytes] leaves to spare beside
-// them and its leads at their bound, each as TestTheWholeLeadsPartFitsItsBudget
-// measures its model of the worst part. PINNED, as the row's are
-// ([measuredOtherFields]): that test compares both exactly, and fails until a
-// change that moves either restates both here and in the table.
+// The part table's measured figures: its own fields at their worst, and what
+// [RowBytes] leaves beside them and its leads at their bound, as
+// TestTheWholeLeadsPartFitsItsBudget measures the worst part. PINNED, as
+// [measuredOtherFields] is: the test compares both exactly, so a change moving
+// either restates both here and in the table.
 const (
 	measuredLeadsFields = 85
 	measuredLeadsSpare  = 5_766_169
@@ -448,17 +372,15 @@ func (p *leadsPart) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
-// took is p once it took in own, the leads a brief opened with of its own:
-// each once by its identity ([KeptLead.Ref]), one already kept left as it is,
-// a new one numbered as taken ([KeptLead.Appended]); the whole held to its
-// bounds ([heldLeads]); with marks, the numbers of every lead the brief told
-// that p then keeps, its own, those told names and those toldUnread numbers,
-// ascending, and grew, whether it took anything in.
+// took is p having taken in own, the brief's own leads: each once by
+// [KeptLead.Ref] (one already kept left as is, a new one numbered as taken),
+// the whole held by [heldLeads]. marks is the ascending numbers of every lead
+// the brief told (own, told, toldUnread) that next keeps; grew whether it took
+// anything in.
 //
-// A TOLD LEAD THE PART DOES NOT KEEP IS NOT MARKED: it is counted under
-// Appends, past the bound, or the part lost it, which a reader counts against
-// the row ([PendingStore.Leads]). The names and the numbers are looked up in
-// sets, so a take of every lead the part keeps, told again, stays linear.
+// A TOLD LEAD THE PART DOES NOT KEEP IS NOT MARKED: a reader counts it against
+// the row ([PendingStore.Leads]). Names and numbers are looked up in sets, so
+// retelling every kept lead stays linear.
 func (p leadsPart) took(own []KeptLead, told []LeadRef, toldUnread []int) (next leadsPart, marks []int, grew bool) {
 	next = p
 	next.Leads = slices.Clone(p.Leads)
@@ -496,14 +418,10 @@ func (p leadsPart) took(own []KeptLead, told []LeadRef, toldUnread []int) (next 
 }
 
 // heldLeads is leads held to [MaxKeptLeadBytes] as the part holds them and to
-// [MaxKeptLeads], the oldest dropped first. Every lead it drops is still
-// counted, under the part's [leadsPart.Appends], which no drop lowers.
-//
-// THE OLDEST, because the newest are the ones a session cut off most likely
-// lacks: a lead older than the newest job known to hold its brief is in that
-// session already. A lead the part's encoder cannot write (a carried key that
-// is not JSON) is dropped first, wherever it stands: kept, it would refuse
-// every write of the part.
+// [MaxKeptLeads], oldest first, since the newest are what a cut-off session most
+// likely lacks. A dropped lead stays counted under [leadsPart.Appends], which no
+// drop lowers. A lead that cannot be encoded (a carried key that is not JSON) is
+// dropped wherever it stands: kept, it would refuse every write of the part.
 func heldLeads(leads []KeptLead) []KeptLead {
 	var (
 		kept  []KeptLead

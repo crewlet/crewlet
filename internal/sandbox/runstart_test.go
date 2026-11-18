@@ -9,13 +9,9 @@ import (
 	"testing"
 )
 
-// Where the run that packed a session began in it ([RunStart]): the box's word,
-// kept on the capture's stamp.
-
-// A RUN'S START IS KNOWN ONLY WHOLE. A run began its session, or began after a
-// message whose id a box may name — and never both; the zero value, an id past
-// its bound, an id holding a character no box's id holds, and a start that says
-// both are not known.
+// A RUN'S START IS KNOWN ONLY WHOLE: it began its session, or began after a
+// message id a box may name, never both. The zero value, an id past its bound
+// or holding a character no box's id holds, and both together are not known.
 //
 // Mutation: read the zero value or Began beside an id as known, or let an id
 // past its bound pass, and a row goes red.
@@ -39,10 +35,9 @@ func TestARunsStartIsKnownOnlyWhole(t *testing.T) {
 	}
 }
 
-// A CAPTURE KEEPS WHERE ITS RUN BEGAN. The take hands the stamp the start its
-// box described, as it hands the session's id and release, and the row's kept
-// capture carries it; and a stamp whose start is past what a message id may be
-// is refused before the row is asked to carry it.
+// A CAPTURE KEEPS WHERE ITS RUN BEGAN: the take puts the box's start on the
+// stamp and the row's kept capture carries it, and a start past a message id's
+// bound is refused before the row carries it.
 //
 // Mutation: leave the start off the stamp, or off Bounded's fields, and a check
 // goes red.
@@ -83,15 +78,13 @@ func TestACaptureKeepsWhereItsRunBegan(t *testing.T) {
 	}
 }
 
-// AN OLDER BUILD'S WRITE CARRIES WHERE A RUN BEGAN. A fleet mid-upgrade
-// rewrites the row on a build that does not know the stamp's start, and a
-// relaunch may run on this build: so the start rides the capture under keys of
-// its own, which a build that does not declare them keeps verbatim and writes
-// back (wirekeys.go), whatever it decoded of the rest.
+// AN OLDER BUILD'S WRITE CARRIES WHERE A RUN BEGAN: mid-upgrade, a build that
+// does not know the start rewrites the row, so the start rides under keys of
+// its own that such a build keeps verbatim and writes back (wirekeys.go).
 //
-// Mutation: leave the fields off the wire, and no older build's capture holds a
-// key of them; drop the carried keys from the capture's encode, and the start is
-// gone after the older build's write.
+// Mutation: leave the fields off the wire, and no older build's capture holds
+// their keys; drop the carried keys from the capture's encode, and the start
+// is gone after the older build's write.
 func TestAnOlderBuildsWriteCarriesWhereARunBegan(t *testing.T) {
 	t.Parallel()
 	for name, start := range map[string]RunStart{

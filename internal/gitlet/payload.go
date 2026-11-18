@@ -939,7 +939,9 @@ type PushBatch struct {
 	Pushes []PushEntry `json:"pushes"`
 }
 
-// PushEntry is one push: in a record iff at least one of its commands is ok.
+// PushEntry is one push: in a record iff at least one of its commands is ok, or it is an ATTEMPT
+// ([Attempted]): a push git received every command of which is refused, one by a rule, recorded moving
+// nothing, with no pack, no commit introduced, no change and no routing.
 type PushEntry struct {
 	// PushID is minted by the receiving node and stable across a failover,
 	// which is what collapses a push decided twice.
@@ -958,10 +960,14 @@ type PushEntry struct {
 	// Commands is every command the client sent, each with its result.
 	Commands []Command `json:"commands"`
 	// Pack is present iff the push carried new objects.
-	Pack            *PackRef  `json:"pack,omitempty"`
-	Introduced      []string  `json:"introduced,omitempty"`
-	IntroducedCount int       `json:"introduced_count,omitempty"`
-	ReceivedAt      time.Time `json:"received_at"`
+	Pack            *PackRef `json:"pack,omitempty"`
+	Introduced      []string `json:"introduced,omitempty"`
+	IntroducedCount int      `json:"introduced_count,omitempty"`
+	// Offered is how many commits an attempt's refused commands offered that the repository did
+	// not hold, counted by its receiver in the push's scratch; 0 where it offered none or the count
+	// was not made. VERSION 5 ([OfferedVersion]): an entry carrying it stamps its record there.
+	Offered    int       `json:"offered,omitempty"`
+	ReceivedAt time.Time `json:"received_at"`
 	// Day is the company day a SEAT'S entry was counted against by its
 	// decide's quota (code.limits.pushes_per_seat_day): period.Day's label
 	// on the deciding node's clock in the company's zone, STAMPED BY THE

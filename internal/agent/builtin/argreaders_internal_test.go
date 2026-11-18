@@ -70,12 +70,10 @@ func misread(schema map[string]any, v any) bool {
 }
 
 // WHAT THE CHECK ADMITS IS WHAT THE TOOL READS, for every declared type over
-// the corpus (ADR-0059, #423 re-verify): whenever the check at the surface
-// lets a value through to the tool, each of the tool's readers for that type
-// returns exactly the value the input spells. Where a reader would read a
-// value as anything else (a truncation, a prefix, a default), the check must
-// refuse it. "1e3" passed the check as an integer while argInt read it as 1;
-// a set of "GP-12" passed as a list while the tool read it as none.
+// the corpus (ADR-0059): each reader returns exactly the value an admitted
+// input spells, and a value a reader would read as anything else (a
+// truncation, a prefix, a default) the check refuses, so "1e3" is never an
+// integer argInt reads as 1, nor "GP-12" a list read as none.
 //
 // Mutation: give argInt a reader of its own (fmt.Sscanf's prefix) and "1e3"
 // is named here; let the check admit "0x10" and its value is named.

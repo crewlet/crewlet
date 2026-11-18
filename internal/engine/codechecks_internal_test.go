@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -8,19 +10,19 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/auth"
+	"github.com/crewlet/crewlet/internal/estate"
 	"github.com/crewlet/crewlet/internal/gitlet/host"
 )
 
 // A CHECK'S BOX READS ITS COMMIT WHERE THE API SERVES IT: the base the engine
 // gives the check runner (checkCodeBase, from CREWLET_BOX_GIT_URL), with a
-// repository's name and a read after it, is a path under auth.BoxGitletPrefix —
-// the route auth leaves public for the box — that the API's three box reads
-// are mounted to answer (host.PatternBoxGitletTree, Blob and Diff, routed here
-// by a mux of those very patterns), on the very listener the box clones from
-// under auth.BoxGitPrefix, whatever path that listener sits at behind a
-// balancer. A base that does not end in the box git route gives none, which
-// checkrun.New refuses. The runner spelled its own "/box/gitlet" before, held
-// to the route by nothing.
+// repository's name and a read after it, is a path under auth.BoxGitletPrefix,
+// the route auth leaves public for the box, that the API's three box reads
+// answer (host.PatternBoxGitletTree, Blob and Diff, routed here by a mux of
+// those patterns), on the listener the box clones from under
+// auth.BoxGitPrefix, whatever path that listener sits at behind a balancer. A
+// base that does not end in the box git route gives none, which checkrun.New
+// refuses.
 func TestACheckBoxReadsItsCommitWhereTheAPIServesIt(t *testing.T) {
 	t.Parallel()
 	reads := http.NewServeMux()
@@ -68,6 +70,38 @@ func TestACheckBoxReadsItsCommitWhereTheAPIServesIt(t *testing.T) {
 		gitRoute} {
 		if base := checkCodeBase(gitBase); base != "" {
 			t.Errorf("checkCodeBase(%q) = %q, want none: it names no listener's box git route", gitBase, base)
+		}
+	}
+}
+
+// AN ENDING IS SENT AGAIN WITHOUT ITS COUNTS ONLY WHERE NO DATA NODE RAN IT: unreadAnywhere is true
+// for the unknown keys refused over a whole walk, wrapped, and false for a walk in which a node went
+// silent (which may have run it), an answer this build could not read (whose request ran), an
+// outcome unknown, and a walk no node served for another reason.
+//
+// Mutations: drop the walk's test (the answer's refusal reads as one, red); drop the silent test
+// (the silent walk reads as unread, red).
+func TestAnEndingIsSentAgainWithoutItsCountsOnlyWhereNoDataNodeRanIt(t *testing.T) {
+	t.Parallel()
+	walk := &estate.ErrUnserved{Detail: "data-a: its build does not declare args.Finished.log_lines"}
+	silent := &estate.ErrUnserved{Detail: "data-a: its build does not declare args.Finished.log_lines; data-b: silent",
+		NodeSilent: true}
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"unknown keys over a walk": {fmt.Errorf("record the ending: %w", &estate.ErrUnknownKeys{Op: "code.checks",
+			Keys: []string{"args.Finished.log_lines"}, Nodes: []string{"data-a"}, Unserved: walk}), true},
+		"unknown keys over a walk a node went silent in": {&estate.ErrUnknownKeys{Op: "code.checks",
+			Keys: []string{"args.Finished.log_lines"}, Nodes: []string{"data-a"}, Unserved: silent}, false},
+		"unknown keys in an answer": {&estate.ErrUnknownKeys{Op: "code.checks", Keys: []string{"result.novel"},
+			Nodes: []string{"data-a"}, Answer: true}, false},
+		"an outcome unknown": {estate.ErrOutcomeUnknown, false},
+		"a walk unserved":    {walk, false},
+		"another error":      {errors.New("busy"), false},
+	} {
+		if got := unreadAnywhere(tc.err); got != tc.want {
+			t.Errorf("%s: unreadAnywhere = %v, want %v", name, got, tc.want)
 		}
 	}
 }

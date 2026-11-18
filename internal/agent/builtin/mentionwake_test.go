@@ -9,10 +9,8 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// AN AGENT'S MENTION IN A WORK ITEM COMMENT WAKES ONLY WHEN IT ASKS (ADR-0113).
-// Measured on a live company, agents' status notes naming each other ("my
-// approval still stands, nothing for @qa") woke the named agent, who replied
-// naming the first back: about 25 turns on one item in 12 minutes. The named
+// AN AGENT'S MENTION IN A WORK ITEM COMMENT WAKES ONLY WHEN IT ASKS (ADR-0113),
+// or status notes naming each other wake agents into a reply loop. The named
 // seat is still told; `asks: true` wakes it, and an agent must say which.
 func TestAnAgentsCommentMentionWakesOnlyWhenItAsks(t *testing.T) {
 	t.Parallel()

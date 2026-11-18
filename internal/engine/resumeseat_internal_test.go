@@ -33,12 +33,10 @@ func (r *seatRecorder) seen() []string {
 	return append([]string(nil), r.seats...)
 }
 
-// A RESUMED TURN'S MODEL CALLS RUN AS ITS SEAT, as a dispatched turn's do. A
-// harness keeps a home per seat — its transcripts, its sign-in — and a call
-// bound to no seat runs in the one home every unbound call shares, so a
-// resumed turn's reviewer ran beside other seats' transcripts and on whichever
-// login that home last held. The dispatch path binds the seat; the resume is
-// the same turn and binds it too.
+// A RESUMED TURN'S MODEL CALLS RUN AS ITS SEAT, as a dispatched turn's do: a
+// harness keeps a home per seat (its transcripts, its sign-in), and a call
+// bound to no seat runs in the one home every unbound call shares, beside
+// other seats' transcripts and on whichever login that home last held.
 //
 // Mutation: continue the run's trace without binding its seat, and every call
 // the resumed turn makes is the shared home's.

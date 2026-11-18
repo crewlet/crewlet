@@ -327,6 +327,29 @@ describe("the peek", () => {
     expect(document.activeElement).toBe(link("Row 4"));
   });
 
+  // Mutation: publish the order whatever neighbours says, and ] steps where the host did not ask.
+  test("a list that leaves its neighbours to its host publishes no order", async () => {
+    const item = (r: Row): ObjectRef => ({ kind: "item", id: `ENG-${r.id.slice(1)}` });
+    location.hash = "#/worklet/ENG?peek=item:ENG-3";
+    await act(async () => {
+      render(
+        <Router>
+          <PeekNeighbours>
+            <Timeline peek={item} neighbours={false} />
+            <Suspense fallback={null}>
+              <PeekHost />
+            </Suspense>
+          </PeekNeighbours>
+        </Router>,
+      );
+    });
+    act(() => link("Row 3").focus());
+    await act(async () => {
+      fireEvent.keyDown(document.activeElement!, { key: "]" });
+    });
+    expect(decodeURIComponent(location.hash)).toContain("peek=item:ENG-3");
+  });
+
   // Mutation: ignore isSelected.
   test("isSelected marks a row the same way without a peek", () => {
     const { container } = mount(<Timeline isSelected={(r) => r.id === "r5"} />);
@@ -575,6 +598,46 @@ describe("roles", () => {
     expect(
       within(screen.getByRole("list", { name: "Repositories" })).getAllByRole("listitem"),
     ).toHaveLength(6);
+  });
+
+  // Mutation: draw the head outside the card, or the rows outside it, and this fails.
+  test("a card's head sits inside the card, above its rows", () => {
+    const { container } = mount(
+      <CodeList<Row>
+        rows={ROWS}
+        rowKey={(r) => r.id}
+        aria-label="Changes"
+        title={(r) => r.title}
+        head={<span>Open 4</span>}
+      />,
+    );
+    const card = container.querySelector(".code-list__card");
+    expect(card?.firstElementChild?.className).toBe("code-list__head");
+    expect(card?.querySelector(":scope > ol.code-list__rows")).not.toBeNull();
+    expect(within(card as HTMLElement).getByText("Open 4")).toBeTruthy();
+  });
+
+  // Mutation: draw the placeholder beside rows, or outside the card's head, and this fails.
+  test("the placeholder is drawn under the head where there is no row, and only there", () => {
+    const placeholder = <p>Loading changes</p>;
+    const props = {
+      rowKey: (r: Row) => r.id,
+      "aria-label": "Changes",
+      title: (r: Row) => r.title,
+      head: <span>Open 4</span>,
+      placeholder,
+    };
+    const { container, rerender } = mount(<CodeList<Row> rows={[]} {...props} />);
+    const held = container.querySelector(".code-list__card > .code-list__placeholder");
+    expect(held?.textContent).toBe("Loading changes");
+    expect(screen.queryByRole("list")).toBeNull();
+    rerender(
+      <Router>
+        <CodeList<Row> rows={ROWS} {...props} />
+      </Router>,
+    );
+    expect(screen.queryByText("Loading changes")).toBeNull();
+    expect(screen.getByRole("list", { name: "Changes" })).toBeTruthy();
   });
 
   // Mutation: draw something for a call with neither rows nor groups.

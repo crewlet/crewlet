@@ -3884,7 +3884,7 @@
         },
         "avatar": {
           "$ref": "#/$defs/RoleAvatar",
-          "description": "Agent seats: the Crewlet character and colour the seat is drawn as. Absent = the original Crewlet, in purple."
+          "description": "Agent seats: the Crewlet character and colour the seat is drawn as. Absent = a character and colour picked from the seat's handle."
         },
         "backstory": {
           "description": "Who this seat is; reaches its prompt.",
@@ -4410,7 +4410,7 @@
       "additionalProperties": false,
       "properties": {
         "character": {
-          "description": "The Crewlet character this agent seat is drawn as. Absent = crewlet, the original.",
+          "description": "The Crewlet character this agent seat is drawn as. Absent = one picked from the seat's handle.",
           "enum": [
             "crewlet",
             "hexlet",
@@ -4447,7 +4447,7 @@
           ]
         },
         "color": {
-          "description": "The colour this agent seat is drawn in. Absent = purple.",
+          "description": "The colour this agent seat is drawn in. Absent = one picked from the seat's handle.",
           "enum": [
             "purple",
             "cyan",
@@ -6109,6 +6109,23 @@
           },
           "type": [
             "array",
+            "null"
+          ]
+        },
+        "target": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,254}$"
+            },
+            {
+              "const": ""
+            }
+          ],
+          "description": "What the change the agent asked the grant for changes, as the integration names it (a Scaleway bucket), which the engine copies from the request; absent for one a person added.",
+          "type": [
+            "string",
+            "number",
+            "boolean",
             "null"
           ]
         }

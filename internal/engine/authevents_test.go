@@ -47,11 +47,9 @@ func (f *feed) of(eventType string) []*events.Event {
 
 // THE IDENTITY WRITER THE NODE BUILDS ANNOUNCES ON THE NODE'S OWN FEED.
 //
-// The writer's announcement is only as real as the seam the engine fills: a
-// writer built without it compiles, passes every iamdomain test and says
-// nothing on a deployment. What is asserted is the ordinary path — the event
-// is published through the node's queue under the node's name, which is what
-// puts it in the store and on every dashboard.
+// A writer built without the engine's seam compiles, passes every iamdomain
+// test and says nothing on a deployment; asserted is the event published
+// through the node's queue under the node's name, which reaches the store.
 //
 // Mutation: drop `Events:` from the engine's WriterDeps and nothing arrives.
 func TestTheNodesIdentityWriterAnnouncesOnItsFeed(t *testing.T) {
@@ -82,13 +80,10 @@ func TestTheNodesIdentityWriterAnnouncesOnItsFeed(t *testing.T) {
 
 // WHAT THE NODE WRITES FOR ITSELF IS THE ENGINE'S IN THE IDENTITY TRAIL.
 //
-// The node's own writer authors the sweeps, a re-seal, a password re-hashed at
-// this build's cost and a company-wide invalidation, and every one of them
-// reaches `iam_history` under the kind the writer was built with. Built as a
-// machine, each of those rows was drawn as the login of a service account
-// named after the node id; the engine is its own principal kind so that its
-// housekeeping is never read as somebody's decision. The row names the node,
-// as the engine, through no credential.
+// The node's own writer authors the sweeps, a re-seal, a password re-hash and a
+// company-wide invalidation, and each reaches `iam_history` under the writer's
+// kind: the engine, naming the node through no credential, so its housekeeping
+// is never read as a service account's decision.
 //
 // Mutation: build the engine's identity writer as [iam.KindMachine] again and
 // the row's kind is a machine.
@@ -122,11 +117,9 @@ func TestTheNodesOwnIdentityWritesAreRecordedAsTheEngine(t *testing.T) {
 
 // STOPPING A NODE PUBLISHES THE MINUTE OF FAILED ATTEMPTS IT STILL HOLDS.
 //
-// The trail's loop publishes a minute once it has closed, so at shutdown the
-// open one exists only in memory. The engine's teardown order is what saves
-// it: the loop is stopped — and flushes — before the broker it publishes onto
-// is closed. Reversed, the last minute of a brute-force attempt that ended in
-// a restart is the one minute nobody can read.
+// The open minute exists only in memory at shutdown; the teardown stops the
+// loop, which flushes it, before the broker closes. Reversed, the last minute
+// of a brute-force attempt ended by a restart is lost.
 //
 // Mutation: stop the trail after the backends close and the row never arrives.
 func TestStoppingANodePublishesTheFailuresItStillHolds(t *testing.T) {

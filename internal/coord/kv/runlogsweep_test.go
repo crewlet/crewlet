@@ -10,13 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// A PART LEFT BESIDE A REMOVED RUN IS SWEPT, AND ONLY THAT ONE — every part,
-// its log, its handed set and its leads alike. The record and each part are
-// keys of their own and no write spans them, so a node that stops between the
-// record's removal and a part's leaves a part no record holds, which nothing
-// else would ever remove ([coord.SandboxRuns]). Staged as that crash leaves
-// it — the record purged on the wire and its parts not — beside a live run
-// with parts of its own, which the sweep must leave alone.
+// A PART LEFT BESIDE A REMOVED RUN IS SWEPT, AND ONLY THAT ONE, whatever the
+// part. No write spans the record and its parts, so a node stopping between
+// their removals leaves a part nothing else removes ([coord.SandboxRuns]).
+// Staged as that crash leaves it, beside a live run the sweep must leave alone.
 //
 // Mutation: skip [FleetStore.sweepRunParts] in SweepMarkers, and the orphans
 // survive; match only the log's name in its candidate filter, and the handed
@@ -68,12 +65,10 @@ func TestAPartLeftBesideARemovedRunIsSwept(t *testing.T) {
 	}
 }
 
-// THE REMOVAL OF A RUN'S LOG NEVER TAKES A NEW RUN'S. A run's record is
-// removed, then its log; between the two the turn can be launched again, its
-// new record created and the log opened to its job. No append creates a log,
-// so a removal that took that log would drop every call of the new job. Staged
-// as that interleaving leaves the bucket — the old record gone, the new record
-// and its log written — before the removal runs.
+// THE REMOVAL OF A RUN'S LOG NEVER TAKES A NEW RUN'S. The turn can relaunch
+// between its record's removal and its log's, and no append creates a log, so
+// taking the new one would drop every call of the new job. Staged with the new
+// record and log written before the late removal runs.
 //
 // Mutation: drop removeRunPart's read of the record, and the new run's log is
 // purged.
@@ -106,11 +101,8 @@ func TestARunsLogRemovalLeavesTheLogOfTheTurnsNextRun(t *testing.T) {
 	}
 }
 
-// A LOG WHOSE RUN IS LAUNCHED AGAIN AFTER THE SWEEP'S PASS IS KEPT. The sweep
-// finds its candidates in a pass of the bucket, and the turn can be launched
-// again between that pass and the purge: its new record created, the log beside
-// it the new run's to open. Each candidate's record is read from the leader
-// before the purge, so the log stays.
+// A LOG WHOSE RUN IS LAUNCHED AGAIN AFTER THE SWEEP'S PASS IS KEPT: each
+// candidate's record is read from the leader before the purge.
 //
 // Mutation: drop sweepRunParts' read of the record, and the relaunched run's
 // log is swept.

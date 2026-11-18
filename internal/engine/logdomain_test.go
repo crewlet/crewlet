@@ -6,11 +6,10 @@ import (
 	"github.com/crewlet/crewlet/internal/engine"
 )
 
-// EVERY REGISTERED DOMAIN IS NAMED FROM ITS STREAM: an applied assistant
-// write tells open screens the domain its position landed on, by the name a
-// screen's read floor is kept under, so a stream a domain owns that resolved
-// to no name would raise no floor anywhere. A stream no domain owns names
-// none.
+// EVERY REGISTERED DOMAIN IS NAMED FROM ITS STREAM: an applied assistant write
+// tells open screens the domain its position landed on, by the name a screen's
+// read floor is kept under, so a domain's stream resolving to no name would
+// raise no floor anywhere. A stream no domain owns names none.
 //
 // Mutation: answer the stream's own name and every case here fails.
 func TestEveryRegisteredDomainIsNamedFromItsStream(t *testing.T) {

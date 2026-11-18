@@ -19,12 +19,11 @@ func (namedTool) Call(context.Context, map[string]any) (tools.Result, error) {
 	return tools.Result{Output: "ok"}, nil
 }
 
-// A SERVER'S TOOL LEAVING TAKES NO BUILTIN WITH IT. A server tool that shares
-// a builtin's name was refused when it was filed, so the name in the registry
-// is the builtin's; when the server stops offering it, the change names it as
-// removed, and unregistering by name alone deleted the builtin from the epoch
-// — a seat lost lookup_colleague because a vendor renamed a tool. An MCP
-// tool of the name is still removed, which is what the change is for.
+// A SERVER'S TOOL LEAVING TAKES NO BUILTIN WITH IT: a server tool sharing a
+// builtin's name was refused when filed, so when the server's change names it
+// removed, the registry's entry of that name is the builtin's and stays
+// (unregistering by name alone deleted it from the epoch). The server's own
+// tool of a removed name is still removed.
 func TestAServerToolLeavingTakesNoBuiltinOfItsName(t *testing.T) {
 	t.Parallel()
 	reg := tools.NewRegistry()

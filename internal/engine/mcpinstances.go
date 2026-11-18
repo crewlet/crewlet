@@ -22,37 +22,23 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// EACH MCP INSTANCE'S HEALTH, read where it lives.
-//
-// A node knows its own children (the shared servers' and each held seat's)
-// and nothing of a peer's, and that is where it stays: the node's status record
-// carries each server's bounded counts per node ([coord.MCPServerStatus]), and
-// a server's page asks the nodes that hold its instances for the rest when a
-// person opens it, as a turn's detail is read (ADR-0021). Nothing is stored
-// and nothing rides the status record that a seat count multiplies.
-//
-// # One reading, two readers
-//
-// The status record's row and the page's instances are read off the same
-// [mcpReading] of each instance, so a server the row calls failing on a node
-// is one whose instances on that node read failed, with the same reason.
-//
-// # The scatter
-//
-// The node serving the question reads its own instances directly and asks
-// every other node named over the broker's ephemeral request and reply
-// ([topics.ObserveMCPInstances]), within [mcpInstanceReadBudget]; a node that
-// does not answer in time is named in the answer as not having answered, never
-// read as one that holds nothing. A read of a node's own memory, which no
-// node carries out as an instruction, so it is not a signed channel; a reply
-// names the request it answers, so a stray reply is never read as this one's.
+// EACH MCP INSTANCE'S HEALTH, read where it lives. A node knows its own
+// children (the shared servers' and each held seat's) and no peer's: its status
+// record carries each server's bounded counts ([coord.MCPServerStatus]), and a
+// server's page asks the nodes holding its instances for the rest when opened,
+// as a turn's detail is read (ADR-0021), so nothing a seat count multiplies is
+// stored or rides the status record. The row and the page read the same
+// [mcpReading], so a row failing on a node is one whose instances there failed,
+// for the same reason. Peers are asked over the broker's ephemeral request and
+// reply ([topics.ObserveMCPInstances]) within [mcpInstanceReadBudget]; one that
+// does not answer is named so, never read as holding nothing. Not a signed
+// channel: it reads a node's memory and instructs nothing; a reply names its
+// request's id, so a stray reply is never read as this one's.
 
-// mcpInstanceReadBudget bounds how long a read of one server's instances waits
-// for the nodes it asks: the fleet's history read budget
-// ([eventfan.FleetReadBudget], two seconds), because it is the same kind of
-// read (a person's screen waiting on every node's own memory) and a node that
-// has not answered by then is one the screen says so about, rather than one it
-// waits on.
+// mcpInstanceReadBudget is the fleet's history read budget
+// ([eventfan.FleetReadBudget]): the same kind of read, a person's screen waiting
+// on every node's memory, which names a node not answered by then rather than
+// wait on it.
 const mcpInstanceReadBudget = eventfan.FleetReadBudget
 
 // mcpInstancesWire is the request and reply shape this build speaks; a node
@@ -146,11 +132,9 @@ func (e *Engine) mcpReadings(ctx context.Context) []mcpReading {
 			since: o.since, tools: o.tools, unlisted: o.unlisted}
 		failure := o.err
 		if health, ok := mcpHealth(o.mcpOutcome); ok {
-			// THE LISTING NOW, like its tools: a restart can come back
-			// listing a different set, so the keys it leaves out are read
-			// off the same record. And so are the tools it lost to their
-			// names, which a server that is down keeps from its last
-			// listing, as it keeps its tools.
+			// THE LISTING NOW: a restart can come back listing a different
+			// set, so the unlisted keys and the tools lost to their names are
+			// read off the same record (a down server keeps its last listing's).
 			r.tools, r.unlisted, failure = health.Tools, o.bridge.UnlistedOverrides(o.instance), nil
 			r.refused, r.shadowed = unfiled(o.mcpOutcome, o.surface)
 			r.restarts, r.since, r.last, r.answered = health.Restarts, health.Since, health.LastFailure, health.LastAnswer

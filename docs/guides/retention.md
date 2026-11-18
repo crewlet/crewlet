@@ -283,8 +283,13 @@ Two policies decide which copies count:
   copy left the host, so a person says so:
 
   ```
-  crewlet retention ack -stream CREWLET_TRACKER_LOG -position 918100000
+  crewlet retention ack -stream CREWLET_TRACKER_LOG -position 918100000 \
+    -taken-at 2026-11-17T03:00:00Z
   ```
+
+  `-taken-at` is when the copy was taken, by the node's clock: the backup's
+  age is measured from it, so an acknowledgement given hours after the copy
+  left still ages the copy, not the acknowledgement.
 
   An acknowledgement names ONE stream and is kept per stream: acknowledging
   the next log leaves the last one's acknowledgement standing. Under this
@@ -2220,7 +2225,10 @@ whose record has room for it (see
 [ref tombstones and ref drops](../concepts/gitlet.md#retention-and-history)). A
 [change](../concepts/gitlet.md#changes) and its revisions have no horizon of
 their own: they are kept as long as their repository is, and its purge removes
-them with the rest of its rows. Nor do a repository's published layers, and
+them with the rest of its rows. Each data node's index of their words drops
+them within one rotation after the purge's last step
+([Searching changes by their words](../concepts/gitlet.md#searching-changes-by-their-words)).
+Nor do a repository's published layers, and
 they need none: `code_layers` holds at most 32 rows a repository and
 `code_layer_parts` at most 16 a layer, each publication replacing the rows it
 supersedes in place, so neither grows with pushes — at most 544 rows a

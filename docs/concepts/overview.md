@@ -248,8 +248,9 @@ internal/
 │                         #   answer
 ├── search/               # Both halves of knowledge search — the BM25 index
 │                         #   and the two-stage semantic retrieval — plus the
-│                         #   embedding domain, the fleet's bucket fan-out and
-│                         #   chat's own keyword index
+│                         #   embedding domain, the fleet's bucket fan-out,
+│                         #   chat's own keyword index and the index of
+│                         #   Gitlet changes' words
 ├── textindex/            # The analyzer and the BM25 arithmetic, as pure
 │                         #   functions: Turso has no fts5
 ├── changefeed/           # How a committed record becomes a WAKE, derived by

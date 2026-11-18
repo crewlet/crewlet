@@ -16,31 +16,22 @@ import (
 
 // The native backends on a node that holds no data.
 //
-// # The same seams, answered elsewhere
-//
-// A node without the `data` role runs no state log, keeps no replicated
-// estate and has no lexical index. Its seats still read and write the
-// company's tracker, knowledge base and chat through exactly the tools a data
-// node's seats have — the same [estate.Router] facades every node's tools are
-// handed, which on this node answer nothing in-process and ask a data node for
-// everything. The tool layer cannot tell, and must not: a tool that behaved
-// differently on a stateless node would be two tools, and only one of them
-// tested.
-//
-// # What it deliberately does not run
-//
-// Everything a data node runs because it HOLDS the estate: the apply loops,
-// the position heartbeat, the snapshotter and the donor, the lexical index and
-// the search slices it answers, the change feeds, the chart apply, the trim
-// and the embedding duty. Each is either a copy this node does not keep or a
-// job a data node already does for the whole fleet.
+// A node without the `data` role runs no state log, replicated estate or
+// lexical index. Its seats reach the tracker, knowledge base and chat through
+// the same [estate.Router] facades every node's tools are handed, which here
+// ask a data node for everything: a tool that behaved differently on a
+// stateless node would be two tools, only one of them tested. It runs nothing
+// a data node runs because it HOLDS the estate (apply loops, position
+// heartbeat, snapshotter and donor, lexical index and search slices, change
+// feeds, chart apply, trim, embedding duty): each is a copy it does not keep
+// or a job a data node does for the whole fleet.
 
 // remoteNative is a stateless node's native runtime: which halves the company
 // runs natively, reached through the router. Written once, like [native],
 // before it is published.
 type remoteNative struct {
-	// tracker, wiki and chat are the halves this company runs natively. A
-	// half the company runs on a vendor is not served from here at all.
+	// tracker, wiki and chat are the halves this company runs natively; a
+	// half run on a vendor is not served from here at all.
 	tracker bool
 	wiki    bool
 	chat    bool
@@ -71,53 +62,33 @@ func (e *Engine) startRemote(c *Company) error {
 	return nil
 }
 
-// dataRoster is every live node that holds data, by id, as this node's WATCHED
-// VIEW of the presence leases answers it — for the questions asked PER
-// REQUEST: which data node a stateless node's tool call goes to, and which
-// nodes a search divides its buckets between.
+// dataRoster is every live data node, by id, from this node's WATCHED VIEW of
+// the presence leases, for the questions asked PER REQUEST (which data node a
+// tool call goes to, which nodes a search divides its buckets between): from
+// memory, as listing the store per call is an O(fleet) read across the leaf
+// link. The view answers UNKNOWN, never an old or empty roster, once its
+// listing is older than a lease survives ([coord.LeaseView], [newDataView]).
 //
-// FROM MEMORY, because it is asked per request. It used to list every presence
-// lease in the fleet on every call — an O(fleet) read of the coordination
-// store, crossing the leaf link on a stateless node, per tool call and per
-// search — for an answer that changes only when a node joins, leaves or lets
-// its lease lapse. The view lists on the presence heartbeat's own cadence,
-// hears every presence claim and release as it lands and lists again then —
-// so a node that joins, or leaves cleanly, is in or out of the roster within
-// about a second rather than a heartbeat later — and answers UNKNOWN rather
-// than an old or an empty roster once its last listing is older than a lease
-// survives; see [coord.LeaseView] and [newDataView].
-//
-// ONE FILTER FOR EVERY QUESTION ABOUT DATA NODES — [dataNodesOf], which the
-// trim and the eviction gate apply to a listing of their own — because a
-// second reading of "which nodes hold data" is how one of them comes to count
-// a stateless node and wait for ever on a position it will never publish. (The
-// capacity handshake asks two different questions with filters of their own:
-// who publishes the estate's records and whose broker is a member — see
-// [Engine.capacityParticipants].) Those list
-// the store directly and deliberately:
-// each runs on a duty's tick rather than per request, and each decides
-// something a roster up to a heartbeat old must not — what may be trimmed,
-// who may be evicted, whether a fleet-wide operation may proceed.
+// ONE FILTER, [dataNodesOf], for every question about data nodes: a second
+// reading is how one comes to count a stateless node and wait for ever on a
+// position it never publishes. The trim and the eviction gate list the store
+// on their duty ticks, as a heartbeat-old roster must not decide what they do;
+// [Engine.capacityParticipants] asks other questions with filters of its own.
 func (e *Engine) dataRoster(context.Context) ([]string, error) {
 	return presenceRoster{view: e.dataView}.LiveDataNodes()
 }
 
 // RoutedDataNodes is every live data node this node's estate router asks, by
-// id and sorted — its placement's own answer ([Engine.estatePlacement]), so
-// the order a keyed operation is asked in (rendezvous.Order over these) is
-// computed from exactly this — or why the view it reads cannot say, never
-// "none".
+// id and sorted: its placement's own answer ([Engine.estatePlacement]), which
+// the keyed order (rendezvous.Order) is computed from, or why the view cannot
+// say, never "none".
 //
-// A LISTING, so a node that claimed its presence since the view last listed is
-// not in it yet: the view hears the claim and lists again within about a
-// second ([coord.LeaseView]), and until then routes without it — a push the
-// joining node's repositories would send there is committed by its runner-up,
-// which the broker's compare-and-set keeps correct and which is not the one
-// group commit the keyed order exists for. A fleet booted at once is that
-// second from each member naming the others, every first listing having been
-// taken before any presence lease existed. A caller that must see the fleet's
-// routing whole — a test asserting where pushes meet — waits for this to name
-// every member.
+// A LISTING: a node that claimed its presence since is missing for about a
+// second ([coord.LeaseView]), and a push meant for it commits on its
+// runner-up, correct under the broker's compare-and-set but not the one group
+// commit the keyed order exists for. A fleet booted at once takes that second
+// for each member to name the others, so a caller that must see the routing
+// whole (a test asserting where pushes meet) waits for this to name every one.
 func (e *Engine) RoutedDataNodes() ([]string, error) {
 	return e.estatePlacement().Holders()
 }
@@ -126,15 +97,12 @@ func (e *Engine) RoutedDataNodes() ([]string, error) {
 // where there is no coordination.
 //
 // ON THE PRESENCE LEASE'S OWN TERMS, from the TTL in force: it lists once per
-// heartbeat (the TTL over [seat.HeartbeatRatio], which is how often a node
-// renews the lease the view reads, so a listing more often would find nothing
-// new) and trusts a listing for one TTL (past which a lease it named may have
-// lapsed and one it missed may have been held all along). Neither is a knob
-// of its own: both move with `coordination.lease_ttl_seconds`, as the leases
-// do. Between listings it WATCHES the presence leases, so a claim or a release
-// lists it again at once: what the cadence is left to catch is a lease that
-// lapsed, which is no write — a node that stopped without releasing, as it
-// leaves every roster.
+// heartbeat (TTL over [seat.HeartbeatRatio], how often a node renews; listing
+// more often finds nothing new) and trusts a listing for one TTL (past which a
+// lease it named may have lapsed). Neither is a knob of its own: both move with
+// `coordination.lease_ttl_seconds`. Between listings it WATCHES, so a claim or
+// release relists at once; the cadence is left to catch a lapse, which is no
+// write: a node that stopped without releasing.
 func newDataView(b *config.Bootstrap, backend coord.Backend) (*coord.LeaseView, error) {
 	if backend == nil {
 		return nil, nil
@@ -177,9 +145,8 @@ func (e *Engine) stopWatchingDataNodes() {
 	e.stopDataView = nil
 }
 
-// dataNodes is every live data node, listed from the store NOW — for the duty
-// ticks that decide something a heartbeat-old roster must not; see
-// [Engine.dataRoster].
+// dataNodes is every live data node, listed from the store NOW, for the duty
+// ticks that decide what a heartbeat-old roster must not ([Engine.dataRoster]).
 func dataNodes(ctx context.Context, leases liveLeases) ([]string, error) {
 	held, err := leases.ListLive(ctx, coord.ClassNode)
 	if err != nil {
@@ -200,11 +167,10 @@ func dataNodesOf(held []coord.Lease) []string {
 }
 
 // gitletNodesOf is the nodes with the gitlet role among a listing of presence
-// leases: the Gitlet nodes a repository's git work is asked of (ADR-0089). Read
-// as every role reads off a peer's row — one this build cannot read is every
-// role — so a peer whose row is unreadable is asked as a Gitlet node too, and
-// answers `no_backend` where it is none, which the walk asks last for half a
-// minute.
+// leases: the Gitlet nodes a repository's git work is asked of (ADR-0089). A
+// row this build cannot read is every role, so such a peer is asked too and
+// answers `no_backend` where it is none, which the walk then asks last for half
+// a minute.
 func gitletNodesOf(held []coord.Lease) []string {
 	out := make([]string, 0, len(held))
 	for _, lease := range held {
@@ -215,11 +181,11 @@ func gitletNodesOf(held []coord.Lease) []string {
 	return out
 }
 
-// gitletNodeOf is the node a presence lease names where it has the gitlet role, by
-// the rule [gitletNodesOf] states — the ONE rule a git listing
-// ([presenceRoster.GitListing]) reads a peer's row by too, so the Gitlet nodes a
-// repository's reads are asked of and those its maintenance is weighed among
-// are one set.
+// gitletNodeOf is the node a presence lease names where it has the gitlet role,
+// by [gitletNodesOf]'s rule: the ONE rule a git listing
+// ([presenceRoster.GitListing]) reads a peer's row by too, so the nodes a
+// repository's reads are asked of and its maintenance is weighed among are one
+// set.
 func gitletNodeOf(lease coord.Lease) (string, bool) {
 	profile, ok := placement.FromLease(lease)
 	if !ok || !profile.Roles.Has(placement.RoleGitlet) {
@@ -229,17 +195,15 @@ func gitletNodeOf(lease coord.Lease) (string, bool) {
 }
 
 // serveEstate makes this data node answer the fleet from its copy of the
-// estate — and, where it has the gitlet role, from its git half on the two git
-// lanes, the reads' and the engine writes' (estate's gitLanes).
+// estate and, with the gitlet role, from its git half on the two git lanes,
+// the reads' and the engine writes' (estate's gitLanes).
 //
-// EVERY DATA NODE SERVES, whether or not another node asks yet — one joins
-// without anybody reconfiguring the others — and from BEFORE its native runtime
-// is up: the backend is resolved per request, so a request arriving first is
-// answered "not here" rather than refused. So is the git half ([engineGit]),
-// and every Gitlet node holds data in this release (gitlet needs ingress, and
-// ingress needs data), so every Gitlet node serves here: each of its git lanes
-// answers `no_backend` until Gitlet is built there, a git read and an engine
-// write alike.
+// EVERY DATA NODE SERVES, asked yet or not (one joins without reconfiguring
+// the others), from BEFORE its native runtime is up: the backend resolves per
+// request, so an early request is answered "not here" rather than refused. So
+// does the git half ([engineGit]): every Gitlet node holds data in this
+// release (gitlet needs ingress, which needs data), and each git lane answers
+// `no_backend` until Gitlet is built there.
 func (e *Engine) serveEstate(ctx context.Context) error {
 	if e.local == nil || e.router == nil || e.backends == nil || e.backends.Queue == nil {
 		return nil
@@ -265,8 +229,8 @@ func (e *Engine) serveEstate(ctx context.Context) error {
 //
 // A NODE WITH NO FLEET STORE TAKES NONE: which data node keeps a batch is
 // decided there, and a keeper that could not ask would keep every copy it
-// wrote. A node without `data` cannot run beside such a node in any case — it
-// reaches the estate through the fleet's broker.
+// wrote. No node without `data` runs beside such a node: it reaches the estate
+// through the fleet's broker.
 func (e *Engine) takeCustody(ctx context.Context) error {
 	if e.backends == nil || e.backends.Store == nil ||
 		e.backends.Fleet == nil || e.backends.Queue == nil {
@@ -291,9 +255,8 @@ func (e *Engine) takeCustody(ctx context.Context) error {
 // stopKeeper takes this data node out of the custody group and ends the
 // keeper's settling pass ([observe.Keeper.Stop]). Nil-safe.
 //
-// ON A CONTEXT OF ITS OWN, the caller's cancellation removed: a stop is
-// routinely driven by the signal it is cleaning up after, and a leave that
-// inherited it would quiesce and detach nothing. The keeper bounds its own
+// WITHOUT THE CALLER'S CANCELLATION, which is often the signal it cleans up
+// after: a leave inheriting it would detach nothing. The keeper bounds its own
 // wait for a batch in hand.
 func (e *Engine) stopKeeper(ctx context.Context) {
 	if e.keeper == nil {
@@ -304,16 +267,14 @@ func (e *Engine) stopKeeper(ctx context.Context) {
 }
 
 // stopServingEstate withdraws this node from the stateless nodes' rosters of
-// who to ask. BEFORE the native runtime stops, for the reason the search
-// slices go first: a node that has decided to go away stops being asked
-// before it stops being able to answer, and the next request goes to a peer
-// rather than waiting out its budget here.
+// who to ask. BEFORE the native runtime stops, as the search slices go first:
+// a leaving node stops being asked before it stops being able to answer, so
+// the next request goes to a peer rather than waiting out its budget here.
 //
 // AND BEFORE THE ADMISSION IS WITHDRAWN ([Engine.withdraw]), with every other
-// state-log publisher: every write a peer routes here, and every
-// linearizable read's barrier, is appended through this node's publishers,
-// and one appended once the admission is gone is a write a capacity
-// coordinator was told nobody was making.
+// state-log publisher: a peer's routed write and a linearizable read's barrier
+// are appended through this node's publishers, and one appended after the
+// admission is a write a capacity coordinator was told nobody was making.
 func (e *Engine) stopServingEstate(ctx context.Context) {
 	if e.stopEstate == nil {
 		return
@@ -326,14 +287,8 @@ func (e *Engine) stopServingEstate(ctx context.Context) {
 
 // remoteActor is a tool's actor as the estate carries it: its WHOLE
 // provenance, through the one construction every writer of it uses
-// ([builtin.Actor.Provenance]).
-//
-// It carried the turn and the chain alone once, written before a person's
-// credential, its bound seat, a task's chat origin and the turn's set of
-// written items were part of a provenance — so every write that crossed the
-// router lost the four: an operator's own gesture landed on a person record
-// named after their token, a task filed from a chat thread forgot the thread,
-// and a turn that wrote one item was charged to none.
+// ([builtin.Actor.Provenance]), as a field left behind is lost on every write
+// that crosses the router (TestAToolsActorCrossesWithItsWholeProvenance).
 func remoteActor(actor builtin.Actor) estate.Actor {
 	return estate.Actor{Handle: actor.Handle, Kind: actor.Kind, Provenance: actor.Provenance()}
 }

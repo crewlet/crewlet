@@ -22,15 +22,11 @@ roles:
 `
 
 // A COMPLETION THAT ARRIVES ON A FULL WINDOW IS COLLECTED, CHARGED IN THAT
-// WINDOW AND HELD, its box paused and left asleep. The job is over and its
-// tokens are spent, so the gate asks a completion no budget: the claim
-// collects the box, the charge lands in the window the run ran in, the box is
-// paused, and the review the full window refuses holds the job on its row,
-// which the waiter skips until the window turns over. Refused at the gate
-// instead, before its claim, the run was not collected until the refusing
-// window had turned over — its tokens charged into the next one — and the
-// waiter, finding its row running, woke and kept its box alive at every poll
-// for the rest of the window.
+// WINDOW AND HELD, its box paused and left asleep. Its tokens are already
+// spent, so the gate asks a completion no budget; the review the full window
+// refuses holds the job on its row, which the waiter skips until the window
+// turns over. Refused at the gate, the run would be charged to the next window
+// and its box kept alive at every poll meanwhile.
 //
 // Mutation: ask a completion's gate the full window again (seatCannotRun), and
 // the run is never collected while the window is full.
@@ -49,8 +45,7 @@ func TestACompletionOnAFullWindowIsChargedThereAndHeldAsleep(t *testing.T) {
 		}
 		return used.In(period.Day)
 	}
-	// THE WINDOW IS FULL before the run finishes: another of the seat's
-	// turns spent it.
+	// THE WINDOW IS FULL before the run finishes.
 	if _, err := e.backends.Fleet.PostCharge(t.Context(), scope, 1000,
 		coord.WindowsAt(time.Now(), time.UTC)); err != nil {
 		t.Fatalf("PostCharge: %v", err)

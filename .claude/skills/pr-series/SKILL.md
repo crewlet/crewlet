@@ -1,0 +1,13 @@
+---
+name: pr-series
+description: "Plan and run a large change to crewlet as a series of mergeable pull requests: when to split, planning the pieces, the tracking issue, building a piece on an unmerged one without opening a pull request against another pull request's branch, and running the series until its last piece merges. Use before writing code for a change large enough that one pull request would be hard to review or would drift from main."
+---
+
+# Split a Large Change into a Series of Mergeable Pull Requests
+When to split, and what `main` must be able to take of a piece, is `CLAUDE.md`'s section of this name. Once you split, land the pieces one at a time:
+- **Plan the series first** — list the pieces in order, each with what it adds and why it is safe on `main` alone (additive, unused until a later piece wires it in, or behind config nothing sets yet). Show the user the breakdown before starting; update it when the plan changes.
+- **Open a tracking issue when GitHub access is available** — one issue describing the feature, with the pieces as a checklist. Every pull request in the series references it (`Part of #N`; the last `Closes #N`); the checklist gets each pull request's link when it opens and its tick when it merges. The issue carries `Priority` and `Effort` like any other (the `file-issue` skill), `Effort` sized for the whole series.
+- **Each piece is a complete pull request** — its own branch, tests and docs for what it adds, a semantic title that reads as a release note, `make check` clean, and every other rule in `CLAUDE.md` (no stubs, no TODOs, its `crewlet-operator` companion if needed). Push it, open it on `.github/pull_request_template.md`, and watch CI (`gh pr checks --watch`) until green, fixing whatever turns it red.
+- **Wait for it to merge, then build the next piece on `main`** — do not merge it yourself unless the user has said to.
+- **While a piece waits on review, build the next one on it rather than stall** — branch from the previous piece's branch, but open the pull request against `main` with `Builds on #N` in the description. Its diff shows both pieces until the lower one merges; then rebase onto `main`. Never open a pull request against another pull request's branch: GitHub registers the pair as a native stack, its merge endpoint refuses every pull request in it (`403 Merging stacked PRs via this endpoint is not supported`), the upper one's base can no longer be changed, and closing it does not release the stack, so only a merge from the web UI gets out.
+- **The series is the task** — finished when the last piece merges and the tracking issue closes, not when the first pull request opens.

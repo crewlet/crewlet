@@ -15,17 +15,14 @@ const sessionsOffCompany = nativeCleanupCompany + `turn_engine:
 
 // THE SESSION TOOLS ARE OMITTED WHERE NO SESSION IS KEPT, through the running
 // wiring: an epoch that keeps sessions, on a node with the estate router and
-// an object store, offers every seat both tools; an epoch whose company turned
-// the switch off offers neither — no model reads a session, the ones kept
-// before it went off included — and neither does a node with no router, nor
-// one with no store a sealed session opens from. And the tools an epoch
-// offered ask the switch of the revision the node runs at each call, so a
-// launch that pinned the epoch is refused once the node applies one that
-// turns it off.
+// an object store, offers every seat both tools; one whose company switched
+// sessions off offers neither (older sessions included), nor does a node with
+// no router or no store. The tools ask the switch of the revision the node
+// runs at each call, so a launch that pinned the epoch is refused once the
+// node applies one that turns it off.
 //
-// Mutation: register the session tools whatever the switch, the router or the
-// store says, or ask the switch of the epoch the tools were offered by, and a
-// check goes red.
+// Mutation: register the tools whatever the switch, router or store says, or
+// ask the switch of the offering epoch, and a check goes red.
 func TestTheSessionToolsAreOmittedWhereNoSessionIsKept(t *testing.T) {
 	t.Parallel()
 	names := []string{builtin.ListSessionsTool, builtin.ReadSessionTool}

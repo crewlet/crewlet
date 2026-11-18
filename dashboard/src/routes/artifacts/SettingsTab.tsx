@@ -20,6 +20,7 @@ import {
   Textarea,
   confirmMatches,
   useToast,
+  PrincipalAvatar,
 } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import { artifactSectionPath } from "~/app/routes.ts";
@@ -57,6 +58,7 @@ import {
   purgeSentence,
   roleIncludes,
 } from "~/lib/artifacts/words.ts";
+import { ChoiceFace } from "~/ui/SeatAvatar.tsx";
 
 /** A text field against its bound, as the sentence under it says. */
 function overBy(text: string, max: number): string | undefined {
@@ -326,7 +328,12 @@ function Ownership({ detail, onChanged }: { detail: ArtifactDetail; onChanged: (
     () =>
       people.index.seats
         .filter((s) => s.handle !== detail.owner)
-        .map((s) => ({ value: s.handle, label: s.name, description: s.handle })),
+        .map((s) => ({
+          value: s.handle,
+          label: s.name,
+          description: s.handle,
+          leading: <ChoiceFace seat={s} />,
+        })),
     [people, detail.owner],
   );
   const transfer = async () => {
@@ -415,6 +422,7 @@ function SeenBy({ detail }: { detail: ArtifactDetail }) {
           <ul className="artifact-list" role="list">
             {reads.map((read) => (
               <li key={read.seat}>
+                <PrincipalAvatar principal={people.seatPrincipal(read.seat)} size="text" />{" "}
                 {people.seatName(read.seat)}, {relTime(read.opened_at, now)}
               </li>
             ))}

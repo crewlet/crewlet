@@ -129,8 +129,8 @@ slack-apps.json
 # (Claude Code's `isolation: worktree`). Each is a full nested checkout with
 # its own .git pointer — transient scaffolding for one task, and committing
 # one would put a checkout inside the repository it was taken from. The rest
-# of .claude/ is deliberately NOT ignored: settings.json and any skills there
-# are project configuration and belong in the tree.
+# of .claude/ is deliberately NOT ignored: settings.json, the rules and the
+# skills there are project configuration and belong in the tree.
 .claude/worktrees/
 
 .idea/

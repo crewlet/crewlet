@@ -12,11 +12,10 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// moduleFile is one non-test Go file of the module, as the source gates in
-// this package read it.
+// moduleFile is one non-test Go file of the module, as this package's source
+// gates read it.
 type moduleFile struct {
-	// rel is the file's path below the root the read started at, with
-	// forward slashes.
+	// rel is the file's slash-separated path below the read's root.
 	rel string
 	// path is the file's path as the walk found it.
 	path string
@@ -40,13 +39,11 @@ func (f moduleFile) under(tops ...string) bool {
 // readModule is every non-test .go file below root, by sourcetree.Walk's rule
 // and no other skip.
 //
-// ONE READ FOR EVERY GATE HERE, each narrowing it by the rule its own walk
-// used to apply — the payload gates skip testdata, the payloads' own package
-// and dot-directories anywhere below the root; the group gate reads internal/;
-// the duty gate internal/ and cmd/. Five gates each walked and read the
-// module for themselves, and then ran a pattern with no literal prefix, or a
-// parser, over all of it; the read is shared, and each gate's prefilter
-// (regexlit.Required, sourcetree.Identifiers) decides what it examines.
+// ONE READ FOR EVERY GATE HERE, each narrowing it by its own rule (the payload
+// gates skip testdata, the payloads' own package and dot-directories anywhere
+// below the root; the group gate reads internal/; the duty gate internal/ and
+// cmd/), and each gate's prefilter (regexlit.Required,
+// sourcetree.Identifiers) decides what it examines.
 func readModule(root string) ([]moduleFile, error) {
 	var out []moduleFile
 	err := sourcetree.Walk(root, func(path string, d fs.DirEntry, err error) error {
@@ -71,8 +68,8 @@ func readModule(root string) ([]moduleFile, error) {
 		return nil, fmt.Errorf("read the module's Go source under %s: %w", root, err)
 	}
 	if len(out) == 0 {
-		// Every gate reading this asserts an absence over it, and a read
-		// that found nothing asserts it just as confidently.
+		// Every gate asserts an absence over this read, which an empty
+		// read would certify vacuously.
 		return nil, fmt.Errorf("found no Go source under %s — a gate reading it "+
 			"would certify nothing", root)
 	}
@@ -80,10 +77,9 @@ func readModule(root string) ([]moduleFile, error) {
 }
 
 // moduleSources is readModule of this module's root, read once per test
-// binary: the source is the build's, so no gate can see it change. The bytes
-// are kept and not the syntax trees, which for eighteen megabytes of Go would
-// hold several hundred megabytes for the rest of the binary — a gate parses
-// the few files its prefilter admits.
+// binary: the source is the build's, so no gate can see it change. It keeps
+// the bytes, not the syntax trees, which for the module's ~18 MB of Go would
+// hold hundreds of megabytes; a gate parses the few files its prefilter admits.
 var moduleSources = sync.OnceValues(func() ([]moduleFile, error) {
 	root, err := sourcetree.ModuleRoot()
 	if err != nil {
@@ -93,9 +89,8 @@ var moduleSources = sync.OnceValues(func() ([]moduleFile, error) {
 })
 
 // moduleFiles is the non-test Go source below root: the binary's one read of
-// the module when root is the module's own, and a fresh read through the same
-// function for any other — a tree a control plants — so the control certifies
-// the read the gates rely on.
+// the module when root is the module's own, else a fresh read through the same
+// function (a tree a control plants), so the control certifies the gates' read.
 func moduleFiles(t *testing.T, root string) []moduleFile {
 	t.Helper()
 	module, err := sourcetree.ModuleRoot()

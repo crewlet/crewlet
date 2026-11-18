@@ -17,9 +17,8 @@ import (
 )
 
 // rowTool is a builtin standing for the authority row it is named after: it
-// declares no argument and counts its runs, and — given asks — asks the
-// authorizer for each of those actions from inside itself before it runs, as a
-// tool deciding a stored row does.
+// declares no argument, counts its runs, and asks the authorizer for each of
+// asks from inside itself before it runs, as a tool deciding a stored row does.
 type rowTool struct {
 	name      string
 	authorize Authorizer
@@ -82,8 +81,8 @@ var (
 		Grants: []iam.Grant{iam.GrantWorklet}}
 )
 
-// gateDecided is every builtin row the gate itself decides, on an object the
-// call's arguments state, whose row names an app.
+// gateDecided is every builtin row naming an app that the gate itself decides,
+// on an object the call's arguments state.
 func gateDecided() []authz.Action {
 	var out []authz.Action
 	for _, a := range authz.Actions() {
@@ -96,14 +95,12 @@ func gateDecided() []authz.Action {
 }
 
 // EVERY APP VERB A SEAT TAKES IN A TURN SOMEBODY WOKE IS HELD TO THE APPS THEY
-// USE (ADR-0109), through the gate every builtin passes: a call the seat's own
-// row admits is refused [authz.ReasonCeiling] when the person whose turn it is
-// does not use the row's app, with the app named for them — and the same call
-// in a turn nobody woke, or one a person using the app woke, runs. A
-// read-only builtin is told its turn by [tools.Invoke] like a seat-scoped one
+// USE (ADR-0109): a call the seat's own row admits is refused
+// [authz.ReasonCeiling], naming the app, when the person whose turn it is does
+// not use the row's app, and runs in a turn nobody woke or an app user woke.
+// [tools.Invoke] tells a read-only builtin its turn like a seat-scoped one
 // ([tools.TurnBound]), so both shapes are walked. The walk is every row the
-// gate decides that names an app, so an app's new verb is held the day it is
-// written.
+// gate decides that names an app, so a new verb is held the day it is written.
 //
 // Mutation: bind no ceiling in CallInTurn — the read-only builtins run for a
 // requester who uses no app.
@@ -125,8 +122,8 @@ func TestEveryAppVerbIsHeldToTheRequestersApps(t *testing.T) {
 			return res
 		}
 		if res := run(opsBotTurn("")); res.Failed {
-			// The seat's own row refuses it — a person's gesture, a
-			// human-only verb — and that is the answer whoever woke it.
+			// The seat's own row refuses it (a person's gesture, a
+			// human-only verb), whoever woke it.
 			continue
 		}
 		walked++
@@ -149,9 +146,8 @@ func TestEveryAppVerbIsHeldToTheRequestersApps(t *testing.T) {
 }
 
 // A DECISION A TOOL TAKES INSIDE ITSELF IS HELD TO THE CEILING TOO: a row the
-// gate leaves to the tool, decided once the tool has read what the call is
-// about, reads the same ceiling the gate bound to the call — so a tool cannot
-// do for a requester inside itself what its gate would have refused them.
+// gate leaves to the tool reads the ceiling the gate bound to the call, so a
+// tool cannot do inside itself what its gate would have refused.
 //
 // Mutation: decide in-tool actions with authz.Decide alone — the tool creates
 // the item for a requester who uses no app.
@@ -174,10 +170,9 @@ func TestAnInToolDecisionIsHeldToTheCeiling(t *testing.T) {
 	}
 }
 
-// A BUILTIN CALLED OUTSIDE ANY TURN ANSWERS AS ITSELF — the operator's surface
-// and the HTTP one call a read-only builtin with no turn — and asks nobody who
-// woke anything: the ceiling is a turn's, and a principal acting through their
-// own credential is no deputy.
+// A BUILTIN CALLED OUTSIDE ANY TURN (the operator's and HTTP surfaces) ANSWERS
+// AS ITSELF and composes no requester: the ceiling is a turn's, and a
+// principal acting through their own credential is no deputy.
 //
 // Mutation: make every gated tool seat-scoped — the plain call is refused for
 // want of a seat.
@@ -202,9 +197,8 @@ func TestAPlainBuiltinStillAnswersOutsideATurn(t *testing.T) {
 }
 
 // ONE CALL COMPOSES ITS REQUESTER ONCE, AND ONLY WHEN IT NEEDS ONE: every
-// decision the call makes reads the one composition its gate bound, and a call
-// that decides no app verb reads nothing of the identity directory at all. A
-// call is one routed read at most, never one per decision; the next call reads
+// decision in a call reads the one composition its gate bound, and a call
+// deciding no app verb reads no identity directory. The next call composes
 // afresh, so a revocation applies at the turn's next call.
 //
 // Mutation: compose the ceiling at every decision — the call composes three
@@ -241,14 +235,11 @@ func TestOneCallComposesItsRequesterOnce(t *testing.T) {
 	}
 }
 
-// A REQUESTER WHO MAY NOT ACT IS TOLD SO, AND NEVER SENT FOR AN APP.
-//
-// A person whose stage may not act — suspended, or removed — holds every app
-// they were given and may still use none, so an app verb in a turn they woke
-// is refused for their stage: the agent is told they may not act in the
-// company now, and never that an administrator could give them the app, which
-// they hold and which would change nothing. The CONTROL is a requester who
-// may act and lacks the app, who is told the app.
+// A REQUESTER WHO MAY NOT ACT IS TOLD SO, AND NEVER SENT FOR AN APP: a
+// suspended or removed person holds their apps yet may use none, so an app
+// verb in a turn they woke is refused for their stage, never by sending them
+// to an administrator for an app they hold. The CONTROL is a requester who may
+// act and lacks the app, who is told the app.
 //
 // Mutation: refuse a requester who may not act naming the row's app again —
 // the suspended requester is sent for an app they hold.
@@ -298,11 +289,11 @@ func machine(login string, grants ...iam.Grant) iam.Principal {
 }
 
 // A TOKEN'S WORK USES THE APPS IT HOLDS, AND NONE IT DOES NOT (ADR-0109): a
-// credential acting as no seat that woke a turn is that turn's requester, by
-// its own apps and never admin. A pipeline's `[worklet]` token that filed an
-// item has the agent comment on it and refuses it the pages, naming the
-// credential and the app; an `[admin]` token's work uses every app; a login
-// this node cannot place, and a write that carried no apps, are a stranger's.
+// credential acting as no seat that woke a turn is its requester, by its own
+// apps, never admin. A `[worklet]` token's turn may comment and is refused the
+// pages, naming the credential and the app; an `[admin]` token's uses every
+// app; a login this node cannot place, or a write carrying no apps, is a
+// stranger's.
 //
 // Mutation: compose a turn's RequesterLogin as nobody (CeilingNone) — the
 // Worklet token's turn reads the pages; or as a stranger — its comment is
@@ -374,11 +365,10 @@ func TestATokensWorkUsesTheAppsItHolds(t *testing.T) {
 }
 
 // A CREDENTIAL IS BOUND BY THE NARROWER OF ITS WRITE AND THIS NODE (ADR-0109).
-// Tier A is per node: the apps a token's write carried are what the node that
-// took it resolved, and this node's resolution is what the token is here, now.
-// Each alone widens it somewhere — a token one node narrowed acting on
-// another's wider grants, or a write recorded before the token was narrowed
-// acting on the old ones — so a call uses only an app both name.
+// Tier A is per node: a write carries what the node that took it resolved, and
+// this node's resolution is the token here, now. Either alone widens it (a
+// token one node narrowed acting on another's wider grants, or a write from
+// before the narrowing), so a call uses only an app both name.
 //
 // Mutation: bound the credential by its carried apps alone — the token this
 // node narrowed to Worklet reads the pages; by this node's alone — the write
@@ -408,9 +398,9 @@ func TestACredentialIsBoundByTheNarrowerOfItsWriteAndThisNode(t *testing.T) {
 }
 
 // GITLET'S CEILING NAMES WHO THE TURN WORKS FOR AS WHAT THEY ARE: a person as a
-// person, and a credential acting as no seat as a credential, as the authority
-// table's own refusal does. The administrator gives the app to the credential,
-// and a seat told "the person" would go looking for somebody who never asked.
+// person, a credential acting as no seat as a credential, as the authority
+// table's refusal does: a seat told "the person" would look for somebody who
+// never asked.
 //
 // Mutation: drop the credential's case from ceilingRefused, and the token's
 // sentence names a person.

@@ -6,17 +6,12 @@ import (
 	"github.com/crewlet/crewlet/internal/org"
 )
 
-// A REMOVED SEAT'S LAST MEMORY LANDS UNDER THE ID ITS HANDLE DERIVES.
-//
-// The revision that removes a seat is already installed when the node lets the
-// seat go, so the release flush asks for the id of a seat the company no
-// longer holds. Looked up in the roster that was nobody: the flush published
-// to a subject with an empty seat token, the broker refused every row, and the
-// seat's last cycle never reached the changelog a seat re-added under the same
-// handle hydrates from.
-//
-// The control is the seat while the company still holds it, which both the
-// derivation and the roster answer alike.
+// A REMOVED SEAT'S LAST MEMORY LANDS UNDER THE ID ITS HANDLE DERIVES: the
+// revision removing a seat is installed before the node lets it go, so a roster
+// lookup finds nobody, and the flush would publish to a subject with an empty
+// seat token the broker refuses, losing the last cycle a seat re-added under
+// the handle hydrates from. The control is the held seat, which derivation and
+// roster answer alike.
 func TestARemovedSeatsMemoryKeepsTheIDItsHandleDerives(t *testing.T) {
 	t.Parallel()
 	held := audienceChart(t)

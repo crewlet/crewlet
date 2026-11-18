@@ -7,31 +7,23 @@ import (
 	"maps"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// HOW A COLLECTION RECORDS THE WAY ITS JOB'S HARNESS ENDED. The read that
-// collects a job writes on the job's own record whether its harness ended its
-// own run — over, gone cleanly by itself, its script packing it — or was cut
-// off, by the line its capture is placed by, whether or not it takes or keeps a
-// capture of the session: a relaunch that carries the round on in the job's box
-// continues the copy that box holds, which no capture describes, and a copy
-// whose harness was cut off may lack calls it made and had answered. Cut off
-// are a harness killed, its script packing after it; one told to stop by the
-// end its turn's cap asked of the job; a job its cap ended before its harness
-// started; and a job lost with its engine after it asked a person, read as its
-// loss is carried on and parked on its question for the answer that carries it
-// on in its box. And the resume that follows on the claim — a round a replaced
-// sign-in carries on, in the same frame — reads it off the claim, which was
-// read before the record was written. CUT OFF ONCE, CUT OFF FOR THE JOB: a read
-// that finds the harness ended its own run, of a job an earlier read found cut
-// off — a collection made again — leaves the record and the claim cut off.
+// HOW A COLLECTION RECORDS HOW ITS JOB'S HARNESS ENDED: on the job's record,
+// capture kept or not, as its own run (over, gone cleanly, its script packing
+// it) or cut off, by the line its capture is placed by; a relaunch in the box
+// continues its copy, which may lack calls a cut-off harness made. Cut off:
+// killed (script packing after), stopped or ended before starting by its cap,
+// or lost with its engine after asking a person. The resume on the claim, read
+// before the record, reads it off the claim. CUT OFF ONCE, CUT OFF FOR THE
+// JOB: a later read finding an own run leaves both.
 //
-// Mutation: write no record, record every job's harness as ending its own run,
-// record it only where the job's session is kept, leave the claim's copy as it
-// was read, or set the claim's copy to the read's end over a cut-off one, and a
-// case goes red.
+// Mutation: write no record, record every end as an own run, record it only
+// where the session is kept, leave the claim's copy as read, or set it to the
+// read's end over a cut-off one, and a case goes red.
 func TestACollectionRecordsHowItsJobsHarnessEnded(t *testing.T) {
 	t.Parallel()
 	archive := SessionArchive{Harness: "claude-code", SessionID: "s-1", Format: 1, Version: "2.1.310",
@@ -270,6 +262,92 @@ func TestAReadIsNeverRecordedOverAWordThisBuildDoesNotKnow(t *testing.T) {
 	}
 }
 
+// EACH OF A TAKE'S RECORDS IS GIVEN ITS OWN GRACE. After its take, the read
+// that collects a job makes two records in turn, in the room it leaves them
+// before its pause (Coordinator.takeRecordsRoom): the take's own (the digest
+// it leaves in the box, or its refusal's stamp) and the harness end, each under
+// its own grace from where it is asked. So here, in the store's own process,
+// the take runs to a second inside its deadline, its digest and the store's
+// answer each a second inside its grace, and both records land. IN A SYNCTEST
+// BUBBLE, so each answer comes exactly when its wait ends.
+//
+// Mutation: count one grace for the pair in takeRecordsRoom, and the harness
+// end is cut at the read's room for it and goes unrecorded.
+func TestEachOfATakesRecordsIsGivenItsOwnGrace(t *testing.T) {
+	t.Parallel()
+	inBubble(t, func(t *testing.T) {
+		var slow *answeredMarks
+		rig, _, _ := keepingRigWith(t, func(o *CoordinatorOptions) {
+			slow = &answeredMarks{PendingStore: o.Pending}
+			o.Pending = slow
+		})
+		// THE STORE ANSWERS A SECOND INSIDE THE RECORD'S GRACE, whatever the
+		// deadline it was asked under: one past that deadline is cut.
+		slow.answer = func(ctx context.Context) error {
+			select {
+			case <-time.After(discardGrace - time.Second):
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		rig.launchKept(t, "t1")
+		session := rig.runner.Session
+		// THE TAKE AT ITS BOUND, a second inside its deadline, wherever the
+		// read's room for its records puts that.
+		session.Taking = func(take context.Context) {
+			deadline, ok := take.Deadline()
+			if !ok {
+				t.Error("the take was asked under no deadline, want the one the read's room sets")
+				return
+			}
+			time.Sleep(time.Until(deadline) - time.Second)
+		}
+		// AND ITS DIGEST, a second inside its own grace.
+		session.Keeping = func(context.Context) { time.Sleep(discardGrace - time.Second) }
+		rig.runner.Finish(Result{Success: true, Text: "done", SessionID: "s-1", Captured: &session.Archive})
+		// A READ WITH A DEADLINE, in the store's own process: its pause keeps a
+		// grace before it, its records the room before that, and its take the
+		// ten seconds before those.
+		read, cancel := context.WithTimeout(t.Context(), 10*time.Second+3*discardGrace)
+		defer cancel()
+		if _, _, err := rig.coordinator.readBox(read, rig.get("t1"), BoxReadCollect); err != nil {
+			t.Fatalf("readBox: %v", err)
+		}
+		rig.awaitKeeps()
+		if got := session.Kept(); got != 1 {
+			t.Errorf("the take's digest was recorded in the box %d times, want once", got)
+		}
+		if got := slow.landed.Load(); got != 1 {
+			t.Errorf("the store took %d records of how the job's harness ended, want one, given its whole "+
+				"grace after the take's own record had its own", got)
+		}
+		if got := rig.get("t1").Launch.HarnessEnd; got != HarnessEndOwnRun {
+			t.Errorf("the job's record says its harness ended %q, want %q", got, HarnessEndOwnRun)
+		}
+	})
+}
+
+// answeredMarks is a coordination store that answers each record of how a
+// job's harness ended once answer returns, passing it on only where answer
+// returns nil, and counts the records it passed on that landed.
+type answeredMarks struct {
+	PendingStore
+	answer func(ctx context.Context) error
+	landed atomic.Int32
+}
+
+func (a *answeredMarks) MarkHarnessEnd(ctx context.Context, turnID, launch string, read EndRead) (bool, error) {
+	if err := a.answer(ctx); err != nil {
+		return false, err
+	}
+	marked, err := a.PendingStore.MarkHarnessEnd(ctx, turnID, launch, read)
+	if err == nil && marked {
+		a.landed.Add(1)
+	}
+	return marked, err
+}
+
 // heldMarks is a coordination store that holds every record of how a job's
 // harness ended until the context it was asked under ends, as a store slow past
 // every deadline does, noting for each how many sessions the runner had taken by
@@ -306,18 +384,14 @@ func (h *heldMarks) asked() []heldMark {
 }
 
 // A JOB'S HARNESS END IS RECORDED AFTER ITS TAKE, WITHIN THE ROOM THE READ LEAVES
-// ITS RECORDS. The record shares that room with the take's own records
-// (Coordinator.takeRecordsRoom), its crossing counted there: asked for before
-// the take, a store slow to answer it cut the take's time; past the room the
-// read leaves the take's own records (Coordinator.recordsBy), the box's pause
-// and the read's answer. So the read that collects a job asks for the record once
-// its take is done, under a deadline no later than its own less the pause's
-// grace, and a store that never answers it still leaves the box its pause.
+// ITS RECORDS (Coordinator.takeRecordsRoom, shared with the take's own): asked
+// before the take, a slow store cuts the take's time; outside that room
+// (Coordinator.recordsBy), it cuts the box's pause and the read's answer. So it
+// is asked once the take is done, under a deadline no later than the read's
+// less the pause's grace, and a store that never answers leaves the pause.
 //
-// IN A SYNCTEST BUBBLE: the take spends twenty seconds of the bubble's clock, so
-// the record's own grace, counted from where it is asked, ends past the read's
-// room for it, and the store holds the record until its deadline, which the
-// bubble's clock reaches exactly.
+// IN A SYNCTEST BUBBLE: the take spends fifty seconds, so the record's own
+// grace ends past the read's room, and the store holds it to its deadline.
 //
 // Mutation: ask for the record before the take, or under a context of its own
 // that the read's room does not bound, and a check goes red.
@@ -332,12 +406,13 @@ func TestAJobsHarnessEndIsRecordedAfterItsTakeWithinTheReadsRoom(t *testing.T) {
 		held.taken = func() int { return len(rig.runner.Takes()) }
 		rig.launchKept(t, "t1")
 		session := rig.runner.Session
-		session.Taking = func() { time.Sleep(20 * time.Second) }
+		session.Taking = func(context.Context) { time.Sleep(50 * time.Second) }
 		rig.runner.Finish(Result{Success: true, SessionID: "s-1", Captured: &session.Archive})
 		// THE READ'S DEADLINE: its take's own ends five seconds in, and the
-		// room it leaves its records thirty-five seconds in, before a record
-		// asked once the take is done would end by its own grace.
-		deadline := time.Now().Add(2*discardGrace + 5*time.Second)
+		// room it leaves its records, a grace for each of the two, sixty-five
+		// seconds in, before a record asked once the take is done would end by
+		// its own grace.
+		deadline := time.Now().Add(3*discardGrace + 5*time.Second)
 		ctx, cancel := context.WithDeadline(t.Context(), deadline)
 		defer cancel()
 		if _, _, err := rig.coordinator.readBox(ctx, rig.get("t1"), BoxReadCollect); err != nil {

@@ -32,13 +32,11 @@ import (
 // tracker's, whose applier announces them.
 var relayInboxSource = worklet.Domain{}.Name()
 
-// heardLive is what one node's sockets were handed, per domain: every inbox
-// movement, every chat effect and every artifact and datastore movement, and
-// how many times each domain was told to read again — per inbox source, and
-// for the artifact domains how many resets they were handed, which is how a
-// gap reaches them.
-// Its working-indicator half raises nothing ([quietPoster]): the relay never
-// touches it.
+// heardLive is what one node's sockets were handed, per domain: every inbox,
+// chat, artifact and datastore movement, and how many times each domain was
+// told to read again (per inbox source; for the artifact domains, the resets
+// that carry a gap). Its working-indicator half raises nothing ([quietPoster]):
+// the relay never touches it.
 type heardLive struct {
 	quietPoster
 	mu         sync.Mutex
@@ -321,24 +319,16 @@ func (n *relayNode) follow(t *testing.T) {
 }
 
 // A NODE WHOSE OWN COPY IS OUT OF SERVICE STILL TELLS ITS SOCKETS WHAT ITS
-// APPLIERS WOULD HAVE — WHOSE INBOX MOVED, WHAT WAS SAID IN A ROOM, AND WHAT
-// MOVED ON AN ARTIFACT AND IN ITS DATASTORE.
+// APPLIERS WOULD HAVE. It stays in rotation, reading through a sound peer, but
+// its appliers commit nothing anybody vouches for, so its sockets went silent.
+// With b's copy out, a's inbox movement, chat post, artifact version and
+// datastore write reach b's sockets and b's own are withheld (one source at a
+// time); each switch of source re-reads EVERY domain (the artifact domains as a
+// reset); once b's copy is back its own appliers are heard again.
 //
-// A copy that is wrong goes out of service and its node stays in rotation, its
-// dashboards reading through a sound peer; its appliers commit nothing anybody
-// vouches for, and they were the only thing those dashboards heard from — so
-// every socket on it went silent until it reconnected somewhere else, which
-// nothing told it to. Here node b's copy is out of service: what a's appliers
-// announce — an inbox movement, a chat post, an artifact's new version and a
-// datastore write — reaches b's sockets, what b's own announce is withheld
-// (one source at a time), each switch of source tells EVERY domain's screens
-// to read again (the artifact domains as their own reset), and once b's copy
-// is back its own appliers are heard again.
-//
-// Mutation: make the follower never follow (or let announce ignore whether it
-// is being relayed), and the relayed batches never arrive (or b's own arrive
-// beside them); drop a domain from deliverLive and its batch never reaches b;
-// drop a domain from liveGap and its re-reads never come.
+// Mutation: never follow (or let announce ignore relaying), and the relayed
+// batches never arrive (or b's own arrive beside them); drop a domain from
+// deliverLive or liveGap, and its batch or its re-reads never reach b.
 func TestAnOutOfServiceNodeHearsAPeersAppliers(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
@@ -428,16 +418,14 @@ func TestAnOutOfServiceNodeHearsAPeersAppliers(t *testing.T) {
 	})
 }
 
-// A FOLLOWER WHOSE SERVER STOPS SERVING MOVES TO ANOTHER, AND RE-READS.
+// A FOLLOWER WHOSE SERVER STOPS SERVING MOVES TO ANOTHER, AND RE-READS: a
+// server answers only while its own copy serves, and a follower must not go
+// silent while another data node could serve it. The sequence it read was the
+// lost server's own, so the move is a re-read, not a guess at where the next
+// one stands.
 //
-// A server answers only while its own copy serves, and a follower that loses
-// its server — out of service itself, or gone — must not go silent while
-// another data node could serve it. The sequence it read is the lost server's
-// own, so the move is a re-read rather than a guess at where the next one
-// stands.
-//
-// Mutation: let a server answer whatever its copy's state, and b goes on
-// hearing nothing from c; keep the follower on its first server, likewise.
+// Mutation: let a server answer whatever its copy's state, or keep the follower
+// on its first server, and b hears nothing from c.
 func TestAFollowerMovesToAnotherServerWhenItsServerStopsServing(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
@@ -469,18 +457,16 @@ func TestAFollowerMovesToAnotherServerWhenItsServerStopsServing(t *testing.T) {
 	}
 }
 
-// A SERVER SAYS WHAT A FOLLOWER CANNOT PLACE ITSELF IN, rather than answering
-// as though nothing were missing: a ring that no longer reaches back to the
-// follower's last batch is a GAP — whether newer batches pushed it out or one
-// was too large to keep at all — and a server back in service after its copy
-// was out is another EPOCH, because what its appliers announced meanwhile is
-// no sequence anybody can trust to be whole. Each is a re-read on the
-// follower's side; answered as an ordinary "nothing new", either is
-// announcements lost without a trace.
+// A SERVER SAYS WHAT A FOLLOWER CANNOT PLACE ITSELF IN, never "nothing new",
+// which would lose announcements without a trace: a ring that no longer reaches
+// back to the follower's last batch (newer batches pushed it out, or one was
+// too large to keep) is a GAP, and a server back in service after its copy was
+// out is another EPOCH, since what its appliers announced meanwhile is no
+// sequence anybody can trust whole. Each is a re-read for the follower.
 //
-// Mutation: drop the eviction check and the first case answers no gap; keep
-// an oversized batch's predecessors and the follower behind it is answered the
-// batches around the hole; keep the epoch across a return to service and the
+// Mutation: drop the eviction check, and the first case answers no gap; keep an
+// oversized batch's predecessors, and the follower behind it is answered the
+// batches around the hole; keep the epoch across a return to service, and the
 // last case answers the old one.
 func TestAServerSaysWhatAFollowerCannotPlaceItselfIn(t *testing.T) {
 	t.Parallel()
@@ -575,22 +561,17 @@ func holdOpen(r *liveRelay) (release func()) {
 	}
 }
 
-// A SERVER KEEPS ONLY WHAT A FOLLOWER CAN STILL ASK FOR.
+// A SERVER KEEPS ONLY WHAT A FOLLOWER CAN STILL ASK FOR: a follower new to a
+// server is answered from where it stands, so a ring kept whatever anybody
+// asked would hold its whole bound on every data node, for followers that do
+// not exist. A batch recorded with nobody answered within [liveRelayHold] and
+// no ask held open is numbered and not kept, and a follower back after the hold
+// ran out is answered a gap, never the batches either side of those it missed.
+// A batch recorded within the hold, or with an ask held open, is kept.
 //
-// A follower new to a server is answered where it stands and nothing before
-// it, so no follower is ever served a batch recorded before the last answer it
-// took: a server that kept its ring whatever anybody asked would hold its whole
-// bound on every data node, for followers that do not exist while every copy
-// serves. So a batch recorded with nobody answered within [liveRelayHold] and
-// no ask held open is numbered and not kept, and a follower that comes back
-// after the hold ran out is answered a gap — never the batches either side of
-// the ones it missed; a batch recorded within the hold, or while an ask is
-// held open, is kept and answered.
-//
-// Mutation: keep every batch whatever anybody asked, and the first ring is not
-// empty; drop the held-open count, and the batch recorded past the hold is not
-// kept for the waiting ask; stamp no hold on an answer, and the follower that
-// asked within it is answered a gap.
+// Mutation: keep every batch, and the first ring is not empty; drop the
+// held-open count, and the batch past the hold is not kept for the waiting ask;
+// stamp no hold on an answer, and the follower within it is answered a gap.
 func TestARelayServerKeepsOnlyWhatAFollowerCanStillAskFor(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -635,15 +616,12 @@ func TestARelayServerKeepsOnlyWhatAFollowerCanStillAskFor(t *testing.T) {
 	}
 }
 
-// A BATCH NOBODY CAN ASK FOR IS NEVER COPIED.
+// A BATCH NOBODY CAN ASK FOR IS NEVER COPIED: with no copy out of service
+// anywhere nobody follows, so a batch costs every data node a number, with
+// nothing encoded or allocated.
 //
-// Every data node records every committed batch of every announcing domain,
-// and in the normal state — no copy out of service anywhere — nobody follows
-// any of them, so what a batch costs there is what the relay costs the whole
-// fleet: it is numbered, and nothing is encoded or allocated.
-//
-// NOT PARALLEL, because an allocation count is the whole process's, and over
-// a hundred runs, which testing.AllocsPerRun divides and rounds down.
+// NOT PARALLEL: an allocation count is the whole process's, over a hundred
+// runs that testing.AllocsPerRun divides and rounds down.
 //
 // Mutation: encode a batch whether or not anybody may ask for it, or replace
 // the wake-up channel with nobody waiting on it, and a run allocates.
@@ -660,20 +638,15 @@ func TestABatchNobodyCanAskForIsNeverCopied(t *testing.T) {
 	}
 }
 
-// ONE DOMAIN'S WRONG COPY IS RELAYED ALONE.
+// ONE DOMAIN'S WRONG COPY IS RELAYED ALONE: a fault is one log's (ADR-0079), so
+// a node whose chat copy is out of service hears chat from a peer, its own chat
+// applier withheld, while its sound tracker applier's inbox movements stay its
+// own; only chat's screens re-read at the switch; and a server whose chat copy
+// is out answers a chat follower unserved but still serves a tracker one.
 //
-// A fault is one log's (ADR-0079): a node whose chat copy is out of service
-// still has a sound tracker copy, whose applier's movements are complete. So
-// its sockets hear chat from a peer — and its own chat applier is withheld —
-// while its inbox movements are its own tracker applier's, unrelayed; only
-// chat's screens re-read at the switch; and a server whose own chat copy is
-// out of service answers a follower relaying chat unserved, while it still
-// answers one that relays only the tracker.
-//
-// Mutation: switch every domain on any one's fault, and b's own inbox
-// movement is withheld and a's relayed; gap every domain at a switch, and the
-// inbox is re-read; answer a follower whatever its domains, and the server
-// with a wrong chat copy serves it.
+// Mutation: switch every domain on one's fault, and b's own inbox movement is
+// withheld; gap every domain at a switch, and the inbox re-reads; answer a
+// follower whatever its domains, and the wrong-chat server serves it.
 func TestOneDomainsWrongCopyIsRelayedAlone(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
@@ -732,21 +705,16 @@ func sizeOf(t *testing.T, b liveBatch) int {
 	return len(raw)
 }
 
-// A NODE NOBODY LISTENS ON RELAYS NOTHING, AND ONE LISTENER IS ENOUGH. A data
-// node with nothing attached has no sockets to tell, so a follower there would
-// be a loop asking a peer every few seconds for batches it hands to nobody —
-// and logging that it relays. So is a node whose only attachment is a chat hub
-// that serves no socket: the process attaches its hub on EVERY node, for the
-// working indicator, and a data node without `ingress` is one of them. But a
-// node whose only listener is a chat hub serving its sockets is one whose
-// rooms would otherwise go quiet, and so is one whose only listener hears the
-// artifacts — the artifact origin's verdict cache, on a data node serving that
-// origin and no API.
+// A NODE NOBODY LISTENS ON RELAYS NOTHING, AND ONE LISTENER IS ENOUGH. With no
+// sockets to tell, a follower would ask a peer every few seconds for batches it
+// hands to nobody. A chat hub serving no socket counts as nobody: the process
+// attaches one on EVERY node, for the working indicator. A hub serving sockets
+// is enough, and so is an artifacts listener alone (the artifact origin's
+// verdict cache, on a data node serving that origin and no API).
 //
-// Mutation: drop the listening check from follow, and b starts relaying; drop
-// chat from liveListening, and c never does; drop the artifact domains from
-// it, and e never does; let chatListening take any attached hub, and d starts
-// relaying.
+// Mutation: drop the listening check from follow, and b relays; drop chat or
+// the artifact domains from liveListening, and c or e never does; let
+// chatListening take any attached hub, and d relays.
 func TestANodeNobodyListensOnRelaysNothing(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()
@@ -793,24 +761,16 @@ func TestANodeNobodyListensOnRelaysNothing(t *testing.T) {
 }
 
 // A RELAYED ANSWER THE FLEET DID NOT SIGN NEVER REACHES A SOCKET, AND ONE IT
-// SIGNED DOES.
+// SIGNED DOES: a follower pushes what it takes to every socket on its node, so
+// an answer anybody on the broker could write is words in a room under
+// anybody's name. A forger answers a's subject first, in the epoch and sequence
+// the follower asked after: unsealed, under a key the fleet does not hold, and
+// under the fleet's key id with other material. Each is passed over while the
+// follower waits, and a's sealed answer behind it is what b's sockets hear.
 //
-// What a follower takes from the relay is pushed to every socket on its node
-// as a peer's appliers' work — a chat batch's excerpts and mentions, a
-// datastore's documents whole — so an answer anybody on the broker could write
-// is words in a room under anybody's name. Here a forger serves a's subject
-// beside a and answers every ask at once, before a does, in exactly the epoch
-// and the sequence the follower asked after — the forgery the unsigned relay
-// believed — unsealed, sealed under a key the fleet does not hold, and sealed
-// under the fleet's own key id with other material. Each is passed over while
-// the follower goes on waiting, and a's own sealed answer, arriving behind it,
-// is the one b's sockets hear.
-//
-// Mutation: let the follower believe a reply its OpenReply refuses (or decode
-// the body without opening it), and the forged post reaches b's chat; end the
-// ask on the first reply whatever it is, and b stops hearing a's posts behind
-// the forger; break a's seal (another channel name), and a's real post never
-// arrives.
+// Mutation: believe a reply OpenReply refuses (or decode without opening), and
+// the forged post reaches b; end the ask on the first reply, and b stops hearing
+// a behind the forger; break a's seal, and a's post never arrives.
 func TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket(t *testing.T) {
 	t.Parallel()
 	for name, seal := range map[string]func(t *testing.T, a relayAnswer) []byte{
@@ -836,9 +796,9 @@ func TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket(t *testing.T) {
 			b.follow(t)
 			b.heard.waitFor(t, "b following a", func(h heard) bool { return h.chatGaps == 1 })
 
-			// THE FORGER: on a's subject, answering first, in the follower's
-			// own epoch, with the batch after its last — and bound to the
-			// id it read off the ask, since an ask's body is in the clear.
+			// THE FORGER: on a's subject, answering first, in the follower's own
+			// epoch with the batch after its last, bound to the id read off the
+			// ask, whose body is in the clear.
 			forger := broker.Client()
 			if err := forger.Start(t.Context()); err != nil {
 				t.Fatal(err)
@@ -862,9 +822,8 @@ func TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket(t *testing.T) {
 			}
 			t.Cleanup(func() { _ = stop(context.WithoutCancel(t.Context())) })
 
-			// a's first post releases the ask in flight, which the forger
-			// never saw; the follower's next ask reaches both, and the
-			// forger answers it first.
+			// a's first post releases the ask in flight, which the forger never
+			// saw; the next ask reaches both, and the forger answers it first.
 			a.engine.chatApplied(posted("m-1"))
 			b.heard.waitFor(t, "a's first post reaching b", func(h heard) bool {
 				return len(h.chat) == 1
@@ -892,8 +851,7 @@ func TestARelayedAnswerTheFleetDidNotSignNeverReachesASocket(t *testing.T) {
 	}
 }
 
-// forgedSeal seals an answer the way a party holding ring would — one that is
-// not the fleet's.
+// forgedSeal seals an answer as a party holding ring, not the fleet's, would.
 func forgedSeal(ring recordseal.Keyring) func(t *testing.T, a relayAnswer) []byte {
 	return func(t *testing.T, a relayAnswer) []byte {
 		wire, err := newRelayWire(ring)
@@ -910,20 +868,14 @@ func forgedSeal(ring recordseal.Keyring) func(t *testing.T, a relayAnswer) []byt
 }
 
 // A SERVER ANSWERS FROM ITS RING ONLY AN ASK THE FLEET SIGNED, BOUND AND NOT
-// TAKEN BEFORE.
+// TAKEN BEFORE, or it would seal its ring's excerpts and documents for anybody.
+// Of an unsealed ask, one under an unheld key, a fleet-signed ask twice and one
+// past its deadline, only the first fleet-signed ask gets the batch; the unheld
+// key's is unserved but bound to its id (so its follower moves on at once). A
+// relay with no envelopes refuses to serve rather than answering unsigned.
 //
-// A server that sealed an answer to any ask would seal its ring — excerpts,
-// documents — for anybody, bound to whatever id they named. Here a server
-// holding a batch is asked unsealed, under a key it does not hold, with a
-// fleet-signed ask twice, and with one past its deadline: only the first
-// fleet-signed ask is answered with the batch, the one under an unheld key is
-// unserved and bound to its id (so its follower moves on at once), and the
-// rest are unserved and carry nothing. And a relay with no envelopes refuses
-// to serve rather than answering unsigned.
-//
-// Mutation: decode the ask without Admit, and the unsealed ask is answered
-// the batch; drop the guard, and the replay is; drop the deadline check in the
-// guard, and the late ask is.
+// Mutation: decode the ask without Admit, drop the guard, or drop its deadline
+// check, and the unsealed, replayed or late ask is answered the batch.
 func TestARelayServerAnswersOnlyAnAskTheFleetSigned(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

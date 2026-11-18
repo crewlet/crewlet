@@ -40,7 +40,7 @@ export interface RepoAt {
   lens?: "blame";
   lines?: string;
   doc?: "license";
-  view?: "tags";
+  view?: "tags" | "all";
   by?: string;
   when?: "today" | "7d" | "30d" | "90d";
   q?: string;
@@ -87,11 +87,35 @@ export function compareHref(
 }
 
 /**
- * A change's own page opened on its diff: the Files tab, every file its head
- * revision changes with each one's patch (`ChangePage`'s `tab=files`).
+ * A change's own page opened on its diff: the Files changed tab, every file
+ * its head revision changes with each one's patch (`ChangePage`'s `tab=files`).
  */
 export function changeDiffHref(repo: string, number: number): string {
-  return href(changePath(repo, number), { tab: "files" });
+  return changeHref(repo, number, { tab: "files" });
+}
+
+/** A change page's tabs, the conversation first, in the order the digits take them. */
+export const CHANGE_TABS = ["conversation", "revisions", "checks", "files", "more"] as const;
+export type ChangeTab = (typeof CHANGE_TABS)[number];
+
+/** Where on a change's page an address points: its tab, and on Files changed the revision, file and thread. */
+export interface ChangeAt {
+  tab?: ChangeTab;
+  rev?: number;
+  since?: number;
+  file?: string;
+  thread?: string;
+}
+
+/** A change's page at `at`; the landing tab is never spelled. */
+export function changeHref(repo: string, number: number, at: ChangeAt = {}): string {
+  const query: Record<string, string> = {};
+  for (const [key, value] of Object.entries(at)) {
+    if (value !== undefined && value !== "" && !(key === "tab" && value === "conversation")) {
+      query[key] = String(value);
+    }
+  }
+  return href(changePath(repo, number), query);
 }
 
 /**

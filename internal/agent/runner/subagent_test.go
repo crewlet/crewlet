@@ -73,13 +73,8 @@ func executeOffers(t *testing.T, r *runner.Runner) []string {
 	return surface.Catalogue
 }
 
-// THE SPAWNER REACHES THE EXECUTOR'S SURFACE.
-//
-// The regression this exists for: internal/agent/subagent was imported by
-// nothing outside its own test, so delegate was never registered on any
-// surface and all six turn_engine.subagent_* knobs were validated, schema'd,
-// documented and read by nobody. The package's whole contract — the grant, the
-// caps, the batch, the panic containment — could not run.
+// THE SPAWNER REACHES THE EXECUTOR'S SURFACE, or none of subagent's contract
+// and the turn_engine.subagent_* knobs can run.
 func TestTheSpawnerReachesTheExecutorsSurface(t *testing.T) {
 	t.Parallel()
 	r := spawnRunner(t, &runner.SubagentConfig{Limits: shipped()})
@@ -88,10 +83,8 @@ func TestTheSpawnerReachesTheExecutorsSurface(t *testing.T) {
 	}
 }
 
-// AND NOWHERE ELSE.
-//
-// The reviewer is judging what was done; a spawner there can spend a batch of
-// model calls on work the turn has already finished.
+// AND NOWHERE ELSE: a reviewer's spawner would spend model calls on finished
+// work.
 func TestOnlyTheExecutorMaySpawn(t *testing.T) {
 	t.Parallel()
 	r := spawnRunner(t, &runner.SubagentConfig{Limits: shipped()})
@@ -100,9 +93,8 @@ func TestOnlyTheExecutorMaySpawn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	// The reviewer's own surface is not returned, so this asserts the rule
-	// from the other end: a review that ran at all did so without the
-	// spawner being reachable, because spawnEntry gates on the phase.
+	// The reviewer's surface is not returned, so this asserts from the other
+	// end: a review ran without the spawner, which spawnEntry gates on phase.
 	if _, err := r.Review(context.Background(), 1, w, nil); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
@@ -118,12 +110,9 @@ func TestWithoutASubagentConfigThereIsNoSpawner(t *testing.T) {
 	}
 }
 
-// AN UNREADABLE BUDGET COUNTER REFUSES THE SPAWN.
-//
-// subagent reads a ParentRemaining of ZERO AS UNCAPPED, so a counter that
-// answered 0 for "I could not reach the store" would hand a fan-out no ceiling
-// at all — the fail-OPEN direction, on the one path where money leaves the
-// building per token. The tool is left off the surface instead.
+// AN UNREADABLE BUDGET COUNTER REFUSES THE SPAWN: subagent reads a
+// ParentRemaining of ZERO AS UNCAPPED, so answering 0 would fail OPEN. The
+// tool is left off the surface instead.
 func TestAnUnreadableBudgetLeavesTheSpawnerOff(t *testing.T) {
 	t.Parallel()
 	r := spawnRunner(t, &runner.SubagentConfig{
@@ -135,16 +124,10 @@ func TestAnUnreadableBudgetLeavesTheSpawnerOff(t *testing.T) {
 	}
 }
 
-// A SEAT OFFERED DELEGATE IS TOLD WHO ITS WORKERS ARE.
-//
-// `## Your workers` is gated on `delegate` being on the surface, and the gate
-// read the registry snapshot the surface was built FROM — which never holds
-// `delegate`, since the phase adds the spawner to the surface's own copy. So
-// the block was rendered for no seat at all, and an executor with templates
-// configured for it chose between them blind. The control is the same seat
-// whose budget cannot be read: the spawner is left off its surface, so the
-// block naming the templates must be left out with it, while the templates
-// themselves are still configured.
+// A SEAT OFFERED DELEGATE IS TOLD WHO ITS WORKERS ARE: the gate reads the
+// phase's surface, not the registry snapshot it was built from, which never
+// holds `delegate`. The control is the same seat with an unreadable budget:
+// no spawner, so no `## Your workers`, though the templates are configured.
 func TestASeatOfferedDelegateIsToldItsWorkers(t *testing.T) {
 	t.Parallel()
 	workers := map[string]config.Worker{"researcher": {
@@ -173,10 +156,8 @@ func TestASeatOfferedDelegateIsToldItsWorkers(t *testing.T) {
 	}
 }
 
-// A SPENT BUDGET REFUSES THE SPAWN TOO. A reader answering zero is a capped
-// seat with no room left — a seat nothing caps is handed no reader — and
-// subagent reads a ParentRemaining of zero as uncapped, so passing it on gave
-// an exhausted seat's fan-out no slice at all.
+// A SPENT BUDGET REFUSES THE SPAWN TOO: a reader answering zero is a capped
+// seat with no room left, and passed on, subagent would read it as uncapped.
 func TestASpentBudgetLeavesTheSpawnerOff(t *testing.T) {
 	t.Parallel()
 	r := spawnRunner(t, &runner.SubagentConfig{
@@ -187,8 +168,8 @@ func TestASpentBudgetLeavesTheSpawnerOff(t *testing.T) {
 	}
 }
 
-// A READABLE ONE DOES NOT. The ordinary case, and the half that proves the
-// tests above are not passing for the wrong reason.
+// A READABLE ONE DOES NOT: the control proving the tests above fail for the
+// right reason.
 func TestAReadableBudgetKeepsTheSpawner(t *testing.T) {
 	t.Parallel()
 	r := spawnRunner(t, &runner.SubagentConfig{

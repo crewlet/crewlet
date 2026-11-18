@@ -21,13 +21,11 @@ import (
 )
 
 // notYetVisibleJS answers `Stream` with "not found" for the first n calls and
-// then delegates, which is the clustered window this file's fix exists for: a
-// create committed by the metadata leader that the member which made it cannot
-// see yet.
+// then answers: a create the metadata leader committed that the member which
+// made it cannot see yet.
 //
-// EMBEDS THE INTERFACE rather than implementing it, because the one method
-// under test is one of dozens and a hand-written stub would be a list of
-// panics that has to be maintained against the vendored client.
+// EMBEDS THE INTERFACE: one method of dozens is under test, and a hand-written
+// stub would be panics to keep in step with the vendored client.
 type notYetVisibleJS struct {
 	jetstream.JetStream
 	notFound atomic.Int32
@@ -39,35 +37,26 @@ func (f *notYetVisibleJS) Stream(context.Context, string) (jetstream.Stream, err
 	if f.notFound.Add(-1) >= 0 {
 		return nil, jetstream.ErrStreamNotFound
 	}
-	// A NIL STREAM WITH A NIL ERROR is enough: nothing in openProvisioned
-	// touches the handle, and building a real one would need a broker to
-	// test a decision that has none in it.
+	// A NIL STREAM WITH A NIL ERROR is enough: openProvisioned never
+	// touches the handle.
 	return nil, nil
 }
 
 // shortReadBack is the production timing with a read-back window short enough
-// for a case to wait out, and a placement cadence to match: what the cases
-// below discriminate on is how many looks the window held and what the last
-// one said, which is the same at a tenth of a second as at five.
+// to wait out: the cases discriminate on how many looks the window held and
+// what the last one said, the same at a tenth of a second as at five.
 func shortReadBack() jsprovision.Timing {
 	t := jsprovision.Clustered(false).Timing()
 	t.ReadBack, t.PlacementRetry = 100*time.Millisecond, 5*time.Millisecond
 	return t
 }
 
-// A CREATE THAT HAS NOT PROPAGATED YET IS WAITED OUT, not reported.
-//
-// This is the failure it was found by: a clustered boot died with `open the
-// log "CREWLET_TRACKER_VECTORS": stream not found` on the node whose own
-// create of that stream had just returned success. The lookup was the one step
-// on the provisioning path with no tolerance for a peer-visible-but-not-yet-
-// local create, and a state log that cannot open the stream it just made takes
-// the whole engine down with it.
+// A CREATE THAT HAS NOT PROPAGATED YET IS WAITED OUT, not reported: a state
+// log that cannot open the stream its own create just made takes the whole
+// engine down.
 //
 // IN A SYNCTEST BUBBLE ([inBubble]): four looks at the placement cadence take
-// fifteen milliseconds of the window's hundred, which is the claim; on the
-// machine's clock a loaded race-detector run delayed the looks' timers past
-// the window, and the case failed on the scheduler's latency.
+// fifteen milliseconds of the window's hundred, exactly.
 func TestALookupWaitsOutACreateThatHasNotPropagated(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -88,26 +77,19 @@ func TestALookupWaitsOutACreateThatHasNotPropagated(t *testing.T) {
 // inBubble runs f in a synctest bubble, where a timer fires at exactly its
 // time and time moves only once every goroutine of the case is blocked.
 //
-// FOR THE CASES THAT HOLD A TIMER-DRIVEN READ TO A WINDOW: what each claims is
-// how many requests the read's own cadence fits inside the caller's budget —
-// two lost requests, their re-asks and the answer inside four terms; a re-ask
-// sent before a late answer arrives — and on the machine's clock that is also
-// a claim about how late a loaded race-detector run wakes a timer's goroutine.
-// Measured so, beside build-and-vet loops on four cores: the never-answered
-// case failed 6 runs in 90 at a load average of 45 to 47, its 200 ms budget
-// holding 110 ms of cadence, and the propagation case 1 in 300 at 25 to 30,
-// its four looks inside a 100 ms window. In the bubble the budgets are
-// unchanged and exact, so a case fails on the read's cadence and on nothing
-// else.
+// FOR THE CASES THAT HOLD A TIMER-DRIVEN READ TO A WINDOW: each claims how
+// many requests the read's cadence fits inside the caller's budget, and on the
+// machine's clock that is also a claim about how late a loaded race-detector
+// run wakes a timer's goroutine. In the bubble the budgets are exact, so a
+// case fails on the read's cadence and on nothing else.
 func inBubble(t *testing.T, f func(*testing.T)) {
 	t.Helper()
 	synctest.Test(t, f)
 }
 
 // armedWaits records each wait a fake was handed: what it waited on, the
-// instant it was armed and the deadline it was armed with. It reads no clock
-// but the one the case runs on — a bubbled case's, where the deadline less the
-// instant is exactly what the wait was handed.
+// instant it was armed and its deadline. In a bubbled case the deadline less
+// the instant is exactly what the wait was handed.
 type armedWaits struct {
 	mu    sync.Mutex
 	waits []armedWait
@@ -145,18 +127,14 @@ func (w *armedWaits) all() []armedWait {
 }
 
 // AND A STREAM THAT REALLY IS GONE IS STILL REPORTED — with its own error,
-// not the deadline's.
-//
-// The tolerance above is bounded for exactly this: if "not found" were waited
-// out for ever, a genuinely missing stream would hang a boot instead of naming
-// itself, which is the trade openBucket's placement retry documents in the
-// other direction.
+// not the deadline's: the tolerance above is bounded so a genuinely missing
+// stream names itself rather than hanging a boot (coord/kv's openBucket makes
+// the trade the other way).
 func TestAMissingStreamIsStillReportedAsMissing(t *testing.T) {
 	t.Parallel()
 	js := &notYetVisibleJS{}
-	// More not-founds than the budget can hold at the retry cadence, so the
-	// wait runs out rather than succeeding late — at [shortReadBack]'s
-	// window, which is the half this case waits out.
+	// More not-founds than [shortReadBack]'s window holds, so the wait
+	// runs out rather than succeeding late.
 	js.notFound.Store(1 << 30)
 	q := &Queue{js: js, timing: shortReadBack()}
 
@@ -167,9 +145,8 @@ func TestAMissingStreamIsStillReportedAsMissing(t *testing.T) {
 	}
 }
 
-// A CANCELLED CALLER IS NOT HELD for the whole tolerance. The retry shortens
-// against the parent like every other budget on this path, so a boot somebody
-// interrupted gives the prompt back rather than finishing its wait.
+// A CANCELLED CALLER IS NOT HELD for the whole tolerance: the retry shortens
+// against the parent, so an interrupted boot gives the prompt back at once.
 func TestACancelledLookupReturnsAtOnce(t *testing.T) {
 	t.Parallel()
 	js := &notYetVisibleJS{}
@@ -192,9 +169,9 @@ func TestACancelledLookupReturnsAtOnce(t *testing.T) {
 type deadlineJS struct {
 	jetstream.JetStream
 	creates armedWaits
-	// asked counts every create, one with no deadline included, and holds
-	// is how many the case's budget can hold: past it a create is ANSWERED,
-	// so one asked for ever — a create no budget bounds — ends.
+	// asked counts every create, undeadlined ones included; past holds,
+	// what the case's budget can hold, a create is ANSWERED, so a create
+	// no budget bounds still ends.
 	asked, holds int
 	undeadlined  bool
 }
@@ -214,47 +191,28 @@ func (f *deadlineJS) CreateConsumer(ctx context.Context, _ string,
 	return nil, ctx.Err()
 }
 
-// Consumer is the read-back ensureDurableConsumer makes when a create fails,
-// and it refuses too: this case is about the DEADLINES the creates carried,
-// and a read-back that answered would only add a second path to reason about.
+// Consumer is the read-back ensureDurableConsumer makes when a create fails.
+// It refuses too, so the DEADLINES the creates carried are the only path.
 func (f *deadlineJS) Consumer(context.Context, string, string) (jetstream.Consumer, error) {
 	return nil, errors.New("not there either")
 }
 
 // A DURABLE CONSUMER GETS THE PROVISIONING BUDGET, like every other replicated
-// create on this path.
+// create on this path, never nats.go's 5s default, under which the slow-create
+// breadcrumb ([jsprovision.SlowAfter]) could never fire.
 //
-// It did not. Nothing here set a deadline, so the caller's context reached
-// nats.go with none of its own — an engine boot's has none — and the client's
-// FIVE-SECOND default applied instead. That is a twenty-fourth of the clustered
-// budget, and shorter than [jsprovision.SlowAfter], so the slow-create
-// breadcrumb beside this call could never fire and the retry window it
-// describes did not exist.
+// The create is HELD, as an unsettled group holds it, so it is re-asked until
+// the budget is spent; in a bubble ([inBubble]) each deadline less its arming
+// instant is exactly its term, held to the clustered ask term or what the
+// budget had left, and the last deadline to the clustered budget from the call.
 //
-// # Held, in a bubble, and read off the waits it was handed
-//
-// The create is HELD, as a group that has not settled holds it, so it is
-// asked again until its budget is spent; and the case runs IN A SYNCTEST
-// BUBBLE ([inBubble]), where the two minutes that takes are the bubble's and
-// each request's deadline less the instant it was armed is exactly the term it
-// was handed. So the budget is the instant the last request was armed to end
-// at, held to the clustered budget from the call, and every request's term to
-// the clustered ask term or what the budget had left; and the breadcrumb is
-// seen to fire. It used to be one request, answered at once, whose time left
-// was read off the machine's clock once the call had returned and held above
-// the breadcrumb's threshold: a runner that lost five seconds after the create
-// failed it, and a create on a budget of a single term, or on the solo budget,
-// passed it.
-//
-// Mutation: create on the caller's context with no budget of its own, and the
-// create is asked past the clustered budget; give the budget a single term, or
-// read the topology as solo, and the asking ends early.
+// Mutation: create on the caller's context and it is asked past the budget;
+// a single-term budget, or a solo topology, ends the asking early.
 func TestADurableConsumerCreateCarriesTheProvisioningBudget(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
-		// THE CLUSTERED TIMING AS PRODUCTION HAS IT, which is what the
-		// waits are held to — never the queue's own, which a queue that
-		// read its topology wrongly would answer for the wrong topology.
+		// THE CLUSTERED TIMING AS PRODUCTION HAS IT, never the queue's own,
+		// which a queue that misread its topology would get wrong.
 		clustered := jsprovision.Clustered(true).Timing()
 		// AT MOST ONE REQUEST A RE-ASK FITS IN THE BUDGET, whatever the
 		// term: a create asked more often than that is one no budget bounds.
@@ -329,19 +287,12 @@ func (f *racedJS) Consumer(context.Context, string, string) (jetstream.Consumer,
 
 // A CONSUMER THE READ-BACK RECOVERED WAS NOT CREATED BY THIS CALL.
 //
-// # Why the bool is worth being exact about
-//
 // [queue.EventQueue] says EnsureSubscription "reports whether this call
-// created it", and the read-back is the one path that can answer wrongly: it
-// exists precisely because somebody ELSE's create is what put the consumer
-// there. Derived from the preceding lookup alone, every member of a fleet
-// booting together reported that it had made every mailbox — the lookup says
-// not-found on all of them, and the recovery is invisible to it.
-//
-// Nothing branches on the bool today; it is a log line and a contract the
-// conformance suite holds both backends to. That is the reason to keep it
-// honest rather than to let it drift: a count that is wrong on every node is
-// worse than no count, because it reads exactly like a correct one.
+// created it", and the read-back exists because somebody ELSE's create put the
+// consumer there: derived from the lookup alone, every member of a fleet
+// booting together claims every mailbox. Nothing branches on the bool, but the
+// conformance suite holds both backends to it, and a count wrong on every node
+// reads exactly like a correct one.
 func TestAConsumerFoundByTheReadBackIsNotReportedAsCreated(t *testing.T) {
 	t.Parallel()
 	js := &racedJS{}
@@ -406,35 +357,16 @@ func (foundConsumer) Info(context.Context) (*jetstream.ConsumerInfo, error) {
 }
 
 // A HELD CREATE THAT TIMED OUT IS READ BACK, not just an explicit
-// already-exists.
+// already-exists: no peer races the state-log consumer (its name carries the
+// node id), but this node's own create meets the one it made on an earlier
+// boot either as ErrConsumerExists (only when the configs differ) or
+// as a TIMEOUT, the server holding the request while the metadata group
+// settles, which is what a clustered boot produces.
 //
-// # Why the tidy error is the one that matters least
-//
-// The state-log consumer's name carries the node id, so no peer races it —
-// but this node's OWN create meets the consumer it made on an earlier boot,
-// and the create announces that in two shapes. ErrConsumerExists is the tidy
-// one and needs the configs to differ. The other is a TIMEOUT: the server
-// holds the request while the metadata group settles and the deadline runs
-// out underneath it, with the consumer perfectly well placed.
-//
-// That second shape is what a clustered boot produces, and gating the
-// read-back on ErrConsumerExists alone left it reporting the timeout — a boot
-// failing over a consumer that was there, which is the failure this whole
-// change exists to remove and the one [Queue.ensureDurableConsumer] has always
-// handled for mailbox consumers.
-//
-// # Why the budget is a third of a second
-//
-// The read-back runs only once the create's WHOLE budget is spent: a held
-// create is an unanswered request, so [jsprovision.Timing.Place] asks it again
-// until the budget ends, and only then is the question handed to the read-back.
-// At the clustered budget that is two minutes of a case doing nothing, and
-// handing the open a caller's deadline instead would not reach the branch
-// honestly — the read-back runs on that same context and would find it spent.
-// So the queue's own timing is shortened, keeping the one relation that makes
-// the re-ask observable: the budget holds several terms and the pauses between
-// them, so a create that is asked once and never again is told apart from one
-// re-asked until the budget ran out.
+// The read-back runs only once [jsprovision.Timing.Place] has re-asked the
+// create for its WHOLE budget, and a caller's deadline would leave the
+// read-back a spent context, so the queue's own timing is shortened — still
+// several terms, so a create re-asked is told from one asked once.
 func TestAHeldConsumerCreateIsReadBackRatherThanReported(t *testing.T) {
 	t.Parallel()
 	js := &heldCreateJS{}
@@ -452,9 +384,8 @@ func TestAHeldConsumerCreateIsReadBackRatherThanReported(t *testing.T) {
 	if cons == nil {
 		t.Fatal("no consumer came back")
 	}
-	// EXHAUSTED, NOT ANSWERED: a held request is one nobody replied to, so
-	// it is asked again until the budget ends — one create would be a
-	// branch reached by something other than the budget running out.
+	// EXHAUSTED, NOT ANSWERED: a held create is re-asked until the budget
+	// ends; one create means the branch was reached some other way.
 	if got := js.creates.Load(); got < 2 {
 		t.Errorf("the held create was sent %d time(s); an unanswered create is "+
 			"asked again until its budget is spent", got)
@@ -507,44 +438,18 @@ func (f *unsettledLookupJS) CreateConsumer(ctx context.Context, _ string,
 	return reportingConsumer{info: f.made}, nil
 }
 
-// AN EXHAUSTED LOOKUP LEAVES THE CREATE ITS WHOLE BUDGET.
+// AN EXHAUSTED LOOKUP LEAVES THE CREATE ITS WHOLE BUDGET: the create's
+// deadline is derived after the lookup returns, as at every other create
+// site. Derived before, an unanswered lookup spends it, and on a solo broker,
+// where the two are equal, the create is never sent.
 //
-// # What it was
+// Staged so: Budget equal to Lookup, as solo production has them; a read term
+// and pause well under the ceiling, so the lookup is EXHAUSTED rather than
+// answered; a group silent until the create arrives. In a bubble ([inBubble])
+// the create must be armed with the whole budget exactly.
 //
-// The create's deadline was derived BEFORE the lookup, so it ran while the
-// lookup did, and a lookup nobody answered spent up to its whole ceiling of the
-// create's budget. On a solo broker the two are equal — thirty seconds each —
-// so a lookup asked until its ceiling ran out handed the create a context that
-// had already expired: the create never reached the broker, the read-back found
-// nothing, and the open failed reporting a consumer that "is not there" over a
-// create that was never sent. On a fleet the create kept ninety seconds of the
-// two minutes [jsprovision.Budget] promises it. Every other create site derives
-// the create's deadline after its lookup returns, which is what the lookup's
-// own comment already said this one did.
-//
-// # Staged where the failure is total, scaled down
-//
-// Budget equal to Lookup, as production's solo timing has them, so a create
-// whose budget the lookup shared is handed nothing at all — and the time the
-// create was handed is asserted too, which also catches the share a fleet's
-// larger budget would lose. The read term and the pause are a fraction of the
-// ceiling so the lookup is asked several times before it gives up: EXHAUSTED
-// rather than answered, which is the only way the create reaches the budget
-// question at all. The group answers nothing until the create arrives, as one
-// that is still forming does.
-//
-// # The whole budget, exactly
-//
-// IN A SYNCTEST BUBBLE ([inBubble]), the create's deadline less the instant
-// it was armed is exactly what the create was handed, and it must be the whole
-// budget. On the machine's clock it was the time left once the create
-// arrived, held to half the budget: a runner that lost a quarter of a second
-// between deriving the create's deadline and sending it failed that, and a
-// create a quarter of whose budget the lookup had spent passed it.
-//
-// Mutation: derive the create's budget before the lookup, and the create is
-// handed nothing; hand it three quarters of the budget, what a lookup that
-// spent a quarter leaves, and it is short by that quarter.
+// Mutation: derive the budget before the lookup, or hand the create three
+// quarters of it, and it is armed short.
 func TestAnExhaustedLookupLeavesTheCreateItsWholeBudget(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -645,21 +550,15 @@ func (s firstSurvivorStream) CachedInfo() *jetstream.StreamInfo {
 // A CREATE ANSWERED WITH AN EXISTING CONSUMER IS JUDGED LIKE A LOOKUP THAT
 // FOUND ONE.
 //
-// A single real broker cannot stage this: its lookup is authoritative, so an
-// existing consumer is always found rather than created. A clustered member
-// can — its lookup is unanswered or falls inside the propagation window, the
-// create goes ahead, and the broker hands back the consumer that was there all
-// along. The node that loses its rows is precisely the one whose create
-// matches the old configuration, so this is the path its consumer comes back
-// by; taken as a fresh create, the rebuild never happens on the topology where
-// losing a node's disk is most survivable.
+// Only a clustered member reaches this: its lookup is unanswered or inside the
+// propagation window, and the create hands back the consumer that was there. A
+// node that lost its rows asks for exactly the old configuration, so this is
+// the path its consumer returns by, and taken as fresh it is never rebuilt.
 //
-// And reading the stream's first sequence is a refinement, not a gate: when it
-// cannot be read the consumer is judged on its raw positions and still
-// rebuilt, because a rebuild is always correct. What the read decides is
-// whether a rebuild is needed and what it is reported as — and a raw
-// acknowledged-past is also what a node below the trim floor looks like, so
-// the warning stays a warning and says it may be either.
+// The stream's first sequence refines, never gates: unread, the consumer is
+// judged on raw positions and still rebuilt (a rebuild is always correct), and
+// the warning stays a warning, saying it may be a node below the trim floor
+// rather than rows that went backwards.
 func TestACreateAnsweredWithAnExistingConsumerIsJudged(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -800,29 +699,17 @@ func (f *failedRebuildJS) Stream(context.Context, string) (jetstream.Stream, err
 }
 
 // A FAILED REBUILD LEAVES A NODE ON ITS OLD CONSUMER ONLY WHEN THAT COSTS TIME
-// RATHER THAN RECORDS.
+// RATHER THAN RECORDS — the boot whose metadata group answers JSClusterNotAvail,
+// an answer and so not re-asked:
 //
-// # The boot this is
-//
-// A clustered restart whose metadata group is not answering — a leader lost
-// mid-boot answers JSClusterNotAvail within about ten seconds, and that is an
-// answer, so it is not re-asked. Before the rebuild existed that boot kept its
-// consumer and came up; with it, every drift failed the boot, including the
-// two that cost only time. What each drift does now:
-//
-//   - BEHIND and IN FLIGHT keep whichever consumer the broker holds, which a
-//     lookup establishes rather than the error, and the node comes up. The
-//     rebuilt one counts: a create can place the consumer and still report
-//     failure.
+//   - BEHIND and IN FLIGHT keep whichever consumer a lookup finds (a create
+//     can place it and still report failure), and the node comes up.
 //   - AHEAD, acknowledged or delivered, fails the open without asking: a node
 //     left reading either can wait for ever.
-//   - A broker that holds none after the failure — the delete landed, the
-//     create did not — fails the open, as the absent path's failed create
-//     does; so does one that cannot say what it holds.
+//   - A broker holding none after the failure, or unable to say, fails it.
 //
-// The handle a kept open returns is checked for WHICH consumer it names,
-// because naming the wrong one fails every fetch for the life of the process
-// while the boot reports success.
+// A kept handle is checked for WHICH consumer it names: the wrong one fails
+// every fetch for the life of the process while the boot reports success.
 func TestAFailedRebuildKeepsOnlyAConsumerThatCostsTime(t *testing.T) {
 	t.Parallel()
 	// The answer a leaderless metadata group sends, and an answer is not
@@ -969,31 +856,18 @@ func (f *droppedDeleteJS) CreateConsumer(_ context.Context, _ string,
 	return reportingConsumer{info: &jetstream.ConsumerInfo{Config: cfg}}, nil
 }
 
-// A RESET'S DELETE IS RE-ASKED LIKE ITS CREATE, on a deadline of its own.
+// A RESET'S DELETE IS RE-ASKED LIKE ITS CREATE, on a deadline of its own: it
+// goes to the same metadata group, an adoption's context has no deadline (so
+// nats.go's 5s default would decide a replicated write), and a dropped
+// request must not fail the open of a consumer AHEAD of its rows.
 //
-// The delete is a request to the same metadata group as the create after it,
-// and it went out on the caller's context with neither a term nor a re-ask. An
-// adoption's context has no deadline, so nats.go's five-second default decided
-// a replicated write on a clustered fleet; and a request the group dropped
-// failed the reset on the spot rather than being asked again — which, on the
-// open that now reaches this for a consumer AHEAD of its rows, is a boot that
-// fails over a question nobody heard.
+// In a bubble ([inBubble]) each request's deadline less its arming instant is
+// exactly its own clustered ask term. The provisioning budget bounding all the
+// re-asks is not asserted: a group that never answers is told from a late one
+// only by waiting the budget out.
 //
-// A DEADLINE OF ITS OWN is each request's own clustered ask term, from the
-// instant it was asked. IN A SYNCTEST BUBBLE ([inBubble]) that is read off the
-// request's deadline less the instant it was armed, exactly. It used to be
-// each deadline's time left, read off the machine's clock once the reset had
-// returned and held above [jsprovision.SlowAfter]: a runner that lost five
-// seconds in the reset failed it, and a re-ask handed what the first request
-// had left, or the solo term, passed it.
-//
-// What bounds the re-asking as a whole is the provisioning budget, and that is
-// not asserted here: a group that never answers is only distinguishable from
-// one that answers late by waiting the budget out.
-//
-// Mutation: ask the delete once, on the reset's budget, and the dropped one
-// fails the reset; arm one request's deadline for every re-ask, or read the
-// topology as solo, and a delete is handed another term than its own.
+// Mutation: ask once and the dropped delete fails the reset; arm one deadline
+// for every re-ask, or read the topology as solo, and a term is wrong.
 func TestAResetsDeleteIsReAskedOnADeadlineOfItsOwn(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -1017,8 +891,7 @@ func TestAResetsDeleteIsReAskedOnADeadlineOfItsOwn(t *testing.T) {
 				"a replicated write")
 		}
 		// THE CLUSTERED TERM AS PRODUCTION HAS IT, never the queue's own,
-		// which a queue that read its topology wrongly would answer for the
-		// wrong topology.
+		// which a queue that misread its topology would get wrong.
 		term := jsprovision.Clustered(true).AskTerm()
 		for i, d := range js.deletes.all() {
 			if got := d.deadline.Sub(d.at); got != term {
@@ -1033,8 +906,8 @@ func TestAResetsDeleteIsReAskedOnADeadlineOfItsOwn(t *testing.T) {
 }
 
 // firstReadJS holds one consumer the last run left, and records how the
-// stream's first sequence was asked for: its first request is DROPPED, which
-// is the reply a metadata group that is not settled does not send.
+// stream's first sequence was asked for; its first request is DROPPED, as an
+// unsettled metadata group drops it.
 type firstReadJS struct {
 	jetstream.JetStream
 	held *jetstream.ConsumerInfo
@@ -1073,31 +946,18 @@ func (f *firstReadJS) CreateConsumer(_ context.Context, _ string,
 }
 
 // THE STREAM'S FIRST SEQUENCE IS A READ: asked only where it can change the
-// answer, re-asked when nobody replies, and bounded as a read.
+// answer, re-asked when nobody replies, and bounded by the lookup ceiling,
+// never the provisioning budget, which a dropped request would spend stalling
+// its domain. Deliveries in flight for a stopped process, the commonest
+// disagreement, are one no first sequence changes, so they skip the read.
 //
-// # What it was
-//
-// One request on the provisioning budget — two minutes on a fleet — made for
-// every consumer that disagreed with its checkpoint in any way. A request the
-// metadata group dropped stalled its domain for all of it with nothing in the
-// log, one per domain spent more than the ceiling every domain's consumer
-// shares, and the commonest disagreement a busy restart leaves — deliveries
-// in flight for the process that stopped — is one no first sequence can
-// change.
-//
-// # The two stagings
-//
-// A consumer the broker placed at a trimmed stream's first survivor, which
-// only the first sequence keeps: its dropped first request must be asked
-// again, each ask must be bounded by the queue's lookup ceiling rather than
-// the provisioning budget, and the answer must keep it. And one holding
-// deliveries in flight at its checkpoint, which is rebuilt without the read.
+// Staged twice: a consumer the broker placed at a trimmed stream's first
+// survivor, kept once its dropped first read is re-asked; and one holding
+// deliveries in flight at its checkpoint, rebuilt without the read.
 func TestTheFirstSequenceIsAReadAskedOnlyWhereItCounts(t *testing.T) {
 	t.Parallel()
-	// A LOOKUP CEILING FAR BELOW THE PROVISIONING BUDGET, so which of the
-	// two bounded the read is visible in the deadline it carried. Every
-	// other duration is production's, which is what the deadlines are read
-	// against.
+	// A LOOKUP CEILING FAR BELOW THE PROVISIONING BUDGET, so the deadline
+	// shows which bounded the read; every other duration is production's.
 	const ceiling = 3 * time.Second
 	cfg := Config{ClusterName: "crewlet-test"}
 	timing := jsprovision.Clustered(true).Timing()
@@ -1107,9 +967,7 @@ func TestTheFirstSequenceIsAReadAskedOnlyWhereItCounts(t *testing.T) {
 	t.Run("placed at the first survivor", func(t *testing.T) {
 		t.Parallel()
 		// IN A SYNCTEST BUBBLE ([inBubble]), so the re-ask is held to its
-		// cadence exactly: on the machine's clock this was a second of
-		// slack on how late a loaded race-detector run wakes the timer's
-		// goroutine, which the read never promised.
+		// cadence exactly.
 		inBubble(t, func(t *testing.T) {
 			js := &firstReadJS{held: &jetstream.ConsumerInfo{
 				Config:    domainConsumerConfig(name, 2),
@@ -1133,11 +991,9 @@ func TestTheFirstSequenceIsAReadAskedOnlyWhereItCounts(t *testing.T) {
 						"is bounded as a write", i+1, left, ceiling)
 				}
 			}
-			// ASKED AGAIN AT A READ'S CADENCE: the dropped request is told
-			// nothing at once, so it is presumed lost at once and the next
-			// follows a re-ask later — never a write's term, which a read
-			// the server dropped would wait out for a reply nobody will
-			// send.
+			// ASKED AGAIN AT A READ'S CADENCE: the dropped request fails at
+			// once, so the next follows a re-ask later — never after a
+			// write's term spent waiting for a reply nobody will send.
 			if gap := js.at[1].Sub(js.at[0]); gap != timing.ReAsk {
 				t.Errorf("the dropped ask was asked again %v later, want the %v "+
 					"re-ask after a request told nothing at once — it is held for "+
@@ -1175,10 +1031,9 @@ func TestTheFirstSequenceIsAReadAskedOnlyWhereItCounts(t *testing.T) {
 }
 
 // silentLeaderStream is a stream handle whose LEADER never answers the first
-// lost requests made of it: each of them waits out its own context, as a
-// request does that reached a member still believing in a leader the cluster
-// has just lost, and every request after them is answered at once — by the
-// leader the cluster elected meanwhile.
+// lost requests — each waits out its context, as one reaching a member that
+// still believes in a lost leader does — and answers every later one at once,
+// as the newly elected leader.
 //
 // EMBEDS THE INTERFACE, for [notYetVisibleJS]'s reason.
 type silentLeaderStream struct {
@@ -1246,15 +1101,12 @@ func shortReads() jsprovision.Timing {
 // A READ OF A DOMAIN LOG THAT ITS LEADER NEVER ANSWERED IS ASKED AGAIN, within
 // the caller's budget, rather than waited on for the whole of it.
 //
-// A domain log allows no direct get, so its info, its last message on a
-// subject and its record at a sequence are answered by the stream's leader or
-// by nobody — and a member that still believes in a leader the cluster has
-// just lost stays silent. Held for its caller's whole context, one such
-// request cost the committer's thirty-second budget: the gate reserve's usage
-// reading before a push's record, `context deadline exceeded`, a push nothing
-// decided reported `unknown`, while a request sent a second later was answered
-// by the new leader at once. Each read here is lost twice and then answered,
-// inside a budget a whole-context wait would have spent on the first.
+// A domain log allows no direct get, so its reads are answered by the stream's
+// leader or by nobody, and a member that still believes in a lost leader stays
+// silent. Held for the caller's whole context, one such request spends the
+// caller's budget while a request a second later is answered by the new
+// leader. Each read here is lost twice and then answered, inside a budget a
+// whole-context wait would have spent on the first.
 func TestADomainLogReadItsLeaderNeverAnsweredIsAskedAgain(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -1306,20 +1158,15 @@ func TestADomainLogReadItsLeaderNeverAnsweredIsAskedAgain(t *testing.T) {
 }
 
 // AND ONE NOBODY EVER ANSWERS ENDS AT THE LOOKUP CEILING, for a caller with no
-// deadline of its own: the trim tick reads every log's state on its node's
-// lifetime, in the loop that also evaluates the node's alarms, and asked until
-// somebody answered, a read of a broker the node could not reach held both for
-// good.
+// deadline of its own: the trim tick reads every log's state in the loop that
+// also evaluates the node's alarms, and a read asked until somebody answered
+// would hold both for good.
 //
-// IN A SYNCTEST BUBBLE ([inBubble]), where the read's timers fire at exactly
-// their time, so the read is held to ending AT its ceiling to the nanosecond.
-// On the machine's clock it was held to ending inside ten of them, which was
-// the claim and a loose one: a read held to five ceilings passed, and a runner
-// that lost ten failed a read that ended at one.
+// IN A SYNCTEST BUBBLE ([inBubble]), so the read ends AT its ceiling to the
+// nanosecond.
 //
-// Mutation: hold a deadline-less read to another ceiling than the lookup
-// ceiling, and it ends at that one; ask until somebody answers, and it is still
-// being asked ten ceilings on.
+// Mutation: hold a deadline-less read to another ceiling, and it ends there;
+// ask until somebody answers, and it is still asked ten ceilings on.
 func TestADomainLogReadNobodyAnswersEndsAtTheLookupCeiling(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -1364,12 +1211,10 @@ func logOver(s jetstream.Stream) *DomainLog {
 		info: func(ctx context.Context) (*jetstream.StreamInfo, error) { return s.Info(ctx) }}
 }
 
-// slowLeaderStream is a stream handle whose LEADER answers every request late,
-// after late — the leader alive and only slow, its API queue backed up — and
-// counts the requests made of it, each ONCE: it answered through the silent
-// stream's own reads, which count a request again, so the late-answer case's
-// premise — a second request asked beside the first — held for a read that
-// asked only once.
+// slowLeaderStream is a stream handle whose LEADER answers every request late
+// — alive and only slow, its API queue backed up — and counts each request
+// ONCE, never through the silent stream's reads, which would count it again
+// and let the late-answer case's premise hold for a read that asked once.
 type slowLeaderStream struct {
 	silentLeaderStream
 	late time.Duration
@@ -1406,15 +1251,13 @@ func (s *slowLeaderStream) GetMsg(ctx context.Context, seq uint64, _ ...jetstrea
 	return leadersRecord(seq), nil
 }
 
-// A READ OF A DOMAIN LOG THAT ITS LEADER ANSWERS LATE IS STILL ANSWERED: every
-// request it is asked is answered half a read term after the term ends, as a
-// leader whose API queue is backed up answers — slowly, never not at all.
-// Each request is presumed lost at its term and another is asked, and the
-// first one's late answer is taken. Abandoned at its term instead, every
-// request was thrown away before its answer came, so no reading of a leader
-// slower than the term was ever taken — and the gate reserve that admits every
-// append and every barrier through the usage reading failed each of them at
-// its own budget, every write and every linearizable read on the node at once.
+// A READ OF A DOMAIN LOG THAT ITS LEADER ANSWERS LATE IS STILL ANSWERED: each
+// request is answered half a read term after its term ends, as a backed-up
+// leader answers. A request is presumed lost at its term and another asked,
+// and the first one's late answer is taken; abandoned at its term, no answer
+// from a leader slower than the term would ever be taken, and the gate reserve
+// that admits every append and barrier through the usage reading would fail
+// every write and linearizable read on the node at once.
 func TestADomainLogReadItsLeaderAnswersLateIsAnswered(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -1436,10 +1279,9 @@ func TestADomainLogReadItsLeaderAnswersLateIsAnswered(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			// IN A BUBBLE, so the premise below is the cadence's alone: the
-			// second request goes out a re-ask after the first's term, two
-			// fifths of a term before the first's answer, a margin a loaded
-			// run's late timer could cross on the machine's clock.
+			// IN A BUBBLE, so the premise below rests on the cadence alone:
+			// the second request goes out a re-ask after the first's term,
+			// two fifths of a term before the first's answer.
 			inBubble(t, func(t *testing.T) {
 				term := shortReads().ReadTerm
 				s := &slowLeaderStream{late: term + term/2}
@@ -1465,13 +1307,10 @@ func TestADomainLogReadItsLeaderAnswersLateIsAnswered(t *testing.T) {
 // A LOG'S MEMBER COUNT IS THE STREAM'S OWN, AND EVERY STATE READ KEEPS IT.
 //
 // What a barrier that did not commit means turns on it (statelog's read
-// index): a majority that did not agree where several members store the log,
-// the member's own stalled write where one does. So it is the replication
-// factor the broker reports for the stream — never Tier A's, which the running
-// stream may exceed — and a stream an operator re-replicates under a running
-// node is seen at the next read of its state rather than at the next restart.
-// An answer stating no factor leaves the last one standing, and a log whose
-// state nobody has read is one member, the fewest a stream has.
+// index), so it is the replication factor the broker reports — never Tier A's,
+// which the running stream may exceed — and a re-replication under a running
+// node is seen at the next state read, not the next restart. An answer stating
+// no factor leaves the last one standing; a log nobody has read is one member.
 func TestALogsMemberCountIsTheStreamsOwnAndEveryStateReadKeepsIt(t *testing.T) {
 	t.Parallel()
 	var replicas atomic.Int32

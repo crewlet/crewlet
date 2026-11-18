@@ -12,108 +12,66 @@ import (
 
 // WHICH OF A ROUND'S CALLS A CUT-OFF SESSION HOLDS, READ OFF ITS KEPT ARCHIVE.
 //
-// A relaunch that continues a kept capture whose harness was cut off
-// ([SessionCapture.Interrupted]) tells the session every call the run's log
-// took after the capture's save point, and a cut-off capture's save point is
-// the newest its launch held rather than where its session ends
-// ([SessionCapture.Through]): so that list repeats calls the session holds,
-// and is headed as calls it may not show. Yet its harness names each call it
-// makes ([BridgeCall.CallID]) and files the call's use and its result under
-// that name in the session it keeps, so the capture's own archive can say
-// which of those calls the session holds the logged result of.
-// [Coordinator.HoldingsOf] is that reading, for the relaunch's telling to ask
-// before it writes the brief, and to tell the session exactly the calls it
-// lacks: internal/agent/runner asks it once per relaunch, through the engine's
-// launcher (runner.HoldingsAsker), only of a capture cut off whose first
-// request it judges, and hands the briefs told by it beside the ones told by
-// the save point ([ExactTelling]), which the launch hands only to a box whose
-// harness answers the release it was read for ([Coordinator.continueKept]).
-//
-// FACTS, AND NEVER A REFUSAL. A reading answers what the archive holds of each
-// call it was asked about ([SessionHoldings]), and one rule turns those facts
-// into a verdict ([SessionHoldings.Holds]). Every failure, of the record, the
-// row, the store or the archive, is NO READING: the relaunch then tells the
-// session every call after its save point, as it does without one, which is
-// never wrong, and no launch is refused for it.
-//
-// ONLY OF THE CAPTURE THE RELAUNCH CONTINUES: its run's record keeps exactly
-// that capture, cut off, and [ContinuityOf], THE decision, still continues the
-// turn's row with the runner that reads it. A capture whose harness ended its
-// own run holds what its save point says, and is never read.
-//
-// ONE WAIT, TAKEN BEFORE THE RECORD IS READ ([holdingsReadWait]): the record,
-// the row, the reader's slots, the open and the read all fall inside it, on a
-// frame that holds the seat and a slot of the node's admission and has
-// already waited for the capture's keep ([relaunchCaptureWait]).
-//
-// THE OBJECT IS READ A SECOND TIME, STREAMED AND NEVER SPOOLED
-// ([SessionRestore.Open]): a second object-store read and opening of what the
-// launch that continues the session fetches again, at most
-// executorkeep.SealedMaxBytes and ordinarily a mebibyte or two. A spool of the
-// reading's own would sit on the node's scratch disk beside the launch's,
-// which is not what crewlet-operator sizes an engine pod's scratch volume by,
-// and one handed on to the launch would change the fetch crewlet-operator
-// copies ([Coordinator.fetchSession]). What a stream hands out is provisional
-// until io.EOF, so a reader decides nothing before its stream has ended.
-//
-// A CALL IS HELD ONLY THROUGH ITS LOGGED RESULT ([SessionHoldings.Holds]): one
-// live result, in the main thread or in the thread of a subagent the reading
-// reports, whose failure is the log's and whose text is the output the log
-// took: every byte of an output the log kept whole, and the size and opening
-// of one it cut, compared by digests, so no tool output leaves the archive.
-// ADR-0073 records the reading.
+// A relaunch continuing a cut-off capture ([SessionCapture.Interrupted]) tells
+// the session every call logged after the save point, which is the newest its
+// launch held, not where the session ends ([SessionCapture.Through]), so the
+// list repeats calls the session holds. Its harness files each call's use and
+// result under the call's id ([BridgeCall.CallID]), so [Coordinator.HoldingsOf]
+// reads which of them the archive holds; internal/agent/runner asks it once per
+// such relaunch (runner.HoldingsAsker), and the launch hands a brief told by it
+// only to a box whose harness answers the release read for ([ExactTelling]).
+// Every failure is no reading, never a refusal: the relaunch then tells every
+// call after the save point, which is never wrong. ADR-0073.
 
 // HoldingsReader is a runner that reads, off a kept capture's archive, which of
 // a round's calls its harness's session holds ([Coordinator.HoldingsOf]). It
 // restores what it reads ([ArchiveRestorer]), since whether the session is
-// continued at all is asked of the same runner first.
+// continued at all is asked of the same runner first. It reads the archive a
+// second time, streamed and never spooled ([SessionRestore.Open]): a spool of
+// its own would sit on the node's scratch disk beside the launch's, which is
+// not what crewlet-operator sizes an engine pod's scratch volume by, and one
+// handed to the launch would change the fetch crewlet-operator copies
+// ([Coordinator.fetchSession]).
 type HoldingsReader interface {
 	ArchiveRestorer
 
-	// ReadHoldings reads what the archive open streams holds of the calls
-	// ask marks asked, or says why it reads none: a harness or a writer's
-	// release whose records it does not read, a resumer's release
-	// ([HoldingsAsk.Resumer]) whose resume it has not read, an ask it does
-	// not answer, an archive it cannot read whole within its bounds. It
-	// checks the ask past what every reading shares
-	// ([Coordinator.HoldingsOf]) before it opens anything, calls open at
-	// most once and closes what it answers, and decides only once that
-	// stream has reached io.EOF. It answers within ctx, which it checks
-	// between the bounded steps of its work, so a reading overruns ctx's
-	// deadline by one such step at most.
+	// ReadHoldings reads what the archive open streams holds of the calls ask
+	// marks asked, or says why it reads none: a harness or writer's release
+	// whose records it does not read, a resumer's release
+	// ([HoldingsAsk.Resumer]) whose resume it has not read, an ask it does not
+	// answer, an archive it cannot read whole within its bounds. It checks the
+	// ask past what every reading shares ([Coordinator.HoldingsOf]) before it
+	// opens anything, calls open at most once, closes what it answers, and
+	// decides nothing before the stream reaches io.EOF. It checks ctx between
+	// the bounded steps of its work, so it overruns ctx's deadline by one step
+	// at most.
 	ReadHoldings(ctx context.Context, archive SessionArchive,
 		open func(context.Context) (io.ReadCloser, error), ask HoldingsAsk) (SessionHoldings, error)
 }
 
-// HoldingsAsk is what a relaunch asks a reading about: the round's listed
-// calls that have an outcome, as the run's log keeps them, but the ones a
-// person approved, which the engine made on its host and which no session
-// holds; the ones its telling asks about marked ([LoggedCall.Asked]). The
-// unasked ones ride it too, so a reader can refuse an ask in which an asked
-// call's id is not that call's alone.
+// HoldingsAsk is what a relaunch asks a reading about: the round's listed calls
+// with an outcome, as the run's log keeps them, save those a person approved
+// (made by the engine on its host, so held by no session), with the ones its
+// telling asks about marked ([LoggedCall.Asked]). The unasked ones ride along
+// so a reader can refuse an ask in which an asked call's id is not that call's
+// alone.
 type HoldingsAsk struct {
 	// Calls are 1 to [MaxBridgeCalls] calls: a round's log lists at most
 	// that many.
 	Calls []LoggedCall
 
-	// Resumer is the release of the harness that continues the session, as
-	// the relaunch knows it when it writes its briefs: the release that
-	// WROTE the session (the turn's row's, which the job's box answered
-	// `--version` with before its harness started), the relaunch's best word,
-	// since its own box is acquired inside the launch, after its briefs are
-	// written. A brief told by the reading is handed only to a box whose
-	// harness answers exactly this release before its brief is chosen
-	// ([ExactTelling], [Coordinator.continueKept]), so the release that
-	// resumes is the one read for, and every other box is handed the brief
-	// told by the save point. In the form [CarryCheck.Version] keeps it
-	// ("2.1.310", a release [ValidRelease] holds). "" means unread, and no
-	// reader holds it.
+	// Resumer is the release of the harness that continues the session, in the
+	// form [CarryCheck.Version] keeps it ("2.1.310", one [ValidRelease] holds);
+	// "" means unread, and no reader holds it. The relaunch knows only the
+	// release that WROTE the session (the turn's row's, as the job's box
+	// answered `--version`), since its own box is acquired after its briefs are
+	// written, so a brief told by the reading goes only to a box whose harness
+	// answers exactly this release ([ExactTelling], [Coordinator.continueKept]).
 	//
-	// WHAT A SESSION HOLDS IS WHAT ITS RESUME HANDS ITS MODEL, and that is
-	// the resuming release's to decide, not the writer's: a release may load,
-	// order or drop the records another wrote otherwise. So each reader holds
-	// Resumer to the set of releases whose resume it read, and a release
-	// outside that set is no reading.
+	// What a session holds is what its resume hands its model, and that is the
+	// resuming release's to decide: a release may load, order or drop another's
+	// records otherwise. So each reader holds Resumer to the releases whose
+	// resume it read, and any other is no reading.
 	Resumer string
 }
 
@@ -126,12 +84,12 @@ type LoggedCall struct {
 	ID string
 
 	// Asked marks a call the relaunch's telling asks about: one it would
-	// otherwise list after the save point or among the owed reads (a read an
-	// earlier brief counted without listing it, which lies at or below the
-	// point), whose key the reader can name, valid and carried by no other
-	// call of the round (internal/agent/runner's holdingsAsk). Never a late
-	// or an abandoned call, a skipped meta-tool's, nor one the save point
-	// holds, each of which the telling decides before any reading.
+	// otherwise list after the save point or among the owed reads (counted by
+	// an earlier brief without being listed, at or below the point), whose key
+	// the reader can name, valid and carried by no other call of the round
+	// (internal/agent/runner's holdingsAsk). Never a late or abandoned call, a
+	// skipped meta-tool's, nor one the save point holds: the telling decides
+	// those before any reading.
 	Asked bool
 
 	// Failed, Output and OutputBytes are the call's outcome as the log keeps
@@ -195,15 +153,14 @@ type CallRecords struct {
 	Uses    int
 	Results int
 
-	// Of its one result, where Results is 1: Live, whether its session hands
-	// it to its model whole when the session is continued, which a result its
-	// harness hands its model replaced by a preview is not; Failed, its is_error,
-	// absent read as false; TextBytes, its text's length, -1 where its
-	// content is neither a string nor one text block; Opening, the SHA-256 of
-	// its text's first min([HoldingsOpeningBytes], TextBytes) bytes; and
-	// Whole, the SHA-256 of its whole text where TextBytes is at most
-	// [MaxBridgeOutputBytes], the most of an output the log keeps whole, and
-	// zero where it is longer.
+	// Of its one result, where Results is 1: Live, whether the continued
+	// session hands it to its model whole (not replaced by a preview); Failed,
+	// its is_error, absent read as false; TextBytes, its text's length, -1 where
+	// its content is neither a string nor one text block; Opening, the SHA-256
+	// of its text's first min([HoldingsOpeningBytes], TextBytes) bytes; Whole,
+	// the SHA-256 of its whole text where TextBytes is at most
+	// [MaxBridgeOutputBytes] (the most the log keeps whole), zero otherwise.
+	// Digests, so no tool output leaves the archive.
 	Live      bool
 	Failed    bool
 	TextBytes int
@@ -228,39 +185,31 @@ type SubagentThread struct {
 }
 
 // HoldingsOpeningBytes is how much of a call's output, from its start,
-// [SessionHoldings.Holds] compares with the text of the result its session
-// holds where the log cut the output, by digest ([CallRecords.Opening]),
-// beside the whole output's length.
+// [SessionHoldings.Holds] compares by digest ([CallRecords.Opening]) with the
+// text of the result its session holds where the log cut the output, beside
+// the whole output's length.
 //
 // 256 BYTES, INSIDE WHAT THE LOG ALWAYS KEEPS OF AN OUTPUT: past
-// [MaxBridgeOutputBytes] the log keeps an output's opening and a marker
-// ([keptCall]), and an output whose every byte the log's encoding escapes to
-// six still keeps 672 bytes of its opening, so the first 256 bytes of every
-// kept output are the output's own (TestALoggedOutputKeepsTheOpeningAHoldingCompares
-// holds the margin). A result whose text is as long as an output the log cut,
-// and opens alike for those bytes, is read as the output; an output the log
-// kept whole is compared whole ([CallRecords.Whole]). One its harness wrote
-// itself, without the call's outcome (a resume's for a call it found open, a
-// stopped harness's, a timed-out call's), carries the harness's own words, and
-// is told.
+// [MaxBridgeOutputBytes] it keeps an opening and a marker ([keptCall]), 672
+// bytes of opening even with every byte escaped to six, so these 256 are always
+// the output's own (TestALoggedOutputKeepsTheOpeningAHoldingCompares). A result
+// its harness wrote itself, without the call's outcome (a resume's for a call
+// it found open, a stopped harness's, a timed-out call's), carries the
+// harness's own words, and is told.
 const HoldingsOpeningBytes = 256
 
-// Holds is whether the session holds c's logged result, and where it does not,
-// under is the agent whose heading tells c: set only where c's records lie in
-// the thread of a subagent the reading does not report, "" telling c in the
-// main list.
+// Holds is whether the session holds c's logged result; where it does not,
+// under is the agent whose heading tells c ("" for the main list), set only
+// where c's records lie in an unreported subagent's thread. Asked only of an
+// asked call ([LoggedCall.Asked]); a reading of a kind this build does not
+// read ([HoldingsKind.Valid]) holds none.
 //
-// ONLY THROUGH ONE LIVE RESULT THAT IS THE LOG'S: records naming c in one
-// thread alone, one use and one result there, the result live, in the main
-// thread or in the thread of a subagent the reading reports, its failure the
-// log's, its text as long as the whole output the log took, and that text the
-// log's: every byte of it where the log kept the output whole
-// ([CallRecords.Whole]), and its opening where the log cut it
-// ([HoldingsOpeningBytes]), the most of it the log keeps for certain. Its
-// harness was handed exactly the output the log took, so a result anything
-// else wrote never matches, and is told.
-// A reading of no kind this build reads ([HoldingsKind.Valid]) holds no call.
-// Asked only of a call its reading was asked about ([LoggedCall.Asked]).
+// ONLY THROUGH ONE LIVE RESULT THAT IS THE LOG'S: c's records in one thread,
+// one use and one result there, live, in the main thread or a reported
+// subagent's, with the log's failure and whole output's length, and the log's
+// text: every byte where it kept the output whole ([CallRecords.Whole]), its
+// opening where it cut it ([HoldingsOpeningBytes]). Its harness was handed
+// exactly that output, so a result anything else wrote never matches.
 func (h SessionHoldings) Holds(c LoggedCall) (held bool, under string) {
 	switch {
 	case !h.Read || !h.Kind.Valid():
@@ -295,59 +244,42 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 	if whole < 0 || records.TextBytes != whole || opening > len(c.Output) {
 		return false, ""
 	}
-	// AN OUTPUT THE LOG KEPT WHOLE IS COMPARED WHOLE, never by its opening
-	// alone, which a result alike that far and otherwise past it would match.
-	// A reader keeps no whole digest of a text longer than the log keeps
-	// whole, so one logged whole and longer, which no log writes, is told.
+	// AN OUTPUT THE LOG KEPT WHOLE IS COMPARED WHOLE, never by its opening,
+	// which a result alike that far and different past it would match. A reader
+	// keeps no whole digest past what the log keeps whole, so one logged whole
+	// and longer, which no log writes, is told.
 	if c.OutputBytes == 0 {
 		return records.Whole == sha256.Sum256([]byte(c.Output)), ""
 	}
 	return records.Opening == sha256.Sum256([]byte(c.Output[:opening])), ""
 }
 
-// holdingsReadWait bounds a reading of what a cut-off session holds
-// ([Coordinator.HoldingsOf]), from before the run's record is read: the
-// record, the row, the reader's slots, the open and the read.
+// holdingsReadWait bounds a reading ([Coordinator.HoldingsOf]) from before the
+// run's record is read: the record, the row, the reader's slots, open and read.
 //
-// FIFTEEN SECONDS, the frame's patience for one operation the size of a
-// session, as the keep's is ([relaunchCaptureWait]): the relaunch's frame
-// holds the seat and a slot of the node's admission, so what it spends on a
-// kept session is thirty seconds, fifteen for its keep and fifteen for its
-// reading, and the one bounded step a reading may overrun its wait by
-// (below). An ordinary kept session is a mebibyte or two sealed: one
-// object-store read, and one pass over its lines. A reader checks the wait
-// between the bounded steps of its work ([HoldingsReader]), so a reading
-// overruns it by one such step at most; a reading past it is no reading, and
-// the relaunch tells the session every call after its save point, which is
-// never wrong. MEASURED on two cores (the executor's
-// BenchmarkAReadingAtItsBounds): Claude Code's reading of an ordinary kept
-// session, a 1.6 MiB archive, takes about 70 ms, so a burst of 32 relaunches,
-// whose readings take turns on the seats' one transcript slot, reads in about
-// 2.2 s; 255 MiB of ordinary lines, the plaintext's bound, read in 2.7 s; a
-// thread at both bounds of the model of Claude Code's resume, in 1.5 s, and
-// with the reading's worst line after it, in 1.7 s; and the slowest lines
-// measured for their size, a line at the line's bound of blocks of a kind no
-// reader names, read 8 MiB in 0.34 s, so an archive of them to the
-// plaintext's bound, which gzip shrinks to almost nothing, reads in about 11 s
-// by that rate (computed, not measured whole): inside the wait still, though
-// on a loaded node it holds the seats' slot for most of it.
+// FIFTEEN SECONDS, the frame's patience for one session-sized operation, as the
+// keep's is ([relaunchCaptureWait]): the relaunch's frame holds the seat and an
+// admission slot, so a kept session costs it thirty seconds, plus the one
+// bounded step a reader may overrun by ([HoldingsReader]) and the keep's settle
+// writes ([Coordinator.ContinuedCapture]). A reading past it is no reading.
+// BenchmarkAReadingAtItsBounds, two cores: an ordinary 1.6 MiB archive reads in
+// ~70 ms (a burst of 32 sharing the seats' one transcript slot, ~2.2 s), 255 MiB
+// of ordinary lines (the plaintext's bound) in 2.7 s, and the slowest lines
+// measured, extrapolated to that bound, ~11 s: inside the wait still.
 const holdingsReadWait = 15 * time.Second
 
 // HoldingsOf is what the session a relaunch of turnID continues holds of the
 // calls ask marks asked, read by reader off the capture (launchSeq,
-// captureSeq) the turn's run record keeps; or, with no reading, why: never a
-// refusal of the relaunch, which then tells the session every call after its
-// save point. See the file comment.
+// captureSeq) the turn's run record keeps; or, with no reading, why, which
+// never refuses the relaunch (see the file comment).
 //
-// ONLY OF THE CAPTURE THE RELAUNCH CONTINUES, CUT OFF: the run's record keeps
-// exactly that capture, its harness cut off, and [ContinuityOf] still
-// continues the turn's row with reader, as the launch's caller asks it
-// ([Coordinator.ContinuedCapture]). INSIDE ONE WAIT ([holdingsReadWait]),
-// taken before the record is read. The ask is held here only to what every
-// reading shares, a reader, 1 to [MaxBridgeCalls] calls and a resumer's
-// release read ([HoldingsAsk.Resumer]); reader checks the rest, the resumer's
-// release among it, since what its harness's records answer, and which
-// releases' resume it read, is its own to say ([HoldingsReader]).
+// ONLY OF THE CAPTURE THE RELAUNCH CONTINUES, CUT OFF, while [ContinuityOf]
+// still continues the turn's row with reader, as the launch's caller asks it
+// ([Coordinator.ContinuedCapture]): a capture whose harness ended its own run
+// holds what its save point says. INSIDE ONE WAIT ([holdingsReadWait]), taken
+// before the record is read. The ask is held here only to what every reading
+// shares (a reader, 1 to [MaxBridgeCalls] calls, a resumer's release); reader
+// checks the rest, which is its own to say ([HoldingsReader]).
 func (c *Coordinator) HoldingsOf(ctx context.Context, turnID string, launchSeq, captureSeq int64,
 	ask HoldingsAsk, reader HoldingsReader) (SessionHoldings, error) {
 
