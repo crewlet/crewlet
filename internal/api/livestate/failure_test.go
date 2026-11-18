@@ -299,3 +299,40 @@ func TestTheWorkKeyOutlivesTheRoundsThatRebuildTheCall(t *testing.T) {
 		t.Errorf("work key = %+v, want the round's own", got.LiveCall)
 	}
 }
+
+// A WORKER'S FAILURE IS NOT THE SEAT'S. A worker the executor delegated to,
+// or the round-cap judge a phase consulted, publishes its record nested under
+// that phase; the phase reads its failure as an answer and goes on. Read as
+// the seat's own, it raised "the last turn failed" on the seat's page and in
+// the Inbox while the turn was still running.
+//
+// Mutation: record every failed phase completion as the seat's last error,
+// and the worker's and the judge's failures land on the seat.
+func TestANestedRecordsFailureIsNotTheSeatsLastError(t *testing.T) {
+	t.Parallel()
+	for _, host := range []string{"execute", "review"} {
+		s := livestate.New()
+		s.Apply(env("agent_phase_started", map[string]any{
+			"agent_id": "Lead", "turn_id": "tn-1", "phase": host, "iteration": 1,
+		}, at("2026-06-14T12:00:00Z")))
+		s.Apply(env("agent_phase_completed", map[string]any{
+			"agent_id": "Lead", "turn_id": "tn-1", "phase": "subagent", "iteration": 1,
+			"host_phase": host, "host_iteration": 1, "task_id": "spec",
+			"failed": true, "error_kind": "no_result",
+		}, at("2026-06-14T12:03:00Z")))
+		if got := overlayOf(t, s, "Lead"); got.LastError != nil {
+			t.Errorf("under %s: last error = %+v, want none for a nested record's failure",
+				host, got.LastError)
+		}
+
+		// The turn's own phase failing is the seat's last error.
+		s.Apply(env("agent_phase_completed", map[string]any{
+			"agent_id": "Lead", "turn_id": "tn-1", "phase": host, "iteration": 1,
+			"failed": true, "error_kind": "timeout",
+		}, at("2026-06-14T12:04:00Z")))
+		got := overlayOf(t, s, "Lead").LastError
+		if got == nil || got.Kind != "timeout" || got.Phase != host {
+			t.Errorf("under %s: last error = %+v, want the turn's own %s failure", host, got, host)
+		}
+	}
+}
