@@ -520,7 +520,6 @@ var contract = []Entry{
 	{"CODE_MAX_BLAME_LINES", ReadScalar, "internal/gitlet.TestTheDashboardBlamesNoWiderARangeThanTheEngineAnswers"},
 	{"CHANGE_PART_PAGE", ReadScalar, "internal/gitlet.TestTheDashboardReadsAChangesConversationAtTheEnginesPage"},
 	{"CHECK_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfACheck"},
-	{"CHECK_ENDED_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfACheck"},
 	{"CHECK_PURPOSES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfACheck"},
 	{"QUEUE_STATES", ReadLiteral, "internal/gitlet.TestTheDashboardKnowsEveryStateOfAQueue"},
 	{"CodeSearchAnswer", ReadInterface, "internal/api/queries.TestTheDashboardReadsWhatACodeSearchAnswers"},

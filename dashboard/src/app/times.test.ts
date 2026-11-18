@@ -46,7 +46,7 @@ const EXCEPTIONS: Record<string, { form: Form; why: string }> = {
     form: "words",
     why: "the header sentence's time, after its verb, in a time element of its own",
   },
-  "routes/gitlet/change/Merge.tsx#EndedAgo": {
+  "routes/gitlet/checks/marks.tsx#EndedAgo": {
     form: "words",
     why: "a check's or queue's time after its state word, which arrives as a prop",
   },
