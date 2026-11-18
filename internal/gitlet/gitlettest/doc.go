@@ -12,9 +12,14 @@
 // write authority with the domain's own fence and gates, the read authority
 // with a REAL barrier — so `linearizable` is the read a node serves — the
 // committer, the lifecycle store and the retention pass. A Gitlet node
-// (StartGitletNode) is a cache, a git pool, Gitlet's host and an HTTP server that
-// mounts the host's three routes behind the API's own guard, so a person's
-// git meets the 401 challenge and Basic credential it meets in production.
+// (StartGitletNode) is a cache, a git pool, Gitlet's host, its query server
+// and merge previews under one share of its git-work lane, and an HTTP server
+// that mounts the host's three routes behind the API's own guard, so a
+// person's git meets the 401 challenge and Basic credential it meets in
+// production. Its one departure is the compactor: built as the engine builds
+// it and never started, so a case drives every pass, compaction and
+// publication itself (Node.Compactor) and what it asserts never races a pass
+// on a timer.
 // SoloNode is one data node on an embedded broker of its own and one or more
 // Gitlet nodes over its estate; internal/gitlet/gitletcluster builds three members
 // from the same two blocks, so the two topologies certify one composition.
@@ -58,7 +63,13 @@
 // than its sync — and fails if the suite passes either. Each holds an ENGINE
 // WRITE as it holds a push, and is held able to fail on one: a host that
 // answers a write's pending proposal applied, and a build that writes an
-// object into the cache its scratch leans on.
+// object into the cache its scratch leans on. So are the retention checks,
+// ARetiredPackOutlivesItsLongestRead (C4) and
+// ExpungeRetiredPackOutlivesItsLongestRead (F50), against a data node whose
+// applier keeps no retired row or whose expunge deletes the rows it should
+// retire (DataOptions.WrapApplier), and the layer check every convergence
+// runs (LayersHold, ADR-0091), against a copy damaged into a layer over a pack
+// it lacks and a chain over the wrong base.
 //
 // # An engine write is a seat's commit, and lands as a push
 //

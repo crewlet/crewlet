@@ -4,7 +4,8 @@
 // without an engine: a push decided by the repository's committer whichever
 // member received it, a committer that dies after appending, an evicted
 // writer, a committer that stops, the crash matrix on a fleet
-// (gitlettest.RunFleet), on the broker's object store and on S3.
+// (gitlettest.RunFleet), on the broker's object store and, on S3, the cases
+// whose claim the backend can change (gitlettest.StoreFleetCases).
 //
 // It has no exported surface and no code of its own; its tests are the whole
 // of it.

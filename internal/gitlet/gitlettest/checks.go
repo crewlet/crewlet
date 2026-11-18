@@ -9,14 +9,14 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE TWO BEHAVIOURS THE RECORD PINS (ADR-0084), as checks a topology that
-// lies can be run through: each returns nil when the topology behaves, and the
-// suite's own meta-test holds each able to fail.
+// The two behaviours the record pins (ADR-0084), as checks a lying topology
+// can be run through: each returns nil when the topology behaves, and the
+// suite's meta-test holds each able to fail (package doc, "The suite's own
+// checks are held able to fail").
 
 // pausedPush is a push whose record lands while the data node's applier is
-// paused: the push reaches the end of its upload, the applier is paused, and
-// the push goes on to propose — so its record is durable and applied nowhere.
-// It returns what git printed, the commit pushed, and the applier's resume.
+// paused, so it is durable and applied nowhere. It returns what git printed,
+// the commit pushed, and the applier's resume.
 func pausedPush(c *Case, p *Person, work string) (Pushed, string, func(), error) {
 	c.T.Helper()
 	p.Commit(work, map[string]string{"README.md": "one\n"}, "one")
@@ -37,8 +37,8 @@ func pausedPush(c *Case, p *Person, work string) (Pushed, string, func(), error)
 }
 
 // okFromRows is the check itself: every ref git printed `ok` for is at the
-// pushed commit in the rows as the data node holds them NOW — read stale, so
-// what the applier has not written is not there to be found.
+// pushed commit in the rows the data node holds now, read stale so what the
+// applier has not written is not there to be found.
 func okFromRows(c *Case, res Pushed, head string) error {
 	if !res.OK("refs/heads/main") {
 		return nil
@@ -55,9 +55,8 @@ func okFromRows(c *Case, res Pushed, head string) error {
 }
 
 // OkOnlyFromARow is the check that git is told `ok` for a ref only once the
-// push's own row has applied: a push whose record is durable while the
-// applier is paused must not print ok for a ref the rows do not yet hold —
-// and an ENGINE WRITE is answered applied only from its row, the same.
+// push's own row has applied, never while its record is durable and the
+// applier paused; an engine write is answered applied only from its row too.
 func OkOnlyFromARow(t *testing.T, newFleet NewFleet) error {
 	t.Helper()
 	c := newCase(t, newFleet, Shape{}, Settings())

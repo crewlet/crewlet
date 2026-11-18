@@ -20,69 +20,61 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// Estate is what the receive pipeline and the fetch path ask the code domain,
-// wherever its rows live — declared here, by the consumer: estate.CodeSeam
-// satisfies it on every node, and a single-node harness's in-process
-// committer and reader do (internal/gitlet/gitlettest).
+// Estate is what the receive pipeline and the fetch path ask the code domain:
+// estate.CodeSeam on every node, or a single-node harness's in-process
+// committer and reader (internal/gitlet/gitlettest).
 type Estate interface {
 	Resolve(ctx context.Context, q gitlet.ResolveQuery) (gitlet.RepoRef, error)
 	RepoState(ctx context.Context, q gitlet.StateQuery) (gitlet.RepoSnapshot, error)
 	Propose(ctx context.Context, p gitlet.Proposal) (gitlet.ProposeResult, error)
 	PushOutcome(ctx context.Context, q gitlet.OutcomeQuery) (gitlet.PushOutcome, error)
-	// Read is a read of Gitlet's rows by its kind: a check's box's
-	// admission reads the attempt its token names (gitlet.ReadCheckBox,
-	// checkadmit.go) — and a merge_change reads the change it merges and its
+	// Read reads Gitlet's rows by kind: a check's box's attempt
+	// (gitlet.ReadCheckBox, checkadmit.go), a merge_change's change and its
 	// target's merge gates (merge.go).
 	Read(ctx context.Context, q gitlet.ReadQuery) (gitlet.ReadAnswer, error)
-	// Merge asks the repository's committer to decide a merge_change's
-	// record (gitlet.Committer.ProposeMerge): a door only the one landing
-	// takes, as Propose is (TestEveryPushTakesTheOneLanding).
+	// Merge asks the committer to decide a merge_change
+	// (gitlet.Committer.ProposeMerge): like Propose, a door only the one
+	// landing takes (TestEveryPushTakesTheOneLanding).
 	Merge(ctx context.Context, p gitlet.MergeProposal) (gitlet.MergeResult, error)
-	// Queue asks it to decide an enqueue: a merge_change onto a target whose
-	// merges land through its queue builds nothing, and is enqueued instead.
+	// Queue decides an enqueue: a merge_change onto a target that merges
+	// through its queue builds nothing and is enqueued instead.
 	Queue(ctx context.Context, p gitlet.QueueProposal) (gitlet.QueueResult, error)
 }
 
 // Boxes is what admits a box (boxadmit.go): an executor's tokens and the run
-// rows its grants come from, and a check's tokens — whose box is admitted by
-// its attempt's row, which the Estate reads (checkadmit.go).
+// rows its grants come from, and a check's tokens, whose box is admitted by
+// its attempt's row in the Estate (checkadmit.go).
 type Boxes struct {
 	Tokens *BoxTokens
 	Runs   Runs
 	Checks *CheckTokens
 }
 
-// Runs is the executors' rows as a box's admission reads them — the sandbox
-// pending store on the fleet's coordination store, which every node reaches
-// (the engine's adapter). Declared here, by its consumer.
+// Runs is the executors' rows as a box's admission reads them: the sandbox
+// pending store on the coordination store, which every node reaches.
 type Runs interface {
-	// Run is the row of the run whose turn is turnID, as it stands: found
-	// false for none; an error is the store unreachable — UNKNOWN, never
-	// "no run".
+	// Run is the row of turnID's run: found false for none; an error is the
+	// store unreachable, UNKNOWN, never "no run".
 	Run(ctx context.Context, turnID string) (BoxRun, bool, error)
-	// RaiseFloor raises the run's code-log floor to at least pos, and only
-	// while ref is still the row's current launch: a lower pos, a
-	// superseded launch or an ended run is no write and no error. An error
-	// is the store unreachable or a lost race past its retries.
+	// RaiseFloor raises the run's code-log floor to at least pos, only while
+	// ref is the row's current launch: a lower pos, a superseded launch or an
+	// ended run is no write and no error. An error is the store unreachable
+	// or a race lost past its retries.
 	RaiseFloor(ctx context.Context, ref BoxRunRef, pos statelog.Position) error
-	// Stopped is who STOPPED seat — the person whose pause of it asked its
-	// running work to stop (coord.SeatPause.StopRunning), "" for a seat not
-	// paused or paused without it — as this node's pause watch holds it. An
-	// error is a node that has not yet read the pauses: UNKNOWN, never "not
-	// stopped".
+	// Stopped is who paused seat asking its running work to stop
+	// (coord.SeatPause.StopRunning), "" for none, as this node's pause watch
+	// holds it. An error is a node that has not read the pauses yet: UNKNOWN,
+	// never "not stopped".
 	Stopped(ctx context.Context, seat string) (by string, err error)
-	// Hold adds keys — each a seat branch's gitlet.RefHoldKey — to the holds
-	// of ref's run (its row's code holds, the turn's that launched it), all
-	// in one write, BEFORE the push that names them is proposed: what a box
-	// pushed is what its parked run depends on. The holds are the TURN'S,
-	// unioned across its launches, so ref's launch is not compared: a
-	// launch superseded since the admission leaves the key held by the turn
-	// that launched it, which keeps a branch longer, the safe direction. A
-	// row that is gone or whose ending is decided is nil, no write and no
-	// error — a run that has ended depends on nothing.
-	// sandbox.ErrCodeHoldsFull is the row at its bound, nothing written; any
-	// other error is the store unreachable, UNKNOWN, and the push is refused
-	// rather than sent unheld.
+	// Hold adds keys (each a seat branch's gitlet.RefHoldKey) to the code
+	// holds of ref's run in one write, BEFORE the push naming them is
+	// proposed: a parked run depends on what its box pushed. Holds are the
+	// TURN'S, unioned across launches, so ref's launch is not compared: a
+	// superseded launch keeps a branch longer, the safe direction. A row gone
+	// or with its ending decided is nil, no write: an ended run depends on
+	// nothing. sandbox.ErrCodeHoldsFull is the row at its bound, nothing
+	// written; any other error is UNKNOWN, and the push is refused rather
+	// than sent unheld.
 	Hold(ctx context.Context, ref BoxRunRef, keys []string) error
 }
 
@@ -97,28 +89,24 @@ type BoxRun struct {
 	Status string
 	// Seat is the handle of the seat whose run it is.
 	Seat string
-	// Ceiling is the handle of the colleague seat whose ask woke the turn
-	// that launched the run — the requester ceiling its launch resolved the
-	// repositories under — whose own grant bounds the box's beside the
-	// seat's: a read it could not make, and a push outside the seat's own
-	// namespace it could not make, are refused (gitlet.Grant.Under). "" for a
-	// run no colleague seat bounds.
+	// Ceiling is the colleague seat whose ask woke the launching turn (the
+	// requester ceiling the launch resolved repositories under): its grant
+	// bounds the box's beside the seat's, refusing a read, or a push outside
+	// the seat's own namespace, it could not make (gitlet.Grant.Under). ""
+	// for none.
 	Ceiling string
-	// WorkingFor is whom the turn that launched the run works for, as the
-	// run's checkout composed it for the turn's own code writes
-	// (internal/sandbox's PendingRun.CodeWorkingFor): the box's pushes are
-	// the turn's writes made late, so each carries it to its committer
-	// (gitlet.Proposal.WrittenFor), as the turn's own code tools' writes do;
-	// and a CREDENTIAL acting as no seat bounds the box as a colleague does,
-	// by its own grant, which reads every repository and pushes none, so the
-	// box pushes the seat's own work alone (boxadmit.go's runCeiling). Nil for
-	// a run that works for its own seat, and for one launched by a build
-	// before the field. A value this build does not know — a kind, an app —
-	// is a newer build's, carried as it stands: its committer answers such a
-	// push as a node of another build (gitlet's unknownToThisBuild), and a
-	// kind its admission cannot bound by is answered 503 carrier_unknown. One
-	// no checkout writes — a stranger, the zero kind, a credential naming no
-	// app — has the box refused every request (gitlet.RunCarrierInvalid).
+	// WorkingFor is whom the launching turn works for (internal/sandbox's
+	// PendingRun.CodeWorkingFor): the box's pushes are the turn's writes made
+	// late, so each carries it to its committer (gitlet.Proposal.WrittenFor).
+	// A CREDENTIAL acting as no seat bounds the box like a colleague, by its
+	// own grant (reads everything, pushes nothing), so the box pushes only the
+	// seat's own work (boxadmit.go's runCeiling). Nil for a run working for
+	// its own seat or launched before the field. A value this build does not
+	// know is a newer build's, carried as it stands: its committer answers it
+	// as another build's node (gitlet's unknownToThisBuild), and a kind
+	// admission cannot bound by is 503 carrier_unknown. One no checkout writes
+	// (a stranger, the zero kind, an app-less credential) has the box refused
+	// every request (gitlet.RunCarrierInvalid).
 	WorkingFor *types.WorkingFor
 	// Repos are the repositories the run was given.
 	Repos []BoxGrant
@@ -126,20 +114,17 @@ type BoxRun struct {
 	// everything its box has been shown and has pushed. Zero for none,
 	// which a box reads past LINEARIZABLE.
 	Floor statelog.Position
-	// Provenance is what the run's pushes are stamped with: TurnID the
-	// row's turn, RunID its launch, WorkBackend, WorkID, WorkKey and
-	// WorkProject its work item — the id and the project what a change its
-	// push opens carries the item by — Model its launch's model, Harness
-	// its harness — as the row holds them: the host fits each to the
-	// code domain's bound where it stamps a push (admission.principal).
+	// Provenance stamps the run's pushes, as the row holds it: TurnID the
+	// turn, RunID its launch, Work* its work item (what a change its push
+	// opens carries the item by), Model and Harness its launch's. The host
+	// fits each to the code domain's bound where it stamps a push
+	// (admission.principal).
 	Provenance gitlet.RunProvenance
-	// Holds are the row's code holds as admission read them, a set: the
-	// keys of what the run's turn holds, each a key this build may not
-	// decode — so a box's push holds only the seat branches it names that
-	// are not among them already ([admission.holdRefs]), and every later
-	// push of a branch its run holds costs the run store nothing. A set
-	// because a push names up to gitlet.MaxCommandsPerPush refs against up to
-	// sandbox.MaxCodeHolds keys.
+	// Holds are the turn's code holds as admission read them, keys this
+	// build may not decode: a push holds only the seat branches it names not
+	// already among them ([admission.holdRefs]), so re-pushing a held branch
+	// costs the run store nothing. A set because a push names up to
+	// gitlet.MaxCommandsPerPush refs against up to sandbox.MaxCodeHolds keys.
 	Holds map[string]bool
 }
 
@@ -147,10 +132,10 @@ type BoxRun struct {
 type BoxGrant struct {
 	RepoID string
 	// Name is the repository's name at launch: what the box's clone URL
-	// carries, and what its request is matched by.
+	// carries and its request is matched by.
 	Name string
-	// Access is gitlet.AccessRead or gitlet.AccessWrite: what the run's
-	// code_checkout call asked for it, the seat's own grant capping it.
+	// Access is what the run's code_checkout asked for, capped by the seat's
+	// own grant.
 	Access gitlet.Access
 	// Branch is the run's branch, refs/heads/…, for the brief and the log.
 	Branch string
@@ -167,9 +152,9 @@ func (r BoxRun) grantNamed(name string) (BoxGrant, bool) {
 	return BoxGrant{}, false
 }
 
-// Timing is every duration the host waits on that a test must be able to
-// scale (jsprovision.Timing's idiom): Production is the value the engine
-// passes, and a field left zero is refused by name.
+// Timing is every duration the host waits on that a test must scale
+// (jsprovision.Timing's idiom): the engine passes Production, and New refuses
+// a zero field by name.
 type Timing struct {
 	// PendingGrace is how long a `pending` push is waited on for its row.
 	PendingGrace time.Duration
@@ -180,53 +165,30 @@ type Timing struct {
 	Keepalive time.Duration
 	// Handshake is how long a hook connection has to name its session.
 	Handshake time.Duration
-	// Stall is how long a transfer's git process — an advertisement,
-	// upload-pack, receive-pack — may read and write nothing before the pool
-	// ends it (gitproc.Cmd.Stall). Git's own keepalives are five seconds
-	// apart at any Timing, and between them a healthy transfer may write
-	// nothing at all: a receive-pack, from its pack's last byte until its
-	// hook answers — its unpack, its connectivity check, the hook's start and
-	// the push's decide and apply, the session's keepalive beginning only a
-	// Keepalive after the hook does. So a case that sets it below five
-	// seconds holds only a stand-in git to it, never a real transfer.
+	// Stall is how long a transfer's git process may read and write nothing
+	// before the pool ends it (gitproc.Cmd.Stall). Git keeps its own
+	// five-second keepalives at any Timing, and a healthy receive-pack may be
+	// silent between them (unpack, connectivity check, hook, decide and
+	// apply), so a case setting it below five seconds holds only a stand-in
+	// git to it, never a real transfer.
 	Stall time.Duration
-	// SpoolWait is the longest a fetch request waits its turn for room in
-	// the spool allowance before it is answered 503 (spool.go).
+	// SpoolWait is the longest a fetch request waits for spool room before
+	// it is answered 503 (spool.go).
 	SpoolWait time.Duration
 }
 
 // Production is the timing every node runs with.
-//
-//   - PendingGrace is statelog.StallGrace (60 s): the grace after which the
-//     framework itself calls an applied prefix stalled, so a record unapplied
-//     for longer is one this node will not be told about by waiting.
-//   - PendingFirst is 250 ms: an append resolves in about 1.5 ms and an apply
-//     in 5–15 ms on a real cluster, so most pending pushes are found on the
-//     first read.
-//   - PendingMax is 2 s: sixty seconds at two-second steps is thirty reads per
-//     stuck push — each an estate read, not a log append.
-//   - Keepalive is 5 s: git's own uploadpack.keepAlive and receive.keepAlive
-//     default, the interval git chose for the same balancer problem.
-//   - Handshake is 5 s: the hook dials a socket on the same host, so a
-//     connection that has not named its session in five seconds is not a hook.
-//   - Stall is gitproc.TransferStall (a minute, objstore.Stall): git's
-//     keepalives are five seconds apart, so twelve of them missed is a process
-//     that stopped — and a case that holds a stand-in git still need not wait
-//     a minute to see it ended.
-//   - SpoolWait is gitproc.TransferStall less a Keepalive: 55 s. A fetch
-//     waiting for room to spool has written its client nothing and reads
-//     nothing more of its request, so its connection is QUIET, and what ends
-//     a quiet connection from outside is a balancer's idle timeout — which
-//     docs/guides/deployment.md has an operator set at a minute or more on
-//     /git/, the silence the node itself allows a git transfer. Answered a
-//     keepalive interval before that minute, the interval git keeps a
-//     transfer alive at for the same balancer, its 503 and the Retry-After
-//     in it reach a client behind a balancer that cuts at exactly a minute,
-//     however late a loaded node's timer fires, rather than the balancer's
-//     own cut, which git reports with no word of why. Waiting less would
-//     refuse checkouts the node could have served a few seconds later; there
-//     is no waiting longer behind such a balancer. A request whose own
-//     context ends sooner stops waiting then.
+//   - PendingGrace is statelog.StallGrace: a record unapplied longer is one
+//     waiting will not tell this node about.
+//   - PendingFirst is 250 ms: an apply takes 5–15 ms, so most pushes are
+//     found on the first read; PendingMax 2 s, thirty estate reads per stuck push.
+//   - Keepalive is git's own keepAlive default; Handshake 5 s, for a same-host hook.
+//   - Stall is gitproc.TransferStall, a minute: twelve git keepalives missed.
+//   - SpoolWait is 55 s, a Keepalive under the minute an operator's balancer
+//     may idle a quiet /git/ connection out at (docs/guides/deployment.md), so
+//     a spooling fetch's 503 and Retry-After beat that wordless cut however
+//     late a loaded node's timer fires; less refuses checkouts served seconds
+//     later.
 var Production = Timing{
 	PendingGrace: statelog.StallGrace,
 	PendingFirst: 250 * time.Millisecond,
@@ -243,84 +205,69 @@ const keepalive = 5 * time.Second
 
 // Options are how a Server is built. Every field but Current, ExternalBase,
 // Faults, Logger, Metrics and Now is required, and New refuses a missing one
-// by name.
-//
-// FETCHED IS REQUIRED LIKE AUDIT: Gitlet serving a `visibility: unit`
-// repository's contents to somebody and recording nothing would answer "who
-// read it" short, and an optional seam is exactly the one a caller forgets.
+// by name. FETCHED IS REQUIRED LIKE AUDIT: an optional seam is the one a
+// caller forgets, and an unrecorded read answers "who read it" short.
 type Options struct {
 	// Cache is this node's git cache: every directory a git process here
-	// reads, and the scratch repositories a push is received in.
+	// reads, and the scratch repositories pushes are received in.
 	Cache *cache.Cache
 	// Git runs every git process.
 	Git *gitproc.Pool
 	// Estate is the code domain's rows and its committer.
 	Estate Estate
-	// Objects stores a push's pack bundle — *objstore.Store in the engine —
-	// held as gitlet.Putter because gitlet.StoreBundle, the one store of a bundle
-	// and its seal every writer of a stored pack takes, is what calls it.
+	// Objects stores a push's pack bundle (*objstore.Store in the engine),
+	// held as gitlet.Putter because gitlet.StoreBundle, every pack writer's
+	// one store of a bundle and its seal, calls it.
 	Objects gitlet.Putter
-	// Audit records one push — published by the engine through the operator
-	// surface's audit, which outlives the request.
+	// Audit records one push through the operator surface's audit, which
+	// outlives the request.
 	Audit func(ctx context.Context, e types.OperatorActed)
-	// Fetched records one fetch of a `visibility: unit` repository whose
-	// answer carried a pack (fetch.go), and every download of one whose answer
-	// began or that was answered 304 (download.go), before the response ends —
-	// filed by the engine in the node's reads ledger
-	// (internal/gitlet/readaudit), which publishes every reader's reads of a
-	// flush as one record into the node's event log, from which the usage
-	// domain derives who read it. It returns at once, so no fetch's answer
-	// waits on the broker for its own record, and the record outlives the
-	// request: a client that hung up after its pack still read the repository.
+	// Fetched records, before the response ends, each fetch of a
+	// `visibility: unit` repository whose answer carried a pack (fetch.go) and
+	// each download of one that began or was answered 304 (download.go), into
+	// the node's reads ledger (internal/gitlet/readaudit). It returns at once,
+	// so no answer waits on the broker, and the record outlives the request: a
+	// client that hung up after its pack still read the repository.
 	Fetched func(ctx context.Context, e types.CodeFetched)
 	// Limits is the CURRENT epoch's code.limits.
 	Limits func() gitlet.Limits
 	// DeletedRetention is the CURRENT epoch's code.deleted_retention_days —
 	// what a deleted repository's refusal names its purge by.
 	DeletedRetention func() time.Duration
-	// Roster is the chart a seat's grant is judged by — an engine write's
-	// (write.go) and a coding box's (boxadmit.go): the serving node's
-	// CURRENT epoch's, read per request — the query server's own. A nil
-	// answer is a node with no chart yet, which builds no seat's write
-	// (gitlet.UnreadyNoChart) and admits no box.
+	// Roster is the CURRENT epoch's chart, read per request (the query
+	// server's own), that judges a seat's grant for an engine write (write.go)
+	// and a coding box (boxadmit.go). Nil is a node with no chart yet, which
+	// builds no seat's write (gitlet.UnreadyNoChart) and admits no box.
 	Roster func() gitlet.Roster
 	// Signer names an engine-built commit's author and committer from the
 	// serving node's epoch (write.go's Signer).
 	Signer Signer
-	// Share is the node's seat git-work share — the query server's own, ONE a
-	// node (gitlet.GitShare): an engine write's build holds one unit of it,
-	// given back before its landing.
+	// Share is the node's ONE seat git-work share (gitlet.GitShare), the
+	// query server's own: an engine write's build holds one unit, given back
+	// before its landing.
 	Share *gitlet.GitShare
-	// Resyncs is the node's ONE set of re-sync buckets at the log's head
-	// (gitlet.NewResyncs) — the query server's own: an engine write's one
-	// re-judgement at linearizable of a seat's refusal draws on its turn's
-	// bucket on its seat as a git read's second look does, and past it the
-	// refusal is answered from the seat's session, saying so; a coding box's
-	// re-syncs draw on its run's on the same seat's bucket, and a check's
-	// box's on its attempt's (boxlimit.go). ONE, because the census gives a
-	// seat one term on the log: a box's buckets apart from its turns' tools'
-	// were twice that term on every Gitlet node.
+	// Resyncs is the node's ONE set of re-sync buckets (gitlet.NewResyncs),
+	// the query server's own: an engine write's linearizable re-judgement of
+	// a seat's refusal draws on its turn's bucket, as a git read's second look
+	// does, and past it answers from the seat's session, saying so; a coding
+	// box draws on its run's bucket, a check's box on its attempt's
+	// (boxlimit.go). ONE, because the census gives a seat one term on the log.
 	Resyncs *gitlet.Resyncs
 	// Current reports whether this node serves the company's configuration:
-	// false on a node confirmed behind it, which builds no SEAT's write and
-	// admits no coding box from the chart the fleet replaced
-	// (gitlet.UnreadyBehindConfig). nil is current.
+	// false on a node confirmed behind, which builds no SEAT's write and
+	// admits no coding box from a replaced chart (gitlet.UnreadyBehindConfig).
+	// nil is current.
 	Current func() bool
-	// Boxes admits a box to /box/git/: the run tokens a coding box presents
-	// and the run rows its grants and floor are read from, and the check
-	// tokens a check's box presents. Every part required, as every field the
-	// host needs: a Gitlet node serves boxes whatever its company runs, since a
-	// box's run may have been launched, and a check's box made, by any node.
+	// Boxes admits a box to /box/git/. Every part is required: a Gitlet node
+	// serves boxes whatever its company runs, since any node may have launched
+	// a box's run or made a check's box.
 	Boxes Boxes
-	// NodeID is this node, which a proposal names as the one that received
-	// the push.
+	// NodeID is this node, which a proposal names as the push's receiver.
 	NodeID string
-	// ExternalBase is where a person reaches the deployment —
-	// `api.external_url` without its trailing slash, the engine's
-	// config.API.ExternalBase() — on which the line git prints for a push's
-	// change links the change's page (changeLink). Empty is a host told no
-	// address, which names the change alone: never an engine node that
-	// serves a push, since every push reaches it through the API listener
+	// ExternalBase is `api.external_url` without its trailing slash
+	// (config.API.ExternalBase()), on which the line git prints for a push's
+	// change links its page (changeLink). Empty names the change alone: never
+	// on an engine node serving a push, which arrives through the API listener
 	// `api.external_url` is required beside.
 	ExternalBase string
 	// Timing is every scaled duration (Production in the engine).
@@ -339,10 +286,10 @@ type Options struct {
 // it 503 with Retry-After StoppingRetryAfter.
 var ErrStopping = errors.New("host: Gitlet is stopping")
 
-// keepaliveTicker paces a push session's keepalive (session.go): the ticks a
-// case set in keepaliveTicks, and otherwise a ticker of every, stopped by its
-// stop. A NIL HOOK IS PRODUCTION'S TICKER, so no way of building a Server — New,
-// or a literal in a case — leaves a session's keepalive nothing to tick on.
+// keepaliveTicker paces a push session's keepalive (session.go): a case's
+// keepaliveTicks, else a ticker of every. A NIL HOOK IS PRODUCTION'S TICKER,
+// so no way of building a Server (New, or a case's literal) leaves the
+// keepalive nothing to tick on.
 func (s *Server) keepaliveTicker(every time.Duration) (<-chan time.Time, func()) {
 	if s.keepaliveTicks != nil {
 		return s.keepaliveTicks(every)
@@ -360,9 +307,9 @@ type Server struct {
 	log *slog.Logger
 	now func() time.Time
 
-	// life is the HOST's lifetime — the one stored context, for the reason
-	// the committer's is: Stop ends it, and every request's work context is
-	// joined to it, so a stop reaches every git process and hook in flight.
+	// life is the HOST's lifetime, the one stored context (as the
+	// committer's is): Stop ends it, and every request's work context joins
+	// it, so a stop reaches every git process and hook in flight.
 	life context.Context
 	end  context.CancelFunc
 
@@ -381,41 +328,34 @@ type Server struct {
 	// the spool without megabytes of fixtures (export_test.go).
 	requestMemory int
 
-	// checkProposal is gitlet.Proposal.ValidateUnstored, the receiver's own
-	// check of a proposal before its bundle is stored — a field so the suite
-	// can stand in a receiver's bug, which no push reaches (export_test.go).
+	// checkProposal is gitlet.Proposal.ValidateUnstored, checked before the
+	// bundle is stored: a field so the suite can stand in a receiver's bug,
+	// which no push reaches (export_test.go).
 	checkProposal func(gitlet.Proposal) error
 
-	// runGit is o.Git.Run, through which every git process the server starts
-	// goes — a field so the suite can read each Cmd as the pool is handed it
-	// (export_test.go). A push's deadlines are formed at their call sites
-	// from what the push sends and what its repository holds, and only the
-	// Cmd that reaches the pool says a call site formed them from the right
-	// ones: a helper that adds the history term proves nothing about a call
-	// site that hands it no history.
+	// runGit is o.Git.Run, which starts every git process: a field so the
+	// suite can read each Cmd the pool is handed (export_test.go), since only
+	// that Cmd proves a call site formed a push's deadlines from what the push
+	// sends and its repository holds.
 	runGit func(context.Context, gitproc.Cmd) (gitproc.Result, error)
 
-	// keepaliveTicks, when set, paces a push session's keepalive in place of
-	// its ticker ([Server.keepaliveTicker]) — a field so the suite can send
-	// each tick itself (export_test.go). The lines go to the push's hook,
-	// which prints them on the client's stderr only once the push ends, so
-	// how many a wait gets is otherwise how many a loaded runner's clock let
-	// fit into it. Nil, as in production, is a ticker.
+	// keepaliveTicks, when set, replaces a push session's ticker
+	// ([Server.keepaliveTicker]) so the suite sends each tick (export_test.go):
+	// the client sees the lines only once the push ends, so under a clock
+	// their count is a loaded runner's. Nil, as in production, is a ticker.
 	keepaliveTicks func(every time.Duration) (ticks <-chan time.Time, stop func())
 
-	// writes is every engine write running on this node, by its push id,
-	// which a second write of the same push id waits for (write.go's
-	// in-flight join).
+	// writes is every engine write running here by push id, which a second
+	// write of the same id waits for (write.go's in-flight join).
 	writesMu sync.Mutex
 	writes   map[string]*inflightWrite
-	// syncWait bounds an engine write's wait on its sync and on its push's
-	// outcome (statelog.ReadBudget), and buildBudget the git run time a
-	// write of each kind is given for its build (gitlet.EngineWriteKind's
-	// BuildDeadline), chainMerges what a chain's merges are given together
-	// (gitlet.MergeBuildDeadline; chain.go), chainPack what its pack is given
-	// (gitlet.ChainPackDeadline) and chainObjects the uncompressed bytes its
-	// entries may write (gitlet.MaxChainObjectBytes) — fields so the suite can
-	// scale them (export_test.go).
+	// The engine write's bounds, fields so the suite can scale them
+	// (export_test.go): syncWait its wait on its sync and outcome
+	// (statelog.ReadBudget), buildBudget its build's git time
+	// (gitlet.EngineWriteKind's BuildDeadline), and a chain's (chain.go)
+	// chainMerges (gitlet.MergeBuildDeadline), chainPack
+	// (gitlet.ChainPackDeadline) and chainObjects, its entries' uncompressed
+	// bytes (gitlet.MaxChainObjectBytes).
 	syncWait     time.Duration
 	buildBudget  func(gitlet.EngineWriteKind) time.Duration
 	chainMerges  time.Duration
@@ -423,8 +363,8 @@ type Server struct {
 	chainObjects int64
 
 	// archives are the node's archive places and the principals making a
-	// ZIP (download.go); the rest are the archive's bounds, fields so the
-	// suite can scale them (export_test.go).
+	// ZIP (download.go); the rest are its bounds, fields so the suite can
+	// scale them (export_test.go).
 	archives          *archivePlaces
 	archiveDeadline   time.Duration
 	archiveFree       int64
@@ -497,9 +437,9 @@ func New(o Options) (*Server, error) {
 	return s, nil
 }
 
-// Start opens the hook relay's socket and its accept loop, and starts the
-// cache's background work — both owned until Stop. An error (the socket cannot
-// be made, or its path is too long) is the engine's to fail the boot with.
+// Start opens the hook relay's socket and accept loop and starts the cache's
+// background work, both owned until Stop. An error (the socket cannot be
+// made, or its path is too long) fails the engine's boot.
 func (s *Server) Start(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -522,23 +462,18 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 // StopBudget is how long a caller of [Server.Stop] gives the host's cancelled
-// work to end: THREE KILL GRACES. A cancelled git process is sent SIGTERM and,
-// gitproc.KillGrace later, SIGKILL; a pipe a straggler still holds is closed a
-// further KillGrace after that; and the third is for what follows a process's
-// end — a handler's answer to a client that has gone, an upload abandoned
-// under its own bound. Declared here, beside the stop whose work it measures,
-// because every caller that stops a host as the engine does — the engine's
-// teardown, and the topologies that stop a node the engine's way
-// (internal/gitlet/gitlettest) — must give it the same time.
+// work to end: THREE KILL GRACES (gitproc.KillGrace): SIGTERM to SIGKILL, then
+// to closing a straggler's pipe, then what follows a process's end (an answer
+// to a gone client, an upload abandoned under its bound). Declared beside
+// Stop so every caller stopping a host as the engine does (its teardown,
+// internal/gitlet/gitlettest) gives it the same time.
 const StopBudget = 3 * gitproc.KillGrace
 
 // Stop refuses every new git request (503, Retry-After StoppingRetryAfter);
-// cancels every in-flight request's work — a receive-pack is killed through
-// its context, its hook's connection with it; waits for the in-flight
-// handlers, until ctx ends; closes the relay's listener, waits for its
-// connections and removes its directory; and stops the cache. Idempotent in
-// effect: a second call waits again for whatever is still running. A caller
-// bounds ctx by [StopBudget].
+// cancels every in-flight request's work (a receive-pack and its hook's
+// connection with it); waits for the in-flight handlers until ctx ends; shuts
+// the relay down; and stops the cache. A second call waits again for whatever
+// still runs. A caller bounds ctx by [StopBudget].
 func (s *Server) Stop(ctx context.Context) {
 	s.mu.Lock()
 	s.stopped = true
@@ -562,9 +497,9 @@ func (s *Server) Stop(ctx context.Context) {
 	s.o.Cache.Stop(ctx)
 }
 
-// begin admits one request to a running host, or answers it 503: a stopping
-// host begins nothing. It answers the request's work context — the client's,
-// joined to the host's lifetime, so a Stop reaches it — and what ends it.
+// begin admits one request to a running host, or answers it 503. It returns
+// the request's work context (the client's, joined to the host's lifetime so
+// a Stop reaches it) and what ends it.
 func (s *Server) begin(parent context.Context, w http.ResponseWriter) (context.Context, func(), bool) {
 	s.mu.Lock()
 	if s.stopped {

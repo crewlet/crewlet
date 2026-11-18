@@ -15,33 +15,18 @@ import (
 	"time"
 )
 
-// DAMAGE, ONE IMPLEMENTATION. Every case a test damages a repository's files
-// with — the pack, its index and reverse index, the multi-pack-index with its
-// bitmap and reverse index, the commit-graph — is written here once, every
-// byte offset read from the file's own header and table of contents, never
-// assumed: gitproc's format table is held to what git says of each case
-// (classify_test.go), the git cache's check, scrub and repair are held to
-// what they find of the same cases (internal/gitlet/cache), and Gitlet's
-// requests are held to what they answer over them (internal/gitlet/host). A
-// second copy in one of those suites would be a case the others no longer
-// measure — ADR-0008's rule, one implementation of a shared rule.
+// DAMAGE, ONE IMPLEMENTATION (ADR-0008): every case a suite damages a
+// repository with is written once, here, each offset read from the file's own
+// header and table of contents: gitproc's format table (classify_test.go),
+// the cache's check, scrub and repair (internal/gitlet/cache) and Gitlet's
+// requests (internal/gitlet/host) all measure these same cases.
 //
-// A case takes the repository's directory and, where it damages one object's
-// bytes or one entry of a table, the object ids it names (each case's doc
-// says which). The PACK of a case is the one whose index holds the first id;
-// a case naming "every" pack, index or reverse index takes all of the
-// repository's.
-//
-// A copy is measured in one of two SHAPES ([Bare], [Served]), because git
-// answers the same damage differently on each: a copy before its first
-// maintenance holds only packs, and every git process reads a pack body
-// through its index; a copy the maintainer has served from also holds a
-// bitmapped multi-pack-index and a commit-graph, and there upload-pack's
-// pack-objects copies a stored object to the client as it is stored —
-// damaged bytes from any pack, a damaged entry header from the bitmap's
-// preferred pack ([PreferredPack]), which single reuse sends without reading
-// it — and walks read commits from the graph, so no process names that
-// damage at all.
+// A copy is measured in two SHAPES ([Bare], [Served]) because git answers the
+// same damage differently on each: before its first maintenance every process
+// reads a pack body through its index; once served from, upload-pack's
+// pack-objects sends a stored object as stored (damaged bytes from any pack, a
+// damaged entry header from [PreferredPack]) and walks read the commit-graph,
+// so no process names that damage.
 
 // DamageCase is one damage [Damage] does to a repository's files; its value
 // is the case's name in the measurements every suite is held to.
@@ -176,11 +161,9 @@ const (
 	BitmapTrailer DamageCase = "KT"
 	// BitmapEntries flips the lowest bit of the first literal word of every
 	// commit bitmap the multi-pack-index's bitmap stores whole (one stored
-	// as the XOR of another changes through that one): a well-formed bitmap
-	// naming one object more or fewer for every commit it covers, so every
-	// walk that reads it answers wrong — what BitmapBody does where its
-	// flipped bytes land in a bitmap a walk reads, which in a small history
-	// they need not.
+	// as an XOR of another changes with it): every covered commit's bitmap
+	// stays well-formed but names one object more or fewer, so every walk
+	// reading it answers wrong, which BitmapBody's bytes need not reach.
 	BitmapEntries DamageCase = "K5"
 )
 
@@ -686,14 +669,13 @@ func (d *damager) bitmap() string {
 }
 
 // bitmapEntryWords is the offset of the first literal word of every commit
-// bitmap the .bitmap at path stores whole — those whose XOR offset is zero —
-// read from the file's own header: its signature, version, options, entry
-// count and the index's checksum (32 bytes), the four type bitmaps, then each
-// entry's commit position, XOR offset and flags (six bytes) before its EWAH
-// bitmap. An EWAH bitmap is its bit size and word count (four bytes each),
-// its words — the first a running-length word, whose top 31 bits count the
-// literal words after it — and the position of its last running-length word
-// (four bytes).
+// bitmap the .bitmap at path stores whole (XOR offset zero). The file: a
+// 32-byte header (signature, version, options, entry count, the index's
+// checksum), the four type bitmaps, then per entry its commit position, XOR
+// offset and flags (six bytes) and an EWAH bitmap: bit size and word count
+// (four bytes each), the words (the first a running-length word whose top 31
+// bits count the literal words after it), and its last running-length word's
+// position (four bytes).
 func (d *damager) bitmapEntryWords(path string) []int64 {
 	d.tb.Helper()
 	b := d.read(path)
@@ -946,21 +928,15 @@ func WriteServed(tb testing.TB, c *Client, dir string) {
 	c.Run(tb, "", gitDir, "commit-graph", "write", "--reachable", "--no-progress")
 }
 
-// PreferredPack is the pack a served copy's multi-pack-index PREFERS — its
-// path without an extension — read from the index as git reads it
-// (midx_preferred_pack): the object at the first position of the index's
-// pseudo-pack order, its reverse index (the RIDX chunk), is the preferred
-// pack's, and that object's row of the object offsets (OOFF) names its pack by
-// the pack's position among the index's pack names (PNAM). With
-// pack.allowPackReuse=single, a clone is sent that pack's objects as they are
-// stored, and every other object as pack-objects packs any object. Which pack
-// it is was the writer's choice — for an index written with no
-// --preferred-pack, the pack whose .pack has the oldest modification time to
-// the second, and among packs of one second whichever the writer listed first
-// (an index it replaces in that index's order, then the directory's) — so a
-// case that needs the pack reads it here rather than presume one. It fails tb
-// on a copy with no multi-pack-index or one with no reverse index, which every
-// git at the node floor writes beside a bitmap.
+// PreferredPack is the pack a served copy's multi-pack-index PREFERS (its
+// path without an extension), read as git's midx_preferred_pack reads it: the
+// pack, by its position in PNAM, that the OOFF row of the object first in the
+// pseudo-pack order (RIDX) names. With pack.allowPackReuse=single a clone is
+// sent that pack's objects as stored. Which pack it is was the writer's choice
+// (with no --preferred-pack, the oldest .pack by mtime to the second, ties in
+// the order the writer listed them), so a case reads it here rather than
+// presume one. It fails tb on a copy with no multi-pack-index or no reverse
+// index, which every git at the node floor writes beside a bitmap.
 func PreferredPack(tb testing.TB, repo string) string {
 	tb.Helper()
 	pack := filepath.Join(repo, "objects", "pack")

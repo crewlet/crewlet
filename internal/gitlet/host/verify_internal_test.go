@@ -9,13 +9,10 @@ import (
 
 // A NODE AGES WHAT IT KEPT WITHOUT WALKING IT: a sweep looks at the
 // verifications that ended longest ago and stops at the first one still
-// kept, so the cost of every verify asked of a node, and of every read of
-// one, does not grow with the verifications it keeps — a sweep of every
-// repository a node holds keeps one for each, and with a walk of the whole
-// registry under its lock that sweep was quadratic in them. What it ages is
-// what a walk would: every one that ended more than VerifyKept ago, the
-// repository's latest pointer with it, and never one a newer verification
-// of its repository replaced, which was dropped when it was.
+// kept, so a verify's and a read's cost does not grow with what a node keeps
+// (one a repository, after a sweep of them all). It ages what a walk would:
+// every one ended more than VerifyKept ago, its repository's latest pointer
+// with it, and never one a newer verification replaced, dropped when it was.
 //
 // Mutation: sweep the whole map, and the count of what it looked at grows
 // with what is kept.

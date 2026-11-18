@@ -51,15 +51,15 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// ClientDeadline bounds one client invocation: a fixture's commit or a clone
-// of a test-sized repository is milliseconds, and a hung git otherwise holds
-// the suite until go test's ten-minute timeout.
+// ClientDeadline bounds one client invocation: a fixture's git takes
+// milliseconds, and a hung one otherwise holds the suite until go test's
+// ten-minute timeout.
 const ClientDeadline = 2 * time.Minute
 
-// waitDelay is how long a client invocation's pipes are given after it is
-// cancelled. SAFE HERE, unlike in gitproc's pool: a client's stdout and stderr
-// are bytes.Buffers whose Write never blocks, so the timer can only ever fire
-// on a pipe a straggler holds, which is the one case it exists for.
+// waitDelay is how long a cancelled client invocation's pipes are given. Safe
+// here, unlike in gitproc's pool: a client's stdout and stderr are
+// bytes.Buffers, whose Write never blocks, so it fires only on a pipe a
+// straggler holds.
 const waitDelay = 5 * time.Second
 
 // clientDate is the author and committer date of every commit a client
@@ -70,11 +70,10 @@ const clientDate = "2026-01-01T00:00:00Z"
 // writeScript execs one without running its body or leaving a call record.
 const probe = "--gittest-probe"
 
-// readVersion is what `git version` says of git, asked with nothing of the
-// machine's configuration: the PATH's git once a test binary ([found]) and a
-// floor's once a binary ([floorVersion]). Here, beside the client's own exec,
-// because this file is the one gittest file gitproc's TestOnlyGitprocExecsGit
-// lets start git.
+// readVersion is what `git version` says of git, asked with none of the
+// machine's configuration, for [found] and [floorVersion]. It is in this file
+// because it is the one gittest file gitproc's TestOnlyGitprocExecsGit lets
+// start git.
 func readVersion(git string) (gitproc.Version, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), ClientDeadline)
 	defer cancel()
@@ -97,13 +96,12 @@ func readVersion(git string) (gitproc.Version, error) {
 	return v, nil
 }
 
-// MidxChunk is where chunk id lies in the multi-pack-index at path — its first
-// byte and the byte past its last — read from the file's own chunk table, for
-// a case that damages one chunk: a twelve-byte header whose seventh byte
-// counts the chunks, then a row for each chunk and one ending the table, each
-// a four-byte id and an eight-byte offset, every chunk ending where the next
-// row's begins. It fails t on a file shorter than its table, or with no such
-// chunk.
+// MidxChunk is where chunk id lies in the multi-pack-index at path (its first
+// byte and the byte past its last), read from the file's own chunk table: a
+// twelve-byte header whose seventh byte counts the chunks, then a row per chunk
+// plus one ending the table, each a four-byte id and an eight-byte offset; a
+// chunk ends where the next row's begins. It fails t on a file shorter than its
+// table, or with no such chunk.
 func MidxChunk(t testing.TB, path, id string) (start, end int64) {
 	t.Helper()
 	return chunk(t, path, MidxHeader, id)
@@ -148,14 +146,11 @@ func chunk(t testing.TB, path string, header int, id string) (start, end int64) 
 // the id asked ([ChunkOf]).
 var ErrNoChunk = errors.New("gittest: the table of contents names no such chunk")
 
-// ChunkOf is where chunk id lies in the chunk-format file body — its first
-// byte and the byte past its last — read from the file's own table of
-// contents under a header of header bytes ([MidxHeader], [GraphHeader]): the
-// reading [MidxChunk] and [GraphChunk] make of a file on disk, for a case that
-// holds the file's bytes — a fuzz target's input, held to what its table
-// says. It answers [ErrNoChunk] where the table names no such chunk, and an
-// error naming what is short where the bytes do not hold their header or
-// their table.
+// ChunkOf is [MidxChunk]'s and [GraphChunk]'s reading of a chunk-format file
+// over its bytes body, under a header of header bytes ([MidxHeader],
+// [GraphHeader]), for a case that holds the bytes (a fuzz target's input). It
+// answers [ErrNoChunk] where the table names no such chunk, and an error naming
+// what is short where body does not hold its header or its table.
 func ChunkOf(body []byte, header int, id string) (start, end int64, err error) {
 	if len(body) < header {
 		return 0, 0, fmt.Errorf("%d bytes, shorter than the %d-byte header", len(body), header)
@@ -175,9 +170,9 @@ func ChunkOf(body []byte, header int, id string) (start, end int64, err error) {
 
 // RenameChunk writes to over the id of chunk from in the table of contents of
 // the chunk-format file at path, under a header of header bytes ([MidxHeader],
-// [GraphHeader]) — a chunk git then does not find, for a case that damages a
-// required one — making the file writable first: git writes its files
-// read-only. It fails t on a file with no such chunk.
+// [GraphHeader]), so git does not find that chunk. It makes the file writable
+// first, since git writes it read-only, and fails t on a file with no such
+// chunk.
 func RenameChunk(t testing.TB, path string, header int, from, to string) {
 	t.Helper()
 	body, err := os.ReadFile(path)
@@ -209,11 +204,11 @@ func RenameChunk(t testing.TB, path string, header int, from, to string) {
 }
 
 // PackEntry is where oid's entry begins in the pack the version-2 index at
-// idx describes, and where the next entry (or the pack's trailer) begins: read
-// from the index's own name and offset tables — four-byte magic and version,
-// a 256-entry fanout, the sorted names, their CRCs, their offsets — never
-// assumed. It fails t on an index of another version, an offset in the large
-// table, or an oid the index does not hold.
+// idx describes, and where the next entry (or the pack's trailer) begins, read
+// from the index's own tables: four-byte magic and version, a 256-entry
+// fanout, the sorted names, their CRCs, their offsets. It fails t on an index
+// of another version, an offset in the large table, or an oid the index does
+// not hold.
 func PackEntry(t testing.TB, idx, oid string) (start, end int64) {
 	t.Helper()
 	body, err := os.ReadFile(idx)
@@ -307,10 +302,9 @@ func NewClientWith(t testing.TB, git string) *Client {
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=" + filepath.Join(home, ".gitconfig"),
 		// The host's /etc/gitattributes, which GIT_CONFIG_NOSYSTEM does
-		// not reach: it decides what a commit stores (an eol, a
+		// not reach, decides what a commit stores (an eol, a
 		// working-tree-encoding), what a merge does and what check-attr
-		// answers. The global attributes file is the HOME's, which holds
-		// none.
+		// answers. The global attributes file is the HOME's: none.
 		"GIT_ATTR_NOSYSTEM=1",
 		"GIT_TERMINAL_PROMPT=0",
 		"LC_ALL=C",
@@ -326,58 +320,37 @@ func (c *Client) Env(kv ...string) *Client {
 	return &Client{git: c.git, home: c.home, env: slices.Concat(c.env, kv), opts: c.opts}
 }
 
-// Environ is c's whole environment, as every git it runs is handed it: for a
-// case that runs something other than git under it — a hook, a box's setup
-// step — whose own git must read no configuration of the machine either. Its
-// PATH is the test's; a case that means a particular git puts that git's
-// directory before it.
+// Environ is c's whole environment, as every git it runs is handed it, for a
+// case that runs something else under it (a hook, a box's setup step) whose
+// own git must read no configuration of the machine either. Its PATH is the
+// test's; a case that means a particular git puts that git's directory first.
 func (c *Client) Environ() []string { return slices.Clone(c.env) }
 
 // HTTPBackend serves every bare repository under root over git's SMART HTTP
-// protocol — git's own `http-backend`, as a forge serves one — run as c's git
-// in c's environment, so the other host a case's import or mirror dials
+// protocol (git's own `http-backend`, as a forge serves one) as c's git in c's
+// environment, so the other host a case's import or mirror dials
 // (internal/gitlet/mirror) reads no configuration of the machine either. Every
-// repository is exported; receive-pack is left as http-backend leaves it for
-// a request with no authenticated user, refused. Serve it behind
-// httptest.NewTLSServer: the engine dials https alone.
-//
-// HERE rather than in the case, since it starts git: this package and gitproc
-// are where a process of git may start (gitproc's TestOnlyGitprocExecsGit).
+// repository is exported; receive-pack is refused, as http-backend refuses it
+// to an unauthenticated request. Serve it behind httptest.NewTLSServer: the
+// engine dials https alone. It is here because it starts git (gitproc's
+// TestOnlyGitprocExecsGit).
 func (c *Client) HTTPBackend(root string) http.Handler {
 	return &cgi.Handler{Path: c.git, Args: slices.Concat(c.opts, []string{"http-backend"}), Dir: c.home,
 		Env: slices.Concat(c.env, []string{"GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1"})}
 }
 
 // ModuleCheckout is c trusting the checkout this module's tests were compiled
-// from, and that checkout's top level — for a test whose SUBJECT is this
-// repository (what its attributes make of a path), never for a fixture, which
-// a test makes and owns.
-//
-// TRUSTED ON THE COMMAND LINE, FOR THAT PATH ALONE. Git refuses a repository
-// whose owner is not the process's unless safe.directory names it, and
-// honours that key only from protected configuration — the system's, the
-// global and the command line's — of which a client reads only the last. So a
-// checkout another uid owns (a container running as root over a bind mount, a
-// devcontainer whose uid is not the files') is refused as dubious ownership,
-// though the developer trusts it in their own ~/.gitconfig, which go build's
-// VCS stamping already needs there. What a client keeps out of a test is the
-// machine's say in what git ANSWERS; whether to read the tree go test is
-// already running from is not that, so the client trusts it itself — and
-// nothing else, so a fixture beside it is refused as before.
-//
-// The path is [sourcetree.Root], the module root with its links resolved,
-// because git compares it byte for byte with the top level it resolves (a
-// trailing slash, or a link's spelling, is refused); and git is asked to
-// confirm that the module root IS the checkout's top level, so a path a test
-// hands check-attr relative to the module is resolved against the tree it
-// names.
-//
-// It FAILS RATHER THAN SKIPS, as [Require] does and as
-// scripts/check-signoff.sh does outside a repository: a test whose subject is
-// this checkout has not passed when it cannot read it, and a skip would be one
-// internal/skipgate refuses anyway, with the coverage living nowhere else. An
-// ownership refusal is told apart from a tree that is no checkout, because
-// the remedies differ.
+// from, and its top level, for a test whose SUBJECT is this repository; never
+// for a fixture. Git honours safe.directory only from protected configuration,
+// of which a client reads only the command line's, so it would refuse a
+// checkout another uid owns as dubious ownership. Trusting the tree go test
+// runs from gives the machine no say in what git answers, so the client trusts
+// that path itself, and nothing beside it. The path is [sourcetree.Root] (links
+// resolved): git compares it byte for byte with the top level it resolves, and
+// is asked to confirm it IS that top level, so a module-relative path resolves
+// against the tree it names. It FAILS RATHER THAN SKIPS, as [Require] does
+// (internal/skipgate refuses the skip). An ownership refusal is told apart
+// from a tree that is no checkout, because the remedies differ.
 func (c *Client) ModuleCheckout(t testing.TB) (*Client, string) {
 	t.Helper()
 	root := sourcetree.Root(t)
@@ -611,13 +584,12 @@ func ReadBundle(bare, checksum string) (Bundled, error) {
 	return b, nil
 }
 
-// Fake is a stand-in git: an executable named git in a fresh directory that
-// prints version (a whole `git version …` line) for `git version` — and writes
-// the trace2 version event a real git writes to the descriptor
-// GIT_TRACE2_EVENT names, so a pool built over it passes gitproc.New's check
-// for the event stream — and runs body — POSIX sh, "$@" the arguments after
-// "git" — for anything else. Its path, for gitproc.Options.Path or a PATH a
-// test sets.
+// Fake is a stand-in git's path (for gitproc.Options.Path or a test's PATH):
+// an executable named git in a fresh directory. For `git version` it prints
+// version (a whole `git version …` line) and writes the trace2 version event to
+// the descriptor GIT_TRACE2_EVENT names, so a pool over it passes gitproc.New's
+// event-stream check; anything else runs body (POSIX sh, "$@" the arguments
+// after "git").
 func Fake(t testing.TB, version, body string) string {
 	t.Helper()
 	exe := strings.TrimPrefix(version, "git version ")
@@ -646,16 +618,13 @@ func fake(t testing.TB, version, onVersion, body string) string {
 }
 
 // Wrap is the real git with a stand-in IN FRONT of it: an executable named git
-// in a fresh directory that runs body — POSIX sh, "$@" the arguments after
-// "git", "$real_git" the path of the git [Require] finds — and then execs the
-// real git with the same arguments, unless body exited first. `git version`
-// is the real git's own answer, never one a test spelled: a pool over the
-// stand-in decides what it decides from a version (a git it refuses) from the
-// git that runs, and a test that held a fault at one step of real git's work
-// needs no exec of its own to ask what that git is. Its path, for
-// gitproc.Options.Path — where the test holds the git it wraps to the node
-// floor as every pool's builder does ([RequireNode]) — or for an operator's
-// git, a client's, which is all [Require] holds it to.
+// in a fresh directory that runs body (POSIX sh, "$@" the arguments after
+// "git", "$real_git" the git [Require] finds), then execs the real git with the
+// same arguments unless body exited. `git version` is always the real git's
+// answer, so a pool over it decides from the version of the git that runs.
+// [Require] holds that git only to the client floor: a test handing the path
+// to gitproc.Options.Path holds it to the node floor ([RequireNode]), as every
+// pool's builder does.
 func Wrap(t testing.TB, body string) string {
 	t.Helper()
 	git := Require(t)
@@ -675,12 +644,11 @@ type Call struct {
 	Args   []string // after "git"
 }
 
-// Recording is the real git behind a recorder: every invocation writes one
-// file (GIT_DIR and argv, NUL-separated — a file per invocation, so
-// concurrent processes never interleave) and execs the real git. calls
-// returns every invocation so far, in no particular order. What it records is
-// a pool's work, so the git it execs is held to the node floor
-// ([RequireNode]).
+// Recording is the real git behind a recorder: every invocation writes a file
+// of its own (GIT_DIR and argv, NUL-separated), so concurrent processes never
+// interleave, and execs the real git. calls returns every invocation so far,
+// in no particular order. It records a pool's work, so its git is held to the
+// node floor ([RequireNode]).
 func Recording(t testing.TB) (path string, calls func() []Call) {
 	t.Helper()
 	git := RequireNode(t)
@@ -713,10 +681,9 @@ func Recording(t testing.TB) (path string, calls func() []Call) {
 }
 
 // writeScript writes an executable stand-in and waits until it can be exec'd
-// (hostbox.Settle, with the probe every stand-in here answers at once): a
-// suite of parallel cases, each writing a stand-in and forking at once, is
-// exactly the window in which Linux refuses to exec a file another child
-// still holds open for writing.
+// (hostbox.Settle, with probe): parallel cases each writing a stand-in and
+// forking are exactly when Linux refuses to exec a file another child still
+// holds open for writing.
 func writeScript(t testing.TB, path, text string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(text), 0o700); err != nil {

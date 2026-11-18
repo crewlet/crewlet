@@ -27,9 +27,8 @@ var log = logging.Get("gitlet.query")
 // Cache is what the reads need of the node's git cache. *cache.Cache
 // satisfies it.
 type Cache interface {
-	// Holds reports whether the cache holds a copy of a repository or is
-	// filling one, from memory and starting nothing: what a read that is not
-	// its walk's effective home's asks before anything else (step 3).
+	// Holds reports whether the cache holds or is filling a copy of a
+	// repository, from memory and starting nothing (step 3).
 	Holds(repoID string) bool
 	// Sync hands out a repository's directory pinned, holding every row up
 	// to a position at least as fresh as fresh asks.
@@ -37,35 +36,34 @@ type Cache interface {
 	// ServeConfig is the configuration every git process in a cache runs
 	// with: one value, so no read sees a copy with another idea of it.
 	ServeConfig() []gitproc.KV
-	// Provenance is the pinned copy's index of which push introduced each
-	// commit, held while the copy is; an error is an index the node cannot
-	// read yet, which a read answers without (step 9).
+	// Provenance is the pinned copy's index of pushes, held while the copy
+	// is; an error is an index not readable yet, which a read answers
+	// without (step 9).
 	Provenance(s cache.Synced) (cache.Provenance, error)
-	// WantHistory marks a repository's history as wanted: what a read
-	// answered as the repository's home asks of its index (step 10).
+	// WantHistory marks a repository's history as wanted (step 10).
 	WantHistory(repoID string)
 	// MemoGet is the page the pinned copy's memo keeps under a key, or false
 	// (step 6).
 	MemoGet(s cache.Synced, k cache.MemoKey) ([]byte, bool)
-	// MemoProbe is MemoGet for a part of an answer a read looks for under
-	// several keys, counted apart (cache's MemoProbe).
+	// MemoProbe is MemoGet for a part of an answer looked for under several
+	// keys, counted apart (cache's MemoProbe).
 	MemoProbe(s cache.Synced, k cache.MemoKey) ([]byte, bool)
-	// Memo is a batch of the pages a run cuts, to memoize in the pinned copy
-	// once its git has answered whole (step 8) — nil where it keeps none.
+	// Memo is a batch of the pages a run cuts, memoized once its git has
+	// answered whole (step 8); nil where the copy keeps none.
 	Memo(s cache.Synced) *cache.MemoBatch
-	// Spool is a file with no name on the cache's volume, gone when it is
-	// closed: where a revision's facts write the change's patch for `git
-	// patch-id` to read back (facts.go). The caller closes it.
+	// Spool is an unnamed file on the cache's volume, gone when closed, where
+	// a revision's facts write the patch `git patch-id` reads (facts.go). The
+	// caller closes it.
 	Spool() (*os.File, error)
 	// IndexTip is the commit the pinned copy's code index answers for, and
 	// whether this node is one of the repository's index holders (search.go).
 	IndexTip(s cache.Synced) (cache.IndexedTip, bool)
-	// CodeIndex is the pinned copy's code index, mapped and opened, valid
-	// while s is held — or false, which a search answers with git grep; one
-	// it cannot read it drops, under ctx's values.
+	// CodeIndex is the pinned copy's code index, valid while s is held, or
+	// false, which a search answers with git grep; one it cannot read it
+	// drops, under ctx's values.
 	CodeIndex(ctx context.Context, s cache.Synced) (*cache.CodeIndexView, bool)
-	// Tags is the pinned copy's tag index, open for one read, which the read closes;
-	// false where it keeps none a read can trust (tags.go).
+	// Tags is the pinned copy's tag index, open for one read, which closes
+	// it; false where it keeps none a read can trust (tags.go).
 	Tags(s cache.Synced) (*cache.TagIndex, bool)
 }
 
@@ -80,22 +78,19 @@ type Options struct {
 	NodeID string
 	// Cache is the node's git cache.
 	Cache Cache
-	// Git is the node's git pool; every process a read runs is a read-lane
-	// one.
+	// Git is the node's git pool; every process a read runs is in its read
+	// lane.
 	Git Pool
-	// Share is the node's seat git-work share (gitlet.NewGitShare over the
-	// pool's read lane), ONE a node: whatever else of a seat's git work the
-	// node runs draws on the same.
+	// Share is the node's ONE seat git-work share (gitlet.NewGitShare over
+	// the pool's read lane), which all of a seat's git work on the node
+	// draws on.
 	Share *gitlet.GitShare
 	// Resyncs is the node's ONE set of re-sync buckets at the log's head
-	// (gitlet.NewResyncs) — the host's draw on the same
-	// (host.Options.Resyncs), its engine writes and its boxes alike: a SEAT'S
-	// read whose refusal would be judged again at linearizable (step 7) pays
-	// its turn's bucket on its seat — the seat's bucket its boxes on this
-	// node pay too — and past it is answered from the copy at the seat's
-	// floor, saying so; and so does a read made for a CHECK, its attempt on
-	// its repository's checks (gitlet.CheckKey.Resyncs), the bucket the
-	// check's own transfers at Gitlet on this node pay.
+	// (gitlet.NewResyncs), shared with the host (host.Options.Resyncs): a
+	// seat's second look at the head (step 7) pays its turn's bucket on its
+	// seat, and a check's read its attempt's on its repository's checks
+	// (gitlet.CheckKey.Resyncs); past it the read is answered from the copy at
+	// its floor, saying so (read.objects).
 	Resyncs *gitlet.Resyncs
 	// Roster is the chart a seat's grant is judged by: the serving node's
 	// CURRENT epoch's, read per read. A nil answer is a node with no chart
@@ -107,15 +102,11 @@ type Options struct {
 	// (gitlet.UnreadyBehindConfig). nil is current.
 	Current func() bool
 	// Fetched records one read this node answered of a `visibility: unit`
-	// repository (step 11) — filed by the engine in the node's reads ledger
-	// (internal/gitlet/readaudit), which publishes every reader's reads of a
-	// flush as one record into the node's event log, from which the usage
-	// domain derives who read it. It is called inside the read, on the
-	// read's own context, which the server's stop cuts and waits for
-	// ([Server.Stop]). It returns at once: no read, and no read waiting on
-	// the page one cuts, waits on the broker for a record.
-	// REQUIRED, for the host's reason: a read answered and recorded by nobody
-	// is an audit short of what the node served.
+	// repository (step 11; package doc, "Who read it"). It is called inside
+	// the read, on the read's context, which [Server.Stop] cuts and waits
+	// for, and returns at once: no read waits on the broker for a record.
+	// REQUIRED: a read answered and recorded by nobody is an audit short of
+	// what the node served.
 	Fetched func(ctx context.Context, e types.CodeFetched)
 }
 
@@ -124,29 +115,19 @@ type Options struct {
 // with its caller's context or with the server's stop ([Server.Stop]).
 type Server struct {
 	o Options
-	// life is the SERVER'S lifetime — the one stored context, for the reason
-	// the host's is: the stop ends it, and every read's context is cut
-	// by it (errStopped), so a stop reaches every read in flight. inflight
-	// counts the reads begun and not yet returned, which the stop waits for,
-	// and stopped, under lifeMu, refuses the reads after it.
+	// life is the SERVER'S lifetime, the one stored context: the stop ends
+	// it, and it cuts every read's context (errStopped), so a stop reaches
+	// every read in flight. inflight counts the reads begun and not yet
+	// returned, which the stop waits for; stopped, under lifeMu, refuses
+	// the reads after it.
 	life     context.Context
 	end      context.CancelFunc
 	lifeMu   sync.Mutex
 	stopped  bool
 	inflight sync.WaitGroup
-	// syncWait bounds a read's wait on its sync (statelog.ReadBudget),
-	// gitBudget the run time a read's own git is given, shared by every
-	// process of its kind (gitproc.ReadDeadline), pageBytes an answer's
-	// JSON (gitlet.MaxGitAnswerBytes), probes a landed-in search's ancestry
-	// checks (MaxLandedProbes), touchedPaths and touchedBytes a revision's
-	// touched list (gitlet.MaxTouchedPaths, gitlet.MaxTouchedBytes),
-	// patchBytes the diff its patch-id is taken of (MaxPatchIDDiffBytes), and
-	// classedBlob and classedBytes the Go its classification lexes, a
-	// version and in all (gitlet.MaxClassedBlobBytes, gitlet.MaxClassedBytes),
-	// and searchBudget what one search may spend (gitlet.SearchBudget), and
-	// treeWalk the bounds of a directory's last commits' walks
-	// (treecommits.go): fields so this package's tests can scale them
-	// (export_test.go).
+	// The bounds a read runs to, as New sets them; fields so this package's
+	// tests can scale them (export_test.go). gitBudget is shared by every
+	// process of a read's kind.
 	syncWait     time.Duration
 	searchBudget time.Duration
 	gitBudget    time.Duration
@@ -158,25 +139,23 @@ type Server struct {
 	classedBlob  int64
 	classedBytes int64
 	treeWalk     treeWalkBounds
-	// flights is every page a read of this node is cutting that its copy's
-	// memo held none of, by repository and the page's memo key: a read that
-	// misses the same page waits for that read's run and asks the memo again,
-	// rather than run the same git beside it (read.await). Under flightsMu;
-	// waiting counts the reads waiting on one now, which a case reads to know
-	// a read waits (export_test.go).
+	// flights is every page a read of this node is cutting that the memo
+	// missed: a read missing the same page waits for that run and asks the
+	// memo again rather than run the same git beside it (read.await). Under
+	// flightsMu; waiting counts the reads waiting now, for the tests
+	// (export_test.go).
 	flightsMu sync.Mutex
 	flights   map[flightKey]*flight
 	waiting   atomic.Int64
-	// patchSpools holds one token for each revision's facts whose patch is
-	// spooled on the cache's volume now, MaxPatchSpools at most
-	// (read.takePatchSpool), and patchSpoolWait how long a read waits for one
-	// to come free (gitlet.GitShareWait), a field so a case can scale it.
+	// patchSpools holds a token for each patch spooled on the cache's volume
+	// now, MaxPatchSpools at most (read.takePatchSpool); patchSpoolWait is how
+	// long a read waits for one (gitlet.GitShareWait), a field for the tests.
 	patchSpools    chan struct{}
 	patchSpoolWait time.Duration
 }
 
 // flightKey names one page a read's run is cutting: its repository and its
-// memo key, which every argument of the page is in.
+// memo key, which holds every argument of the page.
 type flightKey struct {
 	repo string
 	key  cache.MemoKey
@@ -232,8 +211,8 @@ func New(o Options) (*Server, error) {
 	if missing != "" {
 		return nil, fmt.Errorf("%w: query.Options.%s is required", gitlet.ErrInvalid, missing)
 	}
-	// THE SERVER'S OWN LIFETIME, ended by its stop alone: no caller's
-	// context is the server's, since every read runs on its own.
+	// THE SERVER'S OWN LIFETIME, ended by its stop alone: every read runs on
+	// its own caller's context, none of which is the server's.
 	life, end := context.WithCancel(context.Background())
 	return &Server{o: o, life: life, end: end, syncWait: statelog.ReadBudget, gitBudget: gitproc.ReadDeadline,
 		pageBytes: gitlet.MaxGitAnswerBytes, probes: MaxLandedProbes, touchedPaths: gitlet.MaxTouchedPaths,
@@ -242,119 +221,18 @@ func New(o Options) (*Server, error) {
 		patchSpools: make(chan struct{}, MaxPatchSpools), patchSpoolWait: gitlet.GitShareWait}, nil
 }
 
-// Read answers q: a page of the tree, file, diff, comparison or interdiff it
-// names; a page of a path's history, or of a file's blame; whether a commit
-// landed in a target and the push that landed it; a revision's facts; where
-// anchored lines are in a revision; or the files of a commit's tree whose path
-// holds a find's query (find.go).
-//
-//  1. q is validated (gitlet.GitQuery.Validate), and its cursor read as one its
-//     kind issues.
-//  2. A SEAT'S read is refused about THIS node — gitlet.ErrGitUnready, which
-//     another Gitlet node may answer — where the node is confirmed behind the
-//     company's configuration (behind_config) or holds no chart (no_chart):
-//     judged before the sync, so a node that cannot judge starts nothing. A
-//     person's or a token's read reads no chart and skips both.
-//  3. A node holding no copy of the repository, nor filling one
-//     (Cache.Holds), answers a read that is not its walk's effective home's
-//     (gitlet.GitQuery.Home) unready (not_held) at once, having started
-//     nothing: ONE node a walk fills a copy (ADR-0089), and every other
-//     either holds one already or sends the read on.
-//  4. The node's copy is synced to the asker's floor, or read as it stands
-//     where the asker holds none, the wait bounded by statelog.ReadBudget: a
-//     copy that cannot be brought there in time — a cold one downloading the
-//     repository, which goes on after the read stops waiting — or a sync that
-//     failed on what every node's copy is filled from (the code log, the
-//     object store, the rows, a repair the cache would not repeat) is
-//     unready, syncing; one that failed for a reason of the node's own is
-//     unready, node_failed, which lets the walk have the next node fill
-//     (cache.EveryFillMeets, the rule an engine write's sync is read by too).
-//  5. A deleted or purging repository answers gitlet.ErrRepoNotFound with the
-//     domain's own sentence for it; the asker's grant is judged from the
-//     repository's row and this node's chart, and a read below read is
-//     gitlet.ErrNotPermitted — and where the read is made for the seat its
-//     asker's turn is acting for (gitlet.GitQuery.CeilingSeat), that seat's
-//     grant from the same row and chart, one it could not make itself
-//     gitlet.ErrAboveCeiling (gitlet.JudgeRead, the data node's judgment too). A
-//     read the ENGINE makes on its own account (gitlet.GitQuery.EnginesOwn: a
-//     revision's facts, its repository's home's, or a read made for a check,
-//     whose box the attempt's row admitted and which Validate holds to the
-//     check's commit) names no asker and is held to no grant.
-//  6. A PAGE ALREADY CUT is answered from the copy's memo (memo.go) — of
-//     every kind but a landed-in read, a revision's facts and a
-//     re-anchoring (memoizable): for a read naming whole ids, as soon as its
-//     grant is judged and before any git runs; for one naming an
-//     abbreviation, once step 7 has expanded it.
-//     A hit holds no unit of the share and goes on through steps 9 and 10
-//     as a page cut does. A miss of a page ANOTHER READ OF THIS NODE IS
-//     CUTTING waits for that read's run and asks the memo again (await): N
-//     seats asking one page a push just made — a review's fan-out — run one
-//     git, write the page's files once and hold one unit of the share, not N
-//     of each; one whose memo still misses runs its own.
-//  7. Every abbreviated id is expanded from the objects alone, and every id
-//     and path checked present with one batch (objects.go); an id the copy
-//     lacks is gitlet.ErrObjectNotFound, while an anchor's path its revision
-//     lacks is an answer — the anchor is gone. No refusal of steps 5 and 7 is
-//     concluded from a copy not read at the log's head: it is synced there
-//     once, and judged again — for a SEAT, while its re-syncs on this node
-//     last (Options.Resyncs; past them it is answered from the copy at its
-//     floor, saying so). Each of those short processes runs to its own
-//     bound, gitproc.ReadDeadline: one that runs all of it, a few ids' check
-//     no healthy node takes a second over, is the node's own failure
-//     (node_failed).
-//  8. The kind's own git runs under ONE unit of the node's seat git-work
-//     share, released the moment it ends — never across a sync or a check,
-//     which hold no read-lane slot (gitlet.GitShare) — and within ONE BUDGET
-//     of git run time, gitproc.ReadDeadline, which every process of the kind
-//     shares: each is given what the ones before it left. A read whose own
-//     git runs the whole of it is too large to answer (gitlet.ErrSliceTooLarge,
-//     naming the narrowing): another node would take as long. That git cuts
-//     every page from the one asked to its answer's end, each memoized once
-//     git has answered whole (memo.go).
-//  9. Every commit the answer names — its revision, a diff's, a
-//     comparison's or an interdiff's commits, a landed-in read's commit and
-//     tip, a revision's head and target, a re-anchoring's commits, every
-//     commit a history's page lists or a blame's page names — is named with
-//     the push that introduced it (gitlet.GitAnswer.PushedBy), from the copy's
-//     index of pushes, and the answer carries what that index holds
-//     (gitlet.Coverage) — measured into every page's envelope, or for a commit
-//     a page itself finds, into that commit's cost, so a page cut against it
-//     fits with them. A copy whose index cannot be read yet is answered
-//     without either: an index decorates an answer, and no read waits on it.
-//     A history's page also names the tags naming each commit
-//     (gitlet.GitAnswer.Tagged), from the copy's tag index, measured the same way.
-//  10. A read this node answered as the repository's home (gitlet.GitQuery.Home)
-//     marks the repository's history wanted (cache.Cache.WantHistory): the one
-//     node a walk asks first reads it back, once per fleet, and only for a
-//     repository a seat asks about.
-//  11. A read this node answered of a `visibility: unit` repository is
-//     recorded (Options.Fetched) — as its asker, by its kind, with the
-//     answer's encoded size — the memo's answers as its git's: the memo is
-//     the repository's copy's, shared by every asker, and a hit read as no
-//     read would name only the first asker of a page. A read of a
-//     `visibility: company` repository records nothing, since every seat
-//     reads it by declaration, and neither does a refused one, nor the
-//     engine's own, which nobody made — a check's read among them, whose
-//     attempt's row is its record.
-//
-// ctx ENDS WHEN THE ANSWER IS DUE (gitlet.AnswerBy): every wait above — the
-// sync, the unit of the share, the read lane's queue before each process, and
-// each process — takes it, and one that it ends answers gitlet.ErrGitUnready
-// naming what the read was waiting on, while the asker still listens
-// (gitlet.AnswerDue): syncing where it ended the sync, share where it ended a
-// wait for the node's git or a run of it. Never ErrSliceTooLarge — a process
-// the answer's due instant ended had less than its read's whole budget, which
-// a node with more time would have given it — and never ctx's own error,
-// which is the answer only where the caller went away. Time the sum of a
-// read's budgets leaves out (the read lane's queue, the short checks: see
-// estate.GitReadAttempt) comes out of the asker's attempt, and so, under
-// load, out of the read's own git: the read is then answered unready rather
-// than late or too large.
-//
-// A STOPPED SERVER ANSWERS EVERY READ UNREADY, node_failed, having started
-// nothing, and its stop CUTS every read in flight, which is answered the same
-// ([Server.Stop]): about this node, so the walk asks the next Gitlet node and lets
-// it fill a copy.
+// Read answers q with one page of its kind, in steps the package's files
+// cite by number: (1) validate q and its cursor; (2) refuse a seat's read on
+// a node that cannot judge it (judgeable); (3) refuse a non-home read on a
+// node holding no copy, one node a walk filling it (held, ADR-0089); (4) sync
+// to the asker's floor (sync); (5) judge the grant (grant); (6) answer from
+// the memo, before any git for whole ids, after 7 for an abbreviation;
+// (7) expand and find every id and path, refusing only once read at the log's
+// head (objects); (8) run the kind's git under one share unit and one budget
+// (compute); (9) name each commit's push and tags (index); (10) mark a home's
+// history wanted; (11) record a unit repository's read (audit). ctx ends when
+// the answer is due; a stopped server answers unready, node_failed (package
+// doc, "Time: one budget of git, and an answer while the asker listens").
 func (s *Server) Read(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer, error) {
 	rctx, end, ok := s.begin(ctx)
 	if !ok {
@@ -404,20 +282,15 @@ func (s *Server) stopping() error {
 		"another Gitlet node answers, and fills a copy where none holds one", s.o.NodeID)}
 }
 
-// Stop ends the server: every read from now on is refused unready, about this
-// node, and every read in flight is CUT — its waits and its git processes end
-// — and answered the same, and Stop waits for each to return, or for ctx. So
-// once Stop has returned no read this server answered is still being
-// answered, nor recorded (Options.Fetched): every record of a read is made
-// before Gitlet's stop ends, which the engine's teardown orders before
-// the usage day's last flush. Called by whoever stops Gitlet, BEFORE
-// its cache, which a read in flight still reads. Idempotent: a second Stop
-// waits for the same reads.
-//
-// CUT RATHER THAN WAITED OUT, as the host's own requests are at its stop: a
-// read runs up to its asker's whole attempt (estate.GitReadAttempt), longer
-// than the stop's budget, and a read cut is answered while its asker still
-// listens, which takes it to the runner-up at once.
+// Stop ends the server: every later read is refused unready, node_failed,
+// and every read in flight is CUT (its waits and git end) and answered the
+// same; Stop waits for each to return, or for ctx. So once it returns no read
+// is still being answered or recorded (Options.Fetched), which the engine's
+// teardown orders before the usage day's last flush. Called BEFORE the cache
+// is stopped, which a read in flight still reads. Idempotent. Cut rather than
+// waited out: a read may run its asker's whole attempt
+// (estate.GitReadAttempt), longer than the stop's budget, and a cut read is
+// answered while its asker listens (package doc, "The stop").
 func (s *Server) Stop(ctx context.Context) {
 	s.lifeMu.Lock()
 	s.stopped = true
@@ -506,12 +379,11 @@ func (s *Server) serve(ctx context.Context, q gitlet.GitQuery) (gitlet.GitAnswer
 	return a, nil
 }
 
-// audit is step 11: a read answered of a `visibility: unit` repository,
-// recorded as its asker read it — one read, the answer's encoding its bytes,
-// which is what the asker is sent beside its envelope. Before the read
-// returns, and before the page flight it leads lets its waiters go, which is
-// why the engine's Fetched only files it in the node's reads ledger and never
-// waits on the broker.
+// audit is step 11: a read of a `visibility: unit` repository recorded as its
+// asker read it, one read of the answer's encoded bytes (what the asker is
+// sent beside its envelope). It runs before the read returns and before its
+// page flight lets its waiters go, which is why Fetched never waits on the
+// broker.
 func (r *read) audit(ctx context.Context, a gitlet.GitAnswer) error {
 	repo := r.synced.Repo
 	if repo.Visibility != gitlet.VisibilityUnit || r.q.EnginesOwn() {
@@ -581,15 +453,14 @@ func commitsOf(q gitlet.GitQuery, objs found) []string {
 	return out
 }
 
-// index reads the pinned copy's index of pushes — once a read — and names the
-// push that introduced each of commits (step 9), in place of whatever an
-// earlier call named: a hit the memo answers is decorated by the commits its
-// page names, and one it could not use by the read's own.
+// index reads the pinned copy's index of pushes, once a read, and names the
+// push that introduced each of commits (step 9), replacing what an earlier
+// call named: a memo hit is decorated by the commits its page names, one it
+// could not use by the read's own.
 func (r *read) index(commits []string) {
-	// AN UNSTAMPED READ READS NO INDEX: it names no push, so nothing of
-	// what the index holds may move its page (gitlet.GitQuery.Unstamped). Its
-	// commits are named all the same, by nothing, as a stamped read's are
-	// where the index holds none of them.
+	// AN UNSTAMPED READ READS NO INDEX: it names no push, so nothing the
+	// index holds may move its page (gitlet.GitQuery.Unstamped). Its commits
+	// are still named, by no push.
 	if !r.indexRead && !r.q.Unstamped {
 		if p, err := r.s.o.Cache.Provenance(r.synced); err == nil && p.Indexed() {
 			r.prov = p
@@ -610,9 +481,9 @@ func (r *read) index(commits []string) {
 }
 
 // decorate names the push that introduced commit id, where the index holds
-// it: before any page is cut, since every page's envelope carries it. Every
-// commit decorated is named (read.named), held or not, so a page from the
-// memo is decorated by what the index holds when it is read.
+// it, before any page is cut, since every page's envelope carries it. Every
+// commit decorated is named (read.named), held or not, so a memo page is
+// decorated by what the index holds when it is read.
 func (r *read) decorate(id string) {
 	r.named = append(r.named, id)
 	r.markTags(id)
@@ -641,11 +512,10 @@ type read struct {
 	// look.
 	synced cache.Synced
 	linear bool
-	// prov is the copy's index of pushes, the zero one where it keeps none
-	// it can read, and indexRead whether it was asked for; pushedBy the push
-	// that introduced each commit the answer names, coverage what the index
-	// holds — each carried by every page and so measured into its envelope
-	// (room) — and named every commit decorated, held by the index or not.
+	// prov is the copy's index of pushes (zero where none is readable),
+	// indexRead whether it was asked for; pushedBy and coverage ride every
+	// page and so are measured into its envelope (room); named is every
+	// commit decorated, held by the index or not.
 	prov      cache.Provenance
 	indexRead bool
 	pushedBy  map[string]gitlet.PushedBy
@@ -656,20 +526,18 @@ type read struct {
 	// flight of the page the read leads (await), nil where it leads none.
 	recalled bool
 	landing  func()
-	// metered is set once the read's own git has begun (step 8), and gitLeft
-	// is what is left of its budget of run time: each of its processes is
-	// given that as its deadline ([read.budget]) and charged what it ran
-	// ([read.failed]) — its run alone, never its wait for a read-lane slot,
-	// which is the node's contention and not the read's size, and comes out
-	// of the asker's attempt instead.
+	// metered is set once the read's own git has begun (step 8); gitLeft is
+	// what is left of its budget of run time, each process's deadline
+	// ([read.budget]), charged its run alone ([read.charge]), never its wait
+	// for a read-lane slot: that is the node's contention, not the read's size.
 	metered bool
 	gitLeft time.Duration
 	// filter is an interdiff's files, made once (read.interdiffFilter).
 	filter *pathFilter
 	// tips is what a tips read holds of its facts and counts (recallTips).
 	tips *tipsWarm
-	// tagIndex is the copy's tag index a history's read opened under the pin
-	// tagsDir and tagsAt name (index); tagged the tags naming each commit decorated.
+	// tagIndex is the tag index a history's read opened under the pin tagsDir
+	// and tagsAt name (openTags); tagged the tags naming each commit decorated.
 	tagIndex  *cache.TagIndex
 	tagsDir   string
 	tagsAt    statelog.Position
@@ -697,10 +565,9 @@ func (r *read) judgeable() error {
 
 // held refuses a read this node may not fill a copy for (step 3): it holds
 // none, and the read is not its walk's effective home's. Asked before the
-// sync, which is what would start the download: a cold round runs on under
-// the cache's own lifetime after the read stops waiting, so a node that
-// started one for a read another node answers would download the whole
-// repository for nobody.
+// sync, which would start the download: a cold round outlives the read's
+// wait, so a node starting one for a read another node answers would download
+// the whole repository for nobody.
 func (r *read) held() error {
 	if r.q.Home || r.s.o.Cache.Holds(r.q.RepoID) {
 		return nil
@@ -710,19 +577,15 @@ func (r *read) held() error {
 		"meanwhile", r.s.o.NodeID, r.q.RepoID))
 }
 
-// fresh is what the first sync asks: the asker's floor where it names one —
-// at the level it names, session where it names none — and otherwise the copy
-// as it stands. An object id names one object at every position, so no level
-// buys an answer the copy cannot give; what a floor buys is a copy holding the
-// asker's own pushes, which step 7's second look covers for every other id.
-//
-// A LANDED-IN READ is brought to the position its tip's own move landed at
-// (gitlet.LandedInQuery.At), at least: the moves of the target up to that tip are
-// what its index must hold to name the push that landed the commit there, and
-// no move of the target lies between that one and the read that resolved it.
-//
-// The asker's floor is on the code log: a floor on any other is refused with
-// the request ([gitlet.GitQuery.Validate]).
+// fresh is what the first sync asks: the asker's floor on the code log, at
+// the level it names (session where none), or else the copy as it stands. An
+// id names one object at every position, so a floor buys only a copy holding
+// the asker's own pushes; step 7's second look covers every other id. A
+// LANDED-IN READ is brought at least to where its tip's move landed
+// (gitlet.LandedInQuery.At): its index must hold the target's moves up to
+// that tip to name the push that landed the commit, and no move lies between
+// that one and the read that resolved it. A floor on another log is refused
+// with the request ([gitlet.GitQuery.Validate]).
 func (r *read) fresh() statelog.Freshness {
 	f := r.q.Fresh
 	floor := f.Floor(topics.CodeLogStream)
@@ -759,7 +622,7 @@ func (r *read) sync(ctx context.Context, fresh statelog.Freshness) error {
 	case errors.Is(err, gitlet.ErrRepoNotFound):
 		return fmt.Errorf("query: repository %s: %w", r.q.RepoID, err)
 	case errors.Is(err, cache.ErrInvalid):
-		// The request's own mistake — a floor on another log — which no
+		// The request's own mistake (a floor on another log), which no
 		// other node would take either.
 		return fmt.Errorf("%w: fresh: %w", gitlet.ErrInvalid, err)
 	case gitlet.AnswerDue(ctx):
@@ -796,33 +659,24 @@ func (r *read) grant() error {
 		return fmt.Errorf("%w: %s", gitlet.ErrRepoNotFound, gone.Detail())
 	}
 	if r.q.EnginesOwn() {
-		// THE ENGINE'S OWN READ, which names no asker — a revision's facts, or
-		// a read made for a check, whose attempt's row admitted its box: there
-		// is no grant to judge, and judged as nobody it would be refused as
-		// nobody.
+		// THE ENGINE'S OWN READ names no asker (a revision's facts, or a read
+		// for a check, whose attempt's row admitted its box): judged as nobody
+		// it would be refused.
 		return nil
 	}
 	_, err := gitlet.JudgeRead(r.q.Asker, r.q.CeilingSeat, repo, r.roster)
 	return err
 }
 
-// objects is steps 5 and 7 — and their ONE second look at the log's head: NO
-// REFUSAL IS CONCLUDED FROM A COPY THAT MAY BE BEHIND THE LOG, as
-// Gitlet never refuses a person's git on a stale read. An id the copy lacks may
-// be a push the asker knows of and this node has not synced; a repository the
-// copy calls deleted, or a grant its row refuses, may be one an activation
-// restored or opened since. So a read that would refuse on a copy not read at
-// the log's head syncs there once, judges the grant again on the row it
-// brings, and only then answers — a refused read costs one barrier, a served
-// one none, and one whose asker names the head it read (gitlet.GitQuery.Head)
-// none of its own: it syncs to that head (lookAtHead).
-//
-// A SEAT'S SECOND LOOK IS ITS TURN'S TO PAY, from its seat's bucket on this
-// node (Options.Resyncs, gitlet.NewResyncs): past it the refusal is answered
-// from the copy at the seat's floor — which holds what the turn has read and
-// this node's own pushes — saying it was not judged again and when the
-// seat's re-syncs come back. A read made for a check is its attempt's to pay,
-// at the check's session (resync). A person's and the engine's own are never
+// objects is steps 5 and 7, with ONE second look at the log's head: no
+// refusal is concluded from a copy that may be behind the log (package doc,
+// "By object id, never by ref"). A read that would refuse on a copy not read
+// at the head syncs there once (lookAtHead), judges again on the row it
+// brings, and only then answers. A SEAT'S second look is paid from its turn's
+// bucket on this node, a check's read from its attempt's (resync); past it
+// the refusal is answered from the copy at the floor, which holds what the
+// turn has read and this node's own pushes, saying it was not judged again
+// (gitlet.NotRejudged). A person's and the engine's own reads are never
 // charged.
 func (r *read) objects(ctx context.Context) (found, error) {
 	for {
@@ -867,12 +721,10 @@ func (r *read) objects(ctx context.Context) (found, error) {
 }
 
 // lookAtHead is the read's ONE SECOND LOOK at the log's head: the copy synced
-// to the head its asker read (gitlet.GitQuery.Head), at session, where it names
-// one, and otherwise to a barrier of its own, at linearizable — either way a
-// copy no write its asker could have seen before asking is past, so the read
-// is judged as read at the head from then on. Its asker's head costs this
-// node no barrier: one taken by the asker for a whole search, against one for
-// every repository the search reads.
+// at session to the head its asker read (gitlet.GitQuery.Head), else to a
+// barrier of its own at linearizable; either way no write the asker could
+// have seen is past it, so the read counts as read at the head. The asker's
+// head costs no barrier here: one for a whole search, not one a repository.
 func (r *read) lookAtHead(ctx context.Context) error {
 	fresh := statelog.Freshness{Level: statelog.ReadLinearizable}
 	if !r.q.Head.IsZero() {
@@ -885,13 +737,12 @@ func (r *read) lookAtHead(ctx context.Context) error {
 	return nil
 }
 
-// resync draws the read's one second look at the log's head from this node's
-// buckets: a SEAT'S read, its turn on its seat; a read made FOR A CHECK — a
-// check's box's at /box/gitlet/ — its attempt on its repository's checks
-// (gitlet.CheckKey.Resyncs) — the one bucket the box's transfers pay at
-// Gitlet on this node, and counted with them (crewlet.code.box.resyncs). Nil
-// where it is taken, or for a read charged to nobody: a person's, and the
-// engine's own on its own account.
+// resync draws the read's second look at the log's head from this node's
+// buckets: a SEAT'S read from its turn on its seat; a read FOR A CHECK (a
+// box's, at /box/gitlet/) from its attempt on its repository's checks
+// (gitlet.CheckKey.Resyncs), the bucket the box's transfers pay, counted with
+// them (crewlet.code.box.resyncs). Nil where it is taken, or for a read
+// charged to nobody: a person's, or the engine's own.
 func (r *read) resync() *costlimit.Refusal {
 	switch {
 	case r.q.Check != nil:
@@ -902,9 +753,9 @@ func (r *read) resync() *costlimit.Refusal {
 	return nil
 }
 
-// floorWords is how a read answered at its floor names it — what it has read,
-// what it may do instead, and whose bucket ran out, the principal's and the
-// scope's (gitlet.NotRejudged): a seat's turn's, or a check's.
+// floorWords is how a read answered at its floor names it: what it has read,
+// what it may do instead, and whose bucket ran out (gitlet.NotRejudged), a
+// seat's turn's or a check's.
 func (r *read) floorWords() (shown, instead, principal, scope string) {
 	if r.q.Check != nil {
 		return "this check was queued at", "a check's box reads the one commit it checks", "this check's",
@@ -915,7 +766,7 @@ func (r *read) floorWords() (shown, instead, principal, scope string) {
 }
 
 // answer runs the kind's own git over objs (step 8), memoizing every page it
-// cuts once that git has answered whole — and none where it did not.
+// cuts once that git has answered whole, and none where it did not.
 func (r *read) answer(ctx context.Context, objs found, at cursor) (gitlet.GitAnswer, error) {
 	m := r.memoRun(objs)
 	defer m.discard()
@@ -957,13 +808,11 @@ func (r *read) unready(why gitlet.UnreadyReason, detail string) error {
 	return &gitlet.ErrGitUnready{Reason: why, Detail: detail}
 }
 
-// budget is the deadline the next process of the read's OWN GIT is given: what
-// is left of its budget of run time ([read.gitLeft]) — the processes of a kind
-// share one, so a comparison's walks and its stat, or a patch's lookup and its
-// diff-pairs, run in the time one listing gets. A budget already run out is the
-// read too large to answer, said with the generic narrowing: a process's run is
-// charged after it ends (failed), so a later one finds it spent only where the
-// one before it ran out its last instant.
+// budget is the deadline the next process of the read's OWN GIT is given:
+// what is left of the one budget its kind's processes share ([read.gitLeft]).
+// One already run out is the read too large to answer, with the generic
+// narrowing: a run is charged after it ends, so a later process finds it spent
+// only where the one before ran out its last instant.
 func (r *read) budget() (time.Duration, error) {
 	if r.gitLeft <= 0 {
 		return 0, fmt.Errorf("%w: the read of repository %s ran its git's whole %s: narrow it",
@@ -972,26 +821,17 @@ func (r *read) budget() (time.Duration, error) {
 	return r.gitLeft, nil
 }
 
-// failed is what a git process's end means for the read, once the run is
-// charged to the read's own git where that has begun ([read.metered]): nil
-// for one that answered; unready, syncing, for one that reported damage —
-// failed or not, since git answers some questions over damage it reports and
-// exits 0 — and for one the pool refused the copy's shape for (the cache
-// repairs both: nothing here names a gitproc.Repairer, so the cache's observer
-// acts on a report at once); unready, share, for one the read's answer fell
-// due during — waiting for a slot or running (gitlet.AnswerDue) — and for a read
-// lane busy past gitproc.SlotWait; slice, for a process of the read's own git
-// that ran out the whole of its budget, since another node would take as long;
-// and unready, node_failed, for one of the short checks before it that ran its
-// whole bound, which no healthy node takes over a few ids, so this node is not
-// one to wait for and the walk lets the next node fill a copy.
-//
-// A RUN THE ANSWER'S DUE INSTANT ENDED IS NEVER TOO LARGE: it had less than
-// the read's whole budget — the sync, the checks and the read lane's queue
-// took the rest of the asker's attempt — and a node with that time to spare
-// would have given it all of it. Refused as too large, a read that only lost
-// its time to contention told its seat to narrow a question a quiet node
-// answers.
+// failed is what a git process's end means for the read, once its run is
+// charged ([read.charge]): nil where it answered; unready, syncing, where it
+// reported damage (failed or not: git answers some questions over damage and
+// exits 0) or the pool refused the copy's shape, both of which the cache
+// repairs; unready, share, where the answer fell due (gitlet.AnswerDue) or the
+// lane was busy past gitproc.SlotWait; slice (ErrSliceTooLarge where nil)
+// where the read's own git ran out its budget, as it would on another node;
+// unready, node_failed, where a short check before it ran its whole bound,
+// which no healthy node takes. A RUN THE DUE INSTANT ENDED IS NEVER TOO LARGE:
+// it had less than its whole budget, which a quiet node gives (package doc,
+// "Time: one budget of git, and an answer while the asker listens").
 func (r *read) failed(ctx context.Context, what string, res gitproc.Result, err error, slice error) error {
 	r.charge(res)
 	if res.Damage != nil {
@@ -1027,11 +867,10 @@ func (r *read) failed(ctx context.Context, what string, res gitproc.Result, err 
 	return fmt.Errorf("query: %s over repository %s: %w", what, r.q.RepoID, err)
 }
 
-// charge counts a process's run against the read's budget of git once the
-// read's own git has begun ([read.metered]) — its run alone, never its wait
-// for a read-lane slot: what [read.failed] charges every process it judges,
-// and a run the read ends itself, having read all it needs (errStop), is
-// charged here, since it judges none.
+// charge counts a process's run, never its wait for a read-lane slot,
+// against the read's budget once its own git has begun ([read.metered]).
+// [read.failed] calls it for every process it judges; a run the read ends
+// itself, having read all it needs (errStop), is charged here directly.
 func (r *read) charge(res gitproc.Result) {
 	if r.metered {
 		r.gitLeft -= res.Took
@@ -1087,9 +926,8 @@ func cursorOf(q gitlet.GitQuery) (cursor, error) {
 		}
 		return c, err
 	}
-	// A comparison answers its first page of files and no more — a diff of
-	// its merge base and head reads the rest — a landed-in read one answer
-	// of a few ids, a revision's facts one of its ids and a bounded list, and
-	// a re-anchoring one of its bounded anchors.
+	// One page and no cursor: a comparison's first page of files (a diff of
+	// its merge base and head reads the rest), or a landed-in read's, a
+	// revision's facts' or a re-anchoring's single bounded answer.
 	return parseCursor(q.Cursor, q.Kind, map[byte]int{})
 }

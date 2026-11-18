@@ -15,7 +15,8 @@ import (
 
 // THE COPY'S TAGS (gitlet.GitTags): a page newest first from the tag index,
 // with no git, its cursor the last tag's key; and the tags naming each commit
-// a history's page lists, costed as its push is.
+// a history's page lists, costed as its push is (package doc, "The copy's
+// tags").
 
 // tagsRefPrefix is the namespace every tag's ref is under.
 const tagsRefPrefix = "refs/tags/"
@@ -23,7 +24,7 @@ const tagsRefPrefix = "refs/tags/"
 // tagsCursorEncoding is a tags cursor's name: unpadded base64url, strict.
 var tagsCursorEncoding = base64.RawURLEncoding.Strict()
 
-// parseTagsCursor reads a tags cursor, "d:<seconds>:<name>", the last row's
+// parseTagsCursor reads a tags cursor, "d:<seconds>:<name>": the last row's
 // date and its name after refs/tags/ in unpadded base64url, canonical as every
 // cursor is; "" is nil.
 func parseTagsCursor(raw string) (*cache.TagKey, error) {
@@ -63,8 +64,8 @@ var widestTagsCursor = formatTagsCursor(cache.TagKey{Date: 1<<63 - 1,
 // tagsRead answers a tags read from the copy's tag index, with no git: a page
 // newest first from the cursor, cut by the limit and the answer's bytes.
 func (r *read) tagsRead(ctx context.Context) (gitlet.GitAnswer, error) {
-	// THE GRANT, judged at the log's head before any refusal is concluded
-	// from a copy that may be behind it.
+	// THE GRANT, judged at the log's head before a refusal is concluded from
+	// a copy that may be behind it (read.objects).
 	for {
 		refused := r.grant()
 		if refused == nil {
@@ -130,8 +131,9 @@ func (r *read) notIndexed() error {
 		"now and is building one; another Gitlet node answers meanwhile", r.s.o.NodeID, r.q.RepoID))
 }
 
-// tagRow is e as a page lists it: its date where git dates it, in seconds
-// past the last instant encoding/json writes.
+// tagRow is e as a page lists it: its date where git dates it, one past
+// gitlet.LastJSONSecond, which encoding/json cannot write, in unix seconds
+// (DateUnix).
 func tagRow(e cache.TagEntry) gitlet.TagRow {
 	row := gitlet.TagRow{Ref: e.Ref, OID: e.OID, Type: e.Type, Peeled: e.Peeled, PeeledType: e.PeeledType}
 	switch {
@@ -178,7 +180,7 @@ func (r *read) closeTags() {
 }
 
 // tagsOfCommit is commit id's tags, looked up once a read; false where the
-// index failed, which drops the decoration for the read.
+// index failed, which drops the read's tag decoration.
 func (r *read) tagsOfCommit(id string) (gitlet.CommitTags, bool) {
 	if t, ok := r.tagsOf[id]; ok {
 		return t, true

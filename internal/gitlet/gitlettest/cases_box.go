@@ -10,10 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/host"
 )
 
-// CODING BOXES: a seat's executor reaching Gitlet as a git user,
-// through /box/git/ with its run's token — admitted by its run's row, its
-// reads at its run's SESSION on the code log, which every ref answer it is
-// shown and every push it lands raises (M3-decisions M3-O56).
+// CODING BOXES: a seat's executor reaches Gitlet as a git user through
+// /box/git/ with its run's token, admitted by its run's row, reading at its
+// run's SESSION on the code log, which every ref answer it is shown and every
+// push it lands raises (M3-decisions M3-O56).
 
 // boxScene is what a box case needs of its topology: a repository, two Gitlet
 // nodes to reach it through, and the fleet's runs.
@@ -91,14 +91,13 @@ func anEndedRunIsRefused(t *testing.T, newFleet NewFleet) {
 }
 
 // F51: a box's push is recorded by its RUN, whatever its commits' trailers say
-// (M3-decisions U25 a): Gitlet refuses nothing because of a trailer and
-// stamps every push row from the run's row alone. A box of run R1 pushes a
-// commit whose trailers name another seat, another live run R2 and another
-// work item — R2 by its turn, as a run's attribution names it
-// (internal/sandbox/executor's attribution.go); a commit with no trailer;
-// and a commit whose message claims R2 a hundred times. All land, every row
-// names R1's seat, turn, launch, harness and work item, and R2's pushes are
-// none.
+// (M3-decisions U25 a): Gitlet refuses nothing for a trailer and stamps every
+// push row from the run's row alone. A box of run R1 pushes a commit whose
+// trailers name another seat, another live run R2 (by its turn, as
+// internal/sandbox/executor's attribution.go names a run) and another work
+// item; one with no trailer; and one claiming R2 a hundred times. All land,
+// every row names R1's seat, turn, launch, harness and work item, and R2 has
+// no pushes.
 //
 // Mutation: stamp the run's turn from the newest commit's Crewlet-Run
 // trailer → the forged and the many rows name R2's turn, red.
@@ -170,11 +169,10 @@ func aBoxReadsItsOwnPushThroughAnotherNode(t *testing.T, newFleet NewFleet) {
 	assertConverged(t, c.Fleet)
 }
 
-// F46: a box's push whose advertisement one node served past the box's floor
-// and whose receive-pack another node — its copy last synced below that —
-// receives lands whole: the advertisement raised the floor before its first
-// byte, so the receive-pack's session sync holds every base the thin pack
-// names.
+// F46: a box's push lands whole when one node serves its advertisement past
+// the box's floor and another, its copy synced below that, its receive-pack:
+// the advertisement raised the floor before its first byte, so the
+// receive-pack's session sync holds every base the thin pack names.
 func aBoxPushesOnTopOfWhatAnotherNodeShowedIt(t *testing.T, newFleet NewFleet) {
 	c := newCase(t, newFleet, Shape{GitletNodes: 2}, Settings())
 	nodes := c.Fleet.Nodes()
@@ -257,8 +255,8 @@ func (s boxScene) seed() {
 func (s boxScene) readsItsOwnPush() {
 	s.t.Helper()
 	_, box := s.launch(FixtureAlice, gitlet.AccessWrite)
-	// b's COPY AT THE LAUNCH FLOOR, so what the read through it is held to
-	// below is the run's floor and not a copy that never synced.
+	// b's COPY AT THE LAUNCH FLOOR, so the read through it below is held to
+	// the run's floor, not to a copy that never synced.
 	_ = box.LsRemote(s.boxURL(s.b), 0)
 	clone := box.Clone(s.boxURL(s.a))
 	head := box.Commit(clone, map[string]string{"src/a.go": "package a\n"}, "the box's work")
@@ -288,9 +286,9 @@ func (s boxScene) pushesOnTopOfWhatAnotherNodeShowed() {
 	if res := p.Push(s.ctx, work, s.personURL(s.a), "main"); res.Err != nil {
 		s.t.Fatalf("the person's second push of main: %s", res)
 	}
-	// a's COPY CURRENT, as a person's next read through it leaves it: a
-	// push links its pack into its node's copy and moves no position, and a
-	// linearizable read rounds the copy up to the log's head — past the box's
+	// a's COPY CURRENT, as a person's next read leaves it: a push links its
+	// pack into its node's copy without moving its position, and a
+	// linearizable read rounds the copy up to the log's head, past the box's
 	// floor.
 	_ = p.LsRemote(s.personURL(s.a), 0)
 	box.Git().Run(s.t, clone, "fetch", "--quiet", s.boxURL(s.a), "main")

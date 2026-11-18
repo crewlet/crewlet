@@ -29,20 +29,19 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// remoteHost is the name every remote a case dials is written with. The
-// certificate every httptest TLS server presents names example.com and
-// *.example.com, and no DNS answers this name with a server of a case's, so
-// a run that reaches one reached it at the address it was pinned to.
+// remoteHost is the name every case's remote is written with: httptest's TLS
+// certificate names *.example.com, and no DNS answers it with a case's server,
+// so a run that reaches one reached the address it was pinned to.
 const remoteHost = "git.example.com"
 
 // ipv4onlyArpa is the name RFC 7050 discovery asks AAAA records of, rooted as
 // httpx asks it: the network's NAT64 prefixes are read from its answers.
 const ipv4onlyArpa = "ipv4only.arpa."
 
-// resolver is a DNS a case writes: the addresses each name has — every name
-// it has no row for answering fallback — the error a name's lookup fails
-// with, and every lookup asked of it. A name with no address of the family
-// asked is not found, as a resolver says of a name with no record of the type.
+// resolver is a DNS a case writes: each name's addresses (fallback for a name
+// with no row), the error a name's lookup fails with, and every lookup asked.
+// A name with no address of the family asked is not found, as a real resolver
+// says of a name with no record of the type.
 type resolver struct {
 	answers  map[string][]netip.Addr
 	fallback []netip.Addr
@@ -126,10 +125,9 @@ func remoteRun(t *testing.T, body string, r gitproc.Remote, config ...gitproc.KV
 	})
 }
 
-// remoteConfig is the configuration a remote run over r is handed, as a
-// stand-in git that prints its environment reads it — the base, the remote's
-// keys, then config — and the run's arguments, which the stand-in prints
-// first.
+// remoteConfig is the configuration a remote run over r is handed (the base,
+// the remote's keys, then config) and the run's arguments, as a stand-in git
+// printing its arguments and then its environment reads them.
 func remoteConfig(t *testing.T, r gitproc.Remote, config ...gitproc.KV) (got []gitproc.KV, args []string) {
 	t.Helper()
 	res, err := remoteRun(t, `for a in "$@"; do printf 'ARG=%s\n' "$a"; done; exec env`, r, config...)
@@ -147,8 +145,7 @@ func remoteConfig(t *testing.T, r gitproc.Remote, config ...gitproc.KV) (got []g
 	return configOf(t, envOf([]byte(strings.Join(env, "")))), args
 }
 
-// baseConfig is the base every process is handed, in order: the pool's six
-// keys, the hooks path pointing at no directory.
+// baseConfig is the pool's six keys every process is handed, in order.
 var baseConfig = []gitproc.KV{
 	{Key: "protocol.allow", Value: "never"},
 	{Key: "gc.auto", Value: "0"},
@@ -158,10 +155,9 @@ var baseConfig = []gitproc.KV{
 	{Key: "core.attributesFile", Value: "/dev/null/no-attributes"},
 }
 
-// remoteBase is what every remote run is handed after the base, in order,
-// before where its host is reached and what it trusts: its TCP keepalive
-// among it, quiet for half of TransferStall before the first probe and three
-// probes over the rest — and no speed bound.
+// remoteBase is what every remote run is handed after the base and before its
+// pin and authorities, in order: TCP keepalive quiet for half of TransferStall
+// before the first probe, three probes over the rest, and no speed bound.
 var remoteBase = []gitproc.KV{
 	{Key: "protocol.https.allow", Value: "always"},
 	{Key: "http.followRedirects", Value: "false"},
@@ -172,26 +168,18 @@ var remoteBase = []gitproc.KV{
 	{Key: "http.keepAliveCount", Value: "3"},
 }
 
-// A REMOTE RESOLVING TO AN ADDRESS OFF THE PUBLIC INTERNET IS REFUSED WHOLE,
-// before git is told anything: a private, loopback, link-local or
-// unique-local address, written as the host or answered for its name; an IPv6
-// address carrying such an IPv4 address through NAT64 — the well-known
-// prefix, and the prefix the network's own resolver names, which sits in
-// global unicast where only the rule WITH the network's prefixes reads the
-// address it carries; an address under a prefix the resolver names in
-// unique-local space, whatever it carries, since httpx takes no resolver's
-// word that would open a network off the internet; and a name answering one
-// public and one private address, which its owner can point either way
-// between the judgment and the next lookup. The refusal is
-// httpx.ErrNotPublic, naming gitlet.import_allow_private — which pins the
-// answers as they come — and a resolver that cannot say which prefixes its
-// network translates through, for an address whose verdict they decide, fails
-// the resolve rather than judging on a guess.
+// A REMOTE RESOLVING OFF THE PUBLIC INTERNET IS REFUSED WHOLE before git is
+// told anything (httpx.ErrNotPublic naming gitlet.import_allow_private, which
+// pins the answers as they come): a private, loopback, link-local or
+// unique-local address, literal or answered; one carried through NAT64 under
+// the well-known prefix or the network's own (read only WITH the discovered
+// prefixes); anything under a unique-local prefix the resolver names; and a
+// name answering a public and a private address, repointable before the next
+// lookup. A failed discovery, where the prefixes decide, fails the resolve.
 //
-// Mutation: judge the answers by the rule without the network's discovered
-// prefixes, and the DNS64 row goes red; count a prefix the resolver names
-// wherever it lies, and the unique-local DNS64 row does; pin a private answer
-// without gitlet.import_allow_private, and every refused row does.
+// Mutation: judge without the discovered prefixes (the DNS64 row goes red);
+// count a resolver's prefix wherever it lies (the unique-local DNS64 row); pin a
+// private answer without gitlet.import_allow_private (every refused row).
 func TestARemoteResolvingPrivateIsRefused(t *testing.T) {
 	t.Parallel()
 	const named = "https://" + remoteHost + "/team/r.git"
@@ -213,10 +201,9 @@ func TestARemoteResolvingPrivateIsRefused(t *testing.T) {
 			answers: addrs("64:ff9b::a00:5")},
 		{name: "the network's own NAT64 prefix carrying a private address", url: named,
 			answers: addrs("2606:4700:64::a00:5"), nat64: dns64},
-		// fd00:64::/96, named by the network's resolver, carrying
-		// 104.16.0.1: a resolver that could have this counted could call
-		// public any host of the unique-local network whose low 32 bits read
-		// as a public IPv4 address.
+		// fd00:64::/96, named by the resolver, carrying 104.16.0.1: counted, it
+		// would let a resolver call public any unique-local host whose low 32
+		// bits read as a public IPv4 address.
 		{name: "a unique-local NAT64 prefix carrying a public address", url: named,
 			answers: addrs("fd00:64::6810:1"), nat64: addrs("fd00:64::c000:aa")},
 		{name: "a private address literal", url: "https://10.0.0.5/r.git", pinned: addrs("10.0.0.5")},
@@ -264,10 +251,9 @@ func TestARemoteResolvingPrivateIsRefused(t *testing.T) {
 		})
 	}
 
-	// A resolver that cannot say which NAT64 prefixes its network translates
-	// through is not trusted with a verdict they decide: an address in global
-	// unicast, which a prefix the network names could hold, fails the
-	// resolve with the resolver's own error, and nothing is judged on a guess.
+	// A resolver that cannot name its network's NAT64 prefixes gets no verdict
+	// they decide: a global-unicast address, which such a prefix could hold,
+	// fails the resolve with the resolver's own error.
 	failing := &net.DNSError{Err: "server misbehaving", Name: ipv4onlyArpa, IsTemporary: true}
 	dns := &resolver{answers: map[string][]netip.Addr{remoteHost: addrs("2606:4700::1")},
 		fails: map[string]error{ipv4onlyArpa: failing}}
@@ -278,13 +264,13 @@ func TestARemoteResolvingPrivateIsRefused(t *testing.T) {
 	}
 }
 
-// A REMOTE'S URL IS READ BY THE ONE RULE (gitref.ParseRemoteURL, whose own
-// suite holds every shape it takes and refuses): what git is handed is the URL
-// as that rule wrote it back, and what it refuses is refused here ErrRemote —
-// quoting no password — before anything is resolved.
+// A REMOTE'S URL IS READ BY THE ONE RULE (gitref.ParseRemoteURL, whose suite
+// holds every shape): git is handed the URL as that rule writes it back, and
+// what it refuses is refused ErrRemote, quoting no password, before anything
+// is resolved.
 //
-// Mutation: hand git the URL as given rather than as written back — the
-// uppercase name and the default port reach git, red.
+// Mutation: hand git the URL as given, and the uppercase name and the default
+// port reach git.
 func TestARemoteURLIsWrittenBackOneWay(t *testing.T) {
 	t.Parallel()
 	env := gitproc.RemoteEnv{Resolver: publicDNS()}
@@ -317,13 +303,12 @@ func TestARemoteURLIsWrittenBackOneWay(t *testing.T) {
 }
 
 // A REMOTE BEHIND THE PROCESS'S PROXY IS DIALED THROUGH IT, AS ITSELF: the
-// proxy the process names for the URL resolves the host, so nothing is
-// resolved here — no lookup, no pin, no rule, gitlet.import_allow_private
-// changing nothing — and git is handed the proxy as libcurl reads the one Go
-// read: a SOCKS5 proxy as socks5h, which hands the proxy the name rather than
-// resolving it on this node, where no pin covers it. A proxy neither reads is
-// refused, naming the variable that set it, and a proxy's password prints
-// nowhere a log line reads a remote.
+// proxy resolves the host, so nothing is looked up, pinned or judged here
+// (gitlet.import_allow_private changes nothing), and git is handed the proxy Go
+// read as libcurl reads it, a SOCKS5 one as socks5h so the proxy resolves the
+// name rather than this node, where no pin covers it. A proxy neither reads is
+// refused naming the variable that set it, and its password prints nowhere a
+// log line reads a remote.
 func TestARemoteBehindAProxyIsDialedThroughIt(t *testing.T) {
 	t.Parallel()
 	const password = "pr0xy-passw0rd"
@@ -346,8 +331,8 @@ func TestARemoteBehindAProxyIsDialedThroughIt(t *testing.T) {
 			t.Errorf("through %s: the resolver was asked %v and the remote pinned to %v: the proxy resolves the host",
 				given, asked, r.Addrs())
 		}
-		// The stand-in prints its environment on stdout, which a remote run
-		// hands on with the proxy's password taken out.
+		// A remote run hands the stand-in's printed environment on with the
+		// proxy's password taken out.
 		want = strings.ReplaceAll(want, password, redact.Marker+"credential]")
 		config, _ := remoteConfig(t, r)
 		if wantConfig := slices.Concat(baseConfig, remoteBase, []gitproc.KV{{Key: "http.proxy", Value: want}}); !slices.Equal(config, wantConfig) {
@@ -382,18 +367,16 @@ func TestARemoteBehindAProxyIsDialedThroughIt(t *testing.T) {
 }
 
 // A REMOTE RUN IS CONFIGURED BY THE POOL, AFTER THE BASE AND BEFORE THE CALL
-// SITE: https alone; no redirect, bundle URI or submodule followed; TCP's
-// keepalive watching the peer, and nothing bounding the leg's speed; the host
-// pinned to every address the rule judged, in the order answered, and never
-// with the '+' that would let the entry lapse into a lookup; the process's
-// certificate authorities; and the header — every one in the process's
-// environment and none in its arguments, which are exactly the call's. A call
-// site that names one of those keys itself, in any case, is refused ErrConfig
-// and pointed at Cmd.Remote, as a base key is, and one that names libcurl's
+// SITE: https alone; no redirect, bundle URI or submodule followed; TCP
+// keepalive and no speed bound; the host pinned to every judged address in
+// answer order, never with the '+' that lets the entry lapse into a lookup; the
+// process's authorities; and the header. All go in the environment, none in
+// the arguments, which are exactly the call's. A call site naming one of those
+// keys, in any case, is refused ErrConfig pointing at Cmd.Remote, and libcurl's
 // speed bound is refused as every key off the allowlist is.
 //
-// Mutation: write the remote's keys after the call site's, and the order is
-// red; drop the pin, and so is the configuration.
+// Mutation: write the remote's keys after the call site's (the order goes
+// red); drop the pin (the configuration does).
 func TestARemoteRunIsConfiguredByThePool(t *testing.T) {
 	t.Parallel()
 	secret := secretHex(t, "ghs_")
@@ -409,9 +392,8 @@ func TestARemoteRunIsConfiguredByThePool(t *testing.T) {
 		{Key: "http.curloptResolve", Value: remoteHost + ":8443:[2606:4700::1],104.16.0.1"},
 		{Key: "http.sslCAInfo", Value: "/etc/crewlet/ca.pem"},
 		{Key: "http.sslCAPath", Value: "/etc/crewlet/ca.d"},
-		// The stand-in prints its environment on stdout, which a remote run
-		// with a secret hands on with the secret taken out: the header is
-		// there, its value is not.
+		// The stand-in's printed environment comes back with the secret taken
+		// out: the header is there, its value is not.
 		{Key: "http.extraHeader", Value: "Authorization: " + redact.Marker + "credential]"},
 		callSite,
 	})
@@ -453,12 +435,11 @@ func TestARemoteRunIsConfiguredByThePool(t *testing.T) {
 	}
 }
 
-// THE PROCESS'S CERTIFICATE AUTHORITIES ARE GIT'S: SSL_CERT_FILE is
-// http.sslCAInfo and the directory SSL_CERT_DIR names is http.sslCAPath, so git
-// trusts what the engine's own clients trust — and an SSL_CERT_DIR naming
-// several directories, which crypto/x509 reads as a list and libcurl as one
-// directory, is refused naming the variable, rather than leaving git trusting
-// none of them.
+// THE PROCESS'S CERTIFICATE AUTHORITIES ARE GIT'S: SSL_CERT_FILE becomes
+// http.sslCAInfo and SSL_CERT_DIR http.sslCAPath, so git trusts what the
+// engine's clients trust. An SSL_CERT_DIR of several directories (a list to
+// crypto/x509, one directory to libcurl) is refused naming the variable,
+// rather than leaving git trusting none.
 func TestTheProcessAuthoritiesAreGits(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -487,13 +468,11 @@ func TestTheProcessAuthoritiesAreGits(t *testing.T) {
 	}
 }
 
-// A REMOTE'S HEADER IS ONE HEADER LINE, AND A REMOTE PRINTS WITHOUT IT: a
-// name of HTTP's token characters and a value of one line — a carriage return
-// or a line feed would write a second header nobody meant git to send — or
-// ErrRemote, quoting nothing of the value; a header only for a remote
-// ResolveRemote built; and a Remote printed as a log line would print it, by
-// %v, %+v or %#v, names its URL and the addresses it is pinned to and says it
-// carries a header, never the header itself.
+// A REMOTE'S HEADER IS ONE HEADER LINE, AND A REMOTE PRINTS WITHOUT IT: a name
+// of HTTP token characters and a one-line value (a CR or LF would write a
+// second header), else ErrRemote quoting nothing of the value; only on a remote
+// ResolveRemote built; and a Remote printed by %v, %+v or %#v names its URL,
+// its pinned addresses and that it carries a header, never the header.
 func TestARemotesHeaderIsOneLineAndPrintsNowhere(t *testing.T) {
 	t.Parallel()
 	secret := secretHex(t, "glpat-")
@@ -535,17 +514,15 @@ func TestARemotesHeaderIsOneLineAndPrintsNowhere(t *testing.T) {
 }
 
 // A REMOTE RUN'S LINES NAME NONE OF ITS SECRETS. git never prints the header,
-// but the remote, which holds it, may echo it — in the remote: lines git
-// relays, the body of an HTTP error — so the header's value, the credential
-// after its scheme and the user and password a Basic credential encodes are
-// taken out of stderr's tail and of stdout, a line at a time however the
-// writes split it, and out of the error the run returns: before the observer,
-// a log line or a caller reads any of them.
+// but the remote may echo it (relayed remote: lines, an HTTP error body), so
+// the header's value, the credential after its scheme and a Basic credential's
+// user and password are taken out of stderr's tail, stdout (a line at a time
+// however the writes split it) and the returned error, before the observer, a
+// log line or a caller reads them.
 //
-// Mutation: hand stdout on unredacted, and the stdout rows go red; take the
-// secrets out of stderr's tail once it is cut rather than as each line
-// arrives, and nothing changes here — the tail is never cut — so the sink's
-// own case is the line a run ends without a line feed.
+// Mutation: hand stdout on unredacted, and the stdout rows go red. Redacting
+// stderr's tail only once cut changes nothing here (it is never cut); the
+// sink's own case is a run ending without a line feed.
 func TestARemoteRunsLinesNameNoneOfItsSecrets(t *testing.T) {
 	t.Parallel()
 	password := secretHex(t, "pw-")
@@ -598,19 +575,15 @@ func TestARemoteRunsLinesNameNoneOfItsSecrets(t *testing.T) {
 	}
 }
 
-// A REMOTE RUN IS HELD TO ITS REMOTE before any process starts: a fetch, an
-// ls-remote and a push carry the Cmd.Remote ResolveRemote built — the zero
-// Remote is none — and nothing else carries one; it waits in the transfer
-// lane and carries no Stall, since the pool's watchdog cannot see its leg
-// move, and TCP's keepalive watches its peer; and git's remote, the first
-// argument that is no option (or the first after "--"), is the Remote's URL
-// exactly, with no other argument naming a URL or a remote helper — an option
-// whose value stands apart would be read as the remote, so each is written
-// --name=value.
-//
-// The git here is a stand-in that only counts its runs: a refusal this case
-// failed to see would otherwise be a real git dialing the public address its
-// remote is pinned to.
+// A REMOTE RUN IS HELD TO ITS REMOTE before any process starts: a fetch,
+// ls-remote or push carries the Cmd.Remote ResolveRemote built (the zero Remote
+// is none), and nothing else carries one; it runs in the transfer lane with no
+// Stall, since the watchdog cannot see its leg move and TCP keepalive watches
+// the peer; and git's remote, the first non-option argument (or the first after
+// "--"), is exactly the Remote's URL, no other argument naming a URL or remote
+// helper. An option's value standing apart would read as the remote, so each is
+// written --name=value. The git is a stand-in that only counts its runs, so a
+// missed refusal never dials the pinned public address.
 //
 // Mutation: read the remote from the last argument, or let a second URL or a
 // Stall through, and the rows naming one go red.
@@ -685,11 +658,10 @@ func TestARemoteRunIsHeldToItsRemote(t *testing.T) {
 	}
 }
 
-// tlsRemote serves h over TLS for remoteHost: the remote a git process dials
-// it at — the name resolved to the server's own address, which only
-// gitlet.import_allow_private lets a run dial, since it is loopback — with the
-// file of the authority that signed the server's certificate as the
-// process's SSL_CERT_FILE, and the server.
+// tlsRemote serves h over TLS and returns the server and a remote at path for
+// remoteHost: the name resolved to the server's loopback address (so dialed
+// only under gitlet.import_allow_private), the server's signing authority as
+// the process's SSL_CERT_FILE.
 func tlsRemote(t *testing.T, path string, h http.Handler) (gitproc.Remote, *httptest.Server) {
 	t.Helper()
 	srv := httptest.NewTLSServer(h)
@@ -718,14 +690,12 @@ func fetchFrom(t *testing.T, p *gitproc.Pool, r gitproc.Remote, dir string) (git
 }
 
 // A REMOTE RUN DIALS THE ADDRESS THE ENGINE JUDGED, AND NOTHING ELSE ASKS DNS:
-// a repository at git.example.com — a name no DNS answers with this case's
-// server — is fetched whole and its refs listed, over TLS verified against the
-// authority the process names, at the address the run was pinned to, on every
-// git a Gitlet node may run.
+// a repository at git.example.com, which no DNS answers with this case's
+// server, is fetched whole and listed at the pinned address, over TLS verified
+// against the process's authority, on every git a Gitlet node may run.
 //
-// Mutation: leave http.curloptResolve out, and libcurl looks the name up
-// itself and reaches no server of this case's; leave http.sslCAInfo out, and
-// the server's certificate is one git does not trust.
+// Mutation: drop http.curloptResolve, and libcurl's own lookup reaches no
+// server of this case's; drop http.sslCAInfo, and git distrusts the server.
 func TestARemoteRunDialsTheAddressItWasPinnedTo(t *testing.T) {
 	t.Parallel()
 	onNodeGits(t, dialsThePinOn)
@@ -775,12 +745,10 @@ func dialsThePinOn(t *testing.T, git string) {
 	}
 }
 
-// A REDIRECT IS NOT FOLLOWED: the host a remote run dials is the one the rule
-// judged and the run pinned, so a remote that answers with another host's
-// address — whatever that host is — ends the run, and the other host is
-// never asked anything.
+// A REDIRECT IS NOT FOLLOWED: a run dials only the host the rule judged and the
+// run pinned, so a redirect to any other host ends the run unasked.
 //
-// Mutation: http.followRedirects=true (or git's own default, initial), and the
+// Mutation: http.followRedirects=true (or git's default, initial), and the
 // second server is asked for the refs the first sent the run to.
 func TestARedirectIsNotFollowed(t *testing.T) {
 	t.Parallel()
@@ -813,33 +781,26 @@ func redirectOn(t *testing.T, git string) {
 	}
 }
 
-// A QUIET REMOTE IS WAITED ON. A remote run's connection is ended when its
-// peer stops answering — TCP's keepalive probes left unanswered a stall after
-// the last thing it heard — and never for what it sends: a git server counting
-// and compressing what a large fetch wants, or indexing and checking what a
-// push sent, may send nothing but a keepalive every five seconds, or nothing
-// at all, for minutes, and a run ended for that would be ended on every
-// attempt. A remote that answers a fetch's request and then sends NOTHING —
-// no progress, no keepalive, the quietest a working server is — for two and a
-// half times the stall, scaled to six seconds so the probes go out every
-// second after three seconds of quiet (and are answered), is waited on, and
-// the pack it then sends is fetched whole, on every git a Gitlet node may run.
-// The remote sends that pack only once its quiet is over, so a fetch that
-// answers with it — main at the tip, the objects fsck'd — waited through all
-// of the quiet: the order the remote keeps says so, and no clock is read to
-// hold the fetch to the quiet's length.
+// A QUIET REMOTE IS WAITED ON: a remote run's connection ends when its peer
+// leaves TCP keepalive probes unanswered, never for sending nothing, since a
+// server counting a large fetch or indexing a push may be silent for minutes
+// and a run ended for that would end on every attempt. A remote that answers
+// NAK and then sends nothing for 2.5 stalls (scaled to six seconds: probes
+// every second after three of quiet) is waited on and its pack fetched whole,
+// on every git a Gitlet node may run. It sends the pack only after the quiet,
+// so a fetch holding it waited through all of it; no clock is read.
 //
-// Mutation: hand libcurl back its low-speed check (http.lowSpeedLimit 1,
-// http.lowSpeedTime the stall), and the run is ended — curl 28, "Operation
-// too slow" — a few seconds past the stall, while the remote still holds it.
+// Mutation: restore libcurl's low-speed check (http.lowSpeedLimit 1,
+// http.lowSpeedTime the stall), and the run ends with curl 28, "Operation too
+// slow", a few seconds past the stall.
 func TestAQuietRemoteIsWaitedOn(t *testing.T) {
 	t.Parallel()
 	onNodeGits(t, quietRemoteOn)
 }
 
-// quietStall is the stall TestAQuietRemoteIsWaitedOn scales its pool to: six
-// seconds, whose half and the third of the rest — the keepalive's quiet before
-// its first probe, and its interval — are whole seconds, as git reads them.
+// quietStall is TestAQuietRemoteIsWaitedOn's stall: six seconds, so the
+// keepalive's quiet before its first probe (half) and its interval (a third of
+// the rest) are whole seconds, as git reads them.
 const quietStall = 6 * time.Second
 
 // quietRemoteOn is TestAQuietRemoteIsWaitedOn on the git at git.
@@ -871,12 +832,10 @@ func quietRemoteOn(t *testing.T, git string) {
 	c.Run(t, "", "--git-dir="+into, "fsck", "--strict", "--no-dangling")
 }
 
-// quietServer is a git server — smart HTTP at protocol version 0, its one
-// ref, main, naming tip and its objects pack — that works quietly before it
-// answers: a fetch's request is answered NAK at once, then nothing at all for
-// hold, then the pack over side band 1, as upload-pack answers once
-// pack-objects has counted and compressed with no progress asked for and no
-// keepalive configured.
+// quietServer is a smart-HTTP git server (protocol v0) whose one ref, main,
+// names tip and whose objects are pack: it answers a fetch NAK at once, then
+// nothing for hold, then the pack over side band 1, as upload-pack does with
+// no progress asked for and no keepalive configured.
 func quietServer(tip string, pack []byte, hold time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		switch {
@@ -894,8 +853,8 @@ func quietServer(tip string, pack []byte, hold time.Duration) http.HandlerFunc {
 				return
 			case <-time.After(hold): //fixedwait:simulated a git server working quietly for hold before it answers
 			}
-			// Side band 1, in packets of at most side-band-64k's 65 520
-			// bytes: the length, the band, the data.
+			// Side band 1 in packets of at most side-band-64k's 65520 bytes:
+			// length, band, data.
 			for rest := pack; len(rest) > 0; {
 				n := min(len(rest), 65520-5)
 				_, _ = fmt.Fprintf(w, "%04x\x01", n+5)

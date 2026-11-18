@@ -11,12 +11,11 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// pendingOnce is a fleet whose committer answers ONE push pending, as it
-// answers one whose record a loaded runner's applier has not applied within
-// the committer's own wait: durable at its position, which is the record's
-// own, and unresolved where it was proposed. The answer carries no commands,
-// so a setup that took a pending answer's commands for the outcome fails
-// here: only the push's row says what became of it.
+// pendingOnce is a fleet whose committer answers ONE push pending, as when a
+// loaded runner's applier misses the committer's wait: durable at the record's
+// position, unresolved where proposed. The answer carries no commands, so a
+// setup taking a pending answer's commands for the outcome fails here: only
+// the push's row says what became of it.
 type pendingOnce struct {
 	gitlettest.Fleet
 	forced *atomic.Bool
@@ -32,11 +31,9 @@ func (f pendingOnce) Propose(ctx context.Context, p gitlet.Proposal) (gitlet.Pro
 }
 
 // A BULK PACK ANSWERED PENDING IS RESOLVED AT ITS POSITION, not failed:
-// statelog answers pending a record durable there, and documents the answer
-// as never a failure. C5's setup read one as a failure and went red whenever
-// a loaded runner's applier lagged a bulk pack past the committer's wait
-// (#799). Here one pack is answered pending, and the setup must read what
-// became of it and go on with every pack laid.
+// statelog answers pending a record durable there, never a failure. One pack
+// is answered pending, and BulkPacks (C5's setup) must read what became of it
+// and go on with every pack laid.
 func TestABulkPackAnsweredPendingIsResolvedAtItsPosition(t *testing.T) {
 	var forced atomic.Bool
 	c := gitlettest.NewCase(t, func(t *testing.T, s gitlettest.Shape) gitlettest.Fleet {

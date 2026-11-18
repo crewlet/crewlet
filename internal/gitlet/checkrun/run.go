@@ -20,42 +20,37 @@ import (
 )
 
 // LostPolls is how many polls in a row a box may fail to answer before its
-// run is ended `errored box_failed`: FOUR, a minute at CheckPoll — a box's
-// control plane down for one poll is a blip a check should outlast, and one
-// down for a minute is a box the check's attempt is better queued again for.
+// run is ended `errored box_failed`: FOUR, a minute at CheckPoll. One missed
+// poll is a blip a check should outlast; a box down a minute is better
+// queued again.
 const LostPolls = 4
 
-// FinishPolls is how many polls long a run's ending is asked for again before
-// the runner gives it up: TWO, thirty seconds at CheckPoll — through a checks
-// writer answering busy or a committing data node handing its repository to
-// the runner-up, both seconds long. Past it the attempt stays running and the
-// home's sweep ends it runner_lost; SweepPolls counts this patience in.
+// FinishPolls is how many polls long a run's ending is retried before the
+// runner gives it up: TWO, thirty seconds at CheckPoll, outlasting a checks
+// writer answering busy or a committing data node handing its repository
+// over, both seconds long. Past it the attempt stays running and the home's
+// sweep ends it runner_lost; SweepPolls counts this in.
 const FinishPolls = 2
 
-// EndPolls is how many polls long a run's ending may be read from its box —
-// its exit status, its reports, its summary, its tail and its kept log —
-// before whatever is still unread is gone without and the ending recorded:
-// FOUR, a minute at CheckPoll. JUDGMENT: the most an ending reads is two
-// reports of sandbox.MaxFileBytes and a log of gitlet.MaxCheckLogBytes, 128 MiB,
-// which a minute carries at about 2 MB/s from a remote box into the object
-// store, the log streamed from one into the other as it arrives; a run on a
-// box slower than that ends without what is still unread — its log, or a
-// report — its summary saying so, rather than holding its attempt past what
-// the home's sweep waits for. Unbounded, a stalled upload held a run's ending
-// until the sweep took its runner for lost and queued the attempt again while
-// its first box still ran. SweepPolls counts this in, and it sits well inside
-// gitlet.CheckBoxGrace (ten minutes), which the box's TTL outlives its last
-// poll by, so the box is never reclaimed under its ending's reads.
+// EndPolls is how many polls long a run's ending may be read from its box
+// (exit status, reports, summary, tail, kept log) before what is still unread
+// is gone without: FOUR, a minute at CheckPoll. JUDGMENT: an ending reads at
+// most two reports of sandbox.MaxFileBytes and a log of
+// gitlet.MaxCheckLogBytes, 128 MiB, which a minute carries at about 2 MB/s; a
+// slower box's ending goes without the rest, its summary saying so. Unbounded, a stalled
+// read outlasts the home's sweep, which queues the attempt again while its
+// box still runs. SweepPolls counts this in, and it sits well inside
+// gitlet.CheckBoxGrace, which the box's TTL outlives its last poll by, so the
+// box is never reclaimed under its ending's reads.
 const EndPolls = 4
 
-// The files of a run, in a directory of the box's home — never inside the
-// checkout, which the check's own command may clean: its output, its exit
-// status, the summary its command may write ($CREWLET_CHECK_SUMMARY), and the
-// copies of its reports the command's wrapper takes once it ends.
+// The files of a run, in the box's home, never the checkout, which the
+// check's own command may clean: its output, exit status, summary
+// ($CREWLET_CHECK_SUMMARY) and the copies of its reports.
 //
 // AT sandbox.DefaultHome, NEVER A BOX'S OWN Home: the summary's path is in the
-// box's environment, which is fixed before the box exists, and the two cells
-// a check runs in — a container and an e2b box — both keep their home there.
+// box's environment, fixed before the box exists, and both cells a check runs
+// in (container, e2b) keep their home there.
 const (
 	checkHome   = sandbox.DefaultHome + "/.crewlet-check"
 	outputFile  = checkHome + "/output"
@@ -65,18 +60,16 @@ const (
 	sarifFile   = checkHome + "/report.sarif"
 )
 
-// logContentType is a kept log's media type: a run's output as its command
-// wrote it, read as text.
+// logContentType is a kept log's media type: the run's output, read as text.
 const logContentType = "text/plain; charset=utf-8"
 
-// run is one claimed attempt, from its box to its ending: on the runner's own
-// goroutine, under its life. It records an ending on every path but two: the
-// attempt's row ended by somebody else, which needs none, and a fault the
-// suites inject at the claim.
+// run is one claimed attempt, from its box to its ending, under the runner's
+// life. It records an ending on every path but two: the row ended by somebody
+// else, which needs none, and a fault the suites inject at the claim.
 //
-// slot is a remote cell's slot under the company's caps, nil for a container
-// cell: given back the moment the box is closed, before the ending is
-// recorded, since what it bounds is boxes.
+// slot is a remote cell's slot (nil for a container cell), given back once the
+// box is closed and before the ending is recorded, since what it bounds is
+// boxes.
 func (r *Runner) run(c gitlet.RunnableCheck, cell config.Placement, claimed time.Time, slot *RemoteSlot) {
 	ctx := r.life
 	defer slot.Release(ctx)
@@ -92,9 +85,8 @@ func (r *Runner) run(c gitlet.RunnableCheck, cell config.Placement, claimed time
 		return
 	}
 	if ctx.Err() != nil {
-		// THE RUNNER IS STOPPING: the ending the run reached — a measurement
-		// it finished, or its runner leaving — is recorded under the stop's
-		// own bound, since the runner's life has ended.
+		// THE RUNNER IS STOPPING: the ending is recorded under Stop's own
+		// bound, since the runner's life has ended.
 		ctx = r.endingContext()
 	}
 	r.finish(ctx, *f, opID)
@@ -104,9 +96,8 @@ func (r *Runner) run(c gitlet.RunnableCheck, cell config.Placement, claimed time
 	}
 }
 
-// endingContext is what a stopping run records its ending under: Stop's own
-// context, its cancellation detached from the runner's life and bounded by
-// Stop's.
+// endingContext is what a stopping run records its ending under: Stop's
+// context, which the runner's ended life does not cancel.
 func (r *Runner) endingContext() context.Context {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -132,16 +123,15 @@ func (a *attempt) ended(state gitlet.CheckState, reason gitlet.CheckReason, exit
 		DurationMs: a.r.now().Sub(a.claimed).Milliseconds(), Summary: summaryOf(summary), FinishedAt: a.r.now()}
 }
 
-// stopped is the ending of an attempt whose runner is stopping: its runner
-// left, which the home queues again on a Gitlet node still running.
+// stopped is the ending of an attempt whose runner is stopping, which the
+// home queues again on a Gitlet node still running.
 func (a *attempt) stopped() *gitlet.CheckFinished {
 	return a.ended(gitlet.CheckStateErrored, gitlet.CheckReasonRunnerLost, nil,
 		"its runner stopped before the check ended: queued again on a Gitlet node still running")
 }
 
-// run makes the box, runs the command and answers the ending to record, with
-// the operation id it is recorded under — nil where none is to be: the row
-// ended by somebody else.
+// run makes the box, runs the command and answers the ending to record with
+// its operation id: nil where the row was ended by somebody else.
 func (a *attempt) run(ctx context.Context) (*gitlet.CheckFinished, string) {
 	r := a.r
 	opID := statelog.NewOpID(r.now(), "code_check_end")
@@ -161,8 +151,8 @@ func (a *attempt) run(ctx context.Context) (*gitlet.CheckFinished, string) {
 		return refused, opID
 	}
 
-	// THE BOX, made within the setup's budget: the check's token and the
-	// box's TTL both outlive its timeout by exactly that.
+	// THE BOX, made within the setup's budget, which the check's token and
+	// the box's TTL both outlive its timeout by.
 	made, cancel := context.WithDeadline(ctx, a.claimed.Add(gitlet.CheckBoxGrace))
 	box, err := boxes.AcquireBox(made, spec, setup)
 	cancel()
@@ -192,10 +182,8 @@ func (a *attempt) run(ctx context.Context) (*gitlet.CheckFinished, string) {
 	return a.command(ctx, box)
 }
 
-// spec is the attempt's box and its setup: the cell, the TTL, and an
-// environment of EXACTLY the check's named secrets, what the check is, and
-// Gitlet's base and the check's token — or the ending of an attempt
-// whose box cannot be specified.
+// spec is the attempt's box and its setup (package doc, "What a check's box
+// holds"), or the ending of an attempt whose box cannot be specified.
 func (a *attempt) spec(company Company) (sandbox.Spec, []sandbox.SetupStep, *gitlet.CheckFinished) {
 	r, def := a.r, a.c.Def
 	env := map[string]string{}
@@ -240,10 +228,7 @@ func (a *attempt) spec(company Company) (sandbox.Spec, []sandbox.SetupStep, *git
 	return spec, setup, nil
 }
 
-// checkEnv is what the box is told of its check (config.ReservedCheckEnv):
-// the repository's name, the commit, the base its diff is read from where it
-// has one, the check's name and attempt, where it reads its commit without a
-// clone, and the file its command may write its summary to.
+// checkEnv is what the box is told of its check (config.ReservedCheckEnv).
 func (a *attempt) checkEnv() map[string]string {
 	env := map[string]string{
 		"CREWLET_CHECK_REPO":    a.c.Repo,
@@ -259,11 +244,11 @@ func (a *attempt) checkEnv() map[string]string {
 	return env
 }
 
-// nameBox records the box's handle on the attempt, repeating its claim — and
-// reports an attempt whose row has ENDED meanwhile, which runs nothing more.
-// A record that could not be made leaves the box unnamed and runs on: the
-// handle is what the home's sweep kills a remote box by, and that box's own
-// TTL reclaims it where the sweep cannot.
+// nameBox records the box's handle on the attempt, repeating its claim, and
+// reports a row that has ENDED meanwhile, which runs nothing more. A record
+// that could not be made leaves the box unnamed and runs on: the home's sweep
+// kills a remote box by the handle, and the box's TTL reclaims it where the
+// sweep cannot.
 func (a *attempt) nameBox(ctx context.Context, box string) bool {
 	r := a.r
 	res, err := r.o.Estate.Checks(ctx, gitlet.ChecksRequest{OpID: statelog.NewOpID(r.now(), "code_check_box"),
@@ -283,12 +268,11 @@ func (a *attempt) nameBox(ctx context.Context, box string) bool {
 }
 
 // wrapped is the check's command as the box runs it, detached: in its
-// checkout where it has one, its output to one file; and once it ends, the
-// reports its definition names copied beside the output — read where the
-// command left them, relative to its checkout — and its exit status written
-// whole by a rename, LAST, so a poll that finds the status finds every report
-// copied. What a previous run of the box left is removed first, so nothing
-// read is another attempt's.
+// checkout where it has one, its output to one file. Once it ends, the
+// reports its definition names (relative to the checkout) are copied beside
+// the output, and its exit status is written whole by a rename, LAST, so a
+// poll that finds the status finds every report. A previous run's files are
+// removed first, so nothing read is another attempt's.
 func (a *attempt) wrapped() string {
 	q := sandbox.ShellQuote
 	run := "sh -c " + q(a.c.Def.Run)
@@ -332,9 +316,8 @@ func (a *attempt) command(ctx context.Context, box sandbox.Sandbox) (*gitlet.Che
 		case <-tick.C:
 		}
 		now := r.now()
-		// THE ROW FIRST: an attempt ended by somebody else — its head
-		// moved on, a person stopped it, the home's sweep took it for lost
-		// — needs no box another moment.
+		// THE ROW FIRST: an attempt ended by somebody else (its head moved
+		// on, a person stopped it, the home's sweep) needs no box.
 		if row, err := r.o.Estate.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadCheckBox, CheckBox: &key,
 			Fresh: stale}); err == nil && len(row.Checks) == 1 && row.Checks[0].State.Ended() {
 			return nil, ""
@@ -352,9 +335,8 @@ func (a *attempt) command(ctx context.Context, box sandbox.Sandbox) (*gitlet.Che
 			continue
 		case state == sandbox.JobLost:
 			// A JOB NOTHING ALIVE SAW END ([sandbox.JobLost]) left no status
-			// a check can be measured by — its process went with the
-			// engine that watched it — so it reads as its box lost, never
-			// as a command that exited.
+			// to measure the check by, so it reads as its box lost, never as
+			// a command that exited.
 			return a.ended(gitlet.CheckStateErrored, gitlet.CheckReasonBoxFailed, nil,
 				"its command's process went with the engine that watched it, so it left no exit status"), opID
 		case state != sandbox.JobRunning:
@@ -365,8 +347,8 @@ func (a *attempt) command(ctx context.Context, box sandbox.Sandbox) (*gitlet.Che
 		}
 		lost = 0
 		if !now.Before(deadline) {
-			// PAST ITS OWN TIMEOUT: a measurement of the commit, failed —
-			// read, its log kept, before its box is closed.
+			// PAST ITS OWN TIMEOUT: a measurement of the commit, failed, its
+			// log kept before its box is closed.
 			f := a.ended(gitlet.CheckStateFailed, gitlet.CheckReasonTimedOut, nil,
 				fmt.Sprintf("ran past its %s timeout and was stopped", a.timeout))
 			read, cancel := a.reading(ctx)
@@ -374,9 +356,8 @@ func (a *attempt) command(ctx context.Context, box sandbox.Sandbox) (*gitlet.Che
 			cancel()
 			return f, opID
 		}
-		// THE KEEPALIVE: the box's TTL held at the check's own end and the
-		// setup's grace past it, so a box whose runner stops polling is
-		// reclaimed by then whatever else happens.
+		// THE KEEPALIVE: the box's TTL held at the check's end plus the
+		// setup's grace, so a box whose runner stops polling is reclaimed then.
 		if err := box.SetTimeout(ctx, (deadline.Sub(now) + gitlet.CheckBoxGrace).Seconds()); err != nil {
 			r.log.WarnContext(ctx, "code_check_keepalive_failed", "box", box.ID(), "error", err.Error())
 		}
@@ -384,19 +365,16 @@ func (a *attempt) command(ctx context.Context, box sandbox.Sandbox) (*gitlet.Che
 }
 
 // reading is the context a run's ending is read from its box under: ctx
-// bounded by the timing's End (EndPolls polls in production), so a stalled
-// read or upload costs the ending what it had not read yet, never its
-// attempt.
+// bounded by timing.End, so a stalled read or upload costs the ending what it
+// had not read yet, never its attempt.
 func (a *attempt) reading(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(ctx, a.r.timing.End)
 }
 
-// exited is the ending of a command that has ended — passed for status 0,
+// exited is the ending of a command that has ended: passed for status 0,
 // failed for any other, and errored box_failed where it left no status, which
-// only the box's own end leaves — with its SUMMARY: the one its command wrote
-// to $CREWLET_CHECK_SUMMARY, else what its reports say, else its exit and how
-// long it ran. A failed run carries besides the failures its reports name,
-// the last of its output and its kept log; a passed one its summary alone.
+// only the box's own end leaves. A failed run carries what failed adds; a
+// passed one its summary and test counts alone.
 func (a *attempt) exited(ctx context.Context, box sandbox.Sandbox, began time.Time) *gitlet.CheckFinished {
 	raw, err := box.ReadFile(ctx, exitFile)
 	status, convErr := strconv.Atoi(strings.TrimSpace(string(raw)))
@@ -420,13 +398,10 @@ func (a *attempt) exited(ctx context.Context, box sandbox.Sandbox, began time.Ti
 	return f
 }
 
-// failed fills a failed run's ending with what it carries beyond its summary:
-// the failures its reports named (fs, nil where none were read), the last
-// CheckTailBytes of its output, and its log — the output's last
-// MaxCheckLogBytes, stored as one object the attempt's code_check_logs row
-// names; and its output's lines, counted in its box. A log that could not be
-// stored — the object store full, or failing — is said in the summary, and the
-// ending recorded without it.
+// failed fills a failed run's ending beyond its summary: the failures its
+// reports named (fs, nil where none were read), the last CheckTailBytes of its
+// output, its kept log (keepLog) and its output's line count. A log that could
+// not be stored is said in the summary, and the ending recorded without it.
 func (a *attempt) failed(ctx context.Context, box sandbox.Sandbox, f *gitlet.CheckFinished, fs *failures) {
 	if fs != nil {
 		f.Failures, f.FailuresOmitted = fs.kept, fs.omitted
@@ -442,19 +417,16 @@ func (a *attempt) failed(ctx context.Context, box sandbox.Sandbox, f *gitlet.Che
 	f.LogLines = a.lines(ctx, box, t)
 }
 
-// reports reads the copies of the run's JUnit and SARIF reports, each at most
-// sandbox.MaxFileBytes, into one list of failures — nil where the check names
-// neither, or neither was written — and says, for each one named and not
-// read, why.
+// reports reads the copies of the run's JUnit and SARIF reports into one list
+// of failures (nil where the check names neither) and says, for each one
+// named and not read, why.
 //
-// STREAMED from the box into its parser (Sandbox.OpenFile), never read whole:
-// what a report costs the runner is the failures an ending keeps and the one
-// element in hand (junit.go, sarif.go), whatever its size — read whole, each
-// failed run held up to two reports of sandbox.MaxFileBytes at once, every
-// ending on a node beside the others. The cap still holds: a report past it is
-// refused as a whole read refuses one, since a report cut short reads as a
-// finished one, and the failures named before the cap are kept as a report
-// that stops being XML or JSON keeps them.
+// STREAMED from the box into its parser (Sandbox.OpenFile), never read whole,
+// so a report of any size costs the runner only the failures an ending keeps
+// and the element in hand (junit.go, sarif.go). The sandbox.MaxFileBytes cap
+// still holds: a report past it is refused, since one cut short reads as
+// finished, and the failures parsed before the cap are kept, as they are for
+// a report that stops being XML or JSON.
 func (a *attempt) reports(ctx context.Context, box sandbox.Sandbox) (*failures, []string) {
 	def := a.c.Def
 	if def.Report.JUnit == "" && def.Report.SARIF == "" {
@@ -494,11 +466,10 @@ func (a *attempt) reports(ctx context.Context, box sandbox.Sandbox) (*failures, 
 // errReportTooLarge is a report's stream past sandbox.MaxFileBytes.
 var errReportTooLarge = errors.New("checkrun: the report is past the most a report is read to")
 
-// capped is a report's stream held to the most a report is read to: past
-// left bytes it fails with errReportTooLarge, as a whole read refuses such a
-// file. It remembers how much it read and the error it failed with, so the
-// report's reader is told apart from its parser: a stream the box broke, or a
-// report too large, is no report the check wrote wrong.
+// capped is a report's stream held to left bytes, past which it fails with
+// errReportTooLarge. It remembers how much it read and the error it failed
+// with, so a stream the box broke, or a report too large, is told apart from
+// a report the check wrote wrong.
 type capped struct {
 	r    io.Reader
 	left int64
@@ -511,8 +482,8 @@ func (c *capped) Read(p []byte) (int, error) {
 		return 0, c.err
 	}
 	if c.left <= 0 {
-		// One byte past the cap is read to tell a file of exactly the cap
-		// from one past it, as sandbox's readCapped does.
+		// One byte past the cap tells a file of exactly the cap from one past
+		// it, as sandbox's readCapped does.
 		var one [1]byte
 		switch n, err := io.ReadFull(c.r, one[:]); {
 		case n > 0:
@@ -533,11 +504,10 @@ func (c *capped) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// summary is the ending's summary: the file the command wrote to
-// $CREWLET_CHECK_SUMMARY where it wrote one — the check's own words, which
-// say what it measured better than anything the runner reads off it — else
-// what its reports say, else its exit and how long it ran; with, after it,
-// what of its reports could not be read.
+// summary is the ending's summary: what the command wrote to
+// $CREWLET_CHECK_SUMMARY, whose words say what it measured better than
+// anything the runner reads off it, else what its reports say, else its exit
+// and how long it ran; then what of its reports could not be read.
 func (a *attempt) summary(ctx context.Context, box sandbox.Sandbox, status int, took time.Duration, fs *failures,
 	unread []string) string {
 
@@ -574,10 +544,10 @@ type outputTail struct {
 	cut  bool
 }
 
-// tail is the last CheckTailBytes of the command's output, valid UTF-8 — the
-// bytes no character is whole in dropped — and the zero value where it cannot
-// be read. ONE BYTE MORE is read, and dropped, to tell whether the tail's first
-// line began before it.
+// tail is the last CheckTailBytes of the command's output as valid UTF-8,
+// partial characters dropped, and the zero value where it cannot be read. ONE
+// BYTE MORE is read, and dropped, to tell whether the tail's first line began
+// before it.
 func (a *attempt) tail(ctx context.Context, box sandbox.Sandbox) outputTail {
 	t, err := box.ReadTail(ctx, outputFile, gitlet.CheckTailBytes+1)
 	if err != nil {
@@ -628,13 +598,11 @@ func lineCount(file string, size int64) string {
 }
 
 // keepLog stores the last MaxCheckLogBytes of the run's output as one object
-// through the runner's Logs, answering what the ending names it by — nil and
-// "" for a run with no output or a runner with no store, nil and why for one
-// that could not be stored. STREAMED from the box's end (Sandbox.OpenTail)
-// into the store as it arrives, so a run's output of any size costs the
-// runner a buffer's memory and the kept bytes' transfer, never the output's:
-// opened from its start, its earlier bytes read and dropped, a check that
-// wrote gigabytes paid every one of them from a remote box to keep 64 MiB.
+// through the runner's Logs, answering what the attempt's code_check_logs row
+// names it by: nil and "" for no output or no store, nil and why for a log
+// not stored. STREAMED from the box's end (Sandbox.OpenTail) into the store,
+// so output of any size costs the runner a buffer and the kept bytes'
+// transfer, never the whole output's.
 func (a *attempt) keepLog(ctx context.Context, box sandbox.Sandbox) (*gitlet.CheckLog, string) {
 	r := a.r
 	if r.o.Logs == nil {
@@ -686,8 +654,8 @@ func (r *Runner) finish(ctx context.Context, f gitlet.CheckFinished, opID string
 		res, err := r.o.Estate.Checks(ctx, gitlet.ChecksRequest{OpID: opID, Finished: &f})
 		switch {
 		case err != nil && r.o.Unread != nil && r.o.Unread(err) && counted(f):
-			// A DATA NODE REFUSED THE COUNTS and nothing ran the ending: it is sent again without
-			// them under the same operation, rather than left for the sweep.
+			// A DATA NODE REFUSED THE COUNTS and nothing ran the ending: sent again without them
+			// under the same operation, rather than left for the sweep.
 			r.log.WarnContext(ctx, "code_check_counts_unread", "repo_id", f.RepoID, "check", f.Name,
 				"attempt", f.Attempt, "error", err.Error())
 			f = uncounted(f)

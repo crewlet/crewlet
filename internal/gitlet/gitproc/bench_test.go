@@ -24,36 +24,25 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
-// The benchmarks below are the figures the package doc's "Measured" section
-// records, and the ones a change to the pool is compared by (make bench, six
-// counts on each tree, benchstat). Every arm but one runs REAL git through a
-// real pool, because what is being priced is a process — its fork, its exec,
-// its environment, the guard's reads of the repository and its alternate,
-// the reap and the sweep — and a stand-in would price a shell instead. The
-// one stand-in, BenchmarkTransfer's copy-path, is there for exactly that
-// difference: to price the pool's copy path with git taken out of it.
+// These benchmarks are the package doc's "Measured" figures and what a pool
+// change is compared by (make bench, six counts on each tree, benchstat).
+// Every arm but BenchmarkTransfer's copy-path runs REAL git through a real
+// pool: a process (fork, exec, environment, the guard's reads, reap, sweep)
+// is what is priced, and a stand-in would price a shell. copy-path is the
+// stand-in on purpose, to price the copy path with git taken out.
 
 // BenchmarkRun is one git process through the pool, end to end.
 //
-//   - version is the floor every process pays whatever it does: the slot,
-//     the built environment, fork and exec, procgroup's identity of the
-//     leader, the reap and the sweep. No repository, so no guard.
-//   - rev-parse peels the history's tip in the history itself: the floor
-//     plus the repository guard's reads of its config and commondir, and git
-//     opening a pack to read one object.
-//   - rev-parse-in-scratch is the same command in a repository holding
-//     nothing but an alternate naming the history — a push's scratch, an
-//     advertisement view — so the guard's SECOND repository (the alternate,
-//     resolved and checked) is in the figure, and git reads the object
-//     through it.
-//   - cat-file-batch-check-1000 is one cat-file --batch-check --buffer over
-//     a thousand of the history's ids, its answers streamed through
-//     [gitproc.Lines] — the shape of a fetch's want list checked against a
-//     cache before upload-pack runs, and of a cache round's peel of its
-//     tags.
-//   - parallel-rev-parse is rev-parse from as many goroutines as the read
-//     lane has slots (GOMAXPROCS of each), so every slot is busy: ns/op is
-//     wall time per process across all of them, the node's aggregate rate.
+//   - version: the floor every process pays (slot, environment, fork and
+//     exec, procgroup's leader identity, reap, sweep); no repository, no guard.
+//   - rev-parse: the floor, the guard's reads of config and commondir, and
+//     git reading one object from a pack.
+//   - rev-parse-in-scratch: the same in a repository holding only an
+//     alternate (a push's scratch), so the guard's SECOND repository counts.
+//   - cat-file-batch-check-1000: a thousand ids through [gitproc.Lines], the
+//     shape of a fetch's wants check and a cache round's tag peel.
+//   - parallel-rev-parse: every read slot busy; ns/op is wall time per
+//     process across them, the node's aggregate rate.
 func BenchmarkRun(b *testing.B) {
 	quiet(b)
 	p := realPool(b, gitproc.Options{})
@@ -125,22 +114,16 @@ func BenchmarkRun(b *testing.B) {
 }
 
 // BenchmarkTransfer is a TRANSFER-lane process streaming the whole history
-// through the pool — with the deadline and the stall watchdog a served fetch
-// carries — into a writer that only counts. MB/s, in two arms, because a
-// clone's rate is two things in series and only one of them is the pool's:
+// through the pool, with a served fetch's deadline and stall watchdog, into a
+// writer that only counts. MB/s, in two arms, since a clone is git's work and
+// the pool's copy path in series:
 //
-//   - clone is upload-pack answering a protocol v2 fetch of the tip, as a
-//     clone asks it: git's own work — pack-objects counting the history and
-//     reusing the stored pack, upload-pack framing it into side-band — and
-//     the pool's copy path behind it. What a node serves a fast client at.
-//   - copy-path is a stand-in git that writes the same pack with cat, so
-//     git's work is out of the figure. What is left is the pool's copy path
-//     — its pipe, its 64 KiB reads, the metered stream — and the stand-in's
-//     own start on every operation (a shell exec'ing cat: the process floor
-//     BenchmarkRun/version prices), so the figure is a LOWER BOUND on the
-//     copy path. It must sit far above the clone arm, so that a clone is
-//     bounded by git and never by the pool: under 200 MB/s on an idle
-//     machine is a finding in the copy path, not a number to record.
+//   - clone: upload-pack answering a protocol v2 fetch of the tip, as a clone
+//     asks; what a node serves a fast client at.
+//   - copy-path: a stand-in that cats the same pack, its start included: a
+//     LOWER BOUND on the copy path (pipe, 64 KiB reads, metered stream). It
+//     must sit far above clone, so git and never the pool bounds a clone:
+//     under 200 MB/s on an idle machine is a copy-path finding.
 func BenchmarkTransfer(b *testing.B) {
 	quiet(b)
 	h := sharedHistory(b)
@@ -155,11 +138,9 @@ func BenchmarkTransfer(b *testing.B) {
 				Stdin: strings.NewReader(request),
 			}, h.packBytes)
 		}
-		// One clone before the timer sizes the figure's unit. Not held
-		// equal across clones: the side-band frames git cuts a pack into
-		// follow how pack-objects' writes reach upload-pack, so two clones
-		// of one pack differ by a few hundred bytes of framing in nineteen
-		// megabytes.
+		// One clone before the timer sizes the figure's unit. Not checked
+		// per clone: side-band framing follows pack-objects' writes, so two
+		// clones of one pack differ by a few hundred bytes.
 		b.SetBytes(clone())
 		for b.Loop() {
 			clone()
@@ -198,46 +179,18 @@ func transfer(b *testing.B, p *gitproc.Pool, c gitproc.Cmd, packBytes int64) int
 	return n
 }
 
-// BenchmarkIndexPack is the index-pack receive-pack runs over every push
-// before its hook, run as receive-pack runs it, over the history's pack — so
-// it is what the receiving node spends a core a mebibyte on, which
-// [gitproc.PackWorkPerMiB] is anchored to. MB/s is of the pack.
+// BenchmarkIndexPack is receive-pack's index-pack of a push over the history's
+// pack, [gitproc.PackWorkPerMiB]'s anchor; MB/s of the pack. Its arguments are
+// receive-pack's own (GIT_TRACE) less --report-end-of-input and
+// --max-input-size, into a scratch over an alternate, not a quarantine
+// (neither changes the work); a loose file's index-pack is only a floor. Read
+// lane, one thread: the pool lends cores to a receive-pack, never a read, so
+// this is a receive-pack on a node with no core free to lend.
 //
-// THE COMMAND IS RECEIVE-PACK'S OWN, as GIT_TRACE shows a push under the
-// receive configuration starting it: the pack on stdin after the header
-// receive-pack has already read (--stdin --pack_header), every object
-// checked (--strict, which receive.fsckObjects asks for), thin bases
-// completed from the repository (--fix-thin; this pack has none to
-// complete) and a .keep beside the pack (--keep), with the receive
-// configuration's version-2 index and reverse index — all of it written
-// into a scratch whose alternate is a repository, at the base
-// configuration's one thread.
-//
-// NOT index-pack over a file outside any repository: that is the delta
-// resolution alone — no stdin to write out, no object checked, nothing to
-// look an object up in — and on the machine the package doc names it took
-// 1.9 s where known-objects below takes 2.5, so a figure taken from it is a
-// floor under the work a push costs, not that work. Two of receive-pack's arguments are left out,
-// neither of which changes the work: --report-end-of-input (one NUL for the
-// side-band) and --max-input-size (a bound this pack is far under). And it
-// writes into the scratch itself rather than into receive-pack's
-// quarantine, which is one empty object directory more in front of the same
-// alternate.
-//
-//   - new-objects: the scratch's alternate is an empty repository, so every
-//     pushed object is new to it — a push of work the repository has not
-//     seen, every lookup a miss.
-//   - known-objects: the scratch's alternate is the history itself, so every
-//     pushed object is already there, and index-pack reads each one back and
-//     compares it with what arrived (its collision check). A client leaves
-//     out of a push only what the refs it was shown reach, so a push carries
-//     objects its repository already holds whenever they are reachable only
-//     from a ref the client was not shown or no longer has. The WORST CASE,
-//     and the arm PackWorkPerMiB is anchored to.
-//
-// READ-lane: the class only picks the lane here. The pool lends cores to a
-// receive-pack and never to a read, so this is the one thread a receive-pack
-// runs its index-pack with on a node that has no core free to lend.
+//   - new-objects: an empty alternate, every pushed object new.
+//   - known-objects: the history as alternate, so index-pack reads back and
+//     compares every object, as for a push of objects reachable only from
+//     refs its client was not shown: the WORST CASE, PackWorkPerMiB's anchor.
 func BenchmarkIndexPack(b *testing.B) {
 	quiet(b)
 	p := realPool(b, gitproc.Options{})
@@ -372,25 +325,21 @@ func (c *counter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// quiet raises the process's log level to Warn while a benchmark runs, for
-// internal/statelog's reason: an INFO line (code_git_ready, at every New)
-// landing inside a result line breaks the line a comparison tool reads. Warn
-// and above still print, because a killed process during a measurement is a
-// finding. Put back to the level the logging package starts a process at.
+// quiet raises the log level to Warn while a benchmark runs: an INFO line
+// (code_git_ready, at every New) inside a result line breaks what a
+// comparison tool reads (internal/statelog's reason). Warn still prints,
+// since a killed process mid-measurement is a finding.
 func quiet(b *testing.B) {
 	logging.SetVerbosity(slog.LevelWarn, logging.FormatConsole)
 	b.Cleanup(func() { logging.SetVerbosity(slog.LevelInfo, logging.FormatConsole) })
 }
 
-// THE HISTORY every arm that needs a repository reads: an initial commit of
-// historyFiles files of seeded words, about historyFileBytes each, then
-// historyRewrites commits that each replace a tenth of every file's lines —
-// so its one pack carries real delta chains, historyRewrites deep, which is
-// what index-pack resolves and pack-objects reuses. The same bytes on every
-// machine and every run: every word is drawn from seeded streams, every
-// commit carries one committer and one date, and the pack is written by one
-// thread, whose delta search is the one with a single answer — the pack's
-// checksum, logged when the history is built, says so of any two runs.
+// THE HISTORY every arm that needs a repository reads: historyFiles files of
+// seeded words, about historyFileBytes each, then historyRewrites commits each
+// replacing a tenth of every file's lines, so its one pack has delta chains
+// that deep for index-pack to resolve and pack-objects to reuse. The same
+// bytes on every run (seeded words, one committer and date, a one-thread
+// pack, whose delta search has one answer); the logged pack checksum shows it.
 const (
 	historyFiles     = 64
 	historyFileBytes = 128 << 10
@@ -436,21 +385,14 @@ func readPackHeader(path string) (version, objects uint32, err error) {
 	return binary.BigEndian.Uint32(header[4:8]), binary.BigEndian.Uint32(header[8:12]), nil
 }
 
-// shared is the history, built ONCE PER TEST BINARY outside every timer
-// rather than once per arm or per count: building it takes seconds — every
-// version of every file generated, hashed and deltified, then packed — and
-// the arms that read it would otherwise spend more of a run building it than
-// measuring git.
+// shared is the history, built ONCE PER TEST BINARY outside every timer: the
+// build takes seconds, which per arm or count would outweigh the measuring.
 //
-// A mutex and a nil check rather than sync.OnceValues, because the build
-// fails through the benchmark's own b.Fatalf (gittest's helpers do), and a
-// Goexit inside OnceValues' function is re-raised as a nil panic that takes
-// the whole binary down rather than failing the one benchmark; here a failed
-// build leaves nothing behind, and the next arm to ask builds it again.
-//
-// root is a directory of the BINARY's own, because every directory a
-// benchmark makes is removed when that benchmark ends: the build moves the
-// repository there, and TestMain removes it once every benchmark has run.
+// A mutex and a nil check, not sync.OnceValues: the build fails through
+// b.Fatalf, whose Goexit inside OnceValues is re-raised as a nil panic that
+// kills the binary; here a failed build leaves nothing and the next arm
+// retries. root is the binary's own, since a benchmark's directories go when
+// it ends; TestMain removes it.
 var shared struct {
 	mu   sync.Mutex
 	root string
@@ -651,17 +593,14 @@ func sentence(r *rand.Rand, words []string) string {
 }
 
 // BenchmarkTraceSink is the reader every run's trace2 stream passes through,
-// over three streams as git writes them, read in the 64 KiB pieces a pipe
-// hands over:
+// over three streams as git writes them, in a pipe's 64 KiB pieces:
 //
-//   - healthy is a clone's: upload-pack and its pack-objects, each its
-//     version, start, ancestry, name, a few region and data events and its
-//     exit — the stream every successful run pays for;
-//   - damaged is the same clone over a damaged reverse index: pack-objects'
+//   - healthy: a clone's upload-pack and pack-objects events, the stream
+//     every successful run pays for;
+//   - damaged: the same clone over a damaged reverse index, pack-objects'
 //     position row and upload-pack's abort beside it;
-//   - echo is a request's 390 KB echo of one pkt-line of control bytes and
-//     the exit after it — the longest line a request can make git write,
-//     skipped whole.
+//   - echo: a request's 390 KB echo of control bytes, the longest line a
+//     request can make git write, skipped whole.
 func BenchmarkTraceSink(b *testing.B) {
 	child := func(argv ...string) string {
 		return versionLine(2, "2.47.3") + startLine(2, argv...) +

@@ -27,79 +27,30 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// AN ENGINE WRITE'S BUILD, AT A COST THAT FOLLOWS THE CHANGE (ADR-0092): git's
-// own plumbing over exactly the trees the change touches — never read-tree,
-// write-tree, update-index or a checkout, never ls-tree -r or diff-tree -r of
-// the base: no index of the whole tree, ever (TestAnEngineCommitReadsNoWholeTree
-// holds it). Every process is in the read lane (gitproc.ClassRead), and each is
-// ONE for the whole write, run one after another, each with its input known
-// before it starts: a process that answers line by line to a caller feeding it
-// what its answers decide can leave the pool's copy of its input waiting on
-// the caller after the process has died, for as long as the caller's deadline
-// (gitproc's Stdin contract), so no process here is held open across another.
-//
-// FIRST, A CHECK of what the write names — outside the build, a short read
-// like any (gitlet.GitShare: no unit of the share): ONE `for-each-ref` of the
-// branch's EXACT name, never cat-file's reading of a name, which tries
-// refs/<name>, refs/tags/<name>, refs/heads/<name>… when no ref of exactly
-// that name exists — measured on 2.56.0, `refs/heads/foo` answered the commit
-// of a branch NAMED refs/heads/foo while refs/heads/foo itself did not
-// exist, which would refuse a create as stale for good; and ONE `cat-file
-// --batch-check -Z` of the objects it names by id, each one lookup.
-//
-// THEN THE BUILD, under ONE unit of the share and ONE budget of git run time
-// (gitlet.WriteBuildDeadline) that its processes share, each given what the ones
-// before it left and charged what it ran — never its wait for a slot, which
-// is the node's load and no fact about the change. A commit_files reads, in
-// the copy, ONE `cat-file --batch-check -Z` of what every path an operation
-// names and every directory above one is at the parent (building.paths) —
-// the BUILD'S, never the check's: git walks each from the root, one tree a
-// directory, so it costs the square of a path's depth, which is no short
-// read's (1 000 paths 64 deep that the parent holds took 19 s of git; its doc
-// has the figures), and under the build its run is charged to the budget,
-// refused too_large past it, rather than run out as a short read's bound and
-// taken for a failing node, which sends the same write to the next. Then,
-// the change planned on it (planFiles), ONE batch (`cat-file --batch -Z`) of
-// the parent commit — its committer's date — every directory the change
-// touches, staged as git stores it, and every file an edit rewrites, streamed
-// through its edit into a staged file; then, in its scratch: ONE `hash-object
-// -w` of every new file, ONE `mktree -z --batch` a LEVEL of the touched
-// directories, deepest first — a parent names its children's new ids, which
-// only the level below's mktree answers — passing every entry the change does
-// not touch through as git reads it (treeEntry.canon); and ONE `commit-tree`.
-// An apply_suggestions is that build over one edit of each file its
-// suggestions rewrite, each file read through its suggestions' splices, once
-// ONE `diff-pairs` has placed them in the head's files (suggest.go).
-// A revert or a cherry-pick reads its two commits in ONE batch, runs ONE
-// `merge-tree --write-tree -z` — whose cost follows the trees' DIFFERENCES,
-// since it skips every subtree the three sides share — and commits the same
-// way. Every kind that commits then packs: ONE `pack-objects` of the objects
-// the build wrote, self-contained, into a staged file, and ONE `index-pack
-// --strict` of it into the scratch, the relay's own check of every object a
-// push stores (receive.fsckObjects).
-//
-// WHAT A STEP WRITES IT WRITES IN THE SCRATCH (cache.NewScratch, the write's
-// alone): its objects, loose, and what the build stages under write/. An
-// object the copy already holds is not written again: git FRESHENS the
-// copy's pack that holds it — its modification time, not a byte (measured on
-// 2.56.0 for hash-object, mktree and merge-tree alike) — which is no part of
-// a copy's image and no part of a pack's identity (internal/gitlet/cache's
-// fileID). So the scratch's loose objects are exactly what the build made
-// new, and the pack is exactly them.
+// AN ENGINE WRITE'S BUILD (package doc, "An engine write is built beside the
+// copy and lands as a push"): git's plumbing over exactly the trees the change
+// touches, never an index of the whole tree (TestAnEngineCommitReadsNoWholeTree).
+// Each process runs alone in the read lane, its input known before it starts:
+// one fed by a caller reading its answers can leave the pool's copy of its
+// input waiting on the caller after it dies (gitproc's Stdin contract).
+// The build's processes share one unit of the share and one budget of git run
+// time (gitlet.WriteBuildDeadline), each charged its run, never its slot wait.
+// Each writes only in the write's scratch (cache.NewScratch); an object the
+// copy already holds is not written but FRESHENED in it — its pack's mtime, no
+// part of a copy's image nor a pack's identity (cache's fileID) — so the
+// scratch's loose objects, and the pack, are exactly what the build made new.
 
-// emptyTreeID is git's id of the tree with nothing in it: a root commit's
-// revert's other side and its cherry-pick's merge base, which git knows
-// whether or not a repository stores it.
+// emptyTreeID is git's empty tree, which git knows whether or not a repository
+// stores it: a root commit's revert's other side and cherry-pick's merge base.
 const emptyTreeID = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
-// lookupFormat is what the write's check asks of every name: the object, its
-// type and size, and — for a tree entry named by path — its mode as git reads
-// it.
+// lookupFormat is what a lookup asks of every name; the mode is set only for a
+// name given by path.
 const lookupFormat = "--batch-check=%(objectname) %(objecttype) %(objectsize) %(objectmode)"
 
-// object is what the copy holds under one name: its id, its type ("" for
-// nothing, "submodule" for a gitlink a path names), its size and — for a path
-// — its tree entry's mode as git reads it ("40000" for a directory).
+// object is what the copy holds under one name: kind is "" for nothing and
+// "submodule" for a gitlink; mode, for a path only, is as git reads it
+// ("40000" for a directory).
 type object struct {
 	id, kind, mode string
 	size           int64
@@ -108,8 +59,8 @@ type object struct {
 // present reports a name the copy holds something under.
 func (o object) present() bool { return o.kind != "" }
 
-// file reports a regular or an executable file: what an edit and a mode
-// change.
+// file reports a regular or executable file: what an edit or a mode change
+// takes.
 func (o object) file() bool {
 	return o.kind == "blob" && (o.mode == gitlet.ModeFile || o.mode == gitlet.ModeExecutable)
 }
@@ -127,26 +78,23 @@ func (o object) what() string {
 	return "a file"
 }
 
-// judgement is what a write's check read of the copy: where the branch is, the
-// commit the write's commit sits on, and an object the write names that the
-// copy lacks.
+// judgement is what a write's check read of the copy.
 type judgement struct {
 	// head is the branch's commit, "" where the branch does not exist.
 	head string
 	// parent is the commit the write's commit sits on: the head, a new
 	// branch's start, or "" for a root commit.
 	parent string
-	// absent is an object the write names that the copy does not hold, ""
-	// where it holds every one.
+	// absent is the first object the write names that the copy lacks, "" for
+	// none.
 	absent string
 }
 
-// check is the write's check of the copy: where its branch is, then — for a
-// write onto the head it expects — what every object it names by id is. A
-// head that is not the one the caller read is a stale verdict; an object of
-// the wrong type is gitlet.ErrInvalid naming its field; an object the copy
-// lacks is judgement.absent, looked for again at the log's head. What the
-// paths a commit_files names are is its build's to read (building.paths).
+// check is the write's short read of the copy, outside the build: its branch,
+// then every object it names by id. A head other than the caller's is a stale
+// verdict; an object of the wrong type is gitlet.ErrInvalid naming its field;
+// one the copy lacks is judgement.absent, looked for again at the log's head.
+// A commit_files' paths are the build's to read (building.paths).
 func (wr *writing) check(ctx context.Context) (judgement, writeVerdict, error) {
 	w := wr.w
 	head, err := wr.head(ctx)
@@ -200,14 +148,14 @@ func (wr *writing) check(ctx context.Context) (judgement, writeVerdict, error) {
 }
 
 // head is where the write's branch is in the copy, "" where it does not exist:
-// ONE `for-each-ref` of its exact name, which lists that ref and the refs
-// beneath it as a directory — one of which may exist where the branch does
-// not — so only the line naming it exactly is read. A branch naming anything
+// ONE `for-each-ref` of its exact name, never cat-file, which falls back to
+// refs/heads/<name> and the like when no ref of exactly that name exists and
+// so would refuse a create as stale for good. for-each-ref also lists refs
+// beneath the name, so only the exact line is read. A branch naming anything
 // but a commit is gitlet.ErrInvalid: no engine write moves one.
 func (wr *writing) head(ctx context.Context) (string, error) { return wr.headOf(ctx, wr.w.Ref) }
 
-// headOf is where branch ref is in the copy, "" where it does not exist, read
-// as [writing.head] reads the write's own — a rebase's target among them.
+// headOf is [writing.head] for any branch, a rebase's target among them.
 func (wr *writing) headOf(ctx context.Context, branch string) (string, error) {
 	var head, kind string
 	lines := gitproc.NewLines(func(line []byte) error {
@@ -238,10 +186,9 @@ func (wr *writing) headOf(ctx context.Context, branch string) (string, error) {
 	return head, nil
 }
 
-// lookup is ONE `cat-file --batch-check -Z` in the copy of what q asks —
-// NUL-ended both ways, so a path is one record whatever it holds — within
-// deadline, and is what each ask names, in order: a zero object for one the
-// copy holds nothing under. what names the read in a failure's sentence.
+// lookup is ONE `cat-file --batch-check -Z` in the copy of q's asks — -Z so a
+// path is one record whatever it holds — answering each in order, a zero
+// object for a name the copy lacks. what names the read in a failure.
 func (wr *writing) lookup(ctx context.Context, q lookups, what string, deadline time.Duration) ([]object, error) {
 	n := q.len()
 	out := make([]object, 0, n)
@@ -277,24 +224,21 @@ func (wr *writing) lookup(ctx context.Context, q lookups, what string, deadline 
 	return out, nil
 }
 
-// lookups is what one `cat-file --batch-check -Z` is asked, in order: whole
-// object ids, then paths at one commit, each spelled `<commit>:<path>` as
-// git reads it. NEVER SPELLED OUT AHEAD: every directory above a path is a
-// path asked, so a write's asks spelled out are its paths' every prefix — some
-// 133 KB for one 4 KiB path at gitlet.MaxTreePathDepth's 64 components, 34 MB
-// for a mebibyte of such paths — and they are fed to git as it reads (reader)
-// and matched against its answers in place (missing), never held as a list
-// and again as the input it makes.
+// lookups is what one lookup asks, in order: object ids, then paths at one
+// commit, each `<commit>:<path>`. NEVER SPELLED OUT AHEAD: every directory
+// above a path is asked too, so the spelled asks are every prefix — 133 KB for
+// one 4 KiB path 64 deep (gitlet.MaxTreePathDepth), 34 MB for a mebibyte of
+// such paths — so they are spelled as git reads (reader) and matched in place
+// (missing).
 type lookups struct {
 	ids   []string
 	at    string
 	paths []string
 }
 
-// len is how many asks there are.
 func (q lookups) len() int { return len(q.ids) + len(q.paths) }
 
-// appendAsk appends ask i as git reads it, with no end.
+// appendAsk appends ask i, unterminated.
 func (q lookups) appendAsk(b []byte, i int) []byte {
 	if i < len(q.ids) {
 		return append(b, q.ids[i]...)
@@ -304,13 +248,13 @@ func (q lookups) appendAsk(b []byte, i int) []byte {
 	return append(b, q.paths[i-len(q.ids)]...)
 }
 
-// name is ask i spelled out: for a failure's sentence alone.
+// name is ask i spelled out, for a failure's sentence only.
 func (q lookups) name(i int) string { return string(q.appendAsk(nil, i)) }
 
 // missingSuffix ends git's answer that an ask names nothing: `<ask> missing`.
 const missingSuffix = " missing"
 
-// missing reports rec as git's answer that ask i names nothing in the copy.
+// missing reports whether rec is git's answer that ask i names nothing.
 func (q lookups) missing(i int, rec []byte) bool {
 	rest, ok := bytes.CutSuffix(rec, []byte(missingSuffix))
 	if !ok {
@@ -324,12 +268,12 @@ func (q lookups) missing(i int, rec []byte) bool {
 	return len(rest) == colon+len(p) && string(rest[:at]) == q.at && rest[at] == ':' && string(rest[colon:]) == p
 }
 
-// reader is every ask NUL-ended, made as git reads it.
+// reader is every ask NUL-ended, spelled as git reads.
 func (q lookups) reader() io.Reader { return &lookupsReader{q: q} }
 
-// lookupsReader is a Cmd.Stdin that spells each ask only as git reads for more,
-// holding one ask at a time: every Read returns at once (gitproc's Stdin
-// contract), and the asks are fixed before the run, never what git answers.
+// lookupsReader is a Cmd.Stdin holding one ask at a time. Every Read returns
+// at once and the asks are fixed before the run, never decided by git's
+// answers (gitproc's Stdin contract).
 type lookupsReader struct {
 	q       lookups
 	next    int    // the next ask to spell
@@ -358,10 +302,9 @@ func (r *lookupsReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-// parseLookup reads one record of lookupFormat: `<id> <type> <size> <mode>`,
-// the mode empty for an object no path named, or `<id> submodule` for a
-// gitlink whose commit the copy does not hold — and a gitlink whose commit it
-// does hold is a submodule all the same.
+// parseLookup reads one record of lookupFormat: `<id> <type> <size> <mode>`
+// (mode empty for an id), or `<id> submodule` for a gitlink whose commit the
+// copy lacks. A gitlink whose commit it holds is a submodule all the same.
 func parseLookup(rec []byte) (object, bool) {
 	fields := strings.Split(string(rec), " ")
 	if len(fields) == 2 && fields[1] == "submodule" && gitref.ValidOID(fields[0]) {
@@ -390,10 +333,9 @@ func parseLookup(rec []byte) (object, bool) {
 	return o, true
 }
 
-// namedPaths is every path a commit_files names — each operation's path, a
-// move's destination — and every directory above one, the root left out:
-// sorted, each once. A path's walk up ends at the first it has already seen,
-// whose every directory above is seen too, so each is visited once.
+// namedPaths is every path a commit_files names (a move's destination too) and
+// every directory above one but the root, sorted, each once. A walk up stops
+// at the first path already seen, whose ancestors are seen too.
 func namedPaths(files []gitlet.FileOp) []string {
 	seen := map[string]bool{}
 	add := func(p string) {
@@ -410,23 +352,15 @@ func namedPaths(files []gitlet.FileOp) []string {
 	return slices.Sorted(maps.Keys(seen))
 }
 
-// failed is what a git process's end means for a write, once its run is
-// charged to the build where the build has begun (writing.metered): nil for
-// one that answered; unready, syncing, for one that reported damage — failed
-// or not, since git answers some questions over damage and exits 0 — or that
-// the pool refused a directory's shape for: the cache repairs both, as it
-// does a read's (no process here names a gitproc.Repairer, so the cache's
-// observer acts on its report at once), and a repair under the write would
-// hold it for a round no answer waits on. Unready, share, for one the write's
-// answer fell due during — waiting for a slot or running — and for a read lane
-// busy past gitproc.SlotWait; errBuildSpent for a process of the build that
-// ran out the whole of its budget, which another node would take as long
-// over (the build answers it too_large); and unready, node_failed, for one of
-// the short checks before it running its whole bound, which no healthy node
-// takes over a few names. Anything else is the process's own failure.
-//
-// A RUN THE ANSWER'S DUE INSTANT ENDED IS NEVER TOO LARGE, as no read's is: it
-// had less than its budget, the rest spent on the waits before it.
+// failed is what a git process's end means for a write, its run first charged
+// (writing.charge). Damage, even with exit 0, or a directory shape the pool
+// refused, is unready syncing: the cache repairs it at once, as for a read (no
+// process here names a gitproc.Repairer), and a repair under the write would
+// hold it for a round nobody waits on. The answer falling due, or a read lane
+// busy past gitproc.SlotWait, is unready share — never too_large, the budget
+// having gone on waits. A build process out of budget is errBuildSpent
+// (too_large: another node would take as long); a short check out of its bound
+// is unready node_failed, which no healthy node takes over a few names.
 func (wr *writing) failed(ctx context.Context, what string, res gitproc.Result, err error) error {
 	wr.charge(res)
 	s := wr.s
@@ -461,10 +395,7 @@ func (wr *writing) failed(ctx context.Context, what string, res gitproc.Result, 
 }
 
 // budget is the deadline the build's next process is given: what is left of
-// its budget of git run time, which every process of the build shares. A
-// budget already run out is errBuildSpent: a run is charged after it ends, so
-// a later process finds it spent only where the one before it ran out its
-// last instant.
+// the build's shared run time, or errBuildSpent once the one before ran it out.
 func (wr *writing) budget() (time.Duration, error) {
 	if wr.left <= 0 {
 		return 0, errBuildSpent
@@ -472,22 +403,21 @@ func (wr *writing) budget() (time.Duration, error) {
 	return wr.left, nil
 }
 
-// charge counts a process's run against the build's budget once the build
-// has begun (writing.metered): its run alone, never its wait for a slot.
+// charge counts a process's run, never its slot wait, against the budget once
+// the build has begun (writing.metered).
 func (wr *writing) charge(res gitproc.Result) {
 	if wr.metered {
 		wr.left -= res.Took
 	}
 }
 
-// built is what a build made: its commit.
+// built is what a build made.
 type built struct {
 	commit string
 }
 
 // writeStage is the directory under a write's scratch its build stages files
-// in: new files' text, edited files, the touched directories as git stores
-// them, each level's input to mktree, and the pack. Removed with the scratch.
+// in; it goes with the scratch.
 const writeStage = "write"
 
 // building is one build in progress.
@@ -498,8 +428,8 @@ type building struct {
 	files int // staged files so far, which name the next
 }
 
-// build is a commit's build, by its kind, then its pack: the commit and its
-// one pack in the scratch, or a refusal of the change (done, with the answer).
+// build is a write's commit, by its kind, and its pack, both in the scratch,
+// or a refusal of the change (done, with the answer).
 func (wr *writing) build(ctx context.Context, sc *cache.Scratch, j judgement) (built, gitlet.EngineWriteResult,
 	bool, error) {
 
@@ -543,9 +473,8 @@ func (wr *writing) newBuilding(sc *cache.Scratch) (*building, error) {
 }
 
 // ancestor reports whether commit a is an ancestor of commit b, or b itself:
-// ONE `merge-base --is-ancestor` in the scratch, through its alternate —
-// exit 0 is yes, 1 no — within what is left of the build's budget, since a
-// repository with no commit-graph yet walks its history by date to answer it.
+// ONE `merge-base --is-ancestor` in the scratch, within the build's budget,
+// since without a commit-graph it walks history by date.
 func (b *building) ancestor(ctx context.Context, a, of string) (bool, error) {
 	left, err := b.wr.budget()
 	if err != nil {
@@ -568,8 +497,8 @@ func (b *building) create(kind string) (*os.File, error) {
 		hostbox.FileMode)
 }
 
-// commitFiles is a commit_files' build: what its paths are at the parent read,
-// and its files committed on them ([building.commitPlan]).
+// commitFiles is a commit_files' build: its paths read, then committed on
+// ([building.commitPlan]).
 func (b *building) commitFiles(ctx context.Context, j judgement) (string, gitlet.EngineWriteResult, bool, error) {
 	files := b.wr.w.Files
 	paths, err := b.paths(ctx, j.parent, files)
@@ -579,12 +508,9 @@ func (b *building) commitFiles(ctx context.Context, j judgement) (string, gitlet
 	return b.commitPlan(ctx, j, files, paths, nil)
 }
 
-// commitPlan is a change of files committed on what its paths are at the
-// parent read: the change planned on them, its edits and touched directories
-// read and staged, its new files written and hashed, its directories written
-// a level at a time, and its commit. A commit_files' files are its own; an
-// apply_suggestions' are one edit a file its suggestions rewrite, each read
-// through its splices ([splice]) in place of an edit's old and new text.
+// commitPlan commits files on what paths holds at the parent. An
+// apply_suggestions' files are one edit a file, each read through its splices
+// ([splice]) in place of an edit's old and new text.
 func (b *building) commitPlan(ctx context.Context, j judgement, files []gitlet.FileOp, paths map[string]object,
 	spliced map[string][]splice) (string, gitlet.EngineWriteResult, bool, error) {
 
@@ -628,23 +554,15 @@ func (b *building) commitPlan(ctx context.Context, j judgement, files []gitlet.F
 	return commit, gitlet.EngineWriteResult{}, false, err
 }
 
-// paths is the build's first read: what every path a commit_files names and
-// every directory above one is at parent (namedPaths), by path — ONE
-// `cat-file --batch-check -Z` in the copy, given what is left of the build's
-// budget and charged what it ran, as every process of the build is. None for
-// a root commit, whose parent holds nothing. A path the parent does not hold
-// is absent from the answer.
+// paths is what every path a commit_files names, and every directory above
+// one (namedPaths), is at parent: ONE lookup in the copy, within the build's
+// budget. A root commit has none; a path the parent lacks is absent.
 //
-// IT IS THE BUILD'S, never the check's before it: git walks each path it is
-// asked from the root, a tree a directory, so a path n components deep costs
-// some n(n+1)/2 tree reads with its directories — 1 000 paths the parent
-// holds, each with every directory above it, took 1.8 s of git 16 deep,
-// 5.6 s 32 deep and 19 s 64 deep (git 2.56.0 on two E-cores of an Intel Core
-// Ultra 7 265U), where the same 1 000 paths alone took 0.18, 0.29 and 0.53 s.
-// A short read's bound run out is a node failing, which sends the same write
-// to the next Gitlet node to run out the same; a build's run out is the
-// change's, too_large, and while it runs it holds its unit of the node's seat
-// git-work share like the rest of the build.
+// IT IS THE BUILD'S, never the check's: git walks each path from the root, so
+// one n deep costs some n(n+1)/2 tree reads — 1 000 paths with their
+// directories took 19 s of git 64 deep (1.8 s 16 deep) on git 2.56.0. As a
+// short read, running out is a node failing, which sends the write to the
+// next node to fail alike; in the build it is the change's too_large.
 func (b *building) paths(ctx context.Context, parent string, files []gitlet.FileOp) (map[string]object, error) {
 	if parent == "" {
 		return nil, nil
@@ -667,11 +585,10 @@ func (b *building) paths(ctx context.Context, parent string, files []gitlet.File
 	return out, nil
 }
 
-// contents is the build's ONE read of the copy's contents (`cat-file --batch
-// -Z`, in the incarnation): the parent commit — its tree and its committer's
-// date, answered — every touched directory the parent holds, staged as git
-// stores it, and every file an edit rewrites, streamed through its edit into
-// a staged file. An edit's refusal is answered by name.
+// contents is the build's ONE `cat-file --batch -Z` of the copy: the parent
+// commit's header, every touched directory the parent holds staged as git
+// stores it, and every file an edit rewrites streamed through its edit into a
+// staged file. An edit's refusal is answered by name.
 func (b *building) contents(ctx context.Context, j judgement, p *plan) (*commitHeader, gitlet.WriteRefusal, string,
 	error) {
 
@@ -714,8 +631,7 @@ func (b *building) contents(ctx context.Context, j judgement, p *plan) (*commitH
 			if err != nil {
 				return nil, err
 			}
-			// AN EDIT'S TEXT, OR AN APPLY'S SPLICES: either rewrites the file
-			// as it streams through, holding a bounded window of it.
+			// Either stream holds only a bounded window of the file.
 			if e.splices != nil {
 				e.stream = newSpliceStream(e.splices, f)
 			} else {
@@ -792,10 +708,9 @@ func (b *building) stagePuts(p *plan) error {
 	return nil
 }
 
-// blobLimit refuses a change one of whose new files is past
-// code.limits.max_blob_bytes, before anything is hashed: the landing would
-// refuse it after its listing, and this spares the build. A refusal of the
-// push, blob_too_large, as a push's own is.
+// blobLimit refuses, blob_too_large as a push is, a change with a new file
+// past code.limits.max_blob_bytes before anything is hashed: the landing would
+// refuse it anyway, after the whole build.
 func (b *building) blobLimit(p *plan) (gitlet.EngineWriteResult, bool, error) {
 	limit := b.wr.s.limits().MaxBlobBytes
 	for _, nb := range p.newBlobs() {
@@ -811,8 +726,8 @@ func (b *building) blobLimit(p *plan) (gitlet.EngineWriteResult, bool, error) {
 	return gitlet.EngineWriteResult{}, false, nil
 }
 
-// hash is ONE `hash-object -w --no-filters --stdin-paths` over every new file
-// the build staged, each set to the id git answers, in order.
+// hash is ONE `hash-object -w` over every new file the build staged, setting
+// each one's id.
 func (b *building) hash(ctx context.Context, p *plan) error {
 	blobs := p.newBlobs()
 	if len(blobs) == 0 {
@@ -854,11 +769,10 @@ func (b *building) hash(ctx context.Context, p *plan) error {
 	return nil
 }
 
-// trees writes every touched directory, deepest first, one level at a time,
-// and answers the root's new id: a directory left empty is dropped from its
-// parent, and an empty root is the empty tree, written like any. The levels
-// are laid out in ONE pass over the directories (plan.levels), never one pass
-// a level.
+// trees writes every touched directory a level at a time, deepest first since
+// a parent names its children's new ids, and answers the root's id. A
+// directory left empty is dropped from its parent; an empty root is the empty
+// tree.
 func (b *building) trees(ctx context.Context, p *plan) (string, error) {
 	ids := map[string]string{} // a directory's new id, "" where it is left empty
 	levels := p.levels()
@@ -870,13 +784,11 @@ func (b *building) trees(ctx context.Context, p *plan) (string, error) {
 	return ids[""], nil
 }
 
-// level is ONE `mktree -z --batch` for the directories of one depth: each
-// one's entries — its parent's as git reads them, every one the change does
-// not touch passed through, then what the change sets — written into a staged
-// file a directory at a time, each ended by the empty record that ends a tree
-// in a batch, and the file handed to mktree, which answers each tree's id on
-// its own line. A directory left empty is no record at all, so mktree never
-// writes it — but the root, whose empty record writes the empty tree.
+// level is ONE `mktree -z --batch` for the directories of one depth, staged as
+// a file: each one's untouched entries passed through as git reads them
+// (treeEntry.canon), then what the change sets, ended by an empty record. A
+// directory left empty sends no record, so mktree never writes it — but the
+// root, whose empty record writes the empty tree.
 func (b *building) level(ctx context.Context, p *plan, level []string, ids map[string]string) error {
 	if len(level) == 0 {
 		return nil
@@ -950,8 +862,7 @@ func (b *building) level(ctx context.Context, p *plan, level []string, ids map[s
 	return nil
 }
 
-// writeDir writes one directory's entries as mktree reads them, and how many:
-// none for a directory the change leaves empty.
+// writeDir writes one directory's entries for mktree, answering how many.
 func writeDir(w io.Writer, dc *dirChange, ids map[string]string) (int, error) {
 	n := 0
 	if dc.staged != "" {
@@ -995,9 +906,8 @@ func writeDir(w io.Writer, dc *dirChange, ids map[string]string) (int, error) {
 	return n, nil
 }
 
-// commit is ONE `commit-tree` of tree onto parent — "" for a root commit — its
-// message on its standard input as it is given, its identity the write's
-// signature and its dates the write's (commitDates).
+// commit is ONE `commit-tree` of tree onto parent ("" for a root commit) as
+// the write's signature, dated by commitDates.
 func (b *building) commit(ctx context.Context, tree, parent string, parentDate time.Time, message string) (string,
 	error) {
 
@@ -1015,9 +925,8 @@ func (b *building) commit(ctx context.Context, tree, parent string, parentDate t
 	return b.commitOf(ctx, tree, parents, id, message)
 }
 
-// commitOf is ONE `commit-tree` of tree onto parents, in their order — none
-// for a root commit, two for a merge — as id, its message on its standard
-// input as it is given.
+// commitOf is ONE `commit-tree` of tree onto parents in order (none for a
+// root commit, two for a merge) as id, message verbatim on its stdin.
 func (b *building) commitOf(ctx context.Context, tree string, parents []string, id *gitproc.Identity,
 	message string) (string, error) {
 
@@ -1026,9 +935,8 @@ func (b *building) commitOf(ctx context.Context, tree string, parents []string, 
 	if err != nil {
 		return "", err
 	}
-	// EACH ARGUMENT LIST SPELLED IN THE Cmd THAT RUNS IT — this file's
-	// literals and whole object ids — so the cache's writers gate reads
-	// every one (internal/gitlet/cache's TestNothingButSyncWritesACache).
+	// Each argument list is spelled in the Cmd that runs it, so the cache's
+	// writers gate reads every one (cache's TestNothingButSyncWritesACache).
 	var res gitproc.Result
 	switch len(parents) {
 	case 0:
@@ -1061,19 +969,14 @@ func (b *building) commitOf(ctx context.Context, tree string, parents []string, 
 	return commit, nil
 }
 
-// commitDates are an engine-built commit's two dates (M3-decisions U18, the
-// user's answer (c); ADR-0092): its AUTHOR date the instant the principal
-// acted — the operation's own, to the second — and its COMMITTER date that
-// instant or its parent's committer date, whichever is later. A parent dated
-// after the operation — a person's clock ahead — would otherwise give a child
-// dated before it, which every walk by date pays for (6.7 s a push over a
-// gigabyte of history with no commit-graph, on the node pin: this package's
-// measured section), while git's
-// date-ordered walks, merge-base and the commit-graph's corrected dates read
-// the committer date alone — as git's own rebase and cherry-pick keep the
-// author date and set the committer date of their own. Both are pure
-// functions of the operation and the parent, so a retry builds a
-// byte-identical commit, and one operation's writes share one author date.
+// commitDates are an engine-built commit's dates (U18 c; ADR-0092): AUTHOR the
+// operation's instant to the second, COMMITTER the later of that and the
+// parent's committer date. A parent dated ahead (a person's clock) would
+// otherwise give a child dated before it, which every walk by date pays for
+// (package doc, "Measured"); git's walks read the committer date alone, as
+// its own rebase and cherry-pick set it. Both are pure functions of the
+// operation and parent, so a retry builds a byte-identical commit and one
+// operation's writes share one author date.
 func commitDates(instant, parentDate time.Time) (author, committer time.Time) {
 	author = instant.UTC().Truncate(time.Second)
 	committer = author
@@ -1084,8 +987,7 @@ func commitDates(instant, parentDate time.Time) (author, committer time.Time) {
 }
 
 // later is the later of a and b: a merge commit's committer date is held at or
-// past BOTH its parents' (commitDates), since a child dated before either
-// parent costs every walk by date as one dated before its only parent does.
+// past BOTH its parents' (commitDates).
 func later(a, b time.Time) time.Time {
 	if b.After(a) {
 		return b
@@ -1093,9 +995,9 @@ func later(a, b time.Time) time.Time {
 	return a
 }
 
-// pick is a revert's or a cherry-pick's build: its two commits read, the
-// subject held to having one parent, ONE three-way merge onto the head, and
-// its commit — or the merge's conflicts, answered with nothing stored.
+// pick is a revert's or a cherry-pick's build: ONE three-way merge onto the
+// head of a subject with at most one parent, then its commit, or the
+// conflicts answered with nothing stored.
 func (b *building) pick(ctx context.Context) (string, gitlet.EngineWriteResult, bool, error) {
 	wr := b.wr
 	w := wr.w
@@ -1149,12 +1051,11 @@ func (b *building) pick(ctx context.Context) (string, gitlet.EngineWriteResult, 
 	return commit, gitlet.EngineWriteResult{}, false, err
 }
 
-// defaultMessage is a revert's or a cherry-pick's message where the caller
-// gave none: git's own (message.go), as git writes it into a commit
-// (gitref.WrittenCommitText). A subject written in an encoding other than
-// UTF-8 — its `encoding` header, which git converts through iconv — is
-// gitlet.ErrInvalid asking for a message; a message past what one write
-// carries is too_large.
+// defaultMessage is git's own revert or cherry-pick message (message.go) where
+// the caller gave none, as git writes it (gitref.WrittenCommitText). A subject
+// in a non-UTF-8 `encoding`, which git would convert through iconv, is
+// gitlet.ErrInvalid asking for a message; one past what a write carries is
+// too_large.
 func (wr *writing) defaultMessage(subject *commitHeader) (string, gitlet.EngineWriteResult, bool, error) {
 	w := wr.w
 	if enc := subject.encoding; enc != "" && !utf8Encoding(enc) {
@@ -1180,7 +1081,7 @@ func (wr *writing) defaultMessage(subject *commitHeader) (string, gitlet.EngineW
 	return gitref.WrittenCommitText(msg), gitlet.EngineWriteResult{}, false, nil
 }
 
-// subjectEnds reports a message whose subject line ends within it: what a
+// subjectEnds reports whether text's subject line ends within it: all a
 // revert, which reads the subject alone, needs of a message cut short.
 func subjectEnds(text string) bool {
 	_, rest := commitSubject(text)
@@ -1192,11 +1093,9 @@ func utf8Encoding(enc string) bool {
 	return strings.EqualFold(enc, "utf-8") || strings.EqualFold(enc, "utf8")
 }
 
-// readCommits is ONE `cat-file --batch -Z` of commits in the build's scratch,
-// through its alternate — so the copy's commits, and those the build itself
-// made, which a chain's next entry is merged onto (chain.go) — each streamed
-// into its header. Never in the copy alone, where a commit the build made is
-// not.
+// readCommits is ONE `cat-file --batch -Z` of commits into their headers, in
+// the scratch, never the copy alone: a chain's next entry merges onto a commit
+// the build made (chain.go), which only the scratch holds.
 func (b *building) readCommits(ctx context.Context, ids []string, into []*commitHeader) error {
 	var stdin bytes.Buffer
 	for _, id := range ids {
@@ -1228,10 +1127,9 @@ func (b *building) readCommits(ctx context.Context, ids []string, into []*commit
 	return b.wr.failed(ctx, "read of the commits", res, err)
 }
 
-// commitHeader is what a build reads of a commit object as it streams: its
-// tree, its parents, its author line as git wrote it (`<name> <<email>>
-// <seconds> <zone>`, which a rebase replays), its committer's date and its
-// encoding, and its message — kept up to keep bytes, cut marking one longer.
+// commitHeader is what a build reads of a commit as it streams. author is the
+// line as git wrote it, which a rebase replays; message is kept up to keep
+// bytes, cut marking one longer.
 type commitHeader struct {
 	tree      string
 	parents   []string
@@ -1294,9 +1192,8 @@ func (h *commitHeader) keepMessage(p []byte) {
 	h.cut = true
 }
 
-// identDate is the instant an identity line states — `<who> <<email>>
-// <seconds> <zone>`, the seconds since the epoch whatever the zone — or the
-// zero time where it states none git would read.
+// identDate is the instant an identity line `<who> <<email>> <seconds> <zone>`
+// states (epoch seconds, whatever the zone), or zero where it states none.
 func identDate(line string) time.Time {
 	end := strings.LastIndexByte(line, '>')
 	if end < 0 {
@@ -1313,15 +1210,12 @@ func identDate(line string) time.Time {
 	return time.Unix(secs, 0).UTC()
 }
 
-// maxConflictsHeld is how many conflicted paths a build holds as merge-tree
-// names them: as many as could fit one answer — each at least a path and a
-// kind, some two dozen bytes encoded — so a merge of a hundred thousand
-// conflicts holds what it could answer and counts the rest.
+// maxConflictsHeld bounds the conflicted paths a build holds to as many as
+// could fit one answer, each at least ~24 bytes encoded; the rest are counted.
 const maxConflictsHeld = gitlet.MaxGitAnswerBytes / 24
 
-// mergeOutput is what `merge-tree --write-tree -z` answered: the merged tree
-// and, for a merge that conflicts, each conflicted path with its stages and
-// merge-tree's word for it, read as its records stream.
+// mergeOutput is what `merge-tree --write-tree -z` answered, read as its
+// records stream: the merged tree and each conflicted path's stages and kind.
 type mergeOutput struct {
 	tree      string
 	clean     bool
@@ -1347,9 +1241,9 @@ const (
 	mergeMessage
 )
 
-// record reads one record: the tree, a stage record `<mode> <id> <stage>
-// TAB <path>` — consecutive for one path — up to an empty record, then each
-// message's `<count>`, its paths, its type and its words.
+// record reads one record: the tree, stage records `<mode> <id> <stage> TAB
+// <path>` (one path's consecutive) up to an empty record, then each message's
+// `<count>`, paths, type and words.
 func (m *mergeOutput) record(rec []byte) error {
 	switch m.state {
 	case mergeTree:
@@ -1424,15 +1318,12 @@ func (m *mergeOutput) record(rec []byte) error {
 	return nil
 }
 
-// merge is ONE `merge-tree --write-tree -z --merge-base=<base> <ours>
-// <theirs>` in the scratch, which writes the merged tree — and, for a merge
-// that conflicts, its files with their conflict markers — there and nowhere
-// else: exit 0 is a clean merge, 1 one that conflicts. A base of "" is a
-// change's merge into its target, whose base git finds as `git merge` does —
-// and, for two histories sharing no commit, the empty tree
-// (`--allow-unrelated-histories`), as a change's mergeability measures it
-// (internal/gitlet/home), so a merge and the readiness that let it merge say
-// one thing.
+// merge is ONE `merge-tree --write-tree -z` in the scratch, writing the merged
+// tree (with conflict markers) there only; its cost follows the trees'
+// differences, as it skips subtrees all three sides share. A base of "" is a
+// change's merge into its target: git finds the base, and two unrelated
+// histories merge (`--allow-unrelated-histories`), as the change's
+// mergeability does (internal/gitlet/home), so the two never disagree.
 func (b *building) merge(ctx context.Context, base, ours, theirs string) (*mergeOutput, error) {
 	m := &mergeOutput{at: map[string]int{}, firstType: map[string]string{}}
 	recs := newRecords(m.record)
@@ -1440,7 +1331,7 @@ func (b *building) merge(ctx context.Context, base, ours, theirs string) (*merge
 	if err != nil {
 		return nil, err
 	}
-	// EACH ARGUMENT LIST SPELLED IN THE Cmd THAT RUNS IT, as commitOf's.
+	// Each argument list spelled in the Cmd that runs it, as commitOf's.
 	var res gitproc.Result
 	if base == "" {
 		res, err = b.wr.s.runGit(ctx, gitproc.Cmd{
@@ -1482,11 +1373,10 @@ func cmpOr(a, b string) string {
 	return b
 }
 
-// conflicted is a merge's conflicts as the write answers them: as many as fit
-// gitlet.MaxGitAnswerBytes encoded, each with the start of its file as
-// merge-tree wrote it — read in ONE `cat-file --batch -Z` of the scratch,
-// which alone holds that tree — and the rest counted, detail the refusal's
-// sentence. Nothing is stored.
+// conflicted answers a merge's conflicts, as many as fit
+// gitlet.MaxGitAnswerBytes, each with the start of its marked file read in ONE
+// `cat-file --batch -Z` of the scratch, which alone holds that tree; the rest
+// are counted, detail the refusal's sentence. Nothing is stored.
 func (b *building) conflicted(ctx context.Context, m *mergeOutput, detail string) (gitlet.EngineWriteResult,
 	error) {
 
@@ -1500,9 +1390,8 @@ func (b *building) conflicted(ctx context.Context, m *mergeOutput, detail string
 	)
 	for i, c := range held {
 		marked[i].n = gitlet.ConflictMarkedBytes
-		// A path git would read as relative to a working tree it does not
-		// have (object-name.c's resolve_relative_path) is no name cat-file
-		// takes — and no path a repository the relay's fsck admitted holds.
+		// cat-file reads these as relative to a working tree it lacks
+		// (object-name.c's resolve_relative_path); fsck admits no such path.
 		if strings.HasPrefix(c.Path, "./") || strings.HasPrefix(c.Path, "../") {
 			continue
 		}
@@ -1546,7 +1435,7 @@ func (b *building) conflicted(ctx context.Context, m *mergeOutput, detail string
 }
 
 // fitConflicts is how many of conflicts, in order, res answers within
-// gitlet.MaxGitAnswerBytes encoded, the ones left out counted beside omitted.
+// gitlet.MaxGitAnswerBytes encoded, those left out counted with omitted.
 func fitConflicts(res gitlet.EngineWriteResult, conflicts []gitlet.Conflict, omitted int) int {
 	res.Conflicts = nil
 	res.ConflictsOmitted = omitted + len(conflicts) // its widest
@@ -1571,21 +1460,19 @@ func fitConflicts(res gitlet.EngineWriteResult, conflicts []gitlet.Conflict, omi
 	return len(conflicts)
 }
 
-// pack is ONE `pack-objects` of every object the build wrote — the scratch's
-// loose objects, exactly what was new — into a staged file, and ONE
-// `index-pack --strict --stdin` of it into the scratch, writing its .idx
-// (version 2) and .rev beside it: the relay's own check of every object a
-// push stores, so an engine write stores nothing a push of the same objects is
-// refused at the door. A pack past gitlet.MaxWritePackBytes is too_large; an
-// object the check refuses is rejected_object, in git's own words.
+// pack is ONE `pack-objects` of the scratch's loose objects into a staged
+// file, then ONE `index-pack --strict` of it into the scratch: the relay's
+// check of a push (receive.fsckObjects), so an engine write stores nothing a
+// push would be refused. A pack past gitlet.MaxWritePackBytes is too_large; an
+// object the check refuses is rejected_object, in git's words.
 func (b *building) pack(ctx context.Context) (gitlet.EngineWriteResult, bool, error) {
 	res, _, done, err := b.packWithin(ctx, gitlet.MaxWritePackBytes, writePackTooLarge)
 	return res, done, err
 }
 
-// writePackTooLarge is the sentence of an engine write's pack of size bytes
-// past gitlet.MaxWritePackBytes — a merge_change's, and a chain's entry held to
-// the same bound (chain.go), in the same words.
+// writePackTooLarge is the refusal of an engine write's pack past
+// gitlet.MaxWritePackBytes, a merge_change's and a chain entry's (chain.go)
+// alike.
 func writePackTooLarge(size int64) string {
 	return fmt.Sprintf("this change's pack is %s, past the %s one engine write may store "+
 		"(gitlet.MaxWritePackBytes); make it in a checkout of the repository ("+toolname.CodeCheckout+")",
@@ -1593,11 +1480,10 @@ func writePackTooLarge(size int64) string {
 		humanBytes(gitlet.MaxWritePackBytes))
 }
 
-// packWithin is pack under a bound of the build's own: a pack past bound
-// bytes is too_large, tooLarge its sentence of the pack's size — a chain's is
-// gitlet.MaxChainPackBytes (chain.go). With a rejected_object it answers the
-// object git's check named first ("" where its words named none), so a chain
-// skips the one entry that wrote it.
+// packWithin is pack with its own bound and tooLarge sentence (a chain's is
+// gitlet.MaxChainPackBytes, chain.go). With rejected_object it answers the
+// object git's check named first, or "", so a chain skips the entry that
+// wrote it.
 func (b *building) packWithin(ctx context.Context, bound int64, tooLarge func(size int64) string) (
 	gitlet.EngineWriteResult, string, bool, error) {
 
@@ -1652,9 +1538,8 @@ func (b *building) packWithin(ctx context.Context, bound int64, tooLarge func(si
 	return gitlet.EngineWriteResult{}, "", false, nil
 }
 
-// packObjects is ONE `pack-objects` of ids, in the build's scratch, into out,
-// within what is left of the build's budget — what was named, `what`, in a
-// failure's words.
+// packObjects is ONE `pack-objects` of ids in the scratch into out, within the
+// build's budget; what names it in a failure.
 func (b *building) packObjects(ctx context.Context, ids []string, out io.Writer, what string) error {
 	wr := b.wr
 	var stdin bytes.Buffer
@@ -1666,9 +1551,8 @@ func (b *building) packObjects(ctx context.Context, ids []string, out io.Writer,
 	if err != nil {
 		return err
 	}
-	// AN OBJECT LIST, never revs and never --thin, so no delta leans on an
-	// object outside the pack; one thread and no reuse, so two nodes building
-	// one write pack it alike.
+	// An object list, never revs or --thin, so no delta leans on an object
+	// outside the pack; one thread and no reuse, so every node packs alike.
 	res, err := wr.s.runGit(ctx, gitproc.Cmd{
 		Dir: b.sc.Dir, Alternate: b.sc.Alternate,
 		Args:  []string{"pack-objects", "--threads=1", "--no-reuse-object", "-q", "--stdout"},
@@ -1685,9 +1569,9 @@ func (c *counted) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// refusedByFsck reports an index-pack the relay's own check stopped: git's
-// two formats for it (index-pack.c), read from the run's trace — never from
-// its words, which carry the objects' own text.
+// refusedByFsck reports an index-pack the fsck check stopped, by git's two
+// formats for it (index-pack.c) in the trace — never by its stderr, which
+// carries the objects' own text.
 func refusedByFsck(res gitproc.Result) bool {
 	for _, f := range res.Trace.Formats {
 		if f == "fsck error in packed object" || f == "fsck error in pack objects" {
@@ -1697,9 +1581,8 @@ func refusedByFsck(res gitproc.Result) bool {
 	return false
 }
 
-// fsckWords is what git said of the first object its check refused — `<id>:
-// <message id>: <message>` — as the refusal's sentence: the line index-pack
-// wrote for it, its "error: object " cut.
+// fsckWords is the refusal's sentence: index-pack's line for the first object
+// it refused, `<id>: <message id>: <message>`.
 func fsckWords(res gitproc.Result) string {
 	for line := range strings.Lines(res.Stderr) {
 		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "error: object "); ok {
@@ -1709,8 +1592,7 @@ func fsckWords(res gitproc.Result) string {
 	return "an object this change makes is one git's own check refuses: " + res.LastLine()
 }
 
-// fsckObject is the object git's check refused first, as fsckWords reads its
-// line — `error: object <id>: …` — and "" where no line names one.
+// fsckObject is the id on fsckWords' line, "" where no line names one.
 func fsckObject(res gitproc.Result) string {
 	for line := range strings.Lines(res.Stderr) {
 		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "error: object "); ok {
@@ -1722,10 +1604,8 @@ func fsckObject(res gitproc.Result) string {
 	return ""
 }
 
-// looseSize is the size, uncompressed, of the loose object at path, as its
-// header states it — `<type> <size>` and a NUL, the first bytes its deflate
-// holds — so a chain weighs what an entry wrote by the bytes its pack will
-// deflate and check without reading any object whole.
+// looseSize is the uncompressed size the loose object at path states in its
+// header, so a chain weighs an entry's objects without inflating any whole.
 func looseSize(path string) (int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -1737,8 +1617,7 @@ func looseSize(path string) (int64, error) {
 		return 0, fmt.Errorf("host: loose object %s: %w", path, err)
 	}
 	defer func() { _ = z.Close() }()
-	// A HEADER IS AT MOST 32 BYTES: the longest type, "commit", a space, a
-	// size of at most twenty digits and the NUL.
+	// At most 32 bytes: "commit", a space, twenty digits and the NUL.
 	header, err := bufio.NewReaderSize(z, 32).ReadSlice(0)
 	if err != nil {
 		return 0, fmt.Errorf("host: loose object %s has no header: %w", path, err)
@@ -1751,8 +1630,7 @@ func looseSize(path string) (int64, error) {
 	return n, nil
 }
 
-// looseObjects is every loose object under objects — the scratch's own, which
-// the build wrote — sorted.
+// looseObjects is every loose object under objects, sorted.
 func looseObjects(objects string) ([]string, error) {
 	dirs, err := os.ReadDir(objects)
 	if err != nil {
@@ -1777,14 +1655,11 @@ func looseObjects(objects string) ([]string, error) {
 	return out, nil
 }
 
-// prune removes from the build's scratch every loose object it holds that
-// kept does not name: what one merge of a chain wrote before the chain skipped
-// it — a conflicting merge-tree's tree and its marked files, a merge cut by
-// its budget part way — so the chain's one pack is exactly the objects of the
-// commits it made, and a chain built again with that entry gone from its
-// rows packs the same bytes. An object kept named stays whatever the skipped
-// merge did: git never writes a loose object it holds again, only freshens
-// it.
+// prune removes every loose object in the scratch that kept does not name —
+// what a skipped chain merge wrote — so the chain's pack is exactly its
+// commits' objects, the same bytes a rebuild without that entry packs. An
+// object in kept is safe whatever the skipped merge did: git never rewrites a
+// loose object it holds, only freshens it.
 func (b *building) prune(kept []string) error {
 	objects := filepath.Join(b.sc.Dir, "objects")
 	ids, err := looseObjects(objects)

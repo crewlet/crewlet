@@ -20,26 +20,23 @@ import (
 )
 
 // ADMISSION: who is asking, as whom, and of which repository — every git
-// request's first step. A PERSON is admitted by admit, here; a CODING BOX by
-// admitBox (boxadmit.go), and a CHECK'S BOX by admitBox too, its token telling
-// it to admitCheck (checkadmit.go). Nothing after admission asks which of the
-// three ran but through the admission's own fields and its nine accessors —
-// principal, writtenFor, share, refs, objects, boxFloor, resyncKey, floorWords
-// and engineCommitter — and a box's nil check
-// where its pushes raise the run's floor and are left out of the operator
-// audit (TestNothingAfterAdmissionAsksWhichAdmitterRan).
+// request's first step. A PERSON is admitted by admit; a CODING BOX by
+// admitBox (boxadmit.go); a CHECK'S BOX by admitBox too, its token routing it
+// to admitCheck (checkadmit.go). Nothing after admission asks which ran but
+// through the admission's fields and accessors (principal, writtenFor, share,
+// refs, objects, boxFloor, resyncKey, floorWords, engineCommitter), and a box's
+// nil check where its pushes raise the run's floor and skip the operator audit
+// (TestNothingAfterAdmissionAsksWhichAdmitterRan).
 
 // admission is a request admitted to a repository.
 type admission struct {
 	// name is the repository's name, the URL's `.git` stripped.
 	name string
 	// actor is who the guard resolved, as every record names them
-	// (iam.ActorFor): the author, its kind and the credential — the operator
-	// id, `token:<id>` for a Tier A token or `pat:<id>` for a person's own
-	// machine token. seat is the human seat the principal holds — a person's
-	// own, or the one the identity directory binds a token to — "" for a
-	// credential bound to nobody. All three empty for a box, which the guard
-	// resolved to nobody.
+	// (iam.ActorFor). seat is the human seat the principal holds, its own or
+	// the one the identity directory binds a token to; "" for a credential
+	// bound to nobody. All three empty for a box, which the guard resolved to
+	// nobody.
 	actor      iam.Actor
 	operatorID string
 	seat       string
@@ -48,48 +45,38 @@ type admission struct {
 	repo gitlet.RepoRef
 	// linearizable reports that repo was read through the barrier.
 	linearizable bool
-	// box is the executor a /box/git/ request was admitted for; nil for a
-	// person's and a check's.
+	// box is the executor a /box/git/ request was admitted for; nil otherwise.
 	box *BoxRun
 	// check is the attempt a check's box was admitted for, as its row stood
-	// at admission; nil for a person's request and a coding box's.
+	// at admission; nil otherwise.
 	check *gitlet.CheckRow
-	// noRefs is a request shown NO REF — a check's box's: its advertisement
-	// is protocol v2's, which names none, and its `ls-refs` is answered empty
-	// (fetch.go), since it fetches its one commit by id.
+	// noRefs is a check's box's request: shown NO REF (protocol v2's
+	// advertisement, `ls-refs` answered empty in fetch.go), since it fetches
+	// its one commit by id.
 	noRefs bool
-	// grant is the principal's standing as admission judged it — a person's
-	// GrantOf(…, nil), a box's the seat's from the chart held to the run's
-	// (gitlet.Grant.Within), and a check's box's none: it acts as nobody,
-	// admitted by its attempt's row to fetch, and a fetch past its admission
-	// judges no grant. Every later judgement of the request reads it, never a
-	// GrantOf of its own (refusedAtAdvertisement, receivePack).
+	// grant is the principal's standing as admission judged it: a person's
+	// GrantOf(…, nil), a box's seat grant held to the run's
+	// (gitlet.Grant.Within), and none for a check's box, which acts as nobody
+	// and only fetches. Every later judgement reads it, never a GrantOf of its
+	// own (refusedAtAdvertisement, receivePack).
 	grant gitlet.Grant
 	// fresh is what a read of this request's REFS syncs at ([admission.refs]):
 	// LINEARIZABLE for a person, the run's SESSION at its floor for a box, and
 	// a check's box's at the position its attempt was queued at.
 	fresh statelog.Freshness
 	// spool is the credential the request's memory and spool are charged to
-	// (spool.go's per-credential share): [personSpool] of a person's or a
-	// token's credential, and [boxSpool] for EVERY box. One key for every
-	// box because a box runs generated code and the share is what stops one
-	// credential HOLDING the node's spool room: keyed per run, sixty runs
-	// were sixty quarters and boxes could hold all of it while a person's
-	// spooled fetch waited out Timing.SpoolWait; keyed as one, boxes
-	// together hold at most a quarter, and a person's never waits behind
-	// them. What it costs is among boxes alone: one box's spooled requests
-	// can make another box's wait, in the spool's first-come order, which is
-	// the untrusted class sharing what it is given.
+	// (spool.go's per-credential share): [personSpool] for a person or token,
+	// [boxSpool] for EVERY box. Keyed per run, many boxes could together hold
+	// the whole spool while a person's fetch waited out Timing.SpoolWait;
+	// keyed as one, boxes hold at most a quarter. The cost stays among boxes:
+	// one box's spooled requests can make another's wait.
 	spool string
 }
 
-// boxSpool is every coding box's ONE spool credential, and personSpool a
-// person's or a token's: the credential behind the `cred:` prefix, which
-// boxSpool lacks. THE PREFIX KEEPS THE TWO SPELLINGS DISJOINT STRUCTURALLY,
-// whatever the identity grammars later admit — no credential the guard
-// resolves spells `runs` today only because a person's login carries a dot and
-// every credential name a colon (internal/iam), and a rule resting on that
-// reading would break the day either grammar widened.
+// boxSpool is every coding box's ONE spool credential; personSpool's `cred:`
+// prefix keeps the two spellings disjoint STRUCTURALLY, rather than by today's
+// identity grammars (a login carries a dot, a credential name a colon), which
+// may widen.
 const boxSpool = "runs"
 
 // personSpool is the spool credential of a person's or a token's request.
@@ -99,25 +86,13 @@ func personSpool(operatorID string) string { return "cred:" + operatorID }
 //
 //  1. NAME — the URL's segment with one `.git` stripped, held to the grammar;
 //     a name the grammar refuses is a repository that cannot exist (404).
-//  2. PRINCIPAL — the guard's resolution (iam.From). Anonymous — nothing
-//     presented, or a credential refused — is challenged, which is what makes
-//     git ask its credential helper; a resolution this node could not make,
-//     or none at all (the request reached the host past no guard), is 503 and
-//     never a challenge, since a credential git would be asked for again is
-//     not what is missing.
-//  3. PERSON — the human seat the principal holds, if any: the guard's own
-//     answer (the identity directory's binding, resolved against the running
-//     org), never a second lookup here.
-//  4. REPOSITORY — resolved STALE, and again LINEARIZABLE when the stale answer
-//     would refuse: a repository not found, one whose status refuses op
-//     (deleted or purging for any op, archived for a push), or an old name a
-//     push named. A refusal is never decided on a stale read.
-//  5. OLD NAME — a name a rename left redirecting is answered by renamed: a
-//     fetch's advertisement redirected, its POST admitted to the repository
-//     under its current name, a push refused.
-//
-// The repository's STATUS refusals are not answered here: each entry point
-// answers them in its protocol's own form.
+//  2. PRINCIPAL — the guard's resolution (iam.From), its seat never looked up
+//     again. Anonymous is challenged, so git asks its credential helper; an
+//     unresolved one is 503: a credential is not what is missing.
+//  3. REPOSITORY — resolved STALE, and again LINEARIZABLE when the stale answer
+//     would refuse (not found, a status that refuses op, an old name a push
+//     named): a refusal is never decided on a stale read.
+//  4. OLD NAME — answered by renamed. STATUS refusals are each entry point's.
 func (s *Server) admit(ctx context.Context, w http.ResponseWriter, r *http.Request, op auth.GitOp) (admission, bool) {
 	raw := r.PathValue(PathRepo)
 	name := strings.TrimSuffix(raw, ".git")
@@ -160,46 +135,29 @@ func (s *Server) admit(ctx context.Context, w http.ResponseWriter, r *http.Reque
 		if !renamed(w, r, raw, op, ref) {
 			return admission{}, false
 		}
-		// ADMITTED UNDER ITS CURRENT NAME, so what the fetch logs, heats
-		// and records names the repository as every other read does.
+		// Admitted under its CURRENT name, so what the fetch logs, heats
+		// and records names it as every other read does.
 		adm.name = ref.Name
 	}
 	adm.repo = ref
-	// A PERSON'S GRANT READS NO CHART (gitlet.GrantOf asks no roster of an
-	// operator) and no attribute of the repository but its id, name and
-	// owner, so one judged here holds for every row the request later reads
-	// of the same repository.
+	// A person's grant reads no chart and only the repository's id, name and
+	// owner, so one judged here holds for every later row of it.
 	adm.grant = gitlet.GrantOf(adm.principal(), ref, nil)
 	return adm, true
 }
 
-// renamed answers a request that named a repository by an OLD name, which a
-// rename left redirecting to it until ref.RedirectUntil (gitlet.RedirectWindow),
-// and reports whether the request goes on, admitted to the repository:
+// renamed answers a request naming a repository by an OLD name, redirecting
+// until ref.RedirectUntil, and reports whether it goes on, admitted:
 //
-//   - A FETCH'S ADVERTISEMENT — the GET a clone and a fetch begin with — is
-//     302 Found to the same path and query under the new name. git follows a
-//     redirect of its first exchange (http.followRedirects' default,
-//     `initial`), and REBASES onto the new name — printing `redirecting to`
-//     and sending everything after to it — only where the redirect answered
-//     the first request it made: a client presenting its credential up front
-//     (http.extraHeader, a CI checkout's shape).
-//   - A FETCH'S POST GOES ON, to the repository. Where a credential helper
-//     answers git's challenge — a person's own git — its first request is
-//     anonymous and challenged, so the redirect answers the retry that
-//     carried the credential, and git follows it without rebasing: it reads
-//     the advertisement under the new name and POSTs to the old one
-//     (measured, TestARenamedRepositorysOldNameRedirectsAClone). Refusing
-//     that POST, as a redirect-only old name would, fails every such clone
-//     with git's bare `RPC failed; HTTP 404`.
-//   - A DOWNLOAD GOES ON, to the repository under its current name.
-//   - A PUSH IS REFUSED, at either step, naming the new name: at the
-//     advertisement in the 404 git prints (`remote: <sentence>`), never a
-//     redirect, which a credential-helper client follows to POST its push to
-//     the old name, where git prints no reason for a refusal. So no push is
-//     decided against a name the repository no longer holds, and a pusher is
-//     told what to change — answered at admission like a name no repository
-//     holds, so no push is recorded for it.
+//   - A FETCH'S ADVERTISEMENT is 302 Found to the same path and query under
+//     the new name. git rebases onto it only when the redirect answered its
+//     very first request (a credential sent up front, http.extraHeader).
+//   - A FETCH'S POST GOES ON: behind a credential helper the redirect answers
+//     the challenged retry; git follows it without rebasing and POSTs to the
+//     old name (TestARenamedRepositorysOldNameRedirectsAClone).
+//   - A DOWNLOAD GOES ON, under the current name.
+//   - A PUSH IS REFUSED, 404 naming the new name, never redirected (git prints
+//     no reason for a refused POST), and not recorded.
 func renamed(w http.ResponseWriter, r *http.Request, raw string, op auth.GitOp, ref gitlet.RepoRef) bool {
 	switch {
 	case op == auth.GitDownload:
@@ -231,11 +189,9 @@ func renamedSentence(oldName string, ref gitlet.RepoRef) string {
 }
 
 // admitted is the admission of a request for repository name by the resolved
-// principal p, before its repository is resolved: who it is as every record
-// names it (iam.ActorFor), the credential it came through and the human seat
-// it acts as. The ONE derivation of an admission's identity from the guard's
-// principal, so what a push records, what its grant reads and whose turn its
-// transfers take are read off the same fields.
+// principal p, before its repository is resolved. The ONE derivation of an
+// admission's identity, so a push's record, its grant and its transfers' turn
+// read the same fields.
 func admitted(name string, p iam.Principal) admission {
 	actor := iam.ActorFor(p)
 	return admission{name: name, actor: actor, operatorID: actor.OperatorID, seat: p.Seat,
@@ -243,24 +199,17 @@ func admitted(name string, p iam.Principal) admission {
 }
 
 // principal is who the admitted request acts as: the operator credential and
-// the person it is bound to — "" for nobody — or, for a coding box, its run's
-// seat as an agent, its pushes stamped with the run that made them. The ONE
-// construction of it, so a push's proposal, its session, its grant and its
-// fetch's record can never name two different principals.
+// its bound person, or a coding box's run's seat as an agent. The ONE
+// construction, so a push's proposal, session, grant and fetch record agree.
 //
-// A BOX'S RUN IS FITTED where it is stamped (gitlet.FitProvenance): its work
-// item, model and harness are other systems' labels copied onto the row
-// as they arrived — a GitLab key may nest a project path past the bound — and
-// one copied raw would have every push the box makes refused as an invalid
-// proposal, the run stopped by a label it never chose. Its two ids are the
-// engine's own and never fitted: a run's pushes are found by them whole.
+// A BOX'S RUN IS FITTED (gitlet.FitProvenance): its work item, model and
+// harness are other systems' labels, and one past the bound would have every
+// push refused as an invalid proposal. Its two ids are the engine's own and
+// never fitted: a run's pushes are found by them whole.
 //
-// A CHECK'S BOX ACTS AS NOBODY — the zero principal: the engine running its
-// repository's own checks file, which no seat or person asked of the host. So
-// its fetch is no principal's read of a `visibility: unit` repository
-// (fetched): the attempt's row, naming the change and who queued it, is its
-// record. It pushes nothing (admitCheck), so no proposal or session ever
-// carries it — and one that did would be refused as naming nobody.
+// A CHECK'S BOX ACTS AS NOBODY (the zero principal): its fetch is no
+// principal's read of a `visibility: unit` repository (fetched), the attempt's
+// row is its record. It pushes nothing (admitCheck).
 func (a admission) principal() gitlet.Principal {
 	if a.check != nil {
 		return gitlet.Principal{}
@@ -276,20 +225,13 @@ func (a admission) principal() gitlet.Principal {
 }
 
 // writtenFor is whom a push this request lands is made for
-// (gitlet.Proposal.WrittenFor), by who pushes. A CODING BOX's push is its
-// run's turn's write made late — a seat's own writes are tool calls, which the
-// engine builds — so it is made for whom that turn works for, as the run's row
-// carries it (BoxRun.WorkingFor, which the run's checkout composed for the
-// turn's own code writes), and for nobody, the seat's own work, where the run
-// works for its seat; whatever the row holds is carried as it stands, a value a
-// newer build wrote that this one does not know included, since the committer
-// that decides the push holds it to its rule — the admission refused before
-// anything of the push only a row naming what no checkout writes, and answered
-// a kind this build does not know as a newer build's run (boxadmit.go's step
-// 7). A PERSON'S push is their own and states nothing, and a check's box
-// pushes nothing. ONE ANSWER for the push's landing and for its measure before
-// receive-pack runs (commandsRefusal), so a push is measured carrying what it
-// will carry.
+// (gitlet.Proposal.WrittenFor). A CODING BOX's push is its run's turn's write
+// made late, so it is made for whom that turn works for (BoxRun.WorkingFor),
+// carried as the row holds it, a newer build's value included: the committer
+// holds it to its rule, and admission already refused what no checkout
+// writes (boxadmit.go's step 7). A person's push states nothing; a check's
+// box pushes nothing. ONE answer for the landing and for the measure before
+// receive-pack (commandsRefusal), so a push is measured carrying what it will.
 func (a admission) writtenFor() types.WrittenFor {
 	if a.box == nil {
 		return types.WrittenFor{}
@@ -297,29 +239,20 @@ func (a admission) writtenFor() types.WrittenFor {
 	return types.ForTurn(a.box.WorkingFor)
 }
 
-// refs is the freshness every read of this request's REFS syncs at — a v0
-// advertisement, a push's, an `ls-refs`, a push's receive — at the four call
-// sites that name a ref: LINEARIZABLE for a person, through the code log's
-// barrier, and the run's SESSION at its floor for a box, which pays no
-// barrier because its floor already holds everything it was shown
-// (boxadmit.go, "A box reads at its run's floor"). A check's box is shown no
-// ref (admission.noRefs), so no read of its names one: what its fetch syncs
-// at is [admission.objects].
+// refs is the freshness every read naming this request's REFS syncs at (v0
+// and push advertisements, `ls-refs`, a push's receive): LINEARIZABLE for a
+// person, and the run's SESSION at its floor for a box, which already holds
+// all it was shown (boxadmit.go, "A box reads at its run's floor"). A check's
+// box reads no ref (admission.noRefs); its fetch syncs at [admission.objects].
 func (a admission) refs() statelog.Freshness { return a.fresh }
 
-// objects is the freshness a fetch's wants are first looked for at — the sync
-// that serves a fetch by id (fetch.go). STALE for a person and a coding box:
-// an object id has no level, and a want the copy lacks is what the one sync
-// at the log's head is for. A CHECK'S BOX's at its admission's freshness, its
-// check's SESSION: the position its attempt was queued at, which the push of
-// its commit precedes, so the copy it is served from holds the commit and
-// every blob of its tree. Synced stale instead, a Gitlet node whose cache had
-// not converged since that push — most of them, on a fleet of several Gitlet
-// nodes, since a cache syncs on demand and a balancer spreads boxes — lacked
-// the commit, and every check's box it served paid a barrier on the code log
-// that its session would have spared — and that the code log's day does not
-// price (internal/worklet's codeLogDay counts its git clients' barriers, a
-// push's, a person's read and CI's, and none of a box's).
+// objects is the freshness a fetch's wants are first looked for at (fetch.go).
+// STALE for a person and a coding box: an object id has no level, and a
+// missing want is what the one sync at the log's head is for. A CHECK'S BOX's
+// is its check's SESSION, which its commit's push precedes, so the copy holds
+// the commit and its tree. Stale, most nodes' caches on a fleet would lack the
+// commit and pay a code-log barrier per box, one internal/worklet's codeLogDay
+// does not price.
 func (a admission) objects() statelog.Freshness {
 	if a.check != nil {
 		return a.fresh
@@ -337,22 +270,16 @@ func (a admission) boxFloor() (BoxRunRef, statelog.Position, bool) {
 }
 
 // holdRefs holds, on a CODING BOX'S run's row, every seat's branch its push
-// names that the run does not hold yet — cmds, the push's commands as the
-// grant and the protections judged them, those refused left out (pre), since
-// they move nothing and are proposed nowhere — in ONE write (Runs.Hold),
-// BEFORE receive-pack runs, anything is stored or the push is proposed. A box
-// pushes as its RUN, not as a turn: what it pushed is what its parked run
-// depends on, so the branch is held for as long as the run's row exists, as a
-// branch its turn read or wrote is (gitlet.RefHoldKey). Nothing for a person's
-// push, nor for a ref no seat's branch ([gitlet.Holdable]), nor for one the
-// row already holds — so every later push of a branch its run holds costs the
-// run store nothing — and the keys it holds join the admission's copy of the
-// row, so a second run of the push over a rebuilt incarnation holds nothing
-// again.
+// names ([gitlet.Holdable]) that the run does not hold yet, the commands pre
+// refused left out, in ONE write (Runs.Hold) BEFORE receive-pack runs or
+// anything is stored or proposed. Its parked run depends on what it pushed, so
+// the branch is held as long as the run's row exists (gitlet.RefHoldKey). The
+// keys join the admission's copy of the row, so a held branch costs the run
+// store nothing again, a rerun over a rebuilt incarnation included. Nothing for
+// a person's push.
 //
-// Why at the push and not from its rows: every box push row names its run,
-// but holding from them would be a second mechanism — a read of every unended
-// run's pushes by whoever reads the holds — beside the row's union the
+// Held at the push, not derived from push rows: that would be a second
+// mechanism, reading every unended run's pushes, beside the row's union the
 // launch's grants need anyway.
 func (a admission) holdRefs(ctx context.Context, runs Runs, cmds []parsedCommand,
 	pre map[string]answered) error {
@@ -368,8 +295,7 @@ func (a admission) holdRefs(ctx context.Context, runs Runs, cmds []parsedCommand
 		if _, refused := pre[c.Ref]; refused || !gitlet.Holdable(c.Ref) {
 			continue
 		}
-		// A REF NAMED TWICE — which only a hand-built client sends, and the
-		// proposal refuses — is one key.
+		// A ref named twice (the proposal refuses it) is one key.
 		if key := gitlet.RefHoldKey(a.repo.ID, c.Ref); !a.box.Holds[key] && !want[key] {
 			want[key] = true
 			keys = append(keys, key)
@@ -390,13 +316,12 @@ func (a admission) holdRefs(ctx context.Context, runs Runs, cmds []parsedCommand
 	return nil
 }
 
-// resyncKey is whose re-syncs at the log's head the request's linearizable
-// reads draw on (boxlimit.go), as the node's re-sync buckets key them: a
-// CODING BOX's run, by its launch, on its seat (gitlet.RunResyncs); a CHECK'S
-// BOX's attempt on its repository's checks (gitlet.CheckKey.Resyncs) — its
-// repository's checks file is code nobody vouches for as much as a seat's;
-// and false for a person's request, whose reads of refs are linearizable by
-// right and whose barriers are the census's clients' term.
+// resyncKey is whose re-sync bucket the request's linearizable reads draw on
+// (boxlimit.go): a CODING BOX's run, by launch, on its seat
+// (gitlet.RunResyncs); a CHECK'S BOX's repository's checks
+// (gitlet.CheckKey.Resyncs), code nobody vouches for; false for a person,
+// whose ref reads are linearizable by right and priced in the census's
+// clients' term.
 func (a admission) resyncKey() (scope, principal string, ok bool) {
 	switch {
 	case a.check != nil:
@@ -423,13 +348,10 @@ func (a admission) floorWords() (shown, instead, principal, scope string) {
 
 // engineCommitter is the address a commit in this request's pack may be
 // committed as only where the repository already holds it
-// (landing.EngineCommitter): for a CODING BOX the engine's own, as s names it
-// off the serving epoch (Signer.Committer), and "" for a person, whose push
-// may carry the engine's commits as git carries any. A box runs code nobody
-// vouches for, and the committer is what a cooperating client's history
-// marks the host's own writes by (ADR-0092), so a box's push claiming it is
-// refused forged_committer. An error is a node holding no epoch, which judges
-// no box's push.
+// (landing.EngineCommitter): for a CODING BOX the engine's own
+// (Signer.Committer), so a box claiming it is refused forged_committer
+// (package doc, "A coding box is admitted by its run"); "" for a person. An
+// error is a node holding no epoch, which judges no box's push.
 func (a admission) engineCommitter(s Signer) (string, error) {
 	if a.box == nil {
 		return "", nil
@@ -437,27 +359,18 @@ func (a admission) engineCommitter(s Signer) (string, error) {
 	return s.Committer()
 }
 
-// share is whose transfer the admitted request is (gitproc.Cmd.Share), what
-// the transfer lane decides a contended slot by and charges the run's spend
-// to. A PERSON is the holder of a human seat, keyed by the seat's handle:
-// a person through any credential of theirs — their own machine tokens and
-// their sessions all name their seat — so their laptop and their scripts are
-// one principal, as the grant reads them as one; or a Tier A token or a
-// service account the identity directory binds to a human seat nobody else
-// holds, since a bind is a claim on the seat itself and that seat therefore
-// has one holder. A MACHINE is a credential acting as nobody — a Tier A
-// token bound to no seat (`token:<id>`) or a service account's machine token
-// (`pat:<id>`) — keyed by that credential's name, never by the account that
-// owns it (iam.RecordOwner): a service account with a token per CI runner
-// gives each runner its own turn, as the fetch spool keys a request by the
-// credential too. A CODING BOX is a RUN, keyed by its launch: its class holds
-// at most half the lane (gitproc.ShareClass.Cap), so a person's push or clone
-// is never queued behind generated code's client-paced clones. A CHECK'S BOX
-// is a run too — a repository's own checks file is code nobody vouches for as
-// much as a seat's — keyed by its REPOSITORY (`check:<id>`), never its
-// attempt: a push fans out a check per name its file defines, and keyed per
-// attempt one repository's dozen checks took a dozen turns of the class where
-// an executor takes one.
+// share is whose transfer the admitted request is (gitproc.Cmd.Share), what the
+// transfer lane decides a contended slot by and charges spend to.
+//   - A PERSON, or a token bound to a human seat, is keyed by the seat's
+//     handle: all their credentials are one principal, as the grant reads them.
+//   - A MACHINE (a credential acting as nobody) is keyed by the credential,
+//     never its owning account (iam.RecordOwner): each CI runner's token gets
+//     its own turn, as the fetch spool keys it.
+//   - A CODING BOX is a RUN, keyed by launch; its class holds at most half the
+//     lane (gitproc.ShareClass.Cap), so a person never queues behind it.
+//   - A CHECK'S BOX is a run keyed by REPOSITORY (`check:<id>`), never attempt:
+//     a push fans out a check per name, and one repository's checks take one
+//     turn of the class, as an executor does.
 func (a admission) share() gitproc.Share {
 	switch {
 	case a.check != nil:
@@ -471,10 +384,9 @@ func (a admission) share() gitproc.Share {
 }
 
 // grantRefusal is the class a push its principal's grant refuses whole is
-// recorded under: `unbound` for a token bound to nobody — the word the
-// dashboard and crewlet read for it, since the remedy is a binding in the
-// identity directory rather than a grant — and the domain's not_permitted for
-// any other principal.
+// recorded under: `unbound` for a token bound to nobody, whose remedy is a
+// binding in the identity directory rather than a grant, and the domain's
+// not_permitted for any other principal.
 func grantRefusal(p gitlet.Principal) AuditRefusal {
 	if p.Kind == gitlet.PrincipalOperator && p.Seat == "" {
 		return RefusalUnbound
@@ -483,9 +395,8 @@ func grantRefusal(p gitlet.Principal) AuditRefusal {
 }
 
 // refuses reports whether repo, as a read found it, refuses op: a deleted or
-// purging one every op, and an archived one, one being imported and a pull
-// mirror a push — each the refusal a stale read is confirmed by a
-// linearizable one before it is answered.
+// purging one every op; an archived, importing or pull-mirror one a push. A
+// stale read's refusal is confirmed linearizable before it is answered.
 func refuses(repo gitlet.RepoRef, op auth.GitOp) bool {
 	switch repo.Status {
 	case gitlet.RepoStatusDeleted, gitlet.RepoStatusPurging:
@@ -501,10 +412,9 @@ func gone(status gitlet.RepoStatus) bool {
 	return status == gitlet.RepoStatusDeleted || status == gitlet.RepoStatusPurging
 }
 
-// identityUnknown answers a request whose principal this node could not tell —
-// the guard's unknown arm, or a request that reached the host past no guard at
-// all (iam.ErrUnresolved, a wiring fault) — 503 with the identity estate's own
-// Retry-After, logged.
+// identityUnknown answers a request whose principal this node could not tell
+// (the guard's unknown arm, or no guard at all: iam.ErrUnresolved) with 503
+// and the identity estate's own Retry-After, logged.
 func (s *Server) identityUnknown(w http.ResponseWriter, r *http.Request, name string, why error) {
 	s.log.Warn("code_git_identity_unknown", "repo", name, "path", r.URL.Path, "reason", why)
 	wait := time.Duration(auth.RetryIdentity(why)) * time.Second
@@ -518,9 +428,8 @@ func (s *Server) identityUnknown(w http.ResponseWriter, r *http.Request, name st
 	auth.GitText(w, http.StatusServiceUnavailable, sentence)
 }
 
-// unavailable answers a request the code log could not be read for here — a
-// linearizable read refused (no quorum, a single member's stalled write, a
-// copy out of service), or no data node answered — 503 with Retry-After,
+// unavailable answers a request the code log could not be read for here (a
+// linearizable read refused, or no data node answered): 503 with Retry-After,
 // logged.
 func (s *Server) unavailable(w http.ResponseWriter, r *http.Request, name string, err error) {
 	if s.ended(w, r, name, err) {
@@ -550,21 +459,18 @@ func notFoundSentence(name string) string {
 }
 
 // goneSentence is a deleted or purging repository's: the domain's own
-// sentence for the state (gitlet.RepoGone), so the advertisement, a fetch and a
-// push say what the push decide says.
+// (gitlet.RepoGone), so every entry point says what the push decide says.
 func (s *Server) goneSentence(ref gitlet.RepoRef) string {
 	return gitlet.RepoGone{ID: ref.ID, Name: ref.Name, Status: ref.Status, DeletedAt: ref.DeletedAt,
 		Retention: s.o.DeletedRetention(), ManagedBy: ref.ManagedBy}.Detail()
 }
 
-// serviceFor is the git process an advertisement runs — read from the
-// request's query only AFTER auth.GitAccess has classified it, and only ever
-// the service GitAccess's class allows: git-upload-pack for a fetch,
-// git-receive-pack for a push, and nothing else. A request whose query names
-// another service, names one twice or does not parse is refused (ok false),
-// and one naming no service is the dumb protocol's (dumb true). So a request
-// the classifier calls a fetch never runs receive-pack — which is what makes
-// the guard's and the drain's reading of it the one that holds (FuzzServiceFor).
+// serviceFor is the git process an advertisement runs: only the service
+// auth.GitAccess's class allows (upload-pack for a fetch, receive-pack for a
+// push), so a request classified a fetch never runs receive-pack and the
+// guard's and drain's reading holds (FuzzServiceFor). Another service, one
+// named twice or an unparsable query is refused (ok false); none named is the
+// dumb protocol's (dumb true).
 func serviceFor(r *http.Request) (svc string, dumb, ok bool) {
 	op := auth.GitAccess(r)
 	query, err := url.ParseQuery(r.URL.RawQuery)

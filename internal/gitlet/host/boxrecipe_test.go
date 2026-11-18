@@ -28,50 +28,18 @@ func TestTheBoxRecipesCloneFromGitlet(t *testing.T) {
 	boxRecipes(t, gitlettest.SoloOptions{}, gittest.Require(t))
 }
 
-// boxRecipes is the box half of Gitlet's suite: on a Gitlet node serving a
-// repository, the steps a coding box is given its repositories by — the
-// version check, the coding clone and the check's single-commit checkout —
-// run as a box runs them, `sh -c` in the box's working directory, under git
-// (the box's git: the pin, or the client floor's 2.40.4) with EXACTLY the
-// environment the engine gives a box (sandbox.BoxGit, ADR-0093): its run's
-// credential on /box/git/, answered by the engine's credential helper,
-// Gitlet's base as CREWLET_GIT_URL and the seat's commit identity — over
-// a git environment of the box's own whose
-// global credential helper answers as a PERSON, which the engine's reset must
-// keep from ever answering Gitlet.
+// boxRecipes is the box half of Gitlet's suite: the steps that give a coding
+// box its repositories (the version check, the coding clone, the check's
+// single-commit checkout) run as a box runs them, `sh -c` in its working
+// directory under its git (the pin, or the client floor's 2.40.4) with
+// EXACTLY the engine's box environment (sandbox.BoxGit, ADR-0093), over a
+// global credential helper answering as a PERSON, which the engine's reset
+// must keep from ever answering Gitlet. Each invariant is stated at its check.
 //
-//   - The version step passes.
-//   - The coding clone leaves HEAD on the run's branch at its base, the cone's
-//     files checked out — directories git's cone mode would read as patterns
-//     among them — and not one blob outside the cone in the object store,
-//     and no hook of its own: what a commit made in the box carries is the
-//     run's attribution, which the executor's runner installs for every
-//     repository the run commits in (internal/sandbox/executor's
-//     attribution.go), never a property of a checkout. A commit made there
-//     pushes as the run, lands a push row naming the run, and the commit the
-//     host holds carries the seat's identity and nothing the recipe added.
-//   - The coding clone holds the default branch and nothing of the other
-//     seats' branches already on the host — not one of their commits, no
-//     remote-tracking ref but origin/main — and its fetch refspec names main
-//     alone, so the agent's own later `git fetch` brings nothing of another
-//     seat's next push either, and another branch it fetches by name, as its
-//     brief says, lands in FETCH_HEAD untracked.
-//   - A base off the default branch is fetched by id: the tip of the seat's
-//     own branch a run continues, held with the other seats' work still not;
-//     the same in a repository of seats' branches alone, whose HEAD names a
-//     branch nobody pushed, where the clone wants no branch at all; and a
-//     base no ref reaches any more (a deleted branch's commit).
-//   - The single-commit checkout leaves HEAD detached at the commit, one
-//     commit of history, the cone's files alone, and no hook.
-//
-// Mutations: write a commit hook in the coding recipe — the clone holds one
-// and the pushed commit carries its trailers, red; check the coding clone out at what its clone's
-// HEAD names rather than its base — the base cases off the default branch,
-// red; drop --skip-checks — the cone naming [odd] and !bang is refused, red;
-// drop --single-branch — the clone holds every seat's work, tracks every
-// branch and fetches another seat's next push, red; drop the engine's reset
-// of the helper list — the person's helper answers the box route and every
-// request is refused, red.
+// Mutations, each red: a commit hook in the coding recipe; checking the clone
+// out at its HEAD rather than its base; no --skip-checks (the cone naming
+// [odd] and !bang is refused); no --single-branch (every seat's work arrives
+// and is tracked); no reset of the helper list (every request is refused).
 func boxRecipes(t *testing.T, opts gitlettest.SoloOptions, git string) {
 	t.Helper()
 	ctx := t.Context()
@@ -90,10 +58,9 @@ func boxRecipes(t *testing.T, opts gitlettest.SoloOptions, git string) {
 	if res := person.Push(ctx, work, url, "main"); res.Err != nil {
 		t.Fatalf("git push main: %s", res)
 	}
-	// THE OTHER SEATS' WORK, on the host before the run launches, as it is
-	// on any repository its seats work in: a branch a commit off main under
-	// each of three seats' namespaces, Alice's own branch for another item
-	// among them.
+	// THE OTHER SEATS' WORK, on the host before the run launches: a commit off
+	// main on each of three seats' branches, Alice's own for another item among
+	// them.
 	ownRef := "refs/heads/seats/" + gitlettest.FixtureAlice + "/ENG-8"
 	seatWork := map[string]string{}
 	for _, ref := range []string{"refs/heads/seats/" + gitlettest.FixtureBob + "/ENG-1",
@@ -172,13 +139,10 @@ func boxRecipes(t *testing.T, opts gitlettest.SoloOptions, git string) {
 	}
 
 	// GIT'S MONITOR is no clone's: the coding clone leaves it unset, and the
-	// monitor's own step — which the engine runs only in a cell whose boxes
-	// own their kernel (sandbox.CodingSteps) — turns it on in the checkout's
-	// own configuration exactly where the box can keep it: a git of 2.55.0 or
-	// newer, the node pin's here and never the client floor's 2.40.4, with
-	// every checkout in the box taking at most half of the kernel's watches
-	// and instances. Its daemon, which the box's first commit below starts,
-	// is stopped before the case's directories go.
+	// monitor's own step (run only in a cell whose boxes own their kernel,
+	// sandbox.CodingSteps) sets it exactly where the box can keep it
+	// (monitorable). Its daemon, which the box's first commit below starts, is
+	// stopped before the case's directories go.
 	if out, _, _ := client.Try(t, clone, nil, "config", "--get", "core.fsmonitor"); strings.TrimSpace(out) != "" {
 		t.Errorf("the coding clone set core.fsmonitor to %q: the monitor is the cell's to decide", out)
 	}
@@ -199,11 +163,12 @@ func boxRecipes(t *testing.T, opts gitlettest.SoloOptions, git string) {
 		})
 	}
 
-	// A COMMIT MADE IN THE BOX, under its run, pushes AS THE RUN — the
-	// engine's helper answering /box/git/ with the run's token — lands a push
-	// row naming the run, and carries the seat's identity on the host and
-	// no trailer of the recipe's: the push row, stamped from the run's own
-	// record, is its provenance.
+	// A COMMIT MADE IN THE BOX pushes AS THE RUN (the engine's helper answering
+	// /box/git/ with the run's token), lands a push row naming the run, and
+	// carries the seat's identity and no trailer of the recipe's: the push row,
+	// stamped from the run's record, is its provenance, and attribution is the
+	// executor runner's (internal/sandbox/executor's attribution.go), never a
+	// checkout's hook.
 	if err := os.WriteFile(filepath.Join(clone, "src", "a.txt"), []byte("a, changed in the box\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -335,8 +300,8 @@ func boxRecipes(t *testing.T, opts gitlettest.SoloOptions, git string) {
 }
 
 // boxEnv is a box's environment over the client environment env, as the
-// engine's launch makes it: git's directory first on PATH, and over env — its
-// own git configuration kept — the engine's box git environment (g).
+// engine's launch makes it: git's directory first on PATH, and the engine's
+// box git environment (g) over env, its own git configuration kept.
 func boxEnv(t testing.TB, env []string, git string, g sandbox.BoxGit) []string {
 	t.Helper()
 	run := map[string]string{}
@@ -486,10 +451,10 @@ func sameFiles(t *testing.T, what, dir string, want ...string) {
 	}
 }
 
-// pushOffMain pushes ref from p's work tree work as one commit on top of base,
-// a file of its own in a directory of its own — a new tree as well as a new
-// commit — leaves work on main again, and answers the commit. Every git it
-// runs is the person's, under the test's context, as the client's own are.
+// pushOffMain pushes ref from p's work tree work as one commit on top of
+// base, adding a file in a directory of its own (a new tree as well as a new
+// commit), leaves work on main again, and answers the commit. Every git it
+// runs is the person's, under the test's context.
 func pushOffMain(t *testing.T, p *gitlettest.Person, work, url, base, ref string) string {
 	t.Helper()
 	p.Git().Run(t, work, "checkout", "-q", "-B", "seat-work", base)

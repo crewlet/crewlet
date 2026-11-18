@@ -27,19 +27,15 @@ import (
 // remoteCommands are the subcommands that dial a remote: each takes a
 // [Cmd.Remote] and must, and no other subcommand takes one.
 //
-// A SET, as gitproc spells its other sets of names (receivePackOptions,
-// crashFormats), never a []string: the cache's writers gate
+// A SET, never a []string: the cache's writers gate
 // (TestNothingButSyncWritesACache, internal/gitlet/cache) reads a []string
-// literal that begins with a git writer, in any file that runs git, as an
-// argument list built away from its Cmd, and so read this one as a fetch run
-// outside the files allowed to. It runs nothing: a fetch or a push is judged
-// at the call site that spells its Cmd.
+// literal beginning with a git writer as an argument list built away from its
+// Cmd, and would flag this one as a fetch outside the files allowed to run one.
 var remoteCommands = map[string]bool{"fetch": true, "ls-remote": true, "push": true}
 
-// The configuration a remote run is given after the base, each written by the
-// pool from the run's [Cmd.Remote] (Remote.config) for the reason the package
-// doc's "One outbound dial" gives it — so no call site may set one
-// (checkConfig), as none may set a base key.
+// The configuration the pool writes for a remote run after the base, from its
+// [Cmd.Remote] (Remote.config; package doc, "One outbound dial"). No call site
+// may set one (checkConfig), as none may set a base key.
 const (
 	keyHTTPSAllow        = "protocol.https.allow"
 	keyFollowRedirects   = "http.followRedirects"
@@ -61,43 +57,18 @@ var remoteKeys = []string{
 	keyKeepAliveCount, keyResolve, keyProxy, keyCAInfo, keyCAPath, keyExtraHeader,
 }
 
-// remoteKeepAliveProbes is how many of TCP's keepalive probes a remote run's
-// connection may leave unanswered before the kernel ends it
-// (http.keepAliveCount): THREE, ten seconds apart once the connection has been
-// quiet for half of [TransferStall] (http.keepAliveIdle and
-// http.keepAliveInterval, which [Remote.config] derives from the pool's
-// stall). So a connection whose peer stopped answering — a host gone, a path
-// dropped, a NAT that forgot it — is ended a minute after the last thing it
-// heard, the bound every other transfer of the engine's is held to, while a
-// probe or its answer lost on the way ends nothing: three in a row would have
-// to be. A push whose peer vanishes with bytes still in flight sends no probe
-// — TCP retransmits those instead, and gives up after about fifteen minutes on
-// Linux's defaults (tcp_retries2), since neither git nor libcurl sets
-// TCP_USER_TIMEOUT.
+// remoteKeepAliveProbes is how many TCP keepalive probes in a row a remote
+// run's connection may leave unanswered before the kernel ends it
+// (http.keepAliveCount): after quiet for half of [TransferStall], three ten
+// seconds apart ([Remote.config]), so a vanished peer is ended a minute after
+// the last thing it heard, and one lost probe ends nothing. A push with bytes
+// in flight sends no probe: TCP retransmits until Linux's tcp_retries2 (~15
+// minutes), since neither git nor libcurl sets TCP_USER_TIMEOUT.
 //
-// THE PEER'S LIVENESS, NEVER ITS SPEED. A git server working on a large
-// repository — counting and compressing what a fetch wants, indexing and
-// checking what a push sent — may send nothing but a keepalive for minutes, or
-// nothing at all where no progress was asked for and it keeps no keepalive,
-// and no client tells that from a server that has wedged: so a remote that
-// stays connected is waited on until [RemoteDeadline], whatever it sends.
-//
-// NOT LIBCURL'S LOW-SPEED CHECK (http.lowSpeedLimit, http.lowSpeedTime), which
-// bounded this leg until it was measured. What that check reads is a SPEED:
-// the bytes moved, both ways, over libcurl's last five seconds of
-// once-a-second samples, in whole bytes a second rounded down
-// (lib/progress.c), so at its least limit, a byte a second, a window reads as
-// moving only with as many bytes as the seconds it spans — and git's keepalive
-// is five bytes every five seconds (uploadpack.keepAlive, receive.keepAlive):
-// the threshold itself, which side of it a window lands on turning on
-// sub-millisecond timing on both machines. MEASURED with git 2.56.0 and
-// libcurl 8.14.1 over TLS on loopback: with the check's time scaled to ten
-// seconds, a remote sending git's keepalive every five seconds was ended in
-// one fetch of twelve, paced as upload-pack paces it (each five seconds after
-// the last) in one of two, and one every 5.003 s in both; at the minute,
-// keepalives ten to thirty seconds apart were ended at 62-84 s in three
-// fetches of five, and silence at 62 s. No limit or time mends it: the least
-// speed the check can ask for is what git's own keepalive moves.
+// Liveness, never speed (package doc, "One outbound dial"). MEASURED (git
+// 2.56.0, libcurl 8.14.1, TLS, loopback): libcurl's low-speed check at a byte
+// a second ended remotes sending only git's keepalive, one fetch in twelve
+// over ten seconds; three in five over a minute at one per 10-30 s.
 const remoteKeepAliveProbes = 3
 
 // remoteMarker is what a run's lines read where one of its remote's secrets
@@ -105,36 +76,26 @@ const remoteKeepAliveProbes = 3
 // recognises its work and a reader tells a removal from git's own words.
 const remoteMarker = redact.Marker + "credential]"
 
-// minDerivedSecret is the shortest piece [secretsOf] takes out of a run's
-// lines that the run was not handed whole — what a Basic credential encodes,
-// its user and password and the password alone: eight bytes. No forge issues
-// a credential shorter, so a shorter piece is a word, an id or a placeholder
-// (a user named git, a password of x), and taking it out of every line would
-// leave git's account of the failure unreadable. What the run WAS handed — the
-// header's value and the credential after its scheme — is taken out whatever
-// its length: a credential too short to be one is still the operator's to keep
-// out of the logs.
+// minDerivedSecret is the shortest piece [secretsOf] derives from a Basic
+// credential (user:password, and the password) to take out of a run's lines:
+// no forge issues a shorter credential, and taking a shorter word (a user named
+// git, a password of x) out of every line would make git's account unreadable.
+// What the run was handed whole is taken out whatever its length.
 const minDerivedSecret = 8
 
 // Remote is the one host a git process may dial ([Cmd.Remote]), and how: an
-// https URL; the addresses git connects to for its host, resolved in Go and
-// held to the engine's public-address rule before git is told them — or, in
-// their place, the proxy the process names for it; the certificate
-// authorities git verifies it with; and one header, a credential, that git
-// sends with every request. The package doc's "One outbound dial" says why
-// each is so.
+// https URL; the addresses git connects to, resolved in Go and held to the
+// public-address rule, or instead the process's proxy; the certificate
+// authorities git verifies it with; and one header, a credential, sent with
+// every request ([Remote.WithHeader]). Package doc, "One outbound dial".
 //
-// [ResolveRemote] is the only way to a Remote that dials: its fields are its
-// own, so no call site can hand git a host or an address the rule did not
-// judge, and the zero Remote is refused by every run. [Remote.WithHeader]
-// gives it its header.
-//
-// It PRINTS WITHOUT ITS HEADER and without a proxy's password
-// ([Remote.String]): a Remote a log line names never names a credential.
+// [ResolveRemote] is the only way to a Remote that dials: its fields are
+// unexported, so no call site hands git a host or an address the rule did not
+// judge, and every run refuses the zero Remote. It PRINTS WITHOUT ITS HEADER
+// or a proxy's password ([Remote.String]).
 type Remote struct {
 	// url is the URL git is handed, as remoteURL wrote it back from what it
-	// parsed — https, a lowercase name or an address, no user, query or
-	// fragment — never the text it was given.
+	// parsed, never the text it was given.
 	url string
 	// host and port are the URL's as libcurl keys the name it resolves: the
 	// lowercase name, or the address, and the port it connects to (443 where
@@ -145,9 +106,8 @@ type Remote struct {
 	// pinned.
 	literal bool
 	// addrs are what git connects to: the host's addresses, each judged
-	// public unless the call allowed private ones, in the order the resolver
-	// answered; the literal's one for an address; none through a proxy,
-	// which resolves the host itself.
+	// public unless private ones were allowed, in the resolver's order; the
+	// literal's one; none through a proxy, which resolves the host itself.
 	addrs []netip.Addr
 	// proxy is http.proxy: the proxy the process names for the URL, as
 	// libcurl reads one ([remoteProxy]); "" for none.
@@ -165,12 +125,10 @@ type Remote struct {
 	secrets []string
 }
 
-// remoteEnv is what a remote is resolved against: the resolver its host is
-// resolved with (and the network's NAT64 prefixes asked of), the proxy the
-// process names for a URL, and the process's certificate authorities — the
-// file SSL_CERT_FILE names and the directories SSL_CERT_DIR does, as the
-// process's environment holds them. The process's own in ResolveRemote; a
-// table and values of the case's in the suite, which reaches no network.
+// remoteEnv is what a remote is resolved against: the resolver (also asked for
+// the network's NAT64 prefixes), the process's proxy for a URL, and its
+// SSL_CERT_FILE and SSL_CERT_DIR. ResolveRemote passes the process's own; the
+// suite, which reaches no network, its own.
 type remoteEnv struct {
 	resolver httpx.Resolver
 	proxy    func(*url.URL) (*url.URL, error)
@@ -178,46 +136,18 @@ type remoteEnv struct {
 	caDirs   string
 }
 
-// ResolveRemote is the remote at rawURL a git process may dial
-// ([Cmd.Remote]). The URL is read one way and written back that way
-// ([Remote.URL]): https, its host a DNS name of letters, digits and hyphens
-// whose last label begins with a letter, or an address in its one written
-// form, and no user, query or fragment — otherwise [ErrRemote], naming what
-// to change.
-//
-// Its host's addresses are what git connects to, pinned so git never asks DNS
-// for the name again, and every one is held to the engine's public-address
-// rule on the network the node resolves on (httpx.ResolvePublic) — a name
-// that resolves to any address that is not on the public internet is refused
-// whole, httpx.ErrNotPublic wrapped with what lets it through. An IPv6
-// address under a NAT64 prefix is judged by the IPv4 address it carries
-// where the prefix is the well-known one, or one the network's own resolver
-// names where httpx takes that resolver's word: in global unicast clear of
-// the blocks the rule refuses there, or in RFC 8215's 64:ff9b:1::/48. A
-// prefix named anywhere else could widen the rule into a network that is not
-// on the internet, so httpx ignores it and the addresses under it stay
-// refused: a DNS64 network that translates through a unique-local prefix
-// reaches no IPv4-only host this way, and names a proxy for it instead
-// (below). The prefixes are asked of the resolver the host is resolved with,
-// and only for an address whose verdict they can change. allowPrivate (Tier A
-// gitlet.import_allow_private) lifts the rule: the host's addresses are pinned
-// as the resolver answers them.
-//
-// THROUGH A PROXY the process names for the URL — HTTPS_PROXY and NO_PROXY,
-// read as every other client of the engine reads them
-// (http.ProxyFromEnvironment) — nothing is resolved here: the proxy resolves
-// the host and dials it, so the wall is the proxy, the operator's own, as it is
-// for the CDN fetch's dialer (internal/artifactupload/vendor), and allowPrivate
-// changes nothing. The process's SSL_CERT_FILE and SSL_CERT_DIR, where they
-// are set, are the certificate authorities git verifies the remote with, so git
-// trusts what the engine's own clients trust ([remoteCADir] says what of
-// SSL_CERT_DIR it can take).
-//
-// It resolves on every call and keeps nothing, as httpx keeps nothing of the
-// network's prefixes past one resolve: a remote is dialed once a fetch or a
-// push, and an answer kept past it would be a judgment of an address the name
-// may no longer have. A lookup that fails, the host's or the one for the
-// NAT64 prefixes an address's verdict needs, is the resolver's error, wrapped.
+// ResolveRemote is the remote at rawURL a git process may dial ([Cmd.Remote]),
+// its URL written back in one form ([Remote.URL]): https; a DNS name whose
+// last label begins with a letter, or an address; no user, query or fragment;
+// otherwise [ErrRemote], naming what to change. Package doc, "One outbound dial".
+// Its host's addresses are pinned, and one that is not public (as
+// httpx.ResolvePublic judges it, NAT64 included) refuses the name whole,
+// httpx.ErrNotPublic, unless allowPrivate (Tier A gitlet.import_allow_private).
+// Through a proxy the process names for the URL (HTTPS_PROXY, NO_PROXY) nothing
+// is resolved here: the proxy, the operator's, is the wall, and allowPrivate
+// changes nothing. It resolves on every call and keeps nothing: a kept answer
+// would judge an address the name may no longer have. A failed lookup is the
+// resolver's error, wrapped.
 func ResolveRemote(ctx context.Context, rawURL string, allowPrivate bool) (Remote, error) {
 	return resolveRemote(ctx, rawURL, allowPrivate, remoteEnv{
 		resolver: net.DefaultResolver,
@@ -256,11 +186,9 @@ func resolveRemote(ctx context.Context, rawURL string, allowPrivate bool, env re
 	return r, nil
 }
 
-// remoteURL reads rawURL as a remote's URL and writes it back
-// ([gitref.ParseRemoteURL]: THE ONE READING, which the code domain and the
-// configuration hold a recorded mirror or import to as well), with the Remote
-// it names (no addresses yet) and the URL as parsed — refused ErrRemote,
-// naming what to change.
+// remoteURL reads rawURL through [gitref.ParseRemoteURL], THE ONE READING (the
+// code domain and the configuration hold a mirror or import to it too): the
+// Remote it names, no addresses yet, and the URL as parsed; or ErrRemote.
 func remoteURL(rawURL string) (Remote, *url.URL, error) {
 	parsed, err := gitref.ParseRemoteURL(rawURL)
 	if err != nil {
@@ -270,13 +198,10 @@ func remoteURL(rawURL string) (Remote, *url.URL, error) {
 		parsed.Parsed(), nil
 }
 
-// remoteProxy is the proxy git is told to dial for a remote — p, as the
-// process names it — in the form libcurl reads as Go's transport reads p. A
-// SOCKS5 proxy is written socks5h: Go's transport hands a SOCKS5 proxy the
-// remote's NAME to resolve, and libcurl's socks5:// resolves it on this node
-// instead — through DNS no pin covers, since a proxied remote has none —
-// where its socks5h:// does what Go's transport does. A proxy neither reads
-// is ErrRemote, naming the variable that set it.
+// remoteProxy is the process's proxy p written so libcurl reads it as Go's
+// transport does: socks5 becomes socks5h, since Go hands a SOCKS5 proxy the
+// remote's NAME while libcurl's socks5:// resolves it on this node, through
+// DNS no pin covers. A proxy neither reads is ErrRemote, naming its variable.
 func remoteProxy(p *url.URL) (string, error) {
 	proxy := *p
 	switch proxy.Scheme {
@@ -294,19 +219,13 @@ func remoteProxy(p *url.URL) (string, error) {
 	return proxy.String(), nil
 }
 
-// remoteCADir is git's http.sslCAPath for the process's SSL_CERT_DIR, dirs:
-// "" where it names no directory, the directory where it names one, and
-// ErrRemote, naming the variable, where it names several.
-//
-// ONE DIRECTORY, because libcurl reads one. The engine's own clients read
-// SSL_CERT_DIR as crypto/x509 does — a colon-separated list, OpenSSL's reading
-// — while the GnuTLS libcurl the image's git does its TLS through
-// (scripts/git.sh) takes its CA path as a single directory, so a list handed to
-// it would trust no directory in it, and a remote whose authority is in one
-// would fail verification where the engine's own clients connect. Refused
-// here, the operator is told so at the import or the mirror that needs it,
-// rather than told the remote's certificate is untrusted. An empty entry of
-// the list names nothing, for crypto/x509 too, and is passed over.
+// remoteCADir is git's http.sslCAPath for SSL_CERT_DIR's value dirs: "" when
+// it names no directory, the one it names, or ErrRemote naming the variable
+// when it names several. The engine's clients read a colon-separated list
+// (crypto/x509), but the GnuTLS libcurl of the image's git (scripts/git.sh)
+// takes one directory and would trust nothing in a list; refused here, the
+// operator learns why at the import or mirror, not as an untrusted
+// certificate. An empty entry names nothing and is skipped.
 func remoteCADir(dirs string) (string, error) {
 	var named []string
 	for _, d := range strings.Split(dirs, ":") {
@@ -325,10 +244,9 @@ func remoteCADir(dirs string) (string, error) {
 	return named[0], nil
 }
 
-// remoteAddrs is what git connects to for host: every address res answers for
-// it held to the public-address rule (httpx.ResolvePublic, which asks res
-// itself for the network's NAT64 prefixes) — or, with allowPrivate, every
-// address res answers — once each, unmapped, in the order answered.
+// remoteAddrs is what git connects to for host: every address res answers,
+// held to the public-address rule (httpx.ResolvePublic) unless allowPrivate,
+// once each, unmapped, in the order answered.
 func remoteAddrs(ctx context.Context, res httpx.Resolver, host string, allowPrivate bool) ([]netip.Addr, error) {
 	var addrs []netip.Addr
 	var err error
@@ -364,17 +282,13 @@ func remoteAddrs(ctx context.Context, res httpx.Resolver, host string, allowPriv
 	return out, nil
 }
 
-// WithHeader is r sending header with every request git makes to the remote —
-// ONE HTTP header line, "Name: value": the credential a remote is fetched from
-// or pushed to with, an `Authorization: Basic …` or `Bearer …`. git is given
-// it through the run's environment (http.extraHeader), never its arguments,
-// and the header's value, the credential in it and a Basic credential's
-// password are taken out of every line the run hands back ([secretsOf]). It
-// replaces a header r had.
-//
-// The name must be an HTTP token and the value one line of visible characters
-// — a carriage return or a line feed would write a second header nobody
-// meant git to send — or the header is ErrRemote, whose text quotes nothing of
+// WithHeader is r sending header, ONE line "Name: value" (the credential, an
+// `Authorization: Basic …` or `Bearer …`), with every request git makes to the
+// remote, replacing any header r had. git gets it through the run's
+// environment (http.extraHeader), never its arguments, and its secrets are
+// taken out of every line the run hands back ([secretsOf]). The name must be
+// an HTTP token and the value one line of visible characters, since a line
+// break would write a second header; otherwise ErrRemote, quoting nothing of
 // the value.
 func (r Remote) WithHeader(header string) (Remote, error) {
 	if r.url == "" {
@@ -426,18 +340,12 @@ func headerValue(s string) bool {
 }
 
 // secretsOf is what a remote run's lines are redacted of, given its proxy and
-// its header's value: the value whole; the credential after its scheme
-// (`Basic`, `Bearer`, `token` …), which is what a remote echoing the
-// credential it was sent most likely prints; for Basic, the user and password
-// it encodes and the password alone, each at least [minDerivedSecret] long;
-// and the proxy's password. Longest first, so a secret never leaves part of a
-// longer one behind, each once.
-//
-// THE MATERIAL THE ENGINE KNOWS IS SECRET, rather than shapes it hopes to
-// recognise (internal/redact's pass, which runs after this): git never prints
-// the header, but the remote, which holds it, may echo it — in the `remote:`
-// lines git relays, an `ERR` it dies with, the body of an HTTP error — and
-// what it echoes is exactly what it was sent.
+// its header's value: the value whole; the credential after its scheme, which
+// a remote echoing it most likely prints; for Basic, [basicSecrets]; and the
+// proxy's password. Longest first, so no secret leaves part of a longer one
+// behind, each once. The material the engine KNOWS is secret, not shapes
+// internal/redact (which runs after) hopes to recognise: git never prints the
+// header, but the remote may echo exactly what it was sent.
 func secretsOf(proxy, value string) []string {
 	var out []string
 	if value != "" {
@@ -585,12 +493,10 @@ func (r *Remote) known() *strings.Replacer {
 	return strings.NewReplacer(pairs...)
 }
 
-// lineRedactor hands w what is written to it a line at a time, a remote's
-// secrets taken out of each (Remote.known): a remote run's stdout, whose
-// remote has a secret. A line is held until it ends — a secret holds no line
-// break, so a line holds it whole — or until it passes MaxLine, when what is
-// held is handed on as a piece of one; the last is handed on by flush, once
-// the stream has ended.
+// lineRedactor hands w a remote run's stdout a line at a time, Remote.known's
+// secrets taken out of each. A line is held until it ends, since a secret holds
+// no line break, or until it passes MaxLine, when it is handed on in pieces;
+// flush hands on the last once the stream has ended.
 type lineRedactor struct {
 	w       io.Writer
 	known   *strings.Replacer
@@ -632,10 +538,9 @@ func (l *lineRedactor) flush() error {
 	return err
 }
 
-// redactDamage is damage with its message redacted as a remote run's lines
-// are: known's secrets taken out (nil: none), then internal/redact's pass —
-// the *Damage itself wherever it sits in the chain, and answered alone, since
-// a wrap around it would carry its text unredacted.
+// redactDamage is the *Damage in damage's chain, its message redacted as a
+// remote run's lines are (known's secrets, nil for none, then internal/redact),
+// answered alone, since a wrap around it would carry its text unredacted.
 func redactDamage(damage error, known *strings.Replacer) error {
 	var d *Damage
 	if !errors.As(damage, &d) {
@@ -649,18 +554,13 @@ func redactDamage(damage error, known *strings.Replacer) error {
 	return &redacted
 }
 
-// checkRemote holds a run's Remote to its subcommand — fetch, ls-remote and
-// push take one and must, every other subcommand none — to its lane, and to
-// what its arguments name.
-//
-// THE URL GIT DIALS IS THE REMOTE'S: git reads a remote from the first
-// argument that is no option (or the first after "--"), so that argument
-// must be the Remote's URL exactly as ResolveRemote wrote it, and NO OTHER
-// ARGUMENT MAY NAME A URL — "://", or a remote helper's "<transport>::" —
-// since a second https URL git dialed would be resolved by libcurl itself,
-// where no pin and no rule reaches. An option whose value is a separate
-// argument would be read as the remote here, so a remote run writes each
-// option's value after an "=".
+// checkRemote holds a run's Remote to its subcommand (only remoteCommands take
+// one, and must), to the transfer lane, and to its arguments. git dials the
+// first argument that is no option (or the first after "--"), so that must be
+// the Remote's URL exactly, and NO OTHER ARGUMENT MAY NAME A URL ("://" or a
+// remote helper's "<transport>::"): libcurl would resolve a second one itself,
+// past every pin and rule. A remote run writes each option's value after an
+// "=", or the value would be read here as the remote.
 func checkRemote(c Cmd) error {
 	dials := remoteCommands[c.Args[0]]
 	switch {

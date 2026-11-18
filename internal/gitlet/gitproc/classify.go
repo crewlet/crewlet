@@ -25,9 +25,8 @@ var (
 	ErrMissingObject = errors.New("gitproc: git named an object it could not find")
 
 	// ErrNotOurRef: upload-pack refused a want. NEVER a rebuild trigger: an
-	// absent want and a cache that lost a whole pack print the same line, so
-	// it can never tell them apart — and the next linearizable sync
-	// re-downloads any pack whose file is absent anyway.
+	// absent want and a cache that lost a whole pack print the same line, and
+	// the next linearizable sync re-downloads any absent pack anyway.
 	ErrNotOurRef = errors.New("gitproc: upload-pack refused a want this repository does not serve")
 
 	// ErrFailed: git failed for a reason its reports do not classify, or
@@ -36,26 +35,17 @@ var (
 )
 
 // ExitError is a git process that exited with a status that is not one of its
-// command's answers ([Cmd.Answers]). Kind is exactly one of [ErrCorrupt],
-// [ErrMissingObject], [ErrNotOurRef] and [ErrFailed] — the HIGHEST the run's
-// reports named — and errors.Is reaches it AND EVERY OTHER KIND THE RUN NAMED
-// ([Trace.Kinds]); errors.As reaches the run's [*Damage] where it named one.
+// command's answers ([Cmd.Answers]). Kind is the HIGHEST of [ErrCorrupt],
+// [ErrMissingObject], [ErrNotOurRef] and [ErrFailed] the run's reports named;
+// errors.Is reaches it AND EVERY OTHER KIND THE RUN NAMED ([Trace.Kinds]), and
+// a caller asking about several asks the highest first (package doc, "What
+// went wrong is classified from git's own format strings"). errors.As reaches
+// the run's [*Damage] where it named one.
 //
-// EVERY KIND, because a run can name two things at once and a caller asks
-// about one of them. A force check's merge-base over an old id this company
-// never held says "Not a valid commit name" ([ErrMissingObject]: the update
-// is stale) — and over a copy whose multi-pack-index git reads around, it says
-// that first ([ErrCorrupt], the higher). Matched by its Kind alone, the stale
-// update was answered as the engine's own failure. The rank still decides what
-// a caller that asks for the run's ONE kind is told, and every caller that
-// asks several questions asks the highest first, so nothing it decided moves.
-//
-// THE KIND DESCRIBES THE REPOSITORY THE PROCESS READ, and only the caller
-// knows which that was. A receive-pack runs in a scratch and its index-pack
-// reads the CLIENT's pack, so a body that ended short makes it say "early
-// EOF" — ErrCorrupt, correctly (that pack is damaged), and nothing about the
-// cache. ErrCorrupt and ErrMissingObject are a rebuild trigger only from a
-// process whose Cmd.Dir is a cache.
+// THE KIND DESCRIBES THE REPOSITORY THE PROCESS READ, which only the caller
+// knows: a receive-pack's index-pack reads the CLIENT's pack, so its "early
+// EOF" is about that pack, not the cache. ErrCorrupt and ErrMissingObject are
+// a rebuild trigger only from a process whose Cmd.Dir is a cache.
 type ExitError struct {
 	Command string // Args[0]
 	Result  Result
@@ -182,9 +172,8 @@ const (
 	// packs.
 	PartCommitGraph
 	// PartChunk is a chunk-format file whose damage git reports without
-	// naming it: the multi-pack-index OR the commit-graph, both of which are
-	// chunk-format files, and both of which were measured printing these
-	// reports.
+	// naming it: the multi-pack-index OR the commit-graph, either of which
+	// prints these reports.
 	PartChunk
 )
 
@@ -212,11 +201,10 @@ func (p Part) String() string {
 
 // Damage is what a run's trace2 error events named about the repository it
 // read: the highest kind any event's format classifies as, every part the
-// events of that kind named, and the first such event — its format
-// (canonical) and its message, git's arguments filled in, for errors and logs
-// ONLY: the message is never matched, because a request's text lands there.
-// Began is when the process that named it began ([Result.Began]), so a
-// repair carries it wherever the damage goes.
+// events of that kind named, and the first such event's canonical format and
+// its message. The message is for errors and logs ONLY, never matched: a
+// request's text lands there. Began is when the naming process began
+// ([Result.Began]), carried wherever the damage goes.
 type Damage struct {
 	Kind    error // ErrCorrupt or ErrMissingObject
 	Parts   Part
@@ -257,17 +245,13 @@ func (d *Damage) Drops() Part {
 
 // Narrow is d as named by a process that loads, of the two chunk-format
 // files, only those loads names ([PartMultiPackIndex], [PartCommitGraph]): a
-// chunk-format report — which names neither file, and so reads as both
-// ([Damage.Drops]) — is then the one file that process loaded. Its caller
-// says what its process loads, because only the call knows its input: a
-// cat-file asked about object ids alone (the cache's wants check) reads
-// objects through the multi-pack-index and never parses a commit, so it
-// never loads the commit-graph — read as both files', its chunk report had a
-// sound graph dropped beside the index, and every walk of the repository went
-// by commit date until the maintainer wrote it again — while the same
-// cat-file asked to PEEL a tag ("<id>^{}") parses the commit and loads the
-// graph, and its chunk report may be the graph's. d itself when loads names
-// both files or neither, or d names no chunk.
+// chunk-format report, which names neither file and so reads as both
+// ([Damage.Drops]), is then the one file that process loaded. Only the caller
+// knows its input: a cat-file asked about object ids alone (the cache's wants
+// check) never loads the commit-graph, and reading its chunk report as both
+// would drop a sound graph and slow every walk until the maintainer rewrites
+// it; asked to PEEL a tag ("<id>^{}"), it does load the graph. d itself when
+// loads names both files or neither, or d names no chunk.
 func (d *Damage) Narrow(loads Part) *Damage {
 	only := loads & (PartMultiPackIndex | PartCommitGraph)
 	if d == nil || d.Parts&PartChunk == 0 || only == 0 || only == PartMultiPackIndex|PartCommitGraph {
@@ -284,39 +268,18 @@ type row struct {
 	part Part
 }
 
-// formatTable is every report format git prints about a repository file or
-// object it failed to read, AS GIT SPELLS IT, by what it classifies as —
-// exactly the formats a case of classify_test.go provokes from a real damaged
-// repository (TestTheFormatTableIsWhatGitSays holds the table to what the node
-// pin and the node floor's own build each say, both ways: a row nothing
-// provokes fails it as surely as a report the table lacks). A version in a
-// comment is the gits that print the format; every other row is printed by
-// every git from the node floor ([NodeMinVersion]), the oldest a pool runs,
-// and a row only gits below it print is deleted rather than kept: no pool
-// can meet it, and no run of the suite can say whether it is still right.
-//
-// What a row may be (TestNoRowIsAFormatARequestWrites): a format of git's own,
-// with words of its own — never one of conversions and punctuation alone
-// (`%s`), which carries whatever its argument holds, and never one a request
-// makes upload-pack print, or one git prints of a HEALTHY repository: `unable
-// to find all commit-graph files` and `unable to find all multi-pack index
-// files`, which a reader racing git's own split or incremental write prints.
-//
-// Read from git's source and left out, each for its reason:
-//   - `invalid commit position. commit-graph is likely corrupt`: every path a
-//     commit position from a file reaches it by is checked first, and
-//     reported `invalid parent position %u`, which is a row;
-//   - `commit-graph overflow generation data is too small`: it
-//     needs a generation-overflow chunk, which a repository of a test's size
-//     never has, and building one by hand is building the file;
-//   - `unable to read index` (show-index's), `missing %s %s` and `broken link
-//     from` (fsck's findings, written to its stdout, not reported);
-//   - `could not find object in pack %s at offset %lu in MIDX`: a
-//     BUG pack-objects reports, dying of SIGABRT, only beside `bad offset
-//     for revindex`, which is a row — and the run's crash (Result.Crashed);
-//   - `object %s is a %s, not a %s` and `unable to parse object: %s`: a
-//     healthy repository prints both, for an id of the wrong type and for a
-//     name that is no object.
+// formatTable is every format git reports a repository file or object it
+// failed to read with, AS GIT SPELLS IT, by what it classifies as: exactly the
+// formats classify_test.go provokes from real damaged repositories, held both
+// ways on the node pin and floor (TestTheFormatTableIsWhatGitSays). A version
+// comment names the gits that print a row; every other row is printed by every
+// git from [NodeMinVersion], and a row only older gits print is deleted: no
+// pool meets it and no run can check it. A row has words of git's own, never
+// bare conversions (`%s`), a format a request makes upload-pack print, or one
+// a HEALTHY repository prints (`unable to find all commit-graph files` from a
+// reader racing a split write; TestNoRowIsAFormatARequestWrites). Formats read
+// from git's source and left out, with why: package doc, "Formats left out of
+// the table".
 var formatTable = map[row][]string{
 	{ErrCorrupt, PartPack}: {
 		`index file %s is too small`,
@@ -342,11 +305,11 @@ var formatTable = map[row][]string{
 		`reverse-index file %s has unknown signature`,
 		`reverse-index file %s has unsupported version %u`,
 		`reverse-index file %s has unsupported hash id %u`,
-		// What a pack-objects says where the bytes a pack's .idx or .rev
-		// place an object at are not that object's entry: its reuse of a
-		// stored entry reads the pack's own indexes, which a multi-pack-index
-		// above them answers every other lookup past — so on a copy holding
-		// one, a damaged .idx is named only here.
+		// pack-objects where a pack's .idx or .rev place an object at bytes
+		// that are not its entry. Its reuse of a stored entry reads the
+		// pack's own indexes, which a multi-pack-index answers every other
+		// lookup past, so on a copy holding one a damaged .idx is named only
+		// here.
 		`bad offset for revindex`,
 		`write_reuse_object: could not locate %s, expected at offset %lu in pack %s`,
 		// The bytes git read for an object are not its name: the pack, its
@@ -367,10 +330,9 @@ var formatTable = map[row][]string{
 		`multi-pack-index OID fanout is of the wrong size`, // beside the required-fanout row
 		`multi-pack-index pack names out of order: '%s' before '%s'`,
 		`oid fanout out of order: fanout[%d] = %x > %x = fanout[%d]`, // beside the required-fanout row
-		// The maintainer's own write over an index whose checksum is not its
-		// bytes: git says so and writes on, keeping whatever of the old index
-		// it could read — the one report of a damaged index a run that
-		// succeeded makes.
+		// The maintainer's write over an index whose checksum fails: git
+		// writes on, keeping what it could read. The one damaged-index
+		// report a successful run makes.
 		`ignoring existing multi-pack-index; checksum mismatch`,
 		// The index's bitmap, dropped with it.
 		`corrupted bitmap index file (wrong header)`,
@@ -475,8 +437,8 @@ func canonicalFormat(format string) string {
 // stderrSink reads git's stderr as it arrives: it counts every byte (the
 // stall watchdog's third term — a receive-pack relaying its hook's keepalives
 // on stderr is moving) and keeps the tail a Result carries. It classifies
-// nothing: git's stderr is the human's message, and a request's text lands in
-// it (trace.go says why the classification reads the trace instead).
+// nothing: a request's text lands in stderr (package doc, "What went wrong is
+// classified from git's own format strings").
 //
 // Written only by the stderr copier; the tail is read after that copier has
 // finished, so only the counter is shared, and it is atomic.
@@ -485,12 +447,11 @@ type stderrSink struct {
 	pending []byte
 	tailBuf []byte
 	cut     bool // the tail buffer has dropped bytes from its front
-	// known takes a remote run's secrets out of each line as it arrives
-	// (Remote.known), or is nil: AS IT ARRIVES, before the tail is cut, so
-	// no cut can split a secret and keep the half it did not reach. A
-	// secret holds no line break (Remote.WithHeader), so a line holds it
-	// whole — but for a line past MaxLine, kept in pieces, across whose cut
-	// only the remote that holds the secret could have written it.
+	// known takes a remote run's secrets out of each line AS IT ARRIVES
+	// (Remote.known), or is nil: before the tail is cut, so no cut splits a
+	// secret. A secret holds no line break (Remote.WithHeader), so a line
+	// holds it whole, but for a line past MaxLine, kept in pieces, across
+	// whose cut only the secret's own remote could have written it.
 	known *strings.Replacer
 }
 

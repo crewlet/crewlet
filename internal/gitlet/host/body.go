@@ -13,42 +13,24 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// A FETCH REQUEST'S BODY, READ TO ITS END BEFORE ANYTHING ANSWERS IT: the
-// level a fetch is answered at and whether this node lacks a want are both in
-// it, and a fetch that fails on a damaged cache is retried once over the same
-// bytes without the client sending them again.
-//
-// It is held in memory AS LARGE AS IT IS, up to RequestMemoryBytes — a
-// clone's negotiation is a few hundred bytes, and that is what it costs — and
-// the memory every request holds at once is charged to a node-wide allowance
-// (RequestMemoryAllowance), so what requests waiting for their sync and their
-// transfer slot hold is bounded by the node rather than by how many arrive. A
-// request past its in-memory part, or one that finds the allowance spent, is
-// SPOOLED — the whole of it, its head written beside the rest and its memory
-// let go — to an unnamed file on the cache's volume, so a partial clone's
-// lazy fetch of a million wants is served where git's own 10 MiB buffer
-// refused it, and read back as a stream wherever it is needed — never held
-// whole. A request that finds no room in the spool allowance WAITS ITS TURN
-// for it, holding its head in a place of the waiting room and nothing more
-// (spool.go). And the body is GIVEN BACK when the answer's FIRST BYTE is
-// written (sink.onStart), because a retry over a repaired cache reads it until
-// then and no further. For a FETCH that first byte is its PACK's: upload-pack
-// writes its answer's opening line, then runs pack-objects, and only its pack
-// is the first byte — so the body (and its spool) is held through
-// pack-objects' enumeration, at most a progress line (about a second) or one
-// keepalive (5 s, uploadpack.keepAlive) for a client using side-band, and
-// until the raw pack for one that is not. An ls-refs' or a push's first byte is
-// its first output, so its body is given back at once. Past the first byte a
-// transfer paced by its client holds neither memory nor a spool.
+// A FETCH REQUEST'S BODY IS READ TO ITS END BEFORE ANYTHING ANSWERS IT: its
+// level and whether this node lacks a want are in it, and a fetch over a
+// damaged cache is retried once over the same bytes (package doc, "A fetch
+// request is spooled, and bounded by the repository it names"). It is held in
+// memory up to RequestMemoryBytes, charged to RequestMemoryAllowance, and
+// otherwise SPOOLED whole, waiting its turn for room (spool.go). It is GIVEN
+// BACK at the answer's FIRST BYTE (sink.onStart), since a retry reads it until
+// then: for a fetch that is its PACK's, after pack-objects' enumeration (at
+// most a progress line or one 5 s uploadpack.keepAlive with side-band, until
+// the raw pack without); for ls-refs or a push, its first output. Past it, a
+// transfer its client paces holds neither memory nor a spool.
 
 // The refusals reading a request makes, each answered in its own status.
 var (
 	// errRequestTooLarge is a request past its repository's bound (413).
 	errRequestTooLarge = errors.New("host: the request is past its repository's bound")
-	// errSpoolPastCeiling is a request that would spool more than this node
-	// spools for one request (SpoolRequestBytes) — one it can never take,
-	// however idle, so it is refused at once rather than made to wait for
-	// room it would never fit (413).
+	// errSpoolPastCeiling is a request past SpoolRequestBytes: refused at
+	// once, since no wait would ever fit it (413).
 	errSpoolPastCeiling = errors.New("host: the request is past what this node spools for one request")
 	// errSpoolFull is a request that waited for the spool allowance and was
 	// not served: its wait reached its bound, or it had to wait and found no
@@ -61,47 +43,40 @@ func tooLarge(read, bound int64) error {
 	return fmt.Errorf("%w: at least %d bytes, against a bound of %d", errRequestTooLarge, read, bound)
 }
 
-// firstHead is the first buffer a request that does not declare its length is
-// read into: a clone's or an ordinary fetch's negotiation is a few hundred
-// bytes to a few kilobytes, so most requests fit it, and one past it doubles
-// its buffer toward RequestMemoryBytes — the copies of every doubling together
-// under its final size.
+// firstHead is the first buffer an undeclared request is read into: a fetch's
+// negotiation is a few hundred bytes to a few kilobytes, so most fit it, and a
+// larger one doubles toward RequestMemoryBytes, every copy together under its
+// final size.
 const firstHead = 4 << 10
 
 // requestBody is one fetch request's decoded body, read to its end.
 type requestBody struct {
 	mu sync.Mutex
-	// head is the body held in memory, when it fitted there — and, for a
-	// request that spools, its first bytes until they are written into the
-	// spool; heads is the allowance it is charged to, held how much of it
-	// (its capacity), and nothing while a place of the spool's waiting room
-	// holds it instead.
+	// head is the body in memory, or a spooling request's first bytes until
+	// they are written to the spool; held is its capacity charged to heads,
+	// zero while a place in the spool's waiting room holds it instead.
 	head  []byte
 	heads *allowance
 	held  int64
-	// spool holds the whole body, size bytes of it, once the request
-	// spooled; nil when it fitted in memory.
+	// spool holds the whole body, size bytes, once spooled; nil in memory.
 	spool *os.File
 	size  int64
-	// spools is the allowance the spool draws on, set once the request
-	// started spooling: turn is its body there — the room it took while
-	// arriving, what it spooled once it ended — and placed a place of the
-	// waiting room of credential's while it holds one.
+	// spools is set once the request starts spooling: turn is its body there
+	// (the room taken while arriving, what it spooled once ended), and placed
+	// is true while it holds a place in credential's waiting room.
 	spools     *spools
 	turn       *spoolBody
 	credential string
 	placed     bool
-	// drained: the reader upload-pack is reading (feed) has returned the
-	// body's end; answered: the response's first byte was written. Both
-	// together, nothing reads the body again (release).
+	// drained: upload-pack's feed reached the end; answered: the response's
+	// first byte was written. Both together, nothing reads the body again.
 	drained, answered bool
 	closed            bool
 }
 
-// reader is the whole body, from its first byte: a fresh reader each call, so
-// the parse, the check of what this node lacks and upload-pack — once, or
-// again after a rebuild — each read it from the start. A body already given
-// back is no body: its reader fails rather than read a closed spool.
+// reader is the whole body from its start, fresh each call: the parse, the
+// lack check and each upload-pack run read it again. A body given back fails
+// rather than read a closed spool.
 func (b *requestBody) reader() io.Reader {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -114,9 +89,9 @@ func (b *requestBody) reader() io.Reader {
 	return io.NewSectionReader(b.spool, 0, b.size)
 }
 
-// errReleased is a read of a body already given back — which nothing does:
-// the body is given back only once upload-pack has read it and answered, and
-// only a run that answered nothing is retried over it.
+// errReleased is a read of a body already given back, which nothing does: it
+// is given back only once read and answered, and only an unanswered run is
+// retried.
 var errReleased = errors.New("host: the request's body was already given back")
 
 // errReader is a reader that fails with its error.
@@ -131,11 +106,9 @@ func (b *requestBody) length() int64 {
 	return int64(len(b.head)) + b.size
 }
 
-// feed is the body as upload-pack reads it: a reader that, at the body's
-// end, lets go of the bytes it read from and marks the body DRAINED — and a
-// drained body whose answer has started is given back (release). One feed an
-// attempt: a run retried after a rebuild reads a fresh one, and only that
-// run's end counts.
+// feed is the body as upload-pack reads it: at its end it drops its bytes and
+// marks the body DRAINED, given back once answered too. One feed an attempt:
+// only the latest run's end counts.
 func (b *requestBody) feed() io.Reader {
 	b.mu.Lock()
 	b.drained = false
@@ -156,8 +129,7 @@ func (f *feeding) Read(p []byte) (int, error) {
 	n, err := f.r.Read(p)
 	if err == io.EOF {
 		// THE BYTES ARE LET GO HERE, not when the run ends: the run's Cmd
-		// holds this reader until the transfer is over, and a reference to
-		// the head through it would pin it as long.
+		// holds this reader through the transfer, which would pin the head.
 		f.r = nil
 		f.b.mu.Lock()
 		f.b.drained = true
@@ -167,8 +139,8 @@ func (f *feeding) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// started is the response's first byte written: a drained body is given
-// back.
+// started marks the response's first byte written, giving back a drained
+// body.
 func (b *requestBody) started() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -184,9 +156,8 @@ func (b *requestBody) releaseLocked() {
 	}
 }
 
-// close gives everything back: the spool closed — which the kernel then
-// removes, as it has no name — its body, still arriving or not, and its place
-// returned to the spool allowance, and the head's memory to its own.
+// close gives everything back: the unnamed spool (the kernel removes it), its
+// body and place to the spool allowance, the head's memory to its own.
 // Idempotent, and safe on a body that never spooled.
 func (b *requestBody) close() {
 	b.mu.Lock()
@@ -220,22 +191,16 @@ func (b *requestBody) closeLocked() {
 // spoolPiece is how much of a request is copied into its spool at a time.
 const spoolPiece = 64 << 10
 
-// readRequest reads src to its end: up to s.requestMemory bytes into memory,
-// in a buffer grown with the request from its declared length (declared, -1
-// when the client did not say or encoded the body) or from firstHead, each
-// growth charged to the node's request memory; and a request that goes past
-// the in-memory part, or past what the allowance had left, whole into a spool
-// the cache makes, once the spool allowance has let it start (spools.start)
-// claiming as much as it can grow to, its room taken as its bytes arrive
-// (spools.more) — waiting its turn for either if it must. bound answers the most the request may carry: asked once
-// with fresher false, and once more with fresher true before a request past
-// the first answer is refused, so a bound read from a stale row never refuses
-// a request a current one admits. A request past the bound is
-// errRequestTooLarge; one past what this node spools for one request
-// errSpoolPastCeiling; one longer than its client declared errPastClaim; one
-// that waited for room and was not granted it errSpoolFull; one whose context
-// ended while it waited that context's error; src's own failure is returned as
-// itself.
+// readRequest reads src to its end: into memory up to s.requestMemory, the
+// buffer grown from declared (-1 when undeclared or encoded) or firstHead,
+// each growth charged to s.heads; past that, or past what s.heads has left,
+// whole into a spool once spools.start admits it, its room taken as bytes
+// arrive (spools.more), waiting its turn for either. bound is asked with
+// fresher false, then true before refusing, so a stale row never refuses what
+// a current one admits. Errors: errRequestTooLarge past the bound,
+// errSpoolPastCeiling past SpoolRequestBytes, errPastClaim past the declared
+// length, errSpoolFull for a wait not granted, the context's error if it ended
+// while waiting, src's own failure as itself.
 func (s *Server) readRequest(ctx context.Context, src io.Reader, declared int64, credential string,
 	bound func(ctx context.Context, fresher bool) (int64, error)) (*requestBody, error) {
 
@@ -243,17 +208,16 @@ func (s *Server) readRequest(ctx context.Context, src io.Reader, declared int64,
 	memory := int64(s.requestMemory)
 	want := int64(firstHead)
 	if declared >= 0 {
-		// One byte past the declared length, so its end is read with it —
-		// the length capped below memory FIRST: it is the client's word, and
-		// net/http admits one of math.MaxInt64, one past which wraps negative.
+		// One byte past the declared length, so its end is read with it,
+		// capped below memory FIRST: it is the client's word, net/http admits
+		// math.MaxInt64, and one past it wraps negative.
 		want = min(declared, memory-1) + 1
 	}
 	for {
 		want = min(want, memory)
 		if grow := want - int64(cap(b.head)); grow > 0 {
 			if !s.heads.take(grow) {
-				// THE NODE'S REQUEST MEMORY IS IN USE: what is left goes to
-				// the spool, which has an allowance of its own.
+				// The node's request memory is spent: the rest spools.
 				break
 			}
 			b.held += grow
@@ -262,9 +226,8 @@ func (s *Server) readRequest(ctx context.Context, src io.Reader, declared int64,
 			b.head = next
 		}
 		if len(b.head) == cap(b.head) {
-			// A HEAD WITH NO ROOM AND NONE GIVEN is the spool's from here:
-			// asked to fill nothing, a reader answers nothing and no end, and a
-			// loop that asked again would spin without reading a byte.
+			// A HEAD WITH NO ROOM AND NONE GIVEN spools: a fill of nothing
+			// reports no end, and asking again would spin.
 			break
 		}
 		n, end, err := objstore.Fill(src, b.head[len(b.head):cap(b.head)])
@@ -276,13 +239,11 @@ func (s *Server) readRequest(ctx context.Context, src io.Reader, declared int64,
 		case end:
 			return b, nil
 		}
-		// Not at the end, so the buffer is full (objstore.Fill): it doubles,
-		// up to memory, where the loop above finds no room and ends.
+		// Not at the end, so the buffer is full (objstore.Fill): double it.
 		want = 2 * int64(cap(b.head))
 	}
-	// ONE BYTE FIRST, into a byte of its own: a request the in-memory part
-	// held exactly opens no spool and waits for no turn, and one that goes on
-	// is known to before anything is asked of the spool for it.
+	// ONE BYTE FIRST: a request memory held exactly opens no spool and waits
+	// for no turn.
 	var first [1]byte
 	k, end, err := objstore.Fill(src, first[:])
 	switch {
@@ -298,9 +259,8 @@ func (s *Server) readRequest(ctx context.Context, src io.Reader, declared int64,
 		b.close()
 		return nil, err
 	}
-	// AT LEAST what has arrived, and what the client declared it sends: a
-	// request that says it is past its bound, or past what this node spools
-	// for one request, is refused before it waits for room it would never use.
+	// AT LEAST what arrived and what the client declared: a request past its
+	// bound or the spool ceiling is refused before it waits for room.
 	atLeast := max(head+int64(k), declared)
 	fresher := false
 	if atLeast > limit {
@@ -314,20 +274,18 @@ func (s *Server) readRequest(ctx context.Context, src io.Reader, declared int64,
 			return nil, tooLarge(atLeast, limit)
 		}
 	}
-	// ONE ALLOWANCE for the whole request, read once: the body it starts is
-	// that allowance's, and every later room and its end go to it.
+	// ONE ALLOWANCE for the whole request, read once: every later room and
+	// its end go to the allowance its body started in.
 	sp := s.spools
 	ceiling := sp.request
 	if atLeast > ceiling {
 		b.close()
 		return nil, sp.pastCeiling()
 	}
-	// IT STARTS, claiming the most it can grow to — what this node spools for
-	// one request, or the length its client declared, at which net/http ends
-	// an unencoded body — with room for the head and the byte after it: at
-	// once, or in its turn, the head waiting in a place of the spool's
-	// waiting room rather than in the request memory every request on the
-	// node shares.
+	// IT STARTS, claiming the most it can grow to (the ceiling, or the
+	// declared length, where net/http ends an unencoded body) with room for
+	// the head and the next byte; while it waits its turn, the head moves to
+	// a place in the spool's waiting room, out of the shared request memory.
 	claim := ceiling
 	if declared >= 0 {
 		claim = min(claim, declared)
@@ -349,10 +307,9 @@ func (s *Server) readRequest(ctx context.Context, src io.Reader, declared int64,
 		b.close()
 		return nil, err
 	}
-	// THE HEAD GOES INTO THE SPOOL, and its memory is let go — the request
-	// memory it was charged to, or its place — so a spooled request that
-	// waits for its sync and its transfer slot holds disk and no memory, and
-	// a queue of them never sends the requests behind them to the spool.
+	// THE HEAD GOES INTO THE SPOOL and its memory or place is let go, so a
+	// spooled request waiting for its sync and transfer slot holds only disk,
+	// and a queue of them never pushes the requests behind them to spool.
 	for _, p := range [][]byte{b.head, first[:k]} {
 		if _, err = b.spool.Write(p); err != nil {
 			b.close()
@@ -394,8 +351,8 @@ func (s *Server) readRequest(ctx context.Context, src io.Reader, declared int64,
 			b.close()
 			return nil, sp.pastCeiling()
 		}
-		// ROOM AS THE BYTES ARRIVE, a grain at a time: what the spool holds
-		// is what its client sent, never what its request might yet send.
+		// ROOM AS THE BYTES ARRIVE: the spool holds what its client sent,
+		// never what it might yet send.
 		if short := b.size + int64(k) - room; short > 0 {
 			var got int64
 			got, w, err = sp.more(ctx, b.turn, short, sp.ask(room, short, claim),
@@ -413,17 +370,16 @@ func (s *Server) readRequest(ctx context.Context, src io.Reader, declared int64,
 		}
 		b.size += int64(k)
 	}
-	// ITS BODY HAS ENDED: the room it took and did not write goes back, and
-	// so does its claim among the bodies arriving — at once, not with the
-	// request, which may wait a cold sync of a minute or two before
-	// upload-pack reads it, holding only what it spooled.
+	// ITS BODY HAS ENDED: unwritten room and its claim go back now, not with
+	// the request, which may wait a cold sync of minutes before upload-pack
+	// reads it.
 	sp.ended(b.turn, b.size)
 	return b, nil
 }
 
-// spoolWaited records how a request's turn at the spool allowance went
-// (spoolWait): a wait counted and observed by its outcome, and a request
-// refused a place to wait counted; a request granted at once is neither.
+// spoolWaited records a request's turn at the spool allowance: a wait is
+// counted and timed by outcome, a refused place only counted, and an
+// immediate grant neither.
 func (s *Server) spoolWaited(w spoolWait) {
 	if w.outcome == "" || s.o.Metrics == nil {
 		return
@@ -435,8 +391,8 @@ func (s *Server) spoolWaited(w spoolWait) {
 	}
 }
 
-// allowance is a node-wide count of bytes against a limit: taken before they
-// are held, refused rather than waited for.
+// allowance is a node-wide count of bytes against a limit, taken before they
+// are held and refused rather than waited for.
 type allowance struct {
 	limit int64
 

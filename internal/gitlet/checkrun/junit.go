@@ -12,24 +12,21 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A JUNIT REPORT, read as the test runners that write one write it: a
-// <testsuites> of <testsuite> elements, or one <testsuite> alone, each holding
-// <testcase> elements, a failed case carrying a <failure> or an <error> with a
-// message attribute and, as its text, the runner's account — Go's
-// go-junit-report and gotestsum, JUnit 4 and 5, pytest, Jest, Surefire all
-// write this one shape. A case's file and line, where its runner writes them
-// (`file` and `line` attributes, pytest's and Jest's), are its failure's
-// place; its classname and name its test's id.
+// A JUNIT REPORT is read in the one shape go-junit-report, gotestsum, JUnit 4
+// and 5, pytest, Jest and Surefire all write: <testsuites> of <testsuite>, or
+// one <testsuite> alone, holding <testcase> elements; a failed case carries a
+// <failure> or <error> whose message attribute and text are the runner's
+// account. A case's `file` and `line` attributes (pytest's, Jest's) place its
+// failure; its classname and name are its test's id.
 //
-// STREAMED, element by element (encoding/xml's tokens), never decoded whole:
-// a report is up to sandbox.MaxFileBytes, and only the failures an ending
-// carries are held. encoding/xml expands no entity a document declares, so a
-// report cannot grow past its bytes as it is read.
+// STREAMED token by token, never decoded whole: a report is up to
+// sandbox.MaxFileBytes and only the failures an ending carries are held.
+// encoding/xml expands no declared entity, so a report cannot grow past its
+// bytes as it is read.
 
-// readJUnit reads the JUnit report r into fs: its failed cases, and the counts
-// its suites state, its skipped tests among them. A report that is no XML, or
-// no JUnit, is an error naming what is wrong, and fs keeps what it named
-// before it.
+// readJUnit reads the JUnit report r into fs: its failed cases and the counts
+// its suites state, skipped included. A report that is no XML or no JUnit is an
+// error naming what is wrong; fs keeps what was read before it.
 func readJUnit(r io.Reader, fs *failures) error {
 	d := xml.NewDecoder(r)
 	d.Strict = true
@@ -47,11 +44,10 @@ func readJUnit(r io.Reader, fs *failures) error {
 		if err != nil {
 			return fmt.Errorf("the JUnit report is no XML a test runner writes: %w", err)
 		}
-		// Each token is ASSERTED to the one type a branch reads, never bound
-		// by a type switch: internal/gitlet/cache's writers gate types every
-		// value handed to a call under internal/gitlet, and a type switch's
-		// variable is a value it cannot type (decltype's boundary), so it
-		// would stand as a possible gitproc.Cmd.
+		// ASSERTED to the type a branch reads, never bound by a type switch:
+		// internal/gitlet/cache's writers gate types every value passed to a
+		// call under internal/gitlet and cannot type a type switch's variable
+		// (decltype's boundary), so it would stand as a possible gitproc.Cmd.
 		if end, ok := tok.(xml.EndElement); ok {
 			if end.Name.Local == "testcase" {
 				inCase = false
@@ -119,9 +115,8 @@ func (c testCase) failure(message, body string) gitlet.CheckFailure {
 	return gitlet.CheckFailure{Path: c.file, Line: c.line, TestID: c.id(), Message: text}
 }
 
-// text is the character data inside the element d has just
-// opened, up to its end — at most CheckFailureMessageBytes of it held, the
-// rest read and dropped.
+// text is the character data inside the element d has just opened, up to its
+// end: at most CheckFailureMessageBytes held, the rest read and dropped.
 func text(d *xml.Decoder) (string, error) {
 	var (
 		b     bytes.Buffer
@@ -132,7 +127,7 @@ func text(d *xml.Decoder) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		// Asserted, never a type switch's variable, as readJUnit says why.
+		// Asserted, never a type switch's variable: see readJUnit.
 		switch tok.(type) {
 		case xml.StartElement:
 			depth++

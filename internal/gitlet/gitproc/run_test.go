@@ -39,8 +39,8 @@ func TestNoGitRunsWithoutADeadline(t *testing.T) {
 	}
 }
 
-// holdBody is a stand-in body that marks "$2" as started and then holds until
-// the file "$3" exists, so a case starts and ends each holding run itself.
+// holdBody is a stand-in body that marks "$2" as started and holds until the
+// file "$3" exists, so a case starts and ends each holding run itself.
 const holdBody = `: > "$2"; while [ ! -e "$3" ]; do sleep 0.05; done`
 
 // holder is one holding run.
@@ -86,9 +86,8 @@ func quick(c gitproc.Class) gitproc.Cmd {
 	return gitproc.Cmd{Args: []string{"quick"}, Class: c, Share: shareOf(c), Deadline: time.Minute}
 }
 
-// shareOf is the share a case's run of class c carries: the suite's for a
-// transfer, which requires one, and none for any other class, which refuses
-// one.
+// shareOf is the share a run of class c carries: the suite's for a transfer,
+// which requires one, and none for any other class, which refuses one.
 func shareOf(c gitproc.Class) gitproc.Share {
 	if c == gitproc.ClassTransfer {
 		return suiteShare
@@ -98,14 +97,13 @@ func shareOf(c gitproc.Class) gitproc.Share {
 
 // SLOTS BOUND CONCURRENT GIT, in each waiting lane: a run past the lane waits,
 // is refused ErrBusy after SlotWait naming the lane, takes a slot handed to it
-// in arrival order, and answers its CALLER's cancellation as that rather than
-// as a busy node. Each waiter is waited into the lane's queue (awaitWaiting)
-// before the case lets a slot go or ends its caller: one still on its way
-// would take the slot free, or meet its caller's end before it queued.
+// in arrival order, and answers its CALLER's cancellation as that, not as a
+// busy node. Each waiter is waited into the queue (awaitWaiting) before a slot
+// goes or its caller ends: one still on its way would take the slot free, or
+// meet its caller's end before it queued.
 //
 // Mutation: free a released slot to the lane while a run waits — the queued
-// run is never handed it and is refused busy; answer a waiter whose caller
-// went away as a busy node — red.
+// run is refused busy; answer a waiter whose caller went away as busy — red.
 func TestSlotsBoundConcurrentGit(t *testing.T) {
 	t.Parallel()
 	body := `case "$1" in hold) ` + holdBody + `;; esac`
@@ -285,12 +283,11 @@ func TestMaintenanceNeverWaitsForASlot(t *testing.T) {
 	}
 }
 
-// A RESERVED SLOT IS HELD UNTIL IT IS RELEASED: taken at once or refused busy
-// at once, like every maintenance admission, it keeps the lane's slot through
-// whatever its holder does before its process — so another maintenance run
-// and another reservation are refused meanwhile — runs its processes in it,
-// and frees it on Release, once. A released reservation runs nothing, and one
-// runs no class but the lane's.
+// A RESERVED SLOT IS HELD UNTIL IT IS RELEASED: taken or refused busy at once,
+// it keeps the lane's slot before and between its processes (another
+// maintenance run and another reservation are refused meanwhile) and frees it
+// on Release, once. A released reservation runs nothing, and one runs no
+// class but the lane's.
 //
 // Mutation: release the slot as each Reserved.Run ends, and the run refused
 // between two processes is admitted.
@@ -373,11 +370,9 @@ func TestACancelledRequestKillsTheWholeTree(t *testing.T) {
 // A PROCESS THAT IGNORES SIGTERM IS KILLED KillGrace later — and Run returns.
 //
 // The pool arms the wait between the two signals through the case
-// (gitproc.SeeGrace), which records the grace it was armed with and ends the
-// wait at once: so the grace is the one the case set, held exactly. Read off
-// the wall clock instead — how long Run took past its deadline, under ten
-// seconds — a loaded runner could lose the bound, and a grace of KillGrace's
-// five seconds passed inside it.
+// (gitproc.SeeGrace), which records the grace and ends the wait at once, so
+// the grace is checked exactly, not off the wall clock: a bound on how long Run
+// took fails a loaded runner, and is too loose to tell KillGrace's 5s apart.
 //
 // Mutation: arm the grace with the KillGrace constant rather than the pool's
 // own — the pool waits 5s, not the 300ms the case set; send no SIGKILL once
@@ -385,9 +380,8 @@ func TestACancelledRequestKillsTheWholeTree(t *testing.T) {
 func TestAProcessThatIgnoresTerminateIsKilled(t *testing.T) {
 	t.Parallel()
 	pids := newPIDFile(t)
-	// The trap comes before the tree, so a run whose pid was written was
-	// ignoring SIGTERM — leader and grandchild alike, since an ignored
-	// signal stays ignored across exec — when its deadline fired.
+	// The trap precedes the tree, so once the pid is written leader and
+	// grandchild both ignore SIGTERM (an ignored signal survives exec).
 	p := fakePool(t, "trap '' TERM; "+treeBody(pids), gitproc.Options{})
 	gitproc.SetTimings(p, 10*time.Second, 300*time.Millisecond)
 	var (
@@ -447,8 +441,8 @@ func (w *blockingWriter) Write(p []byte) (int, error) {
 }
 
 // keepalive is a Stdin answering a byte every interval until until closes,
-// and then its end: it keeps a run MOVING, as the stall watch counts what
-// a run reads, for as long as a case needs it to.
+// then EOF: it keeps a run MOVING, since the stall watch counts what a run
+// reads.
 type keepalive struct {
 	until    <-chan struct{}
 	interval time.Duration
@@ -468,13 +462,11 @@ func (r *keepalive) Read(p []byte) (int, error) {
 // has stopped reading — killed with the client's Write still blocked, and
 // answered only once that Write returns.
 //
-// The second case holds only once its client HAS stopped reading, so it
-// waits until it has rather than assuming it by now: the stall is measured
-// from the process's start, and a process starved of CPU for the stall
-// before its first output is the first case's silent process — killed before
-// the client's second Write ever began, which a loaded machine produced. So
-// the run reads a byte every few milliseconds until that Write blocks, which
-// no stall can end, and only then stands still.
+// The second case waits until its client HAS stopped reading rather than
+// assume it: the stall runs from the process's start, so a process starved of
+// CPU before its first output is the first case's silent one, killed before
+// the client's second Write began. So the run reads a byte every 10ms until
+// that Write blocks, and only then stands still.
 func TestAStalledTransferIsKilled(t *testing.T) {
 	t.Parallel()
 	t.Run("a silent process", func(t *testing.T) {
@@ -580,13 +572,11 @@ func TestNothingARunStartedOutlivesIt(t *testing.T) {
 // A STRAGGLER HOLDING STDOUT DOES NOT HOLD RUN: the sweep ends it, which closes
 // the pipes — the drain watch never has to.
 //
-// Who closed the pipes is read off the pool's own reports: the sweep's line
-// for the straggler it killed, and none from the drain watch. Run answers
-// while the straggler has ten minutes left to sleep, so a Run held by it
-// never answers inside the hang detector; how soon it answers is no part of
-// the claim. A bound on the wall clock — under ten seconds — failed a runner
-// that lost them, and passed a pool that never swept, whose drain watch freed
-// Run within a third of a second.
+// Who closed the pipes is read off the pool's own reports (the sweep's line
+// for the straggler, none from the drain watch), never the wall clock: a time
+// bound fails a loaded runner and passes a pool that never swept, whose drain
+// watch frees Run within the case's 300ms grace. A Run the straggler held would not answer
+// inside the hang detector.
 //
 // Mutation: skip the sweep — the straggler outlives the run, and the drain
 // watch releases the pipes it holds.
@@ -611,13 +601,11 @@ func TestAStragglerHoldingStdoutDoesNotHoldRun(t *testing.T) {
 	}
 }
 
-// slowWriter is a client that keeps up while the process runs and falls
-// behind once it has exited: from the moment the case closes exited, each
-// Write takes delay before it returns and is counted slow. The Write that
-// brings what it was given to hold first writes the file holding, which the
-// stand-in waits for before it writes the rest of its output, and then holds
-// until exited is closed — so the process exits with that rest still in the
-// pipe, behind a Write the drain watch then has to leave alone.
+// slowWriter keeps up while the process runs and falls behind once exited
+// closes: each later Write takes delay and is counted slow. The Write that
+// reaches hold bytes writes the file holding (the stand-in's cue to write the
+// rest) and holds until exited closes, so the process exits with that rest in
+// the pipe behind a Write the drain watch must leave alone.
 type slowWriter struct {
 	delay   time.Duration
 	hold    int64
@@ -644,24 +632,17 @@ func (w *slowWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// A SLOW READER RECEIVES EVERY BYTE, though the process exited long before the
-// last Write — a Write slower than KillGrace, so a watch that ignored where
-// the copier was blocked would cut it.
+// A SLOW READER RECEIVES EVERY BYTE, though the process exited before a last
+// Write slower than KillGrace, which a watch ignoring the copier's state cuts.
 //
-// The stand-in writes the last page of its mebibyte only once its reader
-// holds a Write, and the case releases that Write only once the pool counts
-// the process gone, which it does just before it drains: so the drain watch
-// finds the copier inside a Write slower than KillGrace with that page still
-// in the pipe behind it, whatever the pipe holds, and two such Writes are all
-// the case waits for. A reader slow in every Write cost a half second a read,
-// past the hang detector wherever the pipe held less than its default
-// (#949); one slow only once the process had exited found the pipe empty, its
-// bytes read as fast as git wrote them, and never had a Write judged. A page
-// is what any pipe holds with nobody reading.
+// The stand-in writes its last page (what any pipe holds unread) only once its
+// reader holds a Write, released once the pool counts the process gone, just
+// before it drains: the drain watch finds the copier in a slow Write with that
+// page behind it, whatever the pipe's size. Slow in every Write overruns the
+// hang detector on a small pipe; slow only after exit finds the pipe empty.
 //
 // Mutation: judge a copier by the time since its last read whatever it is
-// doing (heldFor without its state), and the drain closes the pipe under the
-// held Write: the last page never arrives.
+// doing (heldFor without its state): the last page never arrives.
 func TestASlowReaderReceivesEveryByte(t *testing.T) {
 	t.Parallel()
 	const size, last = 1 << 20, 4 << 10
@@ -730,16 +711,12 @@ func (r *blockedReader) Read([]byte) (int, error) {
 }
 
 // RUN RETURNS ONLY AFTER ITS INPUT ENDS — and still kills on time: the process
-// is reaped while the caller's Read is still blocked, and Run waits for that
-// Read rather than leave a goroutine inside it.
+// is reaped while the caller's Read blocks, and Run waits for that Read rather
+// than leave a goroutine inside it.
 //
 // Both halves are read off the pool, never the clock: the processes gauge
-// says the process was reaped and its group swept with the Read still
-// blocked, and the drain says when it begins to wait for the run's input
-// (gitproc.OnDrain) — only then does the case let the Read end, so a Run that
-// would not wait for it has answered by then. A release three seconds after
-// the start instead passed a Run that would not wait once the runner held it
-// past them, and failed a healthy run the runner reaped after them.
+// says reaped and swept with the Read blocked, and the Read ends only once the
+// drain waits for stdin (gitproc.OnDrain), when a Run not waiting has answered.
 //
 // Mutation: drain git's own streams alone, leaving stdin's copier inside the
 // caller's Read — Run answers with the Read still blocked; reap the process
@@ -799,12 +776,11 @@ type silentReader struct{}
 
 func (silentReader) Read([]byte) (int, error) { return 0, nil }
 
-// THE CALLER SEES ITS OWN INPUT ERROR — and only io.EOF ITSELF is the end of
-// what git was given (objstore.Fill's rule): a body cut short answers
-// io.ErrUnexpectedEOF, and a reader wrapping io.EOF is saying something
-// io.EOF does not, so each is the caller's failure, and a reader answering
-// nothing a hundred times running is stuck (io.ErrNoProgress, bufio's
-// judgement) rather than spun on — never a whole input handed to git.
+// THE CALLER SEES ITS OWN INPUT ERROR — and only io.EOF ITSELF ends what git
+// was given (objstore.Fill's rule): io.ErrUnexpectedEOF and a wrapped io.EOF
+// are the caller's failure, and a reader answering nothing a hundred times
+// running is stuck (io.ErrNoProgress, bufio's judgement), never spun on: none
+// hands git a whole input.
 func TestTheCallerSeesItsOwnInputError(t *testing.T) {
 	t.Parallel()
 	p := fakePool(t, "cat >/dev/null", gitproc.Options{})
@@ -915,18 +891,14 @@ func TestTheGaugesCountRunningProcesses(t *testing.T) {
 	}
 }
 
-// A RUN COUNTS THE CPU OF ITS PROCESS TREE: an upload-pack serving a clone
-// does almost nothing itself — its child pack-objects counts, deltas and
-// compresses the objects — so a figure of the process alone would read a
-// clone as free. The reap's figure counts the child the process waited for:
-// at least half what the same pack-objects spends run by the pool directly
-// over the same request (the rest is noise between two runs of one walk). And
-// every reap is one observation of crewlet.code.git.cpu under the run's own
-// class.
+// A RUN COUNTS THE CPU OF ITS PROCESS TREE: upload-pack's child pack-objects
+// does a clone's work, so the leader alone would read a clone as free. The
+// reap counts the waited-for child: at least half what the same pack-objects
+// spends run directly (the rest is noise). Every reap is one observation of
+// crewlet.code.git.cpu under the run's class.
 //
-// The repository's objects are LOOSE, so pack-objects deflates and deltas
-// every one rather than reusing a stored pack's bytes, and spends well over
-// the tenth of a second the comparison needs to rise above a process's start.
+// The objects are LOOSE, so pack-objects deflates and deltas every one and
+// spends well over the tenth of a second needed to rise above a start.
 //
 // Mutation: leave Result.CPU at zero and this fails.
 func TestARunCountsTheCPUOfItsProcessTree(t *testing.T) {
@@ -937,8 +909,7 @@ func TestARunCountsTheCPUOfItsProcessTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := realPool(t, gitproc.Options{Metrics: rec})
-	// What the pool's own start ran (its version check, a read) is in the
-	// histogram already: the runs here are what follows it.
+	// The pool's start (its version check, a read) is in the histogram already.
 	before := map[string]metrics.Snapshot{
 		"read": reading(rec, metrics.CodeGitCPU, "read"), "transfer": reading(rec, metrics.CodeGitCPU, "transfer"),
 	}
@@ -984,9 +955,9 @@ func TestARunCountsTheCPUOfItsProcessTree(t *testing.T) {
 	}
 }
 
-// looseHistory is a repository the engine's way (its config gitproc.RepoConfig)
-// whose history — four commits over a hundred files of some 30 KB of text, half
-// of them edited in each — is held in LOOSE objects, and main's tip.
+// looseHistory is a repository configured with gitproc.RepoConfig whose
+// history (four commits over a hundred ~30 KB text files, half edited in each)
+// is LOOSE objects, and main's tip.
 func looseHistory(t *testing.T) (dir, tip string) {
 	t.Helper()
 	c := gittest.NewClient(t)
@@ -1046,10 +1017,9 @@ func reading(rec *metrics.Recorder, name, class string) metrics.Snapshot {
 	return metrics.Snapshot{}
 }
 
-// A RUN READS ITS TRACE TO THE END. A process that writes a mebibyte of trace
-// lines with no pause — far past what a pipe holds — and then a damage event
-// is read to its end: the run returns when the process exits, with the
-// damage, and never waits on its own deadline for a writer it stopped reading.
+// A RUN READS ITS TRACE TO THE END: a mebibyte of trace lines (far past a
+// pipe's buffer) then a damage event returns at exit with the damage, never
+// at its deadline for a writer it stopped reading.
 //
 // Mutation: stop reading the trace at a cap, and the stand-in blocks on its
 // write until the deadline ends it — red.
@@ -1074,14 +1044,12 @@ func TestARunReadsItsTraceToTheEnd(t *testing.T) {
 	}
 }
 
-// EVERY PROCESS IN THE TREE REPORTS TO ONE STREAM. git hands the descriptor
-// and the environment on to every process it starts, so what a child says is
-// read as surely as the leader's: a short push through real receive-pack,
-// which itself exits 0 and reports the failure in its answer, carries
-// index-pack's "early EOF" (a child's, at depth 2) as its Result's damage;
-// a clone over a damaged reverse index carries pack-objects' position row
-// (upload-pack's child); and a commit-graph's damaged chunk
-// table under upload-pack is named whichever process of the tree read it.
+// EVERY PROCESS IN THE TREE REPORTS TO ONE STREAM, since git hands the
+// descriptor and environment to every child: a short push through
+// receive-pack (exit 0, failure in its answer) carries index-pack's "early
+// EOF" (depth 2) as its damage; a clone over a damaged reverse index carries
+// pack-objects' position row; a commit-graph's damaged chunk table under
+// upload-pack is named whichever process read it.
 //
 // Mutation: classify only the leader's own events (a sid with no "/") — the
 // short push's arm is red.
@@ -1137,16 +1105,14 @@ func everyProcessReportsOn(t *testing.T, git string) {
 	})
 }
 
-// A CRASH IS A SIGNAL THE POOL DID NOT SEND. A clone over a reverse index
-// whose every position is past its pack's objects (L) has its pack-objects
-// die of SIGSEGV on every git, and upload-pack says so in a report of its own
-// (`%s died of signal %d`; 2.56 also `pack-objects died of signal %d`) and
-// exits with an error, its own death no signal: the crash is the CHILD's,
-// known only from the tree's reports. A leader that raises SIGSEGV itself is
-// one too. What is never one: a run the pool ended — its deadline is the
-// pool's SIGTERM — a run whose caller's output failed, whatever it died of
-// after, and a leader dying of SIGPIPE, the consumer of its output hanging
-// up, which git itself never reports.
+// A CRASH IS A SIGNAL THE POOL DID NOT SEND. A reverse index whose every
+// position is past its pack's objects (L) kills a clone's pack-objects with
+// SIGSEGV on every git; upload-pack reports it (`%s died of signal %d`; 2.56
+// also `pack-objects died of signal %d`) and exits with an error, so the
+// CHILD's crash is known only from the tree's reports. A leader raising
+// SIGSEGV is one too. Never one: a run the pool ended (as at its deadline), a
+// run whose caller's output failed, whatever it died of after, and a leader
+// dead of SIGPIPE (its consumer hung up), which git never reports.
 func TestACrashIsASignalThePoolDidNotSend(t *testing.T) {
 	t.Parallel()
 	t.Run("a clone whose pack-objects dies of a damaged reverse index", func(t *testing.T) {
@@ -1172,9 +1138,8 @@ func TestACrashIsASignalThePoolDidNotSend(t *testing.T) {
 	}{
 		{name: "a leader that raises SIGSEGV", body: "kill -SEGV $$", crashed: true},
 		{name: "a leader that dies of SIGPIPE", body: "kill -PIPE $$"},
-		// The writer fails, yes ignores the SIGPIPE it would have died of and
-		// fails its write, and the leader then dies of SIGSEGV: the caller's
-		// own failure came first.
+		// The writer fails, yes ignores SIGPIPE and fails its write, then the
+		// leader dies of SIGSEGV: the caller's own failure came first.
 		{name: "a run whose caller's output failed", body: "trap '' PIPE; yes; kill -SEGV $$", stdout: failingWriter{}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

@@ -30,10 +30,11 @@
 // tags into it (`+refs/heads/*`, `+refs/tags/*`) through the one outbound
 // dial (gitproc.Cmd.Remote, M6-D18), with transfer.fsckObjects — the check a
 // push's receive-pack makes of what it is sent — and fetch.unpackLimit 1, so
-// everything fetched stays a pack the cut below can name. Never in the copy:
-// what an attempt fetched enters the cache only by an adoption once its rows
-// have applied (cache.Cache.Adopt), as a push's pack does, so a copy stays a
-// function of rows. The fetch NEGOTIATES FROM THE IMPORTED REFS: git lists an
+// everything fetched stays a pack the cut below can name. Never in the copy
+// (internal/gitlet/cache's writers gate holds the fetch and the cut to the
+// scratch): what an attempt fetched enters the cache only by an adoption
+// once its rows have applied (cache.Cache.Adopt), as a push's pack does, so a
+// copy stays a function of rows. The fetch NEGOTIATES FROM THE IMPORTED REFS: git lists an
 // alternate's refs as what the fetching side has, so an attempt after a
 // restart — or a sync after the last — fetches only what the copy's refs do
 // not reach.
@@ -169,5 +170,6 @@
 //
 // ITS IMPORTS: internal/gitlet/query, internal/gitlet/compact, internal/gitlet/host,
 // internal/gitlet/home, internal/gitlet/checkrun and this package never import
-// each other: each reaches the others' work through the estate's router.
+// each other: each reaches the others' work through the estate's router
+// (internal/gitlet/home's TestTheHomeImportsNoQueryCompactHostCheckRunnerOrMirrors).
 package mirror

@@ -25,8 +25,8 @@ import (
 )
 
 // THE VERSION LINE IS READ FOR ITS THREE NUMBERS, whatever a vendor or a build
-// appends — and anything that is not git's own line is refused rather than
-// read as some version.
+// appends; anything that is not git's own line is refused, not read as some
+// version.
 func TestParseVersion(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -54,10 +54,10 @@ func TestParseVersion(t *testing.T) {
 }
 
 // A GITLET NODE REFUSES A GIT BELOW ITS FLOOR: New over a git one patch short of
-// gitproc.NodeMinVersion answers an *ErrTooOld held to the NODE floor, naming
-// the binary, what it is, the floor and its version — the client floor's 2.40
-// is no longer enough for a pool — and the boundary itself builds a pool. A
-// version git did not print is refused naming the text.
+// gitproc.NodeMinVersion answers an *ErrTooOld held to the NODE floor (the
+// client floor is not enough for a pool), naming the binary, what it is, the
+// floor and its version; the boundary itself builds a pool. A version git did not print
+// is refused naming the text.
 //
 // Mutation: check ClientMinVersion in New, and 2.54.9 builds a pool — red.
 func TestAGitletNodeRefusesAGitBelowItsFloor(t *testing.T) {
@@ -86,12 +86,11 @@ func TestAGitletNodeRefusesAGitBelowItsFloor(t *testing.T) {
 	}
 }
 
-// AN ErrTooOld NAMES ITS FLOOR, in the words its reader acts on: a Gitlet node's
-// operator is told the node floor and where a newer git comes from; a
-// client's person the client floor and that Apple's git is too old for it.
-// Neither names the engine image's own git version, which moves with the pin.
-// A Floor nothing set is no floor, wants nothing, and says it is a call site's
-// mistake rather than guess which floor was meant.
+// AN ErrTooOld NAMES ITS FLOOR, in the words its reader acts on: a node's
+// operator gets the node floor and where a newer git comes from; a client's
+// person the client floor and that Apple's git is too old. Neither names the
+// engine image's git version, which moves with the pin. An unset Floor wants
+// nothing and says it is a call site's mistake rather than guess the floor.
 //
 // Mutation: swap the two texts — red.
 func TestErrTooOldNamesItsFloor(t *testing.T) {
@@ -130,13 +129,12 @@ func TestErrTooOldNamesItsFloor(t *testing.T) {
 	}
 }
 
-// THE PINS MEET THE FLOORS. scripts/git-pin.env names the gits the engine is
-// built and tested with — exactly six variables, a three-number release and a
-// tarball's SHA-256 for each of the three pins — and the node pin, which every
-// pool and client of the suite runs and the engine image builds, is at or
-// above the node floor; the node-floor pin is of NodeMinVersion's own series
-// and at or above it, and the client-floor pin of ClientMinVersion's, so the
-// floors' arm runs the floors and not two newer gits under their names.
+// THE PINS MEET THE FLOORS. scripts/git-pin.env holds exactly six variables
+// (a three-number release and a tarball's SHA-256 for each of three pins).
+// The node pin, which the suite and the engine image run, is at or above the
+// node floor; each floor's pin is of its floor's own series and at or above
+// it, so the floors' arm runs the floors and not two newer gits under their
+// names.
 //
 // Mutation: raise NodeMinVersion to 2.57.0, and the node pin is below it.
 func TestThePinsMeetTheFloors(t *testing.T) {
@@ -179,17 +177,13 @@ func TestThePinsMeetTheFloors(t *testing.T) {
 	}
 }
 
-// THE NODE FLOOR WRITES A LAYER OVER A NAMED BASE — the floor's stated reason,
-// held where the floor lands, on the floor's own build (gittest.NodeFloor):
-// over two packs, a bitmapped multi-pack-index layer written incrementally
-// with no chain file and no base, then a second over the first BY ITS
-// CHECKSUM, the chain written by hand (git resolves a named base through the
-// chain on disk, so the first layer's chain is written before the second is
-// asked for); the whole chain verifies, and a walk over every object loads
-// its bitmap. That is how a repository's maintainer publishes the layers
-// every Gitlet node installs. If a later part's commands fail on the floor, the
-// FLOOR moves to the oldest release they pass on; the commands never bend to
-// the floor.
+// THE NODE FLOOR WRITES A LAYER OVER A NAMED BASE, the floor's stated reason,
+// on the floor's own build (gittest.NodeFloor): a bitmapped multi-pack-index
+// layer written incrementally with no chain file and no base, then a second
+// over the first BY ITS CHECKSUM; the chain verifies and a walk over every
+// object loads its bitmap. git resolves a named base through the chain on
+// disk, so the first layer's chain is written by hand before the second.
+// Commands that fail on the floor move the FLOOR, never bend to it.
 //
 // Mutation: drop --no-write-chain-file from the second write, and git
 // refuses --base — red.
@@ -242,14 +236,12 @@ func TestTheNodeFloorWritesALayerOverANamedBase(t *testing.T) {
 }
 
 // EVERY CLAIM ABOUT WHAT GIT DOES IN A POOL RUNS ON BOTH ENDS OF WHAT A POOL
-// ADMITS. onNodeGits — which the format table, the request replay, the
-// environment's cases and the trace's process tree are held through — runs
-// its body on a pool over the node pin (the PATH's git) and on one over the
-// node floor's own build (in gitproc.NodeMinVersion's series), so those arms
-// cannot quietly shrink to the one git a make target puts on PATH, which is
-// how the floor's expectations were wrong in three arms and nothing ran them.
-// Where the floor's build is named (every make target that runs this package
-// names it), its arm must have run.
+// ADMITS. onNodeGits (behind the format table, the request replay, the
+// environment's cases and the trace's process tree) runs its body on the
+// node pin (the PATH's git) and on the node floor's own build, so those arms
+// cannot shrink to the one git on PATH. Where the floor's build is named
+// (every make target that runs this package names it), its arm must have
+// run.
 //
 // Mutation: run onNodeGits's body on the pin alone, and this is red.
 func TestEveryNodeGitClaimRunsOnBothEnds(t *testing.T) {
@@ -277,29 +269,12 @@ func TestEveryNodeGitClaimRunsOnBothEnds(t *testing.T) {
 }
 
 // EVERY GIT A NODE MAY RUN SENDS A CACHE'S OVERLAPPING PACKS WHOLE under
-// either pack.allowPackReuse value: `single`, the one every cache serves with
-// (cache.ServeConfig), and `multi`, the one it is measured against (cache's
-// BenchmarkPackReuse), so the comparison is between two packs a client can
-// use. Whole means every object once, and every delta with its base, when
-// one object sits in many packs — which is a cache's every repository: each
-// push is a pack of its own, and receive-pack completes a thin push with the
-// bases it borrowed from the packs before it. Reuse reads the
-// multi-pack-index bitmap over all of them, as a warm cache's clone does, the
-// index and its bitmap written by the node's own git, as its maintainer
-// writes them. git 2.44 to 2.47 accept `multi` and, reusing from several such
-// packs, sent an object twice or a delta whose base they never sent, and the
-// client's index-pack refused the whole pack ("REF_DELTA … already
-// resolved", "pack has N unresolved deltas" — measured on 2.47.3, Debian
-// trixie's git, which fails this case at forty pushes); 2.48.0 fixed it
-// (tb/multi-pack-reuse-dupfix), and 2.43 refuses the value outright ("bad
-// boolean config value 'multi'"). So nothing chooses the value per binary:
-// either is safe because gitproc.NodeMinVersion is past 2.48, and this case
-// runs on both ends of what a pool admits — the node pin and the node floor's
-// own build (onNodeGits) — since the claim is about every git at the floor,
-// not the one a make target puts first on PATH. And over the published chain a
-// cache installs in its index's place (cache's layers.go), whose tail packs
-// overlap its root layer's preferred pack: single-pack reuse walks the chain
-// to its root.
+// `single` (cache.ServeConfig) and `multi` (what cache's BenchmarkPackReuse
+// measures it against): every object once and every delta with its base, though receive-pack's thin-push
+// completion puts one object in many packs. Reuse reads the node git's own
+// multi-pack-index bitmap, on both node gits (onNodeGits; 2.44 to 2.47 fail
+// `multi`), and over a cache's published chain (cache's layers.go), whose
+// tail packs overlap the root layer's preferred pack.
 //
 // Mutations: lower gitproc.NodeMinVersion to 2.47.0 and name a 2.47.3 build
 // as CREWLET_TEST_GIT_NODE_FLOOR, and the floor's multi arm is red; write the
@@ -315,9 +290,8 @@ func TestEveryPackReuseModeSendsOverlappingPacksWhole(t *testing.T) {
 			fmt.Fprintf(w, "commit refs/heads/main\ncommitter Crewlet Test <test@example.com> %d +0000\ndata 0\n",
 				1_767_225_600+i)
 			for j := range files {
-				// FILE f IN DIRECTORY f MOD twenty: every commit changes
-				// every directory's tree, so each push's trees are deltas
-				// against trees an earlier pack holds.
+				// FILE f IN DIRECTORY f MOD twenty: each push's trees are
+				// deltas against trees an earlier pack holds.
 				f := i*files + j
 				fmt.Fprintf(w, "M 100644 inline d%02d/f%05d\ndata 64\n", f%20, f)
 				if _, err := io.CopyN(w, data, 64); err != nil {
@@ -336,11 +310,10 @@ func TestEveryPackReuseModeSendsOverlappingPacksWhole(t *testing.T) {
 	var order []string
 	held := map[string]bool{}
 	for _, commit := range commits {
-		// A PACK A PUSH, as the cache keeps them: never unpacked into loose
-		// objects, never repacked. Named on receive-pack's own command line,
-		// because a local push clears GIT_CONFIG_PARAMETERS for the process
-		// it runs in another repository, and the repository's config is the
-		// engine's.
+		// A PACK A PUSH, as the cache keeps them: never unpacked, never
+		// repacked. Set on receive-pack's own command line, because a local
+		// push clears GIT_CONFIG_PARAMETERS for the process it runs in
+		// another repository, and the repository's config is the engine's.
 		c.Run(t, src, "push", "--quiet",
 			"--receive-pack=git -c transfer.unpackLimit=1 -c receive.autogc=false receive-pack",
 			packs, commit+":refs/heads/main")
@@ -361,8 +334,8 @@ func TestEveryPackReuseModeSendsOverlappingPacksWhole(t *testing.T) {
 
 	onNodeGits(t, func(t *testing.T, git string) {
 		p := poolOn(t, git, gitproc.Options{})
-		// The node's own copy of the packs, and its maintainer's index and
-		// bitmap over them, written by the git that then serves them.
+		// The node's copy of the packs, its index and bitmap written by the
+		// git that then serves them.
 		bare := filepath.Join(t.TempDir(), "repo.git")
 		if err := os.CopyFS(bare, os.DirFS(packs)); err != nil {
 			t.Fatal(err)
@@ -394,17 +367,14 @@ func TestEveryPackReuseModeSendsOverlappingPacksWhole(t *testing.T) {
 			}
 		}
 
-		// THE CHAIN ARM (M3-O72): the published chain a cache installs in
-		// place of its own index — a root layer over the first half of the
-		// packs and a layer over the next quarter, each written as a
-		// maintainer writes it, over a chain file naming exactly its base —
-		// and the last quarter outside it, the tail, whose packs overlap the
-		// root's own: receive-pack completed each thin push with the bases
-		// the packs before it hold. git 2.56.0's single-pack reuse
-		// (reuse_partial_packfile_from_bitmap) walks the chain down to its
-		// root and reuses that layer's preferred pack, so a tail pack holding
-		// one of its objects is what it must send around. Sent whole under
-		// either mode.
+		// THE CHAIN ARM: the published chain a cache installs in place of
+		// its index (a root layer over the first half of the packs, a layer
+		// over the next quarter, each over a chain file naming exactly its
+		// base) and the last quarter outside it, the tail, whose packs
+		// overlap the root's. Single-pack reuse
+		// (reuse_partial_packfile_from_bitmap) reuses the root layer's
+		// preferred pack, so it must send around a tail pack holding one of
+		// its objects.
 		chained := filepath.Join(t.TempDir(), "chained.git")
 		if err := os.CopyFS(chained, os.DirFS(packs)); err != nil {
 			t.Fatal(err)
@@ -467,16 +437,15 @@ func TestAPathThatIsNotAbsoluteIsRefused(t *testing.T) {
 	}
 }
 
-// THE LANES ARE SIZED HERE AND NOWHERE ELSE: 0 resolves to the cores (and four
-// transfers a core, no more than one for every TransferShare of the node's
+// THE LANES ARE SIZED HERE AND NOWHERE ELSE: 0 resolves to the cores (four
+// transfers a core, but no more than one per TransferShare of the node's
 // memory), and a negative size names the setting an operator changes.
 //
-// The memory bound is what a container limited in memory and not in CPU
-// needs: it sees its host's every core, and on 64 of them with 16 GiB four a
-// core admitted 256 transfers that could hold 56 GiB — it runs 32, as the
-// eight cores its memory backs would. A node of CoreMemory a core or more is
-// sized by its cores as it always was, a node too small for one transfer
-// still runs one, and an operator's own count is taken as given.
+// The memory bound is for a container limited in memory and not in CPU: on
+// 64 host cores with 16 GiB it runs 32 transfers, as the eight cores its
+// memory backs would, not 256. A node of CoreMemory a core or more is sized
+// by its cores, one too small for a transfer still runs one, and an
+// operator's own count is taken as given.
 //
 // Mutation: size the default by the cores alone, and the 64-core row fails.
 func TestTheLaneSizesAreResolvedHere(t *testing.T) {
@@ -521,16 +490,13 @@ func TestTheLaneSizesAreResolvedHere(t *testing.T) {
 	}
 }
 
-// A GIT WRITING NO TRACE IS REFUSED. Gitlet classifies a damaged cache
-// from the trace2 event stream alone, so a git built or patched without
-// trace2 — one that answers `version` and writes nothing on the descriptor
-// the pool gave it — would read every damage as an unclassified failure and
-// never repair one. New refuses it, naming the path; the same version that
-// writes its stream is a pool. A git BELOW THE FLOOR is refused for its
-// version whatever stream it writes: one older than 2.22 writes no trace2 at
-// all, and "built or patched without it" would send its operator after a
-// fault it does not have, where the floor's refusal names the version found
-// and the one wanted.
+// A GIT WRITING NO TRACE IS REFUSED. Gitlet classifies a damaged cache from
+// the trace2 event stream alone, so a git built without trace2 (it answers
+// `version` and writes nothing on the pool's descriptor) would never repair
+// one. New refuses it, naming the path; the same version writing its stream
+// is a pool. A git BELOW THE FLOOR is refused for its version whatever it
+// writes: before 2.22 there is no trace2 at all, and the floor's refusal
+// names the fault it has.
 //
 // Mutations: drop New's check, and the first arm is a pool — red; check the
 // stream before the version, and the last arm is ErrNoTrace — red.

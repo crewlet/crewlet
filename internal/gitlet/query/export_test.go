@@ -31,9 +31,9 @@ func SetTouchedBounds(s *Server, paths, bytes int) { s.touchedPaths, s.touchedBy
 // production's MaxPatchIDDiffBytes — so a case passes it with a small change.
 func SetPatchIDBytes(s *Server, n int64) { s.patchBytes = n }
 
-// SetClassedBounds scales the Go s's revision facts lex — a version and in
-// all, production's gitlet.MaxClassedBlobBytes and gitlet.MaxClassedBytes — so a
-// case passes either with a few small files.
+// SetClassedBounds scales how much Go s's revision facts lex, per blob and in
+// all — production's gitlet.MaxClassedBlobBytes and gitlet.MaxClassedBytes — so
+// a case passes either with a few small files.
 func SetClassedBounds(s *Server, blob, bytes int64) { s.classedBlob, s.classedBytes = blob, bytes }
 
 // SetSearchBudget scales what one of s's searches may spend — production's

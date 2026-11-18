@@ -51,8 +51,8 @@ type histCommit struct {
 	parents []int
 	tree    map[string]histNode
 	date    int64
-	// ident and msg are its author and committer and its message, a fixed
-	// one's where empty.
+	// ident and msg are its author and committer and its message, both fixed
+	// where msg is empty.
 	ident, msg string
 }
 
@@ -91,7 +91,7 @@ func writeHistory(t testing.TB, git *gittest.Client, dir string, commits []histC
 			}
 			w.WriteString("\n")
 		}
-		// A ref a commit, so its id can be read back; never pushed.
+		// A ref per commit, so its id can be read back; never pushed.
 		for i := range commits {
 			fmt.Fprintf(w, "reset refs/marks/%d\nfrom :%d\n\n", i, i+1)
 		}
@@ -663,7 +663,7 @@ func TestADirectorysLastCommitsAreGitsOwn(t *testing.T) {
 }
 
 // graphedFor waits until node 0's copy of repo holds a commit-graph, as
-// fixture.graphed does, on t.
+// fixture.graphed does.
 func graphedFor(t *testing.T, x *fixture, repo string) {
 	t.Helper()
 	c := x.f.Nodes()[0].Cache()
@@ -1060,10 +1060,10 @@ func TestATreeWalkNarrowsToTheEntriesLeft(t *testing.T) {
 	}
 }
 
-// treeCut is a query.Pool on which a directory's group walk writes its first
-// records (git's --max-count) and then answers that its budget ended it, every
-// later walk answers so before git wrote anything, and dueing ends the group
-// walk with its context, as the answer falling due would.
+// treeCut is a query.Pool whose first group walk writes its first records
+// (git's --max-count) and then reports its budget ended; every later walk
+// reports so before git writes. With due, a walk instead waits out its
+// context, as the answer falling due would.
 type treeCut struct {
 	query.Pool
 	records int

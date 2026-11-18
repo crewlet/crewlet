@@ -6,16 +6,12 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet"
 )
 
-// A RE-ANCHORING KEEPS NO HUNK. Its diff's hunks are placed as they stream,
-// so what the read holds is its anchors and never the diff: a hunk above an
-// anchor moves it and is dropped — reading one allocates nothing, so a
-// million of them grow no heap — and once every anchor of a pair is settled
-// the pair's further lines are not read at all, so a line no header could be
-// is passed over rather than refused. Each anchor lands where gitlet.Reanchor
-// puts it over the same hunks.
+// A RE-ANCHORING KEEPS NO HUNK: a hunk above an anchor moves it and is
+// dropped, allocating nothing, and once a pair's anchors are settled its
+// further lines are passed over rather than refused. Each anchor lands where
+// gitlet.Reanchor puts it over the same hunks.
 //
-// NOT PARALLEL: testing.AllocsPerRun counts every allocation of the process
-// while it runs, and a case running beside it would count its own.
+// NOT PARALLEL: testing.AllocsPerRun counts the whole process's allocations.
 //
 // Mutations: keep each hunk the placer reads (append it to a slice) — the
 // allocation is no longer nothing, red; read a pair's lines after its anchors

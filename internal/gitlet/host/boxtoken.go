@@ -24,37 +24,31 @@ const BoxKeyDomain = "crewlet.git.v1"
 const BoxUser = "run"
 
 // RunTokenTTL is how long a box's credential is valid: a BACKSTOP, never the
-// revocation.
-//
-// The run's ROW is the authority, read on every request ([Runs]): a run that
-// ended, was reaped or launched again is refused the moment its row says so,
-// whatever its token's expiry. An executor has no wall-clock limit
-// (sandbox.Limits), so an expiry shorter than any job a person would leave
-// running fails that job's only durable output, its last push. Seven days —
-// config.DefaultMinAge, the trim's replay window every other "a run's worth
-// of history" bound in the engine is sized to — bounds the one case the row
-// cannot: a row still live while its box is gone, which the completion poll
-// settles within its give-up window and the seat's next holder's recovery
-// reaps; a token copied out of a box is worth nothing past either. It is also
-// the floor of a keyring rotation's last step: an old key dropped sooner
-// refuses every running box's pushes (docs/concepts/secret-store.md). And it
-// is a ceiling as well as a floor: with sandbox.KeptBoxMaxAge it may not pass
-// gitlet.PruneGrace, which land.go holds at compile time ([Server.forged]).
+// revocation. The run's ROW is the authority, read on every request ([Runs]):
+// a run that ended, was reaped or launched again is refused once its row says
+// so. An executor has no wall-clock limit (sandbox.Limits), so a short expiry
+// would fail a long job's only durable output, its last push. Seven days
+// (config.DefaultMinAge, the trim's replay window) bounds the one case the
+// row cannot, a live row whose box is gone, which the completion poll or the
+// seat's next holder settles sooner; a copied token is worthless past either.
+// It floors a keyring rotation's last step, as an old key dropped sooner
+// refuses running boxes' pushes (docs/concepts/secret-store.md), and is a
+// ceiling: with sandbox.KeptBoxMaxAge it may not pass gitlet.PruneGrace, held
+// at compile time in land.go ([Server.forged]).
 const RunTokenTTL = 7 * 24 * time.Hour
 
 // BoxRunRef names a run's ONE job: the row's key (the turn's run id) and the
-// launch the token was minted for. A token naming the turn alone would keep
-// admitting the first job's box after a second launch of the same
-// turn opened another on the row: the launch id, minted by the store at
-// every launch, is what a superseded job's token stops matching.
+// launch the token was minted for. The launch id, which the store mints at
+// every launch, is what a superseded job's token stops matching; a token
+// naming the turn alone would keep admitting the first box after a relaunch.
 type BoxRunRef struct {
 	TurnID   string
 	LaunchID string
 }
 
 // maxBoxTurnBytes bounds a token's turn id: every turn id is a UUIDv7 (36
-// bytes), so 128 is past any the engine mints and keeps a token's subject — a
-// path-safe word git sends in every request's header — short.
+// bytes), so 128 is past any the engine mints and keeps the subject, which
+// git sends in every request's header, short.
 const maxBoxTurnBytes = 128
 
 // boxSubjectSep joins a token's launch id to its turn id: the LAUNCH FIRST, a
@@ -65,11 +59,11 @@ const boxSubjectSep = "~"
 // BoxTokens mints and verifies box credentials. Safe for concurrent use.
 type BoxTokens struct{ signer *runtoken.Signer }
 
-// NewBoxTokens builds them over the fleet's keyring, under BoxKeyDomain,
-// refusing one that cannot sign for the fleet (runtoken.ErrNoKeyring): a node
-// that launched a run and the Gitlet node its box dials derive one key from it,
-// so a token minted on one verifies on every other — and a rotation in flight
-// verifies by every key the ring still holds. now nil is the wall clock.
+// NewBoxTokens builds them over the fleet's keyring under BoxKeyDomain,
+// refusing one that cannot sign for the fleet (runtoken.ErrNoKeyring): the
+// node that launched a run and the Gitlet node its box dials derive one key,
+// and a rotation in flight verifies by every key the ring still holds. now
+// nil is the wall clock.
 func NewBoxTokens(m runtoken.Material, now func() time.Time) (*BoxTokens, error) {
 	signer, err := runtoken.New(runtoken.Options{Domain: BoxKeyDomain, Material: m, Now: now})
 	if err != nil {
@@ -81,15 +75,13 @@ func NewBoxTokens(m runtoken.Material, now func() time.Time) (*BoxTokens, error)
 // Mint is a token for ref, valid RunTokenTTL. Its subject is
 // "<launch id>~<turn id>".
 //
-// A ref no run has — a launch id that is not a UUID, a turn id empty, longer
-// than maxBoxTurnBytes or holding `.`, `~` or whitespace — is the caller's bug
-// (every launch id is a UUID the store mints, every turn id a UUIDv7), and is
-// refused with an error naming it ([ErrNoBoxRun]), which every caller refuses
-// its launch over, rather than minted into a token another run's parse could
-// read; so is a subject runtoken refuses (runtoken.ErrSubject). Never a panic
-// in a test binary alone: telling one apart takes the `testing` package, which
-// the binary must not link (cmd/crewlet's TestTheBinaryLinksNoTestScaffolding),
-// and the answer a test reads is then the one production gives.
+// A ref no run has (every launch id is a UUID the store mints, every turn id
+// a UUIDv7) is the caller's bug, refused with [ErrNoBoxRun], which every
+// caller refuses its launch over, rather than minted into a token another
+// run's parse could read; so is a subject runtoken refuses
+// (runtoken.ErrSubject). Never a panic in tests alone: telling one apart
+// takes the `testing` package, which the binary must not link (cmd/crewlet's
+// TestTheBinaryLinksNoTestScaffolding).
 func (t *BoxTokens) Mint(ref BoxRunRef) (string, error) {
 	if !validRef(ref) {
 		return "", fmt.Errorf("%w: launch %q of run %q", ErrNoBoxRun, ref.LaunchID, ref.TurnID)

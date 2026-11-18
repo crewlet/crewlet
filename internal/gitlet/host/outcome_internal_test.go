@@ -15,11 +15,10 @@ import (
 )
 
 // A REFUSAL LINE FITS ONE PKT-LINE, newline included, whatever its ref: the
-// ref whole — git matches a status to its command by the ref's name — and the
-// sentence cut to the room left, marked as cut. The longest ref a command line
-// carries (its pkt-line less both ids and their spaces) left a full sentence a
-// line past git's largest, and git read the push's whole report as a protocol
-// error.
+// ref whole (git matches a status to its command by the ref's name) and the
+// sentence cut to the room left, marked as cut. A line past git's largest,
+// as the longest ref a command line carries makes one, loses the push's whole
+// report to a protocol error.
 func TestARefusalLineFitsOnePktLine(t *testing.T) {
 	longest := "refs/heads/" + strings.Repeat("r", maxPktPayload-len(gitlet.ZeroOID+" "+gitlet.ZeroOID+" ")-
 		len("refs/heads/"))
@@ -65,13 +64,11 @@ func (e *outcomeReads) PushOutcome(context.Context, gitlet.OutcomeQuery) (gitlet
 	return gitlet.PushOutcome{}, errors.New("refused: no data node answered")
 }
 
-// A PENDING PUSH IS READ AGAIN UNTIL ITS GRACE IS SPENT, AND NO LONGER: its
-// outcome is read at once, then again after waits that double from
-// PendingFirst to PendingMax, the last cut to what is left of the grace — so
-// the last read comes at the grace's very end — and the push is then said
-// pending. Read in a bubble, whose clock moves only while the wait waits:
-// every read lands at its step, to the nanosecond, however slowly the runner
-// gets there.
+// A PENDING PUSH IS READ AGAIN UNTIL ITS GRACE IS SPENT, AND NO LONGER: at
+// once, then after waits doubling from PendingFirst to PendingMax, the last
+// cut to what is left so it lands at the grace's very end; then it is said
+// pending. A synctest bubble lands every read at its step to the nanosecond,
+// however slow the runner.
 //
 // Mutation: read again at PendingFirst for ever — the spacing never doubles,
 // red; wait a whole step whatever is left of the grace — the last read comes
