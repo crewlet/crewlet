@@ -97,9 +97,9 @@ const apiBytes = 4 << 10
 type Config struct {
 	// AcrossLink says the node's connection reaches the changelog across a
 	// LINK, a leaf's link to its members or a dial to an external cluster,
-	// rather than its own member in its own process: a replay's pulls are
-	// then windowed ([Syncer.pullBound]) and every request is given the
-	// link's crossing at the floor ([objstore.MiBPace]).
+	// rather than its own member in its own process: a replay's pulls then
+	// take from the link's Window ([Syncer.pullBound]) and every request is
+	// given the link's crossing at the floor ([objstore.MiBPace]).
 	AcrossLink bool
 	// Clustered says the broker is a cluster, which is what a create's
 	// term branches on ([jsprovision.AskTerm]).
@@ -111,6 +111,11 @@ type Config struct {
 	// reads no link, so time alone refuses a quiet replay, as on a member; a
 	// Link without AcrossLink is refused, since a member has no link.
 	Link Link
+	// Window is the link's ONE window (internal/queue/jetstream's
+	// LinkWindow), shared with the object store's transfers on the link:
+	// required with AcrossLink and refused without it. Each replay pull takes
+	// its bytes before it is asked and gives them back when it ends.
+	Window *jsapi.Window
 }
 
 // Link is a node's link to the changelog as its meter reads it, at the
@@ -259,31 +264,24 @@ func (s *Syncer) pullBytes() int {
 }
 
 // pullBound is the byte bound of an ordinary replay pull: [Syncer.pullBytes],
-// and across a link no more than the WINDOW ([pullWindow]).
+// and across a link no more than the link's ONE window ([Config.Window]).
 //
 // A replay rides the coordination connection (ADR-0001) with every lease
 // renewal, and across a link any request sent after a pull, on any connection
 // sharing a first-in-first-out bottleneck, waits behind what of the pull is
 // still crossing: an 8 MiB pull at the floor ([objstore.MiBPace]) holds it four
-// minutes, a window four seconds, inside its term, since one pull is out at a
-// time ([tableReplay.pull]). It is natsobj's upload rule (linkWindow), in
-// bytes since a row has no fixed size; its price is round trips on a fast
-// distant link. What it leaves uncovered is the package doc's "A window across
-// a link".
+// minutes, the window four seconds, inside its term, since one pull is out at a
+// time ([tableReplay.pull]) and takes its bytes from the window the object
+// store's transfers on the link share (ADR-0161). Its price is round trips on a
+// fast distant link. What it leaves uncovered is the package doc's "A window
+// across a link".
 func (s *Syncer) pullBound() int {
 	bound := s.pullBytes()
-	if s.window > 0 {
-		bound = min(bound, s.window)
+	if s.window != nil {
+		bound = min(bound, s.window.Size())
 	}
 	return bound
 }
-
-// pullWindow is what a replay pull carries at most across a link: the bytes a
-// link at the floor ([objstore.MiBPace]) carries within
-// [jsapi.WindowCrossing], the request term less its own round trip — 139 810
-// bytes, four seconds at the floor, whatever lease the node holds
-// ([Syncer.pullBound]). A test holds it to the terms' own constants.
-const pullWindow = int(int64(jsapi.WindowCrossing) * objstore.MiB / int64(objstore.MiBPace))
 
 // quietBytes is what a metered link may carry to this node while the replay
 // hears nothing before it is placed again ([placedQuiet]): one message at the
@@ -291,11 +289,11 @@ const pullWindow = int(int64(jsapi.WindowCrossing) * objstore.MiB / int64(objsto
 // ([Syncer.pullBound]), 8.5 MB across a link.
 //
 // A CHOICE, NOT A BOUND: the replay's own bytes ahead of a word are one pull's
-// ([tableReplay.pull]), but nothing bounds the node's events, records and
-// object-store downloads on the same connection, so past this a fresh copy is
-// judged cheaper than waiting. A word queued behind more costs a needless
-// placement, which the behind clock does not read ([tableReplay.again]); at
-// worst the replay is refused at [Syncer.quietCap].
+// ([tableReplay.pull]), but nothing bounds the node's events and records on
+// the same connection, which the link's window does not hold, so past this a
+// fresh copy is judged cheaper than waiting. A word queued behind more costs
+// a needless placement, which the behind clock does not read
+// ([tableReplay.again]); at worst the replay is refused at [Syncer.quietCap].
 func (s *Syncer) quietBytes() int {
 	return s.pullBytes() + s.pullBound()
 }
@@ -543,6 +541,9 @@ type replayPull struct {
 	maxBytes  int
 	transport bool
 	delivered int
+	// taken is what the pull holds of the link's window, given back once
+	// ([Syncer.give]); 0 in a member's own process.
+	taken int
 }
 
 // replay carries one table of a seat's memory into this node's store and says
@@ -696,7 +697,12 @@ func (r *tableReplay) target() uint64 {
 //
 // No more messages than the consumer takes in one pull ([namedPulls]), where
 // the broker set it fewer than [fetchBatch].
-func (r *tableReplay) ask() (*replayPull, error) {
+//
+// ACROSS A LINK THE PULL FIRST TAKES ITS BOUND FROM THE LINK'S WINDOW
+// ([Config.Window]), under ctx alone and before its silence clock starts: a
+// replay waiting its turn has asked the copy nothing. A pull at the
+// transport's bound is let out alone. [tableReplay.pull] gives it back.
+func (r *tableReplay) ask(ctx context.Context) (*replayPull, error) {
 	p := &replayPull{n: fetchBatch, maxBytes: r.s.pullBound()}
 	if most := r.cons.RequestBatch(); most > 0 {
 		p.n = min(p.n, most)
@@ -704,23 +710,39 @@ func (r *tableReplay) ask() (*replayPull, error) {
 	if r.at.transport {
 		p.n, p.maxBytes, p.transport = 1, r.s.pullBytes(), true
 	}
+	if r.s.window != nil {
+		if err := r.s.window.Take(ctx, p.maxBytes); err != nil {
+			return nil, fmt.Errorf("memsync: replay %s's %s: wait for the link's window: %w",
+				r.handle, r.spec.name, err)
+		}
+		p.taken = p.maxBytes
+	}
 	if err := r.cons.Ask(p.n, p.maxBytes, pullExpiry, pullHeartbeat); err != nil {
+		r.s.give(p)
 		return nil, fmt.Errorf("memsync: replay %s's %s: %w", r.handle, r.spec.name, err)
 	}
 	r.run.pulls++
 	return p, nil
 }
 
+// give returns what p took of the link's window, once.
+func (s *Syncer) give(p *replayPull) {
+	if p.taken > 0 {
+		s.window.Give(p.taken)
+		p.taken = 0
+	}
+}
+
 // pull asks one pull and reads it until it ends, the table ends, or the
 // replay must be placed again ([placeAgain]) or refused, and says whether the
-// table ended. One pull is out at a time: the window a pull is bounded by
-// ([Syncer.pullBound]) is the most a lease renewal waits behind only while
-// that holds.
+// table ended. One pull is out at a time, its bytes held in the link's
+// window from its ask to its end however it ends ([tableReplay.ask]).
 func (r *tableReplay) pull(ctx context.Context) (bool, error) {
-	p, err := r.ask()
+	p, err := r.ask(ctx)
 	if err != nil {
 		return false, err
 	}
+	defer r.s.give(p)
 	stall := r.s.stall(p.maxBytes)
 	clock := r.listen(stall)
 	for {

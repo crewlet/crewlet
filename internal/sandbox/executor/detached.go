@@ -289,6 +289,12 @@ type contextReader interface {
 	request() contextRead
 }
 
+// limitReporter is a decoder that keeps its run's last limit report line
+// ([sandbox.Result.Limits]): Claude Code's `rate_limit_event`.
+type limitReporter interface {
+	limitReport() string
+}
+
 // windowReporter is a decoder that reads off its run's stream the least context
 // window the run's harness reported holding a model to
 // ([sandbox.Result.ReportedWindow]): Claude Code's off its result lines
@@ -958,6 +964,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		spent   *runSpend
 		request contextRead
 		window  int64
+		limits  string
 	)
 	if out.Events {
 		streamed, refusal, err := r.decodeStream(ctx, box, out.Stdout)
@@ -968,7 +975,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			refused = append(refused, refusal)
 		}
 		result, last, spent, request = streamed.result, streamed.last, streamed.spent, streamed.request
-		window = streamed.window
+		window, limits = streamed.window, streamed.limits
 	}
 	if out.Result != "" {
 		raw, refusal, err := readWhole(ctx, box, out.Result, "the result its harness printed")
@@ -1012,6 +1019,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		// continuation of the copy is judged under it where it is less than the
 		// engine's own reading of the model's window.
 		result.ReportedWindow = window
+		result.Limits = limits
 	}
 
 	// Which session the run took up, as its script recorded before its harness
@@ -1364,6 +1372,9 @@ func (r *Runner) decodeStream(ctx context.Context, box sandbox.Sandbox, path str
 	if reporter, ok := dec.Decoder.(windowReporter); ok {
 		out.window = reporter.reportedWindow()
 	}
+	if reporter, ok := dec.Decoder.(limitReporter); ok {
+		out.limits = reporter.limitReport()
+	}
 	return out, "", nil
 }
 
@@ -1378,6 +1389,8 @@ type decodedStream struct {
 	request contextRead
 	// window is the least context window the run reported ([windowReporter]).
 	window int64
+	// limits is the run's last limit report line ([limitReporter]).
+	limits string
 }
 
 // streamLast is an event stream's last line, as `tail -n 1` would copy it

@@ -544,6 +544,13 @@ func (q *Queue) closeMeter() {
 // member, whose connection crosses no link.
 func (q *Queue) LinkMeter() *LinkMeter { return q.link.meter }
 
+// LinkWindow is the ONE window of this queue's link to the fleet's broker
+// ([jsapi.Window]): what the node's bulk transfers across it hold out at once,
+// both ways together, whichever connection of the link they ride. The engine
+// hands it to the object store and the memory sync. Nil on a member, whose
+// connection crosses no link.
+func (q *Queue) LinkWindow() *jsapi.Window { return q.link.window }
+
 // ensureStreams provisions the engine's own streams, under ONE ceiling for
 // the whole sequence.
 //

@@ -75,3 +75,26 @@ func TestAnAllReadInboxScansNoRowBelowTheSeenThroughPosition(t *testing.T) {
 		t.Errorf("a page of every notice seeks a log_seq bound it never named:\n%s", strings.Join(plan, "\n"))
 	}
 }
+
+// ONE NOTICE BY ITS RECORD IS ONE KEY SEEK, never a walk of everything ana holds.
+// Mutation: drop the record branch (the page seeks tracker_notifications_inbox_idx, red).
+func TestANoticeNamedByItsRecordIsSoughtByTheTableKey(t *testing.T) {
+	t.Parallel()
+	db := seededPlanStore(t, func(context.Context, *sql.Tx, int) error { return nil })
+	seen := inbox.Position{Stream: topics.TrackerLogStream, Generation: 1, Seq: 9000}
+	for _, filter := range []inboxFilter{
+		{scope: inbox.SnoozeInclude},
+		{unread: true, seen: seen, marked: []string{"h-00042"}, scope: inbox.SnoozeExclude, asleep: []string{"h-7"}},
+	} {
+		statements, selects, err := inboxStatements("ana", InboxQuery{Record: "h-00042"}, filter, 50)
+		if err != nil || !selects || len(statements) != 1 {
+			t.Fatalf("a read of one record is %d statements, %v, %v; want one", len(statements), selects, err)
+		}
+		plan := storetest.Plan(t, db, statements[0].sql, statements[0].args)
+		if !storetest.Seeks(plan, "sqlite_autoindex_tracker_notifications_1") ||
+			slices.Contains(storetest.IndexesIn(plan), "tracker_notifications_inbox_idx") ||
+			storetest.ScansHeap(plan, "tracker_notifications") {
+			t.Errorf("a read of one record is not one seek of the table's key:\n%s", strings.Join(plan, "\n"))
+		}
+	}
+}

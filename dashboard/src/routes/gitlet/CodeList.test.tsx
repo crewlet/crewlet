@@ -358,6 +358,34 @@ describe("the peek", () => {
   });
 });
 
+describe("a host that opens in place", () => {
+  // Mutation: prevent every click, or open on a modified Enter.
+  test("a host that opens a row in place takes its plain press and Enter, and a modified press keeps the link", () => {
+    const onOpen = vi.fn();
+    mount(<Timeline onOpen={onOpen} />, "#/gitlet");
+    const { seen, stop } = clicks();
+    try {
+      fireEvent.click(link("Row 2"), { ctrlKey: true });
+      expect(onOpen).not.toHaveBeenCalled();
+      expect(seen).toEqual([{ href: "#/x/r2", prevented: false }]);
+      expect(fireEvent.click(link("Row 2"))).toBe(false);
+      expect(onOpen).toHaveBeenCalledTimes(1);
+      expect(onOpen.mock.calls[0]![0]).toMatchObject({ id: "r2" });
+      press("j");
+      act(() => link("Row 1").blur());
+      press("Enter", { shiftKey: true });
+      expect(onOpen).toHaveBeenCalledTimes(1);
+      expect(seen.at(-1)).toEqual({ href: "#/x/r1", prevented: false });
+    } finally {
+      stop();
+    }
+    press("Enter");
+    expect(onOpen).toHaveBeenCalledTimes(2);
+    expect(onOpen.mock.calls[1]![0]).toMatchObject({ id: "r1" });
+    expect(location.hash).toBe("#/gitlet");
+  });
+});
+
 describe("Load more", () => {
   const paged = (over: Partial<NonNullable<Props["paged"]>> = {}) => ({
     more: true,

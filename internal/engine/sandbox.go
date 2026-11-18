@@ -2145,7 +2145,7 @@ func runnerLost(lost *sandbox.LostRun) *runner.Lost {
 // refused ([Engine.signInReplaced]).
 func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.PendingRun, ended sandbox.RunEnding) {
 	if c == nil || c.Models == nil || run.Launch.ProviderKey == "" ||
-		(ended.Text == "" && ended.Error == "" && ended.Event == "") {
+		(ended.Text == "" && ended.Error == "" && ended.Event == "" && ended.Limits == "") {
 		return
 	}
 	provider, ok := c.Models.Provider(run.Launch.ProviderKey)
@@ -2165,7 +2165,7 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 		return
 	}
 	if agent.RunEnded(ctx, harness.RunEnd{Answer: ended.Text, Error: ended.Error,
-		Failed: !ended.Success, Event: ended.Event, At: ended.At}) {
+		Failed: !ended.Success, Event: ended.Event, Limits: ended.Limits, At: ended.At}) {
 		log.InfoContext(ctx, "executor_run_spent_its_entry",
 			"turn_id", run.TurnID, "seat", run.AgentHandle,
 			"provider_key", run.Launch.ProviderKey,

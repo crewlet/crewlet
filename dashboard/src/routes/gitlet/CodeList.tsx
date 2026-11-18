@@ -63,6 +63,8 @@ export interface CodeListProps<T> {
   peek?: (row: T) => ObjectRef | undefined;
   /** The row the reader is on that is no peek (a pane beside the list). */
   isSelected?: (row: T) => boolean;
+  /** A plain press on the row's link, or Enter on its row: the host opens it in place (a pane). */
+  onOpen?: (row: T) => void;
   /** The row's parts, in reading order. */
   lead?: (row: T) => ReactNode;
   title: (row: T) => ReactNode;
@@ -210,7 +212,9 @@ export function useListKeys(opts: {
       run: (e) => {
         if (cursor === null) return;
         const event = e as KeyboardEvent;
-        if (onOpen) {
+        const modified = event.metaKey || event.ctrlKey || event.shiftKey || event.altKey;
+        // A MODIFIED ENTER is the link's, as a modified click is: a new tab or window.
+        if (onOpen && !modified) {
           onOpen(cursor, event);
           return;
         }
@@ -249,6 +253,7 @@ export function CodeList<T>({
   rowHref,
   peek,
   isSelected,
+  onOpen,
   lead,
   title,
   titleAfter,
@@ -275,7 +280,20 @@ export function CodeList<T>({
     [groups, rows],
   );
   const keys = useMemo(() => all.map(rowKey), [all, rowKey]);
-  const { cursor, focusRow } = useListKeys({ root, keys, onceClaimed: keysOnceClaimed });
+  const openKey = useMemo(() => {
+    if (!onOpen) return undefined;
+    const byKey = new Map(all.map((r) => [rowKey(r), r]));
+    return (key: string) => {
+      const item = byKey.get(key);
+      if (item !== undefined) onOpen(item);
+    };
+  }, [all, rowKey, onOpen]);
+  const { cursor, focusRow } = useListKeys({
+    root,
+    keys,
+    onOpen: openKey,
+    onceClaimed: keysOnceClaimed,
+  });
 
   const { open } = usePeekControls();
   const peeked = usePeek();
@@ -329,7 +347,9 @@ export function CodeList<T>({
                 data-list-link=""
                 href={to}
                 aria-current={current ? "true" : undefined}
-                onClick={ref ? peekClickHandler(() => open(ref)) : undefined}
+                onClick={peekClickHandler(
+                  ref ? () => open(ref) : onOpen ? () => onOpen(item) : undefined,
+                )}
               >
                 {words}
               </a>

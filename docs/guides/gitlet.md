@@ -1048,26 +1048,30 @@ with nothing queued and nothing put out lately draws no box, and a company
 with nothing queued says so. The queues are read fifty entries at a time;
 **Load more** reads the next fifty.
 
-**Gitlet › Checks** (`#/gitlet/checks`) is every repository's attempts that
-ended in a window — a day by default, at most the thirty days an ended
-attempt is kept — newest ended first, with a chart of when they ended (the
-failed ones the foot of each bar) and chips that narrow the listing by the
-state an attempt ended in and by a check's name; the engine narrows them, and
-the chart and the chips
-count the attempts loaded, as each says. A repository's page has its own
+**Gitlet › Checks** (`#/gitlet/checks`) is where every check stands: each
+check's latest run on a live change, a queue's candidate or a protected
+branch's tip, over the last day, week or month, with tabs counting each state
+and failing runs first (or **Newest first**), narrowed by a check's name and a
+repository. Press a run to open it beside the list; the address keeps it, so
+a link or a reload reopens it. A repository's page has its own
 **Checks** tab, every attempt it keeps with no window, and a change's page
 has one too: the attempts that judge it, its head's, checked for its target.
 
-Press an attempt to open it: what it was checking (a change's head, a queue's
-candidate, a branch's tip, a landing bisected), the commit and branch, how
-long it ran, its exit code and why it ended; its **failures**, each
+Press an attempt to open it: how many of its tests failed of how many ran,
+and its exit code; what it was checking (a change's head, a queue's
+candidate merged onto its branch, a branch's tip, a landing bisected), the
+commit and branch, how long it ran and why it ended; **Re-run**, which runs
+that one check again once it has ended; **Open in CI** for a run another CI
+reported; its **failures**, each
 `path:line` a link into the diff it was checked on — the comparison of its
 base and its commit, opened on that file with the failing line marked and
 scrolled to, however long the file's patch is: the page reads the patch on
 to the page that holds the line, and no further (where the line is outside
 what the diff changes, the page says so as soon as the patch reaches past
 it, and offers the file at the attempt's commit, opened on that line; an
-attempt that records no base opens the file there directly); its **tail**; and **Read its log**,
+attempt that records no base opens the file there directly); **the end of
+its output**, numbered from its place in the whole output, its failing lines
+marked; and **Read its log**,
 which reads the log a failed run kept a page at a time, only when you ask. A
 check measures durations and exit codes, never tokens: it runs no model.
 
@@ -1158,10 +1162,14 @@ that fill the answer, not every one — so narrow the search with `repo:` or
 
 **Searching from the dashboard.** **Gitlet › Search** (`#/gitlet/search`) takes
 the search as written above, with its mode, a repository, a path and a ref
-as controls beside it, and draws the lines by repository and file, each line
-opening its file at the commit it was searched at; what was not searched is
-said above them on every answer. In ⌘K, the **Code** tab searches the same
-way and lists the first eight lines.
+as controls beside it, and draws each file's matching lines with the lines
+around them, the matches marked, by repository and file, each line opening its
+file at the commit it was searched at; facets narrow it by repository or
+directory, and **Show N more** reads the rest of a file's matching lines. What
+was not searched is said above them on every answer. A repository searched
+only with git grep is named with `repo:` to search it, as the line above the
+results says. In ⌘K, the **Code** tab searches the same way and lists the
+first eight lines.
 
 **Searching from a script.** The same search is the question `code_search`,
 on [`GET /gitlet/search`](../reference/api-endpoints.md#get-gitletsearch):
@@ -1437,6 +1445,10 @@ landed a commit](../concepts/gitlet.md#which-push-landed-a-commit)).
 On a repository's **Commits** tab the dashboard narrows the history to one
 seat's pushes and to recent days, and searches commit messages; each commit
 shows its checks and the change it landed with.
+
+**Gitlet › Pushes** (`#/gitlet/pushes?repo=web`) reads a repository's pushes as sentences by
+day, each day saying how many of its pushes are shown; narrow it by who pushed and when, and its
+rail shows who pushes there and the branches' protection.
 
 ### Working in a clone
 

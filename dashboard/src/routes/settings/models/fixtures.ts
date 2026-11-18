@@ -88,6 +88,7 @@ export function modelEntry(over: Partial<ModelEntry> & { key: string }): ModelEn
     usage: { days: 7, calls: 0, total_tokens: 0 },
     used_by: [],
     device_sign_in: null,
+    limits: [],
     ...over,
   };
 }
@@ -112,6 +113,7 @@ export function memberEntry(e: ModelEntry): MemberModelEntry {
     last_success: e.last_success,
     waiting: e.waiting,
     used_by: e.used_by,
+    limits: e.limits,
   };
 }
 

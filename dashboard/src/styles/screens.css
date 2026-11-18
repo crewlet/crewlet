@@ -7686,9 +7686,15 @@ a.live-row:hover {
   display: grid;
   place-content: center;
 }
-/* The phone pane's way back, at its top start, above the byline. */
+/* The phone pane's way back, at its top start, above the byline: a grid item of the pane's column. */
 .inbox-pane-back {
-  align-self: flex-start;
+  justify-self: start;
+}
+/* An item nobody holds, in one column: the way back on top, the word centred under it. */
+.inbox-pane-missing {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  place-items: center;
 }
 .inbox-evidence {
   margin-top: var(--spacing-1);

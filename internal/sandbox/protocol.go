@@ -848,6 +848,10 @@ type Result struct {
 	// [MaxRunEventBytes] ([boundBox]).
 	Event string
 
+	// Limits is the run's last limit report line, verbatim, read by
+	// harness.Provider.RunEnded; empty past [MaxRunEventBytes] ([boundBox]).
+	Limits string
+
 	// Transcript is the agent's activity log — what it said, each tool it
 	// called and the first line of what it ran — rebuilt from its own
 	// output, or its stderr where the harness streams nothing better. It is the

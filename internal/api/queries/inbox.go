@@ -177,7 +177,12 @@ func (s Sources) composedInbox(ctx context.Context, p Params) (any, error) {
 	}
 	q := inbox.Query{Handle: handle, Unread: p.Bool("unread", false), PrimaryOnly: p.Bool("primary_only", false),
 		Limit: p.Int("limit", 0), Cursor: strings.TrimSpace(p.String("cursor")), Snoozed: inbox.SnoozeExclude,
-		Cards: p.Bool("cards", false)}
+		Record: strings.TrimSpace(p.String("record")), Cards: p.Bool("cards", false)}
+	// ONE NOTICE HAS NO NEXT PAGE, so a cursor beside a record names nothing.
+	if q.Record != "" && q.Cursor != "" {
+		return nil, fmt.Errorf("%w: a read of one record has no next page, so it takes no cursor: drop "+
+			"cursor or record", ErrBadParams)
+	}
 	if raw := strings.TrimSpace(p.String("snoozed")); raw != "" {
 		q.Snoozed = inbox.SnoozeScope(raw)
 		if !q.Snoozed.Valid() {
@@ -264,7 +269,7 @@ func (trackerInbox) Name() string { return "tracker" }
 
 func (t trackerInbox) Notices(ctx context.Context, q inbox.SourceQuery) (inbox.SourcePage, error) {
 	answer, err := t.work.Inbox(ctx, worklet.InboxQuery{Handle: q.Handle, Unread: q.Unread,
-		PrimaryOnly: q.PrimaryOnly, Snoozed: q.Snoozed, Limit: q.Limit, Cursor: q.Cursor,
+		PrimaryOnly: q.PrimaryOnly, Snoozed: q.Snoozed, Record: q.Record, Limit: q.Limit, Cursor: q.Cursor,
 		Level: t.fresh.Level, MaxLag: t.fresh.MaxLag, MaxLagSeq: t.fresh.MaxLagSeq, Floors: t.fresh.Floors}, t.now)
 	if err != nil {
 		return inbox.SourcePage{}, err
@@ -310,7 +315,7 @@ func (e codeReadRefused) Unwrap() error { return e.err }
 func (c codeInbox) Notices(ctx context.Context, q inbox.SourceQuery) (inbox.SourcePage, error) {
 	answer, err := c.reads.Read(ctx, gitlet.ReadQuery{Kind: gitlet.ReadInbox, Asker: c.asker, Cursor: q.Cursor,
 		Limit: q.Limit, Fresh: c.fresh, Inbox: &gitlet.InboxQuery{Handle: q.Handle, Unread: q.Unread,
-			PrimaryOnly: q.PrimaryOnly, Snoozed: q.Snoozed, Now: c.now}})
+			PrimaryOnly: q.PrimaryOnly, Snoozed: q.Snoozed, Record: q.Record, Now: c.now}})
 	if err != nil {
 		return inbox.SourcePage{}, codeReadRefused{err: err}
 	}
@@ -404,8 +409,8 @@ func (artifactsInbox) Name() string { return artifactsdomain.Domain{}.Name() }
 
 func (a artifactsInbox) Notices(ctx context.Context, q inbox.SourceQuery) (inbox.SourcePage, error) {
 	got, err := a.reads.Inbox(ctx, artifactsdomain.InboxQuery{Handle: q.Handle, Unread: q.Unread,
-		PrimaryOnly: q.PrimaryOnly, Snoozed: q.Snoozed, Limit: q.Limit, Cursor: q.Cursor, Now: a.now,
-		Fresh: a.fresh})
+		PrimaryOnly: q.PrimaryOnly, Snoozed: q.Snoozed, Record: q.Record, Limit: q.Limit, Cursor: q.Cursor,
+		Now: a.now, Fresh: a.fresh})
 	if err != nil {
 		return inbox.SourcePage{}, err
 	}
