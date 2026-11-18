@@ -605,8 +605,8 @@
 //
 // A save takes its place ONLY WHILE ITS JOB RUNS UNDECIDED ([licensesSave]),
 // decided in one read-decide-write of the row as it stands: the run running,
-// the save of its current launch, nothing of the job's end read and no refusal
-// of its completion owed ([PendingRun.jobOver]), no loss marked, no ending
+// the save of its current launch, nothing of the job's end read, no refusal
+// of its completion owed and no loss marked ([PendingRun.jobOver]), no ending
 // decided, no capture or save of the turn that may still land
 // ([PendingRun.capturesMayLand]), and at the place after the row's newest.
 // Every read that takes a job's final capture writes its decision on the row
