@@ -298,6 +298,41 @@ func TestCancelsAskTheStoreOnceARoundAndOnlyForCallsNotRuledOut(t *testing.T) {
 				len(asked), asked)
 		}
 	})
+	t.Run("a cancel heard again", func(t *testing.T) {
+		t.Parallel()
+		ctx := t.Context()
+		store := sandbox.NewCoordStore(coordmem.NewFleet())
+		held := &lostServeStore{PendingStore: store}
+		runs, _ := steersOver(t, steerRing, held)
+		runs.stopped = ctx.Done()
+		launch := workingRun(t, store, runs, "run-1")
+		fileSealed(t, runs, "run-1", steer.Note{ID: "n-1", Text: "use staging", By: "founder"})
+		inbox := boundInbox(t, runs, store, "run-1", launch)
+		call := hookCall()
+		takeOf(t, inbox.Take(ctx, mcpbridge.SteerEventFinish, call))
+		inbox.Cancelled(ctx, *call)
+		lostTo(t, store, "run-1", "n-1", sandbox.ServeCancelled)
+		eventually(t, "the first hearing's loop ended", func() bool {
+			runs.settleMu.Lock()
+			defer runs.settleMu.Unlock()
+			return len(runs.settling) == 0
+		})
+		// HELD FROM HERE, so a loop a repeat started stays in settling.
+		held.mu.Lock()
+		held.held = make(chan struct{})
+		held.mu.Unlock()
+		t.Cleanup(func() { close(held.held) })
+		for range 5 {
+			inbox.Cancelled(ctx, *call)
+		}
+		runs.settleMu.Lock()
+		asked := len(runs.settling)
+		runs.settleMu.Unlock()
+		if asked != 0 || len(held.asked()) != 1 {
+			t.Errorf("a cancel POSTed again started %d loops and the store was asked %d settles, want "+
+				"nothing past its first hearing's one", asked, len(held.asked()))
+		}
+	})
 }
 
 // A CANCELLED SERVE IS TOLD AGAIN UNDER THE HEADER. A note whose only serve a

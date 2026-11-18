@@ -1646,16 +1646,19 @@ func (m *hookMemory) end(call *sandbox.NoteCall, take string, lost bool) bool {
 }
 
 // cancel keeps call as cancelled and reports whether the store must be asked
-// to lose its serve: not where its take still runs (that take settles itself),
+// to lose its serve: not where the call was heard before (its first hearing
+// asked, or left it to the take below, so a box POSTing one cancel again asks
+// nothing more), not where its take still runs (that take settles itself),
 // not on an inbox bound to no job (its first take reads the ring), and not
 // where the inbox took calls and this is none of them (a model's call given
 // up, or another session's, which no serve of this job names).
 func (m *hookMemory) cancel(call sandbox.NoteCall, bound bool) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if !slices.ContainsFunc(m.cancelled, call.Is) {
-		m.cancelled = kept(append(m.cancelled, call))
+	if slices.ContainsFunc(m.cancelled, call.Is) {
+		return false
 	}
+	m.cancelled = kept(append(m.cancelled, call))
 	switch {
 	case !bound, slices.ContainsFunc(m.running, call.Is):
 		return false
