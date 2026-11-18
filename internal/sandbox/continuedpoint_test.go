@@ -20,9 +20,9 @@ import (
 // relaunch's record starts with none.
 //
 // Mutation: write it for a launch that opens its round, write the job
-// before's copy's point in place, write it at the attach before the command,
-// keep it across BeginLaunch, or write BasisRestart from the box's own copy on
-// the reused branch, and a case goes red.
+// before's copy's point in place or at the attach before the command, keep it
+// across BeginLaunch, write BasisRestart from the box's own copy on the reused
+// branch, or take its launch from the capture's place, and a case goes red.
 func TestALaunchRecordsThePointOfTheKeptCaptureItHandsItsRun(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -51,7 +51,8 @@ func TestALaunchRecordsThePointOfTheKeptCaptureItHandsItsRun(t *testing.T) {
 			rig.coordinator.spoolDir = t.TempDir()
 			rig.runner.Carries = true
 			key := objstore.KeyAt(time.Now())
-			kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 1, State: CaptureLanded, Final: true,
+			// ITS PLACE, 3, IS NOT ITS LAUNCH, 1, so the point names the one.
+			kept := SessionCapture{LaunchSeq: 1, CaptureSeq: 3, State: CaptureLanded, Final: true,
 				Interrupted: tc.interrupted, Through: tc.through, Object: key.String(),
 				ObjectHash: strings.Repeat("a", 64), ObjectSize: 14, Home: "/boxes/old/home",
 				ResumedCount: &ResumedCount{Tokens: 1, Restart: new("u-kept")}}

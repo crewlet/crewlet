@@ -328,22 +328,16 @@ func TestAKeptStampWithNoSavePointIsNotContinued(t *testing.T) {
 }
 
 // A CAPTURE POINT RISES ONLY WHERE ITS TAKE NAMES THE HELD CAPTURE'S NEWEST
-// COMPACTION (savepoint.go). A capture no read places, reserved at zero, is
-// raised once its take's count is stamped to the newest point a capture its
-// launch's session holds states, where that capture names the same newest
-// compaction: the launch's own landed capture, and the capture it continued,
-// read only where its launch is the job before's and the box took that
-// session up. Its Omitted is the launch's own at or below the point, and the
-// places an older build reads stay zero and nil. Every other case stays at
-// zero: an identity not read on either side, two that differ, a box that never
-// said it took the session up or said it in a word this build does not know,
-// a point that outlived its launch, and a raise past the stamp's bounds.
+// COMPACTION (savepoint.go). Reserved at zero, a capture is raised once its
+// take's count is stamped, to the newest point stated by its launch's own
+// landed capture or by the capture it continued (the job before's, taken up by
+// its box), where that capture names the same compaction. Omitted is the
+// launch's own at or below the point; an older build's places stay zero and
+// nil. Every other case stays at zero, and its row says why.
 //
-// Mutation: compare counts rather than identities, drop the SessionStart
-// check, accept an unknown basis (RestartedSince's arm), carry launchKept's
-// point unchecked, take Omitted off the carried capture, keep Omitted's places
-// past the point, drop the launch check, copy BridgeSeq, or keep a raise the
-// bounds refuse, and a row goes red.
+// Mutation: compare counts, not identities; drop the SessionStart, launch or
+// bounds check; accept an unknown basis; carry launchKept's point unchecked;
+// take Omitted off the carried capture or past the point; or copy BridgeSeq.
 func TestACapturePointRisesOnlyWhereItsTakeNamesTheHeldCapturesNewestCompaction(t *testing.T) {
 	t.Parallel()
 	const job = "job-2"
@@ -365,11 +359,13 @@ func TestACapturePointRisesOnlyWhereItsTakeNamesTheHeldCapturesNewestCompaction(
 	}
 	for name, tc := range map[string]struct {
 		harness string
-		take    *string
-		launch  LaunchRecord
-		kept    *SessionCapture
-		through int
-		omitted []int
+		// launchSeq is the job's launch, 2 where unset.
+		launchSeq int64
+		take      *string
+		launch    LaunchRecord
+		kept      *SessionCapture
+		through   int
+		omitted   []int
 	}{
 		"the continued capture, neither compacted": {take: new(""), launch: continued(new("")), through: 7,
 			omitted: []int{3}},
@@ -400,6 +396,11 @@ func TestACapturePointRisesOnlyWhereItsTakeNamesTheHeldCapturesNewestCompaction(
 			l.Continued.LaunchSeq = 0
 			return l
 		}()},
+		"a point of no launch, on the first": {launchSeq: 1, take: new("msg_1"), launch: func() LaunchRecord {
+			l := continued(new("msg_1"))
+			l.Continued.LaunchSeq = 0
+			return l
+		}()},
 		"a point of this very launch": {take: new("msg_1"), launch: func() LaunchRecord {
 			l := continued(new("msg_1"))
 			l.Continued.LaunchSeq = 2
@@ -422,8 +423,8 @@ func TestACapturePointRisesOnlyWhereItsTakeNamesTheHeldCapturesNewestCompaction(
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			run := PendingRun{TurnID: "t1", LaunchID: job, LaunchSeq: 2, Launch: tc.launch, Kept: tc.kept,
-				Capture: tc.kept}
+			run := PendingRun{TurnID: "t1", LaunchID: job, LaunchSeq: cmp.Or(tc.launchSeq, 2), Launch: tc.launch,
+				Kept: tc.kept, Capture: tc.kept}
 			capture := SessionCapture{Harness: cmp.Or(tc.harness, ClaudeCodeHarness), BridgeSeq: 99,
 				BridgeOpen: []int{98}, Omitted: []int{97}}
 			capture.placeAtZero()
@@ -493,18 +494,16 @@ func TestAClaudeCodeSaveOutsideTheResumeReadSetIsNeverRaised(t *testing.T) {
 }
 
 // A CAPTURE IS PLACED BY ITS LOG READ ONLY WHERE ITS HARNESS ENDED ITS OWN RUN
-// (see savepoint.go's file comment). Every other one — a job still working, and
+// (savepoint.go's file comment). Every other one (a job still working, and
 // every job CUT OFF: killed, told to stop by its end, ended before its script
-// packed, or lost — is reserved at zero, and raised after its take to its own
+// packed, or lost) is reserved at zero and raised after its take to its own
 // launch's landed capture's point where both name one newest compaction, with
-// no place an older build reads, so a relaunch continuing it is told every
-// call its archive may lack.
+// no place an older build reads, so a relaunch is told every call its archive
+// may lack.
 //
-// Mutation: place a cut-off capture at its log read, and its cases count calls
-// its archive may lack; place every capture at its launch's newest save point,
-// and the job that ended its own run tells again every call its session holds;
-// place one at zero whatever its launch holds, and the case whose launch kept a
-// capture goes red.
+// Mutation: place a cut-off capture at its log read, every capture at its
+// launch's newest save point, or one at zero whatever its launch holds, and a
+// case goes red.
 func TestACaptureIsPlacedByItsLogReadOnlyWhereItsHarnessEndedItsOwnRun(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

@@ -261,14 +261,15 @@ func TestAnOwnRunCaptureStatesTheReadsItsBriefLeftOut(t *testing.T) {
 	cutOff := SessionCapture{Omitted: []int{99}}
 	cutOff.placeAtZero()
 	cutOff.ResumedCount = &ResumedCount{Tokens: 1, Restart: new("u-1")}
+	launch := LaunchRecord{Brief: BriefFresh, BriefOmitted: []int{3, 12}}
 	cutOff.placeAtNewest(savePlaces{run: PendingRun{TurnID: "t1", LaunchID: "job-2", LaunchSeq: 2, Kept: own,
-		Capture: own, Launch: LaunchRecord{Brief: BriefFresh, BriefOmitted: []int{3, 12}}}, resumeRead: true})
+		Capture: own, Launch: launch}, resumeRead: true})
 	if !slices.Equal(cutOff.Omitted, []int{3}) {
 		t.Errorf("a capture raised to its launch's own capture's point states %v left out, want its launch's "+
 			"at or below it, [3]", cutOff.Omitted)
 	}
-	if cutOff.Omitted[0] = -1; own.Omitted[0] == -1 {
-		t.Error("the capture shares its set with the capture it was raised to")
+	if cutOff.Omitted[0] = -1; launch.BriefOmitted[0] == -1 {
+		t.Error("the capture shares its set with its launch's record")
 	}
 	start := SessionCapture{Omitted: []int{99}}
 	start.placeAtZero()

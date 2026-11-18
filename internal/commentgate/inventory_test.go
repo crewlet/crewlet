@@ -189,7 +189,7 @@ var excessInventory = map[string]int{
 	"internal/rendezvous":                           88,
 	"internal/routing":                              36,
 	"internal/runtoken":                             28,
-	"internal/sandbox":                              3634,
+	"internal/sandbox":                              3628,
 	"internal/sandbox/executor":                     2319,
 	"internal/sandbox/sandboxtest":                  150,
 	"internal/schedule":                             160,
