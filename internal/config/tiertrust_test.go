@@ -30,17 +30,15 @@ const storeBacked = "WithStore"
 
 // TIER A RESOLVES FROM THE ENVIRONMENT AND NOTHING ELSE.
 //
-// It is ADR-0011, and this is the gate behind it. Tier A holds the address of
-// the secret store and the credentials that open it, so a Tier A document that
-// could expand a reference OUT of that store would be asking the store for the
-// key to itself — and the failure is not a loop, it is worse: whichever half
-// resolves first decides, silently, and an operator who moves one value from
-// the environment into the store gets a node that boots with a different
-// identity, a different broker or a different database.
+// ADR-0011 is the rule; this is the gate behind it. Tier A holds the secret
+// store's address and the credentials that open it, so a Tier A document that
+// could expand a reference OUT of that store would ask the store for its own
+// key: not a loop but a silent race, where whichever half resolves first
+// decides, and moving one value from the environment into the store boots a
+// node with a different identity, broker or database.
 //
-// The violation is ONE ARGUMENT at a call site, it compiles, and it makes a
-// `${VAR}` in bootstrap.yaml start working — which is exactly what somebody
-// will be trying to achieve when they write it.
+// The violation is ONE ARGUMENT at a call site; it compiles, and it makes a
+// `${VAR}` in bootstrap.yaml start working.
 func TestTierAIsNeverResolvedFromTheSecretStore(t *testing.T) {
 	t.Parallel()
 	scan := tierALoads(t, sourcetree.Root(t))

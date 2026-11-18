@@ -21,28 +21,17 @@ import (
 const ArtifactPlaceholder = "{artifact}"
 
 // APIArtifacts is a THIRD listener, beside api.port and api.public, that serves
-// the bytes of artifact versions and nothing else: no guard, no session, no
-// cookie, no API route. An artifact is arbitrary script written by a person or
-// an agent, so it must never run where the dashboard's session runs.
+// artifact version bytes and nothing else: no guard, session, cookie or API
+// route: an artifact is arbitrary script that must never run where the
+// dashboard's session runs. Never a Host predicate on api.port: a client-set
+// header would guard the one surface where a mistake is an account takeover.
 //
-// # Why a listener and never a Host predicate on api.port
-//
-// With a separate socket, the absence of every API route and of any cookie
-// handling is a property of the handler chain. As a Host-header branch on the
-// API's own listener it would be a predicate over a header the client
-// controls, guarding the one surface where a mistake is an account takeover.
-//
-// # Two shapes, decided by the address
-//
-// An external URL whose leftmost label starts with [ArtifactPlaceholder] (for
-// example `https://{artifact}.artifacts.example.net`, or
-// `https://{artifact}--acme.crewletusercontent.com`) gives each artifact a real
-// origin of its own, which needs wildcard DNS and a wildcard certificate. A
-// plain origin (`https://artifacts.example.com`, or a second port on the
-// dashboard's own host) serves every document with an OPAQUE origin through
-// the policy's sandbox directive, which needs one name or one port and costs
-// the page its browser storage. Either way a real origin is granted only on a
-// site that is not the dashboard's ([Bootstrap.ArtifactOriginMode]).
+// An external URL whose leftmost label starts with [ArtifactPlaceholder]
+// (`https://{artifact}.artifacts.example.net`) gives each artifact its own
+// origin (wildcard DNS and certificate). A plain origin serves every document
+// with an OPAQUE origin via the policy's sandbox directive (one name or port;
+// no browser storage). A real origin only off the dashboard's site
+// ([Bootstrap.ArtifactOriginMode]).
 type APIArtifacts struct {
 	// Host is the bind address. Empty binds every interface.
 	Host string `yaml:"host,omitempty" json:"host,omitempty" desc:"Bind address for the artifact listener. Empty binds every interface."`

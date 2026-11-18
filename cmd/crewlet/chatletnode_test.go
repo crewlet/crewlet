@@ -21,19 +21,16 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// EVERY `chatlet` VERB, AGAINST A REAL NODE, AS A PERSON — and refused to a
+// EVERY `chatlet` VERB, AGAINST A REAL NODE, AS A PERSON, and refused to a
 // credential acting as itself.
 //
-// The cases beside this one hold each verb against a hand-written node, which
-// agrees with the CLI about the routes, the bodies and the answers because one
-// author wrote both. Only a real node can say they agree with the SERVER: its
-// guard, its authority table's seated rows, its act transport, the chat
-// questions and the human write surface's destructions. So the founder is
-// invited and redeems the link, mints their own token with `crewlet iam token
-// -login`, and runs every verb with it — say something, list, read, search,
-// erase, set a horizon, prune — while the deployment's own Tier A token, which
-// holds admin and acts as nobody's seat, is refused a read and told how to
-// get a seat.
+// The hand-written node in the cases beside this agrees with the CLI because
+// one author wrote both. Only a real node says they agree with the SERVER: its
+// guard, seated authority rows, act transport, chat questions and destructions.
+// So the founder redeems an invitation, mints their token with `crewlet iam
+// token -login`, and runs every verb (say, list, read, search, erase, set a
+// horizon, prune), while the Tier A token, which holds admin and acts as
+// nobody's seat, is refused a read and told how to get a seat.
 func TestEveryChatletVerbWorksAgainstARealNodeAsAPerson(t *testing.T) {
 	t.Parallel()
 	port := reservePort(t)

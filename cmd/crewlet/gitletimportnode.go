@@ -14,41 +14,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// `crewlet gitlet import` ON THE NODE — the default — a person's request that
-// Gitlet create a project repository filled from one at another host, or
-// kept in step with it as a pull mirror (-mirror).
+// `crewlet gitlet import` ON THE NODE (the default): a person's request that
+// Gitlet create a repository filled from another host's, or kept in step as a
+// pull mirror (-mirror), through code_import_repo on the operator catalogue's
+// act route. CREWLET_API_TOKEN alone is the credential, and must be a PERSON's
+// own machine token: an import is a person's alone (U49 a).
 //
-// # Through the act transport, as the person the token is bound to
-//
-// The tool a person's assistant and the dashboard's "Import a repository"
-// call, code_import_repo, through the operator catalogue's act route (`POST
-// /operator/act/{tool}`), so an import from a terminal is the same create
-// with the same record. The credential is CREWLET_API_TOKEN
-// and nothing else, and it must be a PERSON's own machine token: an import is
-// a person's alone (U49 a), so a token bound to nobody is refused, naming why.
-//
-// # The node fetches, this machine does not
-//
-// The repository's home Gitlet node dials the source — over https alone, every
-// address it resolves held to the public ones unless Tier A's
-// gitlet.import_allow_private says otherwise (M6-D18) — and lands it in chunks,
-// so a history of any size goes in whatever code.limits.max_push_bytes says,
-// with nothing to resume by hand: a restarted home fetches again from the refs
-// already landed. The source's token is the node's too: -credential names the
-// variable that holds it, in the node's secret store or environment, and is
-// recorded as that reference — the token never crosses this command line, nor
-// any record (M6-D17). The variable is one an administrator declared for the
-// source's host in code.remote_credentials, or the node refuses the import. `-local` is the other import, this machine's git
-// pushing into a repository that exists (codeimport.go), for a source only
-// this machine can reach.
-//
-// # A retry is the same create
-//
-// Every invocation mints an operation id before the request and sends it as
-// the `Idempotency-Key` header; the repository's id is derived from that
-// operation, so an answer whose outcome is unknown — or none at all — prints
-// it, and `-op-id` sends it again, which the domain's ledger answers as the
-// first create rather than refused as a name already taken.
+// The home node dials the source (https only, public addresses unless Tier A's
+// gitlet.import_allow_private, M6-D18), lands it in chunks and resumes alone.
+// The source's token stays on the node: -credential names a variable declared
+// in code.remote_credentials and is recorded as that reference, never sent
+// (M6-D17). `-local` is the other import (codeimport.go). A retry sends the
+// same Idempotency-Key (-op-id), answered as the first create.
 
 // codeImportTool is the tool the command calls.
 const codeImportTool = string(authz.ActionCodeImportRepo)

@@ -37,19 +37,16 @@ type Gitlet struct {
 	// fetches and pushes in flight — passed raw like MaxProcesses.
 	MaxTransfers int `yaml:"max_transfers,omitempty" json:"max_transfers,omitempty" js:"min=0;max=65536" desc:"Clones, fetches and pushes this node serves at once; 0 is four for each of max_processes, and no more than one for every 512 MiB of the node's memory. Each holds a few hundred MiB while it runs, so size it to memory rather than cores."`
 
-	// ImportAllowPrivate lifts the public-address rule from the one outbound
-	// git dial (internal/gitlet/gitproc's ResolveRemote): set, a remote's host
-	// is pinned to whatever its name resolves to, a forge on this node's own
-	// network among them. It governs every remote a Gitlet node dials — an
-	// import's source and both kinds of mirror — though its name names
-	// only the first of them.
+	// ImportAllowPrivate lifts the public-address rule from the one outbound git
+	// dial (internal/gitlet/gitproc's ResolveRemote): set, a remote's host is
+	// pinned to whatever its name resolves to, a forge on this node's own network
+	// among them. It governs every remote a Gitlet node dials (an import's source
+	// and both kinds of mirror), though its name names only the first.
 	//
-	// TIER A, and off unset, because what it opens is THIS NODE'S network:
-	// the addresses a dial may reach are the ones its machine is wired to,
-	// and a company document edited live — or a person naming an import's
-	// URL — has no business deciding that a git process may reach the
-	// node's metadata service or its neighbours. The zero value is the
-	// refusal, so a block that never names it keeps the wall.
+	// TIER A, and off unset, because what it opens is THIS NODE'S network: a live
+	// edited company document or an import's URL has no business deciding that git
+	// may reach the node's metadata service or its neighbours. The zero value is
+	// the refusal.
 	ImportAllowPrivate bool `yaml:"import_allow_private,omitempty" json:"import_allow_private,omitempty" desc:"Let this node's imports and mirrors — pull and push alike, whatever the name says — dial a host that resolves to a loopback, link-local, private or otherwise non-public address, such as a forge on this node's own network. Off, a host any of whose addresses is not on the public internet is refused before git runs. A proxy the process names (HTTPS_PROXY, NO_PROXY) is dialed either way, and resolves the host itself."`
 
 	// MaxChecks is how many of the company's checks this node runs at once
@@ -151,22 +148,16 @@ func (g Gitlet) CacheDirFor(storePath string) string {
 }
 
 // CacheBudget is the explicit budget and false, or the derived one
-// ([DerivedCacheMaxBytes]) and true — the second return is what the engine logs
-// (code_cache_sized), so a node can say where its budget came from.
+// ([DerivedCacheMaxBytes]) and true; the engine logs the second return
+// (code_cache_sized) to say where a budget came from.
 //
-// room is the space the cache can use, which only the engine can measure: the
-// volume's free space PLUS what the cache already holds, LESS what the volume's
-// other BOUNDED tenants may still write there — an embedded broker sharing the
-// volume, up to the store limit its server enforces, and Gitlet's
-// request spools, up to their allowance, and the revision facts' patch spools,
-// up to theirs (query.PatchSpoolAllowance). Free space excludes the cache's own
-// files, and a budget derived from it alone shrank at every restart of a warm
-// node, whose first janitor pass then evicted the difference — warm
-// repositories downloaded again, a GET a push, for no change in the disk. And
-// a broker's limit is room IT may fill, itself derived from the same free
-// space: a budget taken from that free space beside it claimed the same bytes
-// twice. dedicated is whether the cache's volume is one of its own, which the
-// engine decides by comparing filesystems.
+// room is what only the engine can measure: the volume's free space PLUS what
+// the cache already holds, LESS what the volume's other BOUNDED tenants may still
+// write (an embedded broker up to its store limit; Gitlet's request spools and
+// query.PatchSpoolAllowance). Free space alone excludes the cache's own files, so
+// the budget shrank at every warm restart and evicted the difference. A broker's
+// limit is itself derived from the same free space, so counting both counts the
+// bytes twice. dedicated is whether the cache's volume is its own.
 func (g Gitlet) CacheBudget(room int64, dedicated bool) (int64, bool) {
 	if g.CacheMaxBytes > 0 {
 		return g.CacheMaxBytes, false
@@ -175,36 +166,17 @@ func (g Gitlet) CacheBudget(room int64, dedicated bool) (int64, bool) {
 }
 
 // DerivedCacheMaxBytes is the budget an unset gitlet.cache_max_bytes derives from
-// the room the cache can use ([Gitlet.CacheBudget]):
-//
-//   - DEDICATED — the volume holds nothing else of this node's — SEVEN EIGHTHS
-//     ([CacheVolumeDedicatedShare]). A quarter of a volume nothing else uses
-//     was three quarters wasted, and every byte the budget refuses is a GET a
-//     push the next time an evicted repository is fetched.
-//   - SHARED — the volume also holds the store, the replicated estate, the
-//     snapshots or the broker's streams — HALF ([CacheVolumeSharedShare]) of
-//     what the bounded tenants leave. The broker is in neither half: its limit
-//     is taken out of the room before it is divided. What is left has two
-//     tenants with no ceiling of their own — the cache, which evicts to its
-//     budget, and the store with its snapshots, which cannot evict anything —
-//     so they divide it evenly, and the store never has less headroom than
-//     the disposable cache beside it: its own growth, a snapshot written
-//     beside the one it replaces, and what the cache's budget does not count
-//     (trash/ awaiting the janitor, a new index beside the old).
-//
-// NEVER MORE THAN THE SHARE, and no floor: a cache needs no minimum to work —
-// it serves a repository larger than its budget and evicts it once idle —
-// while a floor above the share is a budget the volume does not have, which on
-// a shared volume took the store's, the broker's and the snapshots' last bytes
-// before the cache evicted anything. A share below [GitletCacheMaxBytesFloor] is
-// said by the engine at boot (code_cache_sized, a warning) rather than raised
-// to it. And no derived ceiling: the cache's own eviction holds it to whatever
-// this answers, and a ceiling would waste exactly the dedicated volume this
-// rule exists to use. A room of nothing — a volume its bounded tenants may
-// fill — is a budget of nothing, which is no cache at all: the engine refuses
-// to build Gitlet on it, naming the volume's figures and the settings
-// that give it room, since any budget it chose there would be bytes the volume
-// does not have.
+// the room the cache can use ([Gitlet.CacheBudget]): SEVEN EIGHTHS of it on a
+// DEDICATED volume ([CacheVolumeDedicatedShare]; every byte refused is a refetch
+// later), HALF ([CacheVolumeSharedShare]) on a SHARED one, after the broker's
+// limit is taken out. The cache (evicts to budget) and the store with its
+// snapshots (cannot evict) have no ceiling of their own and divide the rest
+// evenly, so the store keeps headroom for growth, a snapshot beside its
+// predecessor and what the budget omits (trash/, a new index).
+// NEVER MORE THAN THE SHARE, no floor: a cache works at any size, a floor above
+// the share took the other tenants' last bytes. A share below
+// [GitletCacheMaxBytesFloor] is warned at boot (code_cache_sized), not raised;
+// no ceiling, as eviction holds it. No room, no cache: the engine refuses Gitlet.
 func DerivedCacheMaxBytes(room int64, dedicated bool) int64 {
 	if room <= 0 {
 		return 0
@@ -267,24 +239,15 @@ func (g Gitlet) validate(path Path, store Store) error {
 }
 
 // holdsStore answers the resolved cache directory and what of the store's it
-// holds — "the store" or "the snapshots" — where it is that directory or an
+// holds ("the store" or "the snapshots") where it is that directory or an
 // ancestor of it, and "" where it holds neither.
 //
-// REFUSED AT VALIDATE, before a node is started on the shape: the cache's own
-// guard at boot (internal/gitlet/cache's Prepare refuses a non-empty directory
-// without its tag) is the second line, not the first, and it cannot see one
-// case at all. The node's store and its replicated estate are opened before
-// Gitlet is built, so a cache directory holding either is non-empty and
-// untagged by then and Prepare refuses it; but the SNAPSHOTS' directory is
-// made at the first snapshot, after the cache has been prepared and tagged, so
-// a cache directory that holds it is adopted while still empty, and from then
-// on the snapshots live in a tree the cache treats as its own (it empties its
-// tmp/, scratch/ and trash/ at every boot). Here, and only here, is that shape
-// refused before it happens — and `crewlet validate` names the other two
-// before a node is ever started on them.
-//
-// A store with no directory of its own — `:memory:`, an empty path — has
-// nothing on disk to protect, and is not compared.
+// REFUSED AT VALIDATE: the cache's boot guard (cache's Prepare refuses a non-empty
+// untagged directory) is the second line and misses one case. The store and
+// estate are opened first, so a cache directory holding either is refused then;
+// but the SNAPSHOTS' directory is made after the cache is tagged, so it is
+// adopted while empty and lives in a tree the cache empties at every boot.
+// A store with no directory of its own (`:memory:`) has nothing to protect.
 func (g Gitlet) holdsStore(store Store) (dir, what string) {
 	storePath := strings.TrimSpace(store.Path)
 	if storePath == "" || strings.HasPrefix(storePath, ":memory:") {

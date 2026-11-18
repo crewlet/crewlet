@@ -144,25 +144,16 @@ type invocation struct {
 
 // runIn is [run] against an invocation it is HANDED: the environment every
 // command that talks to a running node reads its credential from
-// ([nodeTokenOrEmpty]), and a provisioning command the operator's own, and the
-// client Slack's Web API is reached through.
+// ([nodeTokenOrEmpty]), and the client Slack's Web API is reached through.
 //
-// The process's own environment and the default client for every run of the
-// binary, so the rule the credential follows — `CREWLET_API_TOKEN` and
-// nothing else — is unchanged. They are parameters because the process is
-// shared by everything running in it: a suite running its commands side by
-// side could only hand each one a credential by setting the process's
-// variable, which Go refuses to a parallel test and which would hand every
-// concurrent command whichever case set it last; and a case that read the
-// process's would read whatever the machine running the suite exports — an
-// operator's own Slack refresh token among them, which a run that reached
-// slack.com would spend. The engine is handed its environment for the same
-// reason ([engine.Options.Environment]).
-//
-// THE CREDENTIALS, AND NOT THE LOGGING KNOBS: `CREWLET_LOG_LEVEL`,
-// `CREWLET_LOG_FORMAT` and `CREWLET_LOG_FILE` configure the process's one
-// logger, which is the process's state rather than the invocation's, so they
-// are read from the process.
+// The binary passes the process's environment and default client, so the rule
+// (`CREWLET_API_TOKEN` and nothing else) is unchanged. They are parameters
+// because a parallel suite cannot hand each command a credential through the
+// process's variable, and a case reading the process's would read what the
+// machine exports (an operator's Slack refresh token a run would spend). The
+// engine is handed its environment likewise ([engine.Options.Environment]).
+// The `CREWLET_LOG_*` knobs configure the process's one logger and are read
+// from the process.
 func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) {
 	// A READ OF A STORED VALUE THAT FAILED PART WAY THROUGH A COMMAND stops
 	// it with a panic, because the lookup that made it has no error to return
@@ -186,26 +177,18 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 	cmd, rest := args[0], args[1:]
 	environ := inv.environ
 
-	// THE OPERATOR COMMANDS ARE QUIET BY DEFAULT. They open a store, which
-	// logs a migration line per schema file and an open line per call —
-	// noise on a one-shot command whose stdout is meant to be piped, read
-	// or diffed. `run` configures its own level from its own flag, and
-	// nothing here silences a WARNING.
+	// THE OPERATOR COMMANDS ARE QUIET BY DEFAULT: they open a store, which logs a
+	// migration line per schema file, noise on a one-shot command whose stdout is
+	// piped or diffed. `run` sets its own level from its own flag; nothing here
+	// silences a WARNING.
 	//
-	// QUIET IS A DEFAULT, NOT A CEILING. A half-applied migration or a
-	// deploy gate that failed is exactly the run whose detail an operator
-	// needs, and pinning every non-`run` command at warn with no override
-	// left them nothing to turn up. $CREWLET_LOG_LEVEL is the escape
-	// hatch, and it is an environment variable rather than a flag on nine
-	// commands because it belongs to the INVOCATION rather than to any one
-	// of them — a CI step exports it once and every command it runs
-	// answers.
+	// QUIET IS A DEFAULT, NOT A CEILING: a half-applied migration or failed deploy
+	// gate needs its detail. $CREWLET_LOG_LEVEL is the hatch, an environment
+	// variable because it belongs to the invocation, not to nine commands.
 	//
-	// NOR FOR THE RELAY, which sets up nothing at all. It is the process a
-	// harness starts as a seat's MCP server, so its stdout IS the protocol
-	// stream and its environment is whatever the harness chose to pass: the log
-	// level, format and file below would read variables it must not depend on.
-	// See internal/mcprelay.
+	// NOR FOR THE RELAY: a harness starts it as a seat's MCP server, so its stdout
+	// IS the protocol stream and its environment is the harness's choice. See
+	// internal/mcprelay.
 	if cmd != "run" && cmd != mcprelay.Command {
 		// THE LEVEL, NOT THE DESTINATION. This used to install `stderr`
 		// as the process-wide sink, which is wrong twice over: `run`
@@ -216,22 +199,17 @@ func runIn(inv invocation, args []string, stdout, stderr io.Writer) (err error) 
 		// data race, and one test's log lines landing in another's
 		// output. See [logging.Configure].
 		logging.SetVerbosity(operatorLogLevel(), operatorLogFormat())
-		// THE FILE OPENS BEFORE THE FIRST THING THESE COMMANDS LOG, which
-		// is the warning below: a misspelled $CREWLET_LOG_LEVEL is part of
-		// the command's log, and a file attached afterwards would hold
-		// every line of it except the one saying the invocation was wrong.
+		// THE FILE OPENS BEFORE THE FIRST THING THESE COMMANDS LOG, the warning
+		// below: a misspelled $CREWLET_LOG_LEVEL belongs in the command's log, and a
+		// file attached afterwards would miss that line.
 		//
-		// AND THE SAME LEVER OVER WHERE THEY WRITE. $CREWLET_LOG_FILE is
-		// the third sibling of the two above and exists for the one
-		// reason they do: these commands take no logging flags, so a CI
-		// step that wants a `crewlet migrate` in the same durable record
-		// as the node it is migrating for has no other way to ask. The
-		// rotation caps are not env knobs — they belong to a deployment's
-		// file, and a one-shot command does not reach one of them.
-		// STDERR STAYS ON for these: they read no `logging:` block, so
-		// nothing has told them otherwise, and a one-shot command whose
-		// output vanished into a file would be the opposite of what a
-		// person at a terminal wants.
+		// $CREWLET_LOG_FILE is the third sibling of the two above: these commands take
+		// no logging flags, so a CI step wanting a `crewlet migrate` in the same
+		// durable record as its node has no other way to ask. The rotation caps are
+		// not env knobs; they belong to a deployment's file.
+		// STDERR STAYS ON: these commands read no `logging:` block, and a one-shot
+		// command whose output vanished into a file would surprise a person at a
+		// terminal.
 		detach, err := attachLogFile(config.LogFileSettings{
 			Open: logging.FileOptions{Path: os.Getenv("CREWLET_LOG_FILE")},
 		}, true, os.Stderr)
@@ -404,42 +382,18 @@ Environment:
 `, version.String(), defaultBootstrapPath, defaultCompanyPath, apiTokenEnv)
 }
 
-// The two tiers are separate files because they answer to separate people. A
-// node's broker address and store path are an operator's; the org chart and
-// the model behind each seat are the company's.
+// The two tiers are separate files because they answer to separate people: a
+// node's broker and store path are an operator's; the org chart and models the company's.
 //
-// Tier A is read from its file on every boot and never from anywhere else —
-// it is what tells the process where its store and broker are, so it cannot
-// come from them.
+// Tier A is read from its file on every boot and nowhere else: it locates the
+// store. Tier B is TWO flags, since a running node serves the revision the
+// fleet's activation pointer names and a file only gets a document INTO it:
 //
-// Tier B is different, and it is TWO flags because it was one job too many
-// for one.
+//	-company        BOOTSTRAP: imported only where no company exists yet.
+//	-import-company OVERRIDE: make this file the active revision now.
 //
-// A running node serves the revision the fleet's activation pointer names,
-// not a file — that is what makes a PUT /config on one node reach every other.
-// So a Tier B file on the command line is only ever a way of getting a
-// document INTO that store, and there are two quite different reasons to want
-// that:
-//
-//	-company        BOOTSTRAP. Imported only where no company exists yet:
-//	                none in this node's store and none the fleet runs. Once
-//	                the company exists, this file is ignored and the node
-//	                boots on what the fleet is running.
-//
-//	-import-company OVERRIDE. Make this file the active revision now, over
-//	                whatever the fleet is running.
-//
-// They were one flag with the override's behaviour, and it was the wrong
-// default in the way that costs most: an operator edits their company live —
-// through the dashboard, PUT /config, or `crewlet config import` — then
-// restarts a node whose company.yaml still says what it said last month, and
-// the file silently wins. A deleted role comes back, a changed model reverts,
-// and nothing anywhere says so, because from the node's point of view it did
-// exactly what it was told.
-//
-// Making the safe one the default does not resurrect the bug it was guarding
-// against — an edited file being silently ignored — because the ignore is now
-// LOUD (see reconcile.go) and the override is one flag away.
+// Override as the default let a stale company.yaml silently win over a live
+// edit; bootstrap's ignore is LOUD (see reconcile.go).
 const (
 	defaultBootstrapPath = "crewlet.yaml"
 	defaultCompanyPath   = "company.yaml"
@@ -664,32 +618,16 @@ func (t Tier) Valid() bool {
 
 // detectTier reads a document and says which tier it is.
 //
-// # By the keys it has, not by its filename
+// Operators break filename conventions, so the vocabularies come from the
+// CONFIG STRUCTS (config.CompanyKeys / config.BootstrapKeys) reduced to each
+// tier's unique keys; a restated list drifts.
 //
-// A filename is a convention an operator can break and routinely does — and
-// the one thing this must get right is the case where they named the file
-// something else. The vocabularies come from the CONFIG STRUCTS themselves
-// (config.CompanyKeys / config.BootstrapKeys), reduced to the keys unique to
-// one tier.
+// A CHECKS FILE is `checks:` beside no key either tier owns
+// (TestTheTierVocabulariesShareNoKey), so a typo'd key beside it is refused by
+// the checks file's strict reading, at its line.
 //
-// Restated by hand here, the list had drifted exactly as a restated list
-// does: it counted `agents`, which appears nowhere in this tree, the schema,
-// the examples or the docs, while omitting `roles`, `units`, `mcp_servers`,
-// `turn_engine` and `scheduling`. A document carrying only `units:` therefore
-// scored nothing on either side and was reported undecidable — the commonest
-// authoring shape, and the one a `crewlet validate -json` fix loop is most
-// often pointed at.
-//
-// A CHECKS FILE is told by `checks:` beside no key either config tier owns:
-// neither tier has a `checks` key (TestTheTierVocabulariesShareNoKey holds
-// it), so a document that carries one and nothing of either tier is a
-// repository's checks file whatever else it carries — a typo'd key beside
-// `checks:` is then refused by the checks file's own strict reading, at its
-// line, rather than reported as a document no tier could be told from.
-//
-// An UNDECIDABLE document is an error naming -tier, never a guess. Guessing
-// wrong reports every field of the file as invalid, and an operator reading
-// that has no way to tell it from a genuinely broken document.
+// An UNDECIDABLE document is an error naming -tier, never a guess: a wrong
+// guess reports every field invalid, like a genuinely broken document.
 func detectTier(raw []byte) (Tier, error) {
 	var doc map[string]any
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
@@ -859,18 +797,14 @@ func validateOne(file string, tier Tier, asJSON bool, stdout io.Writer) error {
 			return report(stdout, res, asJSON)
 		}
 		res.Valid = true
-		// TIER A HAS WARNINGS OF ITS OWN: a declined fsync, a trim that
-		// will never advance on its own, a peer entry no rule counts.
-		// Every one of them describes a correct deployment for somebody,
-		// so none is a refusal, and here is where the consequence can
-		// still change the decision: before the file is deployed. They are
-		// not said only here — `crewlet run` logs the same list on every
-		// start ([logBootstrapAdvisories]), for every deployment nobody
-		// ran this command for.
+		// TIER A HAS WARNINGS OF ITS OWN (a declined fsync, a trim that will never
+		// advance, a peer entry no rule counts). Each describes a correct deployment
+		// for somebody, so none is a refusal, and here the consequence can still
+		// change the decision, before deploy. `crewlet run` logs the same list on every
+		// start ([logBootstrapAdvisories]) for deployments nobody ran this for.
 		//
-		// APPENDED TO THE EMPTY LIST rather than assigned over it:
-		// [config.Bootstrap.Warnings] answers nil when a document has
-		// none, and assigning that would put `null` where the payload
+		// APPENDED TO THE EMPTY LIST, not assigned: [config.Bootstrap.Warnings] is nil
+		// when there are none, and assigning that would put `null` where the payload
 		// promises an array.
 		res.Warnings = append(res.Warnings, engine.BootstrapWarnings(boot)...)
 		res.Summary = map[string]any{
@@ -902,27 +836,16 @@ type checkedCompany struct {
 }
 
 // checkCompany holds a Tier B document to every rule a submitted document is
-// held to, and then builds its epoch.
+// held to, and then builds its epoch, which reaches nothing (no broker, store
+// or provider is dialled) and catches what a schema cannot, such as a seat
+// whose llm names no configured provider.
 //
-// Building the epoch is the rest of the check, and it reaches nothing: no
-// broker, no store, no provider is dialled. It is what catches the problems a
-// schema cannot, such as a seat whose llm names no configured provider.
-//
-// A document that did NOT hold up reports its references alone: they are
-// reported whenever it PARSED, valid or not, because a misspelled lead is
-// worth seeing in the same pass as the problems and fixing the problems will
-// not fix it. The admission half of [config.Company.Warnings] is deliberately
-// not on that path, because this command refuses an admission rule as a
-// PROBLEM, and the same sentence printed twice reads as two findings.
-//
-// Its advisories wait for the same reason the admission half does, from the
-// other side: an advisory describes what a document that RUNS will do, and a
-// paragraph about a unit's id printed beside a refusal is noise at the moment
-// somebody is reading carefully.
-//
-// A document that held up carries the whole set instead: its references, plus
-// every advisory about what it will do that its author should know before
-// applying it.
+// A document that did NOT hold up reports its references alone, whenever it
+// PARSED, since a misspelled lead is worth seeing in the same pass. The
+// admission half of [config.Company.Warnings] and the advisories stay off that
+// path: an admission rule is refused as a PROBLEM, so printing it twice reads
+// as two findings, and an advisory about what a document that RUNS will do is
+// noise beside a refusal. A document that held up carries the whole set.
 func checkCompany(raw []byte) (*checkedCompany, []config.Warning, error) {
 	company, err := config.ParseCompanyDocument(raw)
 	if err != nil {
@@ -964,20 +887,16 @@ func validateBoth(cfg configFlags, asJSON bool, stdout io.Writer) error {
 	// runs its logs from boot, company or none ([config.Stream.Durable]),
 	// so the Tier A pass above already refused it.
 	res.Valid = true
-	// BOTH TIERS' WARNINGS, for the reason both tiers' problems are
-	// reported: an operator who fixes one file and is told about the other
-	// on the next run has been made to pay twice for one edit. The
-	// company's are already here, put there by checkCompany so that a
-	// refused document still reports them, so Tier A's go in FRONT of them
-	// rather than after, which is the order the two files are named in.
+	// BOTH TIERS' WARNINGS, for the reason both tiers' problems are reported: an
+	// operator told about the other file on the next run pays twice for one edit.
+	// The company's are already here (checkCompany puts them there so a refused
+	// document still reports them), so Tier A's go in FRONT, the order the files
+	// are named in, and the warnings neither tier can raise alone
+	// ([config.TierWarnings]) between the two.
 	//
-	// Inserted rather than appended onto Tier A's own list, which is nil
-	// for a document with no warnings at all: the payload promises both
-	// lists are arrays, and `append(nil)` of nothing stays nil.
-	//
-	// And the warnings neither tier can raise alone ([config.TierWarnings]),
-	// between the two: what the pair does together is read after what the
-	// node's own file says.
+	// Inserted rather than appended onto Tier A's own list, which is nil for a
+	// document with no warnings: the payload promises arrays, and `append(nil)` of
+	// nothing stays nil.
 	res.Warnings = slices.Insert(res.Warnings, 0,
 		slices.Concat(engine.BootstrapWarnings(boot),
 			config.TierWarnings(boot, company.Company))...)
@@ -1344,18 +1263,13 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 			"reports healthy and runs nothing", *mode, words.Or(statelog.MaintenanceModes))
 	}
 	// WHAT IS VALID ABOUT TIER A AND WORTH KNOWING, said on every start (see
-	// [logBootstrapAdvisories] for why). At this point and no other: after
-	// every refusal Tier A's rules can draw from the file and the flags
-	// ([validateFolded]), and this command's own about the bind and the
-	// mode, because a warning printed beside a refusal is noise at the
-	// moment somebody is reading carefully; after the log file is attached,
-	// so the lines reach the durable record; and after every flag has been
-	// folded into the document, so they describe the node this run starts
-	// rather than the file it was started from. What can still fail after
-	// them is not Tier A's to refuse: the environment's node id, a port
-	// somebody else holds, a company file the seed writes into the store and
-	// holds to the admission rules then, a store or a broker that will not
-	// open.
+	// [logBootstrapAdvisories]). Only here: after every refusal Tier A's rules
+	// can draw from the file and flags ([validateFolded]), since a warning beside
+	// a refusal is noise; after the log file is attached, so the lines reach the
+	// durable record; and after every flag is folded in, so they describe the node
+	// this run starts. What can still fail after them is not Tier A's to refuse:
+	// the environment's node id, a port somebody else holds, a company file the
+	// seed holds to the admission rules then, a store or broker that will not open.
 	logBootstrapAdvisories(log, boot)
 	// WHAT THE LAST PROCESS LEFT FOR ITS ISSUE REPORTS, before anything else
 	// here can crash: its crash output moves aside for the first revision to
@@ -1377,19 +1291,16 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	if err != nil {
 		return err
 	}
-	// THE LISTENERS, BOUND NOW: before the first step of the boot that can
-	// take time, which is everything from [decideSeed] on. What they answer
-	// until the node hands them its own surface is internal/api's boot
-	// surface ([api.Boot]): /health 503 while the node recovers what it holds
-	// and 200 once it has — so a startup probe bounds the recovery exactly as
-	// it did, and nothing the company configures, which all starts after it,
-	// can hold the probe — /ready 503 throughout, and every route the node
-	// will serve a 503 `starting` with a Retry-After rather than a refused
-	// connection.
+	// THE LISTENERS, BOUND NOW: before the first boot step that can take time,
+	// everything from [decideSeed] on. Until the node hands them its own surface
+	// they answer internal/api's boot surface ([api.Boot]): /health 503 while the
+	// node recovers what it holds and 200 once it has (so a startup probe bounds
+	// the recovery, and nothing the company configures can hold it), /ready 503
+	// throughout, and a 503 `starting` with Retry-After on every other route
+	// rather than a refused connection.
 	//
-	// AND A PORT ALREADY TAKEN FAILS THE BOOT HERE, at once, rather than
-	// after a recovery that can take minutes and is then thrown away.
-	//
+	// A PORT ALREADY TAKEN FAILS THE BOOT HERE, at once, not after a recovery that
+	// can take minutes.
 	listeners, err := bindListeners(ctx, boot, nodeID, bind, log)
 	if err != nil {
 		return err
@@ -1530,30 +1441,17 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// refusal is live from the first delivery this node could take.
 	e.SetAdmits(reconciler.Admits)
 
-	// THE CONFIG SURFACE IS BUILT HERE, NOT INSIDE serveAPI, and the
-	// difference is a node with `api.port: 0`.
+	// THE CONFIG SURFACE IS BUILT HERE, NOT INSIDE serveAPI, because of a node with
+	// `api.port: 0`: a worker-only node must still get a config writer. The
+	// reconcile loop is armed regardless, as a FLEET SINGLETON that can land on
+	// that node, and every path needing the writer would fail for the life of the
+	// process.
 	//
-	// It used to be constructed after that function's early return, so a
-	// worker-only node — a documented posture, validated as "0 (no HTTP
-	// surface)" — never installed a config writer at all. The reconcile
-	// loop is armed regardless: it is a FLEET SINGLETON, so on a split
-	// deployment it lands on exactly that node as readily as on any other,
-	// and every path needing the writer then failed for the life of the
-	// process. A disconnect answered ErrDisconnectUnavailable whose own
-	// comment calls the missing writer "the window between the loop arming
-	// and the API wiring, which resolves on its own within a second"; a
-	// GitHub seat's discovered installation could never be recorded; and
-	// the Atlassian pass emitted its "set cloud_id by hand" note on every
-	// tick, for ever.
-	//
-	// Nothing about writing the company document needs an HTTP listener —
-	// the surface takes a store, a cipher, the plane and the queue, all of
-	// which exist here — so it is built on every node that HOLDS THE
-	// ESTATE, with a port or without one, and handed to serveAPI, which
-	// shares the ONE instance with the REST routes and the socket queries.
-	// A node without `data` builds none, because nothing on it writes the
-	// document: the reconcile loop is a `workers` duty and the API an
-	// `ingress` surface, and config refuses either without `data`.
+	// Writing the company document needs no listener (the surface takes a store, a
+	// cipher, the plane and the queue), so it is built on every node that HOLDS THE
+	// ESTATE and handed to serveAPI, which shares the ONE instance with the REST
+	// routes and socket queries. A node without `data` builds none: reconcile is a
+	// `workers` duty, the API an `ingress` surface, and both need `data`.
 	configSurface, err := companySurface(e, boot, cipher)
 	if err != nil {
 		abandon()
@@ -1576,29 +1474,15 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 			fleetsecrets.New(e.Backends().Fleet, cipher), log)
 	}
 
-	// ONE PROCESS IS BOTH ENGINE AND API, sharing one broker and one store,
-	// and it is the only shape an API is served in. The API half is what
-	// makes the node reachable at all (every inbound webhook arrives
-	// through it), so an engine that ran without it would hold seats and
-	// hear nothing.
+	// ONE PROCESS IS BOTH ENGINE AND API, sharing one broker and one store. The
+	// API makes the node reachable (every inbound webhook arrives through it).
 	//
-	// SERVED BEFORE THE ENGINE STARTS — the listeners were bound before the
-	// boot, and this is where they are handed the node's own surface — and
-	// the order is a fix rather than a preference. Starting the engine first
-	// means claiming seats first, and a seat is not claimed until its
-	// per-role MCP children are up (one subprocess per server per seat, each
-	// a spawn and a handshake and a tools/list). On the Nimbus example that
-	// is 21 children, and the whole inbound edge (dashboard, REST, every
-	// third-party app's webhook) went unserved for as long as they took —
-	// dark, before the listeners were bound early, and `503 starting` now.
-	// Measured at 37 seconds with four seats and every vendor failing FAST;
-	// a company whose vendors actually answer takes minutes, and it scales
-	// with seats times servers.
-	//
-	// Nothing here needs a started engine: the node exists, /health's seat
-	// list reports honestly that it holds no seats yet (/ready carries none),
-	// and a webhook that arrives in the window is retained rather than
-	// dropped because the mailboxes are created before any claiming (see
+	// SERVED BEFORE THE ENGINE STARTS, where the bound listeners are handed the
+	// node's own surface. The order is a fix: the engine claims seats first, and a
+	// seat is not claimed until its per-role MCP children are up (21 on the Nimbus
+	// example), so the inbound edge went unserved for as long as they took.
+	// Nothing here needs a started engine: /health reports no seats yet, and a
+	// webhook in the window is retained (mailboxes exist before claiming; see
 	// Node.Start).
 	// THE CONFIG FILES THIS NODE WAS STARTED FROM, which a deep-work run
 	// confined on this host is kept from beside the engine's own paths.
@@ -1672,21 +1556,17 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 				"it again")
 	}
 
-	// Said BEFORE the drain, which can take minutes: this line is what an
-	// operator at a terminal reads to learn what the node is waiting for and
-	// how to stop waiting.
+	// Said BEFORE the drain, which can take minutes: an operator at a terminal
+	// reads this line to learn what the node waits for and how to stop waiting.
 	//
-	// WHAT THE PROBES SAY IS CONDITIONAL on there being a listener to say it
-	// on. A node with api.port 0 is a real posture (see [serveAPI]'s
-	// api_disabled line), and promising such an operator a /health that
-	// stays 200 sends them to a refused connection, which is exactly what a
-	// node that died mid-drain looks like — the confusion the rest of this
-	// change exists to remove.
+	// WHAT THE PROBES SAY IS CONDITIONAL on there being a listener. A node with
+	// api.port 0 is a real posture (see [serveAPI]'s api_disabled line), and
+	// promising it a /health that stays 200 sends the operator to a refused
+	// connection, which is what a node that died mid-drain looks like.
 	//
-	// And what the WORK ROUTES say is conditional on there being any: a node
-	// without the ingress role serves only its probes (and a bridge whose
-	// calls belong to runs already under way), so it has no route that would
-	// start new work to refuse.
+	// WHAT THE WORK ROUTES SAY is conditional on there being any: a node without
+	// the ingress role serves only its probes (and a bridge whose calls belong to
+	// runs already under way), so no route would start new work to refuse.
 	probes := "this node binds no HTTP listener, so its drain is visible " +
 		"only in this log"
 	finish := "the turns already running finish"
@@ -1734,29 +1614,17 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	}
 	log.InfoContext(ctx, "engine_draining", draining...)
 
-	// Detached from the signal context, which a signal has already cancelled
-	// when that is what woke us. The drain waits for in-flight turns, bounded only by the
-	// context it is given, so handing it this one would abandon every turn
-	// already running and make the shutdown the opposite of graceful.
+	// Detached from the signal context, which a signal has already cancelled: the
+	// drain is bounded only by the context it is given, so that one would abandon
+	// every running turn. The bound belongs to whatever supervises the process (a
+	// container runtime's kill grace, or the next interrupt: see [interrupts]).
 	//
-	// The bound belongs to whatever supervises the process: a container
-	// runtime's kill grace, or the operator's next interrupt, which the
-	// signal that woke us moved to the second tier (see [interrupts]) and a
-	// fatal moves there above. Both already have one and can see things this
-	// process cannot.
-	//
-	// THE SAME DRAIN ON A FATAL, with no signal behind it and so no kill
-	// grace running, and it still ends — for a reason that depends on which
-	// connection went. With the QUEUE'S OWN gone the drain stops waiting at
-	// once and cancels the turns still running ([node.Node.Drain]): nothing
-	// they conclude can be acknowledged, so a peer runs each of them again
-	// and finishing them here would only make every side effect twice. With
-	// only the COORDINATION STORE'S gone every ack still lands, so the drain
-	// waits for the turns as a signal's does, and they end on their own:
-	// every lease and ledger write they make over the closed connection
-	// fails at once rather than waiting on a broker. Either way the order
-	// after the drain is the one a signal takes, and a second shutdown path
-	// that skipped it would be one more order to keep correct.
+	// THE SAME DRAIN ON A FATAL has no kill grace and still ends. With the QUEUE'S
+	// OWN connection gone it cancels running turns at once ([node.Node.Drain]):
+	// their results cannot be acknowledged, so a peer reruns them and finishing
+	// here would double every side effect. With only the COORDINATION STORE'S gone
+	// every ack still lands, so it waits and the turns end as their lease and
+	// ledger writes fail. The order after is a signal's; a second path is one more.
 	shutdown(context.WithoutCancel(ctx), e, surface, chatLive, log)
 	if fatal != nil {
 		return fmt.Errorf("the node stopped itself: %w", fatal)
@@ -1764,46 +1632,18 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	return nil
 }
 
-// shutdown is the one order a node comes down in, whatever stopped it.
+// shutdown is the one order a node comes down in, whatever stopped it:
+//  1. DRAIN WITH THE LISTENER UP: /health and /ready keep answering while turns
+//     finish, and the drain gate refuses routes that would start new work.
+//  2. FINISH THE GIT REQUESTS ([api.App.DrainGit]), listener up: a clone or push
+//     a close cut restarts from nothing on a peer. Peers' upload RPCs are
+//     still served; the supervisor's grace is the wait's only bound.
+//  3. CLOSE THE LISTENER, not before: that fails liveness during a healthy drain.
+//  4. STOP THE CHAT HUB before the engine, whose appliers would announce into
+//     a hub that no longer drains; detached first, with the indicator driver.
+//  5. TEAR THE ENGINE DOWN: probes and git requests read the stores it closes.
 //
-//  1. DRAIN WITH THE LISTENER UP. /health and /ready are what an orchestrator
-//     reads while the turns finish, and they keep answering: 200 for liveness
-//     and 503 for readiness. The drain is also what shuts the door, because
-//     from its first moment the HTTP surface refuses every route that would
-//     start new work (see internal/api's drain gate), so a listener still
-//     accepting is no longer a listener still minting turns.
-//  2. FINISH THE GIT REQUESTS the node is serving ([api.App.DrainGit]),
-//     once the turns are done and with the listener still up: a clone or a
-//     push the listener's close cut is begun again from nothing on a peer,
-//     and the listener's own grace is sized for a REST read. The drain gate
-//     begins no fetch or push here from the drain's first moment, but it
-//     goes on serving the upload RPCs of fetches begun on a peer for as long
-//     as a balancer sends them here, so this wait ends once that traffic has
-//     moved — and like the turns' it has no bound of its own: the
-//     supervisor's grace is the bound.
-//  3. CLOSE THE LISTENER, once both have completed or their context has
-//     ended, and not before: a node that closed it first answered neither
-//     probe for the whole drain, so its liveness probe failed while it was
-//     doing exactly what it should.
-//  4. STOP THE CHAT HUB, after the drain and the listener — the drain's
-//     turns raise and clear indicators, and the sockets it served are closed
-//     by then — and before the engine, whose appliers would otherwise go on
-//     announcing batches into a hub that no longer drains them. It is
-//     detached from the engine first, so the Chatlet indicator driver goes
-//     with it, and never attached again.
-//  5. TEAR THE ENGINE DOWN, after the listener, because both probes read the
-//     broker and the coordination store the teardown closes — and a git
-//     request still running reads the estate and the object store it closes.
-//
-// A nil surface is a node that bound no listener — api.port 0, or a node
-// without the ingress role and with no tool bridge to serve — and it drains
-// and stops the same way with nothing to close between the two
-// ([httpSurface.stop] is nil-safe). A nil hub is a boot that never built one.
-//
-// ITS PARTS ARE INTERFACES, declared here, so the order is a test's to pin
-// ([TestShutdownTakesANodeDownInOneOrder]): every step's reason is a step that
-// came before it, and an order nothing asserts is one a later edit reverses
-// without a symptom until a rolling restart.
+// A nil surface or hub is skipped; [TestShutdownTakesANodeDownInOneOrder] pins it.
 func shutdown(ctx context.Context, e drainingEngine, surface listeners,
 	chatLive stoppingHub, log *slog.Logger) {
 
@@ -1889,23 +1729,16 @@ func (s *httpSurface) finishGit(ctx context.Context) {
 
 // apiListener is one socket a node binds, the server serving it, and the slot
 // holding what that server answers with.
-//
 // THE SOCKET IS KEPT BESIDE THE SERVER because the server does not hold it
-// until Serve has registered it, and Serve runs in the background
-// ([listenAPI]). Shutdown closes only the listeners Serve has registered, so a
-// stop that came first — every stop a failed public bind makes, a moment after
-// api.port was bound — returned with api.port still accepting connections,
-// until the scheduler next ran that goroutine. [shutdownListener] closes the
-// socket itself, and then waits for that goroutine (served), which is the
-// stop's to end.
+// until the background Serve ([listenAPI]) registers it, and Shutdown closes
+// only registered listeners: a stop that came first (every failed public bind)
+// left api.port accepting. [shutdownListener] closes the socket itself, then
+// waits for that goroutine (served).
 //
-// ONE SERVER FOR THE LIFE OF THE PROCESS, and the handler is what changes
-// ([handlerSlot]): the socket is bound before the boot and served the boot
-// surface, then handed the node's own ([apiListener.serve]). Neither obvious
-// alternative works. An http.Server's Handler must not be changed once Serve
-// has started, and a second server Serving the same socket races the first
-// one's Accept; and a Shutdown before the handover would close the very socket
-// the handover needs.
+// ONE SERVER FOR THE PROCESS, with the handler changing ([handlerSlot]): bound
+// before the boot, served the boot surface, then handed the node's own
+// ([apiListener.serve]). A started Server's Handler must not change, a second
+// server races Accept, and a Shutdown would close the needed socket.
 type apiListener struct {
 	server  *http.Server
 	socket  net.Listener
@@ -1987,30 +1820,17 @@ func (s *httpSurface) stop(ctx context.Context, log *slog.Logger) {
 }
 
 // shutdownListener closes one listener, waiting at most [apiShutdownGrace] for
-// the requests it is serving, and returns only once the socket is closed and
-// the goroutine serving it has ended. listener is the listener as the log
-// names it.
+// its requests, and returns only once the socket is closed and the goroutine
+// serving it has ended. listener is the listener as the log names it.
+// THE SERVER'S OWN SHUTDOWN IS NOT ENOUGH: it closes only listeners Serve has
+// registered, and [listenAPI] starts Serve on a goroutine. A stop that won
+// that race (a failed public bind) left the socket accepting for a node that
+// had reported failure; on 4 cores 42-61% of immediate stops did (Go 1.27.2).
 //
-// THE SERVER'S OWN SHUTDOWN IS NOT ENOUGH. [http.Server.Shutdown] and
-// [http.Server.Close] close only the listeners Serve has already registered,
-// and wait only for the Serve calls that registered one, and [listenAPI]
-// starts Serve on a goroutine — so a stop that won that race (a public bind
-// that failed, tearing api.port down a moment after it was bound, is exactly
-// that stop) returned with the goroutine still to run and the socket still
-// listening until it did: the kernel completed connections for a node that
-// had already reported its failed start and would never answer them. How
-// often follows the scheduler: on 4 cores 42–61% of stops made straight after
-// the start left the socket accepting, 20–37% at GOMAXPROCS=2, and under 0.1%
-// at GOMAXPROCS=1, where the dialler seldom runs before Serve has closed the
-// socket (Go 1.27.2, with and without the race detector, measured).
-//
-// So the stop closes the socket itself, after the shutdown (or the cut), and
-// then waits for the goroutine. By then the server is marked stopping, so a
-// Serve that registered has returned — the shutdown waited for it — and one
-// still to start registers nothing and returns [http.ErrServerClosed] the
-// moment it is scheduled. That is why the wait has no bound of its own, and
-// why it cannot come first: a registered Serve runs until the server is told
-// to stop.
+// So the stop closes the socket itself after the shutdown, then waits for the
+// goroutine, which returns [http.ErrServerClosed] once the server is stopping.
+// The wait has no bound and cannot come first: a registered Serve runs until
+// the server is told to stop.
 func shutdownListener(ctx context.Context, l *apiListener, listener string, log *slog.Logger) {
 	grace, cancel := context.WithTimeout(ctx, apiShutdownGrace)
 	defer cancel()
@@ -2040,31 +1860,16 @@ func shutdownListener(ctx context.Context, l *apiListener, listener string, log 
 
 // apiShutdownGrace bounds how long a listener waits for in-flight REQUESTS,
 // and CUTS whatever is still running when it expires.
+// Requests, not turns (the drain waits for those). Five seconds covers a REST
+// read or a webhook's signature check plus publish, so only a client that
+// stopped reading spends it.
 //
-// Requests, not turns: the turns are the drain's to wait for, and that one is
-// bounded by the process supervisor rather than by a constant here. Five
-// seconds is sized for what a REST read or a webhook's signature-check-plus-
-// publish takes, which is milliseconds, so on an ordinary shutdown this is
-// spent only by a client that stopped reading its own response.
-//
-// IT IS NOT AN UPPER BOUND ON EVERY REQUEST THIS LISTENER CAN BE HOLDING, and
-// the exception is deliberate on both sides. The drain keeps serving
-// [mcpbridge.PathPrefix], whose sessions carry NO idle timeout on purpose (see
-// [mcpbridge.Bridge.Handler]) because a harness legitimately goes quiet
-// for as long as a build takes. A node stopped while such a session is open
-// therefore spends the whole grace here and logs api_shutdown_failed, and that
-// is the honest outcome rather than a fault: the run is one this process will
-// never resume, its record is in the fleet's coordination store, and the
-// alternative — a listener held open for a build — is the thing the grace
-// exists to stop.
-//
-// The other request a listener holds open on purpose is NOT an exception: an
-// assistant's listening stream on /operator/mcp is ended as the shutdown
-// begins ([api.App.EndListens], registered on the listener), so it answers and
-// completes like any other request rather than spending the grace — and
-// api_shutdown_failed keeps meaning that something was stuck. Nor is a
-// connection that has not sent a request, which net/http would wait for until
-// it is five seconds old: it is closed as the shutdown begins ([unusedConns]).
+// NOT A BOUND ON EVERY REQUEST: [mcpbridge.PathPrefix] sessions have NO idle
+// timeout (see [mcpbridge.Bridge.Handler]) because a harness goes quiet for a
+// build, so stopping with one open spends the grace and logs
+// api_shutdown_failed, honestly: this process never resumes that run. The
+// /operator/mcp stream ends as shutdown begins ([api.App.EndListens]), and
+// idle connections close ([unusedConns]).
 const apiShutdownGrace = 5 * time.Second
 
 // seedPauses puts every paused seat on the live projection, by the agent id the
@@ -2249,21 +2054,17 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	dev *auth.DevPrincipal, listeners *nodeListeners, host engine.DeepHost, log *slog.Logger,
 ) (*httpSurface, error) {
 	if boot.API.Port == 0 {
-		// A real posture: a node with no listener at all. Saying so is the
-		// point — an operator who expected an integration to work, or an
-		// orchestrator's probe to answer, should learn it here rather than
-		// from a webhook that never arrives or a restart loop.
+		// A real posture: a node with no listener at all. Saying so lets an operator
+		// who expected an integration or an orchestrator probe to work learn it here
+		// rather than from a silent webhook or a restart loop.
 		//
-		// WHAT IT GAVE UP DEPENDS ON ITS ROLES. A node with the ingress role
-		// is the one integrations and a dashboard expect to find, so
-		// without a port every integration is deaf here. A node without it
-		// serves its probes, and where it runs seats the routes its own
-		// direct boxes dial on loopback — which, given no listener, reach
-		// their tools only at the fleet's address, through an ingress node
-		// — and a satellite with nothing inbound is a shape an operator
-		// chooses. The roles are read off Tier A, whose answer is the
-		// presence lease's: the profile's id is the one field it does not
-		// need.
+		// WHAT IT GAVE UP DEPENDS ON ITS ROLES. With the ingress role, every
+		// integration is deaf without a port. Without it the node serves its probes
+		// and, where it runs seats, the routes its own direct boxes dial on loopback
+		// (which, given no listener, reach their tools only at the fleet's address,
+		// through an ingress node); a satellite with nothing inbound is a chosen
+		// shape. The roles are read off Tier A, whose answer is the presence lease's:
+		// the profile's id is the one field it does not need.
 		hint := "api.port is 0, so this node binds no listener: no " +
 			"orchestrator can probe it (/health, /ready)"
 		switch profile := boot.Profile(""); {
@@ -2303,50 +2104,31 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// answer and a backup's trim hold name this node the way its peers
 	// already do.
 	nodeID := e.Node().ID()
-	// THE INGRESS ROLE DECIDES, not only the port. node.roles was validated,
-	// written onto the presence lease and counted by fleet_role_unmanned,
-	// and nothing consulted it here, so a node told to run only seats still
-	// bound api.port and answered webhooks, the dashboard and the REST
-	// surface: a satellite placed on a private host for exactly that reason
-	// opened a listener, and one config file could not serve both shapes.
-	// The port stays the hard off switch above; this is the role saying the
-	// same thing for a node whose file sets a port for its peers' sake.
+	// THE INGRESS ROLE DECIDES, not only the port: a node told to run only seats
+	// must not bind api.port and answer webhooks, the dashboard and REST. The
+	// port stays the hard off switch above; this is the role saying the same.
 	//
-	// Except for its PROBES, which such a node serves on api.port, because
-	// an orchestrator runs every node and has to be able to restart one that
-	// wedged and wait on one that has not joined — and, beside them, the two
-	// routes its own direct boxes dial, the tool bridge and the telemetry
-	// receiver, to this host's loopback alone: those boxes are processes of
-	// this host, handed this listener on loopback ([nodeListeners.boxHostURL]),
-	// so a seat pool with no address of its own still runs its seats. Every
-	// other box dials the fleet's bridge address, and the ingress node its
-	// call reaches relays it here over the broker (internal/api/mcpbridge).
+	// Except for its PROBES, served on api.port so an orchestrator can restart a
+	// wedged node and wait on one that has not joined, and the two routes its own
+	// direct boxes dial (tool bridge, telemetry receiver) on this host's loopback
+	// ([nodeListeners.boxHostURL]), so a seat pool with no address of its own
+	// still runs its seats. Every other box dials the fleet's bridge address, and
+	// the ingress node relays the call here over the broker (internal/api/mcpbridge).
 	// See [api.Probes].
 	if !boot.Profile(nodeID).RunsIngress() {
 		return serveProbes(ctx, boot, e, reconciler, listeners, log)
 	}
-	// The config surface is the caller's, built before this function so a
-	// node with no HTTP listener still has a config WRITER (see runEngine).
-	// One instance, shared by the REST routes, the socket queries and the
-	// engine's own disconnect path: sealing and opening with the SAME
-	// keyring the reconciler applies through, because two ciphers over one
-	// store would mean a revision written here is one no node can read.
+	// The config surface is the caller's, built before this function so a node
+	// with no HTTP listener still has a config WRITER (see runEngine). One
+	// instance serves the REST routes, socket queries and the engine's disconnect
+	// path, sealing and opening with the SAME keyring the reconciler applies
+	// through: a second cipher would write revisions no node can read, and make a
+	// secret rotation readable only on the node that served it.
 	//
-	// The fleet's secret store, sealed with the SAME keyring: a value
-	// written here is one this node and every peer opens with the key
-	// their Tier A names, and a second cipher would make a rotation
-	// readable only on the node that served the request.
-	//
-	// THE IDENTITY ESTATE, which the surfaces below read — the rotation's
-	// second half here, and who holds a seat for /config and /health. It is
-	// the engine's CORE, opened from boot, company or none, on every node
-	// holding the estate — which a node serving this API always is, since
-	// `ingress` needs `data` — so an engine holding none is one engine.New
-	// did not build: refused here by name rather than handed to each surface
-	// as the nil it reads as "no directory to ask".
-	// It used to be exactly that nil on a node that had met no company, and
-	// each of those surfaces grew a third value for a node that no longer
-	// exists.
+	// THE IDENTITY ESTATE (rotation's second half, and who holds a seat for
+	// /config and /health) is the engine's CORE, opened on every node holding the
+	// estate, which a node serving this API always is. An engine holding none did
+	// not come from engine.New: refused here by name, not handed on as a nil.
 	directory, keyring := e.IAM(), e.IdentityKeyring()
 	if directory == nil || keyring == nil {
 		return nil, errors.New("api: the engine opened no identity estate, and " +
@@ -2593,20 +2375,15 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Config:    configSurface,
 			Budget:    e.Backends().Fleet,
 			Holds:     e.Backends().Fleet,
-			// WHERE A THIRD-PARTY APP REACHES THIS DEPLOYMENT — the
-			// public listener's `api.public.external_url` where one is
-			// configured, `api.external_url` otherwise — which is what a
-			// surface's recorded endpoint is compared with. The SAME
-			// accessor the reconcile loop and the setup surface above
-			// stamp that endpoint from, and never the person's
-			// `api.external_url` alone: behind a public listener that is
-			// another socket, and every registration read as moved.
+			// WHERE A THIRD-PARTY APP REACHES THIS DEPLOYMENT: the public listener's
+			// `api.public.external_url` where configured, `api.external_url` otherwise,
+			// which a surface's recorded endpoint is compared with. The SAME accessor the
+			// reconcile loop and the setup surface above stamp that endpoint from, never
+			// `api.external_url` alone: behind a public listener that is another socket,
+			// and every registration would read as moved.
 			//
-			// A function still, because this whole value is built once
-			// and read for the life of the process, and Tier A is what it
-			// reads: the address cannot change under a running node, so
-			// unlike the company reads around it this one can never
-			// answer twice.
+			// A function because this value is built once and read for the life of the
+			// process, and it reads Tier A, which cannot change under a running node.
 			WebhookBase:   func() string { return boot.API.WebhookBase() },
 			DashboardBase: func() string { return boot.API.ExternalBase() },
 			// What the reconcile loop last found for each surface. The
@@ -2737,30 +2514,18 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		Config:  configSurface,
 		Secrets: secretSurface,
 		Setup:   setupSurface,
-		// WHETHER THIS NODE CAN ANSWER FROM THE ESTATE AT ALL, for /ready.
-		// The ENGINE's own verdict rather than a second one built here: it
-		// is the same question that decides whether this node may keep the
-		// seats it holds, so a node taken out of rotation is the node that
-		// stopped running seats, and the two can never disagree.
+		// WHETHER THIS NODE CAN ANSWER FROM THE ESTATE AT ALL, for /ready: the
+		// ENGINE's own verdict, the one deciding whether it may keep its seats, so
+		// the two never disagree.
 		//
-		// [engine.Engine.SeatsServiceable] rather than
-		// [engine.Engine.StateLogHydrated], deliberately. Hydration is about
-		// a copy that is BEHIND, which catches up on its own — refusing
-		// traffic for the whole of a legitimate boot would take a node out
-		// of rotation at exactly the moment a fleet wants it back. And a
-		// copy that is WRONG — rows below a trim floor, an applier halted
-		// on a record it cannot decode, an eviction — is no reason either:
-		// it goes OUT OF SERVICE and answers nothing, and every request
-		// this node takes is routed to a data node whose copy is sound.
-		// What the seam refuses is a node that can no longer route: its own
-		// copy out of service and its view of the fleet too stale to name
-		// another, which no copy of its own makes up for.
+		// [engine.Engine.SeatsServiceable] rather than [engine.Engine.StateLogHydrated]:
+		// hydration is a copy BEHIND, which catches up, and refusing traffic for a
+		// legitimate boot pulls a node out of rotation when the fleet wants it back. A
+		// copy that is WRONG goes OUT OF SERVICE and requests route to a sound data
+		// node; what it refuses is a node that can no longer route.
 		//
-		// A METHOD VALUE, not a snapshot: every term under it moves while
-		// the process runs, and a cached answer is a node reporting ready
-		// through the whole window in which it stopped being so. It takes
-		// the REQUEST's context, so a probe against a slow broker ends at
-		// its own deadline rather than at the process's.
+		// A METHOD VALUE, not a snapshot: every term moves. It takes the REQUEST's
+		// context, so a probe against a slow broker ends at its own deadline.
 		Estate: e.SeatsServiceable,
 		// WHETHER THIS COMPANY HAS ITS FIRST PERSON — the one thing an
 		// unclaimed company's dashboard can read, since /health is the
@@ -2858,18 +2623,14 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, err
 	}
 	// NOTHING PUSHES "CONFIGURED" FROM HERE. [api.App.Configured] reads the
-	// engine's live epoch through the same Sources.Company seam every other
-	// question uses, so an apply that brings this node its first revision
-	// flips it with nothing to remember to call. The flag that used to be
-	// pushed at this point was set true unconditionally and never
-	// corrected, which left the unconfigured posture unreachable in the
-	// shipped binary: /health never said unconfigured and /ready never went
-	// 503 for it.
+	// engine's live epoch through the same Sources.Company seam as every other
+	// question, so an apply bringing this node its first revision flips it with
+	// nothing to remember to call.
 	//
-	// It is still not the POSTURE: an apply that FAILS leaves the node
-	// serving the previous epoch, which is a configured node. /ready reads
-	// the posture as well, and collapsing the two would take a
-	// correctly-serving node out of rotation for being behind.
+	// It is still not the POSTURE: an apply that FAILS leaves the node serving the
+	// previous epoch, which is a configured node. /ready reads the posture as well,
+	// and collapsing the two would take a correctly-serving node out of rotation
+	// for being behind.
 	app.Start(ctx)
 
 	// The other half of the observability pipeline. The engine already
@@ -2887,37 +2648,18 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		return nil, err
 	}
 
-	// AND THE HISTORY BEHIND IT, or every screen the projection feeds starts
-	// at this process's boot: the activity feed, the spend rollup and the
-	// per-agent rows folded from it. A restart, a deploy or a node joining a
-	// fleet showed an operator a company that had apparently done nothing.
+	// AND THE HISTORY BEHIND IT, or every screen the projection feeds (activity,
+	// spend, per-agent rows) starts at this process's boot.
+	// After the subscription above, so an event between read and subscribe cannot
+	// fall in the gap (the projection counts a double once); before the handover,
+	// so the first socket sees the seeded snapshot ([stream.Service.Seed]).
+	// THE FLEET'S HISTORY comes from every live data node's store: one node's read
+	// shows a restarted node only its share. WHICH SEATS A PERSON PAUSED and THE
+	// EXECUTORS OUT IN THEIR BOXES come from the durable record, since no event
+	// this process hears mentions them; then every interval.
 	//
-	// After the subscription above, so an event published between the read
-	// and the subscribe cannot fall into the gap; the projection counts one
-	// that arrives both ways once. Before the handover, so the first socket
-	// to open sees the seeded snapshot; a seed that lands after it sends every
-	// open socket its snapshot again ([stream.Service.Seed]).
-	//
-	// THE FLEET'S HISTORY, read from every live data node's store through
-	// the engine's history reader: each one holds what that node published
-	// and the custody batches it keeps, so a seed read from this one alone
-	// showed a restarted node only its own share of the company.
-	//
-	// AND WHICH SEATS A PERSON PAUSED, from the record itself, for the same
-	// reason: a pause taken last week is in no event this process will hear,
-	// and a seat drawn as working while it is paused is the one state a
-	// person pausing it must not be shown.
-	//
-	// AND THE EXECUTORS OUT IN THEIR BOXES, from the durable record every
-	// node opens: an executor parked on a question for days is exactly the
-	// one the events of this process's lifetime will never mention. Then
-	// every interval, which is what corrects a panel whose completion event
-	// never arrived.
-	//
-	// SIDE BY SIDE, EACH READ UNTIL IT LANDS ([observe.Seeding]): one after
-	// another under one budget, a history seed slow on a large store spent
-	// the budget and failed the other two on an expired context, every boot,
-	// and none was read again for the life of the process.
+	// SIDE BY SIDE, EACH READ UNTIL IT LANDS ([observe.Seeding]): in sequence a
+	// slow history seed spent the budget and failed the others on every boot.
 	runs := observe.NewSandboxReconciler(sandbox.NewCoordStore(e.Backends().Fleet), app.Stream())
 	seeding := observe.StartSeeding(ctx,
 		observe.HistorySeed(e.History(), func() *org.Organization {
@@ -3015,28 +2757,17 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 		// same-origin only, which is what the dashboard this process
 		// serves needs and what every other site gets.
 		"cross_origin_sites", app.CORS().Origins())
-	// THE COMPANY-DERIVED SURFACES, re-sent whenever a published company
-	// changes them.
+	// THE COMPANY-DERIVED SURFACES, re-sent whenever a published company changes
+	// them. The roster, org tree and tool catalogue come from the company, so no
+	// event corrects them and an overlay merge cannot express a deletion.
 	//
-	// The roster, the org tree and the tool catalogue all come from the
-	// company, so no event will ever correct them: a change that adds,
-	// edits or removes a seat produces nothing a projection could learn
-	// from, and an overlay merge cannot express a deletion at all. Without
-	// this an open dashboard renders the company it connected to until
-	// someone reloads.
+	// WHOLE PAYLOADS, each replacing its predecessor: the hub drops the oldest
+	// queued envelope silently, so a dropped delta would be unrecoverable.
+	// Registered after the app exists, hence a setter (Engine.SetOnCompanyPublished).
 	//
-	// So this fires on every company the engine publishes, at boot and on
-	// every apply. WHOLE PAYLOADS, each replacing its predecessor: the hub
-	// drops the oldest queued envelope without telling the client, so a
-	// delta it dropped would be unrecoverable.
-	//
-	// Registered after the app exists, which is the whole reason it is a
-	// setter — see Engine.SetOnCompanyPublished.
-	//
-	// AND THE OPERATOR'S CATALOGUE: every assistant listening on this node's
-	// /operator/mcp is told its tools changed, and every other node to tell
-	// its own, where what a call would be served has moved — at the publish,
-	// rather than at whichever request next happened to find the move
+	// AND THE OPERATOR'S CATALOGUE: assistants listening on /operator/mcp are told
+	// their tools changed, and every other node tells its own, at the publish
+	// rather than at the next request that finds the move
 	// ([api.App.OperatorToolsMoved]).
 	e.SetOnCompanyPublished(func(ctx context.Context) {
 		app.Stream().CompanyPublished()
@@ -3225,38 +2956,27 @@ const apiReadHeaderTimeout = 10 * time.Second
 // fleet reads that seed the live projection, the pause record and the first
 // read of the durable run record ([observe.Seeding]).
 //
-// The reads run side by side, so the wait is the slowest of them rather than
-// their sum. On a healthy fleet each is milliseconds: indexed range scans of
-// every node's own file, stopping at the projection's own bounds (the newest
-// 400 event rows without their payloads, the newest 24 000 spend records of
-// one day, three turns a seat read back from the newest), plus two listings of
-// the coordination store. What sizes the wait is a peer that does NOT answer,
-// which every scatter waits [eventfan.FleetReadBudget] for, and a seat's turn
-// read is two scatters, so five seconds is those two and a second of headroom.
-// It is a ceiling on the handover, never on a seed: until the handover every
-// webhook is answered `503 starting`, so a fleet that will not answer must not
-// hold it back, and a seed still being read past it lands when it completes,
-// on every screen already open.
+// They run side by side, so the wait is the slowest. Healthy, each is
+// milliseconds (indexed range scans bounded by the projection). What sizes the
+// wait is a peer that does NOT answer: each scatter waits
+// [eventfan.FleetReadBudget], a seat's turn read is two, so five seconds is
+// those two plus a second. It is a ceiling on the handover, never on a seed:
+// until then every webhook gets `503 starting`, so an unanswering fleet must
+// not hold it back, and a late seed lands on every open screen.
 const projectionSeedBudget = 5 * time.Second
 
 // apiIdleTimeout bounds how long a kept-alive connection may sit between
 // requests.
 //
-// Without it net/http falls back to ReadTimeout, which is also unset here — so
-// there was NO deadline at all between keep-alive requests, and a client that
-// completed one request and then went quiet held its slot indefinitely. The
-// neighbouring ReadHeaderTimeout makes the block look complete, which is
-// exactly why this was easy to miss: it bounds the FIRST header, not the
-// silence after a response.
+// Without it net/http falls back to the also-unset ReadTimeout, so a client
+// that went quiet after a request held its slot forever. ReadHeaderTimeout
+// bounds only the FIRST header, not the silence after a response.
 //
-// Sixty seconds, which is well above any real client's think time — the
-// dashboard polls far faster and its live channel is a websocket, which leaves
-// the keep-alive pool entirely once upgraded — and far below the cost of
-// holding a slot for a client that has gone away without saying so.
-//
-// A blanket ReadTimeout is deliberately NOT the instrument: it caps the whole
-// request including the body, which would put a ceiling on `crewlet backup`
-// and on a large config import. Body reads are bounded per route instead.
+// Sixty seconds is well above any real client's think time (the dashboard
+// polls faster and its websocket leaves the pool) and far below the cost of a
+// slot held for a vanished client. A blanket ReadTimeout is NOT the
+// instrument: it caps the body too, limiting `crewlet backup` and large config
+// imports; body reads are bounded per route.
 const apiIdleTimeout = 60 * time.Second
 
 // issueReportCatalogue names the engine's issue report catalogue to `crewlet
@@ -3276,18 +2996,14 @@ var catalogues = map[string]func() ([]byte, error){
 //
 // # Why the CLI carries this at all
 //
-// The schema is not read by the engine — the Go types in `internal/config`
-// are the validator, and the schema is a SUBSET of them. It exists for the
-// people and tools that author a config without running one: the
-// `# yaml-language-server: $schema=` modeline at the top of every shipped
-// example, a CI linter, an assistant writing a config from scratch.
+// The engine does not read the schema: the Go types in `internal/config` are
+// the validator, and the schema is a SUBSET. It serves people and tools that
+// author a config without running one (the `# yaml-language-server:
+// $schema=` modeline in every example, a CI linter, an assistant).
 //
-// It is generated rather than hand-written for the reason every generated
-// artifact is: the two would diverge, and a schema that red-underlines a
-// config the engine would happily run teaches authors to ignore it. The
-// checked-in copies under `schema/` are regenerated by this command and
-// compared in CI, so a config field added without one is a failing build
-// rather than a stale file nobody opens.
+// It is generated because a hand-written one would diverge, and a schema that
+// red-underlines a config the engine runs teaches authors to ignore it. CI
+// compares the copies under `schema/`, so a field added without one fails.
 func emitSchema(args []string, stdout, stderr io.Writer) error {
 	// THE TIER COMES OFF THE FRONT, before the flags are parsed. Go's flag
 	// package stops at the first non-flag argument, so parsing first would
@@ -3378,17 +3094,12 @@ func flagLogLevel(logLevel string, debug bool) slog.Level {
 //
 // # The fallback stays; the silence does not
 //
-// Both of these fail SOFT on purpose — a misspelled log level must never be
-// why a company will not boot, and a CI step must never lose a migration to
-// a typo in an export. But a soft failure nobody is told about is exactly
-// how `debug: true` went its whole life doing nothing: the operator sees
-// behaviour they did not ask for, with nothing anywhere pointing at why.
-// Warning costs one line on the runs that have a mistake in them and nothing
-// at all on the runs that do not.
-//
-// It logs rather than returning an error because the FILE is where a bad
-// value is refused — see config.Logging.validate. A flag and an environment
-// variable belong to one invocation and may not fail it.
+// Both fail SOFT on purpose: a misspelled log level must never stop a company
+// booting or cost a CI step its migration. But an unannounced soft failure is
+// how `debug: true` did nothing for its whole life; the warning costs one line.
+// It logs, not errors, because the FILE is where a bad value is refused
+// (config.Logging.validate); a flag or variable belongs to one invocation and
+// may not fail it.
 func warnUnrecognisedLogNames(log *slog.Logger, source,
 	levelField, level, formatField, format string,
 ) {
@@ -3424,58 +3135,17 @@ func formatNames() []string {
 }
 
 // overrideLogging folds the run flags that override Tier A's `logging:` block
-// into the document, so the verbosity, the log file and the advisories all
-// read one answer: the block this run applies.
-//
-// # Folded, rather than layered on top where each reader looks
-//
-// It used to be two readers — one for the level and the shape, one for the
-// file — each taking the document and the flags and deciding between them,
-// and a third reader, [config.Bootstrap.Warnings], that saw the document
-// alone. The third is the one that showed the cost: a run with `-debug` and
-// `stream.debug: true` was told the broker's debug output had nowhere to go
-// and to pass `-debug`. A rule judged on a document the run does not apply is
-// a second answer to one question, so the flags are written into the
-// document once, here, the way [overrideNode] writes `-roles` and the API's
-// bind, and every reader after this line reads the result. The run holds the
-// result to Tier A's rules ([validateFolded]) and engine.New does again, so
-// what is written here has to be a document the validator accepts.
-//
-// # The command line wins, but only where it actually spoke
-//
-// A flag carries its default whether or not anyone typed it, so applying
-// `-log-level` unconditionally would pin every node at info and make
-// `logging.level: warn` in the file dead on arrival: a setting declared in
-// Tier A and read by nothing. [isFlagSet] is what separates "the operator
-// asked for info" from "nobody said anything", and it matters in both
-// directions for `-log-file`, whose default is the empty string: an EXPLICIT
-// `-log-file ""` is how a node with a file in its document is asked to write
-// none for one invocation.
-//
-// `-debug` only ever RAISES: it is the shorthand for asking for debug, not a
-// switch that turns the file's own setting off. An operator who wants a
-// `logging.level: debug` file quieter for one run says so with
-// `-log-level info`.
-//
-// `-log-file` moves the PATH. The file's shape, its level and its rotation
-// caps stay the document's: they describe the disk this deployment runs on
-// rather than this invocation, the line `-roles` and `-api-host` are drawn
-// along too. Except that a run writing NO file keeps none of them, because
-// a shape, a level or a cap with no path is a block the validator refuses —
-// it reads as a node that logs to a file — and none of them describes
-// anything this run writes.
-//
-// The path is TRIMMED, as Tier A trims every string it holds: validation
-// normalizes the document it checks, so a path folded in untrimmed would be
-// one file opened here and another named by the document the engine runs —
-// and `-log-file " "` is the empty path, asking for no file.
-//
-// # The one combination neither half can see alone
-//
-// `logging.stderr: false` is checked against the file THE DOCUMENT names, so
-// a `-log-file ""` that takes the file away afterwards would leave the node
-// writing its log nowhere. That is refused here, where both halves are
-// finally known, naming both.
+// into the document, so verbosity, file and advisories read the block this
+// run applies. A reader judging the document alone ([config.Bootstrap.Warnings])
+// gave a second answer (`-debug` with `stream.debug: true` was told the broker's
+// debug output had nowhere to go), so the flags are written in once, as
+// [overrideNode] writes `-roles`; the result must pass [validateFolded].
+// The command line wins only where it spoke ([isFlagSet]: a flag carries its
+// default, else `-log-level` kills `logging.level: warn`). An EXPLICIT
+// `-log-file ""` drops the file and its shape, level and caps, which the
+// validator refuses without a path. `-debug` only RAISES; `-log-file` moves
+// the PATH, TRIMMED as Tier A trims strings. `logging.stderr: false` with no
+// file is refused.
 func overrideLogging(boot *config.Bootstrap, fs *flag.FlagSet,
 	logLevel, logFormat string, debug bool, logFile string,
 ) error {
@@ -3520,34 +3190,16 @@ func flagLevel(name string) logging.Level {
 
 // attachLogFile installs the log file beside stderr and returns the teardown
 // this process runs on its way out.
+// It fails the command rather than falling back to stderr alone: every other
+// bad logging value resolves to a default, but an operator who configured a
+// durable record and silently did not get one has nothing pointing at why.
 //
-// # It fails the command rather than falling back to stderr alone
-//
-// Every other bad logging value in this binary resolves to a default,
-// because a misspelled log level must never be why a company will not boot.
-// A path is not one of those. An operator who configured a durable record
-// and silently did not get one has nothing anywhere pointing at why. The
-// error names the path and the permission that has to change.
-//
-// # Detached before it is closed, in that order
-//
-// A line emitted after the close would otherwise meet a closed descriptor,
-// and the sink would report the process's own shutdown as a write failure on
-// every one of them.
-// # And the console is silenced only once the file is open
-//
-// Order, not taste: switching stderr off first and then failing to open the
-// file would leave the process with no destination during the very failure
-// it has to report.
-// # report is where the two notices that cannot go through the logger go
-//
-// The sink's own write failures and the handover below. It is os.Stderr in
-// both production call sites; it is a parameter for the same reason
-// [logging.OpenFile] takes one — a notice nothing can observe is a notice
-// nothing can check, and both of these exist precisely for the moments the
-// logger is not doing its job. Note what is NOT happening here: this writer
-// is never installed as the process-wide sink, which is the move
-// [logging.Configure] exists to prevent.
+// Detached before it is closed, or a line after the close would meet a closed
+// descriptor and report the process's own shutdown as a write failure. The
+// console is silenced only once the file is open, or a failed open would leave
+// no destination for the failure. report carries the notices that cannot go
+// through the logger (os.Stderr in production; a parameter as with
+// [logging.OpenFile]); it is never the process-wide sink ([logging.Configure]).
 func attachLogFile(settings config.LogFileSettings, stderr bool, report io.Writer) (func(), error) {
 	if settings.Open.Path == "" {
 		// Nothing to attach, and nothing to silence — the validator and
@@ -3662,31 +3314,14 @@ func overrideNode(boot *config.Bootstrap, fs *flag.FlagSet,
 // validateFolded holds the document the run flags were folded into to every
 // Tier A rule, refusing it naming the flags given.
 //
-// # Why here, when engine.New asks the same question
-//
-// The file passed these rules as it loaded, and [overrideNode] re-runs the
-// two a node flag most often breaks — what the roles require of the file, and
-// what its listeners require of each other. But a flag reaches every rule that
-// reads what it moved: `-api-port 8080` on a document with no `api:` block
-// turns the API on, and a node serving the API must name
-// `api.external_url`. engine.New refuses that too, but only after this command
-// has logged the document's advisories as though it were the one this node
-// runs — a warning beside the refusal it should have come after — and without
-// naming the flag that made the document wrong. Asked here, the refusal names
-// the flags given and comes first.
-//
-// AND BEFORE ANYTHING ACTS ON IT: the listeners bind on its addresses soon
-// after ([bindListeners]) and [decideSeed] opens and migrates the node's
-// store, so a document a flag broke is refused as the rule it broke rather
-// than as a bind error about an address, and before a store is opened for a
-// configuration the engine would refuse.
-//
-// IT NORMALIZES in place, as [config.Bootstrap.Validate] always does, so what
-// reads the document after it — the dev principal's bind check, the node id,
-// the advisories — reads what the engine will run.
-//
-// Only when a flag that writes into the document was given: without one, the
-// document is the file, which passed these rules as it loaded.
+// A flag reaches every rule that reads what it moved: `-api-port 8080` on a
+// document with no `api:` block turns the API on, which then needs
+// `api.external_url`. engine.New refuses that too, but after this command
+// logged the advisories as though the document were the one this node runs, and
+// without naming the flag. Asked here, the refusal names the flags and comes
+// first, before [bindListeners] and [decideSeed] open anything. It NORMALIZES
+// in place as [config.Bootstrap.Validate] does. Only when a flag that writes
+// into the document was given; otherwise it is the validated file.
 func validateFolded(boot *config.Bootstrap, fs *flag.FlagSet) error {
 	given := givenFlags(fs, "roles", "api-host", "api-port",
 		"log-level", "log-format", "debug", "log-file")
@@ -3703,25 +3338,14 @@ func validateFolded(boot *config.Bootstrap, fs *flag.FlagSet) error {
 // ([config.Bootstrap.Warnings]), one `config_advisory` line at WARN each, in
 // the order the document raises them.
 //
-// # Why every start, and not only `crewlet validate`
-//
-// validate is the moment before a deployment where the consequence can still
-// change the decision, and it is a moment most deployments never have: a
-// container image, a Helm chart or an operator renders the document and
-// starts the process, and nobody runs a command against the file on the way.
-// The log of the node running it is the one place every deployment has, and
-// every advisory is about what this node does — a declined fsync, a trim
-// nobody acknowledges, a member nobody counts — for as long as it runs, so a
-// line written once at a validate nobody ran is one nobody read. Tier A
-// changes only on a restart, so once per start is the complete record.
+// Most deployments (an image, Helm chart or operator rendering the document)
+// never run validate, and the node's log is the one place every deployment has.
+// Tier A changes only on a restart, so once per start is the complete record.
 //
 // # Its fields are the ones a person acts on
 //
-// `config` says which tier, the key `config_reference_unresolved` uses for
-// the same question, so one query finds both; `path` is where the remedy is
-// written; `detail` is the whole message, consequence first and remedy
-// second, because a field cut from it would name a problem without its fix.
-// No `kind`: every Tier A warning is an advisory.
+// `config` says which tier (the key `config_reference_unresolved` uses), `path`
+// is where the remedy is written, `detail` is the whole message. No `kind`.
 func logBootstrapAdvisories(log *slog.Logger, boot *config.Bootstrap) {
 	for _, w := range engine.BootstrapWarnings(boot) {
 		log.Warn("config_advisory", "config", "bootstrap", "path", w.Path, "detail", w.Message)
@@ -3753,17 +3377,14 @@ func splitRoles(value string) []string {
 
 // operatorLogLevel is the level every non-`run` command logs at.
 //
-// Warn unless $CREWLET_LOG_LEVEL names another. A TYPO RESOLVES TO WARN —
-// this command's own default — rather than failing or drifting to info: a bad
-// log level must never be why an operator cannot run a migration, and it must
-// not quietly change the default either. `run` applies the same
-// never-fail rule to its own flag; only the fallback differs, because its
-// default is info.
+// Warn unless $CREWLET_LOG_LEVEL names another. A TYPO RESOLVES TO WARN, this
+// command's own default, rather than failing or drifting to info: a bad level
+// must never stop a migration nor quietly change the default. `run` applies
+// the same never-fail rule to its flag with info as the fallback.
 //
 // Recognised against the closed set explicitly, because logging.ParseLevel
-// cannot report "I did not recognise that" — it answers info for everything
-// it does not know, which is the right answer for `run` and the wrong one
-// here.
+// cannot report "not recognised": it answers info for everything unknown,
+// right for `run` and wrong here.
 func operatorLogLevel() slog.Level {
 	raw := strings.ToLower(strings.TrimSpace(os.Getenv("CREWLET_LOG_LEVEL")))
 	switch raw {
@@ -3777,16 +3398,13 @@ func operatorLogLevel() slog.Level {
 // operatorLogFormat is the shape every non-`run` command logs in.
 //
 // Console, so a migration that fails on a laptop reads like one, unless
-// $CREWLET_LOG_FORMAT names another. It is the sibling of
-// $CREWLET_LOG_LEVEL and exists for the same reason: these commands take no
-// logging flags, and the CI step that ships a `crewlet migrate` run's output
-// to a collector needs `json` from it exactly as much as `crewlet run` does.
-// Without it the only lever over these commands' output was $NO_COLOR, which
-// says nothing about the shape.
+// $CREWLET_LOG_FORMAT names another. It is the sibling of $CREWLET_LOG_LEVEL:
+// these commands take no logging flags, and the CI step shipping a `crewlet
+// migrate` run's output to a collector needs `json` as much as `crewlet run`
+// does ($NO_COLOR says nothing about shape).
 //
-// A name this build does not know resolves to console — logging.ParseFormat
-// applies the same never-fail rule to a format that operatorLogLevel applies
-// to a level.
+// A name this build does not know resolves to console: logging.ParseFormat
+// applies the same never-fail rule operatorLogLevel applies to a level.
 func operatorLogFormat() logging.Format {
 	return logging.ParseFormat(os.Getenv("CREWLET_LOG_FORMAT"))
 }

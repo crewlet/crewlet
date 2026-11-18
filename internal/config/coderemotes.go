@@ -12,35 +12,15 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// WHICH CREDENTIAL A REMOTE MAY BE DIALED WITH (code.remote_credentials): the
-// variables a repository's mirror or import may name for its credential, each
-// with the hosts its value may be sent to. A credential a mirror or an import
-// names is a ${VAR} reference, resolved where its repository's home Gitlet node
-// dials — from the secret store and then that node's own environment — and
-// sent to the host of the URL beside it. So a reference nothing bounds is a
-// way to have the Gitlet node send ANY value it can resolve — the keyring's
-// CREWLET_SECRET_KEY_*, a Tier A token, the object store's key, a model
-// vendor's — to a host its writer chose, and a person who may create a
-// repository (every member of the company, code_import_repo) is not thereby
-// trusted with every secret of every Gitlet node. An administrator writes this
-// table, and a remote's credential is one it declares for the remote's host:
-// refused where a mirror or an import is declared (this document's
-// validation), where a person asks for one (the code domain's lifecycle
-// decide) and again at the dial, under the table the dialing node holds then
-// ([CodeRemoteCredentials.Refusal], the one judgement all three read).
-//
-// KEYED BY THE VARIABLE'S NAME, which is what a record carries — the whole
-// reference ${NAME} — so the declaration binds the record as it stands and a
-// rotation of the value behind it is a secret store write, with nothing on any
-// repository to change. The table holds no secret, only names and hosts: the
-// value is the secret store's or the environment's, as it was.
-//
-// HOSTS, NEVER URLS: a credential is a forge's, and a forge's every repository
-// is reached under its one host, while a URL prefix would read
-// https://github.com/acme against https://github.com/acme-evil the same.
-// A host is matched whole, its port included (443 where none is written), so
-// a value declared for github.com is never sent to api.github.com, to
-// github.com.evil.example or to another port of the same name.
+// WHICH CREDENTIAL A REMOTE MAY BE DIALED WITH (code.remote_credentials): the variables a mirror
+// or import may name, each with the hosts its value may be sent to. The credential is a ${VAR}
+// reference resolved where the repository's home Gitlet node dials (secret store, then its
+// environment) and sent to the URL's host. Unbounded, it would let the node send ANY value it
+// resolves (the keyring's CREWLET_SECRET_KEY_*, a Tier A token, the object store's key) to a
+// host its writer chose, and a person who may create a repository (every member,
+// code_import_repo) is not trusted with every secret. So an administrator writes this table, and
+// [CodeRemoteCredentials.Refusal] judges a credential against it in validation, the code
+// domain's lifecycle decide and the dial (under the dialing node's table then).
 
 const (
 	// CodeMaxRemoteCredentials is the most variables code.remote_credentials
@@ -62,12 +42,20 @@ const (
 	codeMaxRemoteCredentialNameBytes = CodeMaxCredentialRefBytes - len("${}")
 )
 
-// CodeRemoteCredentials are the variables a repository's mirror or import may
-// name for its credential, by the variable's name.
+// CodeRemoteCredentials are the variables a repository's mirror or import may name for its
+// credential, by the variable's name.
+//
+// KEYED BY THE VARIABLE'S NAME, which a record carries (the whole ${NAME}), so a rotation is a
+// secret store write with nothing on any repository to change. The table holds names and hosts,
+// never a secret.
 type CodeRemoteCredentials map[string]CodeRemoteCredential
 
-// CodeRemoteCredential is one declared variable: the hosts its value may be
-// sent to.
+// CodeRemoteCredential is one declared variable: the hosts its value may be sent to.
+//
+// HOSTS, NEVER URLS: a forge's repositories share one host, while a URL prefix would read
+// https://github.com/acme and https://github.com/acme-evil alike. A host is matched whole, port
+// included (443 where none is written), so a value declared for github.com never goes to
+// api.github.com, github.com.evil.example or another port.
 type CodeRemoteCredential struct {
 	Hosts []string `yaml:"hosts" json:"hosts" js:"required" desc:"The hosts this variable's value may be sent to, each a host name or an IP address with an optional :port (github.com, gitlab.example.com:8443), matched whole against a mirror's or an import's URL, its port included (443 where none is written): at least one, at most 16, each once."`
 }

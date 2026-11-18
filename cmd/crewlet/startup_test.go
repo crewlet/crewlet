@@ -24,20 +24,13 @@ import (
 // A STARTING NODE ANSWERS ITS PROBES BEFORE IT SERVES, and nothing its company
 // configures holds the answer that ends a startup probe.
 //
-// `crewlet run` itself, in a child process on the socket this case reserved
-// ([startNodeChild]), with a company whose one shared tool server never speaks:
-// the boot sits in that server's start — after the node has recovered what it
-// holds, before its HTTP surface exists — for as long as this case keeps the
-// server waiting. Inside that window the listener is already bound, and
-// answers what a starting node answers: /health 200 `starting` in the
-// `preparing` phase, /ready 503 `starting`, and every other route 503
+// `crewlet run` in a child process ([startNodeChild]), with a company whose one
+// shared tool server never speaks: the boot sits in that server's start, before
+// the HTTP surface exists. The bound listener answers /health 200 `starting`
+// (`preparing` phase), /ready 503 `starting`, and every other route 503
 // `starting` with a Retry-After and the security headers. Then the server is
-// let go, and the same socket answers as the node's own surface.
-//
-// The window is held open by the server rather than by a hook in the engine,
-// because the point is the real boundary: a tool server the company configures
-// is exactly what used to keep the listener shut until a startup probe killed
-// the node.
+// let go and the same socket answers as the node's own surface. A real tool
+// server holds the window open: it is what used to keep the listener shut.
 func TestAStartingNodeAnswersItsProbesBeforeItServes(t *testing.T) {
 	// Not parallel, for the drain case's reason.
 	client := drainProbeClient(t)

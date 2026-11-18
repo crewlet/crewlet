@@ -33,29 +33,18 @@ type Providers struct {
 	// vocabulary, and a company naming one is refused at Validate.
 	LLM map[string]LLMProvider `yaml:"llm,omitempty" json:"llm,omitempty" desc:"Named models, each a harness the engine drives; seats select one by key."`
 
-	// LLMOrder is the order the providers were DECLARED in, preserved
-	// because per-phase resolution's last resort is "the first provider
-	// configured" — see agent/phase.Registry.
+	// LLMOrder is the order the providers were DECLARED in; per-phase
+	// resolution's last resort is "the first provider configured"
+	// (agent/phase.Registry).
 	//
-	// It is a field and not a derivation because a Go map has no order and
-	// this document does not stay YAML: a company config is stored as JSON
-	// and re-read on every boot and every rollout, so an order recovered
-	// only at YAML-parse time is an order the running engine never sees.
-	// Two nodes booted from one stored revision would then resolve an
-	// unpinned seat to different models, and one node would change model
-	// across a restart.
+	// A field, not a derivation: a Go map has no order, and a company config is
+	// stored as JSON and re-read on every boot, so an order recovered only at
+	// YAML-parse time is one the running engine never sees.
 	//
-	// Normally DERIVED from the document's own key order and not written
-	// by hand — but it is a readable field, because the config read
-	// surface emits it and must accept it back. Go marshals a map with
-	// sorted keys, so a document that made this round trip carries the
-	// authored order here and nowhere else; a reader that refused it would
-	// make GET-edit-PUT reject its own output.
-	//
-	// An explicit value WINS over the document's key order, which is what
-	// makes that round trip lossless and lets an operator pin the order
-	// deliberately. A document carrying neither — a value built in Go —
-	// falls back to sorted keys, arbitrary but stable; see ProviderOrder.
+	// Normally derived from key order, but readable, because the config read
+	// surface emits it and must accept it back (GET-edit-PUT). An explicit
+	// value WINS over key order, so the round trip is lossless and an operator
+	// can pin it. With neither, sorted keys; see ProviderOrder.
 	LLMOrder []string `yaml:"llm_order,omitempty" json:"llm_order,omitempty" desc:"Provider precedence; normally derived from the order they are written in."`
 
 	// Embeddings powers every vector this engine computes: the semantic half
@@ -120,29 +109,15 @@ func mappingValue(node *yaml.Node, key string) *yaml.Node {
 // mappingKeys lists a mapping's keys in document order, expanding merge keys
 // in place.
 //
-// The merge expansion is not decoration. `<<: *shared` is how an operator
-// shares a block of providers between documents, and yaml.v3 resolves it during
-// DECODE — so the map ends up with the merged entries while a naive read of the
-// raw node sees only the literal `<<`. Those providers then fall off the order
-// entirely and are appended by the sorted-tail fallback, which silently moves
-// whichever one an operator listed first. Measured before this existed:
-// `<<: &base {zulu: …}` plus a literal `alpha` ordered [alpha zulu].
+// yaml.v3 resolves `<<: *shared` during DECODE, so the map holds the merged
+// entries while the raw node shows only `<<`; without the expansion those
+// providers fall to the sorted tail and silently move whichever one an
+// operator listed first. Explicit keys still win, via ProviderOrder's dedupe.
 //
-// Explicit keys still win over merged ones, which is YAML's own rule; here that
-// falls out of the dedupe in ProviderOrder rather than needing its own pass.
-//
-// NO ALIAS FOLLOWING, and that is a probed conclusion rather than an omission.
-// An alias node reached here can only ever name a mapping whose anchor was
-// defined at a point that ALREADY contributed its keys — YAML requires the
-// definition before the use, and every top-level key in this document is known
-// and typed, so an anchor-holder key is rejected as an unknown setting and
-// there is nowhere else a provider-map anchor can live. Following the alias
-// therefore cannot change the answer; it was written, mutated away, and no test
-// could be made to see the difference.
-//
-// If a future top-level field is ever shaped like a provider map, this becomes
-// reachable and its absence silently drops that block from the order. That is
-// the one thing to check here.
+// NO ALIAS FOLLOWING, deliberately: an alias here can only name a mapping whose
+// anchor already contributed its keys, and every top-level key is typed, so no
+// provider-map anchor can live elsewhere. If a future top-level field is
+// shaped like a provider map, this becomes reachable: check it then.
 func mappingKeys(node *yaml.Node) []string {
 	if node == nil || node.Kind != yaml.MappingNode {
 		return nil
@@ -170,17 +145,13 @@ func mappingKeys(node *yaml.Node) []string {
 // ProviderOrder is the order seats resolve providers in.
 //
 // It reconciles LLMOrder against the map rather than trusting it, because the
-// two travel separately through JSON and an operator editing a stored revision
-// can desync them. Keys the order names but the map lacks are dropped; keys the
-// map has but the order omits are appended in sorted order, so every configured
-// provider is reachable and the result is always a permutation of the map's
-// keys.
+// two travel separately through JSON and a stored revision can desync them.
+// Keys the order names but the map lacks are dropped; keys the map has but the
+// order omits are appended sorted, so the result is always a permutation of
+// the map's keys.
 //
-// The sorted tail is what makes a document with NO order deterministic. It is
-// arbitrary — an operator's first-listed provider is the one they think of as
-// primary, and sorting does not know that — but arbitrary-and-stable is the
-// only honest answer when the declaration order was never recorded, and it is
-// strictly better than a map range that answers differently every call.
+// The sorted tail is arbitrary but stable, the only honest answer when the
+// declaration order was never recorded, and better than a map range.
 func (p *Providers) ProviderOrder() []string {
 	out := make([]string, 0, len(p.LLM))
 	seen := make(map[string]bool, len(p.LLM))
@@ -227,39 +198,18 @@ func (p *Providers) validate(path Path) error {
 
 // ---- LLM providers --------------------------------------------------- //
 
-// LLMProvider is one named entry under providers.llm: a harness — Claude
-// Code, Codex, OpenCode and the rest of [Harnesses] — that the engine
-// drives as its model.
+// LLMProvider is one named entry under providers.llm: a harness (Claude
+// Code, Codex, OpenCode and the rest of [Harnesses]) the engine drives as its
+// model.
 //
-// # The harness is the only backend
+// There is no HTTP client to a model vendor here, by decision: each vendor's
+// harness owns its request shapes, thinking replay, caching and sign-in, and
+// moves them with every model, so a client here would be a trailing copy.
 //
-// There is no HTTP client to a model vendor in this engine, and that is the
-// decision rather than a gap. Each vendor ships its own harness — the request
-// shape each model accepts, how its thinking is replayed, what is cached and
-// where, how a stream ends, which sign-in bills which account — and moves it
-// with every model it releases. Re-implementing that per vendor and per model
-// was a second, permanently trailing copy of work the vendors already do in
-// the harnesses they maintain. So a model is reached THROUGH one: Claude Code for
-// Anthropic's models, on a subscription or an API key; Codex for OpenAI's;
-// OpenCode for open models on any provider it speaks to, a local server
-// included.
-//
-// The entry is therefore the harness's own settings and nothing else: which harness,
-// which model in that harness's grammar, where its runs are placed, where its
-// login and per-seat homes live, and how it signs in.
-//
-// # One entry, two uses
-//
-// A seat's EXECUTOR is its harness's own agentic run in a box: the harness's
-// loop drives the model, its own shell and editor are enabled, and the seat's
-// tools reach it over the MCP bridge (internal/api/mcpbridge). Only a harness
-// with an in-box runner can be that run ([ExecutorHarnesses]). Every OTHER phase —
-// the reviewer, a delegated worker, the onboarding pass, the side passes —
-// runs the harness's own loop on this host, with its own shell and editor denied
-// and the phase's tools reached as the `crewlet` MCP server
-// ([ToolServerName]), and any harness can serve one. So the same entry may be
-// both: the executor of the seats whose `llm` names it, and the reviewer of
-// the seats whose `llm_review` does.
+// A seat's EXECUTOR is its harness's agentic run in a box ([ExecutorHarnesses]
+// have an in-box runner; tools come over internal/api/mcpbridge). Every OTHER
+// phase runs the harness on this host, shell and editor denied, tools as the
+// `crewlet` MCP server ([ToolServerName]); any harness can serve one.
 type LLMProvider struct {
 	// Harness is which harness to drive. Empty drives Claude Code.
 	Harness Harness `yaml:"harness,omitempty" json:"harness,omitempty" js:"enum=claude-code|codex|gemini-cli|qwen-code|opencode|cursor-agent|copilot|grok|muse-code|kimi-code|hermes|pi|custom" desc:"Which harness to drive (default claude-code)."`
@@ -276,86 +226,65 @@ type LLMProvider struct {
 	// RunIn is WHERE a run launched on this entry happens, naming a cell of
 	// providers.sandbox. Empty takes the catalogue's default.
 	//
-	// On the entry rather than on the seat, because it is a property of
-	// this RUNTIME: the harness's subscription login lives on the engine host,
-	// so `direct` and `container` reach it directly and a remote cell
-	// needs the headless token instead. An operator who wants both makes
-	// two entries and points seats at whichever one is right for them —
-	// which is also how they already choose between two models.
+	// On the entry, not the seat: it is a property of this RUNTIME. The
+	// subscription login lives on the engine host, so `direct` and `container`
+	// reach it and a remote cell needs the headless token; an operator wanting
+	// both makes two entries.
 	//
-	// READ WHENEVER AN EXECUTOR LAUNCHES ON THIS ENTRY, which is any agent
-	// seat's executor chain it is a member of: a launch takes the chain's
-	// first member that can run and is not sitting out, so a fallback member
-	// is placed by its own run_in. An entry no executor chain reaches never
-	// launches a run, and its run_in is read the day a seat points at it.
-	//
-	// REFUSED ON A HARNESS THAT CANNOT LAUNCH ONE ([ExecutorHarnesses]): an entry on
-	// any other harness serves text phases only, so a launch passes over it in
-	// every chain and nothing would ever read the field.
+	// READ WHENEVER AN EXECUTOR LAUNCHES ON THIS ENTRY: a launch takes the
+	// chain's first member that can run and is not sitting out, so a fallback
+	// is placed by its own run_in. REFUSED ON A HARNESS THAT CANNOT LAUNCH ONE
+	// ([ExecutorHarnesses]): nothing would read the field.
 	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=direct|container|e2b" desc:"Where a seat's executor run on this entry happens. Empty = providers.sandbox.default_run_in."`
 
 	// StateDir is where this provider keeps its credential directory and
-	// its per-seat homes, under a subdirectory named for the harness it drives
-	// (<state_dir>/<harness>). Empty derives one per key, so unrelated
-	// providers never collide.
+	// per-seat homes, under a subdirectory named for its harness
+	// (<state_dir>/<harness>). Empty derives one per key, so providers never
+	// collide.
 	//
-	// ENTRIES POINTING AT ONE DIRECTORY AND DRIVING ONE HARNESS SHARE ONE LOGIN
-	// — and one set of per-seat homes, and one generation. That is how
-	// per-phase models work off a single `crewlet llm login`, and entries
-	// that should share have to say so. Entries on one directory that drive
-	// DIFFERENT HARNESSES share nothing: each harness keeps its own subdirectory,
-	// because two harnesses agree on neither which files are credentials nor
-	// which are conversation memory. That is also what lets an entry move
-	// to another harness in a live revision: the new harness opens a login
-	// directory of its own, and moving back finds the old one intact.
+	// ENTRIES ON ONE DIRECTORY DRIVING ONE HARNESS SHARE ONE LOGIN, one set of
+	// per-seat homes and one generation: that is how per-phase models work off
+	// a single `crewlet llm login`. Entries on one directory driving DIFFERENT
+	// HARNESSES share nothing, since harnesses disagree on which files are
+	// credentials and which are conversation memory; so an entry can move to
+	// another harness in a live revision and moving back finds the old login.
 	StateDir string `yaml:"state_dir,omitempty" json:"state_dir,omitempty" desc:"Credential + per-seat home directory, each harness under <state_dir>/<harness>. Entries sharing one and a harness share a login."`
 
 	// TimeoutSeconds caps one STRETCH of the harness's own work, wall clock:
-	// from its launch, or from the end of the tool call it last waited on,
-	// to the start of its next tool call or its exit — a process launch (a
-	// Node runtime costs seconds before its first byte), its model's
-	// answers, and its own internal retry and backoff. The engine's tools
-	// are not on the clock: they hold their own bounds, and a harness run that
-	// drives a phase through many requests and calls is never cut for its
-	// length, only for a stretch in which it made no progress the engine
-	// could see. See [defaultHarnessTimeoutSeconds] for where the default comes
-	// from.
+	// from its launch, or the end of the tool call it last waited on, to the
+	// start of its next tool call or its exit. That covers process launch (a
+	// Node runtime costs seconds), model answers and the harness's own retry
+	// and backoff. The engine's tools are not on the clock, so a run is never
+	// cut for its length, only for a stretch with no progress the engine could
+	// see. Default: [defaultHarnessTimeoutSeconds].
 	//
-	// THE PHASES ON THIS HOST ONLY — the reviewer, a worker, the onboarding
-	// pass, a side pass. An executor run is the harness's own detached run in a
-	// box, and it is never stopped on a clock: its rounds are capped only
-	// where the company or the seat sets a turn cap
-	// (providers.sandbox.default_max_turns, role.sandbox.max_turns).
+	// THE PHASES ON THIS HOST ONLY. An executor run is a detached run in a box
+	// and is never stopped on a clock: its rounds are capped only by
+	// providers.sandbox.default_max_turns and role.sandbox.max_turns.
 	TimeoutSeconds float64 `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0" desc:"Wall-clock cap on one stretch of a harness run on this host with no tool call in flight (default 600). Executor runs are not on this clock."`
 
 	// MaxConcurrent is how many harness processes this provider runs at once on
-	// the engine's own host. A process lives for a whole run of a phase, its
-	// requests and tool calls included; a model call made from INSIDE one of
-	// its tool calls on this same entry — a delegated worker, an auxiliary
-	// rewrite — runs in the caller's slot rather than waiting for one, which
-	// a run holding the last slot could never free.
+	// the engine's own host. A model call made from INSIDE one of its tool calls
+	// on this same entry (a delegated worker, an auxiliary rewrite) runs in the
+	// caller's slot, which a run holding the last slot could never free.
 	//
-	// Each is a full Node or Rust runtime at roughly 200-400 MB resident,
-	// so an unbounded fleet of seats starting a turn together can exhaust
-	// the engine host; 4 keeps peak usage near 1.5 GB, which fits the
-	// smallest realistic host while still overlapping the calls' long I/O
-	// waits. Subscription plans also throttle concurrency well below what
-	// an API key allows, so a higher number mostly buys rate-limit errors.
+	// Each is a full Node or Rust runtime at roughly 200-400 MB resident; 4
+	// keeps peak near 1.5 GB, fitting the smallest realistic host while
+	// overlapping long I/O waits. Subscription plans throttle concurrency below
+	// what an API key allows, so more mostly buys rate-limit errors.
 	//
-	// THE PHASES ON THIS HOST ONLY, like timeout_seconds: an executor run
-	// is a process in its own box, and each seat runs at most one at a time.
+	// THE PHASES ON THIS HOST ONLY, like timeout_seconds: an executor run is a
+	// process in its own box, and each seat runs at most one.
 	MaxConcurrent int `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty" js:"min=0" desc:"Concurrent harness processes on this host; each costs 200-400 MB. Executor runs are not counted: each seat runs at most one."`
 
 	// Env is extra environment for every invocation, ${VAR}-resolved. The
-	// child gets an ALLOWLISTED environment, not the engine's, so anything
-	// the harness needs beyond PATH, locale, TLS and proxy is declared here —
-	// for OpenCode, the key of the provider its model names.
+	// child gets an ALLOWLISTED environment, not the engine's, so anything the
+	// harness needs beyond PATH, locale, TLS and proxy is declared here (for
+	// OpenCode, the key of the provider its model names).
 	//
 	// EVERY INVOCATION INCLUDES A SEAT'S EXECUTOR RUN, in whichever cell its
-	// box is: the whole map is exported into the box with the entry's
-	// sign-in, beneath the seat's role.sandbox.env, which wins a name — so a
-	// gateway's base URL and bearer token, or a cloud provider's switch and
-	// region, reach the run as they reach every other phase. A seat that signs
+	// box is: the whole map is exported into the box with the entry's sign-in,
+	// beneath the seat's role.sandbox.env, which wins a name. A seat that signs
 	// Claude Code in itself replaces the entry's sign-in whole, its
 	// credential-named variables and cloud toggles included, and keeps the
 	// rest.
@@ -414,19 +343,17 @@ var Harnesses = []Harness{
 // than meaning "any".
 func (n Harness) Valid() bool { return slices.Contains(Harnesses, n) }
 
-// ExecutorHarnesses is the closed set of harnesses that can run a seat's EXECUTOR: the
-// ones with an in-box runner (internal/sandbox/executor), which launches
-// the harness as its own agentic run, renders its tools and limits, and reads
-// back what it did.
+// ExecutorHarnesses is the closed set of harnesses that can run a seat's
+// EXECUTOR: those with an in-box runner (internal/sandbox/executor).
 //
-// Every other harness drives the text phases only. A seat's executor chain is
-// walked at launch for its first member in this set that is not sitting out,
-// so a chain with no member here can never run its seat's turn, and config
-// refuses it ([Company.validateExecutors]).
+// Every other harness drives text phases only. A launch walks the seat's
+// executor chain for its first member here that is not sitting out, so a chain
+// with none can never run the turn, and config refuses it
+// ([Company.validateExecutors]).
 //
-// HELD TO THE RUNNERS THAT EXIST by a test against executor.Names(): a
-// runner added there and not here refuses entries that would run, and one
-// listed here with no runner admits entries every launch then refuses.
+// HELD TO THE RUNNERS THAT EXIST by a test against executor.Names(): a runner
+// missing here refuses entries that would run; one listed with no runner
+// admits entries every launch then refuses.
 var ExecutorHarnesses = []Harness{HarnessClaudeCode, HarnessOpenCode}
 
 // HarnessAuthMode is how a providers.llm entry's harness authenticates.
@@ -447,20 +374,17 @@ const (
 	// own environment has — an escape hatch for an unusual harness, and the
 	// only mode that lets a host credential reach the child.
 	AuthInheritEnv HarnessAuthMode = "inherit-env"
-	// AuthEnv signs the harness in with the entry's own env: a cloud
-	// provider's switch and credentials (Claude Code's
-	// CLAUDE_CODE_USE_BEDROCK with the AWS pair), or a gateway's address
-	// and token (ANTHROPIC_BASE_URL with ANTHROPIC_AUTH_TOKEN). The harness is
-	// handed neither the profile's token variable nor its key variable,
-	// and runs in a home no login is seeded into.
+	// AuthEnv signs the harness in with the entry's own env: a cloud provider's
+	// switch and credentials (CLAUDE_CODE_USE_BEDROCK with the AWS pair), or a
+	// gateway's address and token (ANTHROPIC_BASE_URL with
+	// ANTHROPIC_AUTH_TOKEN). The harness is handed neither the profile's token
+	// variable nor its key variable, and runs in a home no login is seeded into.
 	//
-	// A MODE OF ITS OWN rather than an env the default mode reads beside
-	// its token: under subscription the convention resolves the plan
-	// token for every entry, and it reached a Bedrock entry's harness and its
-	// box, where the cloud switch outranks it and it was never used. Such
-	// an entry also read as signed in to nothing, since only an
-	// env_sign_in profile counted its env. Admitted only where the env
-	// does sign the harness in ([LLMProvider.validateCredentials]).
+	// A MODE OF ITS OWN, not an env the default mode reads: under subscription
+	// the plan token resolves for every entry and would reach a Bedrock
+	// entry's harness, where the cloud switch outranks it, and the entry read
+	// as signed in to nothing. Admitted only where the env does sign the
+	// harness in ([LLMProvider.validateCredentials]).
 	AuthEnv HarnessAuthMode = "env"
 )
 
@@ -499,20 +423,16 @@ type HarnessAuth struct {
 	APIKey string `secret:"true" yaml:"api_key,omitempty" json:"api_key,omitempty" desc:"${VAR} holding an API key, read under auth.mode api-key. Empty reads the harness's own key variable."`
 
 	// CredentialBundle is a ${VAR} reference to a bundle exported by
-	// `crewlet llm export` — the harness's login (its credential files, or the
-	// document its export printed) as one blob, restored whenever the engine
-	// builds a company to run (boot and every apply it publishes) into a
+	// `crewlet llm export`: the harness's login as one blob. It is restored
+	// whenever the engine builds a company (boot and every apply) into a
 	// credential directory holding no login, or over one installed before the
-	// bundle's login (the newest login wins, by the install record the bundle
-	// carries), so a fresh container comes up already logged in and a
-	// re-login exported to the store reaches every node. It is withheld
-	// after `crewlet llm logout` until a login is written into the
-	// credential directory again (`crewlet llm login`,
-	// `-from-host` or `crewlet llm import`; a headless token does not end it).
-	// It holds ONE HARNESS's files and names that harness, though it is keyed by the
-	// entry: after the entry's harness changes, the new harness refuses it — by the
-	// harness it names, whatever its files are called — until a bundle exported
-	// from that harness replaces it.
+	// bundle's (the newest wins, by the install record), so a fresh container
+	// comes up logged in and a re-login reaches every node. It is withheld
+	// after `crewlet llm logout` until a login is written again (`crewlet llm
+	// login`, `-from-host`, `crewlet llm import`; a headless token does not end
+	// it). It holds ONE HARNESS's files and names that harness: if the entry's
+	// harness changes, the new one refuses it until a bundle exported from it
+	// replaces it.
 	CredentialBundle string `secret:"true" yaml:"credential_bundle,omitempty" json:"credential_bundle,omitempty" desc:"${VAR} holding a bundle exported by crewlet llm export."`
 }
 
@@ -631,22 +551,16 @@ type CredentialSources struct {
 
 // CredentialSources says where each of this entry's credentials is read from:
 // the field the entry writes or, where it writes none, a conventional variable
-// — the harness's own token or key variable, and the bundle's
-// [harnessprofile.BundleVarName].
+// (the harness's token or key variable, [harnessprofile.BundleVarName]).
 //
 // A CONVENTION, so `crewlet llm login -capture-token`, `crewlet llm export
-// -secret-store` and a key already exported as ANTHROPIC_API_KEY sign an entry
-// in with no YAML change. And ONE RULE with two readers: the engine resolves
-// the entry's sign-in through it, and [Company.VariablesRead] reports it, so
-// the Secrets screen never calls a variable "read by nothing" while an entry
-// signs in with it — which is what invited deleting a live credential.
+// -secret-store` and an exported ANTHROPIC_API_KEY sign an entry in with no
+// YAML change. ONE RULE, two readers: the engine's sign-in and
+// [Company.VariablesRead], so the Secrets screen never calls a live credential
+// "read by nothing".
 //
-// PER AUTH MODE, as the harness is handed them: a token only under subscription,
-// an API key only under api-key, and the bundle under every mode, since it is
-// restored into the credential directory whatever signs the calls in.
-// inherit-env reads nothing through here: it forwards the engine's own
-// environment, which the secret store is not part of. Nor does env: the
-// entry's own env is its sign-in, and the harness is handed no token and no key.
+// PER AUTH MODE: a token only under subscription, an API key only under
+// api-key, the bundle under every mode; inherit-env and env read nothing here.
 func (l *LLMProvider) CredentialSources(key string) CredentialSources {
 	profile, err := harnessprofile.Load(l.HarnessName(), l.Overrides)
 	if err != nil {
@@ -726,20 +640,18 @@ func (l *LLMProvider) validate(path Path) error {
 	return p.err()
 }
 
-// validateProfile holds an entry to the profile it drives — the built-in
-// profile with overrides merged in, loaded by the same [harnessprofile.Load] the
-// backend is built from — and its model to that profile's model flag.
+// validateProfile holds an entry to the profile it drives (the built-in
+// profile with overrides merged, loaded by [harnessprofile.Load]) and its
+// model to that profile's model flag.
 //
-// HERE, AND NOT ONLY WHERE THE BACKEND IS BUILT, because building it is what
-// `crewlet validate` and every node's apply do and what no API write does: a
-// PUT, a PATCH, a setup write or a revert runs these rules and never builds a
-// provider. Judged at the build alone, an override typo was admitted by the
-// API, activated, and then refused by every node.
+// HERE, NOT ONLY WHERE THE BACKEND IS BUILT: building happens in `crewlet
+// validate` and every node's apply, but no API write builds a provider, so
+// judged at the build alone an override typo was admitted, activated, then
+// refused by every node.
 //
-// RUNNABLE, because each says the backend cannot be built: the profile does
-// not load, or no model_args element carries {model}, and every entry names a
-// model (the backend refuses to drop one silently). Where the entry's
-// CREDENTIALS go is the admission half, [LLMProvider.validateCredentials].
+// RUNNABLE: the profile does not load, or no model_args element carries
+// {model}, or the entry names no model. Credentials are the admission half,
+// [LLMProvider.validateCredentials].
 func (l *LLMProvider) validateProfile(path Path) error {
 	if l.Harness != "" && !l.Harness.Valid() {
 		return nil // reported at harness; there is no profile to judge
@@ -765,20 +677,16 @@ func (l *LLMProvider) validateProfile(path Path) error {
 }
 
 // ProviderKeyPattern is the grammar of a providers.llm key: a lowercase
-// letter or digit, then up to 62 more of those, `.`, `_` and `-`, which is a
-// DNS label with the two separators a model's name already uses.
+// letter or digit, then up to 62 more of those, `.`, `_` and `-`.
 //
-// A GRAMMAR, because a key is not only the name seats select an entry by. It
-// names a directory: the default state_dir joins it under the harness home
-// ([LLMProvider.ResolvedStateDir]), so a key with a `/` nested one entry's
-// login inside another's, and `..` left the home altogether. And it names a
-// variable: the entry's credential bundle is read from
-// [harnessprofile.BundleVarName], which upper-cases the key and maps every other
-// character to `_`. Lowercase only, so the one key a person reads in the
-// document, a URL path and a Kubernetes resource name (crewlet-operator's,
-// which are DNS labels already) is the same string.
-// Compiled at first use, not at init: Gitlet's push hook is this
-// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+// A GRAMMAR, because a key names a directory (the default state_dir joins it
+// under the harness home, [LLMProvider.ResolvedStateDir]: a `/` nested one
+// login in another, `..` left the home) and a variable
+// ([harnessprofile.BundleVarName] upper-cases it and maps other characters to
+// `_`). Lowercase only, so the document, a URL path and a Kubernetes resource
+// name are the same string.
+// Compiled at first use, not at init: Gitlet's push hook is this binary and
+// pays every package's init (cmd/crewlet's hookinit_test.go).
 var ProviderKeyPattern = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,62}$`)
 })
@@ -786,18 +694,15 @@ var ProviderKeyPattern = sync.OnceValue(func() *regexp.Regexp {
 // validateLLMKeys holds every providers.llm key to [ProviderKeyPattern], and
 // no two keys to one credential bundle variable.
 //
-// ONE BUNDLE PER ENTRY. [harnessprofile.BundleVarName] maps `.`, `_` and `-` to
-// one character, so `gpt-5`, `gpt_5` and `gpt.5` all read
-// CREWLET_LLM_CLI_GPT_5_CREDENTIALS: the second entry was restored the first
-// one's login, silently, and `crewlet llm export -secret-store` from either
-// overwrote the other's. Each key after the first, in sorted order, is
-// reported naming the one it collides with.
+// ONE BUNDLE PER ENTRY. [harnessprofile.BundleVarName] maps `.`, `_` and `-`
+// alike, so `gpt-5`, `gpt_5` and `gpt.5` all read
+// CREWLET_LLM_CLI_GPT_5_CREDENTIALS and would restore or overwrite each
+// other's login. Each key after the first, sorted, is reported naming the one
+// it collides with.
 //
-// ADMISSION rather than runnable: an entry under such a key still builds and
-// runs, and a refusal at apply would take a node off the fleet's epoch over a
-// revision written before the rule. A write that keeps one is refused. (An
-// empty key is the runnable rule [Providers.validate] holds: no seat can
-// select it.)
+// ADMISSION rather than runnable: such an entry still runs, and a refusal at
+// apply would take a node off the fleet's epoch over an older revision. (An
+// empty key is the runnable rule [Providers.validate] holds.)
 func (c *Company) validateLLMKeys() error {
 	var p problems
 	bundles := make(map[string]string, len(c.Providers.LLM))
@@ -912,23 +817,16 @@ func (l *LLMProvider) validateEffort(path Path) error {
 
 // validateModel holds an entry's model to the grammar its harness reads it in,
 // where the merged profile declares one
-// ([harnessprofile.Profile.ModelNamesProvider]): OpenCode splits its model flag at
-// the first slash into a provider and a model, so a bare `claude-sonnet-5`
-// names the provider "claude-sonnet-5" and no model, and every call the entry
-// makes — its runs on this host and an executor run alike, which are handed
-// the same value — fails inside the harness, which OpenCode 2 refuses as "Invalid
-// model reference".
+// ([harnessprofile.Profile.ModelNamesProvider]): OpenCode splits its model flag
+// at the first slash into provider and model, so a bare `claude-sonnet-5`
+// names a provider and no model and every call fails inside the harness.
 //
-// JUDGED ON THE VALUE THE HARNESS IS HANDED, the model rendered through the
-// profile's model_args, so an override that puts the provider in the flag
-// (["--model", "anthropic/{model}"]) admits a bare model. A model written as a
-// `${VAR}` is not judged: its value is the secret store's and the
-// environment's, which a write cannot see.
+// JUDGED ON THE VALUE THE HARNESS IS HANDED, the model rendered through
+// model_args, so an override putting the provider in the flag
+// (["--model", "anthropic/{model}"]) admits a bare model. A `${VAR}` model is
+// not judged: a write cannot see its value.
 //
-// ADMISSION rather than runnable: the provider builds and the harness starts, the
-// refusal is the harness's grammar — a vendor fact that moves between releases,
-// which is why it is a profile declaration — and a newer peer may admit what
-// this build would not. So a write is refused and an apply only warns.
+// ADMISSION rather than runnable: the grammar moves between vendor releases.
 func (l *LLMProvider) validateModel(path Path) error {
 	if (l.Harness != "" && !l.Harness.Valid()) || envref.Has(l.Model) || strings.TrimSpace(l.Model) == "" {
 		return nil
@@ -972,29 +870,16 @@ func (l *LLMProvider) validateModel(path Path) error {
 
 // validateCredentials holds an entry's credentials to the variables its
 // merged profile names, those variables to the reference grammar, and the
-// profile itself to keeping every credential behind auth
+// profile to keeping every credential behind auth
 // ([harnessprofile.Profile.ValidateCredentials]).
 //
-// The rules exist because the backend's applyAuth (in
-// internal/providers/llm/harness) places a credential only where the profile
-// names a variable for it and drops it silently otherwise: an api-key entry
-// on a harness with no api_key_env ran signed in to nothing, and so did a token on
-// a harness with no token_env. Every such shape is refused, naming the route the
-// harness does read.
-//
-// ADMISSION rather than runnable, because an entry that breaks one still
-// runs: the provider builds, the harness starts, and it signs in from whatever it
-// does read — its credential files, a bundle, its own environment — while only
-// the misplaced credential goes unused. So a write that keeps one is refused,
-// and a revision being applied is only warned about. Refusing it at apply
-// would take this node off the fleet's epoch during a rolling upgrade over a
-// revision a newer peer admitted — one whose profile gained the very variable
-// this build's lacks, which is how a guess like an api_key_env for opencode
-// would arrive.
-//
-// Skipped where the runnable half already refused the entry (an unknown harness,
-// a profile that does not load): there is no profile to judge credentials
-// against, and the refusal that matters is already reported.
+// The backend's applyAuth (internal/providers/llm/harness) places a credential
+// only where the profile names a variable for it and silently drops it
+// otherwise, so an api-key entry on a harness with no api_key_env ran signed
+// in to nothing. Such shapes are refused, naming the route the harness reads.
+// ADMISSION rather than runnable: the entry still runs, only the misplaced
+// credential goes unused; an apply only warns, since refusing would take this
+// node off the fleet's epoch over a revision a newer peer admitted.
 func (l *LLMProvider) validateCredentials(path Path) error {
 	if l.Harness != "" && !l.Harness.Valid() {
 		return nil
@@ -1210,23 +1095,15 @@ func (l *LLMProvider) validateCredentials(path Path) error {
 // validateEnvSignIn holds an entry to the rule that its env is its sign-in
 // exactly when auth.mode says so ([AuthEnv]).
 //
-// UNDER env, THE ENV MUST SIGN THE HARNESS IN. The mode hands the harness no token
-// and no key and seeds no login, so an env that sets none of the names the
-// profile signs in by ([harnessprofile.Profile.SignInEnv]), or on a harness that reads
-// its model provider's key from its environment ([harnessprofile.Profile.EnvSignIn])
-// no credential-named variable, is an entry signed in to nothing. A profile
-// that declares neither has no env that signs it in, and cannot take the mode.
+// UNDER env, THE ENV MUST SIGN THE HARNESS IN: the mode hands it no token or
+// key and seeds no login, so an env setting none of the names the profile
+// signs in by ([harnessprofile.Profile.SignInEnv], [harnessprofile.Profile.EnvSignIn])
+// signs in to nothing.
 //
-// UNDER ANY OTHER MODE, A NAME THAT SIGNS THE HARNESS IN IS REFUSED in env. The
-// mode hands the harness its own credential beside it: subscription the plan
-// token the convention resolves for every entry, api-key the metered key. The
-// harness then ranks the two by rules of its own (Claude Code routes a cloud
-// switch away from the vendor's API whatever token it holds), so one of them
-// is a credential handed to a process that never uses it, and which one is
-// the harness's choice rather than the document's.
-//
-// ADMISSION, like the rest of [LLMProvider.validateCredentials]: the harness
-// starts and signs in from whatever it reads.
+// UNDER ANY OTHER MODE, A NAME THAT SIGNS THE HARNESS IN IS REFUSED in env:
+// the harness ranks it against the mode's own credential by its own rules
+// (Claude Code routes a cloud switch away from the vendor's API whatever
+// token it holds), so one goes unused. ADMISSION, like validateCredentials.
 func (l *LLMProvider) validateEnvSignIn(path Path, profile harnessprofile.Profile, mode HarnessAuthMode) error {
 	var p problems
 	harness := l.HarnessName()
@@ -1377,54 +1254,30 @@ type EmbeddingProvider struct {
 
 	// Dimensions is the vector width, and 0 means THE MODEL'S OWN.
 	//
-	// The width is a property of the model, not a setting with a global
-	// default: text-embedding-3-large emits 3072 and -3-small emits 1536,
-	// and a number that was right for one is silently wrong for the other.
-	// So an unset value resolves from [EmbeddingModels], and a model this
-	// build does not know is REFUSED rather than given a guess — see
-	// Width.
+	// The width is a property of the model (text-embedding-3-large emits 3072,
+	// -3-small 1536), so an unset value resolves from [EmbeddingModels] and a
+	// model this build does not know is REFUSED rather than guessed; see Width.
 	//
-	// A value is an OVERRIDE, 64..4096, for a model that supports
-	// shortening its output. It must match what the model actually
-	// produces: the store's vector columns are checked against it, and a
-	// mismatch is not a degraded search but a write that cannot be read
-	// back. So a model whose endpoint documents the `dimensions` parameter
-	// as unsupported ([DimensionsUnsupported] — embed-v4.0 through
-	// Cohere's Compatibility API) is refused any width but its own, and is
-	// never sent the parameter at that one.
+	// A value is an OVERRIDE, 64..4096, for a model that can shorten its
+	// output. It must match what the model produces: the store's vector columns
+	// are checked against it, and a mismatch is a write that cannot be read
+	// back. A model whose endpoint documents `dimensions` as unsupported
+	// ([DimensionsUnsupported]) is refused any width but its own and is never
+	// sent the parameter.
 	Dimensions int `yaml:"dimensions,omitempty" json:"dimensions,omitempty" js:"min=0;max=4096" desc:"Vector width; 0 takes the named model's own width. 64..4096 to override, and it must match what the model produces."`
 
-	// MaxInputTokens, MaxBatchInputs and MaxBatchTokens are the model's
-	// LIMITS — the most tokens one input may hold, the most inputs one
-	// request may carry, and the most tokens one request may carry summed
-	// over its inputs — and 0 means THE MODEL'S OWN, on exactly the rule
-	// Dimensions follows and for the same reason: a limit is a fact about
-	// the model, and a guess at it is a company whose every long document
-	// is refused by its provider, or whose every batch is, from the day
-	// embeddings are turned on.
+	// MaxInputTokens, MaxBatchInputs and MaxBatchTokens are the model's LIMITS:
+	// most tokens per input, most inputs per request, most tokens per request
+	// summed over its inputs. 0 means THE MODEL'S OWN, on Dimensions' rule: a
+	// guessed limit refuses every long document or batch.
 	//
-	// So an unset value resolves from [EmbeddingModels], and one the table
-	// does not carry — a model this build does not know, or a limit its
-	// vendor does not document for the endpoint this backend calls — is
-	// REFUSED until it is stated. A stated value for a limit the table does
-	// carry may only LOWER it, which is what it is for: a gateway or a proxy
-	// in front of the model that accepts less than the model does. Raising a
-	// documented limit is refused, naming the field, because the provider
-	// would refuse what this engine then sends.
+	// An unset value resolves from [EmbeddingModels]; one the table lacks is
+	// REFUSED until stated. A stated value for a limit the table carries may
+	// only LOWER it (a gateway accepting less than the model). Tokens, the unit
+	// vendors document; the engine counts bytes ([EmbeddingProvider.InputBound]).
 	//
-	// Tokens, because that is the unit every vendor documents a limit in;
-	// what the engine counts is bytes, and [EmbeddingProvider.InputBound] is
-	// the one conversion, which [EmbeddingProvider.Limits] carries.
-	//
-	// THIS BUILD REFUSES A STORED REVISION THAT LACKS ONE IT NEEDS — a
-	// company naming gemini-embedding-001, embed-v4.0 or a model the table
-	// does not carry, with no limits stated — exactly as it refuses an
-	// unknown model with no width: a RUNNABLE rule, not an admission one,
-	// because there is no running such a company without either guessing
-	// the limits or sending what the model refuses. It is refused at boot as
-	// well as at an apply, so no node starts on that revision; the
-	// configuration guide tells an operator to state the limits in the same
-	// edit that names the model.
+	// A stored revision lacking a limit it needs is refused at boot as well as
+	// at apply (RUNNABLE): the company could only run by guessing limits.
 	MaxInputTokens int `yaml:"max_input_tokens,omitempty" json:"max_input_tokens,omitempty" js:"min=0" desc:"Most tokens one input may hold; 0 takes the named model's documented window. Required for a model this build does not know; may only lower a documented one."`
 	MaxBatchInputs int `yaml:"max_batch_inputs,omitempty" json:"max_batch_inputs,omitempty" js:"min=0" desc:"Most inputs one request may carry; 0 takes the named model's documented limit. Required where none is documented; may only lower a documented one."`
 	MaxBatchTokens int `yaml:"max_batch_tokens,omitempty" json:"max_batch_tokens,omitempty" js:"min=0" desc:"Most tokens one request may carry, summed over its inputs; 0 takes the named model's documented limit. Required where none is documented; may only lower a documented one."`
@@ -1486,16 +1339,13 @@ type EmbeddingModel struct {
 // DimensionsSupport is what an embedding endpoint does with the request's
 // `dimensions` parameter for one model, as its vendor documents it.
 //
-// THREE VALUES, because the documentation says one of three things, and each
-// is acted on differently. An endpoint that SHORTENS to the width asked for is
-// sent it, so a store sized below the model's own width is filled at that
-// width. One documented as NOT TAKING it is never sent it, and holds a company
-// to the model's own width, because a width it cannot produce is a store whose
-// every vector would be refused. And where the documentation is SILENT the
-// parameter is sent as it always has been, since dropping it would rest on a
-// guess about the endpoint as much as keeping it does — and the width check
-// every response passes (internal/providers/embeddings) is what catches an
-// endpoint that ignores it.
+// THREE VALUES, each acted on differently. An endpoint that SHORTENS is sent
+// the width, so a store sized below the model's own is filled at it. One
+// documented as NOT TAKING it is never sent it and holds a company to the
+// model's own width. Where the documentation is SILENT the parameter is sent
+// as always, since dropping it is as much a guess as keeping it; the width
+// check on every response (internal/providers/embeddings) catches an endpoint
+// that ignores it.
 type DimensionsSupport string
 
 // The documented answers.
@@ -1524,83 +1374,30 @@ func (d DimensionsSupport) Valid() bool {
 }
 
 // EmbeddingModels is every embedding model this build knows, keyed by the id
-// the provider is configured with.
+// the provider is configured with. A table, not a default: width and limits
+// are facts about the MODEL, so one absent here is refused.
 //
-// # Why a table and not a default
-//
-// The width decides whether a vector written today can be read tomorrow, and
-// the limits decide whether a request is accepted at all — and all four are
-// facts about the MODEL. A single default was wrong the moment a company named
-// a model that emits something else — and the default this replaced justified
-// itself by a case that could not exist: it was documented as "what an entry
-// that names no model gets", while validation refuses exactly that entry. A
-// model absent from this table is refused rather than guessed at, naming both
-// ways to fix it: name a model this build knows, or state the values.
-//
-// # Why the engine counts BYTES against a limit stated in tokens
-//
-// Every tokenizer these models use emits at most one token per byte of the
-// text it is given, plus the special tokens a server wraps an input in:
-//
-//   - a BYTE-LEVEL BPE (OpenAI's cl100k_base) starts from one token per byte
-//     and every merge replaces two tokens with one;
-//   - a SENTENCEPIECE model with byte fallback (Gemma's, which the Gemini
-//     embedders share, and most open models') emits pieces that each cover at
-//     least one character, falling back to one token per BYTE for a character
-//     its vocabulary lacks — plus, at most, a word-boundary marker in front of
-//     the first piece;
-//   - a WORDPIECE model (the BERT family most self-hosted embedders are)
-//     emits pieces that each cover at least one character, and one [UNK] for
-//     a word it cannot split.
-//
-// So a text of N bytes is at most N tokens plus the wrapper, which is a bound
-// that needs NO TOKENIZER — and that is the reason for it. A tokenizer port
-// (a Go tiktoken with its ranks embedded) was the alternative and is
-// rejected: it is exact for one vendor only, every other model this backend
-// serves has its own, and the standard library plus this argument already
-// keeps every input inside every window.
-//
-// The argument has one hole and it is stated rather than papered over: a
-// tokenizer that applies Unicode COMPATIBILITY normalisation (NFKC) before it
-// splits can lengthen a few characters — U+FDFA, one character of three bytes,
-// becomes eighteen. Byte-level BPE normalises nothing, so OpenAI's bound is
-// exact; for a normalising model the wrap allowance absorbs a handful of
-// those characters, and an input dense with them is refused by the provider
-// as a request it will refuse again, which the embedder classifies so a
-// caller can set that one input aside.
-//
-// The price of counting bytes is that ordinary prose — three to four bytes a
-// token — is held to about a quarter of a model's window. For a caller that
-// represents a long text in CHUNKS that costs nothing but more chunks for the
-// same tokens; for a caller that embeds a text's OPENING it is a shorter
-// opening, which is that caller's policy to weigh.
-//
-// # Over the limit, refused or truncated?
-//
-// Each entry says what its vendor documents, and none of it decides anything:
-// the embedder refuses, BEFORE any request, an input past the byte bound, and
-// the byte bound is inside the window, so no server is ever sent an input its
-// over-length behaviour applies to.
+// Bytes are counted against limits stated in tokens because every tokenizer
+// these models use emits at most one token per byte (BPE merges only shrink;
+// SentencePiece and WordPiece pieces cover at least one character) plus a
+// wrapper: a bound needing NO TOKENIZER. One hole: NFKC-normalising tokenizers
+// can lengthen a few characters (U+FDFA: three bytes, eighteen tokens);
+// [EmbeddingWrapTokens] absorbs a handful. Prose at three to four bytes a
+// token is held to about a quarter of the window: a shorter opening for a
+// caller that embeds a text's opening.
 var EmbeddingModels = map[string]EmbeddingModel{
 	// OpenAI's embeddings reference
 	// (https://developers.openai.com/api/reference/resources/embeddings/methods/create):
-	// "The input must not exceed the max input tokens for the model (8192
-	// tokens for all embedding models)", an array of at most 2048 inputs, and
-	// "a maximum of 300,000 tokens summed across all inputs in a single
-	// request". 8192, not the 8191 older pages gave: the reference and the
-	// embeddings guide's model table (developers.openai.com/api/docs/guides/
-	// embeddings) both say 8192 today. WrapTokens is 0 because the guide's
-	// own way to check an input against the limit is to count it with
-	// cl100k_base and nothing else — so the per-input byte bound is exactly
-	// 8192, which is the size the knowledge corpus has always embedded at
-	// (search.EmbedInputBytes): a byte less would move the opening of every
-	// long document, change the digest its replicated vector record carries,
-	// and re-embed the corpus.
+	// at most 8192 tokens an input for all embedding models, 2048 inputs, and
+	// 300,000 tokens summed per request. WrapTokens is 0 because the guide's own
+	// way to check an input is to count it with cl100k_base, so the per-input
+	// byte bound is exactly 8192, the size the knowledge corpus has always
+	// embedded at (search.EmbedInputBytes): a byte less would move the opening
+	// of every long document, change the digest its replicated vector record
+	// carries and re-embed the corpus.
 	//
-	// `dimensions`: "The number of dimensions the resulting output
-	// embeddings should have. Only supported in text-embedding-3 and later
-	// models" (the same reference), and the guide's table gives each
-	// model's own width.
+	// `dimensions` is "Only supported in text-embedding-3 and later models"
+	// (same reference); the guide's table gives each model's own width.
 	"text-embedding-3-large": {
 		Width: 3072, Dimensions: DimensionsShortens, DimensionsSource: openAIDimensions,
 		InputTokens: 8192, BatchInputs: 2048, BatchTokens: 300_000,
@@ -1611,20 +1408,16 @@ var EmbeddingModels = map[string]EmbeddingModel{
 	},
 
 	// The model page (https://ai.google.dev/gemini-api/docs/models/gemini-embedding-001):
-	// an input token limit of 2,048 and a flexible output of 128..3072. The
+	// an input limit of 2,048 tokens and a flexible output of 128..3072. The
 	// OpenAI-compatible endpoint this backend calls is documented only by an
 	// example (https://ai.google.dev/gemini-api/docs/openai); the native API
-	// truncates an over-long input silently when asked to (autoTruncate,
-	// https://ai.google.dev/api/embeddings), and neither page says what the
-	// compatible endpoint does.
+	// can silently truncate an over-long input (autoTruncate), and neither page
+	// says what the compatible endpoint does.
 	//
-	// `dimensions` is not mentioned on the compatibility page at all, and its
-	// examples send none. The native API shortens on request through its own
-	// `output_dimensionality` and emits 3072 by default
-	// (https://ai.google.dev/gemini-api/docs/embeddings), which says nothing
-	// about whether the compatible endpoint maps the OpenAI parameter onto
-	// it, ignores it or refuses it — so it is sent as it always was, and the
-	// width check on every response is what holds the vector to the store.
+	// `dimensions` is not mentioned on the compatibility page. The native API
+	// shortens through `output_dimensionality` (default 3072), which says
+	// nothing about the compatible endpoint, so it is sent as always and the
+	// width check on every response holds the vector to the store.
 	"gemini-embedding-001": {
 		Width: 3072, Dimensions: DimensionsUnstated,
 		DimensionsSource: "Google's page for the OpenAI-compatible endpoint " +
@@ -1637,21 +1430,16 @@ var EmbeddingModels = map[string]EmbeddingModel{
 	},
 
 	// The model page (https://docs.cohere.com/docs/cohere-embed): a 128k
-	// context, read as 128 000 — the smaller of the two things "128k" can
-	// mean, so the bound holds under either — and a default output of 1536.
-	// The Compatibility API this backend calls
-	// (https://docs.cohere.com/docs/compatibility-api) documents no limit at
-	// all; the 96 texts a call of the native Embed API
-	// (https://docs.cohere.com/reference/embed) is that endpoint's, and so is
-	// its silent END truncation.
+	// context, read as 128 000 (the smaller meaning of "128k", so the bound
+	// holds under either), default output 1536. The Compatibility API this
+	// backend calls (https://docs.cohere.com/docs/compatibility-api) documents
+	// no limit; the 96 texts a call and the silent END truncation are the
+	// native Embed API's.
 	//
-	// That page lists `dimensions` among the embeddings parameters it does
-	// NOT support (it takes `input`, `model` and `encoding_format`), and
-	// says neither whether one sent is ignored or refused nor how a width is
-	// chosen instead — the native API's `output_dimension` is among the
-	// Cohere-specific parameters it does not take either. So the endpoint
-	// returns the model's own width, 1536 of 256, 512, 1024 and 1536 (the
-	// model page), and nothing else: the parameter is never sent, and no
+	// That page lists `dimensions` among the parameters it does NOT support and
+	// does not say whether one sent is ignored or refused, nor how a width is
+	// chosen. So the endpoint returns the model's own width, 1536 (of 256, 512,
+	// 1024, 1536 per the model page): the parameter is never sent and no
 	// other width can be configured.
 	"embed-v4.0": {
 		Width: 1536, Dimensions: DimensionsUnsupported,
@@ -1673,18 +1461,15 @@ const openAIDimensions = "OpenAI's embeddings reference " +
 	"`dimensions` is supported in text-embedding-3 and later models"
 
 // EmbeddingWrapTokens is the allowance, in tokens, for what a server adds
-// around each input of a model whose vendor does not document its count —
-// every model in [EmbeddingModels] that is not OpenAI's, and every model it
-// does not carry.
+// around each input of a model whose vendor does not document its count: every
+// model in [EmbeddingModels] but OpenAI's, and any it does not carry.
 //
-// SIXTEEN. The wrappers in use are two or three tokens — [CLS] and [SEP] for
-// the BERT family, <s> and </s> plus SentencePiece's word-boundary marker,
-// BOS and EOS for a decoder used as an embedder — so sixteen is five times the
-// largest, with room left for the few NFKC expansions the byte argument cannot
-// cover ([EmbeddingModels]). It costs sixteen bytes of an input's bound,
-// under one percent of a 2 048-token window. A server configured to PREPEND
-// an instruction of its own is outside it: declare `max_input_tokens` net of
-// that instruction.
+// SIXTEEN. Wrappers are two or three tokens ([CLS]/[SEP], <s>/</s> plus a
+// SentencePiece boundary marker, BOS/EOS), so sixteen is five times the
+// largest, with room for the few NFKC expansions the byte argument cannot
+// cover ([EmbeddingModels]), at under one percent of a 2 048-token window. A
+// server that PREPENDS its own instruction is outside it: declare
+// `max_input_tokens` net of that.
 const EmbeddingWrapTokens = 16
 
 // EmbeddingLimits is what the embedder enforces, in the unit it counts without
@@ -1736,47 +1521,30 @@ func (e *EmbeddingProvider) Width() int {
 }
 
 // SendsDimensions is whether the embedder asks for its width in every request
-// — the `dimensions` parameter — rather than only checking the width of what
-// comes back.
+// (the `dimensions` parameter) rather than only checking the width returned.
 //
-// Every model but one kind is asked: an endpoint that shortens answers at the
-// width the store was sized for, and one whose documentation is silent, or a
-// model this build does not know, is asked as it always has been. The one
-// kind is a model whose endpoint documents the parameter as NOT SUPPORTED
-// ([DimensionsUnsupported]) at the width it emits on its own: the answer is
-// that width without the parameter, and a parameter an endpoint says it does
-// not take is one it may refuse. At any other width the parameter is sent as
-// before — validation refuses that width, so only a caller that skipped
-// validation meets it, and it then fails as it always did, at the width check.
+// Every model is asked except one whose endpoint documents the parameter as
+// NOT SUPPORTED ([DimensionsUnsupported]), at the width it emits on its own:
+// an endpoint that does not take a parameter may refuse it. At any other width
+// it is sent as before; validation refuses that width, so only a caller that
+// skipped validation meets it, and it fails at the width check.
 func (e *EmbeddingProvider) SendsDimensions() bool {
 	model, known := EmbeddingModels[strings.TrimSpace(e.Model)]
 	return !known || model.Dimensions != DimensionsUnsupported || e.Width() != model.Width
 }
 
 // InputBound is the most PREPARED BYTES one input to this provider may hold,
-// and 0 when the model's window is unknown — which validation refuses, so no
-// caller of [EmbeddingProvider.Limits] meets it.
+// and 0 when the model's window is unknown, which validation refuses.
 //
 // THE ONE CONVERSION from what a vendor documents (tokens) to what the engine
-// counts (bytes), by the argument at [EmbeddingModels]: a prepared text of N
-// bytes is at most N tokens plus the wrap allowance, so an input of
-// window − wrap bytes is inside the window. The window is the model's
-// documented one, lowered by a stated `max_input_tokens`, and — because one
-// input must fit one request — lowered again to the request's own token total
-// where that is known and smaller: a gateway whose request is smaller than the
-// model's window bounds the input too.
+// counts (bytes), by the argument at [EmbeddingModels]: N bytes are at most N
+// tokens plus the wrap allowance, so window - wrap bytes fit. The window is
+// the documented one, lowered by a stated `max_input_tokens` and by the
+// request's own token total where known and smaller.
 //
-// Its own method rather than a field of [EmbeddingProvider.Limits], because
-// the bound is known wherever the window is, and the request limits are not:
-// a model whose vendor documents its window but nothing per request still has
-// a per-input bound a reader of its vectors needs — the window a stored corpus
-// was embedded at — while it has no limits an embedder could be built from.
-// Limits takes this value; nothing re-derives it.
-//
-// A stated limit LOWERS a documented one and never raises it — validation
-// refuses the attempt, and this takes the lower of the two regardless, so a
-// bound the provider would refuse is not enforced even by a caller that
-// skipped validation.
+// Its own method, not part of [EmbeddingProvider.Limits]: a reader of stored
+// vectors needs the window the corpus was embedded at, known wherever the
+// window is. A stated limit only LOWERS a documented one, even unvalidated.
 func (e *EmbeddingProvider) InputBound() int {
 	model := EmbeddingModels[strings.TrimSpace(e.Model)]
 	window := limitOf(e.MaxInputTokens, model.InputTokens)

@@ -30,29 +30,17 @@ type teardownHub struct{ t *teardown }
 
 func (h teardownHub) Stop(context.Context) { h.t.steps = append(h.t.steps, "hub") }
 
-// A NODE COMES DOWN IN ONE ORDER, and each step's reason is a step before it.
+// A NODE COMES DOWN IN ONE ORDER, each step's reason a step before it:
+//   - DRAIN first, listener up: probes answer while turns finish; it refuses new work.
+//   - GIT REQUESTS next, listener up: a cut clone or push restarts from nothing
+//     on a peer, and a running request reads the estate the engine closes.
+//   - LISTENERS after both: closed first, a node failed liveness doing its job.
+//   - CHAT HUB after the drain: finishing turns post replies a peer's room learns of.
+//   - ENGINE last: it closes the broker and store the hub and probes use.
 //
-//   - THE DRAIN FIRST, with the listener up: the probes answer while the turns
-//     finish, and the drain is what refuses new work.
-//   - THE GIT REQUESTS the node is serving once it has finished, with the
-//     listener still up: a clone or a push the close cut is begun again from
-//     nothing on a peer, and a request still running reads the estate the
-//     engine's teardown closes.
-//   - THE LISTENERS once both have finished: closed first, a node failed its
-//     liveness probe while doing exactly what it should.
-//   - THE CHAT HUB after the drain: the turns that finish during it post their
-//     replies and lower their indicators, and a peer's room learns of both
-//     through this hub — stopped first, it went dark for a rolling restart.
-//   - THE ENGINE last: its teardown closes the broker the hub's answerers are
-//     subscribed on and the store both probes read, and its appliers announce
-//     into whatever hub is still attached.
-//
-// Nothing else asserts it, and every reversal is silent until production. And
-// a node that bound no listener, or a boot that never built a hub, comes down
-// the same way with nothing in between — the nil parts are the ones runEngine
-// hands over on exactly those nodes. Mutation: swap any two steps of
-// [shutdown], or drop the nil check from [httpSurface.stop] or
-// [httpSurface.finishGit], and this fails.
+// A node with no listener or hub comes down the same way (runEngine passes nil
+// parts there). Mutation: swap any two steps of [shutdown], or drop the nil
+// check from [httpSurface.stop] or [httpSurface.finishGit], and this fails.
 func TestShutdownTakesANodeDownInOneOrder(t *testing.T) {
 	t.Parallel()
 	got := &teardown{}

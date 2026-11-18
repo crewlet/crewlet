@@ -9,25 +9,17 @@ import (
 	"github.com/crewlet/crewlet/internal/plainjson"
 )
 
-// EVERY JSON DOCUMENT THIS COMMAND PRINTS GOES THROUGH HERE, because whoever
-// reads one reads it as TEXT — a person at a terminal, a script matching a
-// string, the fix loop `crewlet validate -json` exists for — and never drops it
-// inside an HTML page, the one place `json.Marshal`'s escaping of `<`, `>` and
-// `&` protects anything. Written that way a validation problem read
-// `replicas \u003e 1 needs peers` and a Tier A token's login
-// `token:\u003cid\u003e`, and a model fixing a document was handed escapes
-// to decode back into the setting it was being told about.
+// EVERY JSON DOCUMENT THIS COMMAND PRINTS GOES THROUGH HERE, because whoever reads
+// one reads it as TEXT (a terminal, a script matching a string, the fix loop
+// `crewlet validate -json` exists for) and never inside an HTML page, the one
+// place `json.Marshal`'s escaping of `<`, `>` and `&` protects anything.
 //
-// A NODE'S ANSWER IS DECODED AND PRINTED AGAIN rather than copied out as it
-// came. The node writes every answer through one encoder that escapes markup
-// uniformly (internal/api/httpjson says why), so the bytes as they came are
-// exactly the escapes this file exists to keep off a terminal — and they are
-// escaped at that one writer whatever produced each value, so no printer could
-// promise text by copying them. What a copy kept and a decode would lose is
-// nothing: the answer is decoded into a generic value, so every field this
-// build does not know survives, and every number is kept as the digits the node
-// sent ([decodeAnswer]). What changes is the layout: indented, and a map's keys
-// in sorted order.
+// A NODE'S ANSWER IS DECODED AND PRINTED AGAIN rather than copied. The node's one
+// encoder escapes markup uniformly (internal/api/httpjson says why), so its bytes
+// are exactly the escapes this file keeps off a terminal. A decode loses nothing:
+// the answer goes into a generic value, so unknown fields survive and every
+// number is kept as the node's digits ([decodeAnswer]). Only the layout changes:
+// indented, a map's keys sorted.
 
 // printJSON writes v as indented JSON text, its strings as written, and ends
 // the line.

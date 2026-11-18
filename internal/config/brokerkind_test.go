@@ -314,14 +314,12 @@ func TestTheBrokerWarnings(t *testing.T) {
 }
 
 // THE IN-MEMORY STREAM IS A MEMBER'S REFUSAL, because only a member holds a
-// stream: it is the one broker running JetStream in this process, and a member
-// keeps the estate's state logs on it from boot, solo or in a fleet
-// ([Stream.Durable]). A stateless leaf runs none and is REFUSED a store
-// directory, so refusing it for having none would tell a correct node to set
-// the one field it may not; a client's streams are its external cluster's. It
-// was two warnings — streams in memory, and a store limit that bounds nothing
-// beside them — and each case pins which shapes load and which are refused at
-// `stream.store_dir`, never at the limit beside it.
+// stream: it is the one broker running JetStream in this process, keeping the
+// estate's state logs from boot ([Stream.Durable]). A stateless leaf runs
+// none and is REFUSED a store directory, so refusing it for having none
+// would tell a correct node to set the one field it may not; a client's
+// streams are its external cluster's. Each case pins which shapes load and
+// which are refused at `stream.store_dir`, never at the limit beside it.
 //
 // The keyring is appended rather than [Runnable] applied, because Runnable
 // would hand every case without a `stream:` block the store directory whose
