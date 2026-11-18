@@ -57,6 +57,8 @@ type Scanner struct {
 	// invalid says the text Read has handed of the current Name or String held a byte that begins no UTF-8
 	// character ([Scanner.InvalidUTF8]).
 	invalid bool
+	// counting says the unit count is on ([Scanner.CountUnits]).
+	counting bool
 
 	// expect is what the grammar takes next; depth is how many containers are open, and objects holds one
 	// bit for each, set for an object, from the outermost.
@@ -73,6 +75,11 @@ type Scanner struct {
 	recFrom   int
 	limit     int
 	held      []byte
+
+	// The unit count ([Scanner.Units]): units what it counted until it last went off, onAt the offset it
+	// last went on at, wide the bytes taken since then past the units they count, and textUnits the current
+	// text's decoded units ([Scanner.TextUnits]).
+	units, onAt, wide, textUnits int64
 }
 
 // textState is what of the current token's text is still unread.
@@ -156,6 +163,7 @@ func (s *Scanner) next() (Kind, error) {
 	if err := s.passText(); err != nil {
 		return "", err
 	}
+	s.textUnits = 0
 	for {
 		c, ok, err := s.peekNonBlank()
 		if err != nil {
