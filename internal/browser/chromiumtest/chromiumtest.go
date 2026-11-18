@@ -22,7 +22,8 @@
 // # How a launch runs
 //
 // [LaunchPort] opens a DevTools port on loopback, which the artifact render's
-// client dials, as it dials the Chromium an operator runs. Each launch runs in
+// client dials, as it dials the Chromium an operator runs, and through which
+// [Methods] reads a pin's own description of its protocol. Each launch runs in
 // a process group of its own, with a profile in the case's temporary
 // directory, and is killed with its whole group and waited for when the case
 // ends. It ends with its test binary too, however the binary ends —
@@ -66,8 +67,10 @@ package chromiumtest
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -82,6 +85,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/browser"
+	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/procgroup"
 )
@@ -456,3 +460,51 @@ func LaunchPort(t testing.TB, chrome string, args ...string) Endpoint {
 	}
 	return Endpoint{}
 }
+
+// Methods is every command and event chrome's own protocol describes, each
+// spelled as its domain and its name joined by a dot, read from the
+// /json/protocol of a launch under t: per call, since a launch runs under its
+// caller's t, whose end ends it.
+func Methods(t testing.TB, chrome string) map[string]bool {
+	t.Helper()
+	ep := LaunchPort(t, chrome)
+	ctx, cancel := context.WithTimeout(t.Context(), listenTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep.HTTP+"/json/protocol", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := httpx.Client(0).Do(req)
+	if err != nil {
+		t.Fatalf("%s/json/protocol: %v", ep.HTTP, err)
+	}
+	defer resp.Body.Close()
+	type named struct {
+		Name string `json:"name"`
+	}
+	var desc struct {
+		Domains []struct {
+			Domain   string  `json:"domain"`
+			Commands []named `json:"commands"`
+			Events   []named `json:"events"`
+		} `json:"domains"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&desc); err != nil {
+		t.Fatalf("%s/json/protocol: %v", ep.HTTP, err)
+	}
+	if len(desc.Domains) < minDomains {
+		t.Fatalf("%s/json/protocol described %d domains: it is describing nothing", ep.HTTP, len(desc.Domains))
+	}
+	methods := map[string]bool{}
+	for _, d := range desc.Domains {
+		for _, m := range slices.Concat(d.Commands, d.Events) {
+			methods[d.Domain+"."+m.Name] = true
+		}
+	}
+	return methods
+}
+
+// minDomains is the fewest domains a pin's protocol may describe: both pins
+// describe nearly sixty, so an answer of fewer than twenty is one that
+// describes nothing the walk could hold Go to.
+const minDomains = 20
