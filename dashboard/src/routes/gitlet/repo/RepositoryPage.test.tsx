@@ -36,7 +36,7 @@ import { SYNTAX_MAX_BYTES, load } from "~/lib/syntax/index.ts";
 import { forgetDownloadProbes } from "./downloads.ts";
 import { forgetTreeChoice } from "./FileView.tsx";
 import { forgetTrees } from "./tree.ts";
-import { sinceOf } from "./History.tsx";
+import { sinceOf } from "../when.ts";
 import { RepositoryPage } from "./RepositoryPage.tsx";
 
 beforeEach(() => {
