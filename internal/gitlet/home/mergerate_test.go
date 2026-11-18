@@ -11,26 +11,17 @@ import (
 )
 
 // THE QUEUE PRICES ITS MERGE RATE AT THE ROUNDS IT TIMED (M5-D28, ADR-0015):
-// main's queue at depth 2 and batch 1, asked thirty enqueues within the
-// window by its rows, is judged against what its own trains land —
-// config.LandingCapacity at the mean round this node timed — and nothing of
-// the alarm's own:
+// main's queue (depth 2, batch 1), its enqueues asked of its rows from a window
+// back, is judged against config.LandingCapacity at the mean round this node
+// timed: before any train, nothing; a train ten minutes in, twelve an hour,
+// thirty over; landed at twenty minutes, six an hour, five silent; a new train
+// a minute old leaves the mean at twenty, thirty over six; drained, the figure
+// goes with its last entry.
 //
-//   - before any train, no round is timed: nothing is said;
-//   - a train ten minutes into testing is one round of ten so far: twelve an
-//     hour, thirty past it — main of web over, at its window, by the read
-//     that asked from an hour back;
-//   - landed at twenty minutes, the round is timed: six an hour, and five
-//     asked is within it — silent;
-//   - a new train a minute old does not shorten the mean of twenty: thirty
-//     asked is past six again;
-//   - drained, the queue's figure goes with its last entry.
-//
-// Mutation: price every target at the standing train's age alone, or never
-// record a landing's round → the young train's minute prices 120, silent,
-// red; count the standing train even where it is younger than the mean → a
-// mean of ten and a half, eleven, red; keep a drained target's figure → it
-// still fires, red.
+// Mutation: price at the standing train's age alone, or never record a
+// landing's round → the young train prices 120, silent, red; count a standing
+// train younger than the mean → a mean of 10.5, eleven, red; keep a drained
+// target's figure → it still fires, red.
 func TestTheQueuePricesItsMergeRateAtTheRoundsItTimed(t *testing.T) {
 	t.Parallel()
 	c := &clock{now: time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)}
@@ -115,13 +106,11 @@ func TestTheQueuePricesItsMergeRateAtTheRoundsItTimed(t *testing.T) {
 }
 
 // A QUEUE THIS NODE NO LONGER TURNS IS FORGOTTEN: a target's merge rate is
-// kept while its train stands or its figure is within the window — so a
-// reading taken before the train's first measurement keeps the round it is
-// timing — and dropped by the first reading past a window with neither, as a
-// queue whose home moved to another node, or whose repository was deleted,
-// is never turned here again and so never reached by a drained turn. A
-// long-lived Gitlet node holds a figure for the queues it is home to now, never
-// one for every queue it ever was.
+// kept while its train stands or its figure is within the window (so a reading
+// before the first measurement keeps the round being timed), and dropped by the
+// first reading past a window with neither: a queue whose home moved or whose
+// repository was deleted never gets a drained turn here, and a long-lived node
+// holds figures only for the queues it homes now.
 //
 // Mutation: never forget a target → it is still held a window on, red;
 // forget a target whose figure lapsed though its train stands → the first
@@ -181,28 +170,18 @@ func merged(r statelog.Reading) rateHalf {
 		r.CodeMergeRateOverTarget, r.CodeMergeRateOverRound, r.CodeMergeRateWindow}
 }
 
-// THE QUEUE COUNTS ITS ROUNDS, ITS LANDINGS AND ITS EJECTIONS (M5 §2.10):
-// what an operator reads of a queue before code_merge_rate_over_capacity
-// fires is the home's own instruments, each recorded where the round it
-// counts ends —
+// THE QUEUE COUNTS ITS ROUNDS, LANDINGS AND EJECTIONS (M5 §2.10), each where
+// its round ends, for an operator before code_merge_rate_over_capacity fires:
+// a green train of two landed ten minutes after its build, two landed and one
+// `landed` round timed at ten minutes; a red train of two bisected to its
+// first entry, that entry ejected `check_failed` and one `bisected` round; the
+// next, given up under a person's push, one `abandoned` round although the
+// turn after rebuilds; the rebuilt train landed by a land answered PENDING
+// (durable), its change landed and round `landed`, never read abandoned after.
 //
-//   - a train of two landed green, ten minutes after it was built: two
-//     changes landed, one round `landed`, timed at ten minutes;
-//   - a train of two whose tip failed, bisected to its first entry: that
-//     entry ejected `check_failed`, one round `bisected`;
-//   - the train built of what was left, given up under a person's push:
-//     one round `abandoned`, counted once although the turn after builds
-//     again;
-//   - the train rebuilt on the pushed tip landed by a land answered PENDING
-//     — durable, every node applies it — while another change waits: its
-//     change counted landed and its round `landed` where it was appended,
-//     never read as abandoned by the turn after.
-//
-// Mutation: drop the landed count → no change landed, red; time a round from
-// the land rather than its build → not ten minutes, red; drop the ejected
-// count → no check_failed, red; never count a replaced train abandoned → no
-// abandoned round, red; count only a land answered applied → the pending
-// one's change uncounted and its train abandoned, red.
+// Mutation, each red: drop the landed count; time a round from the land, not
+// its build; drop the ejected count; never count a replaced train abandoned;
+// count only a land answered applied.
 func TestTheQueueCountsItsRoundsLandingsAndEjections(t *testing.T) {
 	t.Parallel()
 	c := &clock{now: time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)}
@@ -301,22 +280,18 @@ func TestTheQueueCountsItsRoundsLandingsAndEjections(t *testing.T) {
 	}
 }
 
-// A TRAIN ENDED BY AN EJECTION IS COUNTED EJECTED, AND ONCE (M5 §2.10): the
-// two ends the queue worker appends an eject for that are neither a landing
-// nor a bisect each count one round `ejected` and nothing else, and the turn
-// after does not count the same train `abandoned` again —
-//
-//   - a green train whose landing the rows refuse, its first entry
-//     gate_unmet: that entry ejected, the train ended there, and the next
-//     train, of the entry left, built over no abandoned round;
-//   - a train whose base's checks file defines none of its required checks:
-//     every entry ejected check_failed, and the next train, of a change
-//     queued after, built over no abandoned round.
+// A TRAIN ENDED BY AN EJECTION IS COUNTED EJECTED, AND ONCE (M5 §2.10): each
+// end the queue worker appends an eject for that is neither a landing nor a
+// bisect counts one `ejected` round alone, and the turn after never counts the
+// train `abandoned`. The two: a green train whose landing the rows refuse,
+// its first entry gate_unmet; a train whose base's checks file defines none of
+// its required checks, every entry ejected check_failed. Each is followed by
+// a next train built over no abandoned round.
 //
 // Mutation: spell the outcome as another's (roundEjected = "bisected") → no
-// round ejected, red; end neither train (nil in place of endOf at the land's
-// refusal, or at trainDefs) → no round ejected, and the next train reads the
-// old one abandoned, red.
+// round ejected, red; end neither train (nil for endOf at the land's refusal,
+// or at trainDefs) → no round ejected, and the next train reads the old one
+// abandoned, red.
 func TestATrainEndedByAnEjectionCountsItsRoundEjected(t *testing.T) {
 	t.Parallel()
 	loop := func(rows *queueRows) (*home.Loop, func(string) uint64) {

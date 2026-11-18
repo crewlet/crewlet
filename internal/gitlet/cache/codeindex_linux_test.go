@@ -57,16 +57,12 @@ func mappingOf(t *testing.T, addr uintptr) (string, bool) {
 	return "", false
 }
 
-// AN INDEX BUILD HOLDS NO SEGMENT IN ITS HEAP. A build reads back every
-// segment it writes — to know which blobs it holds, and as both inputs of
-// every merge — and reads it through a MAPPING of the file it placed, never
-// from the bytes it wrote, so what its heap holds is one builder's postings
-// and one merge's lists however large the repository: held as written, a
-// first build kept every fresh segment resident at once and buffered each
-// merge's whole output beside its inputs. Four files at a segment a file
-// write four segments and merge two of them twice; every one is read back
-// through a mapping of the very file it is, and the build leaves no mapping
-// behind.
+// AN INDEX BUILD HOLDS NO SEGMENT IN ITS HEAP: it reads back every segment it
+// writes (its blobs, and both inputs of each merge) through a MAPPING of the
+// file it placed, never the bytes it wrote, so its heap holds one builder's
+// postings and one merge's lists however large the repository. Four files at
+// a segment a file write four segments and merge twice; each is read back
+// through a mapping of its own file, and the build leaves no mapping behind.
 //
 // Mutation: open a written segment from the file read into the heap
 // (codeindex.go's openBuilt, os.ReadFile in place of the mapping) — the

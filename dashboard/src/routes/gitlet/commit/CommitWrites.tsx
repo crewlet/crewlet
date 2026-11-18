@@ -14,6 +14,7 @@
 
 import { useState } from "react";
 import { Button, FormField, Input, Select, Stack } from "@crewlethq/ui";
+import { GitCommitVerticalGlyph, RotateCcwGlyph } from "@crewlethq/icons/glyphs";
 import { Modal } from "~/components/Modal.tsx";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
 import { refName, shortOID } from "~/lib/code.ts";
@@ -25,7 +26,7 @@ import type { CodeRepoDetail } from "~/protocol/index.ts";
 
 type Kind = "revert" | "pick";
 
-/** The commit page's two writes, under its header. */
+/** The commit page's two writes, in its page bar. */
 export function CommitWrites({
   repo,
   sha,
@@ -49,6 +50,7 @@ export function CommitWrites({
         size="small"
         variant="secondary"
         blocked={held}
+        leadingIcon={<RotateCcwGlyph size="sm" />}
         onPress={() => setOpen("revert")}
       >
         Revert
@@ -58,6 +60,7 @@ export function CommitWrites({
         size="small"
         variant="secondary"
         blocked={held}
+        leadingIcon={<GitCommitVerticalGlyph size="sm" />}
         onPress={() => setOpen("pick")}
       >
         Cherry-pick

@@ -15,12 +15,9 @@ import (
 	"github.com/crewlet/crewlet/internal/flock"
 )
 
-// THE BOOT'S READING of repos/: done once, by Prepare, under the claim Open
-// takes over — so what Open acts on is what is on the disk, with no second
-// reading to pay for and no window in which another process could have
-// changed it. A boot reads nothing but the directory: every repository's
-// highest incarnation is kept with its state, and everything else under
-// repos/ is moved aside by Open.
+// The boot reads repos/ once, in Prepare, under the claim Open takes over,
+// so no other process can change what Open acts on (package doc, "A boot
+// starts from the disk, once").
 
 // boot is what Prepare hands Open inside a Layout.
 type boot struct {
@@ -61,11 +58,10 @@ type aside struct {
 	why  string
 }
 
-// readBoot is Prepare's step 6: the reading of repos/ and the bytes the cache
-// holds under root — each repository's kept incarnation as its state counts
-// it, one with no state as a walk finds it, and everything the boot gives
-// back, each file once (givenBack): every other entry of repos/, and trash/,
-// scratch/ and tmp/.
+// readBoot is Prepare's step 6: it reads repos/ and sums the bytes held under
+// root — a kept incarnation by its state, else by a walk, and everything the
+// boot gives back (every other entry of repos/, trash/, scratch/, tmp/) each
+// file once (givenBack).
 func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 	skipped := func(path string, err error) {
 		log.Warn("code_cache_held_unmeasured", "path", path, "error", err)
@@ -78,10 +74,9 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 	}
 
 	var held int64
-	// gone is what the boot gives back, every tree of it walked before any
-	// is counted: a file's names can lie in any two of them.
+	// Every tree given back is walked before any is counted: a file's names
+	// can lie in any two of them.
 	gone := newGivenBack(ctx, skipped)
-	// walk adds an entry Open moves aside to what the boot gives back.
 	walk := func(name string) error { return gone.walk(filepath.Join(repos, name)) }
 	type found struct {
 		name string
@@ -120,24 +115,13 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 		slices.SortFunc(incs, func(a, b found) int { return cmp.Compare(a.n, b.n) })
 		for _, older := range incs[:len(incs)-1] {
 			b.aside = append(b.aside, aside{older.name, "an older incarnation of " + id})
-			// AN OLDER INCARNATION IS WHAT THE BOOT GIVES BACK, never what its
-			// state says it holds. It is one a crash left beside the
-			// incarnation kept — a rebuild's predecessor, or a retired one a
-			// reader still held — and the kept one holds HARD LINKS of its
-			// files: a rebuild links its predecessor's every pack a check has
-			// just found whole (seedRebuild), and a swap its predecessor's
-			// every live pack, HEAD, config, packed-refs and the derived files
-			// a retirement keeps but the memo, whose tree it moves whole
-			// (swap.go). The kept one's state counts those, so counted by its
-			// own state as well, every linked pack was counted twice, and the
-			// engine, which adds Held to the volume's free space to derive the
-			// cache's budget, claimed room the volume did not have, by the
-			// linked bytes. Walked rather than read from its state: an older
-			// incarnation exists only where a crash left one, its walk one
-			// Lstat a file of a directory the janitor is about to remove; and
-			// two older ones can share a file the kept one does not — a pack
-			// the second swap took out, linked by the first — which the walk
-			// counts once.
+			// An older incarnation is given back, walked, never counted by
+			// its state: the kept one holds hard links of its files
+			// (seedRebuild, swap.go) and counts them, so its state too would
+			// count them twice and Held, which the engine adds to free space
+			// for the budget, would claim room the volume lacks. The walk
+			// also counts once a file two older ones share (package doc, "A
+			// boot starts from the disk, once").
 			if err = walk(older.name); err != nil {
 				return nil, 0, err
 			}
@@ -166,10 +150,8 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 		b.keep = append(b.keep, k)
 	}
 
-	// The leftovers, which the janitor empties: a file in them with a name
-	// in a kept incarnation is that incarnation's, counted by its state
-	// above, and one whose names all lie in what the boot gives back is
-	// counted once, wherever they lie.
+	// The leftovers the janitor empties: a file also named in a kept
+	// incarnation is counted by its state, any other once (givenBack).
 	for _, name := range []string{trashDir, scratchDir, tmpDir} {
 		if err = gone.walk(filepath.Join(root, name)); err != nil {
 			return nil, 0, err
@@ -179,15 +161,11 @@ func readBoot(ctx context.Context, root string) (*boot, int64, error) {
 }
 
 // measureIncarnation is what an incarnation with no state holds, counted as a
-// state counts it: the files under objects/ — the packs, and every derived
-// file git writes — under the dropping view (gitproc.DroppingDir: the packs an
-// expunge's begin left dropping, which a state counts in DiskBytes too), and
-// under every other root a declaration owns files in
-// (derivedRoots: crewlet/, the cache's own derived files), since validateAll
-// refuses a declaration that owns or holds a file anywhere else; and
-// packed-refs. The roots are READ FROM THE DECLARATIONS, so a root
-// validateAll admits is one this walk reads (M3-decisions M3-O77). Its first
-// round reads the whole answer and measures the two halves exactly.
+// state counts it: every file under objects/, the dropping view
+// (gitproc.DroppingDir, which a state counts in DiskBytes) and each root a
+// declaration owns files in, plus packed-refs. The roots come from the
+// declarations (derivedRoots, M3-O77), so every root validateAll admits is
+// walked.
 func measureIncarnation(ctx context.Context, dir string, skipped func(string, error)) (int64, error) {
 	var total int64
 	for _, root := range derivedRoots(DerivedFiles()) {
@@ -206,10 +184,9 @@ func measureIncarnation(ctx context.Context, dir string, skipped func(string, er
 	return total, nil
 }
 
-// lastUsedOn is when the incarnation at dir was last used, as near as the
-// disk says: its state file's modification, else its directory's — the
-// paths, in that order, the janitor stamps with the moment of last use
-// (Cache.recordUse) — else zero.
+// lastUsedOn is when the incarnation at dir was last used: its state file's
+// modification, else its directory's (the paths Cache.recordUse stamps),
+// else zero.
 func lastUsedOn(dir string) time.Time {
 	for _, path := range []string{filepath.Join(dir, stateName), dir} {
 		if info, err := os.Lstat(path); err == nil {

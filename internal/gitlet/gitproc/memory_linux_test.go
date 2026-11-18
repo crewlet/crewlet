@@ -14,9 +14,8 @@ import (
 // THE NODE'S MEMORY IS THE LEAST OF WHAT LIMITS THE PROCESS: the machine's,
 // and every cgroup limit on the process's cgroup or above it that a mount
 // shows — v2's memory.max and v1's memory.limit_in_bytes alike, since a host
-// still on the v1 hierarchy (the machine this suite was written on among
-// them) shows a container's limit nowhere else. Each case is a fixture tree
-// of the files the kernel writes, the way the kernel writes them.
+// on the v1 hierarchy shows a container's limit nowhere else. Each case is a
+// fixture tree of the files the kernel writes, the way the kernel writes them.
 func TestTheNodesMemoryIsTheLeastOfWhatLimitsIt(t *testing.T) {
 	t.Parallel()
 	const meminfo = "MemTotal:       16479424 kB\nMemFree:         6601724 kB\n"

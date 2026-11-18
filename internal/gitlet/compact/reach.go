@@ -17,39 +17,23 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/gitproc"
 )
 
-// WHAT A SCHEDULED CYCLE'S OWN INPUTS CAN DROP: the scan on the maintainer's
-// own schedule weighs the unreachable bytes of exactly the files a cycle may
-// take — those whose newest content arrived gitlet.PruneGrace or longer ago —
-// never of the whole repository. Weighed over the whole repository, garbage
-// in a YOUNG pack — one a compaction merged with a later push, whose output
-// arrives when its newest input did — made the repository due while every
-// pack the cycle could take held none of it, and the cycle rewrote, stored
-// and had every Gitlet node download the old, garbage-free packs to free
-// nothing, every week.
-//
-// ONE WALK, every file at once: `rev-list --objects --no-object-names` from
-// every ref of the copy and every drop and row in flight the scan keeps, read
-// through the copy's published bitmaps where they cover it, each object it
-// prints looked up in each file's own .idx — the version-2 index git wrote,
-// its ids sorted and its 256-entry fan-out narrowing the search — and marked
-// reached there. What a file's index names and the walk never printed is what
-// the cycle drops of it, each object weighed at the bytes it takes in that
-// file: the distance from its offset to the next object's, the last one's to
-// the pack's trailer. An object two eligible files both hold is weighed in
-// each, since a cycle retiring both frees both copies.
-//
-// HELD IN MEMORY BY THE FILES, never by the history: an id, a weight and a
-// mark an object of the eligible files, and one file's index read at a time
-// beside them ([indexBytes]), which the scan's admission charges beside room
-// for the walk (cache.Cache.AdmitExpungeScan); the walk's own output is
-// streamed through, a line at a time.
+// The expunge's due scan (package doc, "The expunge") weighs the unreachable
+// bytes of exactly the files a cycle may take, never the whole repository, in
+// ONE walk for every file: `rev-list --objects --no-object-names` from every
+// tip the scan keeps, through the copy's bitmaps, each object it prints marked
+// reached in each file's own version-2 .idx (sorted ids, 256-entry fan-out).
+// What an index names and the walk never printed is what the cycle drops of
+// that file, weighed at its offset's distance to the next object's (the last
+// one's to the trailer); an object two files hold is weighed in each, since
+// retiring both frees both. Memory scales with the files, never the history:
+// an id, weight and mark per object, one index read at a time ([indexBytes],
+// charged by cache.Cache.AdmitExpungeScan), and the walk's output streamed a
+// line at a time.
 
-// scanBytesPerObject is what the scan holds an object of the packs it weighs
-// for as long as its walk runs: its id (20 bytes), its weight (8) and its
-// mark (1). readBytesPerObject is what reading one pack's index holds an
-// object beside that, one pack at a time: the file itself (twenty-eight
-// bytes an object, gitlet.IndexBytesFor) and its offsets sorted to weigh them
-// (sixteen).
+// scanBytesPerObject is what the scan holds per object of the packs it weighs
+// while its walk runs: id (20 bytes), weight (8), mark (1). readBytesPerObject
+// is what reading one pack's index adds per object, one pack at a time: the
+// file (28, gitlet.IndexBytesFor) and its offsets sorted to weigh them (16).
 const (
 	scanBytesPerObject = 20 + 8 + 1
 	readBytesPerObject = 28 + 16
@@ -67,9 +51,9 @@ func indexBytes(files []pack) int64 {
 	return all*scanBytesPerObject + largest*readBytesPerObject
 }
 
-// packIndex is one eligible file's index as the scan reads it: its object ids
-// in index order (twenty bytes each), each object's bytes in the pack, the
-// fan-out that narrows a lookup, and which objects the walk reached.
+// packIndex is one eligible file's index as the scan reads it: object ids in
+// index order (20 bytes each), each object's bytes in the pack, the fan-out
+// that narrows a lookup, and which objects the walk reached.
 type packIndex struct {
 	checksum string
 	oids     []byte
@@ -78,10 +62,9 @@ type packIndex struct {
 	reached  []bool
 }
 
-// readPackIndex reads the version-2 index at path of a pack of packBytes
-// bytes — a stored pack's, which carries no 64-bit offset table
-// (gitlet.IndexBytesFor) — refusing one whose header, size, fan-out or offsets
-// are not what git writes for that pack.
+// readPackIndex reads the version-2 index at path of a stored pack of
+// packBytes bytes, which has no 64-bit offset table (gitlet.IndexBytesFor),
+// refusing one whose header, size, fan-out or offsets git would not write.
 func readPackIndex(path, checksum string, packBytes int64) (*packIndex, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -132,8 +115,7 @@ func readPackIndex(path, checksum string, packBytes int64) (*packIndex, error) {
 		ix.weights[order[j].i] = next - order[j].at
 		next = order[j].at
 	}
-	// A COPY of the ids alone, so the file's crc and offset columns go with
-	// the read.
+	// Cloned, so b's crc and offset columns are not kept alive.
 	ix.oids = slices.Clone(b[ids : ids+n*hashBytes])
 	ix.reached = make([]bool, n)
 	return ix, nil
@@ -171,8 +153,8 @@ func (ix *packIndex) unreached() int64 {
 	return n
 }
 
-// reachWriter is the walk's standard output, read a line at a time as git
-// writes it: each line one object id, marked in every file.
+// reachWriter is the walk's standard output, read a line at a time: each line
+// one object id, marked in every file.
 type reachWriter struct {
 	files   []*packIndex
 	partial []byte
@@ -215,9 +197,9 @@ func (w *reachWriter) line(line []byte) error {
 	return nil
 }
 
-// unreachableIn is, by checksum, the bytes of each of files that no tip of the
-// copy s pins reaches — its refs, and tips, the drops and rows in flight the
-// scan keeps — ONE walk in adm's slot (this file's head).
+// unreachableIn is, by checksum, the bytes of each of files that nothing the
+// copy s pins reaches (its refs, and tips: the drops and rows in flight the
+// scan keeps), in ONE walk in adm's slot (this file's head).
 func (c *Compactor) unreachableIn(ctx context.Context, adm *cache.Admission, s cache.Synced, files []pack,
 	tips []string) (map[string]int64, error) {
 

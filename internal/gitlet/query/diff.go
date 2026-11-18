@@ -15,49 +15,31 @@ import (
 	"github.com/crewlet/crewlet/internal/gitref"
 )
 
-// A DIFF'S STAT is two halves: git's RAW RECORDS of base..head — `git
-// diff-tree -z -r --raw [-M] <base> <head>`, both ids whole and NO PATHSPEC, a
-// walk of the two trees that reads no file but a rename's candidates (-M) —
-// and the NUMSTAT of the files the stat admits, the lines each adds and
-// deletes, for which git diffs the text of every pair it counts: that half is
-// what a stat costs. The paths a stat is filtered by are judged here, over
-// git's whole raw answer — a path equal to an entry, or a directory above it,
-// on either side of a rename — so no path ever reaches git's command line,
-// and then ONLY THE FILES THE FILTER ADMITS ARE COUNTED: their raw records,
-// exactly as diff-tree wrote them, go to `git diff-pairs -z --numstat` on its
-// standard input (git 2.50's, which every Gitlet node's 2.55 floor carries),
-// which diffs those pairs and no other. So naming one directory of a diff of
-// thousands of files costs git that directory's diffs: measured over this
-// repository's 5 866 files changed between two commits (git 2.53, one core),
-// the whole raw+numstat took 0.80–0.97 s, the raw records alone 13 ms and
-// diff-pairs over internal/gitlet/query's 18 files 5–6 ms. A stat naming no
-// paths admits every file, and its counts are the whole diff's numstat, which
-// one diff-tree writes after its raw records and in their order (`--raw
-// --numstat`): one process, as cheap as a stat of the whole can be.
-//
-// The raw half decides which files the page holds — each costed as its
-// encoding with its counts at their widest, so where a page ends never depends
-// on a count not read yet — and the numstat half, its j-th record the j-th
-// file admitted, fills the page's counts and the totals, which are over every
-// file the filter admits, on every page. A filtered stat holds the records it
-// admitted until diff-pairs has read them: about 160 bytes a file at a
-// sixty-byte path, 16 MB for a filter admitting every file of a 100 000-file
-// diff.
-//
-// ONE FILE'S PATCH is the same raw records read until the file's, and that
-// one record handed to `git diff-pairs -z -p --full-index`: git's own patch of
-// the two commits for the one file — its header naming the paths, quoted only
-// where a quote, a backslash or a control byte would break the line
-// (core.quotePath off, so a UTF-8 path is written as it is, as the stat beside
-// it names it); `index` naming both blobs whole, so a patch is the same bytes
-// on every node whatever ids its objects share prefixes with, and a byte
-// cursor is sound anywhere; a file added or deleted against /dev/null, a
-// change of type as the deletion and the creation git prints for it, a
-// submodule's commits, and a binary pair's one line, which is how the answer
-// knows the pair is binary. One process, which streams nothing twice. A page
-// of a patch is whole lines from a byte offset while their encoded text fits;
-// a line longer than a page is refused naming the narrowing (the file's own
-// lines), never cut.
+// A DIFF'S STAT is two halves: the RAW RECORDS of base..head (`diff-tree -z -r
+// --raw [-M]`, both ids whole and NO PATHSPEC: a walk of the two trees reading
+// no file but a rename's candidates) and the NUMSTAT of the files the stat
+// admits, which diffs each pair's text and is what a stat costs. The stat's
+// paths are judged here over the raw records (pathFilter), so no path reaches
+// git's command line, and ONLY THE ADMITTED FILES ARE COUNTED: their raw
+// records go to `git diff-pairs -z --numstat` on stdin (git 2.50; Gitlet's
+// floor is 2.55), so naming one directory of a huge diff costs that
+// directory's diffs. A stat naming no paths is one diff-tree `--raw --numstat`,
+// its counts in raw order. A filtered stat holds the admitted records until
+// diff-pairs reads them: about 160 bytes a file, 16 MB at 100 000 files.
+
+// The raw half decides a page's files (widestFile); the numstat's j-th record
+// is the j-th admitted file's, and the totals cover every admitted file on
+// every page.
+
+// ONE FILE'S PATCH is the raw records read until the file's, and that record
+// handed to `git diff-pairs -z -p --full-index`: git's own patch, its header
+// quoted only where a quote, backslash or control byte would break the line
+// (patchConfig); `index` naming both blobs whole, so the patch is the same
+// bytes on every node and a byte cursor is sound anywhere; an add or delete
+// against /dev/null, a type change as a deletion and a creation, a submodule's
+// commits, and a binary pair's one line, which is how the answer knows it is
+// binary. A page is whole lines from a byte offset while their encoded text
+// fits; a line longer than a page is refused naming the narrowing, never cut.
 
 // diffRead answers a diff read: a page of its stat, or of one file's patch —
 // and, where m takes them, every page of either after it.
@@ -89,12 +71,11 @@ func diffable(baseField, baseRev string, base object, headField, headRev string,
 	return nil
 }
 
-// diffAsk is the diff a read's pages are cut from: the kind that asks it — a
-// diff, or an interdiff, which is one — the two commits or trees, whole, the
-// one file a patch names or none, whether renames are detected, whether every
-// file's patch is asked (patches), the files a stat admits (filter), and what
-// an asker whose stat its filter admits every file of ran the read's budget
-// out is told to narrow.
+// diffAsk is the diff a read's pages are cut from: the asking kind (a diff, or
+// an interdiff), the two commits or trees whole, the one file a patch names,
+// whether renames are detected, whether every file's patch is asked, the files
+// a stat admits, and the narrowing an unfiltered stat that ran out the read's
+// budget tells its asker.
 type diffAsk struct {
 	kind       gitlet.GitReadKind
 	base, head string
@@ -153,30 +134,26 @@ type statPage struct {
 }
 
 // statPages is the pages of a diff's stat its run memoizes: the asked one,
-// staged as soon as the raw half has decided it, and every one after it, cut
-// as the raw half reads their files and staged as each fills — with no counts,
-// which follow every file — and each page's files' counts, filed as the
-// numstat half reads them and written into the page's staged entry once the
-// half has counted past it (pageCounts). What it holds is a page of files and
-// the counts of one page: every page's first ordinal and its put, a few
-// bytes a page, and none a file past the page it counts.
+// staged once the raw half decides it, and every one after it, staged without
+// counts as the raw half cuts it; the numstat half's counts are written into
+// each staged entry once it has counted past it (pageCounts). It holds one
+// page of files and one page's counts, plus a few bytes a page.
 type statPages struct {
 	m    *memoRun
 	room int
 	// at is the asked page's cursor, and page the answer a page of files is.
 	at   cursor
 	page func(files []gitlet.DiffFile, next cursor) gitlet.GitAnswer
-	// The page being cut past the asked one: its files, the ordinal (among
-	// the files the filter admits) of its first, what its files left of the
-	// room, and whether a page is being cut at all — none once one file is
-	// wider than a page alone, which a read asking from it is refused.
+	// The page being cut past the asked one: its files, its first's ordinal
+	// among the admitted, the room its files left, and whether one is being
+	// cut (none once a file is wider than a page, which a read asking from it
+	// is refused).
 	files   []gitlet.DiffFile
 	first   int
 	left    int
 	cutting bool
-	// counts files each staged page's files' counts as the numstat half reads
-	// them, and hands each page's on to its staged entry; puts is each staged
-	// page's put, by its index among them.
+	// counts hands each staged page's counts on to its entry; puts is each
+	// staged page's put, by its index among them.
 	counts pageCounts
 	puts   []int
 }
@@ -242,14 +219,11 @@ func (sp *statPages) finish() {
 // count files the ordinal-th file's counts under the staged page it is on.
 func (sp *statPages) count(ordinal int, c fileCounts) { sp.counts.add(ordinal, c) }
 
-// pageCounts files a stat's files' counts under the staged page each is of —
-// pages of consecutive ordinals, the numstat half's order — and HANDS EACH
-// PAGE'S ON as soon as the half has counted past it, so it holds the counts
-// of one page at a time: about 24 bytes a file of that page, where filing
-// every page's to the run's end held 24 bytes for every file of the stat past
-// the asked page, a stat of a million files 24 MB, under no bound. done hands
-// on what is left; a page counted past with no counts — none the half wrote
-// for it — is handed none, which its entry, held to its files, refuses.
+// pageCounts files a stat's counts under the staged page each is of (pages of
+// consecutive ordinals, the numstat order) and HANDS EACH PAGE'S ON once the
+// half counts past it, so it holds one page's counts (about 24 bytes a file),
+// never the whole stat's, which is unbounded. done hands on the rest; a page
+// counted past with no counts is handed none, which its entry refuses.
 type pageCounts struct {
 	// bounds is every page's first ordinal and limit the ordinal past the
 	// last page's last file; k is the page being counted, held its counts so
@@ -312,13 +286,11 @@ func widestFile(f gitlet.DiffFile) gitlet.DiffFile {
 	return f
 }
 
-// stat is the page of base..head's stat that starts at the start-th file the
-// filter admits, whose files may take left bytes, and the totals over every
-// file it admits — and, where sp is set, every page after it, each staged as
-// it is cut. narrowing is what a stat its filter admits every file of, whose
-// one diff-tree the deadline ended, tells its asker to do instead — naming
-// paths among it, where it can, since a stat that names them counts the files
-// they admit and no other. A patches walk hands feed its records and cuts no page.
+// stat is the page of base..head's stat from the start-th admitted file, its
+// files taking at most left bytes, with totals over every admitted file, and,
+// where sp is set, every page after it, staged as cut. narrowing is what an
+// unfiltered stat whose diff-tree ran out the budget tells its asker (naming
+// paths, where it can). A patches walk hands feed its records and cuts no page.
 func (r *read) stat(ctx context.Context, base, head string, filter pathFilter, renames bool, start, left int,
 	narrowing string, sp *statPages, feed *patchFeed) (statPage, error) {
 
@@ -337,10 +309,9 @@ func (r *read) stat(ctx context.Context, base, head string, filter pathFilter, r
 		gitlet.ErrSliceTooLarge, base, head, r.s.gitBudget, narrowing)
 	switch {
 	case filter.set:
-		// AN EXACT FILTER NAMES EVERY FILE IT ADMITS — an interdiff's
-		// touched paths — so its walk is those files looked up at both
-		// commits (interdiff.go), never the two trees, whose difference
-		// beyond them is nothing the stat counts.
+		// AN EXACT FILTER NAMES EVERY FILE IT ADMITS (an interdiff's touched
+		// paths), so they are looked up at both commits (interdiff.go), never
+		// found by walking the two trees.
 		err = r.touchedRecords(ctx, base, head, filter.paths, p.record)
 		if p.tooLarge != nil {
 			return statPage{}, p.tooLarge
@@ -352,10 +323,9 @@ func (r *read) stat(ctx context.Context, base, head string, filter pathFilter, r
 			return statPage{}, err
 		}
 	case p.keep:
-		// A FILTERED STAT'S WALK, its raw records alone: the numstat is
-		// diff-pairs', of the files the filter admits (count). No path
-		// narrows the walk itself, which reads the two trees whatever the
-		// filter, so a walk the deadline ended is refused naming the commits.
+		// A FILTERED STAT'S WALK, its raw records alone (count runs the
+		// numstat). No path narrows the walk, so one the deadline ended is
+		// refused naming the commits.
 		narrow = fmt.Errorf("%w: the walk of the diff of %s and %s did not finish in the read's %s of git: "+
 			"diff commits closer together", gitlet.ErrSliceTooLarge, base, head, r.s.gitBudget)
 		res, err = r.s.o.Git.Run(ctx, gitproc.Cmd{
@@ -392,8 +362,7 @@ func (r *read) stat(ctx context.Context, base, head string, filter pathFilter, r
 			return statPage{}, err
 		}
 	}
-	// A stat of no file — paths that admit nothing it changed, two trees
-	// alike — is a page of none, never a null: every answer's list is a list.
+	// A stat of no file is a page of none, never a null.
 	files := p.files
 	if files == nil {
 		files = []gitlet.DiffFile{}
@@ -443,9 +412,9 @@ type statParser struct {
 	keep  bool
 	pairs bytes.Buffer
 
-	// The raw half: the entry being read and the paths it still needs; how
-	// many entries the filter admitted, and the page's — the admitted from
-	// start on, while they fit.
+	// The raw half: the entry being read and the paths it still needs, how
+	// many entries the filter admitted, and the page's (from start, while
+	// they fit).
 	entry    rawEntry
 	need     int
 	matched  int
@@ -454,10 +423,9 @@ type statParser struct {
 	next     cursor
 	tooLarge error
 
-	// The numstat half: whether it has begun, the record it is at — the
-	// j-th record the j-th file admitted, so j is also that file's ordinal
-	// among them — a rename's counts while its two paths are read, and the
-	// totals.
+	// The numstat half: whether it has begun, the record j it is at (also
+	// the j-th admitted file's ordinal), a rename's counts while its two
+	// paths are read, and the totals.
 	numstat        bool
 	j              int
 	nsNeed         int
@@ -473,11 +441,9 @@ type statParser struct {
 	feed *patchFeed
 }
 
-// rawEnded is the raw half's end — at the numstat half's first record where
-// one diff-tree writes both halves, and otherwise at the raw records' end
-// (end): a filtered stat's walk, whose numstat diff-pairs writes after it, or
-// a stat of no file. The asked page is decided there, and so is the last page
-// past it.
+// rawEnded is the raw half's end, which decides the asked page and the last
+// page past it: at the numstat's first record where one diff-tree writes both
+// halves, otherwise at the raw records' end (end).
 func (p *statParser) rawEnded() {
 	if p.decided {
 		return
@@ -615,15 +581,12 @@ func (e rawEntry) file() gitlet.DiffFile {
 	return f
 }
 
-// pathFilter is the files a stat or a patch admits, JUDGED HERE over git's
-// raw records and never handed to git, as a pathspec or as anything else:
-// every file (the zero filter); a diff read's paths, each admitting the file
-// it names and every file under it as a directory (underFilter); or an
-// interdiff's touched paths, each admitting the one file it names whole
-// (exactFilter) — so `a*` admits the file `a*` and never `ab`, as a pathspec
-// would without its `:(literal)` magic — looked up in a set, since a list of
-// a thousand paths matched against every record of a wide diff would cost the
-// read a thousand comparisons a record.
+// pathFilter is the files a stat or a patch admits, JUDGED HERE over git's raw
+// records and never handed to git: every file (the zero filter); a diff read's
+// paths, each admitting its file and every file under it (underFilter); or an
+// interdiff's touched paths, each admitting the one file it names literally
+// (exactFilter: `a*` admits `a*`, never `ab`), looked up in a set rather than
+// a list matched against every record.
 type pathFilter struct {
 	under []string
 	// exact is an interdiff's set, and set whether there is one: an empty
@@ -677,9 +640,8 @@ func (f pathFilter) admits(paths []string) bool {
 }
 
 // took places a raw entry whose paths are read, where the filter admits it:
-// kept for diff-pairs on a filtered stat, and on the page where the page has
-// room — costed with its counts and binary flag at their widest, which the
-// numstat half has not given yet.
+// kept for diff-pairs on a filtered stat, and on the page while it has room
+// (costed by widestFile).
 func (p *statParser) took() {
 	if !p.filter.admits(p.entry.paths) {
 		return
@@ -721,9 +683,8 @@ func (p *statParser) took() {
 	}
 }
 
-// counted applies one numstat record to the admitted file it is of: the j-th
-// record the j-th file admitted — on a stat naming no paths every file, and on
-// a filtered one every file diff-pairs was handed, in the order handed.
+// counted applies the j-th numstat record to the j-th admitted file: on a
+// filtered stat, in the order diff-pairs was handed them.
 func (p *statParser) counted() error {
 	j := p.j
 	p.j++
@@ -746,11 +707,10 @@ func (p *statParser) counted() error {
 	return nil
 }
 
-// end checks git's records ended where a record does — no raw record still
-// waiting on its paths — and, once the numstat half is read (counted), that
-// it counted every admitted file, once. The raw records' end is where the
-// asked page and the last page past it are decided (rawEnded), whichever
-// process wrote them.
+// end checks git's records ended where a record does (no raw record waiting
+// on its paths) and, once the numstat is read (counted), that it counted every
+// admitted file once. It ends the raw half (rawEnded), whichever process
+// wrote it.
 func (p *statParser) end(counted bool) error {
 	p.rawEnded()
 	switch {
@@ -773,10 +733,9 @@ func (r *read) patchRead(ctx context.Context, d diffAsk, at cursor, m *memoRun) 
 		ok  bool
 		err error
 	)
-	// A FILE THE FILTER DOES NOT ADMIT is one the read does not change — an
-	// interdiff's file that neither revision touches — and no git is asked.
-	// One the exact filter of an interdiff admits is LOOKED UP at both
-	// commits, as its stat's every file is, never found by walking them.
+	// A FILE THE FILTER DOES NOT ADMIT (an interdiff's file neither revision
+	// touches) is unchanged, and no git is asked. One an interdiff's exact
+	// filter admits is LOOKED UP at both commits, never found by a walk.
 	switch {
 	case d.filter.set && d.filter.admits([]string{file}):
 		if e, ok, err = r.lookupFile(ctx, base, head, file); err != nil {
@@ -788,9 +747,8 @@ func (r *read) patchRead(ctx context.Context, d diffAsk, at cursor, m *memoRun) 
 		}
 	}
 	if !ok {
-		// A FILE THE DIFF DOES NOT CHANGE has no patch, as git prints none
-		// for it: an answer with no file, which a stat of the same diff
-		// confirms.
+		// A FILE THE DIFF DOES NOT CHANGE has no patch: an answer with no
+		// file, as a stat of the same diff agrees.
 		if at.letter != 0 {
 			return gitlet.GitAnswer{}, errBadCursor(r.q.Cursor, r.q.Kind, "a byte of a patch")
 		}
@@ -835,14 +793,13 @@ func (r *read) patchRead(ctx context.Context, d diffAsk, at cursor, m *memoRun) 
 	return a, nil
 }
 
-// patchPages is a patch's pages as git's diff-pairs writes it (a Cmd.Stdout):
-// the asked page, fed the whole patch — it also counts the lines the patch
-// adds and deletes, and reads whether git called the pair binary — and, where
-// more is set, every page after it, each a patchPage of its own begun at the
-// line the one before it could not take and fed that line from its start
-// (line), so every page is exactly the page a read from its cursor would cut;
-// each handed to page as it is cut. A page past the asked one at a line too
-// long for any page ends the pages: a read asking from it is refused it.
+// patchPages is a patch's pages as diff-pairs writes it (a Cmd.Stdout): the
+// asked page, fed the whole patch so it also counts the added and deleted
+// lines and reads whether git called the pair binary, and, where more is set,
+// every page after it, each begun at the line the one before could not take
+// and fed that line from its start (line), so each is exactly the page a read
+// from its cursor would cut, handed to page as cut. A line too long for any
+// page ends the pages; a read asking from it is refused.
 type patchPages struct {
 	room  int
 	more  bool
@@ -850,9 +807,8 @@ type patchPages struct {
 	asked *patchPage
 	// cur is the page being cut — the asked one first — and nil once none is.
 	cur *patchPage
-	// off is the patch's bytes so far and lineAt where the current line
-	// began; line is the current line's bytes from its start, kept while a
-	// page past the asked one may begin at it.
+	// off is the patch's bytes so far, lineAt where the current line began,
+	// and line its bytes, kept while a page past the asked one may begin at it.
 	off, lineAt int
 	line        []byte
 }
@@ -908,9 +864,9 @@ func (w *patchPages) finish() {
 	}
 }
 
-// chain hands on every page the patch has just ended at a line it could not
-// take, and begins the next at that line, fed it from its start — and, at
-// the patch's end (eof), settled there, which may end it too.
+// chain hands on every page just ended at a line it could not take and begins
+// the next at that line, fed from its start; at the patch's end (eof) the new
+// page is settled, which may end it too.
 func (w *patchPages) chain(eof bool) {
 	for w.cur != nil && w.cur.done {
 		done := w.cur
@@ -976,8 +932,8 @@ func (r *read) findFile(ctx context.Context, base, head, file string, renames bo
 	})
 	switch {
 	case hit && res.Damage == nil:
-		// THE LOOKUP IS THE PATCH'S OWN GIT, and its run comes out of the
-		// budget the patch's diff-pairs is then given what is left of.
+		// THE LOOKUP IS THE PATCH'S OWN GIT: its run is charged to the budget
+		// the patch's diff-pairs then gets the rest of.
 		r.charge(res)
 		return e, true, nil
 	case err == nil:
@@ -991,9 +947,9 @@ func (r *read) findFile(ctx context.Context, base, head, file string, renames bo
 	return rawEntry{}, false, nil
 }
 
-// patchConfig is what a patch's diff-pairs adds to the cache's
-// configuration: core.quotePath off, so its header names a UTF-8 path as it
-// is, as the stat's path does, rather than as octal escapes of its bytes.
+// patchConfig is what a patch's diff-pairs adds to the cache's configuration:
+// core.quotePath off, so its header names a UTF-8 path as the stat does, not
+// as octal escapes.
 var patchConfig = gitproc.KV{Key: "core.quotePath", Value: "false"}
 
 // patch writes e's patch to pages: git's own, of the one record e, from ONE
@@ -1016,19 +972,17 @@ func (r *read) patch(ctx context.Context, base, head string, e rawEntry, pages *
 	return r.failed(ctx, "patch of a file", res, err, narrow)
 }
 
-// patchPage cuts one page of a patch — whole lines from the byte from, while
-// their encoded text costs at most left — out of git's patch as it is written,
-// and counts the lines added and deleted over all of it. A page past the one a
-// read asked for is begun by patchPages at the cursor the page before it
-// names (begun), fed from there.
+// patchPage cuts one page of a patch (whole lines from the byte from, while
+// their encoded text costs at most left) as git writes it, and counts the
+// lines added and deleted over all of it. A page past the asked one is begun
+// by patchPages at the cursor the page before names (begun).
 type patchPage struct {
 	from, left int
 	begun      cursor
 	// off is the patch's bytes so far; hunks whether the file's hunks have
-	// begun, past which a line opening `+` or `-` is one added or deleted
-	// (before them, they are the `---` and `+++` lines); sawFrom whether a
-	// line began at from, which a cursor must name; binary whether git called
-	// the pair binary.
+	// begun (before them `+` and `-` open the `+++` and `---` lines); sawFrom
+	// whether a line began at from, which a cursor must name; binary whether
+	// git called the pair binary.
 	off     int
 	hunks   bool
 	sawFrom bool
@@ -1072,12 +1026,11 @@ func (pg *patchPage) feed(p []byte) {
 	}
 }
 
-// begin opens a line whose first byte is c, read by git's patch grammar: in a
-// file's hunks every line opens with a space, `+`, `-` or `\`, so a line
-// opening `d` there is the next file header's `diff --git` — the creation that
-// follows a deletion where a file changed its type — and only past a hunk's
-// `@@` header is `+` or `-` a line counted; and before the hunks the one line
-// opening `B` is `Binary files … differ`.
+// begin opens a line whose first byte is c, by git's patch grammar: in a
+// file's hunks every line opens with a space, `+`, `-` or `\`, so `d` there
+// opens the next file's `diff --git` (a type change's creation after its
+// deletion); only past a hunk's `@@` is `+` or `-` a counted line; and before
+// the hunks the one line opening `B` is `Binary files … differ`.
 func (pg *patchPage) begin(c byte) {
 	pg.atStart = true
 	switch {

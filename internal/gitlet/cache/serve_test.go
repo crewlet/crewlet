@@ -14,12 +14,11 @@ import (
 )
 
 // THE SERVE CONFIGURATION IS WHAT THE HOST RUNS: exactly these pairs, every
-// key one the pool's allowlist admits — upload-pack runs with them — and none
-// that would serve an object no advertised tip reaches, nor any the pool sets
-// for every process itself. pack.allowPackReuse is single whatever the pool's
-// git — the reuse that sends a cache's clones the fewest bytes
-// (BenchmarkPackReuse) — and every git at the node floor serves it whole
-// (gitproc's TestEveryPackReuseModeSendsOverlappingPacksWhole).
+// key one the pool's allowlist admits (upload-pack runs with them), none that
+// would serve an object no advertised tip reaches, and none the pool sets for
+// every process itself. pack.allowPackReuse is single whatever the pool's git
+// (BenchmarkPackReuse; gitproc's
+// TestEveryPackReuseModeSendsOverlappingPacksWhole).
 func TestTheServeConfigIsWhatTheHostRuns(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -88,13 +87,12 @@ func advertise(t testing.TB, pool *gitproc.Pool, dir, alternate string, config [
 
 // THE ADVERTISE CONFIGURATION IS WHAT A VIEW RUNS: one pair, a key the pool's
 // allowlist admits, that keeps a view's receive-pack from listing the refs of
-// its one alternate — the incarnation, whose refs ARE the view's own
-// packed-refs, so the listing (a for-each-ref over the same file, as dear as
-// the advertisement itself) printed nothing the view does not already say.
-// The prefix it names can be no ref at all, so no repository's refs come back
-// through it. The view advertises exactly what it did; that the alternate's
-// refs went unread shows once the incarnation has moved past the view, when
-// the view without the configuration prints the newer tip as a .have.
+// its one alternate, the incarnation, whose refs ARE the view's packed-refs.
+// The prefix it names can be no ref, so no repository's refs come back
+// through it. The view advertises exactly what it did without it; that the
+// alternate's refs went unread shows once the incarnation has moved past the
+// view, when the view without the configuration prints the newer tip as a
+// .have.
 func TestTheAdvertiseConfigIsWhatAViewRuns(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)

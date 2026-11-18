@@ -18,59 +18,31 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// BenchmarkExpunge prices ONE EXPUNGE ON THE MAINTAINER'S OWN SCHEDULE against
-// what it frees, the figures gitlet.ExpungeMinBytes is decided by: a repository
-// of about repo bytes, share of them unreachable — a branch's random,
-// incompressible files pushed and deleted a grace ago — and the rest
-// gittest.History's composition, reached by main. Each loop is a repository
-// of its own, built and pushed before the clock runs; the clock runs over
-// one weekly cycle (compact.Compactor.Expunge): the scan's walk of what the
-// tips reach, the builds, the uploads and both records.
+// BenchmarkExpunge prices ONE EXPUNGE ON THE MAINTAINER'S SCHEDULE against what
+// it frees: a repository of about repo bytes, share of them unreachable (random
+// incompressible files pushed and deleted a grace ago), the rest
+// gittest.History, timed over one weekly cycle (compact.Compactor.Expunge).
+// cycle-ms is its wall clock; freed-MiB the live pack bytes it took out (back
+// to the quota); redownload-MiB those it ADDED, which every other Gitlet node
+// holding the repository downloads once; fleet/freed seven times that (a
+// fleet of eight) over freed. share=0.1 is not due: it prices a clean repository's weekly scan.
 //
-//   - cycle-ms: the cycle's wall clock, on the home's maintenance lane.
-//   - freed-MiB: the live pack bytes the cycle took out — what the
-//     repository's quota (code.limits.repo_max_bytes) gets back, and what
-//     the store deletes after gitlet.RetireGrace.
-//   - redownload-MiB: the live pack bytes the cycle ADDED — its kept packs
-//     and its rescue — which every other Gitlet node holding the repository
-//     downloads once; on a fleet of eight Gitlet nodes, seven times this.
-//   - fleet/freed: seven times redownload over freed, the bytes the fleet
-//     moves for each byte freed.
-//
-// THE RULE: gitlet.ExpungeMinBytes is the unreachable bytes below which a
-// cycle's wall clock buys too little — the share alone bounds fleet/freed
-// (under three at a quarter, per node) — so it is set where cycle-ms at
-// share=0.25 stops being dominated by the walk of the reachable history,
-// which a repository pays whatever little it frees. NOT YET DECIDED BY IT
-// (below): gitlet.ExpungeMinBytes stays PROVISIONAL.
-//
-// repo={100MB,1GB} × share={0.1,0.25,0.5}; share=0.1 is NOT DUE by the
-// share and is priced as the scan alone, the weekly cost of a clean
-// repository.
-//
-// # Measured
-//
-// Once each (-benchtime 1x -count 1), on two cores of the crun runner on a
-// laptop other sessions loaded (load 4.5 to 9), git 2.56.0, 2026-11-02:
-//
-//	arm                    cycle-ms  freed-MiB  redownload-MiB  fleet/freed
-//	repo=100MB/share=0.1      1 419          0               0            -
-//	repo=100MB/share=0.25     2 131      24.01               0            0
-//	repo=100MB/share=0.5      4 242      48.02               0            0
-//	repo=1000MB/share=0.1    66 078          0               0            -
-//	repo=1000MB/share=0.25   24 467      239.1               0            0
-//	repo=1000MB/share=0.5    not run
-//
-// At 100 MB the walk (the scan alone, 1.4 s) is two thirds of the cycle that
-// frees 24 MiB and a third of the one that frees 48 MiB, so by THE RULE the
-// least lies between the two. At 1 GB the scan alone took longer than the
-// whole cycle that freed 239 MiB, which only the load on the host explains,
-// so that pair says nothing of where the walk stops dominating; and the
-// re-download is zero in every arm, since this composition leaks into a pack
-// of its own, which a cycle rewrites whole as dropping. Deciding the least
-// needs the 1 GB arms on an unloaded host, several counts each, and a leak
-// mixed into packs that also hold reachable objects.
+// THE RULE: gitlet.ExpungeMinBytes sits where cycle-ms at share=0.25 stops
+// being dominated by the walk of the reachable history (the share alone bounds
+// fleet/freed); not yet decided, so it stays PROVISIONAL (Measured, below).
 func BenchmarkExpunge(b *testing.B) {
+	// Measured once each (-benchtime 1x -count 1), git 2.56.0, two crun cores
+	// at load 4.5 to 9, 2026-11-02, as cycle-ms and freed-MiB; redownload is 0
+	// in every arm (the leak is a pack of its own, rewritten whole):
+	//
+	//	repo     share=0.1 (scan)  share=0.25            share=0.5
+	//	100MB    1 419             2 131, 24.01 MiB      4 242, 48.02 MiB
+	//	1000MB   66 078            24 467, 239.1 MiB     not run
+	//
+	// At 100 MB the least lies between 24 and 48 MiB. At 1 GB the scan
+	// outlasting a whole cycle is the host's load, so it places nothing:
+	// deciding needs those arms unloaded, several counts each, and a leak
+	// mixed into packs that also hold reachable objects.
 	quiet(b)
 	for _, repo := range []int64{100_000_000, 1_000_000_000} {
 		for _, share := range []float64{0.1, 0.25, 0.5} {
@@ -117,9 +89,9 @@ func benchExpunge(b *testing.B, repo int64, share float64) {
 		out, err := expungeWhileBusy(b, c, cand)
 		cycle += time.Since(began) //fixedwait:measure a benchmark reports this; no gate reads it
 		b.StopTimer()
-		// THE SHARE IS JUDGED ON DISK, never on the arm's nominal share: the
-		// history packs smaller than its raw bytes, so share=0.25 may read
-		// just past a quarter. `expunged` says how many loops were due.
+		// THE SHARE IS JUDGED ON DISK, not the arm's nominal one: the history
+		// packs smaller than its raw bytes, so share=0.25 may read just past a
+		// quarter. `expunged` counts the loops that were due.
 		switch out {
 		case compact.OutcomeApplied:
 			expunged++
@@ -150,9 +122,9 @@ func benchExpunge(b *testing.B, repo int64, share float64) {
 	}
 }
 
-// leakCommit writes a root commit on refs/heads/leak in src whose files are
-// size bytes of seeded random — incompressible, as a leaked artifact or a
-// vendored binary is — in files of a mebibyte, and answers it.
+// leakCommit writes a root commit on refs/heads/leak in src holding size bytes
+// of seeded random in mebibyte files (incompressible, as a leaked artifact or
+// a vendored binary is), and answers it.
 func leakCommit(b *testing.B, client *gittest.Client, src string, size int64) string {
 	b.Helper()
 	rng := rand.New(rand.NewChaCha8([32]byte{7}))

@@ -35,13 +35,8 @@ import { useCodeQuery } from "~/lib/useCodeQuery.ts";
 import type { QueryResult } from "~/lib/useQuery.ts";
 import type { CodeRepoDetail } from "~/protocol/index.ts";
 import { repoHref } from "../paths.ts";
-import {
-  TAG_LATE,
-  TAG_UNDATED,
-  TAG_UNDATED_TITLE,
-  protectionTitle,
-  useDefaultBranch,
-} from "./Branches.tsx";
+import { TAG_LATE, TAG_UNDATED, TAG_UNDATED_TITLE } from "./Branches.tsx";
+import { protectionTitle, useBranchDetail } from "../branchDetail.ts";
 import { FIND_QUIET_MS, withinBound } from "./GoToFile.tsx";
 import { REFUSED_CODES, refusalSentence } from "./marks.ts";
 import { branchRows, foundTagRows, tagRows, type PickerRow } from "./picker.ts";
@@ -414,7 +409,7 @@ function useBranchList(
   const onPage = rows?.find((r) => r.ref === defaultRef) ?? null;
   // THE DEFAULT PINNED FIRST is found by its name only where the page does not hold it.
   const findDefault = shown && q === "" && rows !== undefined && !onPage && Boolean(repo.head);
-  const found = useDefaultBranch(repo, findDefault);
+  const found = useBranchDetail(repo.name, repo.default_branch, findDefault);
   if (!shown) return NOTHING;
   if (looking) return { ...NOTHING, status: `Looking for “${looking}”…` };
   if (page.error) {

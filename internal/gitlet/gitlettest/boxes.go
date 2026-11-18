@@ -22,22 +22,21 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// CODING BOXES ON A FLEET: every Gitlet node of one fleet admits a box by the
-// fleet's ONE run store (FixtureRuns), as every node of a deployment reads
-// the one pending store on the fleet's coordination store, and verifies its
-// token under the fleet's keyring — a ring holding a RETIRED key beside the
-// active one (boxKeyring), so every box case also runs across a rotation in
-// flight, since runtoken verifies a token by any key the ring holds.
+// CODING BOXES ON A FLEET: every Gitlet node admits a box by the fleet's ONE
+// run store (FixtureRuns), as a deployment's nodes share one, and verifies its
+// token under the fleet's keyring, which holds a RETIRED key beside the active
+// one (boxKeyring): runtoken verifies by any key the ring holds, so every box
+// case also runs across a rotation in flight.
 
-// boxKeyring is the fleet's keyring as a run token's signer reads it: the
-// active key k2 and the key k1 it replaced, still held.
+// boxKeyring is the fleet's run-token keyring: active k2 and the k1 it
+// replaced, still held.
 var boxKeyring = runtoken.Material{ActiveID: "k2", Keys: []runtoken.KeyMaterial{
 	{ID: "k1", Material: "the gitlettest fleet's retired run-token key"},
 	{ID: "k2", Material: "the gitlettest fleet's active run-token key"},
 }}
 
 // NewBoxTokens is a box token signer over the fleet's keyring, as each Gitlet
-// node builds its own over the keyring every node is configured with.
+// node builds its own.
 func NewBoxTokens(t testing.TB) *host.BoxTokens {
 	t.Helper()
 	tokens, err := host.NewBoxTokens(boxKeyring, nil)
@@ -48,8 +47,7 @@ func NewBoxTokens(t testing.TB) *host.BoxTokens {
 }
 
 // NewCheckTokens is a check's box's token signer over the fleet's keyring, as
-// each Gitlet node builds its own over the keyring every node is configured
-// with: a check token one mints, every node of the fleet verifies.
+// each Gitlet node builds its own: a check token one mints, every node verifies.
 func NewCheckTokens(t testing.TB) *host.CheckTokens {
 	t.Helper()
 	tokens, err := host.NewCheckTokens(boxKeyring, nil)
@@ -60,16 +58,15 @@ func NewCheckTokens(t testing.TB) *host.CheckTokens {
 }
 
 // FixtureRuns is the fleet's executors' rows, in memory: the [host.Runs]
-// every Gitlet node of a fleet admits a box by. A case launches a run on it
-// (Launch), ends, relaunches or removes it, stops its seat, and makes the
-// store fail — and reads back every floor raise the hosts made (Raises) and
-// every hold of the seat branches a box pushed (Holds, Held).
+// every Gitlet node of a fleet admits a box by. A case launches, ends,
+// relaunches and removes runs, stops seats and makes the store fail, and reads
+// back every floor raise (Raises) and seat-branch hold (Holds, Held) asked.
 type FixtureRuns struct {
 	tokens *host.BoxTokens
 
 	mu   sync.Mutex
 	runs map[string]*host.BoxRun // by turn id
-	// stops is each seat's pauser who asked its running work to stop.
+	// stops is who stopped each stopped seat's running work.
 	stops map[string]string
 	// pausesUnread answers Stopped as a node that has not read the pauses.
 	pausesUnread bool
@@ -77,8 +74,7 @@ type FixtureRuns struct {
 	failing error
 	raises  []Raise
 	onRaise func(Raise) error
-	// holds is every Hold a host asked, in order; onHold is told each as it
-	// is asked, before it is written, and fails it where it answers an error.
+	// holds is every Hold asked, in order; onHold is OnHold's hook.
 	holds  []HoldCall
 	onHold func(HoldCall) error
 	// reads counts Run's calls: a request refused before its run is read
@@ -106,9 +102,9 @@ func NewFixtureRuns(tokens *host.BoxTokens) *FixtureRuns {
 
 var _ host.Runs = (*FixtureRuns)(nil)
 
-// Launch is a run of seat given grants, launched at floor — the position its
-// launch read the repositories at (a launch always reads one) — and RUNNING:
-// a fresh turn id and launch id, provenance as a launch stamps it.
+// Launch is a RUNNING run of seat given grants, with a fresh turn id and
+// launch id and provenance as a launch stamps it, at floor: the position its
+// launch read the repositories at (a launch always reads one).
 func (r *FixtureRuns) Launch(seat string, floor statelog.Position, grants ...host.BoxGrant) host.BoxRunRef {
 	ref := host.BoxRunRef{TurnID: uuid.Must(uuid.NewV7()).String(), LaunchID: uuid.NewString()}
 	r.mu.Lock()
@@ -137,9 +133,8 @@ func (r *FixtureRuns) End(ref host.BoxRunRef) {
 	r.edit(ref, func(run *host.BoxRun) { run.Live, run.Status = false, "resumed" })
 }
 
-// Relaunch launches ref's turn again — a second launch of the same
-// turn — under a fresh launch id, which every token of the first job no
-// longer matches.
+// Relaunch launches ref's turn again under a fresh launch id, which no token
+// of the first job matches.
 func (r *FixtureRuns) Relaunch(ref host.BoxRunRef) host.BoxRunRef {
 	next := host.BoxRunRef{TurnID: ref.TurnID, LaunchID: uuid.NewString()}
 	r.edit(ref, func(run *host.BoxRun) { run.Ref, run.Provenance.RunID = next, next.LaunchID })
@@ -153,11 +148,10 @@ func (r *FixtureRuns) Remove(ref host.BoxRunRef) {
 	delete(r.runs, ref.TurnID)
 }
 
-// WorkFor has ref's run work for seat: its turn was woken by that colleague
-// seat's ask, whose own grant the box is held to beside its seat's
-// (host.BoxRun.Ceiling) and for whom its pushes are made
-// (host.BoxRun.WorkingFor), as a run's checkout writes both — "" for a run no
-// colleague seat bounds, which works for its own seat.
+// WorkFor has ref's run work for seat, the colleague whose ask woke its turn:
+// the box is held to that seat's grant beside its own (host.BoxRun.Ceiling)
+// and pushes for it (host.BoxRun.WorkingFor), as a run's checkout writes both.
+// "" is a run no colleague bounds, working for its own seat.
 func (r *FixtureRuns) WorkFor(ref host.BoxRunRef, seat string) {
 	r.edit(ref, func(run *host.BoxRun) {
 		run.Ceiling, run.WorkingFor = seat, nil
@@ -167,10 +161,9 @@ func (r *FixtureRuns) WorkFor(ref host.BoxRunRef, seat string) {
 	})
 }
 
-// MadeFor has ref's run's pushes made for w (host.BoxRun.WorkingFor) — whom its
-// checkout composed its turn works for: a person's seat, which bounds nothing,
-// or a credential acting as no seat — and leaves its colleague's ceiling as it
-// is.
+// MadeFor has ref's run's pushes made for w (host.BoxRun.WorkingFor): a
+// person's seat, which bounds nothing, or a credential acting as no seat. The
+// colleague's ceiling is left as it is.
 func (r *FixtureRuns) MadeFor(ref host.BoxRunRef, w *types.WorkingFor) {
 	r.edit(ref, func(run *host.BoxRun) { run.WorkingFor = w.Clone() })
 }
@@ -184,7 +177,7 @@ func (r *FixtureRuns) SetProvenance(ref host.BoxRunRef, p gitlet.RunProvenance) 
 	})
 }
 
-// Stop pauses seat with stop_running, by who; Resume lifts it.
+// Stop pauses seat with stop_running, by who.
 func (r *FixtureRuns) Stop(seat, by string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -213,9 +206,8 @@ func (r *FixtureRuns) Fail(err error) {
 	r.failing = err
 }
 
-// OnRaise is told every floor raise as it is asked, before it is written —
-// a case's window onto WHEN a host raises, against what it writes — and
-// fails that raise where it answers an error.
+// OnRaise is told every floor raise before it is written, so a case sees WHEN
+// a host raises against what it writes, and fails each raise it errors on.
 func (r *FixtureRuns) OnRaise(fn func(Raise) error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -306,10 +298,9 @@ func (r *FixtureRuns) RaiseFloor(_ context.Context, ref host.BoxRunRef, pos stat
 	return nil
 }
 
-// OnHold is told every hold as it is asked, before it is written — a case's
-// window onto WHEN a host holds, against what the push it holds for has done
-// by then — and fails that hold where it answers an error
-// (sandbox.ErrCodeHoldsFull for a row at its bound).
+// OnHold is told every hold before it is written, so a case sees WHEN a host
+// holds against what its push has done by then, and fails each hold it errors
+// on (sandbox.ErrCodeHoldsFull for a row at its bound).
 func (r *FixtureRuns) OnHold(fn func(HoldCall) error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -337,10 +328,10 @@ func (r *FixtureRuns) Held(ref host.BoxRunRef) map[string]bool {
 	return nil
 }
 
-// Hold joins keys to ref's run's holds (host.Runs), recording the call: by the
-// run's turn, whose holds they are whichever of its launches asked; a row gone
-// or whose job has left its box holds nothing new and answers nil, as the run
-// store does for a row whose ending is decided.
+// Hold joins keys to ref's run's holds (host.Runs), recording the call. Holds
+// are the turn's, whichever launch asked; a row gone or whose job left its box
+// holds nothing new and answers nil, as the run store does once a row's ending
+// is decided.
 func (r *FixtureRuns) Hold(_ context.Context, ref host.BoxRunRef, keys []string) error {
 	call := HoldCall{Ref: ref, Keys: slices.Clone(keys)}
 	r.mu.Lock()
@@ -418,10 +409,9 @@ func (c *Case) LaunchBox(seat string, access gitlet.Access) (host.BoxRunRef, *Pe
 	return ref, NewBox(c.T, c.Fleet, ref)
 }
 
-// SplitURL is a URL whose git requests a proxy sends by WHAT they are: a
-// push's or a fetch's advertisement (info/refs) to adverts, and the RPC that
-// follows it to rpcs — what a balancer may do with the two halves of one
-// push. base is the path below each node's URL, the repository's.
+// SplitURL is a URL whose git requests a proxy splits as a balancer may: the
+// advertisement (info/refs) to adverts and the RPC after it to rpcs. base is
+// the repository's path below each node's URL.
 func SplitURL(t testing.TB, adverts, rpcs Node, base string) string {
 	t.Helper()
 	proxy := func(n Node) *httputil.ReverseProxy {

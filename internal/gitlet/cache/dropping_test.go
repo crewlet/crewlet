@@ -17,32 +17,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// THE IMAGE HOLDS EXACTLY THE LIVE AND THE DROPPING PACKS, each where its
-// rows place it: after an expunge's begin a copy holds the pack it kept in
-// objects/pack and the pack of what no ref reached in its dropping view,
-// objects-dropping/pack — the image a fresh cache builds at the same position
-// — and nothing else, through a swap (a reader held the copy the begin
-// retired the inputs of) and a restart alike. A serving process that names
-// the view (Synced.Dropping) reads a dropping object by id; one in the copy
-// that names none, and a push's scratch leaning on it, read nothing of it;
-// and a merge's store, which links its packs from objects/pack alone, is
-// refused the dropping pack (ErrInvalid) with nothing made under scratch/.
-// The copy's drop epoch is the begin's once its inputs are gone. The budget
-// counts the view (the state's DroppingBytes, the node's
-// crewlet.code.cache.dropping.bytes). A pack's files at the other place —
-// a dropping pack's in objects/pack, where a push could rely on it, or a
-// live pack's in the view — are strays: Verify names them, and a full round
-// takes them out — its repair's, in place with no rebuild, and a boot's. And
-// once the expunge's commit retires the dropping pack, the view goes with it.
+// THE IMAGE HOLDS EXACTLY THE LIVE AND THE DROPPING PACKS, each where its rows
+// place it (package doc, "The dropping view"), as a fresh cache builds,
+// through a swap and a restart. Only a process naming the view reads a
+// dropping object; a merge's store is refused the dropping pack (ErrInvalid).
+// The drop epoch is the begin's once its inputs are gone; the budget counts
+// the view (DroppingBytes). A pack's files at the other place are strays
+// Verify names and a full round removes in place; the commit removes the view.
 //
-// Mutations: place every pack in objects/pack whatever its state
-// (placeOfRows), and the begin's sync holds the dropping pack among the live
-// ones; let packStrays take a pack at the other place for one its rows place
-// there, and Verify's repair has to rebuild and the boot's round keeps them;
-// let Verify's checkPacks judge a pack's files wherever they lie, and neither
-// plant is named; let mergedLive hold a merge to every row of the live set,
-// dropping ones included, and the merge's scratch fails its link of a file
-// objects/pack does not hold rather than being refused.
+// Mutations: placeOfRows placing every pack live, and the begin's sync holds
+// it among the live; packStrays keeping a pack at the other place, and repair
+// rebuilds and the boot keeps them; checkPacks ignoring the place, and no
+// plant is named; mergedLive taking dropping rows, and the merge is not refused.
 func TestTheImageHoldsExactlyLiveAndDroppingPacks(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -152,9 +138,8 @@ func TestTheImageHoldsExactlyLiveAndDroppingPacks(t *testing.T) {
 		t.Fatalf("Verify of the copy with both packs at the other place too: %v", err)
 	}
 	problemsOf(t, "Verify found", report.Problems, found...)
-	// Its repair reads the copy whole IN PLACE — the full round's sweep takes
-	// both strays out, by a swap since the case holds the copy — and needs no
-	// rebuild.
+	// Its repair is a full round IN PLACE, swapping the strays out since the
+	// case holds the copy, with no rebuild.
 	repaired, err := verify(t.Context(), c, repo, true)
 	if err != nil {
 		t.Fatalf("Verify with repair: %v", err)
@@ -164,9 +149,7 @@ func TestTheImageHoldsExactlyLiveAndDroppingPacks(t *testing.T) {
 			"rebuild", repaired)
 	}
 	problemsOf(t, "Verify's repair found first", repaired.Found, found...)
-	// The copy the strays were planted in is retired by the repair's swap and
-	// goes with its last reader, its planted files with it: the view the node
-	// holds is then the next copy's alone.
+	// The planted copy, retired by the swap, goes with its last reader.
 	s.Release()
 	s = w.sync(t, c, repo)
 	holds("after the repair", s)
@@ -178,8 +161,8 @@ func TestTheImageHoldsExactlyLiveAndDroppingPacks(t *testing.T) {
 	s = w.sync(t, c, repo)
 	holds("after a boot over a copy holding both packs at the other place too", s)
 
-	// THE COMMIT retires the dropping pack, and the view goes with it — from
-	// the copy the commit's swap leaves, once its last reader lets it go.
+	// THE COMMIT retires the dropping pack and the view with it, by a swap
+	// whose old copy goes with its last reader.
 	w.log.expungeCommit(repo)
 	before := s
 	s = w.sync(t, c, repo)
@@ -202,25 +185,18 @@ func TestTheImageHoldsExactlyLiveAndDroppingPacks(t *testing.T) {
 	}
 }
 
-// ONLY AN EXPUNGE DROPS THE COMMIT-GRAPH (X04): a compaction's retirement
-// keeps it — a merge drops no commit — and so does an expunge's BEGIN, every
-// object of its inputs being in the packs it adds; its COMMIT drops it, the
-// one retirement that does, since the commits it takes out leave the
-// repository and git walks a graph still naming one as though it were there —
-// and the memo with it, whose answers may quote what was purged. Whichever
-// round takes the dropping pack out: a delta's, whose swap links neither into
-// the copy it promotes, and a boot's first, full, over a copy whose node was
-// down while the commit landed, which drops both in place — and either one
-// crossing the begin as well, over a copy that never placed the dropping
-// pack: the begin's inputs leave it holding the commits the commit took out,
-// so they leave as the commit's.
+// ONLY AN EXPUNGE DROPS THE COMMIT-GRAPH (X04): a compaction's retirement (a
+// merge drops no commit) and an expunge's begin (its packs hold every input
+// object) keep it; the commit drops it, since git walks a graph naming a
+// purged commit as though it were there, and the memo, which may quote what
+// was purged. So does whichever round takes the dropping pack out (a delta's
+// swap, a boot's full round), even one crossing the begin too: the begin's
+// inputs, holding the purged commits, then leave as the commit's.
 //
-// Mutations: declare the commit-graph kept on an expunge (OnPackExpunged
-// Keep), and a fresh `git log` over the dropped commit answers it from the
-// graph; declare the memo kept, and its answer outlives the purge; take a
-// full round's dropping stray for a retirement, and the boot keeps both;
-// take the inputs of a begin a round crossed with its commit for a
-// retirement, and the copy that never held the view keeps both.
+// Mutations: OnPackExpunged Keep for the graph, and `git log` answers the
+// dropped commit; keep the memo, and its answer outlives the purge; take a
+// full round's dropping stray, or a crossed begin's inputs, for a retirement,
+// and the boot or the lagged copy keeps both.
 func TestOnlyAnExpungeDropsTheCommitGraph(t *testing.T) {
 	t.Parallel()
 	for _, arm := range []struct {
@@ -302,13 +278,11 @@ func TestOnlyAnExpungeDropsTheCommitGraph(t *testing.T) {
 	}
 }
 
-// expungeBegin writes an expunge's begin on repo over inputs, its live packs,
-// as the code domain's apply of one writes it (fakeLog.expungeBegin), with the
-// packs a maintainer's rewrite of them writes: KEPT, one pack of every object
-// the repository's refs reach, and DROPPING, one pack of what dropped reaches
-// that no ref does, beside a blob no commit ever named — what an expunge's
-// cruft holds besides, and what makes the pack none of the inputs' bytes. Both
-// are stored, and their rows answered as the record added them.
+// expungeBegin writes an expunge's begin on repo over inputs, its live packs
+// (fakeLog.expungeBegin), with a maintainer's rewrite: KEPT, every object the
+// refs reach, and DROPPING, what dropped reaches that no ref does plus a blob
+// no commit names, as an expunge's cruft holds, so its bytes match no input.
+// Both are stored, and their rows returned as the record added them.
 func (w *syncWorld) expungeBegin(t testing.TB, repo string, dropped []string, inputs ...gitlet.PackRow) (kept,
 	dropping gitlet.PackRow) {
 	t.Helper()
@@ -385,8 +359,8 @@ func droppingFiles(t testing.TB, dir string) []string {
 	return out
 }
 
-// copyFile copies the file at from to to, as a hand writing into a cache
-// would: a file of its own, at to.
+// copyFile copies from to to as a new file, as a hand writing into a cache
+// would.
 func copyFile(t testing.TB, from, to string) {
 	t.Helper()
 	raw, err := os.ReadFile(from)
@@ -399,12 +373,10 @@ func copyFile(t testing.TB, from, to string) {
 }
 
 // AN ADOPTION OF A DROPPING PACK'S CHECKSUM MOVES ITS FILES OUT OF THE VIEW:
-// an expunge's rescue byte for byte the dropping pack it was cut from — the
-// rescue of a dropping pack a ref reaches whole — adopted by the maintainer
-// that built it, places that checksum live where the view held it; the
-// copy's next round takes the view's files out with its swap, as a delta's
-// move of a pack out of the view does, so the copy holds what a fresh cache
-// builds at the same position: the pack in objects/pack, and no view.
+// a rescue byte for byte the dropping pack it was cut from, adopted by its
+// maintainer, places that checksum live; the next round's swap takes the
+// view's files out, leaving what a fresh cache builds: the pack in
+// objects/pack, and no view.
 //
 // Mutation: record the adopted row live without noting the view's files as
 // leaving (liveAdopted), and they stay in the view after the commit's round.
@@ -447,12 +419,10 @@ func TestAnAdoptionOfADroppingPacksChecksumMovesItsFilesOut(t *testing.T) {
 }
 
 // AN ADOPTED DROPPING PACK IS NEVER DOWNLOADED, AND LIES IN THE VIEW: the
-// maintainer that built an expunge's dropping pack adopts it from its
-// build's scratch once the begin has applied (AdoptDropping), and the copy's
-// next round — the rescue's sync — finds it installed where its row places
-// it, in the dropping view, and opens nothing of it; the copy is then exactly
-// what a fresh cache builds at the same position, nothing of the pack in
-// objects/pack.
+// maintainer adopts its build's dropping pack once the begin applied
+// (AdoptDropping), and the next round finds it in the dropping view and
+// opens nothing of it: the copy is what a fresh cache builds, nothing of the
+// pack in objects/pack.
 //
 // Mutations: place the adopted pack in objects/pack (adoptedPlace answering
 // placeLive), and the round moves it into the view with a GET; skip the
@@ -501,15 +471,11 @@ func TestAnAdoptedDroppingPackIsNeverDownloaded(t *testing.T) {
 	}
 }
 
-// A REWRITE'S SCRATCH IS MADE OVER THE COPY SERVING ITS SYNC NOW: an
-// expunge's build is made over the Synced its scan took, and a merge landed
-// beside it on its maintainer swaps that copy for the next — the live set
-// carried over, none left in the copy it replaced — before the build's
-// scratch is made (after the scan's walk) or before the rebuild its bundle
-// rule asks for. The scratch is made over the copy serving now: its inputs,
-// live there, are its own packs, and its store holds every other pack live
-// there, the merge's output among them — never refused for inputs the old
-// copy's emptied live set no longer names.
+// A REWRITE'S SCRATCH IS MADE OVER THE COPY SERVING ITS SYNC NOW: when a
+// merge swaps the copy an expunge's scan took (emptying its live set) before
+// the build's scratch or its bundle rule's rebuild, the scratch is made over
+// the serving copy, its store holding every pack live there, the merge's
+// output among them, never refused for inputs the old copy no longer names.
 //
 // Mutation: pick over the Synced's own incarnation in newRewriteScratch, and
 // the scratch is refused: its input is no pack live there.
@@ -540,13 +506,10 @@ func TestARewritesScratchIsMadeOverTheCopyServingItsSync(t *testing.T) {
 	}
 }
 
-// A MERGE'S SCRATCH IS MADE OVER THE COPY SERVING ITS SYNC NOW: a compaction
-// or a publication's repack makes its scratch after its plan, while another
-// record of the repository — another merge, an expunge's begin or commit —
-// swaps the copy its sync took, which leaves that copy no live set. The
-// scratch is made over the copy serving now, its store linking the inputs
-// from there, never refused for inputs the old copy's emptied live set no
-// longer names.
+// A MERGE'S SCRATCH IS MADE OVER THE COPY SERVING ITS SYNC NOW: when another
+// record swaps the copy a compaction's or a publication's plan took (emptying
+// its live set) before its scratch is made, the scratch links its inputs from
+// the serving copy, never refused for inputs the old copy no longer names.
 //
 // Mutation: resolve no serving copy for a merge in newScratch, and the
 // scratch is refused: its input is no pack live in the copy the sync took.
@@ -574,15 +537,12 @@ func TestAMergesScratchIsMadeOverTheCopyServingItsSync(t *testing.T) {
 }
 
 // ONLY SERVING READS NAME THE DROPPING VIEW (M6-D3): every git process under
-// internal/gitlet that names a copy's dropping view (gitproc.Cmd.Dropping) is
-// a read — a subcommand of gitReaders — that SERVES the copy, a row of
-// droppingViewers saying why, never beside an alternate; every row is found
-// naming it; and every git process of a row's file and subcommand names it,
-// so no read of what the copy serves misses an object an expunge is dropping
-// while it still serves it. A process that writes objects — receive-pack in a
-// push's scratch, a compaction's pack-objects, an engine write — leans on the
-// copy's objects/ alone, so none relies on an object the expunge's commit
-// takes out of every copy.
+// internal/gitlet naming it (gitproc.Cmd.Dropping) is a gitReaders read that
+// serves the copy, a droppingViewers row saying why, never beside an
+// alternate; every row is found, and every process of a row's file and
+// subcommand names it, so no serving read misses a dropping object. A
+// process that writes objects leans on objects/ alone, so none relies on an
+// object the commit takes out.
 //
 // Mutations: name the view in host/receive.go's receive-pack, and it is a
 // writer beside an alternate; drop it from host/fetch.go's upload-pack, and
@@ -632,9 +592,9 @@ func TestOnlyServingReadsNameTheDroppingView(t *testing.T) {
 // its dropping view.
 const queryServes = "a seat's read of the copy by object id, answered from the objects the copy serves"
 
-// droppingViewers is the closed set of git processes under internal/gitlet that
-// name a copy's dropping view: the file and the subcommand, and why it serves
-// the copy. Exact in both directions (TestOnlyServingReadsNameTheDroppingView).
+// droppingViewers is the closed set of git processes under internal/gitlet
+// naming a copy's dropping view, and why each serves the copy. Exact in both
+// directions (TestOnlyServingReadsNameTheDroppingView).
 var droppingViewers = []struct{ file, word, why string }{
 	{"internal/gitlet/host/fetch.go", "upload-pack", "a clone's or a fetch's pack: what the copy serves, an " +
 		"object an expunge is dropping among it, by its id"},
@@ -691,17 +651,13 @@ var droppingViewers = []struct{ file, word, why string }{
 	{"internal/gitlet/query/treecommits.go", "ls-tree", queryServes},
 }
 
-// A CHECK IS CHARGED FOR THE DROPPING VIEW IT WALKS. Verify's connectivity
-// check runs through the copy's dropping view while an expunge is open, and
-// git marks every object of every object directory it is handed, so the
-// check holds FsckBytesPerObject an object of the dropping packs as much as of
-// the live ones; the room kept beside it is for a clone of the live objects
-// alone, which is all a clone sends. A budget that holds the check's charge
-// over the live objects and not that over both refuses it with ErrNoMemory —
-// re-charged before it reads anything, where it was admitted on the copy
-// from before the expunge and its sync brought the view, and at its
-// admission, where the copy it is admitted on holds the view — and a budget
-// that holds the charge over both runs it, clean.
+// A CHECK IS CHARGED FOR THE DROPPING VIEW IT WALKS: git marks every object
+// of every object directory Verify's check is handed, so it holds
+// FsckBytesPerObject for the dropping packs' objects too; the room beside it
+// is for a clone, of live objects alone. A budget holding the charge over the
+// live objects only refuses it with ErrNoMemory, at admission over a copy
+// holding the view and at the re-charge after a sync brought one; a budget
+// holding both runs it clean.
 //
 // Mutations: charge Verification.charge by the live objects alone, and the
 // check admitted before the expunge runs on the smaller budget; charge

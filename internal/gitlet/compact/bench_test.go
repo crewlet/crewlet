@@ -37,112 +37,14 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// BenchmarkCompact is what a repository's maintainer's compaction of its packs
-// costs — on a fleet of alike Gitlet nodes, its home — and the figures the
-// compactor's constants and the cache's charge of a build are decided by.
-// Every figure lands in the doc of what it decides with the arm's name, the
-// machine, the date and the object store it ran over (CONTRIBUTING's
-// benchmark rule): the in-memory store here, so a figure an S3 bucket would
-// bill is stated as the requests and bytes the arm counts, never a bucket's
-// time.
-//
-//   - history=source/inputs={4,8,16,64}: ONE compaction of a repository whose
-//     history — gittest.History's 100 MB composition, the cache benchmarks'
-//     own — was pushed as that many pushes, each its own pack, on the home that
-//     holds the repository already (the ordinary case: its reads are asked of
-//     it too). The build's peak anonymous memory, sampled every millisecond
-//     (gittest.PeakAnon, the method the cache's per-object figures were taken
-//     by), over the objects it merged (anon-B/object); the build's wall clock a
-//     gibibyte of the pack bytes it merged (build-s/GiB), read against
-//     gitproc.PackWorkDeadline's; and the bytes in and out (in-MB, out-MB).
-//     cache.CompactBytesPerObject is the 64-input arm's anon-B/object rounded
-//     up to the next 50 bytes, with its growth across the four arms stated
-//     beside it.
-//   - history=source/cap=input_byte_cap/cut=4MiB: a roll at its byte cap
-//     (compact.InputByteCap) over the same history pushed as 64 packs, at a
-//     cut scaled to 4 MiB with the bundle bound beside it: the build's
-//     outputs over ⌈the pack bytes it merged ÷ the cut⌉ (outputs/cuts), from
-//     which InputByteCap's half is re-derived — at most gitlet.MaxCompactOutputs
-//     outputs a roll at the cap, whatever pack-objects writes whole.
-//   - history=source/roll=16/beside={history,none}: ONE compaction of
-//     gitlet.CompactMinMerge one-commit pushes, sixteen — beside the source
-//     history pushed as one pack, which the roll leaves out, and beside
-//     nothing — its build's wall clock (build-ms) and peak anonymous memory
-//     (peak-MiB), which follow the roll and not the history when the two
-//     arms agree: the build's walk for its name hashes ends at the roll's
-//     edge (cache.Cache.NewMergeScratch), where over the whole copy it ran
-//     the history — a roll of eight, the floor then, took 451 ms and
-//     100.8 MiB beside it, against 19.6 ms and 0.8 MiB over its store (the
-//     figures are cache's scratch.go's).
-//   - steady/pushes=6000/rate=300/min/min-merge={4,8,16} (LARGE): 6 000
-//     one-commit pushes of 20 KB through the data node's committer, 300 to a
-//     simulated minute, and a pass of the home's compactor merging at that
-//     many packs at every minute, while the other Gitlet node syncs after every
-//     push and every pass, as a node serving the repository's fetches does —
-//     a BUSY repository, whose every pass finds the minute's three hundred
-//     packs whatever its floor. min-merge=16, the production floor, is the
-//     STEADY arm: push-KB is what a push's pack weighed — its file, its
-//     commit and its two trees — which every figure over the bytes pushed
-//     divides by; its max-live-packs must stay under gitlet.CompactTargetPacks
-//     plus a minute's pushes, which confirms Poll; retired/push is the roll's
-//     ρ; rewrite-B/pushed-B what the outputs weigh over what was pushed,
-//     O(log n) at factor 2; record-B/push the compactions' records on the
-//     code log a push, their signed frames included; sweep-B/push the
-//     records the code-retention duty appends a day later to remove the rows
-//     those compactions retired, a push, and sweeps how many records that is
-//     — a pass of the duty at every gitlet.RetentionInterval of the arm's
-//     simulated time, its clock gitlet.RetireGrace past the instant that
-//     quarter hour's last pass ended, one retire_sweep record for each
-//     repository holding a row past the grace, as the duty sweeps them; and
-//     got-B/pushed-B what the other Gitlet node downloads over what was pushed,
-//     about 1 + log₂(the largest merged pack ÷ a push's) — stated in
-//     scaling.md (M3-decisions M3-O63). Every arm states, per 1 000 pushes,
-//     the GETs a cold sync of the result makes (cold-gets/kpush,
-//     cold-MB/kpush), the compactions' PUTs (puts/kpush, put-MB/kpush) and
-//     the GETs every Gitlet node but the builder makes of their outputs on a
-//     fleet of eight (fleet-gets/kpush, fleet-MB/kpush: the measured node's
-//     times seven, since each runs the same rounds over the same rows) —
-//     requests, S3's billing unit, and bytes, which a node's disk writes.
-//   - steady/pushes=1200/rate=1/min/min-merge={4,8,16} (LARGE): the same, a
-//     QUIET repository pushed once a minute, so every floor binds — a merge
-//     waits until that many packs have gathered — and the floors' costs
-//     differ, where at three hundred a minute every floor is passed at every
-//     pass and the three measure alike. gitlet.CompactMinMerge is the floor
-//     of the three with the fewest GETs and PUTs a thousand pushes here,
-//     where it saves more than a tenth of them against the floor before it —
-//     16, which halved 8's, the largest floor measured (gitlet's limits.go has
-//     each floor's figures, and what bounds a higher one). Its
-//     retired/push, record-B/push and sweep-B/push are a merge at the
-//     floor's: the rows and the records a repository pushed more slowly than
-//     its home polls costs, each merge's retirements swept by a record of
-//     their own, since a merge of sixteen a minute apart is about one a
-//     quarter hour.
-//   - blobs=max_blob/inputs=8 (LARGE): one compaction over eight packs, each a
-//     revision of one blob of the default max_blob_bytes, so the delta search
-//     holds two of them at once: the build's peak anonymous memory (peak-MiB)
-//     against what it was admitted at (charge-MiB: its objects at
-//     cache.CompactBytesPerObject, room beside them for a transfer of as many
-//     at gitproc.TransferBytesPerObject, and cache.CompactWindowBytes), and
-//     the window the peak leaves past the per-object charge (window-MiB). A
-//     peak past the charge raises CompactWindowBytes to the window measured.
-//   - swap/packs={50,2048} (2048 LARGE): one sync of a copy holding that many
-//     packs — at 2 048 the bound itself — after a compaction retired three of
-//     them — a SWAP into the copy's next directory, of links: its wall clock,
-//     its download of the one output included, and the files it links
-//     (links/swap), which follow the pack count, never the bytes.
-//   - poll/repos={1000,10000}/op=pass/maintains={all,1of8}: one pass over
-//     that many listed repositories none of which is due here — the memory's
-//     steady state — on the maintainer of every one (all: each remembered as
-//     not due, a lookup) and on a node maintaining an eighth of them, as each
-//     node of a fleet of eight alike nodes is (1of8: the eighth remembered,
-//     the rest judged against the pass's ONE listing of who serves git — a
-//     set's lookup here, the router's own judging priced by estate's
-//     BenchmarkMaintainerOf); ns/repo is what a repository costs a pass.
-//   - poll/repos={1000,10000}/op=page: the serving data node's read of ONE
-//     page of the listing of that many repositories (code_repos_packs_idx,
-//     at stale, as every pass reads it). Past 100 ms at 10 000 — two listings
-//     a minute from each of sixteen Gitlet nodes would hold over a twentieth of
-//     one reader — the listing is re-decided (M3-decisions M3-O26).
+// BenchmarkCompact prices a repository maintainer's compaction of its packs
+// on a fleet of alike Gitlet nodes, and decides the compactor's constants and
+// the cache's charge of a build. Each arm's doc (benchInputs, benchCap,
+// benchRoll, benchSteady, benchBlobs, benchSwap, benchPoll) says what it
+// measures and decides. Every figure lands in the doc of what it decides with
+// the arm's name, the machine, the date and the store (CONTRIBUTING's
+// benchmark rule); the store is in-memory, so a figure an S3 bucket would
+// bill is stated as requests and bytes, never a bucket's time.
 func BenchmarkCompact(b *testing.B) {
 	quiet(b)
 	b.Run("history=source", benchHistory)
@@ -182,9 +84,8 @@ const (
 	eightNodes = 8
 
 	// retentionTick is the code-retention duty's tick in the steady arms'
-	// simulated minutes, a pass of the home's compactor each: the duty's own
-	// gitlet.RetentionInterval, a quarter of an hour, so a sweep removes what
-	// the compactions of one quarter hour retired, as the duty's passes do.
+	// simulated minutes (a compactor pass each): gitlet.RetentionInterval, so
+	// a sweep removes what one quarter hour of compactions retired.
 	retentionTick = int(gitlet.RetentionInterval / time.Minute)
 
 	// rollPushes and rollPushBytes are the roll= arms' roll: the fewest
@@ -199,9 +100,9 @@ const (
 	swapPushBytes = 1 << 10
 
 	// benchProcesses is every benchmark Gitlet node's read lane, as the
-	// package's cases run (fixtureProcesses): the maintenance lane two
-	// slots, the maintainer keeping one, so a compaction never builds beside
-	// a maintainer's run and its peak is its own.
+	// package's cases run (fixtureProcesses): a maintenance lane of two slots,
+	// the maintainer keeping one, so a compaction never builds beside a
+	// maintainer's run and its peak is its own.
 	benchProcesses = fixtureProcesses
 
 	// benchLogBytes is a benchmark fleet's code log: 256 MiB admits about
@@ -493,10 +394,9 @@ func benchHistory(b *testing.B) {
 	b.Run(fmt.Sprintf("cap=input_byte_cap/cut=%dMiB", scaledCut>>20), func(b *testing.B) {
 		benchCap(b, historyPushes(b, client, src, commits, gittest.HistorySessions))
 	})
-	// THE ROLL'S OWN COST, beside the history and beside nothing: the same
-	// shape of rollPushes one-commit pushes, made last since they extend src's
-	// main — each stamped after the history's newest commit, so no walk of
-	// git's reads the history for a commit older than its parent.
+	// The roll's pushes are made last because they extend src's main, each
+	// stamped after the history's newest commit, so no git walk reads the
+	// history for a commit older than its parent.
 	b.Run(fmt.Sprintf("roll=%d", rollPushes), func(b *testing.B) {
 		tip := commits[len(commits)-1]
 		history := historyPushes(b, client, src, commits, 1)
@@ -510,13 +410,13 @@ func benchHistory(b *testing.B) {
 	})
 }
 
-// benchRoll is history=source/roll=…: a compaction of a repository whose last
-// rollPushes pushes are one commit each, a loop, each over a repository of its
-// own — beside=history after the source history pushed as ONE pack, which the
-// roll leaves out, and beside=none alone. The build's wall clock (build-ms)
-// and its peak anonymous memory (peak-MiB) are the roll's, never the
-// history's, when the two arms agree: the build's walk for its name hashes
-// ends at the roll's edge (cache.Cache.NewMergeScratch).
+// benchRoll is history=source/roll=…/beside={history,none}: a compaction a
+// loop of the last rollPushes one-commit pushes, each over a repository of
+// its own, beside=history after the source history pushed as ONE pack the
+// roll leaves out, beside=none alone. When the two arms agree, the build's
+// wall clock (build-ms) and peak anonymous memory (peak-MiB) follow the roll,
+// never the history: the build's walk for its name hashes ends at the roll's
+// edge (cache.Cache.NewMergeScratch).
 func benchRoll(b *testing.B, pushes []pushed) {
 	f := newBenchFleet(b, 1)
 	c, _, est := f.compactor(b, gitlet.CompactMinMerge, &traffic{})
@@ -596,8 +496,15 @@ func (f *benchFleet) repoOf(b *testing.B, pushes []pushed) (string, string, []gi
 	return name, id, packs
 }
 
-// benchInputs is history=source/inputs=n: a compaction of n pushes' packs a
-// loop, each over a repository of its own.
+// benchInputs is history=source/inputs={4,8,16,64}: a compaction a loop of
+// the source history pushed as n packs, each over a repository of its own on
+// the home that holds it already (the ordinary case). It reports the build's
+// peak anonymous memory (gittest.PeakAnon, sampled every millisecond, as the
+// cache's per-object figures were) over the objects merged (anon-B/object),
+// its wall clock a GiB of pack bytes merged (build-s/GiB, read against
+// gitproc.PackWorkDeadline's) and in-MB, out-MB. cache.CompactBytesPerObject
+// is the 64-input arm's anon-B/object rounded up to the next 50 bytes, its
+// growth across the arms stated beside it.
 func benchInputs(b *testing.B, pushes []pushed, n int) {
 	f := newBenchFleet(b, 1)
 	c, _, _ := f.compactor(b, min(n, gitlet.CompactMinMerge), &traffic{})
@@ -643,12 +550,15 @@ func benchInputs(b *testing.B, pushes []pushed, n int) {
 	}
 }
 
-// benchCap is history=source/cap=…: a roll at its byte cap at the scaled cut,
-// over the history pushed as gittest.HistorySessions packs — each a fraction
-// of the cut, so the cap, never the roll, says what is merged. The cuts an
-// output count is read against are the BUILD'S OWN: a roll as dense as a
-// source history's is cut below the nominal cut, so its bundles fit the bound
-// (bounds.cutFor), and its byte cap follows that cut.
+// benchCap is history=source/cap=input_byte_cap/cut=4MiB: a roll at its byte
+// cap (compact.InputByteCap) at the scaled cut and bundle bound, over the
+// history pushed as gittest.HistorySessions packs, each a fraction of the
+// cut, so the cap, never the roll, says what is merged. outputs/cuts is the
+// outputs over ⌈the pack bytes merged ÷ the cut⌉, from which InputByteCap's
+// half is re-derived: at most gitlet.MaxCompactOutputs outputs a roll at the
+// cap, whatever pack-objects writes whole. The cut is the BUILD'S OWN: a roll
+// as dense as a source history's is cut below the nominal cut so its bundles
+// fit the bound (bounds.cutFor), and its byte cap follows that cut.
 func benchCap(b *testing.B, pushes []pushed) {
 	f := newBenchFleet(b, 1)
 	c, _, est := f.compactor(b, gitlet.CompactMinMerge, &traffic{})
@@ -692,23 +602,31 @@ func benchCap(b *testing.B, pushes []pushed) {
 	b.ReportMetric(float64(outputs)/float64(cuts), "outputs/cuts")
 }
 
-// steadyRates are the steady arms' repositories, each with its reason:
-// pushes landed, and how many to a simulated minute — a pass of the home's
-// compactor at every minute.
+// steadyRates are the steady arms' repositories: pushes landed, and how many
+// to a simulated minute, a pass of the home's compactor each minute.
 var steadyRates = []struct{ pushes, perMinute int }{
-	// BUSY: 300 a minute, the rate the master's confirmation of Poll is
-	// stated at, twenty minutes of it.
+	// BUSY: 300 a minute for twenty minutes, the rate the master's
+	// confirmation of Poll is stated at. Every pass passes every floor, so the
+	// three measure alike.
 	{pushes: 6_000, perMinute: 300},
-	// QUIET: one a minute, so every pass finds one pack more and every floor
-	// binds — twenty hours of it, about seventy-five merges at the highest
-	// floor.
+	// QUIET: one a minute for twenty hours, so every floor binds (a merge
+	// waits until that many packs gather) and their costs differ.
+	// gitlet.CompactMinMerge is the floor with the fewest GETs and PUTs a
+	// thousand pushes here (gitlet's limits.go has each floor's figures). Its
+	// retired/push, record-B/push and sweep-B/push are a merge at the floor's:
+	// about one a quarter hour, each swept by a record of its own.
 	{pushes: 1_200, perMinute: 1},
 }
 
-// benchSteady is steady/…/min-merge={4,8,16}: for each of steadyRates, one
-// pool of one-commit pushes, built once, landed by each arm into a repository
-// of its own on a fleet of its own, a pass of the home's compactor a simulated
-// minute.
+// benchSteady is steady/pushes=…/rate=…/min/min-merge={4,8,16} (LARGE): for
+// each of steadyRates, one pool of 20 KB one-commit pushes, built once, landed
+// by each arm through the data node's committer into a repository of its own
+// on a fleet of its own, a pass of the home's compactor merging at min-merge
+// each simulated minute, the other Gitlet node syncing after every push and
+// pass as a node serving fetches does. min-merge=16, the production floor, is
+// the STEADY arm: its max-live-packs must stay under gitlet.CompactTargetPacks
+// plus a minute's pushes, which confirms Poll. steadyFigures.report says what
+// each figure is.
 func benchSteady(b *testing.B) {
 	gittest.Large(b, "one-commit pushes packed, then landed, synced and compacted at each floor")
 	gittest.RequireNode(b)
@@ -765,10 +683,9 @@ func steadyRun(b *testing.B, pushes []pushed, perMinute, minMerge int) steadyFig
 
 	fig := steadyFigures{pushes: len(pushes)}
 	// ticks are the instants the duty's passes judge the grace from, one a
-	// retentionTick of passes and one after the last: each read once its
-	// quarter hour's last pass has applied its compaction, so every
-	// retirement of that quarter hour carries a broker instant at or before
-	// it, and none of a later one does.
+	// retentionTick of passes and one after the last, each read once its
+	// quarter hour's last pass has applied: every retirement of that quarter
+	// hour carries a broker instant at or before it, none of a later one does.
 	var ticks []time.Time
 	passes := 0
 	for i, p := range pushes {
@@ -822,12 +739,9 @@ func steadyRun(b *testing.B, pushes []pushed, perMinute, minMerge int) steadyFig
 		fig.coldGetBytes += r.Size
 	}
 	// THE SWEEPS, A DAY ON: the duty's pass at each tick, its clock
-	// gitlet.RetireGrace past the tick — the pass a day after that quarter hour,
-	// which judges the grace by its own clock against the broker's instant on
-	// each retirement — so each removes what one quarter hour retired, in a
-	// retire_sweep record for the repository, as the duty's passes do. Every
-	// row the compactions retired is swept by the last, which is past them
-	// all.
+	// gitlet.RetireGrace past it, removes what that quarter hour retired in one
+	// retire_sweep record for the repository; the last is past every
+	// retirement, so it sweeps every row the compactions retired.
 	before := f.logBytes(b)
 	for _, tick := range ticks {
 		report := f.fleet.Retain(b, tick.Add(gitlet.RetireGrace))
@@ -846,7 +760,17 @@ func steadyRun(b *testing.B, pushes []pushed, perMinute, minMerge int) steadyFig
 	return fig
 }
 
-// report states fig on b, its requests and bytes a thousand pushes.
+// report states fig on b. push-KB is a push's pack (its file, commit and two
+// trees), which every figure over the bytes pushed divides by; retired/push
+// is the roll's ρ; rewrite-B/pushed-B, O(log n) at factor 2, the outputs over
+// what was pushed; record-B/push the compactions' code-log records, signed
+// frames included; sweeps and sweep-B/push the retention duty's retire_sweep
+// records a day later; got-B/pushed-B, about 1 + log₂(the largest merged pack
+// ÷ a push's), what the other node downloads (scaling.md, M3-decisions
+// M3-O63). Per 1 000 pushes: a cold sync's GETs (cold-gets, cold-MB), the
+// compactions' PUTs (puts, put-MB) and the GETs of their outputs by every node
+// but the builder on a fleet of eight (fleet-gets, fleet-MB: the measured
+// node's times seven, since each runs the same rounds over the same rows).
 func (fig steadyFigures) report(b *testing.B) {
 	kpush := float64(fig.pushes) / 1000
 	b.ReportMetric(float64(fig.pushedBytes)/float64(fig.pushes)/1e3, "push-KB")
@@ -867,14 +791,12 @@ func (fig steadyFigures) report(b *testing.B) {
 }
 
 // extendDirs is how many directories extend spreads a history's files over,
-// as internal/gitlet/cache's benchmarks spread theirs: a push of one file then
-// carries it and two trees of at most a hundred entries — the directory it
-// lands in and the root — as a push into a repository of directories does.
-// Every file in ONE directory would have every push carry a root tree listing
-// every file the history has added, some 40 bytes a file: over the steady
-// arm's 6 000 pushes about 73 KB a push of trees beside its 20 KB of file, so
-// what a push weighed would have been mostly a tree that real repositories
-// never carry, and every figure over the bytes pushed understated by it.
+// as internal/gitlet/cache's benchmarks do, so a one-file push carries two
+// trees of at most a hundred entries (its directory and the root), as in a
+// real repository. In ONE directory every push's root tree would list every
+// file so far, some 40 bytes each: about 73 KB a push over the steady arm's
+// 6 000 pushes beside its 20 KB file, understating every figure over the
+// bytes pushed.
 const extendDirs = 100
 
 // extend fast-imports n commits onto src's main after from ("" for its first
@@ -949,8 +871,14 @@ func commitPushes(b *testing.B, client *gittest.Client, src, old string, commits
 	return out
 }
 
-// benchBlobs is blobs=max_blob/inputs=8: one compaction a loop of eight pushes,
-// each a revision of one blob of the default max_blob_bytes.
+// benchBlobs is blobs=max_blob/inputs=8 (LARGE): one compaction a loop of
+// eight pushes, each a revision of one blob of the default max_blob_bytes, so
+// the delta search holds two at once. It reports the build's peak anonymous
+// memory (peak-MiB) against its admission charge (charge-MiB: its objects at
+// cache.CompactBytesPerObject, a transfer's room beside them at
+// gitproc.TransferBytesPerObject, and cache.CompactWindowBytes) and the
+// window the peak leaves past the per-object charge (window-MiB). A peak past
+// the charge raises CompactWindowBytes to the window measured.
 func benchBlobs(b *testing.B) {
 	gittest.Large(b, "eight revisions of a 50 MiB blob, packed whole and compacted")
 	gittest.RequireNode(b)
@@ -1028,13 +956,14 @@ func revisions(b *testing.B, client *gittest.Client, src string, n, size int) []
 	return strings.Fields(client.Run(b, src, "rev-list", "--reverse", "main"))
 }
 
-// benchSwap is swap/packs=n: a loop of syncs that each swap a copy holding n
-// packs, after a compaction retired the three newest. The repository holds
-// n − 2 packs between two syncs, so the two pushes each iteration lands before
-// its compaction take it to n and never past gitlet.MaxPacksPerRepo — at
-// packs=2048 the bound itself, where a third would be refused
-// compaction_behind — and the compaction, of the two pushes and the pack
-// below them, takes it back to n − 2.
+// benchSwap is swap/packs={50,2048} (2048 LARGE): a loop of syncs that each
+// SWAP a copy holding n packs into its next directory, of links, after a
+// compaction retired the three newest; its wall clock includes the download
+// of the one output, and links/swap follows the pack count, never the bytes.
+// The repository holds n − 2 packs between syncs, so an iteration's two
+// pushes take it to n and never past gitlet.MaxPacksPerRepo (at 2048 the
+// bound itself, where a third would be refused compaction_behind), and the
+// compaction of them and the pack below takes it back to n − 2.
 func benchSwap(b *testing.B, n int) {
 	if n > 50 {
 		gittest.Large(b, fmt.Sprintf("%d pushes packed, stored and synced", n))
@@ -1196,8 +1125,15 @@ func linkedFiles(b *testing.B, held, next string) int {
 	return links
 }
 
-// benchPoll is poll/repos=n: a pass over n listed repositories none of which
-// is due, and the data node's read of the listing's page of n.
+// benchPoll is poll/repos={1000,10000}/op=pass/maintains={all,1of8}: one
+// pass over n listed repositories none of which is due here (the memory's
+// steady state), on the maintainer of every one and on a node maintaining an
+// eighth, as each of a fleet of eight alike nodes does; ns/repo is what a
+// repository costs a pass. op=page: the serving data node's read of ONE page
+// of the listing (code_repos_packs_idx, at stale, as every pass reads it).
+// Past 100 ms at 10 000 the listing is re-decided (M3-decisions M3-O26): two
+// listings a minute from each of sixteen Gitlet nodes would hold over a
+// twentieth of one reader.
 func benchPoll(b *testing.B, n int) {
 	listed := make([]gitlet.CompactionCandidate, n)
 	rng := rand.New(rand.NewPCG(uint64(n), 5))
@@ -1216,13 +1152,10 @@ func benchPoll(b *testing.B, n int) {
 	slices.SortFunc(listed, func(x, y gitlet.CompactionCandidate) int {
 		return cmp.Or(cmp.Compare(y.LivePacks, x.LivePacks), strings.Compare(y.ID, x.ID))
 	})
-	// THE PASS, on the maintainer of every listed repository and on a Gitlet
-	// node maintaining an eighth of them, as each node of a fleet of eight
-	// alike nodes is: only a repository's maintainer ever plans it, so only
-	// its maintainer remembers it as not due, and every other listed
-	// repository is judged against the pass's one listing of who serves git —
-	// here a set's lookup, the router's own judging priced apart (estate's
-	// BenchmarkMaintainerOf).
+	// THE PASS: only a repository's maintainer plans it, so only it remembers
+	// the repository as not due (a lookup); every other one is judged against
+	// the pass's one listing of who serves git, here a set's lookup (the
+	// router's own judging is estate's BenchmarkMaintainerOf).
 	for _, arm := range []struct {
 		name      string
 		maintains func(i int) bool

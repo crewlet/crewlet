@@ -29,7 +29,7 @@ import (
 
 // THE TAG INDEX (DerivedTags), crewlet/tags: every tag in git's creatordate
 // order and by the commit each peels to, levelled inside writeRefs and renamed
-// in with packed-refs in one hold (doc.go's "The tag index").
+// in with packed-refs in one hold (package doc, "The tag index").
 
 // tagsFile writes the tag index: its declaration's Writer.File.
 const tagsFile = "internal/gitlet/cache/tags.go"

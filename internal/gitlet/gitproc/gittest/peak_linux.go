@@ -17,18 +17,16 @@ import (
 // apart lands inside it.
 const peakAnonSample = time.Millisecond
 
-// PeakAnon runs fn and answers the most ANONYMOUS memory any child process of
-// this one held while it ran — RssAnon, sampled from /proc — and true. The
-// anonymous pages are what a run cannot give back: the packs' and indexes' own
-// pages a git process maps in count toward its resident size, but the kernel
-// takes them back under pressure rather than killing anybody, so they are not
-// what a node's memory has to hold for it. Every git a pool runs is a child of
-// this process (the pool execs git itself), and a maintenance step, a clone's
-// pack-objects, an fsck and a compaction's build are each one process.
+// PeakAnon runs fn and answers the most ANONYMOUS memory (RssAnon, sampled
+// from /proc) any child process of this one held while it ran, and true.
+// Anonymous pages are what a node's memory must hold: the pack and index pages
+// a git maps count toward its resident size, but the kernel reclaims them
+// under pressure rather than killing anybody. Every git a pool runs is a child
+// of this process, and each maintenance step, clone's pack-objects, fsck and
+// compaction build is one process.
 //
-// ONE SAMPLER, for every benchmark whose figure a node's memory budget charges
-// by — the cache's index, bitmap, graph and check, and a compaction's build —
-// so the figures they set against one another are read the same way.
+// ONE SAMPLER for every benchmark a node's memory budget charges by, so their
+// figures are read the same way.
 func PeakAnon(fn func()) (int64, bool) {
 	var (
 		mu   sync.Mutex

@@ -10,9 +10,9 @@ import (
 )
 
 // ScaleBounds holds every build c makes to a cut of cut and every output's
-// bundle to maxBundle, in place of gitlet.CompactPackBytes and gitlet.MaxPackBytes:
-// a suite builds over mebibytes what production builds over gibibytes, and the
-// plan's full rule and its byte cap follow the cut as they do in production.
+// bundle to maxBundle, in place of gitlet.CompactPackBytes and gitlet.MaxPackBytes,
+// so a suite builds over mebibytes what production builds over gibibytes; the
+// plan's full rule and byte cap follow the cut as in production.
 func ScaleBounds(c *Compactor, cut, maxBundle int64) {
 	c.bounds.cut, c.bounds.maxBundle = cut, maxBundle
 }
@@ -118,11 +118,10 @@ func HeldBase(ctx context.Context, c *Compactor, rows []gitlet.LayerRow, base in
 	return c.heldBase(ctx, rows, base)
 }
 
-// FinishExpunge finishes the expunge open on cand's repository — its rescue
-// and its commit, from the rows — as one whose rescue keeps what a ref drop
-// left for grace would: what an expunge on its maintainer's own schedule
-// keeps, which a case drives over a purge's begin to hold the rescue's drops
-// to the grace it is handed.
+// FinishExpunge finishes the expunge open on cand's repository (its rescue and
+// commit, from the rows) as one on its maintainer's own schedule does, its
+// rescue keeping what a ref drop left for grace: a case drives it over a
+// purge's begin to hold the rescue's drops to that grace.
 func FinishExpunge(ctx context.Context, c *Compactor, cand gitlet.ExpungeCandidate, grace time.Duration) (Outcome,
 	error) {
 
@@ -135,10 +134,9 @@ func FinishExpunge(ctx context.Context, c *Compactor, cand gitlet.ExpungeCandida
 	return c.finish(ctx, cand, openExpunge{id: cand.Open, request: cand.Request, grace: grace, floor: cand.Version})
 }
 
-// Listed is repository id as a pass of c lists it now — the `expunge_due`
-// listing's two arms, its weekly one asked from c's clock less
-// gitlet.ExpungeInterval, every page, as [Compactor.ExpungePass] reads them — and
-// whether the listing names it at all: what a case asks an expunge of again
+// Listed is repository id as a pass of c lists it now (both arms of the
+// `expunge_due` listing, every page, as [Compactor.ExpungePass] reads them)
+// and whether the listing names it: what a case asks an expunge of again
 // after a cycle answered busy, as the next pass would.
 func Listed(ctx context.Context, c *Compactor, id string) (gitlet.ExpungeCandidate, bool, error) {
 	listed, err := c.listExpunges(ctx, c.now().Add(-gitlet.ExpungeInterval))
@@ -158,15 +156,14 @@ func Listed(ctx context.Context, c *Compactor, id string) (gitlet.ExpungeCandida
 // expunged at.
 func ExpungeFrom(c *Compactor, n int64) { c.bounds.expungeMin = n }
 
-// ClockAt has c read now as its clock from here on: what a benchmark's
-// compactor, built by its fleet's own helper, is set past a grace by. Before
-// c starts only.
+// ClockAt has c read now as its clock, before c starts only: how a
+// benchmark's compactor, built by its fleet's own helper, is set past a grace.
 func ClockAt(c *Compactor, now func() time.Time) { c.now = now }
 
-// RememberNotDue has c remember cand as a plan found not due at the version the
-// listing names and at its repository's cap now — what a pass over a
-// repository that is not due leaves behind — so BenchmarkCompact's poll arms
-// price the memory's steady state without planning every repository first.
+// RememberNotDue has c remember cand as not due at the listing's version and
+// its repository's cap now, as a pass over it would, so BenchmarkCompact's
+// poll arms price the memory's steady state without planning every
+// repository first.
 func RememberNotDue(c *Compactor, cand gitlet.CompactionCandidate) {
 	c.remember(cand, c.capFor(cand.ID))
 }

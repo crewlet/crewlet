@@ -17,8 +17,8 @@ import (
 )
 
 // unitCase is a solo fleet of o holding gitlettest.RepoName as a `visibility:
-// unit` repository and `open` as a company one, both with one push of main
-// by ceo, the fleet itself and the pushed commit.
+// unit` repository and `open` as a company one, each with one push of main by
+// ceo; it returns the case, the fleet and the pushed commit.
 func unitCase(t *testing.T, o gitlettest.SoloOptions) (*gitlettest.Case, *gitlettest.SoloFleet, string) {
 	t.Helper()
 	f := gitlettest.SoloNode(t, o)
@@ -37,24 +37,22 @@ func unitCase(t *testing.T, o gitlettest.SoloOptions) (*gitlettest.Case, *gitlet
 	return c, f, head
 }
 
-// fetchRounds counts the fetch requests node 0 has answered — one per round a
-// stateless negotiation makes (crewlet.code.fetch.duration).
+// fetchRounds counts the fetch requests node 0 has answered, one per
+// stateless negotiation round (crewlet.code.fetch.duration).
 func fetchRounds(c *gitlettest.Case) uint64 {
 	n, _ := observed(c.Fleet.Nodes()[0].Metrics(), metrics.CodeFetchDuration, map[string]string{"command": "fetch"})
 	return n
 }
 
-// A UNIT REPOSITORY'S FETCH IS RECORDED: one read for every fetch whose
-// request ended well and whose answer carried a pack — as the credential that
-// fetched and the person it is bound to (none for a token bound to nobody),
-// its bytes what the client read — and none for anything else: a company
-// repository's clone, an `ls-refs`, a negotiation round that sent no object
-// (so a fetch negotiated over several stateless rounds is ONE record, under
-// either protocol), and a fetch the node ended after its pack began.
+// A unit repository's fetch is recorded: one read per fetch that ended well
+// with a pack, as its credential and bound person (none for an unbound token),
+// its bytes what the client read. Nothing else is: a company repository's
+// clone, an `ls-refs`, a negotiation round that sent no object (so a
+// multi-round stateless fetch is ONE record, either protocol), or a fetch the
+// node ended after its pack began.
 //
-// Mutation: record every request a fetch command makes, and the negotiation
-// rounds are records; drop the visibility check, and the company repository's
-// clone is one; record `ls-refs` too, and it is one.
+// Mutation: record every request of a fetch, drop the visibility check, or
+// record `ls-refs`, and a record too many appears.
 func TestAUnitRepositorysFetchIsRecorded(t *testing.T) {
 	c, f, head := unitCase(t, gitlettest.SoloOptions{})
 	repo := c.Rows().Repo.ID
@@ -107,10 +105,9 @@ func TestAUnitRepositorysFetchIsRecorded(t *testing.T) {
 		}
 	})
 
-	// A DIVERGED CLIENT'S NEGOTIATION: a round offering only commits the
-	// repository does not hold is answered with acknowledgments and no
-	// object, and the round that says `done` with the pack — two requests,
-	// one fetch, one record.
+	// A diverged client: a round offering only unknown commits gets
+	// acknowledgments and no object, the `done` round the pack; two
+	// requests, one record.
 	for _, proto := range []struct {
 		name, protocol, round, done string
 	}{
@@ -147,20 +144,17 @@ func TestAUnitRepositorysFetchIsRecorded(t *testing.T) {
 	}
 }
 
-// A FETCH THE NODE ENDED IS NO RECORD, even once its pack had begun: its
-// request did not end well, so its client was not sent the repository whole.
-// The stand-in upload-pack writes a v2 answer's pack section and its pack's
-// first packet, and then nothing until the stall ends it.
+// A fetch the node ended is no record, even once its pack had begun: its
+// client was not sent the repository whole. The stand-in upload-pack writes a
+// v2 pack section and its first packet, then nothing until the stall ends it.
 //
-// THE STALL IS THE STAND-IN'S ALONE (host.Timing.Stall), so the case's commit
-// is an engine write, which runs no transfer, never a push: a real
-// receive-pack is quiet from its pack's last byte until its hook answers,
-// longer than this stall on a loaded runner, and a push seeding the case was
-// ended there for a stall — its client answered 503 for a push that had
-// landed.
+// The short stall (host.Timing.Stall) must hit only the stand-in, so the
+// commit is seeded by an engine write, never a push: a real receive-pack is
+// quiet until its hook answers, which on a loaded runner outlasts the stall
+// and fails a push that landed.
 //
-// Mutation: seed main with a push again, and the premise that the node
-// served no push fails.
+// Mutation: seed main with a push, and the premise that the node served no
+// push fails.
 func TestAFetchTheNodeEndedIsNoRecord(t *testing.T) {
 	fake := gittest.Wrap(t, `case " $* " in
 *" --advertise-refs "*) ;;
@@ -194,8 +188,7 @@ esac`)
 	if err != nil {
 		t.Fatalf("POST git-upload-pack: %v", err)
 	}
-	// CUT SHORT by the node, which is the point: what the client read is not
-	// asked, only that it was cut.
+	// Only that the node cut the answer is asked, not what the client read.
 	_, cut := io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || cut == nil {

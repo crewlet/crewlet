@@ -10,19 +10,13 @@ import (
 )
 
 // A SHARE IS THE HUMAN SEAT A CREDENTIAL ACTS AS, NOT THE CREDENTIAL: a
-// person's laptop, scripts and browser are one principal of the person class
-// — each of their machine tokens and sessions names their seat — so a person
-// cannot double their turn by holding two credentials; a Tier A token the
-// directory binds to a human seat nobody else holds is that seat's one
-// holder, and a person by it. A credential acting as nobody is a machine
-// principal of its own, named by the credential — a Tier A token's login, or
-// a service account's machine token, so a token per CI runner is a turn per
-// runner. Every admission is composed from the principal the guard resolves,
-// as admit composes it (admitted). (TestEveryTransferCarriesItsCredentialsShare
-// holds the call sites through real git, where each person is ONE credential —
-// gitlettest's Tier A token on a seat nobody else holds — and the token bound to
-// nobody is one; the principals a person's several credentials resolve to, and
-// a service account's per-runner tokens, are this case's.)
+// person's tokens and sessions all name their seat, so two credentials cannot
+// double their turn; a Tier A token bound to a seat nobody else holds is its
+// holder, a person. A credential acting as nobody is a machine named by the
+// credential (a Tier A token's login, a machine token), so a token per CI
+// runner is a turn per runner. TestEveryTransferCarriesItsCredentialsShare
+// holds the call sites through real git; several credentials per principal
+// are this case's, composed as admit does (admitted).
 //
 // Mutations: share() naming a bound credential's operator id rather than its
 // seat's handle — red; share() keying a machine by its owner

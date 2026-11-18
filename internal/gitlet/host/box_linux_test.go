@@ -15,25 +15,18 @@ import (
 	"github.com/crewlet/crewlet/internal/gitlet/host"
 )
 
-// A BOX PUSH'S COMMITS ARE READ ONE AT A TIME: no git process the landing of
-// a coding box's push runs over its pack holds the pack's commits at once.
-// What a box sends is a few bytes of pack for every megabyte of commit text,
-// and its committers are read before anything is stored, so a scan that held
-// every commit it was handed would let a pack of a megabyte hold gigabytes of
-// the Gitlet node's memory. The box sends sixteen commits of 8 MiB messages —
-// each a line of its own repeated, so nothing deltas against anything and the
-// pack stays small — on 8 192 small ones, so a listing that prints only once
-// it has read every commit still writes more than its pipe holds, and is alive
-// when its output is first read. Every read the landing runs that writes
-// output holds under half the 128 MiB of commit text at its peak — on the
-// node pin the listing of what the push introduces held 23.6 MiB, and on git
-// 2.53.0 the committers' cat-file 14.8 MB — and the push lands.
-//
-// Linux alone: the peak is read from /proc.
+// A BOX PUSH'S COMMITS ARE READ ONE AT A TIME: no git process landing a
+// coding box's push holds the pack's commits at once, since its committers
+// are read before anything is stored and a megabyte of pack can carry
+// gigabytes of commit text. The box sends sixteen 8 MiB messages (each one
+// line repeated, so the pack stays small) on 8 192 small commits, so a
+// listing that prints only after reading every commit overfills its pipe and
+// is alive at its first read. The push lands, and every read that writes
+// output peaks under half the 128 MiB of commit text (Linux: from /proc).
 //
 // Mutation: read the committers with `rev-list --no-walk=unsorted --stdin
-// --no-commit-header --format=%H%x00%ce`, as the scan first did — it holds
-// every commit's text before it prints one, 138.9 MiB on the node pin, red.
+// --no-commit-header --format=%H%x00%ce`, which holds every commit's text
+// before printing one: red.
 func TestABoxPushsCommitsAreReadOneAtATime(t *testing.T) {
 	t.Parallel()
 	c, head := boxCase(t, gitlettest.SoloOptions{})
@@ -72,8 +65,8 @@ func TestABoxPushsCommitsAreReadOneAtATime(t *testing.T) {
 	for _, p := range peaks()[from:] {
 		switch {
 		case !p.Found && p.Wrote > 256<<10:
-			// More than the pipe and the pool's read of it hold: the
-			// process was alive at its first output, and was not found.
+			// More than the pipe and the pool's read hold: the process was
+			// alive at its first output, yet was not found.
 			t.Errorf("git %s wrote %d bytes and was never found while they were read: it was not measured",
 				strings.Join(p.Args, " "), p.Wrote)
 			continue

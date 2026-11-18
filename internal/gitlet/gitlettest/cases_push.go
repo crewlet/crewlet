@@ -37,12 +37,10 @@ func aPushAppliedLateIsReportedPending(t *testing.T, newFleet NewFleet) {
 		t.Errorf("a push applied late printed %q, want [remote rejected] (pending: durable at …): %s", reason, res)
 	}
 	resume()
-	// THE LATE PUSH APPLIED FIRST, as the re-run's claim needs: its
-	// advertisement is a linearizable read, which waits for the late push's
-	// record — the record before its barrier — and a resumed applier that
-	// had not yet committed it when the read's budget ran out answered the
-	// re-run 503 `behind`, on a machine slow to restart that applier. So the
-	// paused data node's rows are awaited, never raced.
+	// THE LATE PUSH APPLIED FIRST: the re-run's advertisement is a
+	// linearizable read waiting on the late push's record, and an applier
+	// slow to resume answers it 503 `behind` once the read's budget runs out.
+	// So the paused data node's rows are awaited, never raced.
 	if err := c.Fleet.Level(c.Ctx, c.Fleet.DataNodes()[0]); err != nil {
 		t.Fatalf("the paused data node catching up once resumed: %v", err)
 	}
@@ -249,13 +247,12 @@ func protectionRulesRefuseByName(t *testing.T, newFleet NewFleet) {
 }
 
 // F25: a ref beside a directory of its name is refused, and every clone keeps
-// fetching. Each client keeps a ref as a file, so with refs/heads/feature and
-// refs/heads/feature/x both live, a clone that fetched one fails every later
-// fetch ("cannot lock ref") — and nothing but the committer can see the two
-// side by side, since the receive-pack that would refuse the pair runs no ref
-// transaction here. A rename in ONE push — feature deleted, feature/v2 created
-// — lands, as git's own transaction takes it, and a clone that prunes follows
-// it.
+// fetching: a client keeps a ref as a file, so with refs/heads/feature and
+// feature/x both live a clone fails every later fetch ("cannot lock ref"), and
+// only the committer sees the pair, since receive-pack, which would refuse it,
+// runs no ref transaction here. A rename in ONE push (feature deleted,
+// feature/v2 created) lands, as git's own transaction takes it, and a clone
+// that prunes follows it.
 func aRefBesideADirectoryOfItsNameIsRefused(t *testing.T, newFleet NewFleet) {
 	c := newCase(t, newFleet, Shape{}, Settings())
 	p := NewPerson(t, c.Fleet, "ceo")
@@ -385,18 +382,14 @@ func anUnboundTokenFetchesAndNeverPushes(t *testing.T, newFleet NewFleet) {
 // everything queued behind it into the next.
 //
 // ORDERED BY SIGNALS, NEVER BY A WAIT. The followers are received ONE AT A
-// TIME, each started once the one before it has parked where its pack is
-// stored and nothing is proposed, so the case runs no more receive paths at
-// once than any other, and holds nothing at the committer while they run.
-// Only then is the lead pushed and its record held where it is appended, the
-// followers let go to queue behind it, and that record let go once the
-// committer's queue holds every follower — read from the queue
-// (Fleet.Queued), because the next record takes what is queued when the held
-// one ends and nothing that arrives after it. Holding the first record while
-// fifty pushes were received at once failed on a loaded runner both ways
-// (#827): pushes refused 503 before their first byte never uploaded, so the
-// case held on for its whole minute, and the held batch outlived its
-// CommitBudget, which answered its push unknown.
+// TIME, each once the one before has parked with its pack stored and nothing
+// proposed, so no more receive paths run at once than in any other case and
+// nothing is held at the committer meanwhile.
+// Then the lead's record is held where it is appended, the followers let go to
+// queue behind it, and the record let go once Fleet.Queued holds every
+// follower: the next record takes only what is queued when the held one ends.
+// Receiving fifty at once behind a held record fails on a loaded runner: pushes
+// refused 503 never upload, and the held batch outlives its CommitBudget.
 func concurrentPushesShareRecords(t *testing.T, newFleet NewFleet) {
 	const pushers = 50
 	// THE LAST PUSH LEADS and the others follow it, into ONE record:

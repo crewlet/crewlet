@@ -15,18 +15,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/activityline"
 	"github.com/crewlet/crewlet/internal/sandbox"
-	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // OpenCodeName is this runner's config name.
 const OpenCodeName = "opencode"
 
-// transcriptDetailLimit caps one transcript line's echoed command or path:
-// enough to show WHAT ran when a run fails, short of echoing a heredoc whole
-// into the phase event. 160 characters is a readable command line.
-const transcriptDetailLimit = 160
+// transcriptDetailLimit caps one transcript line's echoed text: the grammar's
+// own preview bound.
+const transcriptDetailLimit = activityline.DetailLimit
 
 // openCodeUsageEvent is the type of the one line the run's script adds to the
 // event stream: the session's own usage report, asked for once the run has
@@ -1321,16 +1319,21 @@ type openCodeEvent struct {
 	Part  struct {
 		// MessageID is the message the part belongs to: each step of a
 		// run is a message of its own.
-		MessageID string         `json:"messageID"`
-		Tool      string         `json:"tool"`
-		Text      string         `json:"text"`
-		Reason    string         `json:"reason"`
-		Input     *openCodeInput `json:"input"`
+		MessageID string          `json:"messageID"`
+		Tool      string          `json:"tool"`
+		Text      string          `json:"text"`
+		Reason    string          `json:"reason"`
+		Input     json.RawMessage `json:"input"`
 		State     struct {
-			Status string         `json:"status"`
-			Error  string         `json:"error"`
-			Output string         `json:"output"`
-			Input  *openCodeInput `json:"input"`
+			Status string          `json:"status"`
+			Error  string          `json:"error"`
+			Output string          `json:"output"`
+			Input  json.RawMessage `json:"input"`
+			// Time is when the call started and ended, in Unix ms.
+			Time struct {
+				Start int64 `json:"start"`
+				End   int64 `json:"end"`
+			} `json:"time"`
 		} `json:"state"`
 	} `json:"part"`
 	// Report is the session's usage report, on the one line of the
@@ -1411,7 +1414,9 @@ type openCodeEvents struct {
 	answers    []string
 	message    string
 	transcript transcriptLines
-	errText    string
+	// seq numbers the run's tool calls ([activityline]).
+	seq     int
+	errText string
 	// overflowed is whether the last error the stream carried is OpenCode's
 	// own for a conversation past its model's context.
 	overflowed bool
@@ -1494,11 +1499,14 @@ func (d *openCodeEvents) Line(line []byte) {
 			d.transcript.add(chunk)
 		}
 	case "tool_use":
-		d.transcript.add(toolLine(ev))
+		d.seq++
+		for _, l := range toolLines(d.seq, ev) {
+			d.transcript.add(l)
+		}
 	case "error":
 		d.errText = errorText(ev.Error)
 		d.overflowed = openCodeContextOverflow(ev.Error)
-		d.transcript.add("[error] " + d.errText)
+		d.transcript.add(activityline.Words(activityline.TagError, d.errText))
 	case openCodeUsageEvent:
 		if ev.Report != nil {
 			d.usage = ev.Report
@@ -1740,43 +1748,59 @@ func openCodeContextOverflow(raw json.RawMessage) bool {
 	return json.Unmarshal(raw, &named) == nil && named.Name == openCodeOverflowError
 }
 
-// toolLine renders one tool event for the transcript, with the call's own
-// input, since a bare tool name is useless when a run fails; every lookup
-// falls back across releases' nesting. NEVER the tool's output, which the
-// transcript summarises: only a failed call's first line, which says why.
-func toolLine(ev openCodeEvent) string {
-	name := firstNonBlank(ev.Part.Tool, ev.Tool, ev.Name)
-	if name == "" {
-		name = "tool"
+// toolLines is one tool event's lines ([activityline]): call, input and result
+// at once, as OpenCode reports a call once it has ended. Never the tool's output,
+// only a failed call's first line.
+func toolLines(seq int, ev openCodeEvent) []string {
+	name := firstNonBlank(ev.Part.Tool, ev.Tool, ev.Name, "tool")
+	raw := ev.Part.State.Input
+	if len(bytes.TrimSpace(raw)) == 0 || string(bytes.TrimSpace(raw)) == "null" {
+		raw = ev.Part.Input
 	}
-	input := ev.Part.State.Input
-	if input == nil {
-		input = ev.Part.Input
+	// Loose, as the event is: a retyped field leaves the others named.
+	var input openCodeInput
+	_ = json.Unmarshal(raw, &input)
+	subject := firstNonBlank(input.Command, input.FilePath, input.Path, input.Pattern, input.Description)
+	if subject == "" {
+		subject = compactInput(raw)
 	}
-	if input == nil {
-		input = &openCodeInput{}
-	}
-
-	line := "[tool] " + name
-	if detail := firstNonBlank(
-		input.Command, input.FilePath, input.Path, input.Pattern, input.Description,
-	); detail != "" {
-		line += ": " + firstLine(detail, transcriptDetailLimit)
-	}
+	lines := activityline.Call(seq, name, subject)
 
 	state := ev.Part.State
+	var took activityline.Took
+	if t := state.Time; t.Start > 0 && t.End >= t.Start {
+		took = activityline.Took{D: time.Duration(t.End-t.Start) * time.Millisecond, Known: true}
+	}
 	failure := firstNonBlank(state.Error)
 	if failure == "" && state.Status == "error" {
-		failure = firstNonBlank(state.Output)
+		failure = firstNonBlank(state.Output, "failed")
 	}
-	if state.Status == "error" || failure != "" {
-		if failure == "" {
-			failure = "failed"
-		}
-		line += " → error: " + firstLine(failure, transcriptDetailLimit)
+	switch {
+	case failure != "":
+		lines = append(lines, activityline.Failed(seq, failure, took))
+	case state.Status == "completed":
+		lines = append(lines, activityline.OK(seq, took))
 	}
-	return line
+	return lines
 }
+
+// compactInput is a tool's input as compact JSON, for a tool with no subject
+// field of its own; "" for an empty object, no object, or one past
+// [compactInputLimit].
+func compactInput(raw json.RawMessage) string {
+	if !wireObject(raw) || len(raw) > compactInputLimit {
+		return ""
+	}
+	var out bytes.Buffer
+	if json.Compact(&out, raw) != nil || out.String() == "{}" {
+		return ""
+	}
+	return out.String()
+}
+
+// compactInputLimit bounds the input compacted for a subject: the subject keeps
+// [activityline.InputLimit] of it, so a larger input is a body, not an argument.
+const compactInputLimit = 8 * activityline.InputLimit
 
 func errorText(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
@@ -1804,28 +1828,6 @@ func firstNonBlank(values ...string) string {
 	return ""
 }
 
-// firstLine is one transcript line's echoed command or path, bounded: a
-// PREVIEW, marked as one. A heredoc echoed whole would make one entry of a
-// line-structured log read as many, so every cut says so: an ellipsis on the
-// line, a count of the lines after it. The limit bounds bytes, markers
-// included, and no cut splits a multi-byte character.
-//
-// REDACTED WHOLE BEFORE IT IS CUT, here because every preview cut goes through
-// it: redacted after, a token starting just before the limit survives as a
-// fragment below its rule's length floor, which no pattern recognises and
-// which identifies the token to anybody holding its checksum. The whole value,
-// since a private key's block runs past its first line.
-func firstLine(s string, limit int) string {
-	line, rest, more := strings.Cut(strings.TrimSpace(redact.Secrets(s)), "\n")
-	suffix := ""
-	if more {
-		suffix = fmt.Sprintf(" (+%d more line(s))", strings.Count(rest, "\n")+1)
-	}
-	if limit <= 0 || len(line)+len(suffix) <= limit {
-		return line + suffix
-	}
-	// [textcut.Within] rather than Ellipsis: that one does not count its
-	// marker against max, and this limit bounds what reaches the phase
-	// event, markers included.
-	return textcut.Within(line, max(limit-len(suffix), 0)) + suffix
-}
+// firstLine is s's first line as a preview, redacted whole before it is cut
+// ([activityline.Preview]).
+func firstLine(s string, limit int) string { return activityline.Preview(s, limit) }

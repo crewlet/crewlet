@@ -21,16 +21,12 @@ import (
 )
 
 // A BITMAP THE NODE'S MEMORY CANNOT HOLD IS REPLACED BY AN INDEX WITHOUT ONE.
-// A bitmap holds about BitmapBytesPerObject an object of its repository, and
-// one past what the node can give its background work is killed by the
-// kernel at every duty cycle — or the engine is, in its place. So a
-// repository whose bitmap's charge is past the budget never starts one: it is
-// indexed WITHOUT a bitmap (and its graph written), and stays served from an
-// index rather than from every pack's own; the bitmap's refusal is logged and
-// counted once for its incarnation, kept on a gauge while it is refused, and
-// raises code_maintenance_refused at the budget's own threshold. At a budget
-// of the bitmap's charge the bitmap is written, after which the gauge and the
-// alarm clear.
+// A bitmap holds about BitmapBytesPerObject an object, and one past the
+// background budget gets git, or the engine, killed by the kernel. So it is
+// never started: the repository is indexed without a bitmap (graph written),
+// and the refusal is logged and counted once an incarnation, gauged while it
+// stands, and raises code_maintenance_refused. At a budget of the bitmap's
+// charge it is written, and the gauge and the alarm clear.
 //
 // Mutation: drop the index without a bitmap from plan, and the first pass
 // writes the graph alone; drop the budget check from plan, and it writes the
@@ -119,13 +115,11 @@ func TestABitmapTheNodesMemoryCannotHoldIsReplacedByAnIndexWithoutOne(t *testing
 }
 
 // A GRAPH THE NODE'S MEMORY CANNOT HOLD IS SAID SO AS A BITMAP IS. A copy
-// refused its commit-graph walks its history by date for as long as it is
-// refused — a push of a commit dated before its parent walks every commit —
-// so the refusal is logged and counted once for the incarnation and kept on
-// the refused gauge under its own step while it stands, beside the bitmap's;
-// the alarm stands for the repository refused both. At a budget of the
-// graph's charge the graph is written first, and the gauge's graph falls
-// back.
+// refused its commit-graph walks history by date (a push of a commit dated
+// before its parent walks every commit), so the refusal is logged, counted
+// once an incarnation and gauged under its own step beside the bitmap's; the
+// alarm counts the repository refused both once. At the graph's charge the
+// graph is written first, and its gauge falls back.
 //
 // Mutation: count no refused graph in refusalWalk.note, or set the gauge for
 // bitmaps alone in noteRefusals, and the graph's gauge stays at zero.
@@ -139,9 +133,8 @@ func TestAGraphTheNodesMemoryCannotHoldIsGaugedAsABitmapIs(t *testing.T) {
 	c := w.open(t, clk.on)
 	defer w.sync(t, c, repo).Release()
 	graph := cache.GraphCharge(c, repo)
-	// A budget short of the bitmap too, the cheaper of the two over a
-	// repository this small, whose graph's fixed part (GraphBaseBytes)
-	// outweighs a bitmap of its few objects.
+	// Short of the bitmap too, the cheaper here: the graph's fixed part
+	// (GraphBaseBytes) outweighs a bitmap of so few objects.
 	cache.SetMaintenanceBudget(c, min(graph, cache.BitmapCharge(c, repo))-1)
 	for range 2 {
 		if ran := cache.MaintainerPass(c); len(ran) != 0 {
@@ -189,23 +182,17 @@ func TestAGraphTheNodesMemoryCannotHoldIsGaugedAsABitmapIs(t *testing.T) {
 }
 
 // A TIP THE NODE'S MEMORY CANNOT HOLD IS GAUGED, AND RAISES NOTHING. A copy
-// serving from an installed chain writes one thing of its own, its tip over
-// the tail, charged TipGraphBytesPerObject an object of the tail and
-// GraphBaseBytes whatever its length, with room for a clone of the whole
-// repository beside it (Write.charge). Past the budget it never runs: its
-// refusal is logged and counted once for the incarnation and kept on the
-// refused gauge under its own step while it stands — and the alarm, which
-// says a repository is served without a bitmap, does not stand for it, since
-// the copy is served through its chain's bitmap and graph layers and only the
-// tail's commits walk by date. At a budget of the tip's own charge it is
-// written at once, and the gauge falls back.
+// on an installed chain writes only its tip over the tail, charged
+// TipGraphBytesPerObject an object of the tail plus GraphBaseBytes, beside a
+// whole-repository clone's room (Write.charge). Refused, it is logged, counted
+// once an incarnation and gauged under its own step, but raises no alarm: the
+// chain's bitmap and graph layers serve the copy, and only the tail walks by
+// date. At its own charge it is written, and the gauge falls back.
 //
-// Mutations: count no refused tip in refusalWalk.note, and the tip's gauge
-// stays at zero; count it with the bitmaps, and the alarm reading names the
-// repository; charge the tip by the repository's objects (plan's tip case
-// dropped), and the budget of its charge holds no run; charge it without its
-// fixed part (Write.charge's BaseBytes dropped), and the budget a byte short
-// of its charge runs it.
+// Mutations: count no refused tip in refusalWalk.note, and its gauge stays
+// zero; count it with the bitmaps, and the alarm names it; charge it by the
+// repository's objects (plan's tip case dropped), and its charge runs
+// nothing; drop Write.charge's BaseBytes, and a byte short runs it.
 func TestATipTheNodesMemoryCannotHoldIsGaugedAndRaisesNoAlarm(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -280,19 +267,15 @@ func TestATipTheNodesMemoryCannotHoldIsGaugedAndRaisesNoAlarm(t *testing.T) {
 	}
 }
 
-// A REFUSED REPOSITORY KEEPS ITS PUSHES INDEXED. A repository whose bitmap the
-// node cannot hold is one that only grows, usually the most pushed-to, and a
-// pack outside every index is one more .idx every lookup searches: refused for
-// good, it must not pile its pushes up outside one. So the index without a
-// bitmap is written again at the cadence any index is — MidxPacks gathered
-// beside it — and covers every pack pushed since.
+// A REFUSED REPOSITORY KEEPS ITS PUSHES INDEXED. A repository refused its
+// bitmap is often the most pushed-to, and each pack outside an index is one
+// more .idx every lookup searches, so the index without a bitmap is rewritten
+// at the usual cadence (MidxPacks beside it) over every pack since.
 //
-// The budget is held a byte short of the bitmap's charge AS THE COPY STANDS
-// after each push, so the bitmap is refused for good whatever the repository
-// grows to, while the index and the graph — a fraction of the bitmap's bytes
-// an object, beside the same room — always fit: a budget fixed at the
-// repository's first size would refuse the index too once the repository
-// outgrew it by the ratio of the bitmap's charge to the index's.
+// The budget is reset a byte short of the bitmap's charge AS THE COPY STANDS
+// after each push, so the bitmap stays refused while the far cheaper index
+// and graph fit; a budget fixed at the first size would refuse the index too
+// once the repository grew.
 //
 // Mutation: drop the index without a bitmap from plan, and no pack is ever
 // indexed.
@@ -332,16 +315,12 @@ func TestARefusedRepositoryKeepsItsPushesIndexed(t *testing.T) {
 }
 
 // A STALE BITMAP IS KEPT UNTIL MidxRoundPacks GATHER OUTSIDE IT. A repository
-// that outgrows the node's memory has a bitmap the node wrote while it could,
-// over most of its history; an index without a bitmap over every pack would
-// delete it (git removes a bitmap that does not match the index it writes),
-// and a clone would walk the whole history rather than count most of it. So
-// the bitmap stands while the packs outside it are fewer than MidxRoundPacks —
-// the most this cache serves outside an index anywhere — and past them, the
-// index without a bitmap over every pack replaces it, so a refused
-// repository's pushes never pile up outside an index without bound. The
-// budget is held a byte short of the bitmap's charge as the copy stands after
-// each batch of pushes (TestARefusedRepositoryKeepsItsPushesIndexed says why).
+// that outgrew the node's memory keeps the bitmap written while it fit; an
+// index without a bitmap would delete it (git removes a bitmap not matching
+// the index it writes), and clones would walk the whole history. So it stands
+// while fewer than MidxRoundPacks (the most served outside an index anywhere)
+// are outside it; past them, the index without a bitmap replaces it. The
+// budget follows the copy as in TestARefusedRepositoryKeepsItsPushesIndexed.
 //
 // Mutation: replace a stale bitmap at MidxPacks rather than MidxRoundPacks,
 // and the second pass deletes it.
@@ -389,12 +368,11 @@ func TestAStaleBitmapIsKeptUntilMidxRoundPacksGatherOutsideIt(t *testing.T) {
 	}
 }
 
-// EACH STEP IS ADMITTED ON ITS OWN CHARGE. A run's steps run one after the
-// other and hold their own memory, so a budget past the bitmap's charge and
-// short of the graph's — over repositories this small, whose graph's fixed
-// part (GraphBaseBytes) outweighs a bitmap of their few objects — writes the
-// index with its bitmap alone, and one short of every step runs nothing —
-// each step refused counted and logged once, under its name.
+// EACH STEP IS ADMITTED ON ITS OWN CHARGE. A run's steps run one after
+// another, each holding its own memory, so a budget of the small repository's
+// bitmap (its graph costs more: GraphBaseBytes outweighs a bitmap of few
+// objects) writes the index with its bitmap alone, a repository short of
+// every step runs nothing, and each refused step is counted and logged once.
 //
 // Mutation: refuse a run whole when its graph is refused, and the small
 // repository's index is never written.
@@ -440,14 +418,12 @@ func TestEachStepIsAdmittedOnItsOwnCharge(t *testing.T) {
 	}
 }
 
-// A FULL ROUND'S INDEX IS HELD TO THE NODE'S MEMORY TOO. It is a merge of the
-// packs' indexes, IndexBytesPerObject an object — gigabytes over the largest
-// repository the defaults admit — written in the READ lane before a request
-// is answered, after a restart, a rebuild or an eviction. So past the budget
-// alone it is refused (said once for the incarnation, as the maintainer's own
-// would be) and the round answers without it; at the budget it is written;
-// and when the work in flight leaves it no room, the round never waits for
-// room — it answers without the index and says so.
+// A FULL ROUND'S INDEX IS HELD TO THE NODE'S MEMORY TOO. It costs
+// IndexBytesPerObject an object (gigabytes at the largest repository the
+// defaults admit) and is written in the READ lane before a request is
+// answered. Past the budget it is refused, said once an incarnation, and the
+// round answers without it; at the budget it is written; with no room left by
+// the work in flight, the round never waits: it answers without it, logged.
 //
 // Mutation: drop the budget check from indexRound, and the first round writes
 // an index the budget cannot hold.
@@ -507,13 +483,10 @@ func TestAFullRoundsIndexIsHeldToTheNodesMemory(t *testing.T) {
 }
 
 // THE FIRST REPOSITORY HELD BACK IS GIVEN THE ROOM IT NEEDS. A run that fits
-// the budget alone but not beside the runs in flight waits for them — and
-// were the smaller repositories behind it in the pass's order let in as the
-// room drained, a steady stream of them would keep it waiting for as long as
-// they came: the repository with the most packs uncovered, often the
-// largest, starved by the rest. So nothing starts behind it that would leave
-// it less than its charge once the runs ahead of it end, and it starts as
-// soon as they have.
+// the budget alone but not beside the runs in flight waits; were smaller
+// repositories behind it let in as room drained, a steady stream of them would
+// starve it. So nothing starts behind it that would leave it short of its
+// charge once the runs ahead end, and it starts as soon as they have.
 //
 // Mutation: hold no reservation in maintainerPass, and the second pass starts
 // the small repository in the large one's room.
@@ -578,12 +551,10 @@ func TestTheFirstRepositoryHeldBackIsGivenTheRoomItNeeds(t *testing.T) {
 	}
 }
 
-// THE RUNS IN FLIGHT FIT THE BUDGET TOGETHER: two runs that each fit it but
-// not side by side would hold more than the node can give at once, and a
-// node killed by two is no better off than one killed by one. So with room
-// in the lane and an allowance past both, the second waits for the first —
-// held back, not refused: it runs at the next pass after the first ends,
-// and nothing counts it refused.
+// THE RUNS IN FLIGHT FIT THE BUDGET TOGETHER: two that each fit alone can
+// still get the node killed side by side. So even with room in the lane and
+// the memory, the second waits for the first, held back rather than refused:
+// it runs at the next pass after the first ends and is never counted refused.
 //
 // Mutation: hold only one run to the budget, not the runs in flight
 // together, and the first pass starts both.
@@ -635,12 +606,10 @@ func TestTheRunsInFlightFitTheBudgetTogether(t *testing.T) {
 	}
 }
 
-// THE MEMORY IS READ AGAIN AT EVERY PASS. A running container's limit can be
-// changed in place — Kubernetes resizes a pod's memory without a restart — and
-// a budget read once would go on admitting runs past a limit lowered under
-// it, the kill this exists to prevent. So each maintainer pass reads it again
-// and moves the budget with it, saying so; and a read that fails keeps the
-// reading before it, said once, never a guess.
+// THE MEMORY IS READ AGAIN AT EVERY PASS: a container's limit can change in
+// place (Kubernetes resizes a pod without a restart), and a budget read once
+// would keep admitting runs past a lowered limit. Each pass rereads it and
+// moves the budget, logged; a failed read keeps the last reading, logged once.
 //
 // Mutation: read the memory only at Open, and the pass after a resize writes a
 // bitmap the new limit cannot hold.
@@ -683,11 +652,10 @@ func TestTheMemoryIsReadAgainAtEveryPass(t *testing.T) {
 }
 
 // A CHECK THE NODE'S MEMORY CANNOT HOLD IS REFUSED, NEVER RUN. Verify's
-// connectivity check holds FsckBytesPerObject an object of its repository —
-// some 11 GB over the largest the defaults admit — so it is held to the same
-// budget as the background work: past it alone it is refused for this node
-// (ErrNoMemory), and when the work in flight leaves it no room it is busy,
-// as a full lane is, and answered when asked again.
+// connectivity check holds FsckBytesPerObject an object (some 11 GB at the
+// largest repository the defaults admit), so it shares the background budget:
+// past it alone it is ErrNoMemory on this node, and with no room left by the
+// work in flight it is busy, as a full lane is.
 //
 // Mutation: drop the budget check from fsck, and the first Verify runs it.
 func TestACheckTheNodesMemoryCannotHoldIsRefused(t *testing.T) {
@@ -717,11 +685,10 @@ func TestACheckTheNodesMemoryCannotHoldIsRefused(t *testing.T) {
 	}
 }
 
-// OPEN HOLDS THE BACKGROUND WORK TO THE NODE'S MEMORY: on the machine the
-// suite runs on, read by the pool as a node's is, the budget is that memory
-// less TransferMemory a transfer of the pool's lane and ServingMemoryPerCore
-// a core its memory backs, never below zero — and the boot's line says all
-// four.
+// OPEN HOLDS THE BACKGROUND WORK TO THE NODE'S MEMORY: the budget is the
+// machine's memory as the pool reads it, less TransferMemory a transfer the
+// lane admits and ServingMemoryPerCore a core the memory backs, never below
+// zero, and the boot's line logs all four.
 func TestOpenHoldsTheBackgroundWorkToTheNodesMemory(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t)
@@ -749,12 +716,10 @@ func TestOpenHoldsTheBackgroundWorkToTheNodesMemory(t *testing.T) {
 }
 
 // A NODE OF MANY CORES AND MODEST MEMORY STILL MAINTAINS. A container with a
-// memory limit and no CPU limit sees its host's every core, and kept for each
-// of them, 64 cores with 16 GiB kept 112 GiB for its lanes and its serving,
-// left its background work nothing and refused every repository — while its
-// transfer lane admitted 256 transfers its memory could not hold. Counted as
-// the cores its memory backs, it runs the transfers and keeps the memory of
-// an eight-core node: 32 transfers, and 2 GiB for its maintenance.
+// memory limit but no CPU limit sees every host core; reserving for each, 64
+// cores and 16 GiB would keep 112 GiB, leave the background nothing and admit
+// 256 transfers it cannot hold. Counting only the cores its memory backs, it
+// runs as an eight-core node: 32 transfers, 2 GiB for maintenance.
 //
 // Mutation: keep ServingMemoryPerCore for every core in memoryReserve, and the
 // budget is zero.
@@ -779,12 +744,10 @@ func TestANodeOfManyCoresAndModestMemoryStillMaintains(t *testing.T) {
 	}
 }
 
-// THE SHAPE GIVES THE MAINTAINER ITS SHARE: a node of exactly CoreMemory a
-// core, at the pool's default lanes, has MaintenanceMemoryPerCore a core left
-// to its background work — the share every memory figure of the cache was
-// sized with — and a node with less memory than that a core has it for each
-// core its memory backs, never nothing; what it keeps is gitproc's transfer
-// bound and the rest.
+// THE SHAPE GIVES THE MAINTAINER ITS SHARE: at the pool's default lanes a
+// node of CoreMemory a core leaves MaintenanceMemoryPerCore a core to its
+// background work (the share every memory figure here was sized with), and
+// one with less leaves it for each core its memory backs, never nothing.
 func TestTheMemoryShapeGivesTheMaintainerItsShare(t *testing.T) {
 	t.Parallel()
 	if got := int64(gitproc.TransfersPerProcess) * gitproc.TransferMemory; got != 896<<20 {
@@ -813,31 +776,13 @@ func TestTheMemoryShapeGivesTheMaintainerItsShare(t *testing.T) {
 }
 
 // A BUDGET OF NOTHING IS STATED AS THE CACHE COMPUTES IT, AND SO IS WHAT
-// CLEARS IT. The background work's budget is the node's memory less what Open
-// keeps of it — gitproc.TransferMemory for every transfer the pool admits and
-// ServingMemoryPerCore for every core the memory backs at gitproc.CoreMemory a
-// core — never below zero (maintenanceBudget); every pass reads the memory
-// again, and the reserve stays what Open fixed. A transfer lane the pool sized
-// itself — gitlet.max_transfers unset — leaves MaintenanceMemoryPerCore a backed
-// core. An explicit gitlet.max_transfers is kept as written, and it zeroes the
-// budget long before its transfers take the whole memory: 42 of them on
-// 16 GiB and eight cores, where 16 GiB holds 73 at 224 MiB each. The remedy
-// called a budget of zero a memory lowered after the node booted, which a
-// restart re-sizes the lanes to — so the operator who set that figure was
-// sent to restart a node no restart changes, and a budget of zero was said to
-// clear at a restart where memory given in place past what the node keeps
-// clears it too.
-//
-// Here the smallest explicit lane that zeroes a 16 GiB, eight-core node's
-// budget is found through the cache's own reserve: below what the memory holds
-// at TransferMemory each, at the fraction of the memory the prose states, and
-// one transfer fewer leaves a budget. Real caches then show what clears it: at
-// that lane the budget is nothing; memory given in place past what Open kept
-// gives it back at the next pass; a restart over the same memory leaves it
-// nothing; and with the lane unset, a memory lowered in place to nothing is
-// given back by a restart over the lowered memory. The remedy, the
-// configuration page's entry for the setting and the concept page state those
-// figures and those clears.
+// CLEARS IT. The budget is the memory less Open's fixed reserve
+// (maintenanceBudget), reread every pass. An explicit gitlet.max_transfers
+// zeroes it well before its transfers fill memory (42 on 16 GiB and eight
+// cores, which hold 73); lowering the lane or adding memory, in place or at a
+// boot, clears it, and a restart alone only with the lane unset after memory
+// was lowered. This finds that lane through MemoryReserve, drives real caches
+// through each clear, and holds the remedy and both docs pages to them.
 //
 // Mutation: state another fraction, drop the serving reserve or the in-place
 // clear from the remedy or a page, or name another lane there, and this fails;
@@ -858,11 +803,11 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 	if left := memory - cache.MemoryReserve(zeroing-1, cores, memory); left <= 0 {
 		t.Fatalf("%d transfers already leave a %d-byte node nothing", zeroing-1, memory)
 	}
-	// THE FRACTION the prose states: where the memory backs no more than one
-	// core for every CoreMemory of it, serving keeps ServingMemoryPerCore of
-	// every CoreMemory, and the transfers zero the budget at the rest: the
-	// lane found keeps at least that share of the memory, and one transfer
-	// fewer less than a point more — the figure is the boundary, rounded down.
+	// THE FRACTION the prose states: with a core for every CoreMemory or more,
+	// serving keeps ServingMemoryPerCore of each CoreMemory and the transfers
+	// zero the budget at the rest, so the lane found keeps at least that share
+	// and one fewer less than a point more (the figure is the boundary,
+	// rounded down).
 	percent := 100 * (gitproc.CoreMemory - cache.ServingMemoryPerCore) / gitproc.CoreMemory
 	kept := int64(zeroing) * gitproc.TransferMemory
 	if kept*100 < percent*memory || (kept-gitproc.TransferMemory)*100 >= (percent+1)*memory {
@@ -980,18 +925,12 @@ func TestTheBitmapAlarmSaysWhatLeavesItsBudgetNothing(t *testing.T) {
 }
 
 // THE PROSE NAMES THE CACHE'S OWN FIGURES: the alarm table and the metrics
-// catalogue cannot import the cache (the cache imports them), so their prose
-// states the bytes an object in words — every step's it names, and the
-// transfer's beside them — and how often the node's memory is read again;
-// and this holds the words to the constants, so a retune cannot leave the
-// alarm reference or the metrics reference stale. A compaction's build is
-// one of those steps, charged its own bytes an object of the packs it merges,
-// a transfer's room by those packs — never by the whole repository — and its
-// delta search a multiple of max_blob_bytes. An expunge's build is another,
-// charged the compaction's figure an object of the packs it sorts
-// (Cache.AdmitExpunge) with room for a clone of the WHOLE repository beside
-// it, whose history its build walks — so its words are held to that constant
-// too, since a retune of it once left them stating the old figure.
+// catalogue cannot import the cache (it imports them), so this holds their
+// words to its constants: each step's bytes an object, the transfer's beside
+// them, the reread interval, a compaction's charge over the packs it merges
+// (never the whole repository) plus a multiple of max_blob_bytes, and an
+// expunge's over the packs it sorts beside a WHOLE-repository clone's room
+// (Cache.AdmitExpunge).
 //
 // Mutation: change IndexBytesPerObject, GraphBytesPerObject,
 // TipGraphBytesPerObject, GraphBaseBytes, CompactBytesPerObject,
@@ -1034,8 +973,8 @@ func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 				"of the whole repository, whose history its build walks", cache.CompactBytesPerObject),
 		},
 		metrics.CodeCacheMaintenanceRefused: {reread},
-		// A publication refused for memory is the cache's refusal, counted
-		// by the compactor too: its reason's charge is the cache's figure.
+		// The compactor counts the cache's publication refusal too, at the
+		// cache's charge.
 		metrics.CodePublishRefusals: {publish},
 	} {
 		text, ok := shows[name]
@@ -1051,16 +990,12 @@ func TestTheProseNamesTheCachesOwnFigures(t *testing.T) {
 	}
 }
 
-// THE CONCEPT PAGE SIZES A GITLET NODE BY THE CACHE'S OWN FIGURES: an operator
-// sizes a Gitlet node's memory from what docs/concepts/gitlet.md says each
-// git process holds an object of its repository, what the node keeps back of
-// its memory, and what that leaves its background work on the shapes the page
-// works through — and reads there when the background indexing runs. Every
-// one is a constant here or in gitproc, or arithmetic over them, so this
-// holds each figure the page states to the constant it spells and computes
-// every worked example through the cache's own reserve at the pool's default
-// lanes: a retune that left the page behind fails here rather than sending
-// somebody to buy a node too small.
+// THE CONCEPT PAGE SIZES A GITLET NODE BY THE CACHE'S OWN FIGURES: operators
+// size a node from docs/concepts/gitlet.md's bytes an object, reserve, budget
+// on its worked shapes and indexing cadence. Each is a constant here or in
+// gitproc, or arithmetic over them, so this holds every figure to its
+// constant and computes each example through MemoryReserve at the default
+// lanes: a stale page would have somebody buy a node too small.
 //
 // Mutation: change any constant the page names — BitmapBytesPerObject,
 // FsckBytesPerObject, gitproc.TransferMemory, MaintenanceMemoryPerCore,
@@ -1132,9 +1067,8 @@ func TestTheConceptPageSizesAGitletNodeByTheCachesOwnFigures(t *testing.T) {
 			spaced(cache.PublishTailBytesPerObject)),
 		fmt.Sprintf("%s an object of the layer for its commit-graph layer, and %s beside it for its changed-path "+
 			"filters' diffs", spaced(cache.GraphLayerBytesPerObject), amount(t, cache.GraphBaseBytes)),
-		// A COMPACTION'S BUILD, charged as its admission charges it, in the
-		// section that runs it and in the Memory paragraph beside every
-		// other step.
+		// A COMPACTION'S BUILD, as its admission charges it, in its own
+		// section and in the Memory paragraph.
 		fmt.Sprintf("(%d bytes an object merged, %d more an object merged for a transfer's room beside them, "+
 			"and %s times `code.limits.max_blob_bytes` for its delta search",
 			cache.CompactBytesPerObject, gitproc.TransferBytesPerObject, word(t, windowBlobs(t))),
@@ -1149,9 +1083,8 @@ func TestTheConceptPageSizesAGitletNodeByTheCachesOwnFigures(t *testing.T) {
 }
 
 // windowBlobs is how many of the epoch's largest blob a compaction's build
-// is charged for its delta search (cache.CompactWindowBytes), the multiple
-// the docs spell: a window that is no whole multiple of max_blob_bytes is
-// one they cannot.
+// is charged for its delta search (cache.CompactWindowBytes): the docs spell
+// it as a whole multiple of max_blob_bytes.
 func windowBlobs(t *testing.T) int {
 	t.Helper()
 	const blob = 1 << 20
@@ -1163,14 +1096,10 @@ func windowBlobs(t *testing.T) int {
 	return int(w / blob)
 }
 
-// THE SCALING PAGE SIZES A GITLET NODE BY THE SAME FIGURES: docs/concepts/scaling.md
-// tells an operator that a Gitlet node is sized by its memory before its disk,
-// in the bytes an object its bitmap and a clone beside it hold, and what a
-// repository's maintainer is charged beside them for its compaction and its
-// publication, and sends them to the concept page for everything else — so
-// the figures it does state are the cache's own and gitproc's, held here as
-// the concept page's are above, or a retune would leave one page saying what
-// the other no longer does.
+// THE SCALING PAGE SIZES A GITLET NODE BY THE SAME FIGURES:
+// docs/concepts/scaling.md states a bitmap's and a clone's bytes an object and
+// a maintainer's compaction and publication charges, deferring the rest to the
+// concept page; held here as that page's are, so neither goes stale alone.
 //
 // Mutation: change BitmapBytesPerObject, PublishBytesPerObject,
 // gitproc.TransferBytesPerObject, CompactBytesPerObject or CompactWindowBytes'

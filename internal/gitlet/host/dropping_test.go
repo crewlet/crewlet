@@ -21,21 +21,14 @@ import (
 )
 
 // A DROPPING OBJECT IS SERVED AND NEVER RECEIVED OVER (M6-D3). Between an
-// expunge's begin and its commit, a ref may reach an object only a dropping
-// pack holds — a push decided after the expunge read its tip set and before
-// its begin landed — and a client may already hold such an object's id. So
-// the Gitlet node serves one by its id: a fetch of the commit alone, from a
-// client that holds nothing of it, gets it, through the copy's dropping view.
-// And no push may rely on one, since the commit takes it out of every copy:
-// a push of a commit on top of it — its client sending that commit alone,
-// the advertisement naming what it builds on — is refused by its own
-// receive-pack's connectivity check, which reads the copy's objects/ and
-// never the view, and lands nothing. The copy holds the pack in its view and
-// nowhere a push's scratch reads.
-//
-// Here every snapshot the Gitlet node syncs by answers the pack holding the
-// commit DROPPING from its first, as an expunge's begin leaves a pack (the
-// code domain's own expunge records are internal/gitlet's to hold).
+// expunge's begin and its commit a ref may reach an object only a dropping
+// pack holds, and a client may hold its id, so a fetch of it by id alone is
+// served through the copy's dropping view. No push may rely on one, since the
+// commit takes it out of every copy: a push of a commit on top of it, sending
+// that commit alone, is refused by receive-pack's connectivity check, which
+// reads the copy's objects/, never the view that alone holds the pack. Every
+// snapshot here answers that pack DROPPING, as an expunge's begin would (its
+// records are internal/gitlet's to write).
 //
 // Mutation: make the view an alternates file of the copy's objects/ (and let
 // the pool admit it), and the push relying on the dropping commit lands.

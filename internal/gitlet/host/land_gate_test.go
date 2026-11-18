@@ -14,64 +14,18 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree/decltype"
 )
 
-// TestEveryPushTakesTheOneLanding fails the build when the host reaches the
-// steps that make a push — its proposal, its bundle's upload and its pack's
-// adoption — or a MERGE'S PROPOSAL (Estate.Merge: a merge_change lands through
-// the same landing, M5-D11) anywhere but through the one landing (land.go).
-//
-// A push's facts are formed by its landing: Command.Forced only by its force
-// check, which protected_force turns on; the blob scan, --atomic, the size,
-// the seal, the wait for an applied row. A second path to Estate.Propose or
-// Estate.Merge, to the bundle's store (gitlet.StoreBundle) or to Cache.Adopt is
-// a second implementation of what a push is (ADR-0008) — the first
-// engine-built write that proposed by itself would skip whichever check its
-// author forgot, and pass every test written for it. So each door is SELECTED EXACTLY
-// ONCE in the package's non-test files, and that selection is written in land
-// or in a function only land reaches: a function every reference to which — a
-// call, a method value, a closure handed on — is written in land or in
-// another such function.
-//
-// # The chain: a second taker of the store and the adoption, never a push
-//
-// A queue's candidate is built as a CHAIN of merges (chain.go,
-// Server.BuildChain), which stores its one pack and, once its caller's record
-// has applied, adopts it — and proposes nothing: the candidate record that
-// names the pack is its caller's, decided on the committer, and no push row
-// comes of it, so no fact the landing forms for a push is the chain's to form
-// (every head it merges was pushed through the landing already). So the
-// bundle's store and the adoption each have exactly TWO takers, each selecting
-// the door once in what it alone reaches: the landing for a push, the chain
-// for a candidate. A proposal — Estate.Propose or Estate.Merge — stays the
-// landing's alone, so a chain that proposed would be reported; and a helper
-// both reach is neither's alone, and reported, as any shared path is.
-//
-// # By declaration, never by name
-//
-// Each selector is typed through internal/sourcetree/decltype, so what is
-// judged is the method a selector RESOLVES to: Estate.Propose is the method
-// this package's own interface declares, Cache.Adopt the method
-// internal/gitlet/cache declares, and the bundle's store gitlet.Putter's Put,
-// through whatever field, variable, parameter or embedding the value is held
-// in — a field renamed, or a second field of the same type, is the same door.
-// A method of that name selected through ANY interface is counted as the door
-// too, since an interface value of another type may hold the same
-// implementation. The store has a second spelling, and both are the one door:
-// gitlet.StoreBundle, the step's one implementation, which makes the Put and
-// seals what it stores — a reference to it, a call or a function value, is a
-// selection of the store as much as a Put the host made itself, which would be
-// the same step with no seal. A selector of one of the four method names the
-// walk cannot type is reported rather than passed, and so is a reference it
-// cannot place to a method this package declares: a gate asserting where
-// something is NOT that skipped what it could not read would certify nothing
-// about exactly what it skipped.
-//
-// # Coverage boundary
-//
-// A concrete implementation's own method selected directly — an
-// *objstore.Store held as one rather than as a gitlet.Putter — is not seen: the
-// host is handed its store, its estate and its cache only through the three
-// declared types. A value reached through reflection is not seen either, nor
-// is gitlet.StoreBundle reached through a dot import.
+// TestEveryPushTakesTheOneLanding holds a push's steps to the one landing
+// (package doc, "One landing, whoever built the push"; ADR-0008): Estate.Propose,
+// Estate.Merge (a merge_change lands as a push, M5-D11), the bundle's store
+// (gitlet.Putter's Put, or gitlet.StoreBundle, which also seals) and Cache.Adopt
+// are each selected once in non-test files, in land or a function only land
+// reaches (walkForLandings). The chain (Server.BuildChain) proposes nothing but
+// stores and adopts a candidate's pack, each once in what it alone reaches; a
+// helper both reach is neither's. A selector is judged by the method it
+// resolves to (decltype), any interface's method of a door's name included, as
+// it may hold the same implementation; one the walk cannot type or place is
+// reported, never passed. Not seen: a concrete store's own method (the host
+// holds only the declared types), reflection, a dot import of gitlet.
 func TestEveryPushTakesTheOneLanding(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -92,21 +46,16 @@ const modulePath = "github.com/crewlet/crewlet"
 // hostDir is the package the gate judges, relative to the module root.
 const hostDir = "internal/gitlet/host"
 
-// landingDoor is one step only the landing takes — and, for the bundle's store
-// and the adoption, the chain beside it: a method of a declared type, and —
-// where the step has one — the function of the same package that takes it
-// whole by calling that method.
+// landingDoor is one step of a push: a method of a declared type and, where the
+// step has one, the function of owner's package that takes it whole.
 type landingDoor struct {
 	owner  decltype.TypeName
 	method string
-	// fn is the function of owner's package that IS the step — the
-	// bundle's store, gitlet.StoreBundle, whose Put on the gitlet.Putter it is
-	// handed is the upload — or "" where the method is its one spelling. A
-	// reference to fn and a selection of the method are the same door.
+	// fn is that function (gitlet.StoreBundle, whose Put is the upload), or ""
+	// where the method is the one spelling; a reference to fn selects the door.
 	fn string
-	// chain is whether the chain takes the door too, once, in what it alone
-	// reaches (chainFunc): the bundle's store and the adoption, never a
-	// proposal.
+	// chain is whether chainFunc takes the door too: the store and the
+	// adoption, never a proposal.
 	chain bool
 }
 
@@ -133,14 +82,9 @@ func doorsOf(module string) []landingDoor {
 	host, domain, cache := module+"/"+hostDir, module+"/internal/gitlet", module+"/internal/gitlet/cache"
 	return []landingDoor{
 		{owner: decltype.TypeName{Package: host, Name: "Estate"}, method: "Propose"},
-		// A MERGE'S PROPOSAL (M5-D11): a merge_change lands through the
-		// same landing — its blobs scanned, its size and pack bound held,
-		// its bundle stored and its pack adopted as a push's — so its record
-		// is a door only land takes, as a push's proposal is.
+		// A merge_change lands through the same landing as a push (M5-D11).
 		{owner: decltype.TypeName{Package: host, Name: "Estate"}, method: "Merge"},
-		// The bundle's store and the adoption are the chain's steps too: a
-		// candidate's one pack, stored as it is built and adopted once its
-		// caller's record has applied (chain.go).
+		// The chain stores and adopts a candidate's pack too (chain.go).
 		{owner: decltype.TypeName{Package: domain, Name: "Putter"}, method: "Put", fn: "StoreBundle", chain: true},
 		{owner: decltype.TypeName{Package: cache, Name: "Cache"}, method: "Adopt", chain: true},
 	}
@@ -304,11 +248,9 @@ func walkForLandings(root, module string) landingWalk {
 		}
 	}
 
-	// ONLY LAND REACHES a function every reference to which is written in
-	// land or in another function only land reaches — a fixed point from
-	// land, a function's references to itself left out — and ONLY THE CHAIN
-	// REACHES one the same way from the chain. The two sets are disjoint: a
-	// function both reach is neither's alone.
+	// Only land reaches a function every reference to which is in land or
+	// another function only land reaches (a fixed point, self-references left
+	// out); likewise the chain. A function both reach is neither's alone.
 	if !declared[landFunc] {
 		report("%s declares no %s: the one landing every push takes is gone", hostDir, landFunc)
 		return found
@@ -423,22 +365,17 @@ func exprString(e ast.Expr) string {
 	return fmt.Sprintf("%T", e)
 }
 
-// THE WALK, ON A TREE WHOSE VERDICT IS KNOWN. A fixture host whose landing
-// takes each step once — a push's proposal and a merge's among them, through a
-// helper, a closure, the store's one function — passes; and each way a second
-// path to a step can be written must be reported: the adoption taken again in
-// the relay, a proposal through a second field of the estate's type, a merge
-// proposed outside the landing, a method value taken outside the
-// landing, an upload through an interface of its own or a Put on the store
-// itself beside the store's function, that function called again or held as
-// a value outside the landing, or reached through an import of another name,
-// a helper of the landing's that something else reaches too, a step at
-// package level, a step gone, the landing gone, and a selector of a door's
-// name the walk cannot type. And the chain, the one other taker of the store
-// and the adoption, each once in what it alone reaches: a proposal from it, a
-// second store in it, a helper it shares with the landing, the landing's
-// store gone with the chain's kept, and the chain gone are each reported. A
-// test file is never read.
+// TestTheLandingWalkFindsEverySecondPath runs the walk on a fixture whose
+// verdict is known: a landing taking each step once (through a helper, a
+// closure, the store's function) passes, and every second path is reported —
+// the adoption again in the relay, a proposal through a second estate field, a
+// merge outside the landing, a method value, an upload through an interface of
+// its own or a direct Put, the store's function called again, held as a value
+// or imported under another name, a landing helper something else reaches, a
+// step at package level, a step, the landing or the chain gone, an untypeable
+// door selector; and from the chain, a proposal, a second store, a helper
+// shared with the landing, or the landing's store gone with the chain's kept.
+// A test file is never read.
 func TestTheLandingWalkFindsEverySecondPath(t *testing.T) {
 	t.Parallel()
 	const module = "example.com/m"

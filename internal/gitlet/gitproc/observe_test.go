@@ -15,18 +15,15 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// A RESULT SAYS WHEN ITS PROCESS BEGAN: after its slot was granted — a run
-// waiting behind a held lane began only once the lane let it in — and before
-// everything the process did. A caller orders it against a time.Now() of its
-// own: the cache spares a file it rewrote after a report's process began.
+// A RESULT SAYS WHEN ITS PROCESS BEGAN: after its lane let it in and before
+// the process did anything, so a caller orders it against its own time.Now()
+// (the cache spares a file it rewrote after a report's process began).
 //
-// The pool reads Began from a clock the case steps (gitproc.SetClock), so
-// each claim is an instant the case stated rather than two readings of the
-// wall clock, which a coarse clock stamps equal and a strict order then
-// fails: the clock reads queued while the run waits behind the held lane
-// (gitproc.Waiting), admitted from just before the case lets the lane go, and
-// running once the processes gauge counts the run's process, which it does
-// only after the process has started.
+// The case steps the pool's clock (gitproc.SetClock), since two wall-clock
+// readings a coarse clock stamps equal fail a strict order: queued while the
+// run waits behind the held lane (gitproc.Waiting), admitted from just before
+// the lane is let go, running once the processes gauge counts the started
+// process.
 //
 // Mutation: take Began at the reap — it reads running; take it before the
 // lane's wait — it reads queued.
@@ -69,10 +66,9 @@ func TestAResultSaysWhenItsProcessBegan(t *testing.T) {
 	}
 }
 
-// A PROCESS THAT NEVER STARTED IS NOT OBSERVED. A run admitted to its slot
-// whose git cannot be started — its binary gone from under the pool — names
-// nothing about any repository, and an observer handed it would read a
-// Result with no Began as a report from before every write.
+// A PROCESS THAT NEVER STARTED IS NOT OBSERVED: a run whose git cannot start
+// names nothing about any repository, and an observer would read its Result,
+// with no Began, as a report from before every write.
 //
 // Mutation: report whatever Began says (the observer sees the run).
 func TestAProcessThatNeverStartedIsNotObserved(t *testing.T) {
@@ -107,32 +103,25 @@ func TestAProcessThatNeverStartedIsNotObserved(t *testing.T) {
 	}
 }
 
-// EVERY RUN IS OBSERVED, AND ONLY A RUN. The pool's one observer sees what
-// every run whose process started ran and how it ended — one that answered
-// over damage it reported (exit 0, the damage named), one that failed, one the
-// pool ended at its deadline, and one in a reservation's slot — and nothing of
-// a call refused before a process started: a directory the pool will not run
-// git in, or a lane with no slot. Each is observed with what its Cmd declared
-// of it — the files it loads, and the caller that repairs it. A second
-// observer is refused while one is installed, and accepted once the first is
+// EVERY RUN IS OBSERVED, AND ONLY A RUN: the pool's one observer sees every
+// run whose process started (answered over damage it named, failed, ended at
+// its deadline, in a reservation's slot) with its Cmd's Loads and Repairer,
+// and no call refused before a process started (a directory of another shape,
+// a lane with no slot). A second observer is refused until the first is
 // removed.
 //
-// Mutations: observe only failed runs — the answered run is missed; observe in
-// Pool.Run alone — the reservation's run is missed; report a call Run refuses
-// (its prepare's or its admission's error) — the shape's or the busy lane's
-// call is seen; leave Cmd.Repairer off the Ran — the batch run is observed
-// repaired by nobody; unobserve doing nothing — the second observer is
-// refused; end no run at its deadline — the batch reader, whose input ends
-// only in its drain, never answers.
+// Mutations: observe only failed runs, or in Pool.Run alone; report a call Run
+// refuses; leave Cmd.Repairer off the Ran; unobserve doing nothing; end no run
+// at its deadline (the batch reader, whose input ends only in its drain, never
+// answers).
 func TestEveryRunIsObserved(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
 	p := realPool(t, gitproc.Options{MaxProcesses: 1})
 	gitproc.SetTimings(p, 200*time.Millisecond, time.Second)
-	// The batch reader's input, below, ends only once the drain waits for it:
-	// after its deadline has ended the process, whatever the runner's load.
-	// Ended on a timer instead, a runner slow to start the process let the
-	// input end first, and the batch reader answered before its deadline.
+	// The batch reader's input ends only once the drain waits for it, after the
+	// deadline ended the process however loaded the runner; a timer could end
+	// the input first, and the reader answer before its deadline.
 	blocked := &blockedReader{release: make(chan struct{})}
 	gitproc.OnDrain(p, func(stream string) {
 		if stream == "stdin" {

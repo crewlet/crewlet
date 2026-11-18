@@ -15,73 +15,29 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// A BLAME is ONE `git blame --porcelain -L <from>,<to> <commit> -- <path>`
-// over the whole id of the commit the file is read at, its range given as
-// lines the server formats, and the PATH THE LAST ARGUMENT, after `--`: git
-// reads every argument after `--` as a path and never as an option, and blame
-// takes a PATH, not a pathspec, so no magic applies — `blame <id> --
-// --output=x` blames the file `--output=x`, or answers that there is none.
-// It is the one read whose path reaches git as an argument rather than on a
-// standard input, and that only because git blame reads none there: the one
-// other form, a file named for `--contents`, reads a file's TEXT, not its
-// history. The batch check before it (objects.go) found the path naming a
-// file at the commit, so a blame of a directory or of nothing is refused
-// naming the path before any blame runs.
+// A blame is ONE `git blame --porcelain -L <from>,<to> <commit> -- <path>`,
+// the path the one argument after `--`: blame takes a path, not a pathspec,
+// so `--output=x` is a file's name there (package doc, "Nothing a client wrote
+// reaches git's command line as an option"). The batch check before it
+// (objects.go) found the path naming a file, so a directory or nothing is
+// refused before any blame runs.
 //
-// THE AUTHORS ARE THE COMMITS' OWN. A blame in a bare repository reads the
-// `.mailmap` at HEAD — the default branch's, whatever commit is blamed — and
-// git blame has no --no-mailmap, so its process is given the one key that
-// names where it would read one, `mailmap.blob`, set to nothing: an answer is
-// a function of the commits it names, as a log's is (--no-mailmap there).
-// Read at HEAD, it would be a function of the moment too: a copy that holds a
-// push's adopted pack before a round writes its ref has a HEAD naming the
-// branch's earlier commit, or none, and reads that commit's mailmap or no
-// mailmap where the same blame a round later reads the new one — and the memo
-// keeps whichever page was cut first (measured on 2.56.0: "Mapped Name" over
-// the pool's own run without the key, the commit's author with it).
-//
-// # The porcelain
-//
-// Each line is a group header — `<id> <line in the commit> <line in the file>`,
-// and the group's length on its first line — then, the first time a commit is
-// named, its details (author, author-mail, author-time, committer,
-// committer-mail, summary, …, filename), and the line itself after a TAB; a
-// commit blamed under more than one path names its `filename` on every group.
-// So the parser keeps each commit's details for the run and the path it was
-// last named under, which is every later line's of that commit. A filename is
-// C-quoted as git quotes a path that needs it, and read back exactly
-// (unquoteC); a summary is the message's first LINE, git's own "(<id>)" for an
-// empty message answered as an empty subject. Every field git leaves unbounded
-// is held no further than the most an answer carries, and described past its
-// bound (gitlet.MaxBlameLineBytes, gitlet.MaxLogSubjectBytes,
-// gitlet.MaxLogPersonBytes).
-//
-// # Pages, and one run for the range
-//
-// A page ends before the line whose encoding — its text fenced, and the first
-// time the page names its commit that commit's details, subject fenced, with
-// the push that introduced it — would take the answer past its bound, every
-// string neutralised as a code tool sends it (page.go); its Next is that
-// line, `l:<n>`. git cannot blame a range in pieces any cheaper than whole —
-// its cost is the walk of the file's history for the lines named — so where
-// the memo takes them the run cuts EVERY page of the range from the one
-// asked, each memoized, and a range read page by page is blamed once; where
-// it does not, the run is ended once the asked page is cut. A line too wide
-// for an empty page — a path its origin had, longer than any read names — is
-// refused naming it, never cut.
-//
-// PAST THE FILE'S END a range is git's own refusal, read by its FORMAT (a
-// trace2 error event's, never its words, which name the path the request
-// gave) and answered gitlet.ErrInvalid naming how many lines the file has,
-// counted by streaming the file once. An empty file has none, and is answered
-// so with no blame run.
+// git cannot blame a range in pieces any cheaper than whole, so where the
+// memo takes them one run cuts EVERY page from the one asked to the range's
+// end (blameCut), and a range read page by page is blamed once; where it does
+// not, the run ends once the asked page is cut.
 
 // blamePastEnd is git blame's refusal of a range that begins past the file's
-// last line, by the format it prints it in: its singular and plural.
+// last line, matched by its trace2 FORMAT (singular and plural), never its
+// words, which name the client's path. It is answered gitlet.ErrInvalid
+// naming the file's line count (countLines).
 var blamePastEnd = []string{"file %s has only %lu line", "file %s has only %lu lines"}
 
-// noMailmap is the configuration a blame runs with beside the copy's serve
-// configuration: no `.mailmap` read from HEAD.
+// noMailmap keeps a blame's authors the commits' own, as a log's --no-mailmap
+// does: in a bare repository git blame reads the `.mailmap` at HEAD, the
+// default branch's whatever commit is blamed, and has no --no-mailmap. Read
+// there, an answer would depend on which commit a copy's HEAD named when the
+// page was cut, and the memo keeps whichever page was cut first.
 var noMailmap = gitproc.KV{Key: "mailmap.blob", Value: ""}
 
 // blameRead answers a blame read: the page asked and, where m takes them,
@@ -112,8 +68,8 @@ func (r *read) blameRead(ctx context.Context, objs found, at cursor, m *memoRun)
 		}
 	}
 	if objs.target.size == 0 {
-		// AN EMPTY FILE HAS NO LINES, which git blame refuses to name a
-		// range of: answered so, with no run.
+		// AN EMPTY FILE HAS NO LINES, and git blame refuses any range of
+		// it: answered with no run.
 		switch {
 		case at.letter != 0:
 			return gitlet.GitAnswer{}, errBadCursor(r.q.Cursor, r.q.Kind, "a line of the file")
@@ -222,7 +178,11 @@ func (c *lineCount) lines() int {
 }
 
 // blameCut is the pages one blame run cuts from its lines as they arrive: the
-// page asked, and — where the memo takes them — every page after it.
+// page asked, and — where the memo takes them — every page after it. A page
+// ends before the line whose encoding as a code tool sends it (page.go) —
+// its text fenced and, the first time the page names its commit, that
+// commit's details and pusher — would pass the answer's bound; its Next is
+// that line, `l:<n>`. A line too wide for an empty page is refused, never cut.
 type blameCut struct {
 	r    *read
 	m    *memoRun
@@ -471,8 +431,15 @@ const blameLineCap = 4*gitlet.MaxGitPathBytes + 64
 
 // blameStream is a blame's Stdout: its porcelain parsed line by line as it
 // streams by, each blamed line handed to take whole with its commit's details.
-// An error from take ends the run, as any Stdout's does; output that does not
-// parse ends it with errUnparsed.
+// Each line is a group header (`<id> <line in the commit> <line in the file>`,
+// and the group's length on its first line), then its commit's details the
+// first time the commit is named, then the line after a TAB. A commit blamed
+// under more than one path names its `filename` on every group, so each
+// commit keeps the path it was last named under. Every field git leaves
+// unbounded is held to the most an answer carries, described by size past it
+// (gitlet.MaxBlameLineBytes, gitlet.MaxLogSubjectBytes,
+// gitlet.MaxLogPersonBytes). An error from take ends the run; output that
+// does not parse ends it with errUnparsed.
 type blameStream struct {
 	take func(*blamedLine) error
 

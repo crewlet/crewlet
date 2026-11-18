@@ -19,17 +19,16 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// landedQ is a person's landed-in read of repo — whether commit is in target's
-// history at tip, resolved at at — asked of the node it is handed as its
-// walk's home or not: a home's read wants the repository's history (step 9),
-// which a case about what the index holds does not.
+// landedQ is a person's landed-in read of repo: whether commit is in target's
+// history at tip, resolved at at, asked as the walk's home or not. A home's
+// read wants the repository's history, which a case about what the index
+// holds must not trigger.
 func landedQ(repo, commit, target, tip string, at statelog.Position, home bool) gitlet.GitQuery {
 	return gitlet.GitQuery{Kind: gitlet.GitLandedIn, RepoID: repo, Asker: person, Home: home,
 		LandedIn: &gitlet.LandedInQuery{Commit: commit, Target: target, TargetOID: tip, At: at}}
 }
 
-// forceable is gitlettest.Settings with force-pushes to main allowed: what a
-// case that rewrites main declares.
+// forceable is gitlettest.Settings with force-pushes to main allowed.
 func forceable() gitlet.RepoSettings {
 	s := gitlettest.Settings()
 	s.Protections = []gitlet.Protection{{PushRule: gitlet.PushRule{Pattern: "refs/heads/main",
@@ -37,8 +36,8 @@ func forceable() gitlet.RepoSettings {
 	return s
 }
 
-// tip is ref's commit in gitlettest.RepoName, resolved at the log's head, and
-// the position of the push that moved it there (gitlet.ResolvedRef.Moved): what a
+// tip is ref's commit in gitlettest.RepoName at the log's head, and the
+// position of the push that moved it there (gitlet.ResolvedRef.Moved), as a
 // seat's tool hands a landed-in read.
 func (x *fixture) tip(ref string) (string, statelog.Position) {
 	x.t.Helper()
@@ -95,8 +94,7 @@ func (x *fixture) pushVia(i int, name string, refspecs ...string) {
 
 // indexed waits until the i-th Gitlet node's index of repo can be read at the
 // log's head: a run an earlier process wrote is read only once the backfill
-// has checked it, and a read meanwhile is answered without the index rather
-// than waiting on it.
+// checked it, and a read meanwhile is answered without the index.
 func (x *fixture) indexed(i int, repo string) {
 	x.t.Helper()
 	c := x.f.Nodes()[i].Cache()
@@ -119,12 +117,10 @@ func (x *fixture) indexed(i int, repo string) {
 }
 
 // A LANDED COMMIT NAMES THE PUSH THAT LANDED IT, and the push that introduced
-// it, which may be another branch's: a feature branch merged into main by a
-// person's push is landed by that push and introduced by the branch's; a
-// fast-forward lands and introduces a commit with one push; a commit a
-// force-push removed from main and a later push put back is landed by the push
-// that put it back, never the first; and a commit main does not hold is not
-// landed.
+// it, which may be another branch's: a merged feature branch's commit is landed
+// by the merge's push and introduced by the branch's; a fast-forward lands and
+// introduces with one push; a commit a force-push removed and a later push put
+// back is landed by the later push; a commit main does not hold is not landed.
 //
 // Mutation: answer Landed from IntroducedBy (a commit introduced anywhere is
 // landed) — the side branch's commit is landed in main.
@@ -175,16 +171,15 @@ func TestALandedCommitNamesThePushThatLandedIt(t *testing.T) {
 		t.Errorf("the merged branch's commit was introduced by %+v, want the branch's push %s", f.IntroducedBy,
 			want.PushID)
 	}
-	// main moved to ff twice: by the push that fast-forwarded it there, and
-	// by the force-push that took back off it — which did not land ff.
+	// main moved to ff twice: the fast-forward, and the force-push that took
+	// back off it, which did not land ff.
 	fwd := ask(ff)
 	landedBy("the fast-forward", fwd, main(ff)[0])
 	if fwd.IntroducedBy == nil || fwd.LandedBy == nil || fwd.IntroducedBy.PushID != fwd.LandedBy.PushID {
 		t.Errorf("the fast-forward was introduced by %+v and landed by %+v, want one push", fwd.IntroducedBy,
 			fwd.LandedBy)
 	}
-	// main moved to back twice too: first landed, then put back after the
-	// force-push removed it — the push that put it back landed it.
+	// main moved to back twice too; the push that put it back landed it.
 	puts := main(back)
 	landedBy("the commit put back", ask(back), puts[len(puts)-1])
 	if got := ask(side); got.Landed || got.LandedBy != nil {
@@ -193,14 +188,12 @@ func TestALandedCommitNamesThePushThatLandedIt(t *testing.T) {
 }
 
 // THE LANDING SEARCH IS BOUNDED, AND SAYS SO. Every forced move begins a
-// segment the search may have to look past — one more ancestry check each,
-// where the commit was already reachable before it — so past its bound of
-// checks it stops, names no push, and says how far it reached: the oldest
+// segment the search may have to look past, one ancestry check each, so past
+// its bound it stops, names no push, and says how far it reached: the oldest
 // push it knows kept the commit, and how many forced moves it did not search
-// past, rather than running on within the read's deadline. Here the bound is
-// scaled to three, over five force-pushes of main that each keep the commit:
-// the newest move is one check, and the two forced moves above the third
-// rewrite one each.
+// past. Here the bound is three over five force-pushes of main that each keep
+// the commit: the newest move is one check, the two forced moves above the
+// third rewrite one each.
 //
 // Mutation: search past the bound (ancestorBudgeted counting nothing) — the
 // landing push is named.
@@ -239,20 +232,16 @@ func TestTheLandingSearchIsBoundedAndSaysSo(t *testing.T) {
 }
 
 // A LANDING SEARCH THE READ'S BUDGET ENDS SAYS HOW FAR IT REACHED, as one its
-// bound of checks ends does: the search's checks share the read's one budget
-// of git with the check against the tip, and a check that runs out what the
-// budget had left leaves the search knowing the oldest move that kept the
-// commit, which is answered — never the read refused as too large, which
-// would throw that away and ask for a narrowing no landed-in read can make.
-// The check against the tip is not the search's: run out, nothing is known,
-// and the read is too large. Here main is rewritten by five force-pushes that
-// each keep the commit, and the fourth ancestry check — the search's third,
-// below the second rewrite from the top — runs the budget out.
+// bound ends does: its checks share the read's one budget of git with the
+// tip's, and one running it out leaves the search knowing the oldest move that
+// kept the commit; refusing the read as too large would throw that away and
+// ask for a narrowing no landed-in read can make. The check against the tip is
+// not the search's: run out, nothing is known, and the read is too large. Here
+// five force-pushes each keep the commit, and the fourth ancestry check (the
+// search's third, below the second rewrite from the top) runs the budget out.
 //
-// Mutations: answer every check the budget ends as the read too large
-// (landing.stopped with only its bound's case) — the search's is refused, red;
-// answer the tip's check the budget ends as a search's — the read is
-// answered, red.
+// Mutations: landing.stopped with only its bound's case refuses the search's
+// read, red; answering the tip's check as a search's answers the read, red.
 func TestALandingSearchTheBudgetEndsSaysHowFarItReached(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, forceable())
@@ -298,21 +287,17 @@ func TestALandingSearchTheBudgetEndsSaysHowFarItReached(t *testing.T) {
 }
 
 // A LANDING SEARCH ITS ANSWER FALLING DUE OR A BUSY READ LANE ENDS SAYS HOW
-// FAR IT REACHED, as one its bound or its budget ends does. Each check of the
-// search is a git process that queues for a read-lane slot of its own, a wait
-// the read's budget of git charges nothing, so on a busy node the read's
-// answer falls due, or the lane stays busy past gitproc.SlotWait, while the
-// search still has checks and budget left. Either leaves it knowing the
-// oldest move that kept the commit, which is answered — never the read
-// refused unready, which would throw that away and send the next Gitlet node to
-// run the same checks under the same kind of queue. The check against the
-// tip is not the search's: ended so, nothing is known, and the read is
-// unready at the share as any read's git is. main is rewritten as in the
-// budget's case, and the fourth ancestry check — the search's third — ends.
+// FAR IT REACHED, as one its bound or budget ends does: each check queues for
+// a read-lane slot the budget does not charge, so on a busy node the answer
+// falling due, or the lane busy past gitproc.SlotWait, can end a search with
+// checks and budget left. Refusing the read unready would throw away what it
+// knows and send the next node to run the same checks. The check against the
+// tip is not the search's: ended so, the read is unready at the share. main is
+// rewritten as in the budget's case; the fourth check ends.
 //
-// Mutations: landing.stopped without its due and busy cases — the search's
-// read is refused unready, red for both ends; answer every check the share's
-// ends stop as the busy lane's — the due end's detail names the lane, red.
+// Mutations: landing.stopped without its due and busy cases refuses the
+// search's read unready, red for both ends; answering every check the share
+// stops as the busy lane's names the lane in the due end's detail, red.
 func TestALandingSearchItsAnswerFallingDueOrABusyLaneEndsSaysHowFarItReached(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, forceable())
@@ -392,11 +377,10 @@ func TestALandingSearchItsAnswerFallingDueOrABusyLaneEndsSaysHowFarItReached(t *
 	}
 }
 
-// checkEnding is a query.Pool whose n-th ancestry check — the first a
-// landed-in read runs being its check against the tip — ends as ends says,
-// or, where ends is nil, runs out all the read's budget of git had left,
-// answered as gitproc answers a run killed at its deadline; every other
-// process runs on the pool beneath.
+// checkEnding is a query.Pool whose n-th ancestry check (the first being the
+// check against the tip) ends as ends says, or where ends is nil, runs out
+// the read's budget as gitproc answers a run killed at its deadline; every
+// other process runs on the pool beneath.
 type checkEnding struct {
 	query.Pool
 	n    int64
@@ -417,13 +401,12 @@ func (p *checkEnding) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, e
 
 // A LANDING THE INDEX DOES NOT HOLD IS NOT ATTRIBUTED. The landing is a move
 // the commit was not reachable before; where the commit already stood on the
-// branch before the oldest move the node's index holds of it, or before the
-// first move above the index's gap — moves never read — the answer names no
-// push and says which range the landing lies in, never the first move the
-// index happens to hold.
+// branch before the oldest indexed move, or before the first move above the
+// index's gap, the answer names no push and says which range the landing lies
+// in, never the first move the index happens to hold.
 //
-// Mutation: take the view's first move, or the first above the gap, as the
-// landing without asking its old value — the first indexed push is named.
+// Mutation: take the first move, or the first above the gap, as the landing
+// without asking its old value: the first indexed push is named.
 func TestALandingTheIndexDoesNotHoldIsNotAttributed(t *testing.T) {
 	t.Parallel()
 	t.Run("before the index begins", func(t *testing.T) {
@@ -431,9 +414,8 @@ func TestALandingTheIndexDoesNotHoldIsNotAttributed(t *testing.T) {
 		x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
 		early := x.commit(map[string]string{"a.txt": "a\n"}, "landed before the index")
 		x.commit(map[string]string{"b.txt": "b\n"}, "also before")
-		// A node that read nothing: its index begins at its first round,
-		// and nothing reads the history below it until a home's read wants
-		// it.
+		// A node that read nothing: its index begins at its first round, and
+		// nothing reads the history below until a home's read wants it.
 		g, dir := x.f.GitletNode(0), x.f.Nodes()[0].CacheDir()
 		g.Stop(t.Context())
 		if err := os.RemoveAll(dir); err != nil {
@@ -476,7 +458,7 @@ func TestALandingTheIndexDoesNotHoldIsNotAttributed(t *testing.T) {
 		repo := x.repo(gitlettest.RepoName)
 		x.synced(0, repo)
 		// Down while another node takes a push: its first round back reads
-		// the repository whole, past a range of pushes it never read.
+		// the repository whole, past pushes it never read.
 		g := x.f.GitletNode(0)
 		g.Stop(t.Context())
 		blocked.Store(true)
@@ -504,22 +486,19 @@ func TestALandingTheIndexDoesNotHoldIsNotAttributed(t *testing.T) {
 	})
 }
 
-// AN ANSWER NAMES THE PUSH THAT INTRODUCED ITS COMMITS: a listing of a commit's
-// tree, a diff of two and a comparison each carries the push that introduced
-// every commit it names, from the node's index, and what that index holds.
+// AN ANSWER NAMES THE PUSH THAT INTRODUCED ITS COMMITS: a tree listing, a diff
+// and a comparison each carry, from the node's index, the push that
+// introduced every commit it names, and the index's coverage.
 //
-// Mutation: decorate nothing (index returning at once) — the answers name no
-// push.
+// Mutation: decorate nothing (index returning at once): no push is named.
 func TestAnAnswerNamesThePushThatIntroducedItsCommits(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
 	base := x.commit(map[string]string{"a.txt": "a\n"}, "base")
 	head := x.commit(map[string]string{"a.txt": "b\n"}, "head")
 	repo := x.repo(gitlettest.RepoName)
-	// The copy level with the log: a push's own pack is in it from the
-	// moment the push is answered, but its row is folded into the index by
-	// the round that reads it — and a read decorates from the index as it
-	// stands, never waiting on it.
+	// The copy level with the log: a push's row reaches the index only in the
+	// round that reads it, and a read never waits on the index.
 	x.synced(0, repo)
 	s := x.server(0, query.Options{})
 	pushOf := map[string]string{
@@ -547,13 +526,11 @@ func TestAnAnswerNamesThePushThatIntroducedItsCommits(t *testing.T) {
 	}
 }
 
-// A HOME'S READ WANTS THE HISTORY: a read this node answered as its walk's
-// home marks the repository's history wanted, so the node reads it back — the
-// one node every walk asks first, once per fleet — and a read asked of it as
-// any other node does not.
+// A HOME'S READ WANTS THE HISTORY: a read answered as its walk's home marks
+// the repository's history wanted, so only the node every walk asks first
+// reads it back; a read asked of it as any other node does not.
 //
-// Mutation: want the history on every read — the read not asked as the home
-// wants it too.
+// Mutation: want the history on every read: the non-home read wants it too.
 func TestAHomesReadWantsTheHistory(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -573,8 +550,8 @@ func TestAHomesReadWantsTheHistory(t *testing.T) {
 	}
 }
 
-// wanting is the node's cache, recording every repository a read wanted the
-// history of.
+// wanting is the node's cache, recording every repository whose history a
+// read wanted.
 type wanting struct {
 	*cache.Cache
 	mu     sync.Mutex

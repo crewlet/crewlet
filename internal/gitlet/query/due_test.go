@@ -17,11 +17,10 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// cutPool is a query.Pool whose processes of one git command wait until the
-// context they run under ends — a read lane busy past it, or a run that
-// outlasts it — and end as gitproc ends a run its caller ended, that
-// context's cause wrapped, telling ended, where set, what ended it. Every
-// other process runs on the pool beneath.
+// cutPool is a query.Pool whose processes of command wait until their context
+// ends (a lane busy past it, or a run outlasting it), then end as gitproc ends
+// a run its caller ended, the cause wrapped and noted in ended, where set.
+// Every other process runs on the pool beneath.
 type cutPool struct {
 	query.Pool
 	command string
@@ -71,30 +70,18 @@ func (e *endings) fellDue() error {
 	return nil
 }
 
-// A READ WHOSE ANSWER FALLS DUE SAYS SO WHILE ITS ASKER LISTENS. A Gitlet node's
-// read runs under a context that ends a reply's margin before its asker's
-// deadline (gitlet.AnswerBy), and every wait it makes ends there: its copy's
-// sync, its unit of the node's share, a check of what it names and its own
-// git — each held here past that instant — answer ErrGitUnready naming the
-// wait, before the asker's deadline, so the asker hears a busy node rather
-// than taking it for a gone one. A run of its own git ended so is NEVER
-// answered too large: it had less than its budget, which a node with the time
-// would have given it. A caller that goes away is answered its own ending,
-// which nobody listens for.
+// A READ WHOSE ANSWER FALLS DUE SAYS SO WHILE ITS ASKER LISTENS. Its context
+// ends a reply's margin before the asker's deadline (gitlet.AnswerBy), and each
+// wait held past that (its copy's sync, its share unit, a check of what it
+// names, its own git) answers ErrGitUnready naming the wait: a busy node, not a
+// gone one. Its own git ended so is NEVER too large: it had less than its
+// budget. A caller that goes away gets its own ending. Each wait is seen ended,
+// with no clock read (endings; the share's unready count, which skips a take
+// its caller ended), by the due instant (TestAReadIsServedUntilItsAnswerIsDue
+// holds it exactly), never its own bound (the sync's minute, gitlet.GitShareWait).
 //
-// EACH HELD WAIT SAYS WHAT ENDED IT, with no clock read: the sync's and the
-// processes' contexts their cause (endings), and the share by its own count,
-// which counts a take whose wait ran out and never one its caller's context
-// ended. So every wait is seen ended by the answer's due instant — a margin
-// before the asker's deadline, which TestAReadIsServedUntilItsAnswerIsDue
-// holds exactly — and never by a bound of its own: the sync's minute, the
-// share's gitlet.GitShareWait.
-//
-// Mutations: answer a sync, a share or a run the answer's due instant ended
-// with the context's error — each its row red; answer a run of the read's own
-// git the instant ended as too large — its row red; wait out a sync or a take
-// on a context the due instant does not end — its row red, its wait ended by
-// its own bound.
+// Mutations, each its row red: answer the due instant's end with the context's
+// error, or own git's run as too large; a sync or take waited to its own bound.
 func TestAReadWhoseAnswerFallsDueSaysSoWhileItsAskerListens(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -105,8 +92,7 @@ func TestAReadWhoseAnswerFallsDueSaysSoWhileItsAskerListens(t *testing.T) {
 	node := x.f.Nodes()[0]
 
 	// A SHARE OF ONE UNIT, HELD: a take waits gitlet.GitShareWait, ten times
-	// what the asker's attempt leaves the read below — and is counted
-	// unready where that wait runs out.
+	// what the asker leaves the read below, and counts unready if it runs out.
 	takes, err := metrics.New()
 	if err != nil {
 		t.Fatal(err)
@@ -145,8 +131,7 @@ func TestAReadWhoseAnswerFallsDueSaysSoWhileItsAskerListens(t *testing.T) {
 		s := x.server(0, tc.o)
 		query.SetSyncWait(s, time.Minute)
 		// THE ASKER LEAVES THE READ A FIFTH OF A SECOND past the reply's
-		// margin: what it is held on outlasts that, every wait but the one
-		// a case holds being far shorter.
+		// margin: the held wait outlasts it, every other is far shorter.
 		deadline := time.Now().Add(gitlet.ReplyMargin + 200*time.Millisecond)
 		ctx, cancel := gitlet.AnswerBy(t.Context(), deadline)
 		_, err := s.Read(ctx, treeQ(tc.repo, gitlet.TreeQuery{Rev: head}))
@@ -181,10 +166,10 @@ func TestAReadWhoseAnswerFallsDueSaysSoWhileItsAskerListens(t *testing.T) {
 	}
 }
 
-// budgetPool is a query.Pool that records the deadline every process is
-// given, by its git command, and runs it on the pool beneath — reporting a
-// run of a command in took as having taken that long, and answering one of
-// ends as gitproc answers a run killed at its deadline.
+// budgetPool is a query.Pool recording each process's deadline by git
+// command and running it on the pool beneath, reporting a command in took as
+// taking that long and answering ends as gitproc answers a run killed at its
+// deadline.
 type budgetPool struct {
 	query.Pool
 	took map[string]time.Duration
@@ -220,32 +205,18 @@ func (p *budgetPool) deadlines(command string) []time.Duration {
 	return slices.Clone(p.given[command])
 }
 
-// A READ'S OWN GIT HAS ONE BUDGET ITS PROCESSES SHARE. A comparison runs three
-// processes — the merge base, the count of each side, the stat — and they
-// share the run time one listing is given (gitproc.ReadDeadline): each is
-// handed what the ones before it left, so a merge base that ran six seconds
-// leaves the count four. The checks that find what the read names come before
-// it, each to its own bound and charged nothing. A process handed the last of
-// it and ended there is the read too large to answer, naming the narrowing —
-// another node would take as long. And a run is handed what is left of the
-// budget whatever its asker's attempt leaves: the instant its answer falls due
-// ends it through its context, unready, and never through a deadline of its
-// own cut to that instant, which would answer it too large.
+// A READ'S OWN GIT HAS ONE BUDGET ITS PROCESSES SHARE (gitproc.ReadDeadline):
+// each is handed what the ones before left, so a comparison's merge base that
+// ran six seconds leaves its count four, and a patch's lookup, though it ends
+// its own run, charges the diff-pairs after it. Checks of what the read names
+// run first, to their own bounds, charged nothing. A process ended at the
+// budget's end is the read too large, naming the narrowing. The due instant
+// ends a run through its context (unready), never through a deadline cut to
+// it, which would answer it too large. Every read hides the memo (memoless),
+// which would answer a repeated page with no git.
 //
-// Every read here hides the copy's memo (memoless): a page the memo holds is
-// answered with no git at all, so the comparison asked a second time would be
-// the first one's page, whatever its count's process would have met — and
-// what this case holds is what each process of a read's own git is given.
-//
-// A patch's lookup of its file's record is its own git too, though it ends
-// that run itself once the record is read: its diff-pairs is given what the
-// lookup left.
-//
-// Mutations: give every process the whole budget — the count's deadline ten
-// seconds, red; charge the checks — the merge base's under ten, red; cut a
-// run's deadline to its asker's attempt — the listing's under ten, red;
-// charge nothing for a lookup that ended its own run — the patch's
-// diff-pairs ten seconds, red.
+// Mutations, each red: every process given the whole budget; the checks
+// charged; a deadline cut to the asker's attempt; a self-ended lookup free.
 func TestAReadsOwnGitHasOneBudgetItsProcessesShare(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -278,9 +249,8 @@ func TestAReadsOwnGitHasOneBudgetItsProcessesShare(t *testing.T) {
 		t.Errorf("the stat, after both walks, was given %v, want what the two left of the budget", got)
 	}
 
-	// A PATCH'S LOOKUP IS ITS OWN GIT, though it ends its run itself once it
-	// has read the file's record: the diff-pairs after it is given what it
-	// left.
+	// A PATCH'S LOOKUP IS ITS OWN GIT, though it ends its run itself: the
+	// diff-pairs after it is given what it left.
 	patched := &budgetPool{Pool: node.Pool(), took: map[string]time.Duration{"diff-tree": 4 * time.Second}}
 	s = x.server(0, query.Options{Git: patched, Cache: unkept})
 	if _, err := s.Read(t.Context(), diffQ(repo, gitlet.DiffQuery{Base: first, Head: second, File: "f"})); err != nil {
@@ -298,8 +268,7 @@ func TestAReadsOwnGitHasOneBudgetItsProcessesShare(t *testing.T) {
 	}
 
 	// FIVE SECONDS FROM ITS DUE INSTANT: half the budget, so a deadline cut
-	// to that instant shows, and far more than a warm listing takes, so the
-	// instant never ends this one.
+	// to it shows, and far more than a warm listing takes.
 	listing := &budgetPool{Pool: node.Pool()}
 	ctx, cancel := gitlet.AnswerBy(t.Context(), time.Now().Add(gitlet.ReplyMargin+5*time.Second))
 	defer cancel()

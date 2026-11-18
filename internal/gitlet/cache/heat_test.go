@@ -10,20 +10,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 )
 
-// HEAT DECAYS OUT OF ITS WINDOW, and out of nothing else. What a node served
-// of a repository counts in the hour's window for an hour and in the day's
-// for a day, each to within a twenty-fourth of its span, and then leaves it —
-// a bucket the ring comes round to again starts from nothing rather than
-// adding a day-old count to the hour's — and a repository nothing used within
-// the day is gone from the heat altogether: neither hot, nor named.
+// HEAT DECAYS OUT OF ITS WINDOW, and out of nothing else: a use counts in the
+// hour for an hour and in the day for a day, then leaves it; a bucket the ring
+// comes round to starts from nothing rather than adding a day-old count to the
+// hour's; and a repository nothing used within the day is neither hot nor
+// named. The uses land at the clock's first instant, so each leaves its window
+// at exactly the window's length.
 //
-// The uses here land at the first instant of the clock's first slot, so each
-// leaves its window at exactly the window's length, never a bucket sooner.
-//
-// Mutation: count every written bucket whatever slot it counts (ring.live),
-// and the hour still counts the first fetch past its hour; keep a bucket's
-// count when a later slot comes round to it (servedWindow.add), and the hour
-// counts it twice.
+// Mutation: count every written bucket whatever its slot (ring.live), and the
+// hour still counts the first fetch past its hour; keep a bucket's count when
+// a later slot comes round to it (servedWindow.add), and the hour counts it
+// twice.
 func TestHeatDecaysOutOfItsWindow(t *testing.T) {
 	t.Parallel()
 	clk := newClock()
@@ -76,23 +73,17 @@ func TestHeatDecaysOutOfItsWindow(t *testing.T) {
 	}
 }
 
-// A READING OLDER THAN A COUNT LOSES NOTHING: whatever slot a caller's
-// reading of the clock names, the heat is counted, judged and read at the
-// latest slot it has acted at. A caller whose reading was a second short of a
-// slot's turn when it read it, and who took the heat's lock only after
-// another counted a repository in the new slot — preempted between the two,
-// or barged — judges that repository at the new slot: neither its hot list,
-// nor its count of another repository (whose sweep it runs), drops the
-// repository with its counts, and its read answers them.
+// A READING OLDER THAN A COUNT LOSES NOTHING: whatever slot a caller's reading
+// names, the heat is counted, judged and read at the latest slot it has acted
+// at. A caller whose reading was a second short of a slot's turn, and which
+// took the lock only after another counted a repository in the new slot,
+// neither drops that repository (from its hot list, or the sweep its count of
+// another repository runs) nor reads it short. The case replays that order at
+// the turn of the day's sixth slot on a clock set back a second.
 //
-// The case replays that order on a clock set back a second, at the turn of
-// the day's sixth slot: the count at the turn, then each caller's reading a
-// second short of it, and the count read again at the turn.
-//
-// Mutation: read the clock outside the heat's lock and as it reads, keeping
-// no latest slot (heatNow), and the hot list and the count drop the
-// repository — the day judged idle at its fifth slot — and the read answers
-// nothing.
+// Mutation: read the clock outside the lock, keeping no latest slot (heatNow),
+// and the hot list and the count drop the repository (the day judged idle at
+// its fifth slot) and the read answers nothing.
 func TestAReadingOlderThanACountLosesNothing(t *testing.T) {
 	t.Parallel()
 	const repo = "0190f3c4-5b6a-7c8d-9e0f-0123456789ab"
@@ -141,12 +132,10 @@ func TestAReadingOlderThanACountLosesNothing(t *testing.T) {
 }
 
 // THE HOT LIST HOLDS EACH WINDOW'S HOTTEST, in one list read either way: the
-// n hottest of the hour and the n hottest of the day, a window's heat its git
-// operations — fetches and pushes — with its bytes out breaking a tie and the
-// id the next, those hottest in the hour first. A repository with nothing in a
-// window is never one of that window's hottest, so a list cut by either
-// window's order reads that window's n hottest exactly — and a repository
-// below the n-th of both is in neither, while its own heat is still answered.
+// n hottest of the hour and of the day by Hottest's rule (git operations, then
+// bytes out, then id), the hour's first. A repository with nothing in a window
+// is never that window's hottest, and one below the n-th of both is in neither
+// while its own heat is still answered.
 //
 // Mutation: rank by bytes out before git operations, and the hour's order puts
 // the heavy fetch first; take one window's hottest alone, and the day's
@@ -250,20 +239,17 @@ func TestAHeatCountNeverWrapsOrGoesBelowNothing(t *testing.T) {
 }
 
 // A STATUS COUNTS WHAT THE CACHE SPENT ON ITS OWN ACCOUNT, beside what it
-// holds: the bytes against the budget and the repositories it holds a copy
-// of, the copy in service of each — its incarnation, its position, its
-// packs, its readers — and, over the hour and the day, the copies its budget
-// evicted and the repairs it counted, the very ones crewlet.code.cache.rebuilds
-// counts. An evicted repository has no copy in service, and its eviction
-// leaves the hour an hour later and the day a day later — the hour's bucket
-// starting again from nothing for an eviction an hour on.
+// holds (bytes against the budget, warm repositories, each copy in service):
+// over the hour and the day, the budget's evictions and the repairs
+// crewlet.code.cache.rebuilds counts. An evicted repository has no copy in
+// service, and its eviction leaves the hour an hour later and the day a day
+// later, the hour's bucket starting from nothing for an eviction an hour on.
 //
-// Mutation: count no eviction in evict, or count a repair into the counter
-// alone (rebuilt), and the status's windows read nothing; keep a churn
-// bucket's count when a later slot comes round to it (churnWindow.add), and
-// the hour counts the first evictions with the later one; read the churn's
-// clock as it reads, keeping no latest slot (heatNow), and a status a second
-// short of the eviction an hour on misses it.
+// Mutation: count no eviction in evict, or a repair into the counter alone
+// (rebuilt), and the windows read nothing; keep a churn bucket's count when a
+// later slot comes round (churnWindow.add), and the hour counts the first
+// evictions with the later one; read the churn's clock keeping no latest slot
+// (heatNow), and a status a second short of the eviction an hour on misses it.
 func TestAStatusCountsWhatTheCacheSpentOnItsOwnAccount(t *testing.T) {
 	t.Parallel()
 	w := newSyncWorld(t, onMemory)
@@ -331,10 +317,8 @@ func TestAStatusCountsWhatTheCacheSpentOnItsOwnAccount(t *testing.T) {
 		t.Fatalf("an eviction an hour on reads hour %+v, day %+v; want it alone in the hour and beside the "+
 			"first ones in the day", st.Hour, st.Day)
 	}
-	// A READING OLDER THAN THE EVICTION reads it all the same: a status whose
-	// reading of the clock is a second short of the slot the eviction was
-	// counted in reads what the cache spent at that slot, the latest it has
-	// counted.
+	// A READING OLDER THAN THE EVICTION still reads it: the status acts at the
+	// latest slot the churn counted.
 	clk.Set(start.Add(cache.HeatHour - time.Second))
 	if st = c.Status(); st.Hour != (cache.Churn{Evictions: 1}) || st.Day != (cache.Churn{Evictions: 3, Rebuilds: 1}) {
 		t.Fatalf("a status a second short of the eviction an hour on reads hour %+v, day %+v; want the "+

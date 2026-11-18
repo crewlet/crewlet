@@ -23,19 +23,16 @@ func paths(a gitlet.GitAnswer) []string {
 	return out
 }
 
-// THE INTERDIFF KEEPS TO THE CHANGE'S PATHS. A change edits the file `a*`;
-// its target then edits `ab`, and the change, rebased onto it, edits `a*`
-// again. What the change changed between its two revisions is `a*` alone:
-// `ab` differs between the two heads only because the rebase brought the
-// target's edit in, and neither revision's facts list it — and `a*` is a
-// file's name, never a pattern that would take `ab` in with it. Where either
-// revision touches all, or the two share one base, the interdiff is the
-// heads' whole diff. One file's patch is kept to the same paths: `ab`'s is
-// none.
+// THE INTERDIFF KEEPS TO THE CHANGE'S PATHS. A change edits `a*`; its target
+// edits `ab`, and the change, rebased onto it, edits `a*` again. The interdiff
+// is `a*` alone: `ab` differs between the heads only through the rebase, and
+// `a*` is a file's name, never a glob taking `ab` in. Where either revision
+// touches all, or the two share one base, it is the heads' whole diff. One
+// file's patch keeps to the same paths: `ab`'s is none.
 //
-// Mutations: match the touched paths as globs — `ab` is kept, red; keep no
-// path out — `ab` is kept, red; filter where the bases match — the shared
-// base's read counts its files with diff-pairs, red.
+// Mutations: touched paths matched as globs, or no path kept out — `ab` kept,
+// red; a filter where the bases match — diff-pairs counts the shared base's
+// files, red.
 func TestTheInterdiffKeepsToTheChangesPaths(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())
@@ -108,18 +105,16 @@ func TestTheInterdiffKeepsToTheChangesPaths(t *testing.T) {
 	}
 }
 
-// AN INTERDIFF'S GIT IS THE CHANGE'S, NEVER THE TARGET'S. A change rebased
-// over a target that moved thirty files of its own — a busy monorepo's —
-// adds a file, deletes one, makes one executable, turns one into a link and
-// edits one: its interdiff walks neither head's tree (no diff-tree runs) but
-// looks each touched path up at both heads, two lines of one lookup a path
-// and none of the target's, and answers exactly the heads' whole diff kept to
-// the touched paths — each file's status, modes, ids and counts as git's own
-// walk gives them — and one file's patch exactly as the heads' diff of it.
+// AN INTERDIFF'S GIT IS THE CHANGE'S, NEVER THE TARGET'S. A change rebased over
+// a target that moved thirty files adds a file, deletes one, makes one
+// executable, turns one into a link and edits one: its interdiff runs no
+// diff-tree, feeds one lookup two lines a touched path and none of the
+// target's, and answers exactly the heads' whole diff kept to the touched
+// paths (status, modes, ids, counts) and one file's patch as the heads' own.
 //
-// Mutations: walk the heads for an exact filter — a diff-tree runs, red; read
-// a mode change as a change of type — m.sh's status is T, red; read a change
-// of type as a modification — t.txt's status is M, red.
+// Mutations: the heads walked for an exact filter — a diff-tree runs, red; a
+// mode change read as a change of type — m.sh is T, red; a change of type read
+// as a modification — t.txt is M, red.
 func TestAnInterdiffsGitIsTheChangesNeverTheTargets(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())

@@ -145,9 +145,9 @@ type panicking struct{}
 func (panicking) Hit(context.Context, gitletfault.Point, int64) error { panic("a bug in the session") }
 
 // O14: A PANIC ON A RELAY CONNECTION IS THAT PUSH'S REFUSAL, never the
-// process's end: the relay runs outside net/http's per-handler recovery, and
-// what it reads is bytes a pusher controls. The hook is told, the session
-// recorded failed, the stack logged — and the relay serves the next push.
+// process's end (package doc, "The hook relay cannot end the process"): the
+// hook is told, the session recorded failed, the stack logged, and the relay
+// serves the next push.
 func TestARelayPanicIsThatPushsRefusal(t *testing.T) {
 	var log lockedBuffer
 	s := relayHost(t, panicking{}, &log)

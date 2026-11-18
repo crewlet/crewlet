@@ -27,18 +27,14 @@ import (
 )
 
 // share is whose transfer an attempt's fetch is in the transfer lane: the
-// engine's own, a credential acting as nobody — gitproc's machine class, "a
-// mirror" among its examples — under one principal for every import and
-// mirror of the node, so they take one turn of the lane between them however
-// many run.
+// engine's own (gitproc's machine class), one principal for every import and
+// mirror of the node, so they take one turn of the lane however many run.
 var share = gitproc.Share{Class: gitproc.ShareMachine, Principal: "crewlet:mirror"}
 
-// cutConfig is the configuration the cut's pack-objects runs under: every
-// output a bundle in the stored format — index version 2 and its reverse index
-// beside it, which the bundle's seal holds it to (gitlet.CheckBundle) — and the
-// delta window held to twice the epoch's max_blob_bytes, the bound a
-// compaction's build is held to for the same reason (the window is the
-// build's memory).
+// cutConfig is the cut's pack-objects configuration: every output in the
+// stored bundle format (index version 2 and its reverse index, which
+// gitlet.CheckBundle requires), and the delta window, which is the build's
+// memory, held to twice max_blob_bytes, as a compaction's build is.
 func cutConfig(maxBlob int64) []gitproc.KV {
 	return []gitproc.KV{
 		{Key: "pack.indexVersion", Value: "2"},
@@ -47,12 +43,11 @@ func cutConfig(maxBlob int64) []gitproc.KV {
 	}
 }
 
-// fetchConfig is what the fetch runs under, beside the remote's own keys,
-// which the pool writes (gitproc.Cmd.Remote): every object it receives checked
-// as a push's receive-pack checks one (transfer.fsckObjects), and everything
-// it receives kept as the pack it arrived in (fetch.unpackLimit 1: below the
-// limit git would explode a small fetch into loose objects, which no
-// `--stdin-packs` cut names).
+// fetchConfig is the fetch's configuration beside the remote's keys
+// (gitproc.Cmd.Remote): every object checked as receive-pack checks a push's
+// (transfer.fsckObjects), and kept as the pack it arrived in
+// (fetch.unpackLimit 1: below the limit git explodes a small fetch into loose
+// objects, which no `--stdin-packs` cut names).
 var fetchConfig = []gitproc.KV{
 	{Key: "transfer.fsckObjects", Value: "true"},
 	{Key: "fetch.unpackLimit", Value: "1"},
@@ -66,13 +61,11 @@ func (e *errPermanent) Error() string { return e.why }
 
 // attempt is one import or sync of repoID: synced, fetched into a scratch, cut,
 // checked, stored and landed step by step, the scratch removed however it
-// ends. A nil error is an attempt that landed what it fetched, or found
-// nothing to land — a sync then landing a record of nothing, which moves the
-// mirror's last sync (gitlet.MirrorSync.Current), so the listing holds it back
-// an interval on every node, this one after a restart included, rather than
-// only where this worker remembers the attempt. A sync that reached its source
-// is counted
-// (crewlet.code.mirror.runs{dir=pull}) by what it came to.
+// ends. A nil error landed what it fetched or found nothing to land; a sync
+// then lands a record of nothing, which moves the mirror's last sync
+// (gitlet.MirrorSync.Current), so every node's listing holds it back an
+// interval, not only this worker's memory. A sync that reached its source is
+// counted (crewlet.code.mirror.runs{dir=pull}) by what it came to.
 func (m *Mirrors) attempt(ctx context.Context, repoID string, l listed, floor statelog.Position) (err error) {
 	what := map[kind]string{kindImport: "import", kindSync: "sync"}[l.kind]
 	var dialed bool
@@ -109,9 +102,9 @@ func (m *Mirrors) attempt(ctx context.Context, repoID string, l listed, floor st
 		return nil
 	}
 	if l.kind == kindImport && l.source.URL == "" {
-		// A row importing from no source — one no apply of this build writes,
-		// which the listing names with none (internal/gitlet's importsDue) — is
-		// ended rather than dialed: there is nothing to fetch, now or later.
+		// A row importing from no source (no apply of this build writes one;
+		// internal/gitlet's importsDue lists it) is ended, not dialed: there
+		// is nothing to fetch, now or later.
 		return m.end(ctx, repoID, l, s, nil, &errPermanent{why: "the repository's row names no source to " +
 			"import from"})
 	}
@@ -127,9 +120,8 @@ func (m *Mirrors) attempt(ctx context.Context, repoID string, l listed, floor st
 	}
 	defer sc.Remove()
 
-	// FETCH what the source holds that the copy's refs do not reach: at most
-	// what the repository may still take, for an import, and one push's worth
-	// for a sync.
+	// FETCH what the copy's refs do not reach: at most what the repository
+	// may still take for an import, one push's worth for a sync.
 	bring := limits.MaxPushBytes
 	if l.kind == kindImport {
 		bring = max(limits.RepoMaxBytes-s.Repo.LiveBytes, 0)
@@ -185,8 +177,8 @@ func (m *Mirrors) attempt(ctx context.Context, repoID string, l listed, floor st
 		applied, took, err := m.land(ctx, repoID, l, s, sc, outs, offered, l.seq+1)
 		var perm *errPermanent
 		if errors.As(err, &perm) {
-			// Ended at the chunks landed so far, this attempt's among them:
-			// the end's Seq is the repository's import_seq.
+			// Ended at the chunks landed so far: the end's Seq is the
+			// repository's import_seq.
 			return m.end(ctx, repoID, l, s, sc, perm)
 		}
 		if err != nil || !applied {
@@ -203,11 +195,10 @@ func (m *Mirrors) attempt(ctx context.Context, repoID string, l listed, floor st
 }
 
 // syncFresh is what an attempt syncs its copy at: the further of the turn's
-// floor — the record that nudged it — and the version its listing read the
-// row at (both listings carry it), the floor zero on a backstop's turn. NEVER
-// STALE: a stale sync answers the copy as this node holds it, and a pull
-// mirror's copy can be the one its import's last chunk left, still
-// importing, which the attempt would take for a repository owed nothing.
+// floor (the record that nudged it; zero on a backstop's turn) and the version
+// its listing read the row at. NEVER STALE: a pull mirror's copy as this node
+// holds it can be its import's last chunk, still importing, which the attempt
+// would take for a repository owed nothing.
 func syncFresh(floor, at statelog.Position) statelog.Freshness {
 	if before, err := at.Before(floor); err == nil && before {
 		at = floor
@@ -215,12 +206,11 @@ func syncFresh(floor, at statelog.Position) statelog.Freshness {
 	return statelog.FloorAt(statelog.ReadSession, at)
 }
 
-// looseIn reports whether a fetch left an object LOOSE in the repository at
-// dir — what only git's dumb HTTP protocol writes, since a smart fetch under
-// fetch.unpackLimit 1 keeps whatever it receives as the pack it arrived in.
-// Such a source is refused: its objects reach no `--stdin-packs` cut, so a
-// ref landed onto them would name objects no stored pack holds, and the
-// dumb walker writes them without transfer.fsckObjects' check.
+// looseIn reports whether a fetch left an object LOOSE at dir, which only
+// git's dumb HTTP protocol writes under fetchConfig. Such a source is refused:
+// its objects reach no `--stdin-packs` cut, so a ref landed onto them would
+// name objects no stored pack holds, and the dumb walker skips
+// transfer.fsckObjects' check.
 func looseIn(dir string) (bool, error) {
 	entries, err := os.ReadDir(filepath.Join(dir, "objects"))
 	if err != nil {
@@ -252,14 +242,12 @@ func fileSize(path string) int64 {
 }
 
 // steps is what an attempt has left to land, PACKS FIRST: every output in
-// records of at most gitlet.MaxImportPacks before any command, then the commands,
-// the first of them riding with the last outputs. HOW MANY COMMANDS A RECORD
-// TAKES IS ITS RECORD'S TO SAY, never a count's alone: each is offered every
-// command left, takes the most that fit it (gitlet.ImportProposal.Fitted, at
-// most gitlet.MaxImportRefs and within the bytes one record may carry), and
-// [steps.landed] moves past what it took — so refs whose names JSON spells
-// long (`&`, `<`, `>`, six bytes each) land in more records rather than in one
-// the committer refuses at every attempt.
+// records of at most gitlet.MaxImportPacks, then the commands, the first riding
+// with the last outputs. HOW MANY COMMANDS A RECORD TAKES IS THE RECORD'S TO
+// SAY, never a count's: each is offered every command left and takes the most
+// that fit its bytes and gitlet.MaxImportRefs (gitlet.ImportProposal.Fitted),
+// so refs whose names JSON spells long (`&`, `<`, `>`, six bytes each) land in
+// more records rather than in one the committer refuses at every attempt.
 type steps struct {
 	outs []string
 	cmds []gitlet.Command
@@ -282,12 +270,11 @@ func (s *steps) next() ([]string, []gitlet.Command) {
 // the commands offered to it.
 func (s *steps) landed(outs, cmds int) { s.outs, s.cmds = s.outs[outs:], s.cmds[cmds:] }
 
-// commands is every ref the source moved against the copy: each of the
-// scratch's refs — what the fetch wrote, the source's branches and tags —
-// that the copy holds at another value or not at all, and each of the copy's
-// branches and tags the source no longer has, deleted. A ref in the seats'
-// namespace is none of a source's to set, and one Gitlet's grammar
-// refuses no record carries: both are left out. In the order of their names.
+// commands is every ref the source moved against the copy, by name: each of
+// the scratch's refs (what the fetch wrote) the copy holds at another value or
+// not at all, and each of the copy's the source no longer has, deleted. Refs
+// in the seats' namespace (none of a source's to set) and names Gitlet's
+// grammar refuses are left out ([Mirrors.refs]).
 func (m *Mirrors) commands(ctx context.Context, s cache.Synced, sc *cache.Scratch) ([]gitlet.Command, error) {
 	want, err := m.refs(ctx, sc.Dir, sc.Alternate)
 	if err != nil {
@@ -329,14 +316,11 @@ func cmp(old string, ok bool) string {
 }
 
 // refs is every branch and tag of the repository at dir and the object each
-// names, less the seats' namespace — left out by for-each-ref itself
-// (`--exclude`), so a repository's every seat branch is never listed only to
-// be dropped — and any name Gitlet's grammar refuses. STREAMED
-// (gitproc.Lines), never captured: a repository may hold gitlet.MaxRefsPerRepo
-// refs, some 6 MB of listing, where a capture holds gitproc.CaptureMax (1 MiB,
-// some 17 000 refs) and refuses the rest — which failed every attempt of a
-// mirror of a repository past it, an import's and a sync's as much as a
-// push's.
+// names, less any name Gitlet's grammar refuses and the seats' namespace,
+// which `--exclude` keeps from being listed at all. STREAMED (gitproc.Lines),
+// never captured: gitlet.MaxRefsPerRepo refs list to some 6 MB, past
+// gitproc.CaptureMax (1 MiB), which would fail every attempt on such a
+// repository.
 func (m *Mirrors) refs(ctx context.Context, dir, alternate string) (map[string]string, error) {
 	out := map[string]string{}
 	lines := gitproc.NewLines(func(line []byte) error {
@@ -363,9 +347,9 @@ func (m *Mirrors) refs(ctx context.Context, dir, alternate string) (map[string]s
 	return out, nil
 }
 
-// forced reports whether moving a ref from old to new leaves old behind: old is
-// not an ancestor of new — a commit's history rewritten, or a tag moved —
-// read in the scratch, which holds both through its alternate.
+// forced reports whether moving a ref from old to new leaves old behind (old
+// is not an ancestor of new), read in the scratch, which holds both through
+// its alternate.
 func (m *Mirrors) forced(ctx context.Context, sc *cache.Scratch, old, new string) (bool, error) {
 	res, err := m.o.Git.Run(ctx, gitproc.Cmd{
 		Dir: sc.Dir, Alternate: sc.Alternate, Class: gitproc.ClassRead, Answers: []int{1},
@@ -373,7 +357,7 @@ func (m *Mirrors) forced(ctx context.Context, sc *cache.Scratch, old, new string
 	})
 	switch {
 	case err != nil:
-		// An old value that is no commit — a tag of a tree, a blob — has no
+		// An old value that is no commit (a tag of a tree, a blob) has no
 		// history to be an ancestor in: moving it leaves it.
 		var d *gitproc.Damage
 		if errors.As(err, &d) {
@@ -387,16 +371,14 @@ func (m *Mirrors) forced(ctx context.Context, sc *cache.Scratch, old, new string
 }
 
 // cut writes what the fetch brought into the packs the repository stores: ONE
-// `pack-objects --stdin-packs` in the scratch over every pack the fetch wrote,
-// every live pack of the copy excluded, cut at gitlet.CompactPackBytes; and
-// answers the checksums of its outputs, in the order it wrote them. None where
-// the fetch brought nothing the copy lacks — `--non-empty`, since without it
-// git writes and names a pack of no objects, which no record may carry
-// (gitlet.PackRef.Check), so the attempt would fail on it every time: the
-// restart after a chunk of packs alone, whose fetch brings again only what
-// those packs hold, would never land its refs. It runs in a slot of the
-// node's maintenance lane the attempt WAITS FOR ([Mirrors.maintenanceSlot]),
-// the fetch kept meanwhile.
+// `pack-objects --stdin-packs` over every pack the fetch wrote, every live pack
+// of the copy excluded, cut at gitlet.CompactPackBytes; it answers its outputs'
+// checksums in the order written, none where nothing is new. `--non-empty`:
+// without it git writes a pack of no objects, which no record may carry
+// (gitlet.PackRef.Check), so the restart after a chunk of packs alone, whose
+// fetch brings only what those packs hold, would never land its refs. It runs
+// in a maintenance slot the attempt WAITS FOR ([Mirrors.maintenanceSlot]), the
+// fetch kept meanwhile.
 func (m *Mirrors) cut(ctx context.Context, s cache.Synced, sc *cache.Scratch, fetched []cache.ScratchPack,
 	fetchedBytes int64, limits gitlet.Limits) ([]string, error) {
 
@@ -407,10 +389,9 @@ func (m *Mirrors) cut(ctx context.Context, s cache.Synced, sc *cache.Scratch, fe
 	for _, p := range fetched {
 		list.WriteString("pack-" + p.Checksum + ".pack\n")
 	}
-	// THE PACKS THE REPOSITORY HOLDS, which the cut leaves out: read from a
-	// copy a swap has since replaced, they would read as none, and the cut
-	// would pack again every object the repository already holds — so that
-	// read is refused (cache.ErrSuperseded), and the attempt ends with it, the
+	// THE PACKS THE REPOSITORY HOLDS, which the cut leaves out. A copy a swap
+	// has replaced would read as none and the cut would repack everything, so
+	// that read is refused (cache.ErrSuperseded) and the attempt ends, the
 	// next one syncing past the swap.
 	held, err := m.o.Cache.Packs(s)
 	if err != nil {
@@ -447,30 +428,22 @@ func (m *Mirrors) cut(ctx context.Context, s cache.Synced, sc *cache.Scratch, fe
 	return outs, lines.Err()
 }
 
-// The cut's wait for a maintenance slot polls the lane, which never queues a
-// caller (gitproc's Reserved: it refuses at once when full): first after
-// slotPollFirst, a QUARTER OF A SECOND, doubling to slotPollMax, FIVE
-// SECONDS. A poll is one lock of the lane and nothing more, so its cost is
-// nothing; what the cap bounds is how long a freed slot can sit before the
-// cut asks for it — five seconds at most, against a maintenance process's
-// seconds to minutes and against the home's passes, which ask the same lane
-// for compactions and merges once a minute.
+// The cut polls for a maintenance slot, since the lane never queues a caller
+// (gitproc's Reserved refuses at once when full): a quarter of a second first,
+// doubling to five seconds. A poll is one lock, so it costs nothing; the cap
+// bounds how long a freed slot sits unasked, small against a maintenance
+// process's seconds to minutes and the home's once-a-minute passes.
 const (
 	slotPollFirst = 250 * time.Millisecond
 	slotPollMax   = 5 * time.Second
 )
 
-// maintenanceSlot is a slot of the node's maintenance lane for repoID's cut,
-// WAITED FOR under ctx alone: the lane refuses a process at once when every
-// slot is held — by a compaction's or a publication's build, a home's merge,
-// a commit-graph write — and the cut comes after the attempt's fetch, up to
-// the repository's whole repo_max_bytes for an import. Refused there, the
-// attempt would end, its scratch removed with everything the fetch wrote, and
-// the next attempt download it all again for as long as the lane stayed
-// busy — gitproc's Reserved names the hazard, work done for a process the
-// lane then refuses. NO DEADLINE OF ITS OWN: giving up is that same refetch,
-// and every process holding the lane ends by its own deadline; Stop ends the
-// wait with the attempt.
+// maintenanceSlot is a maintenance-lane slot for repoID's cut, WAITED FOR under
+// ctx alone. The cut follows a fetch of up to repo_max_bytes; refused, the
+// attempt would remove it with its scratch and the next would download it all
+// again for as long as the lane stayed busy (the hazard gitproc's Reserved
+// names). NO DEADLINE OF ITS OWN: giving up is that same refetch, every
+// process holding the lane ends by its own deadline, and Stop ends the wait.
 func (m *Mirrors) maintenanceSlot(ctx context.Context, repoID string) (*gitproc.Reserved, error) {
 	wait := slotPollFirst
 	for logged := false; ; {
@@ -497,8 +470,8 @@ func (m *Mirrors) maintenanceSlot(ctx context.Context, repoID string) (*gitproc.
 	}
 }
 
-// largestBlob is why an output may not be stored — its first blob past limit,
-// in one sentence — or "": ONE `cat-file --batch-check` over each output's ids,
+// largestBlob is why an output may not be stored (its first blob past limit,
+// in one sentence) or "": ONE `cat-file --batch-check` per output over its ids,
 // streamed from its index, ending at the first offender.
 func (m *Mirrors) largestBlob(ctx context.Context, sc *cache.Scratch, outs []string, fetchedBytes int64,
 	limit int64) (string, error) {
@@ -546,13 +519,11 @@ func (m *Mirrors) largestBlob(ctx context.Context, sc *cache.Scratch, outs []str
 // errFound ends a scan at its answer: not a failure.
 var errFound = errors.New("mirror: found")
 
-// permanent reports whether a chunk refused r is refused for good: a limit
-// the source's content is past — repo_size, repo_refs, a ref the repository
-// cannot hold beside another (ref_conflict), a pack past the stored bound —
-// which every attempt would meet again, since each fetches the same source.
-// The import ends on it (internal/gitlet's decide_remote.go: "a limit's refusal
-// is the home's to end the import on"). Every other refusal — stale, busy,
-// expired, unavailable — says nothing of the source and is tried again.
+// permanent reports whether a chunk refused r is refused for good: a limit the
+// source's content is past, which every attempt fetching it would meet again.
+// The import ends on it (internal/gitlet's decide_remote.go decides so). Every
+// other refusal (stale, busy, expired, unavailable) says nothing of the source
+// and is tried again.
 func permanent(r gitlet.Refusal) bool {
 	switch r {
 	case gitlet.RefusalRepoSize, gitlet.RefusalRepoRefs, gitlet.RefusalRefConflict, gitlet.RefusalPackTooLarge:
@@ -561,9 +532,8 @@ func permanent(r gitlet.Refusal) bool {
 	return false
 }
 
-// afterBuild, afterUpload and afterPropose are an attempt's fault points, an
-// import's or a sync's, each spelled where it is hit — the form the gitletfault
-// package's hit-site gate reads.
+// afterBuild, afterUpload and afterPropose are an attempt's fault points, each
+// spelled where it is hit, the form gitletfault's hit-site gate reads.
 func (m *Mirrors) afterBuild(ctx context.Context, k kind) error {
 	if k == kindImport {
 		return m.fault(ctx, gitletfault.ImportAfterBuild)
@@ -585,18 +555,15 @@ func (m *Mirrors) afterPropose(ctx context.Context, k kind) error {
 	return m.fault(ctx, gitletfault.MirrorAfterPropose)
 }
 
-// land lands one record: outs, each laid out under the id the record derives,
-// and the most of offered, from the first, that the record carries beside
-// them — cut and checked as the committer will check it
-// (gitlet.ImportProposal.Fitted, gitlet.MirrorSyncProposal.Fitted) BEFORE ANY
-// UPLOAD, so a step no committer would take costs no PUT to the object store —
-// then the outputs stored, all at once, and the record proposed: an import's
-// chunk at seq, or a sync at the copy's drop epoch. landed is that it applied
-// — and its outputs then adopted into this node's copy — and took how many of
-// offered it carried; false with a nil error is a repository deleted
-// meanwhile, owed nothing more. A chunk refused a limit ([permanent]) is an
-// *errPermanent; any other refusal, and a record not seen applied, is the
-// attempt's error, after which the next attempt reads the rows again.
+// land lands one record: outs and the most of offered, from the first, it
+// carries, fitted as the committer will check it (gitlet.ImportProposal.Fitted,
+// gitlet.MirrorSyncProposal.Fitted) BEFORE ANY UPLOAD, so a step no committer
+// would take costs no PUT; then the outputs stored at once and the record
+// proposed (an import's chunk at seq, or a sync at the copy's drop epoch).
+// landed is that it applied, its outputs then adopted into this node's copy;
+// took is how many of offered it carried. False with a nil error is a
+// repository deleted meanwhile. A chunk refused a limit ([permanent]) is an
+// *errPermanent; any other refusal, or a record not seen applied, is an error.
 func (m *Mirrors) land(ctx context.Context, repoID string, l listed, s cache.Synced, sc *cache.Scratch,
 	outs []string, offered []gitlet.Command, seq int64) (landed bool, took int, err error) {
 
@@ -633,9 +600,8 @@ func (m *Mirrors) land(ctx context.Context, repoID string, l listed, s cache.Syn
 		sync, took = &p.Sync, len(p.Sync.Commands)
 	}
 	// Every output uploads AT ONCE, as a compaction's do (internal/gitlet/compact's
-	// uploadAll gives the arithmetic): one after another, a step of
-	// gitlet.MaxImportPacks outputs would take that many paced uploads end to
-	// end. The first failure cancels the rest, whose objects no row will name.
+	// uploadAll gives the arithmetic). The first failure cancels the rest,
+	// whose objects no row will name.
 	g, gctx := errgroup.WithContext(ctx)
 	for n := range outs {
 		g.Go(func() (err error) {
@@ -685,9 +651,8 @@ func (m *Mirrors) land(ctx context.Context, repoID string, l listed, s cache.Syn
 	case res.Refusal != "":
 		return false, 0, fmt.Errorf("mirror: a step of %s refused %s: %s", repoID, res.Refusal, res.Detail)
 	case res.Outcome != statelog.OutcomeApplied:
-		// Appended, and not seen applied within the wait: a failure, so the
-		// next attempt reads the rows at RetryAfter's first minute rather
-		// than a sync's interval later.
+		// Not seen applied within the wait: a failure, so the next attempt
+		// comes at RetryAfter's first minute, not a sync's interval later.
 		return false, 0, fmt.Errorf("mirror: a step of %s is %s, not seen applied", repoID, res.Outcome)
 	}
 	if len(refs) > 0 {
@@ -699,11 +664,10 @@ func (m *Mirrors) land(ctx context.Context, repoID string, l listed, s cache.Syn
 	return true, took, nil
 }
 
-// end ends an import at l.seq — with why as its import_error where why is set
-// — naming the source's HEAD branch where the branch the repository declares
-// did not arrive in sc, the attempt's scratch (nil for an attempt that made
-// none, which names no branch). A sync ends nothing: why is its attempt's
-// error.
+// end ends an import at l.seq, with why (if set) as its import_error, naming
+// the source's HEAD branch where the declared default branch did not arrive in
+// sc (nil for an attempt that made no scratch, which names none). A sync ends
+// nothing: why is its error.
 func (m *Mirrors) end(ctx context.Context, repoID string, l listed, s cache.Synced, sc *cache.Scratch,
 	why *errPermanent) error {
 
@@ -742,16 +706,13 @@ func (m *Mirrors) end(ctx context.Context, repoID string, l listed, s cache.Sync
 	return nil
 }
 
-// announceImported publishes the account of an import whose end — done —
-// applied at the code log's position at (code_imported): its source, its
-// chunks and its error, and what the repository holds once it ended — its
-// refs, its live bytes and its default branch — read from this node's copy
-// synced at or past the end's record, never tallied from this attempt's
-// landings, which of an import resumed after a restart, or on another home,
-// are only its last part. Published ONCE an import: the end is the import's last
-// record, so no later attempt reaches it. A copy that cannot be synced there
-// — the repository deleted meanwhile, this node stopping — publishes nothing,
-// logged: the end stands, and the repository's row names how it ended.
+// announceImported publishes code_imported for an import whose end, done,
+// applied at at: its source, chunks and error, and the repository's refs, live
+// bytes and default branch read from this node's copy synced at the end, never
+// tallied from this attempt's landings, which of a resumed import are only its
+// last part. Published ONCE: the end is the import's last record. A copy that
+// cannot be synced there publishes nothing, logged; the row still names how
+// the import ended.
 func (m *Mirrors) announceImported(ctx context.Context, repoID string, src gitlet.ImportSource, done gitlet.ImportDone,
 	at statelog.Position) {
 

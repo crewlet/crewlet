@@ -12,28 +12,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// F54: A RENAMED REPOSITORY'S OLD NAME REDIRECTS UNTIL THE RETENTION PASS
-// RELEASES IT, through the topology: a person makes a project repository with
-// a tool's create and pushes to it, then renames it, both asked through the
-// fleet's routing (code.lifecycle) as a person's tool asks them. For
-// gitlet.RedirectWindow the old name answers for the repository — a person's
-// clone of the old URL checks it out, one presenting its credential up front
-// follows the redirect to the new name, and a push there is
-// refused at the old name, naming the new one and pushing nothing — and a
-// retention pass while the window lasts releases nothing. Once the fleet's
-// clock is past the window — the deciding node's and the broker's together,
-// as a month passing moves them — the pass releases the old name, which then
-// names nothing: the rows resolve no repository by it and a clone of it
-// fails, while the new name serves the repository as before.
+// F54: a renamed repository's old name redirects until the retention pass
+// releases it. A person creates a project repository with a tool (a
+// config-managed one takes no tool's rename), pushes, and renames it through
+// the fleet's routing (code.lifecycle). For gitlet.RedirectWindow the old name
+// serves a clone, redirects one presenting its credential up front, refuses a
+// push (naming the new name, pushing nothing), and survives a retention pass.
+// Past the window (the node's and the broker's clocks moved together) the
+// pass releases it: it names nothing, and the new name serves as before.
 //
-// A config-managed repository takes no tool's rename (code.repos names it),
-// so the repository the case renames is one a person's tool made.
-//
-// Mutations: free no old name in the release's apply — the old name still
-// redirects after the pass, red; publish no release record from the store —
-// the pass releases none, red; admit a push at the old name — it lands, red;
-// serve a fetch's advertisement at the old name in place of its 302 — the
-// up-front clone is not rebased onto the new name, red.
+// Red when the release's apply frees no old name, the store publishes no
+// release record, a push lands at the old name, or the old name serves a
+// fetch's advertisement in place of its 302.
 func aRenamedRepositoryRedirectsAndIsReleased(t *testing.T, newFleet NewFleet) {
 	clock := &Clock{}
 	c := newCase(t, newFleet, Shape{Clock: clock}, Settings())
@@ -66,9 +56,7 @@ func aRenamedRepositoryRedirectsAndIsReleased(t *testing.T, newFleet NewFleet) {
 		t.Fatalf("the rename answered %+v, want %s under %s", renamed.Repo, id, to)
 	}
 
-	// THE OLD NAME, WHILE IT REDIRECTS: the rows answer the repository under
-	// its new name by it, a clone of it checks the repository out, and a push
-	// to it is told the new name and pushes nothing.
+	// While the old name redirects.
 	old, err := c.Fleet.Rows(c.Ctx, from, Linearizable)
 	if err != nil || old.Repo.ID != id || old.Repo.Name != to {
 		t.Fatalf("the old name resolves to %+v (%v), want %s under %s", old.Repo, err, id, to)
@@ -76,12 +64,10 @@ func aRenamedRepositoryRedirectsAndIsReleased(t *testing.T, newFleet NewFleet) {
 	if got := p.Head(p.Clone(url(from))); got != head {
 		t.Fatalf("the person's clone of the old name checked out %s, want %s", got, head)
 	}
-	// FOLLOWING THE REDIRECT, which the clone above cannot show: a person's
-	// git meets the 302 only on the retry its credential helper answered,
-	// which git follows without rebasing, so that clone works whether the old
-	// name redirects or serves the repository in place. A clone presenting
-	// its credential up front (http.extraHeader, a CI checkout's shape) meets
-	// the 302 on its first request, rebases onto the new name and says so.
+	// The clone above passes whether the old name redirects or serves in
+	// place: git meets the 302 only on the credential helper's retry, which it
+	// follows without rebasing. A clone presenting its credential up front
+	// (http.extraHeader, a CI checkout's shape) meets it first and rebases.
 	basic := base64.StdEncoding.EncodeToString([]byte("crewlet:" + p.Token()))
 	upFront := filepath.Join(t.TempDir(), "up-front")
 	if _, stderr, err := p.Git().Try(t, "", nil, "-c", "http.extraHeader=Authorization: Basic "+basic,
@@ -106,7 +92,7 @@ func aRenamedRepositoryRedirectsAndIsReleased(t *testing.T, newFleet NewFleet) {
 		t.Fatalf("after a push to the old name, main is %s, want %s unmoved", got, head)
 	}
 
-	// A PASS WHILE THE REDIRECT LASTS releases nothing.
+	// A pass inside the window releases nothing.
 	if report := c.Fleet.Retain(t, clock.Now()); report.Released != 0 {
 		t.Fatalf("a retention pass inside the redirect window released %d names", report.Released)
 	}
@@ -115,8 +101,8 @@ func aRenamedRepositoryRedirectsAndIsReleased(t *testing.T, newFleet NewFleet) {
 			kept.Repo, err, id, to)
 	}
 
-	// A MONTH ON: every record applied before it read as it was, the pass
-	// releases the old name.
+	// A month on, with every record applied before it read at the old time,
+	// the pass releases the old name.
 	if err := c.Fleet.Level(c.Ctx, c.Fleet.DataNodes()[0]); err != nil {
 		t.Fatalf("level the data node before the clock moves: %v", err)
 	}

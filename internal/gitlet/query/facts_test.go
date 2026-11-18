@@ -49,12 +49,10 @@ func numbered(n int, changed map[int]string, top int) string {
 	return b.String()
 }
 
-// THE PATCH-ID SEES WHITESPACE. Two changes to one line that differ only in
-// how the line is indented — four spaces and a tab, which is Python's
-// difference between two programs — are two changes: their facts' ids
-// differ, though `--stable` reads the two as one, which is what makes the
-// case able to fail. And a fact's id is git's own `patch-id --verbatim` of the
-// cumulative diff from the base, which the person's git computes alike.
+// THE PATCH-ID SEES WHITESPACE. Two changes to one line indented apart (four
+// spaces and a tab, two different Python programs) have different ids, though
+// `--stable` reads them as one, and each id is the person's own git's
+// `patch-id --verbatim` of the cumulative diff from the base.
 //
 // Mutation: take the id with --stable — the two ids are equal, red.
 func TestThePatchIDSeesWhitespace(t *testing.T) {
@@ -93,13 +91,11 @@ func TestThePatchIDSeesWhitespace(t *testing.T) {
 }
 
 // A PURE REBASE KEEPS ITS PATCH-ID. A change rebased onto a target that moved
-// three lines in above it and changed another file is the same change: its
-// facts name the new base, and the same id, since an id leaves out the line
-// numbers a hunk is at. So is the change NOT rebased, against that target: it
-// is measured from where its history meets the target's, never from the
-// target's tip. A rebase onto a target that changed a line beside the
-// change's own — inside the lines its hunk shows — is a change a reviewer has
-// not seen, and its id is another.
+// three lines in above it and changed another file names the new base and the
+// same id, since an id leaves out line numbers. So does the change not
+// rebased, measured from the merge base, never the target's tip. A rebase onto
+// a target that changed a line inside the change's hunk is a change no
+// reviewer has seen, with another id.
 //
 // Mutation: take the paths and the id of the diff from the target's tip
 // rather than from the merge base — the change not rebased then touches the
@@ -151,13 +147,11 @@ func TestAPureRebaseKeepsItsPatchID(t *testing.T) {
 	}
 }
 
-// TOUCHED PATHS PAST THE BOUND TOUCH EVERYTHING. A revision's list of the files
-// it touches is whole or not given: at its bounds it is every path, in git's
-// order; a path past the bound on its paths, or a byte past the bound on its
-// JSON, and the facts say the revision touches all, with no list — never a
-// list cut at the bound, which would leave the files past it out of all that
-// matches against it — and its id is taken all the same. A path JSON cannot
-// carry exactly, bytes that are no UTF-8, touches all too.
+// TOUCHED PATHS PAST THE BOUND TOUCH EVERYTHING. At its bounds the list is
+// every path, in git's order; a path past the bound on paths, or a byte past
+// the bound on its JSON, and the facts touch all with no list, never a list
+// cut at the bound, and the id is taken all the same. A path that is no UTF-8
+// touches all too.
 //
 // Mutation: keep the list past the bound on its paths (drop the count's
 // check) — the second row red.
@@ -196,8 +190,8 @@ func TestTouchedPathsPastTheBoundTouchEverything(t *testing.T) {
 			t.Errorf("%s: the facts carry no id (%q, omitted %q): a list's bound is no patch's", tc.name, f.PatchID,
 				f.PatchIDOmission)
 		case f.Classes.Complete == tc.all:
-			// A LIST CLASSES EVERY PATH IT NAMES — none here is Go — and one
-			// that touches all names none, so its classes are never whole.
+			// A list classes every path it names (none here is Go); one that
+			// touches all names none, so its classes are never whole.
 			t.Errorf("%s: the classes are complete = %t, want %t", tc.name, f.Classes.Complete, !tc.all)
 		case f.BaseTree == "" || f.HeadTree == "":
 			t.Errorf("%s: the facts name trees %q and %q, want both, whatever the list", tc.name, f.BaseTree,
@@ -228,15 +222,11 @@ func (p endsAt) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, error) 
 }
 
 // A PATCH-ID PAST ITS BOUND IS OMITTED, AND ONE OUT OF TIME IS SAID APART. A
-// change whose diff is a byte past the bound on a diff the facts identify has
-// its id omitted past its bound — an id that equals nothing, so no approval
-// carries across it, and final, since every node omits it alike — while one
-// at the bound has its id. A patch or an id that ran out the read's budget of
-// git is omitted OUT OF TIME instead: the rest of the facts answered — a base
-// and a list of paths cost little and a change cannot do without them — but
-// the facts not final, since a node beside it, or this one less loaded, takes
-// the id. The merge base and the walk fail the read as any read's git does,
-// too large where they ran its whole budget.
+// diff a byte past MaxPatchIDDiffBytes has its id omitted past its bound, and
+// is final, since every node omits it alike; one at the bound has its id. A
+// patch or id that ran out the read's budget is omitted out of time, the rest
+// of the facts answered but not final, since another node may take the id.
+// The merge base and the walk fail the read, too large, where they ran out.
 //
 // Mutations: take the id past the bound (drop the spool's check) — the
 // byte-past row red; fail the read where the patch ran out its budget — the
@@ -294,10 +284,9 @@ func TestAPatchIDPastItsBoundIsOmitted(t *testing.T) {
 }
 
 // THE BASE IS WHERE THE HISTORIES MEET. A head its target holds already is in
-// its target, its base the head itself, and it changes nothing: no path, no
-// id. A head whose history shares no commit with its target's has no merge
-// base, and its change is measured from the empty tree — every file of the
-// head, and git's own id of that diff.
+// its target, its base the head itself: no path, no id. A head sharing no
+// commit with its target has no merge base, and is measured from the empty
+// tree: every file of the head, and git's own id of that diff.
 //
 // Mutation: answer HeadInTarget from the head equalling the target's tip — an
 // ancestor of the tip is read as a change, red.
@@ -351,10 +340,9 @@ func (p unnameable) Run(ctx context.Context, c gitproc.Cmd) (gitproc.Result, err
 }
 
 // A PATH NO READ COULD NAME BACK TOUCHES ALL: a tree built with git's plumbing
-// may hold a path past gitlet.MaxGitPathBytes, which no work tree could, and the
-// revise that records a revision's facts refuses a touched list holding one —
-// so the facts list no such path, and touch all, as past the list's bounds,
-// rather than leave the change due to its home with every revise refused.
+// may hold a path past gitlet.MaxGitPathBytes, which the revise recording the
+// facts refuses, so the facts touch all rather than leave the change due to
+// its home with every revise refused.
 //
 // Mutation: drop nameable from the walk's stop, and the facts list the path.
 func TestAPathNoReadCouldNameTouchesAll(t *testing.T) {
@@ -419,14 +407,12 @@ func classesOf(f *gitlet.RevisionFactsAnswer) map[string]gitlet.ChangeClass {
 	return out
 }
 
-// A GO CHANGE IS CLASSED FROM ITS TWO VERSIONS. A change touching four files
-// — one only reindented, one whose doc comment alone is rewritten, one whose
-// code changes, and a text file — has the first classed whitespace_only and
-// the second comment_only, each by its place in the touched list and in the
-// list of its narrowest class, the third and the text file classed nothing,
-// and its classification complete. Its facts name the trees of its base and
-// its head, as git names them: what tells two revisions holding the same
-// code apart from two whose diffs merely look alike.
+// A GO CHANGE IS CLASSED FROM ITS TWO VERSIONS. Of four touched files, one
+// only reindented is whitespace_only and one whose doc comment alone changed
+// is comment_only, each by its touched-list place in its narrowest class's
+// list; a code change and a text file have no class; the classification is
+// complete. The facts name the base's and head's trees as git does: what
+// tells two revisions holding the same code from diffs that merely look alike.
 //
 // Mutations: lex each path's head against itself — the code change reads as
 // whitespace, red; name the head's tree as the base's — the base tree is not
@@ -468,13 +454,12 @@ func TestAGoChangeIsClassedFromItsTwoVersions(t *testing.T) {
 	}
 }
 
-// A MODE CHANGE IS NEVER CLASSED, and neither is any path a lexer has no two
-// versions of a Go file for: a Go file whose comment changed beside its
-// executable bit (a change no lexer sees, to whether it runs), one added, one
-// deleted, and a symbolic link named like a Go file whose target moved by a
-// space — a blob that lexes as whitespace, which is no Go source — each has
-// no class, while a Go file whose comment alone changed beside them is
-// comment_only, so the classification ran, and is complete.
+// A MODE CHANGE IS NEVER CLASSED, nor any path without two Go versions: a Go
+// file whose comment changed beside its executable bit (whether it runs, which
+// no lexer sees), one added, one deleted, and a symbolic link named like Go
+// whose target moved by a space (no Go source, though it lexes as whitespace)
+// have no class, while a Go file whose comment
+// alone changed is comment_only, so the classification ran and is complete.
 //
 // Mutation: class a path whatever its modes (drop the mode terms of
 // lexableEntry) — m.go reads comment_only and link.go whitespace_only, red.
@@ -518,18 +503,13 @@ func TestAModeChangeIsNeverClassed(t *testing.T) {
 	}
 }
 
-// A BOUND CUTS CLASSIFICATION INCOMPLETE. Three Go files whose comments alone
-// change are lexed in the touched list's order while the Go they take stays
-// within the bound in all: at the bound every one is classed and the
-// classification complete; a byte short and the last is never read — its
-// class unknown, not none — so the classes say they are INCOMPLETE, the first
-// two classed all the same. A version past the bound on one file leaves that
-// file unread with no class, as the lexer gives none past it, and the rest
-// whole. Each is final, as every node bounds alike: incomplete PAST THE BOUND
-// where a path was left unread. And a classification that runs out what the
-// read's budget of git left is answered incomplete OUT OF TIME, the facts'
-// base, paths, trees and id with it — a class only relaxes, so classes cut
-// short never fail the facts — but the facts not final.
+// A BOUND CUTS CLASSIFICATION INCOMPLETE. Three comment-only Go files lexed
+// in touched order: at the bound in all, every one classed and complete; a
+// byte short, the last unread (class unknown, not none), so incomplete past
+// the bound, the first two classed. A version past the per-file bound leaves
+// that file unclassed, the rest whole. These are final, as every node bounds
+// alike. Out of budget is incomplete out of time, the facts answered but not
+// final: a class only relaxes, so it never fails them.
 //
 // Mutations: class past the bound (drop the total's check) — the byte-short
 // row is complete, red; fail the read where the lexing ran out the budget —
@@ -591,14 +571,11 @@ func TestABoundCutsClassificationIncomplete(t *testing.T) {
 	}
 }
 
-// A NODE SPOOLS SO MANY PATCHES AT ONCE. Every revision's facts write their
-// patch into a spool on the cache's volume, and the node holds at most
-// query.MaxPatchSpools of them, so what they take of the volume is a bound
-// the cache's room is sized beside (query.PatchSpoolAllowance), never one
-// that grows with the read share: a facts read finding every spool taken
-// waits for one, then answers unready (share) for another node; one finding
-// one free takes the id, and gives the spool back when it ends, so the next
-// read takes it again.
+// A NODE SPOOLS SO MANY PATCHES AT ONCE: at most query.MaxPatchSpools, so the
+// volume they take is the cache's sized allowance (query.PatchSpoolAllowance),
+// not one growing with the read share. A facts read finding every spool taken
+// waits, then answers unready (share); one finding one free takes the id and
+// gives the spool back, so the next read takes it again.
 //
 // Mutations: spool without taking one — the read beside every spool held
 // takes its id, red; never give one back — the second read beside the rest
@@ -627,15 +604,13 @@ func TestANodeSpoolsSoManyPatchesAtOnce(t *testing.T) {
 	}
 }
 
-// A BLOB THE COPY LACKS IS THE NODE'S FAILURE, never classes it leaves out. A
-// touched Go file's two blobs are named by the trees of the copy that walked
-// them, so one its check finds none of is the copy's damage: a node holding a
-// whole copy lexes it, and facts this node left it out of would be no
-// function of the two commits. The read is refused unready, node_failed, for
-// the walk to ask another Gitlet node — never answered with the classes cut.
+// A BLOB THE COPY LACKS IS THE NODE'S FAILURE, never classes it leaves out:
+// the copy's own trees name it, so its absence is damage, and facts leaving it
+// out would be no function of the two commits. The read is refused unready
+// (node_failed) for the walk to ask another Gitlet node.
 //
-// Mutation: leave the blob unread and the classes incomplete, as before — the
-// facts are answered, red.
+// Mutation: leave the blob unread and the classes incomplete — the facts are
+// answered, red.
 func TestABlobTheCopyLacksIsTheNodesFailure(t *testing.T) {
 	t.Parallel()
 	x := newFixture(t, gitlettest.SoloOptions{}, gitlettest.Settings())

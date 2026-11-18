@@ -138,7 +138,7 @@ func TestALiveReadingOfALongStreamBeginsAtItsEnd(t *testing.T) {
 		`{"type":"tool_use","part":{"tool":"bash","state":{"input":{"command":"go vet ./..."}}}}`))
 
 	got := read(t, runner.Follow(sandbox.RunHandle{}), b)
-	if got.Source != sandbox.SourceTranscript || got.Text != "[tool] bash: go vet ./...\n" {
+	if got.Source != sandbox.SourceTranscript || got.Text != "[tool 1] bash: go vet ./...\n" {
 		t.Errorf("source %q, text %q; want the stream's newest event", got.Source, got.Text)
 	}
 	if !got.Front || got.Origin == "transcript@0" {
@@ -279,7 +279,7 @@ func TestTwoReadingsOfOneStreamAgree(t *testing.T) {
 // lets a viewer continue across an owner move rather than reset.
 //
 // Mutation: take a fresh decoder for every read, and the failed call read a
-// poll after it was made loses its tool's name.
+// poll after it was made loses its number and its time.
 func TestAReadingIsTheSameHoweverItsReadsFell(t *testing.T) {
 	t.Parallel()
 	runner := executor.NewClaudeCode()
@@ -296,8 +296,8 @@ func TestAReadingIsTheSameHoweverItsReadsFell(t *testing.T) {
 		b.Put(p.Stream(), strings.Join(claudeRunStream[:i+1], "\n")+"\n")
 		polled.WriteString(read(t, reading, b).Text)
 	}
-	if !strings.Contains(once.Text, "[tool] Bash → error") {
-		t.Fatalf("the stream read at once = %q; want its failed call named", once.Text)
+	if !strings.Contains(once.Text, "[failed 3 1250ms]") {
+		t.Fatalf("the stream read at once = %q; want its failed call numbered and timed", once.Text)
 	}
 	if polled.String() != once.Text {
 		t.Errorf("read a line a poll:\n%s\nwant what one read of the whole stream says:\n%s",
@@ -361,8 +361,8 @@ func TestALiveReadingShowsARunningClaudeRun(t *testing.T) {
 	b.Put(p.Err(), "not what a run that streams shows")
 
 	got := read(t, runner.Follow(sandbox.RunHandle{}), b)
-	want := "I'll run the suite first.\n[tool] Bash: go test ./...\n[tool] Read: /home/user/repo/flaky_test.go\n" +
-		"[tool] Bash: go test -run TestFlaky -count=20 ./...\n"
+	want := "I'll run the suite first.\n[tool 1] Bash: go test ./...\n[ok 1 2400ms]\n" +
+		"[tool 2] Read: /home/user/repo/flaky_test.go\n[ok 2]\n[tool 3] Bash: go test -run TestFlaky -count=20 ./...\n"
 	if got.Source != sandbox.SourceTranscript || got.Text != want || got.Finished {
 		t.Errorf("read = source %q, finished %v, text\n%s\nwant the stream's transcript so far",
 			got.Source, got.Finished, got.Text)

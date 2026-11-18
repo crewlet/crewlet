@@ -24,13 +24,15 @@
 //
 // A record's key is everything a reader is and how it read: the company day,
 // the repository, the principal kind and principal, the way (git or tool), a
-// server-side read's kind and the seat it acted as. So a CI token fetching a
-// repository every few seconds is a record a flush rather than a record a
-// fetch, and a seat reading a file a line range at a time is one record of
-// its reads of each kind. A record counts its reads and sums their bytes,
-// names the repository as its newest read did, carries its first read's trace
-// and is stamped with its newest read's instant — inside the day its key
-// names, which keeps every read of the record inside that day.
+// server-side read's or a download's kind (types.FetchedRaw,
+// types.FetchedArchive: a download is its own record beside a fetch) and the
+// seat it acted as. So a CI token fetching a repository every few seconds is
+// a record a flush rather than a record a fetch, and a seat reading a file a
+// line range at a time is one record of its reads of each kind. A record
+// counts its reads and sums their bytes, names the repository as its newest
+// read did, carries its first read's trace and is stamped with its newest
+// read's instant — inside the day its key names, which keeps every read of
+// the record inside that day.
 //
 // # What it costs an answer
 //
@@ -41,6 +43,12 @@
 // (up to coalesce.MaxPending); its orderly stop flushes both once more, after
 // Gitlet stops and before the usage publisher's own last flush, so a
 // node stopped that way leaves its last reads in its last day.
+//
+// # Who owns the ledger
+//
+// The engine builds it once and stops it (internal/engine's codeReads and
+// stopLedgers), not Gitlet: Gitlet is rebuilt at an apply, and a ledger built
+// with it would drop the answered reads the old one had not flushed.
 package readaudit
 
 import (
@@ -55,9 +63,9 @@ import (
 
 var log = logging.Get("gitlet.readaudit")
 
-// Read is one read the ledger is handed: as its producer described it (one
-// read, types.CodeFetched with Reads 1), when it was answered and the company
-// day that instant falls in, and the trace it was served under.
+// Read is one read handed to the ledger: its producer's types.CodeFetched
+// (Reads 1), when it was answered, the company day that instant falls in, and
+// the trace it was served under.
 type Read struct {
 	Fetched types.CodeFetched
 	At      time.Time
@@ -72,11 +80,11 @@ type key struct {
 
 // bucket is one key's reads since its last flush.
 type bucket struct {
-	// name is the repository as the newest of the reads named it, last that
-	// read's instant.
+	// name is the repository as the newest read named it; last is that read's
+	// instant.
 	name string
 	last time.Time
-	// reads and bytes are what the reads count and were sent.
+	// reads and bytes are the reads' count and the bytes they sent.
 	reads, bytes int64
 	// trace is the first read's.
 	trace events.TraceContext
@@ -84,16 +92,14 @@ type bucket struct {
 
 // Ledger is one node's reads of its `visibility: unit` repositories between
 // flushes, published as one `code_fetched` record per key a flush every
-// coalesce.FlushInterval. SAFE FOR CONCURRENT USE: every fetch and every
-// server-side read the node answers adds to it, and nothing it does waits on
-// the broker.
+// coalesce.FlushInterval. SAFE FOR CONCURRENT USE by every fetch and
+// server-side read the node answers; nothing it does waits on the broker.
 type Ledger struct {
 	l *coalesce.Ledger[key, bucket]
 }
 
-// New is an empty ledger publishing through pub. A nil publisher is a ledger
-// that keeps and publishes nothing — a node with no queue, which records no
-// event of any kind.
+// New is an empty ledger publishing through pub. A nil publisher (a node with
+// no queue, which records no event of any kind) keeps and publishes nothing.
 func New(pub coalesce.Publisher) *Ledger {
 	return &Ledger{l: coalesce.New(pub, coalesce.Records[key, bucket]{
 		Type: types.CodeFetched{}.EventType(),
@@ -110,10 +116,9 @@ func New(pub coalesce.Publisher) *Ledger {
 	})}
 }
 
-// Add files a read in its reader's record and returns: it holds the ledger's
-// lock for a fold, and never waits on the broker. The read counts what its
-// Reads says, and one where that says none, as a call the auxiliary-spend
-// ledger is handed counts one. Nil-safe.
+// Add files a read in its reader's record, holding the ledger's lock only for
+// a fold and never waiting on the broker. A read counts its Reads, or one when
+// that says none, as a call handed to the auxiliary-spend ledger does. Nil-safe.
 func (l *Ledger) Add(r Read) {
 	if l == nil {
 		return
@@ -138,18 +143,16 @@ func seal(k key, b *bucket) *events.Event {
 	rec := types.CodeFetched{RepoID: k.repo, RepoName: b.name,
 		PrincipalKind: types.CodeReaderKind(k.principalKind), Principal: k.principal, Seat: k.seat,
 		Via: types.CodeFetchedVia(k.via), Kind: k.readKind, Reads: b.reads, Bytes: b.bytes}
-	// THE ID AND THE INSTANT ARE FIXED HERE, once, so every attempt to
-	// publish the record is the same event, which the store's (time, id) key
-	// collapses.
+	// THE ID AND THE INSTANT ARE FIXED HERE, ONCE: every retry of a refused
+	// publish is the same event, which the store's (time, id) key collapses.
 	ev := events.New(rec, b.trace)
-	// THE NEWEST READ'S INSTANT, not the flush's: the day the reads were made
-	// in, which the key keeps every read of the record inside, and the
-	// newest read the readers' answer reports.
+	// THE NEWEST READ'S INSTANT, not the flush's: it is inside the key's day,
+	// and it is the last read the readers' answer reports.
 	if !b.last.IsZero() {
 		ev.Timestamp = b.last.UTC()
 	}
-	// A SEAT'S READS ARE SOURCED TO THE SEAT, as a seat's every event is; a
-	// credential's name nobody, its reader being the record's own.
+	// A SEAT'S READS ARE SOURCED TO THE SEAT, as all its events are; a
+	// credential's to nobody, since the record's principal is its reader.
 	if rec.PrincipalKind == types.CodeReaderAgent {
 		ev.Source = rec.Seat
 	}
@@ -175,9 +178,9 @@ func (l *Ledger) Run(ctx context.Context) {
 }
 
 // Stop ends the timer, waits for a flush in flight, and flushes once more on
-// ctx — the stop's own budget. Its caller ORDERS it after Gitlet stops,
-// so no read is answered after it, and before the usage publisher's last flush
-// and the stream's close. Nil-safe; a second Stop flushes what arrived since.
+// ctx, the stop's own budget. Its caller ORDERS it after Gitlet stops (no read
+// is answered after it) and before the usage publisher's last flush and the
+// stream's close. Nil-safe; a second Stop flushes what arrived since.
 func (l *Ledger) Stop(ctx context.Context) {
 	if l == nil {
 		return

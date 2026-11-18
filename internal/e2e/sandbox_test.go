@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/activityline"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/runner"
 	"github.com/crewlet/crewlet/internal/api"
@@ -358,8 +359,12 @@ func TestAGoldenCodingTurnSuspendsAndResumes(t *testing.T) {
 		}
 		return false
 	})
-	submitted := "[tool] mcp__" + config.ToolServerName + "__" + runner.SubmitWorkTool
-	if transcript, _ := record["activity_transcript"].(string); !strings.Contains(transcript, submitted) {
+	submitted := "mcp__" + config.ToolServerName + "__" + runner.SubmitWorkTool
+	transcript, _ := record["activity_transcript"].(string)
+	if !slices.ContainsFunc(strings.Split(transcript, "\n"), func(line string) bool {
+		call := activityline.Parse(line)
+		return call.Tag == activityline.TagCall && call.Tool == submitted
+	}) {
 		t.Errorf("the run's transcript is %q; want the bridged call its stream made, %q",
 			transcript, submitted)
 	}
