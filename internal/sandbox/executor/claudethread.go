@@ -52,11 +52,11 @@ const threadPlainMax = int64(scrubExpansion) * executorkeep.SessionMaxBytes
 // of every thread member of an archive between them. PAST IT, THE READING
 // FAILS CLOSED ([errThreadBound]): a line costs its reading a few
 // microseconds whatever its length, so [threadPlainMax] alone lets a thread
-// of tiny lines read for minutes. 2^20, where it meets [threadPlainMax] at
-// lines of 256 bytes, eight times the records a main thread is modelled to
-// ([threadChainMaxRecords]) and over a hundred times the most lines any
-// thread measured holds. The package doc, "THE FACTS ARE HELD TO
-// [threadLineMax] IN SUM", has what a reading at it measured.
+// of tiny lines read for minutes. 2^20 is 126 times the most lines any
+// measured thread holds (8,308), and its slowest shape (256-byte lines, where
+// it meets [threadPlainMax]) reads in at most 22.6 s on two dedicated cores,
+// inside the sandbox's 30 s holdings wait. The package doc, "THE FACTS ARE
+// HELD TO [threadLineMax] IN SUM", has what a reading at it measured.
 const threadLinesMax = 1 << 20
 
 // errThreadBound is a thread past a bound it is read within: a line whose
