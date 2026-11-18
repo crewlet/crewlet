@@ -4207,8 +4207,8 @@ the invitation it was about, and its dialog with it, before a `202` could say
 it was recorded.
 
 - **Invite** — "Invite a person to Jane Doe", the seat stated as a fact rather
-  than offered as a choice: an **Email address** and the **access picker**
- , see [People](#settings-the-frame-people-secrets-nodes-and-configuration), opened with every app
+  than offered as a choice: an **Email address** and the **access picker**,
+  see [People](#settings-the-frame-people-secrets-nodes-and-configuration), opened with every app
   ticked and Admin not, and the note that warns what an unticked app costs
   the person.
   It sends `POST /iam/invitations` with the seat, and the **Invitation link**
@@ -6400,227 +6400,227 @@ rules fix it, and each one names a specific mechanism:
    complete, and a new failure elsewhere silently re-opened a different card
    and shoved everything below it down the page.
 10. **Time is compared as an instant.** Go's `RFC3339Nano` trims trailing
-   zeros, so `…:07Z` sorts *after* `…:07.42Z` on a raw string compare — it
-   compares `'Z'` (0x5A) against `'.'` (0x2E). Every list sorts through
-   `tsKey`, and every comparator is three-way: one returning −1 for equal
-   operands makes equal rows trade places on each render.
+    zeros, so `…:07Z` sorts *after* `…:07.42Z` on a raw string compare — it
+    compares `'Z'` (0x5A) against `'.'` (0x2E). Every list sorts through
+    `tsKey`, and every comparator is three-way: one returning −1 for equal
+    operands makes equal rows trade places on each render.
 11. **A prompt is a document, not a wall of text — and it is read through a
-   map, an outline and one section.** Both halves of a phase's prompt were one
-   code block each, and a seat's system prompt ran to tens of kilobytes:
-   identity, mission, policies, the roster, the turn contract, whatever the
-   turn prefetched, the workers, the skills and a tool catalogue. An
-   operator asking the question this screen exists for — *what was the
-   reviewer actually told about self-iterating?* — scrolled 30 kB looking for
-   a heading. The first answer was a stack of closed folds, one per `##`, and
-   a reader said that was hard to follow too: a column of look-alike rows,
-   titled with raw inline markdown, sized in a unit that never added up, whose
-   bodies collapsed one-fact-per-line text into run-on paragraphs. The
-   *Rendered* view is now a designed reader (`components/PromptDoc.tsx`):
+    map, an outline and one section.** Both halves of a phase's prompt were one
+    code block each, and a seat's system prompt ran to tens of kilobytes:
+    identity, mission, policies, the roster, the turn contract, whatever the
+    turn prefetched, the workers, the skills and a tool catalogue. An
+    operator asking the question this screen exists for — *what was the
+    reviewer actually told about self-iterating?* — scrolled 30 kB looking for
+    a heading. The first answer was a stack of closed folds, one per `##`, and
+    a reader said that was hard to follow too: a column of look-alike rows,
+    titled with raw inline markdown, sized in a unit that never added up, whose
+    bodies collapsed one-fact-per-line text into run-on paragraphs. The
+    *Rendered* view is now a designed reader (`components/PromptDoc.tsx`):
 
-   - **The map** — one slim bar for the whole request, the system prompt's
-     sections, a gap, then the user message's, each as wide as its share of
-     the bytes, so where a prompt's weight went is a glance. Neutral fills in
-     two alternating steps that are two different greys — they were two tokens
-     holding the same colour, so neighbours never alternated and the dark
-     palette's bar sat barely off the card — and the accent only on the
-     section being read. A half is never narrower than its segments, so a
-     small user message beside a large system prompt does not spill past the
-     bar's end on a phone. Pointing at a segment says "Your turn · 2.8 KB ·
-     23% of the system prompt", and pressing it reads that section. It is a
-     picture of the outline, so it is `aria-hidden` and takes no focus; the
-     outline is the keyboard's way to the same sections.
-   - **The outline** — both halves under their names and sizes ("System prompt
-     · 11 KB", "User message · 1.2 KB"), one row per top-level section with
-     its title rendered as the inline markdown it is, its size and a weight
-     bar. The bars are neutral, the selected row's too: its ground already
-     says which row it is, and an accent bar a hundredth of a row wide was a
-     stray dot. A title's link is drawn as its words in a row and in the
-     picker — an option's children are presentational, and a click on a link
-     there navigates instead of choosing — and as a link only in the reader.
-     A listbox with one tab stop: the arrows, Home and End move through
-     both halves and the reader follows, with focus moving to the row it
-     selects. Beside the reader when the prompt view itself is at least 720px
-     wide — a container query on the view, never the window, which the sidebar
-     and a peek narrow without changing — and a picker above the reader below
-     that, with the map kept.
-   - **The reader** — only the selected section is mounted, so an unselected
-     section's text is not in the card. Its title is a styled line, never an
-     `h` element (a quoted prompt's headings are not this page's — a turn with
-     six phases would put eighty of them into one screen's outline), and the
-     region takes its name from it; then its size and share ("2.8 KB · 23% of
-     the system prompt"); then Previous and Next, each naming the section it
-     goes to — the user message's first section from the system prompt's
-     last, which the label says — and staying put at the ends with the reason
-     they cannot move, because a control that vanishes under the press takes
-     the reader's focus with it. Each owns half the row, Previous at its start
-     and Next at its end, and a long destination wraps inside its own half:
-     as a wrapping row, two long names on a phone put Next on a line of its
-     own under Previous. Then the body, with the headings inside the
-     section drawn in place beneath it under styled sub-titles, nested on
-     their levels.
-   - **Find** — a box that annotates rather than filters: every row says how
-     many matches it holds, a polite status says "12 matches in 3 sections",
-     and Escape clears. A row that matches lifts — its title to the primary
-     text step, its count on the ground the matches are marked with — and a
-     row with none recedes to the tertiary step with its weight bar faded. It
-     was one step of grey, and in the dark palette the secondary and tertiary
-     steps are the same grey to the eye; dimming further would take a row's
-     words under the contrast they owe, and a row with no match is still one
-     somebody may choose. **The selection follows the find until the reader
-     takes it**: typing a query the section on screen does not contain moves
-     the reader to the next section that does (the first, from the top), so
-     the first thing a find shows is a match rather than a count — but once
-     the reader chooses a section themselves during that query, the next
-     keystroke leaves them there, because they are reading it on purpose.
-     Enter and Shift+Enter jump to the next and previous section that
-     matches and bring its first match into view, at the nearest edge of
-     whatever scrolls it; typing never scrolls, which would move the page
-     under the box being typed in. Matches are counted on the SOURCE,
-     case-insensitively — what the model was told, markup included — and
-     marked in the reader with the CSS Custom Highlight API where the browser
-     has it, which marks text without adding an element around it; where it
-     does not, the counts still say where the matches are. **What is marked
-     is what was counted**: the title is marked only when it is the section's
-     own heading line, because a builder's "Task" or the untitled lead's
-     words are not in the source, and the reader's own words — the size, the
-     share, where Previous and Next go — never are.
+    - **The map** — one slim bar for the whole request, the system prompt's
+      sections, a gap, then the user message's, each as wide as its share of
+      the bytes, so where a prompt's weight went is a glance. Neutral fills in
+      two alternating steps that are two different greys — they were two tokens
+      holding the same colour, so neighbours never alternated and the dark
+      palette's bar sat barely off the card — and the accent only on the
+      section being read. A half is never narrower than its segments, so a
+      small user message beside a large system prompt does not spill past the
+      bar's end on a phone. Pointing at a segment says "Your turn · 2.8 KB ·
+      23% of the system prompt", and pressing it reads that section. It is a
+      picture of the outline, so it is `aria-hidden` and takes no focus; the
+      outline is the keyboard's way to the same sections.
+    - **The outline** — both halves under their names and sizes ("System prompt
+      · 11 KB", "User message · 1.2 KB"), one row per top-level section with
+      its title rendered as the inline markdown it is, its size and a weight
+      bar. The bars are neutral, the selected row's too: its ground already
+      says which row it is, and an accent bar a hundredth of a row wide was a
+      stray dot. A title's link is drawn as its words in a row and in the
+      picker — an option's children are presentational, and a click on a link
+      there navigates instead of choosing — and as a link only in the reader.
+      A listbox with one tab stop: the arrows, Home and End move through
+      both halves and the reader follows, with focus moving to the row it
+      selects. Beside the reader when the prompt view itself is at least 720px
+      wide — a container query on the view, never the window, which the sidebar
+      and a peek narrow without changing — and a picker above the reader below
+      that, with the map kept.
+    - **The reader** — only the selected section is mounted, so an unselected
+      section's text is not in the card. Its title is a styled line, never an
+      `h` element (a quoted prompt's headings are not this page's — a turn with
+      six phases would put eighty of them into one screen's outline), and the
+      region takes its name from it; then its size and share ("2.8 KB · 23% of
+      the system prompt"); then Previous and Next, each naming the section it
+      goes to — the user message's first section from the system prompt's
+      last, which the label says — and staying put at the ends with the reason
+      they cannot move, because a control that vanishes under the press takes
+      the reader's focus with it. Each owns half the row, Previous at its start
+      and Next at its end, and a long destination wraps inside its own half:
+      as a wrapping row, two long names on a phone put Next on a line of its
+      own under Previous. Then the body, with the headings inside the
+      section drawn in place beneath it under styled sub-titles, nested on
+      their levels.
+    - **Find** — a box that annotates rather than filters: every row says how
+      many matches it holds, a polite status says "12 matches in 3 sections",
+      and Escape clears. A row that matches lifts — its title to the primary
+      text step, its count on the ground the matches are marked with — and a
+      row with none recedes to the tertiary step with its weight bar faded. It
+      was one step of grey, and in the dark palette the secondary and tertiary
+      steps are the same grey to the eye; dimming further would take a row's
+      words under the contrast they owe, and a row with no match is still one
+      somebody may choose. **The selection follows the find until the reader
+      takes it**: typing a query the section on screen does not contain moves
+      the reader to the next section that does (the first, from the top), so
+      the first thing a find shows is a match rather than a count — but once
+      the reader chooses a section themselves during that query, the next
+      keystroke leaves them there, because they are reading it on purpose.
+      Enter and Shift+Enter jump to the next and previous section that
+      matches and bring its first match into view, at the nearest edge of
+      whatever scrolls it; typing never scrolls, which would move the page
+      under the box being typed in. Matches are counted on the SOURCE,
+      case-insensitively — what the model was told, markup included — and
+      marked in the reader with the CSS Custom Highlight API where the browser
+      has it, which marks text without adding an element around it; where it
+      does not, the counts still say where the matches are. **What is marked
+      is what was counted**: the title is marked only when it is the section's
+      own heading line, because a builder's "Task" or the untitled lead's
+      words are not in the source, and the reader's own words — the size, the
+      share, where Previous and Next go — never are.
 
-   **The outline is the builder's, and the headings only where there is no
-   builder's.** It was derived by cutting the prompt at every `##`, and a
-   prompt carries other people's markdown verbatim: a chat trigger's "##
-   Triage" and "## Thread context", a pull request's "# Title", a model's own
-   "## Summary" inside review evidence or a ledger reply. Each of those either
-   escaped the section it was quoted in or swallowed the rest of the prompt
-   under a title nobody wrote. Only the builder knows where its parts begin and
-   end, so the engine sends a section map with each prompt (`system_sections`
-   and `user_sections` on the settled record, `prompt_messages[].sections`
-   live — a key, a title, a byte count and whether the part opens with its own
-   heading, per part), and the top level of the
-   outline IS that map, sliced by UTF-8 byte offsets; a heading inside a span
-   still structures it, nested under it, but cannot leave it. That includes a
-   heading a HEADLESS part opens with: a worker's persona, a task the
-   executor wrote or a trigger's text is the builder's part with no heading
-   of its own (`headed` false), and when the markdown it quotes begins with
-   "## Goal", that heading nests under the builder's "Task" like any other
-   quoted one. It was taken for the span's own heading, so its title gave way
-   to the builder's and "Goal" was drawn nowhere in the reading view while
-   the Source view still had it. A part the map does not call headed is
-   headless, whatever its first line: the engine writes `headed` on every part
-   that opens with its own heading and leaves it off the rest. Spans are
-   decoded without stripping a leading byte order
-   mark, so a part that opens with a pasted document's U+FEFF is still a
-   slice of the prompt. A record without
-   a map — a resumed phase's — is outlined by its headings
-   as before, and so is one whose map does not tile its prompt (the bytes do
-   not add up, a boundary falls inside a character, a span is empty, a key
-   repeats): a map that would mis-slice is not trusted at all
-   (`lib/promptmap.ts`). Either way the outline is DERIVED — from the document
-   or from its builder — never a list this app keeps, so a prompt that grows a
-   section grows a row and no rename leaves a stale name on screen. It is
-   derived once per prompt and map VALUE: every push rebuilds a phase's record
-   from the wire — a streaming phase's five frames a second among them — so
-   the map arrives as a new array each time while saying the same thing, and
-   an open Prompt fold keyed on the array re-sliced both halves and re-counted
-   its find on every frame.
+    **The outline is the builder's, and the headings only where there is no
+    builder's.** It was derived by cutting the prompt at every `##`, and a
+    prompt carries other people's markdown verbatim: a chat trigger's "##
+    Triage" and "## Thread context", a pull request's "# Title", a model's own
+    "## Summary" inside review evidence or a ledger reply. Each of those either
+    escaped the section it was quoted in or swallowed the rest of the prompt
+    under a title nobody wrote. Only the builder knows where its parts begin and
+    end, so the engine sends a section map with each prompt (`system_sections`
+    and `user_sections` on the settled record, `prompt_messages[].sections`
+    live — a key, a title, a byte count and whether the part opens with its own
+    heading, per part), and the top level of the
+    outline IS that map, sliced by UTF-8 byte offsets; a heading inside a span
+    still structures it, nested under it, but cannot leave it. That includes a
+    heading a HEADLESS part opens with: a worker's persona, a task the
+    executor wrote or a trigger's text is the builder's part with no heading
+    of its own (`headed` false), and when the markdown it quotes begins with
+    "## Goal", that heading nests under the builder's "Task" like any other
+    quoted one. It was taken for the span's own heading, so its title gave way
+    to the builder's and "Goal" was drawn nowhere in the reading view while
+    the Source view still had it. A part the map does not call headed is
+    headless, whatever its first line: the engine writes `headed` on every part
+    that opens with its own heading and leaves it off the rest. Spans are
+    decoded without stripping a leading byte order
+    mark, so a part that opens with a pasted document's U+FEFF is still a
+    slice of the prompt. A record without
+    a map — a resumed phase's — is outlined by its headings
+    as before, and so is one whose map does not tile its prompt (the bytes do
+    not add up, a boundary falls inside a character, a span is empty, a key
+    repeats): a map that would mis-slice is not trusted at all
+    (`lib/promptmap.ts`). Either way the outline is DERIVED — from the document
+    or from its builder — never a list this app keeps, so a prompt that grows a
+    section grows a row and no rename leaves a stale name on screen. It is
+    derived once per prompt and map VALUE: every push rebuilds a phase's record
+    from the wire — a streaming phase's five frames a second among them — so
+    the map arrives as a new array each time while saying the same thing, and
+    an open Prompt fold keyed on the array re-sliced both halves and re-counted
+    its find on every frame.
 
-   **Sizes are UTF-8 bytes, heading lines included.** They were UTF-16
-   characters of each body with its heading line left out, so a half's
-   sections never added up and disagreed with the Turn screen's Context tab,
-   which counts bytes. Now each section is a slice of the source from its
-   heading line to the next, separators included, so the sections of a half
-   tile it exactly; the Prompt fold's own count is the two halves' sizes
-   ("11 KB system · 1.2 KB user") rather than the phase's name, which the
-   card's tag already says.
+    **Sizes are UTF-8 bytes, heading lines included.** They were UTF-16
+    characters of each body with its heading line left out, so a half's
+    sections never added up and disagreed with the Turn screen's Context tab,
+    which counts bytes. Now each section is a slice of the source from its
+    heading line to the next, separators included, so the sections of a half
+    tile it exactly; the Prompt fold's own count is the two halves' sizes
+    ("11 KB system · 1.2 KB user") rather than the phase's name, which the
+    card's tag already says.
 
-   **The prompt's line breaks are its own.** A builder writes a prompt line by
-   line for a model, and an identity block of one fact per line, read as
-   markdown's soft wraps, became one run-on sentence. Bodies render with every
-   newline a break — the same reading a model's own words get (see
-   [Markdown is rendered, not printed](#markdown-is-rendered-not-printed)).
+    **The prompt's line breaks are its own.** A builder writes a prompt line by
+    line for a model, and an identity block of one fact per line, read as
+    markdown's soft wraps, became one run-on sentence. Bodies render with every
+    newline a break — the same reading a model's own words get (see
+    [Markdown is rendered, not printed](#markdown-is-rendered-not-printed)).
 
-   Three properties travel with it. **Each view does its whole job.**
-   *Rendered* is for reading; *Source* is the record — each half whole, one
-   block, byte for byte, one selection, which is what an operator reproduces a
-   turn from and what they diff when a model starts behaving differently. What
-   is genuinely record-sensitive survives rendering anyway: a fence comes out
-   as its own block holding the exact text, so a tool schema, a JSON example
-   and a contract template are byte-identical either way, and what the reading
-   view spends is emphasis markers and list bullets. **The switch is offered on
-   every document**, headings or none, since one decodes the markdown and one
-   is the bytes; a prompt with no headings is one section, named for the
-   whole half it is — "The whole user message" — since "Before the first
-   heading", the lead run's name in a headed half, would claim a heading the
-   prompt does not have. And **the outline is
-   the document's own shape**, which mostly means flat and sometimes does not:
-   an executor's sections are peers, but the endings block writes one `###`
-   per earlier turn *inside* its block (`### Turn …`, `### Fire …` for a
-   schedule's), and hoisting those would put a turn of somebody's conversation
-   between "How this conversation's earlier turns ended" and the ask — so a
-   heading nests under the nearest heading above it of a lower level, and the
-   lead run before the first heading is a section of its own, the first one
-   read, never hidden.
+    Three properties travel with it. **Each view does its whole job.**
+    *Rendered* is for reading; *Source* is the record — each half whole, one
+    block, byte for byte, one selection, which is what an operator reproduces a
+    turn from and what they diff when a model starts behaving differently. What
+    is genuinely record-sensitive survives rendering anyway: a fence comes out
+    as its own block holding the exact text, so a tool schema, a JSON example
+    and a contract template are byte-identical either way, and what the reading
+    view spends is emphasis markers and list bullets. **The switch is offered on
+    every document**, headings or none, since one decodes the markdown and one
+    is the bytes; a prompt with no headings is one section, named for the
+    whole half it is — "The whole user message" — since "Before the first
+    heading", the lead run's name in a headed half, would claim a heading the
+    prompt does not have. And **the outline is
+    the document's own shape**, which mostly means flat and sometimes does not:
+    an executor's sections are peers, but the endings block writes one `###`
+    per earlier turn *inside* its block (`### Turn …`, `### Fire …` for a
+    schedule's), and hoisting those would put a turn of somebody's conversation
+    between "How this conversation's earlier turns ended" and the ask — so a
+    heading nests under the nearest heading above it of a lower level, and the
+    lead run before the first heading is a section of its own, the first one
+    read, never hidden.
 
-   Nesting is only correct because **the levels are**, and two of them were
-   not. `internal/agent/prompts` carried a single `#` over a run of `##`,
-   which claimed the rest of the executor's prompt was part of the agent's
-   identity — nested, that would have put the whole document inside it. And
-   the executor's user message carried a bare `Task:` label between two headed
-   ledgers, which filed the ask, the newest thing anybody said, inside the
-   conversation history above it. Both are structural facts about the
-   document rather than about this screen, so both are asserted there: every
-   heading a prompt builder emits is a sibling, and every block of the user
-   message is a peer.
+    Nesting is only correct because **the levels are**, and two of them were
+    not. `internal/agent/prompts` carried a single `#` over a run of `##`,
+    which claimed the rest of the executor's prompt was part of the agent's
+    identity — nested, that would have put the whole document inside it. And
+    the executor's user message carried a bare `Task:` label between two headed
+    ledgers, which filed the ask, the newest thing anybody said, inside the
+    conversation history above it. Both are structural facts about the
+    document rather than about this screen, so both are asserted there: every
+    heading a prompt builder emits is a sibling, and every block of the user
+    message is a peer.
 
-   **Nothing in it scrolls or sticks.** The card hides its overflow and a box
-   that scrolls inside the page is a second thing under the wheel (see
-   [The document does not scroll](#the-document-does-not-scroll)); showing one
-   section at a time is what keeps the page short instead.
+    **Nothing in it scrolls or sticks.** The card hides its overflow and a box
+    that scrolls inside the page is a second thing under the wheel (see
+    [The document does not scroll](#the-document-does-not-scroll)); showing one
+    section at a time is what keeps the page short instead.
 
-   The splitter is `lib/markdown.ts`'s, beside the renderer's own heading and
-   fence constants rather than next to the screen that wanted sections: what a
-   heading is and where a fenced block suspends the grammar are decisions that
-   file has already made once, and a `# install deps` inside a catalogue's
-   shell sample is exactly the drift a second copy starts with.
+    The splitter is `lib/markdown.ts`'s, beside the renderer's own heading and
+    fence constants rather than next to the screen that wanted sections: what a
+    heading is and where a fenced block suspends the grammar are decisions that
+    file has already made once, and a `# install deps` inside a catalogue's
+    shell sample is exactly the drift a second copy starts with.
 12. **A phase card reads in the order the phase happened**: what it was given
-   — the Prompt, then the Tool surface — then what it did, then what it
-   delegated. The transcript came first and both of its inputs sat underneath
-   it, so the question every round raises (*what was this told? what was it
-   allowed to call?*) was answered past the end of the answer, and a phase
-   with forty rounds put a whole scroll between the two. Both inputs are
-   closed folds, so what the order costs a reader who only wants the
-   transcript is two header rows; what it buys is a card that can be read top
-   to bottom as the story of one phase. Their own order is the request's: the
-   prompt is what was sent, and the tool surface is the tools that went *with*
-   it — served to the harness as its MCP server's for the length of each run — one
-   call described in two folds, so they belong beside each other rather than
-   either side of the transcript.
+    — the Prompt, then the Tool surface — then what it did, then what it
+    delegated. The transcript came first and both of its inputs sat underneath
+    it, so the question every round raises (*what was this told? what was it
+    allowed to call?*) was answered past the end of the answer, and a phase
+    with forty rounds put a whole scroll between the two. Both inputs are
+    closed folds, so what the order costs a reader who only wants the
+    transcript is two header rows; what it buys is a card that can be read top
+    to bottom as the story of one phase. Their own order is the request's: the
+    prompt is what was sent, and the tool surface is the tools that went *with*
+    it — served to the harness as its MCP server's for the length of each run — one
+    call described in two folds, so they belong beside each other rather than
+    either side of the transcript.
 
-   **What it did is grouped by harness run.** Most phases are one run of their
-   harness's loop; one that was steered, delegated or corrected is several, each a
-   process handed the conversation so far. So the rounds sit under a head per
-   run (`RunHead`): *Harness run N*, the entry that served it, how many rounds it
-   made, how long it lived, what it spent and how it ended — or, for the run
-   still in flight, that it is running. A run whose harness's record showed no
-   requests is one round, and its head says so, since that round's timing is
-   the run's.
+    **What it did is grouped by harness run.** Most phases are one run of their
+    harness's loop; one that was steered, delegated or corrected is several, each a
+    process handed the conversation so far. So the rounds sit under a head per
+    run (`RunHead`): *Harness run N*, the entry that served it, how many rounds it
+    made, how long it lived, what it spent and how it ended — or, for the run
+    still in flight, that it is running. A run whose harness's record showed no
+    requests is one round, and its head says so, since that round's timing is
+    the run's.
 
-   **What the record does not list is said under what it does.** A phase's
-   record holds each of its payloads to a share of one message, so a long
-   phase's card can list fewer rounds, calls or tool names than the phase had:
-   a warning under the rounds says how many rounds are not listed (the record
-   keeps a long phase's first and newest) and how many calls, by tool; the tool
-   surface says how many more tools it held than it names; and a failed
-   phase's live call, frozen with its record's list, says the same. A running
-   phase's card says what its live frame left out in the live view's words,
-   since a frame republished five times a second keeps a running phase's
-   newest calls and its record keeps the first and the newest, and says how
-   many more calls are running than the frame lists. A call's detail counts
-   a collected run's unlisted calls in its one round's figure, never a host
-   phase's, whose dropped calls belong to no one round.
+    **What the record does not list is said under what it does.** A phase's
+    record holds each of its payloads to a share of one message, so a long
+    phase's card can list fewer rounds, calls or tool names than the phase had:
+    a warning under the rounds says how many rounds are not listed (the record
+    keeps a long phase's first and newest) and how many calls, by tool; the tool
+    surface says how many more tools it held than it names; and a failed
+    phase's live call, frozen with its record's list, says the same. A running
+    phase's card says what its live frame left out in the live view's words,
+    since a frame republished five times a second keeps a running phase's
+    newest calls and its record keeps the first and the newest, and says how
+    many more calls are running than the frame lists. A call's detail counts
+    a collected run's unlisted calls in its one round's figure, never a host
+    phase's, whose dropped calls belong to no one round.
 
-   The error callout is the one thing that does not wait its turn. It is a
-   banner rather than a section — the reason the reader opened the card at all
-   — so it stays above the inputs.
+    The error callout is the one thing that does not wait its turn. It is a
+    banner rather than a section — the reason the reader opened the card at all
+    — so it stays above the inputs.
 
 ## A monitor is not a reader
 
@@ -9697,9 +9697,9 @@ palette and the trail.
   under a date heading contradicted it) and its note: a save's own, a
   comment's words or a new page's first line, never the title again. **Every
   change** opens the audit log narrowed to Doclet's changes. With nothing
-written beside the featured change the column is not drawn, since the big
-tile is then the whole of it. The tiles share one inset and three equal
-columns. Four small
+  written beside the featured change the column is not drawn, since the big
+  tile is then the whole of it. The tiles share one inset and three equal
+  columns. Four small
   tiles list three pages each and say one line when empty: **Continue
   reading**, the pages this browser opened last, and **Pinned**, the pages
   this reader starred from a page's More menu, each page read for its title
@@ -13438,7 +13438,8 @@ to.
     keyboard, a touch screen and anybody who has not already guessed. The
     second exception is `forced-colors: active`, where the rung step cannot be
     seen at all. See *A link is a colour* above for all three.
-16a. **And every anchor register answers the pointer.** A register that pins its
+
+    16a. **And every anchor register answers the pointer.** A register that pins its
     own colour silently takes the `a:hover` step away — `.work-col-foot a` and
     `.int-form-note a` are (0,1,1) exactly as the step is, and the later sheet
     wins — and one that is already `--color-text-primary` at rest, like `.cell-seat` and
@@ -13449,7 +13450,8 @@ to.
     that is `--color-text-primary` at rest steps to the accent ink, which is what says *this
     name* is the link rather than the row around it. Nothing in
     `styles/` can check this today — it needs a real cascade, not a parse.
-16b. **Text takes the ink, never the fill.** Every status family is three
+
+    16b. **Text takes the ink, never the fill.** Every status family is three
     rungs: the base is what a thing is painted *with* — a primary button, a
     status dot, a meter bar — the `-soft` is the ground it tints, and the
     `-ink` is the one of the three that is a text colour. The design system
@@ -13462,7 +13464,8 @@ to.
     at 1.72:1 on a 9px digit, so the unread count rendered as a dot. That
     badge is the ACCENT's ink on the accent's soft ground now: a count of
     things waiting for the reader is "act here", never a caution.
-16c. **The faint rung is decoration, and that is a contrast rule.**
+
+    16c. **The faint rung is decoration, and that is a contrast rule.**
     `--color-text-muted` is about 3:1 against the ground in *both* themes, which is
     the floor a non-text mark takes and not the 4.5 a word needs. Spent on a
     word it is a word nobody can read — it had decayed onto twenty-six rules,

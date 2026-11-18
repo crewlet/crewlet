@@ -5559,6 +5559,7 @@ answers carries one shape:
   second late, or with a clock a little ahead, therefore holds back nothing
   the others include, and a question carrying no instant is refused rather
   than answered as of a node's own clock.
+
 `turns` merges in two passes — every data node's page, then every data node's share of
 exactly the turns any page listed — so a turn resumed on another node after a
 restart is one row folded from both halves. The window is pinned to the asker's clock
@@ -7985,6 +7986,7 @@ is about** and **what would make the same request land**:
   attempt), `notes_full` (the notes a running turn holds unread),
   `notes_spent` (the notes a turn takes, which must not invite one either)
   and `budget_exhausted` (a token window).
+
 A refusal of one of [Gitlet's](../concepts/gitlet.md) writes also
 names Gitlet's own word for it in **`refusal`** — `head_moved`,
 `target_moving`, `queue_full`, `gate_unmet`, the write's `conflict` and the
