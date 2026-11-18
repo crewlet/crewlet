@@ -594,3 +594,40 @@ func TestTheStandingCountBoundKeepsTheFirstPageQuick(t *testing.T) {
 			"re-measure BenchmarkTheStandingCountsAtTheirBound before raising it", gitlet.MaxStandingCounted)
 	}
 }
+
+// A CI'S REPORT STANDS AS THE SUBJECT IT MEASURES: a report names no purpose, holding no queue, so
+// a failed one at web!1's head stands as that change's head check, a running one at main's tip as
+// the tip's, and one at a commit that is neither stands nowhere; the first page counts them so.
+//
+// Mutation: judge a reported attempt by its purpose alone and web stands at nothing, its counts
+// zero.
+func TestACIsReportStandsAsTheSubjectItMeasures(t *testing.T) {
+	t.Parallel()
+	e := newStandingEstate(t)
+	w, _, _, _ := checksWriterOn(t, e.n)
+	report := func(oid, name string, state gitlet.CheckState) {
+		t.Helper()
+		key := gitlet.CheckKey{RepoID: e.web, OID: oidOf(oid), Target: mainRef, Name: name, Attempt: 1}
+		res, err := w.Publish(t.Context(), reporting(key, state, ""))
+		requireChecked(t, "the CI's report of "+name, res, err)
+	}
+	report("B", "lint", gitlet.CheckStateFailed)
+	report("A", "deploy", gitlet.CheckStateRunning)
+	report("E", "stale", gitlet.CheckStateFailed)
+	rows, counts, _ := standingRead(t, e.n, gitlet.ReadQuery{Asker: ada, Repo: "web", Checks: &gitlet.CheckQuery{
+		Standing: gitlet.StandingRecent}})
+	if got, want := labels(rows), []string{"web/deploy", "web/lint"}; !slices.Equal(got, want) {
+		t.Fatalf("web stands at %v, want %v", got, want)
+	}
+	if deploy := rows[0]; deploy.Change != nil || deploy.ChangeHead != "" {
+		t.Errorf("the tip's reported row names %+v at %q, want no change", deploy.Change, deploy.ChangeHead)
+	}
+	if lint := rows[1]; lint.Change == nil || lint.Change.Ref != "web!1" || lint.SourceRef != featureRef ||
+		lint.ChangeHead != oidOf("B") {
+		t.Errorf("the head's reported row names %+v from %q at %s, want web!1 from feature at B", lint.Change,
+			lint.SourceRef, lint.ChangeHead)
+	}
+	if counts == nil || counts.Counts != (gitlet.CheckCounts{Running: 1, Failed: 1}) {
+		t.Errorf("the counts are %+v, want one running and one failed", counts)
+	}
+}
