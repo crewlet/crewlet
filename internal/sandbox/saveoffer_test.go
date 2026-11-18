@@ -504,7 +504,10 @@ func TestAStoppingCoordinatorTakesNoSaveAndStampsTheOneItCut(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
 		rig, _, _ := savingRig(t, memory.NewFleet(), newTakerStore())
+		// THE FLEET'S RECORD BUDGET: the keeping rig's 200 ms is shorter than
+		// the second this store takes to answer, so it would cut any stamp.
 		rig.coordinator.pending = stampsAcrossTheWire{PendingStore: rig.coordinator.pending}
+		rig.coordinator.recordBudget = sessionRecordBudget
 		rig.launchKept(t, "t1")
 		rig.now = rig.now.Add(rigSaveInterval)
 		streaming := make(chan struct{})
