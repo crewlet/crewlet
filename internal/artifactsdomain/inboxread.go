@@ -38,6 +38,10 @@ type InboxQuery struct {
 	// REQUIRED, one of [inbox.SnoozeScopes].
 	Snoozed inbox.SnoozeScope `json:"snoozed"`
 
+	// Record narrows the read to the one notice of that record id, sought by
+	// the table's key; every other narrowing still applies. Empty narrows nothing.
+	Record string `json:"record,omitempty"`
+
 	// Limit is the page's size, at most [inbox.MaxRows]; zero is that.
 	// Cursor is the last notice's place of the page before, "" for the
 	// first.
@@ -266,6 +270,9 @@ type inboxScan struct {
 
 	scope  string
 	asleep string
+
+	// record is the one notice a `record` read seeks ([inboxRecordSQL]), empty for a range.
+	record string
 }
 
 // floor is the range's exclusive lower bound, raised under `unread` to the
@@ -287,6 +294,11 @@ func (s inboxScan) run(ctx context.Context, tx *sql.Tx, limit int) ([]InboxNotic
 			return 1
 		}
 		return 0
+	}
+	if s.record != "" {
+		return scanInbox(ctx, tx, s.handle, inboxRecordSQL, s.record, s.handle, s.before, s.after,
+			flag(s.restricted), s.reasons, flag(s.unread), s.unreadMarks, s.readMarks, s.seenStream, s.seenAt,
+			s.scope, s.asleep, s.asleep)
 	}
 	floor := s.floor()
 	out, err := scanInbox(ctx, tx, s.handle, inboxScanSQL, s.handle, s.before, floor, flag(s.restricted),
@@ -344,7 +356,7 @@ func scanInbox(ctx context.Context, tx *sql.Tx, handle, statement string, args .
 // or the snoozed notices of a person who snoozed none).
 func inboxScanOf(q InboxQuery, marks inbox.Classifier, now time.Time) (inboxScan, bool, error) {
 	s := inboxScan{handle: q.Handle, before: math.MaxInt64, restricted: q.PrimaryOnly, unread: q.Unread,
-		scope: string(q.Snoozed)}
+		scope: string(q.Snoozed), record: q.Record}
 	if q.Cursor != "" {
 		at, err := statelog.ParsePosition(q.Cursor)
 		if err != nil {
@@ -443,7 +455,8 @@ func (r *Reader) NoticeThreads(ctx context.Context, refs []ThreadRef, fresh stat
 
 // The inbox's statements: inboxScanSQL is one range of the inbox index with
 // every filter bound (`unread` is internal/inbox's rule in SQL), inboxMarkedSQL
-// the unread-listed notices below it, noticeThreadsSQL each named thread.
+// the unread-listed notices below it, inboxRecordSQL one notice by its key under
+// the same filters, noticeThreadsSQL each named thread.
 const (
 	inboxColumns = `n.record_id, n.log_seq, n.log_stream, n.log_generation, n.created_at, n.reason,
 			n.addressed, n.op, n.artifact_id, n.thread_id, n.remark_id, n.excerpt, n.actor, n.actor_kind`
@@ -462,6 +475,15 @@ const (
 		FROM json_each(?) AS j CROSS JOIN artifact_notifications AS n
 		WHERE n.record_id = CAST(j.value AS TEXT) AND n.recipient = ? AND n.log_seq < ? AND n.log_seq > ?
 			AND (NOT ? OR n.reason IN (SELECT value FROM json_each(?)))
+			AND CASE ? WHEN 'exclude' THEN n.record_id NOT IN (SELECT value FROM json_each(?))
+				WHEN 'only' THEN n.record_id IN (SELECT value FROM json_each(?)) ELSE 1 END`
+	inboxRecordSQL = `SELECT ` + inboxColumns + `
+		FROM artifact_notifications AS n INDEXED BY sqlite_autoindex_artifact_notifications_1
+		WHERE n.record_id = ? AND n.recipient = ? AND n.log_seq < ? AND n.log_seq > ?
+			AND (NOT ? OR n.reason IN (SELECT value FROM json_each(?)))
+			AND (NOT ? OR n.record_id IN (SELECT value FROM json_each(?))
+				OR (n.record_id NOT IN (SELECT value FROM json_each(?))
+					AND NOT (n.log_stream = ? AND n.log_seq <= ?)))
 			AND CASE ? WHEN 'exclude' THEN n.record_id NOT IN (SELECT value FROM json_each(?))
 				WHEN 'only' THEN n.record_id IN (SELECT value FROM json_each(?)) ELSE 1 END`
 	noticeThreadsSQL = `SELECT t.artifact_id, t.id, t.status, t.version, t.quote, t.resolved_by,
