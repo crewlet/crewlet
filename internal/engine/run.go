@@ -3210,12 +3210,13 @@ func (e *Engine) Drain(ctx context.Context) {
 			announced.Go(func() { e.publishLifecycle(ctx, ev) })
 		}
 		// AND THE SESSIONS OF THE DIRECT JOBS THIS NODE LAUNCHED ARE SAVED
-		// BESIDE THE WAIT FOR TURNS, not after it: such a job dies with this
-		// process, its relaunch continues its newest save, and the wait for
-		// turns is time the drain already spends. Joined before the drain
-		// returns, so the teardown closes nothing a save still writes through;
-		// bounded by its own wait (the sandbox package doc's "A save as its
-		// node drains").
+		// BESIDE THE WAIT FOR TURNS, not after it: the stop a drain comes
+		// before usually takes such a job with its container, unit or host,
+		// its relaunch continues its newest save, and the wait for turns is
+		// time the drain already spends. Joined before the drain returns, so
+		// the teardown closes nothing a save still writes through; bounded by
+		// its own wait (the sandbox package doc's "A save as its node
+		// drains").
 		saved := make(chan struct{})
 		go func() {
 			defer close(saved)
