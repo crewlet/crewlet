@@ -27,9 +27,11 @@ import (
 // FIFTEEN SECONDS: the main thread at its bound, its chain, count and receipts
 // in one walk, reads in 2.78 to 2.85 s on two cores of the engine host (the
 // executor's claudechain.go), twice that on a loaded host or streamed through
-// envd, with a large thread's wait for its one slot inside it. A read past it
-// answers [CountUnread] and decides no receipt, the safe side. It is held in
-// the box read's budget ([BoxReadBudget]) before the take.
+// envd. A read past its base waits for the executor's one large slot INSIDE
+// this wait, never beside it: 11.4 s at worst behind one holder (the executor's
+// package doc, "A collection's read of a thread"). A read past it answers
+// [CountUnread] and decides no receipt, the safe side. It is held in the box
+// read's budget ([BoxReadBudget]) before the take.
 const MainThreadReadWait = 15 * time.Second
 
 // mainThreadReader is a [Runner] whose harness reads the main thread of the
