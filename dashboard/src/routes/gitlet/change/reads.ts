@@ -58,6 +58,7 @@ import {
   type CodeReviewRow,
   type CodeReviewerRow,
   type CodeChangeMoveRow,
+  type CodeChangeQueueEntryRow,
   type CodeRevisionRow,
   type CodeViewedRow,
   type LogRefusal,
@@ -74,6 +75,7 @@ export const CHANGE_POLL_MS = 60_000;
 /** A part of a change, as the page asks for it. */
 export type ChangePartName =
   | "moves"
+  | "queue"
   | "reviewers"
   | "comments"
   | "reviews"
@@ -124,6 +126,12 @@ export function changePartParams(
 export function partMovedBy(change: CodeChangeDetail, part: ChangePartName | "said"): string {
   // A MOVE IS A LIFECYCLE RECORD'S, and every one moves the change's version.
   if (part === "files" || part === "diff" || part === "moves") return String(change.version);
+  // A QUEUE ENTRY is added, tested and ended by the queue's records, which write no change row
+  // but its landing: its live entry, as the readiness's queue condition names it, says when.
+  if (part === "queue") {
+    const queued = change.readiness?.preconditions.find((p) => p.kind === "queue")?.queue;
+    return `${change.version}/${queued?.entry_id ?? ""}/${queued?.state ?? ""}`;
+  }
   // THE READER'S OWN MARKS move with the change's state alone: an ended change keeps none.
   if (part === "viewed") return change.state;
   const conversation = change.conversation;
@@ -240,6 +248,8 @@ const commentsOf = (a: CodeChangeAnswer) => a.comments ?? [];
 const findingsOf = (a: CodeChangeAnswer) => a.findings ?? [];
 const reviewersOf = (a: CodeChangeAnswer) => a.reviewers ?? [];
 const movesOf = (a: CodeChangeAnswer) => a.moves ?? [];
+const queueOf = (a: CodeChangeAnswer) => a.queue_entries ?? [];
+const queueId = (row: CodeChangeQueueEntryRow) => row.entry_id;
 // A MOVE IS ITS RECORD'S AND ITS KIND'S: one edit may set a title and a description at once.
 const moveId = (row: CodeChangeMoveRow) =>
   `${row.position.generation}:${row.position.seq}:${row.kind}`;
@@ -270,7 +280,8 @@ function usePagedPart<T>(
     | "reviewers"
     | "finding_paths"
     | "viewed"
-    | "moves",
+    | "moves"
+    | "queue",
   pick: (a: CodeChangeAnswer) => readonly T[],
   idOf: (row: T) => string,
   extra: Readonly<Record<string, string | number | undefined>>,
@@ -323,6 +334,13 @@ export function usePagedMoves(
   change: CodeChangeDetail,
 ): Paged<CodeChangeMoveRow, CodeChangeAnswer> {
   return usePagedPart(change, "moves", movesOf, moveId, {}, partMovedBy(change, "moves"));
+}
+
+/** A change's queue entries, every page the reader asked for, in queue order. */
+export function usePagedQueue(
+  change: CodeChangeDetail,
+): Paged<CodeChangeQueueEntryRow, CodeChangeAnswer> {
+  return usePagedPart(change, "queue", queueOf, queueId, {}, partMovedBy(change, "queue"));
 }
 
 /** A change's comments, every page the reader asked for, in thread order. */

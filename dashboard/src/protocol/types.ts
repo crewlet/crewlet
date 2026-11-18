@@ -9000,6 +9000,10 @@ export interface CodeRevisionRow {
   push_id?: string;
   position: LogPosition;
   at: string;
+  /** How the push that made it was built (`git`, `engine`); absent where no push made it. */
+  via?: string;
+  /** It rewrote the source branch: a force-push, or through the engine a rebase onto the target. */
+  forced?: boolean;
   /** Absent for a revision its home has recorded no facts of yet. */
   facts?: CodeRevisionFacts;
 }
@@ -9182,6 +9186,8 @@ export interface CodeChangeAnswer extends CodePage {
   reviewers?: CodeReviewerRow[];
   /** The `moves` part: the moves of its lifecycle, oldest first. */
   moves?: CodeChangeMoveRow[];
+  /** The `queue` part: its queue entries, in queue order. */
+  queue_entries?: CodeChangeQueueEntryRow[];
   comments?: CodeCommentRow[];
   reviews?: CodeReviewRow[];
   findings?: CodeFindingRow[];
@@ -9217,6 +9223,29 @@ export interface CodeChangeMoveRow {
   became?: string;
   position: LogPosition;
   at: string;
+}
+
+/**
+ * One queue entry of a change (`gitlet.ChangeQueueEntry`): who added it to its
+ * target's queue and where, and for one that ended how (`reason`, absent for a
+ * landing), what an ejection named and the commit a landing made, with the
+ * positions of the records that enqueued and ended it.
+ */
+export interface CodeChangeQueueEntryRow {
+  entry_id: string;
+  target_ref: string;
+  head_oid: string;
+  method: string;
+  enqueued_by: CodeParty;
+  state: (typeof QUEUE_STATES)[number] | (string & {});
+  reason?: string;
+  checks?: string[];
+  paths?: string[];
+  commit_oid?: string;
+  enqueued_position: LogPosition;
+  enqueued_at: string;
+  ended_position?: LogPosition;
+  ended_at?: string;
 }
 
 /** One line of a finding's excerpt (`gitlet.ExcerptLine`). */

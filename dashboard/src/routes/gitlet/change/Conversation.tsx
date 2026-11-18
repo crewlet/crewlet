@@ -41,6 +41,7 @@ import {
   GitPullRequestClosedGlyph,
   GitPullRequestDraftGlyph,
   GitPullRequestGlyph,
+  ListOrderedGlyph,
   MessageSquareGlyph,
   PencilGlyph,
   ShieldUserGlyph,
@@ -53,22 +54,25 @@ import { useDraftState } from "~/app/assistant/draft.ts";
 import { PageFailed } from "~/components/common.tsx";
 import { FINDING_SEVERITIES, SOURCE_DELETED } from "~/contract/code.ts";
 import { WriteButton, pressable } from "~/components/WriteButton.tsx";
+import { ago } from "~/lib/ago.ts";
+import { ejectReasonWord } from "~/lib/checks.ts";
 import { changeLive, refName } from "~/lib/code.ts";
 import { useNow } from "~/lib/clock.ts";
-import { plural } from "~/lib/format.ts";
+import { fmtDateTime, plural } from "~/lib/format.ts";
 import { renderMarkdown } from "~/lib/markdown.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import type {
   CodeChangeDetail,
   CodeChangeMoveRow,
+  CodeChangeQueueEntryRow,
   CodeCommentRow,
   CodeFindingRow,
   CodeReviewRow,
   CodeReviewerRow,
   CodeRevisionRow,
 } from "~/protocol/index.ts";
-import { ownedPathList } from "../owners.ts";
+import { namesSaid, ownedPathList } from "../owners.ts";
 import { changeHref, repoHref } from "../paths.ts";
 import { BranchChip, Byline, Face, GITLET, ShaChip, useWhoName } from "../ui.tsx";
 import { Description } from "./Description.tsx";
@@ -94,6 +98,7 @@ import {
   usePagedExcerpts,
   usePagedFindings,
   usePagedMoves,
+  usePagedQueue,
   usePagedReviewers,
   usePagedReviews,
   type LatestChecks,
@@ -111,12 +116,19 @@ type Entry =
     }
   | { kind: "revision"; at: CodeRevisionRow["position"]; revision: CodeRevisionRow }
   | { kind: "ask"; at: CodeReviewerRow["position"]; ask: CodeReviewerRow; again: boolean }
-  | { kind: "move"; at: CodeChangeMoveRow["position"]; move: CodeChangeMoveRow };
+  | { kind: "move"; at: CodeChangeMoveRow["position"]; move: CodeChangeMoveRow }
+  | {
+      kind: "queue";
+      at: CodeChangeQueueEntryRow["enqueued_position"];
+      entry: CodeChangeQueueEntryRow;
+      ended: boolean;
+    };
 
 /**
  * The timeline's entries, in the order their records landed: each review, each
  * thread by its first comment with its replies under it, each revision, each
- * ask that stands or was withdrawn, and each move of its lifecycle. A thread on a finding is drawn with
+ * ask that stands or was withdrawn, each move of its lifecycle, and each queue
+ * entry's enqueue and, where it ended, its end. A thread on a finding is drawn with
  * its finding; an answered or ended ask's position is the record that moved it.
  * An ask after a review of the reviewer's own is one asked `again`.
  */
@@ -126,6 +138,7 @@ export function timelineOf(
   revisions: readonly CodeRevisionRow[],
   asks: readonly CodeReviewerRow[] = [],
   moves: readonly CodeChangeMoveRow[] = [],
+  queued: readonly CodeChangeQueueEntryRow[] = [],
 ): Entry[] {
   const threads = new Map<string, { root: CodeCommentRow; replies: CodeCommentRow[] }>();
   for (const c of comments) {
@@ -155,6 +168,12 @@ export function timelineOf(
         ),
       })),
     ...moves.map((move) => ({ kind: "move" as const, at: move.position, move })),
+    ...queued.flatMap((entry) => [
+      { kind: "queue" as const, at: entry.enqueued_position, entry, ended: false },
+      ...(entry.ended_position
+        ? [{ kind: "queue" as const, at: entry.ended_position, entry, ended: true }]
+        : []),
+    ]),
   ];
   return entries.sort((a, b) =>
     positionBefore(a.at, b.at) ? -1 : positionBefore(b.at, a.at) ? 1 : 0,
@@ -174,6 +193,8 @@ export function entryKey(entry: Entry): string {
       return `ask-${entry.ask.kind}:${entry.ask.reviewer}`;
     case "move":
       return `move-${entry.move.position.generation}:${entry.move.position.seq}:${entry.move.kind}`;
+    case "queue":
+      return `queue-${entry.entry.entry_id}-${entry.ended ? "ended" : "added"}`;
   }
 }
 
@@ -199,13 +220,21 @@ export function Conversation({
   // ONE READ for the timeline's asks and the rail's reviewers.
   const asked = usePagedReviewers(change);
   const moves = usePagedMoves(change);
+  const queued = usePagedQueue(change);
   // A FINDING ROW MOVES ONLY WITH WHAT SOMEBODY SAID: the placements a push
   // moves are Files changed's to read.
   const findings = usePagedFindings(change, change.revision, partMovedBy(change, "said"));
   const excerpts = usePagedExcerpts(change);
-  const entries = timelineOf(reviews.items, comments.items, revisions, asked.items, moves.items);
+  const entries = timelineOf(
+    reviews.items,
+    comments.items,
+    revisions,
+    asked.items,
+    moves.items,
+    queued.items,
+  );
   const askedRefused = partRefusal(asked);
-  const parts = [reviews, comments, asked, findings, excerpts, moves];
+  const parts = [reviews, comments, asked, findings, excerpts, moves, queued];
   const excerptsRefused = partRefusal(excerpts);
   const excerptOf = (id: string): ExcerptRead => {
     const found = excerpts.items.find((e) => e.id === id);
@@ -500,6 +529,10 @@ function TimelineEntry({
     case "revision": {
       const v = entry.revision;
       const head = v.n === change.revision;
+      // A REBASE IS THE ENGINE'S ONE PUSH THAT REWRITES A BRANCH (gitlet.WriteRebaseChange),
+      // onto the target its facts were measured against, else the change's.
+      const rebased = v.via === "engine" && v.forced;
+      const onto = refName(v.facts?.target_ref ?? change.target_ref).name;
       return (
         <TimelineEvent
           disc={<Disc glyph={<GitCommitVerticalGlyph size="sm" />} size="small" />}
@@ -526,7 +559,7 @@ function TimelineEntry({
             who={v.pusher}
             verb={
               <>
-                pushed{" "}
+                {rebased ? "rebased" : v.forced ? "force-pushed" : "pushed"}{" "}
                 <a
                   className="prose-link code-tl-strong"
                   href={changeHref(change.repo, change.number, {
@@ -536,6 +569,12 @@ function TimelineEntry({
                 >
                   revision {v.n}
                 </a>
+                {rebased && (
+                  <>
+                    {" "}
+                    onto <BranchChip name={onto} href={repoHref(change.repo, { ref: onto })} />
+                  </>
+                )}
               </>
             }
             at={v.at}
@@ -554,6 +593,8 @@ function TimelineEntry({
       return <AskEntry ask={entry.ask} again={entry.again} now={now} />;
     case "move":
       return <MoveEntry move={entry.move} change={change} now={now} />;
+    case "queue":
+      return <QueueEntry entry={entry.entry} ended={entry.ended} change={change} now={now} />;
     case "thread":
       return (
         <TimelineItem face={entry.root.author}>
@@ -631,6 +672,101 @@ function MoveEntry({
       under={said ? <blockquote className="code-tl-note">{move.reason}</blockquote> : undefined}
     >
       <Byline who={move.by || GITLET} verb={moveVerb(move, change.repo)} at={move.at} now={now} />
+    </TimelineEvent>
+  );
+}
+
+/** Why an entry left its queue other than by landing or an ejection, after "It left the queue". */
+const DEQUEUE_WORDS: Readonly<Record<string, string>> = {
+  closed: "as it was closed",
+  drafted: "as it was made a draft",
+  retargeted: "as its target changed",
+  merged: "as a push merged it",
+};
+
+/** What an ejection found, in words: its reason, and the checks or paths it named. */
+export function ejectedWords(entry: CodeChangeQueueEntryRow): string {
+  const said = ejectReasonWord(entry.reason ?? "");
+  const named = entry.checks?.length ? entry.checks : entry.paths?.length ? entry.paths : [];
+  if (named.length === 0) return said;
+  return `${said}: ${namesSaid(named.slice(0, 3), Math.max(0, named.length - 3))}`;
+}
+
+/**
+ * A queue entry where its records landed: who added the change to its target's
+ * queue, then how the entry ended. A landing and an ejection are the queue's own
+ * (Gitlet's); a dequeue names nobody, since the entry keeps only why it left.
+ */
+function QueueEntry({
+  entry,
+  ended,
+  change,
+  now,
+}: {
+  entry: CodeChangeQueueEntryRow;
+  ended: boolean;
+  change: CodeChangeDetail;
+  now: number;
+}) {
+  const target = refName(entry.target_ref).name;
+  const chip = <BranchChip name={target} href={repoHref(change.repo, { ref: target })} />;
+  const disc = <Disc glyph={<ListOrderedGlyph size="sm" />} size="small" />;
+  if (!ended) {
+    return (
+      <TimelineEvent disc={disc}>
+        <Byline
+          who={entry.enqueued_by.handle}
+          verb={<>added it to the queue for {chip}</>}
+          at={entry.enqueued_at}
+          now={now}
+        />
+      </TimelineEvent>
+    );
+  }
+  if (entry.state === "landed") {
+    return (
+      <TimelineEvent
+        disc={disc}
+        end={entry.commit_oid ? <ShaChip oid={entry.commit_oid} /> : undefined}
+      >
+        <Byline
+          who={GITLET}
+          verb={<>landed it on {chip} through the queue</>}
+          at={entry.ended_at}
+          now={now}
+        />
+      </TimelineEvent>
+    );
+  }
+  if (entry.state === "ejected") {
+    return (
+      <TimelineEvent disc={disc}>
+        <Byline
+          who={GITLET}
+          verb={`took it out of the queue: ${ejectedWords(entry)}`}
+          at={entry.ended_at}
+          now={now}
+        />
+      </TimelineEvent>
+    );
+  }
+  const why = DEQUEUE_WORDS[entry.reason ?? ""];
+  return (
+    <TimelineEvent disc={disc}>
+      <span className="code-byline">
+        <span className="code-byline__verb">
+          {why ? `It left the queue ${why}` : "It was taken out of the queue"}
+        </span>
+        {entry.ended_at && (
+          <time
+            className="code-byline__when"
+            dateTime={entry.ended_at}
+            title={fmtDateTime(entry.ended_at)}
+          >
+            {ago(entry.ended_at, now, { clock: true })}
+          </time>
+        )}
+      </span>
     </TimelineEvent>
   );
 }

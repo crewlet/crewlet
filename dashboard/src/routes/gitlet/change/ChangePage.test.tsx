@@ -1454,6 +1454,65 @@ test("the timeline draws each move of the change's lifecycle, by whom, where it 
   ]);
 });
 
+// THE QUEUE'S ENTRIES STAND IN THE TIMELINE: who added the change to the queue,
+// and how each entry ended, where its record landed: an ejection with what it
+// found and named, a dequeue with why, and a landing as the queue's. A revision
+// the engine's rebase made says it was rebased onto its target, and a
+// force-push says so.
+// Mutation: leave the queue part out of the timeline, word every revision as
+// pushed, or drop an ejection's checks, and this fails.
+test("the timeline draws the change's queue entries and says which revisions were rebased", async () => {
+  const queued = (id: string, enq: number, extra = {}) => ({
+    entry_id: id,
+    target_ref: "refs/heads/main",
+    head_oid: HEAD,
+    method: "merge",
+    enqueued_by: { handle: "cto", kind: "agent" },
+    state: "waiting",
+    enqueued_position: at(enq),
+    enqueued_at: "2026-10-27T11:00:00Z",
+    ...extra,
+  });
+  const ended = (seq: number) => ({ ended_position: at(seq), ended_at: "2026-10-27T11:30:00Z" });
+  stubEngine(detail(), () => json({}), {
+    "": page({
+      change: detail(),
+      revisions: [
+        { ...revisionRow(3, 70), via: "engine", forced: true },
+        { ...revisionRow(2, 40), via: "git", forced: true },
+        { ...revisionRow(1, 10), via: "git" },
+      ],
+    }),
+    queue: page({
+      queue_entries: [
+        queued("e1", 20, {
+          state: "ejected",
+          reason: "checks_undefined",
+          checks: ["lint", "unit"],
+          ...ended(30),
+        }),
+        queued("e2", 50, { state: "dequeued", reason: "asked", ...ended(60) }),
+        queued("e3", 80, { state: "landed", commit_oid: HEAD, ...ended(90) }),
+      ],
+    }),
+  });
+  mount();
+  await waitFor(() => expect(timelineWords()).toHaveLength(10));
+  expect(timelineWords().slice(1)).toEqual([
+    expect.stringMatching(/^Engineer pushed revision 1/),
+    expect.stringMatching(/^CTO added it to the queue for main/),
+    expect.stringMatching(
+      /^Gitlet took it out of the queue: its branch's checks file defines a check its gate requires in no form that runs: lint and unit/,
+    ),
+    expect.stringMatching(/^Engineer force-pushed revision 2/),
+    expect.stringMatching(/^CTO added it to the queue for main/),
+    expect.stringMatching(/^It was taken out of the queue/),
+    expect.stringMatching(/^Engineer rebased revision 3 onto main/),
+    expect.stringMatching(/^CTO added it to the queue for main/),
+    expect.stringMatching(/^Gitlet landed it on main through the queue/),
+  ]);
+});
+
 // A REVIEW'S DISC WEARS ITS VERDICT'S TONE, the verdict said in words beside
 // it (rule C7). Mutation: drop the Comment tag, and a comment reads as no verdict.
 test("a review's disc wears its verdict's tone, and the verdict is said in words", async () => {
