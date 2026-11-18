@@ -14,7 +14,7 @@
  * excerpt says cannot disagree.
  */
 
-import { markdownInline, parseMarkdown, type MarkdownBlock } from "@crewlethq/ui";
+import { markdownCodeText, markdownInline, parseMarkdown, type MarkdownBlock } from "@crewlethq/ui";
 
 /**
  * One run of inline markdown as the text it renders to.
@@ -37,9 +37,9 @@ export function inlineText(text: string): string {
     if (g.esc !== undefined) {
       out.push(g.esc);
     } else if (g.tick !== undefined) {
-      // A code span's own content, minus the one padding space CommonMark lets
-      // a span carry so it can start with a backtick.
-      out.push((g.code ?? "").replace(/^ | $/g, ""));
+      // A code span's own content, read as the grammar reads it: a line ending
+      // is a space, and one space goes from each end only when both have one.
+      out.push(markdownCodeText(g.code ?? ""));
     } else if (g.src !== undefined) {
       // AN IMAGE IS ITS ALT TEXT, which is what alt text is for. One with no alt
       // contributes nothing rather than a filename nobody wrote.
