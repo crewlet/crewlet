@@ -8895,7 +8895,11 @@ other. A `200` answers **per log**:
     {"domain": "atlas", "stream": "CREWLET_ATLAS_LOG",
      "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.atlas:node-4",
      "outcome": "applied",
-     "position": {"stream": "CREWLET_ATLAS_LOG", "generation": 0, "seq": 310}}
+     "position": {"stream": "CREWLET_ATLAS_LOG", "generation": 0, "seq": 310}},
+    {"domain": "advisor", "stream": "CREWLET_ADVISOR_LOG",
+     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.advisor:node-4",
+     "outcome": "applied",
+     "position": {"stream": "CREWLET_ADVISOR_LOG", "generation": 0, "seq": 5140}}
   ]
 }
 ```
