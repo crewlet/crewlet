@@ -266,3 +266,46 @@ func TestAFixThatNoLongerBuildsIsNotApplicable(t *testing.T) {
 		t.Fatalf("a change that breaks a rule answered %+v (%v), state %s, want not applicable", out, err, log.row.State)
 	}
 }
+
+// A RE-CHECK'S PREVIEW SAYS THE CHANGE IN WORDS, by the rule every change a
+// person approves is shown by (catalog.ChangeRows): labelled by their raw keys
+// and valued as JSON, its rows read as a code diff ("health_tools: true").
+// Mutation: label a row by its field again, or say a truth as JSON, and the
+// case goes red.
+func TestARechecksPreviewSaysTheChangeInWords(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name          string
+		before, after map[string]any
+		want          PreviewRow
+	}{
+		{"a switch set where the seat had none", map[string]any{"handle": "dev"},
+			map[string]any{"handle": "dev", "health_tools": true},
+			PreviewRow{Field: "health_tools", Label: "Health tools", After: ptr("Yes")}},
+		{"a nested number raised", map[string]any{"handle": "dev", "sandbox": map[string]any{"max_turns": 30}},
+			map[string]any{"handle": "dev", "sandbox": map[string]any{"max_turns": 60}},
+			PreviewRow{Field: "sandbox.max_turns", Label: "Sandbox › max turns", Before: ptr("30"), After: ptr("60")}},
+	}
+	for _, c := range cases {
+		after, _ := json.Marshal(c.after)
+		rows, err := previewRows(c.before, after)
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("%s: rows = %+v (%v), want one", c.name, rows, err)
+		}
+		if got := rows[0]; got.Field != c.want.Field || got.Label != c.want.Label ||
+			deref(got.Before) != deref(c.want.Before) || deref(got.After) != deref(c.want.After) ||
+			(got.Before == nil) != (c.want.Before == nil) {
+			t.Errorf("%s: row = %s %q %q→%q, want %s %q %q→%q", c.name, got.Field, got.Label, deref(got.Before),
+				deref(got.After), c.want.Field, c.want.Label, deref(c.want.Before), deref(c.want.After))
+		}
+	}
+}
+
+func ptr(s string) *string { return &s }
+
+func deref(s *string) string {
+	if s == nil {
+		return "<none>"
+	}
+	return *s
+}
