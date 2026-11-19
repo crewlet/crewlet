@@ -3001,9 +3001,9 @@ bound holds; one thread's at a time, a subagent's thread past them read on and
 not whole); and the ask to `sandbox.MaxBridgeCalls` (200). Every id it keeps is
 one the log's call-id rule holds: an id is the box's word, as long as a value
 the layer reads whole, and a call under any other is one nothing can link,
-answer or notice. It reads in a slot of its own, one
-(`HoldingsReadsAtOnce`), outside the seats' and the process's transcript reads,
-and waits for it inside its wait. Measured (`BenchmarkAReadingAtItsBounds`, on a dedicated
+answer or notice. It reads in a slot of its own, one (`HoldingsReadsAtOnce`),
+outside the seats' and the process's transcript reads, and waits for it inside
+its wait. Measured (`BenchmarkAReadingAtItsBounds`, on a dedicated
 two-core build slot, one case a process, a time the spread of three runs at the
 default GOGC; what is held at most the largest live heap with the collector run
 at every tenth of the heap's growth, and a peak the largest heap at the default
@@ -4788,8 +4788,8 @@ tells by the save point, as before.
 
 **What it leaves.** Toward over-telling: a session continued by another
 release (no pair is read); a step's `completed` written as a number literal
-past 64 KiB, which no writer writes; Code Mode's calls, a
-subagent's, a truncated or cut-argument call; and a run call identical to an
+past 64 KiB, which no writer writes; Code Mode's calls, a subagent's, a
+truncated or cut-argument call; and a run call identical to an
 earlier job's call of the round, since no record states where the cut-off
 job's brief read the log. Toward a false hold, each on the text-equality
 standard: a refusal in OpenCode's own words equal to a logged failure alike in

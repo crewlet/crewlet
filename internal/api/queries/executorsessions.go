@@ -77,10 +77,10 @@ import (
 // read and printed.
 //
 // And a node decodes at most [executor.TranscriptReadsAtOnce] transcripts at
-// once, whichever socket or REST caller asks, since one read can hold on the
-// order of a hundred mebibytes: a read past them waits for a slot, its object
-// not yet opened, for as long as its caller waits, and ends with the caller's
-// own error where the caller leaves first.
+// once, whichever socket or REST caller asks, since one read can hold 134 MiB,
+// measured of a line at its 32 MiB bound: a read past them waits for a slot,
+// its object not yet opened, for as long as its caller waits, and ends with
+// the caller's own error where the caller leaves first.
 //
 // # A session in progress, and one its turn went past, said in the domain's words
 //

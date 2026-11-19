@@ -24,15 +24,14 @@ import (
 // WHICH OF A ROUND'S CALLS AN OPENCODE SESSION HOLDS, read off its kept export
 // by what each call was ([Runner.ReadHoldings]): OpenCode names no call to the
 // engine, so the reading counts the run's parts of each class of calls
-// ([sandbox.CallClass]), and a class is held only where every call of it has
-// a part the continuation hands its model verbatim. The reading is a visitor
-// of the one export walk ([scanExport]), keeping what it asks of each member
-// as the walk reads it and deciding each item and message at its end; it
-// holds no value whole. The package doc's "An OpenCode session's calls are
-// read by what they were" has the rules, the pool, the order check, the
-// bounds and the memory;
-// ADR-0073's amendment "a cut-off OpenCode session is read by content, held to
-// its run and its class" what they leave.
+// ([sandbox.CallClass]), and a class is held only where every call of it has a
+// part the continuation hands its model verbatim. The reading is a visitor of
+// the one export walk ([scanExport]), keeping what it asks of each member as
+// the walk reads it and deciding each item and message at its end; it holds no
+// value whole. The package doc's "An OpenCode session's calls are read by what
+// they were" has the rules, the pool, the order check, the bounds and the
+// memory; ADR-0073's amendment "a cut-off OpenCode session is read by content,
+// held to its run and its class" what they leave.
 
 // openCodeBridgedPrefix opens the name OpenCode gives each tool of the
 // engine's own MCP server, offered directly ([openCodeMCP]): the server's

@@ -2219,11 +2219,11 @@ route asks. A relaunch's reading of a kept session for the calls it holds is
 none of them: one runs at a time, in a slot of its own
 (`HoldingsReadsAtOnce`), holding at most 43 MiB (an OpenCode session's at most
 2 MiB, however long one of its messages runs), so the two reads and a reading
-hold at most 311 MiB. A read past them waits for a slot before the session's object is
-opened — an opened object would hold its store's connection while it waited —
-for as long as its caller waits, holding no decoder meanwhile, and a slot frees
-within one bounded read; a caller that leaves first is answered nothing, and
-nothing was opened for it.
+hold at most 311 MiB. A read past them waits for a slot before the session's
+object is opened — an opened object would hold its store's connection while it
+waited — for as long as its caller waits, holding no decoder meanwhile, and a
+slot frees within one bounded read; a caller that leaves first is answered
+nothing, and nothing was opened for it.
 
 **A node holds one large thread read at a time for its collections and
 takes.** A job's collection reads its main thread, and a capture's take scrubs
@@ -2341,10 +2341,11 @@ tools returned.
 model counts (150 a seat a day). A transcript is decoded on the node holding
 the seat, in one of its two transcript slots, and seats take at most one of
 those two between them, so a node whose seats page transcripts still decodes a
-person's. A relaunch's reading of what a cut-off session holds takes that seats'
-slot too, inside its own fifteen-second wait. A call the object store or the node's other reads hold past two
-minutes is answered unavailable, naming the session's size, and never as a
-session that holds nothing.
+person's. A relaunch's reading of what a cut-off session holds takes none of
+these: it reads in its node's one slot for readings, inside its own
+thirty-second wait. A call the object store or the node's other reads hold
+past two minutes is answered unavailable, naming the session's size, and never
+as a session that holds nothing.
 
 **A read holds nothing.** Reading a session writes no record and holds no
 session, so it keeps none past what the seat's budget and the retention give

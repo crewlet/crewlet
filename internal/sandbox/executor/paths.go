@@ -408,13 +408,14 @@
 // turn's relaunch is told; apart, it never does. One slot, not two: the
 // process's thread readers then hold at worst 2 x 134 + 43 + 48 = 359 MiB
 // beside the base tier: the two transcript reads, a relaunch's reading in its
-// own slot ([HoldingsReadsAtOnce]) and this one. One waiter behind a pass over ordinary lines at the bound (2.6 to
-// 2.8 s with the count and the next request's estimate, 5.7 s loaded) is
-// through in 11.4 s, within the 27 s. Behind the slot's slowest holder, loaded,
-// it is not: a pass keeping more than [collectionBaseRecords] records holds the
-// slot to its end whatever its lines, so a collection whose chain keeps the
-// records of 2^20 short lines of blocks of an empty kind, at the bound (18.3 to
-// 19.7 s with the count alone, 20.7 to 21.6 s with the next request's estimate,
+// own slot ([HoldingsReadsAtOnce]) and this one. One waiter behind a pass over
+// ordinary lines at the bound (2.6 to 2.8 s with the count and the next
+// request's estimate, 5.7 s loaded) is through in 11.4 s, within the 27 s.
+// Behind the slot's slowest holder, loaded, it is not: a pass keeping more than
+// [collectionBaseRecords] records holds the slot to its end whatever its lines,
+// so a collection whose chain keeps the records of 2^20 short lines of blocks
+// of an empty kind, at the bound (18.3 to 19.7 s with the count alone, 20.7 to
+// 21.6 s with the next request's estimate,
 // BenchmarkTheMainThreadReadAtItsBound, twice that loaded), holds it until its
 // own MainThreadReadWait cuts it. One such line to the bound, 18.6 to 18.8 s
 // (20.8 to 21.7 s estimating), one record of few facts, holds none. That
