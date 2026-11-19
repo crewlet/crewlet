@@ -116,6 +116,9 @@ describe("selecting a picture the page links", () => {
     await opened();
     expect(picture()!.alt).toBe("After the fix");
     expect(viewer().activeElement).toBe(button("Close"));
+    // Moved there by the viewer itself: an artifact's frame is another
+    // origin's, where the browser refuses `autofocus` with a console error.
+    expect(button("Close").autofocus).toBe(false);
     await userEvent.keyboard("{Escape}");
     await eventually(() => expect(open()).toBe(false));
     expect(inPage().activeElement).toBe(link);
@@ -154,6 +157,23 @@ describe("selecting a picture the page links", () => {
     expect(count()).toBe("3 of 3");
     button("Previous file").click();
     expect(count()).toBe("2 of 3");
+  });
+
+  test("on a phone-wide frame fills its width, with the steps under it", async () => {
+    frame.style.width = "390px";
+    try {
+      await eventually(() => expect(frame.contentWindow!.innerWidth).toBe(390));
+      select("before");
+      await opened();
+      await eventually(() => expect(picture()?.complete && picture()!.naturalWidth).toBe(320));
+      // ITS OWN FULL WIDTH, 320 pixels, which the frame's 390 fits: between the
+      // two buttons it would have about 254.
+      expect(picture()!.getBoundingClientRect().width).toBe(320);
+      const below = picture()!.getBoundingClientRect().bottom;
+      expect(button("Next file").getBoundingClientRect().top).toBeGreaterThan(below);
+    } finally {
+      frame.style.width = "1200px";
+    }
   });
 
   test("is drawn by the kit's values, whatever the page's own styles say", async () => {
