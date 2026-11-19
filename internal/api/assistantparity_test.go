@@ -5,21 +5,23 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/configapi"
-	"github.com/crewlet/crewlet/internal/api/httpjson"
 	"github.com/crewlet/crewlet/internal/api/livestate"
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/assistant"
@@ -29,6 +31,8 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/evals"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
+	"github.com/crewlet/crewlet/internal/atlas/derive"
+	"github.com/crewlet/crewlet/internal/atlas/gather"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
@@ -39,6 +43,7 @@ import (
 	"github.com/crewlet/crewlet/internal/fleetsecrets"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/iam/session"
+	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/search"
 	"github.com/crewlet/crewlet/internal/secrets"
@@ -50,21 +55,19 @@ import (
 )
 
 // TestPermissionParityAcrossFivePrincipals: THE ASSISTANT SEES WHAT ITS PERSON
-// SEES, AND NOTHING ELSE (ADR-0050), for every read tool in the catalogue.
-//
-// Four people (administrator, Worklet-only, knowledge-base-only,
+// SEES, AND NOTHING ELSE (ADR-0050), for read_api on every GET route the App
+// offers the assistant. Four people (administrator, Worklet-only, knowledge-base-only,
 // overview-only) sign in through the real session arm. Every request a read's
 // turn sends is made again as the person: the SAME BYTES and status
 // ([sameAnswer] excepts a wall-clock instant), a refusal the authority's.
-// Withheld reads are still offered and refused with the person's own code
-// (exec.RefusalOf, cards.PersonRefusal); the curated catalogue never offers
-// one. A Tier A session and a machine token get no grant. Mutation: widen the
-// assist arm (internal/api/auth), let iam.Assistable admit all, leave chat out
-// of [parityWorldOf], send another read.
+// Every route is read whether or not describe_api lists it, since the listing
+// is a filter and never authority; a route the person's own request answers is
+// one describe_api lists. A Tier A session and a machine token get no grant.
+// Mutation: widen the assist arm (internal/api/auth), let iam.Assistable admit
+// all, leave chat out of [parityWorldOf], list less in catalog.ListedReads.
 func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
 	t.Parallel()
 	sources := parityWorld(t)
-	reads := readTools()
 	people := []struct {
 		name   string
 		grants []iam.Grant
@@ -79,32 +82,33 @@ func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
 			t.Parallel()
 			fx := newAssistAppWith(t, who.grants, sources.mount)
 			person := fx.principal(t)
+			reader := genericTools(t, fx)[catalog.ReadAPITool]
+			reads := everyAssistantRead(t, fx)
+			table, err := catalog.NewRouteTable(fx.app.AssistantRoutes())
+			if err != nil {
+				t.Fatal(err)
+			}
+			listed := catalog.ListedReads(table, person)
 
-			// THROUGH THE ASSISTANT: a turn per catalogue read, the
-			// scripted model calling it once and answering. EVERY read is
-			// offered to the turn, not only the ones the curated catalogue
-			// would offer this person, because the offering is a filter and
-			// never authority: a read the person may not make must be
-			// refused by the API itself, exactly as their cookie is.
 			sent := &recordingDispatcher{inner: fx.disp}
 			var rounds []evals.Round
-			for _, tool := range reads {
-				rounds = append(rounds, evals.Call("c-"+tool.Name, tool.Name,
-					assistanttest.ExampleArgs(t, tool.Parameters)), evals.Say("Done."))
+			for i, args := range reads {
+				rounds = append(rounds, evals.Call(fmt.Sprintf("c-%d", i), catalog.ReadAPITool,
+					args), evals.Say("Done."))
 			}
 			rig := assistanttest.NewRig(t, evals.RigOptions{Rounds: rounds,
-				Person: &person, Catalogue: evals.Catalogue(reads), Dispatcher: sent,
-				Revoker: fx.d})
+				Person: &person, Catalogue: evals.Catalogue([]catalog.Tool{reader}),
+				Dispatcher: sent, Revoker: fx.d})
 			onAppClock(rig)
-			curated := catalog.Offered(person, nil)
 			answered, refused := 0, 0
-			for _, tool := range reads {
-				own, err := tool.Request(assistanttest.ExampleArgs(t, tool.Parameters))
+			for _, args := range reads {
+				route, _ := args["route"].(string)
+				own, err := reader.Request(args)
 				if err != nil {
 					t.Fatal(err)
 				}
 				began := time.Now()
-				frames := askOne(t, rig, fx, tool.Name, nil)
+				frames := askOne(t, rig, fx, route, nil)
 				// EVERY REQUEST THE TURN SENT, each made again with the
 				// cookie; the read's own answer then decides the step's.
 				var status int
@@ -114,65 +118,48 @@ func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
 					personStatus, personBody := fx.asPerson(t, got.request)
 					if got.response.Status != personStatus ||
 						!sameAnswer(t, got.response.Body, personBody, time.Since(began)) {
-						t.Errorf("a turn calling %s sent %s, answered %d %s through the "+
-							"assistant and %d %s to the person", tool.Name,
+						t.Errorf("a read of %s sent %s, answered %d %s through the "+
+							"assistant and %d %s to the person", route,
 							requestLine(got.request), got.response.Status, got.response.Body,
 							personStatus, personBody)
-					}
-					if envelope, ok := httpjson.Decode(personBody); ok &&
-						envelope.Code == httpjson.CodeUnknownQuery {
-						t.Errorf("a turn calling %s sent %s, a question this fixture does not "+
-							"serve: give its source to parityWorldOf", tool.Name,
-							requestLine(got.request))
 					}
 					if sameRequest(got.request, own) {
 						status, body, sentOwn = personStatus, personBody, true
 					}
 				}
 				if !sentOwn {
-					t.Errorf("a turn calling %s never sent %s, the request the tool builds",
-						tool.Name, requestLine(own))
+					t.Errorf("a read of %s never sent %s, the request it builds", route,
+						requestLine(own))
 					continue
 				}
-				step := lastStep(t, frames, tool.Name)
+				step := lastStep(t, frames, catalog.ReadAPITool)
 				switch {
 				case status == http.StatusUnauthorized || status == http.StatusForbidden:
 					refused++
 					// THE REFUSAL THE PERSON'S OWN REQUEST GETS: its code
-					// and the permissions that would admit the person, as
-					// the drawer's step shows them, with the engine's
-					// sentence for that kind of refusal (cards.PersonRefusal).
+					// and the permissions that would admit the person, with
+					// the engine's sentence for that kind of refusal.
 					want := cards.PersonRefusal(exec.RefusalOf(exec.Response{Status: status,
 						Body: body}), status)
 					if step.Refusal == nil || !reflect.DeepEqual(*step.Refusal, want) {
 						t.Errorf("%s was refused to the person as %+v and the assistant's "+
-							"step shows %+v", tool.Name, want, step.Refusal)
+							"step shows %+v", route, want, step.Refusal)
 					}
 					if step.State != wire.StepRefused {
 						t.Errorf("%s was refused to the person (%d) and the assistant's step "+
-							"reads %s", tool.Name, status, step.State)
-					}
-					// AND THE CURATED CATALOGUE NEVER OFFERS IT, so a model
-					// is not invited to try what will be refused.
-					if slices.ContainsFunc(curated, func(o catalog.Tool) bool {
-						return o.Name == tool.Name
-					}) {
-						t.Errorf("%s is offered to %s, whose own request it refuses",
-							tool.Name, who.name)
+							"reads %s", route, status, step.State)
 					}
 				case status < 300:
 					answered++
-					// AND THE CURATED CATALOGUE OFFERS IT, so a read the
-					// dashboard answers the person is one the assistant
-					// may make for them.
-					if !slices.ContainsFunc(curated, func(o catalog.Tool) bool {
-						return o.Name == tool.Name
-					}) {
-						t.Errorf("%s answers %s, and is not offered to them", tool.Name, who.name)
+					// A READ THE DASHBOARD ANSWERS THE PERSON is one the
+					// model is told it may make for them.
+					if !slices.Contains(listed, route) {
+						t.Errorf("%s answers %s, and describe_api does not list it", route,
+							who.name)
 					}
 					if step.State != wire.StepDone {
 						t.Errorf("%s answered the person and the assistant's step reads %s",
-							tool.Name, step.State)
+							route, step.State)
 					}
 				}
 			}
@@ -207,9 +194,10 @@ func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
 			t.Parallel()
 			fx := newAssistAppWith(t, []iam.Grant{iam.GrantAdmin}, sources.mount)
 			present := refusedTo.credential(fx)
+			reader := genericTools(t, fx)[catalog.ReadAPITool]
 			answered := 0
-			for _, tool := range reads {
-				req, err := tool.Request(assistanttest.ExampleArgs(t, tool.Parameters))
+			for _, args := range everyAssistantRead(t, fx) {
+				req, err := reader.Request(args)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -235,6 +223,41 @@ func TestPermissionParityAcrossFivePrincipals(t *testing.T) {
 			}
 		})
 	}
+}
+
+// everyAssistantRead is one read_api call per GET route of the assistant's
+// table (the App's routes less the human-only verbs), each wildcard filled
+// with one value, so every route's guard decides a real request.
+func everyAssistantRead(t *testing.T, fx *assistApp) []map[string]any {
+	t.Helper()
+	table, err := catalog.NewRouteTable(fx.app.AssistantRoutes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []map[string]any
+	for _, r := range table.Routes() {
+		method, path, _ := strings.Cut(r.Pattern, " ")
+		if method != http.MethodGet {
+			continue
+		}
+		values := map[string]any{}
+		for _, segment := range strings.Split(path, "/") {
+			if strings.HasPrefix(segment, "{") && segment != "{$}" {
+				name := strings.TrimSuffix(strings.Trim(segment, "{}"), "...")
+				values[name] = "parity"
+			}
+		}
+		args := map[string]any{"route": r.Pattern}
+		if len(values) > 0 {
+			args["path"] = values
+		}
+		out = append(out, args)
+	}
+	if len(out) < 100 {
+		t.Fatalf("the App offers the assistant %d reads; the walk is not reading its table",
+			len(out))
+	}
+	return out
 }
 
 // askOne asks one question in a conversation of its own (titled, so no title
@@ -321,17 +344,6 @@ func sameValue(x, y any, elapsed time.Duration) bool {
 	}
 	// A number, a bool or null, as JSON decodes each: comparable.
 	return x == y
-}
-
-// readTools are the catalogue's read tools.
-func readTools() []catalog.Tool {
-	var out []catalog.Tool
-	for _, tool := range catalog.Tools() {
-		if tool.Kind == catalog.KindRead {
-			out = append(out, tool)
-		}
-	}
-	return out
 }
 
 // paritySources are one company's sources every parity App shares: a live
@@ -726,3 +738,35 @@ func lastStep(t *testing.T, frames []wire.Frame, tool string) wire.StepEvent {
 	t.Fatalf("no step of %s in the turn", tool)
 	return wire.StepEvent{}
 }
+
+// atlasDepsOf is an atlas over company's settings, the deployment answering at
+// the filled host name, and the record sources a fixture has: its reconcile
+// states where it keeps any, and alarms the fleet has evaluated.
+func atlasDepsOf(company *config.Company, reconciles func(context.Context) []integration.State) *builtin.AtlasDeps {
+	return &builtin.AtlasDeps{
+		Settings: func(context.Context) (builtin.AtlasSettings, bool) {
+			return builtin.AtlasSettings{Company: company, Revision: "r1",
+				Deployment: derive.Deployment{APIAddress: "https://crewlet.example.com"}}, true
+		},
+		Records: func(context.Context) gather.Sources {
+			sources := gather.Sources{Alarms: filledAlarms{}}
+			if reconciles != nil {
+				sources.Integrations = reconciledStates(reconciles)
+			}
+			return sources
+		},
+	}
+}
+
+// reconciledStates is the fixture's reconcile states as the atlas reads them.
+type reconciledStates func(context.Context) []integration.State
+
+func (r reconciledStates) LoadIntegrations(ctx context.Context) ([]integration.State, error) {
+	return r(ctx), nil
+}
+
+// filledAlarms is an alarm record the fleet has evaluated, holding none.
+type filledAlarms struct{}
+
+func (filledAlarms) LatestAlarms() []statelog.Alarm { return []statelog.Alarm{} }
+func (filledAlarms) AlarmsEvaluated() bool          { return true }

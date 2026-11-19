@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -319,5 +320,6 @@ func (c Case) Validate() error {
 // answer among them.
 func known(name string) bool {
 	_, ok := catalog.Lookup(name)
-	return ok || name == catalog.AnswerBriefTool
+	return ok || slices.Contains([]string{catalog.AnswerBriefTool, catalog.DescribeAPITool,
+		catalog.ReadAPITool, catalog.ProposeAPIChangeTool}, name)
 }

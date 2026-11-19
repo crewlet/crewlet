@@ -120,8 +120,12 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	if err != nil {
 		return Trial{}, err
 	}
+	tools, err := c.catalogue()
+	if err != nil {
+		return Trial{}, err
+	}
 	rig, err := Assemble(RigOptions{Person: &person, Company: company,
-		Models: &Models{Provider: meter, Key: meter.key}, Catalogue: catalog.Curated{},
+		Models: &Models{Provider: meter, Key: meter.key}, Catalogue: tools,
 		Acts: c.Person.Acts, Handler: handler})
 	if err != nil {
 		return Trial{}, err
@@ -161,6 +165,24 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	trial := judge(c.Expect, frames, refusals, o.scripted())
 	trial.Rounds, trial.Tokens, trial.Latencies = meter.read()
 	return trial, nil
+}
+
+// catalogue is what the case's person is offered: the curated tools and the
+// generic API tools over the routes the case answers, the API a case's world
+// holds. Each route decides inside its handler here, as the case's answer
+// does, so every one is listed and read.
+func (c Case) catalogue() (*catalog.API, error) {
+	var routes []catalog.Route
+	for _, a := range c.Answers {
+		if !slices.ContainsFunc(routes, func(r catalog.Route) bool { return r.Pattern == a.Route }) {
+			routes = append(routes, catalog.Route{Pattern: a.Route})
+		}
+	}
+	tools := &catalog.API{}
+	if err := tools.Bind(routes); err != nil {
+		return nil, fmt.Errorf("answers: %w", err)
+	}
+	return tools, nil
 }
 
 // handler answers each request from the case's answers, by net/http's own

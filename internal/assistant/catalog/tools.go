@@ -5,29 +5,12 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/iam"
-	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // all is the catalogue, built and checked once.
 var all = sync.OnceValues(func() ([]Tool, error) {
 	var out []Tool
-	for _, t := range slices.Concat(readTools(), []Tool{auditRead(), configSectionRead()}, chatReads(),
-		atlasReads()) {
-		// EVERY READ IS A ROUTE'S OWN ANSWER, labelled as one, and read by
-		// the one rule for a surface the engine hosts unless the tool says
-		// its text comes from outside the company (Trust or TrustOf): the
-		// engine's own records, which only its principals write and whose
-		// answer names none of them, are a colleague's. The assistant is
-		// nobody of its own (ADR-0050), so no text is its own either.
-		t.Kind, t.Tier = KindRead, TierRead
-		t.Source = provenance.SourceAPIAnswer
-		if t.Trust == "" {
-			t.Trust = provenance.TrustForHosted("", nil, false)
-		}
-		out = append(out, t)
-	}
 	out = append(out, writeTools()...)
 	out = append(out, interactionTools()...)
 	out = append(out, engineDocTools()...)
@@ -52,8 +35,9 @@ var all = sync.OnceValues(func() ([]Tool, error) {
 	return out, nil
 })
 
-// Tools are every tool the assistant may be offered, in the order a model
-// meets them: reads, then writes, then the two interaction tools. A
+// Tools are every curated tool the assistant may be offered, in the order a
+// model meets them: writes, then the interaction tools, then the engine's
+// documentation. Every read is the generic [ReadAPITool]'s. A
 // catalogue that does not hold together (a tool declared twice, a card naming
 // a screen the link table does not hold) is a build defect, and panics here
 // on the first read rather than serving a part of it.
@@ -182,14 +166,8 @@ func (t Tool) validate() error {
 	return nil
 }
 
-// offeredTo reports whether a read is offered to p: where it declares Shows,
-// when p sees at least one of those kinds, as its route's answer decides;
-// otherwise when p holds every app it declares.
+// offeredTo reports whether a tool is offered to p: when p holds every app it
+// declares.
 func (t Tool) offeredTo(p iam.Principal) bool {
-	if len(t.Shows) > 0 {
-		return slices.ContainsFunc(t.Shows, func(k authz.ObjectKind) bool {
-			return authz.Shows(p, k)
-		})
-	}
 	return !slices.ContainsFunc(t.Apps, func(g iam.Grant) bool { return !p.Can(g) })
 }

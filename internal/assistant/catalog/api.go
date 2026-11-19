@@ -19,13 +19,14 @@ import (
 )
 
 // THE GENERIC API TOOLS: the person's whole API, through their assistant
-// (ADR-0052's parity). Beside the curated tools, three reach every route the
-// API mounts that the person's grant can reach: [DescribeAPITool] lists routes
+// (ADR-0052's parity). Three tools reach every route the API mounts that the
+// person's grant can reach, and are how Ask Crewlet reads every domain:
+// [DescribeAPITool] lists the routes the person may use, by domain or by words,
 // and answers one's documentation from the API reference, so the model looks a
-// route up, not guesses; [APIRequestTool] reads (GET, HEAD), shaped and fenced
-// by [Shape]; [ProposeAPIChangeTool] writes (POST, PUT, PATCH, DELETE), always
-// a proposal previewed from the resource as it is, sent only from the person's
-// approval (ADR-0051).
+// route up, not guesses; [ReadAPITool] reads (GET), narrowed to the fields a
+// call selects, then shaped and fenced by [Shape]; [ProposeAPIChangeTool]
+// writes (POST, PUT, PATCH, DELETE), always a proposal previewed from the
+// resource as it is, sent only from the person's approval (ADR-0051).
 //
 // A call names a route as [RouteTable] holds it ("PATCH /config"), each
 // wildcard's value apart, every value one escaped segment ([at]), a dot
@@ -55,12 +56,15 @@ const GenericPage = 25
 // sent as it named it.
 var genericReadQuery = map[string]url.Values{
 	"GET /agents/{id}": seatAlone,
+	// A ROOM ANSWERS WHOLE, so fifteen of the largest fit one step where
+	// [GenericPage] of them do not.
+	"GET /chatlet/channels": {"limit": {"15"}},
 }
 
 // The generic tools, by name.
 const (
 	DescribeAPITool      = "describe_api"
-	APIRequestTool       = "api_request"
+	ReadAPITool          = "read_api"
 	ProposeAPIChangeTool = "propose_api_change"
 )
 
@@ -94,6 +98,30 @@ type Route struct {
 	// removed, so the preview refuses one the call did not declare in
 	// `removes`.
 	Replaces bool
+	// Apps are the apps a read deciding inside its handler draws on, as the
+	// question behind it is registered; nil where it needs none.
+	Apps []iam.Grant
+	// QuestionApps are, for [QuestionRoute], the apps each question it asks
+	// draws on, by name.
+	QuestionApps map[string][]iam.Grant
+}
+
+// QuestionRoute is the route any registered question is asked on by name.
+const QuestionRoute = "GET /query/{what}"
+
+// VerbApps are the apps a read decided by verb a draws on: its row's app, the
+// apps it admits on any one of, or admin for an administrator's verb.
+func VerbApps(a authz.Action) []iam.Grant {
+	if app, _ := authz.AppOf(a); app != "" {
+		return []iam.Grant{app}
+	}
+	if apps, _ := authz.AnyOf(a); len(apps) > 0 {
+		return slices.Clone(apps)
+	}
+	if class, _ := authz.ClassOf(a); class == authz.ClassAdmin {
+		return []iam.Grant{iam.GrantAdmin}
+	}
+	return nil
 }
 
 // createsWhenAbsent reports a route that creates what an empty address names.
@@ -111,11 +139,8 @@ func (r Route) Path() string {
 	return path
 }
 
-// reads reports a route a read grant may send: a GET or a HEAD.
-func (r Route) reads() bool {
-	m := r.Method()
-	return m == http.MethodGet || m == http.MethodHead
-}
+// reads reports a route a read sends: a GET.
+func (r Route) reads() bool { return r.Method() == http.MethodGet }
 
 // writeMethods are the methods a generic change may send.
 var writeMethods = []string{http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
@@ -141,11 +166,10 @@ func NewRouteTable(routes []Route) (*RouteTable, error) {
 		switch {
 		case !ok || !strings.HasPrefix(path, "/") || strings.ContainsAny(path, " ?#"):
 			return nil, fmt.Errorf("catalog: route %q is not METHOD /path", r.Pattern)
-		case method != http.MethodGet && method != http.MethodHead &&
-			!slices.Contains(writeMethods, method):
+		case method != http.MethodGet && !slices.Contains(writeMethods, method):
 			return nil, fmt.Errorf("catalog: route %q sends a method no generic tool sends",
 				r.Pattern)
-		case t.byPattern[r.Pattern] != (Route{}):
+		case t.byPattern[r.Pattern].Pattern != "":
 			return nil, fmt.Errorf("catalog: route %q is given twice", r.Pattern)
 		}
 		if r.Action != "" {
@@ -181,22 +205,6 @@ func (t *RouteTable) patterns(keep func(Route) bool) []string {
 	for _, r := range t.routes {
 		if keep(r) {
 			out = append(out, r.Pattern)
-		}
-	}
-	return out
-}
-
-// readPatterns are the patterns a read may be sent on: every read route, and
-// every GET as a HEAD as well, which the API's mux serves on the same route.
-func (t *RouteTable) readPatterns() []string {
-	var out []string
-	for _, r := range t.routes {
-		if !r.reads() {
-			continue
-		}
-		out = append(out, r.Pattern)
-		if r.Method() == http.MethodGet {
-			out = append(out, http.MethodHead+" "+r.Path())
 		}
 	}
 	return out
@@ -254,13 +262,21 @@ func (a *API) Offered(p iam.Principal, acts []string) []Tool {
 	return out
 }
 
-// GenericTools are the three generic API tools over table, for p, whose act
-// route writes are the act tools acts names: the routes p may use, the read,
-// and the change. Built for one turn, because what they may name is the
-// person's.
+// GenericTools are the generic API tools over table, for p, whose act route
+// writes are the act tools acts names: the routes p may use, the read where
+// the table holds a read, and the change where it holds a change. Built for
+// one turn, because what they may name is the person's.
 func GenericTools(table *RouteTable, p iam.Principal, acts []string) []Tool {
 	g := generic{table: table, person: p, acts: slices.Clone(acts)}
-	tools := []Tool{g.describe(), g.read(), g.change()}
+	// A TOOL ONLY OVER ROUTES OF ITS KIND: a table with no change route
+	// offers no change.
+	tools := []Tool{g.describe()}
+	if len(table.patterns(Route.reads)) > 0 {
+		tools = append(tools, g.read())
+	}
+	if len(table.patterns(func(r Route) bool { return !r.reads() })) > 0 {
+		tools = append(tools, g.change())
+	}
 	for i := range tools {
 		tools[i].Parameters = tools[i].schema.JSON()
 		if err := tools[i].validate(); err != nil {
@@ -306,17 +322,20 @@ func (g generic) describe() Tool {
 	return Tool{
 		Name: DescribeAPITool, Kind: KindDocs, Tier: TierRead,
 		Phrase: "look up the API",
-		Description: "List the API routes you can use for this person, or read one route's " +
-			"documentation. With no route, it lists every route: its method and path, " +
-			"whether it reads or changes something, and whether a change asks the person " +
-			"to confirm it is them. With a route, it answers that route's documentation " +
-			"from the engine's API reference. Look a route up here before api_request or " +
-			"propose_api_change rather than guessing it.",
+		Description: "Find the routes this person can use, or read one route's " +
+			"documentation. With a domain, it lists that domain's routes; with query, the " +
+			"routes whose path or documentation holds those words; each with what it is " +
+			"for, its query parameters and what it answers. With a route, it answers that " +
+			"route's documentation from the engine's API reference. Look a route up here " +
+			"before read_api or propose_api_change rather than guessing it. The domains " +
+			"this person can read, with the routes each starts with:\n" + g.domainMap(),
 		schema: object(nil, map[string]*schema{
+			"domain": text("One domain from the list, as it is written there: \"worklet\", "+
+				"\"agents\".", nameBytes),
+			"query": text("Words to find routes by, matched against each route's path and "+
+				"documentation.", lineBytes),
 			"route": text("One route to read the documentation of, \"METHOD /path\" "+
 				"as the list names it.", 160),
-			"search": text("Words to narrow the list by, matched against each route's "+
-				"path and documentation.", lineBytes),
 		}),
 		// IN THE PERSON'S WORDS: what is being looked up is the engine's
 		// own reference, which a step never names by its route.
@@ -332,21 +351,23 @@ func (g generic) describe() Tool {
 
 func (g generic) read() Tool {
 	return Tool{
-		Name: APIRequestTool, Kind: KindRead, Tier: TierRead, Phrase: "read from the API",
+		Name: ReadAPITool, Kind: KindRead, Tier: TierRead, Phrase: "read from the API",
 		// THE ENGINE'S OWN RECORDS, by the one rule for a surface the engine
-		// hosts, as a curated read's are; TrustOf reads the route a call named.
+		// hosts; TrustOf reads the route a call named.
 		Source: provenance.SourceAPIAnswer, Trust: provenance.TrustForHosted("", nil, false),
-		Description: "Read anything else this person can read in the engine's API: a GET " +
-			"or HEAD on any route describe_api lists, with its path values and query " +
-			"parameters. Use a dedicated read tool whenever one answers the question, since " +
-			"its card is shaped for the person; use this for everything else. The answer is " +
-			"the route's own JSON, cut to what one step reads, so narrow it with the route's " +
-			"own filters and paging. A list route that pages by limit is read 25 rows at a " +
-			"time unless you name a limit; read on with the cursor it answers.",
+		Description: "Read anything this person can read in the engine: a GET on any route " +
+			"describe_api lists, with its path values and query parameters. The answer is the " +
+			"route's own JSON, cut to what one step reads, so narrow it with the route's own " +
+			"filters and name the fields you need in select. A list route that pages by limit " +
+			"is read 25 rows at a time unless you name a limit; read on with the cursor it " +
+			"answers.",
 		schema: object([]string{"route"}, map[string]*schema{
 			"route": routeArgument, "path": pathArgument, "query": queryArgument,
+			SelectArgument: selectArgument,
+			"cursor": text("The cursor a list route answered, to read its next page.",
+				cursorBytes),
 		}),
-		Routes: g.table.readPatterns(),
+		Routes: g.table.patterns(Route.reads),
 		Build: func(a map[string]any) (exec.Request, error) {
 			req, _, err := g.request(Args(a), true)
 			return req, err
@@ -355,7 +376,34 @@ func (g generic) read() Tool {
 		Fence:   true,
 		Infer:   true,
 		TrustOf: g.trustOf,
+		AppsOf:  g.appsOf,
 	}
+}
+
+// appsOf are the apps a read's answer drew on, of those the person holds: its
+// route's verb's, or the registered question's for a route that decides
+// inside. A card and an answer are tagged with them, so a person who loses an
+// app is no longer shown what was read through it.
+func (g generic) appsOf(args Args) []iam.Grant {
+	route, ok := g.table.Lookup(args.String("route"))
+	if !ok {
+		return nil
+	}
+	apps := route.Apps
+	switch {
+	case route.Action != "":
+		apps = VerbApps(route.Action)
+	case route.Pattern == QuestionRoute:
+		path, _ := pathValues(args["path"])
+		apps = route.QuestionApps[path["what"]]
+	}
+	var held []iam.Grant
+	for _, app := range apps {
+		if g.person.Can(app) {
+			held = append(held, app)
+		}
+	}
+	return held
 }
 
 func (g generic) change() Tool {
@@ -408,11 +456,6 @@ func genericLabel(doing string) func(map[string]any) string {
 // path and its query from query, and for a change the body.
 func (g generic) request(args Args, reading bool) (exec.Request, Route, error) {
 	pattern := args.String("route")
-	head := false
-	if rest, isHead := strings.CutPrefix(pattern, http.MethodHead+" "); isHead && reading {
-		// A HEAD IS ITS GET'S ROUTE, which the mux serves for both.
-		pattern, head = http.MethodGet+" "+rest, true
-	}
 	route, ok := g.table.Lookup(pattern)
 	if verb, kept := g.table.kept[pattern]; kept {
 		return exec.Request{}, Route{}, fmt.Errorf("%s stays with the person: %s", pattern,
@@ -428,7 +471,7 @@ func (g generic) request(args Args, reading bool) (exec.Request, Route, error) {
 			"%s", pattern, ProposeAPIChangeTool)
 	case !reading && route.reads():
 		return exec.Request{}, Route{}, fmt.Errorf("%s only reads; send it with %s",
-			pattern, APIRequestTool)
+			pattern, ReadAPITool)
 	}
 	path, err := pathValues(args["path"])
 	if err != nil {
@@ -438,6 +481,25 @@ func (g generic) request(args Args, reading bool) (exec.Request, Route, error) {
 	if err != nil {
 		return exec.Request{}, Route{}, err
 	}
+	if cursor := args.String("cursor"); cursor != "" {
+		if !reading {
+			return exec.Request{}, Route{}, errors.New("a change reads no cursor")
+		}
+		query.Set("cursor", cursor)
+	}
+	if _, given := args[SelectArgument]; given && !reading {
+		return exec.Request{}, Route{}, errors.New("a change selects no fields")
+	}
+	if _, selectErr := Selection(args); selectErr != nil {
+		return exec.Request{}, Route{}, selectErr
+	}
+	if reading {
+		for name, values := range genericReadQuery[pattern] {
+			if _, named := query[name]; !named {
+				query[name] = slices.Clone(values)
+			}
+		}
+	}
 	if reading && query.Get("limit") == "" && pagedByLimit(pattern) {
 		// A LIST READ IS ONE PAGE UNLESS THE MODEL ASKED FOR ONE: a route that
 		// pages by `limit` answers its own default page (a hundred events,
@@ -446,13 +508,6 @@ func (g generic) request(args Args, reading bool) (exec.Request, Route, error) {
 		// it can answer from, with the route's own cursor to read on, is the
 		// bounded read ([GenericPage]).
 		query.Set("limit", strconv.Itoa(GenericPage))
-	}
-	if reading {
-		for name, values := range genericReadQuery[pattern] {
-			if _, named := query[name]; !named {
-				query[name] = slices.Clone(values)
-			}
-		}
 	}
 	if _, asked := query[authz.DryRunQuery]; asked && !reading {
 		// A CHANGE IS THE WRITE: the preview asks the route's own check
@@ -465,9 +520,6 @@ func (g generic) request(args Args, reading bool) (exec.Request, Route, error) {
 	req, err := fill(pattern, path, query)
 	if err != nil {
 		return exec.Request{}, Route{}, err
-	}
-	if head {
-		req.Method = http.MethodHead
 	}
 	if route.Action == "" && route.Pattern == ActRoute {
 		// THE ACT ROUTE CARRIES A TOOL OF THE PERSON'S OWN: the viewer's
@@ -714,15 +766,16 @@ func queryValues(v any) (url.Values, error) {
 // (a harness's whole record of a run, every file it read and every command's
 // output, and the listing beside it, whose asks and endings quote them); and
 // the integrations and their agents' access, which carry a vendor's refusals
-// and its names for levels, accounts and scope entries, as the curated read of
-// one agent's access is fenced. An answer of one is fenced as external; every
+// and its names for levels, accounts and scope entries; and the atlas, whose
+// rows an integration's users and anybody with a push name, one entry read as
+// its sources say ([atlasEntryTrust]). An answer of one is fenced as external; every
 // other route's as a colleague's, unless it carries an executor's question
 // (the decisions waiting on a person, and the ones they answered:
 // [decisionRows]) or names a connected knowledge base as its backend.
 var outsideRoutes = []string{
 	"/agents/{id}/sessions", "/agents/{id}/sessions/{turn_id}",
 	"/events", "/turns", "/executors", "/query/{what}",
-	"/integrations", "/setup/integrations/{kind}/access",
+	"/integrations", "/setup/integrations/{kind}/access", "/atlas",
 }
 
 // decisionRows is where a decisions answer keeps an executor's question: on
@@ -730,12 +783,27 @@ var outsideRoutes = []string{
 // and the ones they answered (/worklet/decisions/answered) alike.
 const decisionRows, runAskField = "items", "run.question"
 
+// knowledgeQuestion is the question a knowledge search is asked as.
+const knowledgeQuestion = "knowledge"
+
 // trustOf is a generic read's trust, by the route it was sent to and by what
 // its answer holds: an executor's question is read by the one rule for an
 // executor's words (provenance.Executor) whichever route carries it, as the
 // curated reads of the same decisions read it.
 func (g generic) trustOf(args Args, answer any) Trusted {
 	route, _ := g.table.Lookup(args.String("route"))
+	path, _ := pathValues(args["path"])
+	switch {
+	case route.Pattern == atlasEntryRoute:
+		return atlasEntryTrust(answer)
+	case route.Pattern == QuestionRoute && path["what"] == knowledgeQuestion:
+		// A KNOWLEDGE SEARCH is read as each backend labels its hits.
+		return knowledgeTrust(answer)
+	case route.Path() == "/executors" && carriesRunAsk(answer, "runs", "question"):
+		// AN EXECUTOR'S QUESTION is its words whichever route carries it.
+		l := provenance.Executor("")
+		return Trusted{Trust: l.Trust, Source: l.Source}
+	}
 	for _, prefix := range outsideRoutes {
 		if strings.HasPrefix(route.Path(), prefix) {
 			return Trusted{Trust: provenance.TrustExternal}
