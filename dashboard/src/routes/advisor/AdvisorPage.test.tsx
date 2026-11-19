@@ -23,7 +23,10 @@ import { ranked } from "./words.ts";
 
 vi.mock("./GoLiveReview.tsx", () => ({ GoLiveReview: () => <p>Review what each agent can do</p> }));
 
-const NOW = Date.now();
+// A FIXED MIDDAY: a row words its instants by the reader's calendar day, so a
+// fixture taken from the real clock read "3 days ago" for two days near
+// midnight. Every case's clock is held here (beforeEach).
+const NOW = Date.parse("2026-06-10T12:00:00Z");
 const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
 
 let serial = 0;
@@ -156,10 +159,12 @@ function mount(
 
 beforeEach(() => {
   serial = 0;
+  vi.useFakeTimers({ now: NOW, toFake: ["Date"] });
 });
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 // THE OWNER'S ORDER: the most costly severity first, then the largest

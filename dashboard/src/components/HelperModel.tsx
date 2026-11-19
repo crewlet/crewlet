@@ -1,7 +1,8 @@
 /**
  * The one setting each of Crewlet's two helpers has: the model it runs on
- * (`assistant.model` for Ask Crewlet, `advisor.model` for the Advisor), shown
- * in the head of the helper's own page and chosen there by an administrator.
+ * (`assistant.model` for Ask Crewlet, `advisor.model` for the Advisor), chosen
+ * by an administrator in Settings › Models alone, on By job's helper lines;
+ * neither helper's own page names it.
  *
  * WHICH MODELS CAN RUN A HELPER IS THE ENGINE'S ANSWER (`llm_entries`'
  * `helper_problem`): a model whose harness keeps tools of its own that Crewlet
@@ -14,14 +15,10 @@
  * key, which turns Ask Crewlet off and the Advisor's model work with it.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Select, Text } from "@crewlethq/ui";
 import { documentLimit } from "~/lib/limits.ts";
-import { useQuery } from "~/lib/useQuery.ts";
-import { useConfigWriteAccess } from "~/lib/useWriteAccess.ts";
 import { useSettingWrite, type SettingPlan } from "~/lib/useSettingWrite.ts";
-import type { ModelEntriesAnswer } from "~/protocol/models.ts";
-import type { CompanyDocument } from "~/protocol/types.ts";
 import { SettingWriteStatus, standingWords } from "./SettingWriteStatus.tsx";
 
 /** The two helpers, by the block of the company document each is set in. */
@@ -155,50 +152,4 @@ export function HelperModel({ helper, current, choices, canAssign, onApplied }: 
       ) : null}
     </span>
   );
-}
-
-/**
- * Every model of the company as a helper's choice, with the engine's reason
- * where it cannot run one: the administrator's reading, the only one that
- * says it, and the only reader who chooses.
- */
-export function helperChoices(answer: ModelEntriesAnswer | null): HelperChoice[] {
-  if (answer?.reading !== "admin") return [];
-  return answer.entries.map((entry) => ({
-    key: entry.key,
-    model: entry.model,
-    problem: entry.helper_problem,
-  }));
-}
-
-/**
- * A helper's model as its page draws it: the key assigned, read off the
- * company document an administrator reads, the company's models to choose
- * from, and whether this reader may choose. A reader who may not choose is
- * told the model's name by the page from what it already reads.
- */
-export function useHelperModel(helper: Helper): {
-  current: string | null;
-  choices: HelperChoice[];
-  canAssign: boolean;
-  reload: () => void;
-} {
-  const access = useConfigWriteAccess();
-  const entries = useQuery("llm_entries", undefined, { enabled: access.can });
-  const config = useQuery("config", undefined, { enabled: access.can });
-  const doc = (config.data as CompanyDocument | null) ?? null;
-  const held = doc ? documentLimit(doc, HELPERS[helper].settingKey) : undefined;
-  const choices = useMemo(() => helperChoices(entries.data), [entries.data]);
-  const { refetch: refetchEntries } = entries;
-  const { refetch: refetchConfig } = config;
-  const reload = useCallback(() => {
-    refetchEntries();
-    refetchConfig();
-  }, [refetchEntries, refetchConfig]);
-  return {
-    current: typeof held === "string" && held !== "" ? held : null,
-    choices,
-    canAssign: access.can,
-    reload,
-  };
 }

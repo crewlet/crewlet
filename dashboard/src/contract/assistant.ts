@@ -950,7 +950,7 @@ export interface AssistantViewerAssistant {
 }
 
 /** A helper's model as anybody is shown it: its `providers.llm` key and the model it names. */
-export interface AssistantViewerModel {
+interface AssistantViewerModel {
   key: string;
   label: string;
 }
