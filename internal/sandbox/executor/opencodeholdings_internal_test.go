@@ -650,11 +650,11 @@ func TestOnlyAPartOpenCodeHandsItsModelVerbatimCounts(t *testing.T) {
 // A MARKED CHANGE ENDS THE READING: a fourth item type, an assistant step with
 // an unknown key or `metadata`, a step `time` name outside its set (2.3.0's
 // firstToken among them), an item no object, a list cut part way or no list,
-// a `completed` time null, 0, a string or absent, and no `info` are no
-// reading.
+// a `completed` time null, 0, one a double reads as 0, a string or absent,
+// and no `info` are no reading.
 //
-// Mutation: drop the item faults as the person reader does, or read
-// `completed` for its presence, and a case goes red.
+// Mutation: drop the item faults as the person reader does, read `completed`
+// for its presence, or for a digit other than 0, and a case goes red.
 func TestAMarkedChangeEndsTheReading(t *testing.T) {
 	t.Parallel()
 	c := ohCall(1, "echo", `{"t":1}`, "done")
@@ -669,6 +669,7 @@ func TestAMarkedChangeEndsTheReading(t *testing.T) {
 		"completed null":         ohDoc(ohUser, strings.Replace(step, `"completed":4`, `"completed":null`, 1)),
 		"completed 0":            ohDoc(ohUser, strings.Replace(step, `"completed":4`, `"completed":0`, 1)),
 		"completed 0.0e5":        ohDoc(ohUser, strings.Replace(step, `"completed":4`, `"completed":0.0e5`, 1)),
+		"completed 1e-400":       ohDoc(ohUser, strings.Replace(step, `"completed":4`, `"completed":1e-400`, 1)),
 		"completed a string":     ohDoc(ohUser, strings.Replace(step, `"completed":4`, `"completed":"4"`, 1)),
 		"completed absent":       ohDoc(ohUser, strings.Replace(step, `,"completed":4`, ``, 1)),
 		"a step with no content": ohDoc(ohUser, strings.Replace(ohStep(), `"content":[],`, ``, 1)),

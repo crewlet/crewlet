@@ -400,8 +400,8 @@ var (
 )
 
 // openCodeStepTimes holds a step's `time` to its set, each name once, and its
-// `completed` to a JSON number above zero: the export holds settled steps
-// only, and a step with any other is one the import may drop.
+// `completed` to a number above zero ([positiveNumber]): the export holds
+// settled steps only, and a step with any other is one the import may drop.
 func openCodeStepTimes(raw json.RawMessage) error {
 	if !wireObject(raw) {
 		return errOpenCodeMalformed
@@ -427,16 +427,16 @@ func openCodeStepTimes(raw json.RawMessage) error {
 	return nil
 }
 
-// positiveNumber reports whether raw is a JSON number above zero: no sign,
-// and a digit other than 0 before its exponent.
+// positiveNumber reports whether raw is a JSON number above zero as a
+// double reads it, as JSON.parse does: one that underflows to 0 is falsy to
+// the import, and one past the double's range is refused with it. raw is a
+// value the walk validated, so a leading digit makes it a number.
 func positiveNumber(raw json.RawMessage) bool {
 	if len(raw) == 0 || raw[0] < '0' || raw[0] > '9' {
 		return false
 	}
-	if e := bytes.IndexAny(raw, "eE"); e >= 0 {
-		raw = raw[:e]
-	}
-	return bytes.ContainsAny(raw, "123456789")
+	v, err := strconv.ParseFloat(string(raw), 64)
+	return err == nil && v > 0
 }
 
 // stringIs reports whether raw is a JSON string whose text is want, its span

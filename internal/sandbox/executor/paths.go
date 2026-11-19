@@ -118,8 +118,9 @@
 // at a compaction of any status ([openCodeRestart]) every part fact dropped;
 // an assistant step's names within its set and none twice, no `metadata`, its
 // `time` names within `created`, `streamed` and `completed`, once each, the
-// last a JSON number above zero (a settled step, the only kind the export
-// holds); each item an object of type text, reasoning or tool, the list whole.
+// last a number a double reads above zero, as JSON.parse does (a settled step,
+// the only kind the export holds); each item an object of type text,
+// reasoning or tool, the list whole.
 //
 // A PART COUNTS only where it is `crewlet_` and a name the bridge files a tool
 // by, `executed` absent or false, its names within OpenCode's six and its
