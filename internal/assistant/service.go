@@ -195,8 +195,7 @@ const turnRateScope = "assistant.turn"
 
 // offeredTools is what a turn of person may call: the catalogue's offer, or a
 // brief's reads, with the web where the company reads it.
-func (s *Service) offeredTools(ctx context.Context, person iam.Principal, acts []string,
-	briefing bool) []catalog.Tool {
+func (s *Service) offeredTools(person iam.Principal, acts []string, briefing bool) []catalog.Tool {
 
 	offered := s.catalogue.Offered(person, acts)
 	var tools []catalog.Tool
@@ -490,8 +489,8 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	}
 
 	if past != nil {
-		if err := s.supersede(ctx, ts.Person, ts.Key, *past); err != nil {
-			return wire.TurnAccepted{}, err
+		if supersedeErr := s.supersede(ctx, ts.Person, ts.Key, *past); supersedeErr != nil {
+			return wire.TurnAccepted{}, supersedeErr
 		}
 	}
 	t := s.newTurn(ts.Person, ts.Conversation, id, ts.Key, ts.Read, ts.Page, acts)
@@ -511,24 +510,24 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		t.cancel(nil)
 		s.hub.Forget(id)
 	}
-	if _, err := s.records.OpenTurn(ctx, t.write().Step("open"), assistantdomain.NewTurn{
+	if _, openErr := s.records.OpenTurn(ctx, t.write().Step("open"), assistantdomain.NewTurn{
 		Conversation: ts.Conversation, Turn: id, Node: s.node, PromptVersion: t.promptVersion(),
 		Model: provider.Model(), ProviderKey: key, TraceID: traceOf(ctx), Page: chip,
-	}); errors.Is(err, assistantdomain.ErrTurnOpen) {
+	}); errors.Is(openErr, assistantdomain.ErrTurnOpen) {
 		// THE SAME KEY IS THE SAME TURN, decided by the record: an attempt
 		// that raced its first one (on another node) starts nothing.
 		abandon()
 		return accepted, nil
-	} else if err != nil {
+	} else if openErr != nil {
 		abandon()
-		return wire.TurnAccepted{}, s.writeFailure(err)
+		return wire.TurnAccepted{}, s.writeFailure(openErr)
 	}
 	t.messages = 1
-	if err := s.records.RecordMessage(ctx, t.write().Step("message", "question"), id,
+	if recordErr := s.records.RecordMessage(ctx, t.write().Step("message", "question"), id,
 		assistantdomain.NewMessage{ID: assistantdomain.MessageID(id, 1), Role: wire.RoleUser,
-			Text: input, Page: chip, Attachments: refsOf(attached)}); err != nil {
+			Text: input, Page: chip, Attachments: refsOf(attached)}); recordErr != nil {
 		s.log.WarnContext(ctx, "assistant_record_failed", "turn", id, "record", "question",
-			"error", redact.Secrets(err.Error()))
+			"error", redact.Secrets(recordErr.Error()))
 	}
 	// A CONVERSATION IS NAMED BY ITS FIRST QUESTION AT ONCE, whatever its
 	// first turn then does: stopped, failed or parked on a change, it is
@@ -548,7 +547,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	}
 
 	c, organization := s.company()
-	tools := s.offeredTools(ctx, ts.Person, acts, briefing)
+	tools := s.offeredTools(ts.Person, acts, briefing)
 	earlier := historyEntries(history, ts.Person)
 	t.used(historyApps(earlier))
 	summary := summaryOf(history, ts.Person)

@@ -184,7 +184,7 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	s.track(t)
 	go t.run(loopRun{ //nolint:contextcheck // the turn's own lifetime (t.ctx, under the service's base), never the request's: a turn outlives the POST that started it
 		messages: messages, provider: provider, key: key, meter: meter,
-		tools: s.offeredTools(ctx, person, acts, false), steps: MaxRounds,
+		tools: s.offeredTools(person, acts, false), steps: MaxRounds,
 		timeout: TurnTimeout, decision: decision, screen: screen})
 	return wire.TurnAccepted{TurnID: r.Turn, StreamURL: StreamPath(r.Conversation, r.Turn),
 		AfterSeq: after}, nil

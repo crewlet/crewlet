@@ -113,8 +113,7 @@ var phaseJobs = []struct {
 
 // addressOf is where a reference is answered.
 func addressOf(ref config.ProviderReference) RemovalAt {
-	switch ref.Job {
-	case config.JobAssistant:
+	if ref.Job == config.JobAssistant {
 		return RemovalAt{Assistant: AssistantChat}
 	}
 	return RemovalAt{Seat: ref.Seat, Job: string(ref.Job)}
@@ -291,8 +290,7 @@ func rewrite(c *config.Company, ref config.ProviderReference, id string, to *str
 		}
 		return out
 	}
-	switch ref.Job {
-	case config.JobAssistant:
+	if ref.Job == config.JobAssistant {
 		c.Assistant.Model = ""
 		if to != nil {
 			c.Assistant.Model = *to
