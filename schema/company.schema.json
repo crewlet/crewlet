@@ -175,7 +175,7 @@
               "type": "array"
             }
           ],
-          "description": "The providers.llm entries the analyst runs on, the first first, each held to Ask Crewlet's rules for a member (the harness's local and web tools denied). Absent = the analyst is off."
+          "description": "The providers.llm entries the analyst runs on, the first first, each on a harness a helper can run with no tool of its own. Absent = the analyst is off."
         },
         "max_tokens": {
           "description": "The most tokens one run may spend, every round together, charged to the company's budget and no seat's; a run that reaches it stops and lists what it grounded so far. Absent = 200000; at least 20000.",
@@ -198,58 +198,12 @@
           "$ref": "#/$defs/AssistantDeepWork",
           "description": "Deep work: Ask Crewlet hands a large task to a harness running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."
         },
-        "deliberate": {
-          "$ref": "#/$defs/AssistantDeliberate",
-          "description": "A stronger model chain for hard questions: a person asks for it with Think harder, one question at a time, and briefs of a decision may use it. Held to assistant.llm's rules and charged to the same budgets. Absent: every question runs on assistant.llm."
-        },
-        "enabled": {
-          "description": "Run Ask Crewlet for this company. Absent or false: off.",
-          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
+        "model": {
+          "description": "The providers.llm key Ask Crewlet runs on: an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools. Absent: Ask Crewlet is off.",
           "type": [
-            "boolean",
             "string",
-            "null"
-          ]
-        },
-        "llm": {
-          "anyOf": [
-            {
-              "type": [
-                "string",
-                "number",
-                "boolean",
-                "null"
-              ]
-            },
-            {
-              "items": {
-                "type": [
-                  "string",
-                  "number",
-                  "boolean",
-                  "null"
-                ]
-              },
-              "type": "array"
-            }
-          ],
-          "description": "providers.llm keys Ask Crewlet runs on, a fallback chain. Required when enabled. Each must be an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools."
-        },
-        "max_steps": {
-          "description": "Most model rounds one Ask Crewlet turn may take before its answer, each calling any number of tools, 1..40. Absent: 30.",
-          "maximum": 40,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "proposal_ttl_seconds": {
-          "description": "How long a proposed change waits for approval, 60..3600 seconds. Absent: 900.",
-          "maximum": 3600,
-          "minimum": 0,
-          "type": [
-            "integer",
+            "number",
+            "boolean",
             "null"
           ]
         },
@@ -257,31 +211,9 @@
           "$ref": "#/$defs/AssistantResearch",
           "description": "Web research: Ask Crewlet reads pages, through the engine, from the hosts listed here. Absent: it reads no web page."
         },
-        "retention_days": {
-          "description": "How long a person's Ask Crewlet conversations are kept, 1..365 days. Absent: 30.",
-          "maximum": 365,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
         "token_budget": {
           "$ref": "#/$defs/TokenBudget",
           "description": "Each person's Ask Crewlet token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."
-        },
-        "tools": {
-          "$ref": "#/$defs/AssistantTools",
-          "description": "Which of Ask Crewlet's tools the company turns off for everybody. It only narrows what a person's own permissions already offer."
-        },
-        "turn_timeout_seconds": {
-          "description": "Longest one Ask Crewlet turn may run, 30..1200 seconds. Absent: 900.",
-          "maximum": 1200,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
         }
       },
       "type": [
@@ -334,48 +266,6 @@
         "null"
       ]
     },
-    "AssistantDeliberate": {
-      "additionalProperties": false,
-      "properties": {
-        "decision_briefs": {
-          "description": "Run a brief of a decision (Brief me on this decision) on this chain too. Absent or false: briefs run on assistant.llm.",
-          "pattern": "^(?:y|Y|yes|Yes|YES|n|N|no|No|NO|on|On|ON|off|Off|OFF)$",
-          "type": [
-            "boolean",
-            "string",
-            "null"
-          ]
-        },
-        "llm": {
-          "anyOf": [
-            {
-              "type": [
-                "string",
-                "number",
-                "boolean",
-                "null"
-              ]
-            },
-            {
-              "items": {
-                "type": [
-                  "string",
-                  "number",
-                  "boolean",
-                  "null"
-                ]
-              },
-              "type": "array"
-            }
-          ],
-          "description": "providers.llm keys a question asked to think harder runs on, a fallback chain held to assistant.llm's rules: each an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools. Required."
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
     "AssistantResearch": {
       "additionalProperties": false,
       "properties": {
@@ -397,36 +287,6 @@
         "search": {
           "$ref": "#/$defs/ResearchSearch",
           "description": "Web search over the listed hosts, through the company's own search tool server. Absent: Ask Crewlet reads pages it is given but searches none."
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "AssistantTools": {
-      "additionalProperties": false,
-      "properties": {
-        "deny": {
-          "description": "Tool families Ask Crewlet never offers, each once: writes (every change it could propose, so it only reads), generic_changes (a change to any API route), generic_reads (a read of any API route), chat_writes, atlas_writes, agent_controls (pausing, resuming, steering and answering an agent's run), page_changes (a change to the screen the person has open), deep_work.",
-          "items": {
-            "enum": [
-              "writes",
-              "generic_changes",
-              "generic_reads",
-              "chat_writes",
-              "atlas_writes",
-              "agent_controls",
-              "page_changes",
-              "deep_work",
-              "",
-              null
-            ]
-          },
-          "type": [
-            "array",
-            "null"
-          ]
         }
       },
       "type": [

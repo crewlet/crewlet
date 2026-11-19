@@ -8,8 +8,8 @@ import (
 )
 
 // THE ANALYST'S CHAIN IS HELD TO ASK CREWLET'S RULES, as it reads records as a person's assistant
-// does: off until named, a safe entry handed out, one that keeps its web tools or names no entry
-// refused at admission and by AnalystChain alike, and its bounds held.
+// does: off until named, a safe entry handed out, one on a harness no helper runs on or naming no
+// entry refused at admission and by AnalystChain alike, and its bounds held.
 func TestTheAnalystsChainIsHeldToAskCrewletsRules(t *testing.T) {
 	t.Parallel()
 	doc := func(entries, block string) string {
@@ -27,10 +27,10 @@ func TestTheAnalystsChainIsHeldToAskCrewletsRules(t *testing.T) {
 		a.Ceiling() != DefaultAnalystMaxTokens {
 		t.Errorf("the defaults = %s at %d under %d", a.Every(), a.StartHour(), a.Ceiling())
 	}
-	webbed := "    web:\n      harness: claude-code\n      model: sonnet\n"
+	webbed := "    web:\n      harness: codex\n      model: gpt-5\n"
 	for name, c := range map[string]struct{ doc, field string }{
-		"web tools kept": {doc(webbed, "    llm: [web]\n"), "advisor.analyst.llm[0]"},
-		"no such entry":  {doc(assistantEntry, "    llm: [gone]\n"), "advisor.analyst.llm[0]"},
+		"a harness no helper runs on": {doc(webbed, "    llm: [web]\n"), "advisor.analyst.llm[0]"},
+		"no such entry":               {doc(assistantEntry, "    llm: [gone]\n"), "advisor.analyst.llm[0]"},
 		"an unknown cadence": {doc(assistantEntry, "    llm: [assistant]\n    cadence: hourly\n"),
 			"advisor.analyst.cadence"},
 		"an hour past the day": {doc(assistantEntry, "    llm: [assistant]\n    hour: 24\n"), "advisor.analyst.hour"},

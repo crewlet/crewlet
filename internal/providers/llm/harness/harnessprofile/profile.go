@@ -370,11 +370,11 @@ func (t LocalTools) Valid() bool {
 //
 // A SECOND STANCE BESIDE [LocalTools], not a value of it: local tools are
 // denied for every entry, while web stays on for a seat by default and is
-// turned off PER ENTRY (`overrides: {web_tools: denied}`) for a caller whose
-// security model is that every byte it reads passes the engine's guard. The
-// Dashboard Assistant (ADR-0050) refuses any `assistant.llm` member whose
-// merged profile is not denied here: a page the model fetched itself is text no
-// authority decision saw, and a fetch is also a way OUT for the person's data.
+// turned off per entry (`overrides: {web_tools: denied}`) or for a run whose
+// security model is that every byte it reads passes the engine's guard: a
+// helper's run is always denied here, whatever its entry says (ADR-0050): a
+// page the model fetched itself is text no authority decision saw, and a fetch
+// is also a way OUT for the person's data.
 //
 // The empty value reads as [WebToolsAllowed].
 type WebTools string
@@ -1995,8 +1995,8 @@ func (p *Profile) validateWebStance(add func(string, ...any)) {
 	switch {
 	case p.EffectiveWebTools() == WebToolsDenied && p.WebDenial == nil:
 		// Refused rather than run: the stance would be a claim the harness
-		// does not honour, and the assistant admits an entry on exactly
-		// this claim.
+		// does not honour, and a helper runs an entry on exactly this
+		// claim.
 		add("web_tools is denied but the profile has no web_denial, so this harness "+
 			"has no measured way to turn its web tools off (%s); set "+
 			"overrides.web_denial, or keep web_tools allowed", orUnstated(p.WebToolsNote))

@@ -1053,7 +1053,7 @@ func waitOut(stdout io.Writer, held engineHeld, active string) {
 			fmt.Fprintf(stdout, "%d values in Ask Crewlet conversations are "+
 				"sealed under another key and are not re-sealed: keep that key on the "+
 				"ring until none is left (a conversation leaves once it is untouched "+
-				"for assistant.retention_days, or when its owner clears it)\n", n)
+				"for 30 days, or when its owner clears it)\n", n)
 		}
 	}
 	if held.Executor != nil {

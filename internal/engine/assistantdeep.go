@@ -17,6 +17,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
 	"github.com/crewlet/crewlet/internal/assistant"
+	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/auxspend"
 	"github.com/crewlet/crewlet/internal/config"
@@ -585,7 +586,7 @@ func (d *assistantDeep) Keep(ctx context.Context, b assistant.DeepBox) error {
 	if err != nil {
 		return err
 	}
-	keep := t.company.Config.Assistant.ProposalTTL() + deepKeepGrace
+	keep := proposal.TTL + deepKeepGrace
 	return box.SetTimeout(ctx, keep.Seconds())
 }
 

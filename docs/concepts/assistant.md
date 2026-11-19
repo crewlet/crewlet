@@ -234,11 +234,6 @@ image is refused: paste the text the image shows instead, or ask an
 administrator to turn on deep work. A question that reaches the engine with
 images all the same is answered with the same advice.
 
-**Think harder** on a hard question, where your company sets a stronger model:
-press it beside **Attach image** and the next question is answered by that
-model, which takes longer and costs more. It applies to that one question;
-press it again for another.
-
 **Take you somewhere:** an **Open in app** card links to the dashboard page a
 record lives on. Links come only from the engine's own route table, never from
 text the model wrote.
@@ -364,8 +359,8 @@ The structural limits are why a model that is misled still cannot act on it.
 ## Your conversations and privacy
 
 Your conversations belong to you. They are stored encrypted in the company's
-estate and are kept for **30 days** after you last used them, unless your
-company sets a different retention; then they are deleted. **Clear** deletes a
+estate and are kept for **30 days** after you last used them; then they are
+deleted. **Clear** deletes a
 conversation immediately. If your account is removed, all of your
 conversations are erased.
 
@@ -397,8 +392,9 @@ conversation they came from.
 Ask Crewlet uses tokens from your company's model budget, and your company
 may also set a budget per person, per day, week or month. When a budget is spent, Ask Crewlet
 says so and when it resets, and stops before using more. A turn takes at most
-a few tool steps and a couple of minutes; a question that needs more is best
-split in two.
+40 model rounds and 20 minutes, a change it proposes waits 15 minutes for your
+approval, and your conversations are kept 30 days after you last used them;
+none of these is a setting. A question that needs more is best split in two.
 
 ## When Ask Crewlet cannot answer
 

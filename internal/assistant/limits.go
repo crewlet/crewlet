@@ -3,17 +3,28 @@ package assistant
 import (
 	"time"
 
+	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/live"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 )
 
-// THE TURN'S BOUNDS. What a company sets (the step cap, the turn's wall clock,
-// a proposal's lifetime, the retention) is read from its `assistant:` block
-// through internal/config's accessors and is not restated here; what is
-// stored is bounded by internal/assistantdomain, whose writer refuses past it,
-// and is referenced rather than restated; the frame log's bounds are
-// internal/assistant/live's. What is left is the turn's own.
+// THE TURN'S BOUNDS, fixed for every company: nothing about a turn is a
+// setting. What is stored is bounded by internal/assistantdomain, whose writer
+// refuses past it, and a proposal's lifetime is internal/assistant/proposal's
+// TTL; the frame log's bounds are internal/assistant/live's. What is left is
+// the turn's own.
 const (
+	// MaxRounds is the most model rounds one turn takes before its answer,
+	// each calling any number of tools: forty, enough to find a route, read
+	// what it touches, correct a refused call and propose. Every result stays
+	// in the context the model re-reads, and forty of [ModelResultBytes]
+	// (about 160,000 tokens) fit a 200,000 token context where sixty would not.
+	MaxRounds = 40
+
+	// TurnTimeout is the longest one turn runs: its read grant's whole life
+	// ([exec.ReadLifetime]), which no turn may outlive. Stop ends one sooner.
+	TurnTimeout = exec.ReadLifetime
+
 	// PromptVersion names the system prompt's text, stamped on every turn
 	// row and audit record, so a change in behaviour can be read against a
 	// change in the prompt. A reworded section is a new version.
@@ -21,9 +32,8 @@ const (
 
 	// ModelResultBytes is the most of one tool result the model reads:
 	// sixteen kibibytes, a quarter of what a call reads at most
-	// ([exec.MaxResponseBytes]), so a turn's forty steps at most
-	// (internal/config's max_steps ceiling) fit a 200,000 token context
-	// beside the prompt. A card keeps up to its own bound
+	// ([exec.MaxResponseBytes]), so a turn's [MaxRounds] fit a 200,000 token
+	// context beside the prompt. A card keeps up to its own bound
 	// separately; the model is handed a summary of it.
 	ModelResultBytes = 16 << 10
 
@@ -34,9 +44,8 @@ const (
 	HistoryMessages = 12
 
 	// RunningTurnsPerPerson is how many turns one person may have running
-	// at once across their conversations: two, half of the four slots the
-	// recommended assistant entry runs, so one person never holds the
-	// whole drawer for everybody else. Past it: 429 assistant_busy.
+	// at once across their conversations: two, so one person never holds
+	// the model's slots for everybody else. Past it: 429 assistant_busy.
 	RunningTurnsPerPerson = 2
 
 	// TurnsPerMinute and TurnBurst are one person's turn rate on this node:

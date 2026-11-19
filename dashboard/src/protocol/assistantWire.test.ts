@@ -124,9 +124,9 @@ describe("a stream the parser must not trust", () => {
   const first = GOLDEN.slice(0, GOLDEN.indexOf("\n\n") + 2);
 
   test("stops at a frame of another protocol version", () => {
-    const { frames, faults } = parse(first.replace('"v":1', '"v":2') + GOLDEN, 4096);
+    const { frames, faults } = parse(first.replace('"v":2', '"v":3') + GOLDEN, 4096);
     expect(frames).toEqual([]);
-    expect(faults).toEqual([{ code: "protocol_mismatch", version: 2 }]);
+    expect(faults).toEqual([{ code: "protocol_mismatch", version: 3 }]);
   });
 
   test("skips a kind this build does not know, within the version", () => {
@@ -244,9 +244,26 @@ describe("the bounds a request is held to before it is sent", () => {
     );
   });
 
-  test("a viewer answer with no assistant member reads as disabled", () => {
-    expect(assistantUnavailable(undefined)).toBe("disabled");
-    expect(assistantUnavailable({ available: true })).toBeNull();
-    expect(assistantUnavailable({ available: false, reason: "not_a_person" })).toBe("not_a_person");
+  test("a viewer answer with no assistant member reads as no model", () => {
+    expect(assistantUnavailable(undefined)).toBe("no_model");
+    expect(
+      assistantUnavailable({
+        available: true,
+        model: null,
+        notice: null,
+        can_assign: false,
+        reads_images: false,
+      }),
+    ).toBeNull();
+    expect(
+      assistantUnavailable({
+        available: false,
+        reason: "not_a_person",
+        model: null,
+        notice: null,
+        can_assign: false,
+        reads_images: false,
+      }),
+    ).toBe("not_a_person");
   });
 });

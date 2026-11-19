@@ -15,7 +15,7 @@ type Advisor struct {
 
 // AdvisorAnalyst turns the analyst on and bounds it.
 type AdvisorAnalyst struct {
-	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitempty" desc:"The providers.llm entries the analyst runs on, the first first, each held to Ask Crewlet's rules for a member (the harness's local and web tools denied). Absent = the analyst is off."`
+	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitempty" desc:"The providers.llm entries the analyst runs on, the first first, each on a harness a helper can run with no tool of its own. Absent = the analyst is off."`
 
 	Cadence AnalystCadence `yaml:"cadence,omitempty" json:"cadence,omitempty" desc:"How often it runs on its own: daily (the default), weekly (on Mondays) or off. Run now on Settings, Advisor runs it whatever this says."`
 
@@ -86,7 +86,7 @@ func (c *Company) AnalystChain() (ProviderKeys, error) {
 	if !c.Advisor.Analyst.On() {
 		return nil, ErrAnalystOff
 	}
-	if err := c.chainProblems(field("advisor.analyst.llm"), c.Advisor.Analyst.LLM, ""); err != nil {
+	if err := c.analystChainProblems(field("advisor.analyst.llm")); err != nil {
 		return nil, err
 	}
 	return slices.Clone(c.Advisor.Analyst.LLM), nil
@@ -109,7 +109,17 @@ func (c *Company) validateAdvisor() error {
 			"prompt and tool answers, got %d", MinAnalystMaxTokens, *a.MaxTokens)
 	}
 	if a.On() {
-		p.wrap(c.chainProblems(at(path, "llm"), a.LLM, ""))
+		p.wrap(c.analystChainProblems(at(path, "llm")))
+	}
+	return p.err()
+}
+
+// analystChainProblems holds each member of `advisor.analyst.llm`, at path, to
+// the one rule a helper's model is held to ([Company.HelperModelProblem]).
+func (c *Company) analystChainProblems(path Path) error {
+	var p problems
+	for i, key := range c.Advisor.Analyst.LLM {
+		p.wrap(c.helperModelProblem(idx(path, i), key))
 	}
 	return p.err()
 }

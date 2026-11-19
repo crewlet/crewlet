@@ -2302,8 +2302,7 @@ every record for a day deletes the rows older than that day minus 181 in the
 same transaction that writes it, on every data node, and the stream's own age
 bound forgets the same days. See [Replication](replication.md#two-compacted-domains-the-embeddings-and-each-data-nodes-day).
 Ask Crewlet's conversations are another: a conversation nobody has
-touched for the company's `assistant.retention_days`, 30 days by default, is
-purged by the trash reaper through a record every data node applies (see
+touched for 30 days is purged by the trash reaper through a record every data node applies (see
 [Running Ask Crewlet](assistant.md#retention-and-erasure)).
 The chat transcript is the third, and its horizon is the company's to set: see
 [the chat transcript's horizon](#the-chat-transcripts-horizon) below.

@@ -486,8 +486,40 @@ func doctorEntries(company *config.Company, keys []string, resolver *config.Reso
 			return built.Diagnose(ctx, opts)
 		}
 		out = append(out, entry)
+		if slices.Contains(company.HelperKeys(), key) {
+			out = append(out, helperEntry(company, key, resolver))
+		}
 	}
 	return out
+}
+
+// helperEntry is the run a helper makes of the entry key, which doctor probes
+// apart from the entry's own: its shell, file and web probes must all be
+// refused, since a helper's run has no tool but the engine's.
+func helperEntry(company *config.Company, key string, resolver *config.Resolver) doctorEntry {
+	entry := doctorEntry{key: key}
+	built, err := engine.BuildHelper(company, key, resolver, nil)
+	if err != nil {
+		entry.diagnose = unbuilt(key, err)
+		return entry
+	}
+	entry.diagnose = func(ctx context.Context, smoke bool) diagnosis {
+		if err := built.RestoreConfiguredBundle(ctx); err != nil &&
+			!errors.Is(err, harness.ErrLoggedOut) {
+			return bundleFailure{key: key, err: err}
+		}
+		return helperDiagnosis{built.Diagnose(ctx, harness.DiagnoseOptions{Smoke: smoke})}
+	}
+	return entry
+}
+
+// helperDiagnosis is a helper's run's report, headed so it reads apart from
+// the entry's own.
+type helperDiagnosis struct{ diagnosis }
+
+func (h helperDiagnosis) Render(w io.Writer) {
+	fmt.Fprintln(w, "as a helper runs it (Ask Crewlet), with no tool of its own:")
+	h.diagnosis.Render(w)
 }
 
 // buildFailure is the report for an entry that did not build.

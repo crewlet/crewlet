@@ -18,12 +18,13 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/live"
+	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/costlimit"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
@@ -176,8 +177,7 @@ func New(d Deps) (*Service, error) {
 		metrics: d.Metrics, remote: d.Remote, rate: d.Rate, files: d.Files, deep: d.Deep,
 		sessions: d.Sessions, now: now,
 		log: logging.Get("assistant"),
-		hub: live.NewHub(now, config.Assistant{ProposalTTLSeconds: maxProposalTTLSeconds}.ProposalTTL(),
-			tap),
+		hub: live.NewHub(now, proposal.TTL, tap),
 		limiter: costlimit.New(costlimit.Rates{
 			PrincipalRate: TurnsPerMinute / 60.0, PrincipalBurst: TurnBurst,
 			ScopeRate: NodeTurnsPerSecond, ScopeBurst: NodeTurnBurst,
@@ -195,49 +195,11 @@ func New(d Deps) (*Service, error) {
 	return s, nil
 }
 
-// maxProposalTTLSeconds is the longest proposal lifetime a company may set
-// (`assistant.proposal_ttl_seconds`): a parked turn's numbering is kept that
-// long.
-const maxProposalTTLSeconds = 3600
-
 // turnRateScope is the costlimit scope every turn start is taken from.
 const turnRateScope = "assistant.turn"
 
-// strengthOf is the chain a question runs on: the stronger one for Think harder
-// or a decision brief the company routes there, else the quick one. Think
-// harder with no stronger chain is refused rather than quietly answered quick.
-func (s *Service) strengthOf(ts TurnStart, page *wire.PageContext) (Strength, error) {
-	c, _ := s.company()
-	var d *config.AssistantDeliberate
-	if c != nil {
-		d = c.Assistant.Deliberate
-	}
-	switch {
-	case ts.Deliberate && d == nil:
-		return "", invalid("deliberate: %v", config.ErrNoDeliberate)
-	case ts.Deliberate:
-		return Deliberate, nil
-	case d != nil && d.DecisionBriefs && ts.Mode == wire.TurnBrief && page != nil &&
-		page.Selection != nil && page.Selection.Noun == wire.NounDecision:
-		return Deliberate, nil
-	}
-	return Quick, nil
-}
-
-// Deliberates reports whether a question can ask to think harder: the
-// company sets a stronger chain its rules admit ([config.Company.DeliberateChain]).
-func (s *Service) Deliberates() bool {
-	c, _ := s.company()
-	if c == nil {
-		return false
-	}
-	_, err := c.DeliberateChain()
-	return err == nil
-}
-
-// offeredTools is what a turn of person may call: the catalogue's offer (a
-// brief's reads, or every tool with deep work where it runs), less each family
-// `assistant.tools.deny` turns off.
+// offeredTools is what a turn of person may call: the catalogue's offer, a
+// brief's reads, or every tool with deep work where it runs.
 func (s *Service) offeredTools(ctx context.Context, person iam.Principal, acts []string,
 	briefing bool) []catalog.Tool {
 
@@ -248,29 +210,42 @@ func (s *Service) offeredTools(ctx context.Context, person iam.Principal, acts [
 	} else {
 		tools = s.withConfigured(ctx, offered)
 	}
-	if c, _ := s.company(); c != nil {
-		tools = catalog.Allowed(tools, c.Assistant.Tools.Deny)
-	}
 	return tools
 }
 
 // Eligible says whether p may use the assistant on this node now, and the
-// first reason not, in the order `/viewer` reports them: the company has not
-// turned it on, it has no usable model chain, or p is not a person signed in
-// through their own browser. The authority table's own verdict is the HTTP
-// surface's, which holds the chart.
+// first reason not, in the order `/viewer` reports them: the company assigns
+// it no model, its model is one no helper can run on, or p is not a person
+// signed in through their own browser. The authority table's own verdict is
+// the HTTP surface's, which holds the chart.
 func (s *Service) Eligible(p iam.Principal) (bool, wire.ViewerReason) {
 	c, _ := s.company()
 	if c == nil || !c.Assistant.On() {
-		return false, wire.ViewerDisabled
-	}
-	if _, err := c.AssistantChain(); err != nil {
 		return false, wire.ViewerNoModel
+	}
+	if _, err := c.AssistantModel(); err != nil {
+		return false, wire.ViewerModelProblem
 	}
 	if iam.Assistable(p) != "" {
 		return false, wire.ViewerNotAPerson
 	}
 	return true, ""
+}
+
+// AssignedModel is the model the company assigns Ask Crewlet, as anybody is
+// shown it, or nil where it assigns none: the entry's key, and the model it
+// names where that is written out rather than a reference to resolve.
+func (s *Service) AssignedModel() *wire.ViewerModel {
+	c, _ := s.company()
+	if c == nil || !c.Assistant.On() {
+		return nil
+	}
+	m := &wire.ViewerModel{Key: c.Assistant.Model, Label: c.Assistant.Model}
+	if entry, ok := c.Providers.LLM[m.Key]; ok && entry.Model != "" &&
+		len(envref.Names(entry.Model)) == 0 {
+		m.Label = entry.Model
+	}
+	return m
 }
 
 // eligible is [Service.Eligible] as an error.
@@ -304,8 +279,6 @@ type TurnStart struct {
 	// Mode is what the question asks for ([wire.TurnRequest.Mode]); empty
 	// is [wire.TurnAsk].
 	Mode wire.TurnMode
-	// Deliberate is the person's Think harder ([wire.TurnRequest.Deliberate]).
-	Deliberate bool
 }
 
 // TurnID is the turn a question asked under the operation key starts: the
@@ -407,10 +380,6 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		return wire.TurnAccepted{}, invalid("mode brief takes no attachments")
 	}
 	briefing := ts.Mode == wire.TurnBrief
-	strength, err := s.strengthOf(ts, page)
-	if err != nil {
-		return wire.TurnAccepted{}, err
-	}
 	input = redact.Secrets(input)
 	ts.Page = page
 	attached, attachErr := s.attachmentsOf(ctx, ts)
@@ -436,7 +405,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	// ([Service.ModelNotice] is the same reading for `/viewer`). After the
 	// retry check above, so a retry of a question that already started is
 	// answered with its turn whatever the model's state now.
-	if refusal := s.modelRefusal(ctx, ts.Person, strength); refusal != nil {
+	if refusal := s.modelRefusal(ctx, ts.Person); refusal != nil {
 		return wire.TurnAccepted{}, refusal
 	}
 
@@ -486,7 +455,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		purpose = types.AuxAssistantBrief
 	}
 	use := auxspend.Use{Stage: types.AuxStageOperator, Purpose: purpose, TurnID: id.String()}
-	provider, key, err := s.models.Chain(ctx, ts.Person, use, strength)
+	provider, key, err := s.models.Model(ctx, ts.Person, use)
 	if err != nil {
 		return wire.TurnAccepted{}, &Unavailable{Cause: err}
 	}
@@ -499,7 +468,6 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	t := s.newTurn(ts.Person, ts.Conversation, id, ts.Key, ts.Read, ts.Page, acts)
 	t.subjects = subjectsOf(ts.Input, ts.Page)
 	t.brief.on = briefing
-	t.strength = strength
 	var chip *wire.PageChip
 	if ts.Page != nil {
 		chip = &wire.PageChip{Title: ts.Page.Title, Screen: ts.Page.Screen}
@@ -572,12 +540,8 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		}
 	}
 
-	assistantCfg := config.Assistant{}
-	if c != nil {
-		assistantCfg = c.Assistant
-	}
 	run := loopRun{messages: buildMessages(in), provider: provider, key: key, meter: meter,
-		tools: tools, steps: assistantCfg.Steps(), timeout: assistantCfg.TurnTimeout(),
+		tools: tools, steps: MaxRounds, timeout: TurnTimeout,
 		fresh: history.Conversation.Title == "", question: input}
 	if briefing {
 		run.messages = buildBriefMessages(in)
@@ -656,7 +620,7 @@ func (s *Service) newTurn(p iam.Principal, conversation, id uuid.UUID, key strin
 	read exec.Grant, page *wire.PageContext, acts []string) *turn {
 
 	ctx, cancel := context.WithCancelCause(s.base)
-	return &turn{svc: s, strength: Quick, person: p, by: iam.ActorFor(p), conversation: conversation, id: id,
+	return &turn{svc: s, person: p, by: iam.ActorFor(p), conversation: conversation, id: id,
 		key: key, read: read, page: page, acts: acts, boundary: provenance.NewBoundary(),
 		started: s.now(), ctx: ctx, cancel: cancel, done: make(chan struct{})}
 }

@@ -45,21 +45,22 @@ func (c *Clock) Advance(d time.Duration) {
 	c.now = c.now.Add(d)
 }
 
-// companyDoc is a company document with the assistant on, on the entry the
-// assistant may run on (Claude Code, its local tools denied by its profile and
-// its web tools off), and one human seat for each handle the caller names.
+// companyDoc is a company document with Ask Crewlet on, on an ordinary Claude
+// Code entry (a helper's run turns its web tools off whatever the entry says),
+// and one human seat for each handle the caller names.
 const companyDoc = `name: Nimbus
 providers:
   llm:
     assistant:
       harness: claude-code
       model: sonnet
-      overrides: {web_tools: denied}
 assistant:
-  enabled: %t
-  llm: [assistant]
+  model: assistant
 roles:
 %s`
+
+// assistantOn is the line that assigns Ask Crewlet its model in every document here.
+const assistantOn = "assistant:\n  model: assistant\n"
 
 // deepDoc is [companyDoc] with deep work on, on a Claude Code entry of its own.
 const deepDoc = `name: Nimbus
@@ -68,13 +69,11 @@ providers:
     assistant:
       harness: claude-code
       model: sonnet
-      overrides: {web_tools: denied}
     deep:
       harness: claude-code
       model: sonnet
 assistant:
-  enabled: %t
-  llm: [assistant]
+  model: assistant
   deep_work:
     llm: deep
     max_steps: 20
@@ -82,40 +81,7 @@ assistant:
 roles:
 %s`
 
-// deliberateDoc is [companyDoc] with a stronger chain for questions asked to
-// think harder, on an entry of its own, taking briefs of a decision where the
-// first verb says so.
-const deliberateDoc = `name: Nimbus
-providers:
-  llm:
-    assistant:
-      harness: claude-code
-      model: sonnet
-      overrides: {web_tools: denied}
-    strong:
-      harness: claude-code
-      model: opus
-      overrides: {web_tools: denied}
-assistant:
-  enabled: %t
-  llm: [assistant]
-  deliberate:
-    llm: [strong]
-    decision_briefs: %t
-roles:
-%s`
-
-// DeliberateCompany is [Company] with a stronger chain (`assistant.deliberate`),
-// which a brief of a decision runs on as well where decisionBriefs is set.
-func DeliberateCompany(decisionBriefs bool, seats ...string) (assistant.Company, error) {
-	var roles string
-	for _, seat := range seats {
-		roles += fmt.Sprintf("  - name: %s\n    handle: %s\n    kind: human\n", seat, seat)
-	}
-	return parsedCompany(fmt.Appendf(nil, deliberateDoc, true, decisionBriefs, roles))
-}
-
-// Company is the company a case's people work for: the assistant on when on
+// Company is the company a case's people work for: Ask Crewlet on when on
 // is set, and each of seats a human seat of that handle.
 func Company(on bool, seats ...string) (assistant.Company, error) {
 	return company(companyDoc, on, seats)
@@ -127,13 +93,6 @@ func DeepCompany(seats ...string) (assistant.Company, error) {
 	return company(deepDoc, true, seats)
 }
 
-// DenyingCompany is [DeepCompany] with `assistant.tools.deny` set to deny.
-func DenyingCompany(deny []string, seats ...string) (assistant.Company, error) {
-	doc := strings.Replace(deepDoc, "  llm: [assistant]\n",
-		"  llm: [assistant]\n  tools:\n    deny: ["+strings.Join(deny, ", ")+"]\n", 1)
-	return company(doc, true, seats)
-}
-
 // ResearchCompany is [Company] with web research on, from the hosts named,
 // and searched through a Tavily server where search is set.
 func ResearchCompany(hosts []string, search bool, seats ...string) (assistant.Company, error) {
@@ -141,9 +100,9 @@ func ResearchCompany(hosts []string, search bool, seats ...string) (assistant.Co
 	doc := companyDoc
 	if search {
 		research += "    search: {mcp_server: search}\n"
-		doc = strings.Replace(doc, "assistant:\n  enabled", searchServer+"assistant:\n  enabled", 1)
+		doc = strings.Replace(doc, assistantOn, searchServer+assistantOn, 1)
 	}
-	doc = strings.Replace(doc, "  llm: [assistant]\n", "  llm: [assistant]\n"+research, 1)
+	doc = strings.Replace(doc, assistantOn, assistantOn+research, 1)
 	return company(doc, true, seats)
 }
 
@@ -160,7 +119,10 @@ func company(doc string, on bool, seats []string) (assistant.Company, error) {
 	for _, seat := range seats {
 		roles += fmt.Sprintf("  - name: %s\n    handle: %s\n    kind: human\n", seat, seat)
 	}
-	return parsedCompany(fmt.Appendf(nil, doc, on, roles))
+	if !on {
+		doc = strings.Replace(doc, "  model: assistant\n", "", 1)
+	}
+	return parsedCompany(fmt.Appendf(nil, doc, roles))
 }
 
 // parsedCompany is the company doc describes, with its org.
