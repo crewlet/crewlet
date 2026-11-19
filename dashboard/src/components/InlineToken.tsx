@@ -577,8 +577,8 @@ function SeatMention({
  *
  * Under `checked` it opens only the address rebuilt on the company's own host
  * ([LinkDescription.canonical]); any other is drawn inert, its words and then
- * the host and path it names, so a reader sees where it would have gone and
- * can copy it. An app route a writer spelled (`#/settings/...`) is inert there
+ * the host and path it names as an [InertAddress], so a reader sees where it
+ * would have gone and can copy it. An app route a writer spelled (`#/settings/...`) is inert there
  * too: the dashboard's own links into itself are the ones it builds, a key's
  * and a handle's, never one a model or an agent chose.
  */
@@ -637,8 +637,17 @@ function LabelledAsWritten({
       >
         {children}
       </InlineRef>
-      {shown === null ? null : <span className="md-link-inert-host">{` (${shown})`}</span>}
-      {shown === null ? null : close}
+      {shown === null ? null : (
+        // THE ADDRESS IT WOULD HAVE OPENED, drawn as every inert address is
+        // ([InertAddress]): its mark and the address, in the text's ink, so
+        // nothing a writer chose half-looks like a link.
+        <>
+          {" ("}
+          {said === null ? shown : <InertAddress said={said} raw={href} written={shown} />}
+          {")"}
+          {close}
+        </>
+      )}
     </>
   );
 }

@@ -5958,15 +5958,6 @@ a.work-cal-chip {
   max-width: var(--size-measure-narrow);
 }
 
-/* A WRITTEN LINK, DRAWN INERT (`links: "checked"` in lib/markdown.ts, for an
-   address that is not the company's): the label in the text's own ink, then
-   the place it names in the quiet link ink, never underlined and never a
-   control, so a reader can see where a link would have gone without being
-   able to follow one a model or an agent wrote. */
-.md-link-inert-host {
-  color: var(--color-text-link-quiet);
-  overflow-wrap: anywhere;
-}
 /* EVERY ELEMENT'S OWN MARGIN IS ZEROED FIRST and the rhythm is one rule over
    siblings. The other way round — a `margin: 0` reset per element type after
    the sibling rule — is how the rhythm died: the shorthand resets margin-top
