@@ -17,17 +17,13 @@ import (
 
 // THE METADATA THIS DOMAIN ADDS, on top of the shared chat vocabulary.
 //
-// The shared keys are [github.com/crewlet/crewlet/internal/notify.ChatKeys] —
-// which backend, which surface, which message, which conversation, who, and
-// why it reached this seat — and they are spelled through notify's own
-// constants, never as literals here, so a rename is a compile error rather
-// than a silence.
+// The shared keys are [github.com/crewlet/crewlet/internal/notify.ChatKeys],
+// spelled through notify's own constants, never as literals here, so a rename
+// is a compile error rather than a silence.
 //
-// The four below are facts no vendor has and therefore facts that vocabulary
-// cannot hold. EVERY ONE HAS A PRODUCER AND A READER: the parser stamps them
-// and [Prompt] reads them back. A key nobody reads is work that looks done,
-// which is exactly how `routed_via` was going to end up here before the
-// address rule learned to carry this domain's own reasons.
+// The four below are facts no vendor has, which that vocabulary cannot hold.
+// EVERY ONE HAS A PRODUCER AND A READER: the parser stamps them and [Prompt]
+// reads them back. A key nobody reads is work that looks done.
 const (
 	// MetaAddressed is the ROUTING'S OWN VERDICT on whether this wake
 	// obliges an answer.
@@ -78,46 +74,32 @@ const (
 )
 
 // AddressRule is this domain's answer to "was this message addressed to this
-// seat?", and it is ONE DECLARED VALUE for the reason
-// [notify.AddressRule] exists: the prompt that tells an agent it was asked,
-// the delivery gate that refuses to let an addressed turn end in silence, and
-// the working indicator that tells a person the agent is working must not be
-// three opinions. A spinner over a turn that is allowed to end in silence,
-// and a silence after a spinner, are the same bug.
+// seat?", ONE DECLARED VALUE for [notify.AddressRule]'s reason: the prompt, the
+// delivery gate that refuses to let an addressed turn end in silence, and the
+// working indicator must not be three opinions (a spinner over a turn allowed
+// to end in silence is the same bug as a silence after one).
 //
-// BOTH HALVES ARE DERIVED FROM THE VOCABULARY rather than typed again:
+// NO DMPrefix: a channel id is a uuid, so a prefix test would mark arbitrary
+// rooms as DMs and oblige every seat in them to answer unaddressed traffic.
 //
-//   - The direct kinds are [Kind.Direct]'s, which is what a conversation with
-//     no room around it means here. They are read by the partition key
-//     ([notify.ChatPrompt.PartitionKey]), so a person's consecutive top-level
-//     messages in a DM coalesce into one turn, and by the conversation's
-//     identity ([notify.ChatPrompt.ConversationIdentity]), so a DM's history
-//     is filed under the line it is on rather than under one thread of it.
-//   - The follows are the reasons [Reason.Addressed] returns true for. The
-//     rule carries them rather than inheriting notify's own four precisely
-//     because this domain routes on reasons that package has never heard of
-//     (`reply_to_own_root`, `collective_request` and `answerer` are not
-//     follows anywhere else), and a rule that fell back to the vendor set
-//     would read every one of them as "does not address".
-//
-// NO DMPrefix. A channel id here is a uuid, so a prefix test would mark
-// arbitrary rooms as direct messages and oblige every seat in them to answer
-// traffic nobody addressed to any of them.
-//
-// A FUNCTION RATHER THAN A PACKAGE VAR, because the value holds two slices
-// and a var would hand every caller the same backing arrays to append to.
-//
-// SPELLED AS THE VENDORS SPELL IT — `slack.AddressRule`,
-// `mattermost.AddressRule` — because the working indicator reaches for it
-// through a backend's own StatusPoster: a third name for one concept is how
-// a Chatlet poster ends up declaring a second rule of its own.
+// A FUNCTION, not a package var: the value holds two slices a var would share.
+// It is spelled as the vendors' (`slack.AddressRule`) because the working
+// indicator reaches it through a backend's StatusPoster.
 func AddressRule() notify.AddressRule {
+	// The direct kinds are [Kind.Direct]'s. The partition key
+	// ([notify.ChatPrompt.PartitionKey]) coalesces a person's consecutive
+	// top-level DM messages into one turn, and the conversation identity
+	// ([notify.ChatPrompt.ConversationIdentity]) files a DM's history under
+	// its line rather than one thread of it.
 	direct := make([]string, 0, len(Kinds()))
 	for _, k := range Kinds() {
 		if k.Direct() {
 			direct = append(direct, string(k))
 		}
 	}
+	// The follows are the reasons [Reason.Addressed] accepts: notify's own four
+	// would read this domain's (`reply_to_own_root`, `collective_request`,
+	// `answerer`) as "does not address".
 	follows := make([]notify.FollowReason, 0, len(Reasons))
 	for _, r := range Reasons {
 		if r.Addressed() {
@@ -129,17 +111,13 @@ func AddressRule() notify.AddressRule {
 
 // Parser turns one committed chat record into the wakes it implies.
 //
-// # It holds nothing, and that is the whole of its correctness
-//
-// Not the roster: that arrives per call, because a parser outlives the epoch
-// a wake was written under. Not the answerers: the seat a [ReasonAnswerer]
-// resolves to RIDES THE RECORD, resolved at write time inside the decide,
-// because who answers for a room is a fact about the epoch and the membership,
-// and a parser resolving it later would route a message posted under one org
-// chart to whoever answers under the next one. And not a thread, a membership
-// or a room: the record's [Notify] is the snapshot the routing was decided
-// from, which is what lets this run on a node whose applier has not reached
-// the message.
+// It holds nothing, which is the whole of its correctness. Not the roster: it
+// arrives per call, since a parser outlives the epoch a wake was written under.
+// Not the answerers: a [ReasonAnswerer]'s seat RIDES THE RECORD, resolved at
+// write time inside the decide, because resolving it later would route a
+// message posted under one org chart to whoever answers under the next. Not a
+// thread, membership or room: the record's [Notify] is the snapshot the routing
+// was decided from, so this runs on a node whose applier has not reached it.
 type Parser struct{}
 
 // NewParser builds Chatlet's inbound parser.
@@ -156,23 +134,16 @@ func (p *Parser) Source() string { return Source }
 
 // Parse reports which seats a committed chat record wakes.
 //
-// # It re-runs the routing rather than reading the record's recipient list
+// It re-runs the routing rather than reading the record's recipient list.
+// [Candidates] is PURE over the record; [Route] needs who the company employs
+// RIGHT NOW and who wrote the message. They are the SAME two functions the
+// write path's decide called, so applier and parser cannot disagree about who
+// a message concerned.
 //
-// [Candidates] is PURE over the record and [Route] is the impure half that
-// needs the two facts no record can carry — who the company employs RIGHT NOW
-// and who wrote the message. They are the SAME two functions the write path's
-// decide called, which is the point: the applier and the parser cannot
-// disagree about who a message concerned, because there is one arithmetic and
-// neither of them has a copy of it.
-//
-// Running them again here is not redundant. The set on the record was routed
-// against the roster of the instant it was written; this one is routed against
-// the roster the company has now, so a seat that has since been removed is
-// dropped and the answerer the record named is offered again. And a record
-// from a NEWER BUILD may name more seats than this build's caps allow: a wake
-// set is SPENT rather than kept like a row, and launching an executor in a box
-// for each of two hundred seats a record named is not something an older build
-// has to agree to.
+// The record's set was routed against the roster of its write instant; this one
+// against the current roster, so a removed seat is dropped and the named
+// answerer is offered again. A NEWER BUILD's record may name more seats than
+// this build's caps allow, and a wake set is SPENT, not kept like a row.
 func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Registry) (
 	[]notify.Routed, error) {
 
@@ -402,18 +373,15 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 // wakeBody is what a woken seat reads of a message: the WHOLE body, from the
 // record that carries it, where the card's excerpt was cut from it.
 //
-// The card excerpt is a preview for a list of notices, cut at [MaxExcerpt];
-// the wake prompt is the one message a seat ACTS on, and a message may run to
-// [MaxBody]. Handed the excerpt, a seat sent a two-kilobyte direct message
-// answered its first six hundred bytes as though they were all of it — and a
-// top-level message has no thread for the turn-start prefetch to read the rest
-// back from. It is the rule the tracker's and the knowledge base's wakes
-// already follow, for the same reason.
+// The card excerpt is cut at [MaxExcerpt]; the wake prompt is the one message
+// a seat ACTS on, up to [MaxBody]. Handed the excerpt, a seat answered the
+// first six hundred bytes of a two-kilobyte direct message as if they were all
+// of it, and a top-level message has no thread to prefetch the rest from. The
+// tracker's and knowledge base's wakes follow the same rule.
 //
 // RECOGNISED BY DERIVATION, never guessed: the body is used exactly when the
-// record's excerpt is what [Excerpt] makes of it. Anything else — an op this
-// build does not decode, a payload that does not parse — keeps the excerpt,
-// which is the record's own statement of what the wake is about.
+// record's excerpt is what [Excerpt] makes of it. Anything else (an op this
+// build does not decode, an unparseable payload) keeps the excerpt.
 func wakeBody(record MutationRecord) string {
 	n := record.Notify
 	if n == nil || n.Excerpt == "" {
@@ -529,17 +497,14 @@ func roomLabel(n *Notify) string {
 
 // recordFromBody recovers the record the feed relayed.
 //
-// THROUGH THE DOMAIN'S OWN DECODER, so a record a newer build wrote reaches
-// this parser with everything it carried: the body is exactly the record,
-// unknown fields included.
+// THROUGH THE DOMAIN'S OWN DECODER, so a newer build's record keeps every
+// field it carried, unknown ones included.
 //
 // A RECORD AT A VERSION A NEWER BUILD WRITES IS DEFERRED to a peer on that
-// build ([notify.Defer]), never refused as a payload nobody can read: the
-// notify service acks what a parser refuses, on the ONE group every node takes
-// inbound mail from, so the wake the newer node's feed relayed was gone for
-// the whole fleet when an older node won its delivery during a roll
-// (crewlet#993). It is the feed's own future-version arm ([Translator]), met
-// on this side of the relay.
+// build ([notify.Defer]), never refused as unreadable: notify acks what a
+// parser refuses, on the ONE group every node takes inbound mail from, so an
+// older node winning the delivery during a roll lost the wake for the whole
+// fleet. It is the feed's future-version arm ([Translator]) met on this side.
 func recordFromBody(body map[string]any) (MutationRecord, error) {
 	if len(body) == 0 {
 		return MutationRecord{}, fmt.Errorf("chatlet: the delivery carries no " +

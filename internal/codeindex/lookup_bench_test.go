@@ -5,23 +5,15 @@ import (
 	"testing"
 )
 
-// BenchmarkLookup times what a search's lookup costs a segment's posting
-// lists, the evidence for lookup.go's head: over one segment of 65 536 blobs,
-// in which 99 of every 100 hold "handle" and "request" apart and the hundredth
-// one word of four holding both, joined — so the lists of handle's and
-// request's trigrams name every blob, and the joins' lists one in a hundred:
-//
-//   - decode: one list of 65 536 ordinals decoded whole (Segment.decode), the
-//     loop every posting a merge reads and a lookup's least list go through;
-//   - literal: the candidates of handlerequest, a search's commonest shape,
-//     one literal: its least list decoded, each list of every blob narrowing
-//     it read to the end, since blobs sit in id order and what it keeps runs
-//     to the segment's last;
-//   - alternation: the candidates of handle(request|response|record|reply),
-//     four literals sharing handle's trigrams, read once for all four.
-//
-// It reports allocations beside time; run it bounded, as its figures were:
-// -run '^$' -bench '^BenchmarkLookup$' -benchtime 200x -count 1.
+// BenchmarkLookup is the evidence for lookup.go's head: 65 536 blobs, 99 in 100
+// holding "handle" and "request" apart, the hundredth one of four words holding
+// both joined, so handle's and request's lists name every blob. decode: one
+// list decoded whole (Segment.decode); literal: candidates of handlerequest,
+// each narrowing list read to its end since blobs sit in id order; alternation:
+// handle(request|response|record|reply), four literals reading handle's lists
+// once. Run: -run '^$' -bench '^BenchmarkLookup$' -benchtime 200x -count 1.
+// Reference (two E-cores): literal 2.5 ms, 7.6 KB vs 3.9 ms, 10.6 MB per
+// literal; alternation 2.6 ms, 27 KB vs 9.4 ms, 24.7 MB.
 func BenchmarkLookup(b *testing.B) {
 	const blobs = 65536
 	words := []string{"handlerequest", "handleresponse", "handlerecord", "handlereply"}

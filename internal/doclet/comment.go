@@ -14,17 +14,14 @@ import (
 
 // COMMENTS, AND THE ONE RULE THAT MAKES THEM DIFFERENT FROM THE TRACKER'S.
 //
-// A comment rides the PAGE's subject, so two people commenting on one page
-// contend at the broker and one retries — the same trade the tracker makes for
-// a task's comments, and for the same reason: a comment changes what the
-// page's card shows and what its history says, so the two are one object's
-// state and not two.
+// A comment rides the PAGE's subject, so two commenters on a page contend at
+// the broker and one retries, as the tracker's task comments do: a comment
+// changes the page's card and history, one object's state.
 //
-// What is NOT the same is subscription. A COMMENT DOES NOT SUBSCRIBE ITS
-// COMMENTER here, which is the opposite of the tracker's participants rule and
-// deliberate: a page a hundred people have remarked on would otherwise wake a
-// hundred seats when somebody fixes a heading. Only a MENTION subscribes, and
-// only the person mentioned.
+// Unlike the tracker's participants rule, A COMMENT DOES NOT SUBSCRIBE ITS
+// COMMENTER: a page a hundred people remarked on would wake a hundred seats
+// when somebody fixes a heading. Only a MENTION subscribes, the person
+// mentioned.
 
 // NewComment is a remark to add.
 type NewComment struct {
@@ -482,25 +479,16 @@ func readCommentTx(ctx context.Context, tx *sql.Tx, pageID, commentID string) (
 
 // commentOpID is the operation this comment belongs to.
 //
-// DERIVED FROM THE CALLER'S KEY ([Actor.OpKey]) where it brought one — a
-// turn's call through its own key, which a seat's tools derive from the turn,
-// the tool, the call's arguments and its repeat count in the run; a person's
-// request through its Idempotency-Key — so a retry or a re-run turn is one
-// operation the ledger collapses rather than a second comment. The comment's
-// own id is the same value: one comment is one operation here, and two
-// identifiers for one thing is two places for a retry to disagree with itself.
+// DERIVED FROM THE CALLER'S KEY ([Actor.OpKey]) where it brought one (a seat's
+// tools derive it from turn, tool, arguments and repeat count; a person's
+// request brings its Idempotency-Key), so a retry is one operation the ledger
+// collapses. The comment's own id is the same value.
 //
-// It is [statelog.KeyedObjectOpID], the derivation every keyed write takes,
-// UNNAMED because this is the comment's own id as well and a reader addresses
-// it: the page and the call it came from are on the row. That is also where
-// carrying the key's instant rather than this call's is argued — the gesture
-// a person is most likely to press twice is a comment, and a request retried
-// after an `unknown` must post once.
+// It is [statelog.KeyedObjectOpID], UNNAMED because a reader addresses this id.
 //
 // OVER WHAT THE COMMENT ASKS ([commentAsk]), not its words alone: bound to the
-// body, the same key sent with the same words in another thread was the first
-// comment's operation — answered from the ledger as posted, with nothing
-// posted where it was asked to go.
+// body, the same key and words in another thread were the first comment's
+// operation, answered from the ledger with nothing posted where asked.
 func (s *Store) commentOpID(actor Actor, pageID string, in NewComment) (string, error) {
 	key := strings.TrimSpace(actor.OpKey)
 	if key == "" {

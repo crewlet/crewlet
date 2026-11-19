@@ -11,18 +11,13 @@ import (
 // The rewrite instructions.
 //
 // Tuned for a SMALL model, which is what an auxiliary chain usually points at:
-// the length is stated as numbers, first and last, because a limit stated once
-// in the middle is the instruction a small model drops; it is stated in words
-// as well as characters, because a model keeps to a word count it can feel far
-// better than to a character count it cannot see; and the rules are a short
-// list of what to KEEP rather than an essay on summarising, because "keep
-// every identifier exactly" is checkable and "be concise" is not.
-//
-// The length stated is the AIM, not the budget (see [aimPercent]): the prompt
-// asks for less than the result is held to, because a model asked for a
-// length answers longer than it as often as not.
-//
-// A reworded rule is a behaviour change, like every prompt in this tree.
+// the length is stated as numbers, first and last (a limit stated once in the
+// middle is the one a small model drops), in words as well as characters (a
+// word count is one it can feel), and the rules are a short list of what to
+// KEEP, because "keep every identifier exactly" is checkable and "be concise"
+// is not. The length stated is the AIM, not the budget ([aimPercent]): a model
+// asked for a length answers longer as often as not. A reworded rule is a
+// behaviour change, like every prompt in this tree.
 
 // baseRules is what every rewrite must honour, whatever the text is.
 //

@@ -135,26 +135,18 @@ func TestASessionsStreamedLengthIsItsHarnesssEventStream(t *testing.T) {
 	}
 }
 
-// ONLY A CLAUDE CODE RUNNER SAVES: its harness's session is files a pack beside
-// the working harness can read, and an OpenCode session lives in the database
-// its run's own server holds, which only the run's script reaches — so a save
-// is offered a Claude Code run alone, and an OpenCode runner's own pack of a
-// save, asked anyway, packs nothing.
+// EVERY CARRYING RUNNER SAVES: Claude Code's packs a save beside its working
+// harness, and OpenCode's exports one beside its running server, so a save is
+// offered a run of either.
 //
-// Mutation: answer true for OpenCode, or false for Claude Code, and its row
-// goes red.
-func TestOnlyAClaudeCodeRunnerSaves(t *testing.T) {
+// Mutation: drop OpenCode's PackSave, and its row goes red.
+func TestEveryCarryingRunnerSaves(t *testing.T) {
 	t.Parallel()
-	if !executor.NewClaudeCode().Saves() {
-		t.Error("a Claude Code runner says it packs no saves")
-	}
-	opencode := executor.NewOpenCode()
-	if opencode.Saves() {
-		t.Error("an OpenCode runner says it packs saves, which its harness's database keeps it from")
-	}
-	if saved, err := opencode.PackSave(t.Context(), sandbox.NewFakeSandbox("box-1"), takerA); err != nil ||
-		saved != (sandbox.SessionArchive{}) {
-		t.Errorf("an OpenCode runner's save = %+v, %v; want nothing packed", saved, err)
+	for name, runner := range map[string]*executor.Runner{"Claude Code": executor.NewClaudeCode(),
+		"OpenCode": executor.NewOpenCode()} {
+		if !runner.Saves() {
+			t.Errorf("the %s runner says it packs no saves", name)
+		}
 	}
 }
 
