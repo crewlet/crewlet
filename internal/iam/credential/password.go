@@ -15,19 +15,14 @@ import (
 
 // THE PASSWORD PARAMETERS, and what each one buys.
 //
-// They are stated as constants and asserted BY VALUE in the suite, because a
-// cost that drifts down is invisible: every test still passes, every login
-// still works, and the only thing that changed is how long an offline attack
-// against a stolen database takes.
+// Asserted BY VALUE in the suite: a cost that drifts down is invisible, and only
+// an offline attack on a stolen database gets faster.
 //
-// A CHANGE MAY ONLY RAISE THEM, each on its own. A stored verifier is
-// rewritten at this build's cost only where that cost is above the verifier's
-// in some parameter and below it in none ([Hasher.Verify]), because a rolling
-// upgrade runs two builds against one identity estate and a rewrite in either
-// direction flaps every person's verifier between them — half of each sign-in
-// at the weaker cost. So a change that lowers one parameter to raise another
-// is one no existing verifier ever reaches: everybody keeps the cost they were
-// enrolled at until they choose a new password.
+// A CHANGE MAY ONLY RAISE THEM, each on its own. A verifier is rewritten only
+// where this build's cost is above its in some parameter and below in none
+// ([Hasher.Verify]): a rolling upgrade runs two builds on one estate, and a
+// rewrite in either direction flaps verifiers between them. A change lowering
+// one parameter to raise another reaches no existing verifier.
 const (
 	// Memory is argon2id's memory cost in KiB: 64 MiB.
 	//
@@ -70,16 +65,12 @@ const (
 // VerifyCap is how many argon2id verifications this process runs at once.
 //
 // DERIVED, NOT CONFIGURED: max(1, NumCPU / Threads). Each verification holds
-// [Memory] for its duration, so the cap is what stops an unauthenticated
-// caller turning a sign-in endpoint into 64 MiB per concurrent request — at a
-// hundred in flight that is 6.4 GiB, which is an out-of-memory kill rather
-// than a slow login. Above the cap requests QUEUE, which is the correct
-// failure: a slow sign-in under attack, rather than a dead node.
+// [Memory], so the cap stops an unauthenticated caller turning sign-in into
+// 64 MiB per concurrent request (6.4 GiB at a hundred in flight: an OOM kill).
+// Above the cap requests QUEUE: a slow sign-in under attack, not a dead node.
 //
-// It divides by [Threads] because that is what one verification actually
-// occupies. With Threads at 1 the two are the same number, and stating the
-// division rather than the result is what keeps them in step if the parameter
-// ever moves.
+// It divides by [Threads] because that is what one verification occupies;
+// stating the division keeps the two in step if the parameter moves.
 func VerifyCap() int {
 	if n := runtime.NumCPU() / int(Threads); n > 1 {
 		return n
@@ -209,40 +200,13 @@ func (h *Hasher) Hash(ctx context.Context, password string) (string, error) {
 // Verify reports whether a password matches a verifier, and whether the
 // verifier should be REWRITTEN at this hasher's current cost.
 //
-// THE REHASH FLAG IS WHY THE PARAMETERS ARE IN THE STORED STRING. Raising the
-// cost is otherwise a migration nobody can perform — the plaintext is not
-// stored, so the only instant at which a stronger digest can be computed is
-// the one where somebody presents their password. A verifier written under a
-// weaker cost verifies under its OWN parameters and is reported stale, and the
-// caller rewrites it in the record that records the successful login.
-//
-// STALE MEANS WEAKER, NEVER MERELY DIFFERENT ([Params.weakerThan]). The only
-// place the cost is chosen is a build's [Default], so the only way it moves is
-// a new build — and a new build arrives as a rolling upgrade, two builds
-// sharing one identity estate. Reported whenever the parameters differed, a
-// node still on the older build read every verifier the newer one had written
-// as stale and rewrote it at its own, weaker cost, while a sign-in on an
-// upgraded node rewrote it back up: every person's verifier flapped for the
-// whole rollout and spent part of it at the cost the upgrade was retiring,
-// which is the silent downgrade [Memory] and [Time] are pinned against. A
-// verifier at a cost that is higher in any parameter verifies and is left
-// where it is.
-//
-// AN UNPARSEABLE VERIFIER IS A REFUSAL AND NOT AN ERROR PATH THE CALLER
-// BRANCHES ON: a row somebody corrupted must not be distinguishable, from
-// outside, from a wrong password — so it is verified against what a decoy is
-// ([Hasher.Decoy]), and answers no.
-//
-// UNDER THE SAME CAP AS A HASH ([VerifyCap]). A verification holds the stored
-// verifier's memory cost for as long as it runs, and it is the half an
-// UNAUTHENTICATED caller reaches — every sign-in, every step-up, every retry
-// of a held redemption — so it is the half the cap exists for. It used to call
-// argon2 directly: only setting a password queued, and the sign-in endpoint
-// ran one 64 MiB derivation per concurrent request, however many arrived.
-//
-// The error is ctx's when the request went away before a slot freed: nothing
-// was derived and nothing was decided, and the caller answers as for any
-// attempt that reached no verdict.
+// THE PARAMETERS ARE IN THE STORED STRING because the plaintext is not: a
+// stronger digest exists only when somebody presents their password. An
+// older-cost verifier verifies under its OWN parameters and is reported stale,
+// WEAKER NEVER MERELY DIFFERENT ([Params.weakerThan]), else mid-rollout builds
+// rewrite each other's verifiers. AN UNPARSEABLE VERIFIER IS A REFUSAL, NOT AN
+// ERROR PATH: verified as a decoy is ([Hasher.Decoy]), it must look like a wrong
+// password. UNDER THE CAP AS A HASH ([VerifyCap]); the error is ctx's.
 func (h *Hasher) Verify(ctx context.Context, verifier, password string) (
 	ok bool, rehash bool, err error) {
 
@@ -263,39 +227,18 @@ func (h *Hasher) Verify(ctx context.Context, verifier, password string) (
 	return true, params.weakerThan(h.params), nil
 }
 
-// Decoy verifies what was presented for a subject that has no verifier to
-// check — nobody by that name, a person who may not act, a person with no
-// password — against ONE DUMMY VERIFIER at this hasher's own cost, and
-// discards the answer.
+// Decoy verifies what was presented for a subject with no verifier to check
+// (nobody by that name, a person who may not act, one with no password) against
+// ONE DUMMY VERIFIER at this hasher's own cost, and discards the answer.
 //
-// # A miss costs what a hit costs, because it IS a hit's work
-//
-// If an unknown login were refused without a derivation, it would answer in
-// microseconds where a real one pays an argon2id verification, and a
-// stopwatch would read the roster off the difference. So a miss does what
-// [Hasher.Verify] does past reading the verifier, against a salt and a digest
-// this hasher drew once for the life of the process: one derivation at the
-// same cost under the same cap, and the same constant-time compare. The
-// derivation is what dominates a sign-in's time, and it is the same work on
-// both arms. What it skips is the decode, a split of a short string — and it
-// skips it on purpose, because Verify answers an unreadable verifier with a
-// decoy, so a decoy that went back through Verify is a loop whose only exit is
-// its own dummy decoding.
-//
-// WHAT IT DOES NOT EQUALISE, stated rather than hidden: the directory read
-// before it, which a name nobody holds answers a little sooner than a real
-// one; and a REAL verifier written at another cost than this build's — a
-// person whose password predates a cost raise, until their next sign-in
-// rewrites it ([Hasher.Rehash]), or a verifier a newer build wrote during a
-// rolling upgrade — which verifies at its own cost and so takes that cost's
-// time. Neither is padded: a pad measured from admission did close the first,
-// and needed a turn per address at the cap and a decoy drawing its hold from
-// the node's recent derivations to stay closed under load, which was more
-// machinery than a difference of one indexed read is worth.
-//
-// ITS RESULT IS DISCARDED BY CONSTRUCTION — it returns nothing a caller could
-// branch on, because a decoy whose answer could be read would be a second
-// oracle. The error is ctx's when the request went away before a slot freed.
+// A miss without a derivation would answer in microseconds where a hit pays an
+// argon2id verification: the roster, off a stopwatch. So it does what
+// [Hasher.Verify] does past the decode (one derivation at the same cost under
+// the same cap, the same constant-time compare) against a salt and digest drawn
+// once per process. It skips the decode, as Verify answers an unreadable
+// verifier with a decoy. NOT EQUALISED: the directory read before it, and a
+// REAL verifier at another cost until [Hasher.Rehash]. THE RESULT IS DISCARDED
+// BY CONSTRUCTION: a readable answer would be a second oracle.
 func (h *Hasher) Decoy(ctx context.Context, presented string) error {
 	got, err := h.derive(ctx, presented, h.dummySalt, h.params)
 	if err != nil {
@@ -310,21 +253,14 @@ func (h *Hasher) Decoy(ctx context.Context, presented string) error {
 // weakerThan reports whether p is a WEAKER cost than q: below it in at least
 // one parameter an attacker pays for, and above it in none.
 //
-// A PARTIAL ORDER, deliberately, and not a product or any other single number
-// of cost: a rewrite that lowers ANY parameter is a downgrade in that
-// parameter, and a cost model deciding it was paid for elsewhere is exactly
-// the judgement argon2's own trade-offs make unreliable — OWASP's settings of
-// equal defence are not one memory-time product, because one pass buys less
-// per KiB than three. A verifier whose cost is neither weaker nor stronger
-// than a build's is left where it is by that build — and the order being
-// antisymmetric is what makes the rule safe mid-rollout: no two builds can
-// each find the other's verifier weaker, so nothing flaps.
+// A PARTIAL ORDER, deliberately, not a product or other single number: lowering
+// ANY parameter is a downgrade in it, and judging it paid for elsewhere is what
+// argon2's trade-offs make unreliable. Antisymmetry makes it safe mid-rollout:
+// no two builds each find the other's verifier weaker.
 //
 // [Params.Threads] IS NOT A COST and decides nothing: parallelism changes how
 // soon one verification finishes, not what an attacker pays (see [Threads]),
-// so a verifier that differs only in it is neither weaker nor stronger, and
-// two builds disagreeing about it would otherwise rewrite each person's on
-// every sign-in for nothing.
+// and builds disagreeing about it would rewrite verifiers on every sign-in.
 func (p Params) weakerThan(q Params) bool {
 	if p.Memory > q.Memory || p.Time > q.Time || p.KeyLen > q.KeyLen {
 		return false
@@ -332,30 +268,18 @@ func (p Params) weakerThan(q Params) bool {
 	return p.Memory < q.Memory || p.Time < q.Time || p.KeyLen < q.KeyLen
 }
 
-// Rehash produces a verifier for a password at this hasher's cost, as [Hash]
-// does — but only if a slot of the concurrency cap is free NOW, and answers
-// [ErrSaturated] without deriving anything when none is.
+// Rehash is [Hash] but only if a slot of the cap is free NOW; else it answers
+// [ErrSaturated], deriving nothing.
 //
-// # It exists for the ONE hash nobody is waiting on
+// It is for the ONE hash nobody waits on: the rewrite follows a sign-in that has
+// already answered. So it never QUEUES for the cap, full exactly under the load
+// it exists for: it would take a slot ahead of later sign-ins. A miss is
+// harmless; the next sign-in asks again.
 //
-// Raising the cost is carried out by the sign-in that presents the password
-// ([Hasher.Verify]'s rehash flag), after that sign-in has answered: the
-// rewrite is an opportunity, and nobody's request waits on it. So it never
-// QUEUES for the cap, which is full exactly when the endpoint is under the
-// load the cap exists for — a rewrite waiting in that queue would take a slot
-// ahead of the sign-ins arriving behind it, and turn an attack on somebody
-// else into a slow sign-in for everybody. A miss is harmless: the verifier
-// stays verifiable at its own cost, and the next sign-in asks again.
-//
-// NO CONTEXT, because there is nothing to wait for: a slot is taken at once or
-// not at all, and a slot once taken runs to the end — argon2 is not
-// interruptible, and abandoning a derivation already paid for would spend the
-// cost and keep nothing.
-//
-// NEVER AHEAD OF A WAITER: a slot a finishing derivation frees goes straight to
-// a request already waiting for one (a full channel hands the freed place to a
-// blocked sender as it is received), so this finds a slot free only while
-// nobody is queued.
+// NO CONTEXT: a slot is taken at once or not at all, and runs to the end (argon2
+// is not interruptible). NEVER AHEAD OF A WAITER: a freed slot goes straight to
+// a blocked sender as it is received, so one is free here only while nobody is
+// queued.
 func (h *Hasher) Rehash(password string) (string, error) {
 	select {
 	case h.slots <- struct{}{}:
@@ -377,15 +301,13 @@ var ErrSaturated = errors.New("credential: every derivation slot is taken, " +
 // [Hasher.Rehash] it is the only caller of [Hasher.work], so no derivation
 // this package runs can skip the cap.
 //
-// IT WAITS FOR A SLOT FOR AS LONG AS ITS REQUEST DOES: a sign-in VERIFYING is
-// the caller the cap queues rather than refuses, and one refused would answer
-// as a wrong password — but a request that went away gives up its place, and
-// nothing is derived for nobody.
+// IT WAITS FOR A SLOT FOR AS LONG AS ITS REQUEST DOES: a verifying sign-in is
+// queued, not refused (a refusal would read as a wrong password), but a request
+// that went away gives up its place.
 //
-// THE SLOT IS TAKEN AROUND THE DERIVATION AND NOTHING ELSE. Holding it across
-// a store read as well would make one slow database turn the password cost
-// into a queue, which is the shape that takes a node down under exactly the
-// load the cap exists for.
+// THE SLOT IS TAKEN AROUND THE DERIVATION AND NOTHING ELSE: held across a store
+// read, one slow database would turn the password cost into a queue, taking a
+// node down under the load the cap exists for.
 func (h *Hasher) derive(ctx context.Context, password string, salt []byte,
 	params Params) ([]byte, error) {
 

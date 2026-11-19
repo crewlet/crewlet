@@ -229,7 +229,8 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return keepDigest(ctx, box, paths, archive.SessionID, digest)
 	}
 	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context,
-		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next}, nil
+		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next,
+		ResumeRead: r.resumeRead(archive.Version)}, nil
 }
 
 // scrubContained runs scrub, the take's scrub of a box's archive, a panic in it
@@ -452,8 +453,8 @@ func (r *Runner) PackCapture(ctx context.Context, box sandbox.Sandbox,
 	paths := PathsFor(box)
 	staged, dest := paths.SessionPackStaging(pack), paths.SessionPackHeld(pack)
 	release := func(ctx context.Context) { r.dropPack(ctx, box, staged, dest) }
-	rec, packed, err := r.packNow(ctx, box, func(paths Paths, session string) string {
-		return carries.Pack(paths, session, staged, dest, working)
+	rec, packed, err := r.packNow(ctx, box, func(paths Paths, rec sessionRecord) (string, error) {
+		return carries.Pack(paths, rec.id, staged, dest, working), nil
 	})
 	if err != nil || !packed {
 		release(ctx)
@@ -566,11 +567,11 @@ const packReleaseFloor = 5 * time.Second
 // removed by its release ([Runner.ReleaseSave]), or else by the clear before
 // its next run, which removes every save's files.
 //
-// A zero description where there is nothing to save: a harness whose session
-// the engine packs none of beside its run (OpenCode's, [saver]), a run whose
-// record names no session, a harness that wrote no transcript. An error where a
-// save could not be made, saying why — the check that refused it, for a file
-// the harness wrote under the pack — or where taker names none.
+// A zero description where there is nothing to save: no [saver], a record that
+// names no session, a harness that holds none of it yet. An error where a save
+// could not be made, saying why (the check or the release that refused it),
+// wrapping [sandbox.ErrSaveNoRoom] where its box lacks the room ([packNoRoom]),
+// or where taker names none.
 func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker string) (sandbox.SessionArchive, error) {
 	saves, ok := r.harness.(saver)
 	if !ok {
@@ -583,8 +584,8 @@ func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker string
 	pack := uuid.NewString()
 	paths := PathsFor(box)
 	staged, dest := paths.SessionSaveStaging(taker, pack), paths.SessionSave(taker, pack)
-	rec, packed, err := r.packNow(ctx, box, func(paths Paths, session string) string {
-		return saves.PackSave(paths, session, staged, dest)
+	rec, packed, err := r.packNow(ctx, box, func(paths Paths, rec sessionRecord) (string, error) {
+		return saves.PackSave(paths, rec, staged, dest)
 	})
 	if err != nil || !packed {
 		return sandbox.SessionArchive{}, err
@@ -602,8 +603,8 @@ func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker string
 
 // Saves reports whether this runner packs saves of a session its run still
 // works in ([Runner.PackSave]): only a runner of a harness that is a [saver],
-// Claude Code's. Asked before anything else of a save, so a run on a harness
-// that packs none (OpenCode's) costs its node no slot, no box call and no read
+// Claude Code's and OpenCode's. Asked before anything else of a save, so a run
+// on a harness that packs none costs its node no slot, no box call and no read
 // of the store.
 func (r *Runner) Saves() bool {
 	_, ok := r.harness.(saver)
@@ -694,14 +695,17 @@ func savePath(paths Paths, path string) bool {
 }
 
 // packNow runs pack — a harness's script that packs a session now, beside or
-// after its harness — for the session the box's record names, in a login shell
-// with the box's bin directory first on its PATH as the run's wrapper runs it,
-// within [sandbox.SessionPackWait]: packed, where the pack made its archive;
-// not, with no error, where there is nothing to pack — a record that names no
-// session, a harness that wrote no transcript ([packNothing]); and an error
-// where the pack failed, with what it said ([packFailed]).
+// after its harness — for the session the box's record names, handed that
+// record as the box holds it, in a login shell with the box's bin directory
+// first on its PATH as the run's wrapper runs it, within
+// [sandbox.SessionPackWait]: packed, where the pack made its archive; not, with
+// no error, where there is nothing to pack — a record that names no session, a
+// harness that wrote no transcript ([packNothing]); and an error where pack
+// refused the record before any script ran, saying why, where the pack failed,
+// with what it said ([packFailed]), or where a save's box lacked the room to
+// pack it, wrapping [sandbox.ErrSaveNoRoom] ([packNoRoom]).
 func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox,
-	pack func(paths Paths, session string) string) (sessionRecord, bool, error) {
+	pack func(paths Paths, rec sessionRecord) (string, error)) (sessionRecord, bool, error) {
 
 	paths := PathsFor(box)
 	rec, refusal, err := r.readSessionRecord(ctx, box, paths)
@@ -711,7 +715,11 @@ func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox,
 	if refusal != "" || rec.id == "" {
 		return sessionRecord{}, false, nil
 	}
-	script := "PATH=" + sandbox.ShellQuote(paths.BinDir()) + `:"$PATH"; export PATH` + "\n" + pack(paths, rec.id)
+	packs, err := pack(paths, rec)
+	if err != nil {
+		return sessionRecord{}, false, err
+	}
+	script := "PATH=" + sandbox.ShellQuote(paths.BinDir()) + `:"$PATH"; export PATH` + "\n" + packs
 	res, err := box.Exec(ctx, "sh -lc "+sandbox.ShellQuote(script),
 		sandbox.ExecOptions{TimeoutSec: sandbox.SessionPackWait.Seconds()})
 	if err != nil {
@@ -723,6 +731,9 @@ func (r *Runner) packNow(ctx context.Context, box sandbox.Sandbox,
 		return rec, true, nil
 	case packNothing:
 		return sessionRecord{}, false, nil
+	case packNoRoom:
+		return sessionRecord{}, false, fmt.Errorf("%w: %s", sandbox.ErrSaveNoRoom,
+			firstLine(strings.TrimSpace(res.Stderr), packDetailLimit))
 	}
 	return sessionRecord{}, false, fmt.Errorf("executor: %s's session %s could not be packed (exit %d): %s",
 		r.harness.Name(), rec.id, res.ExitCode, firstLine(strings.TrimSpace(res.Stderr), packDetailLimit))
@@ -754,12 +765,14 @@ func (r *Runner) readSessionRecord(ctx context.Context, box sandbox.Sandbox, pat
 const packDetailLimit = 512
 
 // The exits a pack made on demand ends with ([carrier.Pack]) beside 0, the
-// session packed: packNothing, a session there is nothing of to pack — no
-// transcript its harness wrote, no session its harness holds — and packFailed,
-// one there is and the pack could not make, its error stream saying why.
+// session packed: packNothing, a session there is nothing of to pack (no
+// transcript its harness wrote, no session its harness holds); packFailed,
+// one there is and the pack could not make, its error stream saying why; and
+// packNoRoom, a save its box lacks the memory to pack now ([openCodeSaveRoom]).
 const (
 	packFailed  = 2
 	packNothing = 3
+	packNoRoom  = 4
 )
 
 // packDigest is the part of every pack — the run's own as its harness exits,

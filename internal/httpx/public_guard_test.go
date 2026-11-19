@@ -15,27 +15,14 @@ import (
 
 // TestNoOtherPackageJudgesWhetherAnAddressIsPublic fails the build when a
 // package outside this one asks an address the questions [httpx.Public]
-// answers, which is how a second copy of the rule starts (ADR-0072).
+// answers: how a second copy of the rule starts (ADR-0072).
 //
-// Two copies were in the tree when the rule moved here: the artifact CDN
-// fetch's guard and GitHub's reachability check, and the second admitted
-// carrier-grade NAT, the documentation ranges and multicast that the first
-// refused. Neither said it was a copy of the other.
-//
-// # What it flags
-//
-// In every production file under internal/ and cmd/ that imports net or
-// net/netip, outside this package: a call of IsPrivate, IsLinkLocalUnicast,
-// IsLinkLocalMulticast, IsInterfaceLocalMulticast or IsGlobalUnicast. The
-// last is here because it is the tempting wrong answer: it reports true for
-// 10.0.0.1, so a check written with it admits every private address. IsLoopback
-// and IsUnspecified are not flagged, since "does this name this host" is a
-// question of its own that several packages rightly ask.
-//
-// The match is syntactic, a method name on any receiver in a file that imports
-// an address package, so an unrelated method of the same name in such a file
-// would be reported too; none exists, and the message says what to do if one
-// appears.
+// It flags, in production files under internal/ and cmd/ importing net or
+// net/netip, a call of IsPrivate, IsLinkLocalUnicast, IsLinkLocalMulticast,
+// IsInterfaceLocalMulticast or IsGlobalUnicast (the tempting wrong answer:
+// true for 10.0.0.1). IsLoopback and IsUnspecified are not flagged. The match
+// is syntactic, a method name on any receiver, so an unrelated method of the
+// same name would be reported; none exists, and the message says what to do.
 func TestNoOtherPackageJudgesWhetherAnAddressIsPublic(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {

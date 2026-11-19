@@ -154,20 +154,15 @@ type Exclusion struct {
 // categories maps an event type to its dashboard category.
 //
 // THE MAP IS THE ADMISSION LIST. A type that is not here is not written to the
-// event store and does not reach the activity feed — the live projection keys
+// event store and does not reach the activity feed: the live projection keys
 // "is this a persisted event" on the category being non-empty, so an absent
-// entry is a silent drop in both places at once. That is how the sandbox panel
-// once ended up showing rows that vanished on the next reload and 404'd when
-// clicked.
+// entry is a silent drop in both places. Exclusions are therefore deliberate
+// and stated, never gaps.
 //
-// So the exclusions below are deliberate, and stated, rather than left as gaps.
-//
-// EVERY ENTRY ALSO STATES WHO AUTHORS ITS RATE, because admission is not only
-// "is this worth keeping" but "can somebody outside this company decide how
-// much of it there is". See [RateAuthor] and [AdmissionViolations].
-//
-// So is the one narrowing of the other half: a type in [unfed] is persisted
-// like every other entry here and is kept out of the activity feed.
+// EVERY ENTRY ALSO STATES WHO AUTHORS ITS RATE: admission is also "can somebody
+// outside this company decide how much of it there is". See [RateAuthor] and
+// [AdmissionViolations]. A type in [unfed] is persisted like every other entry
+// and kept out of the activity feed.
 var categories = map[string]placement{
 	// Lifecycle: the org coming and going, plus the config changes an
 	// operator is most likely to go looking for after the fact — and the
@@ -324,14 +319,12 @@ var categories = map[string]placement{
 	// written by the fleet at all. The live half of a trail whose durable,
 	// fleet-wide half is `iam_history` — see internal/events/types' auth.go.
 	//
-	// EVERY RATE HERE IS SOMEBODY THIS ENGINE ALREADY TRUSTS, and the one
-	// that looks like it should not be is the proof: a failed sign-in is
-	// authored by whoever can reach the listener, so it is NOT a type — it
-	// is a metrics counter, and the row is iam_login_failures, one per
-	// client per minute, paced by the engine's own flush loop. The two
-	// signature verdicts are engine-rated for the same reason: a key id is
-	// whatever a frame says, so the node reports each (domain, key id)
-	// once, under a cap on how many distinct ids it will ever name.
+	// EVERY RATE HERE IS SOMEBODY THIS ENGINE ALREADY TRUSTS. A failed
+	// sign-in is authored by whoever can reach the listener, so it is a
+	// metrics counter, not a type; the row is iam_login_failures, one per
+	// client per minute, paced by the engine's flush loop. The two signature
+	// verdicts are engine-rated likewise: a key id is whatever a frame says,
+	// so each (domain, key id) is reported once, under a cap on distinct ids.
 	"iam_session_started":    {"auth", RateAuthenticated},
 	"iam_session_ended":      {"auth", RateAuthenticated},
 	"iam_login_failures":     {"auth", RateEngine},
@@ -439,44 +432,17 @@ var categories = map[string]placement{
 }
 
 // excluded are the types deliberately kept OUT of the event store, each with
-// the CAUSE it must stay out for and the reason in full.
+// its CAUSE and the reason in full. A map to [Exclusion] because an exclusion
+// and an oversight look identical from outside (a type published, then gone);
+// the written reason tells them apart, the completeness test prints it, and the
+// cause is the form [AdmissionViolations] can walk.
 //
-// A map to [Exclusion] rather than a set, because the whole hazard here is
-// that an exclusion and an oversight look identical from the outside: both are
-// a type that is published and then vanishes. Writing the reason down is what
-// makes the next reader able to tell which one they are looking at — and the
-// completeness test prints it. The cause is the same fact in the form a WALK
-// can read: [AdmissionViolations] holds the estate to a rule, and a rule
-// cannot be stated in a sentence nothing parses.
-//
-// # Two facts that are kept out by having NO TYPE, and why they are not here
-//
-// A per-request AUTHORIZATION DECISION and a session TOUCH are both named by
-// the identity design as things the audit trail deliberately does not hold —
-// the first because it is orders of magnitude more voluminous than everything
-// else in the store and is a fact about a poll rather than about the company,
-// the second because it is a clock rather than an event. Neither is an entry
-// below, because an entry here is for a type something PUBLISHES and keeps out
-// of the estate: nothing in this build publishes either, and registering a
-// type only to exclude it would be a wire name with no producer, which reads
-// to the next person exactly like a type whose publisher was lost.
-//
-// # And NOTHING HERE REFUSES THEM — they stay out because no type exists
-//
-// [AdmissionViolations] cannot hold either one out, and it would be false to
-// say it does. Both are caused by a caller the guard ADMITTED — a decision is
-// taken on an authenticated request, a touch is a valid session being used —
-// so a type for either would be filed [RateAuthenticated], and the walk
-// refuses only an anonymous or an unstated author. What keeps them out is
-// what each fact already is: a refused request is the 403 the authority
-// table wrote and a log line, a request a Tier A token overreached on is a
-// WARN log line on the node it reached, and a session's use moves nothing at
-// all — its rotation is
-// derived, so an hour of use writes nothing anywhere. A change that wanted a
-// row per decision or per touch would add the type in a reviewed diff, and
-// the reasons above — volume and a poll rather than a fact for the decision,
-// a clock rather than an event for the touch — are what that review has to
-// answer; no test here would stop it.
+// A per-request authorization decision and a session touch have NO TYPE, so
+// they are not entries: nothing publishes them, and a registered type with no
+// producer reads like one whose publisher was lost. They are out for volume (a
+// fact about a poll, not the company) and for being a clock, not an event. The
+// walk does NOT hold them out: both come from an admitted caller, so a type
+// would be [RateAuthenticated]. Adding one is a reviewed diff; no test stops it.
 var excluded = map[string]Exclusion{
 	"agent_turn_progress": {Cause: CauseIntermediate, Reason: "fires as each LLM round opens, answers and runs its tools, as a live-only signal; the " +
 		"matching agent_phase_completed is its durable record, so persisting " +
@@ -550,32 +516,15 @@ var excluded = map[string]Exclusion{
 }
 
 // unfed are the PERSISTED types the activity feed does not carry, each with the
-// reason.
-//
-// A RULE CHANGE, made once and here rather than as a special case in a reader:
-// "persisted" and "fed" were one fact — a categorised type was a row AND a
-// line of the feed — and the feed is a ring of a few hundred rows (livestate.EventFeedLimit)
-// for the WHOLE COMPANY, because every node's projection is fed by a fleet-wide
-// broadcast. A type that is accounting rather than activity takes those rows
-// from the events a person watching the feed is there for, and a projection
-// that skipped it on its own would leave the startup seed, which reads the
-// feed back out of the store, disagreeing with the stream about what the feed
-// holds. So the class is declared beside the admission list, and every read
-// of the feed's rows asks [KeptOutOfFeed]: the live projection's ring, its
-// startup seed, and every view a reader scrolls on from the ring — the event
-// log's older pages and its axis, the Live screen's activity strip and a
-// seat's latest events — which ask for `feed_only` (store.ListQuery.FeedOnly),
-// so a bar never counts and an older page never lists a row the ring would
-// not hold.
-//
-// An unfed type is still a row with a category: it is in the store, in a
-// turn's and a trace's history, and listed by every read that does not ask
-// for the feed's rows — a type filter, a turn, a trace, a work key.
-//
-// MOVING A TYPE INTO THE CLASS moves every one of those reads at once, on
-// every node: the history scatter carries `feed_only` to each node it asks
-// (internal/eventfan), and each node leaves the class out of its own listing
-// and its own axis by this list.
+// reason. The feed is a ring of a few hundred rows (livestate.EventFeedLimit)
+// for the WHOLE COMPANY, so accounting rows would crowd out the events a
+// watcher is there for. A projection skipping them alone would leave the
+// startup seed (read back from the store) disagreeing with the stream, so every
+// feed read asks [KeptOutOfFeed]: the ring, the seed, and the views scrolling
+// on from it, which pass `feed_only` (store.ListQuery.FeedOnly). An unfed type
+// is still a categorised row, listed by every read not asking for the feed's
+// rows (type filter, turn, trace, work key); the history scatter carries
+// `feed_only` (internal/eventfan) and each node applies this list.
 var unfed = map[string]string{
 	"code_mirror_pushed": "AN AUDIT, NOT ACTIVITY: what a repository's home " +
 		"published to its push mirror, as often as once a minute for a busy " +
@@ -753,18 +702,13 @@ func Exclusions() map[string]Exclusion {
 //
 // THE RULE: no event type whose rate an unauthenticated caller authors reaches
 // the node estate. The estate is a local file on a disk an operator sized, and
-// every row in it is something this company did; a type whose rate anybody who
-// can reach the listener decides hands the size of that file, and the cost of
-// every backup, snapshot and integrity check taken from it, to whoever is
-// making the requests. A failed login is the worked example — an anonymous
-// caller authors millions a day for free — so the per-attempt fact belongs on
-// a metrics counter and only a COALESCED event, per source per minute and
-// published by the engine's own loop, is a row.
+// such a type hands its size, and the cost of every backup and snapshot, to
+// whoever makes the requests. A failed login is the example: the per-attempt
+// fact belongs on a metrics counter and only a COALESCED event, per source per
+// minute from the engine's own loop, is a row.
 //
-// Reported rather than refused at startup, and never a panic: this is a
-// property of two tables in this file, so a violation is a compile-time
-// mistake caught by a test in this package, not a condition a running node can
-// find itself in.
+// Reported, never a startup refusal or panic: a violation is a mistake in two
+// tables here, caught by a test, not a condition a running node can reach.
 func AdmissionViolations() []string {
 	return admissionViolations(categories, excluded)
 }

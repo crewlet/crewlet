@@ -532,22 +532,13 @@ func (e *Engine) liftPauseHold(ctx context.Context, seat uuid.UUID, why string) 
 // clearRemovedSeatPauses lifts the pause of every seat the company no longer
 // has.
 //
-// A pause belongs to a seat, and a seat the chart removed takes no work to
-// hold. Left, the record would outlive the seat for ever — the bucket has no
-// age. Every node composing the company tries; the delete is conditioned on
-// the version this node read, so one wins and the rest find it gone, which the
-// watch then tells every copy.
-//
-// ASKED BY THE SEAT'S ID, the agent id derived from its handle (ADR-0013).
-//
-// CALLED WHEREVER THE ROSTER CAN CHANGE, which is every published company
-// ([Engine.followCompany]) — and ONLY ON THE FLEET'S CURRENT ONE
-// ([Engine.fleetCompany]), the rule the mailbox sweep judges a seat absent by.
-// A node applying a revision the fleet has since replaced does not have a seat
-// the newer one added, and a pause somebody put on that new seat would read
-// here as a pause on a seat the company does not have: the node would delete a
-// pause a person had just placed. A company that is not the fleet's clears
-// nothing; the apply that catches this node up does.
+// A removed seat's pause would outlive it: the bucket has no age. Every node
+// tries; the delete is conditioned on the version read, so one wins. Asked by
+// the seat's id (ADR-0013). Called wherever the roster can change
+// ([Engine.followCompany]), ONLY ON THE FLEET'S CURRENT COMPANY
+// ([Engine.fleetCompany]), as the mailbox sweep judges a seat absent: a node on
+// a replaced revision lacks a seat the newer one added, and would delete a
+// pause a person just placed on it. The apply that catches it up clears.
 func (e *Engine) clearRemovedSeatPauses(ctx context.Context, next *Company) {
 	if next == nil || next.Org == nil || e.backends == nil || e.backends.Fleet == nil {
 		return

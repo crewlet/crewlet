@@ -97,6 +97,10 @@ func RecordStart(text string) (began bool, after string) {
 	return rec.began, rec.from
 }
 
+// SessionRecordOf is the record of a run that worked in session, as
+// [Runner.packNow] hands it to a pack.
+func SessionRecordOf(session string) sessionRecord { return sessionRecord{id: session} }
+
 // OpenCodeCursorTail is how much of a list answer's end a run's script reads
 // its cursor from ([openCodeCursor]).
 const OpenCodeCursorTail = openCodeCursorTail
@@ -133,6 +137,10 @@ const (
 // HeldPlainMax is the most plaintext a pack beside a working harness packs
 // ([heldPlainMax]): what a case sizes a session past it by.
 const HeldPlainMax = heldPlainMax
+
+// OpenCodeSaveRoom defines the shell functions an OpenCode save reads its box's
+// room and its need by ([openCodeSaveRoom]): what a case feeds memory lines.
+var OpenCodeSaveRoom = openCodeSaveRoom
 
 // OpenCodeStops is a run's script's stops ([openCodeStops]) beside the end they
 // stop with ([endFunction]) at stop, and OpenCodeExporter its login exporter

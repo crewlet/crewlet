@@ -9,75 +9,30 @@ import (
 
 // Grant is one permission a principal carries: ADMIN, or ONE APP.
 //
-// A CLOSED SET OF SEVEN (ADR-0033), and the set is the whole point. Eleven
-// grants carved the engine by surface (a read of the board, a read of the
-// trail, a read of the document, a write of work, a write of pages, the
-// credential store twice, the deployment, the directory, `sandbox:run`) and a
-// company had to compose those eleven into the three or four things it meant
-// to say about a person. Nobody could: an operator inviting a teammate faced a
-// list of capabilities that each opened part of a screen, and a person handed
-// none of the right ones landed on an engine that showed them nothing at all.
-// What a company actually says about somebody is whether they RUN it, and
-// which of its apps they USE, so that is the vocabulary:
+// A CLOSED SET OF SEVEN (ADR-0033), each constant below: whether somebody RUNS
+// the company and which apps they USE. A team lead's reach and a share's are
+// RELATIONS internal/authz asks about, never a grant. THE ZERO IS INVALID: a
+// gate nobody filled in holds it, and a valid zero would ship it "granted".
 //
-//   - [GrantAdmin] runs the company and the engine, and includes every app;
-//   - [GrantWorklet] uses Worklet, read and write;
-//   - [GrantDoclet] uses Doclet, read and write;
-//   - [GrantArtifacts] authors artifacts: creates them, publishes their
-//     versions and shapes their data;
-//   - [GrantChatlet] uses Chatlet, read and write;
-//   - [GrantGitlet] uses Gitlet: reaches the company's repositories, through
-//     every door (ADR-0110);
-//   - [GrantAtlas] reads the company's atlas: the map of everything it runs
-//     on (ADR-0127).
-//
-// Everything else a person sees (the org chart, the agents' status, spend,
-// schedules) is EVERYBODY's, and asks no permission at all; what a team lead
-// may do inside their own team, and what a share lets somebody do on one
-// artifact, are RELATIONS internal/authz asks about, never a grant.
-//
-// THE ZERO IS INVALID, and that is load-bearing rather than decorative: a gate
-// somebody forgot to fill in holds the zero Grant, and a zero that validated
-// would ship that gate as "granted".
-//
-// A NAME THIS BUILD DOES NOT KNOW IS KEPT AND IGNORED. One arrives in a
-// replicated row — a person's, an invitation's, a machine token's — from a
-// newer peer during a rolling upgrade, or from an older estate this build
-// renamed out of the vocabulary. It stays in the row, [Grant.Valid] answers
-// false for it, [Principal.Can] never matches it and [Expand] carries it
-// through unchanged. A writer may REMOVE it from a row and never ADD it
-// (internal/iamdomain's MayConfer enforces that at the record), and Tier A's
-// configuration refuses it outright, naming [AllGrants], because a file an
-// operator wrote is a typo rather than an upgrade.
+// A NAME THIS BUILD DOES NOT KNOW IS KEPT AND IGNORED: it arrives in a row from
+// a newer peer, stays there, [Grant.Valid] is false, [Principal.Can] never
+// matches it and [Expand] carries it through. A writer may REMOVE it, never ADD
+// it (internal/iamdomain's MayConfer); Tier A's configuration refuses it.
 type Grant string
 
 const (
 	// GrantAdmin runs the company and the engine: the company document,
-	// its integrations, models, settings and budgets, the workspace
-	// catalogue, the tool-skill pages, the credential store, the identity
-	// directory, the deployment's own controls, the company-wide audit
-	// trail and the purges. And it INCLUDES EVERY APP, through [Expand], so
-	// an administrator is never told they lack a permission an app opens.
+	// integrations, models, budgets, credential store, identity directory, the
+	// deployment's controls, the audit trail and the purges. It INCLUDES EVERY
+	// APP, through [Expand].
 	//
-	// IT IS HOST ACCESS, and it is ONE permission by decision rather than by
-	// oversight. The configuration it writes runs code: an `mcp_servers`
-	// entry is a command every engine host executes, a seat's `mcp_env` and
-	// its per-phase model keys (`llm_*`, a `harness` provider among them)
-	// choose what the seat's children run and which credentials they are
-	// handed, a model entry's `run_in: direct` runs the seat's executor, a
-	// fully permissioned harness, on the engine host, and a seat's
-	// worker grants decide which tools a worker runs with. So a holder can
-	// run anything on every engine host and read
-	// whatever a process there can — the keyring included — and every
-	// other permission is transitively theirs. A split permission for "the
-	// part that runs code" was weighed and declined: it would be the whole
-	// of this one's practical reach under a second name. It is conferred
-	// the way shell on those hosts is.
+	// IT IS HOST ACCESS, ONE permission by decision. The configuration it writes
+	// runs code (an `mcp_servers` command on every engine host, `mcp_env`, model
+	// keys, `run_in: direct`), so a holder can run anything there and read the
+	// keyring; a split "runs code" permission would be this one's whole reach.
 	//
 	// A UNIT'S LEAD changes the seats and units inside it without this
-	// permission (internal/authz's subtree rule), every field but a
-	// credential's; what lies outside every lead's subtree, every setting
-	// and every credential the chart names are this permission's alone.
+	// (internal/authz's subtree rule), every field but a credential's.
 	GrantAdmin Grant = "admin"
 
 	// GrantWorklet uses Worklet: every Worklet read and write, a project's
@@ -112,35 +67,26 @@ const (
 	// making a room, moving their own membership and keeping their read
 	// state.
 	//
-	// WHICH ROOM IS NEVER THIS PERMISSION'S. A public room and a unit's room
-	// are every holder's, and a private room, a group and a direct
-	// conversation are their MEMBERSHIP (internal/chatlet's Visible) — an
-	// administrator's included, who reads no conversation they are not in.
-	// And it is spoken in as a SEAT: a credential acting as itself holds it
-	// and still says nothing, because a room renders a speaker by seat
-	// (internal/authz's seated rows). A company whose chat is a vendor's
-	// (`chat.backend: vendor`) is given nothing by it, as the tracker app
-	// gives a company on Jira nothing.
+	// WHICH ROOM IS NEVER THIS PERMISSION'S. Public and unit rooms are every
+	// holder's; a private room, group or direct conversation is MEMBERSHIP
+	// (internal/chatlet's Visible), an administrator's included. It is spoken in
+	// as a SEAT: a credential acting as itself holds it and still says nothing
+	// (internal/authz's seated rows). A company on a vendor's chat
+	// (`chat.backend: vendor`) is given nothing by it.
 	GrantChatlet Grant = "chatlet"
 
-	// GrantGitlet uses Gitlet, the engine's own git host: reading the
-	// company's repositories and their changes, searching them, cloning,
-	// fetching and pushing over git, and every write a repository takes —
-	// through every door, the routes, the git transport, the code tools a
-	// person's assistant calls, the dashboard and the code half of the inbox
-	// (ADR-0110).
+	// GrantGitlet uses Gitlet, the engine's own git host: reading, searching,
+	// cloning, fetching and pushing, and every write a repository takes,
+	// through every door (routes, git transport, code tools, dashboard, the
+	// code half of the inbox; ADR-0110).
 	//
-	// WHICH REPOSITORY, AND WHAT ON IT, IS NEVER THIS PERMISSION'S. Behind
-	// it, ADR-0088's derivation decides as it always has: a person holding it
-	// maintains every repository, a credential bound to no seat that holds it
-	// reads every repository and never pushes (ADR-0085), and a seat holds
-	// the lower of its `code.access` tier and its relation on the chart. A
-	// holder without it is refused at the authority table, before any
-	// repository is read, so no answer, count or line of git says what one
-	// holds. Who read a repository and the Gitlet nodes' caches are
-	// [GrantAdmin]'s, which includes this. A company that runs no Gitlet is
-	// given nothing by it, as [GrantChatlet] gives a company on a vendor's
-	// chat nothing.
+	// WHICH REPOSITORY, AND WHAT ON IT, IS NEVER THIS PERMISSION'S. Behind it,
+	// ADR-0088's derivation decides: a person holding it maintains every
+	// repository, a credential bound to no seat reads every one and never pushes
+	// (ADR-0085), and a seat holds the lower of its `code.access` tier and its
+	// chart relation. A holder without it is refused at the authority table
+	// before any repository is read. Who read a repository and the nodes' caches
+	// are [GrantAdmin]'s.
 	GrantGitlet Grant = "gitlet"
 
 	// GrantAtlas uses Atlas, the map of everything the company runs on. A
@@ -158,22 +104,14 @@ var AllGrants = []Grant{
 	GrantAdmin, GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet, GrantGitlet, GrantAtlas,
 }
 
-// Apps are the permissions that open one APP each, and THE ONE PLACE AN APP IS
-// DECLARED.
+// Apps are the permissions that open one APP each, THE ONE PLACE AN APP IS
+// DECLARED: an agent seat holds exactly these, [Expand] adds them to an
+// administrator, the dashboard's picker locks them under Admin, internal/authz's
+// walks hold each to a verb a person can take, and the live socket's audience
+// reads it. The dashboard's copy is held to this one by a gate.
 //
-// Everything that has to know which permissions are apps reads this list: an
-// agent seat holds exactly these (it uses the company's apps and never runs
-// the company), [Expand] adds them to an administrator, the dashboard's access
-// picker ticks and locks them under Admin, and internal/authz's walks hold
-// every one of them to a verb a person can take; the live socket's audience
-// reads it too, so an app added here reaches every reader with no second edit.
-// The dashboard's own copy is held to this one by a gate, so an app added here
-// and nowhere else fails the build rather than shipping a permission no screen
-// offers.
-//
-// APPENDED, NEVER INSERTED: the order is what [Expand] stores in a row and
-// what every list of an administrator's permissions reads in, so a new app
-// goes last and no stored row moves.
+// APPENDED, NEVER INSERTED: the order is what [Expand] stores in a row, so a
+// new app goes last and no stored row moves.
 var Apps = []Grant{GrantWorklet, GrantDoclet, GrantArtifacts, GrantChatlet, GrantGitlet, GrantAtlas}
 
 // OptInApps are the apps a person holds only once somebody gives them: never by
@@ -215,19 +153,13 @@ func (g Grant) IsApp() bool { return slices.Contains(Apps, g) }
 // Expand is set as it is compared: set's own members, plus every app when set
 // holds [GrantAdmin].
 //
-// EVERY COMPARISON OF PERMISSIONS GOES THROUGH IT — [Principal.Can], a node's
-// admin posture ([AdminPosture.Effective]), a machine token's mint against its
-// owner, what a writer may confer, an invitation's bound and Tier A's token
-// check — because "admin includes every app" stated at each of those would be
-// six copies of one rule, and the day one of them forgot, an administrator
-// would be refused a page by the one comparison that did.
+// EVERY COMPARISON OF PERMISSIONS GOES THROUGH IT ([Principal.Can], the admin
+// posture, a token's mint, what a writer may confer, an invitation's bound,
+// Tier A's token check), so "admin includes every app" is one rule, not six.
 //
-// A FRESH SLICE THAT NEVER ALIASES set, so a caller that appends to the answer
-// never edits a row it read. It holds set's own members in their order —
-// unknown names kept, duplicates kept as given, because what a row says is the
-// row's business — and then, when set holds admin, every member of [Apps] set
-// does not already hold, in [Apps] order. It adds nothing otherwise, and
-// Expand(Expand(s)) equals Expand(s).
+// A FRESH SLICE THAT NEVER ALIASES set, so appending never edits a row the
+// caller read. It keeps set's members in order (unknown names and duplicates
+// too), then, for admin, adds each [Apps] member not held, in [Apps] order.
 func Expand(set []Grant) []Grant {
 	out := slices.Clone(set)
 	if out == nil {

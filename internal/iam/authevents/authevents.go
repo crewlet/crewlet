@@ -13,19 +13,26 @@
 //
 // A FAILED ATTEMPT is the opposite on both counts, and internal/events refuses
 // to admit a type whose rate such a caller authors. So [Trail.Failed] never
-// publishes anything. It adds one to a metrics counter and one to its
+// publishes anything. It adds one to `crewlet.auth.attempts.failed` (by
+// method and outcome) and one to its
 // source's count for the minute, and [Trail.Run] — the engine's own loop —
 // publishes each minute ONCE, after it has closed, as one `iam_login_failures`
 // for the node. The caller decides how many attempts there are; the ticker
 // decides how many rows there are. The design this replaced wrote a
 // synchronous row per attempt, which was 6.9 million rows a day from one host.
 //
+// The engine builds ONE Trail per process, because its per-minute count is the
+// node's: a failed sign-in and a refused bearer add up only if both reach the
+// same Trail. The Trail folds each source, never a surface, because counted per
+// raw address one host cycling addresses inside its /64 took every named place
+// in a minute's first milliseconds and pushed every other caller into overflow.
+//
 // # A row holds counts per source, and nothing that was presented
 //
 // How many attempts failed from each source — the client address as the
 // trusted proxies resolve it, folded as the sign-in throttle folds it, so an
 // IPv6 caller is its /64 — and how many from sources past the cap. Never
-// what was typed or sent: the presented value is where a password typed into
+// what was typed or sent (a test holds the shape of [Failure] and of the row): the presented value is where a password typed into
 // the login box lands, and an unsalted hash of it reverses against the
 // company's own roster in one pass. The tally this replaced also counted the
 // DIFFERENT names each client tried, over digests under a key the process
@@ -135,21 +142,15 @@ type Failure struct {
 // MaxSourcesPerMinute is how many sources one minute's row names. Past it,
 // every further source's failures fold into the row's overflow count.
 //
-// SIXTY-FOUR, because it is where naming another source stops telling an
-// operator anything the count would not: a minute with more distinct failing
-// sources than that is a distributed attack, and what is worth writing down is
-// its size, which the overflow carries. It also bounds the row — sixty-four
-// addresses and counts is a few kilobytes, inside any event — and the memory a
-// minute holds, where without it both would grow with the attacker's address
-// pool, and an IPv6 /48 alone is 65,536 sources once each /64 is one. A source
-// keeps its place once it has one, so a source already named goes on being
-// counted under its name.
+// SIXTY-FOUR, where naming another source stops telling an operator more than
+// the count: more distinct failing sources in a minute is a distributed attack,
+// whose size the overflow carries. It also bounds the row (a few kilobytes) and
+// a minute's memory, else both grow with the attacker's address pool (an IPv6
+// /48 is 65,536 /64 sources). A source already named keeps its place.
 //
-// A SOURCE IS THE THROTTLE'S UNIT, not the raw address ([Failure.Source]).
-// Counted per address, one IPv6 host cycling addresses inside its own /64 —
-// the cheapest caller there is — took all sixty-four places in the first
-// milliseconds of every minute, and every other caller's failures, an IPv4
-// guesser's included, folded into the overflow with no name on them.
+// A SOURCE IS THE THROTTLE'S UNIT, not the raw address ([Failure.Source]): per
+// address, one IPv6 host cycling inside its /64 took all sixty-four places and
+// folded every other caller into the unnamed overflow.
 const MaxSourcesPerMinute = 64
 
 // PublishBudget bounds one publish.
