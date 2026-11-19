@@ -17,13 +17,13 @@ import (
 	"github.com/crewlet/crewlet/internal/jsonscan"
 )
 
-// A THREAD LINE READ IN ONE SCANNER PASS, NEVER HELD: [scanReader] answers
-// each line as [threadReader] does, through [jsonscan], without holding the
-// line, so a line of any length costs what its readers read of it. Why a tee
-// of the raw bytes, why nothing commits before the break, the order a line is
-// judged in, names by their decoded text and last occurrence, the three means
-// a value is read by, the type's gate and the meter: the package doc, "A
-// thread line is read in one scanner pass, never held".
+// A THREAD LINE READ IN ONE SCANNER PASS, NEVER HELD: [threadReader] reads
+// each line through [jsonscan] without holding it, so a line of any length
+// costs what its readers read of it. Why a tee of the raw bytes, why nothing
+// commits before the break, the order a line is judged in, names by their
+// decoded text and last occurrence, the three means a value is read by, the
+// type's gate and the meter: the package doc, "A thread line is read in one
+// scanner pass, never held".
 
 // threadValueMax is the most of one value the layer reads whole: a raw value
 // it keeps for an accessor to decode (a uuid, a timestamp, a reply's usage,
@@ -59,18 +59,21 @@ func lineScratch(b []byte) []byte {
 // pass for it.
 var errLineMember = errors.New("executor: a thread line runs past what is left of its member's bound")
 
-// scanReader reads one member of a Claude Code session a line at a time, each
-// line read in one scanner pass into its head, its byte facts and its facts,
-// never held ([scanReader.Next]): the reader [threadReader] becomes. One
-// goroutine reads it. ONE READER READS A SESSION'S MEMBERS, one after another
-// ([scanReader.Reset]), keeping its buffers.
-type scanReader struct {
+// threadReader reads one member of a Claude Code session a line at a time,
+// each line read in one scanner pass into its head, its byte facts and its
+// facts, never held ([threadReader.Next]). One goroutine reads it. A THREAD'S
+// MEMBER: a subagent's metadata is one JSON document with no line break
+// ([claudeSubagentMeta]), which it reads as nothing but a torn piece. ONE
+// READER READS A SESSION'S MEMBERS, one after another ([threadReader.Reset]),
+// keeping its buffers whatever members it reads, never one a member.
+type threadReader struct {
 	r *bufio.Reader
 	// maxBytes is the member's bound, and left what of it the lines read so
 	// far have not taken.
 	maxBytes, left int64
-	// n is how many whole lines have been read.
-	n int
+	// n is how many whole lines have been read, and maxLines the most it may
+	// be.
+	n, maxLines int
 	// torn is whether the member ended in a piece with no break.
 	torn bool
 	// end is what ended the reading: io.EOF, errThreadBound, ctx's error, or
@@ -83,66 +86,119 @@ type scanReader struct {
 	// dec is the pass's own scratch, kept across lines and members.
 	dec lineDecoder
 	// valueMax is [threadValueMax] and meterMax [threadLineMax]; the
-	// differential raises both to compare the two readings' facts at any
-	// length (claudelinescan_internal_test.go).
+	// differential raises both to compare the pass's facts with the whole
+	// decode's at any length (claudelinescan_internal_test.go).
 	valueMax, meterMax int
 	// asked is the take tokens each line names of a hook's words
-	// ([scanReader.Asking]).
-	asked []string
+	// ([threadReader.Asking]), and estimating whether each line reads its
+	// estimate ([threadReader.Estimating]).
+	asked      []string
+	estimating bool
+	// gate is the pass's large slot each line's facts hold before they charge
+	// past the base ([threadReader.Gate]); nil where no slot gates them.
+	gate *lineGate
 }
 
-// newScanReader reads r, one member, a line at a time, as [newThreadReader]
-// does: at most maxBytes of it; at or below zero, no byte.
-func newScanReader(r io.Reader, maxBytes int64) *scanReader {
-	return newScanReaderSize(r, maxBytes, lineChunkBytes)
+// lineGate is a reader's way to its pass's large slot ([threadReader.Gate]):
+// held whether it holds it now, for its last line or, where drop is nil, to
+// the pass's end.
+type lineGate struct {
+	pieceGate
+	held bool
 }
 
-// newScanReaderSize is [newScanReader] taking the member chunk bytes at a
+// newThreadReader reads r, one member, a line at a time: at most maxBytes of
+// it, the caller's figure ([threadPlainMax] for a whole thread, what is left
+// of an archive's budget for one member of it); at or below zero, no byte;
+// and at most [threadLinesMax] whole lines ([threadReader.Reset] takes
+// another). The member is a thread, never a subagent's metadata
+// ([claudeSubagentMeta]).
+func newThreadReader(r io.Reader, maxBytes int64) *threadReader {
+	return newThreadReaderSize(r, maxBytes, lineChunkBytes)
+}
+
+// newThreadReaderSize is [newThreadReader] taking the member chunk bytes at a
 // time at most: what a test reads with to move the edge of what the scanner
 // is handed through every byte of a short line, since a member's reader alone
 // cannot (bufio fills its buffer to a break or to its end whatever pieces the
 // member hands it).
-func newScanReaderSize(r io.Reader, maxBytes int64, chunk int) *scanReader {
+func newThreadReaderSize(r io.Reader, maxBytes int64, chunk int) *threadReader {
 	// Built over no reader and then reset onto r: bufio.NewReaderSize hands
 	// back r itself where r is a *bufio.Reader of the size, and a later Reset
 	// would then reset the caller's reader.
-	t := &scanReader{r: bufio.NewReaderSize(nil, chunk), valueMax: threadValueMax, meterMax: threadLineMax}
+	t := &threadReader{r: bufio.NewReaderSize(nil, chunk), valueMax: threadValueMax, meterMax: threadLineMax}
 	t.scan = jsonscan.New(&t.src)
-	t.Reset(r, maxBytes)
+	t.Reset(r, maxBytes, threadLinesMax)
 	return t
 }
 
-// Reset makes t read r, one member, within maxBytes, as [newScanReader] does:
-// whatever t read before, and how it ended, is gone, and t reads r exactly as
-// a fresh reader would, keeping only its buffers.
-func (t *scanReader) Reset(r io.Reader, maxBytes int64) {
+// Reset makes t read r, one member, within maxBytes and maxLines whole lines,
+// as [newThreadReader] does: whatever t read before, how it ended among it (a
+// torn piece, a bound, an error, a context that ended), is gone, and t reads
+// r exactly as a fresh reader would, keeping only its buffers.
+func (t *threadReader) Reset(r io.Reader, maxBytes int64, maxLines int) {
 	maxBytes = max(maxBytes, 0)
+	t.dropGate()
+	t.gate = nil
 	t.r.Reset(r)
 	t.maxBytes, t.left = maxBytes, maxBytes
-	t.n, t.torn, t.end, t.asked = 0, false, nil, nil
+	t.n, t.maxLines, t.torn, t.end, t.asked, t.estimating = 0, max(maxLines, 0), false, nil, nil, false
 }
+
+// Estimating makes every line t reads from here on read Claude Code's estimate
+// of its content ([threadLine.Estimate], [threadLine.AttachmentEstimate]),
+// which a line read otherwise answers [errNotEstimated]: each length counted
+// as the line passes, at any length, at what counting costs the pass (the
+// package doc's "A thread line is read in one scanner pass"), so a reading
+// that reads it asks ([nextReading]) and no other pays. Called before the
+// first [threadReader.Next]; [threadReader.Reset] clears it.
+func (t *threadReader) Estimating() { t.estimating = true }
 
 // Asking makes every line t reads from here on name which of tokens, take
-// tokens ([claudeTakeToken]), a hook's words hold ([threadLine.HookTakes]), or
-// refuses an ask past [maxAskedTakes], as [threadReader.Asking] does: called
-// before the first [scanReader.Next], and cleared by [scanReader.Reset].
-func (t *scanReader) Asking(tokens []string) (err error) {
-	t.asked, err = askedTokens(tokens)
-	return err
+// tokens ([claudeTakeToken]), a hook's words hold ([threadLine.HookTakes]):
+// bit i for tokens[i]. Called before the first [threadReader.Next];
+// [threadReader.Reset] clears it. Past [maxAskedTakes] tokens it asks nothing
+// and answers [errAskedPastMasks]: the ask comes off a row, which a peer with
+// wider bounds may have written, so its caller decides nothing of them.
+func (t *threadReader) Asking(tokens []string) error {
+	if len(tokens) > maxAskedTakes {
+		t.asked = nil
+		return fmt.Errorf("%w: %d asked, %d held", errAskedPastMasks, len(tokens), maxAskedTakes)
+	}
+	t.asked = slices.Clone(tokens)
+	return nil
 }
 
-// Next is the member's next WHOLE line, read without its break in one
-// scanner pass, answered as [threadReader.Next] answers it: io.EOF at the
-// member's end, a last piece with no break never a line ([scanReader.Torn]);
-// a *threadLineError for a whole line that is no record, the reader still
-// usable; and, each ending the reading for good, errThreadBound once the
-// member runs past its bound (EVEN RIGHT AFTER A BREAK), once the pass captures
-// a value past [threadValueMax] (a replaced occurrence or a frame the final
-// type drops among them) or the facts run past [threadLineMax], or once the
-// line's type reads a frame passed over for an earlier type; the member's
-// reader's error as it is; and ctx's error, asked before each piece the line
-// takes, so a reading overruns its caller's wait by one [lineChunkBytes].
-func (t *scanReader) Next(ctx context.Context) (threadLine, error) {
+// Gate makes every line t reads from here on hold gate BEFORE its facts charge
+// past [collectionBaseLineCharge] ([lineMeter]), and drop it as the next line
+// begins or at [threadReader.dropGate]; where gate's drop is nil, it holds the
+// slot to the pass's end, for its caller to release. A line's length takes
+// nothing: what no reader reads of it is passed over unheld. Called before the
+// first [threadReader.Next]; [threadReader.Reset] clears it.
+func (t *threadReader) Gate(gate pieceGate) { t.gate = &lineGate{pieceGate: gate} }
+
+// dropGate drops the slot t holds for its last line, where its gate drops.
+func (t *threadReader) dropGate() {
+	if g := t.gate; g != nil && g.held && g.drop != nil {
+		g.drop()
+		g.held = false
+	}
+}
+
+// Next is the member's next WHOLE line, one that ends in "\n", read without its
+// break in one scanner pass: io.EOF at the member's end, a last piece with no
+// break never a line ([threadReader.Torn]); a *threadLineError for a whole line
+// that is no record, the reader still usable; and, each ending the reading for
+// good, errThreadBound once the member runs past its bound (EVEN RIGHT AFTER A
+// BREAK) or holds a whole line past its lines' bound, read whole first, once
+// the pass captures a value past [threadValueMax] or the facts run past
+// [threadLineMax], or once the line's type reads a frame passed over for an
+// earlier type; the member's reader's error AS IT IS, one wrapping the scrub's
+// bound among them; ctx's error, asked before each piece the line takes; and,
+// first, a wait for the slot ([threadReader.Gate]) that ended. The package doc,
+// "A thread line is read in one scanner pass, never held", says why each.
+func (t *threadReader) Next(ctx context.Context) (threadLine, error) {
+	t.dropGate()
 	if t.end != nil {
 		return threadLine{}, t.end
 	}
@@ -150,15 +206,22 @@ func (t *scanReader) Next(ctx context.Context) (threadLine, error) {
 	facts := new(lineFacts)
 	t.scan.Reset(&t.src)
 	t.dec.reset(t.valueMax, t.meterMax)
-	t.dec.asked = t.asked
+	t.dec.asked, t.dec.estimating = t.asked, t.estimating
+	if t.gate != nil && !t.gate.held {
+		t.dec.meter.gate = t.gate
+	}
 	scanned := t.dec.line(t.scan, facts)
 	// A FAULT STOPS THE SCANNER BEFORE THE BREAK: the rest of the line is read
 	// through the meter and the tee, holding nothing, so a refused line's
 	// size and byte facts are the whole line's.
-	if !t.src.broke && t.src.cause == nil {
+	if !t.src.broke && t.src.cause == nil && t.dec.meter.waitErr == nil {
 		t.src.drain()
 	}
 	t.src.ctx = nil
+	if err := t.dec.meter.waitErr; err != nil {
+		t.end = err
+		return threadLine{}, err
+	}
 	switch cause := t.src.cause; {
 	case errors.Is(cause, errLineMember):
 		t.end = fmt.Errorf("%w: the member runs past the %d bytes it is read within", errThreadBound, t.maxBytes)
@@ -173,12 +236,17 @@ func (t *scanReader) Next(ctx context.Context) (threadLine, error) {
 	}
 	t.left -= t.src.n + 1
 	t.n++
+	if t.n > t.maxLines {
+		t.end = fmt.Errorf("%w: the member holds more than the %d whole lines it is read within", errThreadBound,
+			t.maxLines)
+		return threadLine{}, t.end
+	}
 	return t.commit(scanned, facts)
 }
 
 // Torn reports whether the member ended in a piece with no break, which
-// [scanReader.Next] read as no line: known once Next has answered io.EOF.
-func (t *scanReader) Torn() bool { return t.torn }
+// [threadReader.Next] read as no line: known once Next has answered io.EOF.
+func (t *threadReader) Torn() bool { return t.torn }
 
 // commit is the line just read, whole and ended by its break, scanned what
 // the pass answered (nil where the line was one JSON value) and facts what it
@@ -191,7 +259,7 @@ func (t *scanReader) Torn() bool { return t.torn }
 // facts past [threadLineMax] or a frame passed over for an earlier type
 // ([lineDecoder.passedOver]), errThreadBound, ending the reading; else the
 // record, each frame settled to its type ([settle]).
-func (t *scanReader) commit(scanned error, facts *lineFacts) (threadLine, error) {
+func (t *threadReader) commit(scanned error, facts *lineFacts) (threadLine, error) {
 	size, read := int(t.src.n+1), t.src.bytes.facts()
 	refused := func(err error, fault lineFault, kind recordKind) (threadLine, error) {
 		return threadLine{}, &threadLineError{N: t.n, Err: err, Fault: fault, Type: kind, Size: size, Bytes: read}
@@ -226,6 +294,9 @@ func (t *scanReader) commit(scanned error, facts *lineFacts) (threadLine, error)
 	}
 	t.dec.meter.take(charge)
 	switch {
+	case t.dec.meter.waitErr != nil:
+		t.end = t.dec.meter.waitErr
+		return threadLine{}, t.end
 	case t.dec.over != "":
 		t.end = fmt.Errorf("%w: line %d's %s runs past the %d bytes a value is read whole within", errThreadBound,
 			t.n, t.dec.over, t.valueMax)
@@ -241,6 +312,9 @@ func (t *scanReader) commit(scanned error, facts *lineFacts) (threadLine, error)
 		return threadLine{}, t.end
 	}
 	settle(facts, head)
+	if t.dec.estimating {
+		t.dec.finishEstimate(facts)
+	}
 	// The parent as written is the line's own: the pass's buffer is the next
 	// line's.
 	if keys.parent.kind == '"' {
@@ -249,8 +323,24 @@ func (t *scanReader) commit(scanned error, facts *lineFacts) (threadLine, error)
 	return threadLine{N: t.n, Size: size, Bytes: read, Head: head, f: facts}, nil
 }
 
+// kindOf is raw, a refused record's `type`, as the [recordKind] it names, the
+// layer's own string; the zero kind for anything else, so no string the box
+// wrote is held.
+func kindOf(raw json.RawMessage) recordKind {
+	kind, err := wireRequiredString("type", raw)
+	if err != nil {
+		return ""
+	}
+	for _, k := range recordKinds {
+		if string(k) == kind {
+			return k
+		}
+	}
+	return ""
+}
+
 // scanFault is how Claude Code's load reads a line the scanner refused with
-// e ([lineFault]): what [refusedFault] reads of the same line.
+// e ([lineFault]).
 func scanFault(e *jsonscan.Error) lineFault {
 	switch e.Fault {
 	case jsonscan.FaultByte:
@@ -332,11 +422,11 @@ func (s *lineSource) drain() {
 }
 
 // take takes the line's next piece of the member into pending: ctx asked
-// first; then THE MEMBER'S METER, before the piece's own error, as the line
-// primitive meters a line ([readLine]), so a member past its bound in the
-// same piece as its reader's failure ends with the bound, and the bound holds
-// even right after a break; then the piece, but its break, counted and
-// written to the byte facts.
+// first; then THE MEMBER'S METER, before the piece's own error, as the
+// differential's whole reader meters a line (claudelinewhole_internal_test.go),
+// so a member past its bound in the same piece as its reader's failure ends
+// with the bound, and the bound holds even right after a break; then the
+// piece, but its break, counted and written to the byte facts.
 func (s *lineSource) take() {
 	if err := s.ctx.Err(); err != nil {
 		s.cause = err
@@ -357,8 +447,8 @@ func (s *lineSource) take() {
 	switch {
 	case err == nil, errors.Is(err, bufio.ErrBufferFull):
 	case errors.Is(err, io.EOF):
-		// A wrapped io.EOF is the member's end too, as [threadSource] reads
-		// it.
+		// A wrapped io.EOF is the member's end too: only the member's
+		// reader's other errors are its own.
 		s.cause = io.EOF
 	default:
 		s.cause = err
@@ -411,25 +501,40 @@ var recordRaws = [...]struct {
 // keep for them; over, whether a charge found too few left, after which every
 // charge is refused and the pass holds nothing more of the line. EVERY
 // ALLOCATION THE FACTS KEEP IS CHARGED as it is made: a kept raw or string by
-// its length (a string right after its decode, so the meter passes its bound
-// by one value's decode at most), an array by its capacity times its
-// element's size, before it is made ([grow]). NOTHING IS REFUNDED, so the
-// meter bounds what the line's facts keep, every copy of a value counted. Not
-// charged: the facts' struct, the reader's buffers, and what the pass makes
-// and drops (a refused block's strings, a frame's error).
+// its length (a string right after its decode, past the bound by the three a
+// charge covers at most, "A collection's read of a thread"), an array by its
+// capacity times its element's size, before it is made ([grow]). NOTHING IS
+// REFUNDED, so the meter bounds what the line's facts keep, every copy of a
+// value counted. Not charged: the facts' struct, the reader's buffers, what
+// the pass makes and drops. A charge past unheld first holds gate's slot, if
+// any ([threadReader.Gate]).
 type lineMeter struct {
 	left int
 	over bool
+	// unheld is what the facts may take before gate's slot (gate nil where
+	// none gates the line); waitErr, a wait for it that ended ([errLargeWait]),
+	// after which the meter is over and the reading ends ([threadReader.Next]).
+	unheld  int
+	gate    *lineGate
+	waitErr error
 }
 
 // take charges n bytes, reporting whether they were left: false, and the
-// meter over, where they were not, or where it was over before.
+// meter over, where they were not, or where it was over before, or where the
+// wait for the slot a charge past unheld holds first ended.
 func (m *lineMeter) take(n int) bool {
 	if m.over || n > m.left {
 		m.over = true
 		return false
 	}
-	m.left -= n
+	if g := m.gate; g != nil && !g.held && n > m.unheld {
+		if m.waitErr = g.hold(); m.waitErr != nil {
+			m.over = true
+			return false
+		}
+		g.held = true
+	}
+	m.left, m.unheld = m.left-n, m.unheld-n
 	return true
 }
 
@@ -504,8 +609,16 @@ type lineDecoder struct {
 	// character more, which a read never splits.
 	open [uuidTextBytes + 1 + utf8.UTFMax]byte
 	// asked is the take tokens the line's reader asks of a hook's words
-	// ([scanReader.Asking]).
+	// ([threadReader.Asking]).
 	asked []string
+	// estimating is whether the line's reader asked for its estimate
+	// ([threadReader.Estimating]); images how many images the record's task
+	// delivery carries, and rendered its stored rendering, each by its last
+	// occurrence, which the estimate reads once the line ends
+	// ([lineDecoder.finishEstimate]).
+	estimating bool
+	images     int64
+	rendered   renderedCharge
 }
 
 // uuidTextBytes is a canonical uuid's length as written ([uuidBytes]), and
@@ -607,12 +720,15 @@ type blockScan struct {
 	text                              threadResultText
 	// resultType is the `type` of its content's first element, as written.
 	resultType []byte
+	// est is what the estimate's rule of an element reads of it
+	// ([estimateObject]), but its type, read off typ as the block ends.
+	est estimateObject
 }
 
 // reset makes b a block not yet read, its buffers kept.
 func (b *blockScan) reset() {
 	b.typ, b.id, b.name, b.toolUseID, b.isError = b.typ[:0], b.id[:0], b.name[:0], b.toolUseID[:0], b.isError[:0]
-	b.input, b.to, b.says, b.text = 0, b.to[:0], textSays{}, threadResultText{}
+	b.input, b.to, b.says, b.text, b.est = 0, b.to[:0], textSays{}, threadResultText{}, estimateObject{}
 }
 
 // keys is what the rule of a block reads of b ([blockKeys]), its keys the
@@ -644,11 +760,13 @@ type scannedKey struct {
 // bytes of a value and holding at most meterMax bytes of facts, its scratch
 // kept but what the line before grew past [lineScratchKeep].
 func (d *lineDecoder) reset(valueMax, meterMax int) {
-	d.valueMax, d.meter, d.object, d.over = valueMax, lineMeter{left: meterMax}, false, ""
+	d.valueMax, d.object, d.over = valueMax, false, ""
+	d.meter = lineMeter{left: meterMax, unheld: collectionBaseLineCharge}
 	for i := range d.head {
 		d.head[i] = scannedKey{raw: lineScratch(d.head[i].raw)}
 	}
 	d.typed, d.typeText, d.missed = false, lineScratch(d.typeText), 0
+	d.images, d.rendered = 0, renderedCharge{}
 	for i := range d.held {
 		d.held[i] = lineScratch(d.held[i])
 	}
@@ -704,9 +822,9 @@ func (d *lineDecoder) passedOver(head threadHead) string {
 
 // settle is f, the facts of a record of head, as its accessors read them: a
 // frame its type, or on a system record its subtype, does not read emptied
-// ([gates]), so a record of another type holds nothing of it, as the whole
-// decode reads none ([factsOf]); and of a message, the calls of the kind the
-// record makes alone, a user's results or an assistant's uses, in order.
+// ([gates]), so a record of another type holds nothing of it; and of a
+// message, the calls of the kind the record makes alone, a user's results or
+// an assistant's uses, in order.
 func settle(f *lineFacts, head threadHead) {
 	for _, g := range gates {
 		reads := slices.Contains(g.types, head.Type) &&
@@ -787,7 +905,8 @@ func (d *lineDecoder) members(scan *jsonscan.Scanner, each func(name []byte, k j
 // member reads the record's member name, whose value's first token, k, the
 // scanner stands at: a head key captured into d, a small value its accessors
 // decode captured into f, taskDelivery's presence, a frame its type may read
-// ([gates]), and every other member passed over unheld.
+// ([gates]), and every other member passed over unheld; estimating, the
+// images taskDelivery carries and the record's stored rendering besides.
 func (d *lineDecoder) member(scan *jsonscan.Scanner, k jsonscan.Kind, name []byte, f *lineFacts) error {
 	for i, key := range headNames {
 		if string(name) == key {
@@ -806,9 +925,19 @@ func (d *lineDecoder) member(scan *jsonscan.Scanner, k jsonscan.Kind, name []byt
 			return err
 		}
 	}
-	if string(name) == "taskDelivery" {
+	switch {
+	case string(name) == "taskDelivery":
 		f.taskDelivery = true
-		return scan.Skip()
+		if !d.estimating {
+			return scan.Skip()
+		}
+		var err error
+		d.images, err = d.taskImages(scan, k)
+		return err
+	case string(name) == "rendered" && d.estimating:
+		var err error
+		d.rendered, err = d.renderedOf(scan, k)
+		return err
 	}
 	for _, g := range gates {
 		if string(name) != g.key {
@@ -839,10 +968,10 @@ func (d *lineDecoder) sawType(kind valueKind, raw []byte) {
 	}
 }
 
-// message reads a user or assistant record's `message`, whose first token,
-// k, the scanner stands at, into m, as [messageOf] reads it: its kind; of an
-// object, its small values as written and its content
-// ([lineDecoder.content]), a content it lacks an error of the message's.
+// message reads a user or assistant record's `message`, whose first token, k,
+// the scanner stands at, into m: its kind; of an object, its small values as
+// written and its content ([lineDecoder.content]), a content it lacks an error
+// of the message's.
 func (d *lineDecoder) message(scan *jsonscan.Scanner, k jsonscan.Kind, m *messageFacts) error {
 	m.kind = scannedKind(k)
 	if k != jsonscan.ObjectStart {
@@ -876,22 +1005,36 @@ func (d *lineDecoder) message(scan *jsonscan.Scanner, k jsonscan.Kind, m *messag
 	return err
 }
 
-// errContentKind is a message's content of kind, neither a string nor a list
-// ([messageContent]).
+// errContentKind is a message's content of kind, neither a string nor a
+// list.
 func errContentKind(kind valueKind) error {
 	return fmt.Errorf("content is %s, neither a string nor a list", kind)
 }
 
 // content reads a message's `content`, whose first token, k, the scanner
-// stands at, into m, as [messageContent] reads it, whatever an earlier
-// `content` left: one string, streamed ([lineDecoder.contentText]); a list,
-// a block at a time ([lineDecoder.blocks]); anything else the message's
-// error.
+// stands at, into m, whatever an earlier `content` left: one string, streamed
+// ([lineDecoder.contentText]); a list, a block at a time
+// ([lineDecoder.blocks]); anything else the message's error. Estimating, the
+// scanner counts the value as it passes, and a string is passed to its end
+// for its length.
 func (d *lineDecoder) content(scan *jsonscan.Scanner, k jsonscan.Kind, m *messageFacts) error {
 	m.content, m.contentErr = threadMessage{}, nil
+	m.charge, m.emptyText = estimateCharge{}, false
+	if d.estimating {
+		scan.CountUnits(true)
+		defer scan.CountUnits(false)
+	}
 	switch k {
 	case jsonscan.String:
-		return d.contentText(scan, &m.content)
+		if err := d.contentText(scan, &m.content); err != nil || !d.estimating {
+			return err
+		}
+		if err := scan.Skip(); err != nil {
+			return err
+		}
+		units := scan.TextUnits()
+		m.charge, m.emptyText = estimateCharge{est: estimateUnits(units)}, units == 0
+		return nil
 	case jsonscan.ArrayStart:
 		return d.blocks(scan, m)
 	}
@@ -931,7 +1074,7 @@ func (d *lineDecoder) contentText(scan *jsonscan.Scanner, c *threadMessage) erro
 // kept of either kind (the record's type, which keeps one, may come after
 // the message: [settle]), and whether its text says anything; the first
 // block the rule refuses the message's error, and every block after it
-// passed over, as [messageContent]'s walk stops there.
+// passed over.
 func (d *lineDecoder) blocks(scan *jsonscan.Scanner, m *messageFacts) error {
 	c := &m.content
 	for {
@@ -950,10 +1093,15 @@ func (d *lineDecoder) blocks(scan *jsonscan.Scanner, m *messageFacts) error {
 			refused error
 		)
 		if k == jsonscan.ObjectStart {
+			// The block's brace, which Next took, begins its length as written.
+			start := scan.Units() - 1
 			if err = d.readBlock(scan); err != nil {
 				return err
 			}
 			call, refused = blockCallOf('{', d.block.keys())
+			if refused == nil && d.estimating {
+				m.charge = m.charge.plus(d.block.charge(scan.Units() - start))
+			}
 		} else {
 			if err = scan.Skip(); err != nil {
 				return err
@@ -1007,7 +1155,9 @@ func (d *lineDecoder) readBlock(scan *jsonscan.Scanner) error {
 		case "id":
 			return d.hold(scan, k, "message.content.id", &b.id)
 		case "name":
-			return d.hold(scan, k, "message.content.name", &b.name)
+			err := d.hold(scan, k, "message.content.name", &b.name)
+			b.est.name = estTextOf(scan, k)
+			return err
 		case "tool_use_id":
 			return d.hold(scan, k, "message.content.tool_use_id", &b.toolUseID)
 		case "is_error":
@@ -1017,27 +1167,39 @@ func (d *lineDecoder) readBlock(scan *jsonscan.Scanner) error {
 		case "content":
 			return d.resultContent(scan, k)
 		case "text":
-			return d.blockText(scan, k)
+			err := d.blockText(scan, k)
+			if err == nil && d.estimating && k == jsonscan.String {
+				err = scan.Skip()
+			}
+			b.est.text = estTextOf(scan, k)
+			return err
+		}
+		if d.estimating {
+			return d.estKey(scan, k, name, &b.est, 1)
 		}
 		return scan.Skip()
 	})
 }
 
-// input reads a block's `input`, whose first token, k, the scanner stands
-// at, as [sendTarget] reads it: its kind, and of an object its `to` as
-// written, every other key passed over.
+// input reads a block's `input`, whose first token, k, the scanner stands at:
+// its kind, and of an object its `to` as written, every other key passed over.
 func (d *lineDecoder) input(scan *jsonscan.Scanner, k jsonscan.Kind) error {
 	b := &d.block
 	b.input, b.to = scannedKind(k), b.to[:0]
+	start := scan.Units() - takenOf(k)
+	var err error
 	if k != jsonscan.ObjectStart {
-		return scan.Skip()
+		err = scan.Skip()
+	} else {
+		err = d.members(scan, func(name []byte, k jsonscan.Kind) error {
+			if string(name) == "to" {
+				return d.hold(scan, k, "message.content.input.to", &b.to)
+			}
+			return scan.Skip()
+		})
 	}
-	return d.members(scan, func(name []byte, k jsonscan.Kind) error {
-		if string(name) == "to" {
-			return d.hold(scan, k, "message.content.input.to", &b.to)
-		}
-		return scan.Skip()
-	})
+	b.est.input, b.est.inputSet = scan.Units()-start, k != jsonscan.Null
+	return err
 }
 
 // blockText reads a block's `text`, whose first token, k, the scanner stands
@@ -1063,21 +1225,26 @@ func (d *lineDecoder) blockText(scan *jsonscan.Scanner, k jsonscan.Kind) error {
 }
 
 // resultContent reads a block's `content`, whose first token, k, the scanner
-// stands at, into the block's text as [resultText] reads it: one string,
-// streamed whole into its length and digests ([textResult]); a list whose
-// one element is an object whose `type` is the string "text" and whose
-// `text` is a string, that string streamed whole; no text for anything else,
-// a list of two or more elements, or one whose first is no object, among it,
-// and every element after the first passed over.
+// stands at, into the block's text: one string, streamed whole into its length
+// and digests ([textResult]); a list whose one element is an object whose
+// `type` is the string "text" and whose `text` is a string, that string
+// streamed whole; no text for anything else, a list of two or more elements,
+// or one whose first is no object, among it, and every element after the first
+// passed over.
+//
+// Estimating, every element is read by the estimate's rule of an element too
+// ([lineDecoder.estElement]), the first as the text's digest besides, into
+// the block's content as the estimate reads it.
 func (d *lineDecoder) resultContent(scan *jsonscan.Scanner, k jsonscan.Kind) error {
 	b := &d.block
-	b.text = threadResultText{}
+	b.text, b.est.content = threadResultText{}, estimateList{kind: scannedKind(k)}
 	switch k {
 	case jsonscan.String:
 		if err := d.resultText(scan); err != nil {
 			return err
 		}
 		b.text = d.result.sum()
+		b.est.content.all.est = estimateUnits(scan.TextUnits())
 		return nil
 	case jsonscan.ArrayStart:
 	default:
@@ -1088,35 +1255,71 @@ func (d *lineDecoder) resultContent(scan *jsonscan.Scanner, k jsonscan.Kind) err
 		if err != nil || k == jsonscan.ArrayEnd {
 			return err
 		}
-		if at > 0 || k != jsonscan.ObjectStart {
+		digest := at == 0 && k == jsonscan.ObjectStart
+		if !digest {
 			b.text = threadResultText{}
-			if err = scan.Skip(); err != nil {
-				return err
-			}
-			continue
 		}
-		text := valueKind(0)
-		b.resultType = b.resultType[:0]
-		err = d.members(scan, func(name []byte, k jsonscan.Kind) error {
-			switch string(name) {
-			case "type":
-				return d.hold(scan, k, "message.content.content.type", &b.resultType)
-			case "text":
-				text = scannedKind(k)
-				if k != jsonscan.String {
-					return scan.Skip()
-				}
-				return d.resultText(scan)
-			}
-			return scan.Skip()
-		})
+		switch {
+		case d.estimating:
+			var c estimateCharge
+			c, err = d.estElement(scan, k, 2, digest)
+			b.est.content.add(k == jsonscan.ObjectStart, c)
+		case digest:
+			err = d.resultElement(scan, nil, nil)
+		default:
+			err = scan.Skip()
+		}
 		if err != nil {
 			return err
 		}
-		if resultElementIsText('{', present(b.resultType), text) {
-			b.text = d.result.sum()
-		}
 	}
+}
+
+// resultElement reads a result's first element, an object, its opening brace
+// the scanner's current token, as the text's digest: its `type` held as
+// written and its `text` streamed whole ([lineDecoder.resultText]), each by
+// its last occurrence, the block's text where the element is one text block
+// ([resultElementIsText]). Estimating, est takes both as the estimate's rule
+// reads them, and other every other key ([lineDecoder.estElement]); else
+// every other key is passed over.
+func (d *lineDecoder) resultElement(scan *jsonscan.Scanner, est *estimateObject,
+	other func(name []byte, k jsonscan.Kind) error) error {
+	b := &d.block
+	text := valueKind(0)
+	b.resultType = b.resultType[:0]
+	err := d.members(scan, func(name []byte, k jsonscan.Kind) error {
+		switch string(name) {
+		case "type":
+			err := d.hold(scan, k, "message.content.content.type", &b.resultType)
+			if est != nil {
+				est.typ = estimateTypeOf(b.resultType, estimateElementTypes[:])
+			}
+			return err
+		case "text":
+			text = scannedKind(k)
+			var err error
+			if k != jsonscan.String {
+				err = scan.Skip()
+			} else {
+				err = d.resultText(scan)
+			}
+			if est != nil {
+				est.text = estTextOf(scan, k)
+			}
+			return err
+		}
+		if other != nil {
+			return other(name, k)
+		}
+		return scan.Skip()
+	})
+	if err != nil {
+		return err
+	}
+	if resultElementIsText('{', present(b.resultType), text) {
+		b.text = d.result.sum()
+	}
+	return nil
 }
 
 // resultText reads the string the scanner stands at whole into d.result,
@@ -1135,12 +1338,12 @@ func (d *lineDecoder) resultText(scan *jsonscan.Scanner) error {
 	}
 }
 
-// toolResult reads a user record's own `toolUseResult`, whose first token,
-// k, the scanner stands at, into r, as [toolResultOf] reads it: of an object,
-// whether it carries a `handback` or a `handbackReport`, any value, and what
-// its `status`, `agentId` and `success`, held as written until it ends, say
-// of a subagent's leg ([answerOf]); every other key (a file's base64, a
-// command's output, a patch) passed over, and every other kind nothing.
+// toolResult reads a user record's own `toolUseResult`, whose first token, k,
+// the scanner stands at, into r: of an object, whether it carries a `handback`
+// or a `handbackReport`, any value, and what its `status`, `agentId` and
+// `success`, held as written until it ends, say of a subagent's leg
+// ([answerOf]); every other key (a file's base64, a command's output, a patch)
+// passed over, and every other kind nothing.
 func (d *lineDecoder) toolResult(scan *jsonscan.Scanner, k jsonscan.Kind, r *toolResultFacts) error {
 	if k != jsonscan.ObjectStart {
 		return scan.Skip()
@@ -1178,20 +1381,19 @@ func (d *lineDecoder) clearHeld() (*[]byte, *[]byte, *[]byte) {
 	return &d.held[0], &d.held[1], &d.held[2]
 }
 
-// attachment reads an attachment record's `attachment`, whose first token,
-// k, the scanner stands at, into a, as [attachmentOf] reads it: its kind; of
-// an object, its `type`, `toolUseID`, `by` and `hookEvent` kept as written;
-// what every shape rule asks of its lists, every rule's at once, since its
-// type may be its last key ([threadLine.AttachmentWellFormed]); and which
-// asked take tokens a hook record's string `content` ([hookRecordPrefix]), and
-// a hook_success's string `stdout`, name ([lineDecoder.takes]). No element of
-// a list is held.
+// attachment reads an attachment record's `attachment`, whose first token, k,
+// the scanner stands at, into a: its kind; of an object, its `type`,
+// `toolUseID`, `by` and `hookEvent` kept as written; what every shape rule asks
+// of its lists, every rule's at once, since its type may be its last key
+// ([threadLine.AttachmentWellFormed]); and which asked take tokens a hook
+// record's string `content` ([hookRecordPrefix]), and a hook_success's string
+// `stdout`, name ([lineDecoder.takes]). No element of a list is held.
 func (d *lineDecoder) attachment(scan *jsonscan.Scanner, k jsonscan.Kind, a *attachmentFacts) error {
 	a.kind = scannedKind(k)
 	if k != jsonscan.ObjectStart {
 		return scan.Skip()
 	}
-	// A listing that lacks its names is kept ([skillNamesKept]).
+	// A listing that lacks its names is kept ([lineDecoder.skillNames]).
 	a.namesKept = true
 	err := d.members(scan, func(name []byte, k jsonscan.Kind) error {
 		var err error
@@ -1204,6 +1406,15 @@ func (d *lineDecoder) attachment(scan *jsonscan.Scanner, k jsonscan.Kind, a *att
 			a.by, err = d.keep(scan, k, "attachment.by")
 		case "hookEvent":
 			a.event, err = d.keep(scan, k, "attachment.hookEvent")
+		case "taskDelivery", "reads":
+			switch {
+			case !d.estimating:
+				err = scan.Skip()
+			case string(name) == "reads":
+				a.pdf, err = d.pdfReads(scan, k)
+			default:
+				a.images, err = d.taskImages(scan, k)
+			}
 		case "stdout":
 			a.stdoutTokens, err = d.takes(scan, k)
 		case "content":
@@ -1268,7 +1479,7 @@ func (d *lineDecoder) attachment(scan *jsonscan.Scanner, k jsonscan.Kind, a *att
 // of kind k, names where it is a string ([textTakes]), its decoded text read
 // a piece at a time until every asked token is met, the rest left to the
 // scanner's next call; none, the value passed over, for any other value or
-// where nothing is asked. Bit i for asked[i], as [takesOf] reads it.
+// where nothing is asked. Bit i for asked[i].
 func (d *lineDecoder) takes(scan *jsonscan.Scanner, k jsonscan.Kind) (uint64, error) {
 	if k != jsonscan.String || len(d.asked) == 0 {
 		return 0, scan.Skip()
@@ -1288,15 +1499,14 @@ func (d *lineDecoder) takes(scan *jsonscan.Scanner, k jsonscan.Kind) (uint64, er
 }
 
 // skillNames reads a skill listing's `names`, whose first token, k, the
-// scanner stands at, as [skillNamesKept] reads it: kept where it is a list of
-// at most [skillListingMaxNames] strings, each kept by the rule of a name
-// ([skillNameKept]), read in order and the first that is not deciding it; and
-// unmeasured instead where every name is kept but one past
-// [skillListingMaxNameUnits] held a byte that is no UTF-8, which the layer
-// cannot measure ([errSkillNameUnmeasured]). Each name streams into its
-// length in UTF-16 code units ([textUnits]) and whether its bytes as written
-// were UTF-8 ([jsonscan.Scanner.InvalidUTF8]), which its decoded text cannot
-// say.
+// scanner stands at: kept where it is a list of at most [skillListingMaxNames]
+// strings, each kept by the rule of a name ([skillNameKept]), read in order
+// and the first that is not deciding it; and unmeasured instead where every
+// name is kept but one past [skillListingMaxNameUnits] held a byte that is no
+// UTF-8, which the layer cannot measure ([errSkillNameUnmeasured]). Each name
+// streams into its length in UTF-16 code units ([textUnits]) and whether its
+// bytes as written were UTF-8 ([jsonscan.Scanner.InvalidUTF8]), which its
+// decoded text cannot say.
 func (d *lineDecoder) skillNames(scan *jsonscan.Scanner, k jsonscan.Kind) (kept, unmeasured bool, err error) {
 	count, unreadable := 0, false
 	kept = true
@@ -1335,10 +1545,10 @@ func (d *lineDecoder) skillNames(scan *jsonscan.Scanner, k jsonscan.Kind) (kept,
 }
 
 // withheldEntry reads one entry of a withheld memory's `entries`, whose first
-// token, k, the scanner stands at, as [withheldEntryKept] reads it: of an
-// object, its `path`'s and `displayPath`'s kinds and its `why` held as
-// written, each by its last occurrence, decided by the rule of such an entry
-// ([withheldKept]) once it ends; anything else no entry the rule keeps.
+// token, k, the scanner stands at: of an object, its `path`'s and
+// `displayPath`'s kinds and its `why` held as written, each by its last
+// occurrence, decided by the rule of such an entry ([withheldKept]) once it
+// ends; anything else no entry the rule keeps.
 func (d *lineDecoder) withheldEntry(scan *jsonscan.Scanner, k jsonscan.Kind) (bool, error) {
 	if k != jsonscan.ObjectStart {
 		return withheldKept(scannedKind(k), 0, nil, 0), scan.Skip()
@@ -1360,9 +1570,9 @@ func (d *lineDecoder) withheldEntry(scan *jsonscan.Scanner, k jsonscan.Kind) (bo
 }
 
 // compacted reads a compaction's boundary's `compactMetadata`, whose first
-// token, k, the scanner stands at, into c, as [compactOf] reads it: its kind;
-// of an object, its `preservedMessages` ([lineDecoder.preservedMessages]) and
-// its `preservedSegment` kept as written.
+// token, k, the scanner stands at, into c: its kind; of an object, its
+// `preservedMessages` ([lineDecoder.preservedMessages]) and its
+// `preservedSegment` kept as written.
 func (d *lineDecoder) compacted(scan *jsonscan.Scanner, k jsonscan.Kind, c *compactFacts) error {
 	c.kind = scannedKind(k)
 	if k != jsonscan.ObjectStart {
@@ -1383,13 +1593,13 @@ func (d *lineDecoder) compacted(scan *jsonscan.Scanner, k jsonscan.Kind, c *comp
 }
 
 // preservedMessages reads a compaction's `preservedMessages`, whose first
-// token, k, the scanner stands at, into c, as [preservedList] reads it, its
-// shapes checked in its order though its keys come in any: the list's kind,
-// none where it is null; an object's `anchorUuid`, held as written until it
-// ends; then its `uuids`, each entry read by its opening into a canonical
-// uuid or none ([threadPreserved.list]), in order, up to the first that is no
-// string. Where the anchor is no string the list holds no entry, as the
-// list's walk never began.
+// token, k, the scanner stands at, into c, its shapes checked in its order
+// though its keys come in any: the list's kind, none where it is null; an
+// object's `anchorUuid`, held as written until it ends; then its `uuids`, each
+// entry read by its opening into a canonical uuid or none
+// ([threadPreserved.list]), in order, up to the first that is no string. Where
+// the anchor is no string the list holds no entry, as the list's walk never
+// began.
 func (d *lineDecoder) preservedMessages(scan *jsonscan.Scanner, k jsonscan.Kind, c *compactFacts) error {
 	c.messages, c.list, c.listErr = scannedKind(k), threadPreserved{}, nil
 	switch k {
@@ -1453,10 +1663,10 @@ func (d *lineDecoder) preservedMessages(scan *jsonscan.Scanner, k jsonscan.Kind,
 }
 
 // retracted reads a record's `retractedMessageUuids`, whose first token, k,
-// the scanner stands at, into f, as [retractedOf] reads it: of a list, each
-// entry read by its opening into a canonical prefix or none
-// ([threadRetracted.entry]), in order, up to the first that is no string,
-// that entry's error; anything else the list's own.
+// the scanner stands at, into f: of a list, each entry read by its opening
+// into a canonical prefix or none ([threadRetracted.entry]), in order, up to
+// the first that is no string, that entry's error; anything else the list's
+// own.
 func (d *lineDecoder) retracted(scan *jsonscan.Scanner, k jsonscan.Kind, f *lineFacts) error {
 	list, err := d.elements(scan, k, func(k jsonscan.Kind) error {
 		if f.retractedErr != nil {
@@ -1487,11 +1697,10 @@ func (d *lineDecoder) retracted(scan *jsonscan.Scanner, k jsonscan.Kind, f *line
 }
 
 // replacements reads a content-replacement record's `replacements`, whose
-// first token, k, the scanner stands at, into r, as [replacementsOf] reads
-// it: its kind; of a list, EVERY element counted, and each read by the rule
-// of an entry ([replacedID]) until one fails it, its `kind` and `toolUseId`
-// held as written until it ends, the id of each that replaces a tool's
-// result kept, in order.
+// first token, k, the scanner stands at, into r: its kind; of a list, EVERY
+// element counted, and each read by the rule of an entry ([replacedID]) until
+// one fails it, its `kind` and `toolUseId` held as written until it ends, the
+// id of each that replaces a tool's result kept, in order.
 func (d *lineDecoder) replacements(scan *jsonscan.Scanner, k jsonscan.Kind, r *replacementFacts) error {
 	r.kind = scannedKind(k)
 	_, err := d.elements(scan, k, func(k jsonscan.Kind) error {
@@ -1529,11 +1738,11 @@ func (d *lineDecoder) replacements(scan *jsonscan.Scanner, k jsonscan.Kind, r *r
 	return err
 }
 
-// batch reads an assistant record's `batchToolUses`, whose first token, k,
-// the scanner stands at, into b, as [batchOf] reads it: that it is there; of
-// a list, each entry's `id`, held as written until the entry ends, read by
-// the rule of an entry ([batchEntryID]), in order, up to the first it
-// refuses, that entry's error; anything else the list's own.
+// batch reads an assistant record's `batchToolUses`, whose first token, k, the
+// scanner stands at, into b: that it is there; of a list, each entry's `id`,
+// held as written until the entry ends, read by the rule of an entry
+// ([batchEntryID]), in order, up to the first it refuses, that entry's error;
+// anything else the list's own.
 func (d *lineDecoder) batch(scan *jsonscan.Scanner, k jsonscan.Kind, b *batchFacts) error {
 	b.present = true
 	list, err := d.elements(scan, k, func(k jsonscan.Kind) error {

@@ -19,51 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store/storetest"
 )
 
-// ONE BENCHMARK, TWO AXES — corpus size and CONCURRENCY.
+// ONE BENCHMARK, TWO AXES: corpus size and CONCURRENCY.
 //
-// # Why the idle number is not the supported one
+// The supported corpus is derived from a per-row scan coefficient, and a
+// single reader on an idle node gives the cheapest one. A real node has seats
+// taking turns, the applier committing and the dashboard polling, so the idle
+// number must not be quoted as the budget: the one-reader cell is a CELL of
+// this benchmark, not a benchmark of its own. Eight readers on four cores cost
+// 2.4x the idle p95 at 3 072 dimensions. The published capacity comes from
+// BenchmarkSemanticIVFUnderLoad's scan arm, which also measures the index.
 //
-// The corpus this engine declares supported is derived from a per-row scan
-// coefficient, and every figure behind that coefficient was taken by a single
-// reader on an otherwise idle node. A company's node is not idle: seats are
-// taking turns, the applier is committing records, the dashboard is polling.
-// A benchmark that only ever measured one reader would let the idle number be
-// quoted as the budget, which is the specific mistake this shape exists to
-// prevent — so the zero-concurrency cell is a CELL of this benchmark rather
-// than a benchmark of its own.
-//
-// # What it measured, on this container, at 3 072 dimensions
-//
-// Thirty iterations per cell, four cores, the shipped depths (1 200 candidates,
-// 150 returned), p95 in milliseconds:
-//
-//	readers    n = 10 000              n = 40 000
-//	      1     49 ms  (4.96 us/row)   103 ms  (2.58 us/row)
-//	      2     62 ms  (6.22)          145 ms  (3.63)
-//	      4     75 ms  (7.53)          111 ms  (2.79)
-//	      8    125 ms  (12.55)         245 ms  (6.14)
-//
-// EIGHT CONCURRENT READERS COST 2.4x THE IDLE p95, on four cores, which is the
-// whole reason the concurrency axis exists: a supported-corpus figure derived
-// from the one-reader coefficient is a figure for a node nobody runs. At the
-// 1.0 s interactive target the same two coefficients gave ≈ 390 000 sources
-// idle and ≈ 160 000 under eight readers — and the honest number is whichever
-// of those describes the deployment.
-//
-// Those two figures are SUPERSEDED as the published ones, and the table above
-// is kept as what this benchmark measured rather than edited to agree:
-// BenchmarkSemanticIVFUnderLoad's scan arm re-measured the same statement on
-// the topical fixture at 2.90 and 7.34 µs a source (≈ 345 000 and ≈ 136 000),
-// and it is the one that also measures the index beside it on the same corpus
-// and the same queries — so that is where the published capacity comes from.
-//
-// # What it reports beyond ns/op
-//
-// A mean is not a p95, and the interactive budget is written against a p95:
-// at twelve probes the chance that all twelve fell below the true p95 is
-// 0.95^12 = 0.54, so a mean-reported probe count cannot estimate it at all.
-// Every cell here reports its own p95 from at least 400 samples, alongside the
-// per-row cost that the corpus projection is actually built from.
+// Each cell reports its own p95 from at least 400 samples beside the per-row
+// cost, because the interactive budget is a p95 and a mean cannot estimate it.
 func BenchmarkSemanticScanUnderLoad(b *testing.B) {
 	for _, n := range []int{10_000, 40_000} {
 		corpus := newScanCorpus(b, n)
@@ -252,26 +219,18 @@ func (c *scanCorpus) run(b *testing.B, readers int) {
 	b.ReportMetric(float64(len(samples)), "samples")
 }
 
-// THE SAME TWO AXES FOR THE INDEX — corpus size and concurrency — and the scan
-// beside it on the SAME corpus and queries, so the ratio between them is a
-// measurement rather than two numbers from two runs.
+// THE SAME TWO AXES FOR THE INDEX, and the scan beside it on the SAME corpus
+// and queries, so their ratio is one measurement, not two runs.
 //
-// # Why the topical fixture, and what that choice claims
+// The corpus is the fixture family's TOPICAL member: an inverted file needs
+// structure a k-means can find, and the isotropic fixture has none (its
+// training installs no index: TestIVFRecallMeetsTheFloorCurve). It is written
+// through the applier and indexed as the embedding duty does. Every cell
+// reports the share of lists probed and the recall delivered against the exact
+// f32 scan, so a latency is never quoted without its recall.
 //
-// An inverted file is only worth having where the corpus has structure a
-// k-means can find, and the isotropic fixture has none: its training
-// declines to install an index at all (TestIVFRecallMeetsTheFloorCurve). So
-// the corpus here is the fixture family's topical member, at the shipped
-// width, written through the applier and indexed exactly as the embedding duty
-// indexes it — trained, measured against the exact scan, installed at the
-// probe count the training chose, rolled out. Every cell reports the share of
-// lists it probed and the recall it actually delivered against the exact f32
-// scan on its own queries, so a latency is never quoted without the recall it
-// was bought at.
-//
-// The figures this benchmark produced are in the package doc of semantic.go
-// and in ADR-0028; the per-source coefficient is what [SemanticScanBudget]'s
-// supported-corpus projection is derived from.
+// The figures are in semantic.go's package doc and ADR-0028; the per-source
+// coefficient is what [SemanticScanBudget]'s projection is derived from.
 func BenchmarkSemanticIVFUnderLoad(b *testing.B) {
 	for _, n := range []int{10_000, 40_000} {
 		corpus := newIndexedCorpus(b, n)
@@ -649,46 +608,16 @@ func BenchmarkReassignBatch(b *testing.B) {
 }
 
 // BenchmarkIndexTraining is the embedding duty's TRAINING TICK as the duty runs
-// it, on a real store, phase by phase: the reading (every code in key order,
-// the sampled documents, and the one exact pass that is their ground truth in
-// every shape), the k-means, filing every code, and choosing the probe count.
-//
-// # What it is for
-//
-// A training is as long as its two halves, and the tick bounds each its own
-// way ([search.Budget]): the READING — every code, the sampled documents, the
-// exact pass — streams rows and shows the tick's budget its progress every
-// [search.ProgressStride] of them, and the ARITHMETIC — the k-means, the
-// filing, the probe choice — cannot wedge and runs exempt. So the two are
-// reported apart: reading-us/source is what the reading and the gap between
-// two of its reports are projected from, and arithmetic-s is what the node's
-// cores spend on the rest. The k-means grows with the LIST COUNT rather than
-// the corpus and is measured at scale in memory by BenchmarkIVFTrainingShare
-// and BenchmarkIVFRecallAtScale's train-s. The projections are in the engine's
-// embedTickBudget and beside [search.IVFMaxLists].
-//
-// # The reading is timed ONCE, whole
-//
-// reading-us/source is [search.ReadTrainingSet] exactly as the duty calls it,
-// and that already runs the sample and the exact pass after the codes. Its
-// parts are measured by running the sample and the exact pass AGAIN, alone,
-// after it — exact-us/source and sample-us/source — and the codes are what is
-// left (codes-us/source). An earlier version added the re-run to the whole and
-// reported the exact pass twice, which put the one-core reading at twice what
-// it is. The re-run is the only way to see the parts without instrumenting the
-// read, and it runs on a warm cache the whole reading has also had by then.
-//
-// # Idle, and searched
-//
-// A node holding the duty is also answering searches, whose first stage is the
-// same kind of CPU-bound scan, so each size runs twice: on an otherwise idle
-// node, and with two searchers scanning the corpus's codes for the whole
-// training ([search.SearchWhile], the load BenchmarkIVFTrainingShare runs
-// beside the k-means). The searched arm at -cpu 1 is the slowest node a
-// training runs on: ONE core, shared. Pin the process to one CPU as well
-// (`taskset -c 0`), because the store's engine is a native library whose calls
-// run on threads GOMAXPROCS does not count — at -cpu 1 alone the reading still
-// has the other cores.
+// it, on a real store. The tick bounds the two halves differently
+// ([search.Budget]): the READING shows progress every
+// [search.ProgressStride] rows, the ARITHMETIC cannot
+// wedge and runs exempt, so they are reported apart (reading-us/source,
+// arithmetic-s). The k-means grows with the list count, not the corpus; see
+// BenchmarkIVFTrainingShare. reading-us/source is [search.ReadTrainingSet]
+// timed ONCE, whole; its parts are timed by re-running the sample and exact
+// pass alone, and the codes are the remainder. Each size runs idle and with two
+// searchers ([search.SearchWhile]); pin the searched arm with `taskset -c 0`
+// too, since the store's native threads escape GOMAXPROCS.
 func BenchmarkIndexTraining(b *testing.B) {
 	for _, n := range []int{20_000, 40_000} {
 		for _, searched := range []bool{false, true} {

@@ -660,17 +660,13 @@ func TestARefusedInputIsEmbeddedOnceItIsAccepted(t *testing.T) {
 // HELD REFUSALS NEVER TAKE THE SELECTION'S PLACES.
 //
 // The selection is oldest first and a refused source is never embedded, so
-// every refusal stays at the front of every selection after it. Filtered out
-// after the selection's limit, each one took a place the tick could not use:
-// with H of them a corpus embedded at most EmbedSourcesPerTick − H sources a
-// tick, and once H reached the limit every selected row was held and nothing
-// written to the corpus afterwards was ever selected again — measured, a fresh
-// task never embedded over five more ticks. Passed over inside the selection,
-// they cost a fresh source nothing.
+// every refusal stays at its front. Filtered after the limit, H of them left
+// at most EmbedSourcesPerTick − H places a tick, and once H reached the limit
+// nothing newer was ever selected (measured: a fresh task never embedded over
+// five more ticks). Passed over inside the selection, they cost nothing.
 //
-// AND WHEN THEY FALL DUE TOGETHER, the tick offers a few of them again — never
-// the corpus's whole share at one request apiece, which would stop the corpus
-// again for as long as it took to offer them all.
+// WHEN THEY FALL DUE TOGETHER, the tick offers a few again, never the
+// corpus's whole share at one request apiece.
 func TestHeldRefusalsNeverTakeTheSelectionsPlaces(t *testing.T) {
 	t.Parallel()
 	h := newEmbedHarness(t)
@@ -851,12 +847,9 @@ func TestATransientFailureEndsTheTicksRequests(t *testing.T) {
 // they have in common.
 //
 // Everything short of that is a document's refusal, and blaming the
-// configuration for it sends an operator to a setting that is fine: one new
-// task the provider refuses on a caught-up company is a tick of nothing but a
-// refusal sent alone, and so is every hourly retry of an input already held;
-// refusals beside accepted requests are a provider that takes this
-// configuration; and a tick that met a refusal and was then stopped by a rate
-// limit sent requests nobody refused.
+// configuration sends an operator to a fine setting: one refused new task on a
+// caught-up company, every hourly retry of a held input, refusals beside
+// accepted requests, and a refusal followed by a rate limit.
 func TestTheDutyBlamesTheConfigurationOnlyOnEvidence(t *testing.T) {
 	t.Parallel()
 	const blame = "search_embed_every_request_refused"
@@ -963,17 +956,14 @@ func TestTheDutyBlamesTheConfigurationOnlyOnEvidence(t *testing.T) {
 
 // A CORPUS THAT IS ALWAYS BEHIND DOES NOT STARVE THE ONE AFTER IT.
 //
-// The tick's provider requests are one budget shared by every corpus, and
-// spent corpus by corpus in order they all went to the first one that could
-// take them: a company writing tasks faster than the duty embeds them — or
-// simply one still cold-filling a hundred thousand — never reached its pages
-// at all. Not one page embedded, not one trashed page's vector withdrawn, for
-// as long as the backlog refilled, while the coverage gauge summed both corpora
-// and reported a company that was merely behind.
+// The tick's provider requests are one budget shared by every corpus; spent
+// corpus by corpus in order they all went to the first, so a company writing
+// tasks faster than the duty embeds them never reached its pages (none
+// embedded, no trashed page's vector withdrawn) while the summed coverage
+// gauge read merely behind.
 //
-// A model that takes sixteen inputs a request is what makes the REQUEST
-// ceiling bind here: each corpus has sixty-four requests of backlog, and the
-// tick has thirty-two.
+// A model taking sixteen inputs a request makes the REQUEST ceiling bind:
+// each corpus has sixty-four requests of backlog, the tick thirty-two.
 func TestABackloggedCorpusDoesNotStarveTheOneAfterIt(t *testing.T) {
 	t.Parallel()
 	h := newEmbedHarness(t)
@@ -1778,11 +1768,9 @@ func (h *embedHarness) removeTask(id string) {
 // run it fetched.
 //
 // The loop cuts a run at [statelog.ApplyTxRowBudget] rows, and no drain here
-// comes near it: a tick publishes at most [search.EmbedSourcesPerTick] embeds,
-// or one rollout's batches, and the largest drain in this package measured
-// 2 048 rows. So a drain is one run and one commit — where one commit a
-// record, which is what this helper used to make, was a synchronous commit per
-// vector the duty wrote.
+// comes near it (a tick publishes at most [search.EmbedSourcesPerTick] embeds
+// or one rollout's batches; the largest measured 2 048 rows), so a drain is
+// one run and one commit rather than a synchronous commit per vector.
 //
 // THE RECORDS ARE READ BEFORE THE TRANSACTION OPENS ([embedHarness.readLog]),
 // so no broker round trip runs while the estate's writer is held.
@@ -1812,23 +1800,15 @@ type logRecord struct {
 // readBudget bounds one [embedHarness.readLog]: the log's end, the consumer
 // it creates, and every record it delivers.
 //
-// ONE BOUND OVER THE WHOLE READ, AND AN EXPLICIT ONE. The read this replaced
-// was a GetMsg per sequence — about two thousand of them for the largest
-// drain here — each under t.Context(), which carries no deadline, so the
-// JetStream client gave every request its own default API timeout of five
-// seconds. On a runner at a load average of about fifteen on four CPUs one of
-// those two thousand requests waited past its five seconds, and
-// TestTheIndexWaitsForTheLog and TestTheDutyTrainsAnIndexAndItsRolloutConverges
-// failed reading a record the log held. The exposure was the count: two
-// thousand chances at one stall.
-//
-// TWO MINUTES is sized for that runner, not for an idle one. The largest read
-// in this package, about 2 200 records, took 0.14 s under -race on a lightly
-// loaded four-CPU machine (the GetMsg loop took 2.8 s for the same records),
-// so this is several hundred times that. It is still a fifteenth of the
-// thirty-minute hang detector every test binary runs under (TEST_TIMEOUT in
-// the Makefile), so a broker that has truly stopped answering fails the case
-// by name rather than as a hung binary.
+// ONE EXPLICIT BOUND OVER THE WHOLE READ: a GetMsg per sequence (≈ 2 000)
+// under t.Context(), which has no deadline, got the JetStream client's own
+// five-second default each, and on a loaded runner one stalled past it
+// (TestTheIndexWaitsForTheLog and
+// TestTheDutyTrainsAnIndexAndItsRolloutConverges failed on a held record).
+// TWO MINUTES is sized for that runner: the largest read (≈ 2 200 records)
+// took 0.14 s under -race on a light four-CPU machine, so this is several
+// hundred times that, yet a fifteenth of the thirty-minute hang detector
+// (TEST_TIMEOUT in the Makefile), so a dead broker fails the case by name.
 const readBudget = 2 * time.Minute
 
 // readLog reads every record the log holds from sequence `from` to its end, in

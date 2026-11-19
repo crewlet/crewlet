@@ -9,69 +9,40 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE INDEX'S OWN RECORDS on the vector log — ADR-0028 — and why they are
-// records rather than something each node computes for itself.
+// THE INDEX'S OWN RECORDS on the vector log (ADR-0028). The centroids are the
+// product of a training no node should repeat (a seeded k-means plus a recall
+// measurement over the exact vectors). The embedding duty, the log's one writer,
+// PUBLISHES them, so the applier that writes the indexed rows writes the index:
+// every holder has the same one at the same position, and a snapshot carries it.
+
+// The index's generation is the record's POSITION, never a counter: a counter
+// the duty minted ("last plus one") can be minted twice by a publish of unknown
+// outcome or a lease moving mid-training, and a replay would hold the second's
+// centroids under the number every live node filed its rows against the first's.
+// A position is minted once by the broker, identically everywhere: two trainings
+// are two generations, and a row filed under the earlier is stale, not wrong.
+
+// The re-filing is records too: a node re-filing itself would do it at one log
+// point live and another on replay, and a snapshot between would carry half of
+// each. So the duty publishes [OpReassign] records, each naming one batch of the
+// index's ROLLOUT, applied in log order, never the corpus in one transaction.
+// The rollout's key ranges are cut ONCE, by the training, and carried in the
+// centroids record ([IndexRecord] Rollout): cut afresh per publication, a
+// re-publication after new ids shifted every boundary, and a compacted log
+// holding a mix of two cuts no longer tiled the key space, leaving rows unfiled
+// for ever unnoticed. With ranges a function of the generation, every
+// publication of batch n says the same thing, so any mix tiles.
+
+// Each batch's subject names its GENERATION as well as its number, so a batch
+// of one index never supersedes another's, even from a second publisher that
+// had not seen its index replaced. A retired generation's batches leave with the
+// stream's age bound ([VectorLogMaxAge]) and apply as nothing meanwhile.
 //
-// # Published once, applied everywhere, like the vectors themselves
-//
-// The centroids are the product of a training no node should repeat: a
-// seeded k-means over every code in the corpus, plus a recall measurement
-// that scans the exact vectors. Trained by the embedding duty — the log's one
-// writer — and PUBLISHED, they are applied into every holder's file by the
-// same applier that writes the rows they index, so every holder holds the same
-// index at the same position, and a node adopting a snapshot adopts the index
-// inside it rather than rebuilding it.
-//
-// # The index's generation is the record's POSITION, never a counter
-//
-// A counter the duty minted — "the last generation plus one" — can be minted
-// twice: a publish whose outcome was unknown, a lease that moved mid-training.
-// Both records would sit on the one centroids subject, the compaction would
-// keep the second, and a node replaying the log would hold the second's
-// centroids under the number every live data node filed its rows against the
-// first's. A position is minted by the broker, once, identically on every
-// node: two trainings are simply two generations, the later superseding the
-// earlier, and a row filed under the earlier one is stale rather than wrong.
-//
-// # Why the re-filing is records too, and why its ranges are FIXED
-//
-// When a new index is installed every row is filed under the old one. A node
-// could re-file them itself, but not identically: a live node would do it at
-// one point in its log and a replaying node at another, and a snapshot taken
-// between the two would carry half of each. So the duty publishes the re-filing
-// as [OpReassign] records, each naming one batch of the index's ROLLOUT, and
-// each holder applies them in log order — the same rows re-filed at the same
-// position everywhere, and never the whole corpus inside one apply
-// transaction.
-//
-// The rollout's key ranges are cut ONCE, by the training, from the ids the
-// corpus held then, and carried in the centroids record itself ([IndexRecord]
-// Rollout). They were once cut afresh from whatever ids the duty's node held
-// at each publication, on subjects numbered only by batch — and a
-// re-publication after new ids had arrived shifted every boundary, so a
-// re-publication that stopped partway, or whose publish outcome was unknown,
-// left the compacted log holding a mix of two cuts that no longer tiled the
-// key space. A node replaying it kept those rows unfiled for ever, and the
-// duty — whose own rows the superseded batches HAD filed — never noticed. With
-// the ranges a function of the generation alone, every publication of batch n
-// says the same thing, so any mix of them tiles.
-//
-// And each batch's subject names its GENERATION as well as its number, so a
-// batch of one index can never supersede a batch of another on the compacted
-// log — not even one a second publisher wrote from an index it had not yet
-// seen replaced. A retired generation's batches leave with the stream's own
-// age bound ([VectorLogMaxAge]) like every other record; they cost a few
-// hundred bytes each and apply as nothing meanwhile.
-//
-// # Everything about an index NESTS under its centroids
-//
-// A reassign batch and a measurement mean something only against the index
-// they name, so their scope paths sit BENEATH the centroids record's
-// ([IndexScopePath]). A node that must defer a centroids record — one a newer
-// build reshaped at a version this one cannot read — then retains that index's
-// batches and measurements behind it and applies them after it, rather than
-// applying them first as no-ops against the index it still holds and never
-// re-filing the rows once it can read the one they were for.
+// Everything about an index NESTS under its centroids ([IndexScopePath]): a
+// batch or measurement means something only against the index it names, so a
+// node deferring a centroids record (one a newer build reshaped) retains those
+// behind it and applies them after, not first as no-ops that never re-file the
+// rows.
 
 // IndexSource is the subject KIND every record about the index is filed under.
 //

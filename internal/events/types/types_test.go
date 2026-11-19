@@ -373,7 +373,7 @@ var wireTags = map[string][]string{
 		"dry_run", "failed", "key", "mcp_server", "operator_id", "outcome", "refusal", "seat", "tool", "variable"},
 	"config_revision_applied":       {"applied_subsystems", "error", "revision_id", "status"},
 	"task_assigned":                 {"agent_id", "description", "missed", "requested_by", "role", "schedule", "scheduled_at", "scope_id", "scope_type", "task_id", "timeout_seconds"},
-	"work_pickup":                   {"agent_id", "dead_waits", "item", "key", "moved", "progressed", "quiet", "ready", "ready_capped", "role", "status", "submitted_by", "waits_on", "why", "working_for"},
+	"work_pickup":                   {"agent_id", "dead_waits", "item", "key", "moved", "progressed", "quiet", "ready", "ready_capped", "role", "status", "submitted_by", "wait_by", "wait_reason", "waited", "waits_on", "why", "working_for"},
 	"delegated_review":              {"agent_handle", "agent_id", "at", "held_launch", "held_turn", "kind", "panel", "request", "requester", "rule"},
 	"scheduled_fire_superseded":     {"schedule_name", "scheduled_at", "scope_id", "scope_type", "superseded_by", "target_handle", "task_id"},
 	"scheduled_task_fired":          {"requested_by", "schedule_name", "scheduled_at", "scope_id", "scope_name", "scope_type", "target_handle"},

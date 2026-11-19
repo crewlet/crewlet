@@ -20,23 +20,16 @@ import (
 
 // Checking a credential somebody has typed, before anything stores it.
 //
-// # Why a check is its own gesture
+// A connect seals what it is given and a reconcile pass finds out minutes
+// later whether it works; a person pasting a key wants the answer now. So a
+// check asks the vendor the one READ-ONLY question that proves a credential
+// (who am I, which organization) and stores NOTHING: no value, pointer or
+// finding.
 //
-// A connect seals what it is given and the next reconcile pass finds out
-// whether it works, minutes later, as a finding on a card. A person pasting
-// a key wants that answer now, while the key is still on their clipboard
-// and the vendor's page is still open. So a check asks the vendor the one
-// READ-ONLY question that proves a credential (who am I, which organization
-// is this) and stores NOTHING: not the value, not a pointer, not a finding.
-//
-// # Not every credential can be checked ahead
-//
-// A webhook signing secret is proved by the vendor signing something with
-// it, and nothing can make the vendor do that from here without registering
-// the hook, which is a write. Such a field is not [Requirement.Checkable],
-// and its [Requirement.CheckNote] says when it will be proved. The answer
-// for it is [VerifyUnchecked], given by the surface without asking any
-// vendor, so the sentence lives once, beside the requirement it is about.
+// A webhook signing secret is proved only by the vendor signing something,
+// which needs the hook registered, a write. Such a field is not
+// [Requirement.Checkable]; its [Requirement.CheckNote] says when it will be
+// proved, and the surface answers [VerifyUnchecked] without asking any vendor.
 
 // VerifyOutcome is what a check found.
 type VerifyOutcome string

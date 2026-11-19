@@ -5,7 +5,7 @@ import "bytes"
 // A THREAD LINE'S BYTE FACTS: what Claude Code's large-file readers read of a
 // line's bytes, never its decode ([threadChain], THE LARGE FILE), and the marks
 // the resumed count reads ([resumedReading]), carried by every whole line, a
-// refused one too ([threadBytes]), beside its decode's facts ([lineFacts]).
+// refused one too ([threadBytes]), beside its facts ([lineFacts]).
 // Never read them off the decode: a call input keyed `x"isSidechain` valued
 // true is written `"x\"isSidechain":true`, a sidechain's bytes where the decode
 // reads none, and `{"parent\u0055uid":null}` decodes to a parent no byte reader
@@ -109,14 +109,6 @@ func (b *threadBytes) KeyedBy(id string) bool { return b.keyed && string(b.key[:
 
 // Has reports whether the line holds every mark of m, anywhere in its bytes.
 func (b *threadBytes) Has(m byteMark) bool { return b.marks&m == m }
-
-// lineBytesOf is the byte facts of raw, a whole line, its break dropped,
-// read as its bytes stream past ([lineBytes]).
-func lineBytesOf(raw []byte) threadBytes {
-	var l lineBytes
-	l.write(raw)
-	return l.facts()
-}
 
 // lineBytes reads a whole line's byte facts ([threadBytes]) as its bytes stream
 // past in pieces of any size ([lineBytes.write]), never holding the line; its
