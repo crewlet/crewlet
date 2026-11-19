@@ -184,6 +184,27 @@ func TestTheMemoChangesNoByteOfAKeptSession(t *testing.T) {
 	}
 }
 
+// A PLANNED TEXT OF A CUT DEFINITION COSTS NO LATER TEXT ITS CHECK: a loaded
+// tool definition whose large description the first reading planned is cut in
+// the second, which never reaches that text; the whole-PDF read after it still
+// has both copies of its base64 written as planned, and the take keeps what a
+// take with no memo keeps.
+//
+// Mutation: drop the second reading's passing over of a planned text it went
+// past, and neither copy is checked.
+func TestAPlannedTextOfACutDefinitionCostsNoLaterTextItsCheck(t *testing.T) {
+	t.Parallel()
+	tool := `{"type":"attachment","uuid":"u-2","attachment":{"type":"deferred_tools_record","entries":[` +
+		`{"name":"mcp__cloudhost__x","description":"` + randomBase64(13, 300<<10) + `"}]}}`
+	archive := tarOf(t, map[string]string{"projects/p/s.jsonl": tool + "\n" + pdfLine(13, 300<<10) + "\n"})
+	s := newScrubber([]string{"cloudhost"})
+	want, _ := memoTake(t, archiveTar, archive, s, nil)
+	use := &memoUse{memo: newScrubMemo(), scope: "agent-a"}
+	if got, _ := memoTake(t, archiveTar, archive, s, use); got != want || use.n.checked != 2 {
+		t.Errorf("%+v, kept as with no memo: %t; want both copies of the read checked", use.n, got == want)
+	}
+}
+
 // A TEXT THE MEMO KNEW BY ITS START IS REDACTED WHERE IT CHANGED PAST IT: a
 // take whose large line the memo answers for by its first chunk, but which no
 // longer names a value an earlier take took out (the key then a marker, now
