@@ -6,5 +6,5 @@ var docInventory = map[string]int{
 	"internal/coord/kv":         31396,
 	"internal/engine":           113165,
 	"internal/redact":           23745,
-	"internal/sandbox/executor": 83075,
+	"internal/sandbox/executor": 83071,
 }
