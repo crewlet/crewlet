@@ -550,8 +550,15 @@ export class LiveSocket {
   private sendQuery(entry: Inflight): void {
     if (!this.connected || !this.sock) return; // `onopen` flushes it
     // NO CREDENTIAL IN THE FRAME. The engine asks every question as the
-    // principal the handshake resolved.
-    const frame = { kind: "query", id: entry.id, what: entry.what, params: entry.params };
+    // principal the handshake resolved. THE WAIT IS IN IT, so the engine stops
+    // a question this tab has given up on, and frees what its read holds.
+    const frame = {
+      kind: "query",
+      id: entry.id,
+      what: entry.what,
+      params: entry.params,
+      wait_ms: QUERY_TIMEOUT_MS,
+    };
     try {
       this.sock.send(JSON.stringify(frame));
     } catch {

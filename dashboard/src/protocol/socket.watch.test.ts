@@ -12,6 +12,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { RETRY_AFTER_MAX_MS, UNAVAILABLE_RETRY_MS } from "../contract/retry.ts";
+import { QUERY_TIMEOUT_MS } from "../contract/wire.ts";
 import { LiveSocket, QueryError } from "./socket.ts";
 import { Store } from "./store.ts";
 
@@ -223,7 +224,20 @@ describe("a query frame", () => {
     const frames = dial(0).sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
     const query = frames.find((frame) => frame.kind === "query");
     expect(query).toBeDefined();
-    expect(Object.keys(query!).sort()).toEqual(["id", "kind", "params", "what"]);
+    expect(Object.keys(query!).sort()).toEqual(["id", "kind", "params", "wait_ms", "what"]);
+  });
+
+  // THE FRAME NAMES HOW LONG THE TAB WAITS FOR ITS ANSWER, the wait its own
+  // timer rejects the query at, so the engine stops a question nobody is
+  // waiting for and frees the read it holds.
+  test("names the wait the tab gives its answer", () => {
+    const store = new Store();
+    const socket = new LiveSocket(store);
+    socket.start();
+    dial(0).open();
+    void socket.query("fleet");
+    const frames = dial(0).sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+    expect(frames.find((frame) => frame.kind === "query")?.wait_ms).toBe(QUERY_TIMEOUT_MS);
   });
 
   // A REFUSAL ON AUTHORITY SAYS WHY over the socket as it does over REST: the

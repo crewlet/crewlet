@@ -945,6 +945,51 @@ func TestEachSocketHasItsOwnInFlightBudget(t *testing.T) {
 	}
 }
 
+// A QUESTION ITS CLIENT STOPPED WAITING FOR STOPS, AND FREES ITS SLOT: a frame
+// naming its wait (`wait_ms`) is asked under a deadline that ends the question
+// once the wait has passed, with no answer sent, so the socket's slots and the
+// engine's (a transcript read's, which ends with its context) are free for the
+// next question; a frame naming none is asked for as long as the socket lasts.
+//
+// Mutation: ask every question under the socket's context alone, and the
+// abandoned questions hold the socket's slots until it closes.
+func TestAQueryItsClientStoppedWaitingForStopsAndFreesItsSlot(t *testing.T) {
+	t.Parallel()
+	ended := make(chan error, stream.MaxInFlightQueries)
+	f := newSocket(t, nil, func(ctx context.Context, what string, _ map[string]any) (any, error) {
+		_, bounded := ctx.Deadline()
+		if what == "events" {
+			return bounded, nil
+		}
+		<-ctx.Done()
+		ended <- context.Cause(ctx)
+		return nil, ctx.Err()
+	})
+	conn, _, err := f.dial(t, "")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	next(t, conn)
+
+	for i := range stream.MaxInFlightQueries {
+		write(t, conn, map[string]any{"kind": "query", "id": i, "what": "executor_session", "wait_ms": 1})
+	}
+	for range stream.MaxInFlightQueries {
+		if cause := <-ended; !errors.Is(cause, context.DeadlineExceeded) {
+			t.Fatalf("an abandoned question ended %v, want its client's wait passed", cause)
+		}
+	}
+	write(t, conn, map[string]any{"kind": "query", "id": 100, "what": "events"})
+	got := next(t, conn)
+	if kindOf(got) != stream.KindResult || got["id"] != float64(100) {
+		t.Fatalf("the frame after the abandoned questions = %v, want the next question's answer and none of "+
+			"theirs", got)
+	}
+	if got["data"] != false {
+		t.Errorf("a question naming no wait is asked under a deadline")
+	}
+}
+
 func TestASlowQueryDoesNotStallTheLiveFeed(t *testing.T) {
 	t.Parallel()
 	// The reason queries run off the read loop at all.

@@ -125,6 +125,10 @@ export const MAX_EVENTS = 400;
  * far beyond the slowest query's normal latency and still short enough that a
  * screen shows an error rather than an eternal skeleton.
  *
+ * THE QUERY FRAME CARRIES IT (`wait_ms`), and the engine stops answering a
+ * question once it has passed, so a read this tab gave up on frees the slots it
+ * holds rather than running on for nobody.
+ *
  * AND LONGER THAN THE ENGINE'S OWN READ OF THE BROKER GROUP
  * (`engine.BrokerReadWait`), held there by `internal/api`'s
  * `TestTheDashboardWaitsPastAReadOfTheGroup`: the `fleet_broker` query asks a

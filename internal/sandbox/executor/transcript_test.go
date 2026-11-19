@@ -1697,3 +1697,67 @@ func TestAReadHoldsItsSlotFromBeforeItOpensUntilAfterItCloses(t *testing.T) {
 		t.Errorf("%d slots are held once the read has ended, want none", held)
 	}
 }
+
+// stalledArchive is an archive whose bytes never come: a read of it says so
+// on inside and waits for its caller to leave.
+type stalledArchive struct {
+	ctx    context.Context
+	inside func()
+}
+
+func (a stalledArchive) Read([]byte) (int, error) {
+	a.inside()
+	<-a.ctx.Done()
+	return 0, a.ctx.Err()
+}
+
+func (stalledArchive) Close() error { return nil }
+
+// A READ ITS CALLER ABANDONS PART WAY GIVES ITS SLOT BACK. With every slot held
+// by a read inside an archive whose bytes never come, the callers leave (a
+// dashboard's query its client stopped waiting for, whose context the socket
+// ends): each read ends with its caller's own error and gives its slot back, so
+// the next read reads at once.
+//
+// Mutation: read the archive under a context the caller cannot end, or give
+// the slot back only from a read that ended on its own, and the reads never end
+// or the next read waits behind them.
+func TestAReadItsCallerAbandonsPartWayGivesItsSlotBack(t *testing.T) {
+	type stalled struct {
+		inside, done chan struct{}
+		err          error
+	}
+	ctx, leave := context.WithCancel(t.Context())
+	defer leave()
+	reads := make([]*stalled, executor.TranscriptReadsAtOnce)
+	for i := range reads {
+		r := &stalled{inside: make(chan struct{}), done: make(chan struct{})}
+		reads[i] = r
+		seen := sync.OnceFunc(func() { close(r.inside) })
+		go func() {
+			defer close(r.done)
+			_, r.err = executor.ReadTranscript(ctx, executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+				func(ctx context.Context) (io.ReadCloser, error) { return stalledArchive{ctx, seen}, nil }, 0)
+		}()
+		awaited(t, r.inside, "a read given a free slot reads its archive")
+	}
+	if held := executor.TranscriptReadsHeld(); held != executor.TranscriptReadsAtOnce {
+		t.Fatalf("%d slots are held by the reads inside their archives, want every one", held)
+	}
+	leave()
+	for _, r := range reads {
+		awaited(t, r.done, "a read inside its archive ends once its caller leaves")
+		if !errors.Is(r.err, context.Canceled) {
+			t.Errorf("a read its caller abandoned ended %v, want its caller's own error", r.err)
+		}
+	}
+	if held := executor.TranscriptReadsHeld(); held != 0 {
+		t.Fatalf("%d slots are held once every abandoned read has ended, want none", held)
+	}
+	got, err := executor.ReadTranscript(t.Context(), executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+		opener(bytes.NewReader(gzipped(t, briefs(1)))), 0)
+	if err != nil || len(got.Entries) != 1 {
+		t.Errorf("the read after the abandoned ones: (%d entries, %v), want the archive's one brief",
+			len(got.Entries), err)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -267,6 +268,11 @@ type request struct {
 	ID     int64          `json:"id"`
 	What   string         `json:"what"`
 	Params map[string]any `json:"params"`
+
+	// WaitMS is how long a `query` frame's client waits for its answer once
+	// it sent the frame, in milliseconds, and zero where it names no wait: the
+	// question is answered within it or not at all ([request.waited]).
+	WaitMS int64 `json:"wait_ms"`
 
 	// Seat is whose record a `watch` frame asks to be a recipient for —
 	// a seat's handle, or a login, which is resolved to the record its
@@ -705,16 +711,19 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 			// THIS goroutine, the reader. Moving it inside the spawned
 			// one would let the reader keep spawning past the cap and
 			// the backpressure would be a queue of blocked goroutines
-			// rather than a paused reader.
+			// rather than a paused reader. The client's wait starts as
+			// the frame is read, before the slot, as its own clock does.
+			asked, stop := req.waited(ctx)
 			running.Add(1)
 			slots <- struct{}{}
 			go func() {
 				defer running.Done()
 				defer func() { <-slots }()
+				defer stop()
 				// AS WHOEVER THE LAST DECISION SAID, not whoever opened
 				// the socket: a permission taken away an hour ago must
 				// not still answer here. See lifetime.go.
-				runQuery(who.context(ctx), client, query, req)
+				runQuery(who.context(asked), client, query, req)
 			}()
 		default:
 			// Unknown kinds are ignored, which is what makes new ones
@@ -965,9 +974,10 @@ func (w *watching) recheck(ctx context.Context) {
 
 // runQuery answers one question onto the client's own queue.
 //
-// A QUESTION WHOSE SOCKET CLOSED WHILE IT RAN IS DROPPED: nobody is left to
-// answer, and the read failing on that cancellation is no fault of the node's.
-// Read off ctx rather than err, so a question's own deadline still logs.
+// A QUESTION NOBODY WAITS FOR IS DROPPED, its socket closed or its client's
+// wait passed ([request.waited]): nobody is left to answer, and the read
+// failing on that is no fault of the node's. Read off ctx rather than err, so
+// a deadline of the question's own still logs.
 func runQuery(ctx context.Context, client *Client, query Query, req request) {
 	data, err := query(ctx, req.What, req.Params)
 	if ctx.Err() != nil {
@@ -1043,4 +1053,19 @@ func queryError(req request, code httpjson.Code) Envelope {
 // ignore — which is what makes a newer client safe against an older server.
 func decodeRequest(raw []byte, req *request) error {
 	return json.Unmarshal(raw, req)
+}
+
+// maxWaitMS is the longest wait a frame names that a [time.Duration] holds;
+// a longer one is no deadline a socket outlives.
+const maxWaitMS = math.MaxInt64 / int64(time.Millisecond)
+
+// waited is ctx held to the wait r's client gives its answer ([request.WaitMS]),
+// and what lets it go. A QUESTION ITS CLIENT GAVE UP ON STOPS: unbounded, a read
+// the dashboard stopped waiting for ran on in the socket's slot and the
+// engine's (a transcript's, for one), holding both for nobody until it ended.
+func (r request) waited(ctx context.Context) (context.Context, context.CancelFunc) {
+	if r.WaitMS <= 0 || r.WaitMS > maxWaitMS {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, time.Duration(r.WaitMS)*time.Millisecond)
 }
