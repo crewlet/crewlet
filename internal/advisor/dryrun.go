@@ -44,28 +44,25 @@ func CheckChange(c *config.Company, ch Change) error {
 
 // applyTo merges ch.Merge into entity key by key, then replaces ch.Set's fields.
 func applyTo(entity any, ch Change) error {
-	raw, err := json.Marshal(entity)
+	fields, err := Changed(entity, ch)
 	if err != nil {
 		return err
 	}
-	var fields map[string]any
-	if err = json.Unmarshal(raw, &fields); err != nil {
-		return err
-	}
-	merge, err := asJSON(ch.Merge)
+	raw, err := json.Marshal(fields)
 	if err != nil {
-		return err
-	}
-	set, err := asJSON(ch.Set)
-	if err != nil {
-		return err
-	}
-	fields = mergeFields(fields, merge)
-	maps.Copy(fields, set)
-	if raw, err = json.Marshal(fields); err != nil {
 		return err
 	}
 	return json.Unmarshal(raw, entity)
+}
+
+// asFields is v's JSON as a map of its fields.
+func asFields(v any) (map[string]any, error) {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	fields := map[string]any{}
+	return fields, json.Unmarshal(raw, &fields)
 }
 
 func asJSON(v map[string]any) (map[string]any, error) {

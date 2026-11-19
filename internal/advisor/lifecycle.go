@@ -148,6 +148,9 @@ type Stored struct {
 	EffectDueAt time.Time
 	// AppliedFix is the option an applied finding's person sent, by its digest.
 	AppliedFix string
+	// Ineffective are the options applied for its key that did not clear
+	// it, by digest: never offered again ([WithoutIneffective]).
+	Ineffective []string
 	// Reason, ClosedAt and ClosedBy say how a closed episode ended, and who
 	// closed it where a person did.
 	Reason   CloseReason
@@ -261,7 +264,9 @@ func Reconcile(stored []Stored, observed []Observation, r Reading) []Transition 
 			out = append(out, Transition{Step: StepOpen, Observed: o, State: StateOpen})
 			continue
 		}
-		if t, ok := again(s, o, r.At); ok {
+		kept := *o
+		kept.Finding = WithoutIneffective(o.Finding, s.Ineffective)
+		if t, ok := again(s, &kept, r.At); ok {
 			out = append(out, t)
 		}
 	}

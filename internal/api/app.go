@@ -73,6 +73,7 @@ type App struct {
 	advisor        AdvisorLog
 	advisorDuty    *duty.Duty
 	advisorFinding func(ctx context.Context, id string) (queries.AdvisorFinding, error)
+	advisorConfig  AdvisorConfig
 	stopAdvisor    func()
 
 	// chatLive is the process's chat hub, which the socket carries chat
@@ -892,6 +893,9 @@ func New(opts Options) (*App, error) {
 			sources.Advisor, a.advisor = reads, advisorLog{reads, writes}
 			a.advisorDuty = sources.AdvisorDuty(duty.LogOf(reads, writes, time.Now), r.AdvisorClaim())
 			a.advisorFinding = sources.AdvisorFindingOf
+			if sources.Config != nil {
+				a.advisorConfig = sources.Config
+			}
 		}
 	}
 	// And each server's OAuth grant, which every node reads from the
