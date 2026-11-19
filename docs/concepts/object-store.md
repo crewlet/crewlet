@@ -38,8 +38,7 @@ per push, named by its `code_packs` row, a required reference like a file's —
 every file of every [artifact](artifacts.md) version and asset, every file of
 the company's adopted brand, the files an
 [Ask Crewlet](../guides/assistant.md#retention-and-erasure) conversation
-keeps (the images a person attaches and the files a deep-work run delivers,
-each sealed under the fleet keyring before it is stored, so the bucket holds
+keeps (the images a person attaches, each sealed under the fleet keyring before it is stored, so the bucket holds
 none of them in the clear), and each seat's executor sessions: the harness's
 own transcript of a turn, kept so a later turn on the same conversation, in any
 box on any node, continues it, sealed the same way as it streams in and named
@@ -296,8 +295,7 @@ under an election's wait instead, and the tools are told to try again
 shortly: the object store classes every put it could not finish once, so a
 project file's upload, an artifact's, an image attached to a question for
 [Ask Crewlet](../guides/assistant.md) and both kinds of tool answer each
-the same way, and Ask Crewlet is told what kept out a file a deep-work run
-delivered. The collector does not bound the bucket: it deletes what no row
+the same way. The collector does not bound the bucket: it deletes what no row
 names, never the files a company keeps.
 
 ```yaml

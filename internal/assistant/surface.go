@@ -126,12 +126,11 @@ func (s *surface) AnnotationsOf(name string) mcp.Annotations {
 }
 
 // Detached reports a tool whose call may park the turn: a change waiting on
-// the person's approval, or deep work, which can park on one of its own. Such
-// a call runs alone ([toolloop.Detacher]), since a parked turn waits
-// on one decision.
+// the person's approval. Such a call runs alone ([toolloop.Detacher]), since a
+// parked turn waits on one decision.
 func (s *surface) Detached(name string) bool {
 	switch s.byName[name].Kind {
-	case catalog.KindWrite, catalog.KindPageAction, catalog.KindDeep:
+	case catalog.KindWrite, catalog.KindPageAction:
 		return true
 	}
 	return false
@@ -169,8 +168,6 @@ func (s *surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		return s.navigate(ctx, tool, call.Arguments)
 	case catalog.KindDocs:
 		return s.docs(ctx, tool, call.Arguments)
-	case catalog.KindDeep:
-		return s.deep(ctx, tool, call.Arguments)
 	case catalog.KindBrief:
 		return s.answerBrief(ctx, tool, call.Arguments)
 	}

@@ -50,7 +50,6 @@ func closedSets() map[string][]string {
 		// A proposal's taint is the surface its outside text came from.
 		"AssistantTaintSource": strs(provenance.Sources),
 		// --- deep work (im-deep) ---
-		"AssistantDeepState":           strs(wire.DeepStates),
 		"AssistantAttachmentMediaType": wire.AttachmentMediaTypes,
 	}
 }
@@ -126,11 +125,8 @@ func TestTheDashboardBoundsTheAssistantAtTheEnginesLimits(t *testing.T) {
 		"ASSISTANT_ACTION_ARGS_MAX_MEMBERS":           strconv.Itoa(wire.ActionArgsMaxMembers),
 		"ASSISTANT_ACTION_ARGS_MAX_ENUM":              strconv.Itoa(wire.ActionArgsMaxEnum),
 		"ASSISTANT_ACTION_ARGS_DESCRIPTION_MAX_RUNES": strconv.Itoa(wire.ActionArgsDescriptionMaxRunes),
-		// --- deep work (im-deep) ---
-		"ASSISTANT_DEEP_ACTIVITY_LINES":     strconv.Itoa(wire.DeepActivityLines),
-		"ASSISTANT_FILE_MAX_BYTES":          strconv.Itoa(wire.FileMaxBytes),
-		"ASSISTANT_ATTACHMENTS_PER_TURN":    strconv.Itoa(wire.AttachmentsPerTurn),
-		"ASSISTANT_DELIVERED_FILES_PER_RUN": strconv.Itoa(wire.DeliveredFilesPerRun),
+		"ASSISTANT_FILE_MAX_BYTES":                    strconv.Itoa(wire.FileMaxBytes),
+		"ASSISTANT_ATTACHMENTS_PER_TURN":              strconv.Itoa(wire.AttachmentsPerTurn),
 	} {
 		got, err := clientsource.Scalar(tree, name)
 		if err != nil {
@@ -218,10 +214,8 @@ func shapes() map[string]reflect.Type {
 		"AssistantViewerModel":         reflect.TypeFor[wire.ViewerModel](),
 		"AssistantModelNotice":         reflect.TypeFor[wire.ModelNotice](),
 		// --- deep work (im-deep) ---
-		"AssistantDeepProgress": reflect.TypeFor[wire.DeepProgress](),
-		"AssistantFileRef":      reflect.TypeFor[wire.FileRef](),
-		"AssistantFileCard":     reflect.TypeFor[wire.FileCard](),
-		"AssistantFileStored":   reflect.TypeFor[wire.FileStored](),
+		"AssistantFileRef":    reflect.TypeFor[wire.FileRef](),
+		"AssistantFileStored": reflect.TypeFor[wire.FileStored](),
 	}
 }
 

@@ -215,11 +215,6 @@ var trustDoors = map[string]trustDoor{
 	"internal/assistant/resume.go:pageReport": {scripted, []string{
 		"internal/assistant.TestAResumedTurnRunsOnTheScreenTheDecisionWasMadeFrom",
 	}},
-	"internal/assistant/deep.go:deepReport": {vendor, []string{
-		// A deep-work run's report: a harness's words after it read the
-		// open web, which nobody in the company wrote (ADR-0054).
-		"internal/assistant.TestADeepRunReachesCrewletOnlyThroughTheTurnsSurface",
-	}},
 	// HOW A CONVERSATION'S EARLIER TURNS ENDED, as the engine recorded each
 	// on the executor log and the next turn's brief tells it: what the turn
 	// was asked, what its reviewer and its executor wrote, a stop's reason

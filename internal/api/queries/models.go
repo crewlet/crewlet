@@ -274,7 +274,7 @@ type ModelUsage struct {
 }
 
 // ModelUse is one job the entry runs, or is a fallback for: a seat's, by
-// handle and job, or the assistant's chat or deep work. Position is the
+// handle and job, or the assistant's chat. Position is the
 // entry's place in the resolved chain, 0 for the model that runs it.
 type ModelUse struct {
 	Seat      string `json:"seat,omitempty"`
@@ -820,9 +820,6 @@ func usedBy(company *config.Company, key string) []ModelUse {
 	}
 	if company.Assistant.Model == key {
 		out = append(out, ModelUse{Assistant: "chat", Position: 0})
-	}
-	if deep := company.Assistant.DeepWork; deep != nil && deep.LLM == key {
-		out = append(out, ModelUse{Assistant: "deep_work", Position: 0})
 	}
 	return out
 }

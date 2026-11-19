@@ -63,9 +63,6 @@ func TestEveryLimitIsReadFromTheKeyItNames(t *testing.T) {
 		"code.scratch.idle_days":                      "14",
 		"code.scratch.max_per_seat":                   "20",
 		"chat.chatlet.message_retention_days":         "90",
-		"assistant.deep_work.timeout_seconds":         "900",
-		"assistant.deep_work.max_steps":               "120",
-		"assistant.deep_work.max_tokens":              "500000",
 	}
 	doc := "name: Acme\n" + nest(withContext(written))
 	c, err := config.ParseCompany([]byte(doc))
@@ -129,12 +126,6 @@ func withContext(flat map[string]string) map[string]string {
 	for key := range flat {
 		if strings.HasPrefix(key, "code.") {
 			out["code.backend"] = "gitlet"
-		}
-		// Deep work's bounds need deep work, which needs a Claude Code entry.
-		if strings.HasPrefix(key, "assistant.deep_work.") {
-			out["assistant.deep_work.llm"] = "deep"
-			out["providers.llm.deep.harness"] = "claude-code"
-			out["providers.llm.deep.model"] = "sonnet"
 		}
 	}
 	return out

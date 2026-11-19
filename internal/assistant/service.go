@@ -29,6 +29,7 @@ import (
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/toolsession"
@@ -64,16 +65,11 @@ type Deps struct {
 	// Rate counts a person's turn starts across the fleet; nil counts them
 	// on this node alone.
 	Rate TurnRate
-	// Files keeps a conversation's files: the images a person attaches and
-	// the files a deep-work run delivers, and answers whether a file a draft
-	// change names is the person's. Nil keeps none: a question takes no
-	// attachment, no deep work is offered, and every draft change naming a
+	// Files keeps a conversation's files, the images a person attaches, and
+	// answers whether a file a draft change names is the person's. Nil keeps
+	// none: a question takes no attachment, and every draft change naming a
 	// file is refused.
 	Files Files
-
-	// --- deep work (im-deep) ---
-	// Deep runs deep work; nil is a node that offers none (ADR-0054).
-	Deep DeepWork
 
 	// Sessions is where a turn serves its tools to its model's harness, as the
 	// one MCP server `crewlet` (ADR-0049): this process's tool-session host.
@@ -101,7 +97,6 @@ type Service struct {
 	remote      Remote
 	rate        TurnRate
 	files       Files
-	deep        DeepWork
 	sessions    *toolsession.Host
 	now         func() time.Time
 	log         *slog.Logger
@@ -174,7 +169,7 @@ func New(d Deps) (*Service, error) {
 		node: d.Node, company: d.Company, acts: d.Acts, models: d.Models, budget: d.Budget,
 		catalogue: d.Catalogue, transcripts: d.Transcripts,
 		records: d.Records, dispatcher: d.Dispatcher, revoker: d.Revoker, audit: d.Audit,
-		metrics: d.Metrics, remote: d.Remote, rate: d.Rate, files: d.Files, deep: d.Deep,
+		metrics: d.Metrics, remote: d.Remote, rate: d.Rate, files: d.Files,
 		sessions: d.Sessions, now: now,
 		log: logging.Get("assistant"),
 		hub: live.NewHub(now, proposal.TTL, tap),
@@ -198,8 +193,8 @@ func New(d Deps) (*Service, error) {
 // turnRateScope is the costlimit scope every turn start is taken from.
 const turnRateScope = "assistant.turn"
 
-// offeredTools is what a turn of person may call: the catalogue's offer, a
-// brief's reads, or every tool with deep work where it runs.
+// offeredTools is what a turn of person may call: the catalogue's offer, or a
+// brief's reads, with the web where the company reads it.
 func (s *Service) offeredTools(ctx context.Context, person iam.Principal, acts []string,
 	briefing bool) []catalog.Tool {
 
@@ -208,9 +203,43 @@ func (s *Service) offeredTools(ctx context.Context, person iam.Principal, acts [
 	if briefing {
 		tools = briefTools(offered)
 	} else {
-		tools = s.withConfigured(ctx, offered)
+		tools = s.withWeb(offered)
 	}
 	return tools
+}
+
+// withWeb is tools with the web reads where the company lists research hosts.
+func (s *Service) withWeb(tools []catalog.Tool) []catalog.Tool {
+	if c, _ := s.company(); c != nil && len(c.Assistant.ResearchHosts()) > 0 {
+		tools = append(slices.Clone(tools), catalog.FetchWebPageTool())
+		if c.Assistant.Research.Search != nil {
+			tools = append(tools, catalog.SearchWebTool())
+		}
+	}
+	return tools
+}
+
+// ReadsImages reports whether a question's images are handed to its model:
+// the assigned model's run takes them ([Models.ReadsImages]).
+func (s *Service) ReadsImages() bool { return s.models.ReadsImages() }
+
+// imagesOf are the bytes of the files a question carried, as its model is
+// handed them, or none where the model takes no image.
+func (s *Service) imagesOf(ctx context.Context, p iam.Principal, conversation uuid.UUID,
+	files []StoredFile) ([]llm.Image, error) {
+
+	if len(files) == 0 || !s.ReadsImages() {
+		return nil, nil
+	}
+	out := make([]llm.Image, 0, len(files))
+	for _, f := range files {
+		stored, data, err := s.files.Open(ctx, p.ID, conversation, f.FileID)
+		if err != nil {
+			return nil, fmt.Errorf("assistant: attachment %s: %w", f.FileID, err)
+		}
+		out = append(out, llm.Image{MediaType: stored.MediaType, Data: data})
+	}
+	return out, nil
 }
 
 // Eligible says whether p may use the assistant on this node now, and the
@@ -526,11 +555,15 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	if summary != nil {
 		t.used(summary.Apps)
 	}
-	t.deep.attachments = attached
+	t.attachments = attached
+	images, err := s.imagesOf(ctx, ts.Person, ts.Conversation, attached)
+	if err != nil {
+		return wire.TurnAccepted{}, s.readFailure(err)
+	}
 	in := promptInput{Person: ts.Person, Apps: iam.Expand(ts.Person.Grants), Now: s.now(),
 		History: earlier, Summary: summary, Page: ts.Page, Boundary: t.boundary, Question: input,
-		Proposable: proposable(tools), Deep: offersDeep(tools), DeepConfigured: s.ReadsImages(),
-		Attachments: refsOf(attached)}
+		Proposable: proposable(tools), Delegates: offers(tools, catalog.CreateTaskTool),
+		Attachments: refsOf(attached), ReadsImages: len(images) > 0}
 	if c != nil {
 		in.Company, in.Zone = c.Name, c.Location()
 	}
@@ -540,7 +573,8 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		}
 	}
 
-	run := loopRun{messages: buildMessages(in), provider: provider, key: key, meter: meter,
+	run := loopRun{messages: buildMessages(in), images: images, provider: provider, key: key,
+		meter: meter,
 		tools: tools, steps: MaxRounds, timeout: TurnTimeout,
 		fresh: history.Conversation.Title == "", question: input}
 	if briefing {
@@ -592,11 +626,6 @@ func (s *Service) supersede(ctx context.Context, p iam.Principal, key string,
 	err := s.records.CloseTurn(ctx, Write{Owner: p.ID, By: iam.ActorFor(p), Key: key,
 		Steps: []string{"supersede"}}, row.ID, assistantdomain.TurnEnd{
 		State: wire.TurnSuperseded, Steps: row.Steps})
-	if err == nil && keepErr == nil {
-		// No approval resumes a turn asked past, so a deep-work run it
-		// parked on is never continued.
-		s.dropParkedDeep(ctx, keep)
-	}
 	var moved *assistantdomain.TurnMoved
 	switch {
 	case errors.As(err, &moved) && moved.State.Final():
@@ -676,6 +705,11 @@ func historyApps(entries []historyEntry) []string {
 		out = append(out, e.Apps...)
 	}
 	return out
+}
+
+// offers reports whether tools hold the tool named name.
+func offers(tools []catalog.Tool, name string) bool {
+	return slices.ContainsFunc(tools, func(t catalog.Tool) bool { return t.Name == name })
 }
 
 // proposable is every write the person may propose: the offered tools that
@@ -888,9 +922,6 @@ func (s *Service) declineParked(ctx context.Context, p iam.Principal, row assist
 	s.mu.Unlock()
 	if d == nil {
 		return
-	}
-	if keep, err := s.parkedLoop(ctx, p.ID, row.ID); err == nil {
-		s.dropParkedDeep(ctx, keep)
 	}
 	if err := d.DeclineTurn(ctx, approval.Stop{Owner: p.ID, Conversation: row.Conversation,
 		Turn: row.ID, By: iam.ActorFor(p), Key: key}); err != nil {

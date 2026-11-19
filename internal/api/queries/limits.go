@@ -35,14 +35,12 @@ const (
 	// LimitSignIn is the company's sign-in policy, answered on
 	// `sign_in_policy` with each range narrowed to the node's limits.
 	LimitSignIn LimitGroup = "sign_in"
-	// LimitAssistant is Ask Crewlet's turn and deep-work bounds, changed on its settings page.
-	LimitAssistant LimitGroup = "assistant"
 )
 
 // LimitGroups are every group, in drawing order. Settings › Limits draws the
 // first four; `delegated_decisions` answers the delegated rows.
 var LimitGroups = []LimitGroup{LimitTurn, LimitDelegation, LimitNotifications, LimitSchedules, LimitDelegated,
-	LimitInbox, LimitAtlas, LimitCode, LimitChat, LimitSignIn, LimitAssistant}
+	LimitInbox, LimitAtlas, LimitCode, LimitChat, LimitSignIn}
 
 // LimitUnit is what a limit's number counts.
 type LimitUnit string
@@ -211,20 +209,6 @@ var limits = []limit{
 			}
 			return horizon.Hours() / 24
 		}},
-	{key: "assistant.deep_work.timeout_seconds", group: LimitAssistant, unit: LimitSeconds,
-		read: func(c *config.Company) float64 { return deepWorkOf(c).Timeout().Seconds() }},
-	{key: "assistant.deep_work.max_steps", group: LimitAssistant, unit: LimitCount,
-		read: func(c *config.Company) float64 { return float64(deepWorkOf(c).Steps()) }},
-	{key: "assistant.deep_work.max_tokens", group: LimitAssistant, unit: LimitCount,
-		read: func(c *config.Company) float64 { return float64(deepWorkOf(c).Tokens()) }},
-}
-
-// deepWorkOf is the company's deep work, or the defaults where it sets none.
-func deepWorkOf(c *config.Company) config.AssistantDeepWork {
-	if c.Assistant.DeepWork == nil {
-		return config.AssistantDeepWork{}
-	}
-	return *c.Assistant.DeepWork
 }
 
 // delegatedLimits are the limits every delegate is held to, the rows of

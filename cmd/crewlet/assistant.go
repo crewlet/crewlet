@@ -35,7 +35,7 @@ import (
 // caller closes both before its listeners shut down: an open stream is a
 // request a listener's grace would otherwise wait out whole.
 func mountAssistant(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
-	host engine.DeepHost, opts *api.Options) (*assistantNode, error) {
+	opts *api.Options) (*assistantNode, error) {
 	delegations, err := auth.NewDelegations(boot.Secrets.TokenMaterial(), e, nil)
 	if err != nil {
 		return nil, fmt.Errorf("assistant: grants: %w", err)
@@ -75,7 +75,6 @@ func mountAssistant(ctx context.Context, boot *config.Bootstrap, e *engine.Engin
 		Remote:      remote,
 		Rate:        engine.AssistantTurnRate(e),
 		Files:       engine.AssistantFiles(e),
-		Deep:        engine.AssistantDeepWork(e, boot, host),
 		Sessions:    engine.AssistantToolSessions(e),
 	})
 	if err != nil {

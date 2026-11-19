@@ -12,8 +12,8 @@ import (
 // referencesDoc writes the entry `big` in every shape a document can name a
 // providers.llm entry in: a scalar llm, a list llm, the llm mapping's default
 // beside another phase and each of its satellites, each flat satellite, a seat
-// at the root and seats nested two units deep, the assistant's model and its
-// deep work. `other` is named beside it, so a chain is reported whole.
+// at the root and seats nested two units deep, and the assistant's model.
+// `other` is named beside it, so a chain is reported whole.
 const referencesDoc = `
 name: Acme
 providers:
@@ -54,8 +54,6 @@ units:
             llm_judge: big
 assistant:
   model: big
-  deep_work:
-    llm: big
 `
 
 // EVERY FIELD THAT NAMES AN ENTRY IS A REFERENCE TO IT, at the path it is
@@ -90,7 +88,6 @@ func TestProviderReferencesCoverEveryWrittenShape(t *testing.T) {
 		{"flat", config.JobAuxiliary, "units[0].children[0].roles[1].llm_auxiliary", []string{"big"}},
 		{"flat", config.JobJudge, "units[0].children[0].roles[1].llm_judge", []string{"big"}},
 		{"", config.JobAssistant, "assistant.model", []string{"big"}},
-		{"", config.JobDeepWork, "assistant.deep_work.llm", []string{"big"}},
 	}
 	var got []ref
 	for _, r := range cfg.ProviderReferences("big") {

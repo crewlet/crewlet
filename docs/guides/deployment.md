@@ -1715,9 +1715,7 @@ A `direct` or `container` box is a directory on the engine host, made under
 one **box root**: `providers.sandbox.local.state_dir`, else
 `$CREWLET_SANDBOX_LOCAL_HOME`, else `~/.crewlet/sandboxes` under the engine
 user's home. A relative `state_dir` is read against the directory the engine
-was started in. A seat's box is `<box root>/boxes/<id>`, and an
-[Ask Crewlet deep-work run](assistant.md#where-a-run-happens) placed on
-the engine host keeps its confined box at `<box root>/assistant/boxes/<id>`.
+was started in. A seat's box is `<box root>/boxes/<id>`.
 A box holds its run's checkout, its harness's home with a copy of the
 entry's login, its temporary files (`TMPDIR` and the harness's own temporary root
 point inside it) and whatever the run installs and builds, and it is removed
@@ -1727,8 +1725,7 @@ Size the volume under the box root for every box it holds at once: one for
 each seat whose executor is at work (a seat runs one at a time), one for each
 run parked on a person's question, which keeps its box until it resumes or its
 pause TTL passes (`role.sandbox.pause_ttl_seconds`, else
-`providers.sandbox.default_pause_ttl_seconds`, 1800 seconds unless set), and
-one for each deep-work task running or kept for a proposal.
+`providers.sandbox.default_pause_ttl_seconds`, 1800 seconds unless set).
 
 **On a read-only root filesystem, set `state_dir`.** An engine run as a
 non-root user with only a data volume, `/tmp` and its home writable, the shape
@@ -1746,8 +1743,7 @@ around it, so a command that names `/tmp`, the engine's home or a path on the
 data volume writes there, and no limit on the box root's volume counts it
 ([Security Boundaries](#security-boundaries)). A `container` box writes its
 home, the one directory mounted into it, and the container's own layer, which
-its runtime keeps. A deep-work run on the engine host writes its own box and
-nothing else.
+its runtime keeps.
 
 ### A restart and the executors on its host
 

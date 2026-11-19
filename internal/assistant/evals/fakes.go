@@ -152,7 +152,12 @@ type Models struct {
 	Provider llm.Provider
 	Key      string
 	Err      error
+	// Images is whether the model takes images.
+	Images bool
 }
+
+// ReadsImages implements [assistant.Models].
+func (m Models) ReadsImages() bool { return m.Images && m.Err == nil }
 
 // Model implements [assistant.Models].
 func (m Models) Model(context.Context, iam.Principal, auxspend.Use) (llm.Provider, string, error) {

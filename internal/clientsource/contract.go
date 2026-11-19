@@ -717,16 +717,11 @@ var contract = []Entry{
 	{"AssistantViewerAssistant", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantModelNotice", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantViewerModel", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
-	// assistant.ts (deep work, im-deep)
-	{"AssistantDeepState", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
+	// assistant.ts (attachments)
 	{"AssistantAttachmentMediaType", ReadUnion, "internal/assistant/wire.TestTheDashboardKnowsEveryAssistantClosedSet"},
-	{"ASSISTANT_DEEP_ACTIVITY_LINES", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"ASSISTANT_FILE_MAX_BYTES", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
 	{"ASSISTANT_ATTACHMENTS_PER_TURN", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
-	{"ASSISTANT_DELIVERED_FILES_PER_RUN", ReadScalar, "internal/assistant/wire.TestTheDashboardBoundsTheAssistantAtTheEnginesLimits"},
-	{"AssistantDeepProgress", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantFileRef", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
-	{"AssistantFileCard", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantBriefCard", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantBriefScope", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},
 	{"AssistantBriefNeed", ReadInterface, "internal/assistant/wire.TestTheDashboardSpeaksTheAssistantProtocol"},

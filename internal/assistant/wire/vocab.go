@@ -240,21 +240,16 @@ const (
 	// would narrow it, never drawn as though it held the answer (ADR-0061).
 	CardOversize CardKind = "oversize"
 
-	// --- deep work (im-deep) ---
-
-	// CardFile is the files a deep run delivered (ADR-0054).
-	CardFile CardKind = "file"
-
 	// CardBrief is a brief turn's answer ([TurnBrief]): what the page is
 	// about, and the ranked things the person has to do, each row a record
 	// the engine read and resolved for them.
 	CardBrief CardKind = "brief"
 )
 
-// CardKinds are the nine, in declaration order.
+// CardKinds are the eight, in declaration order.
 var CardKinds = []CardKind{
 	CardTable, CardEntity, CardProposal, CardOpenInApp, CardError, CardNotice, CardOversize,
-	CardFile, CardBrief,
+	CardBrief,
 }
 
 // Valid reports whether k is a kind this build knows.

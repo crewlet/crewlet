@@ -96,7 +96,6 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 		return wire.TurnAccepted{}, err
 	}
 	if !holds(person, keep.Apps) {
-		s.dropParkedDeep(ctx, keep)
 		// THE SECOND LOCK: whatever decided the proposal, a loop that read
 		// through an app the person no longer holds is never handed back to
 		// the model for them. The turn ends; the card shows its state.
@@ -186,7 +185,7 @@ func (s *Service) Resume(ctx context.Context, r approval.Resumption) (wire.TurnA
 	go t.run(loopRun{ //nolint:contextcheck // the turn's own lifetime (t.ctx, under the service's base), never the request's: a turn outlives the POST that started it
 		messages: messages, provider: provider, key: key, meter: meter,
 		tools: s.offeredTools(ctx, person, acts, false), steps: MaxRounds,
-		timeout: TurnTimeout, deep: keep.Deep, decision: decision, screen: screen})
+		timeout: TurnTimeout, decision: decision, screen: screen})
 	return wire.TurnAccepted{TurnID: r.Turn, StreamURL: StreamPath(r.Conversation, r.Turn),
 		AfterSeq: after}, nil
 }

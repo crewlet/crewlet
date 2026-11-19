@@ -154,19 +154,14 @@ const (
 	// KindDocs answers from the engine's own API reference and the route
 	// table the API bound, and sends nothing ([DescribeAPITool]).
 	KindDocs Kind = "docs"
-	// KindDeep hands the task to a deep-work run ([DeepWorkTool]): the
-	// harness with its own tools, reaching Crewlet only through the
-	// person's other tools, bridged (ADR-0054). It sends nothing itself.
-	KindDeep Kind = "deep"
 	// KindBrief is a brief turn's answer ([BriefTool]): the engine checks it,
 	// resolves every record it cites as the person, and draws it as a brief
 	// card. It sends nothing of its own and writes nothing.
 	KindBrief Kind = "brief"
 )
 
-// Kinds are the seven, in declaration order.
-var Kinds = []Kind{KindRead, KindWrite, KindPageAction, KindNavigate, KindDocs, KindDeep,
-	KindBrief}
+// Kinds are the six, in declaration order.
+var Kinds = []Kind{KindRead, KindWrite, KindPageAction, KindNavigate, KindDocs, KindBrief}
 
 // Valid reports whether k is a kind this build knows.
 func (k Kind) Valid() bool { return slices.Contains(Kinds, k) }

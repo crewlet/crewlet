@@ -60,3 +60,33 @@ assistant:
 		t.Error("an entry no helper names was built as a helper's run")
 	}
 }
+
+// A HELPER READS IMAGES WHERE ITS HARNESS TAKES THEM: Ask Crewlet assigned a
+// Claude Code entry hands a question's images to it, and one assigned a Pi
+// entry, whose profile declares no image input, says it cannot see them.
+// Mutation: answer true for every model and the Pi case goes red.
+func TestAHelperReadsImagesWhereItsHarnessTakesThem(t *testing.T) {
+	t.Parallel()
+	for harness, want := range map[string]bool{"claude-code": true, "pi": false} {
+		dir := t.TempDir()
+		doc := fmt.Sprintf(`name: Acme
+providers:
+  llm:
+    helper:
+      harness: %s
+      model: sonnet
+      state_dir: %s/helper
+assistant:
+  model: helper
+`, harness, dir)
+		c, err := NewCompany(parseCompany(t, doc))
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := &Engine{}
+		e.epoch.current.Store(c)
+		if got := AssistantModels(e).ReadsImages(); got != want {
+			t.Errorf("%s: ReadsImages = %v, want %v", harness, got, want)
+		}
+	}
+}
