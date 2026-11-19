@@ -2228,7 +2228,7 @@ the thread) takes none; for a collection that keeps the thread's records (its
 hook receipts), 2^13 of the records and call ids it files; and for the take's
 scrub, 256 KiB of each line, JSON value or stretch of text it redacts as one,
 four times the longest line of 99 in 100 real threads: at its worst about 5 MiB
-for a collection's read and 12 MiB for a take's, whose redaction holds each
+for a collection's read and 13 MiB for a take's, whose redaction holds each
 stage's window, so a node scrubs at most 27 takes at once
 (`SessionTakesAtOnce`), and a take past them waits within its own wait and is
 refused if it runs out. A read past its
@@ -2236,7 +2236,7 @@ base waits for the node's one large-read slot (`CollectionLargeReadsAtOnce`), a
 pool apart from the transcripts' two, so a person paging a transcript never
 delays a turn's collection. A take holds it while it holds that piece, and a
 collection whose reading keeps the thread's records holds it to the read's end:
-at worst about 43 MiB for a collection and 45 MiB for a take. The wait
+at worst about 43 MiB for a collection and 48 MiB for a take. The wait
 is spent inside the read's own: a collection whose read runs
 past its 27 seconds counts the session unread and decides none of its hooks'
 notes, and a take past its budget is refused, its session not kept, the safe

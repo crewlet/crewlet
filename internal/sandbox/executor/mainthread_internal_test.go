@@ -174,10 +174,10 @@ func slotUserCharging(tb testing.TB, n, charge int) string {
 // grownScratch is what a user record under parent (as written) writes to grow
 // each scratch buffer its reader holds a value in to its most within the line
 // ([lineDecoder.reset]): head, every head key twice, at 32 KiB and then at
-// [threadValueMax] bytes as written, a `type` of bytes each decoding to three,
-// then the record's own head; block, a text block holding each block key so;
-// and result, a toolUseResult holding each of its keys so.
-func grownScratch(parent string) (head, block, result string) {
+// [threadValueMax] bytes as written, a `type` of typ as written, then the
+// record's own head; block, a text block holding each block key so; and
+// result, a toolUseResult holding each of its keys so.
+func grownScratch(parent, typ string) (head, block, result string) {
 	twice := func(keys ...string) string {
 		var b strings.Builder
 		for _, k := range keys {
@@ -188,7 +188,7 @@ func grownScratch(parent string) (head, block, result string) {
 		return b.String()
 	}
 	head = twice("type", "subtype", "agentId", "parentUuid", "isSidechain", "replacesSpan") + `"type":"` +
-		benchInvalid(threadValueMax-2) + `","parentUuid":` + parent + `,"isSidechain":false,"type":"user",` +
+		typ + `","parentUuid":` + parent + `,"isSidechain":false,"type":"user",` +
 		`"subtype":"","agentId":"","replacesSpan":false,`
 	block = `{` + twice("type", "id", "name", "tool_use_id", "is_error") + `"input":{` +
 		strings.TrimSuffix(twice("to"), ",") + `},"content":[{` + strings.TrimSuffix(twice("type"), ",") +
@@ -201,9 +201,9 @@ func grownScratch(parent string) (head, block, result string) {
 // as made (the fewest bytes of three makings), the scanner's capture at the
 // bound it grows to and no further ([jsonscan.Scanner.Capture]), and each
 // scratch buffer and the type's text as the line grew them. It fails tb where
-// one is short of what [grownScratch] grows it to, or where the whole passes
-// [readerLineBytes].
-func scratchGrown(tb testing.TB, line string) int {
+// one is short of what [grownScratch] grows it to, the type's text of typeText
+// bytes, or where the whole passes [readerLineBytes].
+func scratchGrown(tb testing.TB, line string, typeText int) int {
 	tb.Helper()
 	src := strings.NewReader(line + "\n")
 	var r *threadReader
@@ -230,8 +230,8 @@ func scratchGrown(tb testing.TB, line string) int {
 		}
 		held += cap(buf)
 	}
-	if cap(d.typeText) < 3*(threadValueMax-2) {
-		tb.Fatalf("the type's text holds %d bytes, want at least %d", cap(d.typeText), 3*(threadValueMax-2))
+	if cap(d.typeText) < typeText {
+		tb.Fatalf("the type's text holds %d bytes, want at least %d", cap(d.typeText), typeText)
 	}
 	if held > readerLineBytes {
 		tb.Fatalf("the reader holds %d bytes within the line (%d as made, %d buffers grown), past the %d it is "+
@@ -251,7 +251,7 @@ func scratchGrown(tb testing.TB, line string) int {
 // without that buffer, and the case fails.
 func TestTheBaseCoefficientsHold(t *testing.T) {
 	line := slotUserGrown(t, collectionBaseRecords, collectionBaseLineCharge)
-	t.Logf("the reader holds %d bytes within a line at its most", scratchGrown(t, line))
+	t.Logf("the reader holds %d bytes within a line at its most", scratchGrown(t, line, 3*(threadValueMax-2)))
 	raw := []byte(`"` + benchInvalid(threadValueMax-2) + `"`)
 	h, err := headOf(headKeys{typ: headKeyOf(raw), subtype: headKeyOf(raw), agentID: headKeyOf(raw)})
 	if err != nil {
@@ -275,10 +275,10 @@ func TestTheBaseCoefficientsHold(t *testing.T) {
 // exactly charge bytes ([resultsCharging]).
 func slotUserGrown(tb testing.TB, n, charge int) string {
 	tb.Helper()
-	head, block, result := grownScratch(cntParent(slotParent(n)))
+	head, block, result := grownScratch(cntParent(slotParent(n)), benchInvalid(threadValueMax-2))
 	line := resultsCharging(tb, `{"parentUuid":`+cntParent(slotParent(n))+`,"isSidechain":false,"type":"user",`+
 		head+`"message":{"role":"user","content":[`+block+`,`, `]},`+result+fmt.Sprintf(`"uuid":"u%d"}`, n), charge)
-	scratchGrown(tb, line)
+	scratchGrown(tb, line, 3*(threadValueMax-2))
 	return line
 }
 
@@ -1131,11 +1131,11 @@ func TestAReaderWhoseSharedWaitEndsWaitsOnItsOwn(t *testing.T) {
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkACollectionPassAtItsBase$' -benchtime 1x -benchmem
 func BenchmarkACollectionPassAtItsBase(b *testing.B) {
 	results := func(n int) string {
-		grown, block, result := grownScratch(benchOf(n - 2))
+		grown, block, result := grownScratch(benchOf(n-2), benchInvalid(threadValueMax-2))
 		head, tail, _ := strings.Cut(benchRecord(benchOf(n-2), benchMain, "user",
 			grown+`"message":{"role":"user","content":[`+block+`,@]},`+result, n-1, n-1), "@")
 		line := resultsCharging(b, head, tail, collectionBaseLineCharge)
-		scratchGrown(b, line)
+		scratchGrown(b, line, 3*(threadValueMax-2))
 		return line
 	}
 	// The chain files each result's id and the anchor's call beside the records.
@@ -1409,12 +1409,33 @@ func BenchmarkATakeAtItsLargeTier(b *testing.B) {
 // WHAT A TAKE HOLDS AT ITS BASE, the figure the package doc's "A collection's
 // read of a thread" counts each take at in the base tier: as
 // [BenchmarkATakeAtItsLargeTier], its line and its string at
-// [scrubPieceBaseBytes], beside a text file at it, so no piece takes the
-// slot. Read off the GC trace as that benchmark is:
+// [scrubPieceBaseBytes], beside a text file at it, and its meter at its worst
+// base ([meterAtItsBase]), whose line the scrub holds the slot for, so the
+// figure is both at their worst at once. Read off the GC trace as that is:
 //
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkATakeAtItsBase$' -benchtime 1x -benchmem
 func BenchmarkATakeAtItsBase(b *testing.B) {
-	benchmarkATake(b, takeOfPieces(b, scrubPieceBaseBytes))
+	benchmarkATake(b, takeOfPieces(b, scrubPieceBaseBytes, meterAtItsBase(b)))
+}
+
+// meterAtItsBase is a main-thread line under u1 holding what the take's meter
+// holds at its base at most (the package doc's THE BASE), as the scrub writes
+// it, so no string decodes past its length: every scratch buffer grown
+// ([grownScratch]), results charging [collectionBaseLineCharge], then a head
+// whose type, subtype and agentId are each [threadValueMax] bytes, the strings
+// one charge covers, decoded before their charge passes the base. tb fails
+// where the scrub writes the line otherwise.
+func meterAtItsBase(tb testing.TB) string {
+	x := strings.Repeat("x", threadValueMax-2)
+	head, block, result := grownScratch(`"u1"`, x)
+	strs := `"type":"` + x + `","subtype":"` + x + `","agentId":"` + x + `",`
+	line := resultsCharging(tb, `{`+head+`"message":{"role":"user","content":[`+block+`,`,
+		`]},`+result+strs+`"uuid":"u2"}`, collectionBaseLineCharge+3*len(x)+len("u1"))
+	scratchGrown(tb, line, len(x))
+	if rewriteLine(tb, line, newScrubber(nil)) != line {
+		tb.Fatal("the scrub writes the meter's line otherwise than it is built")
+	}
+	return line
 }
 
 // benchmarkATake scrubs archive as [Runner.TakeSession] does, its meter fed
@@ -1448,15 +1469,15 @@ func benchmarkATake(b *testing.B, archive []byte) {
 	}
 }
 
-// takeOfPieces is a take's archive whose main thread holds a line of n bytes
-// and whose `.json` member a string within them, each of bytes no UTF-8 holds,
-// and a text file of n bytes, built where nothing the read is measured by
-// keeps its pieces.
-func takeOfPieces(b *testing.B, n int) []byte {
+// takeOfPieces is a take's archive whose main thread holds a line of n bytes,
+// then lines, and whose `.json` member a string within n, each of bytes no
+// UTF-8 holds, and a text file of n bytes, built where nothing the read is
+// measured by keeps its pieces.
+func takeOfPieces(b *testing.B, n int, lines ...string) []byte {
 	thread, _ := claudeMainThread(ctSession)
 	bare := cntUser("", "u1", `""`)
 	members := []struct{ name, body string }{
-		{thread, cntUser("", "u1", `"`+benchInvalid(n-len(bare)-1)+`"`) + "\n"},
+		{thread, cntUser("", "u1", `"`+benchInvalid(n-len(bare)-1)+`"`) + "\n" + strings.Join(append(lines, ""), "\n")},
 		{"tasks/s/1.json", `{"text":"` + benchInvalid(n-64) + `"}`},
 		{"projects/p/s/tool-results/out.txt", strings.Repeat(keyLine+"\n", n/(len(keyLine)+1))},
 	}

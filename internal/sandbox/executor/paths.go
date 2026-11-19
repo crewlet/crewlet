@@ -253,39 +253,43 @@
 // flight at once: one per seat collecting on this node and up to the box
 // host's boxReadsHeld (64) reads for its peers, each about 5.3 MiB at its
 // worst, 341 MiB, and one per take. A take, whose scrub streams each text
-// through redact's stages, each holding its window, holds 11 to 12 MiB at its
-// base (BenchmarkATakeAtItsBase: a main-thread line, a `.json` string and a
-// text file each at [scrubPieceBaseBytes], the line's and the string's of
-// bytes the decode triples, both readings and the meter, read as above, 0.21 s
-// on two cores, its heap peaking at 23 MiB at the default GOGC), so every take
-// holds one of [SessionTakesAtOnce] (27), a pool of its own sized so the takes
-// at their base hold 324 MiB at most, within those 341.
+// through redact's stages, each holding its window, holds 12 to 13 MiB at its
+// base (BenchmarkATakeAtItsBase, one case a process on a dedicated two-core
+// slot: a main-thread line, a `.json` string and a text file each at
+// [scrubPieceBaseBytes], the line's and the string's of bytes the decode
+// triples, both readings, and the meter at its worst base on a line as the
+// scrub writes it, where no string decodes past its length, read as above; 9
+// to 10 MiB without the meter's line; 0.52 to 0.58 s, its heap peaking at 25
+// to 33 MiB at the default GOGC, 50 loaded), so every take holds one of
+// [SessionTakesAtOnce] (27), a pool of its own sized so the takes at their
+// base hold 324 MiB at most, within those 341.
 //
 // THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
 // holds 43 MiB at most, the chain at both bounds; a take, its meter beside it
-// under the same slot, 45 MiB (BenchmarkATakeAtItsLargeTier: as at its base,
-// each piece of [threadLineMax] bytes, 6.9 to 7.0 s on two cores, each piece's
-// hold of the slot about 1.3 s, its heap peaking at 126 MiB at the default
-// GOGC against the pass's 62 MiB). Shared with [TranscriptReadsAtOnce]'s two,
-// a collection's large pass waits behind two transcript reads of up to about
-// 22 s each and spends internal/sandbox's MainThreadReadWait (27 s), so a
-// person paging a transcript would decide how a turn's relaunch is told;
-// apart, it never does. One slot, not two: the process's thread readers then
-// hold at worst 2 x 133 + 45 = 311 MiB beside the base tier. One waiter behind
-// a pass over ordinary lines at the bound (2.6 to 2.8 s with the count and the
-// next request's estimate, 5.7 s loaded) is through in 11.4 s, within the
-// 27 s. Behind the slot's slowest holder, loaded, it is not: a pass keeping
-// more than [collectionBaseRecords] records holds the slot to its end whatever
-// its lines, so a collection whose chain keeps the records of 2^20 short lines
-// of blocks of an empty kind, at the bound (18.3 to 19.7 s with the count
-// alone, 20.7 to 21.6 s with the next request's estimate,
+// under the same slot, 31 to 48 MiB over twelve runs, the most as the build
+// machine's load rose (BenchmarkATakeAtItsLargeTier: as at its base but for the
+// meter's line, each piece of [threadLineMax] bytes, 6.4 to 6.6 s on two cores,
+// 7.1 to 7.5 s loaded, its heap peaking at 65 to 87 MiB at the default GOGC,
+// 146 MiB loaded, against the pass's 62 MiB). Shared with
+// [TranscriptReadsAtOnce]'s two, a collection's large pass waits behind two
+// transcript reads of up to about 22 s each and spends internal/sandbox's
+// MainThreadReadWait (27 s), so a person paging a transcript would decide how a
+// turn's relaunch is told; apart, it never does. One slot, not two: the
+// process's thread readers then hold at worst 2 x 133 + 48 = 314 MiB beside the
+// base tier. One waiter behind a pass over ordinary lines at the bound (2.6 to
+// 2.8 s with the count and the next request's estimate, 5.7 s loaded) is
+// through in 11.4 s, within the 27 s. Behind the slot's slowest holder, loaded,
+// it is not: a pass keeping more than [collectionBaseRecords] records holds the
+// slot to its end whatever its lines, so a collection whose chain keeps the
+// records of 2^20 short lines of blocks of an empty kind, at the bound (18.3 to
+// 19.7 s with the count alone, 20.7 to 21.6 s with the next request's estimate,
 // BenchmarkTheMainThreadReadAtItsBound, twice that loaded), holds it until its
 // own MainThreadReadWait cuts it. One such line to the bound, 18.6 to 18.8 s
 // (20.8 to 21.7 s estimating), one record of few facts, holds none. That
 // waiter, a later one, or one behind a take's piece streaming from a slow box
-// ends with [errLargeWait] and reads as no reading (count
-// unread), the safe side, as a read past MainThreadReadWait already is. The
-// wait is spent inside that wait, never added to it.
+// ends with [errLargeWait] and reads as no reading (count unread), the safe
+// side, as a read past MainThreadReadWait already is. The wait is spent inside
+// that wait, never added to it.
 //
 // # A hook's note, confirmed off its job's main thread
 //
