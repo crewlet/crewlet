@@ -85,10 +85,9 @@ func localRefusedf(why Why, format string, args ...any) error {
 // else [DefaultBoxRoot].
 //
 // ONE RULE for every box the engine makes on its host: a seat's boxes in
-// either local cell ([NewLocal]) and the Dashboard Assistant's confined
-// deep-work boxes, in a directory of their own beneath it. This is the volume
-// an operator sizes for boxes; a root derived from anything else puts a run's
-// writes on a volume nobody sized for them.
+// either local cell ([NewLocal]). This is the volume an operator sizes for
+// boxes; a root derived from anything else puts a run's writes on a volume
+// nobody sized for them.
 func BoxRoot(stateDir string) string {
 	if stateDir == "" {
 		return DefaultBoxRoot()

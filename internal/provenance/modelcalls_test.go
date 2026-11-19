@@ -22,8 +22,7 @@ const modulePath = "github.com/crewlet/crewlet"
 // modelInputs are the types a model is handed its prompt in, by the import
 // path of the package that declares them: a provider's request
 // (internal/providers/llm), and every request a harness's run is launched or
-// continued from. Every seat's executor is such a run (ADR-0066), as is the
-// Dashboard Assistant's deep work.
+// continued from. Every seat's executor is such a run (ADR-0066).
 //
 // AND WHAT A RUN IS HANDED TO REMEMBER: a continued session is a model's
 // context before it reads its brief, so the type naming the restored session
@@ -35,7 +34,6 @@ var modelInputs = map[string][]string{
 		"ExactTelling"},
 	modulePath + "/internal/sandbox": {"LaunchRequest", "Continuation", "RunRequest", "SessionContinuation",
 		"ExactTelling", "CarriedSession"},
-	modulePath + "/internal/assistant": {"DeepRun"},
 }
 
 // modelCall says, for one function that builds a model's input (one of

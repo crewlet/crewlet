@@ -2963,7 +2963,7 @@
           ]
         },
         "state_dir": {
-          "description": "Parent directory for box directories; used by both local placements and by deep work on the engine host.",
+          "description": "Parent directory for box directories; used by both local placements.",
           "type": [
             "string",
             "number",

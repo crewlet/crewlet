@@ -224,9 +224,9 @@ func TestClaudeCodeIsPointedAtAPrivateFileInsideTheBox(t *testing.T) {
 
 // THE STANDING INSTRUCTION ABOUT NOTES IS GIVEN EXACTLY WHEN A RUN READS THEM,
 // in its own harness's words, after the report instruction, and to no other:
-// told to a run with no notes wired (the assistant's deep work) or a harness
-// that takes none, it describes a channel that never opens; another harness's
-// names the wrong carrier. The harness adds it, never the runner. A Claude Code
+// told to a run with no notes wired or a harness that takes none, it
+// describes a channel that never opens; another harness's names the wrong
+// carrier. The harness adds it, never the runner. A Claude Code
 // run wired to notes keeps its plain text for a release whose box starts without
 // the hooks, and a copy told of notes for one that starts with them
 // ([executor.Paths.ClaudeNotesSystem]); an OpenCode run's one file is told.

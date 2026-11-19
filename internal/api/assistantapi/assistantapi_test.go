@@ -372,9 +372,9 @@ func TestTheViewerSaysWhyTheAssistantIsUnavailable(t *testing.T) {
 			if got.CanAssign {
 				t.Errorf("viewer = %+v, which lets a person without the document's write assign a model", got)
 			}
-			// NO DEEP WORK HERE, so nothing reads a question's images.
+			// THE RIG'S MODEL TAKES NO IMAGES, so nothing reads a question's images.
 			if got.ReadsImages {
-				t.Errorf("viewer = %+v, which says images are read without deep work", got)
+				t.Errorf("viewer = %+v, which says images are read by a model that takes none", got)
 			}
 		})
 	}

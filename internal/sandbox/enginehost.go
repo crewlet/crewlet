@@ -39,18 +39,6 @@ func EngineAddress(box Sandbox, raw string) string {
 	return rehost(raw, aliased.EngineHost())
 }
 
-// EngineHostName reports whether host (a bare name, no port, in any case) is
-// the name Docker or Podman gives the engine host inside a box: the one
-// [EngineAddress] hands a box in place of loopback. The tool bridge
-// (internal/api/mcpbridge) admits it as the Host of a loopback-held session's
-// call, since Docker Desktop and Podman's machine on macOS and Windows deliver
-// a container's call under the name it dialled. Both names are under
-// `.internal`, kept for private use, so no public DNS or internet page answers
-// to either.
-func EngineHostName(host string) bool {
-	return strings.EqualFold(host, dockerHostAlias) || strings.EqualFold(host, podmanHostAlias)
-}
-
 // EngineServers is servers as box dials them: [EngineAddress] applied to every
 // HTTP server's URL; a stdio server runs inside the box and dials nothing of
 // the engine's, so it is copied as it is. A copy, because the caller's map is

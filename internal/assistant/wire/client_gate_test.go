@@ -50,7 +50,7 @@ func closedSets() map[string][]string {
 		"AssistantTitleSource":     strs(wire.TitleSources),
 		// A proposal's taint is the surface its outside text came from.
 		"AssistantTaintSource": strs(provenance.Sources),
-		// --- deep work (im-deep) ---
+		// --- a question's attachments ---
 		"AssistantAttachmentMediaType": wire.AttachmentMediaTypes,
 	}
 }
@@ -217,7 +217,7 @@ func shapes() map[string]reflect.Type {
 		"AssistantViewerModel":         reflect.TypeFor[wire.ViewerModel](),
 		"AssistantConversationRename":  reflect.TypeFor[wire.ConversationRename](),
 		"AssistantModelNotice":         reflect.TypeFor[wire.ModelNotice](),
-		// --- deep work (im-deep) ---
+		// --- a question's attachments ---
 		"AssistantFileRef":    reflect.TypeFor[wire.FileRef](),
 		"AssistantFileStored": reflect.TypeFor[wire.FileStored](),
 	}
