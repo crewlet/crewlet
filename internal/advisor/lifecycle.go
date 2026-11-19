@@ -158,6 +158,10 @@ type Stored struct {
 	ClosedBy string
 	// OpenedAt is when the episode opened.
 	OpenedAt time.Time
+	// VerdictDigest is what the episode decides now, by [VerdictDigest], and
+	// ExplainedDigest the verdict the model's explanation was written for:
+	// an explanation of another verdict is not shown.
+	VerdictDigest, ExplainedDigest string
 	// Observation is what the episode's newest record observed.
 	Observation Observation
 	// Body is the observation as the store keeps it, compared byte for byte.

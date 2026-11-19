@@ -78,6 +78,9 @@ func (l *applyLog) Report(context.Context, string, statelog.Freshness) (advisord
 func (l *applyLog) Tally(context.Context, time.Time, time.Time, statelog.Freshness) (advisordomain.Tally, error) {
 	return advisordomain.Tally{}, nil
 }
+func (l *applyLog) Explain(context.Context, advisordomain.Call, string, advisordomain.Explanation) (statelog.Result, error) {
+	return statelog.Result{}, nil
+}
 func (l *applyLog) WriteReport(context.Context, advisordomain.Call, advisordomain.Report) (statelog.Result, error) {
 	return statelog.Result{}, nil
 }

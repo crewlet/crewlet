@@ -32,7 +32,7 @@ func (s *Service) Assigned() bool { return s.Models.Assigned() }
 
 // Run is one pass at now. Only a pass that read and submitted concludes: one
 // cut short at its ceiling listed what it reached, never all it would have.
-func (s *Service) Run(ctx context.Context, now time.Time, dismissed []advisor.Stored) (duty.ModelRun, error) {
+func (s *Service) Run(ctx context.Context, now time.Time, dismissed, live []advisor.Stored) (duty.ModelRun, error) {
 	failed := func(reason string, err error) (duty.ModelRun, error) {
 		pass := advisor.Pass{Status: advisor.PassFailed, Reason: reason + err.Error(),
 			Dropped: map[advisor.Drop]int{}, Unread: []string{}}
@@ -43,6 +43,7 @@ func (s *Service) Run(ctx context.Context, now time.Time, dismissed []advisor.St
 		return failed("the company's records could not be read: ", err)
 	}
 	d.Answers = AnswersOf(dismissed)
+	d.Unexplained = advisor.Unexplained(live)
 	deps, err := s.Models.Deps(ctx, d.Company)
 	if err != nil {
 		return failed("the Advisor's model could not start: ", err)
@@ -55,7 +56,7 @@ func (s *Service) Run(ctx context.Context, now time.Time, dismissed []advisor.St
 	}
 	pass := Run(ctx, deps, d, Ceiling)
 	window := advisor.Span{From: now.Add(-advisor.Window), To: now}
-	out := duty.ModelRun{Summary: pass, Concluded: pass.Status == advisor.PassDone}
+	out := duty.ModelRun{Summary: pass, Concluded: pass.Status == advisor.PassDone, Explained: pass.Explained}
 	for _, f := range pass.Findings {
 		out.Observations = append(out.Observations, advisor.Observe(f, window, d.Revision))
 	}

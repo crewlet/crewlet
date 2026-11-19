@@ -9,6 +9,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +30,9 @@ type Data struct {
 	// Rules are the rule-based findings of the same week, which it never repeats.
 	Rules   []advisor.Finding
 	Answers advisor.Answers
+	// Unexplained are the open findings whose verdict no explanation was
+	// written for yet, which the pass explains.
+	Unexplained []advisor.Explainable
 	// Unread names the sources the reads could not read.
 	Unread []string
 }
@@ -44,8 +49,8 @@ type Deps struct {
 	Now    func() time.Time
 }
 
-// MaxRounds bounds a run's model requests: the nine reads, room to read
-// again, and the two submissions.
+// MaxRounds bounds a run's model requests: the reads, room to read again,
+// the explanations and the findings' submission.
 const MaxRounds = 16
 
 // CeilingScope names the pass's own ceiling in a budget refusal.
@@ -75,6 +80,9 @@ func Run(ctx context.Context, deps Deps, d Data, ceiling int) advisor.Pass {
 		out.InputTokens, out.OutputTokens = res.InputTokens, res.OutputTokens
 	}
 	submitted, accepted := surf.result()
+	// THE EXPLANATIONS ARE KEPT WHATEVER BECAME OF THE FINDINGS: each is
+	// checked against its own finding alone.
+	out.Explained = explained(surf.explanations(), d.Unexplained, out.Dropped)
 	var budget *toolloop.BudgetError
 	switch {
 	case errors.As(err, &budget) && budget.Scope == CeilingScope:
@@ -98,8 +106,13 @@ func Run(ctx context.Context, deps Deps, d Data, ceiling int) advisor.Pass {
 	if deps.Now != nil {
 		now = deps.Now
 	}
-	out.Findings, out.Dropped = advisor.Ground(submitted, surf.served, advisor.Grounding{
+	findings, dropped := advisor.Ground(submitted, surf.served, advisor.Grounding{
 		Company: d.Company, Rules: d.Rules, DryRun: deps.DryRun, Answered: d.Answers.Holding(now())})
+	// THE EXPLANATIONS' DROPS STAY COUNTED beside the findings'.
+	for drop, n := range out.Dropped {
+		dropped[drop] += n
+	}
+	out.Findings, out.Dropped = findings, dropped
 	out.Listed = len(out.Findings)
 	return out
 }
@@ -148,4 +161,24 @@ func (m *ceilingMeter) add(tokens int) int {
 	defer m.mu.Unlock()
 	m.spent += tokens
 	return m.spent
+}
+
+// explained is every submitted explanation that names a finding the pass was
+// asked to explain and cites only that finding's numbers and records, the
+// first for each; every other is counted in dropped.
+func explained(submitted []submittedExplanation, asked []advisor.Explainable, dropped map[advisor.Drop]int) []advisor.Explained {
+	out := []advisor.Explained{}
+	done := map[string]bool{}
+	for _, x := range submitted {
+		at := slices.IndexFunc(asked, func(e advisor.Explainable) bool { return e.ID == x.ID })
+		if at < 0 || done[x.ID] || advisor.GroundExplanation(x.Text, asked[at]) != nil {
+			dropped[advisor.DropExplanation]++
+			continue
+		}
+		e := asked[at]
+		done[x.ID] = true
+		out = append(out, advisor.Explained{ID: e.ID, Key: e.Key, VerdictDigest: e.VerdictDigest,
+			Text: strings.TrimSpace(x.Text)})
+	}
+	return out
 }

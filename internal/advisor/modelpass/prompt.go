@@ -19,7 +19,12 @@ How each finding is checked before anyone sees it, so write it to pass:
 - Offer only a fix the engine builds: round_cap or token_budget for an agent seat, auxiliary_model with a
   providers.llm entry, open_item with an item key you cite, open_seat with an agent's handle, or none.
 - Title at most 120 characters, why at most 600, plain sentences, no links or markup. Severity is costs or note.
-- Leave out what people dismissed in past_answers. Submit an empty list if you find nothing.`
+- Leave out what people dismissed in past_answers. Submit an empty list if you find nothing.
+
+Before submit_findings, if findings_to_explain lists any, call submit_explanations once with one to three plain
+sentences for each, by its id: why it matters to this company and what to look at first. An explanation may say
+only numbers that finding's own facts, title, why or item say, and only the records it cites; one that says any
+other number or record is not kept.`
 
 // opening is the run's first messages.
 func opening() []llm.Message {
@@ -32,6 +37,25 @@ func opening() []llm.Message {
 // submitDescription is the submission tool's description.
 const submitDescription = "Submit the findings, each citing the records and numbers it rests on. " +
 	"The engine checks every one and lists only those it can verify."
+
+// explainDescription is the explanation tool's description.
+const explainDescription = "Submit an explanation of each finding findings_to_explain lists, by its id. " +
+	"The engine keeps only those that cite that finding's own numbers and records."
+
+// explainSchema is the explanations' shape.
+var explainSchema = map[string]any{
+	"type": "object", "additionalProperties": false, "required": []string{"explanations"},
+	"properties": map[string]any{"explanations": map[string]any{
+		"type": "array", "maxItems": advisor.MaxExplained,
+		"items": map[string]any{
+			"type": "object", "additionalProperties": false, "required": []string{"id", "text"},
+			"properties": map[string]any{
+				"id":   map[string]any{"type": "string"},
+				"text": map[string]any{"type": "string", "maxLength": advisor.MaxExplanationBytes},
+			},
+		},
+	}},
+}
 
 // submitSchema is the submission's shape, [advisor.Submitted] for each finding.
 var submitSchema = map[string]any{

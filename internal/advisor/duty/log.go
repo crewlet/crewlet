@@ -34,6 +34,7 @@ type LogWrites interface {
 	RecordRun(ctx context.Context, c advisordomain.Call, r advisordomain.RunRecord) (statelog.Result, error)
 	Expire(ctx context.Context, c advisordomain.Call, day time.Time, e advisordomain.Expiry) (statelog.Result, error)
 	WriteReport(ctx context.Context, c advisordomain.Call, r advisordomain.Report) (statelog.Result, error)
+	Explain(ctx context.Context, c advisordomain.Call, key string, e advisordomain.Explanation) (statelog.Result, error)
 }
 
 // Engine is who the duty writes as: the engine itself, never a person.
@@ -318,6 +319,18 @@ func (l advisorLog) WriteReport(ctx context.Context, r advisor.Report) error {
 	return err
 }
 
+// Explain writes the model's explanation of a finding's verdict. A finding
+// whose verdict moved since the pass read it, or that closed, is left for the
+// next pass to explain as it then is.
+func (l advisorLog) Explain(ctx context.Context, e advisor.Explained) error {
+	_, err := l.writes.Explain(ctx, l.call("advisor_explain"), e.Key,
+		advisordomain.Explanation{Episode: e.ID, VerdictDigest: e.VerdictDigest, Text: e.Text})
+	if errors.Is(err, advisordomain.ErrStaleVersion) || errors.Is(err, advisordomain.ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
 // StoredOf is rows as Reconcile reads them, each body decoded.
 func StoredOf(rows []advisordomain.FindingRow) ([]advisor.Stored, error) {
 	out := make([]advisor.Stored, 0, len(rows))
@@ -333,6 +346,7 @@ func StoredOf(rows []advisordomain.FindingRow) ([]advisor.Stored, error) {
 		out = append(out, advisor.Stored{ID: r.ID, Version: r.KeyVersion, State: advisor.State(r.State),
 			Revision: r.Revision, EffectDueAt: r.EffectDueAt, AppliedFix: r.AppliedFix, Ineffective: ineffective,
 			Reason: advisor.CloseReason(r.CloseReason), ClosedAt: r.ClosedAt, OpenedAt: r.OpenedAt,
+			VerdictDigest: r.VerdictDigest, ExplainedDigest: r.ExplainedDigest,
 			Observation: o, Body: r.Body})
 	}
 	return out, nil

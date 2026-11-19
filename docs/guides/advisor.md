@@ -162,6 +162,8 @@ advisor:
 
 A model finding is one condition by what it is about (its subject, records and kind of fix), not its words, so a pass that says it again in other words keeps it; one a pass that read and submitted does not list again is resolved. Model findings never reach the Inbox, Home or the go-live check.
 
+**Explaining what is listed.** The same pass is handed every open finding, the rules' and its own, whose verdict has no explanation yet, up to 20 a pass, the most severe first, with that finding's title, why, numbers and records. For each it may write one to three plain sentences on why it matters to this company and what to look at first. The engine keeps an explanation only when every number it says is one that finding's own numbers or words say (spelled as digits, with commas, or as a token count such as 26.5M) and every record it names is one the finding cites, with no link or markup; any other is left out and counted with the pass's other drops. An explanation is written for the verdict the pass read: once the finding's verdict moves, the list hides it until the next pass explains the new one.
+
 **When it cannot say.** A model that declines, or does not submit findings the engine can read, is said as such and resolves nothing; a pass that reaches its ceiling says so and resolves nothing, since its list may be short; a model or a company budget that is not available fails the pass in those words.
 
 ## What the atlas shows
@@ -208,6 +210,7 @@ Every Monday the Advisor writes one report of the week before, Monday to Monday 
 - **The week's numbers**, each beside the week before's where that week has a report: turns started, turns that committed nothing, tokens, alarm turns that changed nothing and their tokens, turns refused on a budget, and runs ended on their round cap. A source that could not be read is named in the report's `unread` and its numbers are left out, never counted as nothing.
 - **What became of the findings**: how many the week opened, resolved, had a fix applied to, and dismissed.
 - **The open findings that cost the most** when it was written, five at most, the most severe first and then the longest open.
+- **A summary** in at most five sentences, written by the Advisor's model from the report alone where `advisor.model` names one, and kept only when every number it says is one the report says. Without a model, or where the model's summary is not kept, `summary` is `null` and the report is written all the same.
 
 A server that was down on Monday writes the report when the Advisor next runs that week. `GET /advisor/reports` lists the reports, the newest first, and `GET /advisor/reports/{week}` reads one, by its ISO week (`2026-W47`).
 

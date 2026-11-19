@@ -26,6 +26,8 @@ type fakeLog struct {
 	reports map[string]advisor.Report
 	tally   advisor.Tally
 	order   []string
+	// explained is every explanation written.
+	explained []advisor.Explained
 }
 
 func (l *fakeLog) Live(context.Context) ([]advisor.Stored, error)      { return l.live, nil }
@@ -65,6 +67,11 @@ func (l *fakeLog) Report(_ context.Context, week string) (*advisor.Report, error
 	return &r, nil
 }
 
+func (l *fakeLog) Explain(_ context.Context, e advisor.Explained) error {
+	l.explained = append(l.explained, e)
+	return nil
+}
+
 func (l *fakeLog) Tally(context.Context, time.Time, time.Time) (advisor.Tally, error) {
 	return l.tally, nil
 }
@@ -100,13 +107,26 @@ func (r *fakeReader) Week(_ context.Context, from, to time.Time) ([]advisor.Metr
 	return r.metrics, []string{}, nil
 }
 
-// fakeModel counts its passes.
-type fakeModel struct{ passes int }
+// fakeModel counts its passes, explains what it is told to, and summarises a
+// report in the words it holds.
+type fakeModel struct {
+	passes    int
+	explained []advisor.Explained
+	live      []advisor.Stored
+	summary   string
+}
 
 func (m *fakeModel) Assigned() bool { return true }
-func (m *fakeModel) Run(context.Context, time.Time, []advisor.Stored) (duty.ModelRun, error) {
+func (m *fakeModel) Run(_ context.Context, _ time.Time, _, live []advisor.Stored) (duty.ModelRun, error) {
 	m.passes++
-	return duty.ModelRun{Concluded: true, Summary: map[string]int{"listed": 0}}, nil
+	m.live = live
+	return duty.ModelRun{Concluded: true, Summary: map[string]int{"listed": 0}, Explained: m.explained}, nil
+}
+func (m *fakeModel) Summarize(context.Context, time.Time, advisor.Report) (*string, error) {
+	if m.summary == "" {
+		return nil, nil
+	}
+	return &m.summary, nil
 }
 
 type clock struct{ now time.Time }
@@ -297,5 +317,30 @@ func TestTheWeeklyReportCountsWhatTheWeekOpenedResolvedAndApplied(t *testing.T) 
 	step(t, again)
 	if n := strings.Count(strings.Join(l.order[writes:], " "), "report:"); n != 0 {
 		t.Errorf("the week's report was written %d more times", n)
+	}
+}
+
+// AN EXPLANATION IS WRITTEN FOR THE VERDICT THE PASS READ: the pass is handed
+// the live findings, and each explanation the engine kept is written to the
+// log for the finding and verdict it names; a weekly report carries the
+// model's summary. Mutation: drop the explanations the pass returns, or write
+// the report before asking for its summary, and a check fails.
+func TestAnExplanationIsWrittenForTheVerdictThePassRead(t *testing.T) {
+	t.Parallel()
+	monday := time.Date(2030, 1, 14, 6, 1, 0, 0, time.UTC)
+	l := &fakeLog{live: []advisor.Stored{openFinding(t, "f-1", advisor.SeverityCosts, "dev", monday.Add(-time.Hour))}}
+	m := &fakeModel{explained: []advisor.Explained{{ID: "f-1", Key: "run.round_cap:seat:dev", VerdictDigest: "v1",
+		Text: "Dev's runs hit their cap."}}, summary: "The week opened 4 findings."}
+	d := newDuty(l, &fakeReader{signature: "r1"}, m, &clock{now: monday})
+	step(t, d)
+	if len(m.live) != 1 || m.live[0].ID != "f-1" {
+		t.Errorf("the pass was handed %+v, want the live finding", m.live)
+	}
+	if len(l.explained) != 1 || l.explained[0] != m.explained[0] {
+		t.Errorf("wrote %+v, want the pass's explanation of f-1", l.explained)
+	}
+	report, written := l.reports["2030-W02"]
+	if !written || report.Summary == nil || *report.Summary != m.summary {
+		t.Errorf("the report is %+v (written %v), want it to carry the model's summary", report, written)
 	}
 }
