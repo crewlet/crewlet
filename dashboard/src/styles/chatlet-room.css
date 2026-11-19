@@ -377,13 +377,6 @@
 
 /* A message's words ------------------------------------------------- */
 
-/* A message's words fill the column: the kit's row sets their rhythm (the
-   chat block gap, touching list items), and the page measure the generic
-   `.prose` rule caps a document at would leave half a wide room empty. */
-.prose.md.chat-body {
-  max-width: none;
-}
-
 /* "(edited)" and the receipt end the last paragraph's line: a body carrying
    them runs that paragraph inline, and the block before it keeps the gap an
    inline paragraph cannot take (two block margins collapse to one). */

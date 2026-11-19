@@ -39,6 +39,8 @@ export const ASSISTANT_PAGE_SCREEN_PATTERN = "^[a-z][a-z0-9-]{0,63}$";
 export const ASSISTANT_PAGE_KEY_PATTERN = "^[a-z][a-z0-9_.]{0,63}$";
 /** The longest page title, in characters. */
 export const ASSISTANT_PAGE_TITLE_MAX_RUNES = 120;
+/** The longest title a person may give a conversation, in characters. */
+export const ASSISTANT_TITLE_MAX_RUNES = 60;
 /** The longest route parameter or query value, in bytes, and an action's enumerated or constant value. */
 export const ASSISTANT_PAGE_VALUE_MAX_BYTES = 512;
 /** The longest id the page context names (a resource, its version, a revision, a draft's id), in bytes. */

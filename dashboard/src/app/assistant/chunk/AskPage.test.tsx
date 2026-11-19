@@ -8,6 +8,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { AppAnnouncer } from "~/app/announcer.tsx";
+import { ENGINE_HEADER, ENGINE_HEADER_VALUE } from "~/contract/engine.ts";
 import { Router, useRoute } from "~/app/router.tsx";
 import { resolve } from "~/app/routes.ts";
 import { FrameReadings } from "~/app/Shell.tsx";
@@ -58,13 +59,24 @@ const transcript = (row: ReturnType<typeof summary>, question: string) => ({
   turns: [{ turn_id: "t1", state: "completed" }],
 });
 
+// THE ENGINE'S MARK on every answer, as the engine sets it: a refusal without
+// it is one nobody here can say the engine wrote.
 const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json", [ENGINE_HEADER]: ENGINE_HEADER_VALUE },
+  });
 
 /** The engine as the page meets it: every request recorded, each route answered from `rows`. */
 function engine(
   rows: ReturnType<typeof summary>[],
   pages?: Record<string, { rows: typeof rows; next?: string }>,
+  transcripts: {
+    /** Answers a transcript read with this status instead. */
+    status?: number;
+    /** Holds every transcript read until it settles. */
+    hold?: Promise<void>;
+  } = {},
 ) {
   const sent: { url: URL; init: RequestInit }[] = [];
   let held = [...rows];
@@ -96,10 +108,25 @@ function engine(
       }
       const one = /^\/assistant\/conversations\/([^/]+)$/.exec(path);
       if (one && method === "GET") {
+        await transcripts.hold;
+        if (transcripts.status) {
+          return json(
+            { error: "internal", message: "Something went wrong on the engine." },
+            transcripts.status,
+          );
+        }
         const row = held.find((r) => r.id === one[1]);
         return row
           ? json(transcript(row, `About ${row.title}`))
           : json({ error: "not_found" }, 404);
+      }
+      if (one && method === "PATCH") {
+        const title = (JSON.parse(String(init.body)) as { title: string }).title;
+        if (title.includes("refused")) {
+          return json({ error: "invalid", message: "That title is not taken here." }, 422);
+        }
+        held = held.map((r) => (r.id === one[1] ? { ...r, title, title_set_by: "person" } : r));
+        return json(held.find((r) => r.id === one[1]));
       }
       if (one && method === "DELETE") {
         held = held.filter((r) => r.id !== one[1]);
@@ -247,7 +274,10 @@ test("Delete asks first, then deletes the conversation from the engine and the l
   await screen.findByText("About Payroll");
   const hiring = await screen.findByText("Hiring plan");
   const row = hiring.closest("li") ?? hiring.parentElement!;
-  fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "Delete" }));
+  await act(async () => {
+    fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "More actions" }));
+  });
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Delete/ }));
   const dialog = await screen.findByRole("alertdialog", { name: "Delete this conversation?" });
   expect(sent.some((r) => (r.init.method ?? "GET") === "DELETE")).toBe(false);
   await act(async () => {
@@ -396,4 +426,177 @@ test("the conversation's head names the model Ask Crewlet runs on", async () => 
     }),
   );
   await screen.findByText("Runs on sonnet");
+});
+
+// ONLY A 404 SAYS THE CONVERSATION IS NOT THEIRS. Mutation: read every
+// rejection as missing and a server error tells the reader it is gone.
+test("a transcript the engine failed to read says so in its words, with Try again", async () => {
+  const sent = engine([summary(PAYROLL, "Payroll", 60_000)], undefined, { status: 500 });
+  mount(`#/ask/${PAYROLL}`);
+  await screen.findByText("This conversation could not be read");
+  expect(screen.queryByText("This conversation isn't in your history")).toBeNull();
+  expect(document.body.textContent).toContain("Something went wrong on the engine.");
+  const reads = () =>
+    sent.filter((r) => r.url.pathname === `/assistant/conversations/${PAYROLL}`).length;
+  const before = reads();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  });
+  await waitFor(() => expect(reads()).toBe(before + 1));
+});
+
+// A CONVERSATION ON ITS WAY IS NOT A NEW ONE. Mutation: draw the store's
+// empty view while the transcript is read and the greeting and a live box
+// stand where the reader's conversation is coming.
+test("while a named conversation is read, the page names it and holds the composer", async () => {
+  let release = () => {};
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  engine([summary(PAYROLL, "Payroll", 60_000)], undefined, { hold });
+  mount(`#/ask/${PAYROLL}`);
+  await screen.findByRole("heading", { name: "Payroll" });
+  expect(screen.queryByRole("heading", { name: "New conversation" })).toBeNull();
+  expect(screen.getByText("Reading this conversation")).toBeDefined();
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
+  expect(box.getAttribute("aria-disabled") ?? box.getAttribute("disabled")).not.toBeNull();
+  await act(async () => {
+    release();
+  });
+  await screen.findByText("About Payroll");
+  expect(screen.queryByText("Reading this conversation")).toBeNull();
+});
+
+// RENAME, FROM THE ROW AND FROM THE HEAD: Enter saves, the engine's refusal
+// is said in its words, and the list and the head show the new title.
+test("Rename from a row saves on Enter, says a refusal in the engine's words, and retitles the row", async () => {
+  const sent = engine([
+    summary(PAYROLL, "Payroll", 60_000),
+    summary(HIRING, "Hiring plan", 120_000),
+  ]);
+  mount(`#/ask/${PAYROLL}`);
+  await screen.findByText("About Payroll");
+  const hiring = await screen.findByText("Hiring plan");
+  const row = hiring.closest("li") ?? hiring.parentElement!;
+  await act(async () => {
+    fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "More actions" }));
+  });
+  fireEvent.click(await screen.findByRole("menuitem", { name: /Rename/ }));
+  const dialog = await screen.findByRole("dialog", { name: "Rename conversation" });
+  const field = within(dialog).getByRole("textbox", { name: "Title" });
+  expect((field as HTMLInputElement).value).toBe("Hiring plan");
+
+  fireEvent.change(field, { target: { value: "a refused title" } });
+  await act(async () => {
+    fireEvent.submit(field.closest("form")!);
+  });
+  await within(dialog).findByText("That title is not taken here.");
+
+  fireEvent.change(field, { target: { value: "x".repeat(61) } });
+  expect(within(dialog).getAllByText("At most 60 characters; this is 61.").length).toBeGreaterThan(
+    0,
+  );
+
+  fireEvent.change(field, { target: { value: "  Hiring for Q3  " } });
+  await act(async () => {
+    fireEvent.submit(field.closest("form")!);
+  });
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Rename conversation" })).toBeNull(),
+  );
+  const patch = sent.filter((r) => r.init.method === "PATCH").at(-1);
+  expect(patch?.url.pathname).toBe(`/assistant/conversations/${HIRING}`);
+  expect(JSON.parse(String(patch!.init.body))).toMatchObject({ title: "Hiring for Q3" });
+  expect(new Headers(patch!.init.headers).get("Idempotency-Key")).not.toBeNull();
+  await screen.findByText("Hiring for Q3");
+});
+
+test("Rename from the head retitles the open conversation, and Escape cancels", async () => {
+  engine([summary(PAYROLL, "Payroll", 60_000)]);
+  mount(`#/ask/${PAYROLL}`);
+  await screen.findByText("About Payroll");
+  fireEvent.click(screen.getByRole("button", { name: "Rename this conversation" }));
+  let dialog = await screen.findByRole("dialog", { name: "Rename conversation" });
+  fireEvent.keyDown(within(dialog).getByRole("textbox", { name: "Title" }), { key: "Escape" });
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Rename conversation" })).toBeNull(),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Rename this conversation" }));
+  dialog = await screen.findByRole("dialog", { name: "Rename conversation" });
+  const field = within(dialog).getByRole("textbox", { name: "Title" });
+  fireEvent.change(field, { target: { value: "Payroll in March" } });
+  await act(async () => {
+    fireEvent.submit(field.closest("form")!);
+  });
+  await screen.findByRole("heading", { name: "Payroll in March" });
+  expect(conversation().title).toBe("Payroll in March");
+});
+
+/** Another tab of this browser, telling of a conversation. */
+function otherTab(told: Record<string, unknown>) {
+  const tab = new BroadcastChannel("crewlet-assistant-conversations");
+  tab.postMessage(told);
+  tab.close();
+}
+
+// A SECOND TAB FOLLOWS THE FIRST. Mutation: keep the store per tab with no
+// channel and this tab never hears the question asked in the other.
+test("a question asked in another tab is read into this one", async () => {
+  const sent = engine([summary(PAYROLL, "Payroll", 60_000)]);
+  mount(`#/ask/${PAYROLL}`);
+  await screen.findByText("About Payroll");
+  const reads = () =>
+    sent.filter((r) => r.url.pathname === `/assistant/conversations/${PAYROLL}`).length;
+  const before = reads();
+  otherTab({ kind: "moved", conversation: PAYROLL, turn: "t2" });
+  await waitFor(() => expect(reads()).toBe(before + 1));
+  // A message this build cannot read is dropped.
+  otherTab({ kind: "moved", conversation: "not-an-id" });
+  otherTab({ kind: "erase", conversation: PAYROLL });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(reads()).toBe(before + 1);
+});
+
+test("a conversation deleted in another tab says so, and takes no more questions", async () => {
+  engine([summary(PAYROLL, "Payroll", 60_000)]);
+  mount(`#/ask/${PAYROLL}`);
+  await screen.findByText("About Payroll");
+  otherTab({ kind: "deleted", conversation: PAYROLL });
+  await screen.findAllByText("This conversation was deleted");
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
+  expect(box.getAttribute("aria-disabled") ?? box.getAttribute("disabled")).not.toBeNull();
+});
+
+test("a question sent into a conversation deleted elsewhere is told it was deleted, not that no record exists", async () => {
+  const sent = engine([summary(PAYROLL, "Payroll", 60_000)]);
+  mount(`#/ask/${PAYROLL}`);
+  await screen.findByText("About Payroll");
+  // DELETED ON ANOTHER DEVICE: no tab of this browser told of it.
+  vi.mocked(fetch).mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    sent.push({ url, init: init ?? {} });
+    return json({ error: "not_found", message: "There is no such record here." }, 404);
+  });
+  const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
+  fireEvent.change(box, { target: { value: "And next month?" } });
+  await act(async () => {
+    fireEvent.keyDown(box, { key: "Enter" });
+  });
+  await screen.findByText("Your question was not sent: this conversation was deleted.");
+  expect(document.body.textContent).not.toContain("There is no such record here.");
+  await screen.findAllByText("This conversation was deleted");
+});
+
+// A READ THAT FAILED IS NOT KEPT AS THE ANSWER: coming back to the page reads
+// the conversation again. Mutation: skip the read whenever the store holds an
+// opening for the address, whatever came of it.
+test("coming back to a conversation whose read failed reads it again", async () => {
+  engine([summary(PAYROLL, "Payroll", 60_000)], undefined, { status: 500 });
+  const first = mount(`#/ask/${PAYROLL}`);
+  await screen.findByText("This conversation could not be read");
+  first.unmount();
+  vi.unstubAllGlobals();
+  engine([summary(PAYROLL, "Payroll", 60_000)]);
+  mount(`#/ask/${PAYROLL}`);
+  await screen.findByText("About Payroll");
 });

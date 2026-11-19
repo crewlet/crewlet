@@ -539,6 +539,11 @@ interface Allowed {
 
 const ALLOWED: Allowed[] = [
   {
+    name: "crewlet-prose",
+    why: "uilet's Prose writes it on its root and sizes its own measure there. styles/screens.css names it only to leave it out of the dashboard's `.prose` measure, which, later in the cascade, overrode the measure every caller of Prose chose (an Ask Crewlet answer ran at 78ch). A rule about OUR class, kept off the package's component.",
+    pkg: "@crewlethq/ui/styles.css",
+  },
+  {
     name: "crewlet-modal__body--fill",
     why: "uilet's Modal writes it on a body one child fills, and stretches every child of that body. The dashboard's Modal keeps a place for a refused control's refusal inside the body, and styles/screens.css holds that place to its own height there, so a filled body never gives the refusal a share of its height. Another rule about OUR composition of the package's component.",
     pkg: "@crewlethq/ui/styles.css",
