@@ -1649,6 +1649,11 @@ waiting, and held once its start passes with the limit still on.
 - **`departed` needs a chart.** An assignee is gone once the chart's seats have
   been applied to the tracker and do not name them; a tracker that has never
   been told the chart departs nobody.
+- **A departed seat's work is re-homed a day later.** The item keeps the seat's
+  handle through the 24 hours a removal can be undone in, then the seat's
+  retirement hands each open item to its lead or returns it to `todo`,
+  unassigned, with a history note naming the seat: see
+  [Seat Ownership § The removed seat](../concepts/seat-ownership.md#the-removed-seat).
 
 ### A project's stuck window
 
