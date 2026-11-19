@@ -437,11 +437,6 @@ providers:
 assistant:
   model: sonnet                         # a providers.llm key; absent: off
   token_budget: { day: 200000 }         # per person, optional
-  deep_work:                            # optional: absent is quick mode only
-    llm: assistant-deep                 # a Claude Code entry (harness: claude-code)
-    timeout_seconds: 1200               # one run's wall clock, 60..1200
-    max_steps: 150                      # rounds and Crewlet calls a task makes, 10..400
-    max_tokens: 3000000                 # tokens a task may spend, 10000..20000000
   research:                             # optional: absent reads no web page
     hosts: [developers.cloudflare.com, docs.github.com]
     search: { mcp_server: tavily }      # optional: an mcp_servers entry running tavily-mcp
@@ -451,15 +446,8 @@ assistant:
 |---|---|---|
 | `model` | none | The `providers.llm` entry Ask Crewlet runs on. Absent, Ask Crewlet is off. |
 | `token_budget` | none | Each person's ceiling per calendar window, the shape of [a token budget](#token-budgets), charged on top of the company's own. |
-| `deep_work.llm` | none | The entry deep work runs on: a Claude Code entry (`harness: claude-code`), run as its harness's own run in a box, whose own shell, files and web tools a deep-work run uses. Placed in its own `run_in`, else the first configured `e2b` or image-backed `container` cell, else the engine host under OS confinement ([Running Ask Crewlet](../guides/assistant.md#deep-work)). |
-| `deep_work.timeout_seconds` | 1200 | The longest one deep-work run takes. Never past the turn's read grant, which is why it is also the ceiling. |
-| `deep_work.max_steps` | 150 | The most agentic rounds and Crewlet calls one deep-work task makes, across the runs an approval continues. |
-| `deep_work.max_tokens` | 3000000 | The most tokens one deep-work task spends before it is stopped; the person's and the company's budgets still apply. |
 | `research.hosts` | none | The hosts Ask Crewlet may read web pages from, through the engine, over `https`: each a host name alone, at most 50. Absent, it reads no web page ([Web research](../guides/assistant.md#web-research)). |
 | `research.search.mcp_server` | none | The `mcp_servers` entry Ask Crewlet searches those hosts through: a shared, enabled entry the curated catalogue recognises as Tavily (`tavily-mcp`), whose `tavily_search` is not blocked. Each API node runs its own instance of it for research alone, never a seat's. Absent, Ask Crewlet only reads pages it is given or finds by address. |
-
-A `deep_work` numeric field left out, or `0`, takes its default; a value
-outside its range is refused naming the field.
 
 Nothing else about a turn is a setting. A turn takes at most 40 model rounds
 and 20 minutes, a proposed change waits 15 minutes for its owner's approval,
@@ -637,8 +625,8 @@ providers:
                                         #   above: every seat's executor runs as its harness's own run,
                                         #   in a box from this catalogue (code-sandbox.md)
     local:
-      state_dir: "./acme-data/sandboxes"  # the box root: every box this host makes, a seat's
-                                        #   and deep work's, each removed at teardown
+      state_dir: "./acme-data/sandboxes"  # the box root: every box this host makes for a
+                                        #   seat, each removed at teardown
       # image: ""                       # required only where a run is placed in a container
       # runtime: auto                   # auto | docker | podman
       # network: ""                     # the container network; "none" cuts the box off

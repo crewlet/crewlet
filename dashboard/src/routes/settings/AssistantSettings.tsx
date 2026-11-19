@@ -263,7 +263,7 @@ export function AssistantSettings() {
     data.reload();
     limits.refetch();
   };
-  const bounds = (limits.data?.limits ?? []).filter((r) => r.group === "assistant");
+  const bounds = (limits.data?.limits ?? []).filter((r) => r.key.startsWith("assistant."));
   const turnBounds = bounds.filter((r) => !r.key.startsWith("assistant.deep_work."));
   const deepBounds = bounds.filter((r) => r.key.startsWith("assistant.deep_work."));
   const read = (key: string) => (doc ? documentLimit(doc, key) : undefined);

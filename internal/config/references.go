@@ -5,8 +5,7 @@ import (
 )
 
 // ProviderJob is the work a written providers.llm reference points at a model:
-// a seat's executor or one of its satellites, or the assistant's chat or its
-// deep work.
+// a seat's executor or one of its satellites, or the assistant's model.
 type ProviderJob string
 
 const (
@@ -24,13 +23,11 @@ const (
 	JobJudge ProviderJob = "judge"
 	// JobAssistant is `assistant.model`, the model Ask Crewlet runs on.
 	JobAssistant ProviderJob = "assistant"
-	// JobDeepWork is `assistant.deep_work.llm`.
-	JobDeepWork ProviderJob = "deep_work"
 )
 
 // ProviderJobs is the closed set.
 var ProviderJobs = []ProviderJob{
-	JobExecutor, JobReview, JobSubagent, JobAuxiliary, JobJudge, JobAssistant, JobDeepWork,
+	JobExecutor, JobReview, JobSubagent, JobAuxiliary, JobJudge, JobAssistant,
 }
 
 // Valid reports whether j is one of [ProviderJobs].
@@ -56,8 +53,7 @@ type ProviderReference struct {
 
 // ProviderReferences is every field of the document that names the
 // providers.llm entry key, in document order: each seat's `llm` and its
-// satellites, at any depth, then `assistant.model` and
-// `assistant.deep_work.llm`.
+// satellites, at any depth, then `assistant.model`.
 //
 // It reports the WRITTEN fields, not resolved chains: a flat satellite beats
 // the same phase in the `llm` mapping, but the shadowed field is still what a
@@ -105,9 +101,6 @@ func (c *Company) providerReferences() []ProviderReference {
 	}
 	if c.Assistant.Model != "" {
 		add("", JobAssistant, field("assistant.model"), []string{c.Assistant.Model})
-	}
-	if deep := c.Assistant.DeepWork; deep != nil && deep.LLM != "" {
-		add("", JobDeepWork, field("assistant.deep_work.llm"), []string{deep.LLM})
 	}
 	return out
 }

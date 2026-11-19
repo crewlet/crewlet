@@ -25,7 +25,6 @@ type TurnRequest struct {
 	// Mode is what the question asks for; absent is [TurnAsk]. A
 	// [TurnBrief] needs the page context, which says what it covers.
 	Mode TurnMode `json:"mode,omitempty"`
-	// --- deep work (im-deep) ---
 	// Attachments are files the person uploaded to the conversation for
 	// this question, at most [AttachmentsPerTurn].
 	Attachments []uuid.UUID `json:"attachments,omitempty"`
@@ -194,7 +193,6 @@ type Message struct {
 	// Page is the chip a user message was sent with, absent when the
 	// person sent it without the page.
 	Page *PageChip `json:"page,omitempty"`
-	// --- deep work (im-deep) ---
 	// Attachments are the files a user message was sent with.
 	Attachments []FileRef `json:"attachments,omitempty"`
 }
@@ -228,9 +226,9 @@ type ViewerAssistant struct {
 	// CanAssign is whether this person may assign Ask Crewlet's model: they
 	// hold the company document's write, through which it is assigned.
 	CanAssign bool `json:"can_assign"`
-	// ReadsImages is whether a question's images are read: only deep work
-	// reads them, so false where the company has none, and the composer
-	// does not take them.
+	// ReadsImages is whether a question's images are handed to the model:
+	// false where the assigned model's harness cannot take an image, and
+	// the composer does not take them then.
 	ReadsImages bool `json:"reads_images"`
 }
 

@@ -4072,10 +4072,9 @@ type executorRun struct {
 // the seat's config assembled ([Engine.runEnvironment]), with the integrations'
 // box settings beneath everything and their credentials over it.
 //
-// ONE CONSTRUCTION for a seat's executor run and the Dashboard Assistant's deep
-// work ([assistantDeep.Run]). THE PICKED MEMBER, never a second resolution of
-// the chain: the runner IS that member's harness, so a launch that fell back
-// past the head gets the fallback's model, env and login.
+// THE PICKED MEMBER, never a second resolution of the chain: the runner IS
+// that member's harness, so a launch that fell back past the head gets the
+// fallback's model, env and login.
 func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 	// THE MODEL IS HANDED IN THE HARNESS'S OWN GRAMMAR (OpenCode's
 	// `<provider>/<model>`, Claude Code's alias), as every other phase's run on

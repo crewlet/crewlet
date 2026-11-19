@@ -133,13 +133,10 @@ var settingRanges = map[string]Range{
 
 	// SETTINGS A PAGE CHANGES IN PLACE beside the caps: each bound's reason
 	// is at its constant.
-	"inbox.retention_days":                {Min: MinInboxRetentionDays, Max: atMost(MaxInboxRetentionDays)},
-	"atlas.refresh_interval_seconds":      {Min: MinAtlasRefreshInterval.Seconds()},
-	"code.scratch.idle_days":              {Min: CodeScratchIdleDaysFloor, Max: atMost(CodeScratchIdleDaysCeiling)},
-	"code.scratch.max_per_seat":           {Min: 0, Max: atMost(CodeScratchMaxPerSeatCeiling)},
-	"assistant.deep_work.timeout_seconds": deepTimeout.rangeOf(),
-	"assistant.deep_work.max_steps":       deepSteps.rangeOf(),
-	"assistant.deep_work.max_tokens":      deepTokens.rangeOf(),
+	"inbox.retention_days":           {Min: MinInboxRetentionDays, Max: atMost(MaxInboxRetentionDays)},
+	"atlas.refresh_interval_seconds": {Min: MinAtlasRefreshInterval.Seconds()},
+	"code.scratch.idle_days":         {Min: CodeScratchIdleDaysFloor, Max: atMost(CodeScratchIdleDaysCeiling)},
+	"code.scratch.max_per_seat":      {Min: 0, Max: atMost(CodeScratchMaxPerSeatCeiling)},
 	// 0 KEEPS MESSAGES FOR EVER, a choice of its own below the shortest
 	// horizon (ChatletConfig.MessageRetentionDays says why it is three-valued).
 	"chat.chatlet.message_retention_days": {

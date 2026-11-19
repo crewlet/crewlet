@@ -15,7 +15,7 @@ import (
 // removalDoc is a company whose models are named every way a removal has to
 // answer: pm names none (its jobs run on `default`), qa names codex-review for
 // its reviewing flat and sonnet as its executor, backend names codex-review
-// inside its `llm` mapping, and Ask Crewlet runs on aux with deep work on
+// inside its `llm` mapping, and Ask Crewlet runs on aux
 // sonnet.
 const removalDoc = `
 name: Acme
@@ -47,8 +47,6 @@ roles:
       subagent: codex-review
 assistant:
   model: aux
-  deep_work:
-    llm: sonnet
 `
 
 func removeModel(t *testing.T, s *surface, key, query, body string, headers map[string]string) (int, map[string]any) {
@@ -227,7 +225,6 @@ func TestARemovalSaysWhereAnUnwrittenJobMoves(t *testing.T) {
 // ASK CREWLET'S MODEL IS ANSWERED LIKE ANY OTHER REFERENCE: left unanswered, the
 // removal is refused naming `assistant.model`; repointed, Ask Crewlet runs on
 // the new model; repointed to nothing, it is off, said out loud by the write.
-// Its deep work left unset removes the block.
 func TestRemovingAskCrewletsModelTurnsItOffOnlyWhenTheWriteSaysSo(t *testing.T) {
 	t.Parallel()
 	s := newSurface(t)
@@ -262,14 +259,6 @@ func TestRemovingAskCrewletsModelTurnsItOffOnlyWhenTheWriteSaysSo(t *testing.T) 
 	}
 	if after := activeCompany(t, s); after.Assistant.On() || after.Assistant.Model != "" {
 		t.Errorf("Ask Crewlet still runs on %q", after.Assistant.Model)
-	}
-
-	code, body = removeModel(t, s, "sonnet", "?dry_run=true", `{"repoint": [
-		{"at": {"seat": "qa", "job": "executor"}, "to": "default"},
-		{"at": {"seat": "backend", "job": "executor"}, "to": "default"},
-		{"at": {"assistant": "deep_work"}, "to": null}]}`, nil)
-	if code != http.StatusOK {
-		t.Errorf("removing deep work's model with its block = %d %v", code, body)
 	}
 }
 
@@ -308,8 +297,7 @@ func TestARemovalRefusesARepointTheCompanyCannotRun(t *testing.T) {
 	// CODEX CANNOT RUN AN EXECUTOR: the whole document is validated.
 	code, body = removeModel(t, s, "sonnet", "?dry_run=true", `{"repoint": [
 		{"at": {"seat": "qa", "job": "executor"}, "to": "codex-review"},
-		{"at": {"seat": "backend", "job": "executor"}, "to": "default"},
-		{"at": {"assistant": "deep_work"}, "to": null}]}`, nil)
+		{"at": {"seat": "backend", "job": "executor"}, "to": "default"}]}`, nil)
 	if code != http.StatusUnprocessableEntity || body["error"] != "validation_error" {
 		t.Fatalf("an executor moved to codex = %d %v, want 422 validation_error", code, body)
 	}
@@ -422,8 +410,7 @@ func TestARemovalDoesNotWarnAboutAJobThatFollowsItsExecutor(t *testing.T) {
 	s.seed(t, removalDoc)
 	code, body := removeModel(t, s, "sonnet", "?dry_run=true", `{"repoint": [
 		{"at": {"seat": "qa", "job": "executor"}, "to": "aux"},
-		{"at": {"seat": "backend", "job": "executor"}, "to": "aux"},
-		{"at": {"assistant": "deep_work"}, "to": null}]}`, nil)
+		{"at": {"seat": "backend", "job": "executor"}, "to": "aux"}]}`, nil)
 	if code != http.StatusOK {
 		t.Fatalf("dry run = %d %v", code, body)
 	}

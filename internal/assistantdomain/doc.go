@@ -57,10 +57,9 @@
 //
 // # Files
 //
-// The images a person attaches and the files a deep-work run delivers are
-// kept beside the conversation ([FileStore]): each file's bytes are sealed
-// under the same keyring, with associated data naming the conversation and the
-// file, and uploaded as one object of the fleet's object store BEFORE the
+// The images a person attaches are kept beside the conversation
+// ([FileStore]): each file's bytes are sealed under the same keyring, with
+// associated data naming the conversation and the file, and uploaded as one object of the fleet's object store BEFORE the
 // record naming it is published on the conversation's subject (an attachment
 // exists before the turn it is sent with); the row is declared in
 // internal/objstore/references, so the collector deletes the object once a

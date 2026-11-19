@@ -75,6 +75,17 @@ func (m assistantModels) Unready(ctx context.Context) error {
 	return chain.Unready(ctx, []llm.Provider{provider})
 }
 
+// ReadsImages is whether the helper's run of `assistant.model` takes images
+// ([llm.ImageReader]), false where the model does not resolve.
+func (m assistantModels) ReadsImages() bool {
+	_, _, provider, err := m.entry()
+	if err != nil {
+		return false
+	}
+	r, ok := provider.(llm.ImageReader)
+	return ok && r.ReadsImages()
+}
+
 // entry resolves `assistant.model` to the helper's run of it this node built.
 func (m assistantModels) entry() (*Company, string, llm.Provider, error) {
 	c := m.e.Company()

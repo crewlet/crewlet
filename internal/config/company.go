@@ -1172,7 +1172,7 @@ func (c *Company) validateProviderKeys() error {
 	}
 	known := slices.Sorted(maps.Keys(c.Providers.LLM))
 	for _, ref := range c.providerReferences() {
-		if ref.Job == JobAssistant || ref.Job == JobDeepWork {
+		if ref.Job == JobAssistant {
 			continue
 		}
 		for _, key := range ref.Chain {
@@ -1340,14 +1340,6 @@ func (c *Company) seatPlacements() map[Placement]string {
 			continue
 		}
 		reached[box.Cell] = at(entryPath(box.Executor), "run_in").String()
-	}
-	// DEEP WORK'S CELL, where the catalogue serves it: the engine host is
-	// the engine's own confined cell (internal/engine), never the
-	// catalogue's unconfined direct one.
-	if cell, ok := c.DeepWorkPlacement(); ok && cell != PlacementDirect {
-		if _, seen := reached[cell]; !seen {
-			reached[cell] = "assistant.deep_work.llm"
-		}
 	}
 	return reached
 }

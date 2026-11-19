@@ -194,10 +194,6 @@
     "Assistant": {
       "additionalProperties": false,
       "properties": {
-        "deep_work": {
-          "$ref": "#/$defs/AssistantDeepWork",
-          "description": "Deep work: Ask Crewlet hands a large task to a harness running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."
-        },
         "model": {
           "description": "The providers.llm key Ask Crewlet runs on: an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools. Absent: Ask Crewlet is off.",
           "type": [
@@ -214,51 +210,6 @@
         "token_budget": {
           "$ref": "#/$defs/TokenBudget",
           "description": "Each person's Ask Crewlet token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "AssistantDeepWork": {
-      "additionalProperties": false,
-      "properties": {
-        "llm": {
-          "description": "providers.llm key deep work runs on: an entry driving claude-code. Required.",
-          "type": [
-            "string",
-            "number",
-            "boolean",
-            "null"
-          ]
-        },
-        "max_steps": {
-          "description": "Most agentic rounds and Crewlet tool calls one deep-work run may make, 10..400. Absent: 150.",
-          "maximum": 400,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "max_tokens": {
-          "description": "Most tokens one deep-work run may spend before it is stopped, 10000..20000000. Absent: 3000000. The person's and the company's budgets still apply.",
-          "maximum": 20000000,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "timeout_seconds": {
-          "description": "Longest one deep-work run may take, 60..1200 seconds. Absent: 1200.",
-          "maximum": 1200,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
         }
       },
       "type": [

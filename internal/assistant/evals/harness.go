@@ -62,35 +62,10 @@ roles:
 // assistantOn is the line that assigns Ask Crewlet its model in every document here.
 const assistantOn = "assistant:\n  model: assistant\n"
 
-// deepDoc is [companyDoc] with deep work on, on a Claude Code entry of its own.
-const deepDoc = `name: Nimbus
-providers:
-  llm:
-    assistant:
-      harness: claude-code
-      model: sonnet
-    deep:
-      harness: claude-code
-      model: sonnet
-assistant:
-  model: assistant
-  deep_work:
-    llm: deep
-    max_steps: 20
-    max_tokens: 100000
-roles:
-%s`
-
 // Company is the company a case's people work for: Ask Crewlet on when on
 // is set, and each of seats a human seat of that handle.
 func Company(on bool, seats ...string) (assistant.Company, error) {
 	return company(companyDoc, on, seats)
-}
-
-// DeepCompany is [Company] with deep work configured: twenty Crewlet calls and
-// a hundred thousand tokens a task.
-func DeepCompany(seats ...string) (assistant.Company, error) {
-	return company(deepDoc, true, seats)
 }
 
 // ResearchCompany is [Company] with web research on, from the hosts named,

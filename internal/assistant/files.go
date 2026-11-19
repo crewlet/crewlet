@@ -1,9 +1,6 @@
 package assistant
 
 import (
-	"bytes"
-	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"net/http"
@@ -42,7 +39,7 @@ func SniffFile(name string, content []byte, allowed []string) (mediaType, kept s
 		return "", "", fmt.Errorf("%w: %q is %d bytes, over the %d a file may be",
 			ErrFileRefused, kept, len(content), wire.FileMaxBytes)
 	}
-	mediaType = sniff(kept, content)
+	mediaType = sniff(content)
 	if mediaType == "" || !slices.Contains(allowed, mediaType) {
 		shown := mediaType
 		if shown == "" {
@@ -73,50 +70,12 @@ func fileName(name string) (string, error) {
 	return base, nil
 }
 
-// sniff is content's type: a binary type by its signature, SVG by its root
-// element, and text by its name once it is shown to be text. Empty for
-// anything else, HTML included, which no list allows.
-func sniff(name string, content []byte) string {
+// sniff is content's type, read from its signature: one of the image types a
+// person may attach, and empty for anything else, SVG and HTML included.
+func sniff(content []byte) string {
 	detected, _, _ := strings.Cut(http.DetectContentType(content), ";")
-	switch detected {
-	case "image/png", "image/jpeg", "image/webp", "image/gif", "application/pdf":
+	if slices.Contains(wire.AttachmentMediaTypes, detected) {
 		return detected
-	case "text/html":
-		return ""
-	}
-	if !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 {
-		return ""
-	}
-	if svg(content) {
-		return "image/svg+xml"
-	}
-	switch strings.ToLower(path.Ext(name)) {
-	case ".csv":
-		return "text/csv"
-	case ".md", ".markdown":
-		return "text/markdown"
-	case ".json":
-		if json.Valid(content) {
-			return "application/json"
-		}
-		return ""
-	case ".txt", ".text", "":
-		return "text/plain"
 	}
 	return ""
-}
-
-// svg reports whether content is an XML document whose root element is svg.
-func svg(content []byte) bool {
-	dec := xml.NewDecoder(bytes.NewReader(content))
-	dec.Strict = false
-	for {
-		tok, err := dec.Token()
-		if err != nil {
-			return false
-		}
-		if start, ok := tok.(xml.StartElement); ok {
-			return strings.EqualFold(start.Name.Local, "svg")
-		}
-	}
 }

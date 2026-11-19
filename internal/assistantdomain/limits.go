@@ -60,11 +60,6 @@ const (
 	// for the thirty days it is kept, whoever scripts the upload route.
 	AttachmentsPerConversation = 10 * wire.AttachmentsPerTurn
 
-	// DeliveredPerConversation bounds the files deep-work runs deliver into
-	// one conversation: ten runs' worth of wire.DeliveredFilesPerRun, so
-	// what runs hand back is bounded the same way.
-	DeliveredPerConversation = 10 * wire.DeliveredFilesPerRun
-
 	// MaxListLimit is the most conversations one listing returns, and
 	// DefaultListLimit what a listing that names none takes.
 	MaxListLimit     = 50
@@ -74,20 +69,16 @@ const (
 // FilesPerConversation is how many files of origin one conversation keeps at
 // most, and zero for an origin this build does not know.
 func FilesPerConversation(origin wire.FileOrigin) int {
-	switch origin {
-	case wire.FileAttached:
+	if origin == wire.FileAttached {
 		return AttachmentsPerConversation
-	case wire.FileDelivered:
-		return DeliveredPerConversation
 	}
 	return 0
 }
 
-// fileMediaTypes is what a file of origin may be: what the person may attach,
-// or what a run may deliver.
+// fileMediaTypes is what a file of origin may be: what the person may attach.
 func fileMediaTypes(origin wire.FileOrigin) []string {
 	if origin == wire.FileAttached {
 		return wire.AttachmentMediaTypes
 	}
-	return wire.FileMediaTypes
+	return nil
 }

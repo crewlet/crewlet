@@ -2,13 +2,9 @@ package config
 
 import (
 	"errors"
-	"fmt"
-	"maps"
 	"regexp"
 	"slices"
-	"strings"
 	"sync"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
 )
@@ -33,11 +29,6 @@ type Assistant struct {
 	// TokenBudget is each PERSON's ceiling per calendar window, in the shape
 	// a seat's budget takes, charged on top of the company's own.
 	TokenBudget TokenBudget `yaml:"token_budget,omitempty" json:"token_budget,omitzero" desc:"Each person's Ask Crewlet token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."`
-
-	// DeepWork is the assistant's escalation into a harness's own
-	// harness for a task that needs research, scripts, files or many steps
-	// (ADR-0054). Absent: the assistant answers in quick mode only.
-	DeepWork *AssistantDeepWork `yaml:"deep_work,omitempty" json:"deep_work,omitempty" desc:"Deep work: Ask Crewlet hands a large task to a harness running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."`
 
 	// Research is the web Ask Crewlet may read, through the engine (ADR-0151).
 	Research *AssistantResearch `yaml:"research,omitempty" json:"research,omitempty" desc:"Web research: Ask Crewlet reads pages, through the engine, from the hosts listed here. Absent: it reads no web page."`
@@ -149,198 +140,12 @@ func (r *AssistantResearch) problems(path Path) error {
 	return p.err()
 }
 
-// AssistantDeepWork is the `assistant.deep_work` block.
-//
-// The entry it names runs as its harness's own run in a box, as a seat's
-// executor does: the harness's shell, files, web search and image reading are
-// the point. Its one way into Crewlet is the person's own assistant tools,
-// bridged, so every read is still the person's request and every write a
-// proposal they approve. It runs where the entry's `run_in` says, else the
-// first of e2b and container configured, else the host under OS confinement,
-// which a host that cannot enforce one refuses (internal/sandbox).
-//
-// Numeric zeros read as their defaults, as in [Assistant].
-type AssistantDeepWork struct {
-	LLM            string `yaml:"llm,omitempty" json:"llm,omitempty" desc:"providers.llm key deep work runs on: an entry driving claude-code. Required."`
-	TimeoutSeconds int    `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0;max=1200" desc:"Longest one deep-work run may take, 60..1200 seconds. Absent: 1200."`
-	MaxSteps       int    `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=400" desc:"Most agentic rounds and Crewlet tool calls one deep-work run may make, 10..400. Absent: 150."`
-	MaxTokens      int    `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty" js:"min=0;max=20000000" desc:"Most tokens one deep-work run may spend before it is stopped, 10000..20000000. Absent: 3000000. The person's and the company's budgets still apply."`
-}
-
-// assistantBound is one numeric field's range and the default its zero reads as.
-type assistantBound struct {
-	key      string
-	min, max int
-	def      int
-	unit     string
-}
-
-// Deep work's bounds, each anchored where it is consumed:
-//
-//   - timeout_seconds: a run lives inside one turn segment, whose read grant
-//     lasts at most [deepTimeoutCeiling], so twenty minutes is both
-//     default and ceiling; a longer run parks on a proposal and continues on
-//     the fresh grant its approval derives. One minute reads one page.
-//   - max_steps: a redesign that reads a brand, writes assets, renders and
-//     checks them takes a hundred-odd rounds; four hundred is the most a
-//     twenty-minute run makes at the harness's three-second round.
-//   - max_tokens: 150 rounds re-reading a growing context are about three
-//     million tokens, mostly cache reads; twenty million bounds a run nobody meant.
-var (
-	deepTimeout = assistantBound{key: "timeout_seconds", min: 60, max: deepTimeoutCeiling, def: deepTimeoutCeiling, unit: "seconds"}
-	deepSteps   = assistantBound{key: "max_steps", min: 10, max: 400, def: 150, unit: "steps"}
-	deepTokens  = assistantBound{key: "max_tokens", min: 10_000, max: 20_000_000, def: 3_000_000, unit: "tokens"}
-)
-
-// deepTimeoutCeiling is the longest a turn's read grant lives, in seconds
-// (internal/assistant/exec's ReadLifetime), which a deep-work run never outlives.
-const deepTimeoutCeiling = 1200
-
-// value is v with its default applied and clamped into range.
-func (b assistantBound) value(v int) int {
-	switch {
-	case v == 0:
-		return b.def
-	case v < b.min:
-		return b.min
-	case v > b.max:
-		return b.max
-	}
-	return v
-}
-
-// rangeOf is b as the settings registry declares it ([settingRanges]); 0 is
-// absent, the default.
-func (b assistantBound) rangeOf() Range {
-	return Range{Min: float64(b.min), Max: atMost(float64(b.max)), OrZero: true}
-}
-
-// check reports v when it is set and out of range; absent (0) is the default.
-func (b assistantBound) check(path Path, v int, p *problems) {
-	if v == 0 {
-		return
-	}
-	p.within(at(path, b.key), float64(v), fmt.Sprintf("in %s, or absent for the default of %d",
-		b.unit, b.def))
-}
-
 // On reports whether the company assigned Ask Crewlet a model.
 func (a Assistant) On() bool { return a.Model != "" }
 
 // IsZero lets an unset block drop out of a JSON round trip.
 func (a Assistant) IsZero() bool {
-	return a.Model == "" && a.TokenBudget == (TokenBudget{}) && a.DeepWork == nil && a.Research == nil
-}
-
-// Timeout is the longest one deep-work run may take.
-func (d AssistantDeepWork) Timeout() time.Duration {
-	return time.Duration(deepTimeout.value(d.TimeoutSeconds)) * time.Second
-}
-
-// Steps is the most agentic rounds and bridged calls one run may make.
-func (d AssistantDeepWork) Steps() int { return deepSteps.value(d.MaxSteps) }
-
-// Tokens is the most tokens one run may spend.
-func (d AssistantDeepWork) Tokens() int { return deepTokens.value(d.MaxTokens) }
-
-// ErrDeepWorkOff is what [Company.AssistantDeepWork] answers for a company
-// whose assistant has no deep work.
-var ErrDeepWorkOff = errors.New("deep work is off for Ask Crewlet: set assistant.deep_work.llm " +
-	"to a Claude Code providers.llm entry")
-
-// AssistantDeepWork is the providers.llm entry deep work runs on and its key,
-// or why there is none: [ErrAssistantOff], [ErrDeepWorkOff], or the problems
-// admission reports for the block. THE ONE PLACE IT IS HANDED OUT, for the
-// reason [Company.AssistantChain] is.
-func (c *Company) AssistantDeepWork() (string, LLMProvider, error) {
-	if !c.Assistant.On() {
-		return "", LLMProvider{}, ErrAssistantOff
-	}
-	d := c.Assistant.DeepWork
-	if d == nil || d.LLM == "" {
-		return "", LLMProvider{}, ErrDeepWorkOff
-	}
-	if err := c.deepWorkProblems(at(field("assistant"), "deep_work")); err != nil {
-		return "", LLMProvider{}, err
-	}
-	return d.LLM, c.Providers.LLM[d.LLM], nil
-}
-
-// DeepWorkPlacement is the cell deep work runs in, and whether the company
-// runs deep work at all: its entry's own `run_in`, else the first of e2b and
-// container the company configures, else [PlacementDirect], the engine host,
-// where the engine confines every run (ADR-0054). A REMOTE OR CONTAINED CELL
-// IS PREFERRED whenever one is configured, because the host is the cell whose
-// boundary is the engine's to hold rather than a machine's.
-func (c *Company) DeepWorkPlacement() (Placement, bool) {
-	_, entry, err := c.AssistantDeepWork()
-	if err != nil {
-		return "", false
-	}
-	if entry.RunIn != "" {
-		return entry.RunIn, true
-	}
-	sb := c.Providers.Sandbox
-	switch {
-	case sb.Configured(PlacementE2B):
-		return PlacementE2B, true
-	case sb.Configured(PlacementContainer) && sb.Local != nil && sb.Local.Image != "":
-		return PlacementContainer, true
-	}
-	return PlacementDirect, true
-}
-
-// deepWorkProblems reports every way `assistant.deep_work` cannot run: no
-// entry, an unknown one, a harness other than Claude Code, or a run_in this
-// company configures no backend for.
-func (c *Company) deepWorkProblems(path Path) error {
-	var p problems
-	d := c.Assistant.DeepWork
-	if d == nil {
-		return nil
-	}
-	for _, b := range []struct {
-		bound assistantBound
-		value int
-	}{
-		{deepTimeout, d.TimeoutSeconds},
-		{deepSteps, d.MaxSteps},
-		{deepTokens, d.MaxTokens},
-	} {
-		b.bound.check(path, b.value, &p)
-	}
-	llmPath := at(path, "llm")
-	if d.LLM == "" {
-		p.add(llmPath, ErrMissing, "deep work names no model: set it to a providers.llm "+
-			"key whose entry has harness: claude-code")
-		return p.err()
-	}
-	entry, ok := c.Providers.LLM[d.LLM]
-	if !ok {
-		p.add(llmPath, ErrUnknownValue, "%q is not a configured provider: providers.llm has %s",
-			d.LLM, strings.Join(slices.Sorted(maps.Keys(c.Providers.LLM)), ", "))
-		return p.err()
-	}
-	entryField := func(f string) Path { return at(entryPath(d.LLM), f) }
-	// CLAUDE CODE ALONE. Both in-box runners continue a parked run in its
-	// harness's own session after the approval, but deep work's run on the
-	// engine host is confined around one harness's install and temp roots
-	// (internal/sandbox's confinement, measured against Claude Code's), and
-	// the engine drives it with that harness's runner: another harness there would
-	// meet a confinement nobody measured it against.
-	if Harness(entry.HarnessName()) != HarnessClaudeCode {
-		p.add(llmPath, ErrConflict, "providers.llm.%s drives %s, and deep work runs on %s "+
-			"alone: its run is confined around that harness's own install and temp "+
-			"directories, which no other harness has been measured against. Set %s: %s",
-			d.LLM, entry.HarnessName(), HarnessClaudeCode, entryField("harness"), HarnessClaudeCode)
-	}
-	if entry.RunIn != "" && entry.RunIn != PlacementDirect && !c.Providers.Sandbox.Configured(entry.RunIn) {
-		p.add(entryField("run_in"), ErrConflict, "deep work on providers.llm.%s runs in %s, "+
-			"which providers.sandbox configures no backend for: configure it, or remove "+
-			"run_in to take the first of e2b and container the company configures, else "+
-			"the engine host under confinement", d.LLM, entry.RunIn)
-	}
-	return p.err()
+	return a.Model == "" && a.TokenBudget == (TokenBudget{}) && a.Research == nil
 }
 
 // ErrAssistantOff is what [Company.AssistantModel] answers for a company that
@@ -382,7 +187,6 @@ func (c *Company) validateAssistant() error {
 	if a.On() {
 		p.wrap(c.helperModelProblem(at(path, "model"), a.Model))
 	}
-	p.wrap(c.deepWorkProblems(at(path, "deep_work")))
 	p.wrap(a.Research.problems(at(path, "research")))
 	p.wrap(c.searchProblems(at(path, "research.search")))
 	return p.err()

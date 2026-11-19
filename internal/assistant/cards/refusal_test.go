@@ -29,7 +29,7 @@ func TestEveryRefusalAPersonReadsIsTheEnginesSentence(t *testing.T) {
 		http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity,
 		http.StatusPreconditionRequired, http.StatusTooManyRequests, http.StatusTeapot,
 		http.StatusServiceUnavailable}
-	codes := []string{cards.CodeInvalidCall, cards.CodePreviewUnreadable, cards.CodeDeepUnavailable}
+	codes := []string{cards.CodeInvalidCall, cards.CodePreviewUnreadable}
 	for _, c := range httpjson.Codes() {
 		codes = append(codes, string(c))
 	}

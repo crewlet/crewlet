@@ -207,6 +207,11 @@ func (p Profile) Clone() Profile {
 				Seed: slices.Clone(dm.Seed)}
 		}
 	}
+	if p.ImageInput != nil {
+		image := *p.ImageInput
+		image.Args = slices.Clone(image.Args)
+		out.ImageInput = &image
+	}
 	if p.ToolsOff != nil {
 		args := make([][]string, len(p.ToolsOff.Args))
 		for i, run := range p.ToolsOff.Args {

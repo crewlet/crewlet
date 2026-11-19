@@ -14,7 +14,7 @@ import (
 // a row on a code nothing answers and this fails.
 func TestEveryCodeGivenASentenceIsOneARefusalCarries(t *testing.T) {
 	t.Parallel()
-	known := []string{CodeInvalidCall, CodePreviewUnreadable, CodeDeepUnavailable}
+	known := []string{CodeInvalidCall, CodePreviewUnreadable}
 	for _, c := range httpjson.Codes() {
 		known = append(known, string(c))
 	}

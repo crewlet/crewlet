@@ -312,7 +312,6 @@ These limits are fixed, not configured:
 | Tool result handed to the model | 16 KiB | Larger answers are cut for the model; the card still shows the snapshot |
 | Card size | 1000 rows, 256 KiB | A larger table is cut with a notice and never presented as whole |
 | Attachments | 4 per question, 40 per conversation, 5 MiB each, PNG, JPEG, WebP or GIF | The type is read from the file's bytes, never its name, so a page dressed as an image is refused (`415 assistant_file_refused`); past 40 a conversation answers `409 assistant_file_limit`, which bounds what one conversation keeps in the object store to 200 MiB for its retention |
-| Files a deep-work run delivers | 10 per run, 100 per conversation, 5 MiB each | The same bound on what runs hand back |
 | Rounds of a brief | 7 rounds of reads, then 2 rounds kept for the answer and its one rewrite | A page's brief reads three to five things (often side by side) and answers. A read asked for in the rounds kept for the answer is not sent, and the answer to a read in the last round of reads tells the model the reads are spent, so an answer the engine refuses always has a round left for its rewrite |
 | Tokens of a brief | 100,000, every round together | About five rounds of a 20,000 token context; past it the brief stops with "The brief read more than a brief may", which spends nothing of the company's windows beyond the rounds already made |
 
@@ -351,111 +350,24 @@ read. A source opens in a new tab only after a stop that names its host and its
 whole address. A page's title is the site's words, so a mention of it in the
 answer stays plain text.
 
-## Deep work
+## Big tasks and images
 
-Deep work lets Ask Crewlet hand a large task to a harness with its own
-tools (shell, files, web search and fetch, image reading) for up to twenty
-minutes at a time (ADR-0054). It is off unless `assistant.deep_work` names an
-entry:
+A turn has no shell, files or browser of its own, and runs for at most twenty
+minutes. When a person asks for something that needs scripts, generated files
+or hours of steps (analysing a month of work to propose new teams, redesigning
+the brand's assets), Ask Crewlet proposes a task for one of the company's agent
+seats that can do it, with a brief of what to deliver, the seat to assign and
+links to the records it concerns. The person approves the task like any other
+change, and the seat does the work in its own box, with its own tools, budget
+and review.
 
-```yaml
-providers:
-  llm:
-    assistant-deep:
-      harness: claude-code     # deep work runs the harness's own loop and tools, in a box
-      model: sonnet
-      # run_in: e2b          # optional; see "Where a run happens"
-assistant:
-  model: assistant
-  deep_work:
-    llm: assistant-deep
-    timeout_seconds: 1200    # 60..1200, the longest one run takes
-    max_steps: 150           # 10..400 agentic rounds and Crewlet calls a task makes
-    max_tokens: 3000000      # 10000..20000000 tokens a task may spend
-```
-
-Deep work is also the only path that reads the images a person attaches to a
-question. Without it, the dashboard draws Attach image disabled with that
-reason, says it while an image is dragged over the composer, and refuses a
-pasted or dropped image in place (`/viewer` answers
-`reads_images` only where deep work is configured), and a quick answer told of
-an attachment says it cannot see it and offers what works: pasting the text,
-or asking an administrator to turn on deep work, or asking again shortly where
-deep work is configured and cannot run on this node now.
-
-The entry must be Claude Code: a run on the engine host is confined around that
-harness's own install and temporary directories, which no other harness has been
-measured against, and a run parked on a proposal is continued in that harness's own
-session after the approval. A run's
-wall clock never passes the read grant of the turn it belongs to, which is why
-twenty minutes is the ceiling; a longer task proposes, waits and continues on
-the fresh grant the approval brings. Its tokens are charged to the person's and
-the company's budgets like any turn's, and appear on the spend history as
-`assistant_deep_work`.
-
-### What a run can reach
-
-Its only way into Crewlet is the person's own Ask Crewlet tools, served to it
-over the engine's tool bridge, so every read is the person's request and every
-change a proposal they approve. It is held to that bridge: unlike a seat's
-executor, it starts no MCP server a repository it checked out, its box or the
-account it signs in with would add (`--strict-mcp-config`). No API token, grant or engine credential is
-placed in its box; it holds a bridge token valid for that run alone, which
-stops working when the run ends. It does reach the web, always: a page can try
-to steer it, and it could carry what it read out in an address it fetches.
-
-### Where a run happens
-
-A run goes to the first of these the company configures:
-
-1. The deep-work entry's own `run_in`.
-2. An `e2b` cell under `providers.sandbox`.
-3. A `container` cell with `providers.sandbox.local.image`.
-4. The engine host, **confined**. Every command the run starts runs inside the
-   strongest boundary the host enforces: `sandbox-exec` on macOS, bubblewrap
-   over namespaces on Linux, or Landlock applied by the `crewlet` binary
-   itself. It cannot read or write the node's store and estate, the stream
-   store, the log file, the config files the node was started from, any
-   providers.llm login, any seat's box, or the operator's home directory, and
-   it writes only in its own box. A host that can enforce none of these runs
-   no deep work, and Ask Crewlet reports why. Install bubblewrap
-   (`apt install bubblewrap`) or run on a kernel with Landlock, or configure a
-   cell above.
-
-   Its box is made under the company's box root, where a seat's `direct`
-   boxes are made too: `providers.sandbox.local.state_dir`, else
-   `$CREWLET_SANDBOX_LOCAL_HOME`, else `~/.crewlet/sandboxes`, in a directory
-   of its own there (`<box root>/assistant/boxes/<id>`), which a seat's
-   backend never lists or reaps. So what a run checks out, installs and builds
-   lands on the volume you sized for boxes and never on the one holding the
-   store and the stream ([Where a box writes](deployment.md#where-a-box-writes)).
-   A revision that moves `state_dir` leaves a box kept for a proposal where it
-   is: for as long as the node runs, the approval continues the run in it and
-   its earlier box root stays denied to every other run.
-
-A run dials `CREWLET_MCP_BRIDGE_URL`, the fleet's address for the tool bridge
-([Code Sandbox](../concepts/code-sandbox.md#the-tool-bridge--a-seats-own-tools-from-inside-a-box)),
-and its call is relayed to the node that opened its session wherever it lands.
-Where every box runs on the engine host — a single node whose
-`providers.sandbox` configures no `e2b` cell, such as one with only the
-`direct` cell the [Quickstart](../getting-started/quickstart.md) sets up —
-point that variable at the node's loopback address
-(`http://127.0.0.1:<api.port>`; `[::1]`, `localhost` and a name under it,
-such as `engine.localhost`, are loopback too). A confined run's bridge token
-is then admitted from that host's loopback only, under a loopback host name or
-a container runtime's name for the engine host, so a page in a browser on the
-host cannot spend a leaked one under a name of its own, and it is never
-relayed to another node. A run in a `container` box on the same host is
-handed the runtime's name for the engine host in place of loopback
-([Local sandboxes](../concepts/code-sandbox.md#local-sandboxes)) and is held to
-loopback all the same, so it can do nothing a confined run cannot. A runtime
-that delivers the box's calls over the host's loopback (Docker Desktop, and
-Podman's machine on macOS and Windows) meets that hold, and the bridge admits
-the runtime's name for the host those calls carry; one that delivers them from
-its bridge network (Docker Engine and Podman on Linux) does not, so run deep
-work `direct` or remote there.
-Don't do this where seats run boxes on other machines: they are given the same
-address, and a box on another machine cannot dial it.
+The images a person attaches to a question are handed to the model with the
+question, where the model's harness takes images: Claude Code does, through its
+structured input (`image_input` in [Harness profiles](../concepts/llm-backends.md));
+Pi does not. `/viewer` answers `reads_images` for the assigned model, and where
+it is false the composer takes no image, and a question that carries one all
+the same is answered with what works instead: pasting the text the image shows,
+or assigning Ask Crewlet a model that reads images.
 
 ## Retention and erasure
 
@@ -466,18 +378,18 @@ record. Messages, cards and previews are sealed under the fleet keyring in the
 replicated estate, and nothing a person did not see is stored, apart from the
 bounded context a turn waiting on an approval resumes from and a long
 conversation's summary of its earlier messages. That summary is written by the
-quick chain after a turn once eight messages past the last twelve have
+model after a turn once eight messages past the last twelve have
 gathered, charged to the person's budget as `assistant_summary`, sealed beside
 the conversation and purged with it.
 
-Files go with their conversation. An image a person attaches and a file a
-deep-work run delivers are kept in the fleet's
+Files go with their conversation. An image a person attaches is kept in the
+fleet's
 [object store](../concepts/object-store.md) as one object each,
 sealed under the same keyring with the conversation and the file bound in, so
 the bucket holds none of them in the clear; the replicated row naming each
 object is removed with the conversation, and the object store's collector
 deletes the object at its next pass. A node without an object store keeps no
-files: there Ask Crewlet takes no attachment and offers no deep work.
+files: there Ask Crewlet takes no attachment.
 Downloading a kept file is always a download, never a page: it is served as an
 attachment of the type its bytes were read as, with `nosniff`, a `sandbox`
 content security policy and `Cache-Control: private, no-store`.

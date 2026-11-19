@@ -109,7 +109,7 @@ export interface ModelUsage {
 export interface ModelUse {
   seat?: string;
   job?: ModelJob;
-  assistant?: "chat" | "deep_work";
+  assistant?: "chat";
   position: number;
   written?: boolean;
   source?: "seat" | "executor" | "default-entry" | "first-entry";
@@ -352,7 +352,7 @@ export interface HostLoginAnswer {
 export interface ModelReferenceAt {
   seat?: string;
   job?: ModelJob;
-  assistant?: "chat" | "deep_work";
+  assistant?: "chat";
 }
 
 /** A dependant the remove refusal names: where it is, the field, and the whole chain written there. */

@@ -116,10 +116,6 @@ const (
 	AuxAssistantTitle AuxPurpose = "assistant_title"
 	// AuxAssistantSummary folds a long conversation's earlier messages into its summary.
 	AuxAssistantSummary AuxPurpose = "assistant_summary"
-	// AuxAssistantDeepWork is a person's deep-work run: a harness's own
-	// loop, recorded once when it ends with every token it reported, and
-	// charged to the company's windows by the turn's meter (ADR-0054).
-	AuxAssistantDeepWork AuxPurpose = "assistant_deep_work"
 	// AuxAssistantBrief is a round of a person's brief turn (a Dashboard
 	// Assistant turn in brief mode): recorded apart from their questions,
 	// so what briefs cost is read on its own, and charged to the company's
@@ -155,7 +151,7 @@ var auxPurposes = []AuxPurpose{
 	AuxMemoryFilter, AuxKnowledgeQuery, AuxEpisodeSummary,
 	AuxPersistDecider, AuxCounterpartyProfiler, AuxSkillSynthesizer, AuxSkillRefiner,
 	AuxEpisodeCompaction, AuxSkillClustering, AuxSkillPromotion, AuxProviderProbe,
-	AuxAnswerKnowledge, AuxAssistantTurn, AuxAssistantTitle, AuxAssistantDeepWork,
+	AuxAnswerKnowledge, AuxAssistantTurn, AuxAssistantTitle,
 	AuxAssistantBrief, AuxAssistantSummary, AuxAdvisorAnalysis,
 }
 
