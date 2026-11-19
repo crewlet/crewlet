@@ -34,9 +34,9 @@ import (
 // ([errThreadBound]). What no reader reads (an image's or a PDF's base64, a
 // tool's input but its target, a prompt, a bookkeeping record's payload) is
 // passed over unheld whatever its length, and a value read whole is held to
-// [threadValueMax] besides. EIGHT MEBIBYTES, a constant of its own, never the
-// scrub's piece: the package doc, "THE FACTS ARE HELD TO [threadLineMax] IN
-// SUM", says why, and what a line at it and one of any length measured.
+// [threadValueMax] besides. EIGHT MEBIBYTES, a constant of its own, since the
+// scrub bounds no line: the package doc, "THE FACTS ARE HELD TO [threadLineMax]
+// IN SUM", says why, and what a line at it and one of any length measured.
 const threadLineMax = 8 << 20
 
 // threadPlainMax is the most of one member a reader reads: the plaintext one
@@ -668,13 +668,11 @@ func wireDecode(raw []byte, v any) error {
 // of MiB, before anything refused the first. Its readers: a thread reply's
 // applied context edits ([threadLine.ToolResultsCleared]) and its usage's
 // iterations ([readUsage], a thread's reply's and a run's event stream's), off
-// the raw values the layer keeps; the lists a run's event stream and a
+// the raw values the layer keeps; and the lists a run's event stream and a
 // person's transcript of a session decode (a message's blocks,
 // [eachClaudeBlock]; a tool's answer, [toolAnswer]; an OpenCode step's items,
 // [eachOpenCodeItem]; a run's result's errors, [claudeResult.errorsSaid]; a
-// page of an OpenCode session's message list, [openCodeEvents.page]); and a
-// loaded-tools record's list, which the scrub cuts a definition out of where
-// it sits in the line ([withoutDefinitions]).
+// page of an OpenCode session's message list, [openCodeEvents.page]).
 func eachElement(list json.RawMessage, each func(element json.RawMessage, at int) error) error {
 	if trimmed := bytes.TrimLeft(list, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '[' {
 		return fmt.Errorf("is %s, not a list", wireKind(trimmed))
@@ -724,10 +722,7 @@ func eachElement(list json.RawMessage, each func(element json.RawMessage, at int
 // 286,787 allocations and 45 MB, 42.6 times the line, and a line of four
 // mebibytes four times that (measured): about 1.4 GB at the 32 MiB a line of
 // the stream may hold. Its readers: a run's result's spend model by model
-// ([claudeResult.sinceLastResult]), and the scrub's reading of a loaded-tools
-// record, which finds where the record's attachment and the attachment's list
-// sit in the line ([lastValue]) and the name of each definition it lists
-// ([brokenDefinition]).
+// ([claudeResult.sinceLastResult]).
 //
 // THE NAME IS HANDED AS BYTES, in a buffer the walk reuses, never as a
 // string: a string would be an allocation for every key, which a reader that

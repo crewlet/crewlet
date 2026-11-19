@@ -2077,7 +2077,7 @@ func TestAReadPathHeldTwiceLeavesTheSessionUnread(t *testing.T) {
 // Mutation: hand eachMember no plaintext bound, and the member past it passes.
 func TestAnUnreadMemberIsHeldToTheStreamsBound(t *testing.T) {
 	t.Parallel()
-	bounds := scrubBounds{plain: 1 << 20, piece: scrubPieceMaxBytes}
+	bounds := scrubBounds{plain: 1 << 20}
 	other := claudeProjectPrefix + ctOther + ".jsonl"
 	for name, tc := range map[string]struct {
 		size int
@@ -3985,7 +3985,7 @@ func TestASubagentSentAMessageUnderAnIDTheLogKeepsNoneOfIsNotReported(t *testing
 // the long thread is read.
 func TestWhatMembersHandOutIsHeldToTheArchivesBudget(t *testing.T) {
 	t.Parallel()
-	bounds := scrubBounds{plain: 1 << 20, piece: scrubPieceMaxBytes}
+	bounds := scrubBounds{plain: 1 << 20}
 	thread := func(agent string, hole int) []byte {
 		first := ctSubagentPrompt(ctUUID(101)) + "\n"
 		return sparseMember(claudeProjectPrefix+ctSession+"/subagents/agent-"+agent+".jsonl",

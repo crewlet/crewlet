@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -106,34 +107,73 @@ type contextMeter struct {
 func newContextMeter(ctx context.Context, layout archiveLayout, session, release string,
 	large *passBudget) *contextMeter {
 
+	return startMeter(ctx, func(r io.Reader) (meterReading, error) {
+		var read meterReading
+		var err error
+		switch layout {
+		case archiveTar:
+			read.tokens, read.count, read.next, err = meterArchive(ctx, r, session, release, large)
+		case archiveDocument:
+			var export exportReading
+			export, err = meterExport(ctx, r, release)
+			read = meterReading{tokens: export.figure, count: export.count, provider: export.provider,
+				next: export.next}
+		}
+		return read, err
+	})
+}
+
+// meterReading is what a meter read off its archive: the last request's
+// input, the harness's count, the provider an OpenCode count is anchored on,
+// and the estimate of the next request.
+type meterReading struct {
+	tokens   int64
+	count    *sandbox.ResumedCount
+	provider string
+	next     sandbox.NextRequest
+}
+
+// startMeter starts a meter that reads what is written to it with measure, on
+// a goroutine of its own ([meterContained]).
+func startMeter(ctx context.Context, measure func(io.Reader) (meterReading, error)) *contextMeter {
 	pr, pw := io.Pipe()
 	m := &contextMeter{pw: pw, done: make(chan struct{})}
 	go func() {
 		defer close(m.done)
-		var (
-			n        int64
-			count    *sandbox.ResumedCount
-			provider string
-			next     sandbox.NextRequest
-			err      error
-		)
-		switch layout {
-		case archiveTar:
-			n, count, next, err = meterArchive(ctx, pr, session, release, large)
-		case archiveDocument:
-			var read exportReading
-			read, err = meterExport(ctx, pr, release)
-			n, count, provider, next = read.figure, read.count, read.provider, read.next
-		}
+		read, err := meterContained(ctx, pr, measure)
 		if err == nil {
-			m.tokens = n
+			m.tokens = read.tokens
 		}
-		m.counts, m.provider, m.estimate = count, provider, next
+		m.counts, m.provider, m.estimate = read.count, read.provider, read.next
 		// DRAINED WHATEVER IT FOUND, so the take that feeds it never waits on
 		// a meter that stopped reading; the pipe ends when the take finishes.
 		_, _ = io.Copy(io.Discard, pr)
 	}()
 	return m
+}
+
+// meterContained runs measure over r, a panic in it the meter's measuring
+// nothing rather than the end of the engine.
+//
+// THE METER READS WHAT A BOX WROTE on a goroutine of its own, beside the take's
+// scrub, which nothing above it can recover: a defect the box's text reaches in
+// the transcript's walk or the export's scan would end the engine's process,
+// every seat the node holds with it, as one in the scrub would
+// (scrubContained). So its panic is contained here, told to whoever observes
+// contained panics under the take's scope, its stack logged
+// (session_meter_panicked), and the meter measures nothing, as one that cannot
+// read its archive does; it never fails the take, and is drained as ever.
+func meterContained(ctx context.Context, r io.Reader,
+	measure func(io.Reader) (meterReading, error)) (read meterReading, err error) {
+
+	defer func() {
+		if p := recover(); p != nil {
+			contained := panics.Recovered(panics.ScopeSessionTake, p)
+			log.ErrorContext(ctx, "session_meter_panicked", "panic", fmt.Sprint(p), "stack", contained.Stack)
+			read, err = meterReading{}, contained.Err()
+		}
+	}()
+	return measure(r)
 }
 
 // Write hands the meter what the take wrote. It never fails the take: a meter

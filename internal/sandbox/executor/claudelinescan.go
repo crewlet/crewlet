@@ -422,11 +422,11 @@ func (s *lineSource) drain() {
 }
 
 // take takes the line's next piece of the member into pending: ctx asked
-// first; then THE MEMBER'S METER, before the piece's own error, as the line
-// primitive meters a line ([readLine]), so a member past its bound in the
-// same piece as its reader's failure ends with the bound, and the bound holds
-// even right after a break; then the piece, but its break, counted and
-// written to the byte facts.
+// first; then THE MEMBER'S METER, before the piece's own error, as the
+// differential's whole reader meters a line (claudelinewhole_internal_test.go),
+// so a member past its bound in the same piece as its reader's failure ends
+// with the bound, and the bound holds even right after a break; then the
+// piece, but its break, counted and written to the byte facts.
 func (s *lineSource) take() {
 	if err := s.ctx.Err(); err != nil {
 		s.cause = err

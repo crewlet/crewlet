@@ -20,43 +20,16 @@ import (
 	"github.com/crewlet/crewlet/internal/workkey"
 )
 
-// The episode compaction lifecycle: the pass that drains a seat's episode
-// table.
+// The episode compaction lifecycle: the pass that drains a seat's episodes.
+// Raw rows pile up one per turn and recall scans them linearly (no ANN index
+// is reachable from the Go driver; BenchmarkRecallScan sizes this pass).
 //
-// A seat that keeps working accumulates one raw row per turn forever, and
-// nothing else in the system removes one. Recall is what pays for that, and it
-// pays LINEARLY: there is still no ANN index reachable from the Go driver,
-// re-measured at the pin, so recall visits every embedded row
-// the seat owns, at the start of every turn.
-//
-// The constant shrank when the distance arithmetic moved into the database
-// — the rows no longer cross the driver boundary to be decoded
-// in Go, which at 5 000 rows of 1 536 dimensions was 144 ms and 35.8 MB
-// against 34 ms and 35.8 KB for the same ranking. The SHAPE did not: it is
-// still linear in the seat's row count, still with no ceiling, and this pass
-// is still the only thing that puts one there. The measurement AFTER the move,
-// which is the one this pass is now sized against — 1.9 ms at 100 rows, 3.9 ms
-// at 500, 7.3 ms at 1000, 15.2 ms at 2000, 7.5 µs per row — is in
-// BenchmarkRecallScan. The pre-move figures it replaces were 8× higher and
-// described the Go loop this package deleted.
-//
-// Four actions, cheapest first, so an expensive one never runs over rows the
-// cheap ones were about to delete:
-//
-//  1. drop mid-state rows — a self_iterate turn is half a turn. Skill
-//     synthesis already excludes it, so recall is its only reader and there it
-//     is noise.
-//  2. drop rows a skill absorbed, past their grace — the skill carries the
-//     learning; the grace is the window in which a bad consolidation can still
-//     be audited against its sources.
-//  3. optionally evict ancient summaries, for a deployment that wants a hard
-//     storage cap rather than a decaying long tail — and their anchors, which
-//     no other sweep can reach.
-//  4. compact the rest — cluster by tool-sequence similarity and fold each
-//     cluster into ONE summary row, keeping a couple of members as drill-down
-//     anchors. This is the only step that costs an LLM call, which is why it
-//     goes last: everything above it removes rows it would otherwise pay a
-//     model to summarise.
+// Four actions, cheapest first, so none runs over rows an earlier one deletes:
+//  1. drop mid-state rows (a self_iterate turn is half a turn).
+//  2. drop rows a skill absorbed, past their audit grace.
+//  3. optionally evict ancient summaries and their anchors, for a hard cap.
+//  4. fold the rest into ONE summary per tool-sequence cluster, keeping a few
+//     drill-down anchors; the only LLM-costing step, so last.
 
 // ErrPassInFlight reports that a pass for this seat is already running.
 //
@@ -167,28 +140,21 @@ type Options struct {
 
 	// ToolFreeMaxAge is when a raw turn that called NO TOOLS is dropped.
 	//
-	// It exists because such a turn can never be COMPACTED: clustering
-	// pools turns by tool-sequence overlap, Jaccard over an empty set is
-	// undefined, and there is no other similarity signal here — so for a
-	// chat-only seat the fold that bounds every other seat's raw rows
-	// never fires and the table only grows. Every one of those rows is
-	// scanned and cosined at the start of every turn, for ever.
-	//
-	// A horizon rather than a cap, because these rows have no cluster to
-	// be a member of: there is no summary that would carry their content
-	// forward, so the only question is how long a chat turn stays worth
-	// scanning. See defaultToolFreeMaxAge.
+	// Such a turn can never be COMPACTED: clustering pools by tool-sequence
+	// overlap, and Jaccard over an empty set is undefined, so for a chat-only
+	// seat the fold never fires and every row is scanned at every turn start
+	// for ever. A horizon rather than a cap, because no summary would carry
+	// these rows' content forward. See defaultToolFreeMaxAge.
 	ToolFreeMaxAge time.Duration
 
 	// CompactedMaxAge evicts summaries themselves. Zero keeps them
 	// forever, which is the default: they are small, and losing one loses
 	// the only record of a whole era of a seat's work.
 	//
-	// It is a LONG-TAIL knob — years, not weeks. A summary carries the
-	// ended_at of the newest turn it covers, and the turns it covers are at
-	// least MinAge old, so a horizon anywhere near MinAge produces
-	// summaries that are already past it when they are written: the pass
-	// spends an LLM call, writes the row, and the next pass deletes it.
+	// A LONG-TAIL knob, years not weeks: a summary carries the ended_at of
+	// the newest turn it covers, at least MinAge old, so a horizon near
+	// MinAge writes summaries already past it, and the next pass deletes the
+	// row an LLM call just paid for.
 	CompactedMaxAge time.Duration
 }
 
@@ -197,24 +163,14 @@ const (
 
 	// defaultThreshold is the raw-row count that makes a pass due.
 	//
-	// MEASURED, and it is a latency budget rather than a storage one: recall
-	// scans every embedded row a seat owns, once per turn, at 7.5 µs per
-	// row at 1 536 dimensions (BenchmarkRecallScan, re-measured at the pin).
-	// 500 rows is ~3.9 ms at the start of every turn, a rounding error
-	// next to one LLM round. 2000 is ~15 ms and still climbing linearly,
-	// because nothing else in the system bounds this number.
+	// A latency budget, not a storage one: recall scans every embedded row a
+	// seat owns once per turn, at 7.5 µs per row at 1 536 dimensions
+	// (BenchmarkRecallScan). 500 rows is ~3.9 ms at every turn start, a
+	// rounding error next to one LLM round; 2000 is ~15 ms and climbs
+	// linearly, since nothing else bounds this number.
 	//
-	// THE 62 µs/row THIS REPLACES WAS 8× STALE, and it had already been
-	// contradicted inside this package: the ORDER BY moved into the database
-	// and only the rows surviving the LIMIT cross the driver boundary now.
-	// The threshold does not move with the correction — it is a latency
-	// budget and the budget is met by a wide margin — but the ANCHOR does,
-	// because the next person to raise this number would have reasoned from
-	// a per-row cost that has not been true since the Go loop went.
-	//
-	// It must stay in step with config.DefaultEpisodeLifecycle, which is
-	// what an operator actually edits; the two agreeing is asserted by a
-	// test rather than left to whoever edits one of them.
+	// It must stay in step with config.DefaultEpisodeLifecycle, which is what
+	// an operator edits; a test asserts the two agree.
 	defaultThreshold = 500
 
 	// defaultNonTerminalMaxAge is how long a self_iterate row survives.
@@ -229,21 +185,15 @@ const (
 	// defaultToolFreeMaxAge is how long a raw turn that called no tools
 	// stays recallable.
 	//
-	// Ninety days, and the number is the same argument the chat-thread
-	// follow retention makes: a quarter is the point past which a
-	// conversation has stopped being live on every backend this engine
-	// speaks to. A tool-free turn IS a conversation — it answered somebody
-	// without doing anything — so its value as "similar prior work" decays
-	// with the thread it belonged to, while its cost does not decay at all:
-	// it is a row recall scans at every turn start at 7.5 µs, permanently.
+	// Ninety days, as in the chat-thread follow retention: a quarter is when a
+	// conversation stops being live on every backend. A tool-free turn is a
+	// conversation, so its value as "similar prior work" decays with its thread
+	// while its recall-scan cost (7.5 µs per turn start) never does.
 	//
-	// Deliberately far longer than the other two raw-row horizons here (14
-	// and 30 days), because those drop rows that are half-finished or
-	// already carried forward by something else, and this one drops the
-	// only record of work that really happened. What keeps that honest is
-	// the diary: a fact worth remembering past a quarter is one the seat
-	// was supposed to persist with reflect_and_persist, which nothing here
-	// touches.
+	// Far longer than the other raw-row horizons (14 and 30 days), which drop
+	// rows half-finished or carried forward elsewhere; this drops the only
+	// record of work that happened. A fact worth keeping past a quarter is one
+	// the seat persists with reflect_and_persist, untouched here.
 	defaultToolFreeMaxAge = 90 * day
 
 	// defaultConsolidatedGrace is the audit window after a skill absorbs a
@@ -370,20 +320,15 @@ func (l *Lifecycle) Options() Options { return l.opts }
 
 // terminalOutcomes is [SettledOutcomes] as a SQL tuple.
 //
-// Used twice here, in complementary directions: a compaction candidate must be
-// in it, and the mid-state sweep drops everything that is not. Two hand-written
-// lists is how a row ends up being neither — a sweep naming 'self_iterate'
-// explicitly while the candidate query takes only ('done','failed') leaves any
-// other value undroppable AND uncompactable, and it stays in the seat's memory
-// forever. That was written when this was a literal, and it was already wrong
-// by one: cluster.go held a third copy it could not see.
+// Used twice, in complementary directions: a compaction candidate must be in
+// it, and the mid-state sweep drops everything that is not. Two hand-written
+// lists leave a row neither droppable nor compactable, in the seat's memory
+// forever.
 //
-// Spelled into the query rather than bound: these are compile-time constants
-// of this package and never caller input, exactly like the state names in
-// ListOptions.filter. The day one stops being a bare identifier, the tuple
-// this builds would need quoting rules it does not have — which is why a test
-// holds every value to that shape rather than trusting the next editor to
-// remember it.
+// Spelled into the query rather than bound: these are compile-time constants,
+// never caller input, like the state names in ListOptions.filter. A value that
+// stopped being a bare identifier would need quoting this does not do, so a
+// test holds every value to that shape.
 var terminalOutcomes = sqlTuple(SettledOutcomes())
 
 // sqlTuple renders values as a SQL tuple literal.
@@ -608,19 +553,15 @@ func (l *Lifecycle) dropConsolidated(ctx context.Context, handle string, cutoff 
 // MarkConsolidated stamps rows a skill absorbed, so the sweep above can
 // eventually drop them. Reports how many rows the stamp landed on.
 //
-// FIRST STAMP WINS: a row already pointing at a skill is left alone. One turn
-// can feed several drafts, and the column is the audit trail for which skill
-// claimed it — overwriting would make the trail name the most recent claimant
-// rather than the one whose grace window the row is serving out.
+// FIRST STAMP WINS: one turn can feed several drafts, and the column is the
+// audit trail for which skill claimed it; overwriting would name the latest
+// claimant, not the one whose grace window the row is serving out.
 //
-// Raw rows only. A summary is not something a skill absorbs: it has no tool
-// arguments and no transcript, so nothing could have been drafted from it, and
-// stamping one would hand it to a sweep that is scoped to raw rows anyway.
+// Raw rows only: a summary has no tool arguments or transcript to draft from,
+// and the sweep is scoped to raw rows anyway.
 //
 // Seat-scoped for the reason [deleteEpisodes] is: a stamp is a deletion on a
-// 30-day fuse, so an id that belongs to another seat must land nowhere rather
-// than quietly schedule that seat's turn for removal. A skill belongs to one
-// seat, so the caller always has the handle.
+// 30-day fuse, so another seat's id must land nowhere.
 func (l *Lifecycle) MarkConsolidated(ctx context.Context, handle, skillID string, episodeIDs []string) (int64, error) {
 	if handle == "" || skillID == "" {
 		return 0, fmt.Errorf("learning: a consolidation stamp needs a seat and a skill")
@@ -744,31 +685,16 @@ func (l *Lifecycle) compact(ctx context.Context, handle string, now time.Time, r
 
 // candidates returns the raw rows eligible for folding, oldest first.
 //
-// Eligible is the exact complement of what the earlier sweeps drop: terminal
-// (see [terminalOutcomes]), unstamped, and old enough that no other reader
-// still wants the detail — and, of those, only rows a fold could ever take.
+// Eligible is terminal ([terminalOutcomes]), unstamped, old, and foldable:
+// tool-free turns and retired exemplars ([splitOrphans]) are excluded BEFORE
+// the limit, since neither leaves the OLDEST BatchSize window by folding and
+// would fill it until compaction stopped for the seat. A tool-using turn no
+// cluster reaches has no horizon and can still fill it.
 //
-// ROWS THAT CAN NEVER FOLD ARE LEFT OUT BEFORE THE LIMIT, not after it: a
-// turn that called no tools (clustering has nothing to pool it by, and
-// [Lifecycle.dropToolFree] is its horizon) and an exemplar a summary retired
-// (kept raw on purpose, for good — see [splitOrphans]). The batch is the
-// OLDEST BatchSize rows and neither kind ever leaves its old end by folding, so
-// filtered out after the limit they took its slots pass after pass — a fold
-// keeps two exemplars of every cluster for good, and a chat-heavy seat's
-// tool-free turns sit among its oldest candidates until they age out at ninety
-// days — and the window held fewer and fewer rows a fold could take, until
-// once it held none compaction stopped for the seat, threshold or not.
-// [splitOrphans] still checks retirement against the anchors it reads AFTER
-// this, which covers a summary written in between. What can still hold the
-// window is a settled tool-using turn that no cluster of MinClusterSize
-// reaches inside it: such a turn has no horizon, so a seat that gathers a
-// BatchSize of them at its old end folds nothing after that.
-//
-// ORDERED BY (ended_at, id), and the id is load bearing rather than tidy.
-// Clustering is greedy over this order, so two passes that disagree about the
-// order of two rows stamped in the same microsecond build different clusters,
-// derive different fold keys, and each write a summary claiming turns the
-// other also claimed. SQL leaves the order of equal sort keys unspecified.
+// ORDERED BY (ended_at, id); the id is load bearing. Clustering is greedy over
+// this order, so passes disagreeing on rows stamped in one microsecond build
+// different clusters and fold keys and write summaries claiming each other's
+// turns. SQL leaves the order of equal sort keys unspecified.
 func (l *Lifecycle) candidates(ctx context.Context, handle string, cutoff time.Time) ([]Episode, error) {
 	rows, err := l.db.SQL().QueryContext(ctx,
 		`SELECT `+episodeColumns+` FROM episodes
@@ -852,27 +778,13 @@ func (l *Lifecycle) anchors(ctx context.Context, handle string) ([]anchor, error
 // splitOrphans divides candidates into rows still to be folded and rows an
 // existing summary already covers.
 //
-// Two rules, and they are the same rule seen from both ends:
+// A RETIRED EXEMPLAR (kept by a fold) is dropped, or it would be counted twice
+// and deleted, orphaning its summary's drill-down. An ORPHAN (meant to be
+// deleted, was not) would get a second summary ([Lifecycle.sweepOrphans]).
 //
-// A RETIRED EXEMPLAR is a member a fold deliberately kept. It is dropped from
-// the candidate list entirely — not folded, not counted, not deleted. Letting
-// it back in is what makes drill-down rot: it is old, it matches its own
-// cluster's tool shape by construction, so it joins the next cluster over the
-// same work, gets counted a second time, and is deleted — leaving the earlier
-// summary pointing at rows that no longer exist. Every pass after that costs
-// the same two rows again.
-//
-// An ORPHAN is a member the fold meant to delete and did not. Its summary
-// already counts it, so folding it again writes a second summary over turns
-// the first one claims — the double count this whole mechanism exists to
-// prevent. See [Lifecycle.foldCluster] for why that state should be
-// unreachable, and [Lifecycle.sweepOrphans] for why it is still handled.
-// RETIREMENT IS CHECKED ACROSS EVERY ANCHOR BEFORE COVERAGE IS CHECKED AT ALL,
-// and that order is the whole reason these are two loops rather than one. Two
-// summaries can claim overlapping spans with the same tool shape, so one
-// summary's exemplar can sit inside another's window — and deciding per anchor
-// in one pass would make the outcome depend on which row the database happened
-// to return first, with a live drill-down anchor deleted on half the orderings.
+// RETIREMENT IS CHECKED ACROSS EVERY ANCHOR BEFORE COVERAGE: overlapping
+// summaries can put one's exemplar inside another's window, and deciding per
+// anchor would depend on database row order, deleting a live anchor.
 func splitOrphans(candidates []Episode, anchors []anchor, threshold float64) (live, orphans []Episode) {
 	for _, ep := range candidates {
 		switch {
@@ -907,17 +819,13 @@ func coveredBySummary(anchors []anchor, ep Episode, threshold float64) bool {
 // sweepOrphans deletes rows an existing summary already counts.
 //
 // This is the recovery half of "the summary landed and the deletes did not".
-// The fold below writes both in ONE transaction, so a crash between them is
-// not reachable through this code — proven by failing the delete statement
-// under a fault-injecting driver and watching the summary roll back with it.
-// The state is still reachable from OUTSIDE it: a restore from a backup taken
-// mid-transaction, an operator re-inserting rows from an export, a future
-// backend whose writes are not transactional.
+// The fold writes both in ONE transaction, so that state is unreachable through
+// this code (proven by failing the delete under a fault-injecting driver), but
+// still reachable from outside: a backup restored mid-transaction, an operator
+// re-inserting exported rows, a non-transactional future backend.
 //
-// The alternative to deleting them is folding them again, which deletes them
-// too — and mints a second summary over the same turns first. There is no
-// third option that keeps the rows: they are already inside a span some
-// summary claims.
+// Folding them again would delete them too, after minting a second summary
+// over the same turns; they already sit inside a span some summary claims.
 func (l *Lifecycle) sweepOrphans(ctx context.Context, handle string, orphans []Episode) (int64, error) {
 	if len(orphans) == 0 {
 		return 0, nil
@@ -944,33 +852,15 @@ func (l *Lifecycle) sweepOrphans(ctx context.Context, handle string, orphans []E
 // foldCluster summarises one cluster and replaces its members with the
 // summary, keeping the exemplars.
 //
-// THREE OUTCOMES, THREE VALUES: the rows removed, whether the model answered,
-// and a store error. A model that could not answer is not a failed pass — the
-// cluster's rows are all still there and the next pass tries again — so it
-// must not travel as an error the caller has to classify before deciding
-// whether to abort.
+// Returns rows removed, whether the model answered, and a store error; no
+// answer is not a failed pass (the rows remain).
 //
-// ONE TRANSACTION for the insert and the deletes. Two statements give two ways
-// to disagree, and only one of them is survivable: deleting first and failing
-// loses the turns outright, while writing first and failing leaves a summary
-// counting rows that are still there — which every later pass then folds
-// again — which is exactly what an insert followed by a separate delete
-// does.
-//
-// THE SUMMARY'S WORK KEY NAMES THE FOLD, not a turn. It is derived from the
-// member ids, so re-folding the same set collides with the unique index on
-// (agent_handle, work_key) and does nothing instead of writing a second
-// summary. That covers what the in-process single-flight cannot: a fold this
-// node already made in an earlier pass, or one it makes concurrently in
-// another goroutine. A peer folding the same seat is not the case — the
-// episodes it folds are rows in ITS database, which this node never reads, so
-// the two folds are two summaries of two separate copies of the memory.
-// The "compact:" prefix keeps the two namespaces apart: a turn's key is 32 hex
-// characters (internal/workkey), so no turn can ever mint this one.
-//
-// A COLLIDING INSERT STILL DELETES. That is not a fallthrough — it is the
-// recovery: the summary exists, so its members are redundant, and leaving them
-// would hand the next pass an orphaned cluster.
+// ONE TRANSACTION: deleting first and failing loses turns, writing first and
+// failing leaves a summary counting rows every later pass folds again.
+// The work key names the FOLD (from the member ids), so re-folding a set
+// collides with the unique (agent_handle, work_key) index; the "compact:"
+// prefix keeps it apart from a turn's key. A COLLIDING INSERT STILL DELETES:
+// that is the recovery.
 func (l *Lifecycle) foldCluster(ctx context.Context, handle string, cluster []Episode) (int64, bool, error) {
 	exemplars, doomed := splitExemplars(cluster, l.opts.ExemplarCount)
 	summary, err := l.sum.Summarize(ctx, Cluster{
@@ -1135,17 +1025,14 @@ func foldKey(episodeIDs []string) string {
 // clusterByTools pools turns by tool-sequence overlap, greedily and in one
 // pass.
 //
-// The same algorithm the skill-drafting clustering uses, deliberately: a
-// company where compaction and synthesis disagree about "the same work" folds
-// away turns the other was still drafting from. The first member of a cluster
-// is its representative and every later candidate is compared only against
-// that one, so the result depends on the input order — which is why
-// [Lifecycle.candidates] imposes a total one.
+// The same algorithm as skill-drafting clustering, deliberately: if compaction
+// and synthesis disagreed on "the same work", a fold would drop turns the other
+// still drafts from. Each candidate is compared only against a cluster's first
+// member, so the result depends on input order, which [Lifecycle.candidates]
+// makes total.
 //
-// A turn that called NO TOOLS is skipped entirely: Jaccard over an empty set
-// is undefined, and there is no other similarity signal here. Such a turn is
-// therefore never compacted, which for a chat-only seat means its raw rows
-// only ever grow.
+// A turn with NO TOOLS is skipped (Jaccard over an empty set is undefined), so
+// it is never compacted.
 func clusterByTools(episodes []Episode, threshold float64) [][]Episode {
 	var clusters [][]Episode
 	for _, ep := range episodes {
@@ -1170,18 +1057,13 @@ func clusterByTools(episodes []Episode, threshold float64) [][]Episode {
 // toolJaccard is set overlap between two tool sequences: |A∩B| / |A∪B| over
 // the distinct tools, ignoring order and repetition.
 //
-// ONE FUNCTION FOR ALL FIVE CALLERS — the two clusterers, the promoter, the
-// near-duplicate check and the lifecycle fold. It was written twice with two
-// names, and the copies could have disagreed on the threshold semantics
-// silently: a seat's skills would then have been clustered by one rule and
-// deduplicated by another, so a draft could be judged a duplicate of a skill
-// it would never have been clustered with.
+// One function for all five callers (the two clusterers, the promoter, the
+// near-duplicate check, the lifecycle fold), so skills are clustered and
+// deduplicated by one threshold rule.
 //
-// Empty on either side scores 0 rather than 1. Two turns that called no tools
-// have nothing in common that this function can see, and calling that a
-// perfect match would pool every tool-free turn a seat ever ran into one
-// cluster and summarise it as a pattern. That guard is also what makes the
-// division below safe: with both sides non-empty the union is at least 1.
+// Empty on either side scores 0, not 1: calling two tool-free turns a perfect
+// match would pool every one a seat ran into one "pattern". That guard also
+// makes the division safe, since the union is then at least 1.
 func toolJaccard(a, b []string) float64 {
 	if len(a) == 0 || len(b) == 0 {
 		return 0
@@ -1292,24 +1174,14 @@ func cleanStrings(in []string) []string {
 // seat whose chain answers, a system prompt, a user prompt, and the text that
 // came back.
 //
-// The narrowest thing that can stand for "an LLM" — no provider, no message
-// types, no telemetry. Everything the engine wraps around a model call (the
-// seat's auxiliary provider chain, the token budget, the usage event) lives on
-// the engine's side of this function, which is why this package still imports
-// nothing but the store.
+// The narrowest stand-in for "an LLM": no provider, message types or
+// telemetry. The auxiliary provider chain, token budget and usage event live on
+// the engine's side, so this package imports nothing but the store.
 //
-// THE HANDLE RATHER THAN THE DISPLAY NAME, because the handle is what
-// addresses a seat: it names the inbox, derives the agent id, and is what the
-// org chart resolves. It was the name, and every compaction on a company whose
-// seats declare handles failed with "this revision has no such role" — the
-// memory stayed uncompacted and the failure was logged on a path whose whole
-// contract is best effort.
-//
-// It is the handle the rows are keyed on (see the package doc).
-//
-// It is an identifier rather than a resolved provider for the reason above:
-// resolving it is the engine's job, and a resolved chain here would put the
-// provider types back in this package's imports.
+// The HANDLE, not the display name, addresses a seat (inbox, agent id, org
+// chart resolution) and is what the rows are keyed on (see the package doc); a
+// name fails on companies whose seats declare handles. It is an identifier, not
+// a resolved provider, which would pull provider types into this package.
 type CompleteFunc func(ctx context.Context, handle, system, user string) (string, error)
 
 // FitFunc rewrites one text that will not fit budget bytes, on one seat's

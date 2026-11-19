@@ -146,18 +146,12 @@ type ScopeSet struct {
 
 	// Container is the space the subject lives in, and rides the sentinel.
 	//
-	// # Why the container is ON THE RECORD and not derived from the subject
-	//
-	// A page's subject is its uuid, and which container it lives in is a
-	// fact about the row — one that CHANGES, because a page can be moved
-	// between spaces. So the path a record's scope resolves to cannot be
-	// computed from the subject alone, and the only party that knows it at
-	// the moment the record is written is the writer.
-	//
-	// Leaving it out is silent rather than wrong-looking: every page record
-	// would file its deferral under the containerless space while every
-	// space-scoped read probed its own, and the containment probe would
-	// simply never match.
+	// It is ON THE RECORD, not derived from the subject: a page's subject is
+	// its uuid, and its container CHANGES when the page moves, so only the
+	// writer knows it when the record is written. Leaving it out is silent:
+	// every page record would file its deferral under the containerless space
+	// while every space-scoped read probed its own, and the containment probe
+	// would never match.
 	Container string
 
 	// Terms is the enumeration, when the record touches more than its own

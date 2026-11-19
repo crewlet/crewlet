@@ -22,10 +22,10 @@ import (
 // whole ([estimateWalk]), every length read off the value as written. A
 // member is read by [wholeReader].
 
-// wholeReader reads a member a whole line at a time through the scrub's
-// [readLine], each line decoded whole: the member's ends the layer's reader
-// is held to ([TestTheReaderEndsAMemberAsTheWholeReaderDoes]). It holds no line
-// bound, which the layer has none of, only the member's.
+// wholeReader reads a member a whole line at a time through [readLine], each
+// line decoded whole: the member's ends the layer's reader is held to
+// ([TestTheReaderEndsAMemberAsTheWholeReaderDoes]). It holds no line bound,
+// which the layer has none of, only the member's.
 type wholeReader struct {
 	r              *bufio.Reader
 	maxBytes, left int64
@@ -41,7 +41,8 @@ func newWholeReader(r io.Reader, maxBytes int64) *wholeReader {
 }
 
 // wholeSource tags every error of a member's reader but its end, so one that
-// wraps the scrub's bound is never read as the member's bound.
+// wraps the line primitive's bound ([errLineBound]) is never read as the
+// member's bound.
 type wholeSource struct{ r io.Reader }
 
 // Read reads the member's reader, tagging every error but io.EOF.
@@ -73,7 +74,7 @@ func (t *wholeReader) Next(ctx context.Context) (threadLine, error) {
 	case errors.As(err, &source):
 		t.end = source.err
 		return threadLine{}, t.end
-	case errors.Is(err, errScrubBound):
+	case errors.Is(err, errLineBound):
 		t.end = fmt.Errorf("%w: the member runs past the %d bytes it is read within", errThreadBound, t.maxBytes)
 		return threadLine{}, t.end
 	case errors.Is(err, io.EOF):
@@ -90,6 +91,26 @@ func (t *wholeReader) Next(ctx context.Context) (threadLine, error) {
 
 // Torn reports whether the member ended in a piece with no break.
 func (t *wholeReader) Torn() bool { return t.torn }
+
+// readLine is the next line of r, its break included, refused past bound with
+// [errLineBound]: the oracle holds a line whole to decode it.
+func readLine(r *bufio.Reader, bound int) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := r.ReadSlice('\n')
+		if len(line)+len(chunk) > bound {
+			return nil, fmt.Errorf("%w: a line of the session runs past %d bytes", errLineBound, bound)
+		}
+		line = append(line, chunk...)
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return line, err
+	}
+}
+
+// errLineBound is a line past what [readLine] was asked to hold.
+var errLineBound = errors.New("executor: a line of the session runs past the bound it is read within")
 
 // lineBytesOf is the byte facts of raw, a whole line, its break dropped,
 // read as its bytes stream past ([lineBytes]).

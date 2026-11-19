@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/panics"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -41,6 +42,45 @@ import (
 
 var _ sandbox.SessionTaker = (*Runner)(nil)
 
+// SessionTakesAtOnce is how many takes this process scrubs at once, each
+// holding a slot of [sessionTakes] from before it asks its box for anything
+// to its scrub's and its meter's end. 27: a take's hold at its base, 12 MiB,
+// the most of the 11 to 12 MiB BenchmarkATakeAtItsBase measures, 27 times over
+// is 324 MiB, within the base tier's 341 MiB (64 reads at 5.3 MiB, the package
+// doc's "A collection's read of a thread"): so the takes at their base hold no
+// more than every read of the tier does.
+const SessionTakesAtOnce = 27
+
+// sessionTakes holds a slot for each take in flight ([SessionTakesAtOnce]).
+var sessionTakes = make(chan struct{}, SessionTakesAtOnce)
+
+// errTakeWait is a take whose wait for a slot of [sessionTakes] ended with its
+// ctx: refused, as a box read whose wait runs out is, its box asked nothing.
+var errTakeWait = errors.New("executor: the wait for a session take's slot ended")
+
+// takeSessionSlot takes a slot of [sessionTakes] within ctx, the take's own
+// wait. A take that waits says so as its wait ends
+// (executor_session_take_waited): that the slots are contended, and where it
+// ran out waiting, why it was refused.
+func takeSessionSlot(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %w", errTakeWait, err)
+	}
+	select {
+	case sessionTakes <- struct{}{}:
+		return func() { <-sessionTakes }, nil
+	default:
+	}
+	start := time.Now()
+	took, err := takeSlot(ctx, sessionTakes)
+	log.InfoContext(ctx, "executor_session_take_waited", "took", err == nil,
+		"waited_ms", time.Since(start).Milliseconds())
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errTakeWait, err)
+	}
+	return took, nil
+}
+
 // TakeSession streams the session the box's last run worked in, as a capture
 // keeps it ([sandbox.SessionTaker]): packed now where take says so, and else
 // the archive the run's script left, or — where it left none — one packed now;
@@ -64,6 +104,18 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 		return sandbox.TakenSession{}, errors.New("executor: a take names no bound on the archive it keeps, " +
 			"and a session is never read out of a box unbounded")
 	}
+	// ONE OF [SessionTakesAtOnce], held by the scrub's goroutine to its end,
+	// and given back here where none starts.
+	freeSlot, slotErr := takeSessionSlot(ctx)
+	if slotErr != nil {
+		return sandbox.TakenSession{}, slotErr
+	}
+	scrubbingStarted := false
+	defer func() {
+		if !scrubbingStarted {
+			freeSlot()
+		}
+	}()
 	// A JOB THAT IS OVER IS TAKEN AS ITS SCRIPT LEFT IT where its script
 	// packed it, and packed now where it did not — one that crashed before
 	// its pack, one killed part way through it, one lost with its engine —
@@ -133,8 +185,10 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	// at, read off the archive as it is kept (measure.go), beside the take and
 	// within its context, never holding it up.
 	meter := newContextMeter(metering, carries.layout(), archive.SessionID, archive.Version, large)
+	scrubbingStarted = true
 	go func() {
 		defer close(out.done)
+		defer freeSlot()
 		defer stopScrub()
 		// THE TAKE ENDS WITH ITS METER, which may still wait for the slot.
 		defer func() {
@@ -152,7 +206,9 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 			}
 			return again, nil
 		}
-		scrubErr := scrubArchive(carries.layout(), body, reopen, io.MultiWriter(write, sum, meter), scrub, bounds)
+		scrubErr := scrubContained(ctx, func() error {
+			return scrubArchive(carries.layout(), body, reopen, io.MultiWriter(write, sum, meter), scrub, bounds)
+		})
 		out.finished(scrubErr, sum.String())
 		// THE METER ENDS BEFORE THE READER DOES, so a caller that has read the
 		// take to its end and asks what it measured waits on nothing but the
@@ -175,6 +231,29 @@ func (r *Runner) TakeSession(ctx context.Context, box sandbox.Sandbox,
 	return sandbox.TakenSession{Archive: archive, Body: out, Keep: keep, Context: meter.context,
 		Count: meter.count, CountProvider: meter.countProvider, Next: meter.next,
 		ResumeRead: r.resumeRead(archive.Version)}, nil
+}
+
+// scrubContained runs scrub, the take's scrub of a box's archive, a panic in it
+// the take's error rather than the end of the engine.
+//
+// THE SCRUB RUNS ON A GOROUTINE OF THE TAKE'S OWN, which nothing above it can
+// recover: a defect a box's text reaches in a redaction or a rewrite would end
+// the engine's process, every seat the node holds with it, for one session the
+// box's code wrote. So the panic is contained here, told to whoever observes
+// contained panics (panics.Recovered) under the take's scope, its stack logged,
+// and the take refused with the panic's message, which the capture's stamp
+// carries as the reason the session was not kept. The pipe the take writes to
+// ends on that error, so no reader takes the archive for whole.
+func scrubContained(ctx context.Context, scrub func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			contained := panics.Recovered(panics.ScopeSessionTake, r)
+			log.ErrorContext(ctx, "session_scrub_panicked", "panic", fmt.Sprint(r), "stack", contained.Stack)
+			err = fmt.Errorf("executor: the session's scrub failed, and the session was not kept: %w",
+				contained.Err())
+		}
+	}()
+	return scrub()
 }
 
 // keptRunStart is where an archive's run began in its session as the take

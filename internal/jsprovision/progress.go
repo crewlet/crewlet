@@ -53,35 +53,17 @@ func (t Timing) Longest(d time.Duration) time.Duration {
 	return d + t.Beyond
 }
 
-// Ceiling is ctx ended at d of its link's stillness: at d, for a timing that
+// Ceiling is ctx ended at d of its link's stillness: at d for a timing that
 // follows no link; for one that does ([Timing.Following]), at the first
-// judgment at or past d at which the link did not move over the last d — the
-// first at d, and one every [stillPeriod] after — and at d and
-// [Timing.Beyond] whatever the link does. Ended there, its error is
-// [context.DeadlineExceeded], the silence a ceiling's ending is
-// ([Unanswered]); ended by ctx, it is ctx's.
-//
-// # Why over the last d, never since the read began
-//
-// A ceiling bounds how long the broker may say nothing, and across a link the
-// broker is saying nothing only while the link carries nothing: a reply
-// queued behind one message of megabytes is held as long as that message
-// takes to cross, and the broker answered it long before. Judged over the
-// span the ceiling bounds, a link that moved for the read's whole span holds
-// it, and one that fell still for the last part of the span lets it end once
-// what it carried over the span falls below what a busy link carries — a link
-// cut at the floor, about three tenths of d after its last byte.
-//
-// # Why capped
-//
-// Because movement is not an answer: a link busy with other traffic moves
-// whether or not a reply is among what it carries, and a request a member
-// dropped across an election is answered by nobody however busy the link is.
-// What one reply is held behind is at most one message at the transport's
-// bound, which beyond is, so past d and beyond the reply was never sent.
-//
-// The cancel it answers ends the ceiling and returns once its judge has
-// stopped, as [context.WithTimeout]'s releases its timer.
+// judgment at or past d (one every [stillPeriod] after the first) at which the
+// link did not move over the last d, and at d and [Timing.Beyond] whatever the
+// link does. Its error is [context.DeadlineExceeded] ([Unanswered]); ended by
+// ctx, it is ctx's. Judged over the last d, not since the read began: a reply
+// queued behind a message of megabytes is held as long as it takes to cross.
+// Capped because movement is not an answer: a busy link moves whether or not a
+// reply is on it, and a request a member dropped across an election is
+// answered by nobody. One reply waits behind at most one message at the
+// transport's bound, which Beyond is. The cancel returns once the judge stops.
 func (t Timing) Ceiling(ctx context.Context, d time.Duration) (context.Context, context.CancelFunc) {
 	if t.Progress == nil {
 		return context.WithTimeout(ctx, d)

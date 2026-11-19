@@ -179,10 +179,13 @@
 // before it, but for the strings the charge covers, decoded just before it
 // (THE COEFFICIENTS). What the reader holds within a line is uncharged and
 // bounded whatever the line, so it comes off the base whole. The take's scrub
-// holds each piece whole, so its trigger is a piece's length,
-// [scrubPieceBaseBytes] ([lineRun]): a line, a JSON document holding a token
-// past it (its decoder keeps that token's buffer to the document's end), and a
-// stretch of short lines a redaction holds ([scrubBounds]).
+// holds no piece whole, and its trigger is a TEXT IT REDACTS AS ONE past its
+// own base, [scrubPieceBaseBytes], whose redaction may hold up to its length
+// ([pieceGate.pieces], [lineRun]): a transcript's line, a `.json` file (read
+// as text too), any other file, and an export's name or string; and its plan
+// past the base, the one thing it holds across pieces, held to the take's end
+// ([tarPlan.holdPast]), which only an archive of millions of short lines
+// reaches.
 //
 // HELD PER PIECE, KEPT ONLY WHERE A READING KEEPS RECORDS: a pass whose
 // readings keep records (the collection's chain, which may keep a line's
@@ -246,36 +249,41 @@
 // in 0.13 to 0.17 s, holding 4 MiB at most at GOGC=10 and its heap peaking at
 // 5 to 8 MiB at the default, within the arithmetic, and taking no slot.
 //
-// THE BASE TIER'S COUNT: no token holds it, so it is every read in flight at
-// once, each about 5.3 MiB at its worst: one per seat collecting on this node,
-// one per take (its scrub's piece within [scrubPieceBaseBytes] and its meter's
-// line within the base), and up to the box host's boxReadsHeld (64) reads for
-// its peers, 341 MiB.
+// THE BASE TIER'S COUNT: no token of this pool holds it, so it is every read in
+// flight at once: one per seat collecting on this node and up to the box
+// host's boxReadsHeld (64) reads for its peers, each about 5.3 MiB at its
+// worst, 341 MiB, and one per take. A take, whose scrub streams each text
+// through redact's stages, each holding its window, holds 11 to 12 MiB at its
+// base (BenchmarkATakeAtItsBase: a main-thread line, a `.json` string and a
+// text file each at [scrubPieceBaseBytes], the line's and the string's of
+// bytes the decode triples, both readings and the meter, read as above, 0.21 s
+// on two cores, its heap peaking at 23 MiB at the default GOGC), so every take
+// holds one of [SessionTakesAtOnce] (27), a pool of its own sized so the takes
+// at their base hold 324 MiB at most, within those 341.
 //
 // THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
-// holds 43 MiB at most, the chain at both bounds; a take's piece at the scrub's
-// bound, its meter beside it under the same slot, 89 MiB
-// (BenchmarkATakeAtItsLargeTier: a main-thread line and a `.json` string each
-// at [scrubPieceMaxBytes] of bytes the decode triples, both readings and the
-// meter, read as above, the meter estimating, 1.7 to 2.3 s on two cores, its
-// heap peaking at 137 MiB at the default GOGC against the pass's 62 MiB).
-// Shared with [TranscriptReadsAtOnce]'s two, a collection's large pass waits
-// behind two transcript reads of up to about 22 s each and spends
-// internal/sandbox's MainThreadReadWait (27 s), so a person paging a transcript
-// would decide how a turn's relaunch is told; apart, it never does. One slot,
-// not two: the process's thread readers then hold at worst 2 x 133 + 89 = 355
-// MiB beside the base tier. One waiter behind a pass over ordinary lines at the
-// bound (2.6 to 2.8 s with the count and the next request's estimate, 5.7 s
-// loaded) is through in 11.4 s, within the 27 s. Behind the slot's slowest
-// holder, loaded, it is not: a pass keeping more than [collectionBaseRecords]
-// records holds the slot to its end whatever its lines, so a collection whose
-// chain keeps the records of 2^20 short lines of blocks of an empty kind, at
-// the bound (18.3 to 19.7 s with the count alone, 20.7 to 21.6 s with the next
-// request's estimate, BenchmarkTheMainThreadReadAtItsBound, twice that loaded),
-// holds it until its own MainThreadReadWait cuts it. One such line to the
-// bound, 18.6 to 18.8 s (20.8 to 21.7 s estimating), one record of few facts,
-// holds none. That waiter, a later one, or one behind a take's piece streaming
-// from a slow box ends with [errLargeWait] and reads as no reading (count
+// holds 43 MiB at most, the chain at both bounds; a take, its meter beside it
+// under the same slot, 45 MiB (BenchmarkATakeAtItsLargeTier: as at its base,
+// each piece of [threadLineMax] bytes, 6.9 to 7.0 s on two cores, each piece's
+// hold of the slot about 1.3 s, its heap peaking at 126 MiB at the default
+// GOGC against the pass's 62 MiB). Shared with [TranscriptReadsAtOnce]'s two,
+// a collection's large pass waits behind two transcript reads of up to about
+// 22 s each and spends internal/sandbox's MainThreadReadWait (27 s), so a
+// person paging a transcript would decide how a turn's relaunch is told;
+// apart, it never does. One slot, not two: the process's thread readers then
+// hold at worst 2 x 133 + 45 = 311 MiB beside the base tier. One waiter behind
+// a pass over ordinary lines at the bound (2.6 to 2.8 s with the count and the
+// next request's estimate, 5.7 s loaded) is through in 11.4 s, within the
+// 27 s. Behind the slot's slowest holder, loaded, it is not: a pass keeping
+// more than [collectionBaseRecords] records holds the slot to its end whatever
+// its lines, so a collection whose chain keeps the records of 2^20 short lines
+// of blocks of an empty kind, at the bound (18.3 to 19.7 s with the count
+// alone, 20.7 to 21.6 s with the next request's estimate,
+// BenchmarkTheMainThreadReadAtItsBound, twice that loaded), holds it until its
+// own MainThreadReadWait cuts it. One such line to the bound, 18.6 to 18.8 s
+// (20.8 to 21.7 s estimating), one record of few facts, holds none. That
+// waiter, a later one, or one behind a take's piece streaming from a slow box
+// ends with [errLargeWait] and reads as no reading (count
 // unread), the safe side, as a read past MainThreadReadWait already is. The
 // wait is spent inside that wait, never added to it.
 //
@@ -414,10 +422,10 @@
 // every copy. What a line allocates and drops (a refused block's strings, an
 // error's text) is not charged: a line of many blocks costs time, not memory.
 //
-// EIGHT MEBIBYTES, a constant of its own and never the scrub's piece
-// ([scrubPieceMaxBytes]), which bounds what the scrub holds of a line rather
-// than what a reader keeps of one. Every legitimate line's facts are under a
-// KiB: its readers keep a block's kind, a call's id, name and target, a
+// EIGHT MEBIBYTES, a constant of its own, which bounds what a reader keeps of
+// a line and never what a session holds: the take's scrub keeps a line of any
+// length ("The scrub holds no value whole"). Every legitimate line's facts are
+// under a KiB: its readers keep a block's kind, a call's id, name and target, a
 // result's length and digests, a few small values, never a value's text. Of the
 // 59,519 lines of the 1,091 JSONL files the probes kept and this package's
 // testdata holds, 564 of them threads, the most any line's facts hold is 753
@@ -559,6 +567,249 @@
 // outside [openCodeCountReleases] is refused before its pack
 // ([OpenCode.PackSave]), and a release added there is measured for its saves
 // too (below).
+//
+// # A kept session leaves its box scrubbed
+//
+// A session is a harness's whole transcript, every file it read and every
+// command's output, and what leaves a box passes the engine's secret
+// redaction, as every other text read out of one does (code-sandbox.md). The
+// take's scrub (scrub.go) makes two passes, in this order:
+//
+//  1. BY VALUE: every secret the engine itself put in the box, its login and
+//     its environment's credentials, is taken out wherever it appears, in its
+//     raw form and in the form a JSON string holds it in, whatever its shape,
+//     so a value redact's rules would never recognise (an operator's opaque
+//     token) is gone all the same. First, so the second pass sees the marker
+//     where the value was rather than a half it could not place.
+//  2. BY SHAPE: redact.Secrets, the one denylist every surface uses, which
+//     catches what the engine did not put there: a key the run printed.
+//
+// EACH FILE AS WHAT IT IS, so what is kept is still what its harness restores:
+//
+//   - A TRANSCRIPT, one JSON value a line (`.jsonl`): each value rewritten
+//     string by string, every string and every key of every object scrubbed
+//     and redacted as the text it decodes to (where a key's lines are lines
+//     again, and a secret a tool's structured result names a member by goes
+//     too), and a string or a number under a credential's own key taken out
+//     whole. A line that is not one JSON value (the last of a job packed while
+//     it wrote, or a line of blanks) is scrubbed and redacted as text, the
+//     values in the forms a JSON string escapes them in among those it takes
+//     out. A RECORD KEEPS ITS LINE AND ITS KEYS, every key in the order
+//     written, since Claude Code reads a session file past 5 MiB by where
+//     each line's keys sit; what a record can lose is a loaded tool
+//     definition the scrub renamed (below). Every key and string is written
+//     again ([jsonStringWriter]) as the text it decodes to, changed only
+//     where it held a secret, so an escape can come out spelled otherwise
+//     than its harness wrote it, and a lone surrogate's escape or a byte that
+//     is no UTF-8 comes out as U+FFFD, which each decodes to.
+//   - A DOCUMENT (`.json`, and OpenCode's whole export): rewritten the same
+//     way a token at a time as it streams, and one of blanks alone written as
+//     nothing ([rewriteDocument]), since blanks hold nothing a harness reads.
+//     A `.json` file the rewrite cannot read as one JSON value (a task file
+//     its harness was killed while it wrote, which the run's own end packs as
+//     it finds it) is redacted as text, as a transcript's torn line is, rather
+//     than costing the session; an export read on internal/jsonscan holds
+//     none of its strings.
+//   - ANYTHING ELSE, as text, scrubbed and redacted as it streams, so a rule
+//     that reads across lines sees them all.
+//
+// AND THE TAR'S OWN WORDS: a member's name is scrubbed by value and by shape
+// as the transcript's paths to it are ([memberName]), its header carries
+// nothing but its kind, name, mode, size and time (no owner, link target or
+// extended record of the box's), and a member that is neither a file nor a
+// directory (a link the box's own code made) is left out, since no harness
+// keeps its session in one.
+//
+// A CREDENTIAL'S KEY ([credentialKey]) is read on the key's own words,
+// lowercase: a password's, as redact names them (redact.NamesPassword);
+// `token`, `key` and `auth` only as the whole key; or a name a credential
+// carries anywhere in it (an API key or token, an access, refresh, session,
+// security, auth, bearer, identity or registry token, a private key or token,
+// an authorization, a secret, a credential, an OpenID Connect ID token). The
+// names are read WITH THE KEY'S SEPARATORS DROPPED, since each format joins a
+// name's words its own way: `aws_session_token`, `SessionToken` and
+// `sessionToken` are one key, and AWS's `X-Amz-Security-Token` header is read
+// by its security token; spelled out per separator, the names miss every
+// header's. Never `token`, `key` or `auth` at large: a transcript counts its
+// tokens and names its sessions in keys of its own (`input_tokens`,
+// `sessionId`), an access key's id is no secret (`AccessKeyId`), and a
+// commit's author and a server's OAuth settings are no credential (`author`,
+// `oauth_provider`); an ID token's `id` is read only as a word of its own,
+// since `paid_tokens` spells it. The rule has ONE implementation,
+// [keyReading], handed a key's decoded text a piece at a time, cut anywhere,
+// a rune's bytes included; [credentialKey] is a keyReading handed the whole
+// key. Its state does not grow with the key, since a box's code can write a key
+// a gibibyte long: a rune's cut bytes, the key lowered while it is no longer
+// than the longest whole key, and windows over its last runes twice the most
+// a password's key spans and twice the longest name, each cut back to one
+// fewer than its span when it fills, so a key the window has not yet seen
+// whole is still in it.
+//
+// # The scrub holds no value whole
+//
+// A harness keeps no bound on one value: Claude Code writes a whole PDF it
+// read on one line of its transcript, its base64 twice, 55,924,056 bytes at
+// its 20 MiB file limit, and OpenCode keeps a message part of 27 MiB. So the
+// scrub holds NO LINE, STRING OR STRETCH OF TEXT WHOLE, and refuses none for
+// its length: JSON is read on internal/jsonscan, which hands a name's or a
+// string's decoded text over a piece at a time ([jsonRewrite]); every text is
+// taken out by value through a [valueStream], and redacted through
+// redact.Stream, which writes exactly redact.Secrets of the whole text within
+// its stages' windows ([textScrub]); and a transcript's line is never held to
+// learn what it is ([measureLines]).
+//
+// A [valueStream] writes, put together, what strings.Replacer writes of the
+// whole text ([scrubber.apply]), however the text is cut: a place at a time
+// from the text's start, the longest value that begins at a place taken out
+// and the reading going on after it, else the place's byte kept, so a value
+// is taken out leftmost, and longest where values begin at the same place, as
+// the replacer takes the first of its pairs, which [newScrubber] orders
+// longest first. It HOLDS FEWER BYTES THAN THE LONGEST VALUE from one piece
+// to the next: a place is decided once the longest value's length of text
+// from it is read, or the text has ended, and a value taken out lies whole
+// within the bytes its place is decided on, so nothing else is carried.
+//
+// TWO READINGS. What a line, or a `.json` file, is, JSON or text, is known only
+// at its end, and what a transcript's line loses of its loaded tool
+// definitions only once its last key is read; and a tar names each file's size
+// before its bytes. So a tar is read TWICE: the first reading reads each line
+// and each `.json` file both ways at once, counting what each would write, and
+// keeps a PLAN; the second writes what the first counted. Every rewrite here
+// is a pure function of what it reads, so the second reading writes what the
+// first counted, and a member that comes out another length is a member that
+// changed between the two, which fails the take. A `.json` file's two ways
+// are read ON THE SCRUB'S OWN GOROUTINE ([measureFile]): the document's
+// rewrite reads through a reader that hands every byte to the text's scrub as
+// well ([teeRead]), as a transcript's line is read ([lineReader]), so every
+// byte is rewritten and redacted where the take's containment of a panic sees
+// it. A goroutine for each way, fed through pipes, would put the rewrite and
+// the redaction of every `.json` file a box wrote outside that containment, so
+// a panic there would end the engine, and a panic in the copy beside them
+// would leave both blocked on their pipes for good.
+//
+// THE PLAN ([tarPlan]) is three streams of bits, each written by the first
+// reading in the order it decides them and read back by the second in that
+// order, and nothing else, whatever the tar holds: for each member its kind,
+// and for a regular file its size as rewritten, whether it is kept as text,
+// and how many line bits its transcript took; for each line of two bytes or
+// more, whether it is kept as text (a shorter line is one byte or none, which
+// no pass changes, so both readings write it as text); and for each line that
+// loses a definition, how far it lies from the cut before it, which list it
+// loses them from, how many elements that list holds and a bit each, set for
+// one cut. So the plan is AT MOST A SIXTEENTH OF THE PLAINTEXT, a bit for
+// every two of its bytes, beside a block of each stream being filled: a
+// member's header is 512 bytes against a few dozen bits, a line with a bit is
+// two bytes or more, and a list's element, a byte and its comma, takes one bit,
+// its cut a few dozen more, which the record it is cut out of, some seventy
+// bytes, pays for. A list or a record of its own for each member, line or cut
+// would cost a block or some dozen bytes a line, and let a box's archive of a
+// mebibyte, a transcript of short lines each losing a definition, hold the
+// engine host to gibibytes between the two readings.
+//
+// AN EXPORT IS READ TWICE TOO, THE FIRST READING DRY ([scrubDocument]),
+// because a reading refuses a document only once it has read it: one that is
+// no one JSON value, one past the plaintext a reading reads, or text the
+// redaction could not redact. Read once, the bytes rewritten before the
+// refusal would reach the take's pipe, its uploader, its checksum and its
+// context meter before the pipe ended in the error, a published key among
+// them where the redaction is what refused. The second reading writes what the
+// first read; one that comes out another length, or that the scanner refuses
+// where the first read one value whole, is an export that changed between the
+// two, and one refused for another reason says that reason.
+//
+// # The scrub's bounds, and what it holds
+//
+// The archive is the box's own: its code can write a gzip that expands a
+// thousandfold, a value nested a million deep, or a session of nothing but
+// text the redaction has to read. So the scrub reads at most [scrubExpansion]
+// times the archive's bound of plaintext in one reading ([scrubBounds]) and
+// rewrites no value nested deeper than jsonscan.MaxDepth as JSON (a
+// transcript's line or a `.json` file so nested is text, and an export is
+// refused). A session past the plaintext, or one whose text the redaction
+// refuses ([errRedaction], what the redaction said read off its error, and
+// redact.ErrDecidedEarly whether its stream decided a window before what it
+// read there was known, at a write or at its close), is refused, stamped with
+// why, rather than costing the engine host its memory; and the whole scrub is
+// held to the take's time (internal/sandbox's SessionScrubWait). A panic in
+// the scrub is CONTAINED on the take's own goroutine (scrubContained, take.go),
+// which reads every byte of the archive, a `.json` file's two readings
+// included, and refuses the take with the panic's message; one in the meter
+// beside it measures nothing (meterContained, measure.go); each is told under
+// panics.ScopeSessionTake.
+//
+// AT MOST [scrubHeldBytes] IS HELD, derived from the code's own figures: two
+// text scrubs at once (a line's or a `.json` file's two readings side by side,
+// each redacting one text), each its redaction's stages (redact.Stream's own
+// figure) beside a [valueStream] and a string's encoder; two JSON rewrites,
+// each its scanner, its read buffer and a frame a container open; the readers
+// and writers of the archive's gzip and tar; and the plan, a sixteenth of the
+// plaintext at most. About 111 MiB at the archive's bound, 16 MiB of it the
+// plan, which a real session leaves nearly empty. A test holds the figure at a
+// smaller bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the
+// real one, 256 MiB of plaintext, both readings of the tar from a file on disk.
+// On two efficiency cores of a laptop shared with other work:
+//
+//	one string to the bound:   40.6 s a scrub, held 18.6 MiB (256 MiB from 28 MiB)
+//	a million short lines:     19.9 s a scrub, held 1.6 MiB (160 MiB from 19 MiB)
+//	tiny definitions:          21.7 s a scrub, held 25.5 MiB (256 MiB from 0.5 MiB)
+//
+// Against SessionScrubWait, two minutes for the whole take's scrub with the
+// archive's two readings out of a box at its floor pace of a mebibyte a second
+// among it (64 s for an archive at its 32 MiB bound read twice, so 56 s left
+// for the scrub's own work where the two do not overlap), each arm fits, the
+// string the closest, since its first reading redacts it twice (as JSON and as
+// text, side by side) and its second once.
+//
+// # A definition the scrub renamed is cut out of its line
+//
+// Claude Code keeps the tool definitions a session loaded through tool search
+// in its transcript, an attachment of type [loadedToolsRecord], and a session
+// resumed from it sends each one again as a tool of every request it makes
+// (measured on 2.1.322). A definition whose name the rewrite left outside what
+// the provider takes ([providerToolName]), a marker standing where part of the
+// name was, has every request of the restored session refused, so it is cut;
+// left out, the session loads the tool again by search when it needs it. A
+// line that holds no marker loses nothing, since the rewrite renamed nothing
+// in it, a definition its writer named outside the pattern included; one that
+// holds a marker loses every definition named outside the pattern, whoever
+// named it so; a line that is not one JSON object loses nothing. The record is
+// read as Claude Code's JSON.parse reads it: its attachment, the attachment's
+// type and its list each the last value written under its key, each key by its
+// name exactly, and a definition judged by its `name` exactly and the last
+// written, a value that is no string naming nothing, so a definition that is
+// no object, or names nothing, is cut where its line holds a marker.
+//
+// CUT OUT OF THE LINE AS THE REWRITE WROTE IT, each definition with the comma
+// that joined it to its list, every other byte where it was: never the record
+// decoded and written again from a map, which writes its keys sorted, the
+// attachment (a subagent's agentId before it) first and its list inside it.
+// Claude Code reads a session file past 5 MiB by the bytes of its lines, and
+// finds a record by where its keys sit, in two readings (read in 2.1.310 and
+// 2.1.322):
+//
+//   - 2.1.310, reading such a file as it does by default, takes a record for
+//     a subagent's only where `"isSidechain":true` sits in its line's first
+//     256 bytes, and walks the thread back from the last record it takes for
+//     the main thread's. A subagent's record written sorted, its list before
+//     that key, is taken for the main thread's, and the records the subagent
+//     wrote after it are left out of the thread a relaunch resumes. 2.1.322
+//     looks for the key past those bytes as well.
+//   - Under CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP (a switch a managed settings
+//     file can set whatever a launch unsets), both prune such a file, taking a
+//     line for a record only where it begins `{"parentUuid":` and walking the
+//     main thread back from its last record through such lines alone. A
+//     record's line that begins otherwise ends that walk, and where the
+//     records the walk reached held half the file or less, every record above
+//     that line is pruned from the session a relaunch resumes.
+//
+// DECIDED IN THE FIRST READING, APPLIED IN THE SECOND: whether a line loses a
+// definition is known only at its end (the attachment's last `type`, its last
+// `entries`, a marker anywhere), and the second reading writes the list before
+// it reads that end. The first reading's half ([definitionsReading]) keeps a
+// bit for each element of the list being read and of the last one read before
+// it, which a later `entries` or `attachment` replaces, so at most a bit for
+// each two bytes of the line; the second's ([definitionCut]) reads the plan's
+// cut back as it writes.
 //
 // # An OpenCode continuation's first request, judged in its box
 //

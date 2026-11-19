@@ -9,44 +9,21 @@ import (
 	"unicode/utf8"
 )
 
-// The scanner: TypeScript and TSX source as a stream of tokens, with every
-// comment, every run of whitespace and every piece of JSX prose gone.
+// The scanner: TypeScript and TSX source as tokens, comments, whitespace and
+// JSX prose gone. A SCANNER, NOT A PARSER: every gate question is about a
+// declaration's tokens, and what defeats a pattern is lexical. Three places
+// need context:
 //
-// A SCANNER, NOT A PARSER, and the line between the two is the one this
-// package needs. Every question a gate asks is about a declaration's TOKENS —
-// which strings a literal holds, which members an interface names, which
-// string a call is handed first — and the only thing that makes those hard to
-// answer with a pattern is what a pattern cannot tell apart: a `]` that closes
-// the list from one inside a string, a quote that opens a string from one in a
-// comment or in a sentence of JSX, a `/` that divides from one that opens a
-// regular expression whose character class holds a `{`. Those are LEXICAL
-// facts, and a lexer settles all of them without a grammar.
-//
-// THE THREE PLACES A LEXER NEEDS CONTEXT are the three this one tracks, and
-// each was a real failure mode in this tree rather than a theoretical one:
-//
-//   - A `/` is division after a value and a regular expression anywhere an
-//     expression can start. The dashboard has regexes whose classes hold
-//     braces and quotes (`/^\}/`, `/-{2,}/`), and read as division each one
-//     unbalances everything after it.
-//   - A `<` in a `.tsx` file opens an ELEMENT anywhere an expression can
-//     start, and JSX text is prose: "the company's sealed credentials" holds
-//     an apostrophe that a quote-counting scan reads as the start of a string
-//     running to the next one, which can be a hundred lines away.
-//   - A `}` closes a block, a template literal's `${…}` or a JSX expression
-//     container, and which one decides whether the scan resumes as code, as a
-//     template or as markup. A stack of what each open brace returns to is the
-//     whole of that.
-//
-// Where it cannot tell, it FAILS rather than guesses: an unterminated string,
-// template, comment or regular expression, an element that never closes, and
-// a bracket that closes nothing or closes the wrong kind of bracket are errors
-// naming the file and line. A scanner that lost its place and kept going would
-// read the rest of the file as the wrong thing, and a gate built on it would
-// report whatever it happened to see. And every read scans every source file
-// in the tree, so a construct this scanner cannot follow fails every gate the
-// day it lands, naming the line, rather than the one gate that happened to
-// read past it.
+//   - `/` divides after a value and opens a regex where an expression can
+//     start; the dashboard's regexes hold braces and quotes (`/^\}/`).
+//   - `<` in `.tsx` opens an ELEMENT where an expression can start, and JSX
+//     text is prose whose apostrophe a quote-counting scan misreads.
+//   - `}` closes a block, a template's `${…}` or a JSX container; a stack of
+//     what each brace returns to decides code, template or markup.
+
+// Where the scanner cannot tell, it FAILS naming file and line (one that lost
+// its place would let a gate report whatever it saw), and every read scans the
+// whole tree, so such a construct fails every gate the day it lands.
 
 // kind is what a token is.
 type kind uint8
@@ -621,21 +598,16 @@ var keywordsBeforeExpression = map[string]bool{
 	"do": true, "else": true, "yield": true, "await": true,
 }
 
-// expressionStarts reports whether an expression may start here — the one
-// question that tells a regular expression from a division and an element
-// from a comparison.
+// expressionStarts reports whether an expression may start here: what tells a
+// regex from a division and an element from a comparison. AFTER A VALUE IT MAY
+// NOT (identifier, literal, closing `)` `]` `}`, whole element); after anything
+// else it may. A keyword used as a property name (`x.delete`) is a value, hence
+// the check of the token before it.
 //
-// AFTER A VALUE IT MAY NOT: an identifier, a literal, a closing `)` `]` `}`,
-// or a whole element. After anything else — an operator, an opening bracket, a
-// comma, `=>`, a keyword like `return` — it may. A keyword used as a property
-// name (`x.delete`) is a value, which is why the token before it is checked.
-//
-// AND A NON-NULL ASSERTION IS A VALUE. TypeScript's postfix `!` right after a
-// value (`limit! / 86_400`, `rows[0]!`, `f()!`) leaves a value, so the `/` after
-// it divides; read as the prefix `!` it opened a regular expression that ran to
-// the end of the file. The two are told apart the way the language tells them
-// apart: a postfix `!` touches the value before it, and a prefix one follows
-// an operator, a bracket or a keyword.
+// A NON-NULL ASSERTION IS A VALUE: a postfix `!` (`limit! / 86_400`, `f()!`)
+// leaves a value, so the `/` after it divides; read as a prefix `!` it opens a
+// regex running to the end of the file. A postfix `!` touches the value before
+// it; a prefix one follows an operator, a bracket or a keyword.
 func (l *lexer) expressionStarts() bool {
 	if len(l.toks) == 0 {
 		return true
@@ -680,20 +652,15 @@ func endsAValue(t token, earlier []token) bool {
 // opensElement reports whether the `<` at l.pos opens a JSX element rather
 // than a generic function's type parameters.
 //
-// `<T,>(x: T) => x` and `<T extends U>(…)` are how a `.tsx` file spells a
-// generic arrow, precisely because `<T>(…)` would be an element there.
-//
-// AND A GENERIC FUNCTION TYPE MAY SPELL IT `<T>(…) => R`, because a TYPE
-// position holds no JSX: `importOriginal: <M>() => Promise<M>` annotates a
-// parameter, and `type Load = <M>() => M` declares one. This scanner keeps no
-// track of types, so it reads the SHAPE that only a type can have: `<Name>`,
-// then a balanced `( … )`, then `=>`. In an expression position the compiler
-// reads that shape as an element and refuses the file, so in a tree that
-// compiles it is a type — the one element that shares it is one whose text
-// opens with a parenthesis and an arrow (`<b>(x) => y</b>`), which then fails
-// to scan here, naming the line, rather than being read as the wrong thing.
-//
-// Every other `<` followed by a name or by `>` (a fragment) is an element.
+// `<T,>(x: T) => x` and `<T extends U>(…)` spell a generic arrow in `.tsx`,
+// because `<T>(…)` would be an element there. A GENERIC FUNCTION TYPE MAY SPELL
+// IT `<T>(…) => R`, since a TYPE position holds no JSX
+// (`importOriginal: <M>() => Promise<M>`). The scanner keeps no track of types,
+// so it reads the SHAPE only a type has: `<Name>`, a balanced `( … )`, `=>`.
+// In an expression the compiler reads that as an element and refuses the file,
+// so in a compiling tree it is a type; the one element sharing it
+// (`<b>(x) => y</b>`) fails to scan, naming the line. Every other `<` followed
+// by a name or `>` (a fragment) is an element.
 func (l *lexer) opensElement() bool {
 	src := *l.src
 	i := l.pos + 1

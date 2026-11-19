@@ -293,37 +293,18 @@ func listing(corpus []corpusFile, ids []codeindex.OID) int64 {
 	return held
 }
 
-// BenchmarkCodeIndex measures code search's index at the size it is sized
-// for — a tip of 120k files, built from this repository's own tree (blob) —
-// and reports what re-derives its provisional figures (M3-O6):
-//
-//   - build-s/GB: the build's seconds a gigabyte of source, segments written
-//     as production writes them (a segment each codeindex.SegmentSourceBytes,
-//     merged as codeindex.MergeNewest says after each) straight into files
-//     and read back through mappings of them, as the cache's build does
-//     (build). The blobs are made in memory where the cache reads them
-//     through one cat-file;
-//   - index-B/src-B: the index's bytes — its segments and its tip map — a
-//     byte of the source it indexes;
-//   - build-peak-MiB: the most heap the WHOLE build holds at once — each
-//     segment's builder and its writing, each merge — what
-//     codeindex.SegmentSourceBytes is sized by (buildPeak);
-//   - build-peak-next-MiB: the same at the next power of two,
-//     2·codeindex.SegmentSourceBytes, which the sizing rules out;
-//   - listing-MiB: the heap the cache's build holds beside it for the tip's
-//     listing, for the whole build (listing);
-//   - zlib-B/src-B: the tree's own files deflated as a pack deflates an
-//     object, a byte of source — the least a copy holding the tip takes,
-//     against which CodeIndexShare weighs the index;
-//   - query-p50-ms and query-p99-ms: a search's lookups over every segment
-//     and its confirmation of the candidates' lines, up to gitlet.MaxSearchHits,
-//     for benchQueries literals of the tree's own identifiers, one in four
-//     folding case. The cat-file that reads a candidate in production is not
-//     timed: a blob is made in memory here.
-//
-// It is one bounded run: -run '^$' -bench '^BenchmarkCodeIndex$' -benchtime
-// 1x -count 1. Its figures are on the machine that ran it, which the commit
-// that set the figures names.
+// BenchmarkCodeIndex measures the index at its sized-for tip of 120k files
+// from this repository's tree, reporting what re-derives its provisional
+// figures (M3-O6): build-s/GB (segments written as production does, per
+// codeindex.SegmentSourceBytes and MergeNewest, read back through mappings;
+// blobs made in memory); index-B/src-B; build-peak-MiB, the most heap the WHOLE
+// build holds, which SegmentSourceBytes is sized by (buildPeak), and
+// build-peak-next-MiB at 2·SegmentSourceBytes, which the sizing rules out;
+// listing-MiB, the cache build's heap for the tip's listing; zlib-B/src-B, the
+// tree deflated as a pack does, against which CodeIndexShare weighs the index;
+// and query-p50-ms/query-p99-ms, lookups plus confirming candidates' lines (to
+// gitlet.MaxSearchHits) for benchQueries identifiers, one in four folding case,
+// production's cat-file untimed. Run with -run '^$' -benchtime 1x -count 1.
 func BenchmarkCodeIndex(b *testing.B) {
 	corpus := benchCorpus(b)
 	ids := make([]codeindex.OID, benchFiles)

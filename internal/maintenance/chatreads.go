@@ -11,62 +11,26 @@ import (
 
 // THE CHAT READ STATE OF A SEAT THAT LEFT.
 //
-// How far each person has read in each room, what they have muted and whether
-// they are in do-not-disturb is one record per HUMAN SEAT — kept under the seat
-// the person acts as, so its next holder inherits it — in a coordination bucket
-// with NO AGE ([coord.ChatReads] says why: an expired cursor marks a room its
-// reader had finished as unread). So a record leaves only when somebody
-// decides it should, and until this job nothing did: every seat anybody ever
-// read a room as kept up to [coord.MaxReadCursors] cursors for the life of the
-// deployment, after leaving the company as much as before.
+// Read state is one record per HUMAN SEAT (its next holder inherits it) in a
+// bucket with NO AGE ([coord.ChatReads]: an expired cursor marks a finished
+// room unread), so this job forgets the records of seats that left. It is the
+// mailbox retirement's protocol (mailboxes.go) with its two rules:
 //
-// The reconcile is the mailbox retirement's protocol at the size of what it
-// protects (mailboxes.go), and keeps the two rules that make that one safe:
-//
-//   - ABSENCE IS OBSERVED, NOT INFERRED. The first sweep whose roster lacks a
-//     record's seat stamps the record ([coord.ChatReads.SetChatReadAbsence]),
-//     a sweep that finds the seat back clears the stamp, and a record is
-//     forgotten only once the stamp is older than [ChatReadForgetGrace]. The
-//     stamp is in the record rather than in this job, because the duty moves
-//     and a grace remembered in memory would restart at every handoff.
-//   - UNKNOWN IS NEVER ABSENT. The roster is the human seats of the company
-//     the fleet is pointed at, and a roster that cannot be read — the pointer
-//     unreachable, this node not yet on that revision — stamps nothing and
-//     forgets nothing. A store blip or a lagging duty holder must not be able
-//     to cost a seat its place in every room.
-//
-// What it does NOT need from the mailbox protocol is the lease and the
-// retirement mark: a forget deletes one record and nothing outside it, and
-// the store checks the stamp against the bound in the same compare-and-set
-// that removes it ([coord.ChatReads.ForgetChatRead]), so a seat a peer sweep
-// has just found back keeps its cursors whatever this sweep listed.
-//
-// # The roster is the HUMAN seats, and a seat is what leaves
-//
-// A record is kept under the seat its person acts as, so it is the SEAT that
-// has to be gone, never its holder: a person removed or moved off a seat that
-// the company still has leaves the record to the seat's next holder, exactly
-// as the seat's tracker inbox stays. And only a human seat can own one — every
-// binding a person or a machine acts through names a human seat, and a turn's
-// agent seat is never handed the flush — so a record under any other handle
-// is one nobody can reach, and the roster leaving it out forgets it a grace
-// after it was first seen, rather than keeping it for as long as an agent seat
-// of that name exists. The forgotten record's purge marker is removed in its
-// turn by [MarkerJobs].
+//   - ABSENCE IS OBSERVED, NOT INFERRED: the first sweep lacking a seat stamps
+//     its record ([coord.ChatReads.SetChatReadAbsence]), a sweep finding it
+//     back clears the stamp, and it is forgotten once the stamp is older than
+//     [ChatReadForgetGrace]. The stamp is in the record: the duty moves.
+//   - UNKNOWN IS NEVER ABSENT: an unreadable roster stamps and forgets nothing.
 
 // ChatReadForgetGrace is how long a seat must have been absent from the
 // company the fleet is pointed at before its chat read state is forgotten.
 //
 // [MailboxRetirementGrace], deliberately the same value: both are what a seat
 // REMOVED from the chart leaves behind, and the undo window for a removal has
-// to be one answer. A seat deleted by accident and restored within a working
-// day comes back to its mailbox AND to every room exactly as read; a window
-// that differed would restore one and not the other, which is a stranger
-// outcome than losing both. The cost of the day is a record per removed seat
-// kept a day longer, which is nothing against a bucket that kept them for
-// ever. Like the mailbox's, the clock starts when a sweep FIRST OBSERVES
-// the absence, so the effective delay is this plus up to one [Interval]: a
-// forget is never early, only late.
+// to be one answer, else a seat restored by accident would get back its
+// mailbox but not its read state. Like the mailbox's, the clock starts when a
+// sweep FIRST OBSERVES the absence, so the delay is this plus up to one
+// [Interval]: a forget is never early, only late.
 const ChatReadForgetGrace = MailboxRetirementGrace
 
 // chatReadsJobName is what the sweep log and [Worker.Jobs] call the job.
@@ -114,7 +78,10 @@ type chatReadReconcile struct {
 
 // sweep is the job: clear the stamp of whoever is back, stamp whoever is
 // newly missing, and forget whoever has been missing since before the cutoff.
-// It reports how many records it forgot.
+// It reports how many records it forgot. It needs no lease or retirement mark:
+// the store checks the stamp in the same compare-and-set that removes the
+// record ([coord.ChatReads.ForgetChatRead]). Only a human seat owns a record,
+// so one under any other handle is forgotten a grace after first seen.
 //
 // The roster is read BEFORE the listing, so a record that appeared after the
 // roster was taken — a seat added to the chart and read as at once — is judged

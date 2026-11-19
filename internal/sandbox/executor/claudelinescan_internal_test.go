@@ -1386,9 +1386,9 @@ func scanEnds(ctx context.Context, r interface {
 // from none to two bytes past its length (so at, before and after each break),
 // with each tail a member can end in (none, NULs, a whole record, a lone CR, a
 // cut value, a blank, a short record), and its reader failing at every offset
-// with an error of its own, a wrapped io.EOF and a wrapped scrub bound, under
-// each bound about the failure, answers alike in pieces of 16 bytes and of
-// [lineChunkBytes].
+// with an error of its own, a wrapped io.EOF, a wrapped scrub bound and a
+// wrapped line bound, under each bound about the failure, answers alike in
+// pieces of 16 bytes and of [lineChunkBytes].
 //
 // Mutation: count no line's break against the member's bound; read a wrapped
 // io.EOF as the reader's error both where a piece is taken and where the line
@@ -1419,7 +1419,7 @@ func TestTheReaderEndsAMemberAsTheWholeReaderDoes(t *testing.T) {
 	}
 	text := member + brief
 	for _, failure := range []error{io.ErrUnexpectedEOF, fmt.Errorf("member: %w", io.EOF),
-		fmt.Errorf("meter: %w", errScrubBound)} {
+		fmt.Errorf("meter: %w", errScrubBound), fmt.Errorf("line: %w", errLineBound)} {
 		for cut := range len(text) + 1 {
 			read := func() io.Reader {
 				return io.MultiReader(strings.NewReader(text[:cut]), iotest.ErrReader(failure))

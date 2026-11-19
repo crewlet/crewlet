@@ -92,6 +92,28 @@
 //     not a fact a fleet has to agree on. On an ordered, identity-claiming log
 //     it would be one record per screenful of scrolling, replayed by every
 //     node from zero, for ever.
+//   - IT DOES NOT SEARCH. Chat's keyword index is `search`'s ChatIndexer,
+//     with no vectors, because chat is a keyword corpus only (ADR-0071).
+//
+// # Who may speak, and who judges
+//
+// A speaker is a seat. A credential acting as itself ([AuthorOperator])
+// speaks in no room and reads none; it may only erase, prune and set a
+// room's retention, which reach past membership without reading. The store
+// judges VALUES, never authority: a moderator's delete arrives as
+// [MessageAuthority] and an archive as [ChannelAuthority], decided by the
+// asking node's authz and judged against the stored row, because the applier
+// has no caller to authorize. A rule a later build may change travels on the
+// record ([MessagePost].MembersOnly, [Reaction].Cap), so every node applies
+// the rule its writer had.
+//
+// A person is never answered by silence: the wake rules, and the answerer
+// that guarantees it, are recipients.go's, one set of functions the decide
+// and the parser both call so writer and parser cannot disagree.
+//
+// The read types declare the fields that hold somebody else's words
+// (`untrusted:"fence"` or `untrusted:"name"`, provenance.FieldTag), which the
+// agent's read tools may not answer unlabelled.
 package chatlet
 
 import (
@@ -123,16 +145,13 @@ const (
 	// description a person reads under its name), each in CHARACTERS:
 	// Unicode code points, counted by [textChars].
 	//
-	// THE ONE BOUND IN THIS BLOCK THAT IS NOT BYTES, because a person edits
-	// both in one dialog under a visible counter, and a counter has to count
-	// what the person sees: a byte bound let a sentence in a script that
-	// spends two or three bytes a character stop at a third of the length
-	// the same sentence in English reached. The record stays small either
-	// way, at most four bytes a character.
+	// THE ONE BOUND HERE THAT IS NOT BYTES: both are edited in one dialog under
+	// a visible counter, which must count what the person sees (a byte bound cut
+	// a multi-byte script at a third of English's length). The record stays small,
+	// at most four bytes a character.
 	//
-	// 250 EACH, one figure for both: a topic is a line in the room's header,
-	// and a purpose is a paragraph somebody reads before deciding to join.
-	// One that needs more is describing a project, which has a page.
+	// 250 EACH: a topic is a header line, a purpose a paragraph read before
+	// joining; more is describing a project, which has a page.
 	MaxTopic   = 250
 	MaxPurpose = 250
 
@@ -228,51 +247,27 @@ const (
 
 	// MaxCollectiveRecipients bounds how many agents one `@channel` wakes.
 	//
-	// [MaxMentions], THIRTY-TWO: a collective address wakes no more agents
-	// than one message may name, because a name and `@channel` are the
-	// same wake, and a person's `@channel` obliges every seat it reaches
-	// to answer exactly as a mention does. More would let one gesture
-	// start more runs than naming each seat could; fewer would only make
-	// the writer name the seats it left out, to wake them all the same.
-	// ONE CONSTANT, not a second figure, so the two cannot drift apart.
+	// [MaxMentions], THIRTY-TWO: a name and `@channel` are the same wake, so a
+	// collective address wakes no more than one message may name. ONE CONSTANT.
 	//
-	// A WAKE IS ITS SEAT'S EXECUTOR IN A BOX (ADR-0066): its first request
-	// carries the harness's own prompt (about 15k input tokens for Claude
-	// Code) even where the seat decides the message was not for it, and
-	// its box is a 200 to 400 MB process on the engine host for a `direct`
-	// cell, or one of the sandboxes an E2B account may run at once. So this
-	// is also how many boxes one broadcast starts, and nothing but this cap
-	// and the seats it reaches, each running one at a time, bounds them:
-	// NOT a node's turn budget
-	// ([github.com/crewlet/crewlet/internal/node.DefaultMaxConcurrent],
-	// the same figure today), which a wake holds only while it launches
-	// and while its run is collected and reviewed. Past the cap the
-	// routing keeps the first 32 and sets [Notify.WakesTruncated], so the
-	// room can see that it reached fewer people than it named.
+	// A WAKE IS ITS SEAT'S EXECUTOR IN A BOX (ADR-0066): about 15k input tokens
+	// (Claude Code) and a 200 to 400 MB process for a `direct` cell, so this is
+	// the most boxes one broadcast starts. It is NOT a node's turn budget
+	// ([github.com/crewlet/crewlet/internal/node.DefaultMaxConcurrent]). Past the
+	// cap the routing keeps the first 32 and sets [Notify.WakesTruncated].
 	MaxCollectiveRecipients = MaxMentions
 
 	// MaxRecipients bounds the whole resolved recipient set on one post.
 	//
-	// IT IS A CAP THAT CUTS, NOT A CEILING DERIVED FROM THE ARMS. Three
-	// collections carry limits of their own ([MaxMentions],
-	// [MaxThreadParticipants] and [MaxCollectiveRecipients], the last
-	// under whichever ONE of its two reasons the author raised), and
-	// together with the one answerer they take at most 81. The others carry none: a direct
-	// conversation's participants (at most [MaxDMParticipants], by the
-	// room's own cap), a thread's followers and a room's followers of
-	// everything. Those are cut HERE, and the cut sets
-	// [Notify.WakesTruncated], so a room can see that a message reached
-	// fewer people than follow it.
+	// A CAP THAT CUTS. [MaxMentions], [MaxThreadParticipants] and
+	// [MaxCollectiveRecipients] (under ONE of its two reasons) plus the answerer
+	// take at most 81. Unbounded arms (direct participants, thread followers,
+	// room followers of everything) are cut HERE, setting [Notify.WakesTruncated].
 	//
-	// NINETY-SIX, the smallest multiple of [MaxCollectiveRecipients] above
-	// the 81 the capped arms can fill: a post that fills every capped arm
-	// at once is never cut by the total, so the total bites only on the
-	// arms nothing else bounds. Every recipient is a wake, an executor in
-	// a box, so this is also the most boxes one post starts, and never
-	// more than the seats it reaches would run at once for any other
-	// cause, since each runs one at a time. It is also a line of the
-	// routing snapshot each, which at this figure still fits
-	// [MaxRecordBytes] beside a body at every cap.
+	// NINETY-SIX, the smallest multiple of [MaxCollectiveRecipients] above 81:
+	// a post filling every capped arm is never cut, so the total bites only on
+	// unbounded arms. Each recipient is a box, and a line of the routing snapshot,
+	// which still fits [MaxRecordBytes] beside a body at every cap.
 	MaxRecipients = 96
 
 	// MaxMembers bounds one channel's membership.
@@ -287,19 +282,14 @@ const (
 
 	// MaxChannels bounds how many channels one company has.
 	//
-	// A THOUSAND, the same figure as [MaxMembers] and for the adjacent
-	// reason: a company whose org chart has a room per unit, per project
-	// and per pair is nowhere near it, and past it the sidebar is a search
-	// problem rather than a list. It binds at the CREATE — nothing in a
-	// record can count the company's rooms — so the write path refuses the
-	// thousand-and-first naming this constant.
+	// A THOUSAND, as [MaxMembers]: a room per unit, project and pair is nowhere
+	// near it, and past it the sidebar is a search problem, not a list. It binds
+	// at the CREATE (no record can count the company's rooms), so the write path
+	// refuses the thousand-and-first naming this constant.
 	//
-	// IT COUNTS LIVE ROOMS, not every row ever written. There is no channel
-	// delete in this vocabulary, so counting archived rooms made this a
-	// number a company could reach once and never get back under — with a
-	// refusal telling it to archive a room, which did nothing. Archiving is
-	// the release, which is what the sidebar argument above was about in the
-	// first place.
+	// IT COUNTS LIVE ROOMS. There is no channel delete, so counting archived
+	// rooms would be a number reached once and never left, with a refusal telling
+	// the company to archive a room, which did nothing. Archiving is the release.
 	MaxChannels = 1000
 
 	// MaxDMParticipants bounds a direct or group conversation.
@@ -317,16 +307,12 @@ const (
 	// THIRTY-TWO. Past it a message's reactions are longer than the
 	// message, and every one is a row replicated to every node.
 	//
-	// THE APPLIER ENFORCES THIS ONE, not a Validate here, and that is
-	// forced by the record's shape: a [Reaction] is a single toggle so
-	// that two people reacting never overwrite each other, and a toggle
-	// cannot see the set it is joining. The applier can — it holds the
-	// message's rows in its own transaction — so it declines the
-	// thirty-third distinct emoji deterministically, reaching the same
-	// answer on every node. FROM THE RECORD'S STAMP ([Reaction.Cap]),
-	// which the writer sets to this, never from the applying node's own
-	// copy of it: a later build that moves the number would otherwise
-	// decide one record two ways.
+	// THE APPLIER ENFORCES THIS ONE, not a Validate here: a [Reaction] is a
+	// single toggle (so two people never overwrite each other) and cannot see the
+	// set it joins; the applier holds the message's rows and declines the
+	// thirty-third distinct emoji identically on every node. IT READS THE
+	// RECORD'S STAMP ([Reaction.Cap]), never its own copy of this constant: a
+	// later build moving the number would decide one record two ways.
 	MaxReactionEmoji = 32
 
 	// MaxEraseMessages bounds one erase gesture.
@@ -341,28 +327,17 @@ const (
 	MaxEraseMessages = 250
 )
 
-// MaxRecordBytes is the largest record this domain publishes, envelope
-// included ([statelog.StreamSpec.MaxRecordBytes]) — the bound the framework
-// refuses a larger one at, `record_too_large`, before anything is sent, and
-// what the stream's own message limit and its gate reserve are sized from.
+// MaxRecordBytes is the largest record this domain publishes, envelope included
+// ([statelog.StreamSpec.MaxRecordBytes]); a larger one is `record_too_large`.
 //
-// HALF A MEBIBYTE, sized from the worst record the caps admit rather than
-// from a typical one. A record is JSON, and every `<`, `>`, `&`, control
-// character or invalid byte in a value becomes a six-byte escape, so a post at
-// every cap at once — [MaxBody] of such text, [MaxLinks] of [MaxLinkBytes]
-// full of `&`, and a routing snapshot at [MaxRecipients] of the widest handles
-// a seat may have — encodes to about 305 KiB, an edit to the same, and a
-// unit room's create or membership at [MaxMembers] to about 87 KiB. A bound
-// any of those crosses refuses a message somebody typed — a pasted block of
-// markup is ordinary — or a membership the org chart can never write, and the
-// record tests hold every op at every cap under this one. The next power of
-// two above the worst is the bound: half of an external NATS cluster's 1 MiB
-// `max_payload` default, the one ceiling in the path this package does not
-// own, and a gate reserve whose fleet term — seven peers' appends of it and a
-// mebibyte — is under five mebibytes, far inside a sixteenth of the
-// gibibyte the field's floor allows ([statelog.Reservation]). The thread a
-// message is part of is not on it: a woken seat reads that at turn start
-// ([ThreadReader]).
+// HALF A MEBIBYTE, from the worst record the caps admit: JSON turns each `<`,
+// `>`, `&`, control or invalid byte into six, so a post at every cap ([MaxBody]
+// of such text, [MaxLinks] of [MaxLinkBytes] of `&`, a snapshot at
+// [MaxRecipients]) is about 305 KiB, a membership at [MaxMembers] 87 KiB; the
+// record tests hold every op under it. The next power of two is half of an
+// external NATS cluster's 1 MiB `max_payload` default and keeps the gate
+// reserve's fleet term under five mebibytes ([statelog.Reservation]). The thread
+// is not on it: a woken seat reads it at turn start ([ThreadReader]).
 const MaxRecordBytes = 512 << 10
 
 // ChatMessagesPerDay is the declared census this domain is sized against.
@@ -448,18 +423,15 @@ func (k Kind) Valid() bool { return slices.Contains(Kinds(), k) }
 // Direct reports a channel whose identity is DERIVED from its participants
 // rather than claimed as a name.
 //
-// TWO, AND IT IS A CLOSED SET. The distinction is not cosmetic: a named
-// channel's create arbitrates on its NAME, so two founders typing `#launch`
-// contend at the broker and one of them is told it already exists — while a
-// direct conversation has no name to contend for, and two seats opening the
-// same DM from two nodes must converge on ONE room rather than be told to
-// pick another. [DirectChannelID] is what makes that true, and this is the
-// predicate that decides which discipline a create takes.
+// This decides which discipline a create takes: a named channel's create
+// arbitrates on its NAME (two founders typing `#launch` contend at the broker),
+// while a direct conversation has none, and two seats opening the same DM from
+// two nodes must converge on ONE room ([DirectChannelID]).
 //
-// A CLOSED SET RATHER THAN A NEGATIVE ONE, so a kind added later is named
-// rather than silently derived: a kind wrongly treated as direct would have
-// its create published on a subject nothing arbitrates a name against, and
-// two rooms with one name is not a state this alphabet can express.
+// A CLOSED SET, NOT A NEGATIVE ONE, so a kind added later is named rather than
+// silently derived: one wrongly treated as direct would publish its create on a
+// subject nothing arbitrates a name against, and two rooms with one name is not
+// a state this alphabet can express.
 func (k Kind) Direct() bool {
 	switch k {
 	case KindDM, KindGroup:
@@ -536,37 +508,17 @@ func NormalizeName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
 }
 
-// namePattern is the shape of a channel name: lower-case alphanumerics,
-// hyphens and underscores, starting with an alphanumeric, at most
-// [MaxChannelName] bytes.
+// namePattern is the shape of a channel name: lower-case alphanumerics, `-` and
+// `_`, starting alphanumeric, at most [MaxChannelName] bytes.
 //
-// THE UNDERSCORE IS ADMITTED because a unit's channel is one name for every
-// chat backend ([github.com/crewlet/crewlet/internal/config]'s unit channel
-// grammar is this one), and Slack and Mattermost both admit it — a vendor
-// company whose real channel is `dev_ops` must be able to name it. Nothing
-// here is put at risk by it: a name reaches a broker subject only as a digest
-// ([ChannelToken]), never as itself, so `_` is no more a token character than
-// `-` is.
-//
-// # Why this is not github.com/crewlet/crewlet/internal/org.ValidHandle
-//
-// The two patterns look alike — org's is `^[a-z0-9][a-z0-9-]*$` — and chat
-// deliberately does not delegate to it, for two reasons that both bite later:
-//
-//   - IT CARRIES NO LENGTH BOUND, and it does not need one: a seat handle is
-//     slugified from a role name the config already bounds. A channel name is
-//     typed by a person, goes into a broker subject token and a claim key, and
-//     is bounded here so that the shape and the length are ONE rule checked in
-//     ONE place rather than a regex and a forgotten `len` at each caller.
-//   - THEY ARE DIFFERENT NAMESPACES WITH DIFFERENT OWNERS. Widening the seat
-//     handle to admit an underscore is a decision about identity derivation —
-//     it re-derives every agent id — and it must not silently widen what a
-//     channel may be called, nor the reverse. Sharing the regex would make
-//     each change a change to both.
-//
-// The bound and [MaxChannelName] must agree; a test holds them together.
-// Compiled at first use, not at init: Gitlet's push hook is this
-// binary, and pays every package's init (cmd/crewlet's hookinit_test.go).
+// THE UNDERSCORE IS ADMITTED: a unit's channel is one name for every chat
+// backend ([github.com/crewlet/crewlet/internal/config]'s grammar is this one)
+// and Slack and Mattermost admit it; it risks nothing, since a subject carries
+// only a digest ([ChannelToken]). Not org.ValidHandle: that has no length bound
+// and widening it re-derives every agent id, so the namespaces must not move
+// together. The bound and [MaxChannelName] must agree; a test holds them.
+// Compiled at first use: Gitlet's push hook pays every package's init
+// (cmd/crewlet's hookinit_test.go).
 var namePattern = sync.OnceValue(func() *regexp.Regexp {
 	return regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 })
@@ -614,39 +566,16 @@ func invalid(field, why string, args ...any) error {
 }
 
 // Sentence is a refusal this package wrote, as its reader is told it: the field
-// it names and what to do, or the rule that forbade it — without the "chatlet:
-// invalid:" or "chatlet: that is not this actor's to do:" a Go error opens with,
-// which says where the error came from and nothing about what to change. Any
-// other error, or a refusal a caller wrapped in context of its own, is its
-// whole message, because context is never dropped to tidy a prefix away.
-//
-// # Who reads these
-//
-// A model, in the chat tools' answers: a seat's, a person's own assistant's
-// over the operator's MCP surface, and the Dashboard Assistant's, told in
-// process. Chat's refusals reached it as "chatlet: invalid: body: …", a
-// package path where an instruction belongs. And a person whose chat QUESTION
-// was refused for what it asked: the read answers its `invalid` as the detail
-// the screen draws (internal/api/queries). A person whose chat gesture the
-// dashboard sends is answered the refusal's class in its code's own words,
-// never a tool's sentence, until the refusal catalog words it for them
-// (ADR-0060).
-//
-// THE EIGHT IT RECOGNISES ARE THE EIGHT WRITTEN AS SENTENCES: a field refused
-// ([ErrInvalid]), a gesture this actor may not make ([ErrForbidden]), a room
-// that takes nothing more ([ErrArchived]) and a message that carries all the
-// emoji it may ([ErrReactionsFull]), each a state the sentence says how to
-// change, a room this node cannot serve until it is upgraded
-// ([ErrUnknownKind]), a room, a message or a thread that is not there
-// ([ErrNotFound]), a name another room holds ([ErrNameTaken]), a room that
-// changed under a decision ([ErrConflict]) and a membership stated against
-// members that changed since they were read ([ErrMembersChanged]). Each names a room as a person
-// knows it ([Channel.called]) and never by its id. THE FRAMEWORK'S OWN THREE —
-// a lost race (the conflict beneath [ErrConflict]), a create of what is there
-// and a write a deletion keeps deleted — are told in the state log's words for
-// a person ([statelog.Sentence]), here as well as by every surface that asks
-// the state log first (internal/agent/builtin's WriterSentence), so a caller
-// that asks only this one cannot print the framework's words after the mark.
+// and what to do, without the "chatlet: invalid:" prefix. Any other error, or a
+// refusal wrapped in a caller's context, is its whole message. Readers: models
+// in chat tool answers and a person whose chat QUESTION was refused; a dashboard
+// gesture gets the class in its code's words until the catalog words it (ADR-0060).
+// It recognises [ErrInvalid], [ErrForbidden], [ErrArchived], [ErrReactionsFull],
+// [ErrUnknownKind], [ErrNotFound], [ErrNameTaken], [ErrConflict] and
+// [ErrMembersChanged], each naming a room as a person knows it
+// ([Channel.called]), never by id. The framework's own three (lost race, create
+// of what is there, write a deletion keeps deleted) come from [statelog.Sentence],
+// so a caller asking only this one cannot print them after the mark.
 func Sentence(err error) string {
 	if said, ok := statelog.Sentence(err); ok {
 		return said
