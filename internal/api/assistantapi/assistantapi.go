@@ -83,7 +83,8 @@ type Service interface {
 	ModelNotice(ctx context.Context, p iam.Principal) *wire.ModelNotice
 	ReadsImages() bool
 	AssignedModel() *wire.ViewerModel
-	Conversations(ctx context.Context, p iam.Principal, cursor string, limit int) (wire.ConversationList, error)
+	Conversations(ctx context.Context, p iam.Principal, cursor string, limit int, q string) (wire.ConversationList, error)
+	Rename(ctx context.Context, p iam.Principal, id uuid.UUID, title, key string) (wire.ConversationSummary, error)
 	Create(ctx context.Context, p iam.Principal, key string) (wire.ConversationSummary, error)
 	Transcript(ctx context.Context, p iam.Principal, id uuid.UUID) (wire.Transcript, error)
 	Clear(ctx context.Context, p iam.Principal, id uuid.UUID, key string) (wire.PurgeAnswer, error)
@@ -176,6 +177,7 @@ func (s *Surface) Routes(mux authz.Mux) error {
 	mount("POST /assistant/conversations", converse, s.create)
 	mount("GET /assistant/conversations/{id}", read, s.transcript)
 	mount("DELETE /assistant/conversations/{id}", converse, s.clear)
+	mount("PATCH /assistant/conversations/{id}", converse, s.rename)
 	mount("POST /assistant/conversations/{id}/turns", converse, s.ask)
 	mount("GET /assistant/conversations/{id}/stream", read, s.stream)
 	mount("POST /assistant/turns/{id}/stop", converse, s.stop)

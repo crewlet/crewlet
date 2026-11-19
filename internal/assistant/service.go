@@ -543,7 +543,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		}
 		t.record(ctx, "title", func(ctx context.Context, w Write) error {
 			return s.records.TitleConversation(ctx, w.Step("title", "question"), ts.Conversation,
-				title)
+				title, wire.TitleByModel)
 		})
 	}
 

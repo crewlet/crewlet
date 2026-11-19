@@ -574,6 +574,9 @@ describe("a reloaded transcript's compliance reads", () => {
         conversation: {
           id: CONV,
           title: "Spend",
+          title_set_by: "model",
+          last_turn_state: null,
+          open_turn_id: null,
           created_at: "2026-10-24T09:00:00Z",
           updated_at: "2026-10-24T09:05:00Z",
           last_activity_at: "2026-10-24T09:05:00Z",
@@ -599,6 +602,9 @@ describe("a reloaded transcript", () => {
         conversation: {
           id: CONV,
           title: "Spend",
+          title_set_by: "model",
+          last_turn_state: null,
+          open_turn_id: null,
           created_at: "2026-10-24T09:00:00Z",
           updated_at: "2026-10-24T09:05:00Z",
           last_activity_at: "2026-10-24T09:05:00Z",
@@ -680,6 +686,9 @@ describe("a reloaded transcript's ended turns", () => {
         conversation: {
           id: CONV,
           title: "awdwad",
+          title_set_by: "model",
+          last_turn_state: null,
+          open_turn_id: null,
           created_at: "2026-10-24T09:00:00Z",
           updated_at: "2026-10-24T09:05:00Z",
           last_activity_at: "2026-10-24T09:05:00Z",
@@ -751,7 +760,10 @@ describe("a reloaded transcript's steps", () => {
       transcript: {
         conversation: {
           id: CONV,
-          title: "",
+          title: null,
+          title_set_by: null,
+          last_turn_state: null,
+          open_turn_id: null,
           created_at: "2026-10-24T09:00:00Z",
           updated_at: "2026-10-24T09:05:00Z",
           last_activity_at: "2026-10-24T09:05:00Z",

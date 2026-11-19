@@ -29,10 +29,14 @@ func applyConversation(ctx context.Context, tx *sql.Tx, c applyContext, payload 
 		}
 		return affected(res), nil
 	case ConversationTitled:
+		// A PERSON'S TITLE STAYS: an engine title applied after it changes
+		// nothing, in whichever order the two were published.
 		res, err := tx.ExecContext(ctx, `
-			UPDATE assistant_conversations SET title_sealed = ?,
+			UPDATE assistant_conversations SET title_sealed = ?, title_set_by = ?,
 				updated_at = MAX(updated_at, ?), version = ?
-			WHERE id = ? AND version < ?`, p.TitleSealed, c.at(), c.packed, id, c.packed)
+			WHERE id = ? AND version < ? AND (title_set_by != ? OR ? = ?)`,
+			p.TitleSealed, string(p.By), c.at(), c.packed, id, c.packed,
+			string(wire.TitleByPerson), string(p.By), string(wire.TitleByPerson))
 		if err != nil {
 			return 0, fmt.Errorf("assistantdomain: title conversation %s at %s: %w",
 				id, c.position, err)

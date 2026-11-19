@@ -123,10 +123,20 @@ type AuditReadRequest struct {
 	Reason          string `json:"reason"`
 }
 
-// ConversationList is the person's conversations, newest first.
+// ConversationList is the person's conversations, newest first: every one, or
+// those whose title holds the listing's search words.
 type ConversationList struct {
 	Conversations []ConversationSummary `json:"conversations"`
-	NextCursor    string                `json:"next_cursor,omitempty"`
+	// NextCursor continues the listing, null on its last page.
+	NextCursor *string `json:"next_cursor"`
+}
+
+// ConversationRename names a conversation as a person wants it called:
+// `PATCH /assistant/conversations/{id}`. Title is 1 to [TitleMaxRunes] runes
+// with something besides spaces.
+type ConversationRename struct {
+	ProtocolVersion int    `json:"protocol_version"`
+	Title           string `json:"title"`
 }
 
 // ConversationCreated answers a create.
@@ -136,18 +146,24 @@ type ConversationCreated struct {
 
 // ConversationSummary is one conversation in a list.
 type ConversationSummary struct {
-	ID        uuid.UUID `json:"id"`
-	Title     string    `json:"title"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID uuid.UUID `json:"id"`
+	// Title is null before the first question names the conversation.
+	Title *string `json:"title"`
+	// TitleSetBy is who named it, null while it has no title: a person's
+	// title is never replaced by one the engine writes.
+	TitleSetBy *TitleSource `json:"title_set_by"`
+	CreatedAt  time.Time    `json:"created_at"`
+	UpdatedAt  time.Time    `json:"updated_at"`
 	// LastActivityAt is when the conversation was last used (a turn opened,
 	// a message, a step, a card or a proposal recorded), the moment a listing
 	// is ordered by and so the one it shows. UpdatedAt also moves on a change
 	// that is not activity (a new title), so a list showing it disagrees with
 	// its own order.
 	LastActivityAt time.Time `json:"last_activity_at"`
-	// LastTurnState is the newest turn's state, absent before the first.
-	LastTurnState TurnState `json:"last_turn_state,omitempty"`
+	// LastTurnState is the newest turn's state, null before the first.
+	LastTurnState *TurnState `json:"last_turn_state"`
+	// OpenTurnID is the turn still running or parked, null for none.
+	OpenTurnID *uuid.UUID `json:"open_turn_id"`
 }
 
 // Transcript is a conversation as its owner reads it after a reload, and as

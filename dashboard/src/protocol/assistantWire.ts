@@ -43,6 +43,8 @@ import type {
   AssistantConversationCreated,
   AssistantConversationEvent,
   AssistantConversationList,
+  AssistantConversationRename,
+  AssistantConversationSummary,
   AssistantDeltaEvent,
   AssistantDoneEvent,
   AssistantEntityCard,
@@ -436,6 +438,10 @@ export interface AssistantRoutes {
   };
   "GET /assistant/conversations/{id}": { body: null; answer: AssistantTranscript };
   "DELETE /assistant/conversations/{id}": { body: null; answer: AssistantPurgeAnswer };
+  "PATCH /assistant/conversations/{id}": {
+    body: AssistantConversationRename;
+    answer: AssistantConversationSummary;
+  };
   "POST /assistant/conversations/{id}/turns": {
     body: AssistantTurnRequest;
     answer: AssistantTurnAccepted;

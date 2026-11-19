@@ -649,7 +649,7 @@ export function reduce(view: ConversationView, event: TurnEvent): ConversationVi
     case "transcript":
       return {
         id: event.transcript.conversation.id,
-        title: event.transcript.conversation.title,
+        title: event.transcript.conversation.title ?? "",
         auditReads: event.transcript.audit_reads,
         turns: fromTranscript(event.transcript),
         stream: "closed",
