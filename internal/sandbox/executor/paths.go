@@ -384,7 +384,7 @@
 // transcript reads of up to about 22 s each and spends internal/sandbox's
 // MainThreadReadWait (27 s), so a person paging a transcript would decide how a
 // turn's relaunch is told; apart, it never does. One slot, not two: the
-// process's thread readers then hold at worst 2 x 134 + 43 + 48 = 359 MiB
+// process's thread readers then hold at worst 2 x 227 + 43 + 48 = 545 MiB
 // beside the base tier, a reading's 43 in its slot ([HoldingsReadsAtOnce]).
 // One waiter behind a pass over ordinary lines at the bound (2.6 to 2.8 s with
 // the count and the next request's estimate, 5.7 s loaded) is through in
