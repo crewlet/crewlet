@@ -765,10 +765,11 @@ func (c *callResult) start(ordinal int, shaped, ofKept bool) {
 }
 
 // order notes a member read out of the order a stream takes: the state's
-// result can no longer stream, and a stream it opened is let go.
+// result can no longer stream, and a stream it opened is let go, with the
+// member it was taking.
 func (c *callResult) order(ok bool) {
 	if !ok {
-		c.canonical, c.stream = false, nil
+		c.canonical, c.stream, c.streamingMessage, c.partStreaming = false, nil, false, false
 	}
 }
 
@@ -809,6 +810,7 @@ func (c *callResult) failureStart() {
 	c.order(c.failures == 1 && c.statuses > 0 && c.contents == 0)
 	c.message, c.kind, c.messageLen = c.message[:0], c.kind[:0], 0
 	c.messagePast, c.kindPast, c.messages, c.types = false, false, 0, 0
+	c.streamingMessage, c.messageStreamed = false, false
 }
 
 // failureEnd is the state's `error` read: a failure that is no object says
@@ -820,12 +822,14 @@ func (c *callResult) failureEnd(k jsonscan.Kind) {
 	c.streamingMessage = false
 }
 
-// failureSink is where a failure's type or message is read.
+// failureSink is where a failure's type or message is read: a member written
+// again starts over, ending what the stream took of the one before it.
 func (c *callResult) failureSink(i int, k jsonscan.Kind) io.Writer {
 	if i == failureMessage {
 		c.messages++
 		c.order(c.messages == 1)
 		c.message, c.messageLen, c.messagePast = c.message[:0], 0, false
+		c.streamingMessage, c.messageStreamed = false, false
 	} else {
 		c.types++
 		c.order(c.types == 1)

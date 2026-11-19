@@ -665,8 +665,9 @@ func personReadOf(t *testing.T, c carrier, doc []byte, r personRead) string {
 // within it, blank texts past it, a kind written last, a call's input as an
 // object and as a string past it, answers whose parts, joined or each, run past
 // it, blank parts past it, a failure's words past it, states written in order
-// and out of it, a key written twice, a tool's name past it, an image's mime
-// past it, and credentials across the bound.
+// and out of it, a key written twice, each member a result is read by written
+// twice around a value past it, a tool's name past it, an image's mime past
+// it, and credentials across the bound.
 func personVariants() []string {
 	q := func(s string) string {
 		raw, err := json.Marshal(s)
@@ -714,6 +715,17 @@ func personVariants() []string {
 		step(tool(`{"status":"error","error":{"message":` + q(strings.Repeat("m", 600)) + `},"content":[` +
 			part(strings.Repeat("y", 600)) + `]}`)),
 		step(tool(`{"status":"error","error":{"type":"x","message":` + q(w) + `},"error":{"message":"two"}}`)),
+		step(tool(`{"status":"completed","status":"completed","content":[` + part(w) + `]}`)),
+		step(tool(`{"status":"completed","content":[` + part(w) + `],"status":"completed"}`)),
+		step(tool(`{"status":"error","error":{"message":` + q(w) + `,"message":"x"}}`)),
+		step(tool(`{"status":"error","error":{"message":"x","message":` + q(w) + `}}`)),
+		step(tool(`{"status":"error","error":{"message":` + q(w) + `,"message":"x"},"content":[` + part("on") + `]}`)),
+		step(tool(`{"status":"error","error":{"type":` + q(w) + `,"type":"x"}}`)),
+		step(tool(`{"status":"error","error":{"type":"a","message":` + q(w) + `,"type":"b"}}`)),
+		step(tool(`{"status":"completed","content":[` + part(w) + `,{"type":"file","mime":"image/png","mime":"x"}]}`)),
+		step(tool(`{"status":"completed","content":[{"type":"text","text":` + q(w) + `,"text":"x"},` + part("on") + `]}`)),
+		step(tool(`{"status":"completed","content":[{"type":"text","text":"x","text":` + q(w) + `}]}`)),
+		step(tool(`{"status":"completed","content":[{"type":"text","text":` + q(w) + `,"type":"text"}]}`)),
 		step(tool(`{"status":"running","content":[` + part(w) + `]}`)),
 		step(tool(`{"status":"completed","content":[{"type":"file","mime":` + q("image/"+w) + `}]}`)),
 		step(tool(`{"status":"completed","content":[` + part(strings.Repeat("y", 1020)+secret+" and more") + `]}`)),
