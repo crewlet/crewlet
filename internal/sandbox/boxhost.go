@@ -207,9 +207,9 @@ func (r BoxRead) mayEnd(run PendingRun) bool {
 // host's own reads need none of it. The request's two hops at the slowest pace
 // ([objstore.PaceFor]: thirty seconds a hop) and the reply's two at the broker's
 // ceiling (four minutes a hop) are nine minutes, against over nineteen in the
-// quarter of the shortest budget (an uncapped collection's 78). An absolute
-// margin would be a second rule beside the tail's. A wait cut far below budget
-// by its asker's context is that cut's defect (crewlet/crewlet#1405).
+// quarter of the shortest budget (an uncapped collection's, about 79). An absolute
+// margin would cut a dead host's wait by ten minutes for a second rule beside the
+// tail's. A wait its asker's context cuts far below budget is that cut's defect (#1405).
 const BoxReadAnswerShare = answerShare
 
 // BoxReadChannel names the signed channel a box read crosses

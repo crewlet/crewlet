@@ -9,36 +9,16 @@ import (
 
 // The shared-token rule, and the one place that decides what a usable one is.
 //
-// # What a shared token is doing here
+// Datadog's Webhooks (FIXED headers) and Confluence Cloud (URL only) offer no
+// signature, so a shared token IS the whole authentication, and an accepted
+// delivery drives a turn on content the sender chose. A token has no shape
+// ([whsec] holds the signing-secret rule), so the only check is that there is
+// enough of it to be worth guessing; the dashboard mints 26 base32 characters
+// ([MinSharedTokenChars]).
 //
-// Two inbound routes cannot verify a signature, because their providers do
-// not offer one: Datadog's Webhooks integration attaches headers with FIXED
-// values only, so nothing varies with the payload to compute an HMAC over,
-// and Confluence Cloud attaches nothing at all and delivers only what was
-// written into its URL. For both, a shared token IS the authentication —
-// the whole of it — and an accepted delivery wakes a seat and drives a turn
-// on content the sender chose.
-//
-// A signing secret has a shape that gives it its strength, and [whsec] is
-// where that rule lives. A shared token has no shape at all: it is whatever
-// two sides agree on, so the only property that can be checked is that there
-// is enough of it to be worth guessing. Nothing else in the request is
-// evidence of anything.
-//
-// # Why it is checked rather than trusted
-//
-// The dashboard mints one with crypto/rand and it is 26 characters of base32,
-// which is where [MinSharedTokenChars] comes from. Every other way a value
-// reaches these fields — a hand-edited company document, `PATCH /config`, a
-// `${VAR}` resolved at the edge — accepted anything at all, so a one-character
-// token was a valid configuration and this tree's own tests used one.
-//
-// The rule is enforced in TWO places for the reason [whsec]'s doc gives, in
-// the same words, because it is the same failure: config refuses a literal
-// that is too short, and the webhook edge refuses a RESOLVED value that is,
-// so a `${VAR}` pointing at a weak token cannot be silently accepted where a
-// literal would have been refused. Written once and checked in one of the two,
-// the reference is the hole.
+// Enforced in TWO places, for [whsec]'s reason: config refuses a short
+// literal, and the webhook edge refuses a short RESOLVED value, so a `${VAR}`
+// pointing at a weak token is not accepted where a literal would be refused.
 
 // MinSharedTokenChars is the shortest shared token these routes accept.
 //
@@ -93,22 +73,10 @@ func CheckSharedToken(token string) error {
 // CheckOperatorToken reports why a Tier A `api.auth.tokens` value cannot be a
 // credential, or nil.
 //
-// # One floor, two sentences, and why neither is the other's
-//
-// The arithmetic is [CheckSharedToken]'s — the same whitespace rule and the
-// same [MinSharedTokenChars] — because the property being checked is the same
-// one: there is no shape to verify, only enough of it to be worth guessing. A
-// second number here would be a second answer to "how long is long enough",
-// and the two would drift the way every other duplicated rule in this tree
-// has.
-//
-// What differs is who reads the refusal and what it opens. A shared token
-// authenticates one webhook ROUTE, whose worst outcome is a seat woken with
-// content somebody else chose; this one authenticates the OPERATOR, and what
-// it opens is the config document, the secret store and the fleet. Handed
-// CheckSharedToken's sentence, an operator reads that their API credential is
-// refused "because the provider signs nothing" — a provider that does not
-// exist, about a route they are not configuring.
+// The arithmetic is [CheckSharedToken]'s, so the two cannot drift on "how long
+// is long enough". The sentence differs: this token authenticates the OPERATOR
+// (config, secret store, fleet), and CheckSharedToken's "the provider signs
+// nothing" would be about a route they are not configuring.
 func CheckOperatorToken(token string) error {
 	if strings.ContainsFunc(token, unicode.IsSpace) {
 		return errors.New("an `api.auth.tokens` token can't contain spaces")

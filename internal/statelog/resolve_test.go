@@ -54,19 +54,15 @@ func signedByPeer(t *testing.T, h *harness, body []byte) []byte {
 // A WRITE COLLAPSED ONTO ANOTHER NODE'S GATED COPY OF ITS OPERATION IS TOLD
 // THAT COPY'S GATE — AND WHOSE IT IS.
 //
-// A node evicted while one of its writes was in flight has that write on the
-// log above its eviction, applying nowhere — and holding the operation id in
-// the broker's duplicate window. Another node, handed the same operation
-// inside the window, has its append collapsed onto that record. Its resolution
-// finds no ledger row, and whether a gate dropped the record is a question
-// about the record's WRITER: asked about itself, the other node found nothing,
-// trusted a ledger that vouched, and reported a contract violation for a
-// record that was only ever gated.
-//
-// And the refusal names that writer, because the reason is then its standing
-// and not the refusing node's: read as this node's own `evicted`, an operator
-// was sent away from the one node that can finish the write. A copy this node
-// wrote itself, on an earlier attempt, is its own standing, and names nobody.
+// A node evicted with a write in flight leaves it on the log, applying
+// nowhere, holding the operation id in the broker's duplicate window. Another
+// node handed the same operation inside the window has its append collapsed
+// onto that record and finds no ledger row. Whether a gate dropped it is a
+// question about its WRITER: asked about itself, the other node trusted a
+// ledger that vouched and reported a contract violation. The refusal names that
+// writer, because the reason is its standing, not the refusing node's: read as
+// its own `evicted`, an operator was sent away from the node that can finish
+// the write. A copy this node wrote itself names nobody.
 func TestACollapsedWriteIsJudgedByTheWriterOfTheCopy(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -166,19 +162,15 @@ func TestAnotherNodesCopyTheDeletionMarkerDroppedNamesNoWriter(t *testing.T) {
 // THE REPLICATION GUIDE SAYS WHAT THE WRITE-GATED LINE CARRIES, AND WHAT IT IS.
 //
 // `statelog_write_gated` is the asking node's only per-record witness of a
-// write a gate refused, and its row in the guide read "the same, seen by the
-// write that published it" — the same as the applier's `statelog_record_gated`.
-// Neither half held. The node that logs it is often not the one that published
-// the record: a write collapsed onto another node's copy logs that node as the
-// `writer`, and a reader told the line came from the publisher took the asking
-// node for the writer, the misreading [statelog.Unavailable.CopyWriter] exists
-// to prevent. And the line is a REFUSAL, counted by reason, not a second drop:
-// read as "the same" an operator counted one record twice, which is the double
-// count the records-gated counter was rid of.
-//
-// So the row is held to the line in both of those respects: every key the line
-// carries is named there, and so are the counter the refusal is counted under
-// and the applier's line that is the drop.
+// write a gate refused; its guide row must not call it "the same" as the
+// applier's `statelog_record_gated`. The logging node is often not the one
+// that published the record: a write collapsed onto another node's copy logs
+// that node as the `writer`, and a reader told it came from the publisher
+// took the asking node for the writer ([statelog.Unavailable.CopyWriter]). And
+// the line is a REFUSAL, counted by reason, not a second drop: read as "the
+// same" an operator counted one record twice. So the row names every key the
+// line carries, the counter the refusal is counted under and the applier's
+// line that is the drop.
 func TestTheReplicationGuideSaysWhatTheWriteGatedLineCarries(t *testing.T) {
 	t.Parallel()
 	logs := &lockedBuffer{}
@@ -282,19 +274,15 @@ func TestOnlyARefusalOfTheWriteItselfIsTheWorks(t *testing.T) {
 }
 
 // ONLY A GATE THAT HOLDS A WRITER BLAMES IT — the three that drop a record for
-// what its writer was or did, and none of the rest. The set is what decides
-// whether a refusal of another node's copy names that node
-// ([statelog.Unavailable.CopyWriter]), so a gate reason moved across it changes
-// what every surface tells an operator to do.
-//
-// EVERY REASON IS DECIDED HERE, NOT ONLY THE THREE THAT BLAME.
-// [statelog.Reason.BlamesWriter] answers false for anything its switch does not
-// name, so a test listing only the blaming reasons passed a writer-blaming gate
-// added to [statelog.Reasons] and forgotten in the switch — and a collapse onto
-// another node's copy under it named no writer, which every surface reads as
-// this node's own refusal and answers by sending the write away from the node
-// that can finish it. With an explicit answer per reason ([reasonDecisions]), a
-// new one fails here until somebody says which side it is on.
+// what its writer was or did, and none of the rest. The set decides whether a
+// refusal of another node's copy names that node
+// ([statelog.Unavailable.CopyWriter]), so moving a reason across it changes
+// what every surface tells an operator to do. EVERY REASON IS DECIDED HERE:
+// [statelog.Reason.BlamesWriter] answers false for anything its switch does
+// not name, so a test listing only blaming reasons passed a writer-blaming
+// gate forgotten in the switch, whose refusal was read as this node's own and
+// sent the write away from the node that can finish it. With an explicit
+// answer per reason ([reasonDecisions]), a new one fails until decided.
 func TestOnlyAGateThatHoldsAWriterBlamesIt(t *testing.T) {
 	t.Parallel()
 	for _, reason := range statelog.Reasons() {
@@ -366,16 +354,15 @@ func TestOnlyAGateRefusalOfItsOwnRecordLanded(t *testing.T) {
 // A GATED WRITE'S REFUSAL SAYS WHETHER THE RECORD IT NAMES IS THE WRITE'S OWN,
 // on both arms of the resolution.
 //
-// Where the record at the refusal's position carries this operation — this
-// write's own acknowledged append, the copy the broker collapsed it onto, or
-// the record a lost answer found newest carrying its id — a gate dropped THAT
-// record, and the refusal is [statelog.Unavailable.Landed]. Where a lost answer
-// found ANOTHER operation's record newest on the subject and the gates hold
-// THIS NODE there, the record named is only where the gate was judged: it may
-// be a healthy peer's that applied on every node, and this write's own append
-// may never have landed at all. Read as landed, a caller told its client the
-// write was durable at that position and dropped everywhere — neither known —
-// and answered as lost a write the runner-up could have made.
+// Where the record at the refusal's position carries this operation (its own
+// acknowledged append, the copy the broker collapsed it onto, or the record a
+// lost answer found newest carrying its id), a gate dropped THAT record, and
+// the refusal is [statelog.Unavailable.Landed]. Where a lost answer found
+// ANOTHER operation's record newest and the gates hold THIS NODE there, the
+// record named is only where the gate was judged: it may be a healthy peer's
+// that applied everywhere, and this write's own append may never have landed.
+// Read as landed, a client was told the write was durable and dropped
+// everywhere, neither known, and a write the runner-up could make was lost.
 func TestAGatedWriteSaysWhetherItsRecordIsItsOwn(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -637,22 +624,16 @@ func land(t *testing.T, h *harness, opID string) {
 }
 
 // A WRITE A REANCHOR'S RULE VOIDED IS REFUSED UNDER THAT RULE, not reported as
-// a ledger contract violation — and the rule is asked about THE RECORD'S OWN
-// STAMP AND POSITION.
-//
-// A node whose rows were a restored copy's age goes on writing in the old
-// generation until it learns of the move; its record lands after the
-// reanchor's own and is overtaken on every data node, and writes no ledger
-// row. The domain's gates know nothing of that rule — it is the framework's,
-// on the checkpoint — so a resolution that asked only them found no gate and a
-// ledger that vouched, and called the write a record applied without its row.
-//
-// WHICH generation and sequence it asks is the whole of the rule, and each is
-// the record's: the generation this call stamped its own append with, and the
-// one a copy it was collapsed onto carries — another node's, written before
-// this node's rows moved on. Asked about generation zero at sequence zero, the
-// rules void nothing and the contract violation is back; asked about this
-// call's stamp for a copy stamped otherwise, the copy's rule is missed.
+// a ledger contract violation; the rule is asked about THE RECORD'S OWN STAMP
+// AND POSITION. A node whose rows were a restored copy's age keeps writing in
+// the old generation until it learns of the move; its record lands after the
+// reanchor's own, is overtaken on every data node, and writes no ledger row.
+// The domain's gates know nothing of that framework rule, so a resolution
+// asking only them found no gate and a ledger that vouched. WHICH generation
+// and sequence it asks is the whole of the rule, each the record's: the stamp
+// of this call's own append, and the one a collapsed-onto copy carries. Asked
+// about generation zero at sequence zero, the rules void nothing; asked about
+// this call's stamp for a differently stamped copy, the copy's rule is missed.
 func TestAWriteAReanchorVoidedIsRefusedUnderItsRule(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

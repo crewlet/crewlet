@@ -2,32 +2,18 @@ package seataccess
 
 import "github.com/crewlet/crewlet/internal/config"
 
-// THE ONE PLAN FUNCTION.
-//
-// The preview route and the sync both run [Plan], so a preview cannot promise
-// what a sync will not do. The sync runs it lane by lane with the vendor's
-// real answers fed back in ([walk]); the preview runs it with each lane's
-// effect simulated. Either way the decisions are the ones below, made once for
-// every vendor:
-//
+// THE ONE PLAN FUNCTION: the preview route and the sync both run [Plan], so a
+// preview cannot promise what a sync will not do (the sync feeds the vendor's
+// real answers back lane by lane, [walk]; the preview simulates each lane's
+// effect). Decided once for every vendor:
 //   - A remove is refused while any lane of the kind is on (D1).
-//   - Off disables an enabled account and keeps it (D1), and once every lane
-//     of the kind is off its credential is revoked. A seat that left the
-//     document is off.
-//   - On with no account creates it; a later lane of the same kind then sees
-//     the account the earlier one made (Atlassian's two products).
-//   - An account somebody disabled at the vendor stays off until a person
-//     asks to turn it back on (D3); one this engine disabled is turned back
-//     on with its seat.
-//   - A level or scope that differs from the document is moved to it; where
-//     the document has not changed since the last converged sync, that is
-//     drift, restored and reported (D2).
-//   - A credential is minted where none is sealed, and rotated when asked,
-//     once per account rather than once per lane.
-//   - Nothing is taken away from an account the ledger does not record: no
-//     disable, revoke, remove or rotate. A seat that is on adopts the
-//     account the vendor shows under the engine's naming rather than
-//     creating a second one.
+//   - Off disables an account and keeps it (D1); all lanes off revokes its credential.
+//   - On with no account creates it; a later lane of the kind sees it.
+//   - An account disabled at the vendor stays off until a person asks (D3).
+//   - A differing level or scope is moved to the document's; if the document is
+//     unchanged since the last converged sync, that is drift (D2), reported.
+//   - A credential is minted where none is sealed, once per account.
+//   - Nothing is taken from an account the ledger does not record.
 
 // SeatInput is one seat at one kind, as a plan reads it.
 type SeatInput struct {
