@@ -403,7 +403,10 @@ export function WorkItem({ id }: { id: string }) {
   const { state, item, project, children, worklet } = useTask(id);
   // THE ENGINE'S HOLD ON ITS CONVERSATION, from the notices an administrator reads.
   const admin = useViewer().admin;
-  const advisor = useQuery("advisor", undefined, { pollMs: ADVISOR_POLL_MS, enabled: admin });
+  const advisor = useQuery("advisor_notices", undefined, {
+    pollMs: ADVISOR_POLL_MS,
+    enabled: admin,
+  });
   const held = item ? itemHold(admin ? advisor.data?.notices : undefined, item.id) : undefined;
   const chrome = useItemChrome(index, state.data, project.data);
   const { open: openPeek } = usePeekControls();

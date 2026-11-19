@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -241,6 +243,8 @@ func TestEveryAssistantRouteAnswersNotFoundForAnotherPersonsConversation(t *test
 	}{
 		{http.MethodGet, conv, nil},
 		{http.MethodDelete, conv, nil},
+		{http.MethodPatch, conv, wire.ConversationRename{ProtocolVersion: wire.ProtocolVersion,
+			Title: "Mine now"}},
 		{http.MethodPost, conv + "/turns", wire.TurnRequest{ProtocolVersion: wire.ProtocolVersion,
 			Input: wire.TurnInput{Text: "Read hers"}}},
 		{http.MethodGet, accepted.StreamURL, nil},
@@ -266,11 +270,11 @@ func TestAnotherProtocolVersionIsRefused(t *testing.T) {
 	t.Parallel()
 	s := newSite(t, readTurn(t))
 	rec := s.do(s.rig.Person, http.MethodPost, "/assistant/conversations/"+
-		s.rig.Conversation.String()+"/turns", wire.TurnRequest{ProtocolVersion: 2,
+		s.rig.Conversation.String()+"/turns", wire.TurnRequest{ProtocolVersion: wire.ProtocolVersion + 1,
 		Input: wire.TurnInput{Text: "Hi"}}, map[string]string{"Idempotency-Key": opKey})
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(),
 		`"assistant_protocol_mismatch"`) {
-		t.Fatalf("protocol 2 = %d %s", rec.Code, rec.Body)
+		t.Fatalf("protocol %d = %d %s", wire.ProtocolVersion+1, rec.Code, rec.Body)
 	}
 	if n := len(s.rig.Model.Requests()); n != 0 {
 		t.Errorf("a refused version reached the model %d times", n)
@@ -324,29 +328,32 @@ func TestABudgetRefusalIsATooManyRequestsWithItsReset(t *testing.T) {
 }
 
 // THE VIEWER SAYS WHY THE ASSISTANT IS UNAVAILABLE, naming the first reason in
-// the order the pill reads them, and lit for a person when nothing stops it.
+// the order the pill reads them, and lit for a person when nothing stops it;
+// it names the assigned model to anybody, and whether the viewer may assign
+// one only to a holder of the company document's write.
 //
 // Mutation: answer every refusal with one reason and the cases disagree.
 func TestTheViewerSaysWhyTheAssistantIsUnavailable(t *testing.T) {
 	t.Parallel()
-	on := true
-	unusable := &config.Company{Name: "Nimbus", Assistant: config.Assistant{Enabled: &on,
-		LLM: config.ProviderKeys{"missing"}}}
+	unusable := &config.Company{Name: "Nimbus", Assistant: config.Assistant{Model: "missing"}}
 	token := evals.Person("ci", "grace", iam.GrantWorklet)
 	token.Via = "pat:" + uuid.NewSHA1(uuid.NameSpaceOID, []byte("token")).String()
+	assigned := &wire.ViewerModel{Key: "assistant", Label: "sonnet"}
 	for _, c := range []struct {
 		name   string
 		o      evals.RigOptions
 		who    iam.Principal
 		reason wire.ViewerReason
+		model  *wire.ViewerModel
 	}{
-		{"off", evals.RigOptions{Off: true}, evals.Person("grace", "grace"),
-			wire.ViewerDisabled},
-		{"no usable chain", evals.RigOptions{Company: func() (*config.Company, *org.Organization) {
+		{"no model", evals.RigOptions{Off: true}, evals.Person("grace", "grace"),
+			wire.ViewerNoModel, nil},
+		{"a model no helper runs on", evals.RigOptions{Company: func() (*config.Company, *org.Organization) {
 			return unusable, nil
-		}}, evals.Person("grace", "grace"), wire.ViewerNoModel},
-		{"a machine token", evals.RigOptions{}, token, wire.ViewerNotAPerson},
-		{"available", evals.RigOptions{}, evals.Person("grace", "grace"), ""},
+		}}, evals.Person("grace", "grace"), wire.ViewerModelProblem,
+			&wire.ViewerModel{Key: "missing", Label: "missing"}},
+		{"a machine token", evals.RigOptions{}, token, wire.ViewerNotAPerson, assigned},
+		{"available", evals.RigOptions{}, evals.Person("grace", "grace"), "", assigned},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -354,49 +361,23 @@ func TestTheViewerSaysWhyTheAssistantIsUnavailable(t *testing.T) {
 			if got.Reason != c.reason || got.Available != (c.reason == "") {
 				t.Errorf("viewer = %+v, want reason %q", got, c.reason)
 			}
+			if !reflect.DeepEqual(got.Model, c.model) {
+				t.Errorf("viewer model = %+v, want %+v", got.Model, c.model)
+			}
+			if got.CanAssign {
+				t.Errorf("viewer = %+v, which lets a person without the document's write assign a model", got)
+			}
 			// NO DEEP WORK HERE, so nothing reads a question's images.
 			if got.ReadsImages {
 				t.Errorf("viewer = %+v, which says images are read without deep work", got)
 			}
-			// NO STRONGER CHAIN HERE, so Think harder is not offered.
-			if got.Deliberate {
-				t.Errorf("viewer = %+v, which offers Think harder with no stronger chain", got)
-			}
 		})
 	}
-}
-
-// Think harder is offered only where the company sets a stronger chain, and
-// asking it of a company that sets none is refused 400, naming the setting.
-func TestTheViewerOffersThinkHarderOnlyWithAStrongerChain(t *testing.T) {
-	t.Parallel()
-	company, err := evals.DeliberateCompany(false, "grace")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := newSite(t, evals.RigOptions{Company: company}).surface.Viewer(t.Context(),
-		evals.Person("grace", "grace"))
-	if !got.Available || !got.Deliberate {
-		t.Errorf("viewer = %+v, want Think harder offered", got)
-	}
-	// Still offered while the quick chain sits out: the stronger one may answer.
-	quick := evals.NewModel()
-	quick.SetUnready(&llm.Error{Kind: llm.KindRateLimit, Key: "assistant",
-		Err: errors.New("Usage limit reached")})
-	got = newSite(t, evals.RigOptions{Company: company, Models: &evals.Models{Model: quick,
-		Key: "assistant", Strong: evals.NewModel(), StrongKey: "strong"}}).surface.Viewer(
-		t.Context(), evals.Person("grace", "grace"))
-	if got.Reason != wire.ViewerModelNotReady || !got.Deliberate {
-		t.Errorf("viewer with the quick chain spent = %+v, want Think harder offered", got)
-	}
-
-	s := newSite(t, evals.RigOptions{})
-	rec := s.do(s.rig.Person, http.MethodPost, "/assistant/conversations/"+
-		s.rig.Conversation.String()+"/turns", wire.TurnRequest{
-		ProtocolVersion: wire.ProtocolVersion, Input: wire.TurnInput{Text: "Think about it"},
-		Deliberate: true}, map[string]string{"Idempotency-Key": opKey})
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "assistant.deliberate") {
-		t.Fatalf("Think harder with no stronger chain = %d %s", rec.Code, rec.Body)
+	for name, o := range map[string]evals.RigOptions{"off": {Off: true}, "on": {}} {
+		admin := evals.Person("ada", "ada", iam.GrantAdmin)
+		if got := newSite(t, o).surface.Viewer(t.Context(), admin); !got.CanAssign {
+			t.Errorf("%s: an administrator may not assign the model: %+v", name, got)
+		}
 	}
 }
 
@@ -417,15 +398,15 @@ func TestTheViewerSaysAModelIsNotReadyBeforeAnyoneAsks(t *testing.T) {
 		Err: errors.New("Usage limit reached")})
 
 	got := s.surface.Viewer(t.Context(), s.rig.Person)
-	if got.Available || got.Reason != wire.ViewerModelNotReady || got.Model == nil ||
-		got.Model.Code != wire.ErrorModelBusy || got.Model.RetryAt == nil || !got.Model.RetryAt.Equal(reset) {
-		t.Fatalf("viewer = %+v (model %+v), want model_not_ready naming model_busy until %v",
-			got, got.Model, reset)
+	if got.Available || got.Reason != wire.ViewerModelNotReady || got.Notice == nil ||
+		got.Notice.Code != wire.ErrorModelBusy || got.Notice.RetryAt == nil || !got.Notice.RetryAt.Equal(reset) {
+		t.Fatalf("viewer = %+v (notice %+v), want model_not_ready naming model_busy until %v",
+			got, got.Notice, reset)
 	}
 	token := s.rig.Person
 	token.Via = "pat:" + uuid.NewSHA1(uuid.NameSpaceOID, []byte("token")).String()
 	if other := s.surface.Viewer(t.Context(), token); other.Reason != wire.ViewerNotAPerson ||
-		other.Model != nil {
+		other.Notice != nil {
 		t.Errorf("a machine token's viewer = %+v, want not_a_person and nothing of the model", other)
 	}
 
@@ -436,7 +417,7 @@ func TestTheViewerSaysAModelIsNotReadyBeforeAnyoneAsks(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "90" ||
 		body["error"] != string(httpjson.CodeAssistantModelNotReady) ||
-		body["reason"] != string(wire.ErrorModelBusy) || body["detail"] != got.Model.Message {
+		body["reason"] != string(wire.ErrorModelBusy) || body["detail"] != got.Notice.Message {
 		t.Fatalf("asking anyway = %d %q %s", rec.Code, rec.Header().Get("Retry-After"), rec.Body)
 	}
 	if n := len(s.rig.Model.Requests()); n != 0 {
@@ -542,4 +523,55 @@ func TestThePageActionTurnFixtureIsTheRoutesOwn(t *testing.T) {
 		t.Fatalf("the turn ended %+v, want completed without parking", done)
 	}
 	assistanttest.Golden(t, "testdata/page_action_turn.sse", fixture(t, body))
+}
+
+// A CONVERSATION IS RENAMED AND SEARCHED BY ITS OWNER: a rename answers the
+// conversation with the person's title, said to be theirs; the listing finds
+// it by a word of that title and not by one it no longer holds; and a blank
+// title, one past its bound, or a search past its bound is refused 400.
+func TestAConversationIsRenamedAndSearchedByItsOwner(t *testing.T) {
+	t.Parallel()
+	s := newSite(t, readTurn(t))
+	s.stream(t, s.ask(t, "Who works here?"), "")
+	conv := "/assistant/conversations/" + s.rig.Conversation.String()
+	rename := func(title, key string) *httptest.ResponseRecorder {
+		return s.do(s.rig.Person, http.MethodPatch, conv, wire.ConversationRename{
+			ProtocolVersion: wire.ProtocolVersion, Title: title},
+			map[string]string{"Idempotency-Key": key})
+	}
+	rec := rename("  Team roster  ", "0192f1a4-9b2d-7c03-a4e1-5f3b9d0c7a21")
+	var got wire.ConversationSummary
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil ||
+		got.Title == nil || *got.Title != "Team roster" || got.TitleSetBy == nil ||
+		*got.TitleSetBy != wire.TitleByPerson {
+		t.Fatalf("rename = %d %s", rec.Code, rec.Body)
+	}
+	search := func(q string) (int, wire.ConversationList) {
+		rec := s.do(s.rig.Person, http.MethodGet, "/assistant/conversations?q="+url.QueryEscape(q),
+			nil, nil)
+		var list wire.ConversationList
+		_ = json.Unmarshal(rec.Body.Bytes(), &list)
+		return rec.Code, list
+	}
+	if code, list := search("ROSTER"); code != http.StatusOK || len(list.Conversations) != 1 ||
+		list.Conversations[0].ID != s.rig.Conversation {
+		t.Errorf("a search for its new title = %d %+v", code, list)
+	}
+	if code, list := search("works here"); code != http.StatusOK || len(list.Conversations) != 0 {
+		t.Errorf("a search for its old title = %d %+v", code, list)
+	}
+	for name, c := range map[string]struct {
+		rec *httptest.ResponseRecorder
+	}{
+		"a blank title": {rename("   ", "0192f1a4-9b2d-7c03-a4e1-5f3b9d0c7a22")},
+		"a long title": {rename(strings.Repeat("a", wire.TitleMaxRunes+1),
+			"0192f1a4-9b2d-7c03-a4e1-5f3b9d0c7a23")},
+		"a title on two lines": {rename("Plans\nfor May", "0192f1a4-9b2d-7c03-a4e1-5f3b9d0c7a24")},
+		"a long search": {s.do(s.rig.Person, http.MethodGet, "/assistant/conversations?q="+
+			strings.Repeat("x", wire.SearchMaxRunes+1), nil, nil)},
+	} {
+		if c.rec.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d %s, want 400", name, c.rec.Code, c.rec.Body)
+		}
+	}
 }

@@ -130,7 +130,7 @@ func nameByte(b byte) bool {
 }
 
 // briefTools are what a brief turn is offered: the person's reads, and the
-// brief's answer. Never a write, a page action, a navigation or deep work.
+// brief's answer. Never a write, a page action or a navigation.
 func briefTools(offered []catalog.Tool) []catalog.Tool {
 	out := make([]catalog.Tool, 0, len(offered)+1)
 	for _, t := range offered {

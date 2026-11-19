@@ -472,6 +472,17 @@ func (s *Service) Entity(ctx context.Context, kind, id string) (any, error) {
 	return entity, nil
 }
 
+// EntityAndTag is [Service.Entity] with the entity's own tag, the If-Match a
+// write of it is sent under: what a re-checked fix is built and bound from.
+func (s *Service) EntityAndTag(ctx context.Context, kind, id string) (any, string, error) {
+	entity, err := s.Entity(ctx, kind, id)
+	if err != nil {
+		return nil, "", err
+	}
+	tag, err := entityTag(kind, entity)
+	return entity, tag, err
+}
+
 // getEntity serves GET /config/{kind}/{id} — one entity, redacted.
 //
 // THE ENTITY ITSELF, not an envelope around it. The read has to be the thing

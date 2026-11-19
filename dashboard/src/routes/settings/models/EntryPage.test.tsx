@@ -57,7 +57,7 @@ test("who runs on it is grouped by category, a partial category named, a backup 
     { seat: "backend-engineer", jobs: ["review", "subagent"], whole: true },
     { seat: "qa", jobs: ["review"], whole: false },
   ]);
-  expect(who.assistant).toBe("runs");
+  expect(who.assistant).toBe(true);
   expect(who.seats).toBe(3);
 });
 

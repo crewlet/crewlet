@@ -52,6 +52,8 @@ gone thirty days after it was last used.**
   whose app the reader no longer holds is replaced by a notice on every read,
   and its export is not found.
 
+**Amended by ADR-0163.** Thirty days is a constant of the domain, no longer the `assistant.retention_days` setting.
+
 ## Why the obvious alternatives are wrong
 
 **The node's own event log, which already holds turn detail.** Turn detail

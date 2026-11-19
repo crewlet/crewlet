@@ -1119,6 +1119,11 @@ type Config struct {
 	// the result carries the full conversation.
 	Messages []llm.Message
 
+	// Images are handed to the model beside every round's prompt
+	// ([llm.Request.Images]): each round is a fresh launch of the harness,
+	// which sees only what that round is handed.
+	Images []llm.Image
+
 	// MaxRounds bounds the model requests. Required and positive.
 	MaxRounds int
 
@@ -1425,6 +1430,7 @@ func Run(ctx context.Context, cfg Config) (_ *Result, err error) {
 			attribute.Int("crewlet.round", d.roundsUsed()+1))
 		completion, err := cfg.Provider.Complete(runCtx, llm.Request{
 			Messages: msgs,
+			Images:   cfg.Images,
 			Tools:    d,
 			// A seat at work (a phase of its turn or a worker it
 			// delegated to) unless the loop's prompt is its own.
@@ -1653,8 +1659,7 @@ func streamTo(cfg Config, rec *sync.Mutex, partial **Partial, d *dispatcher, pub
 // Charge records tokens a model call has already spent on meter, and answers a
 // refusal as the loop reads one: a [*BudgetError], or the counter's own error
 // when it could not be reached. Exported for a caller that spends tokens
-// outside this loop and must charge them by the same rule: the Dashboard
-// Assistant's deep-work run, whose tokens are spent in a harness's own loop.
+// outside this loop and must charge them by the same rule.
 func Charge(ctx context.Context, meter BudgetMeter, tokens int) (err error) {
 	defer origin.Stamp(&err)
 	if meter == nil || tokens <= 0 {

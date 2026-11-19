@@ -11,8 +11,8 @@
  * evaluations is `llm_auxiliary` and `llm_judge`. The pairs are paired by the
  * model each wants: the review and the delegated work take a strong model, and
  * the routines and the onboarding judge, each under a fixed deadline, a fast
- * one, so one choice of model serves both jobs it writes. The Assistant is
- * the company's, not a seat's: `assistant.llm`, with no seats.
+ * one, so one choice of model serves both jobs it writes. Ask Crewlet is
+ * the company's, not a seat's: `assistant.model`, with no seats.
  *
  * ONE MODEL PER SEAT FIELD. The page writes a seat's field as one scalar key
  * and never a chain (decision D3): a chain the document held there is
@@ -21,13 +21,8 @@
  * whatever the field named behind it, so the job resolves as the document
  * then says.
  *
- * ASK CREWLET KEEPS ITS CHAIN. `assistant.llm` is the one chain every
- * person's Ask Crewlet runs on, and each member is an entry held to the
- * assistant's own rules (web tools denied), so its fallbacks are the only
- * thing between a model that sits out its plan's limit and nobody being
- * answered. Choosing Ask Crewlet's model therefore replaces the model it
- * answers with first and keeps every fallback behind it, in order
- * ([assistantChain]).
+ * ASK CREWLET RUNS ON ONE MODEL. `assistant.model` is one key, and choosing
+ * Ask Crewlet's model writes it, which also turns Ask Crewlet on.
  *
  * WHAT A JOB RUNS ON NOW is the engine's answer (`llm_entries`' `used_by`),
  * never resolved here: this module only writes.
@@ -309,16 +304,6 @@ function fallbacksOf(value: unknown, key: string): string[] {
     .filter((k) => k !== key);
 }
 
-/**
- * Ask Crewlet's chain with `key` answering first: the model it answered with
- * first replaced, every fallback behind it kept in its order, and `key` taken
- * out of the fallbacks rather than tried twice. A chain that already starts
- * with `key` comes back as it was.
- */
-export function assistantChain(chain: unknown, key: string): string[] {
-  return [key, ...fallbacksOf(chain, key)];
-}
-
 /** The fallbacks a write takes out of a seat's field, for the review to name. */
 export interface Dropped {
   seat: string;
@@ -346,10 +331,9 @@ export interface UsesWrite {
  * - A seat job taken off the model removes `key` from the field it is written
  *   in, keeping the rest; a field left empty is deleted, so the job resolves as
  *   an unset job does.
- * - The Assistant writes `key` at the head of `assistant.llm`, keeping every
- *   fallback the chain named behind it ([assistantChain]). Leaving it is not a
- *   write: the assistant runs on something, so it moves when another model is
- *   chosen.
+ * - Ask Crewlet writes `key` as `assistant.model`. Leaving it is not a write:
+ *   Ask Crewlet runs on something, so it moves when another model is chosen,
+ *   and is turned off only by removing its model on its own page.
  */
 export function applyUses(doc: CompanyDocument, key: string, was: Uses, next: Uses): UsesWrite {
   const out = structuredClone(doc) as unknown as Doc;
@@ -397,7 +381,7 @@ export function applyUses(doc: CompanyDocument, key: string, was: Uses, next: Us
 
   if (next.assistant && !was.assistant) {
     const assistant = (isRecord(out.assistant) ? out.assistant : (out.assistant = {})) as Doc;
-    assistant.llm = chainValue(assistantChain(assistant.llm, key));
+    assistant.model = key;
   }
   return { doc: out as unknown as CompanyDocument, dropped };
 }

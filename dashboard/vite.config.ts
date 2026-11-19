@@ -13,6 +13,7 @@ import react from "@vitejs/plugin-react";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { withPackageNotices } from "./notices.ts";
 
 // The notices for everything the built dashboard redistributes, served beside it
 // at /static/dashboard/THIRD_PARTY_NOTICES.txt and shipped in every release
@@ -352,6 +353,7 @@ export default defineConfig({
     fontLicence(),
     brandAssets(),
     bootScreen(),
+    withPackageNotices(NOTICES),
     sourceNotices(),
   ],
   // The engine serves this tree from /static/dashboard/ and answers the shell
@@ -471,9 +473,10 @@ export default defineConfig({
       // An answer to a usage insight waiting for review (Settings ›
       // Diagnostics). The records are read over the socket.
       "/diagnostics": { target: "http://localhost:8000" },
-      // Running the advisor's analyst and answering its findings (Settings ›
-      // Advisor). Its answer is read over the socket.
-      "/advisor/analysis": { target: "http://localhost:8000" },
+      // The Advisor's presses: Run now, a person's answer to a finding, the
+      // re-check before a fix is sent and the report that it was (#/advisor).
+      // Its findings and runs are read over the socket.
+      "/advisor": { target: "http://localhost:8000" },
       // Signing in, out and up, and an invitation's redemption — how a
       // browser comes to hold a session cookie (protocol/auth.ts).
       "/auth": { target: "http://localhost:8000" },

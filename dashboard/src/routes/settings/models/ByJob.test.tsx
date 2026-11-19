@@ -30,7 +30,7 @@ import {
   runs,
 } from "~/routes/settings/models/fixtures.ts";
 import { ByJob } from "./ByJob.tsx";
-import { assistantOf, type ModelsData } from "./data.ts";
+import type { ModelsData } from "./data.ts";
 import { WIZARD_STEPS } from "./parts.tsx";
 import { CATEGORY_WORDS, FAST_NOTE } from "./words.ts";
 
@@ -73,16 +73,20 @@ function company({ admin = true } = {}): ModelsData {
         harness: "codex",
         model: "gpt-6.1",
         used_by: runs("qa", SECOND_JOB!),
+        helper_problem: "This model's tool keeps a tool Crewlet cannot turn off.",
       }),
       modelEntry({ key: "guarded", model: "claude-sonnet-5", used_by: [ASSISTANT_CHAT] }),
     ],
-    doc: modelsDoc({
-      default: {},
-      haiku: {},
-      sonnet: {},
-      "codex-review": { harness: "codex" },
-      guarded: { overrides: { web_tools: "denied" } },
-    }),
+    doc: {
+      ...modelsDoc({
+        default: {},
+        haiku: {},
+        sonnet: {},
+        "codex-review": { harness: "codex" },
+        guarded: {},
+      }),
+      assistant: { model: "guarded" },
+    } as ModelsData["doc"] & object,
   });
 }
 
@@ -218,14 +222,15 @@ test("every pick opens the picked model's wizard at Use it for, with only the se
   expect(onFlow).not.toHaveBeenCalled();
 });
 
-test("the assistant's picker offers only a model that denies web tools, and opens its wizard for the assistant", () => {
-  const data = company();
-  data.models.find((m) => m.key === "haiku")!.webDenied = true;
-  const onFlow = mount(data);
+// ANY MODEL A HELPER CAN RUN ON, as the engine says of each: an ordinary entry
+// qualifies as it is, and one whose harness keeps a tool that cannot be turned
+// off is not offered.
+test("Ask Crewlet's picker offers every model a helper can run on, and opens its wizard for it", () => {
+  const onFlow = mount(company());
   const trigger = screen.getByRole("combobox", { name: "Model Ask Crewlet runs on" });
   expect(trigger.textContent).toContain("guarded");
-  const offered = optionsOf(trigger).map((o) => o.textContent ?? "");
-  expect(offered.map((t) => t.split(/\s|claude/)[0])).toEqual(["haiku", "guarded"]);
+  const offered = optionsOf(trigger).map((o) => (o.textContent ?? "").split(/\s|claude/)[0]);
+  expect(offered).toEqual(["default", "haiku", "sonnet", "guarded"]);
   fireEvent.mouseDown(
     screen.getAllByRole("option").find((o) => o.textContent?.startsWith("haiku"))!,
   );
@@ -235,22 +240,20 @@ test("the assistant's picker offers only a model that denies web tools, and open
   });
 });
 
-test("the assistant's line names the fallbacks its picker keeps, to an admin and a member", () => {
-  // `haiku` sits second in the chain the engine reports, behind `guarded`.
-  const chained = (admin: boolean) => {
-    const data = company({ admin });
-    const haiku = data.models.find((m) => m.key === "haiku")!;
-    haiku.entry.used_by = [...haiku.entry.used_by, { assistant: "chat", position: 1 }];
-    return { ...data, assistant: assistantOf(null, data.models) };
-  };
-  mount(chained(true));
-  const trigger = screen.getByRole("combobox", { name: "Model Ask Crewlet runs on" });
-  expect(trigger.textContent).toContain("guarded");
-  expect(document.body.textContent).toContain("Falls back to haiku, which a change here keeps.");
+// ONE MODEL, NO CHAIN: the line names no fallback, and is drawn when Ask
+// Crewlet has no model too, so the company sees that it is off.
+test("Ask Crewlet's line names its one model, and is drawn with none", () => {
+  mount(company());
+  expect(document.body.textContent).not.toContain("Falls back");
   cleanup();
-  mount(chained(false));
-  expect(document.body.textContent).toContain("Falls back to haiku.");
-  expect(document.body.textContent).not.toContain("which a change here keeps");
+  const off = company();
+  mount({ ...off, doc: modelsDoc({ guarded: {} }), assistant: { key: null } });
+  expect(screen.getByRole("combobox", { name: "Model Ask Crewlet runs on" }).textContent).toContain(
+    "Not set",
+  );
+  cleanup();
+  mount({ ...company({ admin: false }), assistant: { key: null } });
+  expect(screen.getByText("Not set")).toBeDefined();
 });
 
 test("a member reads every value, in the picker's type, with no picker", () => {

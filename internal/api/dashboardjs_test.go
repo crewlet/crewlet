@@ -193,6 +193,8 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 		"## @crewlethq/ui",              // the design system's components
 		"## @crewlethq/tokens",          // its palette, type and faces
 		"## @crewlethq/icons",           // its glyphs and marks
+		"Apache License",                // their license (Apache-2.0)
+		"## @crewlethq/ui: NOTICE",      // and the NOTICE it requires, appended by withPackageNotices
 		"## uqr - ",                     // the QR encoder (MIT, Project Nayuki's code)
 		"SIL OPEN FONT LICENSE",         // the font license, appended by sourceNotices
 		"The Geist Project Authors",     // naming the faces
@@ -206,7 +208,6 @@ func TestTheBuiltDashboardIsWhole(t *testing.T) {
 	for _, gone := range []string{
 		"The Inter Project Authors",
 		"The JetBrains Mono Project Authors",
-		"Apache License",
 		"Material Symbols",
 	} {
 		if err == nil && bytes.Contains(notices, []byte(gone)) {
@@ -1033,7 +1034,7 @@ const (
 	// the shell links: everything a reader downloads before the first screen
 	// can draw. It began at 300 KiB, under two seconds on a 1.5 Mbit/s link
 	// (the slow end of a phone tether), and has moved up with each kit release
-	// and frame feature; the last measure was 428.5 KiB, about 2.3 seconds.
+	// and frame feature; the last measure was 428.8 KiB, about 2.3 seconds.
 	// The one sheet carries every design-system rule by rule (see
 	// TestNoLazyStylesheetCarriesTheDesignSystem), so kit releases grow it even
 	// when no screen joins the entry. A raise names the measured size and its
@@ -1058,9 +1059,9 @@ const (
 	// at 3 MiB over a 2.3 MB baseline and is set so a bundle that doubled the
 	// baseline is still refused; screens fetched only when opened (the rich
 	// editor, the brand and folder screens, the assistant's panel, Gitlet) and
-	// kit releases account for its growth, and the last measure was 7051.4 KiB.
+	// kit releases account for its growth, and the last measure was 7103.3 KiB.
 	// A raise names the measured size and its cause in its commit.
-	treeBudget = 5<<20 + 1932<<10
+	treeBudget = 5<<20 + 1984<<10
 )
 
 // TestTheDashboardFitsItsBudget holds the built dashboard to the four numbers

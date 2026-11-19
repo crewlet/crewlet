@@ -1484,12 +1484,8 @@ func runEngine(args []string, stderr io.Writer, bind bindFunc) (err error) {
 	// Nothing here needs a started engine: /health reports no seats yet, and a
 	// webhook in the window is retained (mailboxes exist before claiming; see
 	// Node.Start).
-	// THE CONFIG FILES THIS NODE WAS STARTED FROM, which a deep-work run
-	// confined on this host is kept from beside the engine's own paths.
-	host := engine.DeepHost{Config: []string{*cfg.bootstrap, *cfg.company, *importCompany}}
 	surface, err := serveAPI(ctx, boot, e, reconciler, cipher, configSurface,
-		chatLive.Hub(), dev, listeners,
-		host, log)
+		chatLive.Hub(), dev, listeners, log)
 	if err != nil {
 		abandon()
 		return err
@@ -2055,7 +2051,7 @@ func companySurface(e *engine.Engine, boot *config.Bootstrap,
 func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	reconciler *engine.Reconciler, cipher secrets.Cipher,
 	configSurface *configapi.Service, chatLive *stream.ChatHub,
-	dev *auth.DevPrincipal, listeners *nodeListeners, host engine.DeepHost, log *slog.Logger,
+	dev *auth.DevPrincipal, listeners *nodeListeners, log *slog.Logger,
 ) (*httpSurface, error) {
 	if boot.API.Port == 0 {
 		// A real posture: a node with no listener at all. Saying so lets an operator
@@ -2362,9 +2358,8 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 			Channels: e.Backends().Fleet,
 			// The fleet's record of the operating insights it shares (ADR-0119).
 			Insights: e.Backends().Fleet,
-			// The advisor's analyst: the fleet's records of it, and its models (ADR-0157).
-			Analysis: e.Backends().Fleet,
-			Analyst:  engine.AnalystModels(e),
+			// What the Advisor's model pass runs on (ADR-0164).
+			AdvisorModel: engine.AdvisorModels(e),
 			// The company's ONE knowledge backend, behind the same seam a
 			// seat's own turn searches through. Nil when none is
 			// configured, which leaves the question unregistered rather
@@ -2570,7 +2565,7 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// may propose are the operator surface's verdict. Its service is closed
 	// by every path that returns from here without a surface, and by the
 	// surface's stop once there is one.
-	assistantSvc, err := mountAssistant(ctx, boot, e, host, &opts)
+	assistantSvc, err := mountAssistant(ctx, boot, e, &opts)
 	if err != nil {
 		return nil, err
 	}

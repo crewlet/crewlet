@@ -93,7 +93,7 @@ func (s *Service) summarizeConversation(ctx context.Context, t *turn,
 	fence := provenance.NewBoundary()
 	use := auxspend.Use{Stage: types.AuxStageOperator, Purpose: types.AuxAssistantSummary,
 		TurnID: t.id.String()}
-	provider, _, err := s.models.Chain(ctx, t.person, use, Quick)
+	provider, _, err := s.models.Model(ctx, t.person, use)
 	if err != nil {
 		return err
 	}

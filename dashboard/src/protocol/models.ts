@@ -109,7 +109,7 @@ export interface ModelUsage {
 export interface ModelUse {
   seat?: string;
   job?: ModelJob;
-  assistant?: "chat" | "deep_work";
+  assistant?: "chat";
   position: number;
   written?: boolean;
   source?: "seat" | "executor" | "default-entry" | "first-entry";
@@ -146,6 +146,8 @@ export interface ModelEntry {
   used_by: ModelUse[];
   device_sign_in: ModelDevice | null;
   limits: ModelLimit[];
+  /** Why no helper (Ask Crewlet, the Advisor) can run on it, in a person's words; null where one can. */
+  helper_problem: string | null;
 }
 
 /** One model in a member's reading: nothing that names a credential, an account or a vendor's sentence. */
@@ -350,7 +352,7 @@ export interface HostLoginAnswer {
 export interface ModelReferenceAt {
   seat?: string;
   job?: ModelJob;
-  assistant?: "chat" | "deep_work";
+  assistant?: "chat";
 }
 
 /** A dependant the remove refusal names: where it is, the field, and the whole chain written there. */
