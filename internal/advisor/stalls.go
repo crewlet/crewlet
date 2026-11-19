@@ -84,6 +84,8 @@ var documented = []documentedDetector{
 	{ClassWorkConcentrated, sourceWork, workConcentrated},
 	{ClassAlarmNoop, sourceLedger, alarmNoop},
 	{ClassModelHeld, sourceFlow, modelHeld},
+	{ClassAddSeat, sourceStaffing, addSeat},
+	{ClassRemoveSeat, sourceStaffing, removeSeat},
 }
 
 // stallWords is each class's words, the same for every subject.
@@ -107,6 +109,9 @@ var stallWords = map[Class]said{
 		"Every agent that holds the health grant is woken each time an alarm fires or clears, so an " +
 			"alarm another agent already answers still starts a turn here, and half or more of these " +
 			"changed nothing."},
+	ClassAddSeat: {"Work waited for a group of seats that was busy all week.",
+		"Day after day work wanted these seats and did not get them, while every one of them was busy most " +
+			"of the time it could take a turn, so the work waits on how many seats there are."},
 	ClassModelHeld: {"An agent's work waited on its model's limit.",
 		"While the model an agent runs on is at its limit, the agent takes no turn, so the work it " +
 			"holds stands still until the limit resets, however pressing it is."},

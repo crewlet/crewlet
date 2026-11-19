@@ -259,6 +259,7 @@ const (
 	UnreadMerges       = "merges"
 	UnreadEpisodes     = "alarm_episodes"
 	UnreadFlow         = "flow"
+	UnreadStaffing     = "staffing"
 )
 
 // Inputs is what one answer is read from.
