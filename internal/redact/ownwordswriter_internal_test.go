@@ -104,10 +104,11 @@ func streamedOwnWords(t *testing.T, text string, cuts ...int) []string {
 // text of the writtenMarkerLen corpus (each marker the pass writes, markers side by side and at either end,
 // runs that close as a marker and as words, a kind's name of any length, a run ended by a byte that opens
 // the next, a Marker matched in part) is handed to its reader as exactly OwnWords' stretches, one run
-// undecided at a time; and a run is the reader's as it arrives, never held: a writer allocates nothing.
+// undecided at a time; and a run is the reader's as it arrives, never held: a fresh writer costs a MiB-long
+// undecided run what it costs Marker alone, and a write allocates nothing.
 //
-// Mutation: close a run at a bracket with no name, drop the byte that ends a run as words, or hold a run
-// until it closes, and a case goes red.
+// Mutation: close a run at a bracket with no name, drop the byte that ends a run as words, hold a run until
+// it closes, or keep a copy of the run, and a case goes red.
 func TestStreamedOwnWordsAreOwnWords(t *testing.T) {
 	// Not parallel: AllocsPerRun counts a parallel test's allocations as this one's.
 	for _, text := range ownWordsTexts() {
@@ -118,17 +119,33 @@ func TestStreamedOwnWordsAreOwnWords(t *testing.T) {
 	r := &stretchRecorder{t: t}
 	w := NewOwnWordsWriter(r)
 	piece := []byte(strings.Repeat("ab-", 1<<10))
-	if _, err := w.Write([]byte(Marker)); err != nil {
+	pieces := (1 << 20) / len(piece)
+	if _, err := w.Write(markerBytes); err != nil {
 		t.Fatal(err)
 	}
-	for range (1 << 20) / len(piece) {
+	for range pieces {
 		if _, err := w.Write(piece); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if want := len(Marker) + (1<<20)/len(piece)*len(piece); r.handed != want || !r.marked {
+	if want := len(Marker) + pieces*len(piece); r.handed != want || !r.marked {
 		t.Fatalf("a run of %d bytes still undecided has handed its reader %d (marked %v)", want, r.handed,
 			r.marked)
+	}
+	// And holds none of it: a fresh writer each run, so a copy grown in one run is not reused by the next,
+	// against the same writer handed Marker alone, whatever the writer itself costs.
+	runOf := func(n int) float64 {
+		return testing.AllocsPerRun(10, func() {
+			fresh := NewOwnWordsWriter(discardStretches{})
+			_, _ = fresh.Write(markerBytes)
+			for range n {
+				_, _ = fresh.Write(piece)
+			}
+			_ = fresh.Close()
+		})
+	}
+	if alone, mib := runOf(0), runOf(pieces); mib != alone {
+		t.Fatalf("a MiB-long undecided run allocates %v times a run, Marker alone %v", mib, alone)
 	}
 	w = NewOwnWordsWriter(discardStretches{})
 	text := []byte("words " + Marker + "ab-c] [REDAC more [REDACTED:" + strings.Repeat("x", 64))
