@@ -127,14 +127,14 @@ func ohNone(t *testing.T, h sandbox.SessionHoldings, err error) {
 	}
 }
 
-// A MESSAGE IS DECODED ONCE, WITH ITS KEY FACTS: the one decode keeps each
+// A MESSAGE IS DECODED IN PLACE, WITH ITS KEY FACTS: the decode keeps each
 // member read in place, a name written twice by its last value (as JSON.parse
 // reads it), and says which of its names it met, whether one was met twice
 // and whether one was none of its own; a person's message reads none of them.
 //
 // Mutation: keep a name's first value, or drop the facts' twice or other, and
 // this goes red.
-func TestAMessageIsDecodedOnceWithItsKeyFacts(t *testing.T) {
+func TestAMessageIsDecodedInPlaceWithItsKeyFacts(t *testing.T) {
 	t.Parallel()
 	raw := json.RawMessage(`{"type":"user","text":"first","later":1,"text":"second","metadata":{}}`)
 	w := decodeOpenCodeMessage(raw)
@@ -507,6 +507,31 @@ func TestAnUnnamedCountOfFailuresIsWildOnlyForFailures(t *testing.T) {
 	}
 }
 
+// A REPORTED SKILL LOAD IS TOLD: OpenCode's plugin reports a load its own
+// `skill` tool made, which the log keeps as a `load_tool_skill` call asked
+// like any other, and its session holds that tool's part, never one of
+// `crewlet_load_tool_skill`; so the load is told, with or without the native
+// part, and the run's other call beside it held.
+//
+// Mutation: read OpenCode's own `skill` part as the load's, or hold a class
+// no part was counted for, and a case goes red.
+func TestAReportedSkillLoadIsTold(t *testing.T) {
+	t.Parallel()
+	echo := ohCall(1, "echo", `{"t":1}`, "done")
+	load := ohCall(2, "load_tool_skill", `{"name":"crewlet:review"}`, "loaded")
+	native := strings.Replace(ohDone("load_tool_skill", `{"name":"crewlet:review"}`, "loaded"),
+		`"crewlet_load_tool_skill"`, `"skill"`, 1)
+	if !strings.Contains(native, `"name":"skill"`) {
+		t.Fatal("the native part names no skill tool")
+	}
+	for name, doc := range map[string]string{
+		"the native part": ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, "done"), native)),
+		"no part":         ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, "done"))),
+	} {
+		h, err := ohRead(t, doc, ohBegan, echo, load)
+		if got := ohHeld(t, h, err, echo, load); !slices.Equal(got, []int{1}) {
+			t.Errorf("%s: held %v; want the run's echo alone, the load told", name, got)
+		}
 	}
 }
 
