@@ -1831,9 +1831,9 @@ func (d *openCodeEvents) Result() sandbox.Result {
 	res := sandbox.Result{
 		Text:          body,
 		Success:       success,
-		Transcript:    d.transcript.String(),
 		DeliveredRefs: deliveredRefs(body),
 	}
+	res.Transcript, res.TranscriptElidedLines, res.TranscriptElidedBytes = d.transcript.result()
 	if u := d.usage; u != nil {
 		tokens := u.Data.Tokens
 		res.InputTokens = tokens.Input + tokens.Cache.Read + tokens.Cache.Write

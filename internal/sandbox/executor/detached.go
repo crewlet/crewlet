@@ -954,10 +954,11 @@ func (r *Runner) Poll(ctx context.Context, box sandbox.Sandbox, handle sandbox.R
 // or any piece whose path is not a regular file ([sandbox.ErrNotRegularFile],
 // which a retry would read again), degrades only itself: described, the run
 // not a success, its tokens, refs and transcript still collected and charged.
-// A read that fails is an error: the box could not be read back. Everything is
-// redacted whole before anything is bounded, since a secret cut in two
-// survives as fragments; report, failure and transcript leave whole, bounded
-// by the coordinator in one place ([sandbox.MaxRunTextBytes]).
+// A read that fails is an error. Everything is redacted whole before anything
+// is bounded, since a secret cut in two survives as fragments; report and
+// failure leave whole, and the transcript whole up to [transcriptHoldBytes],
+// past it as the record keeps it ([transcriptLines]): the coordinator bounds
+// what is sent, in one place ([sandbox.MaxRunTextBytes]).
 func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbox.RunHandle) (sandbox.Result, error) {
 	paths := PathsFor(box)
 	out := r.harness.Output(paths)
@@ -1011,6 +1012,8 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 			parsed := r.harness.Parse(raw)
 			if out.Events {
 				parsed.Transcript = result.Transcript
+				parsed.TranscriptElidedLines = result.TranscriptElidedLines
+				parsed.TranscriptElidedBytes = result.TranscriptElidedBytes
 			}
 			result = parsed
 		}
@@ -1188,9 +1191,9 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	for i, ref := range result.DeliveredRefs {
 		result.DeliveredRefs[i] = redact.Secrets(ref)
 	}
-	// WHOLE, as the report and the failure leave here: the coordinator is
-	// the one home of the record's bound, and holds the transcript to it
-	// after redacting it again ([sandbox.MaxRunTextBytes]).
+	// Whole up to the hold, as the report and the failure leave here: the
+	// coordinator holds the transcript to the record's bound after redacting
+	// it again ([sandbox.MaxRunTextBytes]).
 	result.Transcript = redact.Secrets(result.Transcript)
 	return result, nil
 }

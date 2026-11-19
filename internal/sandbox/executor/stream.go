@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -139,10 +140,35 @@ func decodeAll(dec Decoder, text string) sandbox.Result {
 	return dec.Result()
 }
 
+// transcriptHoldBytes is how much of a run's transcript a whole reading holds
+// raw: the most the engine reads any one text whole, so below it a transcript
+// costs what it always has. Past it the transcript is redacted as it arrives
+// and only what the run's record keeps is held ([sandbox.TranscriptHalves]).
+const transcriptHoldBytes = sandbox.MaxFileBytes
+
 // transcriptLines builds a run's activity transcript one entry at a time, and
-// is where a skipped line becomes a note.
+// is where a skipped line becomes a note. Each entry is trimmed and a blank one
+// dropped, so the transcript is its entries joined by line breaks.
+//
+// A WHOLE READING PAST THE HOLD STREAMS: its entries so far, then each one
+// after, are written to a redacting stream into the halves the record keeps,
+// a piece at a time. A live reading takes its entries after every read, each
+// well under the hold ([liveBacklog]), so it never streams.
 type transcriptLines struct {
 	lines []string
+	// held is the bytes of lines and the breaks joining them.
+	held int
+	// live is set once a live reading took entries: held raw always.
+	live bool
+	// hold is [transcriptHoldBytes] where zero; a suite lowers it.
+	hold int
+	// newStream is [redact.NewStream] where nil; a suite injects a refusal.
+	newStream func(io.Writer) transcriptStream
+	// stream is set once a whole reading passed the hold; halves is what it
+	// writes, and fedBytes and fedBreaks are what it was fed.
+	stream              transcriptStream
+	halves              sandbox.TranscriptHalves
+	fedBytes, fedBreaks int
 
 	// skipped, skippedBytes and skippedBound are a run of consecutive lines
 	// past the bound, said in ONE note where they were, not one per line.
@@ -151,9 +177,58 @@ type transcriptLines struct {
 	skippedBound int
 }
 
+// transcriptStream is a [redact.Stream].
+type transcriptStream interface {
+	io.Writer
+	Close() error
+}
+
 func (t *transcriptLines) add(entry string) {
 	t.flushSkipped()
-	t.lines = append(t.lines, entry)
+	t.push(entry)
+}
+
+func (t *transcriptLines) push(entry string) {
+	entry = strings.TrimSpace(entry)
+	switch {
+	case entry == "":
+		return
+	case t.stream != nil:
+		t.feed(entry)
+		return
+	case t.live || t.held+len(entry)+1 <= cmp.Or(t.hold, transcriptHoldBytes):
+		if len(t.lines) > 0 {
+			t.held++
+		}
+		t.held += len(entry)
+		t.lines = append(t.lines, entry)
+		return
+	}
+	newStream := t.newStream
+	if newStream == nil {
+		newStream = func(w io.Writer) transcriptStream { return redact.NewStream(w) }
+	}
+	t.stream = newStream(&t.halves)
+	// Entry by entry, never the whole join at once.
+	for _, line := range t.lines {
+		t.feed(line)
+	}
+	t.lines, t.held = nil, 0
+	t.feed(entry)
+}
+
+// feed writes entry to the stream, after the line break joining it to the
+// entry before.
+func (t *transcriptLines) feed(entry string) {
+	piece := make([]byte, 0, len(entry)+1)
+	if t.fedBytes > 0 {
+		piece = append(piece, '\n')
+	}
+	piece = append(piece, entry...)
+	t.fedBytes += len(piece)
+	t.fedBreaks += bytes.Count(piece, []byte("\n"))
+	// A refusal is answered again by Close, which result reads.
+	_, _ = t.stream.Write(piece)
 }
 
 func (t *transcriptLines) skip(n int64, bound int) {
@@ -166,24 +241,40 @@ func (t *transcriptLines) flushSkipped() {
 	if t.skipped == 0 {
 		return
 	}
-	t.lines = append(t.lines, activityline.Words(activityline.TagNote, fmt.Sprintf("%d line(s) of output, %s, "+
+	t.push(activityline.Words(activityline.TagNote, fmt.Sprintf("%d line(s) of output, %s, "+
 		"not read: past the %s one line of a run's output may hold", t.skipped, humanSize(t.skippedBytes),
 		humanSize(int64(t.skippedBound)))))
 	t.skipped, t.skippedBytes = 0, 0
 }
 
-func (t *transcriptLines) String() string {
+// result is the transcript and how much of its middle was left out: its
+// entries joined, or, once it streamed, what the record keeps of its
+// redaction ([sandbox.TranscriptHalves]). A transcript the stream refused is
+// WITHHELD: a note saying so stands for it, counted whole, and nothing the
+// stream wrote is kept.
+func (t *transcriptLines) result() (text string, elidedLines, elidedBytes int) {
 	t.flushSkipped()
-	return strings.TrimSpace(strings.Join(t.lines, "\n"))
+	if t.stream == nil {
+		return strings.Join(t.lines, "\n"), 0, 0
+	}
+	if t.stream.Close() == nil {
+		return t.halves.Bounded()
+	}
+	lines := t.fedBreaks + 1
+	note := activityline.Words(activityline.TagNote, fmt.Sprintf("the run's transcript, %d line(s), %s, is "+
+		"not kept: its text could not be redacted in one pass", lines, humanSize(int64(t.fedBytes))))
+	return note, lines, t.fedBytes
 }
 
-// take hands over the entries added since the last take and forgets them.
+// take hands over the entries added since the last take and forgets them,
+// and marks the reading live.
 //
 // A RUN OF SKIPPED LINES STILL OPEN IS NOT FLUSHED: the next entry says it,
 // so a reading in pieces names the same lines as one taken whole.
 func (t *transcriptLines) take() []string {
+	t.live = true
 	lines := t.lines
-	t.lines = nil
+	t.lines, t.held = nil, 0
 	return lines
 }
 

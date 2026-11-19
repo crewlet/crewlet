@@ -689,15 +689,17 @@ type Result struct {
 	// called and the first line of what it ran — rebuilt from its own
 	// output, or its stderr where the harness streams nothing better. It is the
 	// observability surface for an agent that emits no telemetry of its
-	// own. A runner returns it WHOLE and redacted; the coordinator holds it
-	// to the record's bound ([Coordinator.fitResult]) and redacts it again
-	// at publish.
+	// own. A runner returns it redacted, whole up to the most the engine
+	// reads one text whole and past it as the record keeps it; the
+	// coordinator holds it to the record's bound ([Coordinator.fitResult])
+	// and redacts it again at publish.
 	Transcript string
 
 	// TranscriptElidedLines and TranscriptElidedBytes are how much of the
 	// transcript's middle the record's bound left out: whole lines, and
-	// every byte not kept. Zero for a transcript kept whole. Set by the
-	// coordinator, never by a runner.
+	// every byte not kept. Zero for a transcript kept whole. Set by a runner
+	// that bounded the transcript as it read it, and added to by the
+	// coordinator ([boundBox]).
 	TranscriptElidedLines int
 	TranscriptElidedBytes int
 
