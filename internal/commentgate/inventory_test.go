@@ -4,14 +4,14 @@ package commentgate
 // blockBound the package held when the bound arrived. It only moves down.
 var excessInventory = map[string]int{
 	"internal/agent/ledger":     38,
-	"internal/agent/runner":     1007,
+	"internal/agent/runner":     182,
 	"internal/api/mcpbridge":    7,
 	"internal/coord/coordtest":  43,
 	"internal/coord/memory":     10,
 	"internal/learning/memread": 13,
 	"internal/redact":           963,
-	"internal/sandbox":          2451,
-	"internal/sandbox/executor": 1546,
+	"internal/sandbox":          212,
+	"internal/sandbox/executor": 845,
 }
 
 // rowInventory is the length, in characters, of each internal/README.md row
@@ -71,7 +71,7 @@ var rowInventory = map[string]int{
 	"presence":                               3662,
 	"providers/embeddings":                   1949,
 	"regexlit, regexlit/regexlittest":        2785,
-	"sandbox":                                123730,
+	"sandbox":                                123680,
 	"scenario":                               1053,
 	"sigv4":                                  739,
 	"skipgate":                               2452,

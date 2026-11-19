@@ -71,6 +71,7 @@ import {
   isSidebarRow,
   sectionOf,
   serviceShown,
+  workspaceOpen,
   type Section,
   type WorkspaceRow,
 } from "../nav.ts";
@@ -331,10 +332,17 @@ export function SectionTabs({
 }) {
   const nav = useNavigator();
   // A WORKSPACE WHOSE OWN SERVICE THE COMPANY DOES NOT RUN draws no tabs: every
-  // one of them leads to the same notice (`ServiceNotice`).
-  const tabs = serviceShown(row, runs)
-    ? row.sections.filter((s) => s.tab !== false && serviceShown(s, runs))
-    : [];
+  // one of them leads to the same notice (`ServiceNotice`). NOR DOES ONE
+  // CLOSED TO THE READER as a whole (`workspaceOpen`): every tab leads to the
+  // same refusal (`GrantRequired`), and its tabs drawn open above it (the
+  // Advisor's Findings, Reports and History over "You need Admin access")
+  // offered three ways into one wall. A workspace only part of which is closed
+  // keeps its tabs, the closed ones locked.
+  const closed = grants !== null && !workspaceOpen(row, grants, runs);
+  const tabs =
+    serviceShown(row, runs) && !closed
+      ? row.sections.filter((s) => s.tab !== false && serviceShown(s, runs))
+      : [];
   const current = tabs.find((s) => samePath(s.path, path));
   if (tabs.length < 2 || !current) return null;
   const kept = keptQuery(row, query);

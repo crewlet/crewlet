@@ -262,6 +262,67 @@ func TestRemovingAskCrewletsModelTurnsItOffOnlyWhenTheWriteSaysSo(t *testing.T) 
 	}
 }
 
+// THE ADVISOR'S MODEL IS ANSWERED LIKE ASK CREWLET'S: left unanswered, the
+// removal is refused naming `advisor.model` rather than failing admission on a
+// model the document no longer holds; repointed, the Advisor explains with the
+// new model; repointed to nothing, its checks run with no model.
+func TestRemovingTheAdvisorsModelMovesItOrRunsItWithNone(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, removalDoc+"advisor:\n  model: aux\n")
+	answered := `{"at": {"seat": "qa", "job": "review"}, "to": null},
+		{"at": {"assistant": "chat"}, "to": "default"}`
+
+	code, body := removeModel(t, s, "aux", "?dry_run=true", `{"repoint": [`+answered+`]}`, nil)
+	if code != http.StatusUnprocessableEntity {
+		t.Fatalf("the Advisor's model left unanswered = %d %v, want 422", code, body)
+	}
+	problems, _ := body["problems"].([]any)
+	var at []string
+	for _, raw := range problems {
+		p, _ := raw.(map[string]any)
+		segs, _ := json.Marshal(p["segments"])
+		at = append(at, string(segs))
+	}
+	if !slices.Contains(at, `["advisor","model"]`) {
+		t.Errorf("problems at %v, want one at advisor.model", at)
+	}
+
+	code, body = removeModel(t, s, "aux", "?dry_run=true", `{"repoint": [`+answered+`,
+		{"at": {"advisor": "findings"}, "to": "default"}]}`, nil)
+	if code != http.StatusOK {
+		t.Errorf("repointing the Advisor's model = %d %v", code, body)
+	}
+
+	code, body = removeModel(t, s, "aux", "", `{"repoint": [`+answered+`,
+		{"at": {"advisor": "findings"}, "to": null}]}`, map[string]string{"X-Summary": "remove aux"})
+	if code != http.StatusCreated {
+		t.Fatalf("repointing the Advisor's model to nothing = %d %v", code, body)
+	}
+	if after := activeCompany(t, s); after.Advisor.Model != "" {
+		t.Errorf("the Advisor still explains with %q", after.Advisor.Model)
+	}
+}
+
+// AN ADDRESS NAMES ONE PLACE: a seat, Ask Crewlet or the Advisor, never two.
+func TestARepointAddressesOnePlace(t *testing.T) {
+	t.Parallel()
+	s := newSurface(t)
+	s.seed(t, removalDoc+"advisor:\n  model: aux\n")
+	for _, at := range []string{
+		`{"assistant": "chat", "advisor": "findings"}`,
+		`{"seat": "qa", "job": "review", "advisor": "findings"}`,
+		`{"advisor": "explanations"}`,
+		`{"seat": "qa", "job": "advisor"}`,
+	} {
+		code, body := removeModel(t, s, "aux", "?dry_run=true",
+			`{"repoint": [{"at": `+at+`, "to": null}]}`, nil)
+		if code != http.StatusBadRequest {
+			t.Errorf("repoint at %s = %d %v, want 400", at, code, body)
+		}
+	}
+}
+
 // A REPOINT THAT ANSWERS NOTHING, OR MOVES A JOB WHERE IT CANNOT RUN, IS
 // REFUSED AT ITS FIELD.
 func TestARemovalRefusesARepointTheCompanyCannotRun(t *testing.T) {

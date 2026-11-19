@@ -289,6 +289,17 @@ export const DECISION_MAX_OPTIONS = 4;
 export const PROJECT_PAGE = 200;
 
 /**
+ * The fewest and the most hours a project's stuck window may be
+ * (`worklet.MinStuckAfterHours` and `MaxStuckAfterHours`): Edit project offers
+ * no other. Held by the same gate.
+ */
+export const STUCK_AFTER_HOURS_MIN = 1;
+/** See [STUCK_AFTER_HOURS_MIN]. */
+export const STUCK_AFTER_HOURS_MAX = 168;
+/** The window a project that sets none reads (`worklet.DefaultStuckAfterHours`). */
+export const STUCK_AFTER_HOURS_DEFAULT = 8;
+
+/**
  * The conversation a work item is, less its id: every wake about the item and
  * every pickup of it is filed under this and then the item's id, so a hold the
  * engine puts on that conversation is the item's. Held to the engine's own
@@ -327,7 +338,8 @@ export const FLOW_STATES = [
 
 /**
  * The fact behind a working, waiting or held item, as the clause a sentence
- * about the item ends with. Held to `worklet.FlowCauses` by the same gate.
+ * about the item ends with, and a badge's own word where the cause is the whole
+ * story. Held to `worklet.FlowCauses` by the same gate.
  */
 export const FLOW_CAUSES = [
   { cause: "turn", phrase: "an agent turn is on it" },
@@ -343,6 +355,6 @@ export const FLOW_CAUSES = [
     cause: "parked_elsewhere",
     phrase: "its assignee's run on another item waits for a person's answer",
   },
-  { cause: "departed", phrase: "its assignee has left the org chart" },
-  { cause: "nobody", phrase: "nobody is assigned" },
-] as const satisfies readonly { cause: string; phrase: string }[];
+  { cause: "departed", label: "Assignee left", phrase: "its assignee has left the org chart" },
+  { cause: "nobody", label: "No assignee", phrase: "nobody is assigned" },
+] as const satisfies readonly { cause: string; phrase: string; label?: string }[];

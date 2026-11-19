@@ -471,6 +471,25 @@ type differ struct {
 	l labeller
 }
 
+// ChangeRows are the rows of a change from before to after, two JSON
+// documents (before null for one that creates), each field labelled and
+// valued as a person reads it. THE ONE RULE a change is shown by wherever a
+// person approves one: a proposal's card here, and an Advisor fix's preview
+// (internal/api's re-check), which labelled its rows by their raw keys.
+func ChangeRows(before, after []byte) ([]wire.Change, error) {
+	b, err := cards.Decode(before)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: read the document before the change: %w", err)
+	}
+	a, err := cards.Decode(after)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: read the document after the change: %w", err)
+	}
+	d := differ{l: newLabeller(b, a)}
+	d.diff("", b, a)
+	return d.c.rows(), nil
+}
+
 // diff appends the rows for what moves from before to after at field.
 func (d *differ) diff(field string, before, after any) {
 	switch b := before.(type) {
@@ -821,12 +840,18 @@ func join(field, key string) string {
 	return field + "." + key
 }
 
-// scalar is a value as one line of a card: a string as it is, a number or a
-// truth as written, a list of plain values joined, and anything else as JSON.
+// scalar is a value as one line of a card: a string as it is, a number as
+// written, a truth as Yes or No (a switch read "true" beside its label), a
+// list of plain values joined, and anything else as JSON.
 func scalar(v any) string {
 	switch t := v.(type) {
 	case nil:
 		return ""
+	case bool:
+		if t {
+			return "Yes"
+		}
+		return "No"
 	case string:
 		return redact.Secrets(t)
 	case []any:

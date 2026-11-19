@@ -24,17 +24,11 @@ const (
 	// transcript on such a harness fails at exec rather than at the model.
 	PromptArgv PromptMode = "argv"
 	// PromptFile writes the prompt to a private file in the per-call
-	// working directory and passes the PATH, through the `{file}`
-	// placeholder in [Profile.PromptArgs].
-	//
-	// The same trade this package already makes for the system prompt, for
-	// the same two reasons: argv is bounded by ARG_MAX, and
-	// /proc/<pid>/cmdline makes it readable by every account on the
-	// machine. A rendered prompt is the whole flattened transcript — the
-	// seat's identity, the conversation and its tool results — so it is
-	// the LARGEST and the most sensitive thing this
-	// backend hands a harness. Prefer this over argv wherever a vendor offers
-	// a prompt-file flag; `muse exec --prompt-file` is the first that does.
+	// working directory and passes the PATH through the `{file}`
+	// placeholder in [Profile.PromptArgs]. The prompt is the whole flattened
+	// transcript, the largest and most sensitive thing handed to a harness,
+	// and argv is ARG_MAX-bounded and readable via /proc/<pid>/cmdline: prefer
+	// this over argv wherever the vendor has a prompt-file flag.
 	PromptFile PromptMode = "file"
 )
 
@@ -64,39 +58,26 @@ func (m OutputMode) Valid() bool {
 	return m == OutputJSON || m == OutputJSONL || m == OutputText
 }
 
-// Path is a route to a value inside a decoded JSON document: successive
-// object keys, or a decimal index into an array.
+// Path is a route into a decoded JSON document: object keys, or a decimal
+// array index.
 //
-// A USAGE path may also take [PathEvery] as a step, for every member of the
-// object or array there — and the count it reads is then the SUM of the count
-// under each member that has one. It exists because a harness can key its counts
-// by something no profile can know in advance: Gemini CLI reports
-// `stats.models.<model>.tokens`, one entry for every model a call used, and its
-// web tools ask a second model on the side. Only a usage path may carry it
-// ([Profile.Validate]): a count adds up, while an answer, a failure flag or an
-// event's kind is one value, and which member's would be a guess.
+// A usage path may take [PathEvery], summing the count under each member that
+// has one (Gemini CLI keys counts by model, `stats.models.<model>.tokens`). Only
+// usage paths may ([Profile.Validate]): for an answer or flag, which member's
+// value would be a guess.
 type Path []string
 
-// PathEvery is the [Path] step that stands for every member of the object or
-// array at that point. A key spelled `*` in a harness's own document is therefore
-// out of a path's reach, which no harness measured has.
+// PathEvery is the [Path] step standing for every member there; a literal `*`
+// key is out of reach (no measured harness has one).
 const PathEvery = "*"
 
 // HasEvery reports whether the path takes [PathEvery] anywhere.
 func (p Path) HasEvery() bool { return slices.Contains(p, PathEvery) }
 
-// String renders a path the way profiles.yaml would be read aloud —
-// `usage.input_tokens` for [][]string{{"usage", "input_tokens"}}.
-//
-// It exists for the message an operator reads when a profile stops matching
-// its harness: naming the field to change is the whole point of that message, and
-// `[]harness.Path{{"result"}}` printed with %v names nothing.
+// String renders a path dotted, `usage.input_tokens`, for operator messages.
 func (p Path) String() string { return strings.Join(p, ".") }
 
-// PathList renders a set of paths for the same message, in declaration order.
-//
-// Declaration order because that is the order they are TRIED, so an operator
-// comparing this against their harness's real output reads the two in step.
+// PathList renders paths for such a message, in the order they are TRIED.
 func PathList(paths []Path) string {
 	if len(paths) == 0 {
 		return "(none declared)"
@@ -110,15 +91,14 @@ func PathList(paths []Path) string {
 
 // UsagePaths locates the four token counts in a harness's own usage report.
 //
-// Each is a LIST of paths because a vendor moves these between releases. The
-// first that resolves to a number wins; when none does, the count is estimated
-// (four characters a token) and `crewlet llm doctor` says so.
+// Each is a LIST because vendors move these between releases: the first that
+// resolves to a number wins; when none does, the count is estimated (four
+// characters a token) and `crewlet llm doctor` says so.
 //
-// Reasoning is ADDED to output, since providers bill it as output: declare it
-// only where the vendor's output excludes it (OpenCode 2.0); OpenAI's counts it
-// inside, so adding it there charges it twice.
-// ToolPrompt is the input-side twin: pages a MODEL-SIDE tool put before the
-// model, which Gemini reports apart as toolUsePromptTokenCount.
+// Reasoning is ADDED to output (billed as output): declare it only where the
+// vendor's output excludes it (OpenCode 2.0); OpenAI's counts it inside, so
+// adding it there charges it twice. ToolPrompt is the input-side twin: tokens a
+// MODEL-SIDE tool put before the model (Gemini's toolUsePromptTokenCount).
 type UsagePaths struct {
 	Input      []Path `yaml:"input,omitempty"`
 	Output     []Path `yaml:"output,omitempty"`
@@ -128,23 +108,19 @@ type UsagePaths struct {
 	ToolPrompt []Path `yaml:"tool_prompt,omitempty"`
 
 	// InputIncludesCache declares that the input count is ALREADY the whole
-	// prompt, the cached tokens inside it, so the cache figures only break it
-	// down. False, the default, reads it as the uncached part alone, which is
-	// how Anthropic's usage — and every harness passing that through — reports
-	// it, and adds the cache figures to it ([UsagePaths.PromptTokens]).
+	// prompt, cached tokens inside, so the cache figures only break it down.
+	// False (Anthropic's shape, and every harness passing it through) reads
+	// input as the uncached part and adds the cache figures
+	// ([UsagePaths.PromptTokens]).
 	//
-	// A DECLARATION OF THE VENDOR'S ARITHMETIC, because the two shapes name
-	// their fields alike and differ only in what the first one counts:
-	// OpenAI's `input_tokens` holds its `cached_tokens`, and codex's
-	// turn.completed passes that through (its own `non_cached_input` is the
-	// difference). Read the other way, every cached token was charged twice.
+	// A declaration of the vendor's arithmetic, since both shapes name fields
+	// alike: OpenAI's `input_tokens` holds its `cached_tokens` (codex passes
+	// that through). Read the other way, cached tokens are charged twice.
 	InputIncludesCache bool `yaml:"input_includes_cache,omitempty"`
 }
 
-// PromptTokens is the whole prompt's token count out of the three input
-// figures a harness reported, by the arithmetic [UsagePaths.InputIncludesCache]
-// declares: the budget figure a completion's InputTokens carries, which counts
-// every cached token once.
+// PromptTokens is the whole prompt's token count (every cached token once) from
+// the three input figures, by [UsagePaths.InputIncludesCache]'s arithmetic.
 func (u UsagePaths) PromptTokens(input, cacheRead, cacheWrite int) int {
 	if u.InputIncludesCache {
 		return input
@@ -152,43 +128,34 @@ func (u UsagePaths) PromptTokens(input, cacheRead, cacheWrite int) int {
 	return input + cacheRead + cacheWrite
 }
 
-// CredentialStore is a login a harness keeps in a DATABASE OF ITS OWN: it travels
-// as the DOCUMENT its export command prints, not as [Profile.CredentialPaths].
-// THE FILE CANNOT BE THE CREDENTIAL, because it is also the transcript:
+// CredentialStore is a login kept in a DATABASE OF THE HARNESS'S OWN, travelling
+// as the DOCUMENT its export command prints, not as [Profile.CredentialPaths]:
 // OpenCode 2.0 keeps logins in the same SQLite file as every session, so
-// copying it would carry one seat's conversations to every other seat, and
+// copying it would carry one seat's conversations to every other seat and
 // pruning it would delete the login. The document is the login of record
-// ([CredentialStoreDocument]); each generation starts from an empty database
-// with it imported (an import skips an id the database holds, so a refresh
-// returns as a new document) and exports at its end, carried back only as a
-// compare-and-swap against the seed under hostbox.LockCredentials, dropped if
-// the shared document moved on (Workspace.syncCredentialsOut).
+// ([CredentialStoreDocument]); each generation imports it into an empty
+// database and exports at its end, carried back only as a compare-and-swap
+// against the seed under hostbox.LockCredentials (Workspace.syncCredentialsOut).
 type CredentialStore struct {
 	// ExportArgs print every login the harness holds as one document on stdout.
 	ExportArgs []string `yaml:"export_args,omitempty"`
 
-	// ImportArgs read such a document on STDIN and store every login in it.
-	// Never on argv and never a path the engine invents: the document is a
-	// credential, and stdin is the one channel no other account on the
-	// machine can read.
+	// ImportArgs read such a document on STDIN (a credential: no other account
+	// can read it there) and store every login in it.
 	ImportArgs []string `yaml:"import_args,omitempty"`
 }
 
-// CredentialStoreDocument is the name the shared credential directory, a
-// credential bundle and a coding box keep a [CredentialStore]'s document under.
-//
-// ONE NAME FOR EVERY PROFILE, and the engine's rather than the vendor's: no harness
-// reads this file — it reads the document on stdin — so where it is kept is a
-// fact about this engine, and a profile declaring one would be a second place
-// to keep the same answer. No extension, because the format is the harness's own.
+// CredentialStoreDocument is the name the shared credential directory, bundles
+// and coding boxes keep a [CredentialStore]'s document under: the engine's, one
+// for every profile, since no harness reads the file. No extension (the format
+// is the harness's own).
 const CredentialStoreDocument = "exported-credentials"
 
 // StdinLogin is a credential login a harness genuinely accepts.
 //
-// A pointer field on Profile, and unset on every vendor whose login is
-// browser OAuth: the distinction between "this harness has no password login" and
-// "this harness has one that takes no arguments" is the difference between an
-// error a person can act on and a command that hangs on a prompt.
+// A pointer field on Profile, unset where login is browser OAuth: it separates
+// "no password login" (an error a person can act on) from one taking no
+// arguments (a command that hangs on a prompt).
 type StdinLogin struct {
 	// Args is the login argv, with {username} substituted.
 	Args []string `yaml:"args,omitempty"`
@@ -204,43 +171,35 @@ type StdinLogin struct {
 // LimitMarker recognises a spent subscription in a reply the harness reported as
 // a SUCCESS.
 //
-// A spent plan is not an HTTP status here: the process exits 0 and the answer
-// is prose. Matching that prose by keyword gets it wrong twice over: "usage
-// limit" appears in a model's own answer about rate limits, and a vendor's
-// wording changes under it. So a marker matches by
-// STRUCTURE: a literal sentinel the vendor emits verbatim, plus the field
-// that carries the reset instant — and, in what a run that did not fail
-// says, only where the sentinel opens it ([MarkerScope]). A marker that finds
-// its sentinel but no reset value still classifies; one that finds neither
-// does not fire.
+// The process exits 0 and the answer is prose. Keyword matching is wrong
+// twice over ("usage limit" appears in a model's own answer, and vendors
+// reword), so a marker matches by STRUCTURE: a literal sentinel the vendor
+// emits verbatim, plus the field carrying the reset instant, and in a run that
+// did not fail only where the sentinel opens the answer ([MarkerScope]). A
+// sentinel with no reset value still classifies; no sentinel never fires.
 type LimitMarker struct {
-	// Sentinel is the exact substring the vendor emits. It is compared
-	// case-sensitively against the extracted text: the vendors write these
-	// as fixed strings, and folding case is what turns a sentinel back
-	// into a keyword. In the [MarkerScopeEvents] scope it is the failure
-	// CLASS instead, compared whole and case-sensitively with the string at
-	// [Profile.MarkerPath] in the harness's own failure event.
+	// Sentinel is the exact substring the vendor emits, case-sensitive (folding
+	// case turns it back into a keyword). In [MarkerScopeEvents] it is the
+	// failure CLASS, compared whole with the string at [Profile.MarkerPath].
 	Sentinel string `yaml:"sentinel,omitempty"`
 
-	// Reset reads the reset instant out of the line the sentinel matched
-	// on, where the vendor names one.
+	// Reset reads the reset instant out of the matched line, where named.
 	Reset ResetReading `yaml:",inline"`
 }
 
 // ResetReading says where a vendor's limit report names the instant the limit
 // lifts, and how to read it: the text after Separator, as Unit.
 //
-// A READING THAT FINDS NOTHING IS NOT AN ERROR. The report still classifies as
-// a limit, and the entry sits out a bounded, growing window instead
-// (internal/providers/llm/harness), which is the honest answer when the vendor
-// did not say: inventing an instant would hold a seat off a plan that has
-// already reset, or send it back into one that has not.
+// A reading that finds nothing is not an error: the report still classifies as
+// a limit and the entry sits out a bounded, growing window
+// (internal/providers/llm/harness); inventing an instant would hold a seat off
+// a reset plan or send it back into a spent one.
 type ResetReading struct {
-	// Separator splits the reset value off the report: "|" before an epoch,
-	// "resets " before a time of day.
+	// Separator splits the reset value off: "|" before an epoch, "resets "
+	// before a time of day.
 	Separator string `yaml:"reset_separator,omitempty"`
 
-	// Unit is how to read the value after the separator; see [ResetUnit].
+	// Unit is how to read the value after it ([ResetUnit]).
 	Unit ResetUnit `yaml:"reset_unit,omitempty"`
 }
 
@@ -252,11 +211,10 @@ const (
 	ResetEpoch ResetUnit = "epoch"
 	// ResetSeconds is a delay in seconds from the report.
 	ResetSeconds ResetUnit = "seconds"
-	// ResetClock is a time of day followed by the IANA zone it is in, the
-	// way Claude Code 2.1 writes it: "4:30pm (America/Vancouver)",
-	// "4pm (Europe/Berlin)" or "16:30 (Asia/Tokyo)". The instant is the
-	// occurrence of that time nearest the report, so a reset named past
-	// midnight is tomorrow's.
+	// ResetClock is a time of day then its IANA zone, as Claude Code 2.1
+	// writes it: "4:30pm (America/Vancouver)", "16:30 (Asia/Tokyo)". The
+	// instant is the occurrence nearest the report, so one past midnight is
+	// tomorrow's.
 	ResetClock ResetUnit = "clock"
 )
 
@@ -269,28 +227,22 @@ func (u ResetUnit) Valid() bool {
 	return false
 }
 
-// LimitEvent recognises a spent plan or a rate limit by the harness's own
-// STRUCTURED report: a stdout event whose fields the harness writes, such as
-// Claude Code's result event with `is_error: true` and `api_error_status: 429`.
-//
-// IT IS READ BEFORE ANY SENTINEL, because a status code is the one signal a
-// vendor's rewording leaves alone (Claude Code 2.1 kept 429); a profile
-// knowing only the sentence would never sit the entry out.
-//
-// SAFE TO BENCH ON for the reason [MarkerScopeEvents] is: a model chooses the
-// words in an event's strings, never its keys or types. That holds only where
-// every stdout line is a JSON event, so a profile declares these only with
-// jsonl output and a discriminator, and every match names both.
+// LimitEvent recognises a spent plan or rate limit by the harness's own
+// STRUCTURED report, e.g. Claude Code's result event with `is_error: true` and
+// `api_error_status: 429`. Read BEFORE any sentinel: a status code survives a
+// vendor's rewording. Safe to bench on for [MarkerScopeEvents]'s reason (a
+// model chooses an event's strings, never its keys or types), which holds only
+// where every stdout line is a JSON event: these need jsonl output and a
+// discriminator, and every match names both.
 type LimitEvent struct {
-	// Match picks the report out; see [Match].
+	// Match picks the report out ([Match]).
 	Match []Match `yaml:"match,omitempty"`
 
-	// SaidPath is where in the event the vendor's own sentence is: what the
-	// operator is shown, and what Reset reads the instant from. Empty shows
-	// the whole line and reads no instant.
+	// SaidPath locates the vendor's sentence: shown to the operator and read by
+	// Reset. Empty shows the whole line, no instant.
 	SaidPath Path `yaml:"said_path,omitempty"`
 
-	// Reset reads the reset instant out of the sentence at SaidPath.
+	// Reset reads the instant out of the sentence at SaidPath.
 	Reset ResetReading `yaml:",inline"`
 }
 
@@ -300,34 +252,29 @@ type MarkerScope string
 
 const (
 	// MarkerScopeAnswerAndStderr searches the model's answer and stderr: the
-	// default, and required where a harness reports a spent plan AS its answer
+	// default, required where a harness reports a spent plan AS its answer
 	// (Claude Code, on a ZERO exit).
 	//
-	// On a healthy run the answer is the model's own words, so on a run the
-	// harness did not report failed (non-zero exit or [Profile.ErrorPaths]) a
-	// sentinel counts only where it BEGINS the answer's first non-empty line;
-	// anywhere in a failed run. Stderr is matched anywhere. Without the
-	// anchoring a seat asked about its quota tripped a generic sentinel and
-	// sat the entry out for the node. It does not save a sentinel that is not
-	// words: a "429" was lost to the same false positive.
+	// On a run not reported failed (non-zero exit or [Profile.ErrorPaths]) the
+	// answer is the model's own words, so a sentinel counts only where it BEGINS
+	// the answer's first non-empty line; anywhere in a failed run. Stderr is
+	// matched anywhere. Without the anchoring a seat asked about its quota
+	// sat the entry out. A sentinel that is not words ("429") still false-positives.
 	MarkerScopeAnswerAndStderr MarkerScope = "answer-and-stderr"
 	// MarkerScopeStderr searches stderr only, for a harness whose failures
-	// never reach the answer (kimi-code, pi; measured). Narrow a profile only
-	// where the vendor makes the answer an impossible place for the report:
-	// hermes prints a refused key on stdout with exit 2 (0.21.5), so its
-	// earlier stderr scope matched none of them.
+	// never reach the answer (kimi-code, pi; measured). Narrow only where the
+	// answer is an impossible place for the report: hermes prints a refused
+	// key on stdout with exit 2 (0.21.5).
 	MarkerScopeStderr MarkerScope = "stderr"
-	// MarkerScopeEvents matches STRUCTURE, not text, for a harness that reports
-	// a failure as an event of its own in a JSON stream (OpenCode 2's
-	// `provider.quota`), which can follow a located answer and is not stderr.
+	// MarkerScopeEvents matches STRUCTURE, not text, for a harness reporting a
+	// failure as its own event in a JSON stream (OpenCode 2's `provider.quota`).
 	// It decodes each stdout line, looks only at the events
 	// [Profile.MarkerEvents] names (told apart by [Profile.EventTypePath]) and
 	// compares each sentinel by EQUALITY with the string at
-	// [Profile.MarkerPath]. A substring search of stdout is wrong: a model's
-	// tool-call arguments print as a raw JSON object, so injected text could
-	// bench the credential on a clean exit 0. Stderr is not searched (zero
-	// bytes there, measured on 2.0.32). [Profile.Validate] requires jsonl, its
-	// discriminator, the failure events and the path.
+	// [Profile.MarkerPath]. A substring search is wrong: tool-call arguments
+	// print as raw JSON, so injected text could bench the credential on a clean
+	// exit 0. Stderr is not searched (empty, measured on 2.0.32).
+	// [Profile.Validate] requires jsonl, the discriminator, events and path.
 	MarkerScopeEvents MarkerScope = "events"
 )
 
@@ -336,27 +283,24 @@ func (s MarkerScope) Valid() bool {
 	return s == MarkerScopeAnswerAndStderr || s == MarkerScopeStderr || s == MarkerScopeEvents
 }
 
-// LocalTools says what a profile does about the harness's OWN tools — its shell,
-// its file editor, its browser.
+// LocalTools says what a profile does about the harness's OWN tools (shell,
+// file editor, browser).
 //
-// On the engine host every phase but the executor uses none of them: tools
-// reach the harness as the engine's MCP server ([MCP]), and a harness editing
-// files itself is invisible to the tool registry and permission model. The
-// executor is fully permissioned in its box (internal/sandbox/executor). The
-// shell matters most: hostbox isolates a seat's HOME and environment, not the
-// filesystem. A profile DENIES local tools wherever the vendor allows. Web is
-// the exception, turned off per entry through [WebTools].
+// On the engine host every phase but the executor uses none: tools arrive as
+// the engine's MCP server ([MCP]), and a harness editing files itself is
+// invisible to the tool registry and permission model. The executor is fully
+// permissioned in its box (internal/sandbox/executor). The shell matters most:
+// hostbox isolates HOME and environment, not the filesystem. A profile DENIES
+// local tools wherever the vendor allows; web is off per entry ([WebTools]).
 type LocalTools string
 
 const (
-	// LocalToolsDenied means the profile's flags or seeded files turn the
-	// harness's shell and file tools off. The doctor's shell probe is expected
-	// to be refused.
+	// LocalToolsDenied means flags or seeded files turn the shell and file
+	// tools off; the doctor's shell probe is expected to be refused.
 	LocalToolsDenied LocalTools = "denied"
-	// LocalToolsVendorDefault means the vendor offers no way to deny
-	// them, so the harness runs with whatever its non-interactive default
-	// admits. The profile's local_tools_note says why, and the doctor
-	// reports the probe's measurement as a finding rather than a pass.
+	// LocalToolsVendorDefault means the vendor offers no way to deny them. The
+	// profile's local_tools_note says why, and the doctor reports the probe as
+	// a finding, not a pass.
 	LocalToolsVendorDefault LocalTools = "vendor-default"
 )
 
@@ -365,27 +309,20 @@ func (t LocalTools) Valid() bool {
 	return t == LocalToolsDenied || t == LocalToolsVendorDefault
 }
 
-// WebTools says whether a profile's run keeps the harness's OWN web tools (its
-// fetch and its search) or turns them off.
-//
-// A SECOND STANCE BESIDE [LocalTools], not a value of it: local tools are
-// denied for every entry, while web stays on for a seat by default and is
-// turned off per entry (`overrides: {web_tools: denied}`) or for a run whose
-// security model is that every byte it reads passes the engine's guard: a
-// helper's run is always denied here, whatever its entry says (ADR-0050): a
-// page the model fetched itself is text no authority decision saw, and a fetch
-// is also a way OUT for the person's data.
-//
-// The empty value reads as [WebToolsAllowed].
+// WebTools says whether a run keeps the harness's OWN web tools (fetch and
+// search), a second stance beside [LocalTools]: web is on for a seat by default
+// and off per entry (`overrides: {web_tools: denied}`), and always for a
+// helper's run whatever its entry says (ADR-0050): a page the model fetched
+// itself passed no authority decision, and a fetch is a way OUT for the
+// person's data. The empty value reads as [WebToolsAllowed].
 type WebTools string
 
 const (
 	// WebToolsAllowed keeps the harness's web tools on, the seats' default.
 	WebToolsAllowed WebTools = "allowed"
-	// WebToolsDenied runs the harness with its web tools off, through the
-	// profile's [WebDenial]. A profile with no web_denial cannot be denied,
-	// and Load refuses the stance on it rather than run a harness that still
-	// fetches under a configuration that says it does not.
+	// WebToolsDenied runs the harness with web off through the profile's
+	// [WebDenial]; Load refuses it on a profile with none rather than run a
+	// harness that still fetches.
 	WebToolsDenied WebTools = "denied"
 	// WebToolsSearch runs the harness with its vendor's web search and no
 	// other tool, through the profile's [WebSearch]: Ask Crewlet's search run,
@@ -393,9 +330,8 @@ const (
 	WebToolsSearch WebTools = "search"
 )
 
-// Valid reports whether w is a stance this package knows. The empty value is
-// not one: it is the absence of a stance, which [Profile.EffectiveWebTools]
-// reads as allowed.
+// Valid reports whether w is a stance this package knows; the empty value is
+// not ([Profile.EffectiveWebTools] reads it as allowed).
 func (w WebTools) Valid() bool {
 	return w == WebToolsAllowed || w == WebToolsDenied || w == WebToolsSearch
 }
@@ -462,18 +398,16 @@ func (p Profile) withWebSearch() Profile {
 	return out
 }
 
-// WebDenial is how one harness turns its web tools off: what its run uses INSTEAD
-// when the entry is `web_tools: denied`.
+// WebDenial is what a harness's run uses INSTEAD when the entry is
+// `web_tools: denied`. Replacements, not edits: a set field replaces the
+// profile field of the same name whole ([applyOverrides]), the denied argv
+// having been measured as a unit. A denial setting nothing is refused.
 //
-// REPLACEMENTS, NOT EDITS: a set field replaces the profile field of the same
-// name whole, as [applyOverrides] does, since the denied argv was measured as
-// a unit. An unset field leaves it alone. A denial setting nothing is refused.
-//
-// A RUN WITH TOOLS IS COVERED TOO. A profile whose mcp block has its own argv
-// or settings (mcp.complete_args, mcp.seed) would keep the web on exactly where
-// a seat works, so its denial says what that run uses instead ([WebDenial.MCP])
-// for each field whose counterpart it replaces, or is refused. Built-ins were
-// measured with the doctor's web probe (web_tools_note names the release).
+// A run with tools is covered too: a profile whose mcp block has its own argv
+// or settings would keep web on exactly where a seat works, so the denial says
+// what that run uses ([WebDenial.MCP]) for each field it replaces, or is
+// refused. Built-ins were measured with the doctor's web probe
+// (web_tools_note names the release).
 type WebDenial struct {
 	// CompleteArgs replaces complete_args when web is denied.
 	CompleteArgs []string `yaml:"complete_args,omitempty"`
@@ -498,14 +432,10 @@ func (d *WebDenial) changes() bool {
 		(d.MCP != nil && (d.MCP.CompleteArgs != nil || d.MCP.Seed != nil)))
 }
 
-// mcpUncovered names the mcp block's own fields a denial leaves in place
-// although it replaces their counterpart for a text function, which a run with
-// tools would then use with its web on; empty when it covers them all.
-//
-// THE COUNTERPART DECIDES: a denial that turns the web off in the argv must
-// turn it off in a run's own argv too, and one that does it in a settings file
-// must do it in the run's own settings. A field the denial does not touch
-// carries no web stance it could leave behind.
+// mcpUncovered names the mcp block's fields a denial leaves in place although
+// it replaces their text-function counterpart, which a run with tools would use
+// with web on. The counterpart decides: an argv denial must reach the run's
+// argv, a settings one its settings.
 func (d *WebDenial) mcpUncovered(m *MCP) []string {
 	if m == nil {
 		return nil
@@ -524,13 +454,11 @@ func (d *WebDenial) mcpUncovered(m *MCP) []string {
 type SeedScope string
 
 const (
-	// SeedHome writes the file under the seat's HOME, once per seat
-	// generation, beside the credentials. Settings a harness reads from its
-	// user directory go here.
+	// SeedHome writes under the seat's HOME once per seat generation, beside
+	// the credentials: settings read from the user directory.
 	SeedHome SeedScope = "home"
-	// SeedWork writes the file into the per-call working directory, on
-	// every call. Settings a harness reads from the project it is run in go
-	// here — the scratch directory is that project.
+	// SeedWork writes into the per-call working directory on every call:
+	// settings read from the project (the scratch directory is that project).
 	SeedWork SeedScope = "work"
 )
 
@@ -539,11 +467,9 @@ func (s SeedScope) Valid() bool { return s == SeedHome || s == SeedWork }
 
 // SeedFile is a settings file the engine writes for the harness before a call.
 //
-// Some vendors take their tool policy from a file rather than a flag —
-// Gemini CLI's policy files, OpenCode's opencode.json, Cursor's cli.json — and
-// the seat HOME and the per-call working directory are both places the engine
-// controls, so the file is simply put where the harness will look. Content is
-// written verbatim at 0600.
+// For vendors taking tool policy from a file, not a flag (Gemini CLI's policy
+// files, OpenCode's opencode.json, Cursor's cli.json). Content is written
+// verbatim at 0600.
 type SeedFile struct {
 	// Path is relative to the scope's root. Never absolute, never
 	// escaping it.
@@ -554,13 +480,9 @@ type SeedFile struct {
 	Content string `yaml:"content,omitempty"`
 }
 
-// staysInside reports, at load time, whether a profile-declared relative path
-// stays inside whatever directory it is later joined onto: relative, not
-// empty, and climbing out of nothing once cleaned ([filepath.IsLocal]).
-//
-// The load-time half of [UnderRoot], for a path whose real root does not exist
-// yet; a stand-in root would let `../seat/settings.json` pass at load and fail
-// the real UnderRoot on every call.
+// staysInside is the load-time half of [UnderRoot] ([filepath.IsLocal]), for a
+// path whose real root does not exist yet; a stand-in root would let
+// `../seat/settings.json` pass here and fail on every call.
 func staysInside(rel string) bool { return filepath.IsLocal(rel) }
 
 // Scope is the seed scope with its default applied.
@@ -574,33 +496,28 @@ func (f SeedFile) Scope() SeedScope {
 // Channel is one way a harness takes a system prompt: as an argument, as a file
 // named by an environment variable, or as a file it finds by its location.
 //
-// Three shapes, because vendors ship all three, and `--help` shows only the
-// first: Gemini CLI and its Qwen fork take their prompt from a file a VARIABLE
-// names and have no flag for it at all, which is how both were first recorded
-// here as having no channel; OpenCode takes no path at all and DISCOVERS the
-// file where its vendor says to look.
+// Vendors ship all three and `--help` shows only the first: Gemini CLI and Qwen
+// take a file a VARIABLE names, with no flag; OpenCode takes no path and
+// DISCOVERS the file where its vendor says to look.
 type Channel struct {
 	// Args is the argv the channel adds, with one of two placeholders:
 	//
 	//   {file}    the text goes to a private file in the per-call working
-	//             directory and the PATH is substituted. Prefer this always: a
-	//             seat's prompt carries the org chart, policies and prefetches.
-	//   {system}  the text goes INTO ARGV, where /proc/<pid>/cmdline exposes it
-	//             to every account on the machine and ARG_MAX bounds it (256 KB
-	//             on macOS). Only for a harness with no file variant.
+	//             directory and the PATH is substituted. Prefer always.
+	//   {system}  the text goes INTO ARGV, readable via /proc/<pid>/cmdline and
+	//             ARG_MAX-bounded (256 KB on macOS). Only where no file variant.
 	//
-	// With a discovered [Channel.File] it carries neither: the argv only selects
-	// what the harness found, or is empty where it reads the file every run.
+	// With a discovered [Channel.File] it carries neither: it only selects what
+	// the harness found, or is empty.
 	Args []string `yaml:"args,omitempty"`
 
 	// Env is an environment variable naming a file the harness reads its
-	// system prompt from (`GEMINI_SYSTEM_MD`). Preferred over Args since the
-	// text never reaches argv. A channel declares one or the other: both would
-	// hand the harness the text twice, and the vendor picks the winner.
+	// system prompt from (`GEMINI_SYSTEM_MD`); preferred over Args, the text
+	// never reaching argv. Not both: the harness would get the text twice.
 	Env string `yaml:"env,omitempty"`
 
-	// File shapes the file a `{file}`, Env or discovered channel writes —
-	// see [SystemPromptFile]. Nil writes the prompt alone, under a name no
+	// File shapes the file a `{file}`, Env or discovered channel writes
+	// ([SystemPromptFile]). Nil writes the prompt alone, under a name no
 	// harness reads on its own.
 	File *SystemPromptFile `yaml:"file,omitempty"`
 }
@@ -610,9 +527,8 @@ func (c Channel) Declared() bool {
 	return len(c.Args) > 0 || c.Env != "" || c.File.ReadAlways()
 }
 
-// WritesFile reports whether the channel puts the text in a FILE — `{file}`
-// on argv, the variable, which names a path by construction, or a file the harness
-// discovers by its location.
+// WritesFile reports whether the channel puts the text in a FILE: `{file}` on
+// argv, the variable (it names a path), or a discovered file.
 func (c Channel) WritesFile() bool {
 	return c.Env != "" || c.File.Found() || hasPlaceholder(c.Args, "{file}")
 }
@@ -627,31 +543,26 @@ func (c Channel) clone() Channel {
 	return out
 }
 
-// Route is where one call's system prompt travels, and whether the harness's own
-// system prompt stays in force beside it — see [Profile.RouteFor].
+// Route is where one call's system prompt travels ([Profile.RouteFor]).
 type Route struct {
 	// Channel carries the text; the zero channel leaves it in the transcript.
 	Channel Channel
 
-	// Field names the profile field the channel came from, `system_prompt`
-	// or `append_system_prompt`, and is empty for the transcript. For a
-	// message or a diagnosis to name what an operator would override.
+	// Field names the profile field the channel came from (`system_prompt` or
+	// `append_system_prompt`), empty for the transcript, so a message can name
+	// what to override.
 	Field string
 
-	// KeepsDefault says the harness's own system prompt is in force for this
-	// call: the append channel, or no channel at all, where the engine's
-	// text rides the transcript under the vendor's prompt.
+	// KeepsDefault says the harness's own system prompt is in force: the append
+	// channel, or none (the text rides the transcript).
 	KeepsDefault bool
 }
 
-// RouteFor picks the channel for one call: the append channel for a seat at
-// work (agent) and the replace channel for a text function, each falling back
-// to the other, and both to the transcript — see [Profile.SystemPrompt].
-//
-// A seat on a harness that can only replace takes the replacement rather than the
-// transcript: the vendor prompt it would keep is written for a harness at
-// a terminal, and the seat's own instructions would arrive as a user message
-// under it.
+// RouteFor picks a call's channel ([Profile.SystemPrompt]): append for a seat
+// at work, replace for a text function, each falling back to the other, then
+// the transcript. A seat on a replace-only harness takes the replacement: the
+// vendor prompt it would keep is written for a terminal, and the seat's
+// instructions would arrive as a user message under it.
 func (p *Profile) RouteFor(agent bool) Route {
 	keep := Route{Channel: p.AppendSystemPrompt, Field: "append_system_prompt", KeepsDefault: true}
 	replace := Route{Channel: p.SystemPrompt, Field: "system_prompt"}
@@ -670,49 +581,43 @@ func (p *Profile) RouteFor(agent bool) Route {
 }
 
 // SystemPromptFile shapes the file a channel writes, for vendors whose channel
-// takes a STRUCTURED file or finds one by its location. Without it the file is
-// the prompt alone.
+// takes a STRUCTURED file or finds one by location. Without it the file is the
+// prompt alone.
 //
 // Kimi Code's only per-call channel is `--agent-file`: YAML frontmatter with a
 // REQUIRED description and the tool allowlist, the BODY as the prompt; a bare
-// prompt makes it exit. The frontmatter holds its tool denial, so such a channel
-// is passed on EVERY call, even with no system prompt.
-//
-// OpenCode 2 is handed no path: it DISCOVERS the file in its configuration
-// directory, which its profile points inside the per-call working directory
-// ([Profile.WorkConfigEnv]); see [SystemPromptFile.Discovered].
+// prompt makes it exit. The frontmatter holds its tool denial, so the channel
+// is passed on EVERY call, even with no system prompt. OpenCode 2 DISCOVERS the
+// file in a configuration directory inside the call's working directory
+// ([Profile.WorkConfigEnv], [SystemPromptFile.Discovered]).
 type SystemPromptFile struct {
-	// Name is the file to write in the per-call working directory. Empty
-	// takes the default. A bare name for a file whose path the harness is
-	// handed: a vendor that keys on the extension (`--agent-file` wants
-	// `.md`) is the only reason to set it. A relative path naming a FILE,
-	// staying inside the working directory, for a discovered one, which the
-	// harness finds where its vendor says to look.
+	// Name is the file to write in the per-call working directory; empty takes
+	// the default. A bare name where the path is handed over (set only for an
+	// extension the vendor keys on: `--agent-file` wants `.md`); a relative
+	// path inside the working directory for a discovered file.
 	Name string `yaml:"name,omitempty"`
 
-	// Template is the file's content, with `{system}` substituted by the
-	// seat's system prompt. Empty writes the prompt alone.
+	// Template is the file's content, `{system}` substituted by the system
+	// prompt. Empty writes the prompt alone.
 	Template string `yaml:"template,omitempty"`
 
-	// Discovered says the harness FINDS the file by its location in the working
-	// directory rather than being handed its path — see [Discovery]. Empty
-	// is a file handed over by path.
+	// Discovered says the harness FINDS the file by location instead of being
+	// handed its path ([Discovery]).
 	Discovered Discovery `yaml:"discovered,omitempty"`
 }
 
-// Discovery is how a harness comes to read a file it finds by its location.
+// Discovery is how a harness comes to read a file it finds by location.
 type Discovery string
 
 const (
-	// DiscoverySelected is a file the harness finds and the channel's argv then
-	// selects by name: OpenCode's `agents/<name>.md`, run with
-	// `--agent <name>`. Found but never selected, it changes nothing.
+	// DiscoverySelected is a file the harness finds and the channel's argv
+	// selects by name (OpenCode's `agents/<name>.md` with `--agent <name>`).
+	// Never selected, it changes nothing.
 	DiscoverySelected Discovery = "selected"
 
-	// DiscoveryAlways is a file the harness reads on every run it makes in that
-	// directory, with nothing on argv asking for it: OpenCode's global
-	// `AGENTS.md` in its configuration directory. Its channel is declared by
-	// the file alone.
+	// DiscoveryAlways is a file the harness reads on every run in that
+	// directory with nothing on argv (OpenCode's global `AGENTS.md`); the file
+	// alone declares the channel.
 	DiscoveryAlways Discovery = "always"
 )
 
@@ -721,25 +626,23 @@ func (d Discovery) Valid() bool {
 	return d == "" || d == DiscoverySelected || d == DiscoveryAlways
 }
 
-// Found reports whether the harness finds this file by its location rather than
-// being handed its path. Nil-safe: no spec is a file handed over by path.
+// Found reports whether the harness finds this file by location. Nil-safe.
 func (f *SystemPromptFile) Found() bool {
 	return f != nil && f.Discovered != ""
 }
 
-// ReadAlways reports whether the harness reads this file on every run, so the file
-// alone is the channel. Nil-safe.
+// ReadAlways reports whether the harness reads this file on every run (the file
+// alone is the channel). Nil-safe.
 func (f *SystemPromptFile) ReadAlways() bool {
 	return f != nil && f.Discovered == DiscoveryAlways
 }
 
 // CarriesPolicy reports whether the file says something of its own with no
-// system prompt in it: a template beyond `{system}`, such as the frontmatter
-// that names the agent OpenCode's `--agent` selects, or Kimi Code's tool
-// allowlist. A call writes such a file whether or not the request carries a
-// system prompt; a file that would hold the prompt alone is written only when
-// there is one, because written empty it still says something — OpenCode puts
-// an "Instructions from: <path>" line in front of an empty AGENTS.md. Nil-safe.
+// system prompt in it: a template beyond `{system}` (OpenCode's `--agent`
+// frontmatter, Kimi Code's tool allowlist). Such a file is written on every
+// call; one holding the prompt alone only when there is one, because empty it
+// still says something: OpenCode prefixes an empty AGENTS.md with an
+// "Instructions from: <path>" line. Nil-safe.
 func (f *SystemPromptFile) CarriesPolicy() bool {
 	return f != nil && strings.TrimSpace(f.Render("")) != ""
 }
@@ -761,68 +664,55 @@ func (f *SystemPromptFile) FileName() string {
 }
 
 // ProjectRootMarker is the file the engine writes into every call's working
-// directory to make it a project root of its own, and ProjectRootGitdir its
-// content.
-//
-// A FILE naming a gitdir, because that is what every harness measured stops
-// at: an empty `.git` DIRECTORY is ignored by git and by harnesses that ask git
-// for the root (OpenCode, Qwen Code, Copilot), and Kimi Code accepts a `.git`
-// file only when its first line is `gitdir:`. The relative gitdir names a path
-// that never exists inside the call's own 0700 directory, so git reports "not a
-// git repository" and nobody else can create it.
-//
-// Reserved: no seed may claim the path ([Profile.claims]).
+// directory to make it a project root, and ProjectRootGitdir its content: a
+// FILE naming a gitdir, which every harness measured stops at (an empty `.git`
+// DIRECTORY is ignored by git and by harnesses asking git for the root; Kimi
+// Code accepts a `.git` file only when its first line is `gitdir:`). The
+// relative gitdir never exists in the call's own 0700 directory, so git reports
+// "not a git repository" and nobody else can create it. Reserved: no seed may
+// claim the path ([Profile.claims]).
 const (
 	ProjectRootMarker = ".git"
 	ProjectRootGitdir = "gitdir: .crewlet-not-a-repository\n"
 )
 
-// DefaultSystemPromptFile is what a {file} substitution writes, in the per-call
-// working directory.
-//
-// That directory and not the seat home: it is created empty for one call and
-// removed on release, so the text cannot outlive the call that needed it or
-// reach the next one. The name is deliberately not one a harness reads on
-// its own (CLAUDE.md, AGENTS.md), because this is an argument to the harness, not
-// context for it to discover.
+// DefaultSystemPromptFile is what a {file} substitution writes in the per-call
+// directory, not the seat home: removed on release, the text cannot outlive its
+// call. Deliberately not a name a harness reads itself (CLAUDE.md, AGENTS.md):
+// this is an argument, not discoverable context.
 const DefaultSystemPromptFile = "crewlet-system-prompt.txt"
 
 // AuthMarker recognises a login the harness has stopped honouring.
 //
-// Same reasoning as [LimitMarker]: an expired OAuth login exits non-zero with
-// prose on stderr. Unrecognised, that is the SERVER failure any failed run is,
-// which moves the seat's chain on as AUTH does — so what the marker buys is
-// the NAME: a seat working off its metered fallback says its login is what
-// failed, and the operator knows that `crewlet llm login` is what mends it.
+// An expired OAuth login exits non-zero with prose on stderr; unrecognised it
+// is a plain SERVER failure that moves the chain on as AUTH does, so the marker
+// buys the NAME: the operator learns that `crewlet llm login` mends it.
 type AuthMarker struct {
-	// Sentinel is matched exactly as a [LimitMarker]'s is, in the same scope.
+	// Sentinel is matched as a [LimitMarker]'s is, in the same scope.
 	Sentinel string `yaml:"sentinel,omitempty"`
 
-	// Meaning is what the failure says about the credential the harness was
-	// handed: [AuthRefused] (the default) when the vendor turned it down,
-	// [AuthUnread] when the harness never used it at all. Only the words a person
-	// is shown depend on it; every auth marker fires the same failure.
+	// Meaning is what the failure says about the credential: [AuthRefused]
+	// (default) when the vendor turned it down, [AuthUnread] when the harness
+	// never used it. Only the words shown depend on it.
 	Meaning AuthMeaning `yaml:"meaning,omitempty"`
 }
 
-// AuthMeaning is what an [AuthMarker] says about the credential a run was
-// handed.
+// AuthMeaning is what an [AuthMarker] says about a run's credential.
 type AuthMeaning string
 
 const (
 	// AuthRefused is a credential the vendor saw and turned down: wrong,
 	// expired or revoked. The empty meaning reads as this one.
 	AuthRefused AuthMeaning = "refused"
-	// AuthUnread is a credential the harness did not use, so the vendor never saw
-	// it: the harness reports itself signed out although a value was set. Claude
-	// Code does this with a token that has a space inside it.
+	// AuthUnread is a credential the harness did not use: it reports itself
+	// signed out although a value was set (Claude Code, for a token containing
+	// a space).
 	AuthUnread AuthMeaning = "unread"
 )
 
-// AuthMeaning is the meaning of the first auth marker, in the profile's
-// order, whose sentinel said contains: what a refused sign-in's own words
-// ([llm.Error] Said) say about the credential. [AuthRefused] when none
-// matches, since a sign-in failure is otherwise the vendor's refusal.
+// AuthMeaning is the meaning of the first auth marker, in profile order, whose
+// sentinel said contains ([llm.Error] Said); [AuthRefused] when none matches,
+// a sign-in failure being otherwise the vendor's refusal.
 func (p Profile) AuthMeaning(said string) AuthMeaning {
 	for _, m := range p.AuthMarkers {
 		if m.Sentinel != "" && strings.Contains(said, m.Sentinel) {
@@ -838,174 +728,141 @@ func (p Profile) AuthMeaning(said string) AuthMeaning {
 // Binary is the executable a profile names for its harness: a name resolved on
 // PATH, or a path.
 //
-// A TYPE OF ITS OWN so a harness started anywhere in the module can be found by
-// what it runs: the value keeps this type through every field that carries it
-// to a process, and converts to string only where the process is built, a path
-// looked up or the name printed. A gate following the type sees each start
-// whatever the names say: the harness package's
+// A type of its own so every harness start is found by what it runs: it keeps
+// the type until the process is built. The harness package's
 // TestOnlyStartChildStartsAHarness holds the module to one starter on the
-// engine host, which captures output into files, never a pipe. It is a string
-// on the wire.
+// engine host, which captures output into files, never a pipe. A string on the
+// wire.
 type Binary string
 
 // Profile is everything the engine needs to drive one harness.
 //
-// It is DATA, not code, and every field is replaceable from YAML
-// (`overrides`), because these flags and JSON shapes belong to vendors
-// who rename them between releases. A vendor renaming --output-format must be
-// an operator's config edit, not a Crewlet release; a profile hard-coded in a
-// switch statement makes it the latter.
+// DATA, not code, every field replaceable from YAML (`overrides`): vendors
+// rename these flags and JSON shapes between releases, and that must be an
+// operator's config edit, not a Crewlet release.
 type Profile struct {
 	// Binary is the executable, resolved on PATH unless it is a path.
 	Binary Binary `yaml:"binary,omitempty"`
 
 	// WrittenFor is the harness version this profile was written against,
-	// printed by `crewlet llm doctor` beside the version actually
-	// installed. A profile that silently stopped matching its harness is the
-	// failure mode this exists to make visible.
+	// shown by `crewlet llm doctor` beside the installed one.
 	WrittenFor string `yaml:"written_for,omitempty"`
 
 	// VersionArgs runs the harness's own version probe.
 	VersionArgs []string `yaml:"version_args,omitempty"`
 
 	// CompleteArgs is the argv of one completion, before ModelArgs and
-	// before the prompt. Lists replace wholesale on override: position
-	// matters in an argv, and merging two argvs element-wise produces a
-	// command line neither side wrote.
+	// before the prompt. Lists replace wholesale on override: merging two
+	// argvs element-wise yields a command line neither side wrote.
 	CompleteArgs []string `yaml:"complete_args,omitempty"`
 
-	// ModelArgs carries the model, with {model} substituted. One with no
-	// {model} — empty included — means the harness takes no model, and an entry
-	// naming a model gets a validation error rather than a silently ignored
-	// setting ([Profile.TakesModel]). The placeholder may stand as the
-	// flag's own element or after `=` in a joined `--model={model}`.
+	// ModelArgs carries the model, {model} substituted. None with {model}
+	// (empty included) means the harness takes no model, and an entry naming
+	// one is refused, not silently ignored ([Profile.TakesModel]). The
+	// placeholder may be its own element or follow `=` in `--model={model}`.
 	ModelArgs []string `yaml:"model_args,omitempty"`
 
-	// ModelNamesProvider declares that the harness reads its model flag's value
-	// as `<provider>/<model>` and splits it at the FIRST slash, so a value
-	// with nothing before or after that slash names no model at all and
-	// every call fails inside the harness. Config refuses such a `model` on a
-	// write, judged on the value the harness is handed ([Profile.ModelArgument]).
-	//
-	// A DECLARATION OF A VENDOR FACT, measured per harness and overridable like
-	// every other: a release that starts accepting a bare id is an override,
-	// not a Crewlet release. Only opencode's is measured — OpenCode 2's
-	// `run --model` takes `provider/model[#variant]`, splits it at the first
-	// slash, and refuses a bare id as "Invalid model reference: <id>" — so
-	// only opencode declares it.
+	// ModelNamesProvider declares that the harness splits its model flag's value
+	// `<provider>/<model>` at the FIRST slash, so a value with nothing on either
+	// side names no model and every call fails inside the harness. Config
+	// refuses such a `model` on a write ([Profile.ModelArgument]). A measured
+	// vendor fact, overridable; only opencode declares it (OpenCode 2 refuses a
+	// bare id as "Invalid model reference: <id>").
 	ModelNamesProvider bool `yaml:"model_names_provider,omitempty"`
 
-	// Effort is how the harness takes a reasoning effort and which levels it
-	// takes ([Effort]). Nil: it has none, and config refuses an entry's effort.
+	// Effort is how the harness takes a reasoning effort and its levels
+	// ([Effort]). Nil: none, and config refuses an entry's effort.
 	Effort *Effort `yaml:"effort,omitempty"`
 
-	// EffortNote says why a harness with no Effort has none the engine passes,
-	// in the refusal of an entry's effort.
+	// EffortNote says why a harness with no Effort has none, in that refusal.
 	EffortNote string `yaml:"effort_note,omitempty"`
 
 	// PromptMode is stdin (the default), argv or file.
 	PromptMode PromptMode `yaml:"prompt_mode,omitempty"`
 
-	// SystemPrompt is the channel on which the engine's system prompt
-	// REPLACES the harness's own, and AppendSystemPrompt the one on which it is
-	// added to it; each CALL takes the one its work wants ([Profile.RouteFor]):
-	//
-	//   - a seat at work (an Agent request) takes APPEND: the vendor's prompt
-	//     is written for an agent and moves with every model;
-	//   - a text function (filter, classifier, judge) takes REPLACE: its prompt
-	//     is the whole instruction and its answer is parsed, so harness
-	//     guidance would cost thousands of tokens and push it to prose.
-	//
-	// Each falls back to the other, then to the transcript (USER content).
+	// SystemPrompt is the channel on which the engine's system prompt REPLACES
+	// the harness's own, AppendSystemPrompt the one that adds to it; each call
+	// takes the one its work wants ([Profile.RouteFor]): a seat at work APPEND
+	// (the vendor's prompt is written for an agent); a text function (filter,
+	// classifier, judge) REPLACE (its answer is parsed, and harness guidance
+	// would cost thousands of tokens and push it to prose). Each falls back to
+	// the other, then to the transcript (USER content).
 	SystemPrompt Channel `yaml:"system_prompt,omitempty"`
 
 	// AppendSystemPrompt keeps the harness's own system prompt in force and adds
-	// the engine's ([Profile.SystemPrompt]); where the vendor puts the added
-	// text is its own.
+	// the engine's ([Profile.SystemPrompt]).
 	AppendSystemPrompt Channel `yaml:"append_system_prompt,omitempty"`
 
 	// PromptArgs introduces the prompt in argv mode for a harness taking it as a
 	// FLAG'S VALUE; empty appends it bare. In [PromptFile] mode it carries the
-	// flag AND its `{file}` placeholder (`["--prompt-file", "{file}"]`) and is
-	// required. Appended LAST: a prompt flag in complete_args would make the
-	// model flag that follows the prompt (`grok -p --model grok-4 "hi"` dies at
-	// argument parsing), and only there do flag and value stay adjacent.
+	// flag AND its `{file}` placeholder (`["--prompt-file", "{file}"]`), required.
+	// Appended LAST: a prompt flag in complete_args would put the model flag
+	// after the prompt (`grok -p --model grok-4 "hi"` dies at argument parsing).
 	PromptArgs []string `yaml:"prompt_args,omitempty"`
 
 	// Output is how stdout is encoded.
 	Output OutputMode `yaml:"output,omitempty"`
 
-	// TextPaths locates the assistant's text. First hit wins for json;
-	// for jsonl every match is concatenated in stream order, which is how
-	// an event stream spells one answer.
+	// TextPaths locates the assistant's text. First hit wins for json; for
+	// jsonl every match is concatenated in stream order.
 	TextPaths []Path `yaml:"text_paths,omitempty"`
 
-	// EventTypePath locates the DISCRIMINATOR in one line of a `jsonl`
-	// stream — the field naming what kind of event the line is. Empty
-	// means the stream has none, or that every line's text counts.
-	//
-	// An ENVELOPED stream cannot be read by paths alone: Muse Code puts the kind
-	// in `payload_type`, so `payload.text` is the answer on `run.output.delta`,
-	// a tool's output on `tool.result` and the answer AGAIN on
-	// `run.terminal.completed`, and a path walk would splice and repeat.
+	// EventTypePath locates the DISCRIMINATOR in a `jsonl` line (the event's
+	// kind). Empty: the stream has none, every line's text counts. An enveloped
+	// stream cannot be read by paths alone: Muse Code's `payload.text` is the
+	// answer on `run.output.delta`, a tool's output on `tool.result` and the
+	// answer AGAIN on `run.terminal.completed`; a path walk would repeat it.
 	EventTypePath Path `yaml:"event_type_path,omitempty"`
 
-	// TextEvents restricts TEXT extraction to lines whose discriminator is
-	// one of these. Empty takes every line, which is what a stream with no
-	// envelope wants.
-	//
-	// Text only, deliberately: usage and error paths are scanned across the
-	// whole stream either way, because a stream reports those wherever it
-	// likes and the last value wins. What must not be spliced together is
-	// the ANSWER.
+	// TextEvents restricts TEXT extraction to lines whose discriminator is one
+	// of these; empty takes every line. Text only: usage and error paths are
+	// scanned across the whole stream (last value wins); only the ANSWER must
+	// not be spliced.
 	TextEvents []string `yaml:"text_events,omitempty"`
 
 	// ErrorPaths locates a boolean the harness sets when it failed despite
 	// exiting zero.
 	ErrorPaths []Path `yaml:"error_paths,omitempty"`
 
-	// Usage locates the token counts, in the harness's stdout — or, where
-	// [Profile.UsageFileArgs] or [Profile.UsageArgs] is set, in the report
-	// that field names.
+	// Usage locates the token counts in stdout, or in the report
+	// [Profile.UsageFileArgs] or [Profile.UsageArgs] names.
 	Usage UsagePaths `yaml:"usage,omitempty"`
 
 	// UsageFileArgs asks the harness to write its token counts to a FILE through
 	// the `{usage_file}` placeholder; empty reads stdout. For a harness with no
-	// envelope for a usage path: Hermes's `-z` prints NOTHING else.
+	// envelope for a usage path (Hermes's `-z` prints nothing else).
 	//
-	// Written in the per-call working directory, read after exit; absent or
-	// unreadable, counts fall back to stdout so a broken write never masks the
-	// run's outcome. Absent is silent; an unreadable or empty file logs
-	// `harness_usage_file_unreadable`, one that does not decode (or lacks
-	// usage.input or usage.output) `harness_usage_report_unreadable`, for a run
-	// not reported failed: a failed call is charged nothing.
+	// Written in the call directory, read after exit; absent or unreadable,
+	// counts fall back to stdout so a broken write never masks the outcome.
+	// Absent is silent; unreadable or empty logs `harness_usage_file_unreadable`,
+	// undecodable (or lacking usage.input or usage.output)
+	// `harness_usage_report_unreadable`, for a run not reported failed (a failed
+	// call is charged nothing).
 	UsageFileArgs []string `yaml:"usage_file_args,omitempty"`
 
 	// SessionArgs name the session one call runs in, `{session}` substituted by
 	// an id minted for that call alone (32 lowercase hex characters; a vendor
-	// prefix goes around it, `ses_{session}`). Appended with the model
-	// arguments, before the system prompt and the prompt. For
-	// [Profile.UsageArgs]: a seat's home is shared by concurrent calls, so "the
-	// most recent session" could be a sub-agent's.
+	// prefix may wrap it, `ses_{session}`). Appended with the model arguments.
+	// For [Profile.UsageArgs]: a seat's home is shared by concurrent calls, so
+	// "the latest session" could be a sub-agent's.
 	SessionArgs []string `yaml:"session_args,omitempty"`
 
 	// UsageArgs is a command run AFTER the call, in the same home, directory and
-	// environment, printing the call's token counts as one JSON document that
-	// [Profile.Usage] is read out of; `{session}` is the id
-	// [Profile.SessionArgs] gave. OpenCode 2.0's `run --format json` drops the
-	// FINAL step's `step_finish` (2.0.32: a text-only call printed none), so
-	// stdout would undercharge; the session holds the whole total.
+	// environment, printing the token counts as one JSON document that
+	// [Profile.Usage] reads; `{session}` is the id [Profile.SessionArgs] gave.
+	// OpenCode 2.0's `run --format json` drops the FINAL `step_finish` (2.0.32),
+	// so stdout would undercharge.
 	//
 	// A failed or unreadable report is not a failed call: counts fall back to
-	// stdout (the estimate, where none) with a warning,
+	// stdout (the estimate, where none) with a warning:
 	// `harness_usage_report_failed` for a command that failed or printed
-	// nothing, `harness_usage_report_unreadable` for one that does not decode or
-	// lacks usage.input or usage.output, on a run not reported failed.
+	// nothing, `harness_usage_report_unreadable` for one undecodable or lacking
+	// usage.input or usage.output, on a run not reported failed.
 	UsageArgs []string `yaml:"usage_args,omitempty"`
 
-	// ConfigEnv maps a vendor's own relocation variable to a directory
-	// under the seat's home. Without it a harness reads the engine user's real
-	// dotfiles and every seat shares one set of sessions.
+	// ConfigEnv maps a vendor's relocation variable to a directory under the
+	// seat's home. Without it a harness reads the engine user's real dotfiles
+	// and every seat shares one set of sessions.
 	ConfigEnv map[string]string `yaml:"config_env,omitempty"`
 
 	// WorkConfigEnv maps a vendor's relocation variable to a directory under
@@ -1013,104 +870,95 @@ type Profile struct {
 	// which concurrent calls share while each system prompt is its own.
 	// OpenCode 2 reads `opencode.json`, agents and plugins from the working
 	// directory and EVERY ANCESTOR, where a project's permissions beat the
-	// seat's (2.0.32). With that walk off ([Profile.IsolationEnv]) it reads only
-	// OPENCODE_CONFIG_DIR, which points inside the call's directory, where the
-	// `in: work` seed and agent file go. A machine-wide MANAGED configuration
-	// (`/etc/opencode`) cannot be switched off. Set only for a command that runs
-	// AS A CALL; login, status and the version probe have no working directory.
+	// seat's (2.0.32); with that walk off ([Profile.IsolationEnv]) it reads only
+	// OPENCODE_CONFIG_DIR, inside the call directory, where the `in: work` seed
+	// and agent file go. A machine-wide MANAGED configuration (`/etc/opencode`)
+	// cannot be switched off. Set only for a command run AS A CALL (login,
+	// status and the version probe have no working directory).
 	WorkConfigEnv map[string]string `yaml:"work_config_env,omitempty"`
 
 	// IsolationEnv is a vendor's own SWITCH keeping the harness from reading
 	// configuration outside its seat's home and call directory, set on EVERY
-	// command this profile runs, at the layer of HOME and the relocations.
-	// APART FROM [Profile.Env] because env, passthrough_env and an entry's env
-	// are layered OVER the isolation, and each is refused naming one of
-	// [Profile.IsolationVariables]: an entry's
-	// `OPENCODE_CONFIG_PROJECT_DISABLE: "0"` (or an EMPTY value) silently
+	// command, at the layer of HOME and the relocations. Apart from
+	// [Profile.Env] because env, passthrough_env and an entry's env are layered
+	// OVER the isolation and refused naming [Profile.IsolationVariables]: an
+	// entry's `OPENCODE_CONFIG_PROJECT_DISABLE: "0"` (or empty) silently
 	// restored every ancestor's configuration (2.0.32). The NAME the vendor
-	// reads FIRST, never a fallback: OpenCode 2 reads
-	// `OPENCODE_CONFIG_PROJECT_DISABLE ?? OPENCODE_DISABLE_PROJECT_CONFIG`.
+	// reads FIRST, never a fallback (OpenCode 2 reads
+	// `OPENCODE_CONFIG_PROJECT_DISABLE ?? OPENCODE_DISABLE_PROJECT_CONFIG`).
 	// Never a credential, a variable the engine sets ([HomeIsolation]) or empty.
 	IsolationEnv map[string]string `yaml:"isolation_env,omitempty"`
 
-	// Env is fixed child environment the harness needs. Never a credential,
-	// and never the profile's own token_env or api_key_env, both refused
-	// by [Profile.ValidateCredentials] — nor a variable the engine sets to
-	// isolate the call ([Profile.IsolationVariables]), refused by
-	// [Profile.Validate].
+	// Env is fixed child environment the harness needs. Never a credential or
+	// the profile's token_env or api_key_env ([Profile.ValidateCredentials]),
+	// nor a variable the engine sets to isolate the call
+	// ([Profile.IsolationVariables], refused by [Profile.Validate]).
 	Env map[string]string `yaml:"env,omitempty"`
 
 	// SubscriptionEnv is child environment set under auth.mode subscription
-	// alone, after the operator's env: what tells a harness that picks its
-	// sign-in from its environment to use the login the seat's home holds.
-	//
-	// A FIELD OF ITS OWN, because the same setting under api-key would overrule
-	// the key. Gemini CLI picks its sign-in from settings or its environment
-	// (GOOGLE_GENAI_USE_GCA=true first, GEMINI_API_KEY after) and a copied login
-	// selects nothing: subscription calls exited 41 (0.58.0, 0.65.0).
-	//
-	// Never a credential, never the profile's token_env or api_key_env
-	// ([Profile.ValidateCredentials]), never a variable the engine sets to
-	// isolate the call or one env sets too, and never an empty value.
+	// alone, after the operator's env, telling a harness that picks its sign-in
+	// from its environment to use the seat home's login. Its own field because
+	// under api-key the same setting would overrule the key: Gemini CLI picks
+	// its sign-in from settings or environment (GOOGLE_GENAI_USE_GCA=true
+	// first, GEMINI_API_KEY after) and a copied login selects nothing
+	// (subscription calls exited 41, 0.58.0, 0.65.0). Never a credential, the
+	// profile's token_env or api_key_env, a variable the engine sets to isolate
+	// the call or one env sets too, or empty.
 	SubscriptionEnv map[string]string `yaml:"subscription_env,omitempty"`
 
-	// PassthroughEnv names engine environment variables forwarded to the
-	// child. It MAY NOT name a credential, and config refuses a profile
-	// that does ([Profile.ValidateCredentials]): everything here is
-	// forwarded before auth.mode is consulted, so a key listed here would
-	// reach every seat whatever the mode said, which is exactly the
-	// metered-bill-on-a-flat-rate-plan failure auth.mode exists to prevent.
-	// Nor may it name a variable the engine sets to isolate the call
-	// ([Profile.IsolationVariables]): forwarding the engine's own HOME is
-	// handing the harness the engine user's dotfiles.
+	// PassthroughEnv names engine environment variables forwarded to the child.
+	// It MAY NOT name a credential ([Profile.ValidateCredentials]): it is
+	// forwarded before auth.mode is consulted, so a key would reach every seat
+	// whatever the mode (the metered-bill-on-a-flat-rate failure). Nor a
+	// variable the engine sets to isolate the call
+	// ([Profile.IsolationVariables]): forwarding the engine's HOME hands over
+	// its user's dotfiles.
 	PassthroughEnv []string `yaml:"passthrough_env,omitempty"`
 
-	// TokenEnv is the variable carrying a long-lived headless
-	// subscription token.
+	// TokenEnv is the variable carrying a long-lived headless subscription token.
 	TokenEnv string `yaml:"token_env,omitempty"`
 
-	// APIKeyEnv is the variable carrying a metered API key, set only
-	// under auth.mode api-key or inherit-env.
+	// APIKeyEnv is the variable carrying a metered API key, set only under
+	// auth.mode api-key or inherit-env.
 	APIKeyEnv string `yaml:"api_key_env,omitempty"`
 
-	// APIKeyEnvShared declares that APIKeyEnv is a GENERIC name other vendors'
-	// keys are kept under too, so an entry names its key (auth.api_key) and the
-	// engine never reads that variable from its own store or environment, nor
-	// forwards it under inherit-env (config refuses). Qwen Code sends
-	// OPENAI_API_KEY to whatever OPENAI_BASE_URL names (DashScope's by
-	// default), which would hand the host's OpenAI key to another vendor.
+	// APIKeyEnvShared declares APIKeyEnv a GENERIC name other vendors' keys use
+	// too, so an entry names its key (auth.api_key) and the engine never reads
+	// the variable from its own store or environment, nor forwards it under
+	// inherit-env (config refuses). Qwen Code sends OPENAI_API_KEY to whatever
+	// OPENAI_BASE_URL names (DashScope's by default): the host's OpenAI key
+	// would go to another vendor.
 	APIKeyEnvShared bool `yaml:"api_key_env_shared,omitempty"`
 
 	// EnvSignIn declares that the harness reads its model provider's credential
-	// from its OWN environment, under that provider's own variable, so a
-	// credential-named variable in an entry's `env` signs it in. False: it does not.
+	// from its OWN environment, under that provider's variable, so a
+	// credential-named variable in an entry's `env` signs it in.
 	//
-	// A DECLARATION RATHER THAN A LIST OF NAMES: these harnesses front dozens of
-	// providers each (hermes, pi, OpenCode) with their own variable (hence no
-	// api_key_env). And not inferred from any credential in env, because only
-	// the profile knows: kimi-code ignores KIMI_API_KEY and reads config.toml.
-	// Read by `crewlet llm doctor` and `llm list`, and by config to say where
-	// the key of an entry with no api_key_env goes.
+	// A declaration, not a list of names: these harnesses front dozens of
+	// providers (hermes, pi, OpenCode), hence no api_key_env. Not inferred from
+	// env: kimi-code ignores KIMI_API_KEY and reads config.toml. Read by
+	// `crewlet llm doctor`, `llm list` and config, to say where the key of an
+	// entry with no api_key_env goes.
 	EnvSignIn bool `yaml:"env_sign_in,omitempty"`
 
-	// CredentialPaths are the login files, relative to the seat home.
-	// They are what a bundle may carry and what is synced back after a
-	// refresh; anything else in the home is conversation state.
+	// CredentialPaths are the login files, relative to the seat home: what a
+	// bundle may carry and what is synced back after a refresh; anything else
+	// in the home is conversation state.
 	CredentialPaths []string `yaml:"credential_paths,omitempty"`
 
-	// LoginKeys names, by a credential file's NAME, the top-level key that
-	// file holds only once the harness has signed in, for a file it keeps its
-	// own state in: Copilot CLI writes `firstLaunchAt` into its config.json and
-	// Cursor Agent its settings into cli-config.json, signed in or not, which
-	// made the doctor report a sign-in nobody made. Without its key such a file
-	// is not a login ([Profile.HoldsLogin]); a credential file not named here is
-	// a login whenever it exists.
+	// LoginKeys names, by a credential file's NAME, the top-level key that file
+	// holds only once signed in, for a file that also keeps state: Copilot CLI
+	// writes `firstLaunchAt` into config.json and Cursor Agent settings into
+	// cli-config.json signed in or not, which made the doctor report a sign-in
+	// nobody made. Without its key such a file is not a login
+	// ([Profile.HoldsLogin]); a credential file not named here is one whenever
+	// it exists.
 	LoginKeys map[string]string `yaml:"login_keys,omitempty"`
 
 	// VolatilePaths are sessions, transcripts, history and todo state,
-	// relative to the seat home, deleted before and after every call. A
-	// second invisible memory inside the harness would make turns
-	// non-reproducible and carry one task's context into the next.
+	// relative to the seat home, deleted before and after every call: a hidden
+	// harness memory would make turns non-reproducible and carry one task's
+	// context into the next.
 	VolatilePaths []string `yaml:"volatile_paths,omitempty"`
 
 	// LoginArgs brokers the vendor's own interactive login.
@@ -1128,13 +976,12 @@ type Profile struct {
 	// StdinLogin is a real credential login, where one exists.
 	StdinLogin *StdinLogin `yaml:"stdin_login,omitempty"`
 
-	// CredentialStore is set for a harness that keeps its login in a database of
-	// its own rather than in files — see [CredentialStore]. Nil, the default,
-	// means the login is CredentialPaths, a token, a key, or nothing.
+	// CredentialStore is set for a harness keeping its login in a database of
+	// its own ([CredentialStore]). Nil: CredentialPaths, a token, a key or nothing.
 	CredentialStore *CredentialStore `yaml:"credential_store,omitempty"`
 
-	// LimitEvents recognise a spent plan or a rate limit by the harness's own
-	// structured report, ahead of every sentinel; see [LimitEvent].
+	// LimitEvents recognise a spent plan or rate limit by the harness's own
+	// structured report, ahead of every sentinel ([LimitEvent]).
 	LimitEvents []LimitEvent `yaml:"limit_events,omitempty"`
 
 	// LimitMarkers recognise a spent subscription by the vendor's words.
@@ -1144,90 +991,78 @@ type Profile struct {
 	AuthMarkers []AuthMarker `yaml:"auth_markers,omitempty"`
 
 	// AuthEvents recognise a refused sign-in by the harness's own structured
-	// report, ahead of every limit report and sentinel; see [AuthEvent].
+	// report, ahead of every limit report and sentinel ([AuthEvent]).
 	AuthEvents []AuthEvent `yaml:"auth_events,omitempty"`
 
 	// LimitReports read where each of the vendor's windows stands from the
-	// harness's own fields, and date the limit a run reported; see [LimitReport].
+	// harness's own fields, and date the limit a run reported ([LimitReport]).
 	LimitReports []LimitReport `yaml:"limit_reports,omitempty"`
 
-	// LimitWindows name the window of a limit from the vendor's sentence,
-	// where no [LimitReport] named one; see [LimitWindowWording].
+	// LimitWindows name a limit's window from the vendor's sentence where no
+	// [LimitReport] named one ([LimitWindowWording]).
 	LimitWindows []LimitWindowWording `yaml:"limit_windows,omitempty"`
 
 	// SignInEnv lists the variables that sign this harness in when an entry's
 	// env sets one: a cloud provider's switch (CLAUDE_CODE_USE_BEDROCK) or a
-	// gateway's token (ANTHROPIC_AUTH_TOKEN). What auth.mode env requires
-	// one of, and what `crewlet llm list` reports as the route.
-	//
-	// A LIST, unlike [Profile.EnvSignIn]'s declaration, because these harnesses
-	// sign in by a handful of fixed names, and a switch such as
-	// CLAUDE_CODE_USE_BEDROCK is no credential: no credential-name rule
-	// would count it.
+	// gateway's token (ANTHROPIC_AUTH_TOKEN). auth.mode env requires one, and
+	// `crewlet llm list` reports it as the route. A list, unlike
+	// [Profile.EnvSignIn]: a switch is no credential, so no credential-name
+	// rule would count it.
 	SignInEnv []string `yaml:"sign_in_env,omitempty"`
 
-	// IdentityEnv lists the variables, none of them a credential, whose
-	// values say WHICH account or endpoint a call reaches: a cloud region and
-	// profile, a project and location, a gateway's address. Folded into the
-	// entry's sign-in identity beside its credentials, so two entries on one
-	// cloud switch but different regions, projects or gateways are two
+	// IdentityEnv lists the non-credential variables whose values say WHICH
+	// account or endpoint a call reaches (cloud region and profile, project and
+	// location, gateway address). Folded into the entry's sign-in identity, so
+	// entries on one cloud switch but different regions or gateways are two
 	// sign-ins, and a limit one meets does not sit the other out.
 	IdentityEnv []string `yaml:"identity_env,omitempty"`
 
 	// TokenPrefix and APIKeyPrefix are how the vendor's headless token and
-	// its API key begin (`sk-ant-oat01-`, `sk-ant-api03-`): what a hint of
-	// a stored credential shows, and what tells a key pasted where a token
-	// belongs from the token. Empty where the vendor's credentials share no
-	// prefix.
+	// its API key begin (`sk-ant-oat01-`, `sk-ant-api03-`): shown in a
+	// credential's hint, and telling a key pasted where a token belongs. Empty
+	// where the vendor's credentials share no prefix.
 	TokenPrefix  string `yaml:"token_prefix,omitempty"`
 	APIKeyPrefix string `yaml:"api_key_prefix,omitempty"`
 
-	// TokenLifetimeDays is how long the headless token the harness mints
-	// ([Profile.CaptureTokenArgs]) lasts, as the vendor documents it. Zero
-	// is unknown. The token is opaque, so its expiry is computed from when
-	// it was stored, never read from it.
+	// TokenLifetimeDays is how long the minted headless token
+	// ([Profile.CaptureTokenArgs]) lasts per the vendor; zero is unknown. The
+	// token is opaque: expiry is computed from when it was stored.
 	TokenLifetimeDays int `yaml:"token_lifetime_days,omitempty"`
 
-	// DeviceLoginArgs runs the vendor's device-code sign-in, which prints
-	// an address and a one-time code a person enters elsewhere and then
-	// waits for their approval; see [DeviceCodePatterns].
+	// DeviceLoginArgs runs the vendor's device-code sign-in (it prints an address
+	// and one-time code, then waits for approval; [DeviceCodePatterns]).
 	DeviceLoginArgs []string `yaml:"device_login_args,omitempty"`
 
-	// DeviceCodePatterns read the address and the code out of what
-	// DeviceLoginArgs prints.
+	// DeviceCodePatterns read the address and code out of DeviceLoginArgs' output.
 	DeviceCodePatterns *DeviceCodePatterns `yaml:"device_code_patterns,omitempty"`
 
-	// StatusTextArgs asks the harness who it is logged in as, in words, where
-	// StatusArgs prints JSON: what `crewlet llm doctor` shows a person.
-	// Empty shows StatusArgs' own output.
+	// StatusTextArgs asks who the harness is logged in as, in words, where
+	// StatusArgs prints JSON: what `crewlet llm doctor` shows. Empty shows
+	// StatusArgs' own output.
 	StatusTextArgs []string `yaml:"status_text_args,omitempty"`
 
-	// StatusFields locates the sign-in method and the account in the JSON
-	// StatusArgs prints; see [StatusFields]. Nil reads only the exit code.
+	// StatusFields locates the sign-in method and account in StatusArgs' JSON
+	// ([StatusFields]). Nil reads only the exit code.
 	StatusFields *StatusFields `yaml:"status_fields,omitempty"`
 
-	// ModelAliases are model names the harness resolves itself; see
-	// [ModelAlias].
+	// ModelAliases are model names the harness resolves itself ([ModelAlias]).
 	ModelAliases []ModelAlias `yaml:"model_aliases,omitempty"`
 
 	// ModelsDocs is the vendor's own page listing the models the harness takes.
 	ModelsDocs string `yaml:"models_docs,omitempty"`
 
-	// MarkerScope is where the two marker sets above may be matched —
-	// see [MarkerScope]. Empty searches the answer and stderr, which is
-	// what a harness reporting a spent plan as its answer needs.
+	// MarkerScope is where the two marker sets above may be matched
+	// ([MarkerScope]). Empty searches the answer and stderr.
 	MarkerScope MarkerScope `yaml:"marker_scope,omitempty"`
 
-	// MarkerEvents names the events — by the value at [Profile.EventTypePath]
-	// — in which the harness reports a failure of its own: the only lines the
-	// [MarkerScopeEvents] scope looks at. Required by that scope, and refused
-	// beside any other, which reads nothing here.
+	// MarkerEvents names the events (by the value at [Profile.EventTypePath])
+	// reporting a failure: the only lines [MarkerScopeEvents] looks at.
+	// Required by that scope, refused beside any other.
 	MarkerEvents []string `yaml:"marker_events,omitempty"`
 
-	// MarkerPath locates the failure CLASS inside one of
-	// [Profile.MarkerEvents]: the string a sentinel must EQUAL, not merely
-	// contain. Required by the [MarkerScopeEvents] scope, and refused beside
-	// any other.
+	// MarkerPath locates the failure CLASS inside one of [Profile.MarkerEvents]:
+	// the string a sentinel must EQUAL. Required by [MarkerScopeEvents],
+	// refused beside any other.
 	MarkerPath Path `yaml:"marker_path,omitempty"`
 
 	// HostCredentialPaths are where this harness keeps its login in a human's
@@ -1235,116 +1070,98 @@ type Profile struct {
 	// Paths are relative to that home.
 	HostCredentialPaths []string `yaml:"host_credential_paths,omitempty"`
 
-	// LocalTools is the profile's stance on the harness's own tools — see
-	// [LocalTools]. Empty means the profile has not said, which the doctor
-	// reports as such rather than assuming either way.
+	// LocalTools is the profile's stance on the harness's own tools
+	// ([LocalTools]). Empty means unsaid, which the doctor reports as such.
 	LocalTools LocalTools `yaml:"local_tools,omitempty"`
 
-	// LocalToolsNote explains a vendor-default stance: which flag is
-	// missing, or which flag would also cut the web. Printed by the
-	// doctor beside the probe result.
+	// LocalToolsNote explains a vendor-default stance: which flag is missing, or
+	// would also cut the web. Printed by the doctor beside the probe.
 	LocalToolsNote string `yaml:"local_tools_note,omitempty"`
 
-	// ToolsOff is how this harness's run is left with NO tool of its own at
-	// all, by construction in the argv it runs, or nil where no measured
-	// way exists. See [ToolsOff].
+	// ToolsOff is how the run is left with NO tool of its own, by construction
+	// in its argv, or nil where no measured way exists ([ToolsOff]).
 	ToolsOff *ToolsOff `yaml:"tools_off,omitempty"`
 
-	// SeedFiles are the settings files written for the harness before a call
-	// — the vendors that take their tool policy from a file rather than a
-	// flag. See [SeedFile].
+	// SeedFiles are settings files written before a call, for vendors taking
+	// tool policy from a file ([SeedFile]).
 	SeedFiles []SeedFile `yaml:"seed_files,omitempty"`
 
-	// WebTools is the profile's stance on the harness's own web tools, see
-	// [WebTools]. Empty reads as allowed. Set per entry through overrides;
-	// no built-in profile sets it.
+	// WebTools is the stance on the harness's own web tools ([WebTools]); empty
+	// reads as allowed. Set per entry through overrides; no built-in sets it.
 	WebTools WebTools `yaml:"web_tools,omitempty"`
 
-	// WebToolsNote says how this harness's web denial was measured, or why the
-	// profile has none. Printed by the doctor beside the web probe.
+	// WebToolsNote says how the web denial was measured, or why there is none.
+	// Printed by the doctor beside the web probe.
 	WebToolsNote string `yaml:"web_tools_note,omitempty"`
 
-	// WebDenial is how this harness turns its web tools off, or nil where it
-	// has no measured way to. See [WebDenial].
+	// WebDenial is how the harness turns its web tools off, or nil where no
+	// measured way exists ([WebDenial]).
 	WebDenial *WebDenial `yaml:"web_denial,omitempty"`
 	// WebSearch is this harness's search-only run, or nil where it has no
 	// measured one. See [WebSearch].
 	WebSearch *WebSearch `yaml:"web_search,omitempty"`
 
-	// ImageInput is how a call hands the model images beside its prompt, or
-	// nil where the harness has no way to. See [ImageInput].
+	// ImageInput is how a call hands the model images beside its prompt, or nil
+	// where the harness has no way ([ImageInput]).
 	ImageInput *ImageInput `yaml:"image_input,omitempty"`
 
-	// KeySeedFiles are settings files written into a seat's KEY home alone (the
-	// home its calls use when they sign in with a key: api-key, or inherit-env)
-	// after seed_files, each over a seed_files entry at the same path.
-	//
-	// The counterpart of [Profile.SubscriptionEnv], for a harness that picks its
-	// sign-in from SETTINGS before its environment. Gemini CLI takes an
-	// operator's GOOGLE_GEMINI_BASE_URL gateway as a sign-in it then refuses
-	// (exit 41) unless its settings name the key sign-in, and those settings in
-	// a login home would send subscription calls to a key it lacks (0.65.0). Key
-	// and login homes are two directories ([Workspace.AcquireForKey]).
-	// Home only (`in` is home): a call's working directory knows nothing of how
-	// it signs in.
+	// KeySeedFiles are settings files written into a seat's KEY home alone (used
+	// when signing in with a key: api-key, or inherit-env) after seed_files,
+	// each over a seed_files entry at the same path. The counterpart of
+	// [Profile.SubscriptionEnv], for a harness picking its sign-in from SETTINGS
+	// before its environment: Gemini CLI takes an operator's
+	// GOOGLE_GEMINI_BASE_URL gateway as a sign-in it then refuses (exit 41)
+	// unless its settings name the key sign-in, and those settings in a login
+	// home would send subscription calls to a key it lacks (0.65.0). Key and
+	// login homes are two directories ([Workspace.AcquireForKey]). Home only:
+	// a call's working directory knows nothing of how it signs in.
 	KeySeedFiles []SeedFile `yaml:"key_seed_files,omitempty"`
 
-	// MCP is how the harness is handed a phase's tools as an MCP server — see
-	// [MCP]. Nil: the harness cannot be handed any, and a seat's phase on it is
-	// refused.
+	// MCP is how the harness is handed a phase's tools as an MCP server
+	// ([MCP]). Nil: it cannot be, and a seat's phase on it is refused.
 	MCP *MCP `yaml:"mcp,omitempty"`
 
 	// Requests is how the harness's own record shows each model request of a run
-	// with tools — see [Requests]. Nil: the record shows none, and the whole
-	// run counts as one round.
+	// with tools ([Requests]). Nil: none shown, the run counts as one round.
 	Requests *Requests `yaml:"requests,omitempty"`
 
-	// Cap is how a run the harness's own turn cap ended is told from a failure —
-	// see [Cap]. Nil: the harness has no cap, or the profile cannot tell one.
+	// Cap is how a run ended by the harness's own turn cap is told from a
+	// failure ([Cap]). Nil: no cap, or the profile cannot tell.
 	Cap *Cap `yaml:"cap,omitempty"`
 
 	// FailureMarkers are sentinels the harness writes on stderr when its own
-	// confinement failed to load — a policy file it could not read — after
-	// which it runs on its vendor's defaults. Matched as each stderr line
-	// arrives, on every call, and the run is stopped at once and fails: a harness
-	// running with its tool policy unloaded must not be left to use the tools
-	// that policy denies (Gemini CLI reports "Policy file error" and carries
-	// on, measured on 0.58.0).
+	// confinement failed to load (a policy file it could not read), after which
+	// it runs on vendor defaults. Matched as each stderr line arrives, on every
+	// call; the run is stopped at once and fails, since a harness with its tool
+	// policy unloaded must not use the tools that policy denies (Gemini CLI
+	// reports "Policy file error" and carries on, measured on 0.58.0).
 	FailureMarkers []string `yaml:"failure_markers,omitempty"`
 }
 
-// ToolsOff is the proof, IN THE ARGV, that a harness's run offers its model no
-// tool of its OWN: no shell, file tool, web, or tool server but the engine's.
-// [LocalToolsDenied] is a claim about a profile; this is what a caller that must
-// not be reached around (the Dashboard Assistant) checks against each call's argv.
-//
-// THE ENGINE'S SERVER IS THE ONE TOOL SOURCE LEFT (ADR-0049): the call's own
-// arguments turn every built-in tool off and load no server, and the mcp block
-// allows only the engine's tools.
-//
-// A DENY LIST IS NOT THIS: on Claude Code 2.1.310 --disallowedTools left
-// thirteen tools on offer where `--tools ""` left none, and a deny list is
-// always a release behind.
+// ToolsOff is the proof, IN THE ARGV, that a run offers its model no tool of
+// its OWN (no shell, file tool, web, or server but the engine's).
+// [LocalToolsDenied] is a claim about a profile; a caller that must not be
+// reached around (the Dashboard Assistant) checks this against each call's argv
+// (ADR-0049): the call's arguments turn every built-in off and load no server,
+// and the mcp block allows only the engine's tools. A deny list is not this: on
+// Claude Code 2.1.310 --disallowedTools left thirteen tools where `--tools ""`
+// left none, and a deny list is always a release behind.
 type ToolsOff struct {
 	// Args are the argument runs that leave the harness with no built-in tool
-	// and no server but the ones the mcp block names. Each must appear in
-	// the call's own argv, its elements adjacent and in order, and a run's
-	// flag exactly once, since a harness takes the last value of a repeated flag
-	// and a second `--tools default` would undo the first.
+	// and no server but the mcp block's. Each must appear in the call's argv,
+	// elements adjacent and in order, and its flag exactly once: a harness takes
+	// the last value of a repeated flag, so a second `--tools default` undoes it.
 	Args [][]string `yaml:"args,omitempty"`
 	// Refuses are flags whose presence in the call's own arguments brings a
-	// tool back (a tool server's config, an allow list, a plugin), so an
-	// argv carrying one is not off whatever else it says. The mcp block's
-	// own arguments are judged apart: they may allow only the engine's tools.
+	// tool back (a server's config, an allow list, a plugin). The mcp block's
+	// arguments are judged apart: they may allow only the engine's tools.
 	Refuses []string `yaml:"refuses,omitempty"`
 	// Note says how the construction was measured.
 	Note string `yaml:"note,omitempty"`
 }
 
 // ToolsOffProblem says why the argv this profile runs with tools is NOT left
-// with no tool of its own, or "" when it is: every run of [ToolsOff.Args]
-// present exactly once and no flag of [ToolsOff.Refuses] in the call's own
-// arguments, and an mcp block whose allow list names the engine's tools alone.
+// with no tool of its own, or "" when it is.
 func (p *Profile) ToolsOffProblem() string {
 	if p.ToolsOff == nil {
 		return "the profile has no measured way to run the harness with no tool of its own"
@@ -1368,10 +1185,9 @@ func (p *Profile) ToolsOffProblem() string {
 }
 
 // mcpAllowProblem says why the mcp block's allow list admits a tool that is
-// not the engine's, or "" when every tool it names is one: spelled with the
+// not the engine's, or "" when every tool it names is one, spelled with the
 // prefix the harness gives the engine's server ([Requests.HostPrefix]). A block
-// that allows nothing by name (a harness whose server's tools need no allow list)
-// admits nothing of its own either.
+// allowing nothing by name admits nothing of its own either.
 func (p *Profile) mcpAllowProblem() string {
 	prefix := ""
 	if p.Requests != nil {
@@ -1446,9 +1262,9 @@ func (p *Profile) EffectiveWebTools() WebTools {
 // CanDenyWeb reports whether the profile has a way to turn its web tools off.
 func (p *Profile) CanDenyWeb() bool { return p.WebDenial.changes() }
 
-// withWebDenied is the profile as it runs with its web tools off: the stance
-// set and every field the denial names replaced. The denial itself is kept,
-// so the doctor can still print it, and applying it twice is applying it once.
+// withWebDenied is the profile run with web off: stance set, every field the
+// denial names replaced. The denial is kept (the doctor prints it), so applying
+// it twice is applying it once.
 func (p Profile) withWebDenied() Profile {
 	out := p.Clone()
 	out.WebTools = WebToolsDenied
@@ -1471,31 +1287,19 @@ func (p Profile) withWebDenied() Profile {
 	return out
 }
 
-// credentialWords are the name components that mark a variable as carrying a
-// secret.
-//
-// WHOLE COMPONENTS, NOT SUBSTRINGS. Vendor key names are an open set
-// (GOOGLE_API_KEY, GH_TOKEN), so the rule reads the shape: a name is cut at
-// every non-alphanumeric character and is a credential when a component is one
-// of these words. A substring match read CLAUDE_CODE_MAX_OUTPUT_TOKENS as a
-// credential, refusing a real tuning variable and counting an entry with no key
-// as signed in. The joined forms (APIKEY, ACCESSKEY, SECRETKEY) and KEYS
-// (GEMINI_API_KEYS) are listed; TOKENS is deliberately absent, being how every
-// harness spells a count of model tokens.
+// credentialWords are the name components marking a secret. Whole components,
+// not substrings: a substring match read CLAUDE_CODE_MAX_OUTPUT_TOKENS as a
+// credential. TOKENS is deliberately absent, being how every harness spells a
+// count of model tokens.
 var credentialWords = []string{
 	"KEY", "KEYS", "APIKEY", "ACCESSKEY", "SECRETKEY", "TOKEN", "SECRET",
 	"PASSWORD", "PASSWD", "CREDENTIAL", "CREDENTIALS", "AUTH", "OAUTH", "PAT",
 }
 
-// IsCredentialName reports whether an environment variable's name says it
-// carries a secret: whether any of its components, cut at every character
-// that is not a letter or a digit and compared without regard to case, is
-// one of [credentialWords].
-//
-// One predicate for every question this backend asks of a name — which
-// passthrough_env and env entries are refused, which of an entry's env
-// entries sign a harness in, and which travel into a coding box — so the answers
-// cannot drift.
+// IsCredentialName reports whether a variable name says it carries a secret:
+// any component, cut at non-alphanumerics and compared case-insensitively, is
+// one of [credentialWords]. One predicate for what passthrough_env and env
+// refuse, which env sign a harness in, and what travels into a coding box.
 func IsCredentialName(name string) bool {
 	components := strings.FieldsFunc(strings.ToUpper(name), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
@@ -1508,14 +1312,9 @@ func IsCredentialName(name string) bool {
 	return false
 }
 
-// TakesModel reports whether this profile passes a model to its harness — whether
-// an element of its model_args carries {model}.
-//
-// One predicate for the two places that refuse a model the harness would never
-// see: config, which every write path runs, and the backend's constructor.
-// The PLACEHOLDER, not merely a flag: `["--model", "fixed"]` passes `fixed`
-// on every call whatever the entry's `model` says, which drops the entry's
-// model exactly as silently as declaring no flag at all.
+// TakesModel reports whether an element of model_args carries {model}: the
+// PLACEHOLDER, not merely a flag (`["--model", "fixed"]` passes `fixed`
+// whatever the entry's `model`). Config and the backend's constructor share it.
 func (p *Profile) TakesModel() bool {
 	return slices.ContainsFunc(p.ModelArgs, func(arg string) bool {
 		return strings.Contains(arg, modelPlaceholder)
@@ -1526,17 +1325,11 @@ func (p *Profile) TakesModel() bool {
 const modelPlaceholder = "{model}"
 
 // ModelArgument is the model as a run hands it to the harness: the VALUE of
-// the model_args element carrying {model}, rendered with model, so an override
-// such as ["--model", "openrouter/{model}"] is part of it. The model itself when
-// no element carries the placeholder ([Profile.TakesModel] refuses that).
-//
-// ONE RENDERING FOR EVERY PLACE THE MODEL GOES: the host argv, the executor's
-// box run and the config rule must see the same string, or the box and the
-// host name different models on one entry.
-//
-// THE VALUE, NOT THE ELEMENT. A box's runner writes its own flag, so an element
-// spelling flag and value as one (`--model={model}`) is read past its first `=`:
-// returned whole it reached the box as `--model '--model=anthropic/...'`.
+// the model_args element carrying {model}, rendered (an override such as
+// "openrouter/{model}" is part of it); the model itself when none does. One
+// rendering for host argv, executor box and config rule, or box and host name
+// different models. The value, not the element: a box's runner writes its own
+// flag, so `--model={model}` is read past its first `=`.
 func (p *Profile) ModelArgument(model string) string {
 	for _, arg := range p.ModelArgs {
 		at := strings.Index(arg, modelPlaceholder)
@@ -1561,28 +1354,21 @@ func (p *Profile) EffectiveMarkerScope() MarkerScope {
 	return p.MarkerScope
 }
 
-// HomeIsolation is the variables the engine points inside a seat's home — or,
-// for XDG_CACHE_HOME, beside it — for every harness, whatever its profile says.
-//
-// Declared here, beside [Profile.IsolationVariables], rather than only in the
-// code that sets them, because config refuses an entry that would override
-// one and has to be able to name them without importing the backend.
+// HomeIsolation is the variables the engine points inside a seat's home (beside
+// it, for XDG_CACHE_HOME) for every harness, whatever its profile says.
+// Declared here so config, which refuses an entry overriding one, can name them
+// without importing the backend.
 var HomeIsolation = []string{
 	"HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "TMPDIR",
 }
 
 // IsolationVariables names every variable the engine sets to keep this harness
-// inside its seat's home and its call's working directory: [HomeIsolation],
-// then the profile's [Profile.ConfigEnv], [Profile.WorkConfigEnv] and
-// [Profile.IsolationEnv], each sorted.
-//
-// One list for the three places that must not set one of them — the profile's
-// own env and passthrough_env ([Profile.Validate]) and an entry's env
-// (config) — because every one of those is layered OVER the isolation when the
-// child's environment is built, so a value there silently replaces the seat's
-// home with whatever it names: the engine user's own dotfiles, a
-// configuration directory no seat's system prompt is written to, or a switch
-// turned back off.
+// inside its seat's home and call directory: [HomeIsolation], then
+// [Profile.ConfigEnv], [Profile.WorkConfigEnv] and [Profile.IsolationEnv], each
+// sorted. One list for the places that must not set one (the profile's env and
+// passthrough_env, an entry's env): each is layered OVER the isolation, so a
+// value there silently replaces the seat's home with the engine user's
+// dotfiles, a directory no system prompt is written to, or a switch turned off.
 func (p *Profile) IsolationVariables() []string {
 	names := slices.Clone(HomeIsolation)
 	names = append(names, slices.Sorted(maps.Keys(p.ConfigEnv))...)
@@ -1590,17 +1376,16 @@ func (p *Profile) IsolationVariables() []string {
 	return append(names, slices.Sorted(maps.Keys(p.IsolationEnv))...)
 }
 
-// IsolationLayer is which of the layers that keep a harness inside its seat's home
-// and its call's working directory sets one of [Profile.IsolationVariables] —
-// and so which field, if any, changes the value the child is given.
+// IsolationLayer is which layer keeping a harness inside its seat's home and
+// call directory sets one of [Profile.IsolationVariables], and so which field,
+// if any, changes the child's value.
 type IsolationLayer string
 
 // The layers, each but the engine's own named by the profile field that sets
-// it, which is what an operator overrides it with (overrides.<field>).
+// it (overrides.<field>).
 const (
-	// IsolationHome is [HomeIsolation]: HOME, the XDG homes and TMPDIR, set
-	// by the engine for every harness, whatever its profile says, and changed by
-	// no field at all — config_env, work_config_env and isolation_env each
+	// IsolationHome is [HomeIsolation], set by the engine for every harness and
+	// changed by no field: config_env, work_config_env and isolation_env each
 	// refuse every one of them.
 	IsolationHome IsolationLayer = "home"
 	// IsolationConfigEnv is a [Profile.ConfigEnv] relocation under the
@@ -1613,18 +1398,12 @@ const (
 	IsolationSwitch IsolationLayer = "isolation_env"
 )
 
-// IsolationLayerOf reports which layer sets name, and false when none does:
-// when name is not one of [Profile.IsolationVariables].
-//
-// ONE LAYER PER VARIABLE in a profile that loaded, because each field refuses
-// the others' names ([Profile.Validate]): config_env refuses [HomeIsolation],
-// work_config_env those and config_env's, isolation_env all three. So no
-// precedence decides it.
-//
-// For refusals that must say WHERE a variable's value is changed, rather than
-// a second copy of the lists: an entry's env naming OPENCODE_CONFIG_DIR would
-// otherwise be sent to overrides.config_env, which refuses it as
-// work_config_env's.
+// IsolationLayerOf reports which layer sets name, false when it is not one of
+// [Profile.IsolationVariables]. One layer per variable in a loaded profile,
+// since each field refuses the others' names ([Profile.Validate]). For refusals
+// that must say WHERE a value is changed: an entry's env naming
+// OPENCODE_CONFIG_DIR would otherwise be sent to overrides.config_env, which
+// refuses it as work_config_env's.
 func (p *Profile) IsolationLayerOf(name string) (IsolationLayer, bool) {
 	switch {
 	case slices.Contains(HomeIsolation, name):
@@ -1645,18 +1424,14 @@ func hasKey(m map[string]string, key string) bool {
 	return ok
 }
 
-// KeptUnder names the fields whose paths this profile keeps inside the
-// directory one of its relocation variables points at — a [Profile.ConfigEnv]
-// directory under the seat's home, a [Profile.WorkConfigEnv] one under the
-// call's working directory — each once, in field order; nil for a variable
-// neither relocates, or one under which the profile keeps nothing.
-//
-// WHAT HAS TO MOVE WITH THE DIRECTORY. The harness finds each path THROUGH the
-// variable (CODEX_HOME's login and sessions, the policy and agent file under
-// OPENCODE_CONFIG_DIR), so repointing it strands a harness that never reads its
-// login, never has its sessions pruned or never sees the policy denying it a
-// shell. The refusal of an entry's env names the fields that move with it; a
-// profile moving the directory without them does not load ([Load]).
+// KeptUnder names the fields, once each in field order, whose paths this
+// profile keeps inside the directory a relocation variable ([Profile.ConfigEnv]
+// or [Profile.WorkConfigEnv]) points at; nil if none. They must move with the
+// directory: the harness finds each path THROUGH the variable (CODEX_HOME's
+// login and sessions, the policy and agent file under OPENCODE_CONFIG_DIR), so
+// repointing strands a harness that never reads its login, never has sessions
+// pruned or never sees the policy denying it a shell. A profile moving the
+// directory without them does not load ([Load]).
 func (p *Profile) KeptUnder(name string) []string {
 	var dir string
 	var scope SeedScope
@@ -1677,19 +1452,16 @@ func (p *Profile) KeptUnder(name string) []string {
 	return fields
 }
 
-// keptPath is one path a profile keeps for its harness in a scope: the field it
-// is set with, the entry as an operator would find it, and the path as
-// written.
+// keptPath is one path a profile keeps in a scope: its field, the entry as an
+// operator would find it, and the path as written.
 type keptPath struct {
 	field, label, path string
 }
 
-// kept lists the paths this profile keeps for its harness in one scope — the ones
-// a relocation of that scope can strand. Under the seat's home: the login
-// files, the volatile paths and the home's seed files. Under the call's
-// working directory: its seed files and a discovered system prompt file, which
-// the harness finds by where it is; a `{file}` one is handed to the harness by its
-// path, wherever it is.
+// kept lists the paths a relocation of one scope can strand. Under the seat's
+// home: login files, volatile paths and home seed files. Under the call's
+// directory: its seed files and a discovered system prompt file (found by
+// location; a `{file}` one is handed over by path, wherever it is).
 func (p *Profile) kept(scope SeedScope) []keptPath {
 	var out []keptPath
 	add := func(field, label, path string) {
@@ -1731,8 +1503,7 @@ func within(rel, dir string) bool {
 	return dir == "." || rel == dir || strings.HasPrefix(rel, dir+string(filepath.Separator))
 }
 
-// namedChannel is one of a profile's system-prompt channels with the field it
-// is configured under, for a message to name what an operator would override.
+// namedChannel is a system-prompt channel with its field, for messages.
 type namedChannel struct {
 	field string
 	Channel
@@ -1763,13 +1534,12 @@ func isBareFileName(name string) bool {
 }
 
 // namesAFile reports whether a relative path that [staysInside] names a FILE
-// under the directory it is joined onto, rather than that directory or a
-// directory spelled with a trailing separator: its last element, as written,
-// is a [isBareFileName], and it does not clean to the directory itself.
+// under the directory it is joined onto, not that directory or one spelled with
+// a trailing separator: its last element, as written, is a [isBareFileName],
+// and it does not clean to the directory itself.
 //
-// The last element AS WRITTEN, not after cleaning, because cleaning is what
-// hides the shape: `x/..` cleans to `.` and `agents/` to `agents`, and the
-// second of those reads as a file name while the operator wrote a directory.
+// As written, not cleaned: cleaning hides the shape (`x/..` cleans to `.`,
+// `agents/` to `agents`, which reads as a file name though a directory was written).
 func namesAFile(rel string) bool {
 	if strings.HasSuffix(rel, "/") || strings.HasSuffix(rel, string(filepath.Separator)) {
 		return false
@@ -1805,11 +1575,8 @@ func (p *Profile) problems() []string {
 		add("binary is empty — set overrides.binary")
 	}
 	if len(p.CompleteArgs) == 0 && p.EffectivePromptMode() == PromptStdin {
-		// Only stdin mode can end up with NO argv at all. The other two
-		// build one from prompt_args and the prompt itself, so a harness
-		// invoked as `mycli --prompt-file <path>` and nothing else is a
-		// legitimate shape rather than a profile that forgot to say how
-		// to run its binary.
+		// Only stdin mode can have NO argv: the others build one from
+		// prompt_args, so `mycli --prompt-file <path>` alone is legitimate.
 		add("complete_args is empty — set overrides.complete_args")
 	}
 	if p.PromptMode != "" && !p.PromptMode.Valid() {
@@ -1819,8 +1586,7 @@ func (p *Profile) problems() []string {
 		add("output %q (want json, jsonl or text)", p.Output)
 	}
 	if p.Output != OutputText && len(p.TextPaths) == 0 {
-		// The DEFAULTED mode, not the field: a profile that names no
-		// output is a json profile, and the raw field printed "a  profile".
+		// The defaulted mode, not the raw (possibly empty) field.
 		add("text_paths is empty — a %s profile must say where the answer is", p.EffectiveOutput())
 	}
 	p.validateRelocations(add)
@@ -1829,11 +1595,9 @@ func (p *Profile) problems() []string {
 			"on argv and there is none to introduce", p.EffectivePromptMode())
 	}
 	if p.EffectivePromptMode() == PromptFile && !hasPlaceholder(p.PromptArgs, "{file}") {
-		// Refused rather than defaulted to a bare append: a file-mode
-		// profile whose argv never carries the path runs the harness with no
-		// prompt, which a vendor answers by opening an interactive
-		// session or by printing usage — neither of which looks like the
-		// configuration error it is.
+		// Refused, not defaulted to a bare append: with no path in argv the
+		// harness gets no prompt and opens an interactive session or prints
+		// usage, neither of which looks like a configuration error.
 		add("prompt_mode is file but no prompt_args entry contains {file} — set " +
 			`overrides.prompt_args, e.g. ["--prompt-file", "{file}"]`)
 	}
@@ -1845,9 +1609,8 @@ func (p *Profile) problems() []string {
 		add("text_events is set but event_type_path is empty — there is nothing to " +
 			"compare the event names against")
 	case len(p.EventTypePath) > 0 && p.EffectiveOutput() != OutputJSONL:
-		// Refused rather than ignored: an operator who wrote it meant the
-		// answer to be picked out of an event stream, and a filter that
-		// silently did nothing is a debugging session.
+		// Refused rather than ignored: a filter that silently does nothing
+		// is a debugging session.
 		add("event_type_path is set but output is %q — an event discriminator "+
 			"only exists in a jsonl stream", p.EffectiveOutput())
 	}
@@ -1865,14 +1628,11 @@ func (p *Profile) problems() []string {
 			add("usage_file_args carries no {usage_file} placeholder — there is " +
 				`nothing to substitute the path into, e.g. ["--usage-file", "{usage_file}"]`)
 		}
-		// BOTH PROMPT COUNTS, because [extracted.applyUsageReport] accepts a
-		// report only when both resolve — a partial overlay would pair one
-		// source's input with another's output, and the sum is what a
-		// budget is charged. A profile declaring one of them (or only the
-		// cache paths) therefore estimates on EVERY call while
-		// [Profile.ReadsUsage] and `crewlet llm doctor` report it as using
-		// the vendor's own figures, which is the one thing that report
-		// exists to settle.
+		// Both counts, because [extracted.applyUsageReport] accepts a report
+		// only when both resolve (a partial overlay would pair one source's
+		// input with another's output, and the sum is charged). A profile
+		// declaring one would estimate on EVERY call while
+		// [Profile.ReadsUsage] and `crewlet llm doctor` call it the vendor's figures.
 		if len(p.Usage.Input) == 0 || len(p.Usage.Output) == 0 {
 			add("usage_file_args is set but usage.input and usage.output are not both " +
 				"declared — the report is only read when both counts resolve, so every " +
@@ -1886,10 +1646,9 @@ func (p *Profile) problems() []string {
 	case p.MarkerScope == MarkerScopeEvents:
 		p.validateEventMarkers(add)
 	case len(p.MarkerEvents) > 0 || len(p.MarkerPath) > 0:
-		// Refused rather than ignored: an operator who named the failure
-		// event meant markers to be matched in it, and under any other scope
-		// they would be matched as substrings of the answer and stderr while
-		// the profile appeared to say otherwise.
+		// Refused rather than ignored: under any other scope markers would
+		// be matched as substrings of the answer and stderr while the
+		// profile appeared to say otherwise.
 		add("marker_events or marker_path is set but marker_scope is %q — they say "+
 			"where the %s scope looks, and no other scope reads them; set "+
 			"marker_scope: %s, or drop them", p.EffectiveMarkerScope(), MarkerScopeEvents,
@@ -1904,9 +1663,8 @@ func (p *Profile) problems() []string {
 	p.validateLimitEvents(add)
 	p.validateEventReports(add)
 	p.validateSignIn(add)
-	// Checked at all, which it was not: an auth marker fires KindAuth, and
-	// KindAuth exhausts the credential exactly as a spent plan does — so an
-	// unusable sentinel costs the same here as it does above.
+	// An auth marker fires KindAuth, which exhausts the credential as a
+	// spent plan does, so an unusable sentinel costs the same as above.
 	for i, m := range p.AuthMarkers {
 		if problem := sentinelProblem(m.Sentinel); problem != "" {
 			add("auth_markers[%d].sentinel %s", i, problem)
@@ -1921,10 +1679,9 @@ func (p *Profile) problems() []string {
 		add("stdin_login.args is empty")
 	}
 	if store := p.CredentialStore; store != nil {
-		// BOTH HALVES OR NEITHER: an export with no import leaves every seat
-		// home empty, and an import with no export can never write back the
-		// token a call refreshed, which is how a fleet is logged out at the
-		// next expiry.
+		// Both halves or neither: no import leaves every seat home empty;
+		// no export never writes back a refreshed token, logging the fleet
+		// out at the next expiry.
 		if len(store.ExportArgs) == 0 {
 			add("credential_store.export_args is empty — a login held in the harness's " +
 				"own database can only leave it through the harness's export command")
@@ -1935,9 +1692,8 @@ func (p *Profile) problems() []string {
 		}
 		for _, args := range [][]string{store.ExportArgs, store.ImportArgs} {
 			if hasPlaceholder(args, "{file}") {
-				// The document is a credential, so it goes on stdin, which no
-				// other account can read; a path would also have to be a
-				// file the engine wrote and then had to remember to remove.
+				// A credential goes on stdin, which no other account can read;
+				// a path would also be a file to remember to remove.
 				add("credential_store args carry {file} — the document travels on " +
 					"stdin and stdout, never through a path")
 				break
@@ -1945,9 +1701,8 @@ func (p *Profile) problems() []string {
 		}
 		for _, rel := range p.CredentialPaths {
 			if filepath.Base(rel) == CredentialStoreDocument {
-				// The shared directory keeps both kinds under their base
-				// names, so one would overwrite the other there and in every
-				// bundle.
+				// Both kinds are kept under base names, so one would
+				// overwrite the other in the shared directory and bundles.
 				add("credential_paths names %q, whose file name is the one the "+
 					"credential store's document is kept under (%s)", rel, CredentialStoreDocument)
 			}
@@ -1958,8 +1713,8 @@ func (p *Profile) problems() []string {
 		add("local_tools %q (want denied or vendor-default)", p.LocalTools)
 	}
 	if p.LocalTools == LocalToolsVendorDefault && strings.TrimSpace(p.LocalToolsNote) == "" {
-		// A stance that admits the harness's tools without saying why is
-		// exactly the silent hole the field exists to make visible.
+		// A stance admitting the harness's tools without a reason is the
+		// silent hole this field exists to expose.
 		add("local_tools is vendor-default but local_tools_note is empty — say which " +
 			"denial the vendor lacks")
 	}
@@ -1976,23 +1731,18 @@ func (p *Profile) problems() []string {
 		}
 		switch {
 		case !staysInside(f.Path):
-			// The same two things seeding's UnderRoot proves — relative,
-			// and not escaping the scope — asked before any seat home
-			// exists.
+			// What seeding's UnderRoot proves (relative, not escaping the
+			// scope), asked before any seat home exists.
 			add("seed_files[%d].path %q must be relative and stay inside the %s directory",
 				i, f.Path, f.Scope())
 		case !namesAFile(f.Path):
-			// The content is written to exactly this path, and UnderRoot
-			// proves only that it stays inside — it accepts the scope
-			// directory itself. So `.` and `x/..` are a write onto the
-			// home or the working directory (EISDIR on every call), and
-			// `.crewlet-config/` writes a regular FILE where the harness and
-			// the engine need a directory, so the system prompt's write
-			// under it fails ENOTDIR on every call. The rule a channel's
-			// file.name is held to, for the same reason.
-			// The same directory spelled as a file name, `.crewlet-config`,
-			// is a conflict between two fields rather than a shape, and
-			// [Profile.validateCollisions] refuses it.
+			// UnderRoot accepts the scope directory itself, so `.` and `x/..`
+			// would write onto the home or working directory (EISDIR on every
+			// call), and `.crewlet-config/` writes a FILE where a directory is
+			// needed (ENOTDIR on the system prompt's write). A channel's
+			// file.name is held to the same rule. The same directory spelled
+			// as a file name, `.crewlet-config`, is a conflict between two
+			// fields, refused by [Profile.validateCollisions].
 			add("seed_files[%d].path %q must name a FILE inside the %s directory — not "+
 				"the directory itself, not a path ending in a separator, and not one "+
 				"whose last element is . or .. — e.g. .vendor/settings.json",
@@ -2031,11 +1781,10 @@ func (p *Profile) problems() []string {
 	return bad
 }
 
-// validateEveryStep refuses [PathEvery] in every path that reads ONE value —
-// the answer, the failure flag, an event's kind and its failure class — where
-// only a usage count, which adds up, may take it ([Path]). Refused rather than
-// read as the first member: the members of a decoded object have no order, so
-// the same stdout would answer differently from one call to the next.
+// validateEveryStep refuses [PathEvery] in every path reading ONE value (the
+// answer, failure flag, event kind, failure class); only a usage count may take
+// it ([Path]). Not read as the first member: a decoded object's members are
+// unordered, so the same stdout would answer differently call to call.
 func (p *Profile) validateEveryStep(add func(string, ...any)) {
 	for _, field := range []struct {
 		name  string
@@ -2057,9 +1806,9 @@ func (p *Profile) validateEveryStep(add func(string, ...any)) {
 
 // validateWebStance holds the web stance and its denial to their rules.
 //
-// A profile that keeps web on but CARRIES a denial has that denial validated
-// as the profile it would become, so a broken web_denial is refused where it
-// is written rather than on the first entry that turns web off.
+// A profile keeping web on but carrying a denial has it validated as the
+// profile it would become, so a broken web_denial is refused where written, not
+// on the first entry that turns web off.
 func (p *Profile) validateWebStance(add func(string, ...any)) {
 	if p.WebTools != "" && !p.WebTools.Valid() {
 		add("web_tools %q (want allowed, denied or search)", p.WebTools)
@@ -2093,9 +1842,8 @@ func (p *Profile) validateWebStance(add func(string, ...any)) {
 	}
 	switch {
 	case p.EffectiveWebTools() == WebToolsDenied && p.WebDenial == nil:
-		// Refused rather than run: the stance would be a claim the harness
-		// does not honour, and a helper runs an entry on exactly this
-		// claim.
+		// Refused rather than run: a helper runs an entry on exactly this
+		// claim, which the harness would not honour.
 		add("web_tools is denied but the profile has no web_denial, so this harness "+
 			"has no measured way to turn its web tools off (%s); set "+
 			"overrides.web_denial, or keep web_tools allowed", orUnstated(p.WebToolsNote))
@@ -2130,8 +1878,7 @@ const ImageClaudeStreamJSON ImageFormat = "claude-stream-json"
 func (f ImageFormat) Valid() bool { return f == ImageClaudeStreamJSON }
 
 // validateImageInput holds an image_input block to its shape: arguments, a
-// format this build writes, a note, and a prompt on stdin, where the
-// structured message goes.
+// format this build writes, a note, and a stdin prompt (where the message goes).
 func (p *Profile) validateImageInput(add func(string, ...any)) {
 	in := p.ImageInput
 	if in == nil {
@@ -2152,8 +1899,8 @@ func (p *Profile) validateImageInput(add func(string, ...any)) {
 }
 
 // validateToolsOff holds a tools_off block to its shape. Whether the argv
-// carries it is [Profile.ToolsOffProblem]'s question, asked by the one caller
-// that requires it, since a seat's argv deliberately keeps the web.
+// carries it is [Profile.ToolsOffProblem]'s question, asked only by the caller
+// that requires it: a seat's argv deliberately keeps the web.
 func (p *Profile) validateToolsOff(add func(string, ...any)) {
 	t := p.ToolsOff
 	if t == nil {
@@ -2183,20 +1930,17 @@ func orUnstated(note string) string {
 	return note
 }
 
-// pathClaim is one path a profile has the engine WRITE a file at, or has the
-// harness read a DIRECTORY at, inside one scope: the field that names it, and the
-// path clean.
+// pathClaim is one path a profile has the engine WRITE a file at, or the
+// harness read a DIRECTORY at, in one scope: its naming field and clean path.
 type pathClaim struct {
 	label, path string
 	dir         bool
 }
 
 // claims lists every path this profile claims in one scope whose own shape is
-// valid — a path its shape check refuses is reported there and not again.
-// Under the seat's home: the login files and the home's seed files are
-// written, and each config_env directory is read. Under the call's working
-// directory: its seed files and the system prompt file are written, and each
-// work_config_env directory is read.
+// valid (a refused shape is reported there, not again). Home: login and seed
+// files are written, each config_env directory read. Call directory: seed
+// files and the system prompt file written, each work_config_env directory read.
 func (p *Profile) claims(scope SeedScope) []pathClaim {
 	var out []pathClaim
 	file := func(label, rel string) {
@@ -2210,8 +1954,7 @@ func (p *Profile) claims(scope SeedScope) []pathClaim {
 		}
 	}
 	if scope == SeedWork {
-		// FIRST, so a seed at the same path is the one refused, under a
-		// label that says the engine owns it.
+		// First, so a seed at this path is the one refused, as engine-owned.
 		file("the call's project-root marker", ProjectRootMarker)
 	}
 	seeded := map[string]bool{}
@@ -2222,18 +1965,15 @@ func (p *Profile) claims(scope SeedScope) []pathClaim {
 		}
 	}
 	if scope == SeedHome {
-		// A key home's own: one at a seed_files path is that file's key-home
-		// content, written in its place, so it is the same claim rather than
-		// a second write — and one anywhere else is held to every rule a
-		// seed is.
+		// One at a seed_files path is that file's key-home content, written
+		// in its place: the same claim. Elsewhere it is held as a seed is.
 		for i, f := range p.KeySeedFiles {
 			if !staysInside(f.Path) || !namesAFile(f.Path) {
 				continue
 			}
 			clean := filepath.Clean(f.Path)
 			if seeded[clean] {
-				// Replacing it, once: a second key seed at the path is a
-				// second write, which the claim below is refused as.
+				// Replaces it once; a second key seed here is refused below.
 				seeded[clean] = false
 				continue
 			}
@@ -2241,21 +1981,18 @@ func (p *Profile) claims(scope SeedScope) []pathClaim {
 		}
 	}
 	if scope == SeedWork {
-		// Written by every call that takes a file channel, discovered or
-		// handed over by path, so a seed at the same path is overwritten
-		// before the harness ever reads it. ONE CLAIM PER PATH across the two
-		// channels: a call takes one channel or the other, so two channels
-		// naming one file (Kimi's agent file, with and without the vendor's
-		// own prompt in it) write it once per call, never twice.
+		// Written by every call taking a file channel, so a seed at this
+		// path is overwritten before the harness reads it. One claim per
+		// path across the two channels: a call takes one, so two naming one
+		// file (Kimi's agent file) write it once per call.
 		claimed := map[string]bool{}
 		for _, ch := range p.channels() {
 			if !ch.WritesFile() {
 				continue
 			}
-			// The shapes the channel's own rules admit: a file the harness
-			// finds is a path inside the call's directory, one handed
-			// over by path a bare file name. A malformed one is that
-			// rule's to report, and claims nothing here.
+			// Shapes the channel's own rules admit: a discovered file is a
+			// path inside the call directory, a handed-over one a bare
+			// name. A malformed one is that rule's to report.
 			name := ch.File.FileName()
 			claimable := isBareFileName(name)
 			if ch.File.Found() {
@@ -2271,9 +2008,8 @@ func (p *Profile) claims(scope SeedScope) []pathClaim {
 		}
 	}
 	if scope == SeedWork {
-		// Written on a run with tools alone, after the seeds above, so one at
-		// a path a seed or the system prompt file also names replaces it on
-		// exactly those runs.
+		// Written on runs with tools alone, after the seeds, replacing any
+		// at the same path on exactly those runs.
 		out = append(out, p.mcpClaims()...)
 	}
 	field, relocations := "config_env", p.ConfigEnv
@@ -2289,18 +2025,16 @@ func (p *Profile) claims(scope SeedScope) []pathClaim {
 	return out
 }
 
-// validateCollisions holds the paths a profile claims in each scope
-// ([Profile.claims]) apart: no file the engine writes may be a path another
-// claim needs as a DIRECTORY — the same path as a relocated directory, or an
-// ancestor of any other claim — and no two writes may name one file.
+// validateCollisions holds the paths claimed in each scope ([Profile.claims])
+// apart: no written file may be a path another claim needs as a DIRECTORY (a
+// relocated directory, or an ancestor of any claim), and no two writes may
+// name one file.
 //
 // [namesAFile] cannot see this: the conflict is between two fields.
 // `.crewlet-config` is a file name, but opencode needs it as
 // OPENCODE_CONFIG_DIR's directory (ENOTDIR on every call), as codex needs
-// `.codex`. A file written twice is one write the harness never sees: a seed
-// at a login path replaces the seeded login and is carried back over the shared one.
-//
-// One refusal per file, naming the first claim it collides with.
+// `.codex`. A seed at a login path replaces the seeded login and is carried
+// back over the shared one. One refusal per file, naming the first collision.
 func (p *Profile) validateCollisions(add func(string, ...any)) {
 	for _, scope := range []SeedScope{SeedHome, SeedWork} {
 		claims := p.claims(scope)
@@ -2315,11 +2049,10 @@ func (p *Profile) validateCollisions(add func(string, ...any)) {
 	}
 }
 
-// collision is what is wrong with the file claims[i] beside the other claims
-// of its scope, or "" for nothing: a relocated directory at its very path
-// first, as the plainest statement of the conflict, then an earlier write of
-// the same file, then the first claim that needs it as a directory above
-// itself.
+// collision is what is wrong with the file claims[i] beside its scope's other
+// claims, or "": first a relocated directory at its path (the plainest
+// conflict), then an earlier write of the same file, then the first claim
+// needing it as a directory above itself.
 func collision(claims []pathClaim, i int, scope SeedScope) string {
 	a := claims[i]
 	for _, b := range claims {
@@ -2346,18 +2079,16 @@ func collision(claims []pathClaim, i int, scope SeedScope) string {
 	return ""
 }
 
-// validateHomePaths holds the paths a login and a prune are made of —
-// [Profile.CredentialPaths], [Profile.HostCredentialPaths] and
-// [Profile.VolatilePaths] — to the shape in which each names what it says,
-// asked at load as a seed path is.
+// validateHomePaths holds [Profile.CredentialPaths],
+// [Profile.HostCredentialPaths] and [Profile.VolatilePaths] to the shape each
+// names, at load as a seed path is.
 //
 // Each is operator-overridable and joined onto a directory only at run time,
-// where [UnderRoot] alone refuses one climbing out of the home on EVERY call.
-// A login path is a FILE besides, read, written and carried by its base name:
-// `.` and `x/..` fail with EISDIR, and two sharing a base name are ONE file in
-// the shared directory and every bundle (one named [BundleManifest] collides
-// with the manifest). A volatile path may name a directory, so it is held only
-// to staying inside the home.
+// where [UnderRoot] alone would refuse one climbing out of the home, on EVERY
+// call. A login path is also a FILE, carried by its base name: `.` and `x/..`
+// fail with EISDIR, and two sharing a base name are ONE file in the shared
+// directory and every bundle (one named [BundleManifest] collides with the
+// manifest). A volatile path may name a directory: held only to staying inside.
 func (p *Profile) validateHomePaths(add func(string, ...any)) {
 	for _, list := range []struct {
 		field, home string
@@ -2411,11 +2142,10 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 				"harness has signed in", name)
 		}
 	}
-	// A HOST FILE IS ADOPTED UNDER ITS FILE NAME, and a seat is seeded only
-	// with the names credential_paths gives — so a host path whose file name
-	// none of them has is adopted, reported as the login found, and read by
-	// no seat: copilot listed gh's `.config/gh/hosts.yml`, adopted as
-	// `hosts.yml` beside the `hosts.json` its credential_paths then named.
+	// A host file is adopted under its file name and a seat is seeded only with
+	// credential_paths' names, so a host path with another name is adopted,
+	// reported as found, and read by no seat: copilot listed gh's
+	// `.config/gh/hosts.yml`, adopted as `hosts.yml` beside `hosts.json`.
 	for i, rel := range p.HostCredentialPaths {
 		if name := filepath.Base(rel); staysInside(rel) && namesAFile(rel) && byName[name] == "" {
 			add("host_credential_paths[%d] %q has a file name (%s) no credential_paths "+
@@ -2434,30 +2164,24 @@ func (p *Profile) validateHomePaths(add func(string, ...any)) {
 
 // validateRelocations holds [Profile.ConfigEnv] and [Profile.WorkConfigEnv] to
 // the one shape in which they relocate anything: each variable named once,
-// none the engine already points at the seat's home, and each directory
-// relative and inside its root — holds [Profile.IsolationEnv] to a vendor
-// variable of its own with a value — and holds env and passthrough_env off
-// every variable any of them, or [HomeIsolation], names.
-//
-// The directories were never checked before: `config_env: {CODEX_HOME: ../..}`
-// loaded, and pointed the vendor's whole configuration — sessions and login
-// included — outside the seat's home, which is the isolation this field exists
-// to provide.
+// none the engine already points at the seat's home, each directory relative
+// and inside its root. It holds [Profile.IsolationEnv] to a vendor variable of
+// its own with a value, and env and passthrough_env off every variable any of
+// them or [HomeIsolation] names. Without the directory check
+// `config_env: {CODEX_HOME: ../..}` would point the vendor's whole
+// configuration, sessions and login included, outside the seat's home.
 func (p *Profile) validateRelocations(add func(string, ...any)) {
 	for _, name := range slices.Sorted(maps.Keys(p.ConfigEnv)) {
 		rel := p.ConfigEnv[name]
 		switch {
 		case slices.Contains(HomeIsolation, name):
-			// The engine's own, for every harness, and never a vendor's: HOME
-			// is the seat's home, and the XDG homes and TMPDIR already
-			// point inside it (the cache beside it). Relocating one moved
-			// nothing out of the home that was not in it, and stranded
-			// whatever the profile keeps at the engine's location — on
-			// muse-code, `XDG_CONFIG_HOME: .x` left the seeded tool policy
-			// in a `.config` the harness no longer read, handing every seat
-			// its default tools. It was also the one overlap between the
-			// isolation layers, so an entry's env naming XDG_CONFIG_HOME
-			// could not be told that no field changes it.
+			// The engine's own, never a vendor's: the XDG homes and TMPDIR
+			// already point inside the seat home (the cache beside it).
+			// Relocating one strands whatever the profile keeps at the
+			// engine's location: on muse-code `XDG_CONFIG_HOME: .x` left the
+			// seeded tool policy in a `.config` the harness no longer read,
+			// handing every seat its default tools. It was also the one
+			// overlap between isolation layers ([Profile.IsolationLayerOf]).
 			add("config_env may not name %s — the engine points it at or inside the "+
 				"seat home for every harness already; config_env relocates a variable of "+
 				"the vendor's own", name)
@@ -2472,8 +2196,7 @@ func (p *Profile) validateRelocations(add func(string, ...any)) {
 		_, alsoHome := p.ConfigEnv[name]
 		switch {
 		case slices.Contains(HomeIsolation, name):
-			// A home variable pointed at a directory removed after every call
-			// takes the login and every setting the home holds with it.
+			// Removed after every call, it would take the login and settings with it.
 			add("work_config_env may not name %s — the engine points it at the seat's "+
 				"home, which outlives the call", name)
 		case alsoHome:
@@ -2494,22 +2217,19 @@ func (p *Profile) validateRelocations(add func(string, ...any)) {
 		case strings.TrimSpace(name) == "":
 			add("isolation_env names an empty variable")
 		case slices.Contains(HomeIsolation, name) || home || work:
-			// Two values for one variable, of which the child would get
-			// whichever layer happened to be applied last.
+			// Two values for one variable: the last layer applied wins.
 			add("isolation_env names %s, which the engine already points at a directory — "+
 				"a switch is a variable of the vendor's own, never a relocated one", name)
 		case strings.TrimSpace(p.IsolationEnv[name]) == "":
-			// Not "unset": a vendor reading `1` or `true` as on reads an
-			// empty value as OFF, so the switch would be declared and do the
-			// opposite of what it says.
+			// A vendor reading `1` or `true` as on reads empty as OFF: the
+			// switch would do the opposite of what it says.
 			add("isolation_env.%s is empty — give the value that switches the vendor's "+
 				"behaviour off, e.g. \"1\"; an empty one reads as off", name)
 		}
 	}
-	// LAYERED OVER THE ISOLATION, which is why they are refused here: the
-	// child's environment applies the profile's env and passthrough after
-	// the variables that point it at its own home, so one named here
-	// replaces the seat's home with something else and says nothing.
+	// Layered over the isolation, hence refused here: the child's environment
+	// applies env and passthrough after the home variables, so one named here
+	// silently replaces the seat's home.
 	isolation := p.IsolationVariables()
 	for _, name := range slices.Sorted(maps.Keys(p.Env)) {
 		if slices.Contains(isolation, name) {
@@ -2536,9 +2256,7 @@ func (p *Profile) validateRelocations(add func(string, ...any)) {
 				"its seat's home and its call's working directory — a value here would "+
 				"replace that isolation on every subscription call", name)
 		case inEnv:
-			// Two values for one variable, of which the child gets the
-			// subscription one under subscription and the other under
-			// every other mode — a sign-in choice made in two places.
+			// Two values for one variable: a sign-in choice made in two places.
 			add("subscription_env and env both name %s — set it in subscription_env "+
 				"alone, which is the only mode it may apply under", name)
 		case strings.TrimSpace(p.SubscriptionEnv[name]) == "":
@@ -2552,13 +2270,13 @@ func (p *Profile) validateRelocations(add func(string, ...any)) {
 // path the built-in kept under it ([Profile.kept] still under the old
 // directory, unreached through the moved variable).
 //
-// EACH VARIABLE ON ITS OWN: another variable's directory excuses nothing, nor
+// Each variable on its own: another variable's directory excuses nothing, nor
 // does an ANCESTOR (CODEX_HOME at `.` reads `auth.json`, the login sits at
 // `.codex/auth.json`); a path is reached only where the new directory lies
 // strictly inside the old and the path inside the new. Stranded, the deny-all
 // policy and agent file go unread. Judged against the BUILT-IN, whose layout
-// states which paths are read through which variable; a new value itself
-// refused ([Profile.validateRelocations]) is left to that refusal.
+// says which paths are read through which variable; a refused new value
+// ([Profile.validateRelocations]) is left to that refusal.
 func (p *Profile) strandedBy(builtin *Profile) []string {
 	var bad []string
 	for _, r := range []struct {
@@ -2570,10 +2288,9 @@ func (p *Profile) strandedBy(builtin *Profile) []string {
 		{"work_config_env", SeedWork, builtin.WorkConfigEnv, p.WorkConfigEnv},
 	} {
 		for _, name := range slices.Sorted(maps.Keys(r.was)) {
-			// An override merges into the built-in's map key by key, so the
-			// variable is still there; empty (a YAML null) or escaping its
-			// root, it is refused on its own. The same directory, however
-			// spelled, strands nothing.
+			// Overrides merge key by key, so the variable is still there;
+			// empty (a YAML null) or escaping, it is refused on its own. The
+			// same directory, however spelled, strands nothing.
 			was, now := filepath.Clean(r.was[name]), r.now[name]
 			if strings.TrimSpace(now) == "" || !staysInside(now) {
 				continue
@@ -2609,13 +2326,11 @@ func (p *Profile) strandedBy(builtin *Profile) []string {
 }
 
 // validateEventMarkers holds a [MarkerScopeEvents] profile to the shape in
-// which a sentinel can only be the harness's own: a jsonl stream, a discriminator
-// that tells its events apart, the events that report a failure, and where in
-// them the class is.
+// which a sentinel can only be the harness's own: jsonl, a discriminator, the
+// failure events, and where in them the class is.
 func (p *Profile) validateEventMarkers(add func(string, ...any)) {
 	if p.EffectiveOutput() != OutputJSONL {
-		// On a text profile stdout IS the model's reply, and a json one is a
-		// single document with no events to tell apart.
+		// Text stdout IS the model's reply; json is one document, no events.
 		add("marker_scope is %s but output is %q — a failure event exists only in a "+
 			"jsonl stream; use %s for a harness that reports a failure as its answer",
 			MarkerScopeEvents, p.EffectiveOutput(), MarkerScopeAnswerAndStderr)
@@ -2635,8 +2350,7 @@ func (p *Profile) validateEventMarkers(add func(string, ...any)) {
 	}
 	for _, kind := range p.MarkerEvents {
 		if slices.Contains(p.TextEvents, kind) {
-			// An event that carries the answer carries the model's words, and
-			// matching a sentinel in it is matching what the model wrote.
+			// An answer-carrying event holds the model's words.
 			add("marker_events and text_events both name %q — an event that carries "+
 				"the model's answer is not the harness's failure report", kind)
 		}
@@ -2704,8 +2418,7 @@ func (p *Profile) validateUsageCommand(add func(string, ...any)) {
 	}
 	switch {
 	case !hasPlaceholder(p.UsageArgs, "{session}"):
-		// Without the id the command can only ask about SOME session, and a
-		// seat's home holds every call running in it at once.
+		// Without the id it asks about SOME session of a shared home.
 		add("usage_args carries no {session} placeholder — the report has to be " +
 			"about this call's session, and a seat's home holds every call running in it")
 	case !hasPlaceholder(p.SessionArgs, "{session}"):
@@ -2714,13 +2427,11 @@ func (p *Profile) validateUsageCommand(add func(string, ...any)) {
 			"can ask about")
 	}
 	if len(p.UsageFileArgs) > 0 {
-		// Two reports of one call, and whichever was read second would
-		// silently replace the first.
+		// Two reports of one call: the second read would replace the first.
 		add("usage_args and usage_file_args are both set — one call has one usage " +
 			"report; declare the one this harness writes")
 	}
-	// The same rule, for the same reason, as a usage file's: both prompt
-	// counts or the report is never read.
+	// As for a usage file: both counts or the report is never read.
 	if len(p.Usage.Input) == 0 || len(p.Usage.Output) == 0 {
 		add("usage_args is set but usage.input and usage.output are not both " +
 			"declared — the report is only read when both counts resolve, so every " +
@@ -2732,21 +2443,15 @@ func (p *Profile) validateUsageCommand(add func(string, ...any)) {
 func (ch namedChannel) validate(add func(string, ...any)) {
 	f := ch.field
 	if len(ch.Args) > 0 && ch.Env != "" {
-		// One shape or the other. Both would hand the harness the same
-		// system prompt twice, and which copy wins is the vendor's
-		// business rather than something this profile can state.
+		// Both would hand over the prompt twice; the vendor picks the winner.
 		add("%s.args and %s.env are both set — a harness takes its system prompt on ONE "+
 			"channel; drop whichever this build does not use", f, f)
 	}
-	// AND ONE PLACEHOLDER OR THE OTHER WITHIN args, which is the same rule one
-	// level down and was the hole: the renderer writes the private file for
-	// `{file}` and then substitutes `{system}` into argv on the SAME pass, so
-	// `["--agent-file", "{file}", "--system-prompt", "{system}"]` wrote the
-	// seat's identity to a 0600 file and ALSO put every byte of it in
-	// /proc/<pid>/cmdline, where any account on the machine reads it. The
-	// shipped profiles are held to this by a test; nothing held an operator's
-	// overrides to it, and overrides are exactly where a hand-written argv
-	// appears.
+	// One placeholder or the other within args: the renderer writes the private
+	// file for `{file}` and substitutes `{system}` into argv on the SAME pass,
+	// so `["--agent-file", "{file}", "--system-prompt", "{system}"]` also put
+	// every byte of the seat's identity in /proc/<pid>/cmdline. A test holds
+	// shipped profiles to this; overrides are where a hand-written argv appears.
 	if hasPlaceholder(ch.Args, "{file}") && hasPlaceholder(ch.Args, "{system}") {
 		add("%s.args names both {file} and {system} — the first writes the seat's "+
 			"system prompt to a private file and the second puts the same text on argv, "+
@@ -2761,9 +2466,8 @@ func (ch namedChannel) validate(add func(string, ...any)) {
 			"handed over by path)", f, ch.File.Discovered)
 	}
 	if !ch.WritesFile() {
-		// A template with no file to write is not a harmless extra: on a
-		// `{system}` channel the seat's identity goes on argv bare, and an
-		// operator who wrote frontmatter meant it to reach the harness.
+		// Not harmless: on a `{system}` channel the identity goes on argv
+		// bare, and the operator meant the frontmatter to reach the harness.
 		add("%s.file is set but the channel writes no file — give %s.args a {file} "+
 			"placeholder, set %s.env, or make the file discovered", f, f, f)
 	}
@@ -2775,36 +2479,30 @@ func (ch namedChannel) validate(add func(string, ...any)) {
 	case ch.File.Found():
 		ch.validateDiscovered(add)
 	case name != "" && !isBareFileName(name):
-		// The path is joined onto the per-call working directory, and
-		// this field is operator-overridable.
+		// Joined onto the per-call directory, and operator-overridable.
 		add("%s.file.name %q must be a plain file name, with no directory separator "+
 			"— only a discovered file, which the harness finds where its vendor says to "+
 			"look, carries a directory", f, name)
 	}
 }
 
-// validateDiscovered holds a discovered file to the shape that makes it one: a
-// file the harness finds in the working directory, and an argv that selects it —
-// or none at all, for a file the harness reads on every run.
+// validateDiscovered holds a discovered file to its shape: a file the harness
+// finds in the working directory, and an argv selecting it, or none for one it
+// reads on every run.
 func (ch namedChannel) validateDiscovered(add func(string, ...any)) {
 	f, name := ch.field, ch.File.Name
 	switch {
 	case name == "":
-		// The default name is a bare prompt file no vendor looks for, so a
-		// discovered channel without a name of its own writes a file
-		// nothing will ever find.
+		// The default name is one no vendor looks for: nothing would find it.
 		add("%s.file is discovered but its name is empty — say where the harness looks "+
 			"for it, e.g. .crewlet-config/agents/crewlet-seat.md", f)
 	case !staysInside(name):
 		add("%s.file.name %q must be relative and stay inside the per-call working "+
 			"directory", f, name)
 	case !namesAFile(name):
-		// The prompt is written to exactly this path, so a name that
-		// cleans to a DIRECTORY fails every call: `.` and `x/..` are the
-		// working directory itself (a write onto it is EISDIR), and
-		// `.opencode/agents/` writes a regular FILE where the harness looks
-		// for a directory of agents, so it finds none. The bare-name rule
-		// beside this one refuses `.` and `..` for the same reason.
+		// A name cleaning to a DIRECTORY fails every call: `.` and `x/..` are
+		// the working directory (EISDIR), and `.opencode/agents/` writes a
+		// FILE where the harness looks for a directory of agents.
 		add("%s.file.name %q must name a FILE inside the per-call working directory "+
 			"— not the directory itself, not a path ending in a separator, and not one "+
 			"whose last element is . or .. — e.g. .crewlet-config/agents/crewlet-seat.md", f, name)
@@ -2812,15 +2510,13 @@ func (ch namedChannel) validateDiscovered(add func(string, ...any)) {
 	switch {
 	case ch.File.Discovered == DiscoverySelected && len(ch.Args) == 0:
 		// Found but never selected, the file changes nothing: the harness runs
-		// its own default agent, and the seat's identity is in neither
-		// place.
+		// its default agent without the seat's identity.
 		add("%s.file is discovered: selected but %s.args is empty — the harness finds the "+
 			"file, and nothing tells it to use what it found; select it, or make it "+
 			"discovered: always if the harness reads it on every run", f, f)
 	case hasPlaceholder(ch.Args, "{file}") || hasPlaceholder(ch.Args, "{system}"):
-		// A discovered file is found by where it is. Handing over its
-		// path too is two channels for one prompt, and {system} would put
-		// the text on argv beside the file.
+		// Handing over the path too is two channels for one prompt, and
+		// {system} would put the text on argv beside the file.
 		add("%s.file is discovered but %s.args carries {file} or {system} — a "+
 			"discovered file is found by its location, and the argv only selects it", f, f)
 	}
@@ -2834,14 +2530,12 @@ func (ch namedChannel) validateDiscovered(add func(string, ...any)) {
 // around auth: a passthrough_env or env entry whose name says it carries a
 // secret, and an env entry naming the profile's own token_env or api_key_env.
 //
-// APART FROM [Profile.Validate], which [Load] runs, because these are
-// ADMISSION rules and that one is RUNNABLE. A profile that breaks one still
-// builds, starts and answers: what it gets wrong is where a credential comes
-// from. Config refuses a document that breaks one on every write and only
-// warns about a revision being applied, because an apply that refused it would
-// take a node off the fleet's epoch over a revision that runs — and the rule
-// set here is the one a later build is free to change, as this predicate
-// itself changed from substrings to whole name components.
+// Apart from [Profile.Validate], which [Load] runs: these are ADMISSION rules,
+// that one is RUNNABLE. A profile breaking one still runs, only wrong about
+// where a credential comes from. Config refuses such a document on every write
+// but only warns on an apply, since refusing would take a node off the fleet's
+// epoch over a revision that runs, and a later build is free to change this
+// rule set.
 func (p *Profile) ValidateCredentials(name string) error {
 	var bad []string
 	add := func(format string, args ...any) {
@@ -2849,9 +2543,7 @@ func (p *Profile) ValidateCredentials(name string) error {
 	}
 	for _, env := range p.PassthroughEnv {
 		if IsCredentialName(env) {
-			// Refused rather than dropped: an operator who wrote it
-			// meant it to arrive, and a variable that vanished
-			// silently is a debugging session.
+			// Refused rather than silently dropped.
 			add("passthrough_env names %q, which looks like a credential — "+
 				"passthrough is forwarded before auth.mode is consulted, so it would "+
 				"reach every seat whatever the mode says; use auth.mode api-key or "+
@@ -2859,8 +2551,7 @@ func (p *Profile) ValidateCredentials(name string) error {
 		}
 	}
 	for _, env := range slices.Sorted(maps.Keys(p.IsolationEnv)) {
-		// A switch is forwarded on every command whatever auth.mode says,
-		// and is no place for a value anybody would have to keep secret.
+		// Forwarded on every command whatever auth.mode says: no place for a secret.
 		if env != "" && (env == p.TokenEnv || env == p.APIKeyEnv || IsCredentialName(env)) {
 			add("isolation_env names %q, which is a credential variable — a switch the "+
 				"engine sets on every command is forwarded whatever auth.mode says and is "+
@@ -2869,9 +2560,9 @@ func (p *Profile) ValidateCredentials(name string) error {
 		}
 	}
 	for _, env := range slices.Sorted(maps.Keys(p.SubscriptionEnv)) {
-		// Set under subscription alone, which removes the key variable and
-		// sets the token's from auth: a credential here would sign the harness
-		// in with a value no auth field names, stored unredacted.
+		// Set under subscription alone, where auth supplies the token: a
+		// credential here would sign in with a value no auth field names,
+		// stored unredacted.
 		if env != "" && (env == p.TokenEnv || env == p.APIKeyEnv || IsCredentialName(env)) {
 			add("subscription_env names %q, which is a credential variable — it selects "+
 				"the login a subscription call signs in with and carries no secret; give "+
@@ -2881,15 +2572,13 @@ func (p *Profile) ValidateCredentials(name string) error {
 	if p.MCP != nil {
 		for _, env := range slices.Sorted(maps.Keys(p.MCP.Env)) {
 			if p.MCP.mintedByServer(p.MCP.Env[env]) {
-				// A VALUE THE HARNESS'S OWN SERVER MINTS — the password
-				// OpenCode's `serve` prints as it starts — rendered into
-				// each run and never written anywhere: the profile holds
-				// a placeholder, which is no secret, and the rule below
-				// exists for a secret the profile would hold.
+				// A value the harness's own server mints (the password
+				// OpenCode's `serve` prints), rendered per run and never
+				// stored: the profile holds a placeholder, no secret.
 				continue
 			}
-			// Set on every run with tools whatever auth.mode says, and
-			// stored unredacted like the rest of overrides.
+			// Set on every run with tools whatever auth.mode says, stored
+			// unredacted like the rest of overrides.
 			if env != "" && (env == p.TokenEnv || env == p.APIKeyEnv || IsCredentialName(env)) {
 				add("mcp.env names %q, which is a credential variable — the tool route's "+
 					"environment is set whatever auth.mode says and is stored unredacted; give "+
@@ -2900,24 +2589,19 @@ func (p *Profile) ValidateCredentials(name string) error {
 	for _, env := range slices.Sorted(maps.Keys(p.Env)) {
 		switch {
 		case env != "" && (env == p.TokenEnv || env == p.APIKeyEnv):
-			// Named apart from the shape rule below because an
-			// overridden token_env or api_key_env need not LOOK like a
-			// credential. The entry's env and then its auth are layered over
-			// this one, so whether a value here reaches the harness turns on
-			// the mode and on whether the secret store or the engine's
-			// environment holds a credential of its own — which no
-			// document can see.
+			// Apart from the shape rule below: an overridden token_env or
+			// api_key_env need not LOOK like a credential. The entry's env and
+			// auth are layered over this, so whether a value reaches the
+			// harness turns on the mode and on stores no document can see.
 			add("env names %q, which is this profile's token_env or api_key_env — "+
 				"auth owns that variable, and whether a value here reaches the harness "+
 				"depends on auth.mode and on whether the secret store or the engine's "+
 				"environment holds one; give the credential through auth "+
 				"(auth.token, or auth.api_key with auth.mode api-key)", env)
 		case IsCredentialName(env):
-			// The same reason passthrough_env refuses one, and a second:
-			// the profile's env is forwarded whatever auth.mode says,
-			// and overrides is neither ${VAR}-resolved nor marked
-			// secret, so a key written here sits in the stored revision
-			// in plain text and is shown unredacted on every read.
+			// As passthrough_env, and overrides is neither ${VAR}-resolved nor
+			// marked secret: a key here sits in the stored revision in plain
+			// text and is shown unredacted on every read.
 			add("env names %q, which looks like a credential — the profile's env "+
 				"is forwarded whatever auth.mode says, and overrides is stored "+
 				"and shown unredacted; put it in the entry's own env, which is "+
@@ -2935,11 +2619,10 @@ func (p *Profile) ValidateCredentials(name string) error {
 // key it names is set to something other than null or an empty string, object
 // or array.
 //
-// Read as JSON once every line opening with `//` is set aside, because the
-// file Copilot CLI keeps its plaintext login in opens with two such lines. A
-// file that does not read that way IS taken for a login: guessing harder would
-// mean parsing a vendor's format here, and a wrong guess in the other
-// direction is a login the engine would not carry, export or keep.
+// Read as JSON with every `//` line set aside, since Copilot CLI's plaintext
+// login file opens with two. A file that does not read that way IS taken for a
+// login: guessing harder means parsing a vendor's format, and the opposite
+// wrong guess is a login the engine would not carry, export or keep.
 func (p *Profile) HoldsLogin(name string, content []byte) bool {
 	key, named := p.LoginKeys[name]
 	if !named {
@@ -2991,15 +2674,14 @@ func (p *Profile) EffectiveOutput() OutputMode {
 // sentinelProblem reports why a marker sentinel cannot be matched safely, or
 // "" when it can.
 //
-// A SENTINEL IS THE VENDOR'S WORDS, matched as a plain substring against stderr,
-// a failed run's output and the opening of a healthy answer, which is the
-// model's own ([MarkerScope]). One that can occur in ordinary text
-// misclassifies replies: KindRateLimit and KindAuth hand the seat to the
-// fallback chain, and a rate limit SITS THE ENTRY OUT (harness bench.go). A
-// `sentinel: "429"` benched a working subscription when a model quoted a status.
-// The rule is "it has to contain a letter", with no minimum length: a number is
-// not a sentence, while a length floor nobody can defend would refuse a
-// legitimate short vendor string. See [LimitMarker].
+// A sentinel is matched as a plain substring against stderr, a failed run's
+// output and the opening of a healthy (model-written) answer ([MarkerScope]).
+// One that can occur in ordinary text misclassifies replies: KindRateLimit and
+// KindAuth hand the seat to the fallback chain, and a rate limit SITS THE ENTRY
+// OUT (harness bench.go); `sentinel: "429"` benched a working subscription when
+// a model quoted a status. The rule is "contains a letter", no minimum length:
+// a length floor nobody can defend would refuse a legitimate short vendor
+// string. See [LimitMarker].
 func sentinelProblem(sentinel string) string {
 	if sentinel == "" {
 		return "is empty"
@@ -3016,11 +2698,10 @@ func sentinelProblem(sentinel string) string {
 // ReadsUsage reports whether this profile can take token counts from the harness
 // rather than estimating them.
 //
-// BOTH HALVES, because either alone is a lie: no usage paths cannot, and a TEXT
-// profile cannot either, since [extract] never decodes a document in that mode
-// (`output: text` is a one-line override that leaves inherited paths inert).
-// A USAGE REPORT is the exception: one the harness writes to a path of its own
-// or prints to a usage command is decoded whatever stdout carries, so a `text`
+// Both halves, since either alone is a lie: no usage paths cannot, and a TEXT
+// profile cannot since [extract] never decodes a document in that mode
+// (`output: text` is a one-line override leaving inherited paths inert). A
+// usage report is the exception: decoded whatever stdout carries, so a `text`
 // profile declaring [Profile.UsageFileArgs] or [Profile.UsageArgs] reports real
 // counts. `crewlet llm doctor` and the extractor share this answer.
 func (p *Profile) ReadsUsage() bool {
@@ -3034,8 +2715,7 @@ func (p *Profile) ReadsUsage() bool {
 }
 
 // LoginLocation says where this harness keeps a login, for a message telling an
-// operator to put one there: its credential files, the database a
-// [CredentialStore] reads and writes, or both.
+// operator to put one there: credential files, a [CredentialStore] database, or both.
 func (p *Profile) LoginLocation() string {
 	var where []words.Said
 	if len(p.CredentialPaths) > 0 {
@@ -3054,17 +2734,15 @@ func (p *Profile) LoginLocation() string {
 	return words.And(where)
 }
 
-// KeepsLogin reports whether the harness keeps a login of its own that the engine
-// can hold for it: credential files, or a login in its own database. A profile
-// that keeps none signs in only through what a call's environment carries — its
-// token, its key, or a model provider's key ([Profile.EnvSignIn]).
+// KeepsLogin reports whether the harness keeps a login the engine can hold:
+// credential files or its own database. Otherwise it signs in only through a
+// call's environment: token, key, or a provider's key ([Profile.EnvSignIn]).
 func (p *Profile) KeepsLogin() bool {
 	return len(p.CredentialPaths) > 0 || p.CredentialStore != nil
 }
 
-// ReadsUsageReport reports whether this profile takes its counts from a report
-// apart from stdout — a usage file the harness writes, or a usage command run after
-// the call — rather than from what the call printed.
+// ReadsUsageReport reports whether counts come from a report apart from stdout
+// (a usage file or a usage command run after the call).
 func (p *Profile) ReadsUsageReport() bool {
 	return len(p.UsageFileArgs) > 0 || len(p.UsageArgs) > 0
 }
@@ -3072,8 +2750,8 @@ func (p *Profile) ReadsUsageReport() bool {
 // UnderRoot joins a profile-declared relative path onto a root and refuses
 // one that escapes it.
 //
-// Profile paths are operator-overridable, so "../../.ssh" is reachable from
-// config — and the backend's prune calls RemoveAll on whatever this returns.
+// Profile paths are operator-overridable, and the backend's prune calls
+// RemoveAll on what this returns, so "../../.ssh" must not pass.
 func UnderRoot(root, rel string) (string, error) {
 	if filepath.IsAbs(rel) {
 		return "", fmt.Errorf("harness: path %q must be relative to the seat home", rel)

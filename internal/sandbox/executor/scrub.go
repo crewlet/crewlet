@@ -207,7 +207,8 @@ func (l *lineRun) done() {
 const (
 	// streamHeldBytes is one redact.Stream: its stages' windows, at most
 	// about 21 MiB of text and 26 MiB of what they keep beside it, as
-	// redact's package doc states and its own test holds.
+	// redact's package doc states and its own test holds (21,589 and 26,941
+	// KiB), and for a moment the 484 KiB its keys' stage outgrows: 47.9 MiB.
 	streamHeldBytes = 48 << 20
 	// scannerHeldBytes is one jsonscan.Scanner: its read buffer and its
 	// struct, the open containers' bits among it, as jsonscan's package doc

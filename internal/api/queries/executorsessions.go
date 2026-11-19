@@ -46,7 +46,7 @@ import (
 // ends. Entry text, the ask's excerpt and the ending's prose pass through
 // [redact.Secrets] at this read (the row by [executordomain.Session.Redacted]).
 // A node decodes at most [executor.TranscriptReadsAtOnce] at once (a read can
-// hold ~100 MiB); more wait for a slot, ending with their caller's own error.
+// hold 227 MiB); more wait for a slot, ending with their caller's own error.
 
 // A live turn's row naming a session is `in_progress`: the newest its runs kept,
 // which the run may have gone past. An ended row kept up to a session its turn

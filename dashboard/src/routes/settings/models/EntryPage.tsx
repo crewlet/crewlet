@@ -91,6 +91,8 @@ export interface WhoRuns {
   categories: CategoryUse[];
   /** Whether Ask Crewlet runs on the model. */
   assistant: boolean;
+  /** Whether the Advisor explains its findings with the model. */
+  advisor: boolean;
   /** Every distinct seat on the model, at any position. */
   seats: number;
 }
@@ -143,6 +145,7 @@ export function whoRuns(usedBy: readonly ModelUse[]): WhoRuns {
       backups: list(category, backups),
     })).filter((c) => c.runs.length > 0 || c.backups.length > 0),
     assistant: usedBy.some((u) => u.assistant === "chat"),
+    advisor: usedBy.some((u) => u.advisor === "findings"),
     seats: new Set(usedBy.flatMap((u) => (u.seat ? [u.seat] : []))).size,
   };
 }
@@ -168,13 +171,17 @@ function SeatChip({ seats, on }: { seats: readonly Seat[]; on: SeatOnCategory })
   );
 }
 
-function assistantLine(runs: boolean): string[] {
-  return runs ? ["Ask Crewlet runs on it."] : [];
+/** The helpers that run on a model, a line each: Ask Crewlet and the Advisor are no seat's. */
+function helperLines(who: Pick<WhoRuns, "assistant" | "advisor">): string[] {
+  return [
+    ...(who.assistant ? ["Ask Crewlet runs on it."] : []),
+    ...(who.advisor ? ["The Advisor explains its findings with it."] : []),
+  ];
 }
 
 function WhoRunsCard({ model, data }: { model: ModelView; data: ModelsData }) {
   const who = useMemo(() => whoRuns(model.entry.used_by), [model.entry.used_by]);
-  const assistant = assistantLine(who.assistant);
+  const assistant = helperLines(who);
   return (
     <Card padding="none">
       <Card.Header count={who.seats}>

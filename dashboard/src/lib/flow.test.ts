@@ -1,22 +1,31 @@
 /**
  * An item's flow as words (ADR-0162): the engine's state, cause and instants
- * drawn as sent, and Workload's counts read from its buckets.
+ * drawn as sent, on the company's clock, and Workload's counts read from its
+ * buckets.
  */
 
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import type { WorkFlow, WorkFlowEntry } from "~/protocol/index.ts";
 import {
   badgedFlow,
   flowBadgeText,
   flowEntryWords,
+  flowInstant,
   flowLabel,
   flowSentence,
   flowTone,
   openWords,
   workloadWords,
+  type FlowWords,
 } from "./flow.ts";
+import { pinZoneForTest } from "./prefs.ts";
 
 const NOW = Date.parse("2031-04-16T12:00:00Z");
+const UTC: FlowWords = { zone: "" };
+const BERLIN: FlowWords = { zone: "Europe/Berlin" };
+
+beforeEach(() => pinZoneForTest("UTC"));
+afterEach(() => pinZoneForTest(""));
 
 const flow = (over: Partial<WorkFlow>): WorkFlow => ({
   state: "moving",
@@ -36,15 +45,26 @@ describe("a flow badge", () => {
 
   test("says when the state ends where the engine knows it, else how long it has held", () => {
     const held = flow({ state: "held", cause: "limit", until: "2031-04-16T13:00:00Z" });
-    expect(flowBadgeText(held, NOW)).toMatch(/^Held · until \S/);
+    expect(flowBadgeText(held, NOW, "")).toBe("Held · until 13:00");
     const stuck = flow({ state: "stuck", since: "2031-04-16T03:00:00Z" });
-    expect(flowBadgeText(stuck, NOW)).toBe("Stuck · 9h");
-    expect(flowBadgeText(flow({ state: "blocked" }), NOW)).toBe("Blocked");
+    expect(flowBadgeText(stuck, NOW, "")).toBe("Stuck · 9h");
+    expect(flowBadgeText(flow({ state: "blocked" }), NOW, "")).toBe("Blocked");
   });
 
   test("a start that passed reads apart from a due date", () => {
     expect(flowLabel("due")).toBe("Start passed");
     expect(flowTone("due")).toBe("warning");
+  });
+
+  // AN ITEM NOBODY HOLDS SAYS SO, rather than a bare "Held" that reads as
+  // somebody holding it, and says since when.
+  test("a cause that is the whole story is the badge's word", () => {
+    const nobody = flow({ state: "held", cause: "nobody", since: "2031-04-16T10:00:00Z" });
+    expect(flowBadgeText(nobody, NOW, "")).toBe("No assignee · 2h");
+    expect(flowBadgeText(flow({ state: "held", cause: "departed" }), NOW, "")).toBe(
+      "Assignee left",
+    );
+    expect(flowBadgeText(flow({ state: "held", cause: "paused" }), NOW, "")).toBe("Held");
   });
 
   test("a state this build does not know reads as its own word, in no tone", () => {
@@ -53,14 +73,35 @@ describe("a flow badge", () => {
   });
 });
 
+// THE FLOW'S INSTANTS ARE ON THE COMPANY'S CLOCK, as Worklet's dates are. A
+// wait until a start is the company's midnight: read on a UTC reader's clock
+// in a company on Berlin's, it was the evening before, beside a Start field
+// naming the day itself.
+describe("a flow's instants", () => {
+  const midnight = "2031-04-21T22:00:00Z"; // Apr 22, 00:00 in Berlin
+
+  test("a wait until a start names the company's day, never the evening before", () => {
+    const waiting = flow({ state: "waiting", cause: "start", until: midnight });
+    expect(flowBadgeText(waiting, NOW, "Europe/Berlin")).toBe("Waiting · until Apr 22");
+    expect(flowSentence(waiting, NOW, BERLIN)).toBe("Waiting until Apr 22: it waits for its start");
+  });
+
+  test("a clock time is the company's, and says whose where the reader's clock is another", () => {
+    // 23:00 in Berlin, a seat's limit lifting the same evening.
+    expect(flowInstant("2031-04-16T21:00:00Z", NOW, "Europe/Berlin")).toMatch(/^23:00 \S/);
+    expect(flowInstant("2031-04-16T21:00:00Z", NOW, "")).toBe("21:00");
+    expect(flowInstant("2031-04-18T09:30:00Z", NOW, "")).toBe("Apr 18, 09:30");
+  });
+});
+
 describe("a flow sentence", () => {
   test("names the cause the engine sent", () => {
     const held = flow({ state: "held", cause: "limit", until: "2031-04-16T13:00:00Z" });
-    expect(flowSentence(held, NOW)).toMatch(
-      /^Held until .+: its assignee is out of its model limit$/,
+    expect(flowSentence(held, NOW, UTC)).toBe(
+      "Held until 13:00: its assignee is out of its model limit",
     );
-    expect(flowSentence(flow({ state: "held", cause: "departed" }), NOW)).toBe(
-      "Held: its assignee has left the org chart",
+    expect(flowSentence(flow({ state: "held", cause: "departed" }), NOW, UTC)).toBe(
+      "Assignee left: its assignee has left the org chart",
     );
   });
 
@@ -71,12 +112,35 @@ describe("a flow sentence", () => {
       until: "2031-04-20T00:00:00Z",
       reason: "The release's health check",
     });
-    expect(flowSentence(waiting, NOW)).toMatch(/^Waiting until .+: The release's health check$/);
+    expect(flowSentence(waiting, NOW, UTC)).toBe(
+      "Waiting until Apr 20: The release's health check",
+    );
   });
 
-  test("a state with no cause says why it holds", () => {
-    expect(flowSentence(flow({ state: "due", since: "2031-04-16T09:00:00Z" }), NOW)).toMatch(
-      /^Start passed since .+: its start passed and nothing of its assignee's has run on it since$/,
+  // A PERSON PICKS AN ITEM UP; an agent takes a turn on it. One clause for
+  // both spoke of runs on a person's item.
+  test("a start that passed is said in its assignee's terms", () => {
+    const due = flow({ state: "due", since: "2031-04-16T09:00:00Z" });
+    const chart = {
+      seatName: (h: string) => (h === "riley" ? "Riley Ops" : "Agent SWE"),
+      seatKind: (h: string) => (h === "riley" ? ("human" as const) : ("agent" as const)),
+    };
+    expect(flowSentence(due, NOW, { ...UTC, ...chart, assignee: "riley" })).toBe(
+      "Start passed since 09:00: its start passed and Riley Ops has not picked it up since",
+    );
+    expect(flowSentence(due, NOW, { ...UTC, ...chart, assignee: "agent-swe" })).toBe(
+      "Start passed since 09:00: its start passed and Agent SWE has not taken a turn on it since",
+    );
+  });
+
+  // A STUCK ITEM SAYS ITS WINDOW where the screen holds its project.
+  test("a stuck item names its project's window where it is known", () => {
+    const stuck = flow({ state: "stuck", since: "2031-04-16T11:00:00Z" });
+    expect(flowSentence(stuck, NOW, { ...UTC, stuckHours: 1 })).toBe(
+      "Stuck since 11:00: nothing changed on it for 1 hour, its project's stuck window",
+    );
+    expect(flowSentence(stuck, NOW, UTC)).toBe(
+      "Stuck since 11:00: nothing changed on it for its project's stuck window",
     );
   });
 });
@@ -122,15 +186,27 @@ describe("a flow history line", () => {
   });
 
   test("a recorded change says the state and why it holds", () => {
-    const { what, why } = flowEntryWords(entry({}), NOW);
-    expect(what).toMatch(/^recorded it as stuck since \S/);
-    expect(why).toBe("nothing changed on it for its project's window");
+    const { what, why } = flowEntryWords(entry({}), NOW, { ...UTC, stuckHours: 8 });
+    expect(what).toBe("recorded it as stuck since Apr 15, 09:00");
+    expect(why).toBe("nothing changed on it for 8 hours, its project's stuck window");
+  });
+
+  test("a wait it recorded names the company's day", () => {
+    const { what } = flowEntryWords(
+      entry({ state: "waiting", cause: "start", since: null, until: "2031-04-21T22:00:00Z" }),
+      NOW,
+      BERLIN,
+    );
+    expect(what).toBe("recorded it as waiting until Apr 22");
   });
 
   test("a notice names whom it told, and in which role", () => {
     const names = (handle: string) => (handle === "maya" ? "Maya" : handle);
-    const told = flowEntryWords(entry({ notice: "lead", told: "maya" }), NOW, names);
-    expect(told.what).toMatch(/^told Maya, as its lead, it reads stuck since \S/);
+    const told = flowEntryWords(entry({ notice: "lead", told: "maya" }), NOW, {
+      ...UTC,
+      seatName: names,
+    });
+    expect(told.what).toBe("told Maya, as its lead, it reads stuck since Apr 15, 09:00");
     expect(told.why).toBe("");
   });
 });

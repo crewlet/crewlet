@@ -23,12 +23,12 @@ import (
 func TestAKeyedScanFindsWhatItsPatternFinds(t *testing.T) {
 	t.Parallel()
 	for name, k := range map[string]*keyed{
-		"the password rule":           passwordRule,
-		"the pending password key":    pendingKey,
-		"a password's prompt":         passwordPrompt,
+		"the password rule":           passwordRule(),
+		"the pending password key":    pendingKey(),
+		"a password's prompt":         passwordPrompt(),
 		"words folding outside ASCII": keyedOn([]string{"key", "ſecret", "sk"}, `\s*=\S+`),
 	} {
-		atEnd := k == pendingKey || k == passwordPrompt
+		atEnd := k == pendingKey() || k == passwordPrompt()
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			pieces := []string{
@@ -94,7 +94,7 @@ func found(k *keyed, text string) [][]int {
 	}
 	var matches [][]int
 	for i := 0; i < len(text); {
-		if loc := k.anchored.FindStringIndex(text[i:]); loc != nil && !k.refuses(text, i) {
+		if loc := k.anchored.FindStringIndex(text[i:]); loc != nil && !k.refuses.s(text, i) {
 			matches = append(matches, []int{i, i + loc[1]})
 			i += loc[1]
 			continue

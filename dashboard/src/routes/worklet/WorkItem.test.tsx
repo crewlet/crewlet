@@ -449,6 +449,31 @@ test("an item's wait is labelled by the engine's flow, never by the browser's cl
   expect(screen.queryByText("Waits for")).toBeNull();
 });
 
+// A HOLD SAYS WHERE IT IS LIFTED, beside why it holds: the seat's own page
+// for a paused seat (its pause and Resume), the models for a model limit, and
+// a hand-off for an item nobody holds.
+test("a held item's flow row links where its hold is lifted", async () => {
+  const held = (cause: string, assignee: string) =>
+    detail({
+      task: task({ assignee }),
+      flow: { state: "held", cause, since: null, until: null, reason: "" },
+    });
+  rail(held("paused", "swe"));
+  await settle();
+  const seat = within(rowValue("Flow")).getByRole("link", { name: "Open swe" });
+  expect(seat.getAttribute("href")).toBe(href(["company", "org", "seats", "swe"]));
+  cleanup();
+  rail(held("limit", "swe"));
+  await settle();
+  expect(
+    within(rowValue("Flow")).getByRole("link", { name: "Open the models" }).getAttribute("href"),
+  ).toBe(href(["settings", "models"]));
+  cleanup();
+  rail(held("nobody", ""));
+  await settle();
+  expect(within(rowValue("Flow")).getByRole("button", { name: /^Assign/ })).toBeTruthy();
+});
+
 // AN ITEM IN PROGRESS SAYS WHY IT IS NOT MOVING above its title, with the
 // seat's reset where the engine knows it; the ordinary `moving` says nothing.
 test("an item held by its seat's model limit says so, and until when", () => {

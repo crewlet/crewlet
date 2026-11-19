@@ -66,8 +66,13 @@ import { itemAddress, targetLabel } from "~/lib/work.ts";
 import { useOpenNewTask } from "~/app/newTask.ts";
 import { STEER_NOTE_MAX_RUNES } from "~/contract/steer.ts";
 import { steerReadsSentence } from "~/lib/steer.ts";
-import { VIEW_NAME_MAX_BYTES } from "~/contract/work.ts";
-import { possessive, textBudget } from "~/lib/format.ts";
+import {
+  STUCK_AFTER_HOURS_DEFAULT,
+  STUCK_AFTER_HOURS_MAX,
+  STUCK_AFTER_HOURS_MIN,
+  VIEW_NAME_MAX_BYTES,
+} from "~/contract/work.ts";
+import { plural, possessive, textBudget } from "~/lib/format.ts";
 import { CHECKED_WORDS, renderMarkdown, renderTokens } from "~/lib/markdown.ts";
 import { RUNS_POLL_MS, runAskTexts, unanswerable } from "~/lib/runs.ts";
 import { RunQuestion } from "./RunQuestion.tsx";
@@ -364,6 +369,7 @@ export function EditProjectButton({
   target,
   assignee,
   archived,
+  stuck,
   lead,
   open: held,
   onOpenChange,
@@ -372,6 +378,8 @@ export function EditProjectButton({
   /** The project's name, as its page is headed; the key when it has none. */
   name?: string;
   target?: string;
+  /** The project's stuck window in hours, where its lead set one (ADR-0162). */
+  stuck?: number | undefined;
   /** Who unassigned work lands on now, a seat's handle, or "" for triage. */
   assignee?: string;
   archived?: boolean;
@@ -410,7 +418,12 @@ export function EditProjectButton({
         <EditProjectDialog
           project={project}
           name={name || project}
-          now={{ target: target ?? "", assignee: assignee ?? "", archived: archived ?? false }}
+          now={{
+            target: target ?? "",
+            assignee: assignee ?? "",
+            archived: archived ?? false,
+            stuck: stuck ? String(stuck) : "",
+          }}
           write={write}
           onClose={() => {
             write.dismiss();
@@ -427,6 +440,17 @@ export interface ProjectPolicy {
   target: string;
   assignee: string;
   archived: boolean;
+  /** The stuck window's hours as typed, "" for the default. */
+  stuck: string;
+}
+
+/** Why a typed stuck window is refused, or undefined for one the engine takes. */
+function stuckRefusal(text: string): string | undefined {
+  if (text === "") return undefined;
+  const hours = Number(text);
+  return Number.isInteger(hours) && hours >= STUCK_AFTER_HOURS_MIN && hours <= STUCK_AFTER_HOURS_MAX
+    ? undefined
+    : `A whole number of hours from ${STUCK_AFTER_HOURS_MIN} to ${STUCK_AFTER_HOURS_MAX}.`;
 }
 
 /**
@@ -442,6 +466,7 @@ function policyArgs(
   if (now.target !== was.target) args.target_date = now.target || null;
   if (now.assignee !== was.assignee) args.default_assignee = now.assignee;
   if (now.archived !== was.archived) args.archived = now.archived;
+  if (now.stuck !== was.stuck) args.stuck_after_hours = now.stuck ? Number(now.stuck) : null;
   return Object.keys(args).length === 0 ? null : { project, ...args };
 }
 
@@ -451,8 +476,14 @@ function policyDone(name: string, was: ProjectPolicy, now: ProjectPolicy, seat: 
     now.target !== was.target,
     now.assignee !== was.assignee,
     now.archived !== was.archived,
+    now.stuck !== was.stuck,
   ].filter(Boolean).length;
   if (moved > 1) return `Saved ${possessive(name)} settings`;
+  if (now.stuck !== was.stuck) {
+    return now.stuck
+      ? `Items in ${name} now read stuck after ${plural(Number(now.stuck), "hour")}`
+      : `Items in ${name} now read stuck after the default ${plural(STUCK_AFTER_HOURS_DEFAULT, "hour")}`;
+  }
   if (now.archived !== was.archived) return `${now.archived ? "Archived" : "Unarchived"} ${name}`;
   if (now.assignee !== was.assignee) {
     return now.assignee
@@ -481,7 +512,8 @@ function EditProjectDialog({
   const seats = useMemo(() => indexOrg(org).seats, [org]);
   const [policy, setPolicy] = useState<ProjectPolicy>(was);
   const args = policyArgs(project, was, policy);
-  const blocked = args ? undefined : "Change something first.";
+  const stuckWrong = stuckRefusal(policy.stuck);
+  const blocked = stuckWrong ?? (args ? undefined : "Change something first.");
   const seatName = (handle: string) => seats.find((s) => s.handle === handle)?.name ?? handle;
   const archiving = policy.archived && !was.archived;
   const submit = async () => {
@@ -575,6 +607,26 @@ function EditProjectDialog({
             value={policy.assignee}
             options={assigneeOptions}
             onChange={(next) => setPolicy((p) => ({ ...p, assignee: String(next) }))}
+          />
+        </FormField>
+        <FormField
+          label="Stuck after"
+          optional
+          htmlFor="project-stuck"
+          helper={
+            stuckWrong ??
+            `Hours an item in progress may go unchanged before it reads stuck. Leave empty for the default of ${STUCK_AFTER_HOURS_DEFAULT}.`
+          }
+        >
+          <Input
+            id="project-stuck"
+            type="number"
+            inputMode="numeric"
+            min={STUCK_AFTER_HOURS_MIN}
+            max={STUCK_AFTER_HOURS_MAX}
+            placeholder={String(STUCK_AFTER_HOURS_DEFAULT)}
+            value={policy.stuck}
+            onChange={(event) => setPolicy((p) => ({ ...p, stuck: event.target.value.trim() }))}
           />
         </FormField>
         <Switch

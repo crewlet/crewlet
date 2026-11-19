@@ -394,16 +394,18 @@ export function AskProvider({ place, children }: { place: AskPlace; children: Re
 
   // A QUESTION TYPED ELSEWHERE (the palette's row) is asked at once where
   // this conversation could ask it now, and otherwise waits in the box for
-  // the person to send when the running answer ends.
+  // the person to send when the running answer ends. One a screen offered
+  // (a draft) always waits in the box: it is the person's to send.
   const queued = useQueuedQuestion();
   useEffect(() => {
     if (queued === null) return;
     const question = takeQueuedQuestion();
     if (question === null) return;
-    if (running === null && disabledReason === undefined && questionFits(question.trim())) {
-      ask(question);
+    const { text, send } = question;
+    if (send && running === null && disabledReason === undefined && questionFits(text.trim())) {
+      ask(text);
     } else {
-      fill(question);
+      fill(text);
     }
   }, [queued, running, disabledReason, ask, fill]);
 

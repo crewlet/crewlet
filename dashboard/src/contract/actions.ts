@@ -201,7 +201,7 @@ export const ACTIONS = {
   },
   write_project: {
     // A PROJECT'S OWN SETTINGS, on its page and nowhere else: "Edit project"
-    // (the lead's target date and default assignee), About's labels (declare,
+    // (the lead's target date, default assignee and stuck window), About's labels (declare,
     // rename, archive) and fields (the project's own declarations, sent whole),
     // and the page's Archive project. A project's settings are what every
     // seat's tracker reads, so this is a COMPANY write. The engine decides
@@ -212,6 +212,7 @@ export const ACTIONS = {
       "target_date",
       "default_assignee",
       "archived",
+      "stuck_after_hours",
       "fields",
       "tags_add",
       "tags_rename",

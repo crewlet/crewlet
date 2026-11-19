@@ -23,11 +23,14 @@ const (
 	JobJudge ProviderJob = "judge"
 	// JobAssistant is `assistant.model`, the model Ask Crewlet runs on.
 	JobAssistant ProviderJob = "assistant"
+	// JobAdvisor is `advisor.model`, the model the Advisor explains its
+	// findings with.
+	JobAdvisor ProviderJob = "advisor"
 )
 
 // ProviderJobs is the closed set.
 var ProviderJobs = []ProviderJob{
-	JobExecutor, JobReview, JobSubagent, JobAuxiliary, JobJudge, JobAssistant,
+	JobExecutor, JobReview, JobSubagent, JobAuxiliary, JobJudge, JobAssistant, JobAdvisor,
 }
 
 // Valid reports whether j is one of [ProviderJobs].
@@ -101,6 +104,9 @@ func (c *Company) providerReferences() []ProviderReference {
 	}
 	if c.Assistant.Model != "" {
 		add("", JobAssistant, field("assistant.model"), []string{c.Assistant.Model})
+	}
+	if c.Advisor.Model != "" {
+		add("", JobAdvisor, field("advisor.model"), []string{c.Advisor.Model})
 	}
 	return out
 }

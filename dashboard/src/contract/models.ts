@@ -157,7 +157,8 @@ export type ModelCheckName =
  * against `config.ProviderJobs` by
  * `internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes`.
  */
-export type ModelJob = "executor" | "review" | "subagent" | "auxiliary" | "judge" | "assistant";
+export type ModelJob =
+  "executor" | "review" | "subagent" | "auxiliary" | "judge" | "assistant" | "advisor";
 
 /**
  * The seat field each seat job is written in, as the page writes it: the
