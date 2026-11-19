@@ -338,14 +338,22 @@
 //     elsewhere;
 //   - the part of a value after an escaped break inside it when that part is
 //     punctuation alone (`pwd=abc\n!!`), which reads as the string's;
-//   - and a key's piece below a key's line that spells none of the piece's
+//   - a key's piece below a key's line that spells none of the piece's
 //     line, under a block whose first line opens with a run of base64 that
 //     the piece's line repeats before a key's END: written whole, the block
 //     leaves the key's line opening with that run, so the rule reads it as
 //     the wrapping's and the END as no value, while the claims, reading the
 //     key's line as written, take the run for the value and keep the keys
 //     from reading it back; a second pass reads it as a key's and redacts it,
-//     and there redacting twice is not redacting once.
+//     and there redacting twice is not redacting once;
+//   - and, in a string whose breaks are escaped, a value below a key on a
+//     table's row that holds a key's text before the key: an escaped break
+//     follows the row's closing, so the rule reads no opening across the
+//     key's marker ([pastMarkup]) and takes the closing for the value, while
+//     the claims, reading the key's text as words of the label, read the
+//     string's next piece; where that holds a key's piece before an END, a
+//     second pass reads it as a key's and redacts it, and there redacting
+//     twice is not redacting once.
 package redact
 
 import (
@@ -3043,8 +3051,8 @@ const maxKeyLine = 76 + 1
 // read and written beside a password's value as the rule reads that value
 // (the package doc's "A key's block beside a password"); and what a rule
 // leaves of a run of base64 it replaced some of, written straight onto its
-// marker, is read as the run it claimed ([claims.glued]). The exception is
-// the last the package doc lists as still published.
+// marker, is read as the run it claimed ([claims.glued]). The exceptions are
+// the last two the package doc lists as still published.
 //
 // THE TEXT IS READ WHOLE, the keys' blocks and then each rule over what the
 // one before it wrote, however long it is: its caller holds it whole already,
