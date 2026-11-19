@@ -79,7 +79,7 @@ func TestReadyWorkComesStartedFirstThenTheListThenTheQueue(t *testing.T) {
 	// not move it, and a person's does.
 	before := got.Items[3].Moved
 	ana := r.writer.As("ana", worklet.AuthorAgent, worklet.Provenance{WrittenFor: types.ForTurn(nil)})
-	comment := func(w *worklet.Writer, op, author string, kind worklet.AuthorKind) {
+	comment := func(w *worklet.Writer, op, author string, kind worklet.AuthorKind) statelog.Position {
 		t.Helper()
 		c := worklet.Comment{ID: op, Task: "low", Author: author, AuthorKind: kind,
 			Body: "noted", CreatedAt: wednesday}
@@ -90,21 +90,31 @@ func TestReadyWorkComesStartedFirstThenTheListThenTheQueue(t *testing.T) {
 		}
 		wake := worklet.Wake{Kind: worklet.ChangeComment, Before: detail.Task, After: detail.Task,
 			Comment: &c}.Notify(nil)
-		if _, err := w.UpdateTask(t.Context(), op, "low", "ENG", worklet.NoIfMatch,
-			worklet.TaskPatch{Comment: &c}, worklet.ChangeComment, wake); err != nil {
+		res, err := w.UpdateTask(t.Context(), op, "low", "ENG", worklet.NoIfMatch,
+			worklet.TaskPatch{Comment: &c}, worklet.ChangeComment, wake)
+		if err != nil {
 			t.Fatalf("comment %s: %v", op, err)
 		}
 		r.drain()
+		return res.Position
 	}
 	comment(ana, "c-ana", "ana", worklet.AuthorAgent)
 	if after := r.readyWork("ana").Items[3].Moved; after != before {
 		t.Errorf("the seat's own comment moved the item's key "+
 			"from %d to %d, so a seat that declines with a comment is handed it again", before, after)
 	}
-	comment(r.writer.As("pm", worklet.AuthorHuman, worklet.Provenance{}), "c-pm", "pm",
+	at := comment(r.writer.As("pm", worklet.AuthorHuman, worklet.Provenance{}), "c-pm", "pm",
 		worklet.AuthorHuman)
-	if after := r.readyWork("ana").Items[3].Moved; after <= before {
-		t.Errorf("a person's comment left the item's key at %d", after)
+	moved := r.readyWork("ana").Items[3]
+	if moved.Moved <= before {
+		t.Errorf("a person's comment left the item's key at %d", moved.Moved)
+	}
+	// AND THE WHOLE POSITION OF THAT CHANGE, its log and generation too: what a
+	// pickup's turn reads the item's conversation past, which a sequence alone
+	// cannot be compared with.
+	if at.IsZero() || moved.MovedOn != at || moved.Moved != at.Seq {
+		t.Errorf("the item moved on %v (sequence %d), want the person's comment at %v",
+			moved.MovedOn, moved.Moved, at)
 	}
 }
 

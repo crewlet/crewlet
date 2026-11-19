@@ -130,7 +130,7 @@ func (p Prompt) PartitionKey(metadata map[string]string, subject string) string 
 // wake, written on a person, joins the task at the top of their list.
 func (Prompt) ConversationIdentity(metadata map[string]string, _ string) string {
 	if id := metadata[MetaTaskID]; id != "" {
-		return ItemConversation(id)
+		return itemIdentity(id)
 	}
 	// A non-task wake keys on its own object: a shared empty key would merge
 	// every person-scoped wake in the company into one ledger.
@@ -827,8 +827,12 @@ func promptSender(n notify.Inbound, parties notify.Parties) string {
 	return actor
 }
 
-// ItemConversation is the conversation a task IS, named by its id: what every
-// wake about the task is filed under ([Prompt.ConversationIdentity]), and what
-// the work pickup stamps its wake with, so a pickup's turn continues the
-// task's own conversation (ADR-0112).
-func ItemConversation(id string) string { return string(KindTask) + ":" + id }
+// ItemConversation is the conversation a task IS, as every wake about it is
+// stamped: its identity ([Prompt.ConversationIdentity]) namespaced by this
+// source ([notify.Prompts.Conversation]), `work:task:<id>`. The work pickup
+// stamps its wake with it, so a pickup's turn continues the task's own session
+// (ADR-0112) and moves the seat's seen-through mark on it (ADR-0162).
+func ItemConversation(id string) string { return notify.Namespaced(Source, itemIdentity(id)) }
+
+// itemIdentity is a task's conversation as this source names it, `task:<id>`.
+func itemIdentity(id string) string { return string(KindTask) + ":" + id }

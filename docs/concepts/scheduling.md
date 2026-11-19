@@ -793,7 +793,13 @@ the last word anybody said about that item.
 
 The wake is a `work_pickup` naming the item, its status and why it was
 chosen, stamped with the instant of the change its key names and filed under
-the item's own conversation so the turn continues the item's session.
+the item's own Worklet conversation (`work:task:<id>`, the key every wake about
+the item carries), so the turn continues the item's session. It carries that
+change's log position (`trigger_position`) as a wake carries its record's: the
+turn reads the item no older, and its completion moves the seat's
+[seen-through mark](event-system.md#inbox-batching--coalescing) on the item, so
+the state notices queued about the item that the turn read past start no turn
+([ADR-0162](../../adr/0162-an-item-in-progress-says-why-it-is-not-moving.md)).
 
 **A pickup's turn is delivered only by a typed answer on its item**, and its
 brief names the five: change the item's own fields (start it, finish it, move
