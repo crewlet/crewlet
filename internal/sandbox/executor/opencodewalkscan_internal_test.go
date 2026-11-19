@@ -816,3 +816,41 @@ func TestAPersonsReadReadsAnExportAsItsDecodeWalkDid(t *testing.T) {
 		check("past the lines bound", doc, []personRead{{bounds: person, valueMax: 1 << 10}})
 	}
 }
+
+// A PERSON'S READ OF ANY EXPORT IS ITS DECODE WALK'S: whatever document the
+// export walk is handed, at value bounds of 64 bytes and a kibibyte, unfiltered
+// and filtered by a term and by kind, it reads it without failing on its own,
+// and where both it and the decode walk read it to a page, the page is the
+// decode walk's. Seeded with every person variant, alone and all together.
+//
+// Mutation: let a result's stream go without the member it was taking, and a
+// seed with a failure's message written twice fails.
+func FuzzAPersonsReadOfAnyExportIsItsDecodeWalks(f *testing.F) {
+	variants := personVariants()
+	for _, v := range variants {
+		f.Add(`{"messages":[` + v + `]}`)
+	}
+	f.Add(`{"messages":[` + strings.Join(variants, ",") + `]}`)
+	// read is what one walk reads of doc, and whether it read it to a page.
+	read := func(ctx context.Context, doc string, valueMax int, filter TranscriptFilter, whole bool) (string, bool) {
+		b := newTranscriptBuilder(0, TranscriptReadBounds(), filter)
+		b.valueMax = valueMax
+		walk := b.openCodeExport
+		if whole {
+			walk = b.openCodeExportWhole
+		}
+		err := walk(ctx, strings.NewReader(doc))
+		return fmt.Sprint(b.entries, b.places, b.next, b.cut, err), err == nil || errors.Is(err, errTranscriptPage)
+	}
+	f.Fuzz(func(t *testing.T, doc string) {
+		for _, valueMax := range []int{64, 1 << 10} {
+			for _, filter := range []TranscriptFilter{{}, {Terms: []string{"x"}}, {Kinds: []EntryKind{EntryToolResult}}} {
+				got, walked := read(t.Context(), doc, valueMax, filter, false)
+				want, decoded := read(t.Context(), doc, valueMax, filter, true)
+				if walked && decoded && got != want {
+					t.Fatalf("at %d under %+v:\nwalk   %.800s\nwant   %.800s", valueMax, filter, got, want)
+				}
+			}
+		}
+	})
+}
