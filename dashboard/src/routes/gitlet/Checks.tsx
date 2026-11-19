@@ -23,7 +23,7 @@ import { useClock, useNow } from "~/lib/clock.ts";
 import { isRepoName, refName, shortOID } from "~/lib/code.ts";
 import { fmtCount, fmtDuration, fmtElapsed, plural } from "~/lib/format.ts";
 import { RANGE_LABEL, isRange, useTimeRange, type Offer, type Range } from "~/lib/range.ts";
-import { codeRest, useCodeQuery, type CodeParams } from "~/lib/useCodeQuery.ts";
+import { codeRest, useCodeQuery, type CodeParams, type CodeWindow } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
 import type { CodeCheckRow, CodeChecksAnswer } from "~/protocol/index.ts";
 import { CHECKS_POLL_MS, CheckPane } from "./checks/CheckList.tsx";
@@ -129,21 +129,24 @@ export function Checks() {
   const [run, setRun] = useParam("run", "", "filter");
   const route = useRoute();
   const asked = repo !== "" && isRepoName(repo) ? repo : "";
+  const shown = isRange(range.window) ? range.window : "1d";
   const params = useMemo<CodeParams>(
     () => ({
       standing: sort === "recent" ? "recent" : "failing",
-      since: range.since,
       ...(state ? { state } : {}),
       ...(name ? { name } : {}),
       ...(asked ? { repo: asked } : {}),
     }),
-    [sort, range.since, state, name, asked],
+    [sort, state, name, asked],
   );
-  const first = useCodeQuery("code_checks", params, { pollMs: CHECKS_POLL_MS });
+  // THE WINDOW BY ITS NAME, ITS START READ AT EACH ASK: the hour turning is no new question, so
+  // the rows on screen stay until the next poll reads the moved window (`lib/useCodeQuery.ts`).
+  const span: CodeWindow = { name: shown, edges: { since: range.since } };
+  const first = useCodeQuery("code_checks", params, { pollMs: CHECKS_POLL_MS, window: span });
   const paged = usePaged(
     first,
-    params,
-    (cursor) => codeRest.query("code_checks", { ...params, cursor }),
+    { ...params, window: shown },
+    (cursor) => codeRest.query("code_checks", { ...params, ...span.edges, cursor }),
     checksOf,
     runKey,
     checksAfter,
@@ -185,7 +188,7 @@ export function Checks() {
     href(route.path, { ...Object.fromEntries(route.query), run: runKey(row) });
 
   const scope = asked ? ` in ${asked}` : "";
-  const windowWords = `last ${RANGE_LABEL[isRange(range.window) ? range.window : "1d"]}`;
+  const windowWords = `last ${RANGE_LABEL[shown]}`;
   // AN OLDER FLEET refuses `standing` itself; with a filter sent, the refusal may be the filter's.
   const unserved = paged.error === "bad_params" && !state && !name && !asked;
   const placeholder = unserved ? (
@@ -230,7 +233,7 @@ export function Checks() {
           activate="manual"
           size="sm"
           label="Window"
-          value={isRange(range.window) ? range.window : "1d"}
+          value={shown}
           onValueChange={(value) => range.set(value as Range)}
           options={CHECKS_OFFER.ranges.map((r) => ({ value: r, label: RANGE_LABEL[r] }))}
         />
