@@ -264,11 +264,16 @@
 // as a real break does ([readValue]), so the pieces after it are read as
 // rows that end in that closing, a blank one passed over; read with no
 // suffix, a blank row's closing was taken for the value and the value below
-// it published. And a string's first piece is read from the quote that opens
-// the string ([stringOpening]), as every later piece is from the escaped
-// break before it, so its gutter is the string's and not what the real line
-// holds before the string: read from the line's start, a piece below spelled
-// none of it, and its opening punctuation was taken for the value.
+// it published. And there a string's first piece is read from the quote that
+// opens the string ([stringOpening]), as every later piece is from the
+// escaped break before it, so its gutter is the row's and not what the real
+// line holds before the string: read from the line's start, a row below
+// spelled none of it, and its opening was taken for the value. A key's piece
+// no markup closes is still read from its real line's start: a key's block
+// can join a later piece to the first, and read from inside the string there,
+// the joined piece has a gutter the claims, reading the later piece, never
+// see, and the value read past it runs on across the escaped break into the
+// next key's line.
 //
 // A BLOCK NO END CLOSES TAKES A PASSWORD'S KEY ONLY WITH ITS VALUE
 // ([claims.shortOfValues]). Ended by the lines it reads, a block read forward
@@ -319,8 +324,10 @@
 //   - a value on a line that opens with the punctuation the key's line has
 //     straight before its key, after words that line does not repeat — a
 //     list's dash after a logged message (`msg: - Password:` over
-//     `- hunter2x9`) — which is read as the value: the gutter is read from
-//     the line's start, and ends where the two lines' words part;
+//     `- hunter2x9`), the first line of a string no markup closes the key in
+//     (`{"text": "> Password:\n> hunter2x9"}`) — which is read as the value:
+//     the gutter is read from the line's start, and ends where the two lines'
+//     words part;
 //   - a value written over several lines — a YAML block scalar, a YAML
 //     sequence under the key, a heredoc — of which the first word at most is
 //     read, and a diff whose key is on a context line and whose value
@@ -1663,11 +1670,6 @@ func (r *valueRead) restOfLine(pos int) (int, bool, bool) {
 		// The string goes on to another escaped line: one of its lines.
 		return pos, true, false
 	}
-	if n, _ := gutterLen(rest, r.gutter(false)); n > 0 {
-		// It opens with the gutter of the key's piece of the string
-		// ([stringOpening]): the string's next line, and the last.
-		return pos, true, false
-	}
 	r.setSuffix(rest)
 	return next, false, false
 }
@@ -1955,8 +1957,8 @@ func leadingMarkers(content string) int {
 // the read stops at opens with: from the start of the key's real line where
 // the read has crossed a real line break to it, whose gutter is the
 // wrapping's, and from the start of the key's piece of its string, after the
-// last escaped break or the opening quote ([stringOpening]), where the read
-// goes on in the same string. Read from the piece alone, the key in
+// last escaped break, or the opening quote where markup closes the key's
+// piece ([stringOpening]), where the read goes on in the same string. Read from the piece alone, the key in
 // `"user: bob\npassword:\n"` had nothing before it, so on the next real line
 // under a reader's line numbers the number was the value, and under a
 // concatenation's lines the `"` that opens the string. A line or a piece that
@@ -1966,7 +1968,7 @@ func (r *valueRead) gutter(crossed bool) string {
 	if !r.read[k] {
 		lo := segmentStart(r.text, r.start)
 		found := lo == 0 || r.text[lo-1] == '\n' || lo >= 2 && r.text[lo-2:lo] == `\n`
-		if found && (lo == 0 || r.text[lo-1] == '\n') {
+		if found && r.markupOnly && (lo == 0 || r.text[lo-1] == '\n') {
 			lo = stringOpening(r.text, lo, r.start)
 		}
 		if crossed {
@@ -1985,6 +1987,8 @@ func (r *valueRead) gutter(crossed bool) string {
 // backslash escapes, or lo where there is none ([valueRead.gutter]). Only a
 // string's first piece holds what its line has before the string; a piece
 // after an escaped break begins inside it, and a quote there is the text's.
+// Asked only where markup closes the key's piece (the package doc's "A key's
+// block beside a password").
 func stringOpening(text string, lo, start int) int {
 	for i := start - 1; i >= lo; i-- {
 		if text[i] == '"' && (i == lo || text[i-1] != '\\') {

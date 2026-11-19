@@ -587,14 +587,15 @@ func TestABlockWhoseFirstLineOpensAsTheKeysRowStaysOneMarker(t *testing.T) {
 // A STRING'S LINES ARE READ AS THE LINES THEY STAND FOR: each text below,
 // written with real line breaks and then as a JSON log's string, its breaks
 // escaped, shows gutterValue in neither ([gutterValues]'s values neither),
-// and Secrets of each answer is its answer. Rows a markup closes, a blank row
-// among them, a quote's gutter, a key's text in a row's label, and a string
-// that ends on the value's line; and an escaped quote before the key.
+// and Secrets of each answer is its answer: rows a markup closes, a blank row
+// among them, and a key's text in a row's label; a quote before the key,
+// escaped or on a later piece; and a key's piece no markup closes, which a
+// key's block joins to the string's first.
 //
 // Mutation: read no markup-only suffix before an escaped break ([readValue]),
-// read a string's first piece from its real line's start, or past an escaped
-// quote ([stringOpening]), or read a rest that opens with the piece's gutter
-// as a suffix ([valueRead.restOfLine]), and a string here publishes the value.
+// or read a string's first piece from its real line's start, past an escaped
+// quote, a later piece past a quote on it, or a piece no markup closes
+// ([stringOpening]), and a string here publishes the value.
 func TestAStringsLinesAreReadAsTheLinesTheyStandFor(t *testing.T) {
 	t.Parallel()
 	pc := testKeyLine[:56]
@@ -604,15 +605,14 @@ func TestAStringsLinesAreReadAsTheLinesTheyStandFor(t *testing.T) {
 		"| Password: |\n| " + v + " |\n",
 		"| x pwd= |\n|  |\n| " + v + " |\n",
 		"| **Password:** |\n|  |\n| " + v + " |\n",
-		"> Password:\n> " + v + "\n",
-		"> Password:\n> " + v,
 		"| " + testKeyLine + " " + testEnd + " pwd= |\n     7→" + v + "\ndone\n",
 		"| u1SU1Lf=" + testEnd + "\tPassword: |\n|  |\n| " + v + " |\n",
 		"| " + testKeyLine + " " + testEnd + "\tpwd= |\n|  |\n| " + pc + " " + testEnd + " |\n| Retype password: " + v + " |\n",
 	} {
 		texts = append(texts, lines, `{"log": "`+strings.ReplaceAll(lines, "\n", `\n`)+`"}`+"\n")
 	}
-	texts = append(texts, `{"log": "> \"| Password: |\n> `+v+`\n"}`+"\n")
+	texts = append(texts, `{"log": "> \"| Password: |\n> `+v+` |\n"}`+"\n", `{"log": "a\necho "| Password: |\necho "`+v+` |\n"}`+"\n",
+		`{"log": "3f9a7c0e1b2d u1SU1Lf=\n`+testKeyLine+testEnd+`\" ; pwd:\n3f9a7c0e1b2d u1SU1Lf=\n3f9a7c0e1b2d Retype password:\n3f9a7c0e1b2d `+v+`\n"}`+"\n")
 	for _, text := range texts {
 		once := Secrets(text)
 		for _, value := range append(gutterValues(text), v) {
