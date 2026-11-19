@@ -70,6 +70,12 @@ type FakeSandbox struct {
 	// and a non-nil answer is that read's error — standing in for a box
 	// whose file could not be read back (a transport failure, not a size).
 	ReadErr func(path string) error
+
+	// Streams, when set, wraps every stream the box opens (OpenFile,
+	// OpenTail, OpenRange) with the file's path, and its reader is what the
+	// caller reads: a stream that fails after k bytes, or one slowed inside a
+	// synctest bubble. [FakeSandbox.Delivered] counts what it hands out.
+	Streams func(path string, r io.Reader) io.Reader
 }
 
 var _ Sandbox = (*FakeSandbox)(nil)
@@ -249,7 +255,7 @@ func (s *FakeSandbox) OpenFile(ctx context.Context, p string) (io.ReadCloser, er
 	if err != nil {
 		return nil, err
 	}
-	return io.NopCloser(s.delivering(bytes.NewReader(content))), nil
+	return io.NopCloser(s.streaming(p, content)), nil
 }
 
 // ReadTail answers the file's last n bytes and its whole size.
@@ -273,7 +279,22 @@ func (s *FakeSandbox) OpenTail(ctx context.Context, p string, n int64) (io.ReadC
 	}
 	size := int64(len(content))
 	start := max(size-max(n, 0), 0)
-	return io.NopCloser(s.delivering(bytes.NewReader(content[start:]))), size, nil
+	return io.NopCloser(s.streaming(p, content[start:])), size, nil
+}
+
+// OpenRange streams at most n bytes of the file from off, with its whole size:
+// nothing, with the size, for an offset at or past the end.
+func (s *FakeSandbox) OpenRange(ctx context.Context, p string, off, n int64) (io.ReadCloser, int64, error) {
+	if err := rangeRefused(p, off, n); err != nil {
+		return nil, 0, err
+	}
+	content, err := s.content(p)
+	if err != nil {
+		return nil, 0, err
+	}
+	size := int64(len(content))
+	from := min(off, size)
+	return io.NopCloser(s.streaming(p, content[from:from+min(n, size-from)])), size, nil
 }
 
 // Delivered is how many bytes of its files the box's reads have handed out —
@@ -284,6 +305,19 @@ func (s *FakeSandbox) Delivered() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.delivered
+}
+
+// streaming is a stream of content, a file of the box at p: through
+// [FakeSandbox.Streams] when a test set it, counted as it is read.
+func (s *FakeSandbox) streaming(p string, content []byte) io.Reader {
+	s.mu.Lock()
+	wrap := s.Streams
+	s.mu.Unlock()
+	var r io.Reader = bytes.NewReader(content)
+	if wrap != nil {
+		r = wrap(path.Clean(p), r)
+	}
+	return s.delivering(r)
 }
 
 // delivering is r counting what it hands out into [FakeSandbox.Delivered].

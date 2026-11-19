@@ -521,6 +521,20 @@ func (b *directBox) OpenTail(ctx context.Context, path string, n int64) (io.Read
 	return r, size, b.explain(path, rel, err)
 }
 
+// OpenRange implements [Sandbox] for a box on the engine host: a seek, then the
+// section the open found ([openHomeRange]).
+func (b *directBox) OpenRange(ctx context.Context, path string, off, n int64) (io.ReadCloser, int64, error) {
+	if err := rangeRefused(path, off, n); err != nil {
+		return nil, 0, err
+	}
+	rel, err := b.homeRel(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	r, size, err := openHomeRange(b.layout, rel, path, off, n)
+	return r, size, b.explain(path, rel, err)
+}
+
 // SetTimeout refreshes the box's keepalive stamp: the orphan reaper reclaims
 // local boxes on a clock, so a running box that never says it is alive is
 // deleted by the next Create on this host. The waiter calls it per poll for
@@ -984,6 +998,19 @@ func (b *containerBox) OpenTail(ctx context.Context, path string, n int64) (io.R
 	return r, size, b.explain(path, rel, err)
 }
 
+// OpenRange implements [Sandbox]: a seek on the host side of the mount.
+func (b *containerBox) OpenRange(ctx context.Context, path string, off, n int64) (io.ReadCloser, int64, error) {
+	if err := rangeRefused(path, off, n); err != nil {
+		return nil, 0, err
+	}
+	rel, err := b.homeRel(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	r, size, err := openHomeRange(b.layout, rel, path, off, n)
+	return r, size, b.explain(path, rel, err)
+}
+
 // openHomeFile is a local box's OpenFile once the path is mapped onto its home:
 // the file, or a reader yielding nothing for one not there yet.
 //
@@ -1022,6 +1049,31 @@ func openHomeTail(l boxLayout, rel, path string, n int64) (io.ReadCloser, int64,
 	size := info.Size()
 	start := max(size-max(n, 0), 0)
 	return hostSection{Reader: io.NewSectionReader(f, start, size-start), Closer: f}, size, nil
+}
+
+// openHomeRange is a local box's OpenRange once the path is mapped onto its
+// home: at most n bytes from off of the file as its size stood at the open, a
+// SECTION for [readHomeTail]'s reason, closed with the file. An offset at or
+// past that size is nothing, with the size.
+func openHomeRange(l boxLayout, rel, path string, off, n int64) (io.ReadCloser, int64, error) {
+	f, err := openHomeRegular(l, rel)
+	switch {
+	case absent(err):
+		return io.NopCloser(strings.NewReader("")), 0, nil
+	case err != nil:
+		return nil, 0, fmt.Errorf("local sandbox: open %s: %w", path, err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, 0, fmt.Errorf("local sandbox: stat %s: %w", path, err)
+	}
+	size := info.Size()
+	if off >= size {
+		_ = f.Close()
+		return io.NopCloser(strings.NewReader("")), size, nil
+	}
+	return hostSection{Reader: io.NewSectionReader(f, off, min(n, size-off)), Closer: f}, size, nil
 }
 
 // hostSection is a section of a file on the engine host, closed with it.
