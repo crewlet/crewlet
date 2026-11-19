@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1758,5 +1759,63 @@ func TestAReadItsCallerAbandonsPartWayGivesItsSlotBack(t *testing.T) {
 	if err != nil || len(got.Entries) != 1 {
 		t.Errorf("the read after the abandoned ones: (%d entries, %v), want the archive's one brief",
 			len(got.Entries), err)
+	}
+}
+
+// leavingArchive is an archive handing out r's bytes whose reader's caller
+// leaves once it has handed after of them; handed counts all it handed.
+type leavingArchive struct {
+	r      io.Reader
+	after  int
+	leave  context.CancelFunc
+	handed int
+}
+
+func (a *leavingArchive) Read(p []byte) (int, error) {
+	n, err := a.r.Read(p)
+	if a.handed += n; a.handed >= a.after {
+		a.leave()
+	}
+	return n, err
+}
+
+func (*leavingArchive) Close() error { return nil }
+
+// A READ ITS CALLER LEAVES INSIDE ONE LONG VALUE STOPS THERE. The slow read a
+// dashboard gives up on is one value streamed past the value bound, which the
+// export walk asks its context after only between records: a person's read of
+// a brief of 4 MiB whose caller leaves an eighth of the way through the archive
+// ends with its caller's own error, having read the archive no further than a
+// piece past where its caller left, and gives its slot back.
+//
+// Mutation: ask the context only between records, and the read streams the
+// value to its end.
+func TestAReadItsCallerLeavesInsideOneLongValueStopsThere(t *testing.T) {
+	// Words a box might write that gzip packs only so far, so the archive is
+	// read a piece at a time all through the value.
+	rng := rand.New(rand.NewChaCha8([32]byte{}))
+	var text strings.Builder
+	for text.Len() < 4<<20 {
+		for range 3 + rng.IntN(6) {
+			text.WriteByte(byte('a' + rng.IntN(26)))
+		}
+		text.WriteByte(' ')
+	}
+	raw := gzipped(t, openCodeDoc(openCodeUser(text.String())))
+	ctx, leave := context.WithCancel(t.Context())
+	defer leave()
+	archive := &leavingArchive{r: bytes.NewReader(raw), after: len(raw) / 8, leave: leave}
+	_, err := executor.ReadTranscriptWithin(ctx, executor.OpenCodeName, executor.OpenCodeArchiveFormat,
+		func(context.Context) (io.ReadCloser, error) { return archive, nil }, 0,
+		within(func(b *executor.TranscriptBounds) { b.LineBytes = 1 << 10 }))
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("a read whose caller left inside a long value ended %v, want its caller's own error", err)
+	}
+	if archive.handed > len(raw)/2 {
+		t.Errorf("a read whose caller left %d bytes into an archive of %d read %d of it, want it stopped a "+
+			"piece past where its caller left", archive.after, len(raw), archive.handed)
+	}
+	if held := executor.TranscriptReadsHeld(); held != 0 {
+		t.Errorf("%d slots are held once the read its caller left has ended, want none", held)
 	}
 }
