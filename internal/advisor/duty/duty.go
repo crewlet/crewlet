@@ -67,7 +67,8 @@ type Reader interface {
 	// changes when any of it does.
 	Signature(ctx context.Context) (string, error)
 	// Week reads the week [from, to) a report is written for: its numbers,
-	// and the sources it could not read.
+	// and the sources it could not read; [advisor.ErrWeekUnmeasured] for a
+	// week the company's records do not reach back over all of.
 	Week(ctx context.Context, from, to time.Time) ([]advisor.Metric, []string, error)
 }
 
@@ -292,7 +293,14 @@ func (d *Duty) report(ctx context.Context, now time.Time) error {
 		return nil
 	}
 	metrics, unread, err := d.Read.Week(ctx, from, to)
-	if err != nil {
+	switch {
+	case errors.Is(err, advisor.ErrWeekUnmeasured):
+		// A WEEK BEFORE THE COMPANY, or one it began within: its numbers
+		// would read as a measured week, so it has no report.
+		log.InfoContext(ctx, "advisor_report_week_unmeasured", "week", week)
+		d.reported = week
+		return nil
+	case err != nil:
 		return fmt.Errorf("read the week %s: %w", week, err)
 	}
 	tally, err := d.Log.Tally(ctx, from, to)
@@ -309,7 +317,7 @@ func (d *Duty) report(ctx context.Context, now time.Time) error {
 		return fmt.Errorf("read the report of %s: %w", before, err)
 	}
 	r := advisor.Report{Week: week, From: from, To: to, Metrics: advisor.Against(metrics, last),
-		Unread: unread, Tally: tally, Top: advisor.TopOf(live)}
+		Unread: unread, Tally: tally, Top: advisor.TopOf(live, to)}
 	// THE MODEL'S SUMMARY, where the company assigns one, from the report
 	// alone: a report is written without it rather than not at all.
 	if d.Model != nil && d.Model.Assigned() {

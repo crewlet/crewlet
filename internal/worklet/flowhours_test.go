@@ -65,6 +65,23 @@ func TestHowLongWorkStoodInEachStateIsReadOffTheFlowRecord(t *testing.T) {
 	if err != nil || len(items) != 1 || items["ada"] != 2 {
 		t.Errorf("items %v (%v), want ada's two", items, err)
 	}
+	// A PICKUP IS A DUE SPELL ITS SEAT ENDED BY ACTING: t-1 stood due two
+	// hours and was then held, which its seat did not end, so the window holds
+	// no pickup until the item moves straight from due.
+	pickups, err := r.reader.FlowPickups(t.Context(), worklet.FlowHoursQuery{Since: from,
+		Until: from.Add(4 * time.Hour), Level: statelog.ReadStale})
+	if err != nil || len(pickups) != 0 {
+		t.Errorf("pickups %v (%v), want none: the due spell ended held", pickups, err)
+	}
+	change("t-1", worklet.FlowDue, "", at(4*time.Hour))
+	change("t-1", worklet.FlowMoving, "", at(4*time.Hour+30*time.Minute))
+	change("t-2", worklet.FlowDue, "", at(5*time.Hour))
+	change("t-2", worklet.FlowMoving, "", at(7*time.Hour))
+	pickups, err = r.reader.FlowPickups(t.Context(), worklet.FlowHoursQuery{Since: from,
+		Until: from.Add(8 * time.Hour), Level: statelog.ReadStale})
+	if err != nil || len(pickups) != 2 || pickups[0] != 30*time.Minute || pickups[1] != 2*time.Hour {
+		t.Errorf("pickups %v (%v), want half an hour and two hours", pickups, err)
+	}
 	if _, err := r.reader.FlowHours(t.Context(), worklet.FlowHoursQuery{Since: from, Until: from.Add(15 * 24 * time.Hour),
 		Level: statelog.ReadStale}); err == nil {
 		t.Error("a window past two weeks was read")

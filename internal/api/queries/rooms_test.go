@@ -288,6 +288,10 @@ func (emptyWork) FlowItems(context.Context, worklet.FlowHoursQuery) (map[string]
 	return map[string]int{}, nil
 }
 
+func (emptyWork) FlowPickups(context.Context, worklet.FlowHoursQuery) ([]time.Duration, error) {
+	return []time.Duration{}, nil
+}
+
 func (emptyWork) Tasks(context.Context, worklet.Query, time.Time) (worklet.Answer, error) {
 	return worklet.Answer{}, nil
 }

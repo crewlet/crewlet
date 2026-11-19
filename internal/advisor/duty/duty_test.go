@@ -92,6 +92,8 @@ type fakeReader struct {
 	reads     int
 	metrics   []advisor.Metric
 	weeks     []advisor.Span
+	// weekErr is what reading a week answers beside its metrics.
+	weekErr error
 }
 
 func (r *fakeReader) Observe(context.Context, time.Time) (duty.Observed, error) {
@@ -104,7 +106,7 @@ func (r *fakeReader) Signature(context.Context) (string, error) { return r.signa
 // Week answers the metrics it holds, and records the period it was asked for.
 func (r *fakeReader) Week(_ context.Context, from, to time.Time) ([]advisor.Metric, []string, error) {
 	r.weeks = append(r.weeks, advisor.Span{From: from, To: to})
-	return r.metrics, []string{}, nil
+	return r.metrics, []string{}, r.weekErr
 }
 
 // fakeModel counts its passes, explains what it is told to, and summarises a
@@ -276,6 +278,10 @@ func TestTheWeeklyReportCountsWhatTheWeekOpenedResolvedAndApplied(t *testing.T) 
 			monday.Add(-time.Duration(6-i)*time.Hour)))
 	}
 	l.live = append(l.live, openFinding(t, "blocks", advisor.SeverityBlocks, "qa", monday.Add(-time.Hour)))
+	// NOT THE WEEK'S: a note, which costs nothing, and a finding opened
+	// after the week ended.
+	l.live = append(l.live, openFinding(t, "note", advisor.SeverityNote, "qa", monday.AddDate(0, 0, -3)),
+		openFinding(t, "late", advisor.SeverityBlocks, "qa", monday.Add(5*time.Hour)))
 	r := &fakeReader{signature: "r1", metrics: []advisor.Metric{{Key: "turns_nothing", Label: "Turns that committed nothing",
 		Value: 40, Unit: advisor.UnitTurns}}}
 	c := &clock{now: monday.Add(5*time.Hour + 59*time.Minute)}
@@ -317,6 +323,26 @@ func TestTheWeeklyReportCountsWhatTheWeekOpenedResolvedAndApplied(t *testing.T) 
 	step(t, again)
 	if n := strings.Count(strings.Join(l.order[writes:], " "), "report:"); n != 0 {
 		t.Errorf("the week's report was written %d more times", n)
+	}
+}
+
+// A WEEK BEFORE THE COMPANY HAS NO REPORT: a company first started after the
+// week began has no records of all of it, so a report would read its zeros as
+// a measured week; none is written, and the week is not read again. Mutation:
+// write the report with what the week read, and the first report reads as
+// measured.
+func TestAWeekBeforeTheCompanyHasNoReport(t *testing.T) {
+	t.Parallel()
+	monday := time.Date(2030, 1, 14, 0, 0, 0, 0, time.UTC)
+	l := &fakeLog{}
+	r := &fakeReader{signature: "r1", weekErr: advisor.ErrWeekUnmeasured}
+	c := &clock{now: monday.Add(6*time.Hour + time.Minute)}
+	d := newDuty(l, r, nil, c)
+	step(t, d)
+	c.now = c.now.Add(time.Hour)
+	step(t, d)
+	if _, written := l.reports["2030-W02"]; written || len(r.weeks) != 1 {
+		t.Errorf("a week the company's records do not cover: written %v, read %d times", written, len(r.weeks))
 	}
 }
 
