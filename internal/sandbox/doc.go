@@ -2120,13 +2120,13 @@
 // the row at the slowest crossing. Every other read waits as it did.
 //
 // What that costs is the wait for a host that has truly stopped (about
-// seventy-eight minutes for a collection of a turn with no cap, ninety-six
-// with a served note; eighty-one and a half for a stop's or a loss's read,
-// ninety-nine and a half with one; ninety-nine and a half for a collection of
-// a turn with a cap, a hundred and seventeen with one), which a host that is
-// only slow, ending a job, packing a session or changing a run's row at its
-// bound across a link at the slowest pace allowed, must not be taken for.
-// Ordinary reads answer in seconds. A read that has not finished in that is
+// seventy-nine minutes for a collection of a turn with no cap, ninety-six and
+// a half with a served note; eighty-one and a half for a stop's or a loss's
+// read, ninety-nine and three quarters with one; a hundred for a collection of
+// a turn with a cap, a hundred and seventeen and three quarters with one),
+// which a host that is only slow, ending a job, packing a session or changing
+// a run's row at its bound across a link at the slowest pace allowed, must not
+// be taken for. Ordinary reads answer in seconds. A read that has not finished in that is
 // a host that is not answering, and is answered as one ([ErrBoxHostSilent]);
 // the host's own waiter announces the completion again on its schedule once
 // the host is back (reannounce.go). Only a node that asks ANOTHER node's host

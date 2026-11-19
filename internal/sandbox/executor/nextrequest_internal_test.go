@@ -3,7 +3,12 @@ package executor
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -185,5 +190,67 @@ func TestAPreservedStretchPastTheRingIsNoFigure(t *testing.T) {
 		sandbox.NextRequest{Tokens: 3 + 10 + 4, OlderTokens: 2 + 8 + 3})
 	if r := (nextReading{}); r.capacity() != threadChainMaxRecords {
 		t.Errorf("the ring holds %d records, want the %d a thread's chains file", r.capacity(), threadChainMaxRecords)
+	}
+}
+
+// THE NEXT REQUEST READS ALIKE THROUGH EITHER READER: every Claude Code thread
+// under testdata, walked once in the line's one scanner pass ([walkThread],
+// which asks every line's estimate) and once a whole line at a time
+// ([wholeReader], the differential's oracle), makes the same figure, so the
+// estimate read as a line passes is the estimate read of the line whole,
+// line after line, compactions and their kept stretches among them.
+//
+// Mutation: drop the next request's ask, and every thread with a figure
+// reads none through the walk.
+func TestTheNextRequestReadsAlikeThroughEitherReader(t *testing.T) {
+	t.Parallel()
+	var threads []string
+	err := filepath.WalkDir(filepath.Join("testdata", "claude"), func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(path, ".jsonl") {
+			threads = append(threads, path)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	figures := 0
+	for _, path := range threads {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var walked nextReading
+		var large passBudget
+		walkThread(t.Context(), bytes.NewReader(body), threadPlainMax, &large, &walked)
+		large.release()
+		var whole nextReading
+		r := newWholeReader(bytes.NewReader(body), threadPlainMax)
+		for {
+			l, err := r.Next(t.Context())
+			var refused *threadLineError
+			if errors.As(err, &refused) {
+				whole.refused(refused)
+				continue
+			}
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					err = nil
+				}
+				whole.end(r.Torn(), err)
+				break
+			}
+			whole.line(l)
+		}
+		got, want := walked.next(), whole.next()
+		if got != want {
+			t.Errorf("%s: the walk's figure is %+v, the whole lines' %+v", path, got, want)
+		}
+		if got.Tokens > 0 {
+			figures++
+		}
+	}
+	if figures < 5 {
+		t.Errorf("%d testdata threads make a figure; the claim reads at least 5", figures)
 	}
 }

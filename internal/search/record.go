@@ -12,47 +12,29 @@ import (
 
 // The VECTOR RECORD, and why this domain is shaped nothing like the tracker's.
 //
-// Both are [statelog] domains and that is the point of having two: the
-// framework's contracts are the same for a strict, arbitrated, identity-
-// claiming log and for a compacted, unarbitrated, derived one, and everything
-// that differs between them is DECLARED rather than assumed. What differs
-// here:
+// A compacted, unarbitrated, derived [statelog] domain, DECLARED as such:
 //
-//   - THE STREAM IS A KEYED TABLE. One message per subject, so an ordinary
-//     write removes an interior sequence and the replay loop steps over it. A
-//     gap is a coverage number rather than a fault.
-//   - NOTHING ARBITRATES. Exactly one writer — the fleet's embedding duty —
-//     publishes on a subject, so there is no expectation to form and no anchor
-//     row to advance. Concurrency control is the applier's own version guard.
-//   - THERE IS NO OPERATION LEDGER, because nothing reports a committed
-//     position to a caller: an embedding is written for a source, not for a
-//     person waiting on an answer.
-//   - NOTHING CLAIMS IDENTITY. Two nodes legitimately hold different coverage
-//     — one joined after a trim, one is mid-fill — and asserting they hold the
-//     same rows would report a healthy fleet as broken.
+//   - THE STREAM IS A KEYED TABLE, one message per subject: a write removes an
+//     interior sequence and replay steps over it. A gap is coverage, not a fault.
+//   - NOTHING ARBITRATES: the fleet's embedding duty is the one writer, so there
+//     is no expectation or anchor row; the applier's version guard is the control.
+//   - NO OPERATION LEDGER; NOTHING CLAIMS IDENTITY: nodes hold different coverage.
 //
-// # Why an embedding is a record at all
-//
-// It costs a provider call per source, and it is the one thing in the search
-// path a node cannot recompute on its own. Published once, applied N times, the
-// fleet pays the bill once and every data node holds the answer — which is what
-// the node estate's own rule said a table there may NOT be.
+// An embedding is a record because it costs a provider call per source and a
+// node cannot recompute it: published once, applied N times, the fleet pays once.
 
 // RecordVersion is the record shape this build reads.
 //
-// A record above it is RETAINED at its position rather than skipped, so a
-// newer peer's shape survives a rolling upgrade in both directions.
+// A record above it is RETAINED at its position, not skipped, so a newer peer's
+// shape survives a rolling upgrade both ways.
 //
-// # What each version added
+// Version 1: an embed and a forget of a page or a task, and the semantic
+// index's records ([IndexSource]: [OpCentroids], [OpReassign], [OpMeasure]),
+// ADR-0028.
 //
-//   - 1: an embed and a forget of a page or a task, and the semantic index's
-//     records ([IndexSource]: [OpCentroids], [OpReassign], [OpMeasure]),
-//     ADR-0028.
-//
-// A record is WRITTEN at the lowest version that expresses it, never simply at
-// this constant — see [versionedFields] — and it is the highest version that
-// table names, which the framework's conformance suite holds it to, so a kind
-// added at a higher version cannot be written at one no build yet reads.
+// A record is WRITTEN at the lowest version that expresses it ([versionedFields]),
+// and this is the highest version that table names (held by the framework's
+// conformance suite), so no kind is written at a version no build reads.
 const RecordVersion = 1
 
 // Source is where an embedded document came from.
@@ -117,39 +99,17 @@ var Ops = []Op{OpEmbed, OpForget, OpCentroids, OpReassign, OpMeasure}
 func (o Op) Valid() bool { return slices.Contains(Ops, o) }
 
 // versionedFields is the vector domain's field table: the record version each
-// operation and each subject kind after the base format was introduced at — the
-// version a record carrying it is written at, and the lowest a reader must read
-// to apply it ([statelog.RecordFields]).
+// operation and subject kind after the base format was introduced at, which a
+// record carrying it is written at ([statelog.RecordFields]); the framework's
+// conformance suite holds a build to reading exactly the highest it names.
 //
-// # Why the framework's table rather than one of this package's own
-//
-// It was one of this package's own once — a map of op and source to version,
-// consulted by a function beside it — while the tracker and the knowledge base
-// stamped through [statelog.RecordFields]: two spellings of one rule, and the
-// framework's conformance suite could hold only one of them. The suite
-// certifies that a build reads exactly the highest version its table names
-// and that every record carrying a row is stamped at that row's version, and
-// a domain with a private table passed it by declaring none.
-//
-// # A ROW FOR EVERY OPERATION AND KIND ABOVE THE BASE FORMAT
-//
-// A record carries an operation AND a subject kind, and either can be new, so
-// each has a row that names its VALUE ([statelog.VersionedField.Equals]): a
-// row naming only the key would stamp every record the domain writes. The base
-// format's own — today every member of [Ops], [Sources] and [IndexSource] —
-// need none, and a test holds the table to every member outside that base set
-// so a kind added without its row is a failure rather than a record written at
-// a version the builds before it read, refused by each as a writer fault and
-// retried on every redelivery, where the rolling upgrade's contract is that
-// they defer it.
-//
-// # Why the LOWEST version that expresses it, never [RecordVersion]
-//
-// A record of an existing shape stays readable by every build that reads that
-// shape. Stamping every record at this constant the day a new kind raised it
-// would make every peer still on the version before defer every vector this
-// build computes — a whole corpus unsearchable by meaning on those nodes for
-// the length of the upgrade, for a shape they read perfectly well.
+// A ROW FOR EVERY OPERATION AND KIND ABOVE THE BASE FORMAT (every member of
+// [Ops], [Sources] and [IndexSource] needs none), naming its VALUE
+// ([statelog.VersionedField.Equals]): a key-only row would stamp every record.
+// A test holds the table to every other member, so a kind added without a row
+// fails there, not as a record older builds refuse as a writer fault (they must
+// defer it). Written at the LOWEST version that expresses a record, never
+// [RecordVersion]: else peers on the previous version defer every vector.
 var versionedFields = statelog.RecordFields{}
 
 // VersionedFields is the table, for the conformance suite.
@@ -198,18 +158,12 @@ func (s Subject) Validate() error {
 // wellFormed refuses a subject that cannot be a subject on the wire at all, and
 // nothing else.
 //
-// # Why the envelope asks only this
-//
-// The envelope is the half EVERY build reads, for ever ([statelog.Domain]'s
-// deferral contract), and a failure to read it STOPS the applier rather than
-// deferring the record — there is no position, kind or scope to file a record
-// under without one. Asking the envelope whether the kind is one THIS build
-// knows turned every kind a newer build adds into a stop on every older node
-// of a rolling upgrade, which is the opposite of what [Source] promises: a
-// newer build's source is a record this build DEFERS. So the envelope checks
-// only what makes a subject a subject — a kind and an id that are tokens, not
-// empty and not a wildcard — and the version-gated second pass ([Decode])
-// refuses a kind this build does not write at a version it does read.
+// The envelope is the half EVERY build reads ([statelog.Domain]'s deferral
+// contract); failing it STOPS the applier, as there is nothing to file the
+// record under. Asking whether the kind is one THIS build knows would stop
+// every older node on each kind a newer build adds, where [Source] promises
+// DEFERRAL. So it checks only a kind and id that are tokens (not empty, not a
+// wildcard); the version-gated second pass ([Decode]) refuses the rest.
 func (s Subject) wellFormed() error {
 	if !isToken(string(s.Source)) {
 		return fmt.Errorf("search: %q is not a subject kind — it is a subject "+

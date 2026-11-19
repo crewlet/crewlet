@@ -10,17 +10,12 @@ import (
 // A BLOCK COMPOSES EXACTLY WHAT ONE DOCUMENT AT A TIME DOES, to the bit, and a
 // fixture is the same corpus whatever its size's remainder against the block.
 //
-// Every recall figure this package's comments quote was measured on corpora
-// the one-document loop generated, so a composition that summed one float32
-// in another order would move every floor's margin while each gate still
-// passed — or failed for a reason nobody could find. The reference is that
-// loop, which is still [basis.vector] — every single document the fixture is
-// asked for, a query or a benchmark's stored vector, is composed by it — so
-// this holds the two paths a document can take to one answer: each direction
-// in turn along its support, the mean last, a zero coefficient adding
-// nothing. The blocks hold coefficient sets from both members of the family
-// and sets whose zeros differ from their neighbours', and the fixture is a
-// size that leaves a partial last block.
+// Every recall figure quoted in this package was measured on corpora the
+// one-document loop, [basis.vector], generated, so a block summing one float32
+// in another order would move every floor's margin while each gate still passed.
+// The coefficient sets come from both members of the family, include sets whose
+// zeros differ from their neighbours', and the fixture size leaves a partial
+// last block.
 func TestABlockComposesExactlyWhatOneDocumentAtATimeDoes(t *testing.T) {
 	t.Parallel()
 	b := newBasis()
@@ -91,27 +86,17 @@ func TestABlockComposesExactlyWhatOneDocumentAtATimeDoes(t *testing.T) {
 	}
 }
 
-// THE FIXTURE COMPOSES ON ITS OWN STACK.
+// THE FIXTURE COMPOSES ON ITS OWN STACK: an accumulator the race detector does
+// not instrument is why generating the gate corpus stopped taking two minutes
+// under `-race` ([basis.composeInto]), and nothing in the code says so: a
+// larger block, or the array allocated, composes the same bits on the heap.
 //
-// The accumulator being a variable the race detector does not instrument is
-// the whole of why generating the gate corpus stopped taking two minutes under
-// `-race` ([basis.composeInto]) — and nothing about the code says so: a block
-// one document larger, or the array allocated rather than declared, compiles,
-// composes the same bits, and quietly moves it to the heap. A composition that
-// allocates nothing is one whose accumulator did not move.
-//
-// NOT PARALLEL, because an allocation count is the whole process's — and for
-// the same reason it is counted over A HUNDRED BLOCKS rather than a handful.
-// [testing.AllocsPerRun] divides every allocation the process made by the
-// runs, rounding down, and this binary is never quiet: nats-server, which it
-// links, samples the process's CPU once a second on a timer of its own
-// (server/pse), measured at about ten allocations a second with nothing else
-// running. Counted over five blocks, a sample landing in those few
-// milliseconds read as an accumulator on the heap, once in two thousand runs.
-// A block takes about half a millisecond under the detector, so a hundred are
-// about fifty milliseconds, before any parallel test resumes: a sample or two
-// in that window divides to zero, and an accumulator on the heap — one
-// allocation every block — divides to one whatever else allocated.
+// NOT PARALLEL: an allocation count is the whole process's. Counted over A
+// HUNDRED BLOCKS because [testing.AllocsPerRun] rounds down and this binary is
+// never quiet (nats-server, which it links, allocates about ten times a second
+// on its CPU sampler): over five blocks a sample once in two thousand runs read
+// as an accumulator on the heap, while a hundred (about fifty milliseconds)
+// divide a sample or two to zero and one allocation a block to one.
 func TestTheFixtureComposesOnItsOwnStack(t *testing.T) {
 	b := newBasis()
 	gen := generator{weights: b.weights}
