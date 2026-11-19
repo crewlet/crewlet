@@ -652,6 +652,33 @@ test("a workspace whose service the company does not run draws no section tabs",
   expect(document.querySelector(".section-tabs")).toBeNull();
 });
 
+// A WORKSPACE CLOSED TO THE READER AS A WHOLE DRAWS NO TABS: the Advisor is
+// an administrator's, and a member was shown Findings, Reports and History
+// over one refusal, three ways into one wall. One the reader holds draws them.
+// Mutation: lock the tabs by their own sections' grants alone, and this fails.
+test("a workspace closed to the reader as a whole draws no section tabs", () => {
+  const advisor = WORKSPACES.find((w) => w.key === "advisor")!;
+  const tabs = (grants: string[]) => {
+    render(
+      <Router>
+        <SectionTabs
+          row={advisor}
+          path={["advisor"]}
+          query={new URLSearchParams()}
+          counts={{}}
+          runs={EVERY}
+          grants={grants}
+        />
+      </Router>,
+    );
+    const drawn = document.querySelector(".section-tabs") !== null;
+    cleanup();
+    return drawn;
+  };
+  expect(tabs(["worklet"])).toBe(false);
+  expect(tabs(["admin"])).toBe(true);
+});
+
 // A TAB THE READER CANNOT OPEN IS LOCKED, as the sidebar's rows and the
 // Settings column's are: Live's Turns, Agent-to-agent and Event log looked
 // open to a Worklet-only reader and then refused. Mutation: drop the grants
