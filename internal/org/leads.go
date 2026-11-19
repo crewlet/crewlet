@@ -9,20 +9,14 @@ import (
 
 // Who owns an integration scope.
 //
-// The lead map is what makes a work item that names nobody land somewhere. A
-// tracker's worst failure is not a misroute — it is a ticket filed into a
-// project nobody watches, which produces no error anywhere and is discovered
-// weeks later when somebody asks why it was never picked up.
+// The lead map makes a work item that names nobody land somewhere: the worst
+// tracker failure is a ticket filed into a project nobody watches, silently.
 //
-// # Why this is here rather than in each integration
-//
-// A project identifier, a project key and a space key are different words
-// for one org-model question: which seat owns the place this work was filed.
-// The walk that answers it — units before root seats, an inherited lead
-// resolving through the hierarchy, first declaration winning — is a rule
-// about the ORG, not about any integration, and three copies of it is three
-// chances for one of them to answer differently from the others while each
-// stays self-consistent.
+// A project identifier, project key and space key are one org-model question:
+// which seat owns the place the work was filed. The walk that answers it
+// (units before root seats, inherited leads, first declaration winning) is
+// about the ORG, so it lives here, not in three integrations that could each
+// answer differently.
 
 // Scope is one integration's per-unit and per-seat identity, and how to
 // read it.
@@ -71,22 +65,15 @@ type leadSource struct{ where, handle string }
 
 // LeadsBy maps each declared scope to the handle that owns it.
 //
-// Two sources, in this order:
+// Two sources, in order: a UNIT declaring the scope maps it to its effective
+// lead (inherited included); a ROOT SEAT declaring it maps it to itself, having
+// no unit.
 //
-//  1. A UNIT that declares the scope maps it to the unit's effective lead,
-//     which resolves through an inherited one — a lead set on a division
-//     owns a team three levels down that named nobody itself.
-//  2. A ROOT SEAT that declares the scope maps it to that seat directly. A
-//     root seat belongs to no unit, so there is no lead to resolve: the seat
-//     IS the owner.
+// A seat INSIDE a unit declares where IT writes, not who owns the scope;
+// letting a member override the unit's lead would hand the fallback to
+// whichever teammate was walked first.
 //
-// A seat INSIDE a unit that declares a scope is declaring where IT writes,
-// not who owns the scope — the unit's lead already answers that, and letting
-// a member override it would hand the fallback to whichever teammate
-// happened to be walked first.
-//
-// Scopes are keyed UPPER, because every integration this serves renders them
-// upper and an operator writes one however it was shown to them.
+// Scopes are keyed UPPER, as every integration renders them.
 func (o *Organization) LeadsBy(s Scope) (map[string]string, LeadReport) {
 	var report LeadReport
 	if o == nil || s.OfUnit == nil || s.OfRole == nil {

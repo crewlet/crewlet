@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/named"
 )
 
 // What an agent read from the company's knowledge base.
@@ -131,27 +132,35 @@ func (e KnowledgeRead) Role() string { return e.RoleName }
 // AgentID is the instance that read.
 func (e KnowledgeRead) AgentID() string { return e.Agent }
 
-// SummaryFor names the page for a single-page read and counts them otherwise,
+// PhraseFor names the page for a single-page read and counts them otherwise,
 // with the query a search ran — which is what a feed line about a read is
-// scanned for.
-func (e KnowledgeRead) SummaryFor(actor string) string {
-	what := strconv.Itoa(len(e.Pages)) + " pages"
+// scanned for. A Doclet page is named as one; another backend's is its words.
+func (e KnowledgeRead) PhraseFor(actor string) named.Line {
+	what := named.Words(strconv.Itoa(len(e.Pages)) + " pages")
 	if len(e.Pages) == 1 {
-		what = "'" + pageLabel(e.Pages[0]) + "'"
+		page := named.Ref{Text: pageLabel(e.Pages[0])}
+		if e.Backend == KnowledgeNative {
+			page = named.PageRef(e.Pages[0].ID, page.Text)
+		}
+		what = named.Words("'").Name(page).Words("'")
 	}
 	switch e.Via {
 	case ReadViaSearch:
-		return lead(actor, "searched knowledge for \""+e.Query+"\" ("+what+")")
+		return leadLine(actor, named.Words("searched knowledge for \""+e.Query+"\" (").Then(what).Words(")"))
 	case ReadViaPrefetch:
-		return lead(actor, "was given "+what+" at turn start")
+		return leadLine(actor, named.Words("was given ").Then(what).Words(" at turn start"))
 	case ReadViaSkillLoaded:
-		return lead(actor, "loaded tool skill "+what)
+		return leadLine(actor, named.Words("loaded tool skill ").Then(what))
 	case ReadViaSkillInjected:
-		return lead(actor, "was offered tool skills from "+what)
+		return leadLine(actor, named.Words("was offered tool skills from ").Then(what))
 	default:
-		return lead(actor, "read "+what)
+		return leadLine(actor, named.Words("read ").Then(what))
 	}
 }
+
+// KnowledgeNative is the Backend of a read Doclet answered (doclet.Backend),
+// whose page ids are Doclet's own.
+const KnowledgeNative = "native"
 
 // pageLabel is the title, or the id where the page had none.
 func pageLabel(p KnowledgeReadPage) string {

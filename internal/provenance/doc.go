@@ -145,6 +145,29 @@
 // run (every seat's executor is one), and refuses one that does not say which
 // test holds its fences, or why it reads nobody's words.
 //
+// # The read tools
+//
+// agent/builtin's read tools answer through the fence (fence.go, and
+// workfence.go for the tracker): every chat message, thread and search snippet
+// under its author, a room's topic and purpose as [SourceChatRoom], every
+// change's excerpt under who made it (worklet.ExcerptSource) and an ask under
+// its asker. Every title and name is neutralised and read as a colleague's
+// with nobody named, so an answer carrying one is never the reader's own. Every
+// other string in the answer is defused too, and the answer is written as every
+// tool answer is, `<`, `>` and `&` as themselves (internal/plainjson). A
+// [Source] is a closed set ([Sources]) and the runtime's page is held to it
+// both ways. The writes a fenced read feeds, the chat posting tools among them,
+// take their text through [Unfence].
+//
+// # A fence is a model's
+//
+// The envelope and fences are written for a model, so a person's surface (the
+// act route, the human write surface) is answered from the value stored beside
+// the labelled answer (mcp.Result.PersonReceipt, through builtin.ForPerson),
+// never from the fenced one: a receipt that echoed a room's topic or a page's
+// title once reached a person between a fence's two lines, and an escape
+// cannot be taken back off a labelled answer.
+//
 // # Writing back
 //
 // A model that edits what it read is likely to send the fence back with it.

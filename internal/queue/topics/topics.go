@@ -84,49 +84,18 @@ const (
 	// history. See internal/learning/memsync.
 	MemoryPrefix = "crewlet.memory."
 
-	// MemoryBarrierToken names a seat's barrier on the memory changelog, the
-	// token after the seat's id: crewlet.memory.<seat-id>.hydration-barrier.
-	//
-	// A hydration publishes one message of no bytes there before it replays
-	// the seat, and the sequence the changelog acknowledges it at lies past
-	// every row the changelog had acknowledged before. Each table's replay
-	// reads the table's subjects and this one through one consumer, which
-	// delivers in the stream's order, and ends once it has delivered a
-	// barrier at or past that one and its copy holds nothing more
-	// (internal/learning/memsync, Syncer.replay): a copy behind the stream's
-	// leader cannot end a replay short, and no answer of the leader's has to
-	// cross a link with a row in it.
-	//
-	// FOUR TOKENS, where a row's subject has five, so no table's filter,
-	// crewlet.memory.<seat-id>.<table>.>, matches it, and a replay's two
-	// filters never overlap, which nats-server requires of a consumer's
-	// filter subjects.
-	//
-	// A TOKEN NO TABLE CAN EVER BE NAMED. A memory table's name is a SQL
-	// identifier, written unquoted into every statement that reads or writes
-	// it, and a hyphen is no part of one; memsync's
-	// TestTheBarrierTokenIsNoTablesName holds every table it carries and every
-	// one it has retired apart from this token.
-	//
-	// ONE PER SEAT: the stream keeps one message per subject, so a seat holds
-	// one barrier at most, the newest hydration's, and a barrier published
-	// again replaces the one before. Two hydrations of a seat racing each
-	// other therefore both end: the earlier's barrier is replaced by the
-	// later's, which lies past it and which its replays accept, since each
-	// ends at a barrier at or past its own. Only a hydration writes it; a
-	// publish of the seat's memory never does. memsync's
-	// TestEveryHydrationOfASeatLeavesItOneBarrier and
-	// TestTwoHydrationsOfASeatRacingEachOtherBothEnd hold both.
-	//
-	// AND IT PUSHES NO ROW OUT. The changelog is provisioned with no age, byte,
-	// message-count or message-size limit (internal/queue/jetstream's memory
-	// spec: no max_age, max_bytes and max_msg_size -1, max_msgs left 0, which
-	// nats-server reads as unlimited), so its discard policy, old, acts on the
-	// one limit it has: one message per subject, which drops a subject's older
-	// message as a newer one lands on that subject. A barrier, on a subject of
-	// its own, replaces the seat's previous barrier and never a row. memsync's
-	// TestABarrierPushesNoRowOut reads those limits off the changelog as the
-	// queue provisions it.
+	// MemoryBarrierToken names a seat's barrier on the memory changelog:
+	// crewlet.memory.<seat-id>.hydration-barrier. A hydration publishes one
+	// empty message there first, past every row acknowledged before it; each
+	// table's replay ends once it has delivered a barrier at or past that one
+	// (memsync, Syncer.replay). FOUR TOKENS, a row's has five, so no table
+	// filter matches it and a replay's two filters never overlap. A hyphen is no
+	// part of a SQL table name (TestTheBarrierTokenIsNoTablesName). ONE PER SEAT
+	// (one message per subject): racing hydrations both end, the later barrier
+	// replacing the earlier, each replay accepting one at or past its own
+	// (TestTwoHydrationsOfASeatRacingEachOtherBothEnd). IT PUSHES NO ROW OUT:
+	// the changelog has no age, byte, count or size limit
+	// (TestABarrierPushesNoRowOut).
 	MemoryBarrierToken = "hydration-barrier"
 
 	// MemoryStream is the stream those subjects live on.
@@ -263,18 +232,16 @@ const (
 	SeatSteer = SteerPrefix + "note"
 
 	// HeldPrefix prefixes the subjects a question only a seat's HOLDER can
-	// answer truthfully crosses — a seat's memory, which every node keeps a
-	// copy of and only the holder keeps current
-	// (internal/learning/memread); what a launch of its turns — a
-	// relaunch, or a conversation's next turn — would be launched on, which
-	// the holder's own bench of spent plans decides (internal/engine,
-	// relaunchtarget.go); and whether a park holds its inbox, which lives in
-	// the holder's process alone (internal/engine, parkheld.go).
+	// answer truthfully crosses: a seat's memory, which every node copies and
+	// only the holder keeps current (internal/learning/memread); what a
+	// relaunch or a conversation's next turn would be launched on, which the
+	// holder's bench of spent plans decides (internal/engine, relaunchtarget.go);
+	// and whether a park holds its inbox, which lives in the holder's process
+	// alone (internal/engine, parkheld.go).
 	//
-	// NOT EVENTS, for SearchPrefix's reason: a read is the ephemeral
-	// request and reply of [queue.EventQueue.Ask]. And NOT under
-	// MemoryPrefix, whose `>` is a stream's subject set: a request there
-	// would be captured and retained as a memory row.
+	// NOT EVENTS, for SearchPrefix's reason: the ephemeral request and reply of
+	// [queue.EventQueue.Ask]. NOT under MemoryPrefix, whose `>` is a stream's
+	// subject set: a request there would be retained as a memory row.
 	HeldPrefix = "crewlet.held."
 	// HeldRead is where one such read is scattered. Every node serves it
 	// and only the incarnation the seat's lease names answers.
@@ -295,15 +262,12 @@ const (
 	// appliers announced on, to a peer whose own copy is out of service
 	// (internal/engine, liverelay.go).
 	//
-	// NOT EVENTS, for SearchPrefix's reason: a relay is the ephemeral
-	// request and reply of [queue.EventQueue.AskEach], and what it carries —
-	// whose inbox moved, what landed in a room, what moved on an artifact —
-	// is what every data node's own rows already hold, so a durable copy
-	// would be a second record of the same facts. Every ask and answer is
-	// SIGNED (internal/signedask), because what it carries is shown on a
-	// screen as somebody's words. And NOT under AgentInboxPrefix, whose
-	// `.inbox` subjects are seats' durable mailboxes: nothing here is
-	// anybody's mail.
+	// NOT EVENTS, for SearchPrefix's reason: the ephemeral request and reply of
+	// [queue.EventQueue.AskEach], carrying what every data node's rows already
+	// hold (whose inbox moved, what landed in a room or on an artifact), so a
+	// durable copy would duplicate them. SIGNED (internal/signedask), because
+	// it is shown on a screen as somebody's words. NOT under AgentInboxPrefix,
+	// whose `.inbox` subjects are seats' durable mailboxes: nothing here is mail.
 	RelayPrefix = "crewlet.relay."
 	// LiveRelayPrefix is followed by one data node's id, escaped as a
 	// subject token, and that node alone serves it: a follower reads ONE
@@ -403,24 +367,15 @@ func AgentReflectGroup(seat uuid.UUID) string {
 	return AgentGroupPrefix + seat.String() + AgentReflectGroupSuffix
 }
 
-// SeatFromInbox recovers the seat id from an inbox subject, reporting
-// whether the subject was one. Used by diagnostics and by backends that log
-// per-seat activity without threading the id through.
-//
-// It is the exact inverse of [AgentInbox]: it reports true only for a
-// subject AgentInbox could have produced. The suffix is matched against what
-// is LEFT after the prefix, not against the whole subject, because the two
-// overlap on one dot — "crewlet.agent.inbox" carries both, and matching them
-// independently recovered a seat token of "inbox" from a subject that is
-// nobody's inbox. A false identification is worse than none here: the caller
-// is a log line, a diagnostic or a sweep that would then name a seat which is
-// not involved.
-//
-// THE TOKEN IS PARSED, not merely extracted, which is what the id buys over
-// the handle this used to recover: a subject whose middle token is not a
-// uuid was not minted here, so a consumer somebody attached by hand under
-// this prefix is reported as not-a-mailbox rather than as a seat with an
-// unreadable name.
+// SeatFromInbox recovers the seat id from an inbox subject, reporting whether
+// the subject was one: the exact inverse of [AgentInbox], true only for a
+// subject it could have produced. The suffix is matched against what is LEFT
+// after the prefix, because the two overlap on one dot ("crewlet.agent.inbox"
+// carries both) and matching independently recovered a seat "inbox" from
+// nobody's inbox; a false identification makes a sweep name an uninvolved seat.
+// THE TOKEN IS PARSED, not merely extracted: a middle token that is not a uuid
+// was not minted here, so a consumer attached by hand is reported as
+// not-a-mailbox.
 func SeatFromInbox(subject string) (uuid.UUID, bool) {
 	rest, ok := strings.CutPrefix(subject, AgentInboxPrefix)
 	if !ok {
@@ -502,34 +457,15 @@ const deadLetterDigestBytes = 6
 
 // DeadLetter returns the dead-letter subject for a (topic, group) pair.
 //
-// Deliberately OUTSIDE the crewlet.* space: the dashboard streams
-// crewlet.events.> and a dead-lettered subject inside it would resurface
-// poison as live traffic.
-//
-// Dot-segmented rather than hyphenated so it is an ordinary subject in the
-// same grammar as everything else — a backend that groups subjects by their
-// leading segment can then carry dead letters without a special case, and a
-// special case in the poison path is exactly the code nobody exercises.
-//
-// It must be INJECTIVE, and that is why it is not a string join. A join on a
-// dot aliases whenever either half can contain one: DeadLetter("a.b", "c")
-// and DeadLetter("a", "b.c") were the same subject, so two subscriptions'
-// poison landed in one place with nothing to tell it apart — the dead letter
-// carries the original event, not the subscription that failed it. Reachable
-// rather than theoretical: the conformance suite subscribes with the dotted
-// group "h.i" precisely because a backend was aliasing distinct pairs there.
-//
-// So the readable head is for OPERATORS — it keeps a DLQ greppable by the
-// topic that produced it — and the DIGEST is the identity. The digest is
-// taken over the raw pair joined by a NUL, which cannot occur in either half,
-// so no two distinct pairs share one. Sanitising could not carry the identity
-// for the same reason the join could not: it is lossy, and lossy is exactly
-// what aliases.
-//
-// The head introduces no new length bound — the topic already had to be a
-// publishable subject and the group a legal subscription name — and the
-// digest is appended LAST, so a backend that ever has to truncate cannot
-// reintroduce an alias by doing so.
+// OUTSIDE the crewlet.* space: the dashboard streams crewlet.events.> and a
+// dead letter inside it would resurface poison as live traffic. Dot-segmented,
+// so a backend grouping by leading segment needs no special case.
+// INJECTIVE, so not a string join: a dot join aliases when either half holds
+// one (DeadLetter("a.b", "c") and DeadLetter("a", "b.c")), and the dead letter
+// carries the event, not the failing subscription (the conformance suite's
+// dotted group "h.i"). The readable head is for OPERATORS; the DIGEST is the
+// identity, over the raw pair joined by a NUL neither half can hold, appended
+// LAST so truncation cannot reintroduce an alias. Sanitising is lossy: it aliases.
 func DeadLetter(topic, group string) string {
 	sum := sha256.Sum256([]byte(group + "\x00" + topic))
 	id := hex.EncodeToString(sum[:deadLetterDigestBytes])
@@ -537,29 +473,16 @@ func DeadLetter(topic, group string) string {
 }
 
 // Unhandled returns the dead-letter subject for a (topic, group) pair's
-// UNHANDLED deliveries: the copies of messages whose delivery budget was spent
-// and that never failed as themselves — passed, handed back by a deferral or by
-// the backend itself, failed only for a reason of the node's own — so that no
-// member of the group ever handled them. [DeadLetter] is the pair's other
-// subject, for the copy of a message one of whose deliveries FAILED AS ITSELF:
-// poison, which nothing replays (internal/queue's RetiredTo decides which).
-//
-// TWO SUBJECTS RATHER THAN ONE MARKED BY A HEADER, because a delivery is as
-// large as the transport carries and a copy at that ceiling has no room for a
-// header beside it. Marked by where it is kept, every unhandled copy is found
-// by the reader that replays the pair's unhandled deliveries
-// (internal/notify), whatever its size, and finds no poison among them — save
-// a message whose failure the member it failed on could not mark for the rest
-// of the group (internal/queue/jetstream's failure marks), kept there rather
-// than a healthy one kept with the poison.
-//
-// [DeadLetter]'s form with one segment more, `unhandled`, before a digest of
-// its own: under the topic's head as every dead letter of the topic is
-// ([DeadLettersUnder]), greppable by the topic as DeadLetter is, and injective
-// as DeadLetter is, by its digest alone. The digest is taken over the pair
-// behind a NUL of its own, so its input holds two NULs where DeadLetter's holds
-// one — neither half can hold one — and no pair's unhandled digest is any
-// pair's poison digest.
+// UNHANDLED deliveries: messages whose delivery budget was spent without ever
+// failing as themselves, so no member handled them. [DeadLetter] is the other
+// subject, for a message that FAILED AS ITSELF: poison, which nothing replays
+// (internal/queue's RetiredTo decides which). TWO SUBJECTS RATHER THAN A HEADER
+// MARK, because a delivery can fill the transport's ceiling with no room for a
+// header; the replaying reader (internal/notify) then finds no poison among
+// them, save a message whose failure the failing member could not mark for the
+// group (internal/queue/jetstream's failure marks). [DeadLetter]'s form with a
+// segment `unhandled` and a digest over the pair behind a NUL of its own (two
+// NULs against DeadLetter's one), so no unhandled digest is any poison digest.
 func Unhandled(topic, group string) string {
 	sum := sha256.Sum256([]byte("\x00" + group + "\x00" + topic))
 	id := hex.EncodeToString(sum[:deadLetterDigestBytes])
@@ -588,22 +511,15 @@ func DeadLettersUnder(head string) string {
 // subjectSafe rewrites the parts of a name that would stop the result from
 // being a publishable subject.
 //
-// The set is exactly what makes a subject unpublishable: whitespace, the two
-// wildcards (which would make the result a PATTERN rather than a subject),
-// and an empty segment. That is nats-server's own rule — see isValidSubject,
-// which rejects an empty token and a subject that is anything but a literal
-// past a '>'. A dead-letter subject tripping any of those is a poison message
-// that cannot be published at all — and that is the one message where losing
-// it costs the only copy of the evidence.
+// The set is exactly what makes a subject unpublishable, nats-server's own
+// rule (isValidSubject): whitespace, the two wildcards (which would make the
+// result a PATTERN), and an empty segment. A dead letter tripping any of those
+// cannot be published, and losing it costs the only copy of the evidence.
 //
-// Nothing else is rewritten, deliberately. A character that the broker
-// accepts is a character this must not mangle: the head is here to be read by
-// a person grepping a DLQ, and every substitution makes two different pairs
-// look more alike.
-//
-// Dots are left alone: they are legal, and keeping them keeps a DLQ greppable
-// by topic. Being lossy is safe here only because the digest beside it, not
-// this, is what identifies the pair.
+// Nothing else is rewritten: the head is read by a person grepping a DLQ, and
+// every substitution makes two different pairs look more alike. Dots stay, for
+// greppability. Being lossy is safe only because the digest beside it, not
+// this, identifies the pair.
 func subjectSafe(s string) string {
 	segments := strings.Split(s, ".")
 	for i, segment := range segments {

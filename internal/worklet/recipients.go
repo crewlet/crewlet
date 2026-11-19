@@ -92,6 +92,17 @@ var heldReasons = []Reason{ReasonAssignee, ReasonBlocking, ReasonUnblocked}
 // seat holds the task the wake is about ([heldReasons]).
 func (r Reason) Held() bool { return slices.Contains(heldReasons, r) }
 
+// absorbableReasons are the reasons whose STATE NOTICE ([StateNotice]) asks
+// its seat for nothing but the item it is about: the work the pickup owns, so
+// a completed turn on the item discharges it (ADR-0162). Its own question,
+// distinct from [Reason.Addressed], which keeps its meaning for prompts and
+// the working indicator: may a turn that read past the notice absorb it.
+var absorbableReasons = []Reason{ReasonAssignee, ReasonBlocking, ReasonUnblocked}
+
+// Absorbable reports whether a state notice under this reason is absorbed
+// past its seat's seen-through mark for the item ([absorbableReasons]).
+func (r Reason) Absorbable() bool { return slices.Contains(absorbableReasons, r) }
+
 // turnReasons are the reasons whose notice starts a turn whatever the change
 // was: each puts something to this seat (`mention`, `prioritised`, `asked`),
 // replies to its ask (`answered`), moves work it owns (`unblocked`,

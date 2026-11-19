@@ -216,6 +216,11 @@ func gibWords(t *testing.T, bytes int64) string {
 		// eighth, beside a sum in sixths. No vulgar fraction spells it, so
 		// the pages write it to one decimal, as [gibText] does (229.3).
 		return gibText(bytes) + " GiB"
+	case (48*bytes+48)%gib < 96:
+		// A WHOLE NUMBER OF FORTY-EIGHTHS: the advisor log's 64 MiB, a
+		// sixteenth, beside a sum in twenty-fourths, written to one decimal
+		// as well (229.5).
+		return gibText(bytes) + " GiB"
 	}
 	t.Fatalf("%d bytes is no whole or half GiB; teach gibWords and the pages "+
 		"the figure the arithmetic now leaves", bytes)
@@ -258,7 +263,7 @@ func fractionWords(t *testing.T, share float64) string {
 func numberWord(t *testing.T, n int) string {
 	t.Helper()
 	words := []string{"zero", "one", "two", "three", "four", "five", "six",
-		"seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen"}
+		"seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen"}
 	if n < 0 || n >= len(words) {
 		t.Fatalf("%d state logs: numberWord cannot say it", n)
 	}

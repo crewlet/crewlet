@@ -61,6 +61,7 @@ import {
 } from "~/lib/seats.ts";
 import type { AgentAvatar } from "~/lib/avatar.ts";
 import { InboxWaitingTags } from "~/components/InboxWaitingTags.tsx";
+import { EngineLine } from "~/components/InlineToken.tsx";
 import type { AgentRow, FeedRow, LogRefusal, QueryRefusal } from "~/protocol/index.ts";
 import type { QueryErrorCode } from "~/contract/errors.ts";
 
@@ -255,6 +256,10 @@ export function SeatCard({
  * and one line that is the actor followed by what happened. The event log
  * itself is a table (`components/EventGrid.tsx`); this row's one line is what
  * a card at half a page's width has room for.
+ *
+ * THE ROW OPENS ITS EVENT AND EACH THING ITS LINE NAMES OPENS ITS OWN PAGE
+ * ([EngineLine]): the event's link is the time's, stretched over the row, and a
+ * reference stands above it, so neither link is inside the other.
  */
 export function EventRow({ event, onOpen }: { event: FeedRow; onOpen?: () => void }) {
   const now = useNow();
@@ -269,18 +274,21 @@ export function EventRow({ event, onOpen }: { event: FeedRow; onOpen?: () => voi
   // THE HOVER TEXT IS THE DRAWN LINE, built from the same two pieces.
   const said = `${actor}${rest}`;
   return (
-    <a
-      className={cx("feed-row", event.failed && "failed")}
-      href={href(["live", "events", event.id])}
-      onClick={onOpen}
-    >
-      <time
-        className="feed-time"
-        dateTime={event.timestamp}
-        title={`${fmtDateTime(event.timestamp)} · ${relTime(event.timestamp, now)}`}
+    <div className={cx("feed-row", event.failed && "failed")}>
+      <a
+        className="feed-row__open"
+        href={href(["live", "events", event.id])}
+        onClick={onOpen}
+        aria-label={said}
       >
-        {fmtTime(event.timestamp)}
-      </time>
+        <time
+          className="feed-time"
+          dateTime={event.timestamp}
+          title={`${fmtDateTime(event.timestamp)} · ${relTime(event.timestamp, now)}`}
+        >
+          {fmtTime(event.timestamp)}
+        </time>
+      </a>
       <span className="feed-what truncate" title={said}>
         {event.failed && (
           <TriangleAlertGlyph
@@ -290,9 +298,9 @@ export function EventRow({ event, onOpen }: { event: FeedRow; onOpen?: () => voi
           />
         )}
         <span className="feed-actor">{actor}</span>
-        {rest}
+        <EngineLine text={rest} refs={event.refs} cut />
       </span>
-    </a>
+    </div>
   );
 }
 

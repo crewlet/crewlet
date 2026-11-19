@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactdata/query"
 	"github.com/crewlet/crewlet/internal/artifacts"
@@ -62,9 +63,9 @@ func TestEveryRoutedDomainIsDeclaredToTheSurfaces(t *testing.T) {
 			"arguments, and nothing no surface writes", declared, routed)
 	}
 	for name, d := range nativeDomains {
-		if d.class == nil || d.sentence == nil || len(d.objects) == 0 {
-			t.Errorf("%s is declared with no class function, no sentence or no "+
-				"object argument", name)
+		if d.class == nil || d.sentence == nil || (len(d.objects) == 0) == (d.noTool == "") {
+			t.Errorf("%s is declared with no class function, no sentence, or neither or both "+
+				"an object argument and why no tool writes it", name)
 		}
 	}
 }
@@ -370,6 +371,20 @@ var domainErrors = map[string]map[string]classRow{
 			why: "a re-anchoring answer placing another set than its anchors, which no Gitlet node of this build " +
 				"gives: the asking node's own fault, never a caller's request"},
 		"ErrFutureVersion": {err: &gitlet.ErrFutureVersion{},
+			why: "a record a newer build wrote, which the framework defers rather than refuses"},
+	},
+	advisordomain.Domain{}.Name(): {
+		"ErrInvalid":      {err: advisordomain.ErrInvalid, means: malformed},
+		"ErrStaleVersion": {err: advisordomain.ErrStaleVersion, means: staleRead},
+		"ErrNotFound":     {err: advisordomain.ErrNotFound, means: absent},
+		"ErrConflict":     {err: advisordomain.ErrConflict, means: lostRace},
+		"ErrExists":       {err: advisordomain.ErrExists, means: taken},
+		// A KEY A DISMISSAL HOLDS QUIET, and a move the episode's state does
+		// not admit, are the finding's state: the same request lands once the
+		// hold lapses or the finding moves.
+		"ErrHeld":        {err: advisordomain.ErrHeld, means: objectState},
+		"ErrIllegalMove": {err: advisordomain.ErrIllegalMove, means: objectState},
+		"ErrFutureVersion": {err: &advisordomain.ErrFutureVersion{},
 			why: "a record a newer build wrote, which the framework defers rather than refuses"},
 	},
 	atlasdomain.Domain{}.Name(): {
@@ -772,7 +787,8 @@ func domainPackages() map[string]string {
 	internal := path.Dir(reflect.TypeFor[statelog.Position]().PkgPath())
 	out := map[string]string{}
 	for _, d := range []statelog.Domain{worklet.Domain{}, doclet.Domain{}, chatlet.Domain{},
-		artifactsdomain.Domain{}, artifactdata.Domain{}, gitlet.Domain{}, atlasdomain.Domain{}} {
+		artifactsdomain.Domain{}, artifactdata.Domain{}, gitlet.Domain{}, atlasdomain.Domain{},
+		advisordomain.Domain{}} {
 		out[d.Name()] = strings.TrimPrefix(reflect.TypeOf(d).PkgPath(), internal+"/")
 	}
 	return out

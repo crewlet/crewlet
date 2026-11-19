@@ -294,8 +294,10 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			"neither Worklet nor the object store's passes have its rows to " +
 			"read; the domain is in the register and its stream failed to come up")
 	}
+	// THE SEATS' LIVE FACTS, read per call through the seam the API installs
+	// ([Engine.UsePostures]): the reader is built before any projection is.
 	if n.trackerFiles, err = worklet.NewReader(
-		sl.estate().Reader(), running.reader, nil); err != nil {
+		sl.estate().Reader(), running.reader, livePostures{engine: e}); err != nil {
 		return fmt.Errorf("engine: the tracker's file rows: %w", err)
 	}
 	if runTracker {
@@ -1810,6 +1812,25 @@ func chartSeats(o *org.Organization) []string {
 		out = append(out, role.Handle())
 	}
 	return out
+}
+
+// UsePostures installs the seats' live facts every tracker read's item flow
+// reads (ADR-0162): the live projection, which only a node serving the API
+// folds. A node with none installed reads every flow without them, and each
+// answer says so (`flow_live: false`).
+//
+// Installed rather than passed to [New], as [Engine.UseConfigWriter] is: the
+// projection is built with the API, after the engine and its reader.
+func (e *Engine) UsePostures(p worklet.Postures) { e.postures.Store(&p) }
+
+// livePostures reads whatever [Engine.UsePostures] installed, per read.
+type livePostures struct{ engine *Engine }
+
+func (l livePostures) SeatPostures() worklet.Posture {
+	if p := l.engine.postures.Load(); p != nil && *p != nil {
+		return (*p).SeatPostures()
+	}
+	return worklet.Posture{}
 }
 
 // liveLeads resolves a wake's two fallbacks against the CURRENT epoch.

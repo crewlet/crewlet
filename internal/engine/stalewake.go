@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
@@ -11,14 +12,16 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// A Worklet wake about work the seat holds ([worklet.Reason.Held]: an
-// assignment, a new dependent on its item, its item unblocked) whose item was
-// finished, removed or handed to somebody else since starts no turn: it asks
-// nothing of the seat any more, however late it arrives, and its inbox row
-// still tells it. A comment is kept whatever its item became.
+// A Worklet state notice about work the seat holds ([worklet.StateNotice],
+// [worklet.Reason.Held]) whose relation ended starts no turn (ADR-0162): it
+// asks nothing of the seat any more, however late it arrives, and its inbox
+// row still tells it. Every such notice is moot once its item was finished,
+// removed or handed to somebody else; a `blocking` one also once every
+// dependent it names was finished, removed or no longer waits on the item; an
+// `unblocked` one also once its item is blocked again. Words are never moot.
 
-// dropStaleWakes is [Dispatcher.StaleWakes]: evs less the wakes about work
-// the seat no longer holds, each logged.
+// dropStaleWakes is [Dispatcher.StaleWakes]: evs less the state notices whose
+// relation ended, each logged.
 func (e *Engine) dropStaleWakes(ctx context.Context, handle string, evs []*events.Event) []*events.Event {
 	if e.router == nil {
 		return evs
@@ -42,19 +45,19 @@ func staleWakes(ctx context.Context, tasks taskReader, handle string, evs []*eve
 	return out
 }
 
-// staleWake names ev's item, its reason and why the wake is stale, or "" for
-// a wake about work the seat does not hold, a comment, or an unread item.
-// Floored at the wake's own change, so a node behind it never reads a fresh
-// assignment as removed.
+// staleWake names ev's item, its reason and why the wake is moot, or "" for a
+// wake that is no state notice about held work, or one a read could not
+// settle. Every read is floored at the wake's own change, so a node behind it
+// never reads a fresh assignment as removed.
 func staleWake(ctx context.Context, tasks taskReader, handle string,
 	ev *events.Event) (item string, reason worklet.Reason, why string) {
 
 	n, ok := events.DataAs[*types.ExternalNotification](ev)
-	if !ok || n == nil || n.NotificationSource != worklet.Source {
+	if !ok {
 		return "", "", ""
 	}
-	reason = worklet.Reason(n.Metadata[worklet.MetaVia])
-	if !reason.Held() || worklet.ChangeKind(n.SourceEventType).Conversation() {
+	reason, state := worklet.StateNotice(n)
+	if !state || !reason.Held() {
 		return "", "", ""
 	}
 	item = n.Metadata[worklet.MetaTaskID]
@@ -62,19 +65,65 @@ func staleWake(ctx context.Context, tasks taskReader, handle string,
 	if item == "" || err != nil || at.IsZero() {
 		return "", "", ""
 	}
-	detail, err := tasks.Task(ctx, item, worklet.DetailWants{},
-		statelog.FloorAt(statelog.DefaultReadLevel(statelog.SurfaceSeat), at))
-	switch {
-	case errors.Is(err, worklet.ErrNoTask):
-		return item, reason, "removed"
+	fresh := statelog.FloorAt(statelog.DefaultReadLevel(statelog.SurfaceSeat), at)
+	detail, err := tasks.Task(ctx, item, worklet.DetailWants{}, fresh)
+	switch why = taskEnded(detail, err); {
+	case why != "":
+		return item, reason, why
 	case err != nil:
 		return "", "", ""
-	case detail.Task.Removed != nil:
-		return item, reason, "removed"
-	case detail.Task.Status.Group().Finished():
-		return item, reason, "finished"
 	case detail.Task.Assignee != handle:
 		return item, reason, "reassigned"
+	case reason == worklet.ReasonUnblocked && detail.Blocked:
+		return item, reason, "blocked again"
+	case reason == worklet.ReasonBlocking &&
+		dependentsEnded(ctx, tasks, item, worklet.WakeDependents(n.Metadata), fresh):
+		return item, reason, "its dependents ended"
 	}
 	return "", "", ""
+}
+
+// taskEnded is why a task a read answered with err is over, "removed" or
+// "finished", or "" for one still open or not read.
+func taskEnded(detail worklet.TaskDetail, err error) string {
+	switch {
+	case errors.Is(err, worklet.ErrNoTask):
+		return "removed"
+	case err != nil:
+		return ""
+	case detail.Task.Removed != nil:
+		return "removed"
+	case detail.Task.Status.Group().Finished():
+		return "finished"
+	}
+	return ""
+}
+
+// dependentsEnded reports whether a `blocking` notice on blocker named
+// dependents and every one was finished, removed or no longer waits on
+// blocker. One a read could not settle keeps the notice.
+func dependentsEnded(ctx context.Context, tasks taskReader, blocker string, dependents []string,
+	fresh statelog.Freshness) bool {
+
+	if len(dependents) == 0 {
+		return false
+	}
+	for _, id := range dependents {
+		detail, err := tasks.Task(ctx, id, worklet.DetailWants{}, fresh)
+		if taskEnded(detail, err) != "" {
+			continue
+		}
+		if err != nil || waitsOn(detail.Task, blocker) {
+			return false
+		}
+	}
+	return true
+}
+
+// waitsOn reports whether task's own edges still name blocker as one it waits
+// on.
+func waitsOn(task worklet.Task, blocker string) bool {
+	return slices.ContainsFunc(task.Relations, func(r worklet.Relation) bool {
+		return r.Kind == worklet.RelationWaitingOn && r.Other == blocker
+	})
 }

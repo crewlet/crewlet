@@ -873,14 +873,12 @@ func TestAStopIsSaidEndedUnreadOnlyOnceItsRecordSaysSo(t *testing.T) {
 }
 
 // A STOP OF A RELAUNCH BEFORE IT ATTACHES ITS BOX READS NO JOB AND LEAVES THE
-// BOX TO ITS HOST. The resumed turn's relaunch has reset the row on another node
-// — a new job, its charge not yet made — and the row still names the previous
-// job's box, on the host of the node that launched that job, until the launch
-// attaches a box of its own. A stop decided in that window found the previous
-// job's command still on the row and read that finished, collected and charged
-// job back off the box, charging it a second time as this one's; and with the
-// row naming this node as the box's host, it killed an id this node does not
-// have and never told the host that has it.
+// BOX TO ITS HOST. A relaunch resets the row on another node (a new job, not
+// yet charged), but the row names the previous job's box, on that job's host,
+// until the launch attaches its own. A stop in that window must not read the
+// previous, collected and charged job back off the box (a second charge), nor,
+// with the row naming this node as host, kill an id this node lacks and leave
+// the real host untold.
 //
 // Mutation: keep the previous job's command on the reset row, and the stop
 // asks the box's host to read the finished job; name the relaunch's node on the
@@ -1245,20 +1243,17 @@ func nextHolder(t *testing.T, rig *coordRig, now *time.Time, asks BoxReader) *co
 }
 
 // A STOP GIVES A SILENT HOST UP ON THE ASKING NODE'S OWN CLOCK. The stop's
-// decision is dated by the clock of the node that decided it, and the node
-// asking the box's host may stand hours from it; read as an age here, the
-// decision gave the host up on a node ahead at its first ask, and never on a
-// node behind. So the bound is this node's silence: the box timeout from the
-// start of its first ask that reached the broker and came back with nothing,
-// on its own clock. An ask it could not make says nothing of the host and
-// neither starts nor advances it; a host that answered busy is there, and its
-// silence starts again.
+// decision is dated by the deciding node's clock, which may stand hours from
+// the asking node's; read as an age, it gave the host up at once on a node
+// ahead and never on one behind. So the bound is this node's own silence: the
+// box timeout from its first ask that reached the broker and came back with
+// nothing. An ask it could not make neither starts nor advances it; a busy
+// answer means the host is there, and its silence starts again.
 //
-// Mutation: age the decision's instant ((a) never ends: it lies in this node's
-// future); count each ask alone, with no memory ((a) never ends); count from the
-// ask's end ((b) is kept); count an ask not made as silence, or from the
-// series' first attempt ((c) ends early); leave the silence standing over a
-// busy answer ((d) ends early).
+// Mutation: age the decision's instant, or count each ask alone ((a) never
+// ends); count from the ask's end ((b) is kept); count an ask not made, or from
+// the series' first attempt ((c) ends early); keep the silence over a busy
+// answer ((d) ends early).
 func TestAStopGivesASilentHostUpOnTheAskingNodesOwnClock(t *testing.T) {
 	t.Parallel()
 	timeout := DefaultBoxTimeout

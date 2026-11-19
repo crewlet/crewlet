@@ -117,6 +117,16 @@ so the item can fall short of the turn's cost and never exceed it, as above. A
 call that finishes after a launch that started a new round is not recorded at
 all, as before.
 
+## Amendment: a call that outlives its round's collection is listed in the round after, and paid by nobody
+
+A bridged call still running as its round's collection read the log, whose
+record lands after a launch that started a new round, is no longer unrecorded:
+the new round's log lists it, marked late and with no place
+([ADR-0073](0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md),
+its amendment on a call that outlives its round's collection). What it cost is
+on no job's record, as a late call's is, so the item can fall short of the
+turn's cost and never exceed it, as above.
+
 ## What this does not decide
 
 It does not decide how a task's turns are listed or numbered on a screen, nor
