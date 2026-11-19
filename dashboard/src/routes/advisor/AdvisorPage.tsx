@@ -15,8 +15,7 @@
  * then what the engine is handling. Each row says how fresh it is and offers
  * its fix; Apply re-checks the finding before anything is sent (`apply.ts`).
  *
- * REPORTS: each week's numbers against the week before. HISTORY: what was
- * found and closed, and why it closed.
+ * HISTORY, the second tab: what was found and closed, and why it closed.
  */
 
 import { useCallback, useEffect, useState } from "react";

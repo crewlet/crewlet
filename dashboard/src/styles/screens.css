@@ -10710,6 +10710,13 @@ a.live-row:hover {
   margin: 0;
 }
 
+/* The Advisor's model picker, captioned with what it picks. */
+.advisor-model {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
 /* A finding's fix and its menu, side by side at a row's end. */
 .advisor-row-actions {
   display: inline-flex;
