@@ -84,6 +84,8 @@ describe("usesOf", () => {
     expect(uses.jobs.executor).toEqual(["lead"]);
     expect(uses.jobs.review).toEqual([]);
     expect(uses.assistant).toBe(true);
+    expect(uses.advisor).toBe(false);
+    expect(usesOf([{ advisor: "findings", position: 0 }]).advisor).toBe(true);
   });
 });
 
@@ -95,6 +97,10 @@ describe("intentOf", () => {
     expect(intentOf(usesForIntent("reviews", ["a"], false))).toBe("reviews");
     // THE ASSISTANT BESIDE SEAT WORK keeps the seat choice.
     expect(intentOf(usesForIntent("routines", ["a"], true))).toBe("routines");
+    // THE ADVISOR ALONE is a choice of its own; beside seat work it keeps the seat choice.
+    expect(intentOf(usesForIntent("advisor", [], false))).toBe("advisor");
+    expect(usesForIntent("advisor", ["a", "b"], false).jobs.executor).toEqual([]);
+    expect(intentOf(usesForIntent("coding", ["a"], false, true))).toBe("coding");
   });
 
   it("reads a category split by hand as custom", () => {
@@ -179,6 +185,26 @@ describe("applyUses", () => {
     );
     expect(role(doc, "lead").llm_auxiliary).toBeUndefined();
     expect(role(doc, "lead").llm_judge).toBeUndefined();
+  });
+
+  it("writes the Advisor's one model, and clears it only where it is taken off the model it runs on", () => {
+    const before = company();
+    const advisorOf = (doc: unknown) => (doc as { advisor?: { model?: string } }).advisor;
+    const { doc, dropped } = applyUses(
+      before,
+      "big",
+      noUses(),
+      usesForIntent("advisor", [], false, true),
+    );
+    expect(advisorOf(doc)).toEqual({ model: "big" });
+    expect(role(doc, "lead")).toEqual(role(before, "lead"));
+    expect(dropped).toEqual([]);
+    // TAKEN OFF the model it runs on, its checks run with no model.
+    const off = applyUses(doc, "big", { ...noUses(), advisor: true }, noUses()).doc;
+    expect(advisorOf(off)?.model).toBeUndefined();
+    // ANOTHER MODEL'S edit leaves the Advisor where it is.
+    const kept = applyUses(doc, "other", noUses(), noUses()).doc;
+    expect(advisorOf(kept)).toEqual({ model: "big" });
   });
 
   it("writes Ask Crewlet's one model, company-wide, and leaves seats alone", () => {

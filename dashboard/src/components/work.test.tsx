@@ -394,7 +394,7 @@ test("a card draws the engine's flow, once, and nothing for an item that moves",
   expect(waiting?.getAttribute("title")).toMatch(/: The vendor's window opens Monday$/);
   cleanup();
   expect(card(flowOf("held", { cause: "departed" }))?.getAttribute("title")).toBe(
-    "Held: its assignee has left the org chart",
+    "Assignee left: its assignee has left the org chart",
   );
   cleanup();
   for (const state of ["moving", "working", "blocked"]) {

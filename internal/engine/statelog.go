@@ -37,23 +37,22 @@ import (
 )
 
 // This node's state-log runtime: which domains it runs, and the four objects
-// each needs — a LOG to append to, a CONSUMER to read it back, an APPLY LOOP
+// each needs: a LOG to append to, a CONSUMER to read it back, an APPLY LOOP
 // turning records into rows, a PUBLISHER deciding what to append. Two are the
-// broker's and two the store's, and every failure that matters is one being
-// fine while another is not, so they stay four objects.
+// broker's and two the store's; a failure that matters is one being fine while
+// another is not, so they stay four objects.
 //
 // The consumer resumes at the applier's checkpoint, which commits with the
-// rows it covers: the only durable statement of where this node is, and what
-// spares a restart a redelivery of every applied record. Seat admission waits
-// on the domains a seat depends on ([statelog.Domain.GatesSeatAdmission]): a
-// seat attached before its tracker would answer "no such task" and act on it.
-// Whether a domain's copy is WRONG is [stateLog.judgeCopy]'s question (ADR-0079).
+// rows it covers: the only durable statement of where this node is. Seat
+// admission waits on the domains a seat depends on
+// ([statelog.Domain.GatesSeatAdmission]): a seat attached before its tracker
+// would answer "no such task" and act on it. Whether a domain's copy is WRONG
+// is [stateLog.judgeCopy]'s question (ADR-0079).
 
-// domainHost is the broker as this node's state log needs it, declared here
-// and satisfied by the JetStream queue: the one place the engine names a queue
-// backend. A state log needs a conditional append, a per-node durable consumer
-// and a stream whose settings make an interior gap impossible, none of which
-// the EventQueue contract carries.
+// domainHost is the broker as this node's state log needs it, satisfied by the
+// JetStream queue: the one place the engine names a queue backend. A state log
+// needs a conditional append, a per-node durable consumer and a stream whose
+// settings make an interior gap impossible; the EventQueue contract has none.
 type domainHost interface {
 	EnsureDomainStream(ctx context.Context, spec jetstream.DomainStream) error
 
@@ -63,8 +62,7 @@ type domainHost interface {
 
 	// StreamBudget is what the broker will let this node reserve. A ceiling
 	// is a reservation checked against the broker's own limit, not the disk,
-	// so one derived from free space alone is refused on machines that have
-	// the space.
+	// so one derived from free space alone is refused on roomy machines.
 	StreamBudget(ctx context.Context) (jetstream.StorageBudget, error)
 
 	// GrowthBudget is how far a running log's ceiling may be raised: an
@@ -75,8 +73,7 @@ type domainHost interface {
 
 	// DomainStreamCeiling is the ceiling a domain's stream already holds,
 	// and whether it exists. An existing log reserves what it holds, not
-	// what it would ask for now, so a restart sizes as the first boot did
-	// and a new log is sized beside it.
+	// what it would ask for now, so a restart sizes as the first boot did.
 	DomainStreamCeiling(ctx context.Context, stream string) (int64, bool, error)
 	DomainLog(ctx context.Context, stream string) (*jetstream.DomainLog, error)
 	DomainConsumer(ctx context.Context, stream, nodeID string, after uint64) (*jetstream.DomainConsumer, error)
@@ -95,21 +92,19 @@ type runningLog struct {
 	log       *jetstream.DomainLog
 	consumer  *jetstream.DomainConsumer
 
-	// reserve holds this node's ordinary appends (the write authority's and
-	// the read index's) out of the log's gate reserve. Nil for a log that
-	// keeps none ([statelog.ReservationOf]).
+	// reserve holds this node's ordinary appends out of the log's gate
+	// reserve. Nil for a log that keeps none ([statelog.ReservationOf]).
 	reserve *statelog.Reserve
 
-	// No creation instant is held here: the stream a domain's positions are
-	// keyed to ([statelog.Runner.StreamCreatedAt]) and whether the live
-	// stream is still it ([statelog.Runner.StreamIdentity]) are the runner's,
-	// since the write path refuses on them. A copy sampled at boot goes stale
-	// when a stream is rebuilt under a running node.
+	// No creation instant is held here: the runner owns the stream identity
+	// ([statelog.Runner.StreamCreatedAt], [statelog.Runner.StreamIdentity])
+	// since the write path refuses on it; a boot-time copy goes stale when a
+	// stream is rebuilt under a running node.
 
 	// evicted is this domain's eviction gate, taken from the write fence so
 	// readiness reads the row the write path reads: two sources for one fact
 	// is how a node whose writes every peer drops still answers reads (D109
-	// (b)'s worst shape). Nil for a domain with no gate: "not evicted".
+	// (b)). Nil for a domain with no gate: "not evicted".
 	evicted func(ctx context.Context) (bool, error)
 
 	// progress is what a snapshot cannot see: whether the checkpoint moves,
@@ -121,36 +116,32 @@ type runningLog struct {
 	// that answered, refreshed off the read's path (servedhealth.go).
 	ends memo[streamEnds]
 	// verifier opens a record's frame for the applier and the change feed
-	// alike (a second consumer of the same bytes): one verifier, so neither
-	// can be the reader that hands a decoder the signature. signer signs the
-	// appends no write authority makes — a reanchor's generation record, a
-	// read index's barrier, the trim's anchor sweep ([retention.sweepDeps]) —
-	// since every applier drops a record that is not a frame this keyring
-	// opens.
+	// alike: one verifier, so neither can hand a decoder the signature.
+	// signer signs the appends no write authority makes (a reanchor's
+	// generation record, a read index's barrier, the trim's anchor sweep,
+	// [retention.sweepDeps]), since every applier drops a record that is not
+	// a frame this keyring opens.
 	verifier *recordseal.Verifier
 	signer   *recordseal.Signer
 
-	// reader is this domain's read authority (the four levels, the refusal
-	// ladder, the coverage probe, the barrier wait). Nil for a domain with no
+	// reader is this domain's read authority. Nil for a domain with no
 	// barrier encoder, whose reads make no freshness claim: vectors are
 	// derived and compacted, so "as of a position" has no answer about them.
 	reader *statelog.Reader
 
-	// lagNanos is how far behind the log this applier is, as a duration,
-	// sampled on the position heartbeat rather than asked for: every session
-	// validation compares it against [statelog.StallGrace], and a broker
-	// round trip on the authentication path would make a broker blip an
-	// outage for everybody. It is one of two terms of [runningLog.Lag]. A
-	// heartbeat whose stream stats failed leaves the last value standing:
-	// unreadable is not caught up. Atomic: the heartbeat writes it while
-	// every request reads it.
+	// lagNanos is how far behind the log this applier is, sampled on the
+	// position heartbeat rather than asked for: every session validation
+	// compares it against [statelog.StallGrace], and a broker round trip on
+	// the authentication path would make a broker blip an outage for
+	// everybody. One of two terms of [runningLog.Lag]. A heartbeat whose
+	// stream stats failed leaves the last value: unreadable is not caught up.
+	// Atomic: the heartbeat writes it while every request reads it.
 	lagNanos atomic.Int64
 }
 
 // standing is this log as a standing read takes it: every record's body,
-// opened under its domain's verifier, beside the log's per-subject probe.
-// Never the raw log of signed frames (ADR-0031), whose signature a standing
-// read would decode as the envelope.
+// opened under its domain's verifier. Never the raw signed frames (ADR-0031),
+// whose signature a standing read would decode as the envelope.
 func (d *runningLog) standing() statelog.StandingLog {
 	return statelog.StandingOf(d.log, d.verifier)
 }
@@ -173,10 +164,9 @@ func backlogOf(stats jetstream.LogStats, err error, applied uint64,
 }
 
 // lagDurationOf is how long behind a backlog of (last - applied) records is at
-// this applier's measured drain rate (fleet nodes differ by an order of
-// magnitude). Pure over values so the rule deciding whether a session is
-// served or answered 503 is testable without a broker. A rate of zero is
-// floored at one record a second: a node with no measured rate is the least
+// this applier's measured drain rate. Pure, so the rule deciding whether a
+// session is served or answered 503 is testable without a broker. A zero rate
+// is floored at one record a second: a node with no measured rate is the least
 // able to claim it is nearly caught up.
 func lagDurationOf(last, applied uint64, drain float64) time.Duration {
 	if last <= applied {
@@ -188,10 +178,10 @@ func lagDurationOf(last, applied uint64, drain float64) time.Duration {
 
 // Lag is how far behind the log this applier is: the backlog at the last
 // heartbeat over its drain rate, or how long its checkpoint has been frozen
-// while it owed work, whichever is larger. A retained record moves the
-// checkpoint, so a deferral is never a lag. The second term makes a wedge
-// visible: nothing moves the drain rate while no batch runs, so the first
-// alone reads a wedged applier as caught up ([progress.frozenFor]).
+// while it owed work, whichever is larger. A deferral is never a lag (a
+// retained record moves the checkpoint). The second term exposes a wedge: no
+// batch runs, so the drain rate stays put and the first alone reads a wedged
+// applier as caught up ([progress.frozenFor]).
 func (d *runningLog) Lag() time.Duration { return d.lagAt(time.Now()) }
 
 // lagAt is [runningLog.Lag] at an instant a case chooses.
@@ -209,25 +199,23 @@ type stateLog struct {
 	// [stateLog.appends].
 	mode statelog.MaintenanceMode
 
-	// logs is every log this node runs ([logSet]), written once where the
-	// runtime is built: after every log started, before any loop reading the
-	// set is launched. Nothing starts or stops a log while the node runs (an
-	// adoption relaunches the appliers over the same logs; a reanchor re-keys
-	// a runner in place), so readers walk it without a lock and may hold a
-	// log. Nil on a runtime whose boot failed first, which runs nothing
-	// ([stateLog.held]).
+	// logs is every log this node runs ([logSet]), written once after every
+	// log started and before any loop reading it is launched. Nothing starts
+	// or stops a log while the node runs (an adoption relaunches the appliers
+	// over the same logs; a reanchor re-keys a runner in place), so readers
+	// walk it without a lock. Nil on a runtime whose boot failed first, which
+	// runs nothing ([stateLog.held]).
 	logs *logSet
 
 	nodeID string
 	db     *store.DB
 	fleet  coord.Fleet
 
-	// floorMemos is each domain's published floor as a READ is served it:
-	// the last read of its key that answered, refreshed off the read's path
-	// (servedhealth.go).
+	// floorMemos is each domain's published floor as a READ is served it,
+	// refreshed off the read's path (servedhealth.go).
 	floorMemos floorMemos
 	// epoch is where every domain's applier reads its per-epoch
-	// configuration from, once per batch ([statelog.RunnerDeps.Epoch]) —
+	// configuration, once per batch ([statelog.RunnerDeps.Epoch]):
 	// [Engine.applyEpoch], the published company's.
 	epoch func() map[string]any
 
@@ -242,14 +230,13 @@ type stateLog struct {
 	// alarm reads it on another loop (clockskew.go).
 	skew atomic.Pointer[skewMeasure]
 
-	// skewMisses is how many publishes in a row measured nothing, which is
-	// what drops [stateLog.skew] ([stateLog.recordSkew]). Guarded by
-	// publishing, the one lock every publish holds.
+	// skewMisses counts publishes in a row that measured nothing, which
+	// drops [stateLog.skew] ([stateLog.recordSkew]). Guarded by publishing.
 	skewMisses int
 
-	// clustered is whether the broker has peers, which is what a replicated
-	// create's budget branches on — and so how long a reanchor's steps after
-	// its append may take ([statelog.ReanchorDeps.CompletionBudget]).
+	// clustered is whether the broker has peers, which a replicated create's
+	// budget branches on, and so how long a reanchor's steps after its append
+	// may take ([statelog.ReanchorDeps.CompletionBudget]).
 	clustered jsprovision.Clustered
 
 	// metrics is the process's one recorder, threaded down so the apply
@@ -260,10 +247,10 @@ type stateLog struct {
 	// not authenticate. Nil reports nothing beyond the log and the metric.
 	witness statelog.Witness
 
-	// skills is this build's tool-skill parser, because the pages applier is
-	// the only thing that sees a skill page arrive and leave: Doclet has no
-	// page webhook and the change feed drops those changes. Nil answers "not
-	// a skill".
+	// skills is this build's tool-skill parser: the pages applier is the only
+	// thing that sees a skill page arrive and leave (Doclet has no page
+	// webhook and the change feed drops those changes). Nil answers "not a
+	// skill".
 	skills doclet.SkillDetector
 
 	// applyHooks is what each domain's applier calls after a committed
@@ -279,8 +266,7 @@ type stateLog struct {
 	ceilings map[string]domainCeiling
 
 	// volume is the directory the ceilings were derived from, which a
-	// refused reservation names when that volume is what bounds the
-	// broker.
+	// refused reservation names when that volume bounds the broker.
 	volume string
 
 	// floor is the least the broker must reserve for a fresh node of this
@@ -292,11 +278,10 @@ type stateLog struct {
 	// against, read once: only a restart changes it.
 	ring recordseal.Keyring
 
-	// snapshot is what this node's snapshot loop last concluded, handed to
-	// the position heartbeat: the loop runs on the staleness interval (a day
-	// by default), the heartbeat every ten seconds. Atomic rather than a
-	// mutex so the heartbeat reads it mid-copy; nil is a loop that has
-	// concluded nothing yet.
+	// snapshot is what this node's snapshot loop last concluded, for the
+	// position heartbeat (the loop runs on the staleness interval, the
+	// heartbeat every ten seconds). Atomic so the heartbeat reads it
+	// mid-copy; nil until the loop concludes something.
 	snapshot atomic.Pointer[snapshotHeld]
 
 	// usageSeen is the usage log's generation on every data node as the
@@ -319,21 +304,19 @@ type stateLog struct {
 	// heartbeat, which starts first.
 	donor atomic.Pointer[statelog.Donor]
 
-	// snapshotNudge wakes the snapshot loop early for the events that make
-	// this node's artefact one nobody can adopt — a reanchor moved a domain
-	// to a new generation, an adoption replaced its rows, or a restore after
-	// a failed adoption opened the artefact it installed — since a joiner
-	// asks for each domain's current generation and would otherwise wait up
-	// to the interval. Also for an applier's first drain, which ends
-	// `unhydrated` ([statelog.RunnerDeps.OnDrained]). Buffered by one: a
-	// second pending nudge adds nothing.
+	// snapshotNudge wakes the snapshot loop early when this node's artefact
+	// becomes one nobody can adopt (a reanchor moved a domain to a new
+	// generation, an adoption replaced its rows, a restore after a failed
+	// adoption), since a joiner asks for each domain's current generation and
+	// would otherwise wait up to the interval. Also for an applier's first
+	// drain, which ends `unhydrated` ([statelog.RunnerDeps.OnDrained]).
+	// Buffered by one: a second pending nudge adds nothing.
 	snapshotNudge chan struct{}
 
 	// heartbeatNudge wakes the position heartbeat early when this node has
 	// just taken an artefact: the trim's snapshot term and a joiner count
-	// donors from the register, and a row naming it up to
-	// [statelog.PositionHeartbeat] late is a donor the fleet could have
-	// counted. Buffered by one, as snapshotNudge is.
+	// donors from the register, and a row up to [statelog.PositionHeartbeat]
+	// late is a donor the fleet could have counted. Buffered by one.
 	heartbeatNudge chan struct{}
 
 	// admit tells the engine's seat-claim gate that a log whose health
@@ -352,10 +335,9 @@ type stateLog struct {
 	// The apply loops run under a context of their own, a child of run,
 	// because a running node ends and restarts them: an adoption replaces the
 	// replicated file, which needs the appliers' pinned connections released.
-	// applyStop ends them, applyDone joins them, launchAppliers starts them
-	// again. Each loop has its own context beneath that, since a reanchor
-	// restarts only the one domain whose checkpoint it moves; applying holds
-	// each loop's stop, and ending the set ends them all.
+	// Each loop has its own context beneath that, since a reanchor restarts
+	// only the one domain whose checkpoint it moves; applying holds each
+	// loop's stop, and applyStop ends them all.
 	applyMu   sync.Mutex
 	applyCtx  context.Context
 	applyStop context.CancelFunc
@@ -363,12 +345,10 @@ type stateLog struct {
 	applyDone sync.WaitGroup
 
 	// recovering serialises what rewrites a log's checkpoint or re-keys its
-	// runner under a running node: a runtime adoption (replaces the
-	// replicated file), the restore of an estate a failed adoption left closed
-	// (reopens it, re-keys every runner), a reanchor (moves one log's
-	// checkpoint). Two interleaved would write into a file being replaced,
-	// re-key to a moved checkpoint or relaunch a halted loop. One lock, since
-	// every log's rows are in the one file.
+	// runner under a running node: a runtime adoption, the restore of an
+	// estate a failed adoption left closed, a reanchor. Two interleaved would
+	// write into a file being replaced, re-key to a moved checkpoint or
+	// relaunch a halted loop. One lock, since every log's rows are in one file.
 	recovering sync.Mutex
 
 	// rejoin is what the heartbeat calls when it finds this node below the
@@ -400,9 +380,9 @@ type stateLog struct {
 // applyHooks are what each domain's applier calls after a committed batch,
 // built once by [Engine.applyHooks]: an applier handed a nil hook compiles and
 // passes its own package's cases while the consequence (a skill page nobody
-// re-reads, a suspension that reaches no contact map, a stale screen) shows up
-// far away. The directory and inbox cases here build their appliers from the
-// register with the same value, so dropping either hook fails a case.
+// re-reads, a stale screen) shows up far away. The directory and inbox cases
+// build their appliers from the register with the same value, so dropping
+// either hook fails a case.
 type applyHooks struct {
 	// nudgeSkills is what the pages applier calls after a batch that moved a
 	// tool-skill page ([stateLog.skills] says why the apply). Nil nudges
@@ -411,13 +391,13 @@ type applyHooks struct {
 
 	// identityMoved is what the identity applier calls after a committed
 	// batch with what it moved ([iamdomain.Moved]): a seat's standing for the
-	// party registry, whose credentials to close. The apply is the only thing
-	// that sees it on every data node: a suspension moves nothing a published
-	// company carries, and the change feed relays a record to one node. A
-	// node without `data` runs no applier: its registry re-reads the directory
-	// through a data node ([Engine.startRoutedDirectory]) and it holds no
-	// socket, since `ingress` requires `data`. It must not block — it runs on
-	// the apply loop with the next batch waiting, so it signals
+	// party registry, whose credentials to close. Only the apply sees it on
+	// every data node: a suspension moves nothing a published company
+	// carries, and the change feed relays a record to one node. A node
+	// without `data` runs no applier: its registry re-reads the directory
+	// through a data node ([Engine.startRoutedDirectory]) and holds no socket
+	// (`ingress` requires `data`). It must not block: it runs on the apply
+	// loop with the next batch waiting, so it signals
 	// ([Engine.identityMoved]). Nil: nobody is listening.
 	identityMoved func(iamdomain.Moved)
 
@@ -431,29 +411,26 @@ type applyHooks struct {
 	inboxMoved func([]inbox.Movement)
 
 	// artifactsMoved is what the artifacts applier calls after a batch with
-	// what it moved ([artifactsdomain.Moved]): a version, a narrowing's
-	// access epoch, a trash, a purge — for the serving origin's authorization
-	// cache and the socket hub, which serve only this node. It must not block
-	// ([Engine.OnArtifactsMoved]).
+	// what it moved ([artifactsdomain.Moved]), for the serving origin's
+	// authorization cache and the socket hub, which serve only this node. It
+	// must not block ([Engine.OnArtifactsMoved]).
 	artifactsMoved func([]artifactsdomain.Moved)
 
-	// artifactDataMoved is what the DATASTORE APPLIER calls after a
-	// committed batch, with the documents it moved ([artifactdata.Moved]),
-	// for artifactsMoved's reason: the socket hub serves only this node's
-	// own sockets. It must not block. See [Engine.OnArtifactDataMoved].
+	// artifactDataMoved is what the datastore applier calls after a committed
+	// batch, with the documents it moved ([artifactdata.Moved]), for
+	// artifactsMoved's reason. It must not block. See
+	// [Engine.OnArtifactDataMoved].
 	artifactDataMoved func([]artifactdata.Moved)
 
 	// chatApplied is what the chat applier calls after a batch with what it
 	// wrote ([chatlet.Applied], [Engine.SetChatLive]), relayed like
-	// inboxMoved while this node's copy is out of service, or a room open
-	// here would go quiet until its socket moved. It must not block.
+	// inboxMoved while this node's copy is out of service. It must not block.
 	chatApplied func([]chatlet.Applied)
 
 	// replaced is what the state log calls once its replicated estate was
-	// replaced under a running node (an adoption, or a reopen after a failed
-	// join, [stateLog.estateReplaced]), for what is derived from those rows
-	// by a forward-only walk: the chat index and the change index
-	// ([search.ChatIndexer.RequestRebuild],
+	// replaced under a running node ([stateLog.estateReplaced]), for what is
+	// derived from those rows by a forward-only walk: the chat index and the
+	// change index ([search.ChatIndexer.RequestRebuild],
 	// [search.ChangeIndexer.RequestRebuild]). No batch says it, so it is not a
 	// post-commit hook. It must not block.
 	replaced func()
@@ -472,17 +449,15 @@ func (e *Engine) applyHooks() applyHooks {
 	}
 }
 
-// logSet is the logs this node runs: each by its domain's name, and every
-// name in the register's own order ([registeredDomains]), so every surface
-// that walks them renders them the same way. A map's iteration order would
-// make one screen's rows move between refreshes.
+// logSet is the logs this node runs, by domain name and in the register's
+// order ([registeredDomains]): a map's iteration order would make one screen's
+// rows move between refreshes.
 type logSet struct {
 	byKey map[string]*runningLog
 	order []string
 }
 
-// newLogSet is the set of runs, in the order given — the register's, since
-// every runtime starts its logs by walking it.
+// newLogSet is the set of runs, in the order given (the register's).
 func newLogSet(runs []*runningLog) *logSet {
 	set := &logSet{byKey: make(map[string]*runningLog, len(runs))}
 	for _, running := range runs {
@@ -504,8 +479,7 @@ func (set *logSet) running() []*runningLog {
 	return out
 }
 
-// held is the logs this node runs — never nil, so a runtime that started none
-// walks an empty set.
+// held is the logs this node runs, never nil.
 func (s *stateLog) held() *logSet {
 	if s == nil || s.logs == nil {
 		return &logSet{}
@@ -522,47 +496,41 @@ func (s *stateLog) Domain(name string) *runningLog { return s.held().byKey[name]
 
 // RejoinRetryCeiling bounds how long a node below the floor waits between
 // attempts to adopt a snapshot when the last found no usable donor. The first
-// retry is a heartbeat away and each doubles, so a donor a minute from its
-// first snapshot is asked within that minute, while a fleet with none is asked
-// a dozen times an hour rather than 360 — each ask up to a five-second offer
+// retry is a heartbeat away and each doubles; a fleet with no donor is asked a
+// dozen times an hour rather than 360, each ask up to a five-second offer
 // window in which the node refuses every read.
 const RejoinRetryCeiling = 5 * time.Minute
 
-// errNoDonor reports a runtime join that found nothing to adopt, which is a
-// state to retry from rather than a failure: the node stays as it is, below
-// the floor and refusing, until a peer can donate.
+// errNoDonor reports a runtime join that found nothing to adopt: a state to
+// retry from, not a failure. The node stays below the floor and refusing until
+// a peer can donate.
 var errNoDonor = errors.New("engine: no peer could donate a usable snapshot")
 
 // errJoinUnable reports a runtime join that ended on a fault of this node's own
-// before anything was installed ([statelog.ErrJoinerFault]). Retried from like
-// [errNoDonor], and for the same reason: the node is as it was, below the floor
-// on its own intact rows. A separate value so the retry's line says whose fault
-// it was — the join has already logged what to fix.
+// before anything was installed ([statelog.ErrJoinerFault]). Retried like
+// [errNoDonor]; separate so the retry's line says whose fault it was.
 var errJoinUnable = errors.New("engine: this node could not adopt a peer's " +
 	"snapshot, for a fault of its own")
 
-// estate is the replicated estate's file AS THE RUNTIME HANDS IT to the
-// framework and the domains: resolved through this node's handle on every
-// call, never captured, because an adoption closes the file, renames a peer's
-// artefact over it and opens it again — see [store.ReplicatedHandle].
+// estate is the replicated estate's file as the runtime hands it to the
+// framework and domains: resolved through this node's handle on every call,
+// never captured, because an adoption closes the file, renames a peer's
+// artefact over it and opens it again ([store.ReplicatedHandle]).
 func (s *stateLog) estate() store.ReplicatedHandle { return s.db.Replicated() }
 
 // estateLogs is how many logs run on the replicated estate (one per registered
-// domain, since every data node runs every domain's log) and so how many
-// writers their apply loops pin on its file ([store.DB.OpenReplicated]). Each
-// loop holds one pin for its life as its domain's single writer; the count is
-// declared so the pool is sized for them, or a reader starves behind a writer
-// that never returns its connection. Nothing else pins: the maintenance sweeps
-// take pooled write transactions. A node without `data` opens no estate
-// ([holdEstate]).
+// domain) and so how many writers their apply loops pin on its file
+// ([store.DB.OpenReplicated]). Each loop holds one pin for its life; the count
+// sizes the pool, or a reader starves behind a writer that never returns its
+// connection. Nothing else pins: the maintenance sweeps take pooled write
+// transactions.
 func estateLogs() int { return len(register()) }
 
-// holdEstate opens this node's replicated estate for the node's life (the
-// store's Close takes it down); a node without `data` ([HoldsEstate]) opens
-// nothing. At boot, before any company is applied, not by the state-log
-// runtime: a company that moved its tracker to Jira still leaves the file on
-// disk, and a backup must not leave it out. Idempotent, for an engine started
-// again over the same backends.
+// holdEstate opens this node's replicated estate for the node's life; a node
+// without `data` ([HoldsEstate]) opens nothing. At boot, before any company is
+// applied, not by the state-log runtime: a company that moved its tracker to
+// Jira still leaves the file on disk, and a backup must not leave it out.
+// Idempotent.
 func holdEstate(ctx context.Context, db *store.DB, b *config.Bootstrap) error {
 	if !HoldsEstate(b) {
 		return nil
@@ -573,11 +541,9 @@ func holdEstate(ctx context.Context, db *store.DB, b *config.Bootstrap) error {
 	return nil
 }
 
-// domainEstate is the replicated estate as this node's domain-level consumers
-// read it (a seat's tracker search, the search index and its coverage); a node
-// without `data` answers [store.ErrNoEstate] through it. A read handle: what
-// may write the estate is internal/store's applier gate's short list, and
-// answering the write handle here would put every caller on it.
+// domainEstate is the replicated estate as domain-level consumers read it; a
+// node without `data` answers [store.ErrNoEstate]. A read handle: what may
+// write the estate is internal/store's applier gate's short list.
 func (e *Engine) domainEstate() store.ReplicatedReader {
 	if e.backends == nil || e.backends.Store == nil {
 		return store.ReplicatedReader{}
@@ -585,17 +551,15 @@ func (e *Engine) domainEstate() store.ReplicatedReader {
 	return e.backends.Store.Replicated().Reader()
 }
 
-// estateOpen reports whether this node's replicated estate is open — which,
-// while its state log runs, it is but for the window an adoption holds it
-// closed, or after a join whose reopen failed.
+// estateOpen reports whether this node's replicated estate is open: always
+// while its state log runs, but for an adoption's window or a failed reopen.
 func (s *stateLog) estateOpen() bool {
 	_, err := s.db.ReplicatedDB()
 	return err == nil
 }
 
-// reopenEstate opens the replicated estate if it is not open. It is the one
-// way the runtime brings its file back: at its own start, and when a join left
-// it closed.
+// reopenEstate opens the replicated estate if it is not open: the one way the
+// runtime brings its file back, at start and after a join left it closed.
 func (s *stateLog) reopenEstate(ctx context.Context) error {
 	if s.estateOpen() {
 		return nil
@@ -608,9 +572,8 @@ func (s *stateLog) reopenEstate(ctx context.Context) error {
 
 // snapshotHeld is the artefact this node holds, and why it holds no current
 // one. Both, since a skip deletes nothing: a node that could not refresh still
-// donates its old copy, and the register's readers need both that (the trim's
-// snapshot term) and that it stopped refreshing (an operator asking why a join
-// failed).
+// donates its old copy, and the register's readers need that (the trim's
+// snapshot term) and that it stopped refreshing.
 type snapshotHeld struct {
 	// Manifest is the newest complete artefact on this node's disk, and
 	// Have reports whether there is one at all.
@@ -625,7 +588,7 @@ type snapshotHeld struct {
 // startStateLog brings up every registered domain's log as one runtime:
 // provision, resume, run, per log, and the order is the contract. A consumer
 // opened before its stream reads nothing; a runner started before its consumer
-// resumed from the rows reads from wherever the broker's default put it.
+// resumed reads from wherever the broker's default put it.
 func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	nodeID string) (*stateLog, error) {
 
@@ -642,17 +605,15 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 			"what the eviction gate compares against")
 	}
 
-	// The register is checked first, before a stream is sized or a
-	// connection opened: its failures are facts about this build (a domain
-	// with no applier, write authority or ceiling), and a refusal naming the
-	// domain beats a half-started node failing later elsewhere.
+	// The register is checked first: its failures are facts about this build
+	// (a domain with no applier, write authority or ceiling), and a refusal
+	// naming the domain beats a half-started node failing later elsewhere.
 	if err := checkRegister(register()); err != nil {
 		return nil, err
 	}
 
-	// SIZED BEFORE ANYTHING IS STARTED, so the one failure here that is a
-	// declaration rather than a broker (a registered domain Tier A has no
-	// ceiling for) has nothing to unwind.
+	// Sized before anything starts, so a declaration failure (a domain with
+	// no ceiling) has nothing to unwind.
 	ceilings, err := ceilingsFor(ctx, host, boot)
 	if err != nil {
 		return nil, err
@@ -686,17 +647,15 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	// trimmed", for a log the fleet has written for months.
 	//
 	// One ceiling over the whole bring-up, for [jsprovision.SequenceBudget]'s
-	// reason: a replicated stream create per log, on every data node, would
-	// otherwise each find a wedged cluster on its own budget, and the queue's
-	// ceiling covers only the engine's streams. The consumer creates get a
-	// ceiling of their own, after the join, whose snapshot transfer must not
+	// reason: a replicated create per log, on every data node, would
+	// otherwise each find a wedged cluster on its own budget. The consumer
+	// creates get their own, after the join, whose snapshot transfer must not
 	// spend the creates' budget.
 	provisionCtx, cancelProvision := context.WithTimeout(ctx, host.Clustered().SequenceBudget())
 	defer cancelProvision()
 
-	// THE ESTATE'S FILE FIRST, before anything reads a checkpoint out of
-	// it: the join below asks each log's rows where they stand, and an
-	// estate that is not open answers nothing it could be asked.
+	// The estate's file first: the join below asks each log's rows where they
+	// stand, and an estate that is not open answers nothing.
 	if err = s.reopenEstate(ctx); err != nil {
 		s.Stop()
 		return nil, err
@@ -709,17 +668,15 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	}
 
 	// Adopt before any applier runs: a join replaces the replicated file,
-	// which it can do only while no transaction holds it open (an applier
-	// mid-batch would write into an unnamed inode). Each runner is built
-	// after this, against the live instant, over whatever file the join left.
+	// which needs no transaction holding it open (an applier mid-batch would
+	// write into an unnamed inode). Each runner is built after this.
 	if _, _, err := e.join(ctx, s, logs); err != nil {
 		s.Stop()
 		return nil, err
 	}
 
-	// A second ceiling over the consumer creates, opened after the join,
-	// which transfers a snapshot and can honestly take minutes: spanning both
-	// would let a large adoption eat the creates' budget.
+	// A second ceiling over the consumer creates: the join transfers a
+	// snapshot and can take minutes, which must not eat the creates' budget.
 	consumerCtx, cancelConsumers := context.WithTimeout(ctx, host.Clustered().SequenceBudget())
 	defer cancelConsumers()
 
@@ -727,10 +684,9 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 	for _, domain := range registeredDomains() {
 		running, err := s.startLog(ctx, consumerCtx, host, domain, logs[domain.Name()])
 		if err != nil {
-			// EVERY LOG OR NONE. A node running half its logs serves
-			// rows derived from one log while another's records pile
-			// up unapplied, and nothing above it can tell that from a
-			// node that is merely behind.
+			// Every log or none: a node running half its logs serves rows
+			// from one while another's records pile up unapplied, which
+			// nothing above it can tell from a node merely behind.
 			for _, r := range started {
 				r.consumer.Close()
 			}
@@ -739,23 +695,20 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 		}
 		started = append(started, running)
 	}
-	// THE SET, ONCE AND BEFORE ANY LOOP THAT READS IT: the appliers, the
-	// heartbeat, the snapshot loop and the donor all start below, and the set
-	// is never written again ([stateLog.logs]).
+	// The set, once and before any loop that reads it ([stateLog.logs]).
 	s.logs = newLogSet(started)
-	// THE STATE LOG'S OWN CONTEXT, never the boot call's: an applier is
-	// joined by [stateLog.Stop], which ends that one.
+	// The state log's own context, never the boot call's: [stateLog.Stop]
+	// ends it.
 	//nolint:contextcheck // s.run is [context.WithoutCancel] of the boot
 	// context: an applier started under the CALLER's would stop the moment
 	// start returned, and every read of that log would go stale.
 	s.launchAppliers(s.run)
 	// A node that falls below the floor while running adopts as at boot: the
-	// heartbeat notices and calls this, which ends the appliers, installs the
-	// artefact and starts them again over it.
+	// heartbeat calls this, which ends the appliers, installs the artefact
+	// and starts them again over it.
 	s.rejoin = func(ctx context.Context) error { return e.rejoin(ctx, s) }
-	// AFTER EVERY LOG IS RUNNING. The heartbeat reports each log's
-	// position and the snapshot gate reads each one's health, so both need
-	// the loops they describe to exist.
+	// After every log runs: the heartbeat reports each log's position and the
+	// snapshot gate reads each one's health.
 	s.startPositionHeartbeat()
 	e.startSnapshots(ctx, boot, s)
 	log.InfoContext(ctx, "statelog_started", "node", nodeID, "domains", s.held().order)
@@ -763,9 +716,9 @@ func (e *Engine) startStateLog(ctx context.Context, boot *config.Bootstrap,
 }
 
 // startLog builds one domain's log on the stream [stateLog.provision] opened
-// on host. Its applier is not launched here. What the domain must answer is a
-// fact about this build, refused earlier by [checkRegister]
-// ([checkIdentityEntry]); left here is the boot's fact: the stream was opened.
+// on host. Its applier is not launched here. What the domain must answer was
+// refused earlier by [checkRegister]; left here is the boot's fact: the stream
+// was opened.
 func (s *stateLog) startLog(ctx, consumerCtx context.Context, host domainHost,
 	domain statelog.Domain, appendTo *jetstream.DomainLog) (*runningLog, error) {
 
@@ -778,10 +731,9 @@ func (s *stateLog) startLog(ctx, consumerCtx context.Context, host domainHost,
 
 // Stop ends every loop this node started and waits for them. The appliers are
 // halted last, after [stateLog.done] drains: a runtime rejoin is in that group
-// and relaunches them on its way out ([Engine.rejoin]), so halting them first
-// let a Stop mid-rejoin return with a relaunched set running against a store
-// its caller closes next. Cancelling the run ends the appliers too (their
-// context is its child); the halt is what waits for them.
+// and relaunches them on its way out ([Engine.rejoin]), so halting first let a
+// Stop mid-rejoin return with a relaunched set running against a store its
+// caller closes next. Cancelling the run ends the appliers too; the halt waits.
 func (s *stateLog) Stop() {
 	if s == nil {
 		return
@@ -789,22 +741,18 @@ func (s *stateLog) Stop() {
 	s.stop()
 	s.done.Wait()
 	// A pin no row will now count is released once the heartbeat that would
-	// have counted it stops; left, its renewal would pin the trim for this
-	// process's life and a stale window after.
+	// have counted it stops; left, its renewal would pin the trim.
 	s.releaseTail()
 	s.haltAppliers()
-	// The consumers are closed last, once no loop can fetch through them: an
-	// engine may be stopped and another started over the same connection,
-	// and an open handle leaves its last pull request standing on the
-	// broker, served before the next engine's into a buffer nobody reads
-	// until the ack window.
+	// Consumers close last, once no loop can fetch through them: an open
+	// handle leaves its last pull request standing on the broker, served
+	// before the next engine's into a buffer nobody reads.
 	for _, running := range s.running() {
 		if running.consumer != nil {
 			running.consumer.Close()
 		}
 	}
-	// Not the file: the node holds its replicated estate whether or not a
-	// state log runs ([holdEstate]), and the store's Close takes it down.
+	// Not the file: the store's Close takes the estate down ([holdEstate]).
 }
 
 // applierRun is one domain's apply loop: what ends it, and what reports it
@@ -815,11 +763,10 @@ type applierRun struct {
 }
 
 // launchAppliers starts every domain's apply loop under a fresh context derived
-// from base, at boot and after every adoption, over the same runners:
-// [statelog.Runner.Run] resumes from the checkpoint the file now keeps. base is
-// the state log's own lifetime ([stateLog.run]), never the caller's, which
-// would stop the loop when the boot call or heartbeat tick returned; passed so
-// the call site says whose lifetime it is.
+// from base, at boot and after every adoption, over the same runners
+// ([statelog.Runner.Run] resumes from the file's checkpoint). base is the state
+// log's own lifetime ([stateLog.run]), never the caller's, which would stop the
+// loop when the boot call or heartbeat tick returned.
 func (s *stateLog) launchAppliers(base context.Context) {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
@@ -847,19 +794,15 @@ func (s *stateLog) startApplierLocked(set context.Context, running *runningLog) 
 		defer close(run.done)
 		defer cancel()
 		// A stopped applier is not a crashed node: its rows freeze, the
-		// coverage it reports says so, and the readiness gate stops taking
-		// seats off [statelog.Runner.Stopped] rather than this error. No line
-		// of its own: the runner logs `statelog_applier_stopped` with the
-		// stream, position and what resumes it, under the component the
-		// replication guide names.
+		// coverage says so, and readiness reads [statelog.Runner.Stopped],
+		// not this error. The runner logs `statelog_applier_stopped`.
 		_ = running.runner.Run(ctx)
 	}()
 }
 
-// haltApplier ends ONE domain's loop and waits for it, reporting whether it was
-// still running (false for a loop that already stopped, or a set not launched).
-// For a reanchor, which rewrites one domain's checkpoint: this loop is its only
-// other writer, and a batch committed after the reanchor would write the old
+// haltApplier ends one domain's loop and waits for it, reporting whether it was
+// still running. For a reanchor, which rewrites that domain's checkpoint: the
+// loop is its only other writer, and a later batch would write the old
 // generation and stream instant back over it.
 func (s *stateLog) haltApplier(name string) bool {
 	s.applyMu.Lock()
@@ -880,11 +823,11 @@ func (s *stateLog) haltApplier(name string) bool {
 	return running
 }
 
-// resumeApplier starts ONE domain's loop again after [stateLog.haltApplier],
+// resumeApplier starts one domain's loop again after [stateLog.haltApplier],
 // first resetting its consumer to the checkpoint the rows keep, as a rejoin
-// does: what it delivered was against the checkpoint a reanchor has just
-// rewritten, and a record left in its buffer would reach the resumed loop too.
-// A failed reset costs only redeliveries the loop drops, and is logged.
+// does: a record buffered against the checkpoint a reanchor just rewrote would
+// reach the resumed loop. A failed reset costs only redeliveries the loop
+// drops, and is logged.
 func (s *stateLog) resumeApplier(ctx context.Context, name string) {
 	running := s.Domain(name)
 	at, _, _, err := statelog.CursorFor(ctx, s.estate().Reader(), running.spec.Name)
@@ -901,9 +844,9 @@ func (s *stateLog) resumeApplier(ctx context.Context, name string) {
 	s.launchApplier(name)
 }
 
-// launchApplier starts ONE log's loop again under the set's context. A no-op
-// while the set is halted — the launch that ends that halt starts every log —
-// and while the log already has a loop running.
+// launchApplier starts one log's loop again under the set's context. A no-op
+// while the set is halted (the launch that ends the halt starts every log) and
+// while the log already has a loop running.
 func (s *stateLog) launchApplier(name string) {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
@@ -918,15 +861,13 @@ func (s *stateLog) launchApplier(name string) {
 		}
 	}
 	//nolint:contextcheck // the SET's context, never a caller's: a loop
-	// outlives the reanchor or the resume that restarted it, and one started
-	// under that caller's context would stop the moment it returned — and
-	// ending the set is what must end it, as it ends every other domain's.
+	// outlives the reanchor or resume that restarted it, and ending the set
+	// is what must end it, as for every other domain.
 	s.startApplierLocked(s.applyCtx, s.Domain(name))
 }
 
-// haltAppliers ends every apply loop and waits for them, releasing the pinned
-// connections an adoption needs closed. Idempotent, and a no-op before the
-// first launch.
+// haltAppliers ends every apply loop and waits, releasing the pinned
+// connections an adoption needs closed. Idempotent.
 func (s *stateLog) haltAppliers() {
 	s.applyMu.Lock()
 	stop := s.applyStop
@@ -939,8 +880,7 @@ func (s *stateLog) haltAppliers() {
 	s.applyDone.Wait()
 }
 
-// provisionAll provisions every registered domain's log, in the register's
-// order, and opens each, keyed by the domain's name.
+// provisionAll provisions and opens every registered domain's log, by name.
 func (s *stateLog) provisionAll(ctx context.Context, host domainHost) (map[string]*jetstream.DomainLog, error) {
 	logs := map[string]*jetstream.DomainLog{}
 	for _, domain := range registeredDomains() {
@@ -953,9 +893,8 @@ func (s *stateLog) provisionAll(ctx context.Context, host domainHost) (map[strin
 	return logs, nil
 }
 
-// provision creates one log's stream if it is not there and opens it, apart
-// from [stateLog.start] because the join between them needs every stream to
-// exist first.
+// provision creates one log's stream if absent and opens it, apart from
+// [stateLog.start] because the join between them needs every stream first.
 func (s *stateLog) provision(ctx context.Context, host domainHost,
 	domain statelog.Domain) (*jetstream.DomainLog, error) {
 
@@ -967,9 +906,8 @@ func (s *stateLog) provision(ctx context.Context, host domainHost,
 		Name:     spec.Name,
 		Subjects: spec.Subjects,
 		MaxBytes: ceiling.Bytes,
-		// The domain's largest record as the broker counts a message, so
-		// a peer that does not refuse a larger one itself is held to the
-		// size every node's gate reserve was sized by.
+		// The domain's largest record as the broker counts a message, so a
+		// peer is held to the size every node's gate reserve was sized by.
 		MaxMessageBytes: spec.MaxAppendBytes(),
 		MaxPerSubject:   spec.MaxPerSubject,
 		MaxAge:          spec.MaxAge,
@@ -978,10 +916,9 @@ func (s *stateLog) provision(ctx context.Context, host domainHost,
 		if errors.Is(err, jetstream.ErrInsufficientStorage) {
 			return nil, s.storageRefused(ctx, host, spec, domain, ceiling, err)
 		}
-		// THE CEILING AND ITS FIELD RIDE EVERY FAILURE, because a
-		// clustered broker that cannot place the stream says
-		// "insufficient storage" in prose, about members this node
-		// cannot see, and names neither.
+		// The ceiling and its field ride every failure: a clustered broker
+		// that cannot place the stream says "insufficient storage" in prose,
+		// about members this node cannot see, and names neither.
 		return nil, fmt.Errorf("engine: provision the %s log at a %d-byte ceiling "+
 			"(%s): %w", domain.Name(), ceiling.Bytes, ceiling.Field, err)
 	}
@@ -1001,10 +938,9 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		return nil, err
 	}
 
-	// The stream says which stream this is: its creation instant
-	// ([statelog.StreamCreatedAt], read by Stats) detects a recreated stream,
-	// compared against the instant the checkpoint was committed under, so it
-	// must be the live one, never the cursor row's own value.
+	// The creation instant ([statelog.StreamCreatedAt]) detects a recreated
+	// stream against the instant the checkpoint committed under, so it must
+	// be the live one, never the cursor row's own value.
 	stats, err := appendTo.Stats(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("engine: read %s's identity: %w — a node cannot "+
@@ -1019,18 +955,16 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 			spec.Name, statelog.ErrStreamRecreated)
 	}
 
-	// THE ROWS SAY WHERE THIS NODE IS. The checkpoint commits with them,
-	// so it is the only durable statement of it — and resuming a consumer
-	// anywhere else is either a hole (at the head) or a million
+	// The rows say where this node is: the checkpoint commits with them, and
+	// resuming a consumer elsewhere is a hole (at the head) or a million
 	// redeliveries (at the beginning).
 	checkpoint, _, err := statelog.CheckpointOf(ctx, s.estate().Reader(), spec.Name)
 	if err != nil {
 		return nil, err
 	}
 	at := checkpoint.At
-	// The consumer ceiling, not the caller's context: a replicated create
-	// like the stream's, and one ceiling shared by every domain, so a wedged
-	// metadata group cannot spend a full per-create budget per domain.
+	// The consumer ceiling, shared by every domain, so a wedged metadata
+	// group cannot spend a full per-create budget per domain.
 	consumer, err := host.DomainConsumer(provisionCtx, spec.Name, s.nodeID, at.Seq)
 	if err != nil {
 		return nil, fmt.Errorf("engine: open %s's consumer: %w", domain.Name(), err)
@@ -1052,34 +986,30 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		Domain: domain, Spec: spec, Applier: applier, Fetch: consumer, Verifier: verifier,
 		// The replicated estate, not the node's own file: the applier pins
 		// a connection for its loop's life on the estate's pool, sized one
-		// per log ([estateLogs]). On the node's file it would refuse its
+		// per log ([estateLogs]); on the node's file it would refuse its
 		// first round ("declared 0 pinned writers") and the domain would
-		// silently stay behind for ever.
+		// silently stay behind.
 		DB: s.estate(),
-		// AND THE NODE'S OWN, where a log that diverged from these rows is
+		// The node's own, where a log that diverged from these rows is
 		// remembered across a restart ([statelog.NodeEstate]).
 		Node: s.db,
-		// AT THE WHOLE CHECKPOINT, and the record it names: what this node
+		// The whole checkpoint and the record it names: what this node
 		// publishes and verifies before its loop has loaded the row.
 		Checkpoint: at, CheckpointStoredAt: checkpoint.StoredAt,
-		// THE SAME STREAM READ BY POSITION: how the applier establishes that
-		// the log still holds, at its checkpoint, the record it consumed
-		// there before it applies anything past it.
+		// The same stream read by position: how the applier establishes
+		// that the log still holds the record it consumed at its checkpoint.
 		Log:             appendTo,
 		StreamCreatedAt: created, Metrics: s.metrics,
-		// THE EPOCH AS A SOURCE, read per batch: the runner is built once,
-		// at boot, and outlives every activation — see
-		// [statelog.RunnerDeps.Epoch].
+		// The epoch as a source, read per batch: the runner is built once
+		// and outlives every activation ([statelog.RunnerDeps.Epoch]).
 		Epoch: s.epoch,
-		// A RECORD THIS NODE WOULD NOT AUTHENTICATE reaches the
-		// company's audit feed as well as this node's log.
+		// A record this node would not authenticate reaches the company's
+		// audit feed as well as this node's log.
 		Witness: s.witness,
 		// Who this node is and whom the fleet evicted name the remedy for
-		// a record from a generation these rows never entered (this node's
-		// failed reanchor, run again; an evicted node's generation,
-		// re-anchored past; a peer's, adopted). The log is read through its
-		// verifier: it holds signed frames (ADR-0031), whose signature the
-		// probe would read as an unreadable eviction.
+		// a record from a generation these rows never entered. The log is
+		// read through its verifier: it holds signed frames (ADR-0031),
+		// whose signature the probe would read as an unreadable eviction.
 		NodeID: s.nodeID,
 		Evicted: func(ctx context.Context, node string) (bool, error) {
 			evicted, readErr := s.evictedOn(ctx, domain, spec,
@@ -1088,33 +1018,30 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		},
 		// The first drain ends `unhydrated`, the snapshot loop's commonest
 		// boot skip ([stateLog.snapshotNudge]), and wakes the usage
-		// publisher for the usage log ([stateLog.onDrained]).
+		// publisher ([stateLog.onDrained]).
 		OnDrained: s.onDrained(domain),
-		// AND EVERY TIME THE LOOP COMES LEVEL, the seat-claim gate's watch,
-		// for a log whose health gates admission ([stateLog.levelHook]).
+		// Every time the loop comes level: the seat-claim gate's watch
+		// ([stateLog.levelHook]).
 		OnLevel: s.levelHook(domain),
-		// No logger, here or at any statelog constructor: an absent one is
-		// the framework's `component=statelog` logger, the component its
-		// warnings belong to.
+		// No logger here or at any statelog constructor: an absent one is
+		// the framework's `component=statelog` logger.
 	})
 	if err != nil {
 		return nil, fmt.Errorf("engine: build %s's applier: %w", domain.Name(), err)
 	}
 	// Where the log ends, against the checkpoint the loop will load, at boot
-	// before any write reaches the publisher: boot is when a broker restored
-	// from an older copy is met (the embedded one runs in this process), and
-	// its stream keeps its creation instant, so the runner's `created`
-	// comparison passes. Read end-first, and sound: nothing writes the
-	// checkpoint row between the two reads (the join is done, no applier
-	// runs), and on a healthy log the end only grows.
+	// before any write reaches the publisher: a broker restored from an older
+	// copy is met at boot and keeps its stream's creation instant, so the
+	// runner's `created` comparison passes. Read end-first, and sound: nothing
+	// writes the checkpoint row between the two reads, and on a healthy log
+	// the end only grows.
 	s.observeEnd(ctx, domain.Name(), runner, runner.Stance(), stats.LastSeq)
 	// And whether the log still holds, at that checkpoint, the record the row
-	// names, for the same reason: a restored broker written past this node's
-	// rows ends at or past the checkpoint, so the end reading finds nothing,
-	// and the heartbeat's comparison is an interval away. Through the runner,
-	// which also recalls a divergence recorded before a restart. An
-	// unreadable log or estate leaves it to the loop, which will not apply
-	// past the checkpoint before answering it.
+	// names: a restored broker written past this node's rows ends at or past
+	// the checkpoint, so the end reading finds nothing. Through the runner,
+	// which also recalls a divergence recorded before a restart. An unreadable
+	// log or estate is left to the loop, which will not apply past the
+	// checkpoint before answering it.
 	if established, readErr := runner.VerifyCheckpoint(ctx); readErr == nil && established {
 		s.logDiverged(ctx, domain.Name(), runner)
 	}
@@ -1134,22 +1061,20 @@ func (s *stateLog) start(ctx, provisionCtx context.Context, host domainHost, dom
 		log: appendTo, consumer: consumer, evicted: evicted, reserve: reserve,
 		verifier: verifier, signer: signer,
 	}
-	// AFTER the struct exists, because the health closure the reader
-	// holds reads through it — a reader built first would capture a
-	// half-assembled domain and report its progress as never observed.
+	// After the struct exists: the reader's health closure reads through it,
+	// and one built first would report progress as never observed.
 	if running.reader, err = s.readerFor(domain, spec, appendTo, runner, running); err != nil {
 		return nil, err
 	}
-	// THE LOOP IS NOT STARTED HERE. Every domain is built first and the
-	// loops are launched together by [stateLog.launchAppliers], which is
-	// also what an adoption calls to start them again.
+	// The loop starts in [stateLog.launchAppliers], after every domain is
+	// built; an adoption calls it again too.
 	return running, nil
 }
 
-// publisherFor builds one domain's write authority. The fence and gates are
-// the domain's, off its register entry: the tracker's fence reads its eviction
-// rows and its gates a deletion marker, while the vector domain declares both
-// open (a derived value has no history to protect; the fleet singleton's lease
+// publisherFor builds one domain's write authority. The fence and gates come
+// off the domain's register entry: the tracker's fence reads its eviction rows
+// and its gates a deletion marker, while the vector domain declares both open
+// (a derived value has no history to protect; the fleet singleton's lease
 // stops an evicted node writing). It also returns the domain's eviction
 // reader, so readiness asks the write path's question of the same row.
 func (s *stateLog) publisherFor(domain statelog.Domain, spec statelog.StreamSpec,
@@ -1159,13 +1084,11 @@ func (s *stateLog) publisherFor(domain statelog.Domain, spec statelog.StreamSpec
 	return s.publisherOver(domain, spec, appendTo, appendTo, runner, reserve)
 }
 
-// reserveFor is the gate reserve on one domain's log, reading its usage from
-// the broker's stream state; nil for a log that keeps none. One per log, for
-// the write authority and the read index alike, since its budget is everything
-// this node has in flight there. Whether a log keeps one is derived from
-// [statelog.ReservationOf], which the publisher and read index enforce, not
-// stated on the register entry as a second answer; sized by the log's spec,
-// whose largest record is what one node may hold in flight.
+// reserveFor is the gate reserve on one domain's log, reading usage from the
+// broker's stream state; nil for a log that keeps none. One per log, shared by
+// the write authority and the read index, since its budget is everything this
+// node has in flight there. Whether a log keeps one derives from
+// [statelog.ReservationOf], not a second answer on the register entry.
 func reserveFor(domain statelog.Domain, spec statelog.StreamSpec,
 	appendTo *jetstream.DomainLog) (*statelog.Reserve, error) {
 	if !statelog.ReservationOf(domain).Kept {
@@ -1185,10 +1108,9 @@ func reserveFor(domain statelog.Domain, spec statelog.StreamSpec,
 	return reserve, nil
 }
 
-// publisherOver is [stateLog.publisherFor] with the appender the write
-// authority publishes through named apart from the log whose ends its fence
-// reads: one DomainLog in production, and in a case that has to see exactly
-// what reached the broker, that log behind a recorder.
+// publisherOver is [stateLog.publisherFor] with the appender named apart from
+// the log whose ends its fence reads, so a case can see exactly what reached
+// the broker.
 func (s *stateLog) publisherOver(domain statelog.Domain, spec statelog.StreamSpec,
 	publishTo statelog.Appender, appendTo *jetstream.DomainLog, runner *statelog.Runner,
 	reserve *statelog.Reserve) (*statelog.Publisher, func(context.Context) (bool, error), error) {
@@ -1201,10 +1123,9 @@ func (s *stateLog) publisherOver(domain statelog.Domain, spec statelog.StreamSpe
 	return s.publisherFrom(entry, spec, publishTo, appendTo, runner, reserve)
 }
 
-// publisherFrom is [stateLog.publisherOver] over one register entry, which is
-// what lets a test hand it an entry the shipped register does not hold — a
-// write authority built short of a seam has to be refused HERE, before the
-// domain starts, and the register's own entries cannot reach that arm.
+// publisherFrom is [stateLog.publisherOver] over one register entry, so a test
+// can hand it an entry the shipped register lacks: a write authority short of a
+// seam must be refused here, before the domain starts.
 func (s *stateLog) publisherFrom(entry registration, spec statelog.StreamSpec,
 	publishTo statelog.Appender, appendTo *jetstream.DomainLog, runner *statelog.Runner,
 	reserve *statelog.Reserve) (*statelog.Publisher, func(context.Context) (bool, error), error) {
@@ -1224,36 +1145,29 @@ func (s *stateLog) publisherFrom(entry registration, spec statelog.StreamSpec,
 		return nil, nil, err
 	}
 	deps := statelog.Deps{
-		// EVERY APPEND IS SIGNED (ADR-0031): the publisher frames what its
-		// decision encoded, and every applier refuses a record that is not
-		// a frame this deployment's keyring opens.
+		// Every append is signed (ADR-0031): every applier refuses a record
+		// that is not a frame this deployment's keyring opens.
 		Domain: domain, Spec: spec, Log: publishTo, Signer: signer,
 		Waiter: runner, NodeID: s.nodeID,
-		// The same log read by position through its verifier, which a
-		// resolution reads to learn whose a record it did not append is:
-		// decoding the raw frame would read every record as nobody's.
+		// The same log read by position through its verifier: decoding the
+		// raw frame would read every record as nobody's.
 		Records: statelog.VerifiedLog{Log: appendTo, Verifier: verifier},
-		// AND THE RULES ITS REANCHORS VOID RECORDS BY, the runner's own, so
-		// a write they dropped is refused under them.
+		// The rules its reanchors void records by, the runner's own, so a
+		// write they dropped is refused under them.
 		Voids: runner,
-		// The runner is the identity, as it is the waiter: a write's
-		// positions are the runner's, so "are they on the live stream" is
-		// too, and the health refuses on exactly what the writes refuse on.
+		// The runner is the identity, as it is the waiter: the health refuses
+		// on exactly what the writes refuse on.
 		Identity: runner,
-		// READ FRESH ON EVERY PUBLISH rather than captured: a reanchor
-		// moves the generation under a running process, and a publisher
-		// stamping the old one would write records every applier reads
-		// as safely stale.
+		// Read fresh on every publish: a reanchor moves the generation under
+		// a running process, and a stale stamp would read as safely stale.
 		Generation: func() uint32 { return runner.Committed().Generation },
 	}
-	// A NIL RESERVE STAYS A NIL ADMISSION: a nil *Reserve in the interface
+	// A nil reserve stays a nil admission: a nil *Reserve in the interface
 	// would read as a reserve given to a log that keeps none.
 	if reserve != nil {
 		deps.Admission = reserve
 	}
-	// THE DOMAIN'S OWN SEAMS, off its register entry rather than a switch
-	// here — see statelogregister.go — over the replicated estate as this
-	// log's spec declares it.
+	// The domain's own seams, off its register entry (statelogregister.go).
 	seams, err := entry.NewSeams(s, spec, appendTo, runner)
 	if err != nil {
 		return nil, nil, fmt.Errorf("engine: build %s's read seam: %w", domain.Name(), err)
@@ -1267,12 +1181,10 @@ func (s *stateLog) publisherFrom(entry registration, spec statelog.StreamSpec,
 }
 
 // barrierEncoder is how a domain writes the framework's barrier as a record on
-// its own log, or nil for a domain that has none. On the register's entry, not
-// Domain: the read index decides when a barrier goes out, the domain what its
-// record looks like. A domain without one gets no read index and so no
-// `linearizable`, correct for reads that make no freshness claim (the derived,
-// compacted vectors). [checkRegister] refuses an entry that states neither
-// ([registration.Barrier]).
+// its own log, or nil for a domain that has none. A domain without one gets no
+// read index and so no `linearizable`, correct for reads that make no freshness
+// claim (the derived, compacted vectors). [checkRegister] refuses an entry that
+// states neither ([registration.Barrier]).
 func barrierEncoder(domain statelog.Domain) func(statelog.Envelope) ([]byte, error) {
 	entry, _ := registrationFor(domain.Name())
 	return entry.Barrier
@@ -1280,23 +1192,20 @@ func barrierEncoder(domain statelog.Domain) func(statelog.Envelope) ([]byte, err
 
 // trimmedEncoder is how a domain writes the trim's trimmed record (ADR-0080) on
 // its own log, or nil for a domain whose log writes no anchor (the compacted
-// vectors and usage). Off the register's entry ([registration.Trimmed]) for
-// [barrierEncoder]'s reason. [checkRegister] refuses an encoder that disagrees
-// with [statelog.WritesAnchors], and
+// vectors and usage) ([registration.Trimmed]). [checkRegister] refuses an
+// encoder that disagrees with [statelog.WritesAnchors], and
 // TestEveryLogThatWritesAnchorsHasATrimmedRecord holds every domain to it, so
-// one with anchors and no encoder fails rather than growing an anchor per
-// subject.
+// anchors with no encoder fail rather than growing an anchor per subject.
 func trimmedEncoder(domain statelog.Domain) func(statelog.Envelope) ([]byte, error) {
 	entry, _ := registrationFor(domain.Name())
 	return entry.Trimmed
 }
 
 // readerFor builds a domain's read authority: the four levels, the refusal
-// ladder, the coverage probe and the quorum-committed barrier a linearizable
-// read waits through — the last only for a domain [barrierEncoder] knows. Off
-// [registration] rather than a switch, because absent and deliberately absent
-// must be told apart: a forgotten domain was a working node that quietly
-// refused its strongest read level.
+// ladder, the coverage probe and, only for a domain [barrierEncoder] knows, the
+// quorum-committed barrier a linearizable read waits through. Absent and
+// deliberately absent must be told apart: a forgotten domain was a working
+// node that quietly refused its strongest read level.
 func (s *stateLog) readerFor(domain statelog.Domain, spec statelog.StreamSpec,
 	appendTo *jetstream.DomainLog, runner *statelog.Runner,
 	running *runningLog) (*statelog.Reader, error) {
@@ -1309,29 +1218,26 @@ func (s *stateLog) readerFor(domain statelog.Domain, spec statelog.StreamSpec,
 		Mode:   s.mode,
 		DB:     s.estate().Reader(),
 		Waiter: runner,
-		// Assembled on every read, since each term can change between
-		// reads and a captured value would freeze the refusals this seam
-		// delivers; the two remote terms (published floors, log ends) are
+		// Assembled on every read: a captured value would freeze the
+		// refusals. The two remote terms (published floors, log ends) are
 		// served from memory, re-read off the read's path once
-		// [servingRecheck] old and never past [statelog.FloorCacheStale]
-		// or [endsStale] ([stateLog.servedHealth]), or every read would
-		// queue on a broker round trip. Under [stateLog.run], since the
-		// closure outlives the boot context. An error is a readiness
-		// nobody could read (refused `broker_unreachable`); an unrefreshed
-		// floor is an aged one (refused `floor_unknown`).
+		// [servingRecheck] old and never past [statelog.FloorCacheStale] or
+		// [endsStale] ([stateLog.servedHealth]), or every read would queue
+		// on a broker round trip. Under [stateLog.run], since the closure
+		// outlives the boot context. An error is a readiness nobody could
+		// read (`broker_unreachable`); an unrefreshed floor is an aged one
+		// (`floor_unknown`).
 		Health: func() (statelog.Health, error) {
 			return s.servedHealth(s.run, running)
 		},
 		Drain:   runner.Drain,
 		Metrics: s.metrics,
 	}
-	// NO READ INDEX IN A MODE THAT PUBLISHES NOTHING: it is an appender,
-	// and the reader refuses a linearizable read there rather than
-	// appending (see the mode field).
+	// No read index in a mode that publishes nothing: it is an appender, and
+	// the reader refuses a linearizable read there (see the mode field).
 	if encode != nil && s.mode.Publishes() {
-		// Signed like every record, and admitted through the write
-		// authority's gate reserve: a barrier bypassing it would spend the
-		// room a node gate is promised.
+		// Signed like every record, and admitted through the gate reserve: a
+		// barrier bypassing it would spend the room a node gate is promised.
 		var admission statelog.Admission
 		if running.reserve != nil {
 			admission = running.reserve
@@ -1353,14 +1259,14 @@ func (s *stateLog) readerFor(domain statelog.Domain, spec statelog.StreamSpec,
 // trimFloor is the published floor for one domain at the caller's generation:
 // the first sequence every node must hold. It is [coord.TrimFloor.Floor],
 // which never moves down within a generation and is written before the purge
-// it licenses — not a minimum over positions (which includes the reader) nor
-// TrimTo (zero on a blocked tick), each of which cleared the node a fence
-// exists to refuse. A reader that must survive the next trim takes the higher
-// of this and the stream's first sequence; one asking whether a replay is
-// possible takes the stream's alone ([statelog.FloorReplaying]). Unknown
-// refuses: failing open here is a lost update. Read on the write's path, after
-// the write's read of its subject (statelog's floor theorem), so never from
-// memory: one leader read of the domain's key ([coord.FloorRegister.Floor]).
+// it licenses; not a minimum over positions (includes the reader) nor TrimTo
+// (zero on a blocked tick), either of which cleared the node a fence exists to
+// refuse. A reader that must survive the next trim takes the higher of this and
+// the stream's first sequence; one asking whether a replay is possible takes
+// the stream's alone ([statelog.FloorReplaying]). Unknown refuses: failing open
+// is a lost update. Read on the write's path after the write's read of its
+// subject (statelog's floor theorem), so never from memory
+// ([coord.FloorRegister.Floor]).
 func (s *stateLog) trimFloor(ctx context.Context, domain string, generation uint32) (uint64, error) {
 	return readFloorsOf(ctx, s.fleet, []string{domain}).floor(domain, generation)
 }
@@ -1370,19 +1276,18 @@ func (s *stateLog) trimFloor(ctx context.Context, domain string, generation uint
 // domain, its row, no row, or why it could not be read. Each domain by its key
 // ([readFloorsOf]), never a listing of the register, whose ordered consumer is
 // two metadata-group proposals on a clustered broker and timed out under load
-// (`BenchmarkAFloorRead`, internal/coord/kv, measures both). A row and its
-// failure are one domain's: a bad row or a timed-out request fails that key
-// alone, so each domain answers from its own key ([publishedFloors.row]), and
-// only a reader needing every domain at once (the join) refuses on any unread.
+// (`BenchmarkAFloorRead`, internal/coord/kv). A bad row or a timed-out request
+// fails that key alone ([publishedFloors.row]); only a reader needing every
+// domain at once (the join) refuses on any unread.
 type publishedFloors struct {
 	// domains is each domain the read asked about, and what its key said.
-	// A domain the read did not ask about is absent, which is NEVER read as
-	// a trim that has never run: [publishedFloors.row] refuses it.
+	// A domain not asked about is absent, NEVER read as a trim that has never
+	// run: [publishedFloors.row] refuses it.
 	domains map[string]domainFloor
 
-	// at is when the read landed — what a health built from it stamps its
-	// floor with ([statelog.Floor.ReadAt]), since that is the instant the
-	// floor was known, however long after it the health was assembled.
+	// at is when the read landed: the instant the floor was known, which a
+	// health built from it stamps ([statelog.Floor.ReadAt]), however long
+	// after it the health was assembled.
 	at time.Time
 }
 
@@ -1391,17 +1296,16 @@ type publishedFloors struct {
 var errNoFloorStore = errors.New("this node has no coordination store to read a " +
 	"published floor from")
 
-// domainFloor is what one domain's key answered: its row, no row (the trim
-// has never written one for the domain), or why it could not be read.
+// domainFloor is what one domain's key answered: its row, no row, or why it
+// could not be read.
 type domainFloor struct {
 	row   coord.TrimFloor
 	found bool
 	err   error
 }
 
-// readFloors reads every registered domain's published floor once, and keeps
-// every domain's that answered for the reads served after it
-// ([stateLog.servedFloor]).
+// readFloors reads every registered domain's published floor once, keeping
+// each that answered for later served reads ([stateLog.servedFloor]).
 func (s *stateLog) readFloors(ctx context.Context) publishedFloors {
 	read := readFloorsOf(ctx, s.fleet, registeredNames())
 	for domain, got := range read.domains {
@@ -1413,10 +1317,9 @@ func (s *stateLog) readFloors(ctx context.Context) publishedFloors {
 }
 
 // readFloorsOf reads the published floor of each of domains, one key read a
-// domain, all at once: every [publishedFloors] comes from here. Each domain's
-// answer is its own. No fleet is every domain unread ([errNoFloorStore]), never
-// "no row": a node with no coordination store holds no floor, which is not a
-// trim that has never run, and each caller's own unread arm answers.
+// domain, all at once: every [publishedFloors] comes from here. No fleet is
+// every domain unread ([errNoFloorStore]), never "no row": a node with no
+// coordination store holds no floor, which is not a trim that has never run.
 func readFloorsOf(ctx context.Context, fleet coord.Fleet, domains []string) publishedFloors {
 	if fleet == nil {
 		out := publishedFloors{domains: make(map[string]domainFloor, len(domains)), at: time.Now()}
@@ -1447,8 +1350,8 @@ func readFloorsOf(ctx context.Context, fleet coord.Fleet, domains []string) publ
 
 // row is domain's published row out of this read: the row and true, false
 // where the trim has never written one, or the error its key's read failed
-// with — and an error for a domain the read never asked about, which is not a
-// domain without a floor.
+// with; also an error for a domain never asked about, which is not a domain
+// without a floor.
 func (p publishedFloors) row(domain string) (coord.TrimFloor, bool, error) {
 	got, asked := p.domains[domain]
 	if !asked {
@@ -1459,8 +1362,8 @@ func (p publishedFloors) row(domain string) (coord.TrimFloor, bool, error) {
 	return got.row, got.found, got.err
 }
 
-// floor is domain's floor at generation out of this read ([floorFor]); a key
-// nobody could read is the error, which refuses — that domain alone.
+// floor is domain's floor at generation out of this read ([floorFor]); an
+// unreadable key is the error, refusing that domain alone.
 func (p publishedFloors) floor(domain string, generation uint32) (uint64, error) {
 	row, found, err := p.row(domain)
 	if err != nil {
@@ -1469,10 +1372,8 @@ func (p publishedFloors) floor(domain string, generation uint32) (uint64, error)
 	return floorFor(row, found, domain, generation)
 }
 
-// unread is why every domain this read could not read failed, joined, in the
-// order of the domains' names — nil when every key answered. For a reader
-// that needs every domain at once, which no single domain's answer can stand
-// in for.
+// unread is why every unreadable domain failed, joined in name order; nil when
+// every key answered. For a reader that needs every domain at once.
 func (p publishedFloors) unread() error {
 	var errs []error
 	for _, domain := range slices.Sorted(maps.Keys(p.domains)) {
@@ -1483,8 +1384,7 @@ func (p publishedFloors) unread() error {
 	return errors.Join(errs...)
 }
 
-// only is this read narrowed to one domain, as the read memo of that domain
-// holds it.
+// only is this read narrowed to one domain, as its read memo holds it.
 func (p publishedFloors) only(domain string) publishedFloors {
 	got, asked := p.domains[domain]
 	if !asked {
@@ -1494,10 +1394,9 @@ func (p publishedFloors) only(domain string) publishedFloors {
 }
 
 // floorOf is [stateLog.trimFloor] for one domain as a write fence reads it: at
-// the generation of the cursor the fence compares (the write's snapshot
-// checkpoint, [statelog.Snap.Checkpoint]), not the applier's live one, which an
-// adoption can move between snapshot and check into another sequence space. A
-// floor published at a higher generation then gets [floorFor]'s refusal.
+// the generation of the cursor the fence compares ([statelog.Snap.Checkpoint]),
+// not the applier's live one, which an adoption can move into another sequence
+// space between snapshot and check; [floorFor] then refuses.
 func (s *stateLog) floorOf(domain string) func(context.Context, uint32) (uint64, error) {
 	return func(ctx context.Context, generation uint32) (uint64, error) {
 		return s.trimFloor(ctx, domain, generation)
@@ -1510,8 +1409,8 @@ func (s *stateLog) floorOf(domain string) func(context.Context, uint32) (uint64,
 //   - No record: the trim has licensed nothing. Zero.
 //   - A record at a lower generation names a dead number space. Zero: the
 //     stream's first sequence, which readers take beside it
-//     ([stateLog.trimFloor]), covers a purge that raced a reanchor, where
-//     unknown would refuse every zero-expectation write for a trim interval.
+//     ([stateLog.trimFloor]), covers a purge that raced a reanchor; unknown
+//     would refuse every zero-expectation write for a trim interval.
 //   - A record at a higher generation: this node is on the dead space. Unknown.
 //   - Otherwise the record's Floor, never TrimTo, which is zero while the trim
 //     is blocked and falls with the counted minimum.
@@ -1530,20 +1429,18 @@ func floorFor(row coord.TrimFloor, found bool, domain string, generation uint32)
 
 // logEndsOf is a domain log's two ends as the write fences read them beside
 // [stateLog.trimFloor]. The first end may only raise the floor (a stale answer
-// is lower than the truth, [statelog.Health.FirstSeq]); it covers what the
-// floor cannot see and tells a node below the log from one replaying to the
-// floor. The last end says this node is on this log at all: a checkpoint past
-// it is refused. Unreadable refuses. It also hands the stream's identity to
-// the runner, which the publisher asks before appending, so a log rebuilt
-// since the last heartbeat is refused within a zero-expectation write, where
-// letting it through is a lost update ([statelog.Fence.ClearForZero]); the end
-// goes to the runner too.
+// is lower than the truth, [statelog.Health.FirstSeq]); it tells a node below
+// the log from one replaying to the floor. The last end says this node is on
+// this log at all: a checkpoint past it is refused. Unreadable refuses. It also
+// hands the stream's identity and the end to the runner, which the publisher
+// asks before appending, so a log rebuilt since the last heartbeat is refused
+// within a zero-expectation write ([statelog.Fence.ClearForZero]).
 func (s *stateLog) logEndsOf(domain string, l *jetstream.DomainLog,
 	runner *statelog.Runner) func(context.Context) (statelog.LogEnds, error) {
 
 	return func(ctx context.Context) (statelog.LogEnds, error) {
-		// WHERE THE RUNNER STANDS BEFORE THE READ, which is the only order in
-		// which the pair can say anything — see [statelog.Runner.ObserveEnd].
+		// Where the runner stands before the read: the only order in which
+		// the pair says anything ([statelog.Runner.ObserveEnd]).
 		stance := runner.Stance()
 		stats, err := l.Stats(ctx)
 		if err != nil {
@@ -1557,12 +1454,11 @@ func (s *stateLog) logEndsOf(domain string, l *jetstream.DomainLog,
 // Readmissible is the node gate's judgement of a readmission: whether an
 // evicted node has fallen below a floor it would be counted against again,
 // asked once per gesture before any log is written ([NodeGate.Readmit]). Here
-// because this object holds all three inputs (the positions register, the
-// published floors, every log), and each log's bound is read as this node's
-// write fence reads it ([stateLog.readmissionBound]): the fence that will hold
-// the readmitted node is this one's, since this node writes the readmission.
-// Identity-claiming domains only, every one (only they form an expectation of
-// zero); each input read once and judged together. Every failed read refuses
+// because this object holds all three inputs (positions register, published
+// floors, every log), and each bound is read as this node's write fence reads
+// it ([stateLog.readmissionBound]), since this node writes the readmission.
+// Every identity-claiming domain (only they form an expectation of zero); each
+// input read once and judged together. Every failed read refuses
 // ([ReadmissionUnjudged]): an unlisted register is not one without the node.
 func (s *stateLog) Readmissible(ctx context.Context, nodeID string) error {
 	unjudged := func(log string, err error) error {
@@ -1576,9 +1472,8 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string) error {
 	if err != nil {
 		return unjudged("", fmt.Errorf("read the positions register: %w", err))
 	}
-	// EACH LOG'S FLOOR IS ITS OWN, so one that did not read refuses the
-	// readmission naming that log ([ReadmissionUnjudged.Log]) rather than
-	// the register as a whole.
+	// Each log's floor is its own: one unread refuses the readmission naming
+	// that log ([ReadmissionUnjudged.Log]).
 	floors := s.readFloors(ctx)
 	var bounds []statelog.ReadmissionBound
 	for _, running := range s.running() {
@@ -1592,10 +1487,9 @@ func (s *stateLog) Readmissible(ctx context.Context, nodeID string) error {
 		bounds = append(bounds, bound)
 	}
 	permitted := statelog.PermitReadmission(nodeID, register, bounds)
-	// A LOG THE FLEET RE-ANCHORED AND THIS NODE HASN'T caught up on is one it
-	// cannot judge the readmission on, which is this refusal's condition: told
-	// to the operator, with the node to ask instead, rather than answered as
-	// a fault with the remedy in this node's log alone.
+	// A log the fleet re-anchored and this node hasn't caught up on cannot be
+	// judged: told to the operator with the node to ask instead, not answered
+	// as a fault with the remedy in this node's log alone.
 	var behind *statelog.ReanchorNotApplied
 	if errors.As(permitted, &behind) {
 		return &ReadmissionUnjudged{Node: nodeID, Log: behind.Domain, Behind: true,
@@ -1627,9 +1521,8 @@ func (s *stateLog) readmissionBound(ctx context.Context, running *runningLog,
 
 // observeStream hands one live reading of a domain log's state to its runner
 // (the creation instant, and the end paired with the [statelog.Runner.Stance]
-// read before the broker was asked) and names what it changed. One place for
-// the heartbeat and the zero fence alike: whichever reads first establishes a
-// finding, so the line is written by whoever got there.
+// read before the broker was asked) and names what it changed. Shared by the
+// heartbeat and the zero fence: whichever reads first writes the line.
 func (s *stateLog) observeStream(ctx context.Context, domain string,
 	runner *statelog.Runner, at statelog.Stance, stats jetstream.LogStats) {
 
@@ -1650,11 +1543,10 @@ func (s *stateLog) observeStream(ctx context.Context, domain string,
 
 // observeEnd hands one reading of a domain log's end to its runner, paired with
 // where it stood before the read (its checkpoint, and the barriers its loop
-// reached past it, which an end below them sends back unapplied,
-// [statelog.Runner.ObserveEnd]), and names both transitions. The end reaching
-// the checkpoint again is either a stale member corrected or a restored log
-// written past it in another history; the end cannot tell, but the applier
-// compares the record at the checkpoint before applying past it
+// reached past it, [statelog.Runner.ObserveEnd]), and names both transitions.
+// The end reaching the checkpoint again is either a stale member corrected or
+// a restored log written past it in another history; the end cannot tell, but
+// the applier compares the record at the checkpoint before applying past it
 // ([statelog.Runner.VerifyCheckpoint]), so the latter becomes
 // `statelog_log_diverged`, a refusal that does not lift.
 func (s *stateLog) observeEnd(ctx context.Context, domain string,
@@ -1687,10 +1579,9 @@ func (s *stateLog) observeEnd(ctx context.Context, domain string,
 	}
 }
 
-// logDiverged names the one transition a divergence has: established. Unlike a
-// reading of the end it is never cleared by a later reading — a member behind
-// the log answers that it holds no record, never with another one — so there is
-// no second line to write; a reanchor or an adoption is what ends it.
+// logDiverged names the one transition a divergence has: established. Never
+// cleared by a later reading (a member behind the log holds no record, never
+// another one); a reanchor or an adoption ends it.
 func (s *stateLog) logDiverged(ctx context.Context, domain string, runner *statelog.Runner) {
 	log.ErrorContext(ctx, "statelog_log_diverged",
 		"node", s.nodeID, "domain", domain,
@@ -1708,10 +1599,10 @@ func (s *stateLog) logDiverged(ctx context.Context, domain string, runner *state
 }
 
 // Established reports whether every domain whose health gates seat admission
-// ([statelog.Domain.GatesSeatAdmission]) has one. Per domain, from its own
-// declaration: a compacted domain's gap is a coverage number, and withholding
-// seats over it would be the outage the number avoids. Admission only; whether
-// a copy is WRONG is [stateLog.judgeCopy]'s (ADR-0079).
+// ([statelog.Domain.GatesSeatAdmission]) has one. A compacted domain's gap is a
+// coverage number, and withholding seats over it would be the outage the
+// number avoids. Admission only; whether a copy is WRONG is
+// [stateLog.judgeCopy]'s (ADR-0079).
 func (s *stateLog) Established(ctx context.Context, strict bool) (bool, statelog.ReadRefusal) {
 	if s == nil {
 		return true, ""
@@ -1738,8 +1629,8 @@ type healthRead struct {
 	err     error
 }
 
-// readHealths reads every one of runs' health AT ONCE, beside ONE read of the
-// published floors ([stateLog.readFloors]) — in runs' order.
+// readHealths reads every one of runs' health at once, beside one read of the
+// published floors ([stateLog.readFloors]), in runs' order.
 func (s *stateLog) readHealths(ctx context.Context, runs []*runningLog) []healthRead {
 	return readHealthsWith(ctx, runs, s.readFloors, s.observe)
 }
@@ -1747,10 +1638,9 @@ func (s *stateLog) readHealths(ctx context.Context, runs []*runningLog) []health
 // readHealthsWith is [stateLog.readHealths] over its two reads, separated so
 // the concurrency is exercised without a broker. Each log is its own raft
 // group, so logs are read at once: in series under one deadline, one
-// leaderless group spent it and left every later log unread, hiding their
-// faults (ADR-0079's isolation). The floors are read beside the logs, since a
-// health needs its floor only at the end ([floored]), and every health is
-// built from that one read ([readFloorsOf]).
+// leaderless group spent it and left every later log unread (ADR-0079's
+// isolation). The floors are read beside the logs, since a health needs its
+// floor only at the end ([floored]).
 func readHealthsWith(ctx context.Context, runs []*runningLog,
 	readFloors func(context.Context) publishedFloors,
 	observe func(context.Context, *runningLog) (statelog.Health, error)) []healthRead {
@@ -1761,8 +1651,8 @@ func readHealthsWith(ctx context.Context, runs []*runningLog,
 	var wg sync.WaitGroup
 	for i, running := range runs {
 		wg.Go(func() {
-			// EACH INTO ITS OWN SLOT, so one log's answer — or its
-			// silence — touches no other's.
+			// Each into its own slot: one log's answer or silence touches
+			// no other's.
 			h, err := observe(ctx, running)
 			out[i] = healthRead{running: running, health: h, err: err}
 		})
@@ -1779,33 +1669,31 @@ func readHealthsWith(ctx context.Context, runs []*runningLog,
 }
 
 // judgeCopy judges this node's copy of every registered domain (ADR-0079) from
-// one reading of each log's health and one read of the published floors, all
-// at once ([stateLog.readHealths]). A wrong copy is taken out of service for
-// that domain's operations alone ([localEstate.For]); every other domain keeps
-// answering here. Every domain is judged whatever it declares:
-// [statelog.Domain.GatesSeatAdmission] decides only the seat copy
-// ([estate.SeatCopy]). WRONG is rows that will not become right by applying
-// more ([statelog.Health.Fault]: stopped, evicted, below the log, wrong stream,
-// stalled, an undecodable record past [statelog.DeferralGrace]); being behind
-// is admission's business ([stateLog.Established]) and fires nothing here. A
-// health nobody could read is UNREAD, not wrong, and keeps its last verdict
+// one reading of each log's health and one read of the published floors
+// ([stateLog.readHealths]). A wrong copy is taken out of service for that
+// domain's operations alone ([localEstate.For]). Every domain is judged
+// whatever it declares: [statelog.Domain.GatesSeatAdmission] decides only the
+// seat copy ([estate.SeatCopy]). WRONG is rows that will not become right by
+// applying more ([statelog.Health.Fault]: stopped, evicted, below the log,
+// wrong stream, stalled, an undecodable record past [statelog.DeferralGrace]);
+// being behind is admission's business ([stateLog.Established]). A health
+// nobody could read is UNREAD, not wrong, and keeps its last verdict
 // ([copyVerdict.carried]): an unreachable broker is when copies must answer.
 func (s *stateLog) judgeCopy(ctx context.Context) copyVerdict {
 	out := copyVerdict{domains: map[string]domainVerdict{}}
 	if s == nil {
-		// NO STATE LOG, NOTHING TO JUDGE: every domain this build
-		// registers is sound and answering, which is what a runtime with
-		// no log to fall behind on is.
+		// No state log, nothing to judge: every registered domain is sound
+		// and answering.
 		for _, domain := range registeredDomains() {
 			out.domains[domain.Name()] = domainVerdict{answers: true,
 				gates: domain.GatesSeatAdmission()}
 		}
 		return out
 	}
-	// A file that is not open cannot answer at all (lost to a rejoin that
-	// could not reopen it, or between an adoption's rename and reopen), and
-	// with its appliers halted and nothing written it owes no progress, so
-	// nothing below would call it wrong: shut sends its calls to a peer.
+	// A file that is not open (a rejoin that could not reopen it, or between
+	// an adoption's rename and reopen) cannot answer, and with appliers halted
+	// it owes no progress, so nothing below would call it wrong: shut sends
+	// its calls to a peer.
 	if s.db != nil {
 		if _, err := s.db.ReplicatedDB(); err != nil {
 			return copyVerdict{shut: true}
@@ -1815,8 +1703,8 @@ func (s *stateLog) judgeCopy(ctx context.Context) copyVerdict {
 }
 
 // judgeReads is each domain's verdict out of one reading of the logs' health
-// ([stateLog.readHealths]) at now — a domain whose health was not read is
-// UNREAD, for [stateLog.judgeCopy]'s reason, and on its own.
+// ([stateLog.readHealths]) at now; an unread domain is UNREAD on its own, for
+// [stateLog.judgeCopy]'s reason.
 func judgeReads(now time.Time, reads []healthRead) copyVerdict {
 	out := copyVerdict{domains: make(map[string]domainVerdict, len(reads))}
 	for _, read := range reads {
@@ -1835,9 +1723,8 @@ func judgeReads(now time.Time, reads []healthRead) copyVerdict {
 }
 
 // health assembles one domain's readiness from the four places it lives: this
-// node's own checkpoint, its consumer's backlog, the stream's own bounds, and
-// the fleet's published floor — out of floors, the caller's one read of the
-// register for every domain it asks about at this instant
+// node's checkpoint, its consumer's backlog, the stream's bounds, and the
+// fleet's published floor, out of the caller's one read of the register
 // ([stateLog.readFloors]).
 func (s *stateLog) health(ctx context.Context, running *runningLog,
 	floors publishedFloors) (statelog.Health, error) {
@@ -1848,9 +1735,8 @@ func (s *stateLog) health(ctx context.Context, running *runningLog,
 	return floored(health, running.domain.Name(), floors)
 }
 
-// observe is every term of one domain's health but its floor: the checkpoint,
-// the applier's own state, the eviction row and the stream's bounds, read now
-// — the half a reading can take before the published floors land
+// observe is every term of one domain's health but its floor, read now: the
+// half a reading can take before the published floors land
 // ([readHealthsWith]). [floored] completes it.
 func (s *stateLog) observe(ctx context.Context, running *runningLog) (statelog.Health, error) {
 	return s.observeWith(ctx, running, func(ctx context.Context,
@@ -1863,12 +1749,10 @@ func (s *stateLog) observe(ctx context.Context, running *runningLog) (statelog.H
 // or served from memory, [servedEnds]), handed the position this health
 // describes: the runner's reached position ([statelog.Runner.Reached]), never
 // its committed checkpoint, since a read is served from rows current through
-// it and a reached, not yet checkpointed barrier changes none of them. What is
-// durable stays the checkpoint ([stateLog.publishPositions]). Ends from memory
-// may predate this position: if the position they were read beside was not
-// past them, the end is at least this position (the applier read those
-// records from the log); if it was past them, the node was ahead of its log
-// and stays so.
+// it. What is durable stays the checkpoint ([stateLog.publishPositions]). Ends
+// from memory may predate this position: if the position they were read beside
+// was not past them, the end is at least this position (the applier read those
+// records from the log); if it was, the node was ahead of its log and stays so.
 func (s *stateLog) observeWith(ctx context.Context, running *runningLog,
 	endsOf func(context.Context, statelog.Position) (streamEnds, error)) (statelog.Health, error) {
 	now := time.Now()
@@ -1878,13 +1762,13 @@ func (s *stateLog) observeWith(ctx context.Context, running *runningLog,
 	// no read over them can be certified ([statelog.Health.Refusal]'s
 	// `stalled` arm). A stop this process asked for is not a fault: every
 	// applier returns its context's error on shutdown, and reading that as a
-	// halt would refuse reads and take the copy out of service mid-drain.
+	// halt would take the copy out of service mid-drain.
 	if err := running.runner.Stopped(); err != nil && !errors.Is(err, context.Canceled) {
 		health.Err = err.Error()
 	}
-	// A fault past its budget is the same report: the applier still retries,
-	// but the rows have not moved and a read is old in a way lag cannot show.
-	// Inside the budget nothing is reported, so a broker blip moves no seats.
+	// A fault past its budget is the same report: the rows have not moved
+	// and a read is old in a way lag cannot show. Inside the budget nothing
+	// is reported, so a broker blip moves no seats.
 	if msg, faulted := running.runner.Fault(now); faulted && health.Err == "" {
 		health.Err = msg
 	}
@@ -1898,7 +1782,7 @@ func (s *stateLog) observeWith(ctx context.Context, running *runningLog,
 	}
 	// The eviction row, from the write fence's own reader: an evicted node's
 	// peers drop its records, so its rows stop advancing while its position
-	// is still published, and a read from them serves an abandoned copy.
+	// is still published.
 	if running.evicted != nil {
 		evicted, err := running.evicted(ctx)
 		if err != nil {
@@ -1909,7 +1793,7 @@ func (s *stateLog) observeWith(ctx context.Context, running *runningLog,
 	ends, err := endsOf(ctx, at)
 	if err != nil {
 		// Neither half of the inequality can be evaluated, and both fail
-		// silently: a consumer above the last sequence waits for ever, one
+		// silently: a consumer above the last sequence waits forever, one
 		// below the first is clamped up and reports caught up over a hole.
 		return health, err
 	}
@@ -1918,24 +1802,24 @@ func (s *stateLog) observeWith(ctx context.Context, running *runningLog,
 		end = at.Seq
 	}
 	health.FirstSeq = &first
-	// THE END ITSELF, beside the lag derived from it: the lag is clamped
-	// at zero, so a checkpoint PAST the end reads as caught up through
-	// it, and the end is what [statelog.Health.AheadOfLog] refuses on.
+	// The end itself, beside the lag: the lag is clamped at zero, so a
+	// checkpoint past the end reads as caught up, and the end is what
+	// [statelog.Health.AheadOfLog] refuses on.
 	health.LastSeq = &end
-	// And whether this is the same stream at all: observed, not derived, and
-	// from the runner, where the write path asks it, so reads and writes
-	// refuse together. Its recreation half only: a checkpoint past the end is
-	// decided above from this health's own end, or a broker back from an
-	// older copy would be named a rebuild.
+	// Whether this is the same stream at all: observed from the runner,
+	// where the write path asks it, so reads and writes refuse together. Its
+	// recreation half only: a checkpoint past the end is decided above from
+	// this health's own end, or a broker back from an older copy would be
+	// named a rebuild.
 	identity := running.runner.StreamIdentity()
 	health.StreamRecreated = errors.Is(identity, statelog.ErrStreamRecreated)
-	// AND ITS PASSED-GENERATION HALF, from the same answer: a peer
-	// re-anchored this log past this node's rows, which is the one finding
-	// here a restored broker below this node's checkpoint cannot show.
+	// Its passed-generation half: a peer re-anchored this log past this
+	// node's rows, the one finding a restored broker below this node's
+	// checkpoint cannot show.
 	health.GenerationPassed = errors.Is(identity, statelog.ErrGenerationPassed)
-	// AND ITS DIVERGED HALF — from the runner's own verdict rather than the
-	// first finding the identity names, so a node the log diverged from that
-	// a peer has also re-anchored past reports both.
+	// Its diverged half, from the runner's own verdict rather than the first
+	// finding the identity names, so a node both diverged and re-anchored
+	// past reports both.
 	health.LogDiverged = running.runner.Diverged()
 	lag := uint64(0)
 	if end > at.Seq {
@@ -1943,9 +1827,8 @@ func (s *stateLog) observeWith(ctx context.Context, running *runningLog,
 	}
 	health.Lag = &lag
 	// Drained is the applier's record of having reached its log's end at
-	// least once, a property of a series, not of the lag beside it (deriving
-	// it from the lag released every seat on each new work item). A stall
-	// clears it: frozen rows stop being a whole state.
+	// least once, not derived from the lag (that released every seat on each
+	// new work item). A stall clears it: frozen rows are not a whole state.
 	health.Drained = running.runner.Drained() && !health.Stalled
 	return health, nil
 }
@@ -1969,15 +1852,14 @@ func floored(health statelog.Health, domain string, floors publishedFloors) (sta
 	// ([statelog.Floor]). FirstSeq may only raise it: a stale member's answer
 	// is lower than the truth.
 	health.Floor = statelog.Floor{State: statelog.FloorOK, ReadAt: floors.at}
-	// Below means the next record this node needs (the one after the
-	// position its rows are current through) may be gone; the heartbeat asks
-	// the same of the committed checkpoint ([stateLog.publishPositions]).
-	// Which below is asked of `first` alone, since a floor can be published
-	// and its purge fail: under a floor above the log's first record, a node
-	// whose next record survives is REPLAYING (`behind`, clearing on its
-	// own), and only one whose next record is gone is BELOW, adopting a
-	// snapshot. Every reader shares the predicate ([statelog.Replayable]) and
-	// chooses only its bound ([stateLog.trimFloor]).
+	// Below means the next record this node needs may be gone; the heartbeat
+	// asks the same of the committed checkpoint ([stateLog.publishPositions]).
+	// Below is asked of `first` alone, since a floor can be published and its
+	// purge fail: under a floor above the log's first record, a node whose
+	// next record survives is REPLAYING (`behind`, clearing on its own), and
+	// only one whose next record is gone is BELOW, adopting a snapshot. Every
+	// reader shares the predicate ([statelog.Replayable]) and chooses only its
+	// bound ([stateLog.trimFloor]).
 	switch {
 	case !statelog.Replayable(at.Seq, first):
 		health.Floor.State = statelog.FloorBelow
@@ -1987,10 +1869,10 @@ func floored(health statelog.Health, domain string, floors publishedFloors) (sta
 	return health, nil
 }
 
-// applierFor is the state machine each domain declares, out of the register:
-// on the entry, not the domain, because the declaration is read by snapshots,
-// claims, sweeps and the trim and must be answerable by a build that cannot
-// construct the applier. A domain without one fails the boot check by name.
+// applierFor is the state machine each domain declares, on the register entry
+// rather than the domain: snapshots, claims, sweeps and the trim read the
+// declaration and must be answerable by a build that cannot construct the
+// applier. A domain without one fails the boot check by name.
 func (s *stateLog) applierFor(domain statelog.Domain) (statelog.Applier, error) {
 	entry, found := registrationFor(domain.Name())
 	if !found || entry.NewApplier == nil {
@@ -2010,10 +1892,9 @@ func (s *stateLog) applierFor(domain statelog.Domain) (statelog.Applier, error) 
 // options), so two nodes applying one record produce the same rows; the
 // framework fills this once per apply-loop generation, which is why the one
 // table depending on it is classed DIVERGING. Keys are the company settings'
-// own paths ([inbox.RetentionKey]), so one setting is one key. The horizon is
-// stated with its default applied ([config.Inbox.Days]), so the applier and
-// the sweep ([Engine.inboxRetention]) read one horizon. A nil company
-// declares none, and every applier applies its own default.
+// own paths ([inbox.RetentionKey]). The horizon carries its default
+// ([config.Inbox.Days]), so the applier and the sweep ([Engine.inboxRetention])
+// read one horizon. A nil company declares none; appliers use their defaults.
 func (c *Company) Epoch() map[string]any {
 	if c == nil || c.Config == nil {
 		return nil
@@ -2023,31 +1904,28 @@ func (c *Company) Epoch() map[string]any {
 
 // applyEpoch is what every domain's applier reads per batch: the epoch of the
 // company this node has PUBLISHED (one atomic load), never the revision being
-// built, which a refused apply never makes this node's company. A node with no
-// company hands its appliers none.
+// built, which a refused apply never makes this node's company.
 func (e *Engine) applyEpoch() map[string]any { return e.Company().Epoch() }
 
-// join adopts a peer's snapshot when this node cannot replay its way back,
-// for the boot and for [Engine.rejoin]. Per domain: is the record after the
-// checkpoint still on the log ([statelog.Replayable])? Any domain that cannot
-// joins them all, since a snapshot names every registered domain. A fresh
-// node's next record is the first, so it asks nobody, sparing the common case
-// a round trip that refuses reads for up to [statelog.OfferWindow]. No offer,
-// or a fault of this node's own before install ([statelog.ErrJoinerFault]),
-// leaves it on its intact rows: it comes up gated by seat admission and
-// retries on a widening interval, rather than failing to start. An unrecorded
-// install ([statelog.ErrAdoptionUnrecorded]) is an adoption, the rename being
-// the point of no return; a lost estate ([statelog.ErrEstateNotRestored])
-// stops a boot, and a running node reopens it ([stateLog.restoreEstate]).
+// join adopts a peer's snapshot when this node cannot replay its way back, for
+// the boot and [Engine.rejoin]. Any domain whose next record is gone
+// ([statelog.Replayable]) joins them all, since a snapshot names every
+// registered domain. A fresh node asks nobody, sparing a round trip that
+// refuses reads for up to [statelog.OfferWindow]. No offer, or a fault of this
+// node's own before install ([statelog.ErrJoinerFault]), leaves it on its
+// intact rows, gated by seat admission, retrying on a widening interval. An
+// unrecorded install ([statelog.ErrAdoptionUnrecorded]) is an adoption, the
+// rename being the point of no return; a lost estate
+// ([statelog.ErrEstateNotRestored]) stops a boot, and a running node reopens
+// it ([stateLog.restoreEstate]).
 func (e *Engine) join(ctx context.Context, s *stateLog,
 	logs map[string]*jetstream.DomainLog) (joinOutcome, statelog.OfferRequest, error) {
 
 	conn, ok := e.backends.Queue.(interface{ Conn() *nats.Conn })
 	if !ok || conn.Conn() == nil {
-		// A JOIN NEEDS THE BROKER'S OWN CONNECTION — a snapshot is
-		// megabytes over request/reply rather than anything the queue
-		// contract carries. A backend with none is the memory twin, in
-		// a test, with no peer to donate anyway.
+		// A join needs the broker's own connection (a snapshot is megabytes
+		// over request/reply, outside the queue contract). A backend with
+		// none is the memory twin, with no peer to donate anyway.
 		return joinNoDonor, statelog.OfferRequest{}, nil
 	}
 
@@ -2084,8 +1962,7 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		NodeID:   s.nodeID,
 		Conn:     conn.Conn(),
 		// Every node that can donate ([Engine.joinExpectation]): the join
-		// stops collecting once each has answered, not at the offer
-		// window.
+		// stops once each has answered, not at the offer window.
 		Donors: e.joinExpectation(s),
 		Need: func(context.Context) (statelog.OfferRequest, error) {
 			return want, nil
@@ -2112,21 +1989,19 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 		return "", statelog.OfferRequest{}, err
 	}
 	adoption, err := adopter.Join(ctx)
-	// AN INSTALLED ARTEFACT'S PIN OUTLIVES THE JOIN, whatever came beside
-	// it: the tail it pins is the one this node is about to replay, and
-	// nothing in the fleet counts that until a row of this node's own does
-	// — see [stateLog.holdUntilCounted].
+	// An installed artefact's pin outlives the join: the tail it pins is the
+	// one this node is about to replay, and nothing in the fleet counts that
+	// until a row of this node's own does ([stateLog.holdUntilCounted]).
 	if adoption.Release != nil {
 		s.holdUntilCounted(adoption.Release)
 	}
 	switch {
 	case errors.Is(err, statelog.ErrNoOffer):
 		// Not a failure (see the doc comment). The error carries each
-		// donor's refusal, which says why nobody could donate.
+		// donor's refusal; the commonest cause, a donor running fewer
+		// domains, is permanent.
 		log.WarnContext(ctx, "statelog_no_snapshot_offered",
 			"node", s.nodeID, "domains", slices.Concat(behind, passed),
-			// And why each peer was turned down: the commonest cause, a
-			// donor running fewer domains, is permanent.
 			"refusals", err.Error(),
 			"detail", "no peer could donate a usable snapshot, so this node "+
 				"comes up on the history it has; reads report the coverage "+
@@ -2135,15 +2010,13 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 				"and it asks again on a widening interval")
 		return joinNoDonor, want, nil
 	case errors.Is(err, statelog.ErrAdoptionUnrecorded):
-		// ADOPTED — see the doc comment. The adopter has written both
-		// lines this needs: `statelog_adopted`, and the error naming the
-		// history row it could not advance.
+		// Adopted (see the doc comment). The adopter has logged
+		// `statelog_adopted` and the history row it could not advance.
 		return joinAdopted, want, nil
 	case errors.Is(err, statelog.ErrJoinerFault):
-		// BEHIND, AND THIS NODE'S OWN FAULT — see the doc comment. At
-		// error rather than warn, unlike nobody donating: an operator
-		// may have something to fix (a full volume, an unwritable
-		// directory), and the line names it.
+		// Behind, and this node's own fault (see the doc comment). Error
+		// rather than warn, unlike nobody donating: an operator may have
+		// something to fix (a full volume, an unwritable directory).
 		log.ErrorContext(ctx, "statelog_join_unable",
 			"node", s.nodeID, "domains", slices.Concat(behind, passed),
 			"error", err.Error(),
@@ -2158,57 +2031,51 @@ func (e *Engine) join(ctx context.Context, s *stateLog,
 			"replay its way to the fleet on %s and the join failed: %w",
 			words.And(slices.Concat(behind, passed)), err)
 	}
-	// NO LINE OF ITS OWN: the adopter writes `statelog_adopted` with the
-	// donor, the artefact's checksum and when it was taken, and a second
-	// line here made one adoption read as two.
+	// No line of its own: the adopter writes `statelog_adopted`, and a second
+	// here made one adoption read as two.
 	return joinAdopted, want, nil
 }
 
-// joinOutcome is what a join concluded, for the caller that acts on the
-// difference. Four answers, since "adopted nothing" is three facts to a running
-// node: current (nothing asked, but [Engine.rejoin] still re-keys, since the
-// file may be an artefact an earlier rejoin installed and
-// [stateLog.restoreEstate] opened since), no donor, or a fault of its own. The
-// last two are acted on alike (rows untouched) and differ only in naming whose
+// joinOutcome is what a join concluded. Four answers, since "adopted nothing"
+// is three facts to a running node: current (nothing asked, but [Engine.rejoin]
+// still re-keys, since the file may be an artefact an earlier rejoin installed
+// and [stateLog.restoreEstate] opened since), no donor, or a fault of its own.
+// The last two are acted on alike (rows untouched) and differ only in whose
 // fault it was: an operator reads the donors' refusals for one and fixes this
 // node for the other. Never read off the wire, so it has no Valid.
 type joinOutcome string
 
 const (
-	// joinCurrent — every domain can replay from where its rows say it
-	// is, so the fleet was not asked.
+	// joinCurrent: every domain can replay from where its rows say it is,
+	// so the fleet was not asked.
 	joinCurrent joinOutcome = "current"
 
-	// joinAdopted — a peer's snapshot is installed and open: complete, or
-	// complete in everything but this node's history row of it
-	// ([statelog.ErrAdoptionUnrecorded]).
+	// joinAdopted: a peer's snapshot is installed and open, complete or
+	// complete but for this node's history row ([statelog.ErrAdoptionUnrecorded]).
 	joinAdopted joinOutcome = "adopted"
 
-	// joinNoDonor — this node is behind and no peer could donate, or it
-	// has no broker connection to ask one over.
+	// joinNoDonor: this node is behind and no peer could donate, or it has
+	// no broker connection to ask one over.
 	joinNoDonor joinOutcome = "no_donor"
 
-	// joinUnable — this node is behind and could not adopt a snapshot, for
-	// a fault of its own before anything was installed
-	// ([statelog.ErrJoinerFault]). Its rows are untouched, so it stands
-	// exactly where [joinNoDonor] leaves a node.
+	// joinUnable: this node is behind and could not adopt, for a fault of
+	// its own before anything was installed ([statelog.ErrJoinerFault]).
+	// Rows untouched, so it stands where [joinNoDonor] leaves a node.
 	joinUnable joinOutcome = "unable"
 )
 
 // joinExpectation is who a join on this node waits to hear from
 // ([statelog.AdoptDeps.Donors]): the live data nodes listed now
 // ([Engine.holdersOf]) and the positions register ([joinDonors]). Listed, not
-// the watched view, which may not have seen a donor yet; both are read inside
-// the offer window, and a failed read leaves the window to decide rather than
-// end the collection before a donor's offer.
+// the watched view, which may not have seen a donor yet; a failed read leaves
+// the offer window to decide rather than end collection before a donor's offer.
 func (e *Engine) joinExpectation(s *stateLog) func(context.Context) ([]string, error) {
 	return func(ctx context.Context) ([]string, error) {
 		live, err := e.holdersOf().LiveData(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("list the live data nodes: %w", err)
 		}
-		// NO REGISTER, NO ROWS: nothing on this node publishes one, so
-		// there is nobody a row could add.
+		// No register, no rows: nobody a row could add.
 		var rows []coord.NodePositions
 		if s.fleet != nil {
 			if rows, err = s.fleet.Positions(ctx); err != nil {
@@ -2221,8 +2088,8 @@ func (e *Engine) joinExpectation(s *stateLog) func(context.Context) ([]string, e
 }
 
 // joinDonors is every node a join on node own waits to hear from, a superset
-// of every node that can offer, since the collection ends on the last one
-// named ([statelog.CollectOffers]). Sorted, so one fleet is one expectation:
+// of every node that can offer, since collection ends on the last one named
+// ([statelog.CollectOffers]). Sorted, so one fleet is one expectation:
 //
 //   - every live data node, each running a donor (its row may lag a beat);
 //   - every node whose fresh row names an artefact ([donorRowFresh]), whatever
@@ -2255,13 +2122,13 @@ func joinDonors(now time.Time, own string, ownServing bool,
 // a join to wait on the artefact it names ([joinDonors]): four heartbeats, as
 // [statelog.TrimHoldStale] derives, since a node may miss three and still run
 // its donor. Waiting on a node just dead costs the [statelog.OfferWindow];
-// leaving out a running one costs its offer, which may be the only one.
+// leaving out a running one costs its offer, maybe the only one.
 const donorRowFresh = 4 * statelog.PositionHeartbeat
 
 // namesArtefact reports whether a register row says its node holds an
 // artefact of the estate ([stampSnapshot]): a size on the row, or a snapshot
-// instant on any log's entry — the instant rather than the sequence, because
-// an artefact taken while a log was still empty covers it at position zero.
+// instant on any log's entry (the instant, not the sequence, since an artefact
+// taken while a log was empty covers it at position zero).
 func namesArtefact(row coord.NodePositions) bool {
 	if row.SnapshotBytes > 0 {
 		return true
@@ -2288,8 +2155,8 @@ func namesArtefact(row coord.NodePositions) bool {
 //     than one below the floor.
 
 func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
-	// ONE RECOVERY AT A TIME: a reanchor moving a checkpoint in the file
-	// this is about to replace would be writing into a file with no name.
+	// One recovery at a time: a reanchor moving a checkpoint in the file this
+	// is about to replace would write into a file with no name.
 	s.recovering.Lock()
 	defer s.recovering.Unlock()
 	log.WarnContext(ctx, "statelog_rejoin_started", "node", s.nodeID,
@@ -2301,12 +2168,11 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 			"holds")
 	s.haltAppliers()
 	// replaced is whether the join may have put a donor's rows in place,
-	// which no committed batch will ever say — see [stateLog.estateReplaced].
+	// which no committed batch will ever say ([stateLog.estateReplaced]).
 	replaced := false
-	// ctx is the state log's own run context ([stateLog.requestRejoin]
-	// starts this under it), so the relaunched appliers get the boot
-	// launch's lifetime. On every exit, failures included: a rejoin that
-	// found no donor changed no rows.
+	// ctx is the state log's own run context ([stateLog.requestRejoin]), so
+	// relaunched appliers get the boot launch's lifetime. On every exit,
+	// failures included: a rejoin that found no donor changed no rows.
 	defer func() {
 		s.launchAppliers(ctx)
 		if replaced {
@@ -2318,26 +2184,22 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 	switch {
 	case err != nil:
 		// Only a join that may have put another file in place, or left none
-		// open, announces the rows replaced: [statelog.ErrEstateNotRestored],
-		// the one error beside an installed artefact (an unrecorded one is
-		// [joinAdopted]) or after a rollback that could not reopen. Every
-		// other failure left the live file open, and announcing it would
-		// close every socket and reset every artifact room on each retry.
-		// Said here, not left to [stateLog.restoreEstate], a heartbeat later
-		// at the soonest, while a socket the donor's rows ended streams on.
+		// open, announces the rows replaced: [statelog.ErrEstateNotRestored].
+		// Every other failure left the live file open, and announcing it
+		// would close every socket and reset every artifact room on each
+		// retry. Said here, not left to [stateLog.restoreEstate], a heartbeat
+		// later at the soonest, while a socket the donor's rows ended streams on.
 		replaced = errors.Is(err, statelog.ErrEstateNotRestored)
 		return err
 	case outcome == joinNoDonor:
 		return errNoDonor
 	case outcome == joinUnable:
-		// NOTHING WAS INSTALLED and the live file was never replaced, so
-		// nothing is announced: as [joinNoDonor], the node is where it
-		// was, and the retry widens.
+		// Nothing was installed and the live file never replaced, so nothing
+		// is announced: as [joinNoDonor], and the retry widens.
 		return errJoinUnable
 	}
-	// Against the instant the join judged the artefact by (the live one the
-	// adopter checked the offer against), not a fresh read that could fail
-	// and leave a runner keyed to the replaced history.
+	// Against the instant the join judged the artefact by, not a fresh read
+	// that could fail and leave a runner keyed to the replaced history.
 	s.resetConsumers(ctx, func(name string) (time.Time, error) {
 		return want.StreamCreatedAt[name], nil
 	})
@@ -2353,11 +2215,10 @@ func (e *Engine) rejoin(ctx context.Context, s *stateLog) error {
 // moves every consumer to the checkpoint the opened file keeps, with the
 // appliers halted around it as around a join. The consumers move because the
 // file may be the donor's, from an artefact installed but not opened, which no
-// consumer was moved to and, when current, no rejoin follows. The adoption row
-// stays incomplete: nothing on the write path reads it, since each file
-// carries its own ledger and watermark ([statelog.Rows.LostBefore]). A failed
-// reopen is [statelog.ErrEstateNotRestored], like every outcome leaving no
-// replicated database.
+// consumer was moved to. The adoption row stays incomplete: nothing on the
+// write path reads it, since each file carries its own ledger and watermark
+// ([statelog.Rows.LostBefore]). A failed reopen is
+// [statelog.ErrEstateNotRestored].
 func (s *stateLog) restoreEstate(ctx context.Context) error {
 	// One recovery at a time: a reanchor between this reopen and the re-key
 	// below would be re-keyed back and see its halted applier relaunched.
@@ -2365,8 +2226,8 @@ func (s *stateLog) restoreEstate(ctx context.Context) error {
 	defer s.recovering.Unlock()
 	s.haltAppliers()
 	// ctx is the state log's run context, for [Engine.rejoin]'s reason. A
-	// file that opened is announced replaced once the appliers run: it may
-	// be the donor's ([stateLog.estateReplaced]).
+	// file that opened may be the donor's, so it is announced replaced
+	// ([stateLog.estateReplaced]).
 	reopened := false
 	defer func() {
 		s.launchAppliers(ctx)
@@ -2384,9 +2245,9 @@ func (s *stateLog) restoreEstate(ctx context.Context) error {
 			"open again; the node asks the fleet for a snapshot only if it is "+
 			"still below the floor, and no sooner than its retry interval allows")
 	// No join ran, so each runner is re-keyed against a fresh read of its
-	// live stream; one unreadable is re-derived by its loop
-	// ([statelog.Runner.Run]), and a verdict left wrong is named by the next
-	// heartbeat ([statelog.Runner.RecreationStale]).
+	// live stream; an unreadable one is re-derived by its loop
+	// ([statelog.Runner.Run]), a wrong verdict named by the next heartbeat
+	// ([statelog.Runner.RecreationStale]).
 	s.resetConsumers(ctx, func(name string) (time.Time, error) {
 		stats, err := s.Domain(name).log.Stats(ctx)
 		if err != nil {
@@ -2394,9 +2255,8 @@ func (s *stateLog) restoreEstate(ctx context.Context) error {
 		}
 		return stats.CreatedAt, nil
 	})
-	// And the snapshot loop is woken, as after an adoption: the file may be
-	// at a generation this node's artefact does not name
-	// ([stateLog.snapshotNudge]); otherwise its gate declines.
+	// Wake the snapshot loop, as after an adoption: the file may be at a
+	// generation this node's artefact does not name ([stateLog.snapshotNudge]).
 	s.nudgeSnapshot()
 	return nil
 }
@@ -2405,13 +2265,12 @@ func (s *stateLog) restoreEstate(ctx context.Context) error {
 // replicated file now keeps ([statelog.Runner.Rejoined], against the instant
 // live names) and moves its consumer there: a runner keyed to the replaced
 // history stops again on it, and the broker will not move a consumer's start,
-// so one left behind delivers every record between to be dropped. A failure
-// is a line, not a failed call. The consumer: correctness is the checkpoint's,
-// so one left behind costs redeliveries, and [jetstream.DomainConsumer]
-// rebuilds on its next fetch a handle whose reset deleted and failed to
-// create. The runner: an unrun re-key leaves the verdict to its relaunched
-// loop ([statelog.Runner.Run]), and a stream it never read is named by the
-// next heartbeat ([statelog.Runner.RecreationStale]). Neither strands a node.
+// so one left behind redelivers every record between. A failure is a line, not
+// a failed call: correctness is the checkpoint's, so a stale consumer costs
+// redeliveries ([jetstream.DomainConsumer] rebuilds a handle whose reset
+// failed), and an unrun re-key leaves the verdict to the relaunched loop
+// ([statelog.Runner.Run]) or the next heartbeat
+// ([statelog.Runner.RecreationStale]).
 func (s *stateLog) resetConsumers(ctx context.Context, live func(name string) (time.Time, error)) {
 	for _, running := range s.running() {
 		name := running.domain.Name()
@@ -2452,9 +2311,9 @@ func (s *stateLog) resetConsumers(ctx context.Context, live func(name string) (t
 // heartbeat whatever the interval says, since that asks nobody and until it
 // opens the node serves no replicated read; a reopen moves no schedule. Asking
 // the fleet costs an offer window of refusals and maybe a whole transfer, so
-// it runs one attempt at a time and every failed ask widens the interval, one
-// that lost the estate included. A lost estate is logged at ERROR, naming the
-// file, as the one outcome an operator may fix by hand.
+// it runs one attempt at a time and every failed ask widens the interval. A
+// lost estate is logged at ERROR, naming the file, as the one outcome an
+// operator may fix by hand.
 func (s *stateLog) requestRejoin(now time.Time) {
 	s.rejoinMu.Lock()
 	defer s.rejoinMu.Unlock()
@@ -2523,7 +2382,7 @@ func (s *stateLog) requestRejoin(now time.Time) {
 // generation, [passedByAReanchor]), each repaired by the same adoption. Need
 // is one below the floor per domain, the artefact's acceptance test, with its
 // generation: a bare sequence from before a reanchor names a dead number
-// space, and for a passed domain it is the fleet's generation.
+// space; for a passed domain it is the fleet's generation.
 func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.DomainLog) (
 	behind, passed []string, want statelog.OfferRequest, err error) {
 
@@ -2532,9 +2391,9 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 		Generations:     map[string]uint32{},
 		StreamCreatedAt: map[string]time.Time{},
 	}
-	// WHERE EACH LOG'S ROWS STAND, read first: the fleet read below asks
-	// whether a node is evicted only of one ahead of these, so a fleet on
-	// one generation asks nothing of the logs.
+	// Where each log's rows stand, read first: the fleet read below asks
+	// about eviction only of a log ahead of these, so a fleet on one
+	// generation asks nothing of the logs.
 	above := map[string]uint32{}
 	for _, domain := range registeredDomains() {
 		at, _, found, readErr := statelog.CursorFor(ctx, s.estate().Reader(), domain.Stream().Name)
@@ -2545,9 +2404,9 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 			above[domain.Name()] = at.Generation
 		}
 	}
-	// The fleet's generations and floors, read once for every domain, so all
-	// are judged against one answer. Not ordered after any subject read, as
-	// this is not a write's fence, so the floor theorem asks no second read.
+	// The fleet's generations and floors, read once so all are judged against
+	// one answer. This is not a write's fence, so the floor theorem asks no
+	// second read.
 	rows, err := s.fleet.Positions(ctx)
 	if err != nil {
 		return nil, nil, statelog.OfferRequest{}, fmt.Errorf("engine: read the "+
@@ -2556,8 +2415,8 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 	}
 	floors := s.readFloors(ctx)
 	fleet, unread := s.fleetGenerations(ctx, rows, floors, logs, above)
-	// EVERY DOMAIN AT ONCE: an artefact covers them all, so a join with any
-	// domain unanswered cannot say what to ask for.
+	// Every domain: an artefact covers them all, so a join with any domain
+	// unanswered cannot say what to ask for.
 	for _, name := range registeredNames() {
 		if err := unread[name]; err != nil {
 			return nil, nil, statelog.OfferRequest{}, err
@@ -2570,9 +2429,9 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 			return nil, nil, statelog.OfferRequest{}, fmt.Errorf("engine: the %s "+
 				"log was not provisioned before the join asked what it holds", name)
 		}
-		// One round trip for every term the stream answers, so they describe
-		// one moment: the first sequence (behind?) and the creation instant
-		// (on which stream?) read separately can straddle a rebuild.
+		// One round trip for every stream term, so they describe one moment:
+		// the first sequence and the creation instant read separately can
+		// straddle a rebuild.
 		stats, err := appendTo.Stats(ctx)
 		if err != nil {
 			return nil, nil, statelog.OfferRequest{}, err
@@ -2582,12 +2441,12 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 		if err != nil {
 			return nil, nil, statelog.OfferRequest{}, err
 		}
-		// A node with no checkpoint is at no generation, not generation 0:
-		// in a fleet that has re-anchored, reading it as 0 would replay from
-		// sequence 1 at the wrong generation, report caught up over a partial
-		// database, block the trim, and fail its own boot on the floor
-		// comparison, terminally. So the generation comes from the fleet, and
-		// such a node adopts, as does one whose rows the fleet has passed.
+		// A node with no checkpoint is at no generation, not generation 0: in
+		// a re-anchored fleet, reading it as 0 would replay from sequence 1 at
+		// the wrong generation, report caught up over a partial database,
+		// block the trim, and fail its own boot on the floor comparison. So
+		// the generation comes from the fleet, and such a node adopts, as does
+		// one whose rows the fleet has passed.
 		generation := at.Generation
 		reanchored := passedByAReanchor(domain, at, found, fleet[name])
 		if !found || reanchored {
@@ -2612,19 +2471,18 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 		}
 
 		// What an artefact must cover (set above) is one below the higher of
-		// the stream's first surviving sequence (gone already) and the
-		// published floor (licensed for deletion, maybe not yet reached): an
-		// artefact chosen from `first` alone could be one the trim was about
-		// to pass. One below is the lowest checkpoint [statelog.Replayable]
-		// accepts, sent as a number since the donor has no view of this stream.
+		// the stream's first surviving sequence (gone) and the published
+		// floor (licensed for deletion): one chosen from `first` alone could
+		// be one the trim was about to pass. One below is the lowest
+		// checkpoint [statelog.Replayable] accepts, sent as a number since the
+		// donor has no view of this stream.
 
 		// Whether this node is behind is asked of `first` alone: the floor
 		// says what MAY be deleted, only the stream what IS, and a node
 		// between the two can replay what it lacks (judging it behind would
-		// ask the fleet for records it could read; alone, a snapshot of
-		// itself). [statelog.Replayable] spells the zero cases: a
-		// never-written stream reports 0, a purge-emptied one one past its
-		// last.
+		// ask the fleet for records it could read). [statelog.Replayable]
+		// spells the zero cases: a never-written stream reports 0, a
+		// purge-emptied one one past its last.
 		if !statelog.Replayable(at.Seq, first) {
 			behind = append(behind, name)
 		}
@@ -2639,9 +2497,8 @@ func (s *stateLog) replayable(ctx context.Context, logs map[string]*jetstream.Do
 // generation alone decides: a reanchor opens its generation from one node's
 // rows, so no other node's rows are that history, and on a broker restored
 // from an older copy the instant shows nothing. Never for a domain that claims
-// no identity, whose nodes re-anchor their copies one at a time
-// ([statelog.PermitReanchor]), nor for a node with no checkpoint, which the
-// join already sends to adopt.
+// no identity, whose nodes re-anchor one at a time ([statelog.PermitReanchor]),
+// nor a node with no checkpoint, which the join already sends to adopt.
 func passedByAReanchor(domain statelog.Domain, at statelog.Position, found bool,
 	fleet uint32) bool {
 
@@ -2650,9 +2507,8 @@ func passedByAReanchor(domain statelog.Domain, at statelog.Position, found bool,
 
 // stillUsable re-checks after the transfer that every position the artefact
 // carries is still above the floor: the hold is the mechanism and this the
-// belt, against a hold that went stale or a hand purge, and only before the
-// install can this node refuse. Every domain at once (floors and each log's
-// state concurrently), costing the slowest round trip, not the sum.
+// belt, against a stale hold or a hand purge, and only before the install can
+// this node refuse. Floors and logs are read concurrently.
 func (s *stateLog) stillUsable(ctx context.Context, logs map[string]*jetstream.DomainLog,
 	m statelog.Manifest) error {
 
@@ -2712,11 +2568,11 @@ func (s *stateLog) stillUsable(ctx context.Context, logs map[string]*jetstream.D
 // counted ([stateLog.holdUntilCounted]). Renewed by [statelog.HoldTail]: put
 // once, the trim ignored it a minute into a transfer.
 func (s *stateLog) holdTail(ctx context.Context, at map[string]statelog.DomainPosition) (func(), error) {
-	// An earlier adoption still waiting to be counted gives its pin up
-	// first: one key per owner, so its renewals would put old positions back.
+	// An earlier adoption still waiting to be counted gives its pin up first:
+	// one key per owner, so its renewals would put old positions back.
 	s.releaseTail()
-	// Keyed by stream, as [coord.TrimHold.Streams] is and the backup's hold
-	// (from `statelog_cursor`) is, or the trim reads one as pinning nothing.
+	// Keyed by stream, as [coord.TrimHold.Streams] is, or the trim reads one
+	// as pinning nothing.
 	streams := make(map[string]coord.Position, len(at))
 	for _, domain := range registeredDomains() {
 		name, stream := domain.Name(), domain.Stream().Name
@@ -2724,9 +2580,9 @@ func (s *stateLog) holdTail(ctx context.Context, at map[string]statelog.DomainPo
 		if !held {
 			continue
 		}
-		// The artefact's generation, never this node's cursor's, which is the
-		// one thing a join knows is wrong (absent, or passed by a reanchor):
-		// a pin below the log's generation is an unknown term to the trim.
+		// The artefact's generation, never this node's cursor's, which a join
+		// knows is wrong (absent, or passed): a pin below the log's generation
+		// is an unknown term to the trim.
 		streams[stream] = coord.Position{
 			Stream: stream, Generation: pos.Generation, Seq: pos.Seq,
 		}
@@ -2740,7 +2596,7 @@ func (s *stateLog) holdTail(ctx context.Context, at map[string]statelog.DomainPo
 		Logger:   log,
 	})
 	if err != nil {
-		// UNWRAPPED: the error names the hold by its owner, `<node>/join`,
+		// Unwrapped: the error names the hold by its owner, `<node>/join`,
 		// and the adopter's own says what it was pinning for.
 		return nil, err
 	}
@@ -2748,14 +2604,13 @@ func (s *stateLog) holdTail(ctx context.Context, at map[string]statelog.DomainPo
 }
 
 // joinHoldPurpose names a join in the trim-hold register ([coord.HoldOwner]),
-// beside the backup's: an operator reading a stalled trim sees which node pins
-// it and what it is doing.
+// so an operator reading a stalled trim sees which node pins it and why.
 const joinHoldPurpose = "join"
 
 // heldTail is an installed artefact's pin, waiting for this node to be counted
-// ([stateLog.holdUntilCounted]). A pointer, because WHICH pin a publish
-// captured is a question of identity: a join may hand over a newer one while
-// a publish is in flight.
+// ([stateLog.holdUntilCounted]). A pointer, because which pin a publish
+// captured is a question of identity: a join may hand over a newer one while a
+// publish is in flight.
 type heldTail struct {
 	release func()
 }
@@ -2767,7 +2622,7 @@ type heldTail struct {
 // node's row names the replaced checkpoint until its next publish, so a pin
 // released with the join could let a trim remove the tail just installed.
 // Released by a counting publish ([stateLog.releaseCountedTail]), a later
-// join's own pin ([stateLog.holdTail]) or the state log's stop.
+// join's pin ([stateLog.holdTail]) or the state log's stop.
 func (s *stateLog) holdUntilCounted(release func()) {
 	s.tailMu.Lock()
 	previous := s.tailHeld
@@ -2811,9 +2666,9 @@ func (s *stateLog) releaseCountedTail(ctx context.Context, pin *heldTail, row co
 	}
 	counts, err := s.rowCountsTail(ctx, row)
 	if err != nil {
-		// AN ESTATE NOT OPEN IS SAID ALREADY, at error on every beat
-		// (`statelog_estate_lost`), and the pin is kept for the same
-		// reason the line is written: nothing is counted until it opens.
+		// An estate not open is said already, at error on every beat
+		// (`statelog_estate_lost`); the pin is kept, nothing counting until
+		// it opens.
 		if ctx.Err() == nil && !errors.Is(err, store.ErrNoEstate) {
 			log.WarnContext(ctx, "statelog_join_hold_kept",
 				"node", s.nodeID, "error", err.Error(),
@@ -2833,8 +2688,7 @@ func (s *stateLog) releaseCountedTail(ctx context.Context, pin *heldTail, row co
 	}
 	s.tailMu.Unlock()
 	if !current {
-		// RELEASED ALREADY, or replaced by a later join's — whose own
-		// pin is what that join's installed file is protected by.
+		// Released already, or replaced by a later join's own pin.
 		return
 	}
 	pin.release()
@@ -2844,8 +2698,7 @@ func (s *stateLog) releaseCountedTail(ctx context.Context, pin *heldTail, row co
 }
 
 // rowCountsTail is whether row names, on every registered log, a position no
-// further along than this node's own rows hold — see
-// [stateLog.releaseCountedTail].
+// further along than this node's own rows hold ([stateLog.releaseCountedTail]).
 func (s *stateLog) rowCountsTail(ctx context.Context, row coord.NodePositions) (bool, error) {
 	for _, domain := range registeredDomains() {
 		name, stream := domain.Name(), domain.Stream().Name
@@ -2858,8 +2711,7 @@ func (s *stateLog) rowCountsTail(ctx context.Context, row coord.NodePositions) (
 			return false, fmt.Errorf("read %s's checkpoint: %w", name, err)
 		}
 		if !found {
-			// NO CHECKPOINT ROW IS THE ZERO POSITION: a log nobody has
-			// written to has applied nothing.
+			// No checkpoint row is the zero position: nothing applied.
 			held = statelog.Position{}
 		}
 		switch {
@@ -2873,11 +2725,11 @@ func (s *stateLog) rowCountsTail(ctx context.Context, row coord.NodePositions) (
 	return true, nil
 }
 
-// registered is every registered domain's log as the framework's surfaces want
-// it: by name, with the health this node reports for each, or the zero health
+// registered is every registered domain's log as the framework wants it: by
+// name, with the health this node reports for each, or the zero health
 // (vouching for nothing) for a log this runtime does not run. A snapshot gates
-// on the health and a join on the artefact's acceptance; both walk this map,
-// so a log cannot appear in one and not the other.
+// on the health and a join on the artefact's acceptance; both walk this map, so
+// a log cannot appear in one and not the other.
 func (s *stateLog) registered() map[string]statelog.Registered {
 	out := map[string]statelog.Registered{}
 	for _, domain := range registeredDomains() {
@@ -2885,25 +2737,22 @@ func (s *stateLog) registered() map[string]statelog.Registered {
 		entry := statelog.Registered{Domain: domain, Spec: domain.Stream()}
 		running := s.Domain(name)
 		if running == nil {
-			// A LOG THIS NODE DOES NOT RUN IS ONE IT CANNOT VOUCH FOR,
-			// which the zero value says.
+			// A log this node does not run is one it cannot vouch for.
 			entry.Health = func() statelog.Health { return statelog.Health{} }
 			out[name] = entry
 			continue
 		}
 		entry.Spec = running.spec
 		// The running log, captured: the snapshot loop and the adopter keep
-		// this for the process's life, the set's own ([stateLog.logs]), and
-		// its runner is relaunched or re-keyed in place, so every call reads
-		// the live checkpoint. Under [stateLog.run], for
-		// [stateLog.readerFor]'s reason: no caller's context outlives it.
+		// this for the process's life ([stateLog.logs]), and its runner is
+		// relaunched or re-keyed in place, so every call reads the live
+		// checkpoint. Under [stateLog.run], for [stateLog.readerFor]'s reason.
 		entry.Health = func() statelog.Health {
 			health, err := s.health(s.run, running, s.readFloors(s.run))
 			if err != nil {
-				// AN UNREADABLE HEALTH IS NOT A HEALTHY ONE: the zero
-				// value has Drained false, an unread floor and no
-				// first sequence, which every gate reads as "cannot
-				// vouch for this".
+				// An unreadable health is not a healthy one: the zero value
+				// (Drained false, unread floor, no first sequence) reads at
+				// every gate as "cannot vouch for this".
 				return statelog.Health{}
 			}
 			return health
@@ -2914,9 +2763,8 @@ func (s *stateLog) registered() map[string]statelog.Registered {
 }
 
 // Status is what this node reports about each domain's apply loop: every
-// registered domain, including those that do not gate seat admission, since
-// the report asks how far along every copy is, and a domain missing from it is
-// one an operator cannot see falling behind.
+// registered domain, including those that do not gate seat admission, since a
+// domain missing from it is one an operator cannot see falling behind.
 func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 	if s == nil {
 		return nil
@@ -2930,16 +2778,15 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 		health, err := s.health(ctx, running, floors)
 		switch {
 		case err != nil:
-			// UNREADABLE IS NOT READY. The alternative reads as a
-			// caught-up loop on a node whose broker is unreachable,
-			// which is the one state this count exists to surface.
+			// Unreadable is not ready: the alternative reads as caught up on
+			// a node whose broker is unreachable, the state this count exists
+			// to surface.
 			row.Detail = "this node cannot read the domain's own position: " +
 				err.Error()
 		case health.StreamRecreated || health.GenerationPassed || health.LogDiverged:
 			// A rebuilt, passed or diverged log first, ahead of the stop it
 			// may have caused: this is the cause, with the remedy, and a node
-			// on a rebuilt log not yet faulted past its budget would read as
-			// ready.
+			// not yet faulted past its budget would read as ready.
 			row.Detail = running.runner.StreamIdentity().Error()
 		case health.Err != "":
 			// A stopped applier is not ready whatever its lag says: one
@@ -2956,10 +2803,9 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 			// print "0 record(s) behind", the number a reader would act on.
 			row.Detail = "this node cannot tell how far behind the log it is"
 		case *health.Lag > 0:
-			// BEHIND IS NOT READY AND NOT WRONG. The seats this node
-			// holds stay put (see [statelog.Health.Healthy]); what
-			// this row feeds is the fleet view's "3 of 5", which is
-			// how an operator sees a fresh node catching up.
+			// Behind is not ready and not wrong: held seats stay put
+			// ([statelog.Health.Healthy]); this row feeds the fleet view's
+			// "3 of 5", how an operator sees a fresh node catching up.
 			row.Detail = fmt.Sprintf("applying: %d record(s) behind the log's head",
 				*health.Lag)
 		case health.Deferred > 0:
@@ -2979,24 +2825,22 @@ func (s *stateLog) Status(ctx context.Context) []ReplicationStatus {
 // startSnapshots runs both halves of the fleet's recovery path: this node takes
 // snapshots of its replicated estate on a timer and serves them to a peer that
 // asks. Both, on every member: a recipient ([Engine.join]) with no donor never
-// completes, half wired reports itself working, and there is no leader to be
-// the donor. Both are best effort and never gate the boot: a node that cannot
-// snapshot still serves its company, and only its peers' recovery loses.
+// completes, and there is no leader to be the donor. Best effort, never gating
+// the boot: a node that cannot snapshot still serves its company, and only its
+// peers' recovery loses.
 func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *stateLog) {
 	if s == nil || boot == nil || e.backends == nil {
 		return
 	}
 	// Two seams: the join rides the engine's connection for one short
 	// exchange, while the donor dials its own, since it closes what it is
-	// given and would take the engine's broker connection down with it.
+	// given and would take the engine's connection down with it.
 	broker, ok := e.backends.Queue.(interface {
 		Conn() *nats.Conn
 		DialOwned() (*nats.Conn, error)
 	})
 	if !ok || broker.Conn() == nil {
-		// NO BROKER CONNECTION, which is the memory twin in a test. A
-		// transfer is megabytes over request/reply rather than anything
-		// the event-queue contract carries.
+		// No broker connection: the memory twin in a test.
 		return
 	}
 	root := boot.Store.SnapshotDirFor()
@@ -3012,9 +2856,9 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 	}
 	// The snapshotter once, for the node's life: its logs are the boot's set
 	// ([stateLog.logs]) and its file a handle resolved per call
-	// ([stateLog.estate]), so nothing can move under it. A build refusal is a
-	// registration no later attempt would find different, so it is logged
-	// once and stamped on the heartbeat's row, not logged every tick.
+	// ([stateLog.estate]). A build refusal is a registration no later attempt
+	// would find different, so it is logged once and stamped on the
+	// heartbeat's row.
 	snapshotter, snapErr := e.snapshotterOf(s, root, interval)
 	if snapErr != nil {
 		log.ErrorContext(ctx, "statelog_snapshots_unavailable",
@@ -3030,9 +2874,8 @@ func (e *Engine) startSnapshots(ctx context.Context, boot *config.Bootstrap, s *
 	s.done.Add(1)
 	go func() {
 		defer s.done.Done()
-		// THE DONOR FIRST and for the node's whole life: a peer asks at
-		// ITS boot, which is any moment at all, so there is no window in
-		// which not answering is acceptable.
+		// The donor first and for the node's whole life: a peer asks at its
+		// own boot, any moment at all.
 		keepDonorServing(s.run, donor, donorRedial)
 	}()
 	if snapErr != nil {
@@ -3055,16 +2898,15 @@ func (s *stateLog) donorDeps(root string, dial statelog.Dialer) statelog.DonorDe
 		Dial:   dial,
 		Newest: func() (statelog.Manifest, bool) { return newestSnapshot(root) },
 		Path: func(m statelog.Manifest) string {
-			// The name the manifest carries, never re-derived: a derivation
-			// let a second take land on the previous pair's name
-			// ([statelog.Manifest.Artifact]).
+			// The name the manifest carries, never re-derived: a second take
+			// could land on the previous pair's name ([statelog.Manifest.Artifact]).
 			return filepath.Join(root, m.Artifact)
 		},
 	}
 }
 
-// snapshotterOf is the snapshotter of the replicated estate, over every log
-// this node runs, writing its artefacts to dir.
+// snapshotterOf is the snapshotter of the replicated estate over every log
+// this node runs.
 func (e *Engine) snapshotterOf(s *stateLog, dir string, interval time.Duration) (*statelog.Snapshotter, error) {
 	registered := s.registered()
 	logs := make([]statelog.Registered, 0, len(registered))
@@ -3088,9 +2930,9 @@ func (e *Engine) snapshotterOf(s *stateLog, dir string, interval time.Duration) 
 // the interval's business. [statelog.Snapshotter.Take]'s preconditions (caught
 // up, not too far behind, more than one node counted, room on the volume,
 // nothing deferred) are all transient at boot, so a skip retries soon, or a
-// node restarted more often than the interval (a day) would never take one and
-// the fleet would have no donor. A taken snapshot, or `recent`, is a question
-// of staleness and waits ([snapshotWaits.after]). A reanchor, an adoption, a
+// node restarted more often than the interval would never take one and the
+// fleet would have no donor. A taken snapshot, or `recent`, is a question of
+// staleness and waits ([snapshotWaits.after]). A reanchor, an adoption, a
 // restore or a first drain wakes the loop at once ([stateLog.nudgeSnapshot]),
 // since each leaves an artefact a joiner refuses or ends `unhydrated`.
 func (e *Engine) snapshotLoop(s *stateLog, snap snapshotTaker,
@@ -3098,12 +2940,10 @@ func (e *Engine) snapshotLoop(s *stateLog, snap snapshotTaker,
 
 	ctx := s.run
 	// What this node holds decides how loud a skip is: one holding an
-	// artefact still gives its fleet a donor, one holding none does not. It
-	// is [snapshotHeld.Have], read from the directory, so it survives a
-	// restart as the artefact does (a process-scoped flag warned "never
-	// taken" on every restart). The reason last reported is the other half:
-	// an unchanged state is not news, though the register is stamped every
-	// tick.
+	// artefact still gives its fleet a donor. It is [snapshotHeld.Have], read
+	// from the directory so it survives a restart as the artefact does. The
+	// reason last reported is the other half: an unchanged state is not news,
+	// though the register is stamped every tick.
 	var reported statelog.SkipReason
 	// streak counts the boot skips in a row the retry is backing off over.
 	streak := 0
@@ -3122,13 +2962,12 @@ func (e *Engine) snapshotLoop(s *stateLog, snap snapshotTaker,
 		switch {
 		case err == nil:
 			reported = ""
-			// AND AT ONCE rather than on the heartbeat's next beat: the
-			// row naming this artefact is what makes the node a donor
-			// anybody counts — see [stateLog.heartbeatNudge].
+			// At once, not on the next beat: the row naming this artefact
+			// makes the node a donor anybody counts ([stateLog.heartbeatNudge]).
 			s.nudgeHeartbeat()
 		case !isSkip(err):
-			// Repeated, unlike a skip: this one ran and errored, and a disk
-			// gone read-only is a fault an operator should keep seeing.
+			// Repeated, unlike a skip: it ran and errored, and a read-only
+			// disk is a fault an operator should keep seeing.
 			log.WarnContext(ctx, "statelog_snapshot_failed",
 				"error", err.Error(), "holds_artefact", held.Have,
 				"retry_in", wait,
@@ -3145,10 +2984,7 @@ func (e *Engine) snapshotLoop(s *stateLog, snap snapshotTaker,
 			return
 		case <-time.After(wait):
 		case <-s.snapshotNudge:
-			// A REANCHOR, AN ADOPTION, A RESTORE OR A FIRST DRAIN: the
-			// next take is a question about whether the artefact is
-			// current, which the gate answers — see
-			// [stateLog.snapshotNudge].
+			// See [stateLog.snapshotNudge].
 		}
 	}
 }
@@ -3160,7 +2996,7 @@ type snapshotWaits struct {
 	// snapshot stands before the next is taken.
 	Interval time.Duration
 	// FirstRetry and Retry are the doubling retry after a skip that clears
-	// on its own as a boot settles — its first wait, and the ceiling it
+	// on its own as a boot settles: its first wait, and the ceiling it
 	// doubles to, which every other declined or failed tick waits flat.
 	FirstRetry, Retry time.Duration
 }
@@ -3173,16 +3009,15 @@ func snapshotWaitsFor(interval time.Duration) snapshotWaits {
 
 // after is how long the loop waits after a tick that ended in err holding held
 // (never past the interval), and the run of boot skips it carries on. Pure,
-// for [reportForSkip]'s reason: the schedule makes a restarted node a donor.
+// for [reportForSkip]'s reason.
 //
 //   - A taken snapshot waits the interval.
 //   - `recent` waits until its artefact ages past the interval, when the
 //     gate's answer next changes; a nudge covers a generation moving.
 //   - `unhydrated`, `sole_node` and `lagging` clear as a boot settles, so
-//     they double from [snapshotSkipFirstRetry] to [snapshotSkipRetry]:
-//     prompt in a rolling upgrade, settled within a minute if they persist.
-//   - Every other skip, and a failed take, waits flat at the ceiling, since
-//     each waits on something outside the boot.
+//     they double from [snapshotSkipFirstRetry] to [snapshotSkipRetry].
+//   - Every other skip, and a failed take, waits flat at the ceiling: each
+//     waits on something outside the boot.
 func (w snapshotWaits) after(err error, held snapshotHeld, streak int,
 	now time.Time) (time.Duration, int) {
 	retry := min(w.Retry, w.Interval)
@@ -3204,8 +3039,8 @@ func (w snapshotWaits) after(err error, held snapshotHeld, streak int,
 	}
 }
 
-// clearsAtBoot reports a skip that ends by itself as a node's boot settles —
-// see [snapshotWaits.after].
+// clearsAtBoot reports a skip that ends by itself as a node's boot settles
+// ([snapshotWaits.after]).
 func clearsAtBoot(reason statelog.SkipReason) bool {
 	switch reason {
 	case statelog.SkipUnhydrated, statelog.SkipSoleNode, statelog.SkipLagging:
@@ -3215,16 +3050,15 @@ func clearsAtBoot(reason statelog.SkipReason) bool {
 }
 
 // snapshotTaker is the snapshotter as its loop uses it: one attempt, which
-// either took an artefact or says why not. [statelog.Snapshotter] is the
-// implementation.
+// either took an artefact or says why not.
 type snapshotTaker interface {
 	Take(ctx context.Context) (statelog.Manifest, error)
 }
 
 // levelHook is what a domain's apply loop tells each time it comes level with
 // its log ([statelog.RunnerDeps.OnLevel]): the seat-claim gate's watch for a
-// domain whose health gates admission, and nobody for one whose health does
-// not, whose level the gate never asks about — see admission.go.
+// domain whose health gates admission, nobody for one the gate never asks
+// about (admission.go).
 func (s *stateLog) levelHook(domain statelog.Domain) func() {
 	if s.admit == nil || !domain.GatesSeatAdmission() {
 		return nil
@@ -3232,8 +3066,8 @@ func (s *stateLog) levelHook(domain statelog.Domain) func() {
 	return s.admit
 }
 
-// nudgeSnapshot wakes the snapshot loop, without waiting for it — see
-// [stateLog.snapshotNudge].
+// nudgeSnapshot wakes the snapshot loop without waiting
+// ([stateLog.snapshotNudge]).
 func (s *stateLog) nudgeSnapshot() {
 	select {
 	case s.snapshotNudge <- struct{}{}:
@@ -3241,8 +3075,8 @@ func (s *stateLog) nudgeSnapshot() {
 	}
 }
 
-// nudgeHeartbeat wakes the position heartbeat, without waiting for it — see
-// [stateLog.heartbeatNudge].
+// nudgeHeartbeat wakes the position heartbeat without waiting
+// ([stateLog.heartbeatNudge]).
 func (s *stateLog) nudgeHeartbeat() {
 	select {
 	case s.heartbeatNudge <- struct{}{}:
@@ -3273,10 +3107,9 @@ type noSnapshotReport struct {
 // [internal/backup]), ending only when an operator adds a node, so it is said
 // once at info; warned every tick, it taught operators to filter the
 // subsystem. The tick stays on the retry: `sole_node` is the snapshotter's
-// first gate, one register read, so the donor arms a tick after a peer joins.
+// first gate, so the donor arms a tick after a peer joins.
 func reportForSkip(reason, reported statelog.SkipReason, holds bool) noSnapshotReport {
-	// A node that holds an artefact says nothing, decided here rather than
-	// at the call site so the predicate and the decision are one place.
+	// A node that holds an artefact says nothing.
 	if holds || reason == reported {
 		return noSnapshotReport{}
 	}
@@ -3303,7 +3136,7 @@ func reportForSkip(reason, reported statelog.SkipReason, holds bool) noSnapshotR
 }
 
 // remembered is what the next tick compares against. A node holding an
-// artefact remembers nothing, so if it later holds none, that is said again.
+// artefact remembers nothing, so losing it is said again.
 func remembered(reason statelog.SkipReason, holds bool) statelog.SkipReason {
 	if holds {
 		return ""
@@ -3311,9 +3144,8 @@ func remembered(reason statelog.SkipReason, holds bool) statelog.SkipReason {
 	return reason
 }
 
-// emitNoSnapshot writes what [reportForSkip] decided, and nothing for the tick
-// it decided says nothing. wait is how long the loop waits before it asks
-// again ([snapshotWaits.after]).
+// emitNoSnapshot writes what [reportForSkip] decided; wait is how long the loop
+// waits before asking again ([snapshotWaits.after]).
 func emitNoSnapshot(ctx context.Context, say noSnapshotReport, wait time.Duration) {
 	switch {
 	case say.Event == "":
@@ -3327,8 +3159,7 @@ func emitNoSnapshot(ctx context.Context, say noSnapshotReport, wait time.Duratio
 }
 
 // heldAfter is what a snapshot tick concluded this node holds, read from the
-// directory: a skip deletes nothing, and `recent` is a skip because an artefact
-// is there, while the other skips leave yesterday's copy still donatable. The
+// directory: a skip deletes nothing, so yesterday's copy stays donatable. The
 // skip says why nothing was refreshed, the directory what is held.
 func heldAfter(m statelog.Manifest, err error, dir string) snapshotHeld {
 	if err == nil {
@@ -3344,7 +3175,7 @@ func heldAfter(m statelog.Manifest, err error, dir string) snapshotHeld {
 		held.Manifest, held.Have = on, true
 		if held.Skip == statelog.SkipRecent {
 			// `recent` is no answer to "why can this node not donate": it
-			// can, and publishing it would list every healthy node as unable.
+			// can, and publishing it would list healthy nodes as unable.
 			held.Skip = ""
 		}
 	}
@@ -3353,15 +3184,11 @@ func heldAfter(m statelog.Manifest, err error, dir string) snapshotHeld {
 
 // stampSnapshot writes what this node holds onto the row it is about to
 // publish: the artefact's size and skip on the row, each log's artefact
-// position on its entry. Over values, for [statelog.TrimInputs]'s reason: the
-// one part of the path from disk to another node's trim testable without a
-// fleet.
+// position on its entry. Over values, for [statelog.TrimInputs]'s reason.
 func stampSnapshot(row *coord.NodePositions, held *snapshotHeld) {
 	if held == nil {
-		// NOTHING CONCLUDED YET is not the same as nothing held, and
-		// the difference matters for the first seconds of a node's
-		// life: leaving both fields empty says "not known", where a
-		// skip would say "known, and the answer is no".
+		// Nothing concluded yet is not nothing held: empty fields say "not
+		// known", where a skip would say "known, and the answer is no".
 		return
 	}
 	row.SnapshotSkip = string(held.Skip)
@@ -3403,20 +3230,20 @@ const snapshotSkipRetry = 30 * time.Second
 
 // snapshotSkipFirstRetry is the first wait of a boot skip's doubling retry: one
 // second, the scale of the events that end one (an applier's empty fetch, a
-// peer's first heartbeat). Each retry is a few reads, so the five doublings to
-// [snapshotSkipRetry] cost a booting node five register reads.
+// peer's first heartbeat); the five doublings to [snapshotSkipRetry] cost a
+// booting node five register reads.
 const snapshotSkipFirstRetry = time.Second
 
 // counted is the nodes the fleet counts on the estate's logs at now, sorted,
 // which decides whether there is anybody to donate to: the trim's own counted
 // set ([statelog.CountedSet]), so the loop and the trim's snapshot term ask
 // one question. Rows naming the log, plus every live data node (a joiner has
-// no row until it adopts the copy this decides whether anybody takes), less
-// tombstones past their window (an evicted node's row never expires). The live
-// half comes from the watched view ([Engine.watchedHolders]), asked on every
-// retry; a view that cannot answer leaves it out, a lower bound that declines
-// a copy for a tick rather than failing a take over a coordination blip.
-// Unreadable eviction rows subtract none, erring toward an unneeded copy.
+// no row until it adopts), less tombstones past their window (an evicted
+// node's row never expires). The live half comes from the watched view
+// ([Engine.watchedHolders]); one that cannot answer is left out, a lower bound
+// that declines a copy for a tick rather than failing a take over a
+// coordination blip. Unreadable eviction rows subtract none, erring toward an
+// unneeded copy.
 func (e *Engine) counted(ctx context.Context, s *stateLog, now time.Time) ([]string, error) {
 	if s.fleet == nil {
 		return nil, fmt.Errorf("engine: no coordination to count the fleet with")
@@ -3469,9 +3296,9 @@ func newestSnapshot(dir string) (statelog.Manifest, bool) {
 		if err != nil {
 			continue
 		}
-		// AND THE BYTES BESIDE IT. A manifest whose artefact was rotated
+		// And the bytes beside it: a manifest whose artefact was rotated
 		// away describes a transfer that would fail after the recipient
-		// had already chosen it over every other offer.
+		// chose it over every other offer.
 		if _, err := os.Stat(filepath.Join(dir,
 			m.Artifact)); err != nil {
 			continue
@@ -3486,15 +3313,13 @@ func newestSnapshot(dir string) (statelog.Manifest, bool) {
 // startPositionHeartbeat publishes this node's row in the fleet's position
 // register for as long as the node runs. Three readers are wrong without it:
 // the trim's minimum (it would trim past records this node needs), the
-// snapshot gate (an empty register is a fleet of one, so nobody takes a
-// snapshot), and the trim's snapshot term (a row with a position but no
-// artefact blocks every domain's trim while all else looks healthy). The write
+// snapshot gate (an empty register is a fleet of one), and the trim's snapshot
+// term (a position row with no artefact blocks every domain's trim). The write
 // fence must not read it: a minimum including the reader can never refuse it,
-// so the fence reads the published floor, and a node the trim passed is
-// refused there. A timer, not a write per commit, since readers need a recent
-// number, not the fleet's slowest store on the apply loop; each row carries
-// its instant. [statelog.PositionHeartbeat] lives in the framework, since the
-// alarm table evaluates on it ([statelog.AlarmInterval]).
+// so the fence reads the published floor. A timer, not a write per commit, so
+// the apply loop never waits on the fleet's slowest store.
+// [statelog.PositionHeartbeat] lives in the framework, since the alarm table
+// evaluates on it ([statelog.AlarmInterval]).
 func (s *stateLog) startPositionHeartbeat() {
 	if s == nil || s.fleet == nil || len(s.running()) == 0 {
 		return
@@ -3509,10 +3334,9 @@ func (s *stateLog) startPositionHeartbeat() {
 // beat is the heartbeat's loop: publish at once (a node restarted more often
 // than the interval would never appear otherwise), then on every tick of
 // interval and every nudge ([stateLog.heartbeatNudge]), until ctx ends. The
-// publish is a parameter so the schedule, which notices a running node fall
-// below the floor, runs under an interval a test can wait out. An ended loop
-// holds no clock measure, or an alarm would report its last one
-// (clockskew.go).
+// publish is a parameter so a test can run the schedule under an interval it
+// can wait out. An ended loop holds no clock measure, or an alarm would report
+// its last one (clockskew.go).
 func (s *stateLog) beat(ctx context.Context, interval time.Duration,
 	publish func(context.Context)) {
 	defer s.forgetSkew()
@@ -3530,28 +3354,25 @@ func (s *stateLog) beat(ctx context.Context, interval time.Duration,
 }
 
 // publishPositions writes one row describing every domain this node runs (the
-// register's shape: the trim asks about all of them at once), with the
-// snapshot this node holds as its snapshot loop last concluded, not re-read
-// from disk every ten seconds for an answer that moves daily. A failure is
-// logged and the loop continues: a node whose heartbeat stopped on a
-// coordination blink would be invisible to the trim, the failure this loop
-// exists to prevent.
+// trim asks about all of them at once), with the snapshot this node holds as
+// its snapshot loop last concluded, not re-read from disk every ten seconds
+// for an answer that moves daily. A failure is logged and the loop continues:
+// a node whose heartbeat stopped on a coordination blink would be invisible to
+// the trim, the failure this loop exists to prevent.
 func (s *stateLog) publishPositions(ctx context.Context) {
-	// NO REGISTER, NOTHING TO PUBLISH TO — the condition the heartbeat is
-	// never started under, checked here too because a reanchor publishes
-	// through this directly.
+	// No register, nothing to publish to: the heartbeat never starts so, but
+	// a reanchor publishes through this directly.
 	if s.fleet == nil {
 		return
 	}
-	// One publish at a time, from reading the runners to writing the row:
-	// the register keeps the last row written, and a beat that read before a
-	// reanchor re-keyed a runner and wrote after it put the old generation
-	// back.
+	// One publish at a time, from reading the runners to writing the row: a
+	// beat that read before a reanchor re-keyed a runner and wrote after it
+	// would put the old generation back.
 	s.publishing.Lock()
 	defer s.publishing.Unlock()
-	// THE PIN AN ADOPTION IS WAITING TO HAVE COUNTED, captured BEFORE the
-	// runners are read: one handed over after this point belongs to an
-	// install this reading may predate, and is the next publish's to judge
+	// The pin an adoption is waiting to have counted, captured before the
+	// runners are read: one handed over later belongs to an install this
+	// reading may predate, the next publish's to judge
 	// ([stateLog.releaseCountedTail]).
 	tail := s.waitingTail()
 	held := s.running()
@@ -3566,7 +3387,7 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	// its own log cannot show: a peer re-anchored past it. Unread, this beat
 	// judges nothing by them. An evicted peer's generation is not the fleet's
 	// ([stateLog.fleetGenerations]), so a decommissioned peer that re-anchored
-	// stops sending this node after a donor that no longer exists.
+	// does not send this node after a donor that no longer exists.
 	above := make(map[string]uint32, len(held))
 	for _, running := range held {
 		above[running.domain.Name()] = running.runner.Committed().Generation
@@ -3576,8 +3397,8 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	// [stateLog.truncation]), judged from one successful reading or not at
 	// all: the peer holding what the log lost is often the one that then
 	// re-anchored, and judging one without the other lifted the write fence
-	// with no passed verdict to replace it. Per domain: one whose floor or
-	// evicted peers could not be read waits while the others are judged
+	// with no passed verdict to replace it. A domain whose floor or evicted
+	// peers could not be read waits while the others are judged
 	// ([stateLog.fleetGenerations]). These floors also build the gauges below.
 	rows, rowsErr := s.fleet.Positions(ctx)
 	floors := s.readFloors(ctx)
@@ -3586,13 +3407,12 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 	if rowsErr == nil {
 		s.observeUsageGenerations(rows)
 		generations, unreadGen = s.fleetGenerations(ctx, rows, floors, s.openLogs(), above)
-		// And how far this node's clock, and the broker member's, stand from
-		// the fleet's, off the rows just read, so `clock_skew` costs no read
-		// of its own (clockskew.go).
+		// How far this node's clock and the broker member's stand from the
+		// fleet's, off the rows just read (clockskew.go).
 		clocks = s.measureSkew(rows)
 	}
-	// RECORDED ON EVERY PUBLISH, a reading that failed included: a publish
-	// that measured nothing is a miss, and two in a row drop the measure.
+	// Recorded on every publish, a failed reading included: a publish that
+	// measured nothing is a miss, and two in a row drop the measure.
 	s.recordSkew(clocks)
 	genErr := func(name string) error {
 		if rowsErr != nil {
@@ -3618,10 +3438,10 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		name := running.domain.Name()
 		stance := running.runner.Stance()
 		at, record := stance.At, stance.StoredAt
-		// AND PASSED BY A REANCHOR: the same predicate the join asks, so
-		// the rejoin this requests is one the join then acts on. The
-		// runner is told first, which is what refuses this node's reads
-		// and writes of the domain until the adoption lands.
+		// Passed by a reanchor: the join's own predicate, so the rejoin
+		// this requests is one the join acts on. The runner is told first,
+		// which refuses reads and writes of the domain until the adoption
+		// lands.
 		if genErr(name) == nil && passedByAReanchor(running.domain, at, true, generations[name]) {
 			if running.runner.ObserveFleetGeneration(generations[name]) {
 				log.WarnContext(ctx, "statelog_generation_passed",
@@ -3635,10 +3455,9 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 			}
 			below = true
 		}
-		// AND WHO HOLDS THE GENERATION A VERDICT NAMES, from the same
-		// reading: the remedy its refusals name moves while it holds — an
-		// operator evicting the peer that opened it leaves nothing to adopt
-		// ([statelog.Runner.RecheckPassed]).
+		// Who holds the generation a verdict names, from the same reading:
+		// the remedy its refusals name moves (evicting the peer that opened
+		// it leaves nothing to adopt, [statelog.Runner.RecheckPassed]).
 		if genErr(name) == nil {
 			if _, err := running.runner.RecheckPassed(ctx, generations[name]); err != nil &&
 				ctx.Err() == nil {
@@ -3658,15 +3477,15 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 		pos := coord.DomainPosition{
 			Seq: at.Seq, Generation: at.Generation, AppliedThrough: at.Seq,
 			StreamCreatedAt: running.runner.KeyedTo(), CheckpointStoredAt: record,
-			// WHICH RECORDS THIS BUILD READS, so a writer of a kind older
-			// builds cannot even defer waits for every node to read it —
-			// see [coord.DomainPosition.RecordVersion].
+			// Which records this build reads, so a writer of a kind older
+			// builds cannot defer waits for every node to read it
+			// ([coord.DomainPosition.RecordVersion]).
 			RecordVersion: running.domain.RecordVersion(),
 		}
-		// APPLIED_THROUGH IS LOWER WHEN SOMETHING IS DEFERRED, and the
-		// two numbers are what tell a lagging node from a stalled one:
-		// a position that advances while nothing is applied is exactly
-		// what a retained record produces.
+		// AppliedThrough is lower when something is deferred; the two
+		// numbers tell a lagging node from a stalled one (a position that
+		// advances while nothing is applied is what a retained record
+		// produces).
 		deferral, held := running.runner.Deferred()
 		if held {
 			pos.Deferred = 1
@@ -3674,44 +3493,43 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 				pos.AppliedThrough = deferral.Position.Seq - 1
 			}
 		}
-		// The progress observation rides this loop, the one place that takes
-		// a look every interval, keeping a health read pure ([progress]).
+		// The progress observation rides this loop, the one place that
+		// looks every interval, keeping a health read pure ([progress]).
 		// Behind is read from the broker's last sequence, not the consumer's
 		// backlog: an idle node owes nothing, and a stall needs owed work.
 		stats, statsErr := running.log.Stats(ctx)
 		behind := backlogOf(stats, statsErr, at.Seq, running.progress.owed())
 		if statsErr == nil {
-			// And how long behind, for the request path
-			// ([runningLog.lagNanos]).
+			// How long behind, for the request path ([runningLog.lagNanos]).
 			running.observeLag(stats.LastSeq, at.Seq)
-			// And below: the next record this node needs is gone, so it
-			// adopts as a boot would. Asked of `first` alone, as the join asks
-			// it, or the rejoin it requests adopts nothing, on every retry.
+			// Below: the next record this node needs is gone, so it adopts
+			// as a boot would. Asked of `first` alone, as the join asks it,
+			// or the rejoin it requests adopts nothing, on every retry.
 			if !statelog.Replayable(at.Seq, stats.FirstSeq) {
 				below = true
 			}
-			// And whether it is even the same log: a stream rebuilt under a
+			// Whether it is even the same log: a stream rebuilt under a
 			// running node restarts at generation 0 from 1, invisible to the
 			// sequence terms once it passes this node's checkpoint. Its
-			// creation instant, in this same answer, goes to the runner, whose
-			// verdict reads and writes refuse on (a zero-expectation write
-			// also hands one over, without waiting for this beat). With it the
-			// end, paired with `at` read before this answer, the only order in
-			// which a checkpoint past the end means another history rather
-			// than a record landing between reads: what fence 0 refuses on.
+			// creation instant goes to the runner, whose verdict reads and
+			// writes refuse on (a zero-expectation write also hands one over
+			// without waiting for this beat), with the end paired with `at`
+			// read before this answer: the only order in which a checkpoint
+			// past the end means another history rather than a record landing
+			// between reads, what fence 0 refuses on.
 			s.observeStream(ctx, name, running.runner, stance, stats)
-			// And whether the log still holds, at the checkpoint, the record
-			// it consumed there: the loop asks before applying past it; this
-			// asks for a node with nothing to apply (a restored log written
-			// exactly to its checkpoint) or stopped, and of a broker restored
-			// between the loop's moments. One direct read per domain per beat.
+			// Whether the log still holds, at the checkpoint, the record it
+			// consumed there: the loop asks before applying past it; this
+			// covers a node with nothing to apply (a restored log written
+			// exactly to its checkpoint), a stopped one, and a broker
+			// restored between the loop's moments. One direct read a beat.
 			established, verifyErr := running.runner.VerifyCheckpoint(ctx)
 			if established {
 				s.logDiverged(ctx, name, running.runner)
 			}
-			// AND WHETHER A PEER'S ROWS HOLD RECORDS THIS LOG LOST, which
-			// refuses this node's writes of it — against the same end, and
-			// only on the reading the passed verdict above was judged from.
+			// Whether a peer's rows hold records this log lost, which refuses
+			// this node's writes of it: against the same end, and only on the
+			// reading the passed verdict was judged from.
 			if genErr(name) == nil {
 				truncation, truncErr := s.truncation(ctx, running, rows, at, stats.LastSeq)
 				switch {
@@ -3733,19 +3551,18 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 						"applier asks again before it applies past it, and so "+
 						"does the next beat")
 			}
-			// And a recreation verdict the live instant contradicts
-			// ([statelog.Runner.RecreationStale]): only a join re-keys it and
-			// a reanchor refuses such rows, so a rejoin is asked for, which
-			// finds every domain current and re-keys each runner.
+			// A recreation verdict the live instant contradicts
+			// ([statelog.Runner.RecreationStale]): only a join re-keys it
+			// and a reanchor refuses such rows, so a rejoin is asked for,
+			// which finds every domain current and re-keys each runner.
 			if running.runner.RecreationStale(stats.CreatedAt) {
 				below = true
 			}
 		}
 		running.progress.observe(row.At, pos, behind)
-		// AND WHETHER THE LOG DIVERGED FROM THESE ROWS, for the peers: a
-		// node whose rows the log does not continue past its checkpoint is
-		// one whose history a write by any other node on this log would
-		// contradict — see [coord.DomainPosition.LogDiverged].
+		// Whether the log diverged from these rows, for the peers: a write
+		// by any other node would contradict this node's history
+		// ([coord.DomainPosition.LogDiverged]).
 		pos.LogDiverged = running.runner.Diverged()
 		row.Domains[name] = pos
 	}
@@ -3766,15 +3583,14 @@ func (s *stateLog) publishPositions(ctx context.Context) {
 				"heartbeat retries")
 		return
 	}
-	// AND A ROW THE TRIM NOW COUNTS releases the pin an adoption held for
-	// exactly this moment — only once it has been written.
+	// A row the trim now counts releases the pin an adoption held for exactly
+	// this moment, once written.
 	s.releaseCountedTail(ctx, tail, row)
 }
 
 // positionGauges publishes each domain's progress on the beat the register row
 // is written: these are states, and set per applied batch a quiet log would
-// leave the last burst's lag standing. floors is the beat's own read, the one
-// the generations were judged from.
+// leave the last burst's lag standing. floors is the beat's own read.
 func (s *stateLog) positionGauges(ctx context.Context, row coord.NodePositions,
 	floors publishedFloors) {
 	if s.metrics == nil {
@@ -3789,9 +3605,8 @@ func (s *stateLog) positionGauges(ctx context.Context, row coord.NodePositions,
 			continue
 		}
 		s.metrics.Set(metrics.StatelogDrainRowsPerSecond, running.runner.Drain(), attrs)
-		// And the commit rate beside it: rows/s is progress, commits/s the
-		// fsync rate a device's write budget is spent by, and doubled
-		// commits for the same rows shows in neither alone.
+		// The commit rate beside it: rows/s is progress, commits/s the fsync
+		// rate a device's write budget is spent by.
 		s.metrics.Set(metrics.StatelogDrainCommitsPerSecond,
 			running.runner.Commits(), attrs)
 		health, err := s.health(ctx, running, floors)
@@ -3825,10 +3640,8 @@ func (s *stateLog) deferralGauges(now time.Time) {
 	}
 }
 
-// logOf is the running log whose stream this is, or nil.
-//
-// A REVERSE LOOKUP over the set rather than a second map beside it: the set
-// holds a handful of logs, and one index is one thing to build.
+// logOf is the running log whose stream this is, or nil: a scan, since the set
+// holds a handful of logs and a second index is one more thing to keep.
 func (s *stateLog) logOf(stream string) *runningLog {
 	for _, running := range s.running() {
 		if running.spec.Name == stream {
@@ -3839,11 +3652,9 @@ func (s *stateLog) logOf(stream string) *runningLog {
 }
 
 // opsLedgers is the operation ledger of every log this node runs, keyed by its
-// domain's name, which names the sweep's `<domain>_ops` job
-// ([maintenance.StatelogJobs]), each with its register entry's horizons. Built
-// from the running set, not a hand-written list a new domain could be missed
-// from; read once where the sweep is built, since the set is fixed
-// ([stateLog.logs]).
+// domain's name (the sweep's `<domain>_ops` job, [maintenance.StatelogJobs]),
+// each with its register entry's horizons. Built from the running set, not a
+// list a new domain could be missed from.
 func (s *stateLog) opsLedgers() map[string]maintenance.OpsHorizon {
 	out := map[string]maintenance.OpsHorizon{}
 	for _, running := range s.running() {
@@ -3852,9 +3663,8 @@ func (s *stateLog) opsLedgers() map[string]maintenance.OpsHorizon {
 		}
 		name := running.domain.Name()
 		entry, found := registrationFor(name)
-		// A domain that keeps no ledger has nothing to sweep (the compacted
-		// ones), or a sweep job would purge a table that does not exist;
-		// [checkRegister] refuses OpsRetention on such a domain.
+		// A domain that keeps no ledger (the compacted ones) has nothing to
+		// sweep; [checkRegister] refuses OpsRetention on such a domain.
 		if !found || running.domain.OpsTable() == "" {
 			continue
 		}
@@ -3867,8 +3677,8 @@ func (s *stateLog) opsLedgers() map[string]maintenance.OpsHorizon {
 	return out
 }
 
-// domainLedger is one domain's operation-ledger sweeps, this node's own rows,
-// not its arbitration anchors: those the trim removes with a trimmed record
+// domainLedger is one domain's operation-ledger sweeps: this node's own rows,
+// not its arbitration anchors, which the trim removes with a trimmed record
 // every node applies at one position (ADR-0080, [retention.sweepAnchors]), or
 // a node would be a second writer of rows every copy holds alike (ADR-0002).
 type domainLedger struct {

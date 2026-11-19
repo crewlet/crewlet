@@ -288,6 +288,10 @@ func (emptyWork) FlowItems(context.Context, worklet.FlowHoursQuery) (map[string]
 	return map[string]int{}, nil
 }
 
+func (emptyWork) FlowPickups(context.Context, worklet.FlowHoursQuery) ([]time.Duration, error) {
+	return []time.Duration{}, nil
+}
+
 func (emptyWork) Tasks(context.Context, worklet.Query, time.Time) (worklet.Answer, error) {
 	return worklet.Answer{}, nil
 }
@@ -521,11 +525,6 @@ var readOutsideTheDashboard = map[string]string{
 	"research_page":     "Ask Crewlet's fetch_web_page, over GET /research/page (ADR-0151)",
 	"research_search":   "Ask Crewlet's search_web, over GET /research/search (ADR-0151)",
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
-	// THE TRACKER'S OWN INBOX: the dashboard reads it composed with Gitlet's
-	// through `inbox`; this stays the tracker's question and its tool's
-	// (`work_inbox`), read by a script on the path the reference prints.
-	"work_inbox": "a script: GET /worklet/inbox, as docs/reference/api-endpoints.md prints it, and Worklet's " +
-		"own tool work_inbox",
 	// THE ADVISOR'S WEEKLY REPORTS, read by a script until the Advisor page's
 	// Reports tab reads them; that tab makes these lines red, and they go.
 }

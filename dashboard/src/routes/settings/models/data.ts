@@ -85,6 +85,8 @@ export interface ModelsData {
   node: string;
   /** The model Ask Crewlet runs on, or null where none is assigned and Ask Crewlet is off. */
   assistant: { key: string | null };
+  /** The model the Advisor explains its findings with, or null where it has none and runs its checks alone. */
+  advisor: { key: string | null };
   loading: boolean;
   error: string | null;
   /**
@@ -116,6 +118,26 @@ export function assistantOf(
     return { key: typeof assistant?.model === "string" ? assistant.model : null };
   }
   const reported = models.find((m) => m.entry.used_by.some((u) => u.assistant === "chat"));
+  return { key: reported?.key ?? null };
+}
+
+/**
+ * The Advisor's model, from the document an admin reads or, for a member who
+ * reads none, the place the engine reports its findings at (`used_by`).
+ */
+export function advisorOf(
+  doc: CompanyDocument | null,
+  models: readonly Pick<ModelView, "key" | "entry">[],
+): ModelsData["advisor"] {
+  if (doc) {
+    const advisor = isRecord((doc as Record<string, unknown>).advisor)
+      ? ((doc as Record<string, unknown>).advisor as Record<string, unknown>)
+      : null;
+    return {
+      key: typeof advisor?.model === "string" && advisor.model !== "" ? advisor.model : null,
+    };
+  }
+  const reported = models.find((m) => m.entry.used_by.some((u) => u.advisor === "findings"));
   return { key: reported?.key ?? null };
 }
 
@@ -195,6 +217,7 @@ export function useModelsData(): ModelsData {
   const answer = entries.data;
   const models = useMemo(() => modelViews(answer, doc), [answer, doc]);
   const assistant = useMemo(() => assistantOf(doc, models), [doc, models]);
+  const advisor = useMemo(() => advisorOf(doc, models), [doc, models]);
   const reload = useCallback(() => {
     refetchEntries();
     if (admin) refetchConfig();
@@ -209,6 +232,7 @@ export function useModelsData(): ModelsData {
     nodes: answer?.nodes ?? [],
     node: answer?.node ?? "",
     assistant,
+    advisor,
     loading: (entries.loading && !entries.data) || (admin && config.loading && !config.data),
     error: entries.error
       ? (entries.detail ?? entries.error)

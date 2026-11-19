@@ -408,7 +408,10 @@ export function ModelWizard({
         : {}),
       ...(executor ? {} : { runIn: "" }),
       ...(dropsCoding
-        ? { intent: "none", uses: { ...noUses(), assistant: draft.uses.assistant } }
+        ? {
+            intent: "none",
+            uses: { ...noUses(), assistant: draft.uses.assistant, advisor: draft.uses.advisor },
+          }
         : {}),
     });
   };
@@ -561,7 +564,9 @@ export function ModelWizard({
           ? ""
           : draft.intent === "assistant"
             ? "Ask Crewlet"
-            : CATEGORY_WORDS[draft.intent].label.toLowerCase();
+            : draft.intent === "advisor"
+              ? "the Advisor"
+              : CATEGORY_WORDS[draft.intent].label.toLowerCase();
     if (!what) return verb;
     return `${verb} for ${what}${seats > 0 ? ` (${seats} ${seats === 1 ? "seat" : "seats"})` : ""}`;
   }
@@ -791,7 +796,12 @@ export function ModelWizard({
     </>
   );
   const reviewErrors = errorWhere(
-    (s) => s[0] === "assistant" || s[0] === "roles" || s[0] === "units" || field("overrides")(s),
+    (s) =>
+      s[0] === "assistant" ||
+      s[0] === "advisor" ||
+      s[0] === "roles" ||
+      s[0] === "units" ||
+      field("overrides")(s),
   );
 
   return (

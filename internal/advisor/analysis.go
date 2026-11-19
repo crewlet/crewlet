@@ -89,10 +89,12 @@ type Submitted struct {
 	Fix      SubmittedFix `json:"fix"`
 }
 
-// CitedFact is one number and where in the run's own tool answers it was read:
-// a tool's name, then the path into its answer (open_work.blockers[0].blocks).
+// CitedFact is one number, what it counts in a few plain words, and where in
+// the run's own tool answers it was read: a tool's name, then the path into
+// its answer (open_work.blockers[0].blocks).
 type CitedFact struct {
 	Key   string `json:"key"`
+	Label string `json:"label"`
 	Value int64  `json:"value"`
 	From  string `json:"from"`
 }
@@ -206,6 +208,9 @@ type Grounding struct {
 const (
 	MaxAnalystTitle = 120
 	MaxAnalystWhy   = 600
+	// MaxAnalystFactLabel bounds what a cited number is said to count: a
+	// label beside its number, as a rule's ("Hours work waited for a seat").
+	MaxAnalystFactLabel = 60
 	// MaxAnalystFindings is the most findings one run lists.
 	MaxAnalystFindings = 10
 )
@@ -253,7 +258,12 @@ func ground(s Submitted, served *Served, g Grounding) (Finding, Drop) {
 		if got, ok := served.read(c.From); !ok || got != c.Value || c.Key == "" {
 			return Finding{}, DropWrongFact
 		}
-		facts = append(facts, Fact{Key: c.Key, Value: c.Value})
+		// A NUMBER IS SAID WHAT IT COUNTS: a model's key is its own, and
+		// drawn as the label it read as "blocks 1" on the finding's page.
+		if strings.TrimSpace(c.Label) == "" || !plainWords(c.Label, MaxAnalystFactLabel) {
+			return Finding{}, DropWords
+		}
+		facts = append(facts, Fact{Key: c.Key, Value: c.Value, Label: strings.TrimSpace(c.Label)})
 	}
 	if !plainWords(s.Title, MaxAnalystTitle) || !plainWords(s.Why, MaxAnalystWhy) ||
 		!plainWords(s.Item, MaxAnalystTitle) || (s.Severity != SeverityCosts && s.Severity != SeverityNote) {

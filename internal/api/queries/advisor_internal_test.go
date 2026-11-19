@@ -61,6 +61,10 @@ func (patternsWork) FlowItems(context.Context, worklet.FlowHoursQuery) (map[stri
 	return nil, errors.New("this reader keeps no flow record")
 }
 
+func (patternsWork) FlowPickups(context.Context, worklet.FlowHoursQuery) ([]time.Duration, error) {
+	return nil, errors.New("this reader keeps no flow record")
+}
+
 // ledgerUsage answers the turn ledger read and nothing else, keeping the range asked.
 type ledgerUsage struct {
 	UsageReads
@@ -400,5 +404,37 @@ func TestTheAlarmsHistoryIsReadOverTheWeek(t *testing.T) {
 	if want := []advisor.AlarmEpisode{{Node: "data-1", Kind: "pool_starved", Instance: "pool_starved",
 		RaisedAt: raised}}; !reflect.DeepEqual(got, want) {
 		t.Errorf("episodes %+v, want %+v", got, want)
+	}
+}
+
+// THE COUNTS ARE WHAT WAITS ON A PERSON: the owner's open findings, not
+// snoozed and not applied. An engine finding is the engine's own work, which
+// never reaches a person as a to-do, so the sidebar's figure over these counts
+// would ask an administrator about something nobody can act on. Mutation: drop
+// the actor test, or the snooze test, and the case goes red.
+func TestTheFindingCountsAreWhatWaitsOnAPerson(t *testing.T) {
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	row := func(actor advisordomain.Actor, severity advisordomain.Severity, state advisordomain.State,
+		snoozed time.Time) advisordomain.FindingRow {
+		return advisordomain.FindingRow{Actor: actor, Severity: severity, State: state, SnoozedUntil: snoozed}
+	}
+	rows := []advisordomain.FindingRow{
+		row(advisordomain.ActorOwner, advisordomain.SeverityBlocks, advisordomain.StateOpen, time.Time{}),
+		row(advisordomain.ActorOwner, advisordomain.SeverityCosts, advisordomain.StateOpen, time.Time{}),
+		row(advisordomain.ActorOwner, advisordomain.SeverityCosts, advisordomain.StateOpen,
+			now.Add(time.Hour)),
+		row(advisordomain.ActorOwner, advisordomain.SeverityCosts, advisordomain.StateOpen,
+			now.Add(-time.Hour)),
+		row(advisordomain.ActorOwner, advisordomain.SeverityBlocks, advisordomain.StateApplied,
+			time.Time{}),
+		row(advisordomain.ActorEngine, advisordomain.SeverityBlocks, advisordomain.StateOpen,
+			time.Time{}),
+		row(advisordomain.ActorEngine, advisordomain.SeverityNote, advisordomain.StateOpen, time.Time{}),
+	}
+	got := countsOf(rows, now)
+	want := map[advisor.Severity]int{advisor.SeverityBlocks: 1, advisor.SeverityCosts: 2, advisor.SeverityNote: 0}
+	if !maps.Equal(got, want) {
+		t.Errorf("counts = %v, want %v (the owner's open findings, a snooze ended counted, none of the engine's)",
+			got, want)
 	}
 }

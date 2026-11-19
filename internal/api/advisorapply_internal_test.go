@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -230,7 +233,8 @@ func TestAChangedFixIsShownBeforeItCanBeSent(t *testing.T) {
 }
 
 // A RESOLVED FINDING IS NEVER APPLIED: a condition that ended closes the
-// finding with nothing to send, and a report of a send is refused after it.
+// finding with nothing to send, and a report of a send, or a re-check, after
+// it is refused as a finding no longer open, which is said in words.
 func TestAResolvedFindingIsNeverApplied(t *testing.T) {
 	t.Parallel()
 	log := newApplyLog(t, capFinding(60))
@@ -241,11 +245,11 @@ func TestAResolvedFindingIsNeverApplied(t *testing.T) {
 		t.Fatalf("re-check = %+v (%v), state %s, want resolved with nothing to send", out, err, log.row.State)
 	}
 	if err := rc.applied(t.Context(), "f-1", advisor.ApplyDigest("f-1", 1,
-		advisor.OptionDigest(capFinding(60).Fix.Options[0])), person); !errors.Is(err, errRecheckAgain) {
-		t.Errorf("a report on a resolved finding answered %v, want a re-check", err)
+		advisor.OptionDigest(capFinding(60).Fix.Options[0])), person); !errors.Is(err, errNotOpen) {
+		t.Errorf("a report on a resolved finding answered %v, want it said as no longer open", err)
 	}
-	if _, err := rc.recheck(t.Context(), "f-1", 0, person); !errors.Is(err, advisordomain.ErrIllegalMove) {
-		t.Errorf("a re-check of a closed finding answered %v", err)
+	if _, err := rc.recheck(t.Context(), "f-1", 0, person); !errors.Is(err, errNotOpen) {
+		t.Errorf("a re-check of a closed finding answered %v, want it said as no longer open", err)
 	}
 }
 
@@ -265,4 +269,76 @@ func TestAFixThatNoLongerBuildsIsNotApplicable(t *testing.T) {
 	if err != nil || out.Outcome != advisor.RecheckNotApplicable || log.row.State != advisordomain.StateRetired {
 		t.Fatalf("a change that breaks a rule answered %+v (%v), state %s, want not applicable", out, err, log.row.State)
 	}
+}
+
+// A FINDING APPLIED IN ANOTHER WINDOW IS SAID IN WORDS: a re-check, or a
+// report that a change was sent, on a finding that is no longer open answers
+// 409 with what became of it (applied, when, and until when its effect is
+// checked), never the log's own sentence for a refused move. Mutation: pass
+// the refusal through, and the person reads "cannot make that move".
+func TestAFindingAppliedInAnotherWindowIsSaidInWords(t *testing.T) {
+	t.Parallel()
+	log := newApplyLog(t, capFinding(60))
+	log.row.State = advisordomain.StateApplied
+	log.row.AppliedAt, log.row.EffectDueAt = applyAt.Add(-time.Minute), applyAt.Add(29*time.Minute)
+	rc := applyRig(log, []advisor.Observation{observedNow(capFinding(60))}, &applyConfig{})
+	_, err := rc.recheck(t.Context(), "f-1", 0, person)
+	rec := httptest.NewRecorder()
+	refuseApply(rec, httptest.NewRequest(http.MethodPost, "/advisor/findings/f-1/recheck", nil), err)
+	var body map[string]any
+	if jerr := json.Unmarshal(rec.Body.Bytes(), &body); jerr != nil {
+		t.Fatal(jerr)
+	}
+	detail, _ := body["detail"].(string)
+	if rec.Code != http.StatusConflict || body["outcome"] != "applied" || body["state"] != "applied" ||
+		body["applied_at"] == nil || body["effect_due_at"] == nil || strings.Contains(detail, "cannot make that move") ||
+		!strings.Contains(detail, "applied already") {
+		t.Errorf("the re-check of an applied finding answered %d %v", rec.Code, body)
+	}
+	if err := rc.applied(t.Context(), "f-1", "any", person); !errors.Is(err, errNotOpen) {
+		t.Errorf("a report on an applied finding answered %v, want it said as no longer open", err)
+	}
+}
+
+// A RE-CHECK'S PREVIEW SAYS THE CHANGE IN WORDS, by the rule every change a
+// person approves is shown by (catalog.ChangeRows): labelled by their raw keys
+// and valued as JSON, its rows read as a code diff ("health_tools: true").
+// Mutation: label a row by its field again, or say a truth as JSON, and the
+// case goes red.
+func TestARechecksPreviewSaysTheChangeInWords(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name          string
+		before, after map[string]any
+		want          PreviewRow
+	}{
+		{"a switch set where the seat had none", map[string]any{"handle": "dev"},
+			map[string]any{"handle": "dev", "health_tools": true},
+			PreviewRow{Field: "health_tools", Label: "Health tools", After: ptr("Yes")}},
+		{"a nested number raised", map[string]any{"handle": "dev", "sandbox": map[string]any{"max_turns": 30}},
+			map[string]any{"handle": "dev", "sandbox": map[string]any{"max_turns": 60}},
+			PreviewRow{Field: "sandbox.max_turns", Label: "Sandbox › max turns", Before: ptr("30"), After: ptr("60")}},
+	}
+	for _, c := range cases {
+		after, _ := json.Marshal(c.after)
+		rows, err := previewRows(c.before, after)
+		if err != nil || len(rows) != 1 {
+			t.Fatalf("%s: rows = %+v (%v), want one", c.name, rows, err)
+		}
+		if got := rows[0]; got.Field != c.want.Field || got.Label != c.want.Label ||
+			deref(got.Before) != deref(c.want.Before) || deref(got.After) != deref(c.want.After) ||
+			(got.Before == nil) != (c.want.Before == nil) {
+			t.Errorf("%s: row = %s %q %q→%q, want %s %q %q→%q", c.name, got.Field, got.Label, deref(got.Before),
+				deref(got.After), c.want.Field, c.want.Label, deref(c.want.Before), deref(c.want.After))
+		}
+	}
+}
+
+func ptr(s string) *string { return &s }
+
+func deref(s *string) string {
+	if s == nil {
+		return "<none>"
+	}
+	return *s
 }
