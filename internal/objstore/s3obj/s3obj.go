@@ -1,15 +1,14 @@
 // Package s3obj keeps the object store's objects in an S3-compatible bucket:
-// Amazon S3, or anything speaking its API — Cloudflare R2, MinIO, Google Cloud
-// Storage's interoperability endpoint, Backblaze B2, Ceph's gateway.
+// Amazon S3, or anything speaking its API (R2, MinIO, GCS interop, B2,
+// Ceph's gateway).
 //
 // # When to take it
 //
 // The default backend (internal/objstore/natsobj) keeps every object on every
-// broker member holding a copy, which is right for a fleet of three or five
-// data nodes and wrong for a company whose files outgrow one member's disk.
-// A bucket has no such ceiling, keeps its own copies, and takes the files off
-// the broker's routes entirely — at the price of a dependency the engine does
-// not run and a network round trip per request.
+// broker member holding a copy: wrong for a company whose files outgrow one
+// member's disk. A bucket has no such ceiling and takes the files off the
+// broker's routes, at the price of a dependency the engine does not run and a
+// round trip per request.
 //
 // # One bucket, several companies: only with credentials scoped to a prefix
 //
@@ -23,16 +22,16 @@
 // why the node checks its bucket with a probe under the prefix (probe.go)
 // rather than a HeadBucket, which needs s3:ListBucket on the whole bucket and
 // refused exactly the credential that makes sharing safe. One bucket per
-// company remains the simpler isolation and the recommended one.
+// company is the simpler, recommended isolation.
 //
 // # The AWS SDK, the keys and what the probe proves
 //
-// The backend uses the AWS SDK rather than a client of its own because SigV4
-// and the regional endpoint rules are what a hand-rolled one gets wrong. Its
-// credentials are the static pair in [Config] or else the SDK's own chain, and
-// `AWS_CA_BUNDLE` is added to the roots for the bucket's requests only, which
-// all go through internal/httpx and never the SDK's own pool. The open's
-// probe (probe.go) stores and deletes an object through the engine's own path,
+// The backend uses the AWS SDK because SigV4 and the regional endpoint rules
+// are what a hand-rolled client gets wrong. Its credentials are the static
+// pair in [Config] or else the SDK's own chain, and `AWS_CA_BUNDLE` is added
+// to the roots for the bucket's requests only, which all go through
+// internal/httpx and never the SDK's own pool. The open's probe (probe.go)
+// stores and deletes an object through the engine's path,
 // failing the boot if it cannot, then proves with presigned puts that the
 // provider refuses a mismatched `x-amz-checksum-sha256` (BadDigest) and a
 // second put under `If-None-Match: *` (412). Only a provider doing both offers
@@ -41,19 +40,15 @@
 //
 // # One object per name, streamed
 //
-// Each name is the key `<prefix><name>` — and every name the store writes is
-// `files/<key>` ([objstore.Key.Name]), so an object of the engine's sits at
-// `<prefix>files/<key>`, under a corner of the bucket an empty prefix still
-// does not share with another application's own UUID-named objects.
+// Each name is the key `<prefix><name>`, and every name the store writes is
+// `files/<key>` ([objstore.Key.Name]), a corner of the bucket an empty prefix
+// still does not share with another application's UUID-named objects.
 //
 // LastModified is what [objstore.Info.Written] reports, and AN OBJECT PUT IN
 // PARTS CARRIES ITS UPLOAD'S START there, not its completion: Amazon dates an
-// object assembled from parts by when its multipart upload was created —
-// after the put began, and for a large object hours before anybody could read
-// it. It is why that contract promises only an instant between the two, to
-// be read as the earliest the object might have been stored and never as when
-// it was finished; s3fake dates a completed upload the same way, so nothing
-// tested against it meets a gentler S3 than Amazon's.
+// object assembled from parts by when its multipart upload was created. That
+// contract therefore promises only an instant between the two, the earliest
+// the object might have been stored; s3fake dates an upload the same way.
 //
 // A put STREAMS without knowing its length, which S3 can only take in parts:
 // a body that ends inside its first [PartBytes] is one PutObject, and a longer
@@ -69,17 +64,14 @@
 // # A large upload's parts are in flight together
 //
 // Up to [partsInFlight] parts of one upload are sent at once, each on a
-// connection of its own, while the next is read — and hashed, by the store —
+// connection of its own, while the next is read (hashed by the store)
 // into a buffer of its own; the parts are independent until the completion
-// names them by number. Sent one after another, every part paid a whole round
-// trip before the next could start and one connection's throughput carried
-// the whole object. The buffers past an upload's first come from ONE ALLOWANCE
+// names them by number. Sent one after another, one connection's throughput
+// carried the whole object. The buffers past an upload's first come from ONE ALLOWANCE
 // the node's uploads share ([spareParts]), taken only while it has one free,
-// so many large uploads at once cost the node a bounded amount of memory and
-// each still finishes on the one buffer it holds. A part that fails ends its
-// upload AT ONCE — the others in flight cancelled, the body read no further —
-// rather than when the upload next needs a buffer, which was after up to
-// three more parts of a client's body.
+// so many large uploads cost the node bounded memory and each still finishes on
+// the one buffer it holds. A failed part ends its upload AT ONCE, the
+// others cancelled and the body read no further.
 //
 // # So are a large read's ranges
 //
@@ -103,15 +95,13 @@
 // as its reader keeps busy, up to [partsInFlight]: more while the reader waits
 // on the bucket, one fewer once a range read ahead had landed whole before
 // the reader got there. A download paced to a person's link so holds one
-// buffer for as long as it runs, where one holding four took a third of the
-// node's allowance for hours; and a read that finds no buffer free streams
+// buffer for as long as it runs; a read that finds no buffer free streams
 // its ranges one after another, taking one as soon as one is free. EVERY
 // RANGE IS ASKED FOR AHEAD of the moment its answer is needed — a buffer
 // freeing for it, or the reader reaching it — by twice the bucket's first byte
-// at the reader's pace, its answer waiting on its connection meanwhile: a
-// range asked for only once its buffer was free left a whole first byte
-// between ranges, which held a wide read well under its connections' rate and
-// one streaming its ranges under a single stream's. A range that fails ends
+// at the reader's pace, its answer waiting on its connection meanwhile: asked
+// only once its buffer was free, each range left a whole first byte
+// between ranges. A range that fails ends
 // the ranges after it at once, every range before it still handed out, and
 // the read asks for nothing more. Closing a read cancels every range in
 // flight, waits for each, and gives its buffers back before it returns.
@@ -146,13 +136,11 @@
 // abandoned — asked once instead, a bucket that recovered inside those seconds
 // would hold the parts, billed, for the collector's day of grace. Only a
 // refusal asking again cannot change is final at once: a client error, a
-// certificate the node does not trust. A READ'S deadline is the longest — its
-// whole budget, hours for a large object — so what ends a read whose first
-// request the bucket keeps failing is that request's bound, forty seconds to a
-// minute in, or the store's stall watchdog, which watches the open of a read
-// as it watches each piece after ([objstore.Stall]) and would end it at the
-// minute measured from the open — whichever comes first, the bucket's last
-// answer named either way.
+// certificate the node does not trust. A READ'S deadline is the longest, hours
+// for a large object, so what ends a read whose first request the bucket keeps
+// failing is that request's bound or the store's stall watchdog
+// ([objstore.Stall]), which watches the open as it watches each piece after,
+// whichever comes first, the bucket's last answer named either way.
 //
 // # A write that stops moving
 //
@@ -175,35 +163,29 @@
 // has not acknowledged changing between two samples five seconds apart, a
 // `100 Continue`, the answer's headers, and every byte of an answer the SDK
 // reads itself — so a write moving at any pace the node's socket can see is
-// never ended, however slow. The body alone is not enough: the kernel's send
-// buffer and the bucket's receive buffer hold megabytes, so a write moving at
-// the floor across a slow link went minutes between two reads of its body
-// while they drained, and a watch on the body alone ended every such write.
-// And the socket alone misses an answer, and a body still being copied into
-// an empty buffer. Time spent inside a read of the body is the body's source's
+// never ended, however slow. The body alone is not enough: kernel and bucket
+// buffers hold megabytes, so a slow-link write went minutes between two reads
+// of its body. The socket alone misses an answer, and a body still being
+// copied into an empty buffer. Time spent inside a read of the body is the body's source's
 // and is never counted against the bucket.
 //
 // THE ONE STOP IT CANNOT SEE is a bucket whose SOFTWARE reads a write slower
-// than its kernel took it — fast at first, then about the floor — or a proxy
-// in front of it that buffers an upload before passing it on (nginx's
-// default): what they took and have not read is acknowledged already, so
-// nothing the node can see moves while it drains, and a write of which they
+// than its kernel took it, or a proxy in front of it that buffers an upload
+// (nginx's default): what they took and have not read is acknowledged already,
+// so nothing the node can see moves while it drains, and a write of which they
 // hold more than a minute's reading is ended a minute after the node last saw
-// it move, where it would have landed (the fake's figures are in the
-// object-store concepts page). From the node's side it is a bucket that
-// stopped, so no rule the node can apply keeps it and still ends a hung one; a
-// slow NETWORK in front of a healthy bucket — the realistic slow case — is
-// never ended.
+// it move (the figures are in the object-store concepts page). No rule the
+// node can apply keeps it and still ends a hung bucket; a slow NETWORK in
+// front of a healthy bucket is never ended.
 //
 // THE BUCKET IS SPOKEN TO OVER HTTP/1.1 ALONE ([bucketClient]), so a socket
-// is one request's: over HTTP/2 a socket carries many, and another request's
-// acknowledgements would read as this one's movement. S3's API is specified
-// over HTTP/1.1 and every S3-compatible gateway serves it. A connection whose
-// count cannot be read is never ended by the watch — its deadline still ends
-// it — which on the two platforms the engine builds for never happens, and
-// where the process's default transport is one internal/httpx cannot clone (a
-// test harness or an instrumented build, never the engine's own run) the
-// bucket is spoken to in whatever that transport speaks.
+// is one request's: over HTTP/2 another's acknowledgements would read
+// as this one's movement. S3's API is specified over HTTP/1.1. A connection
+// whose count cannot be read is never ended by the watch, only by its
+// deadline; that never happens on the platforms the engine builds for, and
+// where the default transport is one internal/httpx cannot clone (a test
+// harness, never the engine's own run) the bucket is spoken to in whatever it
+// speaks.
 //
 // # A throttle slows the whole client
 //
@@ -239,17 +221,15 @@
 // # A bucket with no room is full, never failing
 //
 // Amazon S3 holds whatever it is sent; a self-hosted gateway does not. MinIO
-// at its drives' free-space floor, or past a bucket's quota, and Ceph's
-// gateway out of space or past a quota refuse a write for want of room
-// ([fullCodes], any `507`), and refuse the same write the same way until an
-// operator makes room. So [Backend.Put] answers such a refusal — on the put,
-// a part, the completion or the upload's start — as the store having none
-// ([objstore.Full]), naming the provider's room ([FullRemedy]); read as the
-// bucket failing, every surface invited the retry, and a client or a script
-// honouring a Retry-After sent the same bytes into the same bucket again.
-// The remedy is never the nats bucket's "move the files to a bucket", which
-// would send an operator already on one to migrate to the store that refused;
-// and the write is not asked again, since the SDK asks none of these twice.
+// at its free-space floor or a bucket's quota, and Ceph's gateway out of space
+// or past a quota, refuse a write for want of room ([fullCodes], any `507`),
+// the same way until an operator makes room. So [Backend.Put] answers such a
+// refusal — on the put, a part, the completion or the upload's start — as the
+// store having none ([objstore.Full]), naming the provider's room
+// ([FullRemedy]); read as the bucket failing, every surface invited a retry of
+// the same bytes into the same bucket. The remedy is never the nats bucket's
+// "move the files to a bucket", which would send an operator already on one to
+// migrate to the store that refused; and the write is not asked again.
 //
 // # What it counts
 //
@@ -272,115 +252,46 @@
 //     `unsent` (before its first, observed at zero) or `failed` (a failure
 //     asking again cannot change).
 //   - `crewlet.objects.s3.gate.limit` is how many attempts the gate lets out
-//     at once while a throttle holds the node back, and zero while nothing
-//     does; it is set only when it changes.
-//   - `crewlet.objects.s3.gate.waiting` is how many attempts wait in line at
-//     the gate, set only when it changes too.
+//     at once while a throttle holds the node back, zero while nothing does.
+//   - `crewlet.objects.s3.gate.waiting` is how many attempts wait at the gate.
+//     Both gauges are set only when they change.
 //
 // The outcomes are read by the gate's own predicates ([isThrottle],
 // [answered]), so what the counter calls a throttle is what cut the gate. An
 // operation's RETRIES are its attempts less its requests, plus the requests
-// counted `unsent` — which is why a request that never got its turn has an
-// outcome of its own: the histogram's first bucket holds zero and one
-// together.
+// counted `unsent`, which is why a request that never got its turn has an
+// outcome of its own: the histogram's first bucket holds zero and one together.
 //
-// # What it costs the node, measured
+// # What it costs the node
 //
 // `make bench` (BenchmarkBackend, through internal/objstore/objstoretest's
-// Bench) against s3fake, at the production [PartBytes] and S3's own page of a
-// thousand keys — on four vCPUs of a KVM Intel Xeon at 2.8 GHz WITHOUT SHA
-// instructions (it has AES-NI), Go 1.27.2, aws-sdk-go-v2/service/s3 v1.114.0,
-// 2026-10-10, two runs on a VM shared with other work:
+// Bench) runs against s3fake at the production [PartBytes]; it measures the
+// node's side of a bucket, never a provider's. What its figures fix:
 //
-//   - ON LOOPBACK, over https, the NODE'S SIDE of a bucket: the SDK, the
-//     signature, TLS and the store's own hashing, with the fake's half of
-//     every request on the same CPUs, and none of the provider's — no round
-//     trip, no per-prefix request rate, no link. A 64 KiB put took 0.73 ms and
-//     larger ones ran at 177–229 MB/s. A whole read — of an object written
-//     moments before, held in the fake's memory, as every read figure here
-//     is — ran (2026-10-11, reads in ranges as wide as their reader, the VM
-//     loaded by other work) at 730–820 MB/s at 1 MiB, one request, and at
-//     1,100–1,300 MB/s at 16 MiB and 1,270–1,680 at 128 MiB; verified
-//     ([objstore.Store.Open]) at 190–220 MB/s at 1 MiB and 255–275 from
-//     16 MiB up — this CPU's SHA-256 rate less the decryption of the ranges
-//     it streams, since a link this fast keeps a read one range wide, where
-//     four ranges taken whatever the reader's pace decrypted beside the hash
-//     and ran at 300; eight verified reads at once at 300–670 MB/s together;
-//     a 64 KiB page at a random offset of a 128 MiB object took 0.49 ms — ONE
-//     ranged request wherever the page is. A HEAD across ten thousand
-//     objects ran 3,200–3,600 a second from one goroutine and 19,300–22,700
-//     at 32 in flight, and a listing named 117,000–123,000 objects a second,
-//     a thousand to a request.
-//   - A ROUND TRIP AWAY — the fake holding every request 20 or 50 ms before it
-//     answers (`rtt=`) — every loop of one request at a time is the round
-//     trip's, and the node's CPU stops being what it waits on. A HEAD runs 47
-//     a second at 20 ms and 19 at 50 for each request in flight: 1,380–1,450
-//     and about 610 a second at 32 (what that makes of an audit is
-//     internal/objstore/collect's to say, since it decides how many it asks at
-//     once). A listing's page costs its round trip and about ten milliseconds
-//     of the node's own parsing — 31,400–33,000 names a second at 20 ms,
-//     15,600–16,900 at 50 — so a pass over two million objects is one to two
-//     minutes. A 64 KiB page at any offset is one request, 21 and 51 ms. And a
-//     128 MiB put, eighteen requests, ran at 220–228 MB/s at 20 ms and 153–196
-//     at 50 with [partsInFlight] parts in flight — 192–229 on loopback — where
-//     one part at a time had run at 121 and 79, and 166 on loopback.
-//   - A CONNECTION'S CEILING — the fake sending an object's bytes at no more
-//     than 80 MB/s a connection (`bw=80MB`), about what one S3 connection
-//     carries — is what reading in ranges is for (2026-10-11, the VM loaded
-//     by other work, so each pair below was measured interleaved). A 128 MiB
-//     whole read with the node's spares free (`read=wide`) ran at 335–353
-//     MB/s at loopback's first byte, 284–310 with the bucket 20 ms away and
-//     219–246 at 50 ms, against one GetObject's 80, 79 and 78
-//     (`read=stream`) — and against 310–317, 220–255 and 196–199 when its
-//     four ranges were each asked for only once a buffer was free. What 50 ms
-//     still costs is the read's start: it widens once its reader has been
-//     handed half the first range, and the ranges it then asks for pay their
-//     first byte. With every spare taken (`read=narrow`), a range at a time
-//     with the next one's request on its way, it ran at 82, 121 and 102 MB/s,
-//     where asked for only when the reader reached it a range at a time had
-//     run at 80, 67 and 54 — above one stream at a round trip because the
-//     next range's answer starts arriving into its connection's buffers while
-//     the range before is read, which a real link's window bounds. Verified,
-//     the 128 MiB read ran at 220–244, 205–225 and 178–186 MB/s against
-//     217–263, 196–227 and 157–182 before: this CPU hashes at about four
-//     connections' rate, so the read narrows and widens around its reader.
-//     Two ranges, 16 MiB, ran at 157, 113 and 81 either way — the second is
-//     asked for once the first's answer has named the object, so it pays a
-//     first byte of its own. And a 128 MiB upload beside three downloads
-//     paced to 4 MB/s (BenchmarkUploadBesideSlowReads, 20 ms) ran at 407–472
-//     MB/s, each download holding one spare, where reads that held four each
-//     left it a part at a time at 166–192.
-//   - A THROTTLE BEFORE A BURST (BenchmarkAThrottledBurst, on four vCPUs of a
-//     2.1 GHz Xeon, 2026-10-15): five hundred heads by thirty-two loops
-//     against a bucket 150 ms away took 2.43 seconds, and 2.72–2.74 from a
-//     fresh client whose first answer was a `SlowDown` — the gate cut to
-//     twenty-two and climbing back a place a round — where the SDK's adaptive
-//     mode, which this client used before its gate, took 9.6–9.7. A lone head
-//     throttled between two bursts cost the same, 2.72–2.73, where a cut of
-//     what was out at that moment had left one place and took 4.99–5.00; a
-//     throttle answered to the check at open, before the client has had more
-//     than one attempt out, still leaves it one place, and took 5.00–5.02.
+//   - A round trip away, a loop of one request at a time is the round trip's,
+//     so a large put sends [partsInFlight] parts at once (one part at a time ran
+//     at about half the rate at 50 ms).
+//   - Against a connection capped near S3's 80 MB/s, a whole read in ranges ran
+//     at 219-353 MB/s where one GetObject ran at 80. A range asked for only once
+//     its buffer was free left a first byte between ranges, so each is asked
+//     ahead. A read holds only as many buffers as its reader keeps busy: four
+//     held by a download paced to a person's link took a third of the allowance
+//     for hours.
+//   - A throttle before a burst (BenchmarkAThrottledBurst) costs the gate 2.7 s
+//     against 2.4 s unthrottled, where the SDK's adaptive mode took 9.6 s.
 //
-// OVER PLAIN HTTP THE SDK SIGNS EVERY BODY: it hashes each byte it uploads to
-// put the digest in the signature, where over https it sends UNSIGNED-PAYLOAD
-// instead. On this CPU, where the hash is what a put waits on, puts from
-// 1 MiB up ran at 105–175 MB/s over http against 177–229 over https; reads
-// over http, with no TLS to decrypt, ran unverified at 1.7 GB/s at 1 MiB and,
-// in ranges, 1.5–2.5 at 16 MiB and 1.4–2.9 at 128 MiB (2026-10-11, the VM
-// loaded by other work). Reach a bucket over https.
+// OVER PLAIN HTTP THE SDK SIGNS EVERY BODY, hashing each byte it uploads where
+// https sends UNSIGNED-PAYLOAD, and puts ran at 105-175 MB/s against 177-229
+// over https on a CPU without SHA instructions. Reach a bucket over https.
 //
 // # Measuring a real bucket
 //
-// BenchmarkBackend's `bucket=real` arm — and every Gitlet benchmark's arm
-// over the bucket: internal/gitlet/cache's BenchmarkColdSync, a Gitlet node's first
-// sync of a repository from it; internal/gitlet/host's BenchmarkPushSmall and
-// BenchmarkCloneCold, a push stored in it and a first clone on a node that
-// reads it cold; and internal/gitlet/query's BenchmarkCodeRead, a seat's first
-// read on such a node — runs only when CREWLET_BENCH_S3_BUCKET names a bucket,
-// and otherwise skips, saying so under `go test -v` (which `make bench`
-// passes).
-// No real bucket's figures are recorded here: none has been measured. The
-// variables are read by s3fake.RealBucket — the one parser of them, which
+// BenchmarkBackend's `bucket=real` arm, and every Gitlet benchmark's arm over
+// the bucket (internal/gitlet/cache's BenchmarkColdSync, internal/gitlet/host's
+// BenchmarkPushSmall and BenchmarkCloneCold, internal/gitlet/query's
+// BenchmarkCodeRead), run only when CREWLET_BENCH_S3_BUCKET names a bucket, and
+// otherwise skip, saying so under `go test -v` (which `make bench` passes).
+// The variables are read by s3fake.RealBucket — the one parser of them, which
 // every benchmark that measures a real bucket calls, so each reads them
 // alike — and never by the engine:
 //
@@ -393,16 +304,12 @@
 //
 // NO CREDENTIAL IS ONE OF THEM: the arm takes the SDK's own chain —
 // AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, AWS_PROFILE, a web identity, the
-// instance's role — and honours AWS_CA_BUNDLE as [Open] does. For example:
-//
-//	CREWLET_BENCH_S3_BUCKET=acme-bench CREWLET_BENCH_S3_REGION=eu-west-1 \
-//	  make bench BENCH_PKGS=./internal/objstore/s3obj BENCH_PATTERN=Backend/bucket=real
+// instance's role — and honours AWS_CA_BUNDLE as [Open] does.
 //
 // Every object the arm writes it deletes; a run killed part way can leave
 // objects and an unfinished upload under the prefix, and a lifecycle rule
 // aborting incomplete uploads removes the second. Run it from inside the
-// bucket's region: each case moves as much as the link carries in its
-// benchtime, which at the default is gigabytes.
+// bucket's region: each case moves gigabytes at the default benchtime.
 package s3obj
 
 import (
