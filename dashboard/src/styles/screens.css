@@ -733,7 +733,8 @@
    leading, unbounded measure. That is a wall of text nobody reads. Here it
    gets a proportional face, real leading and a bounded measure, while
    monospace stays where it means something. `pre-wrap` keeps the model's own
-   paragraph breaks, which are load-bearing in a long answer. */
+   paragraph breaks, which are load-bearing in a long answer. The measure is
+   only for a `.prose` that is not the kit's, whose caller chose its own. */
 .prose {
   margin: 0;
   font-family: var(--font-family-sans);
@@ -742,6 +743,8 @@
   color: var(--color-text-primary);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.prose:not(.crewlet-prose) {
   max-width: 78ch;
 }
 .prose.muted {
@@ -5946,6 +5949,13 @@ a.work-cal-chip {
 .prose.md {
   white-space: normal;
   overflow-wrap: break-word;
+}
+
+/* AN ANSWER'S WORDS READ AT THE NARROW MEASURE, about 70 characters a line
+   (app/assistant/chunk/blocks.tsx), while a table or a code sample takes the
+   thread's width, where a row cut to a reading measure would scroll. */
+.prose.md.ask-answer > :is(p, ul, ol, blockquote, h2, h3, h4, h5, h6, .md-heading) {
+  max-width: var(--size-measure-narrow);
 }
 
 /* A WRITTEN LINK, DRAWN INERT (`links: "checked"` in lib/markdown.ts, for an

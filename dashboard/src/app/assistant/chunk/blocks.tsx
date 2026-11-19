@@ -273,19 +273,18 @@ const BUSY: ReadonlySet<TurnPhase> = new Set(["sending", "thinking", "working"])
  * drawn: only while the assistant itself is busy on the turn, never while it
  * waits on the person or applies an approved change, which their cards say.
  *
- * THE STATUS IS WHAT IS HAPPENING NOW: "Stopping" once a stop is on its way,
- * the running step's own sentence while a tool runs, and "Thinking" while
- * nothing of the answer is written yet. Once the answer's words are arriving
- * the mark stands alone after them, with no words of its own, as a caret
- * would have but never inside the text.
+ * WHAT IS HAPPENING NOW, AND FOR HOW LONG: "Stopping", the running step's
+ * sentence (the run chip counts its time), or "Thinking" then "Answering" with
+ * the time since the question, so a long answer never reads as stalled.
  */
-export function thinkingOf(turn: TurnView): { status: string | undefined } | null {
+export function thinkingOf(turn: TurnView, now: number): { status: string } | null {
   if (!BUSY.has(turn.phase)) return null;
   if (turn.stopping) return { status: "Stopping" };
   const running = turn.steps.filter((step) => step.state === "running").at(-1);
   if (running) return { status: running.label };
   const writing = (turn.replies.at(-1)?.text.trim() ?? "") !== "";
-  return { status: writing ? undefined : "Thinking" };
+  const elapsed = fmtElapsed(Math.max(0, now - Date.parse(turn.askedAt)));
+  return { status: `${writing ? "Answering" : "Thinking"}, ${elapsed}` };
 }
 
 /**
@@ -366,6 +365,9 @@ export function ReplyProse({ text, dimmed = false }: { text: string; dimmed?: bo
  * `prose md` is the class pair the dashboard's Markdown rhythm is written for,
  * as every other rendered body here carries it, so the reply's paragraphs are
  * spaced. An answer whose mentions are chips (`reads.tsx`) is drawn by it too.
+ *
+ * ITS WORDS READ AT A MEASURE, ITS TABLES AND CODE AT THE THREAD'S WIDTH
+ * (`ask-answer`): a measure on the whole block cut a table to a column.
  */
 export function ProseBlock({
   children,
@@ -375,7 +377,7 @@ export function ProseBlock({
   dimmed?: boolean;
 }) {
   return (
-    <Prose as="div" measure="narrow" dimmed={dimmed} className="prose md">
+    <Prose as="div" measure="none" dimmed={dimmed} className="prose md ask-answer">
       {children}
     </Prose>
   );

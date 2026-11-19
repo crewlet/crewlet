@@ -95,7 +95,7 @@ function draw(t: TurnView, retryDisabledReason?: string) {
 
 test("says Thinking once, with no run chip and no placeholder, before the first step", () => {
   const { container } = draw(turn);
-  expect(container.querySelector(STATUS)!.textContent).toBe("Thinking");
+  expect(container.querySelector(STATUS)!.textContent).toBe("Thinking, 2s");
   expect(container.querySelector('[class*="crewlet-skeleton"]')).toBeNull();
   expect(container.querySelector(".crewlet-run-chip")).toBeNull();
   // Announced once, through the indicator's own status region.
@@ -118,8 +118,9 @@ test("stands after a card a read built, rather than going", () => {
 });
 
 // THE CARET IS GONE: it stood on a line of its own after the last block, and
-// alone above the cards of a silent round. The mark stands after the words.
-test("draws the mark alone after a streaming answer, and no caret in it", () => {
+// alone above the cards of a silent round. The mark stands after the words,
+// saying the answer is still being written and for how long.
+test("says Answering after a streaming answer, and draws no caret in it", () => {
   const { container } = draw({
     ...turn,
     phase: "working",
@@ -130,7 +131,7 @@ test("draws the mark alone after a streaming answer, and no caret in it", () => 
   });
   expect(container.querySelector(CARET)).toBeNull();
   expect(container.querySelector(INDICATOR)).not.toBeNull();
-  expect(container.querySelector(STATUS)).toBeNull();
+  expect(container.querySelector(STATUS)!.textContent).toBe("Answering, 2s");
   const words = screen.getByText(/Both of your agents are idle/);
   expect(
     words.compareDocumentPosition(container.querySelector(INDICATOR)!) &
@@ -165,8 +166,8 @@ const failed = (error: NonNullable<TurnView["error"]>): TurnView => ({
 });
 
 // A MODEL FAILURE IS TOLD IN THE ENGINE'S WORDS, with its hint, and Try again
-// is offered only where asking again can help: not for a signed-out model.
-test("a signed-out model says so with its hint and offers no Try again", () => {
+// waits on what must change first: Send's own reason holds it off.
+test("a signed-out model says so with its hint, and Try again waits until it is signed in", () => {
   draw(
     failed({
       code: "model_signed_out",
@@ -174,12 +175,46 @@ test("a signed-out model says so with its hint and offers no Try again", () => {
       hint: "Ask an administrator to sign Ask Crewlet's model in again.",
       retryable: false,
     }),
+    "Ask Crewlet's model is signed out",
   );
   expect(screen.getByText("Ask Crewlet's model is signed out, so it cannot answer.")).toBeTruthy();
   expect(document.body.textContent).toContain(
     "Ask an administrator to sign Ask Crewlet's model in again.",
   );
-  expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  expect(screen.getByRole("button", { name: /Try again/ }).getAttribute("aria-disabled")).toBe(
+    "true",
+  );
+});
+
+// A FAILED TURN READ BACK FROM ITS TRANSCRIPT carries its code's sentence and
+// no word on whether waiting helps; it is still asked again with one press.
+// Mutation: gate Try again on `retryable` and a reloaded failure offers none.
+test("a failed turn read back from its transcript offers Try again, which asks the same question", () => {
+  const asked: string[] = [];
+  render(
+    <Router>
+      <Thread
+        view={{
+          ...EMPTY,
+          id: "c1",
+          turns: [
+            failed({
+              code: "model_unavailable",
+              message: "Ask Crewlet's model did not answer.",
+              retryable: false,
+            }),
+          ],
+        }}
+        now={Date.parse("2026-10-24T09:41:02Z")}
+        on={on}
+        opened={new Set()}
+        onRetry={(text) => asked.push(text)}
+        onReconnect={() => {}}
+      />
+    </Router>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(asked).toEqual(["Which agents spent the most?"]);
 });
 
 test("a model that took too long offers Try again, held off while Send is", () => {
