@@ -185,45 +185,18 @@ func noSession(ask Ask, reading bool) error {
 		"none, or its row went: %s", ErrNoSession, ask.Handle, ask.Turn, howRowsGo)
 }
 
-// Read reads a page of the session of the seat's turn ask names: the turn's
-// row at ask's level, and the transcript its object holds from ask's cursor on,
-// held to the bounds of whose read it is ([executor.Reader.Bounds]) and
-// narrowed by ask's filter.
+// Read reads a page of the session of the seat's turn ask names: the row at
+// ask's level and the transcript from ask's cursor on, held to the bounds of
+// whose read it is ([executor.Reader.Bounds]) and narrowed by ask's filter.
 //
-// A ROW THAT NAMES NO SESSION, AND AN OBJECT THAT DOES NOT READ, ARE ANSWERS:
-// the row is still the turn's account of how it ended, so a page says why no
-// entries are shown, in the engine's words ([TranscriptStates]) — never a
-// decoder's, which would quote what a box's own agent packed. Only a turn with
-// no row ([ErrNoSession]), a cursor the page cannot continue ([ErrCursor]) and
-// a store that did not answer ([ErrUnavailable]) are no page; a caller that
-// left is returned as it left — beside the row its read had read, where it had
-// read one ([Page.Read]), so a caller whose own bound ended the read can say
-// how large the session it was reading is — and a refusal of the log's own — a
-// turn id that is none — as the log said it. A store that did not answer and a
-// log that did not say whether a failed session is still kept are both
-// [ErrUnavailable], and the second is [ErrKeptUnknown] too, so a caller tells a
-// reader which of the two did not answer.
-//
-// A SESSION RELEASED WHILE IT IS READ IS SAID AS RELEASED. A read holds
-// nothing: the session a page reads can go between the read of its row and
-// the end of its object's stream — absorbed by a later turn's end, released by
-// the seat's budget, retired by the end of a turn that ran out of its model's
-// context in it, past the retention, or captured again — and its object with it
-// once the collector passes. So an object that fails, as it opens or
-// as it streams, has the turn's row read once more, at [ReadAgain]'s level,
-// and the page says what the row says now: no row is [ErrNoSession] saying the
-// row went while the session was read; a row naming no object is
-// [TranscriptNone] in the domain's reason and that nothing more can be read;
-// a row naming a newer capture is read from it on a first page, and refuses a
-// later page's cursor as a session captured again — or, its turn not ended, as
-// one its runs have kept again ([recaptured]). Only where the row still
-// names the object is the failure the store's or the archive's own — missing,
-// unreadable, or a store that did not answer — since the store reports a
-// collected object and bytes that are not the sealed ones alike as unreadable,
-// and a release read as either was said as a loss or as corruption it is not.
-// The row is read again once: a newer capture that fails too is said as it
-// fails. And a later page whose row went, or names no object, before its read
-// began is said the same way, the pages before it standing.
+// AN UNREADABLE SESSION IS AN ANSWER: the page says why no entries are shown,
+// in the engine's words ([TranscriptStates]), never a decoder's, which would
+// quote a box's agent. Only a missing row ([ErrNoSession]), an unusable cursor
+// ([ErrCursor]) and an unanswering store ([ErrUnavailable]) are no page; a
+// departed caller is returned as it left, beside any row read ([Page.Read]);
+// the log's own refusal as said. A log not saying whether a failed session is
+// kept is [ErrUnavailable] and [ErrKeptUnknown], so a caller tells which.
+// A session released mid-read is said as released (the retry below).
 func Read(ctx context.Context, ask Ask, src Source) (Page, error) {
 	if !ask.By.Valid() {
 		return Page{}, fmt.Errorf("executorread: a read of a session says whose it is, one of %s, "+
@@ -245,6 +218,17 @@ func Read(ctx context.Context, ask Ask, src Source) (Page, error) {
 	if failed == nil || !releasable(failed) {
 		return unread(page, failed)
 	}
+	// A SESSION RELEASED WHILE IT IS READ IS SAID AS RELEASED. A read holds
+	// nothing: the session can go between the row's read and the stream's end
+	// (absorbed by a later turn's end, released by the seat's budget, retired by
+	// a context-exhausted turn, past retention, or captured again), its object
+	// with it once the collector passes. So the row is read once more, at
+	// [ReadAgain]'s level, and the page says what it says now: none is
+	// [ErrNoSession]; no object is [TranscriptNone]; a newer capture reads from
+	// its first page and refuses a later cursor ([recaptured]). Only where the
+	// row still names the object is the failure the store's or archive's own,
+	// since the store reports a collected object and non-sealed bytes alike as
+	// unreadable.
 	again, err := src.Rows.Session(ctx, ask.Handle, ask.Turn, ReadAgain())
 	switch {
 	case errors.Is(err, executordomain.ErrNotFound):
@@ -382,19 +366,15 @@ func Cursor(key objstore.Key, next int) string {
 	return key.String() + "." + strconv.Itoa(executor.TranscriptVersion) + "." + strconv.Itoa(next)
 }
 
-// ordinalOf is the ordinal a page of row's transcript starts at: 0 for no cursor,
-// and the cursor's own for one the row's object handed out under this build's
-// count of entries. A cursor of an object the row has since replaced with a
-// newer capture, or of another count, is refused, saying to read again from
-// the start.
+// ordinalOf is the ordinal a page of row's transcript starts at: 0 for no
+// cursor, else the cursor's own, if its object is the row's under this build's
+// count of entries; otherwise refused, saying to read again from the start.
 //
-// A ROW THAT NAMES NO OBJECT ANY MORE IS NOT CAPTURED AGAIN: the seat's
-// session budget released its object, or the turn's end did, its newest
-// capture not kept — each only of an ended turn — and an ended turn is never
-// captured again. So its cursor is the page's to answer, as the first page is
-// answered — no session kept, and why ([readPage]) — where a refusal saying
-// the session was captured since, and to read it from its start, said what was
-// false and sent the reader to a first page saying something else.
+// A ROW THAT NAMES NO OBJECT ANY MORE IS NOT CAPTURED AGAIN: only an ended
+// turn's object is released (seat budget, the turn's end), and an ended turn is
+// never captured again. So its cursor is answered as the first page is
+// ([readPage]): no session kept, and why. "Captured since" would be false and
+// send the reader to a first page saying something else.
 //
 // A ROW IN PROGRESS IS REFUSED IN ITS RUNS' WORDS ([recaptured]).
 func ordinalOf(cursor string, row executordomain.Session) (int, error) {

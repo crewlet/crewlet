@@ -10,34 +10,17 @@ import (
 )
 
 // Agent-to-agent channels: one ask, one answer, then closed. These events are
-// the audit trail of that exchange — the delivery itself rides the target
-// seat's durable inbox, never a second in-process path.
-//
-// # The three audit records name the turn that published them
+// the audit trail; delivery rides the target seat's durable inbox.
 //
 // [A2AChannelOpened], [A2AMessageSent] and [A2AChannelClosed] each declare a
-// `turn_id`, and that key is the whole of what puts them on the Turn screen:
-// EventLog.Turn is `WHERE turn_id = ?` over a column store.ExtractTags fills
-// from the payload's own top-level field, so a record without it writes an
-// empty column and can never be in a turn's answer however the client bands
-// it. All three went without one for as long as they have existed, which is
-// why the "What else it did" panel advertised colleagues and had never once
-// drawn an ask — and why it failed EMPTY, reading as a turn that talked to
-// nobody rather than as a broken panel.
-//
-// IT IS NOT THE ENVELOPE'S ParentTurnID, which the two WAKE types above carry
-// instead. That one points BACKWARDS, from a wake to the turn that asked for
-// it, and is read by whoever answers. This one is the publisher's own
-// identity, on a record that wakes nobody. A single field on a2a.Ask and
-// a2a.Answer supplies both, because the frame calling the service is both the
-// turn writing the record and the parent of the wake it triggers; they stay
-// two names where they land because two different readers ask two different
-// questions of them — "what else happened on this turn" and "what asked for
-// this".
-//
-// EMPTY IS A REAL ANSWER for exactly one producer: the maintenance sweep
-// closing a channel nobody answered belongs to no turn, publishes no wake, and
-// says so by naming neither a turn nor a closer. See [A2AChannelClosed].
+// `turn_id`, the whole of what puts them on the Turn screen: EventLog.Turn is
+// `WHERE turn_id = ?` over a column store.ExtractTags fills from that field, so
+// a record without it is never in a turn's answer (the panel fails EMPTY).
+// It is NOT the envelope's ParentTurnID, which the two WAKE types carry and
+// which points BACKWARDS to the turn that asked; this is the publisher's own
+// identity. One field on a2a.Ask and a2a.Answer supplies both, but two readers
+// ask different questions. EMPTY IS A REAL ANSWER for the maintenance sweep
+// closing an unanswered channel: no turn, no wake ([A2AChannelClosed]).
 
 // The two WAKE types an A2A exchange puts on a seat's inbox.
 //

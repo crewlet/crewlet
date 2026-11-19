@@ -63,23 +63,16 @@ func union(groups ...[]store.EventRecord) []store.EventRecord {
 
 // MergeListing merges several nodes' keyset pages into the fleet's page.
 //
-// EXACT, and the boundary is why. A node whose part is FULL holds rows older
-// than its last one that nobody has seen, so no row older than that last one
-// can be placed: another node's older row might belong after one of the rows
-// this node did not send. So the merged page stops at the NEWEST position any
-// full part stopped at — every row at or above it is known on every node — and
-// the next page resumes from there.
+// EXACT, and the boundary is why. A FULL part holds older rows nobody has seen,
+// so none older than its last can be placed. The page stops at the NEWEST
+// position any full part stopped at and the next resumes there.
 //
-// While every node sends a whole page, that stop is never above the page size
-// and cutting at the size is already exact: a row in the fleet's top N has
-// fewer than N rows above it on its own node too. What makes the stop
-// necessary is a reply CUT TO FIT THE TRANSPORT (see [fit]) — full, and
-// shorter than the page — whose unsent rows sit above the size cut; the
-// obvious k-way merge would page past them for good.
+// With whole pages that never exceeds the page size, so cutting at the size is
+// exact. It matters for a reply CUT TO FIT THE TRANSPORT (see [fit]), full and
+// shorter than the page: a plain k-way merge would page past its unsent rows.
 //
-// more reports that rows exist past this page — a node said it holds more
-// than it sent, or the merged page was cut at limit — which is what tells a
-// caller to offer "older".
+// more reports rows past this page (a node holds more than it sent, or the page
+// was cut at limit), which tells a caller to offer "older".
 func MergeListing(parts []listPart, limit int) (rows []store.EventRecord, more bool) {
 	groups := make([][]store.EventRecord, 0, len(parts))
 	var horizon *store.EventRecord
@@ -140,20 +133,13 @@ func MergeToolCalls(parts []toolCallsPart, limit int) []store.ToolCall {
 // MergeSpend merges several nodes' per-phase spend records into the fleet's
 // newest `limit` (every record when limit is not positive), newest first.
 //
-// EXACT FOR [MergeListing]'s REASON, and cut at the same place: a node whose
-// part is FULL holds older records nobody has seen, so nothing older than its
-// last record can be placed, and the merge stops at the newest point any full
-// part stopped at. A record is a ROW, and the union holds each row once by the
-// event log's own identity — its instant and its event id — because a record
-// is SUMMED and the cost of a duplicate is a double count rather than a
-// repeated row: a stateless node's phase sits in two data nodes' stores while
-// its custody batch is in flight (see the package doc), and both send it. By
-// the id alone the union would drop a second row sharing an id at another
-// instant, which the log's key allows.
-//
-// more reports that records exist past this page — a node said it holds more
-// than it sent, or the merged page was cut at limit — which is what tells a
-// paged read to ask again below the page's last record.
+// EXACT FOR [MergeListing]'s REASON, cut at the same place. The union holds each
+// row once by the log's identity, instant and event id, because a record is
+// SUMMED and a duplicate double counts: a stateless node's phase sits in two
+// data nodes' stores while its custody batch is in flight (see the package
+// doc). By id alone it would drop a second row sharing an id at another
+// instant, which the log's key allows. more tells a paged read to ask again
+// below the page's last record.
 func MergeSpend(parts []spendPart, limit int) (records []tokens.Record, more bool) {
 	var all []tokens.Record
 	var horizon *tokens.Record
@@ -265,28 +251,17 @@ type Counted[T any] struct {
 }
 
 // once is every row a part named unsettled, once each, that no part counted
-// already — what a merge adds to the counts it summed, by `named`, which reads
-// a part's named rows.
+// already (`named` reads a part's).
+// EXACT: no two nodes KEEP one row (own rows are written once, a stateless
+// node's by the one data node the custody claim chose, internal/observe). A row
+// held without knowing it is kept is NAMED, not counted, and added once unless
+// a node that keeps it and did not name it counted it already (the keeper,
+// settled first). A node that named it and keeps it by the second question
+// settled between the two, counted it in neither, and it is added.
 //
-// EXACT, for two reasons that are both needed. A row a node COUNTED is one it
-// keeps, and no two nodes keep one row: its own rows are written once, inline,
-// by the node that published them, and a stateless node's by the one data node
-// the fleet's custody claim chose (internal/observe). And a row a node holds
-// WITHOUT knowing it keeps it is NAMED rather than counted, and counted here
-// once — unless a node that keeps it, and did not name it, counted it already.
-// That node is the batch's keeper, which settled first; a node that named the
-// row and keeps it by the second question settled between the two, and counted
-// it in neither, so the row is still counted here.
-//
-// What that leaves is a batch written and settled by its keeper BETWEEN the two
-// questions while another node held it unsettled: the keeper counted it in
-// neither answer, and keeps it by the second — so it is in no count. That is a
-// redelivery landing inside one read, and the next read counts it.
-//
-// Only the parts handed in are counted from and judged by: a node whose part a
-// merge left out — one that refused the first question, or whose axis was cut
-// over another window — counted nothing the merge holds, so what it keeps
-// cannot say a row was counted, and the merge does not hand its part in.
+// Left over: a batch settled by its keeper BETWEEN the two questions while
+// another held it unsettled is in no count; the next read counts it. A node
+// whose part was left out counted nothing, so what it keeps proves nothing.
 func once[T any](parts []Counted[T], named func(T) []store.UnsettledRow) []store.UnsettledRow {
 	rows := map[store.RowKey]store.UnsettledRow{}
 	var order []store.RowKey
@@ -334,23 +309,17 @@ func identities[T any](parts []Counted[T], named func(T) []store.UnsettledRow) [
 	return out
 }
 
-// MergeSeries sums several nodes' histograms of ONE window into the fleet's —
-// the first part's window, which is the asker's — and names the nodes whose
-// part it could not sum.
+// MergeSeries sums several nodes' histograms of ONE window into the fleet's (the
+// first part's, the asker's) and names the nodes whose part it could not sum.
 //
-// Summable because the window is PINNED — every node was handed the asker's
-// clock, so every node snapped the same edges and produced the same bars — and
-// because every row is counted once: each part counts the rows its node keeps,
-// and the rows a custody batch still in flight puts on two nodes are named and
-// added once, by the rule the counts placed them by ([once],
-// [store.EventHistogram.Count]). Every node cuts that window alike
-// ([store.HistogramQuery.Window]), a window the history clips included: down
-// to the bucket the floor falls in, partial first bar and all, which the asker
-// drops after this sum ([store.EventHistogram.InsideHistory]). A part whose
-// window differs anyway cannot be summed bar for bar without adding one node's
-// minute to another's next one; it is left out and its node reported, so the
-// caller names that node rather than drawing a wrong bar — and its named rows
-// and what it keeps are left out with it.
+// Summable because the window is PINNED (every node got the asker's clock, so
+// snapped the same edges) and every row is counted once: parts count what their
+// node keeps, and rows in-flight custody puts on two nodes are named and added
+// once ([once], [store.EventHistogram.Count]). Every node cuts the window alike
+// ([store.HistogramQuery.Window]), down to the bucket the floor falls in,
+// partial first bar and all, which the asker drops after the sum
+// ([store.EventHistogram.InsideHistory]). A part whose window differs anyway is
+// left out, named rows too, and its node reported.
 func MergeSeries(q store.HistogramQuery, parts []Counted[store.EventHistogram]) (store.EventHistogram, []string) {
 	if len(parts) == 0 {
 		return store.EventHistogram{}, nil
@@ -456,24 +425,14 @@ func FirstFound(parts []eventPart) (store.EventRecord, bool) {
 // [store.MaxTraceEvents] of every answering node's rows, and how many the fleet
 // holds.
 //
-// EXACT FOR [MergeListing]'s REASON, and cut where it cuts. Each node sent its
-// own oldest rows, so the fleet's oldest are among them — up to the point a
-// node stops being known. A node holding rows it did NOT send ([tracePart.unsent])
-// holds every one of them after the last row it sent, so no row past that one
-// can be placed: another node's newer row would be shown while the unsent rows
-// before it were not, a hole inside a view that presents itself as the
-// trace's opening. So the union stops at the OLDEST such last row — kept,
-// since its node sent it — and the cap applies after that; a node that sent
-// no row at all while holding some leaves nothing placeable.
-//
-// While every node sends its whole capped read, that stop is never above the
-// cap and cutting at the cap is already exact. What makes it necessary is a
-// part that sent FEWER rows than the cap and holds more: a reply cut to fit
-// the transport ([fit]) — whose unsent rows sit inside the cap's cut, where
-// the obvious merge filled the gap with other nodes' newer rows. The total is what
-// every node keeps of the trace and every row a custody batch in flight puts on
-// two nodes once ([once]), and it is never cut, so the answer still says what
-// it does not show.
+// EXACT FOR [MergeListing]'s REASON, cut where it cuts. A node holding rows it
+// did NOT send ([tracePart.unsent]) holds them all after the last row it sent,
+// so none past that can be placed: another node's newer row would show while
+// unsent rows before it did not. The union stops at the OLDEST such last row
+// (kept) and the cap applies after; a node that sent nothing while holding some
+// leaves nothing placeable. This matters for a part that sent FEWER rows than
+// the cap (a reply cut to fit the transport, [fit]). The total counts what
+// nodes keep plus in-flight custody rows once ([once]) and is never cut.
 func MergeTrace(parts []Counted[tracePart]) (rows []store.EventRecord, total int) {
 	groups := make([][]store.EventRecord, 0, len(parts))
 	var known opening
@@ -534,16 +493,14 @@ func (o opening) cut(rows []store.EventRecord) []store.EventRecord {
 // rows, its newest [TurnClosingEvents], how many the fleet holds, and every
 // trace it touched in the order it first touched them.
 //
-// Exact on both ends. The OPENING is [MergeTrace]'s, cut where it cuts: each
-// node sent its own oldest rows, so the fleet's oldest are among them up to
-// the oldest last opening row of a node holding rows it sent in neither its
-// opening nor its ending — every one of those lies after that row, so nothing
-// past it can be placed. It is taken from every row sent, endings included,
-// because a node holding nothing it did not send is known whole. The newest
-// rows are among the nodes' closings — or their heads, where a head held the
-// whole of that node's share and no closing was needed. What lies between is
-// the gap the total reports, which is never cut — and which counts each row
-// once, for [MergeTrace]'s reason.
+// Exact on both ends. The OPENING is [MergeTrace]'s, cut where it cuts: nothing
+// can be placed past the oldest last opening row of a node holding rows it sent
+// in neither its opening nor its ending, as all of those lie after it. It is
+// taken from every row sent, endings included, because a node holding nothing
+// it did not send is known whole. The newest rows are among the closings, or
+// the heads where a head held a node's whole share. What lies between is the
+// gap the total reports, never cut, counting each row once for [MergeTrace]'s
+// reason.
 func MergeTurn(parts []Counted[turnPart]) (rows []store.EventRecord, total int, traces []string) {
 	everything := make([][]store.EventRecord, 0, 2*len(parts))
 	firsts := map[string]time.Time{}

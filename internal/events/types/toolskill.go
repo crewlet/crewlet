@@ -12,24 +12,14 @@ func init() {
 // ToolSkillPageChanged tells every node that one page in the tool-skills
 // container changed, so each re-reads that page into its own registry.
 //
-// # Why a broadcast, when the change already arrived as a webhook
+// A vendor webhook reaches ONE node (inbound deliveries are a fleet-wide
+// consumer group) but a registry is per node, so the winner publishes this and
+// the others hear it on an ephemeral broadcast subscription.
 //
-// A vendor webhook reaches ONE node: inbound deliveries are a fleet-wide
-// consumer group, so exactly one member parses each one. A registry is per
-// node, though, and a node that only ever learned about skills from the
-// deliveries it happened to win would serve guidance its peers had already
-// replaced. The node that wins the delivery publishes this; every other node
-// hears it on an ephemeral broadcast subscription and re-reads the page
-// itself.
-//
-// # Deliberately thin, and a nudge rather than a record
-//
-// It names the page and never carries its content, nor whether the page is
-// gone: each node reads the page from the backend, which is the one authority
-// on what it now says and on whether it is there, so a nudge that arrives late
-// can install neither a stale body nor a stale removal. Losing one costs
-// staleness until the periodic walk every node runs, never a divergence that
-// lasts.
+// It is a nudge, deliberately thin: it names the page, never its content or
+// whether it is gone, since the backend is the authority on both and a late
+// nudge must install neither a stale body nor a stale removal. Losing one costs
+// staleness until the periodic walk.
 type ToolSkillPageChanged struct {
 	// Backend is the knowledge backend the page lives in ("confluence").
 	// A node on another backend has nothing to re-read.

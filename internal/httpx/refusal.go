@@ -14,52 +14,26 @@ import (
 
 // RefusalBytes is how much of a refused response is worth reading.
 //
-// TWO KILOBYTES, which is what four of the seven clients already used before
-// this was shared. A refusal's useful content is a sentence; past a couple of
-// kilobytes a body is not explaining the refusal, it is a document that
-// happens to have arrived instead of one.
+// Two kilobytes: a refusal's useful content is a sentence; past that a body is
+// a document that arrived instead of an explanation.
 //
-// It replaced six different answers to one question — 2048 twice, 4096, two
-// named constants, and 1 MiB — and the outlier is the one that produced the
-// defect below. It is the ONE bound on what a refusal says: there used to be a
-// second, 400 bytes, applied silently after the first, so a validation list
-// past four hundred bytes lost its later fields with nothing to say it had —
-// to the operator, and to the model whose tool call the refusal answers.
+// It is the ONE bound on what a refusal says. A second, silent cut after it
+// would drop a long validation list's later fields with nothing to say so, to
+// the operator and to the model whose tool call the refusal answers.
 const RefusalBytes = 2 << 10
 
 // Refusal is what an endpoint SAID about refusing a request, as one line.
 //
-// # A body that is not an explanation must not be pasted into an error
+// A body that is not an explanation is never pasted into an error: an HTML
+// error page would bury the one fact that mattered in a rendered document. A
+// non-JSON body yields an HTML page's TITLE (where proxies and login walls put
+// the reason) or plain text as itself; no title yields nothing, the status code
+// being carried separately.
 //
-// Every vendor client decodes the JSON shapes its own vendor uses and then
-// needs an answer for everything else. The answer was `string(body)`, and for
-// an HTML error page that is the whole page: Atlassian's 403 reached an
-// operator's log as a rendered document — doctype, head, inline styles, script
-// tags — around a sentence nobody could find, with the one fact that mattered
-// (an unconfirmed address, a missing scope) buried in it if it was there at
-// all. Atlassian read up to a MEGABYTE of it.
-//
-// So a non-JSON body is read for what it can honestly yield and nothing more:
-// an HTML page's TITLE, which is where a proxy, a gateway and a login wall all
-// put the reason ("403 Forbidden", "Sign in to continue"), and plain text as
-// itself. A page with no title yields nothing, which is the honest answer — the
-// status code is carried separately and already says more than the markup does.
-//
-// # Bounded where it is read, and said
-//
-// Only the first [RefusalBytes] of body are shaped, and a body that ran past
-// them is MARKED, because "the explanation is off-screen" and "the endpoint
-// explained itself badly" must not be the same string. What is shaped is never
-// cut again. [ReadRefusal] is the reading half, for the callers that have the
-// response rather than a body some other read already bounded.
-//
-// # Shared, because the fallback is the part that was wrong everywhere
-//
-// The vendor-specific SHAPES stay with their vendors: a Jira error envelope is
-// Jira's business and a union of seven of them would be a grab-bag nobody
-// owns. What is shared is the question every one of them asks last — "this is
-// not a shape I know; what can I say?" — which is where each had its own
-// mistake.
+// Only the first [RefusalBytes] are shaped, and a body past them is MARKED so
+// "off-screen" and "explained badly" differ; shaped text is never cut again.
+// [ReadRefusal] is the reading half. Vendor SHAPES stay with their vendors;
+// only this last fallback is shared.
 func Refusal(contentType string, body []byte) string {
 	cut := len(body) > RefusalBytes
 	text := strings.TrimSpace(textcut.Bytes(string(body), RefusalBytes))

@@ -1548,6 +1548,11 @@ type continuedLaunch struct {
 	// job's own copy with, to know whether the job restarted it after its
 	// brief ([RestartedSince]).
 	restart *string
+	// point is the save point of the kept capture the launch hands its run,
+	// with that capture's launch, where the launch carries its round on and
+	// the capture states one above zero; nil otherwise ([LaunchRecord.Continued]).
+	// Written on the job's record with its command ([BoxRef.Continued]).
+	point *ContinuedPoint
 	// release removes what the launch spooled to carry the session in, once
 	// the run has started (or failed to).
 	release func()
@@ -1785,6 +1790,10 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	// AND WHERE THE ARCHIVE RESTARTS LAST, as the capture's own read of it
 	// found it.
 	restart := restartOf(kept.ResumedCount)
+	// AND ITS SAVE POINT, for a later capture of the job to be raised to: only
+	// where the launch carries its round on, since a round the launch opens
+	// numbers its calls from a new log ([LaunchRecord.Continued]).
+	point := continuedPoint(req, *kept)
 	// THE BOX'S OWN COPY, where its harness exited cleanly in this very box
 	// and its session was taken whole there: the box holds the archive, so
 	// nothing is fetched to be kept over a copy it would not touch.
@@ -1864,7 +1873,7 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	if own {
 		return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
 			kept: true, unheld: unheld, summarized: summarized, measure: measure, restart: restart,
-			release: func() {}}, ""
+			point: point, release: func() {}}, ""
 	}
 	fetched, err := c.fetchSession(ctx, row)
 	if err != nil {
@@ -1886,10 +1895,21 @@ func (c *Coordinator) continueKept(ctx context.Context, req LaunchRequest, opene
 	carried := &CarriedSession{Archive: archive, Body: body, Replace: kept.Interrupted}
 	return continuedLaunch{brief: brief, fresh: req.Brief, session: row.SessionID, kind: kind,
 		kept: true, exact: exact != "", unheld: unheld, summarized: summarized, carried: carried,
-		measure: measure, restart: restart, release: func() {
+		measure: measure, restart: restart, point: point, release: func() {
 			_ = body.Close()
 			fetched.remove()
 		}}, ""
+}
+
+// continuedPoint is the save point of kept, the capture launch req hands its
+// run, with kept's launch ordinal ([LaunchRecord.Continued]): nil where req
+// carries no round on, the rule [continuedLaunch.omitted] reads, and where kept
+// states no point above zero.
+func continuedPoint(req LaunchRequest, kept SessionCapture) *ContinuedPoint {
+	if at, stated := kept.SavePoint(); req.Continue != nil && stated && at > 0 {
+		return &ContinuedPoint{LaunchSeq: kept.LaunchSeq, Through: at}
+	}
+	return nil
 }
 
 // answeredRelease is the release check's box answered, in a person's words.
