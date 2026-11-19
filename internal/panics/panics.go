@@ -53,10 +53,13 @@ const (
 	ScopeRelay Scope = "relay"
 	// ScopeAPI is an API request.
 	ScopeAPI Scope = "api"
+	// ScopeSessionTake is the scrub of a run's session as it is taken out of
+	// its box.
+	ScopeSessionTake Scope = "session_take"
 )
 
 var scopes = []Scope{ScopeTurn, ScopeToolCall, ScopePrefetch, ScopeSubagent, ScopeReflection,
-	ScopeSeat, ScopeQueue, ScopeCoordination, ScopeCodeHook, ScopeRelay, ScopeAPI}
+	ScopeSeat, ScopeQueue, ScopeCoordination, ScopeCodeHook, ScopeRelay, ScopeAPI, ScopeSessionTake}
 
 // Scopes is every scope, in a fixed order.
 func Scopes() []Scope { return slices.Clone(scopes) }

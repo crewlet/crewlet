@@ -6,91 +6,29 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"path"
 	"slices"
-	"strconv"
 	"strings"
-	"sync"
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/crewlet/crewlet/internal/jsonscan"
 	"github.com/crewlet/crewlet/internal/plainjson"
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// THE SCRUB A KEPT SESSION LEAVES ITS BOX THROUGH.
-//
-// A session is a harness's whole transcript — every file it read, every
-// command's output — and what leaves a box passes the engine's secret
-// redaction, as every other text read out of one does (code-sandbox.md). Two
-// passes, in this order:
-//
-//  1. BY VALUE: every secret the engine itself put in the box — its login,
-//     its environment's credentials — is taken out wherever it appears, in its
-//     raw form and in the form a JSON string holds it in, whatever its shape.
-//     A value redact's rules would never recognise (an operator's opaque
-//     token) is gone all the same. First, so the second pass sees the marker
-//     where the value was rather than a half it could not place.
-//  2. BY SHAPE: redact.Secrets, the one denylist every surface uses, which
-//     catches what the engine did not put there — a key the run printed.
-//
-// EACH FILE AS WHAT IT IS, so what is kept is still what its harness restores:
-//
-//   - A TRANSCRIPT, one JSON value a line (`.jsonl`): each value rewritten
-//     string by string — every string scrubbed and redacted as the text it
-//     decodes to, which is where a key's lines are lines again; every key of
-//     every object scrubbed and redacted the same way, so a secret a tool's
-//     structured result names a member by goes too; and a string or a number
-//     under a credential's own key taken out whole. A line that is not JSON —
-//     the last one of a job packed while it wrote — is scrubbed and redacted
-//     as text, the values in the forms a JSON string escapes them in among
-//     those it takes out. A RECORD KEEPS ITS LINE AND ITS KEYS: the transcript
-//     keeps every line, and each record every key in the order written, so
-//     Claude Code, which reads a session file past 5 MiB by where each line's
-//     keys sit, still finds every record where it did; what a record can lose
-//     is a loaded tool definition named outside what the provider takes, cut
-//     out of its line as written ([withoutBrokenDefinitions]). Every key and
-//     string is written again ([jsonRewrite.writeString]) as the text Go
-//     decodes it to, changed only where it held a secret: so an escape can
-//     come out spelled otherwise than its harness wrote it, and a lone
-//     surrogate's escape or a byte that is no UTF-8, each of which Go decodes
-//     to U+FFFD, comes out as U+FFFD.
-//   - A DOCUMENT (`.json`, and OpenCode's whole export): rewritten string by
-//     string as it streams, the same way, a token at a time. A `.json` file
-//     the rewrite cannot read as one JSON value — a task file its harness was
-//     killed while it wrote, which the run's own end packs as it finds it
-//     (a pack beside a harness still working refuses one it sees written,
-//     claudeHeldTar) — is redacted as text, as a transcript's torn line is,
-//     rather than costing the session.
-//   - ANYTHING ELSE, as text: each whole line scrubbed, and redacted as
-//     redact settles it (redact.Settled, as a live tail is), so a rule that
-//     reads across lines sees them all.
-//
-// AND THE TAR'S OWN WORDS: a member's name is scrubbed by value and by shape
-// as the transcript's paths to it are ([memberName]), its header carries
-// nothing but its kind, name, mode, size and time — no owner, link target or
-// extended record of the box's — and a member that is neither a file nor a
-// directory (a link the box's own code made) is left out, since no harness
-// keeps its session in one.
-//
-// # One piece at a time, and never more than the archive's bound
-//
-// A line, a string or a settled stretch of text in memory, never a file; and
-// a tar is read TWICE — a tar names each file's size before its bytes, and a
-// file's size after the scrub is known only once it has been read — so every
-// rewrite here is a pure function of what it reads, and the second reading
-// writes what the first counted. The archive is the box's own: its code can
-// write a gzip that expands a thousandfold, a line with no end, a string a
-// gigabyte long or a value nested a million deep. So the scrub reads at most
-// [scrubExpansion] times the archive's bound of plaintext in one reading,
-// holds no piece longer than [scrubPieceMaxBytes] and rewrites no value
-// nested deeper than [scrubDepthMax] as JSON — a session past the first two
-// is refused ([errScrubBound]), stamped so, rather than costing the engine
-// host its memory.
+// THE SCRUB A KEPT SESSION LEAVES ITS BOX THROUGH: every secret the engine put
+// in the box taken out by value, then redact.Secrets by shape, each file
+// rewritten as what it is (a transcript line by line, a document a token at a
+// time, anything else as text) so its harness still restores it, and the tar's
+// own words scrubbed too. No line, string or stretch of text is held whole or
+// refused for its length; a tar and an export are each read twice, from a plan
+// of bits; and the scrub is held to its bounds and to [scrubHeldBytes]. The
+// argument is the package doc's: "A kept session leaves its box scrubbed",
+// "The scrub holds no value whole" and "The scrub's bounds, and what it holds".
 
 // archiveLayout is how a harness's archive is laid out.
 type archiveLayout int
@@ -132,59 +70,13 @@ const minScrubBytes = 8
 // two bounds make together, raised by raising this with the budget.
 const scrubExpansion = 8
 
-// scrubPieceMaxBytes is the most the scrub holds whole: one line of a
-// transcript, one JSON string or literal, one stretch of text held for its
-// redaction to settle. Past it the session is refused.
-//
-// EIGHT MEBIBYTES. A transcript's longest ordinary line is a tool's output it
-// echoes — tens of kibibytes — and its longest legitimate one an image the
-// model read, a screenshot's few mebibytes encoded; eight is room for that
-// twice over. A piece is rewritten in a handful of copies at once (the line, the
-// string decoded from it, its scrubbed and redacted forms, what is written), so
-// the bound is what one capture can cost a host's memory: a few tens of
-// mebibytes, whatever the box wrote.
-const scrubPieceMaxBytes = 8 << 20
-
-// scrubSettleStride is the least a stretch held for its redaction grows by
-// before the redaction is asked again what of it has settled — and the stretch
-// grows by half of itself once that is more ([rewriteText]): asked at every
-// line, a stretch of a million one-byte lines that never settles would be read
-// a million times over, and asked at a fixed stride, a stretch at the piece's
-// bound would be read some hundred times. Grown by half, a stretch is read a
-// small multiple of its length in all. The redaction is asked once more before
-// a stretch past the piece is refused, so how often it is asked never decides
-// whether a session is kept; and every reading of an archive asks at the same
-// lengths, so the two readings of a tar write the same bytes.
-const scrubSettleStride = 64 << 10
-
-// scrubDepthMax is how deep the containers of one JSON value the scrub
-// rewrites may nest: a decoder keeps a frame for every container open, and so
-// does the rewrite, so a value a box wrote with a million brackets would cost
-// a host a million frames. A value nested deeper is not rewritten as JSON — a
-// transcript's line or a `.json` file is redacted as the text it is, and an
-// export is refused.
-//
-// TEN THOUSAND, encoding/json's own bound on a value it decodes whole. A
-// harness's transcript line nests some tens deep, and a value at the bound costs
-// the rewrite well under a mebibyte of frames.
-const scrubDepthMax = 10000
-
-// errScrubBound is a session past what its scrub reads or holds: refused.
+// errScrubBound is a session past what its scrub reads: refused.
 var errScrubBound = errors.New("executor: the session is past the bounds a kept session is scrubbed within")
 
-// errNotOneValue is JSON holding more than one value where the rewrite reads
-// one: a transcript's line, a `.json` file, an export.
-var errNotOneValue = errors.New("executor: more than one JSON value where one was expected")
-
-// errTooDeep is a JSON value nested past [scrubDepthMax].
-var errTooDeep = fmt.Errorf("executor: a JSON value nested deeper than %d", scrubDepthMax)
-
-// scrubBounds is how much of an archive one scrub reads and holds.
+// scrubBounds is how much of an archive one scrub reads.
 type scrubBounds struct {
 	// plain is the most plaintext one reading of the archive yields.
 	plain int64
-	// piece is the most it holds whole.
-	piece int
 	// gate is what the scrub holds while it holds a piece past
 	// [collectionBaseLineBytes] ([scrubBounds.gatedBy]); its hold is nil
 	// where no slot gates the scrub's pieces.
@@ -193,7 +85,7 @@ type scrubBounds struct {
 
 // boundsFor is the scrub of an archive of at most archiveMax bytes.
 func boundsFor(archiveMax int64) scrubBounds {
-	return scrubBounds{plain: scrubExpansion * archiveMax, piece: scrubPieceMaxBytes}
+	return scrubBounds{plain: scrubExpansion * archiveMax}
 }
 
 // gatedBy is b with every piece past the base held under large's one slot
@@ -204,19 +96,73 @@ func (b scrubBounds) gatedBy(ctx context.Context, large *passBudget) scrubBounds
 	return b
 }
 
-// pieceSource is src beneath a scrub's line reader: a line past the base
-// holds b's slot before its bytes are handed on, until the reader above is
-// done with it ([lineRun]); done drops what it still holds.
-func (b scrubBounds) pieceSource(src io.Reader) (r io.Reader, done func()) {
-	if b.gate.hold == nil {
+// pieces is src beneath a scrub's reader: a piece past the base holds g's slot
+// before its bytes are handed on, until the reader above is done with it
+// ([lineRun]), a piece each line where lines is set and else the whole of src;
+// done drops what it still holds. A PIECE IS WHAT THE SCRUB REDACTS AS ONE
+// TEXT, whose redaction may hold up to its length (the package doc's "The
+// scrub's bounds, and what it holds").
+func (g pieceGate) pieces(src io.Reader, lines bool) (r io.Reader, done func()) {
+	if g.hold == nil {
 		return src, func() {}
 	}
-	run := &lineRun{r: src, gate: b.gate}
+	run := &lineRun{r: src, gate: g, whole: !lines}
 	return run, run.done
 }
 
-// scrubber takes the engine's own values out of text.
-type scrubber struct{ r *strings.Replacer }
+// The figures [scrubHeldBytes] adds up, each the most one part of the scrub
+// holds.
+const (
+	// streamHeldBytes is one redact.Stream: its stages' windows, at most
+	// about 21 MiB of text and 24 MiB of what they keep beside it, as
+	// redact's package doc states and its own test holds.
+	streamHeldBytes = 46 << 20
+	// scannerHeldBytes is one jsonscan.Scanner: its read buffer and its
+	// struct, the open containers' bits among it, as jsonscan's package doc
+	// states and its own test holds. The scrub never captures a value, so
+	// it holds no capture's buffer beside it.
+	scannerHeldBytes = 67_072
+	// rewriteFrameBytes is the most one of a JSON rewrite's frames takes
+	// (rewriteFrame), which a test holds it to.
+	rewriteFrameBytes = 40
+	// rewriteHeldBytes is one JSON rewrite: its scanner, the buffer it
+	// reads a text's pieces into, and a frame for each container open, at
+	// most jsonscan.MaxDepth.
+	rewriteHeldBytes = scannerHeldBytes + textWholeBytes + jsonscan.MaxDepth*rewriteFrameBytes
+	// archiveHeldBytes is the archive's own readers and writers, the gzip
+	// writer's compressor the largest: flate's hash chains and window, under
+	// a mebibyte at the default level, beside gzip's reader, tar's reader
+	// and writer and the buffers of the readers and writers above them.
+	archiveHeldBytes = 2 << 20
+	// planBlockBytes is the room of the [bitList] blocks being filled beyond
+	// their bits: each of the plan's three streams, the three lists a line's
+	// cut reads at once, and the block a list's bits move into while the
+	// list's last one goes ([bitList.moveTo]) each round up to one.
+	planBlockBytes = 7 * bitBlockWords * 8
+)
+
+// scrubHeldBytes is the most the scrub of a reading of at most plain bytes
+// holds, longest the longest value it takes out ([scrubber]): two text scrubs
+// at once, each a redaction's stream, a [valueStream] (fewer bytes than the
+// longest value held, and twice that read beside them) and a string's encoder
+// (a rune's bytes and the most of a text the cut reads); two JSON rewrites;
+// the archive's readers and writers; and the plan, a bit for every two bytes
+// of plaintext at most ([tarPlan]), so a sixteenth of it.
+//
+// TWO OF EACH, because the first reading reads a line, or a `.json` file,
+// both ways at once ([measureLines], [measureFile]); the second reads one.
+func scrubHeldBytes(plain int64, longest int) int64 {
+	text := int64(streamHeldBytes + 3*longest + utf8.UTFMax + providerToolNameMax + 1)
+	return 2*text + 2*rewriteHeldBytes + archiveHeldBytes + plain/16 + planBlockBytes
+}
+
+// scrubber takes the engine's own values out of text: a whole text through
+// strings.Replacer ([scrubber.apply]), and a text that arrives in pieces
+// through a [valueStream] of the same values ([scrubber.stream]).
+type scrubber struct {
+	r      *strings.Replacer
+	values *valueTable
+}
 
 // newScrubber is the scrubber for values: each line of each value at least
 // [minScrubBytes] long — a multi-line value (a key file a setup step wrote) is
@@ -255,7 +201,7 @@ func newScrubber(values []string) scrubber {
 	for _, old := range olds {
 		pairs = append(pairs, old, scrubMarker)
 	}
-	return scrubber{r: strings.NewReplacer(pairs...)}
+	return scrubber{r: strings.NewReplacer(pairs...), values: newValueTable(olds)}
 }
 
 // apply is s with every value taken out.
@@ -264,6 +210,144 @@ func (s scrubber) apply(text string) string {
 		return text
 	}
 	return s.r.Replace(text)
+}
+
+// valueStream is the by-value pass over a text that arrives in pieces, cut
+// anywhere: what it writes to w, put together, is [scrubber.apply] of the
+// whole text, however the text was cut, once Close has written the last of it.
+// It decides a place at a time as the replacer does, a value taken out
+// leftmost and longest first, and holds fewer bytes than the longest value
+// from one piece to the next. The package doc's "The scrub holds no value
+// whole" says why.
+type valueStream struct {
+	w      io.Writer
+	values *valueTable
+	// held is the text past the last place decided, fewer bytes than the
+	// longest value.
+	held []byte
+	// joined is held and the start of the next piece, read together.
+	joined []byte
+	// err is the first error of w, which ends the stream.
+	err error
+}
+
+// valueTable is the values a [scrubber] takes out, as a [valueStream] reads
+// them: by their first byte, longest first, and the longest one's length.
+type valueTable struct {
+	byFirst [256][][]byte
+	longest int
+}
+
+// newValueTable is the table of olds, ordered longest first.
+func newValueTable(olds []string) *valueTable {
+	t := &valueTable{}
+	for _, old := range olds {
+		t.byFirst[old[0]] = append(t.byFirst[old[0]], []byte(old))
+		t.longest = max(t.longest, len(old))
+	}
+	return t
+}
+
+// stream is s's by-value pass onto w, for a text written to it a piece at a
+// time.
+func (s scrubber) stream(w io.Writer) *valueStream {
+	return &valueStream{w: w, values: s.values}
+}
+
+// Write reads the next piece of the text, and writes what of the text it has
+// decided.
+func (v *valueStream) Write(p []byte) (int, error) {
+	if v.err != nil {
+		return 0, v.err
+	}
+	if v.values == nil {
+		return v.result(len(p), v.literal(p))
+	}
+	n := len(p)
+	if len(v.held) > 0 {
+		// Every place in held is decided on held and the first twice the
+		// longest value's length of p: a value read from a place in held
+		// ends within the longest value's length past it.
+		take := min(len(p), 2*v.values.longest)
+		v.joined = append(append(v.joined[:0], v.held...), p[:take]...)
+		if take == len(p) {
+			at, err := v.step(v.joined, len(v.joined), false)
+			v.held = append(v.held[:0], v.joined[at:]...)
+			return v.result(n, err)
+		}
+		at, err := v.step(v.joined, len(v.held), false)
+		if err != nil {
+			return v.result(n, err)
+		}
+		p = p[at-len(v.held):]
+	}
+	at, err := v.step(p, len(p), false)
+	v.held = append(v.held[:0], p[at:]...)
+	return v.result(n, err)
+}
+
+// Close decides every place still held, as the text's end decides them, and
+// writes them. It closes nothing it was handed.
+func (v *valueStream) Close() error {
+	if v.err != nil || v.values == nil {
+		return v.err
+	}
+	_, err := v.step(v.held, len(v.held), true)
+	v.held = v.held[:0]
+	_, err = v.result(0, err)
+	return err
+}
+
+// step decides the places of text before stop, from its start, and writes
+// them, a value taken out as [scrubMarker]: every place, once the text has
+// ended, and otherwise each with the longest value's length of text read from
+// it. It answers the first place it did not decide, every byte before which
+// is written.
+func (v *valueStream) step(text []byte, stop int, ended bool) (int, error) {
+	at, last := 0, 0
+	for at < stop {
+		if !ended && at+v.values.longest > len(text) {
+			break
+		}
+		matched := 0
+		for _, value := range v.values.byFirst[text[at]] {
+			if bytes.HasPrefix(text[at:], value) {
+				matched = len(value)
+				break
+			}
+		}
+		if matched == 0 {
+			at++
+			continue
+		}
+		if err := v.literal(text[last:at]); err != nil {
+			return at, err
+		}
+		if _, err := io.WriteString(v.w, scrubMarker); err != nil {
+			return at, err
+		}
+		at += matched
+		last = at
+	}
+	return at, v.literal(text[last:at])
+}
+
+// literal writes text as it is, and nothing where it is empty.
+func (v *valueStream) literal(text []byte) error {
+	if len(text) == 0 {
+		return nil
+	}
+	_, err := v.w.Write(text)
+	return err
+}
+
+// result is n read and the stream's error once err ends it.
+func (v *valueStream) result(n int, err error) (int, error) {
+	if err != nil {
+		v.err = err
+		return 0, err
+	}
+	return n, nil
 }
 
 // memberName is a tar member's name as the kept archive holds it: scrubbed by
@@ -289,98 +373,286 @@ func jsonEscaped(s string) string {
 }
 
 // credentialKey reports whether a JSON object's key names a credential, whose
-// string value is taken out whole however it is shaped: a login's tokens, a
-// tool call's password or API key, a cloud session's token. Read on the key's
-// own words, lowercase: a password's, as redact names them
-// (redact.NamesPassword), `token`, `key` and `auth` exactly, or one of the
-// names a credential carries — an API key and an API token, the access token a
-// login holds and the token that refreshes it, a cloud session's token, which
-// AWS names a session token and a security token both, an auth token and a
-// bearer token, a private key and a private token (GitLab's header), the
-// authorization a request carries, a secret, a credential itself, an OpenID
-// Connect ID token ([namesIDToken]), and the identity token and registry token
-// a Docker config holds beside a registry's `auth`, which is its user and
-// password encoded.
-//
-// THE NAMES ARE READ WITH THE KEY'S SEPARATORS DROPPED, since each format joins
-// a name's words its own way: a session's token is `aws_session_token` in AWS's
-// credentials file, `SessionToken` in what STS answers and `sessionToken` in
-// what Roles Anywhere does, one name once the separators are gone; and a
-// request's header joins its words with hyphens, so AWS's
-// `X-Amz-Security-Token` is read by its security token, and an API key's
-// `x-api-key` and GitLab's `PRIVATE-TOKEN` by theirs. Spelled out per
-// separator, the names missed every header's.
-//
-// NOT `token`, `key` OR `auth` AT LARGE, which only the whole key is read as:
-// a transcript counts its tokens and names its sessions in keys of its own
-// (`input_tokens`, `sessionId`), an access key's id is no secret
-// (`AccessKeyId`), a commit's author and a server's OAuth settings are no
-// credential (`author`, `oauth_provider`), and a value under one is none.
+// string or number value is taken out whole however it is shaped: read on the
+// key's own words, lowercase, with its separators dropped, `token`, `key` and
+// `auth` only as the whole key, and an OpenID Connect ID token's `id` only as a
+// word of its own ([keyReading.idToken]). It is a [keyReading] handed the whole
+// key, so a key read in pieces and one read whole share one rule. The names,
+// and why neither the separators nor the short words are read at large, are in
+// the package doc's "A kept session leaves its box scrubbed".
 func credentialKey(key string) bool {
-	if redact.NamesPassword(key) {
-		return true
-	}
-	k := strings.ToLower(key)
-	if k == "token" || k == "key" || k == "auth" {
-		return true
-	}
-	joined := strings.Map(func(r rune) rune {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) {
-			return r
-		}
-		return -1
-	}, k)
-	for _, name := range []string{"apikey", "apitoken", "accesstoken", "refreshtoken", "sessiontoken",
-		"securitytoken", "authtoken", "bearertoken", "privatekey", "privatetoken", "authorization", "secret",
-		"credential", "identitytoken", "registrytoken"} {
-		if strings.Contains(joined, name) {
-			return true
-		}
-	}
-	return namesIDToken(key)
+	var k keyReading
+	k.WriteString(key)
+	return k.Credential()
 }
 
-// namesIDToken reports whether key names an OpenID Connect ID token: `id` a
-// word of its own and `token` after it, however a format joins the two
-// (`id_token`, `idToken`, `OIDC_ID_TOKEN`).
+// wholeCredentialKeys are the keys [credentialKey] reads only as the whole key,
+// lowercase: never at large, where a transcript's own keys spell them.
+var wholeCredentialKeys = []string{"token", "key", "auth"}
+
+// credentialNames are the names [credentialKey] reads anywhere in a key once
+// it is lowercase and its separators are dropped.
+var credentialNames = [][]byte{[]byte("apikey"), []byte("apitoken"), []byte("accesstoken"),
+	[]byte("refreshtoken"), []byte("sessiontoken"), []byte("securitytoken"), []byte("authtoken"),
+	[]byte("bearertoken"), []byte("privatekey"), []byte("privatetoken"), []byte("authorization"),
+	[]byte("secret"), []byte("credential"), []byte("identitytoken"), []byte("registrytoken")}
+
+// keyReadingReach is how far back each of [keyReading]'s windows has to reach:
+// the longest whole key, the longest name, and the most runes a password's
+// key spans ([redact.PasswordKeyMaxBytes]).
+var keyReadingReach = func() (r struct{ whole, name, password int }) {
+	for _, key := range wholeCredentialKeys {
+		r.whole = max(r.whole, len(key))
+	}
+	for _, name := range credentialNames {
+		r.name = max(r.name, len(name))
+	}
+	r.password = max(redact.PasswordKeyMaxBytes(), 1)
+	return r
+}()
+
+// keyReading is a JSON object's key read a piece at a time, as its decoded
+// text arrives, cut anywhere, a rune's bytes included: Write hands it the next
+// piece, and Credential ends the key and reports whether it names a
+// credential, [credentialKey]'s reading of the whole key.
 //
-// A WORD OF ITS OWN, where every other name is read anywhere in the key,
-// because `idtoken` is what a count spells by chance — `paid_tokens`,
-// `invalid_tokens` — and a number under such a key is no credential's.
-func namesIDToken(key string) bool {
-	for i := 0; i+len("id") <= len(key); i++ {
-		if !strings.EqualFold(key[i:i+len("id")], "id") || !wordStarts(key, i) {
+// ITS STATE DOES NOT GROW WITH THE KEY, since a box's code can write a key a
+// gibibyte long: a rune's cut bytes, the key lowered while it is short, and two
+// windows over its last runes, each cut back to one fewer than its span when it
+// fills (the package doc's "A kept session leaves its box scrubbed"). A byte
+// that begins no rune is U+FFFD wherever the key is cut ([utf8.FullRune]).
+type keyReading struct {
+	// cut is the bytes of a rune the last piece ended inside.
+	cut  [utf8.UTFMax - 1]byte
+	ncut int
+	// lowered is the key lowered while it is no longer than the longest
+	// whole key; long once it is.
+	lowered []byte
+	long    bool
+	// written is the key's last runes as written, U+FFFD for a byte that
+	// begins none, and runes how many it holds.
+	written []byte
+	runes   int
+	// joined is the lowered key's last letters and digits.
+	joined []byte
+	// prev is the key's last rune; any whether it has one.
+	prev rune
+	any  bool
+	// id is how far an ID token has read, and token how much of `token`.
+	id    idTokenRead
+	token int
+	// named is whether a credential is named already: nothing read after
+	// changes it.
+	named bool
+}
+
+// idTokenRead is how far [keyReading.idToken] has read an ID token's words.
+type idTokenRead int
+
+const (
+	// idNone: no `id` that starts a word is being read.
+	idNone idTokenRead = iota
+	// idI: an `i` that starts a word, its `d` next.
+	idI
+	// idWord: `id`, its separators being read, `token` next.
+	idWord
+	// idToken: `id` and its separators, and keyReading.token bytes of
+	// `token`.
+	idToken
+)
+
+// reset readies k for another key, keeping its windows' room.
+func (k *keyReading) reset() {
+	*k = keyReading{lowered: k.lowered[:0], written: k.written[:0], joined: k.joined[:0]}
+}
+
+// WriteString is Write of s's bytes.
+func (k *keyReading) WriteString(s string) {
+	for len(s) > 0 {
+		var chunk [256]byte
+		n := copy(chunk[:], s)
+		_, _ = k.Write(chunk[:n])
+		s = s[n:]
+	}
+}
+
+// Write reads the next piece of the key. It never fails.
+func (k *keyReading) Write(p []byte) (int, error) {
+	n := len(p)
+	if k.named {
+		return n, nil
+	}
+	if k.ncut > 0 {
+		// The rune a piece ended inside, finished from this one: at most
+		// three of its bytes are needed, and a run that is no rune is read
+		// a byte at a time, as the whole key's decode reads it.
+		var joined [2*utf8.UTFMax - 2]byte
+		s := append(joined[:0], k.cut[:k.ncut]...)
+		s = append(s, p[:min(len(p), utf8.UTFMax-1)]...)
+		i := 0
+		for i < k.ncut {
+			if !utf8.FullRune(s[i:]) {
+				// The whole of p is in s, and still no rune.
+				k.ncut = copy(k.cut[:], s[i:])
+				return n, nil
+			}
+			r, w := utf8.DecodeRune(s[i:])
+			k.rune(r)
+			i += w
+		}
+		p = p[i-k.ncut:]
+		k.ncut = 0
+	}
+	for i := 0; i < len(p); {
+		if c := p[i]; c < utf8.RuneSelf {
+			k.rune(rune(c))
+			i++
 			continue
 		}
-		rest := strings.TrimLeftFunc(key[i+len("id"):], func(r rune) bool {
-			return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-		})
-		if len(rest) >= len("token") && strings.EqualFold(rest[:len("token")], "token") {
+		if !utf8.FullRune(p[i:]) {
+			k.ncut = copy(k.cut[:], p[i:])
+			break
+		}
+		r, w := utf8.DecodeRune(p[i:])
+		k.rune(r)
+		i += w
+	}
+	return n, nil
+}
+
+// Credential ends the key, a rune a piece ended inside read as the whole
+// key's decode reads it, and reports whether the key names a credential.
+func (k *keyReading) Credential() bool {
+	for i := 0; i < k.ncut; {
+		r, w := utf8.DecodeRune(k.cut[i:k.ncut])
+		k.rune(r)
+		i += w
+	}
+	k.ncut = 0
+	if k.named {
+		return true
+	}
+	if k.runes > 0 && redact.NamesPassword(string(k.written)) {
+		return true
+	}
+	if !k.long && slices.Contains(wholeCredentialKeys, string(k.lowered)) {
+		return true
+	}
+	return k.joinedNames()
+}
+
+// rune reads the key's next rune.
+func (k *keyReading) rune(r rune) {
+	if k.named {
+		return
+	}
+	reach := keyReadingReach
+	k.written = utf8.AppendRune(k.written, r)
+	if k.runes++; k.runes == 2*reach.password {
+		if redact.NamesPassword(string(k.written)) {
+			k.named = true
+			return
+		}
+		k.written, k.runes = lastRunes(k.written, reach.password-1), reach.password-1
+	}
+	lower := unicode.ToLower(r)
+	if !k.long {
+		if k.lowered = utf8.AppendRune(k.lowered, lower); len(k.lowered) > reach.whole {
+			k.long, k.lowered = true, nil
+		}
+	}
+	if unicode.IsLetter(lower) || unicode.IsDigit(lower) {
+		if k.joined = utf8.AppendRune(k.joined, lower); len(k.joined) >= 2*reach.name {
+			if k.joinedNames() {
+				k.named = true
+				return
+			}
+			// A name still to be read whole begins in the last bytes
+			// but one of its length: bytes, not runes, since the names
+			// are matched as bytes.
+			k.joined = append(k.joined[:0], k.joined[len(k.joined)-(reach.name-1):]...)
+		}
+	}
+	k.idToken(r)
+	k.prev, k.any = r, true
+}
+
+// joinedNames reports whether the joined window holds one of
+// [credentialNames].
+func (k *keyReading) joinedNames() bool {
+	for _, name := range credentialNames {
+		if bytes.Contains(k.joined, name) {
 			return true
 		}
 	}
 	return false
 }
 
-// wordStarts reports whether one of key's words begins at byte i: at the key's
-// start, after a character that is neither a letter nor a digit, or at an
-// uppercase letter after a lowercase one or a digit (`oidcIdToken`).
-func wordStarts(key string, i int) bool {
-	if i == 0 {
+// idToken reads r for an OpenID Connect ID token: `id` a word of its own and
+// `token` after it, however a format joins the two (`id_token`, `idToken`,
+// `OIDC_ID_TOKEN`), each of its letters in either case.
+//
+// A WORD OF ITS OWN, where every other name is read anywhere in the key,
+// because `idtoken` is what a count spells by chance (`paid_tokens`,
+// `invalid_tokens`), and a number under such a key is no credential's.
+//
+// ONE `id` AT A TIME: no letter of `d`, the separators or `token` is an `i`,
+// so an `id` read on is never beside another that could start, and a rune that
+// ends one reading is read again as the start of the next.
+func (k *keyReading) idToken(r rune) {
+	switch k.id {
+	case idI:
+		if r == 'd' || r == 'D' {
+			k.id = idWord
+			return
+		}
+	case idWord:
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			return
+		}
+		if r == 't' || r == 'T' {
+			k.id, k.token = idToken, 1
+			return
+		}
+	case idToken:
+		if r|0x20 == rune("token"[k.token]) {
+			if k.token++; k.token == len("token") {
+				k.named = true
+			}
+			return
+		}
+	}
+	k.id = idNone
+	if (r == 'i' || r == 'I') && k.wordStarts(r) {
+		k.id = idI
+	}
+}
+
+// wordStarts reports whether one of the key's words begins at r, read after
+// the key's last rune: at the key's start, after a character that is neither
+// a letter nor a digit, or at an uppercase letter after a lowercase one or a
+// digit (`oidcIdToken`).
+func (k *keyReading) wordStarts(r rune) bool {
+	if !k.any || !unicode.IsLetter(k.prev) && !unicode.IsDigit(k.prev) {
 		return true
 	}
-	prev, _ := utf8.DecodeLastRuneInString(key[:i])
-	if !unicode.IsLetter(prev) && !unicode.IsDigit(prev) {
-		return true
+	return unicode.IsUpper(r) && (unicode.IsLower(k.prev) || unicode.IsDigit(k.prev))
+}
+
+// lastRunes is b's last n runes, moved to b's start.
+func lastRunes(b []byte, n int) []byte {
+	at := len(b)
+	for ; n > 0 && at > 0; n-- {
+		_, w := utf8.DecodeLastRune(b[:at])
+		at -= w
 	}
-	cur, _ := utf8.DecodeRuneInString(key[i:])
-	return unicode.IsUpper(cur) && (unicode.IsLower(prev) || unicode.IsDigit(prev))
+	return append(b[:0], b[at:]...)
 }
 
 // scrubArchive streams the archive first holds, of layout, scrubbed onto dst,
-// within bounds. reopen opens the same archive again from its start, for a
-// layout read twice. It closes nothing it was handed; the caller owns both
-// readers.
+// within bounds. reopen opens the same archive again from its start, for the
+// second of the two readings every layout is read in. It closes nothing it was
+// handed; the caller owns every reader.
 func scrubArchive(layout archiveLayout, first io.Reader, reopen func() (io.ReadCloser, error),
 	dst io.Writer, s scrubber, b scrubBounds) error {
 
@@ -388,39 +660,59 @@ func scrubArchive(layout archiveLayout, first io.Reader, reopen func() (io.ReadC
 	case archiveTar:
 		return scrubTar(first, reopen, dst, s, b)
 	case archiveDocument:
-		return scrubDocument(first, dst, s, b)
+		return scrubDocument(first, reopen, dst, s, b)
 	}
 	return fmt.Errorf("executor: no scrub for an archive of layout %d", layout)
 }
 
-// scrubDocument streams a gzipped JSON document, rewritten string by string.
-func scrubDocument(src io.Reader, dst io.Writer, s scrubber, b scrubBounds) error {
-	zr, err := gzip.NewReader(src)
+// scrubDocument streams a gzipped JSON document, rewritten string by string,
+// read TWICE: once dry, writing nothing, and again to write it.
+//
+// DRY FIRST, because a reading refuses a document only once it has read it,
+// and read once, the bytes rewritten before a refusal would reach the take's
+// pipe, its uploader, its checksum and its meter, a published key among them
+// where the redaction refused. A second reading that comes out another length,
+// or that the scanner refuses, is an export that changed between the two; one
+// refused for another reason says that reason. The package doc's "The scrub
+// holds no value whole" has the whole argument.
+func scrubDocument(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writer, s scrubber,
+	b scrubBounds) error {
+
+	dry := &counted{}
+	if err := rewriteExport(first, dry, s, b); err != nil {
+		return fmt.Errorf("executor: scrubbing the session's export: %w", err)
+	}
+	again, err := reopen()
 	if err != nil {
-		return fmt.Errorf("executor: the session's export is not gzip: %w", err)
+		return fmt.Errorf("executor: opening the session's export again to write it: %w", err)
 	}
 	zw := gzip.NewWriter(dst)
-	if err = rewriteDocument(zw, boundedPlain(zr, b.plain), s, b); err != nil {
+	written := &counted{w: zw}
+	err = rewriteExport(again, written, s, b)
+	var fault *jsonscan.Error
+	switch {
+	case errors.As(err, &fault) || err == nil && written.n != dry.n:
+		return errors.New("executor: the session's export changed while it was read")
+	case err != nil:
 		return fmt.Errorf("executor: scrubbing the session's export: %w", err)
 	}
 	return zw.Close()
 }
 
-// memberPlan is how the first reading of a tar decided to write one member:
-// its kind as the archive gave it, which the second reading must find again;
-// whether it is kept; and, for a file, its size as rewritten and whether it is
-// kept as text.
-type memberPlan struct {
-	kind byte
-	keep bool
-	size int64
-	text bool
+// rewriteExport is one reading of a gzipped export, rewritten onto dst.
+func rewriteExport(src io.Reader, dst io.Writer, s scrubber, b scrubBounds) error {
+	zr, err := gzip.NewReader(src)
+	if err != nil {
+		return fmt.Errorf("executor: the session's export is not gzip: %w", err)
+	}
+	return rewriteDocument(dst, boundedPlain(zr, b.plain), s, b.gate)
 }
 
 // scrubTar streams a gzipped tar with every regular file rewritten
 // ([rewriteFile]): read once to learn each file's size as rewritten — and, for
-// a `.json` file, whether it is JSON — and again to write it under a header
-// that says so.
+// a `.json` file, whether it is JSON, and for a transcript, which of its lines
+// are and which loaded tool definitions it loses; and again to write it under
+// a header that says so.
 //
 // THE SECOND READING MUST BE THE FIRST'S ARCHIVE: a file whose rewrite comes
 // out another size, or a member the first reading did not have, is an archive
@@ -429,23 +721,22 @@ type memberPlan struct {
 func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writer, s scrubber,
 	b scrubBounds) error {
 
-	var plans []memberPlan
+	plan := &tarPlan{gate: b.gate}
+	defer plan.letGo()
 	err := eachMember(first, b, func(h *tar.Header, body io.Reader) error {
-		switch h.Typeflag {
-		case tar.TypeReg:
-		case tar.TypeDir:
-			plans = append(plans, memberPlan{kind: h.Typeflag, keep: true})
-			return nil
-		default:
-			plans = append(plans, memberPlan{kind: h.Typeflag})
-			return nil
+		plan.members.putByte(h.Typeflag)
+		if h.Typeflag != tar.TypeReg {
+			return plan.holdPast()
 		}
-		size, text, err := measureFile(h.Name, body, s, b)
+		from := plan.lines.count()
+		size, text, err := measureFile(h.Name, body, s, plan)
 		if err != nil {
 			return err
 		}
-		plans = append(plans, memberPlan{kind: h.Typeflag, keep: true, size: size, text: text})
-		return nil
+		plan.members.putNumber(uint64(size))
+		plan.members.put(text)
+		plan.members.putNumber(uint64(plan.lines.count() - from))
+		return plan.holdPast()
 	})
 	if err != nil {
 		return err
@@ -456,52 +747,64 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 	}
 	zw := gzip.NewWriter(dst)
 	tw := tar.NewWriter(zw)
-	i := 0
 	err = eachMember(again, b, func(h *tar.Header, body io.Reader) error {
-		if i >= len(plans) {
+		kind, ok := plan.members.takeByte()
+		if !ok {
 			return errors.New("executor: the session's archive gained a member while it was read")
 		}
-		plan := plans[i]
-		i++
-		if h.Typeflag != plan.kind {
-			return fmt.Errorf("executor: the session's archive changed its member %s while it was read",
-				memberNamed(h.Name))
+		if h.Typeflag != kind {
+			return errMemberChanged(h.Name)
 		}
-		if !plan.keep {
-			return nil
-		}
-		file := h.Typeflag == tar.TypeReg
 		header := tar.Header{Typeflag: h.Typeflag, Name: memberName(s, h.Name), Mode: h.Mode & 0o777,
 			ModTime: h.ModTime}
-		if file {
-			header.Size = plan.size
+		switch h.Typeflag {
+		case tar.TypeDir:
+			return tw.WriteHeader(&header)
+		case tar.TypeReg:
+		default:
+			return nil
 		}
+		size, sized := plan.members.takeNumber()
+		text, read := plan.members.take()
+		lines, listed := plan.members.takeNumber()
+		if !sized || !read || !listed {
+			return errMemberChanged(h.Name)
+		}
+		header.Size = int64(size)
 		if headerErr := tw.WriteHeader(&header); headerErr != nil {
 			return headerErr
 		}
-		if !file {
-			return nil
-		}
 		w := &counted{w: tw}
-		if memberErr := rewriteMember(h.Name, plan.text, w, body, s, b); memberErr != nil {
+		from := plan.lines.read
+		end := from + int(lines)
+		if memberErr := rewriteMember(h.Name, text, plan, end, w, body, s); memberErr != nil {
+			if errors.Is(memberErr, errLinesChanged) {
+				return errMemberChanged(h.Name)
+			}
 			return memberErr
 		}
-		if w.n != plan.size {
-			return fmt.Errorf("executor: the session's archive changed its member %s while it was read",
-				memberNamed(h.Name))
+		if w.n != header.Size || plan.lines.read != end {
+			return errMemberChanged(h.Name)
 		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	if i != len(plans) {
+	if !plan.members.done() {
 		return errors.New("executor: the session's archive lost a member while it was read")
 	}
 	if err = tw.Close(); err != nil {
 		return err
 	}
 	return zw.Close()
+}
+
+// errMemberChanged is the member named name, as a failure quotes it, found
+// changed by the second reading.
+func errMemberChanged(name string) error {
+	return fmt.Errorf("executor: the session's archive changed its member %s while it was read",
+		memberNamed(name))
 }
 
 // memberNamed is an archive member's name as a failure quotes it: its first
@@ -582,165 +885,316 @@ func (c *counted) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// measureFile is how many bytes one file of an archive comes to as it is
-// kept, and — for a `.json` file — whether it is kept as text because it is
-// not JSON.
+// measureFile is how one file of an archive is to be kept, read through by the
+// tar's first reading: how many bytes it comes to, and, for a `.json` file,
+// whether it is kept as text because it is not JSON; a transcript's lines are
+// planned on plan ([measureLines]).
 //
-// A `.json` FILE IS READ BOTH WAYS AT ONCE, its bytes handed to a rewrite as a
-// document and to one as text: which it takes is known only once it has been
-// read through, and a tar member is read once in each reading.
-func measureFile(name string, body io.Reader, s scrubber, b scrubBounds) (int64, bool, error) {
-	if path.Ext(name) != ".json" {
+// A `.json` FILE IS READ BOTH WAYS AT ONCE, as a document and as text, ON ONE
+// GOROUTINE, THE SCRUB'S OWN: the rewrite hands every byte it reads to the
+// text's scrub ([teeRead]), so every byte is read where the take contains a
+// panic (scrubContained). Goroutines fed through pipes would put the file's
+// rewrite and redaction outside that containment (the package doc's "The scrub
+// holds no value whole").
+func measureFile(name string, body io.Reader, s scrubber, plan *tarPlan) (size int64, text bool, err error) {
+	switch path.Ext(name) {
+	case ".jsonl":
+		size, err = measureLines(body, s, plan)
+		return size, false, err
+	case ".json":
+	default:
 		n := &counted{}
-		err := rewriteFile(name, n, body, s, b)
+		err = rewriteText(n, body, s, plan.gate)
 		return n.n, false, err
 	}
-	asDocument := func(r io.Reader) (int64, error) {
-		n := &counted{}
-		err := rewriteDocument(n, r, s, b)
-		return n.n, err
+	// ONE PIECE, THE WHOLE FILE: its text is redacted as one, so the
+	// document's strings within it need no gate of their own.
+	body, done := plan.gate.pieces(body, false)
+	defer done()
+	asText := &counted{}
+	textual := s.text(asText)
+	tee := &teeRead{r: body, w: textual}
+	asDocument := &counted{}
+	documentErr := rewriteDocument(asDocument, tee, s, pieceGate{})
+	// THE REST IS THE TEXT'S ALONE: a document the rewrite stopped reading
+	// is read on to its end, for its text.
+	if _, err = io.Copy(io.Discard, tee); err == nil {
+		err = tee.readErr
 	}
-	asText := func(r io.Reader) (int64, error) {
-		n := &counted{}
-		err := rewriteText(n, r, s, b)
-		return n.n, err
+	if err != nil {
+		return 0, false, err
+	}
+	textErr := tee.writeErr
+	if closeErr := textual.Close(); textErr == nil {
+		textErr = closeErr
 	}
 	// A DOCUMENT THE REWRITE CANNOT READ, FOR WHATEVER REASON, IS TEXT: torn,
-	// more than one value, nested past the rewrite's depth, or holding a
-	// string past its piece — which the text's own bounds refuse as surely,
-	// a JSON string holding no line break of its own.
-	document, documentErr, text, textErr := both(body, asDocument, asText)
+	// more than one value, nested past the scanner's depth, or holding text
+	// its redaction could not redact; kept as text only where its text's own
+	// redaction did not fail. The archive's own failure is neither's, and
+	// refuses the session above.
 	switch {
-	case errors.Is(documentErr, errLargeWait):
-		return 0, false, documentErr
 	case documentErr == nil:
-		return document, false, nil
+		return asDocument.n, false, nil
 	case textErr != nil:
 		return 0, false, textErr
 	}
-	return text, true, nil
+	return asText.n, true, nil
 }
 
-// rewriteMember writes one file of an archive as it is kept: as text where the
-// first reading found a `.json` file that is not JSON, and as what its name
-// says it is otherwise ([rewriteFile]).
-func rewriteMember(name string, text bool, dst io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
-	if text {
-		return rewriteText(dst, src, s, b)
+// teeRead reads r and hands every byte it reads to w as well: a `.json`
+// file's text scrub, fed what the document's rewrite reads of the file
+// ([measureFile]).
+type teeRead struct {
+	r io.Reader
+	w io.Writer
+	// readErr is r's failure, other than its end, which no reading of the
+	// file survives; writeErr is w's first, after which w is handed nothing
+	// more and the document is read on.
+	readErr, writeErr error
+}
+
+func (t *teeRead) Read(p []byte) (int, error) {
+	n, err := t.r.Read(p)
+	if n > 0 && t.writeErr == nil {
+		_, t.writeErr = t.w.Write(p[:n])
 	}
-	return rewriteFile(name, dst, src, s, b)
+	if err != nil && !errors.Is(err, io.EOF) && t.readErr == nil {
+		t.readErr = err
+	}
+	return n, err
+}
+
+// rewriteMember writes one file of an archive as the first reading planned it:
+// as text where it found a `.json` file that is not JSON, and as what its name
+// says it is otherwise ([rewriteFile]), a transcript's lines up to the bit end
+// of plan's.
+func rewriteMember(name string, text bool, plan *tarPlan, end int, dst io.Writer, src io.Reader,
+	s scrubber) error {
+
+	if text {
+		return rewriteText(dst, src, s, plan.gate)
+	}
+	return rewriteFile(name, plan, end, dst, src, s)
 }
 
 // rewriteFile writes one file of an archive scrubbed, read as what its name
-// says it is (see the file comment).
-func rewriteFile(name string, dst io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
+// says it is (see the file comment), a transcript's lines as plan plans them.
+func rewriteFile(name string, plan *tarPlan, end int, dst io.Writer, src io.Reader, s scrubber) error {
 	switch path.Ext(name) {
 	case ".jsonl":
-		return rewriteLines(dst, src, s, b)
+		return writeLines(dst, src, s, plan, end)
 	case ".json":
-		return rewriteDocument(dst, src, s, b)
+		return rewriteDocument(dst, src, s, plan.gate)
 	}
-	return rewriteText(dst, src, s, b)
+	return rewriteText(dst, src, s, plan.gate)
 }
 
-// both reads src once into two rewrites at once, each counting what it would
-// write, and answers both counts and both errors. A rewrite that stops early —
-// it failed — is fed no further, and the other is fed to the end.
-func both(src io.Reader, first, second func(io.Reader) (int64, error)) (int64, error, int64, error) {
-	r1, w1 := io.Pipe()
-	r2, w2 := io.Pipe()
-	var (
-		wg         sync.WaitGroup
-		n1, n2     int64
-		err1, err2 error
-	)
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		n1, err1 = first(r1)
-		_ = r1.CloseWithError(errRewriteDone)
-	}()
-	go func() {
-		defer wg.Done()
-		n2, err2 = second(r2)
-		_ = r2.CloseWithError(errRewriteDone)
-	}()
-	_, copyErr := io.Copy(&fanOut{to: []*io.PipeWriter{w1, w2}, open: []bool{true, true}}, src)
-	_ = w1.CloseWithError(copyErr)
-	_ = w2.CloseWithError(copyErr)
-	wg.Wait()
-	if copyErr != nil && !errors.Is(copyErr, errRewriteDone) {
-		return 0, copyErr, 0, copyErr
-	}
-	return n1, err1, n2, err2
+// tarPlan is how the first reading of a tar decided to write it, which the
+// second reads back as it writes: three streams of bits ([planBits]), each
+// written by the first reading in the order it decides them and read by the
+// second in that same order, and nothing else, whatever the tar holds:
+// members (each one's kind, and a file's size as rewritten, whether it is kept
+// as text and how many line bits it took), lines (for each of two bytes or
+// more, whether it is kept as text) and cuts (for each line that loses a loaded
+// tool definition, where it lies, which list and which elements).
+//
+// SO IT IS AT MOST A SIXTEENTH OF THE PLAINTEXT, where a record for each
+// member, line or cut would let a box's small archive hold the host to
+// gibibytes (the package doc's "The scrub holds no value whole").
+type tarPlan struct {
+	members, lines, cuts planBits
+	// planned is the line after the last one the first reading cut, as
+	// lines' bits count them, where the next cut's distance counts from;
+	// reached is the same for the second reading.
+	planned, reached int
+	// next is the second reading's next cut, read off cuts ahead of its line
+	// (pending), at line nextAt.
+	next    definitionCut
+	nextAt  int
+	pending bool
+	// gate is the scrub's way to the large slot ([scrubBounds.gate]), which
+	// the plan holds once it is past the base ([tarPlan.holdPast]); held
+	// says it does.
+	gate pieceGate
+	held bool
 }
 
-// errRewriteDone is a rewrite that stopped reading: what [both] closes its pipe
-// with, so writes to it fail and it is fed no further.
-var errRewriteDone = errors.New("executor: the rewrite stopped reading")
-
-// fanOut writes to every pipe still read, and fails only once none is.
-type fanOut struct {
-	to   []*io.PipeWriter
-	open []bool
+// holdPast holds the large slot once the plan is past [collectionBaseLineBytes]
+// of bits, to the take's end ([tarPlan.letGo]): THE ONE THING THE SCRUB HOLDS
+// ACROSS PIECES, which only a box's archive of millions of short lines or
+// members brings there.
+func (p *tarPlan) holdPast() error {
+	bits := p.members.count() + p.lines.count() + p.cuts.count()
+	if p.held || p.gate.hold == nil || bits/8 <= collectionBaseLineBytes {
+		return nil
+	}
+	if err := p.gate.hold(); err != nil {
+		return err
+	}
+	p.held = true
+	return nil
 }
 
-func (f *fanOut) Write(p []byte) (int, error) {
-	fed := false
-	for i, w := range f.to {
-		if !f.open[i] {
-			continue
-		}
-		if _, err := w.Write(p); err != nil {
-			f.open[i] = false
-			continue
-		}
-		fed = true
-	}
-	if !fed {
-		return 0, errRewriteDone
-	}
-	return len(p), nil
-}
-
-// readLine is the next line of r, its break included, refused past bound: a
-// line is held whole to be scrubbed.
-func readLine(r *bufio.Reader, bound int) ([]byte, error) {
-	var line []byte
-	for {
-		chunk, err := r.ReadSlice('\n')
-		if len(line)+len(chunk) > bound {
-			return nil, fmt.Errorf("%w: a line of the session runs past %d bytes", errScrubBound, bound)
-		}
-		line = append(line, chunk...)
-		if errors.Is(err, bufio.ErrBufferFull) {
-			continue
-		}
-		return line, err
+// letGo drops the slot the plan holds, once the take is done with it.
+func (p *tarPlan) letGo() {
+	if p.held {
+		p.gate.drop()
+		p.held = false
 	}
 }
 
-// rewriteLines rewrites a file of one JSON value a line ([rewriteLine]).
-func rewriteLines(dst io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
-	pieces, done := b.pieceSource(src)
-	defer done()
-	r := bufio.NewReaderSize(pieces, 64<<10)
-	w := bufio.NewWriter(dst)
-	for {
-		line, err := readLine(r, b.piece)
-		if len(line) > 0 {
-			body, ended := strings.CutSuffix(string(line), "\n")
-			if _, werr := w.WriteString(rewriteLine(body, s, b)); werr != nil {
-				return werr
-			}
-			if ended {
-				if werr := w.WriteByte('\n'); werr != nil {
-					return werr
-				}
-			}
-		}
+// addCut plans the cut of the line at index, as lines' bits count it, of list:
+// its bits move to the plan, and list holds none after it.
+func (p *tarPlan) addCut(index int, list *listRead) {
+	p.cuts.putNumber(uint64(index - p.planned))
+	p.planned = index + 1
+	p.cuts.putNumber(uint64(list.container))
+	p.cuts.putNumber(uint64(list.n))
+	list.bits.moveTo(&p.cuts)
+}
+
+// cutAt is the cut the second reading applies to the line at index, nil where
+// the first reading cut nothing from it. A cut planned for a line the second
+// reading has passed is a transcript that changed between the two.
+func (p *tarPlan) cutAt(index int) (*definitionCut, error) {
+	if err := p.readCut(); err != nil {
+		return nil, err
+	}
+	switch {
+	case !p.pending || p.nextAt > index:
+		return nil, nil
+	case p.nextAt < index:
+		return nil, errLinesChanged
+	}
+	p.pending = false
+	p.reached = index + 1
+	return &p.next, nil
+}
+
+// passed says the second reading has written every line before end, as lines'
+// bits count them: a cut planned for one it did not apply is a transcript that
+// changed between the two.
+func (p *tarPlan) passed(end int) error {
+	if err := p.readCut(); err != nil {
+		return err
+	}
+	if p.pending && p.nextAt < end {
+		return errLinesChanged
+	}
+	return nil
+}
+
+// readCut reads the next cut's line, list and length, where none is pending
+// and one is left. Its bits are read as its list is written ([definitionCut]).
+func (p *tarPlan) readCut() error {
+	if p.pending || p.cuts.done() {
+		return nil
+	}
+	gap, ok := p.cuts.takeNumber()
+	list, listed := p.cuts.takeNumber()
+	n, counted := p.cuts.takeNumber()
+	if !ok || !listed || !counted {
+		return errLinesChanged
+	}
+	p.next = definitionCut{list: int(list), n: int(n), bits: &p.cuts}
+	p.nextAt = p.reached + int(gap)
+	p.pending = true
+	return nil
+}
+
+// errLinesChanged is a transcript the second reading finds other than the
+// first planned it: a line JSON where it was text or text where it was JSON,
+// or more lines than were planned. The tar's failure names the member.
+var errLinesChanged = errors.New("executor: a transcript changed while it was read")
+
+// lineReader is a transcript's lines, read one at a time ([lineReader.next])
+// as the scanner's text or the text scrub's: a line's bytes up to its break,
+// never the break, with io.EOF at its end. tee is handed every byte of the line
+// read, where it is set: the first reading's text candidate.
+type lineReader struct {
+	r   *bufio.Reader
+	tee io.Writer
+	// done says the line is read to its end; ended that its break was read.
+	done, ended bool
+	// err is an error of the transcript's reader, which ends the reading.
+	err error
+	// sc and j rewrite a line as JSON, each allocated once for every line
+	// of a reading; drain is what a line's rest is read into.
+	sc    *jsonscan.Scanner
+	j     *jsonRewrite
+	drain []byte
+}
+
+// newLineReader reads src's lines, rewriting them with s's values.
+func newLineReader(src io.Reader, s scrubber) *lineReader {
+	l := &lineReader{r: bufio.NewReaderSize(src, 64<<10), j: newJSONRewrite(s), drain: make([]byte, 32<<10)}
+	l.sc = jsonscan.New(l)
+	return l
+}
+
+// next readies the next line, tee handed its bytes: short says it is shorter
+// than two bytes before its break, and more is false at the transcript's end,
+// where no line is left.
+func (l *lineReader) next(tee io.Writer) (short, more bool, err error) {
+	head, err := l.r.Peek(2)
+	if len(head) == 0 {
 		if errors.Is(err, io.EOF) {
-			return w.Flush()
+			return false, false, nil
+		}
+		return false, false, err
+	}
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, bufio.ErrBufferFull) {
+		return false, false, err
+	}
+	l.tee, l.done, l.ended, l.err = tee, false, false, nil
+	return head[0] == '\n' || len(head) == 1 || head[1] == '\n', true, nil
+}
+
+// Read reads the line's next bytes, never past its break.
+func (l *lineReader) Read(p []byte) (int, error) {
+	if l.done {
+		return 0, io.EOF
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	if l.r.Buffered() == 0 {
+		if _, err := l.r.Peek(1); err != nil {
+			l.done = true
+			if !errors.Is(err, io.EOF) {
+				l.err = err
+				return 0, err
+			}
+			return 0, io.EOF
+		}
+	}
+	chunk, _ := l.r.Peek(min(l.r.Buffered(), len(p)))
+	took := len(chunk)
+	if i := bytes.IndexByte(chunk, '\n'); i >= 0 {
+		chunk, took = chunk[:i], i+1
+		l.done, l.ended = true, true
+	}
+	n := copy(p, chunk)
+	if l.tee != nil && n > 0 {
+		if _, err := l.tee.Write(p[:n]); err != nil {
+			l.err, l.done = err, true
+			return 0, err
+		}
+	}
+	_, _ = l.r.Discard(took)
+	if n == 0 && l.done {
+		return 0, io.EOF
+	}
+	return n, nil
+}
+
+// rest reads the line to its end, its bytes handed to tee.
+func (l *lineReader) rest() error {
+	for {
+		_, err := l.Read(l.drain)
+		if errors.Is(err, io.EOF) {
+			return l.err
 		}
 		if err != nil {
 			return err
@@ -748,40 +1202,181 @@ func rewriteLines(dst io.Writer, src io.Reader, s scrubber, b scrubBounds) error
 	}
 }
 
-// rewriteLine is one line of a transcript as it is kept: its JSON value
-// rewritten string by string; or, a line that is not JSON, scrubbed and
-// redacted as text. The line is within the scrub's piece already ([readLine]),
-// and so is every string in it.
+// measureLines is the first reading of a transcript: how many bytes it comes
+// to as kept, each of its lines planned on plan.
 //
-// NOT REDACTED AGAIN AS A WHOLE LINE once rewritten. Every pair a rule reads a
-// secret by sits in one JSON value — a string's text, or a key and the value
-// under it, which the rewrite takes out by the key ([credentialKey]) — and a
-// rule that read across two of them replaced JSON syntax with its marker,
-// leaving no line JSON: a reading that could only keep what the rewrite had
-// already taken.
-func rewriteLine(line string, s scrubber, b scrubBounds) string {
-	var out bytes.Buffer
-	// UNGATED: the line's own hold covers every token in it
-	// ([scrubBounds.pieceSource]), so its rewrite never waits for the slot.
-	b.gate = pieceGate{}
-	if err := rewriteDocument(&out, strings.NewReader(line), s, b); err != nil {
-		return redact.Secrets(s.apply(line))
+// EACH LINE IS READ BOTH WAYS AT ONCE, as JSON for as long as its grammar
+// holds, and as text: which it is is known only at its end, and a line is read
+// once in each reading and never held. So two scrubs of it run side by side,
+// each counting what it would write, and the plan keeps a bit for which the
+// line is: what the second reading writes, a line of each written exactly as
+// the scrub of that line whole writes it.
+func measureLines(src io.Reader, s scrubber, plan *tarPlan) (int64, error) {
+	src, done := plan.gate.pieces(src, true)
+	defer done()
+	l := newLineReader(src, s)
+	defs := &definitionsReading{}
+	var asJSON rewriteOut
+	var size int64
+	for {
+		asText := &counted{}
+		text := s.text(asText)
+		short, more, err := l.next(text)
+		if err != nil || !more {
+			return size, err
+		}
+		var jsonErr error
+		if !short {
+			asJSON.reset(nil, true)
+			l.sc.Reset(l)
+			l.j.reset(l.sc, &asJSON, defs, nil)
+			jsonErr = l.j.run()
+		}
+		if err = l.rest(); err != nil {
+			return 0, err
+		}
+		keptAsText, err := lineKeptAs(short, jsonErr, text.Close())
+		switch {
+		case err != nil:
+			return 0, err
+		case short:
+			size += asText.n
+		case keptAsText:
+			plan.lines.put(true)
+			size += asText.n
+		default:
+			index := plan.lines.count()
+			plan.lines.put(false)
+			n := asJSON.n
+			if list, taken, ok := defs.decide(asJSON.marked); ok {
+				plan.addCut(index, list)
+				n -= taken
+			}
+			size += n
+		}
+		if l.ended {
+			size++
+		}
+		if err = plan.holdPast(); err != nil {
+			return 0, err
+		}
 	}
-	return withoutBrokenDefinitions(out.String())
+}
+
+// lineKeptAs is which of a line's two readings the first reading keeps, short
+// saying the line has no bit, jsonErr what ended its JSON reading and textErr
+// what its text's scrub answered at its close: the text where the line is
+// short or no JSON value (a *jsonscan.Error), and its JSON otherwise. err is
+// the kept reading's own failure, which refuses the session.
+//
+// NEVER THE OTHER'S: a reading that is not written is no miss, so a text the
+// redaction could not finish deciding refuses a line kept as text and not one
+// kept as JSON, whose strings the redaction reads on their own; as a `.json`
+// file's document read whole leaves its text's failure unread
+// ([measureFile]).
+func lineKeptAs(short bool, jsonErr, textErr error) (text bool, err error) {
+	var fault *jsonscan.Error
+	switch {
+	case short || errors.As(jsonErr, &fault):
+		return true, textErr
+	case jsonErr != nil:
+		return false, jsonErr
+	}
+	return false, nil
+}
+
+// writeLines is the second reading of a transcript, writing each line as the
+// first reading planned it ([measureLines]), its lines' bits those of plan's
+// up to end.
+func writeLines(dst io.Writer, src io.Reader, s scrubber, plan *tarPlan, end int) error {
+	src, done := plan.gate.pieces(src, true)
+	defer done()
+	l := newLineReader(src, s)
+	w := bufio.NewWriterSize(dst, 64<<10)
+	var out rewriteOut
+	for {
+		short, more, err := l.next(nil)
+		if err != nil {
+			return err
+		}
+		if !more {
+			if plan.lines.read != end {
+				return errLinesChanged
+			}
+			if err = plan.passed(end); err != nil {
+				return err
+			}
+			return w.Flush()
+		}
+		asText := short
+		index := plan.lines.read
+		if !short {
+			var ok bool
+			if asText, ok = plan.lines.take(); !ok || index >= end {
+				return errLinesChanged
+			}
+		}
+		if asText {
+			text := s.text(w)
+			l.tee = text
+			if err = l.rest(); err != nil {
+				return err
+			}
+			if err = text.Close(); err != nil {
+				return err
+			}
+		} else {
+			cut, cutErr := plan.cutAt(index)
+			if cutErr != nil {
+				return cutErr
+			}
+			out.reset(w, false)
+			l.sc.Reset(l)
+			l.j.reset(l.sc, &out, nil, cut)
+			err = l.j.run()
+			var fault *jsonscan.Error
+			switch {
+			case l.err != nil:
+				return l.err
+			case errors.As(err, &fault):
+				return errLinesChanged
+			case err != nil:
+				return err
+			case cut != nil && !cut.whole():
+				return errLinesChanged
+			}
+		}
+		if l.ended {
+			if err = w.WriteByte('\n'); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 // loadedToolsRecord is the `type` of the attachment Claude Code keeps in its
-// transcript for the tool definitions a session loaded through tool search.
-// A session resumed from the transcript sends each one again as a tool of
-// every request it makes (measured on 2.1.322).
+// transcript for the tool definitions a session loaded through tool search,
+// each sent again as a tool of every request a resumed session makes.
+//
+// A DEFINITION THE SCRUB RENAMED IS CUT OUT OF ITS LINE ([definitionsReading],
+// [definitionCut]): one named outside what [providerToolName] takes, in a
+// line that holds a marker, would have every request of the restored session
+// refused. It is cut from the line as the rewrite wrote it, every other byte
+// where it was, never the record written again from a map, whose sorted keys
+// Claude Code misreads past 5 MiB; decided in the first reading, applied in
+// the second. The package doc's "A definition the scrub renamed is cut out of
+// its line" has the reading of both releases.
 const loadedToolsRecord = "deferred_tools_record"
+
+// providerToolNameMax is the longest name the provider takes for a tool.
+const providerToolNameMax = 128
 
 // providerToolName reports whether name is one the provider takes for a tool
 // (`^[a-zA-Z0-9_-]{1,128}$`); a request carrying a definition named outside
 // that is refused whole. Spelled out, not a compiled pattern: a package-level
 // one is allocated at every start of the binary, the git hooks' included.
 func providerToolName(name string) bool {
-	if len(name) < 1 || len(name) > 128 {
+	if len(name) < 1 || len(name) > providerToolNameMax {
 		return false
 	}
 	for i := range len(name) {
@@ -793,507 +1388,57 @@ func providerToolName(name string) bool {
 	return true
 }
 
-// withoutBrokenDefinitions is a rewritten transcript line less every loaded
-// tool definition ([loadedToolsRecord]) whose name the rewrite left outside
-// what [providerToolName] takes: a marker stands where part of the name was,
-// and resent under that name the definition has every request of the restored
-// session refused. Left out, the session loads the tool again by search when
-// it needs it. A line that holds no marker is returned as it is, since the
-// rewrite renamed nothing in it, a definition its writer named outside the
-// pattern included; one that holds a marker loses every definition named
-// outside the pattern, whoever named it so. A line that is not one JSON object
-// [threadDecoding] reads is returned as it is too. The record is read as
-// Claude Code's JSON.parse reads it, its attachment, the attachment's type and
-// its list each the last value written under its key.
-//
-// CUT OUT OF THE LINE AS WRITTEN, each definition with the comma that joined
-// it to its list, every other byte of the line left where it was: never the
-// record decoded and written again, which wrote its keys sorted, the
-// attachment (a subagent's agentId before it) first and its list inside it.
-// Claude Code reads a session file past 5 MiB by the bytes of its lines, and
-// finds a record by where its keys sit, in two readings (read in 2.1.310 and
-// 2.1.322):
-//
-//   - 2.1.310, reading such a file as it does by default, takes a record for
-//     a subagent's only where `"isSidechain":true` sits in its line's first
-//     256 bytes, and walks the thread back from the last record it takes for
-//     the main thread's. A subagent's record written sorted, its list before
-//     that key, was that record: the walk began there, and records the
-//     subagent wrote after it were left out of the thread a relaunch resumed.
-//     2.1.322 looks for the key past those bytes as well.
-//   - Under CLAUDE_CODE_DISABLE_PRECOMPACT_SKIP (a switch a managed settings
-//     file can set whatever a launch unsets), both prune such a file, taking a
-//     line for a record only where it begins `{"parentUuid":` and walking the
-//     main thread back from its last record through such lines alone. A
-//     record's line that begins otherwise ends that walk, and where the
-//     records the walk reached held half the file or less, every record above
-//     that line was pruned from the session a relaunch resumed.
-func withoutBrokenDefinitions(line string) string {
-	if !strings.Contains(line, loadedToolsRecord) || !strings.Contains(line, redact.Marker) {
-		return line
-	}
-	raw := []byte(line)
-	attachment, ok := lastValue(raw, lineSpan{end: len(raw)}, "attachment")
-	if !ok {
-		return line
-	}
-	kind, ok := lastValue(raw, attachment, "type")
-	if !ok || looseString(raw[kind.start:kind.end]) != loadedToolsRecord {
-		return line
-	}
-	entries, ok := lastValue(raw, attachment, "entries")
-	if !ok {
-		return line
-	}
-	if kept, cut := withoutDefinitions(raw, entries); cut {
-		return kept
-	}
-	return line
-}
-
-// lineSpan is where one JSON value sits in a transcript line:
-// line[start:end], its own bytes and no blank around them.
-type lineSpan struct{ start, end int }
-
-// lastValue is where in line the value under the LAST key named key of the
-// object at object sits, as JSON.parse reads a key written twice, and whether
-// the object holds such a key: it holds none where it is no object
-// [threadDecoding] reads, or is followed by more than blanks. Read in the one
-// walk of an object ([eachKey]), which hands each value with where it sits.
-func lastValue(line []byte, object lineSpan, key string) (lineSpan, bool) {
-	var (
-		found lineSpan
-		ok    bool
-	)
-	if eachKey(line[object.start:object.end], func(name []byte, value json.RawMessage, at int) error {
-		if string(name) == key {
-			start := object.start + at
-			found, ok = lineSpan{start: start, end: start + len(value)}, true
-		}
-		return nil
-	}) != nil {
-		return lineSpan{}, false
-	}
-	return found, ok
-}
-
-// withoutDefinitions is line less every definition of the list at list that
-// [brokenDefinition] refuses, each cut out with the comma that joined it to
-// the list (the one before it, or the one after it where every definition
-// before it goes as well), every other byte kept where it was, and whether
-// any went: none goes where none is refused, or where the list is none
-// [threadDecoding] reads.
-//
-// ONE DEFINITION AT A TIME, in the one walk of a list ([eachElement], which
-// says what a list a box can write a million elements long costs read whole):
-// the line is copied once the first definition is cut, and nothing is
-// collected of the list.
-func withoutDefinitions(line []byte, list lineSpan) (string, bool) {
-	var (
-		// cut is the line as it is kept, written from the first definition
-		// cut on: every byte before it is kept.
-		cut     strings.Builder
-		cutting bool
-		// kept says a definition before this one is kept, and end is where
-		// in line the one just before this one ends.
-		kept bool
-		end  int
-	)
-	err := eachElement(line[list.start:list.end], func(definition json.RawMessage, at int) error {
-		start := list.start + at
-		next := start + len(definition)
-		// ITS STRETCH OF THE LIST, kept or cut with it: from the end of the
-		// definition before it, the comma between them included, where one
-		// before it is kept; else from its own first byte, so that the comma
-		// after a definition cut before it goes with that one.
-		from := start
-		if kept {
-			from = end
-		}
-		if brokenDefinition(definition) {
-			if !cutting {
-				cutting = true
-				cut.Grow(len(line))
-				cut.Write(line[:from])
-			}
-		} else {
-			if cutting {
-				cut.Write(line[from:next])
-			}
-			kept = true
-		}
-		end = next
-		return nil
-	})
-	if err != nil || !cutting {
-		return "", false
-	}
-	cut.Write(line[end:])
-	return cut.String(), true
-}
-
-// brokenDefinition reports whether a loaded tool definition is one no request
-// may carry: not an object, or named by nothing [providerToolName] takes. The
-// name is the one Claude Code sends the definition under, read as Claude
-// Code's JSON.parse reads it: the value of the key `name` exactly, the last
-// written where it is written twice, whatever a `name` before it holds; a
-// value that is no string names nothing. Read in the one walk of an object
-// ([eachKey]).
-//
-// NOT A DECODE OF THE DEFINITION into a name. encoding/json's fills a field
-// from a key that differs from its name only in case, the last such key
-// winning: a definition holding a renamed `name` and then a sound `NAME` was
-// read as sound and kept, and sent under the renamed name (2.1.310 and 2.1.322
-// key every definition they send again by its `name`), which had every
-// request of the restored session refused. And a decode into a string fails
-// at the first `name` that is none, whichever `name` JSON.parse reads: a
-// definition holding a number and then a sound `name` was cut, though Claude
-// Code sends it under the sound one.
-func brokenDefinition(definition []byte) bool {
-	// name is the last `name`'s value, a copy of its own: what the walk hands
-	// over is valid only while it does.
-	var name []byte
-	if eachKey(definition, func(key []byte, value json.RawMessage, _ int) error {
-		if string(key) == "name" {
-			name = append(name[:0], value...)
-		}
-		return nil
-	}) != nil {
-		return true
-	}
-	return !providerToolName(looseString(name))
-}
-
 // rewriteDocument streams one JSON value from src to dst a token at a time,
 // every string value and every key scrubbed and redacted, and a value under a
-// credential's key taken out whole. A second value is refused
-// ([errNotOneValue]); so is a string or a literal past the scrub's piece, and
-// a value nested past [scrubDepthMax], before the decoder holds either
-// ([tokenBound]).
-func rewriteDocument(dst io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
-	tokens := &tokenBound{r: src, bound: b.piece, gate: b.gate}
-	defer tokens.done()
-	dec := json.NewDecoder(tokens)
-	dec.UseNumber()
-	j := &jsonRewrite{out: bufio.NewWriter(dst), scrub: s}
-	for {
-		tok, err := dec.Token()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		if err = j.token(tok); err != nil {
-			return err
-		}
+// credential's key taken out whole ([jsonRewrite]). A text that is no one JSON
+// value ends it on the scanner's *jsonscan.Error: more than one value, one
+// cut short, or one nested past jsonscan.MaxDepth. A name or a string past
+// the base holds gate's slot while it is scrubbed ([jsonRewrite.text]).
+//
+// BUT A DOCUMENT OF BLANKS ALONE, or of nothing, holds no value a harness
+// reads, and is written as nothing rather than refused as no JSON, as
+// encoding/json's decoder answers such a text with its end. A transcript's
+// line of blanks is kept as its blanks ([measureLines]).
+func rewriteDocument(dst io.Writer, src io.Reader, s scrubber, gate pieceGate) error {
+	w := bufio.NewWriterSize(dst, 64<<10)
+	var out rewriteOut
+	out.reset(w, false)
+	j := newJSONRewrite(s)
+	j.reset(jsonscan.New(src), &out, nil, nil)
+	j.gate = gate
+	var fault *jsonscan.Error
+	if err := j.run(); err != nil && (!errors.As(err, &fault) || fault.Fault != jsonscan.FaultNoValue) {
+		return err
 	}
-	if len(j.stack) > 0 {
-		return io.ErrUnexpectedEOF
-	}
-	return j.out.Flush()
-}
-
-// tokenBound passes a JSON text through to its decoder, refusing one the
-// decoder would hold more than bound bytes of at once, or nest deeper than
-// [scrubDepthMax]: the decoder holds a string or a bare literal whole before it
-// hands it over — and the blanks before the next token with it, which it skips
-// only once it sees that token — and keeps a frame for every container open,
-// and a document a box's own code wrote can hold a token of any length, or open
-// a container at every byte.
-type tokenBound struct {
-	r        io.Reader
-	bound    int
-	inString bool
-	escaped  bool
-	// run is how much the decoder holds whole so far: the string being read,
-	// or the literal and the blanks around it.
-	run int
-	// depth is how many containers are open.
-	depth int
-	// gate is held before a run past [collectionBaseLineBytes] is handed on
-	// ([scrubBounds.gate]), to the document's end: the decoder keeps a buffer
-	// the size of its longest token until then. held says it holds it.
-	gate pieceGate
-	held bool
-}
-
-// done drops the gate where the document held it.
-func (t *tokenBound) done() {
-	if t.held {
-		t.gate.drop()
-		t.held = false
-	}
-}
-
-func (t *tokenBound) Read(p []byte) (int, error) {
-	n, err := t.r.Read(p)
-	for _, c := range p[:n] {
-		switch {
-		case t.inString:
-			t.run++
-			switch {
-			case t.escaped:
-				t.escaped = false
-			case c == '\\':
-				t.escaped = true
-			case c == '"':
-				t.inString, t.run = false, 0
-			}
-		case c == '"':
-			t.inString, t.run = true, 1
-		case c == '[' || c == '{':
-			t.depth++
-			t.run = 0
-			if t.depth > scrubDepthMax {
-				return 0, errTooDeep
-			}
-		case c == ']' || c == '}':
-			t.depth--
-			t.run = 0
-		case c == ',' || c == ':':
-			t.run = 0
-		default:
-			t.run++
-		}
-		if t.run > t.bound {
-			return 0, fmt.Errorf("%w: a JSON value of the session runs past %d bytes", errScrubBound, t.bound)
-		}
-		if t.run > collectionBaseLineBytes && !t.held && t.gate.hold != nil {
-			if largeErr := t.gate.hold(); largeErr != nil {
-				return 0, largeErr
-			}
-			t.held = true
-		}
-	}
-	return n, err
-}
-
-// jsonRewrite writes the tokens a decoder reads back as JSON.
-type jsonRewrite struct {
-	out   *bufio.Writer
-	scrub scrubber
-	stack []jsonFrame
-	// done says the one value outside any container has been written.
-	done bool
-}
-
-// jsonFrame is one open object or array.
-type jsonFrame struct {
-	object bool
-	// n is how many members (an object's pairs, an array's values) are
-	// written; key is the object's key whose value comes next, and wantKey
-	// says a key comes next.
-	n       int
-	key     string
-	wantKey bool
-}
-
-func (j *jsonRewrite) frame() *jsonFrame {
-	if len(j.stack) == 0 {
-		return nil
-	}
-	return &j.stack[len(j.stack)-1]
-}
-
-// beginValue writes what comes before a value — a comma between an array's
-// values; an object's value follows its key's colon — refusing a second value
-// outside any container.
-func (j *jsonRewrite) beginValue() error {
-	f := j.frame()
-	switch {
-	case f == nil && j.done:
-		return errNotOneValue
-	case f != nil && !f.object && f.n > 0:
-		_ = j.out.WriteByte(',')
-	}
-	return nil
-}
-
-// endValue counts a value written.
-func (j *jsonRewrite) endValue() {
-	f := j.frame()
-	if f == nil {
-		j.done = true
-		return
-	}
-	f.n++
-	if f.object {
-		f.wantKey = true
-	}
-}
-
-func (j *jsonRewrite) token(tok json.Token) error {
-	switch t := tok.(type) {
-	case json.Delim:
-		switch t {
-		case '{', '[':
-			if err := j.beginValue(); err != nil {
-				return err
-			}
-			_ = j.out.WriteByte(byte(t))
-			j.stack = append(j.stack, jsonFrame{object: t == '{', wantKey: t == '{'})
-		default:
-			j.stack = j.stack[:len(j.stack)-1]
-			_ = j.out.WriteByte(byte(t))
-			j.endValue()
-		}
-	case string:
-		if f := j.frame(); f != nil && f.object && f.wantKey {
-			if f.n > 0 {
-				_ = j.out.WriteByte(',')
-			}
-			// THE KEY AS IT IS KEPT: a key is a string a tool's structured
-			// result can name anything by, a secret included. Judged as a
-			// credential's by what it said, and written as what is kept.
-			if err := j.writeString(redact.Secrets(j.scrub.apply(t))); err != nil {
-				return err
-			}
-			_ = j.out.WriteByte(':')
-			f.key, f.wantKey = t, false
-			return nil
-		}
-		if err := j.beginValue(); err != nil {
-			return err
-		}
-		if err := j.writeString(j.value(t)); err != nil {
-			return err
-		}
-		j.endValue()
-	case json.Number:
-		if err := j.beginValue(); err != nil {
-			return err
-		}
-		if j.credential() {
-			// A NUMBER UNDER A CREDENTIAL'S KEY goes as a string under one
-			// does — a PIN, a numeric password, an account's key — written
-			// as the marker, a string where the number stood: no shape
-			// places a bare number, and kept as it came it survived every
-			// pass.
-			if err := j.writeString(credentialMarker); err != nil {
-				return err
-			}
-		} else {
-			_, _ = j.out.WriteString(t.String())
-		}
-		j.endValue()
-	case bool:
-		if err := j.beginValue(); err != nil {
-			return err
-		}
-		_, _ = j.out.WriteString(strconv.FormatBool(t))
-		j.endValue()
-	case nil:
-		if err := j.beginValue(); err != nil {
-			return err
-		}
-		_, _ = j.out.WriteString("null")
-		j.endValue()
-	default:
-		return fmt.Errorf("executor: a JSON token of type %T", tok)
-	}
-	return nil
-}
-
-// value is a string value as it is kept.
-func (j *jsonRewrite) value(s string) string {
-	if s != "" && j.credential() {
-		return credentialMarker
-	}
-	return keptString(j.scrub, s)
+	return w.Flush()
 }
 
 // keptString is a string value under a key that is no credential's, as a kept
 // document holds it: every value the take names taken out, then every shape of
 // a secret redacted. The ONE rule for it, so what the take keeps beside an
 // archive of a document — where its run began in it ([keptRunStart]) — is
-// spelled as the document spells the same text.
+// spelled as the document spells the same text, whose rewrite scrubs a string
+// by this rule whole or, past [textWholeBytes], through the streams that write
+// exactly what it writes.
 func keptString(scrub scrubber, s string) string {
-	return redact.Secrets(scrub.apply(s))
+	return keptText(scrub, s)
 }
 
-// credential reports whether the value being written is a member of an object
-// under a credential's own key ([credentialKey]).
-func (j *jsonRewrite) credential() bool {
-	f := j.frame()
-	return f != nil && f.object && credentialKey(f.key)
-}
-
-// writeString writes s as a JSON string, escaped as plainjson escapes: as
-// JSON.stringify does, but for U+2028 and U+2029, which it writes as escapes
-// where JSON.stringify writes them as they are. JSON.parse reads either back
-// as the same text.
-func (j *jsonRewrite) writeString(s string) error {
-	out, err := plainjson.Marshal(s, "")
-	if err != nil {
+// rewriteText streams text scrubbed by value and redacted by shape as it
+// arrives ([scrubber.text]): what it writes is exactly redact.Secrets of the
+// whole text with every value taken out, held to the redaction's own windows
+// rather than to a line or a stretch of it, and to gate's slot once the text
+// is past the base ([pieceGate.pieces]).
+func rewriteText(dst io.Writer, src io.Reader, s scrubber, gate pieceGate) error {
+	src, done := gate.pieces(src, false)
+	defer done()
+	w := bufio.NewWriterSize(dst, 64<<10)
+	text := s.text(w)
+	if _, err := io.Copy(text, src); err != nil {
 		return err
 	}
-	_, err = j.out.Write(out)
-	return err
-}
-
-// rewriteText streams text, every whole line scrubbed, and redacted as redact
-// settles it ([redact.Settled]): a line a rule may yet read with the lines after
-// it is held until they come, and the rest once the text ends. Held, never
-// past the scrub's piece: a stretch still unsettled past it is refused.
-func rewriteText(dst io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
-	pieces, done := b.pieceSource(src)
-	defer done()
-	r := bufio.NewReaderSize(pieces, 64<<10)
-	w := bufio.NewWriter(dst)
-	var held []byte
-	// asked is how long the stretch was when the redaction was last asked.
-	asked := 0
-	// stretch is whether the stretch held holds the slot.
-	stretch := false
-	defer func() {
-		if stretch {
-			b.gate.drop()
-		}
-	}()
-	for {
-		line, err := readLine(r, b.piece)
-		// A STRETCH OF SHORT LINES is a piece too: past the base, it holds the
-		// slot before it holds more, until it settles back within the base.
-		if !stretch && b.gate.hold != nil && len(held)+len(line) > collectionBaseLineBytes {
-			if largeErr := b.gate.hold(); largeErr != nil {
-				return largeErr
-			}
-			stretch = true
-		}
-		if len(line) > 0 {
-			held = append(held, s.apply(string(line))...)
-		}
-		if errors.Is(err, io.EOF) {
-			if _, werr := w.WriteString(redact.Secrets(string(held))); werr != nil {
-				return werr
-			}
-			return w.Flush()
-		}
-		if err != nil {
-			return err
-		}
-		if len(held) <= b.piece && len(held)-asked < max(scrubSettleStride, asked/2) {
-			continue
-		}
-		pending := string(held)
-		if n := redact.Settled(pending); n > 0 {
-			if _, werr := w.WriteString(redact.Secrets(pending[:n])); werr != nil {
-				return werr
-			}
-			held = append(held[:0], held[n:]...)
-			// SETTLED BACK WITHIN THE BASE, the stretch moves out of the array
-			// it grew, which it no longer holds, and lets the slot go.
-			if stretch && len(held) <= collectionBaseLineBytes {
-				held = append([]byte(nil), held...)
-				b.gate.drop()
-				stretch = false
-			}
-		}
-		if len(held) > b.piece {
-			return fmt.Errorf("%w: a stretch of the session's text a redaction holds runs past %d bytes",
-				errScrubBound, b.piece)
-		}
-		asked = len(held)
+	if err := text.Close(); err != nil {
+		return err
 	}
+	return w.Flush()
 }

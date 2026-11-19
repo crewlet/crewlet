@@ -46,11 +46,11 @@ import (
 //     way), never by [claudeThread], which takes any session's file for the
 //     main thread: a reader that decides something of one session must never
 //     read another session's file as it.
-//   - A WHOLE LINE AT A TIME, through the scrub's own [readLine] at the scrub's
-//     own bounds ([threadLineMax], [threadPlainMax]): one copy of the line
-//     primitive, so a reader never holds a line the take's scrub would have
-//     refused, and a last piece with no break is never a line
-//     ([threadReader.Next]).
+//   - A WHOLE LINE AT A TIME, through [readLine], one copy of the line
+//     primitive, at the layer's own line bound ([threadLineMax]) and
+//     the plaintext a kept session's scrub reads ([threadPlainMax]): a reader
+//     never holds a line longer than the layer's bound, and a last piece with
+//     no break is never a line ([threadReader.Next]).
 //   - PAST A BOUND, THE READING IS OVER: a line or a member past its bound
 //     ends it, with nothing skipped, since a reader that skipped a line would
 //     decide from a thread with a hole in it.
@@ -91,12 +91,18 @@ import (
 // as the engine drives a box's executor, and 2.1.118 beside 2.1.310 for a hook
 // that follows one call (a skill's).
 
-// threadLineMax is the longest whole line a Claude Code thread is read with,
-// its break included: the scrub's own piece ([scrubPieceMaxBytes]). The take's
-// scrub refused every session holding a longer line, so a reader of a kept
-// archive meets one only where a redaction grew a line, and a reader of a
-// box's live thread stops where the take would refuse the session.
-const threadLineMax = scrubPieceMaxBytes
+// threadLineMax is the longest line the thread layer reads, its break
+// included: 8 MiB.
+//
+// PAST IT, A READING FAILS CLOSED: [threadReader.Next] answers errThreadBound,
+// which every reader turns into no reading or cannot tell, never a false hold.
+// It bounds the reader's memory, not what a session holds, and is the layer's
+// own, never the scrub's, which keeps a line of any length. 8 MiB keeps one
+// line's decode within the slot a reading takes, measured by
+// BenchmarkAThreadChainAtItsBounds and BenchmarkAReadingAtItsBounds, so
+// another value runs those again (the package doc's "A Claude Code thread is
+// read a whole line at a time").
+const threadLineMax = 8 << 20
 
 // threadPlainMax is the most of one member a reader reads: the plaintext one
 // reading of an archive yields to the take's scrub at the bound a kept
@@ -382,9 +388,10 @@ func askedTokens(tokens []string) ([]string, error) {
 // [threadReader.Next] tagged as the reader's own ([threadSourceError]).
 //
 // TAGGED, because the line primitive's own bound is told by the error it
-// wraps, errScrubBound, and a reader may wrap it too: a reader that meters a
-// kept archive's plaintext with the take's scrub's own meter fails with the
-// scrub's bound once the archive inflates past a reading. Untagged, that error
+// wraps, errLineBound, and a reader's error is never to be read as that bound:
+// a reader that meters a kept archive's plaintext with the take's scrub's own
+// meter fails with the scrub's bound once the archive inflates past a reading,
+// and untagged, an error of the reader's that wrapped the line primitive's
 // would be read as a line or a member past this reader's bound, its own words
 // and its errors.Is lost.
 type threadSource struct{ r io.Reader }
@@ -459,10 +466,10 @@ func (t *threadReader) Next(ctx context.Context) (threadLine, error) {
 	case errors.As(err, &source):
 		t.end = source.err
 		return threadLine{}, t.end
-	case errors.Is(err, errScrubBound) && member:
+	case errors.Is(err, errLineBound) && member:
 		t.end = fmt.Errorf("%w: the member runs past the %d bytes it is read within", errThreadBound, t.maxBytes)
 		return threadLine{}, t.end
-	case errors.Is(err, errScrubBound):
+	case errors.Is(err, errLineBound):
 		t.end = fmt.Errorf("%w: a line runs past %d bytes", errThreadBound, threadLineMax)
 		return threadLine{}, t.end
 	case errors.Is(err, io.EOF):
@@ -482,6 +489,26 @@ func (t *threadReader) Next(ctx context.Context) (threadLine, error) {
 // Torn reports whether the member ended in a piece with no break, which
 // [threadReader.Next] read as no line: known once Next has answered io.EOF.
 func (t *threadReader) Torn() bool { return t.torn }
+
+// readLine is the next line of r, its break included, refused past bound with
+// [errLineBound]: the layer holds a line whole to decode it.
+func readLine(r *bufio.Reader, bound int) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := r.ReadSlice('\n')
+		if len(line)+len(chunk) > bound {
+			return nil, fmt.Errorf("%w: a line of the session runs past %d bytes", errLineBound, bound)
+		}
+		line = append(line, chunk...)
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return line, err
+	}
+}
+
+// errLineBound is a line past what [readLine] was asked to hold.
+var errLineBound = errors.New("executor: a line of the session runs past the bound it is read within")
 
 // threadLineError is a whole line that is not one record: not one JSON
 // object, or a head key of the wrong type ([threadHead]).
@@ -892,11 +919,9 @@ func wireDecode(raw []byte, v any) error {
 // message's blocks, [eachClaudeBlock]; a tool's answer, [toolAnswer]; an
 // OpenCode step's items, [eachOpenCodeItem]; a run's result's errors,
 // [claudeResult.errorsSaid]; a page of an OpenCode session's message list,
-// [openCodeEvents.page]), a call's result content, which the reader that
+// [openCodeEvents.page]), and a call's result content, which the reader that
 // tells a relaunch which of its calls a kept session holds (exact telling)
-// reads no further than its second element, and a loaded-tools record's list,
-// which the scrub cuts a definition out of where it sits in the line
-// ([withoutDefinitions]).
+// reads no further than its second element.
 func eachElement(list json.RawMessage, each func(element json.RawMessage, at int) error) error {
 	if trimmed := bytes.TrimLeft(list, " \t\r\n"); len(trimmed) == 0 || trimmed[0] != '[' {
 		return fmt.Errorf("is %s, not a list", wireKind(trimmed))
@@ -946,10 +971,7 @@ func eachElement(list json.RawMessage, each func(element json.RawMessage, at int
 // 286,787 allocations and 45 MB, 42.6 times the line, and a line of four
 // mebibytes four times that (measured): about 1.4 GB at the 32 MiB a line of
 // the stream may hold. Its readers: a run's result's spend model by model
-// ([claudeResult.sinceLastResult]), and the scrub's reading of a loaded-tools
-// record, which finds where the record's attachment and the attachment's list
-// sit in the line ([lastValue]) and the name of each definition it lists
-// ([brokenDefinition]).
+// ([claudeResult.sinceLastResult]).
 //
 // THE NAME IS HANDED AS BYTES, in a buffer the walk reuses, never as a
 // string: a string would be an allocation for every key, which a reader that

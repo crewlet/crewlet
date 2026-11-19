@@ -457,7 +457,8 @@ func heldExport(ctx context.Context, export []byte, large *passBudget, err *erro
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		*err = scrubDocument(bytes.NewReader(export), io.Discard, newScrubber(nil), testBounds.gatedBy(ctx, large))
+		*err = scrubDocument(bytes.NewReader(export), reopenOf(export), io.Discard, newScrubber(nil),
+			testBounds.gatedBy(ctx, large))
 	}()
 	return done
 }
@@ -545,35 +546,54 @@ func (w *readAtWait) Done() <-chan struct{} {
 }
 
 // A TAKE'S PIECE PAST THE BASE WAITS FOR THE LARGE SLOT BEFORE IT IS HELD:
-// a transcript's line and a document's string twice [collectionBaseLineBytes],
-// and a stretch held unsettled (a key with no END) that a line within the base
-// carries one byte past it, wait for the slot held elsewhere having read at
-// most the base and one fill past where the piece began; freed, the rewrite
+// a transcript's line twice [collectionBaseLineBytes], in each reading, an
+// export's string, a `.json` file and a text of short lines as long, each a
+// text the scrub redacts as one, wait for the slot held elsewhere having read
+// at most the base and two fills (the source's, and the scanner's or the
+// text's read ahead) past where the piece began; freed, the rewrite
 // reads to its end and holds nothing once done; with its context ended while
-// it waits, it ends with [errLargeWait]. Short lines alone never carry a
-// stretch past the base: the redaction lets a key's block go at
-// [redact.MaxKeyBlockBytes], and is asked again every [scrubSettleStride].
+// it waits, it ends with [errLargeWait].
 //
-// Mutation: hold a line only once it is read whole, drop a piece's gate, or
-// keep a hold past the rewrite, and a case goes red.
+// Mutation: gate no piece, a line only once it is read whole, or a text by its
+// lines, drop a piece's gate, or keep a hold past the rewrite, and a case goes
+// red.
 func TestATakesPiecePastTheBaseWaitsForTheLargeSlot(t *testing.T) {
 	long := strings.Repeat("a", 2*collectionBaseLineBytes)
 	prefix := `{"text":"`
-	// HELD UNASKED: the armour and its lines are short of the first ask.
-	open := "-----BEGIN RSA PRIVATE KEY-----\n" + strings.Repeat(keyLine+"\n", scrubSettleStride/2/(len(keyLine)+1))
-	stretch := open + strings.Repeat("a", collectionBaseLineBytes-len(open)) + "\n" +
-		strings.Repeat(keyLine+"\n", collectionBaseLineBytes/(len(keyLine)+1))
+	line := prefix + long + `"}` + "\n"
+	lines := strings.Repeat(keyLine+"\n", 2*collectionBaseLineBytes/(len(keyLine)+1))
 	type rewrite func(io.Writer, io.Reader, scrubber, scrubBounds) error
 	pieces := []struct {
 		name    string
 		body    string
 		rewrite rewrite
 	}{
-		{"a transcript's line", prefix + long + `"}` + "\n", rewriteLines},
-		{"a document's string", prefix + long + `"}`, rewriteDocument},
-		{"a held stretch", stretch, rewriteText},
+		{"a transcript's line, first reading", line, func(_ io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
+			_, err := measureLines(src, s, &tarPlan{gate: b.gate})
+			return err
+		}},
+		{"a transcript's line, second reading", line, func(dst io.Writer, src io.Reader, s scrubber,
+			b scrubBounds) error {
+			plan := &tarPlan{}
+			if _, err := measureLines(strings.NewReader(line), s, plan); err != nil {
+				return err
+			}
+			plan.gate = b.gate
+			return writeLines(dst, src, s, plan, plan.lines.count())
+		}},
+		{"an export's string", prefix + long + `"}`, func(dst io.Writer, src io.Reader, s scrubber,
+			b scrubBounds) error {
+			return rewriteDocument(dst, src, s, b.gate)
+		}},
+		{"a `.json` file", prefix + long + `"}`, func(_ io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
+			_, _, err := measureFile("tasks/s/1.json", src, s, &tarPlan{gate: b.gate})
+			return err
+		}},
+		{"a text of short lines", lines, func(dst io.Writer, src io.Reader, s scrubber, b scrubBounds) error {
+			return rewriteText(dst, src, s, b.gate)
+		}},
 	}
-	most := len(prefix) + collectionBaseLineBytes + 64<<10
+	most := len(prefix) + collectionBaseLineBytes + 2*(64<<10)
 	for _, tc := range pieces {
 		for _, leaves := range []bool{false, true} {
 			free := holdLargeSlot(t)
@@ -597,7 +617,7 @@ func TestATakesPiecePastTheBaseWaitsForTheLargeSlot(t *testing.T) {
 			}
 			if ctx.read > most {
 				t.Errorf("%s: the rewrite waits for the slot having read %d bytes, past the %d of the base and "+
-					"one fill", tc.name, ctx.read, most)
+					"two fills", tc.name, ctx.read, most)
 			}
 			if leaves {
 				leave()
@@ -619,6 +639,44 @@ func TestATakesPiecePastTheBaseWaitsForTheLargeSlot(t *testing.T) {
 					len(collectionLargeReads))
 				large.release()
 			}
+		}
+	}
+}
+
+// THE PLAN PAST THE BASE HOLDS THE SLOT TO THE TAKE'S END: a tar's plan one
+// line short of a byte past [collectionBaseLineBytes] of bits takes no slot
+// as the first reading plans a transcript's lines; one line further it takes
+// it, and holds it once the lines are read, until the take lets it go.
+//
+// Mutation: hold the plan at the base (`>=` for `>`), plan no hold in a
+// transcript's lines, or drop it with the lines, and a case goes red.
+func TestThePlanPastTheBaseHoldsTheSlotToTheTakesEnd(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		bits  int
+		holds bool
+	}{
+		{"a plan a bit short of past the base", (collectionBaseLineBytes+1)*8 - 3, false},
+		{"a plan past the base", (collectionBaseLineBytes+1)*8 - 2, true},
+	} {
+		large := testPass(t)
+		plan := &tarPlan{gate: large.gate(t.Context())}
+		for range tc.bits {
+			plan.lines.put(false)
+		}
+		// TWO LINES, a bit each.
+		if _, err := measureLines(strings.NewReader("ab\ncd\n"), newScrubber(nil), plan); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if held := len(collectionLargeReads) == 1; held != tc.holds {
+			t.Errorf("%s: once its lines are read, the plan holds the large slot: %v, want %v", tc.name, held,
+				tc.holds)
+		}
+		plan.letGo()
+		if len(collectionLargeReads) != 0 {
+			t.Errorf("%s: once the take lets the plan go, %d large slots are held, want none", tc.name,
+				len(collectionLargeReads))
+			large.release()
 		}
 	}
 }
@@ -778,9 +836,10 @@ func BenchmarkACollectionPassAtItsBase(b *testing.B) {
 func inABubble(t *testing.T, f func(t *testing.T)) {
 	t.Helper()
 	synctest.Test(t, func(t *testing.T) {
-		outer := collectionLargeReads
+		outer, outerTakes := collectionLargeReads, sessionTakes
 		collectionLargeReads = make(chan struct{}, CollectionLargeReadsAtOnce)
-		t.Cleanup(func() { collectionLargeReads = outer })
+		sessionTakes = make(chan struct{}, SessionTakesAtOnce)
+		t.Cleanup(func() { collectionLargeReads, sessionTakes = outer, outerTakes })
 		f(t)
 	})
 }
@@ -789,15 +848,20 @@ func inABubble(t *testing.T, f func(t *testing.T)) {
 // session, written by Claude Code 2.1.322.
 func slotTake(t *testing.T, archive []byte) sandbox.TakenSession {
 	t.Helper()
-	box := sandbox.NewFakeSandbox("box-1")
-	p := PathsFor(box)
-	box.Put(p.SessionRecord(), "id "+ctSession+"\ncontinued no\nrelease 2.1.322 (Claude Code)\n")
-	box.Put(p.SessionCapture(), string(archive))
-	taken, err := NewClaudeCode().TakeSession(t.Context(), box, sandbox.SessionTake{MaxBytes: 32 << 20})
+	taken, err := takeWithin(t.Context(), archive)
 	if err != nil || taken.Body == nil {
 		t.Fatalf("the take: %v", err)
 	}
 	return taken
+}
+
+// takeWithin is [slotTake]'s take within ctx, its error the caller's.
+func takeWithin(ctx context.Context, archive []byte) (sandbox.TakenSession, error) {
+	box := sandbox.NewFakeSandbox("box-1")
+	p := PathsFor(box)
+	box.Put(p.SessionRecord(), "id "+ctSession+"\ncontinued no\nrelease 2.1.322 (Claude Code)\n")
+	box.Put(p.SessionCapture(), string(archive))
+	return NewClaudeCode().TakeSession(ctx, box, sandbox.SessionTake{MaxBytes: 32 << 20})
 }
 
 // countedWriter counts what is written to it.
@@ -914,18 +978,94 @@ func TestATakesCloseEndsItsMetersWaitForTheSlot(t *testing.T) {
 	})
 }
 
+// NO MORE TAKES SCRUB AT ONCE THAN [SessionTakesAtOnce]: with every slot held
+// by a take nothing reads, one more waits within its ctx, and takes the slot a
+// closed take gives back; one whose ctx ends while it waits is refused
+// ([errTakeWait]), holding none.
+//
+// Mutation: take no slot, and the take past the pool returns at once.
+func TestNoMoreTakesScrubAtOnceThanThePoolAllows(t *testing.T) {
+	archive := cntArchive(t, cntThread(cntUser("", "u1", `"hello"`)))
+	inABubble(t, func(t *testing.T) {
+		held := make([]sandbox.TakenSession, 0, SessionTakesAtOnce)
+		for range SessionTakesAtOnce {
+			held = append(held, slotTake(t, archive))
+		}
+		if n := len(sessionTakes); n != SessionTakesAtOnce {
+			t.Fatalf("%d takes in flight hold %d slots, want one each", SessionTakesAtOnce, n)
+		}
+		refused, cancel := context.WithCancel(t.Context())
+		gaveUp := make(chan error, 1)
+		go func() {
+			_, err := takeWithin(refused, archive)
+			gaveUp <- err
+		}()
+		type result struct {
+			taken sandbox.TakenSession
+			err   error
+		}
+		next := make(chan result, 1)
+		go func() {
+			taken, err := takeWithin(t.Context(), archive)
+			next <- result{taken, err}
+		}()
+		synctest.Wait()
+		select {
+		case r := <-next:
+			t.Fatalf("a take past the pool's %d returned (%v) while every slot was held",
+				SessionTakesAtOnce, r.err)
+		case err := <-gaveUp:
+			t.Fatalf("a take past the pool returned (%v) before its wait ended", err)
+		default:
+		}
+		cancel()
+		if err := <-gaveUp; !errors.Is(err, errTakeWait) {
+			t.Errorf("a take whose wait ended: %v, want errTakeWait", err)
+		}
+		_ = held[0].Body.Close()
+		r := <-next
+		if r.err != nil || r.taken.Body == nil {
+			t.Fatalf("the take given a slot back: %v", r.err)
+		}
+		_ = r.taken.Body.Close()
+		for _, h := range held[1:] {
+			_ = h.Body.Close()
+		}
+		if n := len(sessionTakes); n != 0 {
+			t.Errorf("once every take was closed, %d slots are held, want none", n)
+		}
+	})
+}
+
 // WHAT A TAKE HOLDS AT ITS LARGE TIER, the figure the package doc's "A
 // collection's read of a thread" states beside the collection's pass: a kept
-// archive whose main thread holds a line at [scrubPieceMaxBytes] and whose
-// `.json` member holds a string at it, each of bytes no UTF-8 holds, which the
-// decode reads as U+FFFD, three bytes a byte; scrubbed, both readings, with
-// its meter fed as [Runner.TakeSession] feeds it, under one budget. What is
+// archive whose main thread holds a line at [threadLineMax], the most the
+// meter reads, whose `.json` member holds a string as long, each of bytes no
+// UTF-8 holds, which the decode reads as U+FFFD, three bytes a byte, and whose
+// text file is as long; scrubbed, both readings, with its meter fed as
+// [Runner.TakeSession] feeds it, under one budget. What is
 // held at most is read off the runtime's GC trace as
 // BenchmarkAThreadChainAtItsBounds says:
 //
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkATakeAtItsLargeTier$' -benchtime 1x -benchmem
 func BenchmarkATakeAtItsLargeTier(b *testing.B) {
-	archive := takeAtTheLargeTier(b)
+	benchmarkATake(b, takeOfPieces(b, threadLineMax))
+}
+
+// WHAT A TAKE HOLDS AT ITS BASE, the figure the package doc's "A collection's
+// read of a thread" counts each take at in the base tier: as
+// [BenchmarkATakeAtItsLargeTier], its line and its string at
+// [collectionBaseLineBytes], beside a text file at it, so no piece takes the
+// slot. Read off the GC trace as that benchmark is:
+//
+//	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkATakeAtItsBase$' -benchtime 1x -benchmem
+func BenchmarkATakeAtItsBase(b *testing.B) {
+	benchmarkATake(b, takeOfPieces(b, collectionBaseLineBytes))
+}
+
+// benchmarkATake scrubs archive as [Runner.TakeSession] does, its meter fed
+// beside it under one budget.
+func benchmarkATake(b *testing.B, archive []byte) {
 	var before, after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&before)
@@ -954,14 +1094,17 @@ func BenchmarkATakeAtItsLargeTier(b *testing.B) {
 	}
 }
 
-// takeAtTheLargeTier is [BenchmarkATakeAtItsLargeTier]'s archive, built where
-// nothing the read is measured by keeps its pieces.
-func takeAtTheLargeTier(b *testing.B) []byte {
+// takeOfPieces is a take's archive whose main thread holds a line of n bytes
+// and whose `.json` member a string within them, each of bytes no UTF-8 holds,
+// and a text file of n bytes, built where nothing the read is measured by
+// keeps its pieces.
+func takeOfPieces(b *testing.B, n int) []byte {
 	thread, _ := claudeMainThread(ctSession)
 	bare := cntUser("", "u1", `""`)
 	members := []struct{ name, body string }{
-		{thread, cntUser("", "u1", `"`+benchInvalid(scrubPieceMaxBytes-len(bare)-1)+`"`) + "\n"},
-		{"tasks/s/1.json", `{"text":"` + benchInvalid(scrubPieceMaxBytes-64) + `"}`},
+		{thread, cntUser("", "u1", `"`+benchInvalid(n-len(bare)-1)+`"`) + "\n"},
+		{"tasks/s/1.json", `{"text":"` + benchInvalid(n-64) + `"}`},
+		{"projects/p/s/tool-results/out.txt", strings.Repeat(keyLine+"\n", n/(len(keyLine)+1))},
 	}
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
