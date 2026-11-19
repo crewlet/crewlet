@@ -210,7 +210,29 @@ func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, n
 		log.WarnContext(ctx, "advisor_schedule_fires_unreadable", "error", err.Error())
 		ev.FiresUnread = true
 	}
+	if ev.Episodes, err = s.alarmEpisodes(ctx, now); err != nil {
+		log.WarnContext(ctx, "advisor_alarm_episodes_unreadable", "error", err.Error())
+		ev.EpisodesUnread = true
+	}
 	return ev
+}
+
+// alarmEpisodes is every alarm episode on any node that stood in the window
+// before now, as the advisor log keeps them.
+func (s Sources) alarmEpisodes(ctx context.Context, now time.Time) ([]advisor.AlarmEpisode, error) {
+	if s.Advisor == nil {
+		return nil, errors.New("queries: this node reaches no advisor log to read the alarms' history from")
+	}
+	rows, err := s.Advisor.AlarmEpisodes(ctx, now.Add(-advisor.Window), advisorFresh)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]advisor.AlarmEpisode, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, advisor.AlarmEpisode{Node: r.Node, Kind: r.Kind, Instance: r.Instance,
+			RaisedAt: r.RaisedAt, ClearedAt: r.ClearedAt})
+	}
+	return out, nil
 }
 
 // failedRunsPage is how many records one read of the week takes, and

@@ -61,8 +61,9 @@ func TestTheDutysRecordsAreOnesTheLogKeeps(t *testing.T) {
 		t.Errorf("the log keeps %+v, want the company's finding and the seat's", kinds)
 	}
 	run, found, err := r.LatestRun(t.Context(), stale)
-	if err != nil || !found || run.Status != advisordomain.RunDone || run.EndedAt.Before(run.StartedAt) {
-		t.Errorf("the latest run is %+v, found %v (%v), want the tick's run recorded done", run, found, err)
+	if err != nil || !found || run.Status != advisordomain.RunDone ||
+		!run.StartedAt.Equal(writerClock) || !run.EndedAt.Equal(writerClock) {
+		t.Errorf("the latest run is %+v, found %v (%v), want the tick's run recorded done, begun and ended at the writer's clock", run, found, err)
 	}
 	// A MONDAY MORNING'S TICK writes the week before's report, which the log keeps.
 	week, _, _, _ := advisor.ReportWeek(writerClock, time.UTC)

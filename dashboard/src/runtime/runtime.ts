@@ -51,6 +51,7 @@ import {
 import { RUNTIME_CONTRACT } from "../contract/artifactsworkspace.ts";
 import { pathSegment } from "../lib/segment.ts";
 import { PageComments } from "./comments.ts";
+import { FileViewer, interceptFileLinks } from "./viewer.ts";
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 type Unsubscribe = () => void;
@@ -508,6 +509,16 @@ const ticketBase = (() => {
   const [, t, ticket] = window.location.pathname.split("/");
   return t === "t" && ticket ? `/t/${pathSegment(ticket)}` : "";
 })();
+
+// A LINK TO ONE OF THE ARTIFACT'S OWN FILES that is not a page (a picture, a
+// PDF, a video, an asset) opens in the file viewer over the page, since the
+// frame can hold only the artifact's pages (`viewer.ts`).
+const fileViewer = new FileViewer({ window });
+interceptFileLinks({
+  window,
+  ticketBase,
+  open: (items, at, opener) => fileViewer.open(items, at, opener),
+});
 
 const state = {
   get: (key: string) => bridge.call<Json | null>("state.get", { key }),

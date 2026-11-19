@@ -239,11 +239,11 @@ const (
 	flowStuck = "t.updated_at <= ? - 3600000000 * COALESCE((SELECT fp.stuck_after_hours " +
 		"FROM tracker_projects fp WHERE fp.key = t.project_key), ?)"
 	// A blocker gives no instant of its own, so a blocked item is blocked
-	// since the flow duty recorded it so: its latest recorded change, where
-	// that change is to blocked.
+	// since the flow duty recorded it so: its latest change the duty
+	// recorded, where that change is to blocked.
 	flowBlockedSince = "(SELECT CASE WHEN fb.state = '" + string(FlowBlocked) +
 		"' THEN fb.recorded_at END FROM tracker_flow fb WHERE fb.task_id = t.id " +
-		"AND fb.notice = '' ORDER BY fb.log_seq DESC LIMIT 1)"
+		"AND fb.notice = '' AND fb.backfilled = 0 ORDER BY fb.log_seq DESC LIMIT 1)"
 )
 
 // flowRendering is what each branch of the expression reads as.
