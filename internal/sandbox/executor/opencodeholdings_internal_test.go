@@ -1012,44 +1012,55 @@ func TestAnErrorPartCountsOnlyForAFailureHandedUntrimmed(t *testing.T) {
 
 // A BLANK OUTPUT IS HELD ONLY WHERE A REQUEST WAS MEASURED TO CARRY IT: an
 // empty answer reaches the model as "(no tool output)", and a blank one is
-// left told though it was carried verbatim, so neither is held.
+// left told though it was carried verbatim, so neither is held. A text is
+// blank only where every one of the digest's pieces is ([textDigestBytes]):
+// one of words in either piece is held.
 //
-// Mutation: count an empty or blank completed part, and this goes red.
+// Mutation: count an empty or blank completed part, or judge a text's blanks
+// by one of its pieces, and this goes red.
 func TestABlankOutputIsHeldOnlyWhereARequestWasMeasuredToCarryIt(t *testing.T) {
 	t.Parallel()
-	for _, output := range []string{"", " \n\t "} {
+	blanks := strings.Repeat(" ", textDigestBytes+100)
+	for output, held := range map[string]bool{"": false, " \n\t ": false, blanks: false, "words" + blanks: true,
+		blanks + "words": true} {
 		c := ohCall(1, "echo", `{"t":1}`, output)
+		if len(output) > sandbox.MaxBridgeOutputBytes {
+			c = ohCut(c)
+		}
 		h, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, output))), ohBegan, c)
-		if got := ohHeld(t, h, err, c); got != nil {
-			t.Errorf("an output %q: held %v; want told", output, got)
+		if got := ohHeld(t, h, err, c); (got != nil) != held {
+			t.Errorf("an output %.12q of %d bytes: held %v; want held %t", output, len(output), got, held)
 		}
 	}
 }
 
 // A SCRUBBED TEXT NEVER STANDS FOR A CUT OUTPUT: a part of a cut call's size
 // and kept opening whose text past the opening holds the scrub's marker is
-// told, since the scrub may have rewritten what the log did not keep; so is a
-// part of the kept opening at another size.
+// told, since the scrub may have rewritten what the log did not keep, the
+// marker within one of the digest's pieces or across two ([textDigestBytes]);
+// so is a part of the kept opening at another size.
 //
-// Mutation: leave the marker unchecked, or a cut output's size, and a case
-// goes red.
+// Mutation: leave the marker unchecked, read it within each piece alone, or
+// leave a cut output's size unchecked, and a case goes red.
 func TestAScrubbedTextNeverStandsForACutOutput(t *testing.T) {
 	t.Parallel()
-	text := strings.Repeat("w", 8000) + "[REDACTED:engine-secret]" + strings.Repeat("w", 1000)
-	c := ohCut(ohCall(1, "echo", `{"t":1}`, text))
-	h, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, text))), ohBegan, c)
-	if got := ohHeld(t, h, err, c); got != nil {
-		t.Errorf("held %v; want told", got)
-	}
-	plain := strings.ReplaceAll(text, "[REDACTED:engine-secret]", strings.Repeat("w", 24))
-	c = ohCut(ohCall(1, "echo", `{"t":1}`, plain))
-	h, err = ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, plain))), ohBegan, c)
-	if got := ohHeld(t, h, err, c); !slices.Equal(got, []int{1}) {
-		t.Errorf("an unscrubbed text: held %v; want it", got)
-	}
-	h, err = ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, plain+"w"))), ohBegan, c)
-	if got := ohHeld(t, h, err, c); got != nil {
-		t.Errorf("a part of another size: held %v; want told", got)
+	for where, at := range map[string]int{"within a piece": 8000, "across two pieces": textDigestBytes - 5} {
+		text := strings.Repeat("w", at) + "[REDACTED:engine-secret]" + strings.Repeat("w", 1000)
+		c := ohCut(ohCall(1, "echo", `{"t":1}`, text))
+		h, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, text))), ohBegan, c)
+		if got := ohHeld(t, h, err, c); got != nil {
+			t.Errorf("a marker %s: held %v; want told", where, got)
+		}
+		plain := strings.ReplaceAll(text, "[REDACTED:engine-secret]", strings.Repeat("w", 24))
+		c = ohCut(ohCall(1, "echo", `{"t":1}`, plain))
+		h, err = ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, plain))), ohBegan, c)
+		if got := ohHeld(t, h, err, c); !slices.Equal(got, []int{1}) {
+			t.Errorf("the text unscrubbed, its marker %s: held %v; want it", where, got)
+		}
+		h, err = ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, plain+"w"))), ohBegan, c)
+		if got := ohHeld(t, h, err, c); got != nil {
+			t.Errorf("a part of another size, its marker %s: held %v; want told", where, got)
+		}
 	}
 }
 

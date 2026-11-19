@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,8 +16,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/jsonscan"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -446,8 +449,8 @@ func holdingsCalls() [][]sandbox.LoggedCall {
 // the answers the export walk moves, each its own case below.
 //
 // Mutation: read a capture past its bound as absent, decide a part before its
-// state is read, count a part of a message whose kind comes last, or drop
-// the digest's span rule, and a case goes red.
+// state is read, count a part of a message whose kind comes last, or match a
+// class of size zero, and a case goes red.
 func TestAHoldingsReadingReadsAnExportAsItsWalkDid(t *testing.T) {
 	t.Parallel()
 	asks := holdingsCalls()
@@ -503,6 +506,58 @@ func TestAHoldingsReadingReadsAnExportAsItsWalkDid(t *testing.T) {
 		for _, start := range starts {
 			for _, calls := range asks {
 				check("variant", doc, ohSession, start, calls)
+			}
+		}
+	}
+}
+
+// A TEXT'S DIGEST IS ITS WHOLE TEXT'S, WHEREVER ITS PIECES END: written a
+// piece at a time, whole characters each, as the walk hands it, in pieces of
+// every length, a text's digest answers its size, its sum, the sum of every
+// opening it reaches, whether it holds the scrub's marker and whether it is
+// blank exactly as the text read whole does. A class's opening is at most
+// [sandbox.MaxBridgeOutputBytes], inside the walk's first piece, so only here
+// does an opening's sum cross an edge.
+//
+// Mutation: read the marker within each piece alone or off the last piece's
+// tail alone, judge blanks by the last piece, or reach an opening only past
+// it, and a case goes red.
+func TestATextsDigestIsItsWholeTextsWhereverItsPiecesEnd(t *testing.T) {
+	t.Parallel()
+	texts := []string{"", " ", "words", " \t\n\v\f\r\u0085 　 ", " 　　x", "x　 \n ", "é€😀 ok"}
+	for at := range len(redact.Marker) + 2 {
+		texts = append(texts, strings.Repeat("w", at)+redact.Marker+"x]www",
+			strings.Repeat("w", at)+redact.Marker[:len(redact.Marker)-1]+"www")
+	}
+	openings := []int{0, 1, 7, 13, 26}
+	for _, text := range texts {
+		for size := range max(1, len(text)) {
+			d := newTextDigest(openings)
+			d.reset()
+			for rest := text; rest != ""; {
+				n := 0
+				for n < len(rest) {
+					_, width := utf8.DecodeRuneInString(rest[n:])
+					if n > 0 && n+width > size+1 {
+						break
+					}
+					n += width
+				}
+				d.write([]byte(rest[:n]))
+				rest = rest[n:]
+			}
+			d.end()
+			if d.n != len(text) || d.whole != sha256.Sum256([]byte(text)) ||
+				d.marker != strings.Contains(text, redact.Marker) || d.blank != (strings.TrimSpace(text) == "") {
+				t.Errorf("%q in pieces of %d bytes: %d bytes, marked %t, blank %t, its sum %t", text, size+1, d.n,
+					d.marker, d.blank, d.whole == sha256.Sum256([]byte(text)))
+			}
+			for i, opening := range openings {
+				if reached := i < d.next; reached != (opening <= len(text)) ||
+					reached && d.sums[i] != sha256.Sum256([]byte(text[:opening])) {
+					t.Errorf("%q in pieces of %d bytes: the opening of %d reached %t, its sum %x", text, size+1,
+						opening, reached, d.sums[i][:4])
+				}
 			}
 		}
 	}
