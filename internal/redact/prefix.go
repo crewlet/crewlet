@@ -8,7 +8,7 @@ import (
 // prefixWholeBytes is the longest text [Prefix] redacts whole, as [Secrets]
 // does: 32 MiB, the most the engine reads of one text whole anywhere (a box's
 // file, one line of a run's stream: internal/sandbox's MaxFileBytes), and where
-// a stream stops costing more. Over log-shaped text from 150 KiB to 32 MiB,
+// a stream stops costing more. Over log-shaped text from 256 KiB to 32 MiB,
 // Secrets took a quarter to a tenth of a stream's time, a fiftieth of its
 // allocation and no more peak heap; at 32 MiB the two peaks met, about 110
 // MiB, and past it only the stream's stays bounded.
