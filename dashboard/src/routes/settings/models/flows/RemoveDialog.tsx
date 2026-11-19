@@ -1,7 +1,7 @@
 /**
  * Remove a model: every place that names it is listed first, each moved to
- * another model, left unset, or (for the Dashboard Assistant's chat) the
- * assistant turned off, and the removal and every move land as one revision.
+ * another model or left unset (Ask Crewlet's model left unset turns Ask
+ * Crewlet off), and the removal and every move land as one revision.
  * Nothing is left pointing at a model that is gone, which the engine would
  * refuse anyway.
  *
@@ -37,17 +37,19 @@ import { configGuardedReason } from "~/lib/useWriteAccess.ts";
 import { getEntity, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
 import { managedSentence, unsettledSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
 import type { ConfigWarning } from "~/protocol/types.ts";
-import type { ModelReference, ModelRepoint } from "~/protocol/models.ts";
+import type { ModelReference } from "~/protocol/models.ts";
 import { removeModel, type Removal } from "../api.ts";
 import type { ModelsData, ModelView } from "../data.ts";
 import { JOB_WORDS, placeWords, seatName } from "../places.ts";
 import { HEALTH } from "../words.ts";
 
-/** What one place becomes: another model, unset, or the assistant turned off. */
-export type Choice = { to: string } | { to: null } | { off: true };
+/** What one place becomes: another model, or none (for Ask Crewlet's model, Ask Crewlet turned off). */
+export type Choice = { to: string } | { to: null };
 
 const UNSET = "__unset__";
-const OFF = "__off__";
+
+/** Whether a reference is Ask Crewlet's model, which pointing at nothing turns off. */
+const askCrewlets = (ref: Pick<ModelReference, "at">) => ref.at.assistant === "chat";
 
 /** One reference's identity, as the choices are keyed. */
 export const refId = (ref: Pick<ModelReference, "at">) =>
@@ -60,20 +62,23 @@ function pathOf(segments: readonly (string | number)[]): string {
     .join("");
 }
 
-/** The models a reference may move to: a seat's executor needs a harness that can run one, the assistant a model that denies web tools. */
+/**
+ * The models a reference may move to: a seat's executor needs a harness that
+ * can run one, and Ask Crewlet a model a helper can run on, as the engine says
+ * of each (`helper_problem`).
+ */
 export function targetsFor(ref: ModelReference, removing: string, models: readonly ModelView[]) {
   return models.filter(
     (m) =>
       m.key !== removing &&
       (ref.at.job !== "executor" || m.executor) &&
-      (!ref.at.assistant || m.webDenied),
+      (!ref.at.assistant || (m.admin !== null && m.admin.helper_problem === null)),
   );
 }
 
-/** Whether a reference may be left unset: the assistant's chat may not while the assistant is on. */
-function unsetAllowed(ref: ModelReference, removing: string, assistantOn: boolean): boolean {
-  if (ref.chain.some((k) => k !== removing)) return false;
-  return !(ref.at.assistant === "chat" && assistantOn);
+/** Whether a reference may be left with no model: one whose field names nothing else, and Ask Crewlet's, which is then off. */
+function unsetAllowed(ref: ModelReference, removing: string): boolean {
+  return askCrewlets(ref) || !ref.chain.some((k) => k !== removing);
 }
 
 /** The choices a place offers, in the one phrasing every row uses. */
@@ -81,7 +86,6 @@ export function optionsFor(
   ref: ModelReference,
   removing: string,
   models: readonly ModelView[],
-  assistantOn: boolean,
 ): SelectOption[] {
   const targets = targetsFor(ref, removing, models);
   return [
@@ -90,11 +94,8 @@ export function optionsFor(
       label: `Move to ${m.key}`,
       ...(m.entry.health !== "ready" ? { hint: HEALTH[m.entry.health].label } : {}),
     })),
-    ...(unsetAllowed(ref, removing, assistantOn)
-      ? [{ value: UNSET, label: "Leave it unset" }]
-      : []),
-    ...(ref.at.assistant === "chat" && assistantOn && targets.length === 0
-      ? [{ value: OFF, label: "Turn Ask Crewlet off" }]
+    ...(unsetAllowed(ref, removing)
+      ? [{ value: UNSET, label: askCrewlets(ref) ? "Turn Ask Crewlet off" : "Leave it unset" }]
       : []),
   ];
 }
@@ -112,13 +113,12 @@ const HEALTH_RANK: Record<ModelView["entry"]["health"], number> = {
 /**
  * The first choice a place gets: its own backup where it can take the job,
  * else the eligible model likeliest to answer, on the removed model's harness
- * where one is as likely.
+ * where one is as likely, else none.
  */
 export function defaultChoice(
   ref: ModelReference,
   removing: string,
   models: readonly ModelView[],
-  assistantOn: boolean,
 ): Choice {
   const eligible = targetsFor(ref, removing, models);
   const targets = eligible.map((m) => m.key);
@@ -128,29 +128,20 @@ export function defaultChoice(
   const rank = (m: ModelView) => HEALTH_RANK[m.entry.health] * 2 + (m.harness === harness ? 0 : 1);
   const best = [...eligible].sort((a, b) => rank(a) - rank(b))[0];
   if (best) return { to: best.key };
-  if (unsetAllowed(ref, removing, assistantOn)) return { to: null };
-  return { off: true };
+  return { to: null };
 }
 
-const valueOf = (c: Choice) => ("off" in c ? OFF : c.to === null ? UNSET : c.to);
-const choiceOf = (value: string): Choice =>
-  value === OFF ? { off: true } : value === UNSET ? { to: null } : { to: value };
+const valueOf = (c: Choice) => (c.to === null ? UNSET : c.to);
+const choiceOf = (value: string): Choice => (value === UNSET ? { to: null } : { to: value });
 
 /** The request every choice makes. */
 export function removalOf(
   refs: readonly ModelReference[],
   choices: Record<string, Choice>,
 ): Removal {
-  let assistantOff = false;
-  const repoint: ModelRepoint[] = refs.map((ref) => {
-    const choice = choices[refId(ref)] ?? { to: null };
-    if ("off" in choice) {
-      assistantOff = true;
-      return { at: ref.at, to: null };
-    }
-    return { at: ref.at, to: choice.to };
-  });
-  return { repoint, assistantOff };
+  return {
+    repoint: refs.map((ref) => ({ at: ref.at, to: (choices[refId(ref)] ?? { to: null }).to })),
+  };
 }
 
 /**
@@ -164,13 +155,15 @@ export function summaryOf(key: string, removal: Removal, mood: "says" | "audit" 
   let unset = 0;
   for (const r of removal.repoint) {
     if (r.to) moves.set(r.to, (moves.get(r.to) ?? 0) + 1);
-    else if (!(removal.assistantOff && r.at.assistant === "chat")) unset += 1;
+    else if (!askCrewlets(r)) unset += 1;
   }
   const parts = [
     `${verb("remove")} the model ${key}`,
     ...[...moves].map(([to, n]) => `${verb("move")} ${plural(n, "use")} to ${to}`),
     ...(unset ? [`${verb("leave")} ${unset} unset`] : []),
-    ...(removal.assistantOff ? [`${verb("turn")} Ask Crewlet off`] : []),
+    ...(removal.repoint.some((r) => askCrewlets(r) && r.to === null)
+      ? [`${verb("turn")} Ask Crewlet off`]
+      : []),
   ];
   const sentence = listed(parts);
   return `${sentence.charAt(0).toUpperCase()}${sentence.slice(1)}${mood === "says" ? "." : ""}`;
@@ -184,7 +177,7 @@ export function summaryOf(key: string, removal: Removal, mood: "says" | "audit" 
 export function movesOf(key: string, removal: Removal, seats: ModelsData["seats"]): string[] {
   return removal.repoint.map((r) => {
     const where = placeWords(seats, r.at);
-    if (removal.assistantOff && r.at.assistant === "chat") return `${where}: turned off`;
+    if (askCrewlets(r) && r.to === null) return `${where}: turned off`;
     return `${where}: ${key} → ${r.to ?? "left unset"}`;
   });
 }
@@ -313,7 +306,6 @@ export function RemoveDialog({
   const toast = useToast();
   const lifetime = useLifetimeSignal();
   const key = model.key;
-  const assistantOn = data.assistant.enabled;
   const [load, setLoad] = useState<Load>({ kind: "loading" });
   const [reads, setReads] = useState(0);
   const [choices, setChoices] = useState<Record<string, Choice>>({});
@@ -353,7 +345,7 @@ export function RemoveDialog({
       }
       const answer = await removeModel(
         key,
-        { repoint: [], assistantOff: false },
+        { repoint: [] },
         { etag: read.etag, summary: "", dryRun: true },
         abort.signal,
       );
@@ -364,7 +356,7 @@ export function RemoveDialog({
       const refs = answer.references;
       setChoices(
         Object.fromEntries(
-          refs.map((ref) => [refId(ref), defaultChoice(ref, key, modelsRef.current, assistantOn)]),
+          refs.map((ref) => [refId(ref), defaultChoice(ref, key, modelsRef.current)]),
         ),
       );
       setLoad({ kind: "ready", etag: read.etag, refs });
@@ -372,7 +364,7 @@ export function RemoveDialog({
       // Only this dialog's own abort rejects.
     });
     return () => abort.abort();
-  }, [key, reads, assistantOn]);
+  }, [key, reads]);
 
   const refs = useMemo(() => (load.kind === "ready" ? load.refs : []), [load]);
   const removal = useMemo(() => removalOf(refs, choices), [refs, choices]);
@@ -487,7 +479,7 @@ export function RemoveDialog({
                         const place = placeWords(data.seats, ref.at);
                         const label = backup ? `${place} (backup)` : place;
                         const job = jobLabel(ref);
-                        const choice = choices[id] ?? defaultChoice(ref, key, models, assistantOn);
+                        const choice = choices[id] ?? defaultChoice(ref, key, models);
                         return (
                           <li key={id} className="models-repoint__row">
                             <span className="col">
@@ -503,7 +495,7 @@ export function RemoveDialog({
                             <Select
                               ariaLabel={`Where ${label} moves`}
                               value={valueOf(choice)}
-                              options={optionsFor(ref, key, models, assistantOn)}
+                              options={optionsFor(ref, key, models)}
                               disabled={removing}
                               onChange={(next) =>
                                 setChoices((c) => ({ ...c, [id]: choiceOf(String(next)) }))
@@ -533,7 +525,7 @@ export function RemoveDialog({
               </li>
               {refs.map((ref) => {
                 const choice = choices[refId(ref)];
-                const to = choice && "to" in choice ? choice.to : null;
+                const to = choice ? choice.to : null;
                 const after = chainAfter(ref, key, to);
                 return (
                   <li key={refId(ref)}>
@@ -543,12 +535,6 @@ export function RemoveDialog({
                   </li>
                 );
               })}
-              {removal.assistantOff ? (
-                <li>
-                  <span className="mono">assistant.enabled</span> becomes{" "}
-                  <span className="mono">false</span>
-                </li>
-              ) : null}
             </ul>
           </Disclosure>
 

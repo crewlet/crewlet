@@ -7,7 +7,6 @@ import {
   SEAT_JOBS,
   agentRoles,
   applyUses,
-  assistantChain,
   categoryFields,
   categoryState,
   intentOf,
@@ -46,7 +45,7 @@ function company(): CompanyDocument {
         ],
       },
     ],
-    assistant: { enabled: true, llm: "fast" },
+    assistant: { model: "fast" },
   } as unknown as CompanyDocument;
 }
 
@@ -182,47 +181,21 @@ describe("applyUses", () => {
     expect(role(doc, "lead").llm_judge).toBeUndefined();
   });
 
-  it("writes the assistant's model, company-wide, and leaves seats alone", () => {
+  it("writes Ask Crewlet's one model, company-wide, and leaves seats alone", () => {
     const before = company();
-    const { doc } = applyUses(before, "big", noUses(), usesForIntent("assistant", [], true));
-    expect((doc as unknown as { assistant: { llm: string } }).assistant.llm).toBe("big");
+    const { doc, dropped } = applyUses(
+      before,
+      "big",
+      noUses(),
+      usesForIntent("assistant", [], true),
+    );
+    expect((doc as unknown as { assistant: { model: string } }).assistant.model).toBe("big");
     expect(role(doc, "lead")).toEqual(role(before, "lead"));
-  });
-
-  // ASK CREWLET KEEPS ITS CHAIN: choosing its model replaces the one it
-  // answers with first, and every fallback behind it stays, in its order,
-  // so a model sitting out its plan's limit still leaves somebody to answer.
-  it("keeps the assistant's fallbacks when its model is changed", () => {
-    const llmOf = (doc: CompanyDocument) =>
-      (doc as unknown as { assistant: { llm: unknown } }).assistant.llm;
-    const chained = (llm: unknown) => {
-      const doc = company();
-      (doc as unknown as { assistant: { llm: unknown } }).assistant.llm = llm;
-      return doc;
-    };
-    const pick = (doc: CompanyDocument, key: string) =>
-      applyUses(doc, key, noUses(), usesForIntent("assistant", [], true));
-
-    const changed = pick(chained(["fast", "old", "spare"]), "big");
-    expect(llmOf(changed.doc)).toEqual(["big", "old", "spare"]);
-    // Nothing a seat names is dropped, so the review lists none.
-    expect(changed.dropped).toEqual([]);
-    // A fallback chosen to answer first is not tried a second time behind itself.
-    expect(llmOf(pick(chained(["fast", "old", "spare"]), "spare").doc)).toEqual(["spare", "old"]);
-    expect(llmOf(pick(chained(["fast", "old"]), "old").doc)).toBe("old");
-    // A chain that already starts with the model comes back as it was.
-    expect(llmOf(pick(chained(["big", "old"]), "big").doc)).toEqual(["big", "old"]);
-    // A company with no chain yet gets the one model.
+    expect(dropped).toEqual([]);
     const bare = company();
     delete (bare as unknown as { assistant?: unknown }).assistant;
-    expect(llmOf(pick(bare, "big").doc)).toBe("big");
-  });
-
-  it("orders a chain with assistantChain: the model first, the fallbacks kept", () => {
-    expect(assistantChain(["a", "b", "c"], "d")).toEqual(["d", "b", "c"]);
-    expect(assistantChain(["a", "b", "c"], "c")).toEqual(["c", "b"]);
-    expect(assistantChain("a", "d")).toEqual(["d"]);
-    expect(assistantChain(undefined, "d")).toEqual(["d"]);
+    const { doc: made } = applyUses(bare, "big", noUses(), usesForIntent("assistant", [], true));
+    expect((made as unknown as { assistant: unknown }).assistant).toEqual({ model: "big" });
   });
 
   it("never edits a human seat or the document it was given", () => {

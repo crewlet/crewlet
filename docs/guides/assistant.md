@@ -182,6 +182,12 @@ stated once in the
 and in [Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host).
 The Models screen says of each entry whether a helper can run on it.
 
+In the dashboard, the model is chosen on Ask Crewlet's own page (`#/ask`):
+the model named in the conversation's head is a picker for an administrator,
+with each entry a helper cannot run on drawn disabled beside the engine's
+reason. The change is checked by the engine before it is saved, as a
+configuration edit is.
+
 `crewlet llm doctor <key>` proves it: for an entry a helper runs on, it probes
 the helper's run beside the entry's own, and reports a shell, a file read or a
 fetch that succeeded there as a problem.
@@ -372,7 +378,7 @@ or assigning Ask Crewlet a model that reads images.
 ## Retention and erasure
 
 A conversation untouched for 30 days is purged by the trash reaper, the same
-term on every node. **Clear** in the panel purges one at once.
+term on every node. **Delete** on Ask Crewlet's page or in the panel purges one at once.
 Removing a person from the directory erases every conversation they own in one
 record. Messages, cards and previews are sealed under the fleet keyring in the
 replicated estate, and nothing a person did not see is stored, apart from the

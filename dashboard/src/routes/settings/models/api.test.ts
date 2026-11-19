@@ -51,7 +51,7 @@ describe("every model route", () => {
       call: (k) =>
         removeModel(
           k,
-          { repoint: [], assistantOff: false },
+          { repoint: [] },
           { etag: "e1", summary: "", dryRun: true },
           new AbortController().signal,
         ),

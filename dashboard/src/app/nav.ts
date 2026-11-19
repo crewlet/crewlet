@@ -85,6 +85,7 @@ export type Workspace =
   | "home"
   | "inbox"
   | "me"
+  | "ask"
   | "company"
   | "brand"
   | "org"
@@ -534,6 +535,21 @@ export const WORKSPACES: WorkspaceRow[] = [
         service: "code",
       },
     ],
+  },
+  {
+    key: "ask",
+    label: "Ask Crewlet",
+    icon: "wand-sparkles",
+    path: ["ask"],
+    hint: "Ask about anything in the engine, and have it make the changes you approve",
+    keywords: ["assistant", "chat", "conversations", "question", "answer"],
+    chord: "q",
+    place: "you",
+    renderer: "none",
+    // EVERY SIGNED-IN PERSON'S, as the Ask button is: whether this reader may
+    // ask is the engine's answer (`viewer.assistant`), which the page draws in
+    // place rather than a lock on the row, so the row never hides a reason.
+    sections: [],
   },
   {
     // THE COMPANY'S PRINCIPLES: its mission, its vision and the standing
@@ -1191,17 +1207,6 @@ export const WORKSPACES: WorkspaceRow[] = [
         // the page is an admin's (`llm_entries`' two readings).
       },
       {
-        key: "ask-crewlet",
-        label: "Ask Crewlet",
-        icon: "wand-sparkles",
-        path: ["settings", "ask-crewlet"],
-        hint: "Ask Crewlet's models, bounds, tools and deep work",
-        keywords: ["assistant", "ask", "drawer", "think harder", "deep work", "chat model"],
-        group: "Runtime",
-        // ADMIN'S: read off the company document, which only an admin reads.
-        grants: ["admin"],
-      },
-      {
         key: "mcp-tools",
         label: "MCP & tools",
         icon: "wrench",
@@ -1565,7 +1570,6 @@ export const RESERVED_SEGMENTS: string[] = [
   "models",
   "secrets",
   "limits",
-  "ask-crewlet",
   "nodes",
   "config",
   "revisions",

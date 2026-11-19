@@ -41,7 +41,7 @@ const data = modelsData({
       used_by: [...runs("backend-engineer", ...EVERY_JOB), ...runs("pm", ...EVERY_JOB)],
     }),
   ],
-  assistant: { enabled: true, key: "default", fallbacks: [] },
+  assistant: { key: "default" },
 });
 
 let latest: Draft;
@@ -171,22 +171,14 @@ test("the changes list names each seat that moves, where from and where to, and 
   ]);
 });
 
-test("the changes list keeps Ask Crewlet's fallbacks and names them", () => {
-  const chained = {
-    ...data,
-    assistant: { enabled: true, key: "default", fallbacks: ["spare", "haiku"] },
-  };
+// ONE MODEL: the change names the model Ask Crewlet leaves and the one it
+// moves to, and nothing else.
+test("the changes list says Ask Crewlet's model moving, and only that", () => {
   const ask = usesForIntent("assistant", [], true);
-  // The model it answers with first changes; the fallbacks behind it stay.
-  expect(seatChangesOf(chained, "big", noUses(), ask)).toEqual([
-    "Ask Crewlet: default → big, still falling back to spare and haiku",
-  ]);
-  // A fallback chosen to answer first is not named as its own fallback.
-  expect(seatChangesOf(chained, "haiku", noUses(), ask)).toEqual([
-    "Ask Crewlet: default → haiku, still falling back to spare",
-  ]);
-  // A chain of one model says nothing of fallbacks.
   expect(seatChangesOf(data, "big", noUses(), ask)).toEqual(["Ask Crewlet: default → big"]);
+  expect(seatChangesOf({ ...data, assistant: { key: null } }, "big", noUses(), ask)).toEqual([
+    "Ask Crewlet: no model → big",
+  ]);
 });
 
 test("a category the document split by hand reads back half-checked", () => {
@@ -226,22 +218,19 @@ test("the fast-model note shows only where a category carries one, and only for 
   for (const c of noted) expect(screen.queryByText(FAST_NOTE[c]!)).toBeNull();
 });
 
-test("the assistant asks for web tools denied, and one click denies them", () => {
+// ANY ENTRY OF A HARNESS THE ENGINE CAN RUN WITH NO TOOL OF ITS OWN may run
+// Ask Crewlet as it is: choosing it asks nothing of the entry's web tools, and
+// a harness that cannot be run that way is refused with its reason.
+test("Ask Crewlet takes any model of a harness a helper can run on, with nothing to change on it", () => {
   render(<Harness start={{ key: "chat" }} />);
   fireEvent.click(screen.getByRole("radio", { name: /Ask Crewlet/ }));
   expect(latest.uses.assistant).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "Deny web tools for this model" }));
-  expect(latest.webDenied).toBe(true);
-  expect(screen.queryByRole("button", { name: "Deny web tools for this model" })).toBeNull();
-});
-
-test("Everything on a model that allows web tools says the assistant cannot use it", () => {
-  const warning = "Ask Crewlet can't use this model while web tools are allowed.";
-  render(<Harness start={{}} />);
-  fireEvent.click(screen.getByRole("radio", { name: /Everything/ }));
-  expect(screen.getByText(warning)).toBeTruthy();
+  expect(latest.webDenied).toBe(false);
+  expect(screen.queryByRole("button", { name: /Deny web tools/ })).toBeNull();
   cleanup();
-  render(<Harness start={{ webDenied: true }} />);
-  fireEvent.click(screen.getByRole("radio", { name: /Everything/ }));
-  expect(screen.queryByText(warning)).toBeNull();
+  render(<Harness start={{ key: "review", harness: "codex" }} />);
+  const refused = screen.getByRole("radio", { name: /Ask Crewlet/ });
+  expect(
+    refused.getAttribute("aria-disabled") === "true" || (refused as HTMLInputElement).disabled,
+  ).toBe(true);
 });

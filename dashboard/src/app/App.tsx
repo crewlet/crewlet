@@ -149,12 +149,12 @@ const AtlasEntry = lazyScreen("atlas", (m) => m.EntryPage);
 const AtlasChanges = lazyScreen("atlas", (m) => m.ChangesPage);
 const AtlasReview = lazyScreen("atlas", (m) => m.Review);
 const AtlasSources = lazyScreen("atlas", (m) => m.SourcesPage);
+const AskPage = lazyScreen("assistant", (m) => m.AskPage);
 const GeneralSettings = lazyScreen("settings", (m) => m.GeneralSettings);
 const Models = lazyScreen("settings", (m) => m.Models);
 const McpTools = lazyScreen("settings", (m) => m.McpTools);
 const Secrets = lazyScreen("settings", (m) => m.Secrets);
 const Limits = lazyScreen("settings", (m) => m.Limits);
-const AssistantSettings = lazyScreen("settings", (m) => m.AssistantSettings);
 const People = lazyScreen("settings", (m) => m.People);
 const ServiceAccounts = lazyScreen("settings", (m) => m.ServiceAccounts);
 const ApiTokens = lazyScreen("settings", (m) => m.ApiTokens);
@@ -191,6 +191,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <Inbox />;
     case "me":
       return <MyWork section={route.section} />;
+    case "ask":
+      return <AskPage conversation={route.conversation} />;
     case "worklet-projects":
       return <Projects />;
     case "worklet-tasks":
@@ -337,8 +339,6 @@ export function screenFor(route: Resolved): ReactNode {
       return <GeneralSettings />;
     case "limits":
       return <Limits />;
-    case "ask-crewlet":
-      return <AssistantSettings />;
     case "spend":
       return <Spend />;
     case "spend-tasks":
