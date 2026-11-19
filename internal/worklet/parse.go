@@ -84,7 +84,38 @@ const (
 	MetaChoice   = "choice"
 	MetaQuestion = "question"
 	MetaInform   = "inform"
+
+	// MetaDependents is the dependents a relations commit on a blocker names
+	// ([Snapshot.Dependents]), by id, comma-separated in the record's order:
+	// what a `blocking` wake is about beside its own item, so a wake whose
+	// every dependent ended starts no turn. Read through [WakeDependents].
+	MetaDependents = "dependents"
 )
+
+// WakeDependents is the dependents a wake's metadata names ([MetaDependents]),
+// none for a wake that names none.
+func WakeDependents(metadata map[string]string) []string {
+	if metadata[MetaDependents] == "" {
+		return nil
+	}
+	return strings.Split(metadata[MetaDependents], ",")
+}
+
+// StateNotice reports a Worklet wake that tells its seat a state rather than
+// words (ADR-0162), and the reason it was routed under: one under an
+// [Reason.Absorbable] reason whose change is no talk on the task and carries
+// no comment. Words are never one, whatever their reason.
+func StateNotice(n *types.ExternalNotification) (Reason, bool) {
+	if n == nil || n.NotificationSource != Source {
+		return "", false
+	}
+	reason := Reason(n.Metadata[MetaVia])
+	if !reason.Absorbable() || ChangeKind(n.SourceEventType).Conversation() ||
+		n.Metadata[MetaCommentID] != "" {
+		return "", false
+	}
+	return reason, true
+}
 
 // Parser turns a mutation record into the notifications it implies; it
 // implements [notify.Parser].
@@ -254,6 +285,13 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	}
 	if record.Notify.CommentID != "" {
 		metadata[MetaCommentID] = record.Notify.CommentID
+	}
+	if len(snapshot.Dependents) > 0 {
+		ids := make([]string, len(snapshot.Dependents))
+		for i, party := range snapshot.Dependents {
+			ids[i] = party.Task
+		}
+		metadata[MetaDependents] = strings.Join(ids, ",")
 	}
 	if decision := askedDecision(record); decision != nil {
 		metadata[MetaDecision] = jsonText(decision)

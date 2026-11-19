@@ -288,6 +288,14 @@ export const DECISION_MAX_OPTIONS = 4;
 export const PROJECT_PAGE = 200;
 
 /**
+ * The conversation a work item is, less its id: every wake about the item and
+ * every pickup of it is filed under this and then the item's id, so a hold the
+ * engine puts on that conversation is the item's. Held to the engine's own
+ * `worklet.ItemConversation` by `internal/worklet/client_gate_test.go`.
+ */
+export const ITEM_CONVERSATION_PREFIX = "work:task:";
+
+/**
  * The chat surfaces a structured ask's `inform` may name — where the asker
  * said it would report what was decided — as the engine's `InformSurfaces`
  * names them: `mattermost`, `slack`, and `chat`, the engine's own.
