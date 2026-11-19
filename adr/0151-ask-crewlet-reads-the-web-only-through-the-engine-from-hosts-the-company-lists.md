@@ -1,6 +1,7 @@
 # ADR-0151: Ask Crewlet reads the web only through the engine, from hosts the company lists
 
-- **Status:** accepted
+- **Status:** superseded
+- **Superseded-by:** ADR-0163
 - **Authority:** `internal/assistant`
 - **Enforced-by:** `internal/config.TestTheAssistantRefusesAnEntryThatReachesTheWeb`, `internal/config.TestResearchListsBareHostNames`, `internal/research.TestOnlyAListedHostsPagesAreRead`, `internal/research.TestAPageIsReadAsItsText`, `internal/api/queries.TestAPageIsReadOnlyFromTheHostsTheCompanyLists`, `internal/assistant.TestTheWebIsOfferedOnlyWhereTheCompanyListsHosts`, `internal/assistant.TestATurnReadsAFewPagesFencedAsTheSites`, `internal/assistant.TestAProposalAfterOutsideTextIsTainted`, `internal/assistant.TestAWebTaintedTurnProposesOnlyOnItsSubject`, `internal/config.TestResearchSearchNamesTheCompanysTavilyServer`, `internal/research.TestASearchKeepsToTheListedHosts`, `internal/api/queries.TestASearchAnswersOrSaysWhyNot`, `internal/assistant.TestATurnSearchesAFewTimesFencedAsTheSites`
 - **Tag-status:** unreleased

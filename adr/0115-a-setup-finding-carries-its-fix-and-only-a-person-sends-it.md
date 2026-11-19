@@ -46,6 +46,8 @@ wrong, why it costs the company, where in the document it sits, and its fix.
   on consecutive days before it is shared, a notice for a persistent
   `blocks` finding) keeps its own state where it is built.
 
+**Amended by ADR-0164.** Findings are kept by a background duty and re-derived on every run of their class, and a fix is sent only after the engine has re-checked its finding against the latest records. Detectors still call no model and the engine still sends nothing.
+
 ## Why the obvious alternatives are wrong
 
 **Applying a fix the engine is sure of.** A grant, a model, a schedule or a
