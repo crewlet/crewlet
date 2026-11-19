@@ -86,10 +86,23 @@
  *  6. A MENTION is `@` and a seat's handle, as the engine holds one
  *     (`SEAT_HANDLE`, at most `MAX_LOGIN` characters), with no letter, digit,
  *     dot, `@` or slash before it, so an email address is never one.
+ *  6a. A GITLET CHANGE is a repository's name as the engine holds one
+ *     (`REPO_NAME`), `!` and a change's number (`web!42`), at a reference's
+ *     boundaries. It is a GUESS, the documented fallback for prose the engine
+ *     cannot structure (an agent's summary, a review), so it is drawn as a
+ *     reference only once the reader's engine says it is one they may open
+ *     (`lib/namedRefs.ts`), and as its words otherwise.
  *  7. Where two tokens overlap, the one that starts first wins, then the
  *     longer, then the one found first: an address swallows every key and
  *     colour spelled inside it, and a room found before a colour or a bare
  *     number spelled the same wins it (rule 1a).
+ *  8. WHAT THE LINE SAYS IT NAMES COMES FIRST. A line the engine wrote carries
+ *     the objects it names (`NamedRef`, `internal/named`), each by the words
+ *     the line spells it with: those words are found left to right, each
+ *     search starting after the last, and each is a `named` token that no
+ *     recognised token overlaps. A ref whose words are not there (a summary
+ *     cut to its bound) is not drawn. This is structure, not a guess: the
+ *     rules above read the rest of the run.
  *
  * Every pattern here runs in time linear in its run: a comment is written by
  * an agent that may have read anything, and every reader renders it.
@@ -99,6 +112,8 @@ import { safeHref } from "@crewlethq/ui";
 import { CHANNEL_NAME_PATTERN } from "~/contract/chat.ts";
 import { MAX_LOGIN, SEAT_HANDLE } from "~/contract/identity.ts";
 import type { LinkHost, LinkHostKind } from "~/contract/integrations.ts";
+import { REPO_NAME, REPO_NAME_MAX_BYTES } from "~/contract/code.ts";
+import type { NamedRef } from "~/protocol/index.ts";
 import { overlapsAny, writtenOutSpans } from "./writtenOut.ts";
 import { linkSegment } from "./segment.ts";
 
@@ -136,7 +151,12 @@ export type InlineToken =
   | { kind: "key"; at: number; end: number; text: string; project: string }
   /** A chat room, by its name in lower case ([RoomSet]). */
   | { kind: "room"; at: number; end: number; text: string; name: string }
-  | { kind: "mention"; at: number; end: number; text: string; handle: string };
+  | { kind: "mention"; at: number; end: number; text: string; handle: string }
+  /**
+   * An object the line names (rule 8, `guessed` false), or a Gitlet change the
+   * prose fallback read (rule 6a, `guessed` true), drawn by its kind.
+   */
+  | { kind: "named"; at: number; end: number; text: string; ref: NamedRef; guessed: boolean };
 
 /** Hex digits holding a digit and a letter: a colour in prose, a commit's SHA. */
 function mixed(hex: string): boolean {
@@ -210,6 +230,13 @@ const BARE_NUMBER = new RegExp(`${NUMBER_BEFORE}${NUMBER}`, "gu");
 const COMMIT_AFTER = /\b(commit|at head|at|head)\s+([0-9a-f]{7,40})(?![\p{L}\p{N}_-])/gu;
 const KEY = /(?<![\p{L}\p{N}_-])(\p{Lu}[\p{Lu}\p{N}]*)-\p{N}+(?![\p{L}\p{N}_-])/gu;
 const MENTION = new RegExp(String.raw`(?<![\p{L}\p{N}_.@/-])@(${HANDLE})(?![\p{L}\p{N}_-])`, "gu");
+/** A repository's whole name, as the engine holds one (`REPO_NAME`). */
+const REPO_NAME_PATTERN = new RegExp(REPO_NAME);
+/**
+ * A Gitlet change (rule 6a): one name with nothing of a path, an address or
+ * another reference before it, and a change's number, whole.
+ */
+const CHANGE = /(?<![\p{L}\p{N}_./@#!~:-])([a-z0-9][a-z0-9.-]*)!([1-9]\d{0,15})(?![\p{L}\p{N}_!-])/gu;
 
 /**
  * An address's own end: a trailing stop or an unbalanced closing bracket is
@@ -290,6 +317,43 @@ export function inlineTokens(
   owners: ReadonlySet<string> = NO_OWNERS,
   scope: MessageScope = NO_SCOPE,
   rooms: RoomSet = NO_ROOMS,
+  refs: readonly NamedRef[] = NO_REFS,
+): InlineToken[] {
+  const declared = locate(text, refs);
+  const read = recognised(text, owners, scope, rooms);
+  if (declared.length === 0) return read;
+  return [...declared, ...read.filter((t) => !declared.some((d) => t.at < d.end && d.at < t.end))].sort(
+    (a, b) => a.at - b.at,
+  );
+}
+
+/** No refs: a run whose line says it names nothing. */
+const NO_REFS: readonly NamedRef[] = [];
+
+/**
+ * Where a line's refs are (rule 8): each ref's words, found left to right,
+ * each search starting where the last match ended.
+ */
+export function locate(text: string, refs: readonly NamedRef[]): InlineToken[] {
+  const out: InlineToken[] = [];
+  let from = 0;
+  for (const ref of refs) {
+    if (ref.text === "") continue;
+    const at = text.indexOf(ref.text, from);
+    if (at < 0) continue;
+    const end = at + ref.text.length;
+    out.push({ kind: "named", at, end, text: ref.text, ref, guessed: false });
+    from = end;
+  }
+  return out;
+}
+
+/** Every token the rules read in a run (rules 1 to 7). */
+function recognised(
+  text: string,
+  owners: ReadonlySet<string>,
+  scope: MessageScope,
+  rooms: RoomSet,
 ): InlineToken[] {
   const found: InlineToken[] = [];
   for (const m of text.matchAll(ADDRESS)) {
@@ -393,6 +457,21 @@ export function inlineTokens(
     const end = m.index + m[0].length;
     if (overlapsAny(paths, m.index, end)) continue;
     found.push({ kind: "key", at: m.index, end, text: m[0], project: m[1]! });
+  }
+  // RULE 6a: a Gitlet change, by the engine's grammar of a repository's name.
+  for (const m of text.matchAll(CHANGE)) {
+    const [whole, repo, number] = m as unknown as [string, string, string];
+    if (repo.length > REPO_NAME_MAX_BYTES || !REPO_NAME_PATTERN.test(repo)) continue;
+    const end = m.index + whole.length;
+    if (overlapsAny(paths, m.index, end)) continue;
+    found.push({
+      kind: "named",
+      at: m.index,
+      end,
+      text: whole,
+      ref: { kind: "code_change", id: `${repo}!${number}`, text: whole },
+      guessed: true,
+    });
   }
   for (const m of text.matchAll(MENTION)) {
     // Past the width no seat's handle has, the words are words.

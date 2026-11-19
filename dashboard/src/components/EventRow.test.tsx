@@ -26,15 +26,19 @@ const row = (over: Partial<FeedRow> = {}): FeedRow =>
 
 test("a card's row is the time and one line: the actor, then what happened", () => {
   const { container } = render(<EventRow event={row()} />);
-  const link = container.querySelector("a.feed-row")!;
+  const card = container.querySelector(".feed-row")!;
+  // THE ROW OPENS ITS EVENT through the time's link, stretched over the row.
+  const link = card.querySelector("a.feed-row__open")!;
   expect(link.getAttribute("href")).toBe("#/live/events/e-1");
+  expect(link.getAttribute("aria-label")).toBe("harness-0 Organization 'Nimbus' started");
   // TWO TRACKS: the clock, and the sentence with its actor inside it.
-  expect([...link.children].map((c) => c.className)).toEqual(["feed-time", "feed-what truncate"]);
-  expect(link.querySelector(".feed-what")?.textContent).toBe(
+  expect([...card.children].map((c) => c.className)).toEqual(["feed-row__open", "feed-what truncate"]);
+  expect(link.querySelector(".feed-time")).not.toBeNull();
+  expect(card.querySelector(".feed-what")?.textContent).toBe(
     "harness-0 Organization 'Nimbus' started",
   );
   // THE HOVER TEXT IS THE LINE DRAWN, character for character.
-  const what = link.querySelector(".feed-what")!;
+  const what = card.querySelector(".feed-what")!;
   expect(what.getAttribute("title")).toBe(what.textContent);
 });
 
