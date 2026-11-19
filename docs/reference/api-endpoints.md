@@ -11342,10 +11342,10 @@ not kept — each only of a turn that ended — and an ended turn is never captu
 again.
 
 **Two transcripts at a time on each node.** One read can hold a line at
-`bounds.line_bytes`, as much again while the buffer gathering it grows, and the
-copy decoding it makes — on the order of 100 MiB — so a node decodes at most
-two transcripts at once, about 200 MiB at their worst, whichever socket
-question or REST request asks for them. A request past them waits for a slot,
+`bounds.line_bytes`, as much again while the buffer gathering it grows, the
+copy decoding it makes and the entry's whole redaction, on the order of 130 MiB,
+so a node decodes at most two transcripts at once, about 270 MiB at their
+worst, whichever socket question or REST request asks for them. A request past them waits for a slot,
 its session's object not yet opened, for as long as its caller waits, and a
 slot frees within one bounded read; nothing in the answer says it waited, and a
 caller that gives up first is answered nothing.

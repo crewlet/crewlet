@@ -2211,12 +2211,13 @@ of it came from a chunk that authenticated.
 harness's record at its 32 MiB bound, as much again while the buffer gathering
 it grows, and the copy decoding it makes, on the order of 100 MiB (97 MiB
 measured for an OpenCode export at its 32 MiB message, whether a person reads
-it or a relaunch reads it for the calls it holds), and a node answers every
-dashboard tab open on it and every REST caller, each with a read of its own. A
-relaunch's reading takes the seats' one slot of the two, so two never run at
-once, and the most a reading and a person's read hold together, of the same
-OpenCode export, measured 193 MiB. So each node decodes at most two transcripts at once
-(`TranscriptReadsAtOnce`), about 200 MiB at their worst, whichever socket or
+it or a relaunch reads it for the calls it holds), and a person's read a
+third more for the entry's whole redaction; a node answers every dashboard tab
+open on it and every REST caller, each with a read of its own. A relaunch's
+reading takes the seats' one slot of the two, so two never run at once, and the
+most a reading and a person's read hold together, of the same OpenCode export,
+measured 193 MiB before that redaction. So each node decodes at most two transcripts at once
+(`TranscriptReadsAtOnce`), about 270 MiB at their worst, whichever socket or
 route asks. A read past them waits for a slot before the session's object is
 opened — an opened object would hold its store's connection while it waited —
 for as long as its caller waits, holding no decoder meanwhile, and a slot frees

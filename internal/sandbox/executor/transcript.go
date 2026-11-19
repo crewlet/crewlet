@@ -366,14 +366,14 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // whichever socket or REST caller asks for them ([ReadTranscript]).
 //
 // TWO, BY WHAT ONE READ CAN HOLD: a value read whole at up to 32 MiB
-// ([TranscriptBounds.LineBytes]), its buffer's growth and its decoded copy,
-// about 100 MiB (97 MiB measured of an OpenCode export at its bound), so about
-// 200 MiB for two. Nothing else bounds it: a node serves every tab open on it.
-// One slot would queue every reader behind the longest archive. A seat's read
-// for words holds a third more, a relaunch's [Runner.ReadHoldings] no more (97
-// MiB OpenCode's, 43 MiB at most Claude Code's), both in the seats' one slot
-// ([SeatTranscriptReadsAtOnce]); a collection's pass in neither. A read past
-// them waits holding no decoder or opened object.
+// ([TranscriptBounds.LineBytes]) with its buffer's growth and decoded copy (97
+// MiB measured of an OpenCode export), and its redaction, a third more
+// ([entryOpening]): about 133 MiB, so about 270 MiB for two. Nothing else
+// bounds it: a node serves every tab open on it. One slot would queue every
+// reader behind the longest archive. A seat's read for words, and a relaunch's
+// [Runner.ReadHoldings] (97 MiB OpenCode's, 43 MiB at most Claude Code's), take
+// the seats' one slot ([SeatTranscriptReadsAtOnce]); a collection's pass
+// neither. A read past them waits holding no decoder or opened object.
 const TranscriptReadsAtOnce = 2
 
 // transcriptReads holds a slot for each transcript this process is reading,

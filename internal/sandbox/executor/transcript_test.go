@@ -1427,7 +1427,7 @@ func TestAReadStopsBetweenTheNotesAndTheValuesOneLineHolds(t *testing.T) {
 // times an archive's largest stored size (gzip's ratio over text), so an
 // ordinary session at its bound reads whole; and at least two reads run at
 // once, at worst (each a line at its bound, as much again while its slice
-// grows, its decoded copy) about 200 MiB.
+// grows, its decoded copy and its redaction) about 270 MiB.
 //
 // Mutation: raise the entry's bound past a sixty-fourth of the page's, read
 // lines to a bound of their own, shrink the budget under eight archives, or let
