@@ -15,28 +15,16 @@ import (
 
 // A READ IN PAGES, AND WHERE A PAGE MAY END.
 //
-// A window of this domain's rows is large: ninety days of a three-node,
-// forty-seat company is some ten thousand (day, node, seat) groups of several
-// spend cells each, tens of megabytes of rows. Read in-process that is one
-// transaction and no wire; answered by ANOTHER data node — the case a node
-// whose usage copy is out of service routes to (ADR-0079) — it crosses one
-// message, which carries at most [queue.MaxPayloadBytes]. So every read that
-// can grow with a window has a PAGED form ([SpendPage], [SeatTurnsPage],
-// [PersonSpendPage], [SeatDaysPage], [PageReadsPage]), and the whole read is
-// that form asked for one unbounded page: one implementation, one order, one
-// rule for where a page ends ([Fill]).
+// A window's rows can reach tens of megabytes, and a read answered by another
+// data node (ADR-0079) crosses one message of at most [queue.MaxPayloadBytes].
+// So every read that grows with a window has a PAGED form ([SpendPage],
+// [SeatTurnsPage], [PersonSpendPage], [SeatDaysPage], [PageReadsPage]), and the
+// whole read is that form asked for one unbounded page ([Fill] ends a page).
 //
-// A PAGE PAYS FOR ITS OWN ROWS. Every paged read walks its window one LEADING
-// KEY at a time — one company day for the day-keyed reads ([walkDays]), one
-// page id for a page's readers — each by a statement of its own that SEEKS
-// that key and streams in the read's order, inside the page's one transaction.
-// [Fill] stops the walk where the page ends, so nothing past it is read, and a
-// page that resumes inside a key re-reads at most that one key's rows ahead of
-// its own. One statement over the whole window was a filter, never a seek: the
-// keyset a page resumed after was applied to rows the statement had already
-// read, joined and SORTED from the window's first day, so every page paid for
-// the window from its resumption to the end, and the cost of a walk grew with
-// the square of the window. The package doc has the measurement.
+// A PAGE PAYS FOR ITS OWN ROWS. A paged read walks its window one LEADING KEY
+// at a time ([walkDays]), each by a statement that SEEKS that key, and [Fill]
+// stops the walk where the page ends. One statement over the window would
+// re-read and sort it from its first day on every page: a quadratic walk.
 
 // Group is the key of the rows ONE RECORD writes, in a read's order — the
 // columns a page may be cut between and nowhere else.
@@ -184,12 +172,10 @@ func (p Page[R]) AppendJSON(dst []byte) ([]byte, error) {
 //
 // A page that stopped early ends on its last row's group (Next) and is not
 // done; one that ran out of rows is done, with no Next. A row error ends the
-// fill with that error. A GROUP IS NEVER SPLIT, so a page may run past budget
-// by at most one group — one record's rows, which a record being one message
-// bounds ([ReadsPerSeatDay] is what keeps a seat-day's under 1 MiB).
-//
-// Exported because the transport that carries a page holds its own budget to
-// this same rule (internal/estate).
+// fill with that error. A GROUP IS NEVER SPLIT,
+// so a page may run past budget by at most one record's rows, which
+// [ReadsPerSeatDay] keeps under 1 MiB. Exported because the transport holds
+// its own budget to this rule (internal/estate).
 func Fill[R any](budget int, groupOf func(R) Group, rows iter.Seq2[R, error]) (Page[R], error) {
 	var page Page[R]
 	var last Group

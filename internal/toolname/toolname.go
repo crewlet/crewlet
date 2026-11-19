@@ -25,6 +25,12 @@
 // offers of its own that no row of the authority table names, which the walk
 // below would otherwise never read (see [AskAndWait]).
 //
+// The package imports nothing, and a test holds it to that: its readers
+// include the prompts (which import only the org model and the provenance
+// fence) and the skill guard (only the prompts, the logger, `words` and the
+// tool layer's argument leaves), so any import here is a name one of them
+// cannot reach.
+//
 // # Held by a walk
 //
 // This package's suite walks every non-test Go file in the module for EVERY
@@ -38,6 +44,16 @@
 // that fails the build. A prompt, a description or a refusal that names a tool
 // builds its text from the constant, so a new copy of a name is caught the day
 // it is written rather than the day the name changes.
+// Every name is declared exactly once, here; an owner's own constant and the
+// authority table's row read the value from here, so the walk covers their
+// copies too.
+//
+// The walk skips test-support packages (names ending in `test`). A word of
+// another vocabulary (an estate operation's wire name, an event payload's
+// value, the inbox question's name, the Dashboard Assistant's own name for a
+// tool), which a tool's rename must not move, is a reviewed exemption in the
+// suite, and a stale entry fails. `delegate` is also an English word, so the
+// walk reads it as the tool only where the text marks it as code.
 //
 // THE SET FAILS CLOSED: the runner's suite holds every tool a phase surface
 // offers beyond the seat's registry to the same set

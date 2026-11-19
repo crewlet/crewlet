@@ -5,8 +5,7 @@ import (
 )
 
 // ProviderJob is the work a written providers.llm reference points at a model:
-// a seat's executor or one of its satellites, or the assistant's chat or its
-// deep work.
+// a seat's executor or one of its satellites, or the assistant's model.
 type ProviderJob string
 
 const (
@@ -22,15 +21,13 @@ const (
 	JobAuxiliary ProviderJob = "auxiliary"
 	// JobJudge is a seat's onboarding judge's chain.
 	JobJudge ProviderJob = "judge"
-	// JobAssistant is `assistant.llm`, the Dashboard Assistant's chain.
+	// JobAssistant is `assistant.model`, the model Ask Crewlet runs on.
 	JobAssistant ProviderJob = "assistant"
-	// JobDeepWork is `assistant.deep_work.llm`.
-	JobDeepWork ProviderJob = "deep_work"
 )
 
 // ProviderJobs is the closed set.
 var ProviderJobs = []ProviderJob{
-	JobExecutor, JobReview, JobSubagent, JobAuxiliary, JobJudge, JobAssistant, JobDeepWork,
+	JobExecutor, JobReview, JobSubagent, JobAuxiliary, JobJudge, JobAssistant,
 }
 
 // Valid reports whether j is one of [ProviderJobs].
@@ -47,7 +44,7 @@ type ProviderReference struct {
 	Job ProviderJob `json:"job"`
 	// Segments is the WRITTEN field, as a problem's segments are:
 	// ["units", 0, "roles", 2, "llm_review"], ["roles", 0, "llm", "review"]
-	// or ["assistant", "llm"].
+	// or ["assistant", "model"].
 	Segments Path `json:"segments"`
 	// Chain is the whole chain the field writes, in its order, the key
 	// asked about included.
@@ -56,14 +53,12 @@ type ProviderReference struct {
 
 // ProviderReferences is every field of the document that names the
 // providers.llm entry key, in document order: each seat's `llm` and its
-// satellites, at any depth, then `assistant.llm` and
-// `assistant.deep_work.llm`.
+// satellites, at any depth, then `assistant.model`.
 //
 // It reports the WRITTEN fields, not resolved chains: a flat satellite beats
 // the same phase in the `llm` mapping, but the shadowed field is still what a
-// removal must edit (phase.ResolveWithSource says what a job runs on). A
-// disabled assistant's fields count, so a removal never leaves one naming a
-// missing entry. The mapping's default is `llm` when alone and `llm.default`
+// removal must edit (phase.ResolveWithSource says what a job runs on). The
+// mapping's default is `llm` when alone and `llm.default`
 // beside another, the stored form ([PhaseLLM.MarshalYAML]).
 func (c *Company) ProviderReferences(key string) []ProviderReference {
 	var out []ProviderReference
@@ -104,9 +99,8 @@ func (c *Company) providerReferences() []ProviderReference {
 		add(seat, JobAuxiliary, at(path, "llm_auxiliary"), role.LLMAuxiliary)
 		add(seat, JobJudge, at(path, "llm_judge"), role.LLMJudge)
 	}
-	add("", JobAssistant, field("assistant.llm"), c.Assistant.LLM)
-	if deep := c.Assistant.DeepWork; deep != nil && deep.LLM != "" {
-		add("", JobDeepWork, field("assistant.deep_work.llm"), []string{deep.LLM})
+	if c.Assistant.Model != "" {
+		add("", JobAssistant, field("assistant.model"), []string{c.Assistant.Model})
 	}
 	return out
 }

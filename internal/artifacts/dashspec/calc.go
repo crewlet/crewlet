@@ -17,16 +17,15 @@ import (
 // ---- calculated datasets -------------------------------------------------- //
 //
 // A CALCULATION IS A FEW DECLARED STEPS OVER ROWS, NEVER A PROGRAM. Each step
-// is one of a closed set ([Ops]), reads columns its input declares and
-// declares the columns it answers, so a widget over a calculated dataset is
-// validated at publish against columns the steps promise, and a viewer reads
-// the steps in the Sources rail as the formula they are.
+// is one of a closed set ([Ops]), reads columns its input declares and declares
+// the columns it answers, so a widget over a calculated dataset is validated at
+// publish against columns the steps promise, and a viewer reads the steps in
+// the Sources rail as the formula they are.
 //
-// DETERMINISTIC BY CONSTRUCTION: no step reads a clock, a locale or a random
-// source; a group's rows come out ordered by their keys under [compare], a
-// sort is stable, a sum adds in row order, and a join takes the first match
-// in the right side's order. One input and one spec answer one table on every
-// node and in every run.
+// DETERMINISTIC BY CONSTRUCTION: no step reads a clock, locale or random
+// source; groups come out ordered by key under [compare], a sort is stable, a
+// sum adds in row order, a join takes the first match in the right side's
+// order. One input and one spec answer one table on every node and run.
 
 // Calc is a calculated dataset: the dataset it starts from and its steps.
 type Calc struct {

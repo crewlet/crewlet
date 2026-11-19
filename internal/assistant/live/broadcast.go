@@ -23,37 +23,29 @@ import (
 // THE FLEET HALF OF A TURN'S STREAM: the frames a node appends, told to every
 // node following the turn, and the two instructions a node sends the one
 // running it (the frames its client missed, and a Stop).
-//
+
 // # Encrypted, then sealed
 //
-// A frame carries what the person asked and what their reads returned, the
-// same prose and cards internal/assistantdomain encrypts at rest (ADR-0053).
-// The broker authenticates nothing (ADR-0031), so a frame in the clear would
-// make reaching the broker a way to read every person's conversation; the
-// broker's private ports are defence in depth, never the control. So every
-// frame and every replayed page is ENCRYPTED with the fleet keyring's AEAD,
-// the one internal/secrets cipher the conversation is sealed with at rest,
-// under associated data that names the turn ([FrameAAD], [ReplayAAD]): a
-// frame captured from one turn and broadcast on another's channel does not
-// open there. The ciphertext then travels inside the signed one-way frame
-// presence uses (internal/signedask), in a key domain of its own
-// ([FrameChannel]), whose expiry bounds how long a captured copy is believed
-// and whose dispositions (not the fleet's, a key this node does not hold, a
-// build it cannot read, expired) are the fleet's one vocabulary. A frame the
-// fleet did not seal, or that does not open under the turn it arrived for, is
-// dropped.
-//
+// A frame carries what the person asked and their reads returned, which
+// internal/assistantdomain encrypts at rest (ADR-0053). The broker
+// authenticates nothing (ADR-0031), so a clear frame would let reaching it
+// read every conversation. So every frame and replayed page is ENCRYPTED with
+// the fleet keyring's AEAD (internal/secrets' cipher) under associated data
+// naming the turn ([FrameAAD], [ReplayAAD]), so a frame replayed on another
+// turn's channel does not open. The ciphertext travels inside internal/
+// signedask's signed one-way frame, in its own key domain ([FrameChannel])
+// whose expiry bounds how long a captured copy is believed. A frame the fleet
+// did not seal, or that does not open under its turn, is dropped.
+
 // # Lossy broadcast, exact stream
 //
 // A broadcast is at most once, and a transcript rebuilt from deltas cannot
-// survive a hole, so the broadcast is never what a follower trusts for
-// completeness. It numbers what it hears against the last seq it wrote, and
-// any gap (a frame lost, a listener that fell behind) is filled by asking the
-// running node for every frame after it ([ReplayChannel]), which answers from
-// its frame log exactly as it would its own client: a snapshot of the
-// transcript where the log no longer holds the frames, then what it holds. A
-// quiet stream asks again on every keepalive, so a lost final frame costs one
-// keepalive interval and never a stream that hangs.
+// survive a hole, so a follower never trusts it for completeness. It numbers
+// what it hears against the last seq it wrote; any gap is filled by asking the
+// running node for every frame after it ([ReplayChannel]), answered from its
+// frame log as for its own client: a transcript snapshot where the log no
+// longer holds the frames, then what it holds. A quiet stream asks again on
+// every keepalive, so a lost final frame costs one interval, never a hang.
 
 // The key domains, each the stem signedask derives its keys from: their own,
 // so no state-log record, no presence frame and no other channel's envelope

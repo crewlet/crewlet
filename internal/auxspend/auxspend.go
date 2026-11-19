@@ -1,7 +1,8 @@
 // Package auxspend is what the seats' AUXILIARY model spends, recorded: the
 // attribution every caller of the auxiliary seam states, the per-turn tally a
 // turn's work item is charged from, and the node's LEDGER that coalesces each
-// call into an `auxiliary_spend` record.
+// call into an `auxiliary_spend` record. A [Use]'s tally charges the turn's
+// work item (ADR-0022).
 //
 // # Why the record is separate from the counter
 //
@@ -54,6 +55,10 @@
 // ran. The fold, the flush, the backlog and the stop are internal/coalesce's,
 // which the reads of unit repositories are recorded by too: this package says
 // only what a record of spend is.
+//
+// The stop is ordered after every producer of auxiliary calls and before the
+// custody flush and the stream close, so no late call is recorded into a
+// closed stream.
 //
 // # What a crash costs
 //

@@ -44,7 +44,12 @@
 // cadence is tuned to catching access somebody revoked, and its failures are
 // findings about seats. An inventory read has a different cost, a different
 // failure meaning and a different cadence (`atlas.refresh_interval_seconds`,
-// hourly by default), so it is a duty of its own. Where the two read the same
+// hourly by default, never under five minutes), so it is a duty of its own.
+// A [Source] is registered from its vendor package's init ([Register], as
+// seat access vendors are), or handed to the worker by the engine where it
+// needs the node's own wiring. The duty's lease is re-claimed before every
+// source and sized from one visit ([VisitDeadline]), and a read is recorded
+// as the engine's own actor. Where the two read the same
 // list (Cloudflare's zones), this one repeats one cheap call an hour, which is
 // the price of keeping the two contracts apart.
 //
@@ -66,7 +71,9 @@
 // an entry a later complete read at least [RetireAfter] after the first also
 // misses is retired, with one denied exists claim and every other slot of the
 // voice withdrawn. A read that failed or was cut short retires nothing and
-// forgets no miss, and one that lists the entry again clears its miss.
+// forgets no miss, and one that lists the entry again clears its miss. At
+// most [MaxMissing] misses are tracked a source, the rest held for a later
+// read, since a standing is one coordination record.
 //
 // # A source reads in parts, and denies only what it said exists
 //
@@ -127,7 +134,18 @@
 // so shaped; what is refused is counted and placed ([Read.Withheld]), never
 // shown. A source maps a vendor's answer into closed fields and reads no
 // field nobody mapped: Cloudflare's TXT records, comments and tags are never
-// decoded.
+// decoded. A DNS record is read one way, by [Builder.Name]: an A, AAAA or
+// CNAME gives its name, its zone and what it points at (a server the same
+// read holds at that address, else one known by the address alone, or
+// another name), and every other type is skipped unread, so two DNS vendors
+// cannot map a record two ways. What every source does to a vendor's text
+// before the builder judges it lives here once ([PlainLabel], [Address],
+// [EnvironmentWord], [KeySegment], the builder's Pipeline and Deployed),
+// so two sources cannot shape one text two ways. redacttest.Shapes is
+// planted in every vendor field to prove the refusal. [Decide] and
+// [Describe] are pure, and Describe shows a reader no digest and no id of what
+// a source stopped seeing; collecttest.Log is the one in-memory atlas log the
+// readers' tests share.
 //
 // # Who has to agree on each piece of state
 //
@@ -139,7 +157,9 @@
 // the coordination store ([CoordStore]), beside the integration statuses and
 // apart from them. A person's ask that a source be read now ([Request]): the
 // whole company, current value only, until the duty honours it, so it is a
-// record of its own in the coordination store, never a field of the standing
-// the duty rewrites whole. Which node reads: the `worker:atlas-collect` lease,
+// record of its own in the coordination store (the atlas_source_refreshes
+// bucket, the standings' being atlas_sources), never a field of the standing
+// the duty rewrites whole; the standings sit apart from the integration
+// statuses, whose reader forgets every key its document does not declare. Which node reads: the `worker:atlas-collect` lease,
 // claimed per tick and re-claimed before every source.
 package collect

@@ -87,27 +87,12 @@ describe("the engine's golden stream", () => {
       "brief",
       "entity",
       "error",
-      "file",
       "notice",
       "open_in_app",
       "oversize",
       "proposal",
       "table",
     ]);
-  });
-
-  test("a deep run is re-sent under one step id, its step names it, and its files are a card", () => {
-    const { frames } = parse(GOLDEN, 97);
-    const steps = frames.flatMap((f) => (f.kind === "step" ? [f.step] : []));
-    const runs = steps.filter((s) => s.deep !== undefined);
-    expect(runs.map((s) => s.deep?.state)).toEqual(["running", "finished"]);
-    expect(new Set(runs.map((s) => s.step_id)).size).toBe(1);
-    expect(steps.some((s) => s.parent === runs[0]!.index)).toBe(true);
-    const files = frames.flatMap((f) =>
-      f.kind === "card" && f.card.card.type === "file" ? (f.card.card.file?.files ?? []) : [],
-    );
-    expect(files.map((f) => f.media_type)).toContain("image/svg+xml");
-    for (const file of files) expect(file.download.startsWith("/assistant/")).toBe(true);
   });
 
   test("narrows each frame to the payload its kind names", () => {
@@ -124,9 +109,9 @@ describe("a stream the parser must not trust", () => {
   const first = GOLDEN.slice(0, GOLDEN.indexOf("\n\n") + 2);
 
   test("stops at a frame of another protocol version", () => {
-    const { frames, faults } = parse(first.replace('"v":1', '"v":2') + GOLDEN, 4096);
+    const { frames, faults } = parse(first.replace('"v":2', '"v":3') + GOLDEN, 4096);
     expect(frames).toEqual([]);
-    expect(faults).toEqual([{ code: "protocol_mismatch", version: 2 }]);
+    expect(faults).toEqual([{ code: "protocol_mismatch", version: 3 }]);
   });
 
   test("skips a kind this build does not know, within the version", () => {
@@ -244,9 +229,26 @@ describe("the bounds a request is held to before it is sent", () => {
     );
   });
 
-  test("a viewer answer with no assistant member reads as disabled", () => {
-    expect(assistantUnavailable(undefined)).toBe("disabled");
-    expect(assistantUnavailable({ available: true })).toBeNull();
-    expect(assistantUnavailable({ available: false, reason: "not_a_person" })).toBe("not_a_person");
+  test("a viewer answer with no assistant member reads as no model", () => {
+    expect(assistantUnavailable(undefined)).toBe("no_model");
+    expect(
+      assistantUnavailable({
+        available: true,
+        model: null,
+        notice: null,
+        can_assign: false,
+        reads_images: false,
+      }),
+    ).toBeNull();
+    expect(
+      assistantUnavailable({
+        available: false,
+        reason: "not_a_person",
+        model: null,
+        notice: null,
+        can_assign: false,
+        reads_images: false,
+      }),
+    ).toBe("not_a_person");
   });
 });

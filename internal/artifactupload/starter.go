@@ -20,24 +20,15 @@ type DocStarter struct {
 
 // starter is the content a create that asks for its kind's starter publishes:
 // the files, inline, and the entry they open on. A kind's starter is its
-// format's, so the engine holds it and holds it to that format like any
-// version; a kind whose format has none is refused. Each kind's own field
-// is refused on any other kind. A doc's may carry the text its writer wrote
-// (req.Doc), held to the inline bound of a call. A deck's is composed from
-// its plan (req.Deck; nil is [slideformat.DefaultPlan]), and a plan the
-// format does not hold is refused as invalid, naming what it holds. A deck
-// whose plan names [slideformat.BrandTheme] is drawn in the brand adopted now
-// ([Service.brandLook]), its logo and faces copied into the version beside
-// its slides; with no brand adopted it is refused, naming the themes there
-// are. A design's is the layout the person drew (req.Layout, its boards as
-// placeholder pages), which a design always names.
-//
-// THE ENGINE'S RATHER THAN THE CLIENT'S because a create from the dashboard
-// carries no upload, and a deployment whose object store presigns transfers
-// sends them to an origin the dashboard's own policy does not let it reach.
-//
-// A deck begun in the brand also answers the adoption it was composed from, so
-// the run copies its logo and faces from that same adoption.
+// format's, held to that format; a kind whose format has none is refused, and
+// each kind's own field is refused on any other kind. A doc's may carry its
+// writer's text (req.Doc); a deck's is composed from its plan (req.Deck; nil
+// is [slideformat.DefaultPlan]), one naming [slideformat.BrandTheme] drawn in
+// the brand adopted now ([Service.brandLook]), refused if none; a design's is
+// the layout drawn (req.Layout). THE ENGINE'S RATHER THAN THE CLIENT'S: a
+// dashboard create carries no upload, and a presigning store's origin is one
+// the dashboard's policy blocks. A brand deck answers the adoption it was
+// composed from, so the run copies from that same adoption.
 func (s *Service) starter(ctx context.Context, req CreateRequest) ([]FileSpec, string,
 	*artifactsdomain.Adoption, error) {
 

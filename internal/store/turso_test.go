@@ -15,17 +15,14 @@ import (
 
 // What these cases protect.
 //
-// The Turso driver extracts a ~20 MB native library into a per-user cache on
-// first use, and writes it straight into the final path instead of renaming a
-// temporary file into place. A second process that looks while the first is
-// copying reads a partial file, and the driver's response to a hash mismatch
-// is to PANIC — inside a sync.Once, which marks itself done even when the
-// function panicked, so the process cannot recover either. The corrupt file
-// then stays on disk and every later start fails the same way.
+// The Turso driver extracts its ~20 MB native library into a per-user cache,
+// writing straight into the final path. A second process looking mid-copy reads
+// a partial file, and the driver PANICS on the hash mismatch inside a
+// sync.Once, so the process cannot recover and the corrupt file fails every
+// later start.
 //
-// Two properties, then: concurrent starts must not be able to produce that
-// file, and a cache that already holds one must heal rather than wedge the
-// host for good.
+// Two properties: concurrent starts must not produce that file, and a cache
+// that already holds one must heal rather than wedge the host.
 
 // tursoChildEnv marks a child process, so the helper case below is inert in an
 // ordinary run. The cache root itself travels as TURSO_GO_CACHE_DIR, because
@@ -34,17 +31,11 @@ const tursoChildEnv = "CREWLET_TEST_TURSO_CHILD"
 
 // childRan is printed by every child half and REQUIRED by every parent.
 //
-// Without it these cases have a vacuous pass in them. A parent selects its
-// child with `-test.run=^TestSomeChild$` and reads the exit status, and a
-// pattern that matches NOTHING makes `go test` print "testing: warning: no
-// tests to run", report PASS and exit 0. So renaming a child — or renaming the
-// parent's copy of the name — leaves the parent seeing success from a process
-// that ran no assertion at all, and the concurrency and broken-cache gates go
-// quiet together with nothing to notice it.
-//
-// Measured: building this package's test binary and running it with
-// `-test.run='^TestNoSuchTestAtAll$' -test.count=1` prints that warning, prints
-// PASS, and exits 0.
+// Without it these cases pass vacuously. A parent selects its child with
+// `-test.run=^TestSomeChild$` and reads the exit status, and a pattern matching
+// NOTHING makes `go test` warn "no tests to run", print PASS and exit 0. So
+// renaming a child, or the parent's copy of its name, leaves the parent seeing
+// success from a process that asserted nothing.
 const childRan = "CREWLET_CHILD_RAN"
 
 // childEnv is the environment a child half runs with: this process's own,

@@ -36,13 +36,10 @@ const MaxSpendRangeDays = 90
 //
 // A REFUSAL rather than a truncated answer: the rows before the floor are gone
 // on every data node, so an answer "floored" to it would put a heading over
-// figures covering fewer days than it names — the previous-window chart at 30
-// and 90 days read exactly that way, silently empty, while the event log was
-// its source.
+// figures covering fewer days than it names.
 //
-// NOT [ErrWindowLength], which it was until a 152-day window lying wholly
-// inside the history was refused as one that "reaches past the spend
-// history": the reader was told the wrong thing to change.
+// NOT [ErrWindowLength]: a window wholly inside the history must not be told
+// it "reaches past" it, which names the wrong thing to change.
 var ErrOutOfRange = errors.New("tokens: the window starts before the spend history")
 
 // ErrWindowLength is a window of fewer than one or more than
@@ -231,19 +228,15 @@ type DailyOptions struct {
 // FoldDaily folds a named window's company-day rows into the breakdown.
 //
 // THE SAME [Rollup] [Aggregate] answers the live window with, so a reader
-// moving between the two compares like with like — with the three differences
-// the source forces, each stated on the answer rather than papered over: there
-// is no `by_turn` (a day's row holds no turn), no watermark (no instant per
-// call), and every seat's row carries how many of its turns ended and failed
-// (which the live window cannot count).
+// compares like with like, with the three differences the source forces, each
+// stated on the answer: no `by_turn` (a day's row holds no turn), no watermark,
+// and every seat's row carries how many of its turns ended and failed.
 //
-// A seat is keyed on its AGENT ID — the identity every node derives alike from
-// the org name and the seat's handle — and named from the org
-// ([DailyOptions.Seats]), or, for a seat the chart no longer holds, by the
-// newest day that named it, whatever order the rows arrive in. A PERSON is
-// keyed on their handle ([PersonKey]), apart from every seat, named from their
-// human seat the same way, and carries no turn counts: a person takes no turns,
-// and a zero would read as a seat that ended none.
+// A seat is keyed on its AGENT ID (derived alike on every node) and named from
+// the org ([DailyOptions.Seats]), or, for a seat the chart no longer holds, by
+// the newest day that named it, whatever order rows arrive in. A PERSON is
+// keyed on their handle ([PersonKey]), named from their human seat, and carries
+// no turn counts: a zero would read as a seat that ended none.
 func FoldDaily(cells []Cell, seats []SeatDay, opts DailyOptions) Rollup {
 	h := opts.Horizon
 	out := Rollup{

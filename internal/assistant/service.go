@@ -18,16 +18,18 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/live"
+	"github.com/crewlet/crewlet/internal/assistant/proposal"
 	"github.com/crewlet/crewlet/internal/assistant/proposal/approval"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 	"github.com/crewlet/crewlet/internal/auxspend"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/costlimit"
+	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
 	"github.com/crewlet/crewlet/internal/provenance"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
 	"github.com/crewlet/crewlet/internal/toolsession"
@@ -63,16 +65,11 @@ type Deps struct {
 	// Rate counts a person's turn starts across the fleet; nil counts them
 	// on this node alone.
 	Rate TurnRate
-	// Files keeps a conversation's files: the images a person attaches and
-	// the files a deep-work run delivers, and answers whether a file a draft
-	// change names is the person's. Nil keeps none: a question takes no
-	// attachment, no deep work is offered, and every draft change naming a
+	// Files keeps a conversation's files, the images a person attaches, and
+	// answers whether a file a draft change names is the person's. Nil keeps
+	// none: a question takes no attachment, and every draft change naming a
 	// file is refused.
 	Files Files
-
-	// --- deep work (im-deep) ---
-	// Deep runs deep work; nil is a node that offers none (ADR-0054).
-	Deep DeepWork
 
 	// Sessions is where a turn serves its tools to its model's harness, as the
 	// one MCP server `crewlet` (ADR-0049): this process's tool-session host.
@@ -100,7 +97,6 @@ type Service struct {
 	remote      Remote
 	rate        TurnRate
 	files       Files
-	deep        DeepWork
 	sessions    *toolsession.Host
 	now         func() time.Time
 	log         *slog.Logger
@@ -173,11 +169,10 @@ func New(d Deps) (*Service, error) {
 		node: d.Node, company: d.Company, acts: d.Acts, models: d.Models, budget: d.Budget,
 		catalogue: d.Catalogue, transcripts: d.Transcripts,
 		records: d.Records, dispatcher: d.Dispatcher, revoker: d.Revoker, audit: d.Audit,
-		metrics: d.Metrics, remote: d.Remote, rate: d.Rate, files: d.Files, deep: d.Deep,
+		metrics: d.Metrics, remote: d.Remote, rate: d.Rate, files: d.Files,
 		sessions: d.Sessions, now: now,
 		log: logging.Get("assistant"),
-		hub: live.NewHub(now, config.Assistant{ProposalTTLSeconds: maxProposalTTLSeconds}.ProposalTTL(),
-			tap),
+		hub: live.NewHub(now, proposal.TTL, tap),
 		limiter: costlimit.New(costlimit.Rates{
 			PrincipalRate: TurnsPerMinute / 60.0, PrincipalBurst: TurnBurst,
 			ScopeRate: NodeTurnsPerSecond, ScopeBurst: NodeTurnBurst,
@@ -195,82 +190,90 @@ func New(d Deps) (*Service, error) {
 	return s, nil
 }
 
-// maxProposalTTLSeconds is the longest proposal lifetime a company may set
-// (`assistant.proposal_ttl_seconds`): a parked turn's numbering is kept that
-// long.
-const maxProposalTTLSeconds = 3600
-
 // turnRateScope is the costlimit scope every turn start is taken from.
 const turnRateScope = "assistant.turn"
 
-// strengthOf is the chain a question runs on: the stronger one for Think harder
-// or a decision brief the company routes there, else the quick one. Think
-// harder with no stronger chain is refused rather than quietly answered quick.
-func (s *Service) strengthOf(ts TurnStart, page *wire.PageContext) (Strength, error) {
-	c, _ := s.company()
-	var d *config.AssistantDeliberate
-	if c != nil {
-		d = c.Assistant.Deliberate
-	}
-	switch {
-	case ts.Deliberate && d == nil:
-		return "", invalid("deliberate: %v", config.ErrNoDeliberate)
-	case ts.Deliberate:
-		return Deliberate, nil
-	case d != nil && d.DecisionBriefs && ts.Mode == wire.TurnBrief && page != nil &&
-		page.Selection != nil && page.Selection.Noun == wire.NounDecision:
-		return Deliberate, nil
-	}
-	return Quick, nil
-}
-
-// Deliberates reports whether a question can ask to think harder: the
-// company sets a stronger chain its rules admit ([config.Company.DeliberateChain]).
-func (s *Service) Deliberates() bool {
-	c, _ := s.company()
-	if c == nil {
-		return false
-	}
-	_, err := c.DeliberateChain()
-	return err == nil
-}
-
-// offeredTools is what a turn of person may call: the catalogue's offer (a
-// brief's reads, or every tool with deep work where it runs), less each family
-// `assistant.tools.deny` turns off.
-func (s *Service) offeredTools(ctx context.Context, person iam.Principal, acts []string,
-	briefing bool) []catalog.Tool {
+// offeredTools is what a turn of person may call: the catalogue's offer, or a
+// brief's reads, with the web where the company reads it.
+func (s *Service) offeredTools(person iam.Principal, acts []string, briefing bool) []catalog.Tool {
 
 	offered := s.catalogue.Offered(person, acts)
 	var tools []catalog.Tool
 	if briefing {
 		tools = briefTools(offered)
 	} else {
-		tools = s.withConfigured(ctx, offered)
-	}
-	if c, _ := s.company(); c != nil {
-		tools = catalog.Allowed(tools, c.Assistant.Tools.Deny)
+		tools = s.withWeb(offered)
 	}
 	return tools
 }
 
+// withWeb is tools with the web reads where the company lists research hosts.
+func (s *Service) withWeb(tools []catalog.Tool) []catalog.Tool {
+	if c, _ := s.company(); c != nil && len(c.Assistant.ResearchHosts()) > 0 {
+		tools = append(slices.Clone(tools), catalog.FetchWebPageTool())
+		if c.Assistant.Research.Search != nil {
+			tools = append(tools, catalog.SearchWebTool())
+		}
+	}
+	return tools
+}
+
+// ReadsImages reports whether a question's images are handed to its model:
+// the assigned model's run takes them ([Models.ReadsImages]).
+func (s *Service) ReadsImages() bool { return s.models.ReadsImages() }
+
+// imagesOf are the bytes of the files a question carried, as its model is
+// handed them, or none where the model takes no image.
+func (s *Service) imagesOf(ctx context.Context, p iam.Principal, conversation uuid.UUID,
+	files []StoredFile) ([]llm.Image, error) {
+
+	if len(files) == 0 || !s.ReadsImages() {
+		return nil, nil
+	}
+	out := make([]llm.Image, 0, len(files))
+	for _, f := range files {
+		stored, data, err := s.files.Open(ctx, p.ID, conversation, f.FileID)
+		if err != nil {
+			return nil, fmt.Errorf("assistant: attachment %s: %w", f.FileID, err)
+		}
+		out = append(out, llm.Image{MediaType: stored.MediaType, Data: data})
+	}
+	return out, nil
+}
+
 // Eligible says whether p may use the assistant on this node now, and the
-// first reason not, in the order `/viewer` reports them: the company has not
-// turned it on, it has no usable model chain, or p is not a person signed in
-// through their own browser. The authority table's own verdict is the HTTP
-// surface's, which holds the chart.
+// first reason not, in the order `/viewer` reports them: the company assigns
+// it no model, its model is one no helper can run on, or p is not a person
+// signed in through their own browser. The authority table's own verdict is
+// the HTTP surface's, which holds the chart.
 func (s *Service) Eligible(p iam.Principal) (bool, wire.ViewerReason) {
 	c, _ := s.company()
 	if c == nil || !c.Assistant.On() {
-		return false, wire.ViewerDisabled
-	}
-	if _, err := c.AssistantChain(); err != nil {
 		return false, wire.ViewerNoModel
+	}
+	if _, err := c.AssistantModel(); err != nil {
+		return false, wire.ViewerModelProblem
 	}
 	if iam.Assistable(p) != "" {
 		return false, wire.ViewerNotAPerson
 	}
 	return true, ""
+}
+
+// AssignedModel is the model the company assigns Ask Crewlet, as anybody is
+// shown it, or nil where it assigns none: the entry's key, and the model it
+// names where that is written out rather than a reference to resolve.
+func (s *Service) AssignedModel() *wire.ViewerModel {
+	c, _ := s.company()
+	if c == nil || !c.Assistant.On() {
+		return nil
+	}
+	m := &wire.ViewerModel{Key: c.Assistant.Model, Label: c.Assistant.Model}
+	if entry, ok := c.Providers.LLM[m.Key]; ok && entry.Model != "" &&
+		len(envref.Names(entry.Model)) == 0 {
+		m.Label = entry.Model
+	}
+	return m
 }
 
 // eligible is [Service.Eligible] as an error.
@@ -304,8 +307,6 @@ type TurnStart struct {
 	// Mode is what the question asks for ([wire.TurnRequest.Mode]); empty
 	// is [wire.TurnAsk].
 	Mode wire.TurnMode
-	// Deliberate is the person's Think harder ([wire.TurnRequest.Deliberate]).
-	Deliberate bool
 }
 
 // TurnID is the turn a question asked under the operation key starts: the
@@ -407,10 +408,6 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		return wire.TurnAccepted{}, invalid("mode brief takes no attachments")
 	}
 	briefing := ts.Mode == wire.TurnBrief
-	strength, err := s.strengthOf(ts, page)
-	if err != nil {
-		return wire.TurnAccepted{}, err
-	}
 	input = redact.Secrets(input)
 	ts.Page = page
 	attached, attachErr := s.attachmentsOf(ctx, ts)
@@ -436,7 +433,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	// ([Service.ModelNotice] is the same reading for `/viewer`). After the
 	// retry check above, so a retry of a question that already started is
 	// answered with its turn whatever the model's state now.
-	if refusal := s.modelRefusal(ctx, ts.Person, strength); refusal != nil {
+	if refusal := s.modelRefusal(ctx, ts.Person); refusal != nil {
 		return wire.TurnAccepted{}, refusal
 	}
 
@@ -486,20 +483,19 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		purpose = types.AuxAssistantBrief
 	}
 	use := auxspend.Use{Stage: types.AuxStageOperator, Purpose: purpose, TurnID: id.String()}
-	provider, key, err := s.models.Chain(ctx, ts.Person, use, strength)
+	provider, key, err := s.models.Model(ctx, ts.Person, use)
 	if err != nil {
 		return wire.TurnAccepted{}, &Unavailable{Cause: err}
 	}
 
 	if past != nil {
-		if err := s.supersede(ctx, ts.Person, ts.Key, *past); err != nil {
-			return wire.TurnAccepted{}, err
+		if supersedeErr := s.supersede(ctx, ts.Person, ts.Key, *past); supersedeErr != nil {
+			return wire.TurnAccepted{}, supersedeErr
 		}
 	}
 	t := s.newTurn(ts.Person, ts.Conversation, id, ts.Key, ts.Read, ts.Page, acts)
 	t.subjects = subjectsOf(ts.Input, ts.Page)
 	t.brief.on = briefing
-	t.strength = strength
 	var chip *wire.PageChip
 	if ts.Page != nil {
 		chip = &wire.PageChip{Title: ts.Page.Title, Screen: ts.Page.Screen}
@@ -514,24 +510,24 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		t.cancel(nil)
 		s.hub.Forget(id)
 	}
-	if _, err := s.records.OpenTurn(ctx, t.write().Step("open"), assistantdomain.NewTurn{
+	if _, openErr := s.records.OpenTurn(ctx, t.write().Step("open"), assistantdomain.NewTurn{
 		Conversation: ts.Conversation, Turn: id, Node: s.node, PromptVersion: t.promptVersion(),
 		Model: provider.Model(), ProviderKey: key, TraceID: traceOf(ctx), Page: chip,
-	}); errors.Is(err, assistantdomain.ErrTurnOpen) {
+	}); errors.Is(openErr, assistantdomain.ErrTurnOpen) {
 		// THE SAME KEY IS THE SAME TURN, decided by the record: an attempt
 		// that raced its first one (on another node) starts nothing.
 		abandon()
 		return accepted, nil
-	} else if err != nil {
+	} else if openErr != nil {
 		abandon()
-		return wire.TurnAccepted{}, s.writeFailure(err)
+		return wire.TurnAccepted{}, s.writeFailure(openErr)
 	}
 	t.messages = 1
-	if err := s.records.RecordMessage(ctx, t.write().Step("message", "question"), id,
+	if recordErr := s.records.RecordMessage(ctx, t.write().Step("message", "question"), id,
 		assistantdomain.NewMessage{ID: assistantdomain.MessageID(id, 1), Role: wire.RoleUser,
-			Text: input, Page: chip, Attachments: refsOf(attached)}); err != nil {
+			Text: input, Page: chip, Attachments: refsOf(attached)}); recordErr != nil {
 		s.log.WarnContext(ctx, "assistant_record_failed", "turn", id, "record", "question",
-			"error", redact.Secrets(err.Error()))
+			"error", redact.Secrets(recordErr.Error()))
 	}
 	// A CONVERSATION IS NAMED BY ITS FIRST QUESTION AT ONCE, whatever its
 	// first turn then does: stopped, failed or parked on a change, it is
@@ -546,23 +542,27 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		}
 		t.record(ctx, "title", func(ctx context.Context, w Write) error {
 			return s.records.TitleConversation(ctx, w.Step("title", "question"), ts.Conversation,
-				title)
+				title, wire.TitleByModel)
 		})
 	}
 
 	c, organization := s.company()
-	tools := s.offeredTools(ctx, ts.Person, acts, briefing)
+	tools := s.offeredTools(ts.Person, acts, briefing)
 	earlier := historyEntries(history, ts.Person)
 	t.used(historyApps(earlier))
 	summary := summaryOf(history, ts.Person)
 	if summary != nil {
 		t.used(summary.Apps)
 	}
-	t.deep.attachments = attached
+	t.attachments = attached
+	images, err := s.imagesOf(ctx, ts.Person, ts.Conversation, attached)
+	if err != nil {
+		return wire.TurnAccepted{}, s.readFailure(err)
+	}
 	in := promptInput{Person: ts.Person, Apps: iam.Expand(ts.Person.Grants), Now: s.now(),
 		History: earlier, Summary: summary, Page: ts.Page, Boundary: t.boundary, Question: input,
-		Proposable: proposable(tools), Deep: offersDeep(tools), DeepConfigured: s.ReadsImages(),
-		Attachments: refsOf(attached)}
+		Proposable: proposable(tools), Delegates: offers(tools, catalog.CreateTaskTool),
+		Attachments: refsOf(attached), ReadsImages: len(images) > 0}
 	if c != nil {
 		in.Company, in.Zone = c.Name, c.Location()
 	}
@@ -572,12 +572,9 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 		}
 	}
 
-	assistantCfg := config.Assistant{}
-	if c != nil {
-		assistantCfg = c.Assistant
-	}
-	run := loopRun{messages: buildMessages(in), provider: provider, key: key, meter: meter,
-		tools: tools, steps: assistantCfg.Steps(), timeout: assistantCfg.TurnTimeout(),
+	run := loopRun{messages: buildMessages(in), images: images, provider: provider, key: key,
+		meter: meter,
+		tools: tools, steps: MaxRounds, timeout: TurnTimeout,
 		fresh: history.Conversation.Title == "", question: input}
 	if briefing {
 		run.messages = buildBriefMessages(in)
@@ -628,11 +625,6 @@ func (s *Service) supersede(ctx context.Context, p iam.Principal, key string,
 	err := s.records.CloseTurn(ctx, Write{Owner: p.ID, By: iam.ActorFor(p), Key: key,
 		Steps: []string{"supersede"}}, row.ID, assistantdomain.TurnEnd{
 		State: wire.TurnSuperseded, Steps: row.Steps})
-	if err == nil && keepErr == nil {
-		// No approval resumes a turn asked past, so a deep-work run it
-		// parked on is never continued.
-		s.dropParkedDeep(ctx, keep)
-	}
 	var moved *assistantdomain.TurnMoved
 	switch {
 	case errors.As(err, &moved) && moved.State.Final():
@@ -656,7 +648,7 @@ func (s *Service) newTurn(p iam.Principal, conversation, id uuid.UUID, key strin
 	read exec.Grant, page *wire.PageContext, acts []string) *turn {
 
 	ctx, cancel := context.WithCancelCause(s.base)
-	return &turn{svc: s, strength: Quick, person: p, by: iam.ActorFor(p), conversation: conversation, id: id,
+	return &turn{svc: s, person: p, by: iam.ActorFor(p), conversation: conversation, id: id,
 		key: key, read: read, page: page, acts: acts, boundary: provenance.NewBoundary(),
 		started: s.now(), ctx: ctx, cancel: cancel, done: make(chan struct{})}
 }
@@ -712,6 +704,11 @@ func historyApps(entries []historyEntry) []string {
 		out = append(out, e.Apps...)
 	}
 	return out
+}
+
+// offers reports whether tools hold the tool named name.
+func offers(tools []catalog.Tool, name string) bool {
+	return slices.ContainsFunc(tools, func(t catalog.Tool) bool { return t.Name == name })
 }
 
 // proposable is every write the person may propose: the offered tools that
@@ -924,9 +921,6 @@ func (s *Service) declineParked(ctx context.Context, p iam.Principal, row assist
 	s.mu.Unlock()
 	if d == nil {
 		return
-	}
-	if keep, err := s.parkedLoop(ctx, p.ID, row.ID); err == nil {
-		s.dropParkedDeep(ctx, keep)
 	}
 	if err := d.DeclineTurn(ctx, approval.Stop{Owner: p.ID, Conversation: row.Conversation,
 		Turn: row.ID, By: iam.ActorFor(p), Key: key}); err != nil {

@@ -13,22 +13,16 @@ import (
 
 // ---- PNG ------------------------------------------------------------------ //
 //
-// A PNG LOGO IS READ CHUNK BY CHUNK, NEVER DECODED INTO PIXELS. Its header is
-// held to the size bounds before anything is inflated (a decompression bomb
-// is a few kilobytes of IDAT that inflate to gigabytes), and then the whole
-// image stream is inflated, row by row through one row's buffer, to exactly
-// the bytes its header promises, each row's filter byte checked: a full decode
-// of the structure at the memory of one row, rather than of a 64 MiB bitmap.
+// A PNG LOGO IS READ CHUNK BY CHUNK, NEVER DECODED INTO PIXELS. The header is
+// held to the size bounds before anything is inflated (a decompression bomb is
+// kilobytes of IDAT inflating to gigabytes), then the stream is inflated row by
+// row through one row's buffer to exactly the bytes the header promises.
 //
-// Kept: the critical chunks, and the ancillary ones that change how the image
-// looks (transparency, gamma, chromaticities, the colour space and an ICC
-// profile of at most 64 KiB, the pixel density). A larger profile is refused,
-// never dropped: dropping it would draw the logo in other colours than the
-// file says, and only metadata is ever dropped. Dropped: every other
-// ancillary chunk, which is where text, EXIF, timestamps and editor state
-// live. Refused: an unknown critical chunk (no decoder would draw it), an
-// animated PNG (acTL, fcTL, fdAT: a logo is one frame), a bad CRC, anything
-// after IEND, and any byte after the image data's compressed stream.
+// Kept: critical chunks and the ancillary ones that change how the image looks
+// (transparency, gamma, colour space, density, an ICC profile of at most 64
+// KiB; a larger one is refused, as dropping it would change the colours).
+// Dropped: other ancillary chunks (text, EXIF, editor state). Refused: an
+// unknown critical chunk, an animated PNG, a bad CRC, any byte after IEND.
 
 var pngSignature = []byte("\x89PNG\r\n\x1a\n")
 

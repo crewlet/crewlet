@@ -310,24 +310,14 @@ type fileTheme struct {
 // link a fresh file makes to a kit release this build does not serve or to a
 // file the release it names does not ship.
 //
-// THE VERSION IS THE UNIT, as a page and the rules that theme it are often
-// different files. It follows the reader when any page or stylesheet carries a
-// dark-mode rule of its own, or when its pages link BOTH of the kit's theming
-// files at a release the build serves: the kit's stylesheet alone follows the
-// device rather than the reader (only the bootstrap writes the reader's chosen
-// mode onto the page), and a link to a release the origin does not hold loads
-// nothing at all. The kit's own rules are not in the version, which is why its
-// links are read rather than its text.
-//
-// A LINK TO A FILE ITS RELEASE NEVER SHIPPED is a 404 as surely as a release
-// the build does not hold: a page that links the content stylesheet at a
-// release older than it renders on the bare base with nothing failing. Which
-// files a release ships is read from the embedded tree ([Releases.Ships]), so
-// no list here has to follow the kit.
-//
-// EVERY FRAMED KIND IS HELD TO IT: a design's artboards are pages as an html
-// version's are, and its findings name the first board, since its entry is
-// the canvas the dashboard draws.
+// THE VERSION IS THE UNIT: pages and their theming rules are often different
+// files. It follows the reader when any file carries a dark-mode rule, or its
+// pages link BOTH of the kit's theming files at a release the build serves
+// (the kit's stylesheet alone follows the device; only the bootstrap writes
+// the reader's chosen mode). The kit's rules are not in the version, so its
+// links are read, not its text. A link to a file its release never shipped
+// ([Releases.Ships]) is a silent 404 on the bare base. EVERY FRAMED KIND IS
+// HELD TO IT: a design's findings name the first board (its entry, the canvas).
 func (r *run) themeWarnings(m artifacts.Manifest) {
 	if !r.kind.Framed() || m.Entry == "" {
 		return

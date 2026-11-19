@@ -27,6 +27,10 @@
 // "something moved", a periodic walk behind all of them, and a bounded retry
 // behind a walk that failed.
 //
+// An apply that moves the source retires the previous source's skills at once,
+// not when the new walk lands: until then the registry would serve skills from
+// a container the company no longer names.
+//
 // # One goroutine does the reading, and that is what makes it correct
 //
 // Every walk and every page read runs on the loop's own goroutine, one at a
@@ -83,15 +87,12 @@ const (
 	// nothing asking it to.
 	//
 	// It is the convergence bound for everything the event path misses: a
-	// nudge a node did not hear (a broker reconnect, a subscription that
-	// failed to attach), a webhook the wiki never delivered, and the changes
-	// no subscribed event names at all (a page moved into or out of the
-	// container, a page restored from the trash). Ten minutes keeps a guidance
-	// edit that took one of those paths inside the working session in which
-	// somebody made it, and a walk is cheap at that rate: a skills container
-	// is tens of pages, one listing request of up to a hundred, so a ten-node
-	// fleet spends sixty requests an hour of the org credential that the
-	// knowledge search already spends a request per turn on.
+	// nudge a node did not hear, a webhook the wiki never delivered, and
+	// changes no subscribed event names (a page moved into or out of the
+	// container, restored from the trash). Ten minutes keeps such an edit
+	// inside the working session that made it, and a walk is cheap: tens of
+	// pages, one listing request of up to a hundred, so a ten-node fleet spends
+	// sixty requests an hour of the org credential.
 	RewalkInterval = 10 * time.Minute
 
 	// RetryBase is how long a node waits before retrying a walk that failed,
@@ -380,23 +381,15 @@ func (s *Syncer) Stop(ctx context.Context) {
 // SetSource installs the source the current epoch names. Called at boot and on
 // every apply.
 //
-// A CHANGED SOURCE EMPTIES THE REGISTRY AT ONCE, before the new one is walked.
-// The registry never serves a source the epoch no longer names: the old
-// container's pages are ordinary pages now (no longer excluded from search or
-// routing), a disconnected wiki's skills describe a stack the company stopped
-// running, and keeping them until a walk of the new source succeeds would keep
-// them indefinitely whenever it cannot, which is the exact shape of the bug
-// this replaced. A walk of the new source starts immediately, so the gap is
-// one request long on the ordinary path.
+// A changed source empties the registry at once, before the new one is walked:
+// it never serves a source the epoch no longer names, and keeping the old
+// skills until a walk succeeds would keep them indefinitely whenever it cannot.
 //
-// AN UNCHANGED SOURCE RE-WALKS ONLY IF THE LAST WALK FAILED, OR IF THIS NODE
-// COULD NOT READ IT UNTIL NOW. An apply is the gesture that fixes a broken
-// credential, so it is the moment to try again; an apply that changed a seat's
-// model has nothing to say about skills. A source that was unreadable is
-// walked even when its last walk succeeded, because nothing else would bring
-// it up to date: every page change that arrived while it could not be read was
-// dropped, and the periodic walk is re-armed only by a walk, so one that came
-// due while there was nothing to read is not due again until something walks.
+// An unchanged source re-walks only if the last walk failed, or this node
+// could not read it until now: an apply fixes a broken credential, but says
+// nothing about skills otherwise. Changes that arrived while it was unreadable
+// were dropped, and the periodic walk is re-armed only by a walk, so one that
+// came due with nothing to read is not due until something walks.
 func (s *Syncer) SetSource(src Source) {
 	if s == nil {
 		return
@@ -500,13 +493,11 @@ func (s *Syncer) Announce(backend string) {
 // than waiting to hear its own broadcast, so a broker that is down costs the
 // fleet its nudge and never this node its own edit.
 //
-// A change that cannot concern the registry is dropped here, before anything
-// is read or published: a wiki's every edit in every space reaches this call,
-// and only the skills container's (or a page that just left it) matter.
+// A change that cannot concern the registry is dropped before anything is read
+// or published: every edit in every space reaches this call.
 //
-// The error is the publish's, and it is informational: the change has already
-// been applied here, and a peer that missed the nudge converges on its
-// periodic walk.
+// The error is the publish's and informational: the change is applied here,
+// and a peer that missed the nudge converges on its periodic walk.
 func (s *Syncer) PageChanged(ctx context.Context, change Change) error {
 	if s == nil || !s.concerns(change) {
 		return nil

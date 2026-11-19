@@ -16,23 +16,17 @@ import (
 )
 
 // ActionArgs is the shape a page action's arguments take on the screen that
-// mounts it NOW, as that screen declares it: a small, closed subset of JSON
-// Schema, so the model reads it in the vocabulary it already knows.
+// mounts it NOW, as that screen declares it: a small, closed JSON Schema subset.
 //
-// DECLARED ONCE, BY THE SCREEN. A page action is the screen's (its parser,
-// its gate, its setters), so the screen is the one place that knows which
-// keys it reads and which values it takes now: the windows it offers, the
-// seats it draws, the spaces it searches. The dashboard builds this schema
-// from the same declaration its parser reads, sends it in the page context
-// (`action_args`), and the engine holds every proposal to it BEFORE anything
-// is previewed or recorded: a proposal the screen could only refuse is the
-// model's refused step, never a card in front of the person.
+// DECLARED ONCE, BY THE SCREEN, which alone knows what it takes now. The
+// dashboard builds this schema from its parser's declaration and sends it in
+// the page context (`action_args`); the engine holds every proposal to it
+// BEFORE it is previewed or recorded, so a proposal the screen could only
+// refuse is the model's refused step, never a card.
 //
-// A HINT, NEVER AUTHORITY. The schema only ever refuses more: the screen
-// parses again before it previews or applies, and nothing here grants. So the
-// engine holds the schema itself to a bounded vocabulary (an unknown keyword,
-// a pattern RE2 cannot compile, a schema too deep or too wide is refused as a
-// malformed page context), and checks values against it, nothing else.
+// A HINT, NEVER AUTHORITY: it only refuses more; the screen parses again. An
+// unknown keyword, bad RE2 pattern or too deep or wide a schema is a
+// malformed page context.
 type ActionArgs struct {
 	// Type is the JSON type or types the value takes; empty takes any.
 	Type ArgTypes `json:"type,omitempty"`
@@ -120,18 +114,17 @@ func (t *ArgTypes) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
-// The bounds a declared schema is held to. Generous for every action a screen
-// declares (the org builder's operations, the widest, use a depth of five and
-// about sixty nodes) and small enough that checking a value against one is
-// cheap and the schema reads in a few lines of the prompt.
+// The bounds a declared schema is held to: generous for every action a screen
+// declares (the org builder's, the widest, uses depth five and about sixty
+// nodes), small enough that checking is cheap and the schema reads in a few
+// lines of the prompt.
 //
-// THE EXPORTED ONES ARE THE DASHBOARD'S TOO: they are the bounds a screen's
-// data can push a declaration past (a member per field of an open draft, a
-// value per seat a screen draws, words a person wrote), so the frame holds
-// every action's arguments to them before a page context is sent, and leaves
-// out what does not fit rather than send it to be refused with the question.
-// `contract/assistant.ts` copies them, held here by the client gate. The rest
-// are the shape a screen's code writes, held for every declaration by
+// THE EXPORTED ONES ARE THE DASHBOARD'S TOO: a screen's data can push a
+// declaration past them (a member per draft field, a value per seat drawn,
+// words a person wrote), so the frame holds every action's arguments to them
+// and leaves out what does not fit rather than have the question refused.
+// `contract/assistant.ts` copies them, held by the client gate. The rest are
+// the shape a screen's code writes, held by
 // TestTheEngineReadsEverySchemaTheDashboardDeclares.
 const (
 	actionArgsMaxDepth    = 8

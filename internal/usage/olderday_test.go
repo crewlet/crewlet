@@ -60,21 +60,12 @@ func watermark(t *testing.T, own *store.DB) time.Time {
 
 // AN OLDER DAY IS NEVER PUBLISHED BELOW WHAT THE FLEET HOLDS.
 //
-// A backup copies a node's store first and its streams after, and a fleet
-// restore puts one node's store back beside a usage log another node's copy
-// took later: the log holds what this node published after its store was
-// copied, and its event log does not. The restored watermark names the day the
-// copy was taken, so the first start derives that day again — from a log that
-// stops at the copy — and published as derived, the short record would replace
-// on every node the whole day the fleet holds. Inside the floor a day only
-// grows, so what is published is the derivation JOINED with the fleet's record
-// (usage.Join): the fleet's figure wherever it is larger. That a derivation
-// came out short is said once, and the day still settles, so the watermark
-// moves on.
-//
-// And it is said once for as long as the object STAYS short: the same day
-// derived again in the same process — a batch kept on it — that is still short
-// of the fleet's says nothing more, while the batch's new seat is published.
+// A fleet restore can put a store back beside a usage log taken later, which
+// holds what the node published after the store was copied and its event log
+// does not. The first start derives the copy's day again from a log that stops
+// there, and published as derived the short record would replace the whole day
+// on every node. So it is JOINED with the fleet's record (usage.Join); a short
+// derivation is said once while the object STAYS short, and the day settles.
 //
 // Mutation: publish a day's derivation whatever the fleet holds, and the day
 // shrinks to what the restored log kept; or say a short derivation every time
@@ -324,24 +315,16 @@ func TestAYesterdayReopenedBeforeMidnightIsSentAfterIt(t *testing.T) {
 
 // A DAY DERIVED AGAIN AFTER THE COMPANY'S CLOCK MOVED KEEPS ITS FIRST CUT.
 //
-// A record names its day by label, cut into instants on the company's clock —
-// which an apply can move. Recut on the clock in force when it is derived
-// again, a label replaces the record its old cut published while the objects
-// the new cut no longer reaches keep theirs: moved west, a seat's row just
-// after midnight joins the day before and stays in its own, counted twice.
-// Every label keeps the cut it was first given — the two a tick fingerprints
-// at the very tick the clock moves, and an older one a mark derives later.
+// A record names its day by label, cut on the company's clock, which an apply
+// can move. Recut on the new clock, a label replaces the record its old cut
+// published while objects the new cut no longer reaches keep theirs: moved
+// west, a row just after midnight is counted twice. Every label keeps its
+// first cut. The 22nd's START edge is held by a seat new to the day at the tick
+// the clock moves, since the join keeps a row the fleet holds either way.
 //
-// Both of the 22nd's edges are held — a row after the 23rd's UTC midnight and
-// rows before New York's — and the one that holds its START is a seat new to
-// the day at the tick the clock moves: a row the fleet already holds would be
-// kept by the join whichever cut the day was derived on, so only a row it does
-// not hold yet shows which instants the day was cut on.
-//
-// Mutation: cut every day on the clock in force, and both the tick at the move
-// and the later pass count the row twice; or derive a label already cut on a
-// fresh cut abutting its neighbours, and the 22nd loses its hours before New
-// York's midnight at the tick the clock moves.
+// Mutation: cut every day on the clock in force, and the tick at the move and
+// the later pass count the row twice; or cut an already-cut label afresh, and
+// the 22nd loses its hours before New York's midnight at the tick it moves.
 func TestADayKeepsItsCutWhenTheClockMovesWest(t *testing.T) {
 	t.Parallel()
 	own := openStore(t)
@@ -983,14 +966,12 @@ var hourBin = func() int {
 
 // A TURN WHOSE EARLIER RECORDS THE SWEEP REMOVED KEEPS ITS STATISTICS.
 //
-// A turn whose end states no tally is read off its records, and those reach
-// back to wherever the turn started: a park lasts as long as its executor,
-// which nothing stops on a timer, or as long as a person takes to answer. So
-// a day inside the event log's read floor can hold such a turn whose earlier
-// records the sweep has already removed, and derived again — a kept settle
-// marks the day — it reads a shorter turn with fewer reviews. Joined with the
-// fleet's record, the turn keeps the duration and the send-back it was
-// published with, and the settle's new spend still goes out.
+// A turn whose end states no tally is read off its records, which reach back
+// to wherever the turn started (a park lasts as long as its executor or a
+// person's answer), so a day inside the read floor can hold such a turn whose
+// earlier records the sweep removed, and derived again it reads shorter with
+// fewer reviews. Joined with the fleet's record, it keeps the duration and
+// send-back it was published with, and the settle's new spend still goes out.
 //
 // Mutation: join a seat's histogram by the derivation's alone, or its
 // first-pass turns by their own larger, and the swept turn shrinks or reads as

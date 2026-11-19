@@ -18,15 +18,14 @@ import (
 
 // The applier, and the rules that make it a PURE FUNCTION of the log.
 //
-//  1. IT READS NO CONFIG, NO CLOCK AND NO OTHER DOMAIN. The caller's role on
-//     the artifact, whether the caller is an agent and the limits in force were
-//     decided at the API and STAMPED into the record; every instant written is
-//     the broker's ([statelog.ApplyOptions.StoredAt]).
-//  2. IT DECIDES EVERY WRITE, AND A REFUSAL IS A ROW. Schema, field rules,
-//     guards, caps and the stamped limits are judged here, in log order, so
-//     every data node reaches one verdict; a write refused is applied as its history
-//     row with the verdict and the reason, never as an error, which would stall
-//     the log on every data node.
+//  1. IT READS NO CONFIG, NO CLOCK AND NO OTHER DOMAIN. The caller's role,
+//     whether it is an agent and the limits in force are STAMPED into the
+//     record at the API; every instant written is the broker's
+//     ([statelog.ApplyOptions.StoredAt]).
+//  2. IT DECIDES EVERY WRITE, AND A REFUSAL IS A ROW. Schema, rules, guards,
+//     caps and stamped limits are judged here in log order, so every node
+//     reaches one verdict; a refusal is applied as a history row with its
+//     reason, never an error, which would stall the log on every node.
 //  3. EVERY RECORD IS APPLIED ONCE. Its history row is keyed by its position,
 //     and an apply that finds its own row already there writes nothing.
 

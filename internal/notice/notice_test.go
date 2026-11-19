@@ -148,7 +148,8 @@ func TestOnlyAnOwnersBlockingFindingIsANotice(t *testing.T) {
 }
 
 // A PLATFORM NOTICE OFFERS NO ANSWER: it says what holds and since when, and
-// carries nothing a reader could answer or decide; it ends when its condition does.
+// names the finding whose fix ends it, carrying nothing a reader could answer
+// or decide; it ends when its condition does.
 func TestAPlatformNoticeOffersNoAnswer(t *testing.T) {
 	t.Parallel()
 	raw, err := json.Marshal(alarm("apply_lag", t0, "node-a"))
@@ -160,7 +161,7 @@ func TestAPlatformNoticeOffersNoAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := slices.Sorted(maps.Keys(fields))
-	if want := []string{"class", "nodes", "person", "since", "subject", "title"}; !slices.Equal(got, want) {
+	if want := []string{"class", "finding", "nodes", "person", "since", "subject", "title"}; !slices.Equal(got, want) {
 		t.Errorf("a notice carries %v, want only %v", got, want)
 	}
 }
@@ -258,5 +259,25 @@ func TestAFlappingVolumeAlarmStillReachesTheAdministrators(t *testing.T) {
 	}
 	if !notified {
 		t.Fatal("no beat past the grace found the alarm standing: the case proves nothing")
+	}
+}
+
+// A NOTICE NAMES THE FINDING WHOSE FIX ENDS IT, by the finding's class and
+// subject, the backup alarm's included; an alarm no finding carries names none.
+func TestANoticeNamesTheFindingWhoseFixEndsIt(t *testing.T) {
+	t.Parallel()
+	company := advisor.Subject{Kind: advisor.SubjectCompany}
+	backup := advisor.Finding{Class: advisor.ClassNoVerifiedBackup, Subject: company, Title: "No verified backup.",
+		Fix: advisor.Fix{Sentence: "Take a backup."}}
+	backupAlarm := notice.Notice{Class: string(advisor.ClassNoVerifiedBackup), Subject: company,
+		Alarm: string(statelog.KindBackupAge), Since: t0, Nodes: []string{"node-a"}}
+	got := notice.WithFindings([]notice.Notice{backupAlarm, alarm("apply_lag", t0, "node-a")},
+		[]notice.Listed{{ID: "f-1", Finding: backup}})
+	if got[0].Finding == nil || *got[0].Finding != (notice.FindingRef{ID: "f-1", Title: "No verified backup.",
+		Fix: "Take a backup."}) {
+		t.Errorf("the backup alarm's notice names %+v, want finding f-1", got[0].Finding)
+	}
+	if got[1].Finding != nil {
+		t.Errorf("an alarm no finding carries names %+v", got[1].Finding)
 	}
 }

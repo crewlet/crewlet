@@ -890,6 +890,12 @@ var zeroThroughPointer = map[string]string{
 		"tracker.create_task_asking refuse one before they are asked (worklet.Task.CheckInstants) " +
 		"and the writer's createTask where it runs, so the stored task and every archive " +
 		"predicate that reads it meet nil or a real instant",
+	"worklet.FlowNotice.Since": "read by the wake parser alone, as its flow metadata " +
+		"(worklet.instantText), which writes nil and a pointer at the zero instant alike as " +
+		"no instant; the flow duty's notice carries nil for an instant the facts do not give",
+	"worklet.FlowNotice.Until": "read by the wake parser alone, as its flow metadata " +
+		"(worklet.instantText), which writes nil and a pointer at the zero instant alike as " +
+		"no instant; the flow duty's notice carries nil for an instant the facts do not give",
 	"worklet.Comment.ResolvedAt": "never the zero instant on a comment a write posts: " +
 		"tracker.create_task_asking (worklet.Comment.CheckInstants) and tracker.update_task " +
 		"(worklet.TaskPatch.CheckDates, which checks its comment) refuse one before they are " +

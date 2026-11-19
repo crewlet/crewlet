@@ -10,15 +10,13 @@ import (
 // THE DASHBOARD HAS A SENTENCE FOR EVERY RULE THE ENGINE DECIDES BY, and for
 // nothing else.
 //
-// A refusal on authority that names no access — `grants` empty, because none
-// would admit the caller — is drawn in the sentence `REFUSAL_SENTENCES` keeps
-// for the deciding rule's [authz.Reason]. One sentence for all of them told a
-// credential bound to no seat, and a token on a gesture that needs the person
-// present, that what they lacked was leading somebody; so the table is keyed
-// by the engine's closed set, and held here in both directions. A reason the
-// engine grew with no row is drawn as a claim about a rule that did not
-// decide; a row for a reason nothing reports is what a rename leaves behind.
-//
+// A refusal naming no access (`grants` empty, since none would admit the
+// caller) is drawn in the sentence `REFUSAL_SENTENCES` keeps for the deciding
+// rule's [authz.Reason]; one sentence for all would tell a seatless credential
+// that it lacked leading somebody. So the table is keyed by the engine's
+// closed set, held in both directions: a reason with no row claims a rule that
+// did not decide, and a row for a reason nothing reports is a rename's
+// leftover.
 // Mutation: drop a reason from the table, or add one [authz.Reasons] does not
 // have, and this fails.
 func TestTheDashboardSaysEveryReasonTheEngineDecidesBy(t *testing.T) {

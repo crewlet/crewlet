@@ -15,19 +15,14 @@ import (
 // A COPY HOLDING THE LOG IS LISTED, AND WHAT IT HELD BACK IS MEASURED — by the
 // last copy that finished, and never by one that failed.
 //
-// A copy stops every checkpoint at its moment for its whole run, so the -wal
-// beside the live file grows by what is committed meanwhile, on the volume the
-// node commits to (copies.go). What reads that off a handle is the alarms and
-// the room checks above this package: which copies hold the log now
-// (DB.Copies), and what a copy taken now would hold back (DB.CopyHoldsBack).
-// Here a copy is held at its VACUUM INTO while the applier's pinned writer
-// commits beside it: the copy is listed while it runs and not after, the log
-// grows under it — the cost the measure exists for — and the measure covers at
-// least what the case saw it grow by. A copy that then fails with nothing
-// committed beside it changes nothing, though measured it would read as a copy
-// that held nothing back; and a copy that finishes with nothing committed
-// beside it does replace the measure, with nothing, since the last copy is the
-// best guess at the write rate the next one will see.
+// The alarms and room checks read this off a handle (DB.Copies,
+// DB.CopyHoldsBack; see copies.go). Here a copy is held at its VACUUM INTO
+// while the applier's pinned writer commits beside it: it is listed while it
+// runs and not after, and the measure covers at least what the log grew by. A
+// copy that fails with nothing committed beside it changes nothing (measured,
+// it would read as holding nothing back); one that finishes with nothing
+// committed does replace the measure, with nothing, being the best guess at
+// the next write rate.
 func TestACopyIsListedWhileItHoldsTheLogAndMeasuresWhatItHeldBack(t *testing.T) {
 	t.Parallel()
 	hold := storetest.NewCopyHold()

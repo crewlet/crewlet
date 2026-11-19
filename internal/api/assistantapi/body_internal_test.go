@@ -19,14 +19,14 @@ func TestABodyThatDoesNotDecodeIsToldInWords(t *testing.T) {
 	t.Parallel()
 	const remedy = " Send one JSON object of the route's own fields."
 	for name, tc := range map[string]struct{ body, says string }{
-		"a field the route does not take": {`{"protocol_version": 1, "bogus": 1}`,
+		"a field the route does not take": {`{"protocol_version": 2, "bogus": 1}`,
 			`In the body, "bogus" isn't a field this takes.` + remedy},
 		"a value of the wrong kind": {`{"protocol_version": "one"}`,
 			`In the body, "protocol_version" holds text where a whole number belongs.` +
 				remedy},
 		"a document that is not JSON": {`{"protocol_version": `,
 			"The body isn't valid JSON: it ends too soon." + remedy},
-		"something after the object": {`{"protocol_version": 1} {}`,
+		"something after the object": {`{"protocol_version": 2} {}`,
 			"The body has more after its JSON value, which is all it may hold."},
 	} {
 		r := httptest.NewRequest(http.MethodPost, "/assistant/conversations",

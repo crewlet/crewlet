@@ -13,26 +13,16 @@ import (
 )
 
 // Transfer is the engine-streamed leg: the bytes of one file of the caller's
-// upload, put under the key its intent minted.
-//
-// # A name is put once
-//
-// The file is CLAIMED on its upload's record before a byte is read (one
-// compare-and-set, so two nodes handed the same file cannot both stream it),
-// and the put is checked against what the intent declared as it completes: a
-// stream of any other length or digest is deleted at once, nothing being able
-// to name it, and the file may be sent again. A put the store failed leaves
-// nothing behind, and the claim is given back. A file already stored is
-// refused ([ErrUploadConsumed]), so no second put of its key ever runs, and a
-// file the intent sends straight to the bucket is not taken here. A node that
-// dies mid-stream leaves its file claimed, since nothing can say how much of
-// the put landed: the upload's other files go on, that one is sent in a new
-// upload, and the old one's hold covers whatever the dead put stored.
-//
-// size is the length the caller was told the body has, or -1 where it was
-// not: a known size that is not the declared one is refused before a byte is
-// read. The put runs no later than the upload's window plus the file's own
-// pace, which the reservation's hold already covers.
+// upload, put under the key its intent minted. The file is CLAIMED on its upload's record before a byte is read (one
+// compare-and-set, so two nodes cannot both stream it), and the put is checked
+// against the intent as it completes: another length or digest is deleted at
+// once and the file may be sent again. A failed put gives the claim back. A
+// stored file is refused ([ErrUploadConsumed]), so no key is put twice. A node
+// dying mid-stream leaves its file claimed, since nothing says how much
+// landed: it is sent in a new upload, the old hold covering the dead put.
+// size is the length the caller was told, or -1; a known size other than the
+// declared is refused before a byte is read. The put ends within the upload's
+// window plus the file's pace, which the hold covers.
 func (s *Service) Transfer(ctx context.Context, c artifactsdomain.Call, upload, path string,
 	body io.Reader, size int64) error {
 

@@ -16,8 +16,15 @@
 // lines: the decision, and why the obvious alternative is wrong. The argument
 // behind it is written once, in the package doc, which a reader opens on
 // purpose (or in an ADR, when it binds more than one package), and the comment
-// points there. A package doc is not bounded: it is where the argument goes.
-// History stays in the commit, the pull request and the issue.
+// points there. History stays in the commit, the pull request and the issue.
+//
+// # A package doc holds decisions, not their history
+//
+// A package doc is what an agent reads before changing the package, so it too
+// is paid in full by every such reader. It holds the package's decisions and
+// why each alternative is wrong, within docBound bytes; a rule another package
+// decides belongs to that package's doc or an ADR, and the measurements and
+// incidents behind a decision to the commit and the issue.
 //
 // # internal/README.md is a map
 //
@@ -29,14 +36,14 @@
 //
 // # An inventory that only shrinks
 //
-// Both bounds arrived after the code. excessInventory records, per package
-// directory, the comment lines past the bound the package held then, and
-// rowInventory each long row's length; the gates refuse a package or a row
-// that grows, and a number not lowered when it shrinks, so the inventory only
-// moves down, and two changes to one package's count meet as a conflict on its
-// line. Issue #1474 removes the entries package by package, each by folding
+// The bounds arrived after the code. excessInventory records, per package
+// directory, the comment lines past the bound the package held then,
+// docInventory each long package doc's size, and rowInventory each long
+// row's length; the gates refuse an entry that grows, and a number not lowered
+// when it shrinks, so the inventory only moves down, and two changes to one
+// package's count meet as a conflict on its line. Issue #1474 removes the entries package by package, each by folding
 // the package's row into its doc and condensing its comments, and its last
-// piece removes the inventory and makes both bounds absolute.
+// piece removes the inventory and makes the bounds absolute.
 //
 // The package is test-only: this file is its documentation and the gates are
 // its tests.

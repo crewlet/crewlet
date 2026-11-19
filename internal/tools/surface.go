@@ -138,18 +138,14 @@ func (s *Surface) WithGuard(g Guard) *Surface {
 
 // SeatCallable is a tool that needs to know which seat is calling it.
 //
-// The tools that speak FOR a seat: asking a colleague, marking an onboarding
-// step, loading a skill this agent synthesized, recalling this agent's own
-// episodes. Every one of them is an authorization decision, and every one of
-// them would be forgeable if the seat arrived in the model's arguments.
+// The tools that speak FOR a seat (asking a colleague, marking an onboarding
+// step, loading a synthesized skill, recalling the agent's own episodes): each
+// is an authorization decision, forgeable if the seat arrived in the model's
+// arguments. Also `delegate`, whose workers count their calls on the log of the
+// turn it is called as ([Surface.Admit]'s), so the run's record keeps them with
+// the call that made them.
 //
-// AND THE ONE WHOSE WORK IS THE CALL'S OWN: `delegate`, whose workers count
-// their calls on the log of the turn it is called as — the call's own, where
-// the surface admitted it on one ([Surface.Admit]) — so the run's record can
-// keep their calls with the call that made them.
-//
-// Optional, and checked at the one frame that holds both halves. A plain
-// Callable — every MCP tool, every discovery meta-tool — is unaffected and
+// Optional: a plain Callable (every MCP tool, every discovery meta-tool)
 // knows nothing about turns.
 type SeatCallable interface {
 	Callable
@@ -308,19 +304,12 @@ func (s *Surface) Active() []string {
 // AnnotationsOf is one active tool's behavioural hints, as the registry holds
 // them.
 //
-// SEPARATE FROM [Surface.ToolDefs], because the two answer different clients:
-// a [llm.ToolDef] is what a MODEL is given — a name, a description and a
-// schema, and a model has no use for a destructive hint — while an MCP client
-// is a program that may ask a person before an irreversible call, and the hint
-// is the only thing it has to ask on.
+// SEPARATE FROM [Surface.ToolDefs]: a [llm.ToolDef] is for a MODEL, which has
+// no use for a destructive hint, while an MCP client may ask a person before an
+// irreversible call and the hint is all it has to ask on.
 //
-// It exists because the bridge advertised none. A sandboxed harness was
-// handed a seat's whole grant with every tool unannotated, so its own client
-// could not tell `get_work_item` from `remove_work_item` — while the registry
-// behind it had carried both decisions the whole time.
-//
-// A name that is not in the universe answers the zero set, which is the
-// correct reading of "nothing was advertised" rather than four false hints.
+// A name not in the universe answers the zero set: "nothing was advertised",
+// not four false hints.
 func (s *Surface) AnnotationsOf(name string) Annotations {
 	e, held := s.universe.Lookup(name)
 	if !held {
@@ -337,15 +326,10 @@ func (s *Surface) ToolDefs() []llm.ToolDef {
 
 	defs := make([]llm.ToolDef, 0, len(active))
 	for _, name := range active {
-		// No miss check. Activate is the ONLY writer of active and it
-		// admits nothing the universe does not resolve, and the universe
-		// is a frozen snapshot — so a name here always resolves.
-		//
-		// The check was written, mutated away, and nothing noticed. It was
-		// guarding against a server restarting mid-phase, which this
-		// surface is deliberately immune to: it resolves against the
-		// snapshot, not the live registry. Keeping it would have implied a
-		// hazard that the snapshot already removes.
+		// No miss check: Activate is the ONLY writer of active and admits
+		// nothing the universe does not resolve, and the universe is a
+		// frozen snapshot (immune to a server restarting mid-phase), so a
+		// name here always resolves.
 		e, _ := s.universe.Lookup(name)
 		defs = append(defs, llm.ToolDef{
 			Name:        e.Name(),
@@ -444,33 +428,18 @@ func (s *Surface) AsksFirst(name string) bool {
 	return e.NeedsApproval || e.ApprovalFixed || e.Unreviewed != nil
 }
 
-// Admit records a call in its run's call log NOW, in the order calls arrive,
-// for a caller that runs calls side by side — see [turnctx.CallLog.Admit] for
-// why a count read against the order calls RETURN in is one a re-run does not
-// reproduce — and returns the call bound to that place. The caller admits each
-// call under its own lock, in arrival order, and runs it once with what this
-// returns: exactly [Surface.Execute], except that the tool counts its repeats
-// from the log as it stood at the admission, and the call, already in the log,
-// is not recorded there again. What the call records on its own view is handed
-// back to the run's log when it returns.
+// Admit records a call in its run's call log NOW, in arrival order, for a
+// caller that runs calls side by side (see [turnctx.CallLog.Admit] for why a
+// count in return order is not reproducible), and returns the call bound to
+// that place. The caller admits each call under its own lock and runs it once:
+// exactly [Surface.Execute], except that repeats are counted from the log as
+// it stood at admission and the call is not recorded again.
 //
-// AT ADMISSION, so a call the surface goes on to refuse — an unknown name, a
-// guard — is in the log as well, and so is one its caller admitted and then
-// never ran. That can only raise a later count, and a raised count is a fresh
-// operation; see [turnctx.CallLog].
-//
-// The admitted call runs with the arguments admitted here, in their canonical
-// form; the call it is handed is read for nothing but its name.
-//
-// AND WHAT THE CALL'S OWN WORK RECORDED rides its result
-// ([toolloop.ToolResult.Absorbed]), the calls the run's log absorbs from it
-// as it returns, for a caller that records the call where a later segment's
-// log is seeded from.
-//
-// EVEN WHERE THE CALL PANICS: what its work recorded by then is in the run's log
-// all the same, so the panic is raised again carrying it
-// ([toolloop.CallPanic]), for the caller that recovers it to record beside the
-// call that broke. A call whose work recorded nothing panics as it did.
+// At admission, so a call later refused or never run is in the log too (it only
+// raises a later count; see [turnctx.CallLog]). The call runs with the
+// arguments admitted here; the call it is handed is read only for its name.
+// What its own work recorded rides its result ([toolloop.ToolResult.Absorbed]),
+// also on a panic, re-raised as a [toolloop.CallPanic] carrying it.
 func (s *Surface) Admit(name string, raw map[string]any) toolloop.Admitted {
 	args := s.ArgsOf(name, raw)
 	calls := s.turn.CallLog().Admit(name, args)
@@ -541,20 +510,14 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 	s.mu.Unlock()
 	e, known := s.universe.Lookup(name)
 	if !known || (!offered && !approved) {
-		// The two readings are DIFFERENT and the model can act on the
-		// difference: a name that exists but was not offered is something
-		// to activate, a name that does not exist is something to stop
-		// trying.
+		// The two readings differ and the model can act on it: an existing
+		// name not offered is something to activate, a missing one to stop
+		// trying. The class follows: not_found for a name nothing
+		// registered, forbidden for one not offered to THIS surface.
 		//
-		// THE CLASS FOLLOWS THE SAME SPLIT: a name nothing registered is
-		// not_found, and one that exists but was not offered to THIS
-		// surface is forbidden — the call is refused for where it was
-		// made rather than for what it named.
-		//
-		// WHOSE TOOL IT WAS rides a refusal of a name that exists
-		// ([toolloop.ToolResult.Source]): nothing answered it, but it was a
-		// call for that server's tool, refused here, which is what its
-		// count of refused calls is.
+		// WHOSE TOOL IT WAS rides a refusal of an existing name
+		// ([toolloop.ToolResult.Source]): it counts as that server's
+		// refused call.
 		msg, class, source := fmt.Sprintf("Unknown tool: %s", name), RefusalNotFound, ""
 		if known {
 			msg = fmt.Sprintf("Tool %s is not active on this surface; activate it first.", name)
@@ -679,23 +642,14 @@ func (s *Surface) execute(ctx context.Context, name string, args toolargs.Args,
 // executor's surface records it as the question its run parks on ([Holder]),
 // and every other phase is refused it.
 //
-// # Why a phase on the engine host is refused rather than parked
+// A reviewer, worker, onboarding or side pass runs inside one turn on the
+// engine host with no run whose row a question could ride, and parking the
+// turn would hold the seat as long as a person takes: so it is refused
+// FORBIDDEN, and the model is told the seat's own executor can ask.
 //
-// A reviewer, a delegated worker, the onboarding pass and the side passes each
-// run inside one turn on the engine host, with the seat's other work queued
-// behind it, and none of them has a run whose row a question rides or whose
-// answer could carry it on days later. Parking the whole turn instead would
-// hold the seat for as long as a person takes. So the call is refused as
-// FORBIDDEN, as a call refused for where it was made, and the model is told
-// that the seat's own run, its executor, can ask (the series' question 4).
-//
-// # What is recorded
-//
-// The call, FAILED either way, since nothing it asked for happened: a held
-// call counted as made would satisfy the delivery gate for a message nobody
-// sent. A held one carries [toolloop.ToolResult.Held], which tells the run's
-// record that it ended the job, and is recorded without its arguments, which
-// ride the run's row sealed.
+// The call is recorded FAILED either way: counted as made, it would satisfy the
+// delivery gate for a message nobody sent. A held one carries
+// [toolloop.ToolResult.Held], its arguments sealed on the run's row.
 func (s *Surface) hold(ctx context.Context, span trace.Span, name string, e Entry,
 	args toolargs.Args, turn *turnctx.Turn, changed bool) toolloop.ToolResult {
 
@@ -804,22 +758,15 @@ func paramsOrEmpty(p map[string]any) map[string]any {
 		return map[string]any{"type": "object", "properties": map[string]any{}}
 	}
 	out := maps.Clone(p)
-	// AN OBJECT SCHEMA OR NOTHING. A tool's parameters reach two consumers
-	// that both require the top-level `type: "object"` the MCP spec
-	// mandates (a vendor's tool-definition API, which rejects the whole
-	// request, and the MCP server the bridge builds, whose AddTool PANICS),
-	// and for an MCP tool this map came off a third-party server's wire
-	// verbatim. A value off the wire must be a value rather than a panic,
-	// and the panic's blast radius is the seat: it is raised on the turn
-	// goroutine that opens the bridge, so the wake naks, redelivers and
-	// panics again until the seat dead-letters.
+	// AN OBJECT SCHEMA OR NOTHING. Both consumers require the top-level
+	// `type: "object"`: a vendor's tool-definition API rejects the whole
+	// request, and the bridge's MCP AddTool PANICS, on the turn goroutine,
+	// so the wake naks and redelivers until the seat dead-letters. An MCP
+	// tool's map came off a third-party wire verbatim.
 	//
-	// A missing type is the ordinary malformation and the properties are
-	// still good, so it is filled in. A type that is present and says
-	// something else describes something that cannot be a tool's argument
-	// object at all, so the schema is replaced rather than believed —
-	// leaving the tool callable with whatever the model sends, which is
-	// what the surface's own dispatch does with it in any case.
+	// A missing type is the ordinary malformation, so it is filled in. Any
+	// other type cannot describe an argument object, so the schema is
+	// replaced rather than believed.
 	switch out["type"] {
 	case "object":
 	case nil:

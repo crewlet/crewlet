@@ -236,12 +236,11 @@ func (s *Service) create(ctx context.Context, c artifactsdomain.Call, req Create
 //
 // # A refused publish leaves nothing behind
 //
-// Every object the pipeline wrote for the publish (an edit's result, a linted
-// page, a copied CDN file, inline content) is deleted when the publish is
-// refused, and its reservation released; the upload the caller sent goes back
-// to open, its files held for another try until its window closes. An outcome
-// nobody could establish (a store that did not answer) leaves everything as it
-// is, so the retry of the same operation continues where it stopped.
+// Every object the pipeline wrote (an edit's result, a linted page, a copied
+// CDN file, inline content) is deleted when the publish is refused, and its
+// reservation released; the caller's upload goes back to open, its files held
+// until its window closes. An outcome nobody could establish (a store that
+// did not answer) leaves everything, so the retry continues where it stopped.
 func (s *Service) Publish(ctx context.Context, c artifactsdomain.Call, req PublishRequest) (artifactsdomain.Published, Report, error) {
 	start := s.now()
 	out, report, err := s.publish(ctx, c, req)

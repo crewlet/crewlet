@@ -41,34 +41,16 @@ func TestTheAdoptsStepsRunInTheOrderItsCrashMatrixAssumes(t *testing.T) {
 
 // AN INTERRUPTED ADOPTION LEAVES ONE DATABASE OR THE OTHER, NEVER A MIXTURE.
 //
-// # Why this is the assertion and not "it fails cleanly"
+// A crash leaves whatever the NEXT open finds. Acceptable: the old database,
+// the new one, or no live path yet (the caller re-fetches). Not: the new
+// database with the old -wal applied, or pages lost from a sidecar, a store
+// that opens and answers wrongly. The sequence is cut after each step of
+// [adoptSteps], so a step added or reordered is covered automatically.
 //
-// A node adopts because it cannot replay its way back, so the file it is
-// replacing is the only copy of its state it has. A power cut is not a
-// failure the caller handles — the process is gone, and what matters is
-// whatever the NEXT open finds. Three outcomes are acceptable and one is not:
-// the old database, the new database, or a live path that does not exist yet
-// (the caller re-fetches). A mixture — the new database with the old one's
-// -wal applied over it, or either one missing pages that were still in a
-// sidecar — is a store that opens, answers, and answers wrongly.
-//
-// # What "interrupted" means here
-//
-// The sequence is cut after each step, which is exactly what a crash between
-// two of them leaves on disk. It walks [adoptSteps] rather than repeating the
-// five calls, so a step added or reordered is covered by this case without
-// anybody remembering to extend it.
-//
-// # What it cannot see
-//
-// A reordering whose cuts stay coherent BY ACCIDENT. Swapping the last two
-// steps puts the rename before the live file's sidecars are removed — but the
-// live file was already checkpointed by then, so its -wal holds nothing and
-// removing it later changes no byte. That reordering is wrong and this case
-// passes on it; [TestTheAdoptsStepsRunInTheOrderItsCrashMatrixAssumes] is what
-// catches it, which is why both exist. Measured, so the boundary is a fact
-// rather than a caveat: moving the rename to the FRONT is caught here, and
-// swapping the last two is not.
+// It cannot see a reordering whose cuts stay coherent BY ACCIDENT: swapping the
+// last two steps passes, as the live file is already checkpointed.
+// [TestTheAdoptsStepsRunInTheOrderItsCrashMatrixAssumes] catches that; moving
+// the rename to the FRONT is caught here.
 func TestAnInterruptedAdoptionLeavesOneDatabaseOrTheOther(t *testing.T) {
 	t.Parallel()
 	steps := len(adoptSteps("a", "b"))

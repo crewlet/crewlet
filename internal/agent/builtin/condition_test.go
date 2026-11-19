@@ -95,20 +95,15 @@ func everyCondition() map[string]error {
 // EVERY CONDITION IS TOLD TO BOTH ITS READERS, AND TO NEITHER IN ITS OWN TEXT.
 //
 // A model reads a condition as a clause inside a tool's sentence
-// ([builtin.Condition]), and a person as a whole sentence on a screen
-// ([builtin.ConditionSentence]); both come from one classification, so
-// neither can name a condition the other does not. The model's clause and the
-// person's sentence carry nothing of the error: no framework or package name,
-// no reason's spelling, no position, setting, subject or host. The person's
-// sentence is in a screen's voice — no em dash and none of the engine's own
-// words for its parts — and asks for a try in a moment exactly where the
-// answer carries a Retry-After; a state-log refusal is told in the state log's
-// own sentence for its code.
+// ([builtin.Condition]), a person as a whole sentence ([builtin.ConditionSentence]);
+// one classification, so neither names a condition the other does not. Neither
+// carries the error (no package name, reason, position, setting, subject or
+// host). The person's has no em dash or engine word for its parts, and asks
+// for a try exactly where the answer carries a Retry-After.
 //
-// Mutation: drop an arm from the classification and its row goes red; answer a
-// refusal's message ([statelog.Unavailable.Error]) or its detail and every
-// state-log row does; give a person's sentence an em dash, or advice that
-// disagrees with the Retry-After, and that row does.
+// Mutation: drop an arm, answer a refusal's message
+// ([statelog.Unavailable.Error]) or detail, add an em dash, or give advice that
+// disagrees with the Retry-After, and the matching row goes red.
 func TestAConditionIsToldToItsTwoReadersWithoutItsOwnText(t *testing.T) {
 	t.Parallel()
 	for name, err := range everyCondition() {
@@ -190,22 +185,18 @@ func TestEveryConditionIsRecordedUnderAKindOfItsOwn(t *testing.T) {
 	}
 }
 
-// A CONDITION NO WAIT CLEARS IS NOT RETRIED BY A MODEL. A tool's sentence
-// about a condition told a model to try again whatever the condition was, so a
-// log at its byte ceiling — refused the same way until an administrator makes
-// room — was asked again for as long as the turn lasted. Now the sentence ends
-// on what a model can do about it: say it could not check, or could not make
-// the change, and why — never the person's advice, which sends them to another
-// node or an administrator, neither of which a model reaches. Only a condition
-// that clears on its own is offered the retry. A read and a write each,
-// through the tools themselves, beside a control that clears; every other
-// helper a tool answers a condition through is held to the same in
+// A CONDITION NO WAIT CLEARS IS NOT RETRIED BY A MODEL. Told to try again
+// whatever the condition, a model re-asked a log at its byte ceiling for the
+// whole turn. The sentence ends on what a model can do: say it could not check
+// or change, and why, never the person's advice (another node, an
+// administrator), which a model cannot reach. Only a condition that clears on
+// its own is offered the retry. A read and a write each, through the tools,
+// beside a control that clears; other helpers are held to the same in
 // TestEveryToolTellsAModelWhatAConditionNoWaitClearsLeavesIt.
 //
-// Mutation: answer every condition "Try again shortly" (or drop the next
-// clause from the write's sentence) and the full log's rows go red; offer the
-// person's advice instead and they go red too; offer the model's to a
-// condition that clears and the control does.
+// Mutation: answer every condition "Try again shortly", drop the next clause
+// from the write's sentence, or offer the person's advice, and the full log's
+// rows go red; offer the model's to a condition that clears and the control does.
 func TestAConditionNoWaitClearsIsNotRetriedByAModel(t *testing.T) {
 	t.Parallel()
 	trk := newFakeTracker()
@@ -252,15 +243,13 @@ func TestAConditionNoWaitClearsIsNotRetriedByAModel(t *testing.T) {
 	}
 }
 
-// EVERY SANDBOX CLASS IS A CONDITION, AND WAITS EXACTLY WHERE THE CLASS SAYS. A
-// coding sandbox's backend marks what it failed with by what clears it
-// ([sandbox.Why]), and every reader outside a box read — the query surface
-// answering a running run's output among them — tells it through this
-// classification: unclassed here, a provider that did not answer was a fault
-// of this node, a 500 telling a client nothing would change it. The hint
-// follows the class's own word on whether a wait clears it, and the class
-// wins over a deadline its chain carries, since a provider's request that ran
-// out of time is the provider not answering.
+// EVERY SANDBOX CLASS IS A CONDITION, AND WAITS EXACTLY WHERE THE CLASS SAYS.
+// A sandbox backend marks a failure by what clears it ([sandbox.Why]), and
+// every reader outside a box tells it through this classification: unclassed,
+// a provider that did not answer was a fault of this node, a 500 nothing would
+// change. The hint follows the class's word on whether a wait clears it, and
+// the class wins over a deadline in its chain, since a request that ran out of
+// time is the provider not answering.
 //
 // Mutation: drop a class from the classification, or mark a stuck class as
 // one that waits (or the reverse), and its row goes red; read a deadline

@@ -10606,3 +10606,201 @@ a.work-cal-chip {
 .assistant-attach-refusal {
   margin: 0 0 var(--spacing-2);
 }
+
+/* Ask Crewlet's page (app/assistant/chunk/AskPage.tsx): the reader's
+   conversations, a column as wide as a roomy sidebar, beside the one open,
+   which runs edge to edge under its head as a chat room does. The list's
+   width is the kit's own variable; nothing here sizes the kit's boxes. */
+.ask-page {
+  --ask-page-pad-x: var(--spacing-4);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ask-page__split {
+  --crewlet-list-detail-list: clamp(16rem, 30%, 22rem);
+}
+
+.ask-page__list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* New conversation and the search stay at the list's top as it scrolls. */
+.ask-page__list-top {
+  position: sticky;
+  top: var(--sticky-top);
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--ask-page-pad-x);
+  border-bottom: 1px solid var(--color-border-default);
+  background: var(--color-surface-background);
+}
+
+.ask-page__list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2);
+}
+
+.ask-page__list-title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+
+.ask-page__list-note,
+.ask-page__list-more {
+  padding: var(--spacing-3) var(--ask-page-pad-x);
+}
+
+.ask-page__open {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* The open conversation's head: its title and its actions, on a hairline,
+   at the height of a chat room's. Where the title and the model's picker do
+   not both fit, the actions wrap under the title rather than cut it. */
+.ask-page__head {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1) var(--spacing-2);
+  min-height: calc(var(--size-control-md) + var(--spacing-2) * 2);
+  padding: 0 var(--spacing-3) 0 var(--ask-page-pad-x);
+  border-bottom: 1px solid var(--color-border-default);
+}
+
+.ask-page__title {
+  flex: 1 1 12rem;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ask-page__actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+/* The thread is the one scroller; the notice that says why the reader may
+   not ask does not scroll itself, so it is given a box that does. */
+.ask-page__thread {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ask-page__thread--offline {
+  overflow: auto;
+  padding: var(--spacing-6) var(--ask-page-pad-x);
+}
+
+.ask-page__foot {
+  flex: none;
+  padding: 0 var(--ask-page-pad-x) var(--spacing-3);
+}
+
+.ask-page__none {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  padding: var(--spacing-6) var(--ask-page-pad-x);
+}
+
+/* The Advisor's page (routes/advisor): its head, when the checks last ran,
+   Run now and the model, on one wrapping row. */
+.advisor-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+
+.advisor-head__run {
+  flex: 1;
+  min-width: 12rem;
+  margin: 0;
+}
+
+/* The Advisor's model picker, captioned with what it picks. */
+.advisor-model {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* A finding's fix and its menu, side by side at a row's end. */
+.advisor-row-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.advisor-finding__tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+/* The facts a re-check read now: each label beside its number. */
+.advisor-facts {
+  display: grid;
+  gap: var(--spacing-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.advisor-facts__label {
+  color: var(--color-text-secondary);
+}
+
+.advisor-facts__value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Closed findings, one row each. */
+.advisor-history {
+  display: grid;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.advisor-history__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing-1) var(--spacing-2);
+}
+
+/* A helper's model in its page's head (components/HelperModel.tsx): the
+   picker, and what its last change came to beside it. */
+.helper-model {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}

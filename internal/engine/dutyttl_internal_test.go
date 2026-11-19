@@ -39,6 +39,7 @@ var dutyTTLs = map[string]struct {
 	"trashReaperDutyTTL":   {trashReaperDutyTTL, true},
 	"chatPruneDutyTTL":     {chatPruneDutyTTL, true},
 	"delegatedSweepTTL":    {delegatedSweepTTL, true},
+	"flowDutyTTL":          {flowDutyTTL, true},
 	"integrationDutyTTL":   {integrationDutyTTL, true},
 	"atlasCollectDutyTTL":  {atlasCollectDutyTTL, true},
 	"atlasWakeDutyTTL":     {atlasWakeDutyTTL, true},
@@ -48,6 +49,7 @@ var dutyTTLs = map[string]struct {
 	"identityDutyTTL(interval)": {longestIdentityDutyTTL(), true},
 	"setup.LeaseTTL":            {setup.LeaseTTL, true},
 	"companyKeyHoldTTL":         {companyKeyHoldTTL, true},
+	"advisorDutyTTL":            {advisorDutyTTL, true},
 	"schedule.DutyTTL(tick)":    {schedule.DutyTTL(schedule.MaxTick), true},
 	"waiterDutyTTL(interval)":   {waiterDutyTTL(coord.MaxDutyTTL / dutyTTLTicks), false},
 }
@@ -106,18 +108,18 @@ func TestEveryDutyClaimSiteIsInTheTTLTable(t *testing.T) {
 	// A renamed helper would otherwise leave this scanning nothing, green.
 	for expr := range dutyTTLs {
 		if !slices.Contains(sites, expr) {
-			t.Errorf("dutyTTLs lists %q but no workerDuty or workerHold call passes it; "+
+			t.Errorf("dutyTTLs lists %q but no duty helper's call passes it; "+
 				"the table is stale or the scan matched nothing", expr)
 		}
 	}
 }
 
 // claimFunctions are the schedule package's claim functions, which nothing
-// but the two duty helpers may call; dutyHelpers are those helpers, whose TTL
+// but the duty helpers may call; dutyHelpers are those helpers, whose TTL
 // argument the table must list.
 var (
 	claimFunctions = []string{"ClaimNamedDuty", "HoldNamedDuty", "ClaimDuty"}
-	dutyHelpers    = []string{"workerDuty", "workerHold"}
+	dutyHelpers    = []string{"workerDuty", "workerHold", "liveDuty"}
 )
 
 // dutyHelperFiles are the two files allowed to call claimFunctions.

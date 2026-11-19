@@ -32,28 +32,18 @@ import (
 // both: the copy's before the streams, these after them. See the package doc's
 // "The objects follow the log" for why this and not a read of the live rows.
 
-// windowBufferBytes bounds each pull the window's reader makes, and so how much
-// of a log it holds ahead of what it has read: [statelog.MaxDeliveryBytes], the
-// largest record the transport carries WITH what the broker counts beside it
-// when it delivers one.
+// windowBufferBytes bounds each pull the window's reader makes:
+// [statelog.MaxDeliveryBytes], the largest record the transport carries WITH
+// what the broker counts beside it when it delivers one.
 //
-// NOT THE TRANSPORT'S CEILING ALONE (queue.MaxPayloadBytes). The broker admits
-// a publish whose headers and payload reach that ceiling, and then sizes its
-// DELIVERY against a pull's byte bound as the subject, the acknowledgement
-// subject, the headers and the payload together — so a record at the ceiling
-// never fits a pull bounded by the ceiling: every pull is answered "message
-// size exceeds max bytes" with nothing delivered, the client pulls again with
-// the same bound, and the backup is refused when the wait runs out
-// (TestABackupReadsPastARecordAtTheTransportCeiling, on the pinned broker). The
-// framework's own pull is sized past the same floor for the same reason
-// (statelog's FetchBytes); this one holds one maximal record, since the window
-// is read one record at a time.
-//
-// NOR A LOG'S OWN LARGEST APPEND ([statelog.StreamSpec.MaxAppendBytes]): the
-// window names each declaring log by its stream alone, and what bounds the
-// records on a log the backup reads is the broker that admitted them — a
-// stream made under another build's declaration, or by an operator's restore,
-// holds whatever the transport carried.
+// Not queue.MaxPayloadBytes alone: the broker sizes a delivery against a pull's
+// byte bound as subject, ack subject, headers and payload together, so a record
+// at that ceiling never fits a pull bounded by it, every pull is answered
+// "message size exceeds max bytes", and the backup is refused when the wait
+// runs out (TestABackupReadsPastARecordAtTheTransportCeiling). Not a log's
+// StreamSpec.MaxAppendBytes either: the window names logs by stream alone, and
+// a stream made under another build or by a restore holds whatever the
+// transport carried.
 const windowBufferBytes = statelog.MaxDeliveryBytes
 
 // window is what the records past the copy name, keyed for the two questions
@@ -127,13 +117,12 @@ func (w window) owesReplayed(ref reference) bool {
 // the streams were snapshotted (nc non-nil), each declaring log from the copy's
 // position through the snapshot's last sequence.
 //
-// EVERY RECORD, APPLIED OR NOT: whichever records a restore's applier drops (an
-// evicted writer's, a redelivery its guard skips), what is read here is a
-// superset of what the restored rows name, and the backup never has to decide
-// which records apply. A record this build cannot read that may write a
-// declared table refuses the backup ([objstore.ErrRecordUnreadable]): it may
-// name an object the restore needs, and nobody can tell which. And EVERY
-// RECORD IS A SIGNED FRAME, opened and verified before it is read
+// EVERY RECORD, APPLIED OR NOT: what is read is a superset of what the restored
+// rows name (an evicted writer's record, a redelivery the guard skips), so the
+// backup never decides which records apply. A record this build cannot read
+// that may write a declared table refuses the backup
+// ([objstore.ErrRecordUnreadable]): it may name an object the restore needs.
+// Every record is a signed frame, verified before it is read
 // ([objectPass.noteRecord]).
 func (p *objectPass) readWindow(ctx context.Context, nc *nats.Conn, api jsapi.API,
 	m Manifest, cursors map[string]statelog.FileCursor) error {
@@ -258,17 +247,14 @@ func declaringLogs(required []objstore.ReferenceTable,
 // into the window through every table l writes, naming where it came from in a
 // refusal.
 //
-// THE FRAME IS OPENED AND VERIFIED FIRST, as statelog's verified log opens one
-// for every reader that decodes a log straight off it (statelog.VerifiedLog):
-// each declaration's Records decodes a record's BODY, and handed the frame it
-// read every signed record as one no build reads. Strict, for the verified
-// log's reason — what the backup decides from a record is which files it
-// carries — so a record under a key this node does not hold refuses the
-// backup ([statelog.ErrRecordUnverified]) rather than being read for files on
-// trust: its node holds a keyring short of the fleet's, whose applier is
-// holding the same record back, and the remedy is the key. A frame the
-// keyring does not open at all is not this fleet's ([statelog.ErrRecordTampered])
-// and is refused for the same reason the applier refuses it.
+// THE FRAME IS OPENED AND VERIFIED FIRST, as statelog.VerifiedLog does for any
+// reader decoding a log off the stream: each declaration's Records decodes a
+// record's BODY, and handed the frame it would read every signed record as one
+// no build reads. Strict: what the backup decides from a record is which files
+// it carries, so a record under a key this node does not hold refuses the
+// backup ([statelog.ErrRecordUnverified]) rather than being read on trust; the
+// remedy is the key. A frame the keyring does not open is not this fleet's
+// ([statelog.ErrRecordTampered]) and is refused as the applier refuses it.
 func (p *objectPass) noteRecord(l declaringLog, where string, framed []byte) error {
 	payload, verdict := l.verifier.Open(framed)
 	switch verdict {
@@ -329,11 +315,10 @@ type deferredRecord struct {
 // though the copy's do not. A record this build deferred because it cannot read
 // it is a newer build's, which refuses the backup as any such record does.
 //
-// A PAGE AT A TIME ([deferredPage]), each page read in a read of its own and
-// folded once that read has ended — never the whole table in one slice under
-// one read, which held a stalled upgrade's whole backlog, payloads and all, and
-// one of the copy's connections for as long as it took to scan it. The first
-// record that refuses the backup ends the walk.
+// A PAGE AT A TIME ([deferredPage]), each in a read of its own, folded once
+// that read has ended: never the whole table under one read, which would hold a
+// stalled upgrade's whole backlog and a connection for the whole scan. The
+// first record that refuses the backup ends the walk.
 func (p *objectPass) readDeferred(ctx context.Context, logs []declaringLog) error {
 	db, err := store.OpenEstate(ctx, store.EstateReplicated, p.copyPath, store.Options{})
 	if err != nil {
@@ -469,18 +454,15 @@ func (p *objectPass) readLog(ctx context.Context, js jetstream.JetStream, l decl
 // readRange hands each record of stream from after from through through to
 // each, in order, and answers how many it read.
 //
-// AN ORDERED CONSUMER'S ITERATOR, never a fetch: the library re-creates an
-// ordered consumer on every Fetch, a consumer creation per batch, where the
-// iterator keeps one and remakes it by itself when it loses its heartbeats or a
-// sequence. What proves nothing was skipped either way is the CONTIGUITY CHECK:
-// each record must be the sequence after the one before, so a record the log
-// no longer holds refuses the backup rather than leaving a file uncounted.
+// AN ORDERED CONSUMER'S ITERATOR, never a fetch, which re-creates the consumer
+// per batch where the iterator keeps one and remakes it on lost heartbeats. The
+// CONTIGUITY CHECK proves nothing was skipped: each record must follow the one
+// before, so a record the log no longer holds refuses the backup.
 //
-// EACH RECORD IS WAITED FOR UP TO snapshotChunkWait — the bound a snapshot's
-// next chunk gets — through the wait's own context. A shorter wait asked again
-// would never see the iterator's heartbeat check fire (it is rescheduled at
-// every wait, and fires at twice the heartbeat), so a consumer whose pull the
-// broker dropped would be waited on until the bound rather than remade.
+// EACH RECORD IS WAITED FOR UP TO snapshotChunkWait, through the wait's own
+// context: a shorter wait asked again never sees the iterator's heartbeat check
+// fire (rescheduled at every wait, at twice the heartbeat), so a consumer whose
+// pull the broker dropped would be waited on rather than remade.
 func readRange(ctx context.Context, js jetstream.JetStream, stream string, from, through uint64,
 	each func(seq uint64, payload []byte) error) (int, error) {
 

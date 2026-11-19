@@ -218,28 +218,16 @@ func decided(row queries.SessionRow) string {
 }
 
 // A SESSION'S ROW SAYS WHICH LAUNCH WOULD CONTINUE IT, AND WHETHER, AS THAT
-// LAUNCH DECIDES IT. Asked of the one decision that launch takes, over the
-// turn's row on the log, its run's record, its conversation's head as the page
-// named it and the member the launch is launched on: a live turn whose job kept
-// the capture the row names, which that member's runner restores, is
-// continuable by a relaunch in any box, with no reason; a session another
-// harness wrote, which the member's runner does not take up, is not continued
-// from its capture — and, its parked box of that other harness, nowhere — saying
-// why; an ended turn's session that is its conversation's head is the next
-// turn's, continuable in any box where the member restores it; and a live turn
-// whose end is owed, whose run's ending is decided, or whose run is over, is the
-// next turn's too, undecided until its end is on the log. A whole page reads the
-// coordination store ONCE, and once more for the one live row the listing does
-// not hold, and asks the node holding the seat ONCE, about the two live rows a
-// relaunch decides, each by its turn, and the head the next turn decides, by no
-// turn; one session read alone reads its own turn's record and asks about its
-// own turn's session, and nothing else.
+// LAUNCH DECIDES IT. A live turn whose job kept a capture the launch member's
+// runner restores is continuable in any box; a session another harness wrote
+// is not, saying why. An ended head is the next turn's, as is a live turn whose
+// end is owed or decided, undecided until its end is on the log. A page reads
+// the coordination store ONCE (plus once for the live row the listing lacks)
+// and asks the seat's node ONCE; a session read alone asks about its own turn.
 //
-// Mutation: decide a row by anything but sandbox.ReadContinuityOf, read the
-// store or ask the holder once per row, ask the runner of the harness that
-// wrote the session rather than the launch's member, ask about an ended head
-// by its own turn, answer a decided ending as live, or say which launch a row
-// is about otherwise than the decision did, and a check goes red.
+// Mutation: decide a row by anything but sandbox.ReadContinuityOf, read or ask
+// once per row, ask the wrong harness's runner, ask about an ended head by its
+// own turn, or answer a decided ending as live, and a check goes red.
 func TestASessionsRowSaysWhichLaunchWouldContinueIt(t *testing.T) {
 	t.Parallel()
 	continues, continuesRun := liveSession(executor.ClaudeCodeName)
@@ -336,12 +324,11 @@ func TestASessionsRowSaysWhichLaunchWouldContinueIt(t *testing.T) {
 
 // A LIVE SESSION WHOSE RUN RECORD CANNOT BE READ IS UNDECIDED, NEVER A NO, AND
 // AN ENDED ONE NEEDS NO RECORD. A coordination store that does not answer, a
-// node wired with none to read, and a node wired with no way to ask the node
-// holding the seat what a relaunch is launched on each leave every live turn's
-// row with `continuable` null and its reason saying why — a no would tell a
-// person a session starts over that may well be continued — while the page is
-// still answered, and an ended turn's row of no conversation is decided off the
-// log alone. A page of ended turns reads nothing from the store at all.
+// node wired with none to read, and a node with no way to ask the seat's node
+// what a relaunch is launched on each leave a live row `continuable` null with
+// a reason (a no would say a session starts over that may be continued), the
+// page still answered. An ended turn of no conversation is decided off the log
+// alone, and a page of ended turns reads nothing from the store.
 //
 // Mutation: answer an unread record as a run that is over, read a node with no
 // run records as one whose runs are all over, read a node that asks no holder
@@ -597,16 +584,13 @@ func TestWhetherARelaunchContinuesIsUndecidedWhereARelaunchWouldNotDecideEither(
 }
 
 // A CLAIM IS DECIDED ONCE ITS READ HAS TAKEN THE JOB'S FINAL CAPTURE, OR ITS
-// TURN HAS SAID WHAT IT DOES. The read a claim makes takes the job's session
-// first, and the claim's row stays resumed for the whole resumed turn, its review
-// included — which is when a person most wants to know what a send-back would
-// continue. So once that final capture is taken and kept, the row is decided as
-// any other: continued from it in any box. And once the turn has begun, saying
-// what it does with the round, so is one whose capture no relaunch's runner
-// restores, and one whose read took no capture at all: a turn that collects its
-// job is reviewed, and its send-back continues nothing in the job's box; one
-// that carries the round on in that box continues it there. Before either, it is
-// still undecided.
+// TURN HAS SAID WHAT IT DOES. A claim's row stays resumed for the whole resumed
+// turn, review included, when a person most wants to know what a send-back
+// would continue. Once the final capture is kept, the row is decided as any
+// other. Once the turn has said what it does with the round, so is one whose
+// capture no runner restores or whose read took none: a turn that collects its
+// job continues nothing in the job's box; one that carries the round on
+// continues it there. Before either, it is undecided.
 //
 // Mutation: read every resumed row as a job still being collected, read a turn
 // that said what it does as one that has not, or read a collecting turn as one
@@ -1002,14 +986,11 @@ func endedOn(conversation string, seq uint64) executordomain.Session {
 }
 
 // A SCHEDULE'S ROW SAYS WHETHER ITS NEXT FIRE CONTINUES IT. A schedule is a
-// conversation of each seat that runs it, every fire a turn of it, so a fire's
-// row is decided as any conversation's is — by the decision its next fire's
-// first launch takes — and said as the schedule's next fire (`next_fire`), in
-// the schedule's words: the newest fire's session in the schedule's line is
-// continuable in any box, and a fire that parked on a question — which read
-// the schedule before that fire did and ended after it — names the fire the
-// next one is handed instead, on its page and read alone. A chat
-// conversation's head on the same page stays its next turn's.
+// conversation of each seat that runs it, every fire a turn, so a fire's row is
+// decided as any conversation's, by its next fire's first launch, and said as
+// `next_fire`: the newest fire's session is continuable in any box, and a fire
+// that parked on a question (read the schedule before that fire, ended after)
+// names the fire the next one is handed instead. A chat head stays `next_turn`.
 //
 // Mutation: decide a schedule's row as `next_turn`, word it as a
 // conversation's, or tell a chat conversation's row as a schedule's, and a
@@ -1062,24 +1043,17 @@ func TestAScheduleRowSaysWhetherItsNextFireContinuesIt(t *testing.T) {
 }
 
 // A ROW SAYS WHETHER THE NEXT TURN CONTINUES IT, as that turn's first launch
-// decides it, on the head the read that answered the row named: the head of a
-// conversation is continuable by the next turn in any box, asked of the node
-// holding the seat by NO turn, its runner restoring it; an older row names the
-// head the next turn is handed instead; a row that names no session says which
-// of three reasons — nothing captured, its newest capture not kept (that
-// capture's own reason redacted, on the ending as much as in the sentence), or
-// the seat's budget's release — and a turn that served no conversation is
-// continued by no launch. A live turn whose first job was lost before it kept
-// anything says its relaunch continues the session its first launch was
-// handed, names it (`base_turn`), and asks the holder about that session's
-// archive. A head whose launch cannot be said is undecided, never a no. And a
-// session read alone is decided as its page decides it, on its own read's head.
+// decides it, on the head the read that answered the row named: a head is
+// continuable in any box, asked of the seat's node by NO turn; an older row
+// names the head the next turn is handed; a row naming no session gives one of
+// three reasons (nothing captured, capture not kept, redacted, budget release).
+// A live turn whose first job was lost continues the session its first launch
+// was handed (`base_turn`). An unsayable launch is undecided, never a no.
 //
-// Mutation: decide an ended row as 6b did (a relaunch's no), by its own turn's
-// target or by a head the page did not name; read an unknown target as a no;
-// drop a reason for a row with no session, or send an unkept capture's reason
-// unredacted; or ask the holder about a begun turn's own empty archive, and a
-// check goes red.
+// Mutation: decide an ended row by a relaunch's no, its own turn's target or a
+// head the page did not name; read an unknown target as a no; drop a reason
+// for a row with no session or send an unkept capture's reason unredacted; or
+// ask the holder about a begun turn's own empty archive, and a check goes red.
 func TestARowSaysWhetherTheNextTurnContinuesIt(t *testing.T) {
 	t.Parallel()
 	secret := "ghp_" + strings.Repeat("d", 36)

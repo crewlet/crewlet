@@ -12,32 +12,16 @@ import (
 
 // ONLY THE RUNTIME REACHES THE REPLICATED ESTATE.
 //
-// A node without the `data` role holds no replicated estate at all — no file,
-// nothing open — and a tool, a reader or an operator surface runs on every
-// kind of node. So a caller that reaches for the estate through the node's own
-// store — opens it, looks it up, builds a handle to it, finds its file — is a
-// caller assuming this node holds it, and that assumption is right on a data
-// node and wrong on every node without `data`. What reaches the estate is the
-// RUNTIME that opened it, handing it to the domains that apply and read it
-// there; every other reader is handed what the runtime gives it, or asks a
-// node that holds the estate through the estate router (internal/estate).
-//
-// The exported methods that reach it are a family the compiler lets any
-// package call. This walk is what keeps the family to the list below.
-//
-// # What it reports
-//
-// Every call in a non-test file under internal/ or cmd/ to one of the store's
-// replicated-estate methods — `OpenReplicated`, `CloseReplicated`,
-// `ReplicatedDB`, `Replicated`, `ReplicatedFile` — on a receiver that is not
-// an imported package, and every call through the store package itself that
-// names the replicated estate's file: `ReplicatedPath` and `OpenEstate` of
-// `EstateReplicated`. Matching is on the name, as every gate in this package
-// matches; the one name it trusts is an import's.
-//
-// # The allowance is two-sided
-//
-// An entry that matches no call FAILS, for the reason the applier gate's do.
+// A node without `data` holds none, yet tools and readers run on every node,
+// so a caller that opens or looks up the estate through the node's own store
+// assumes this node holds it. Only the RUNTIME that opened it reaches it;
+// every other reader is handed what it gives or asks a data node through
+// internal/estate. The compiler lets any package call the exported family;
+// this walk keeps it to the allowance list, by NAME. It reports calls in
+// non-test files under internal/ and cmd/ to `OpenReplicated`,
+// `CloseReplicated`, `ReplicatedDB`, `Replicated`, `ReplicatedFile`, and
+// store-package calls naming the file (`ReplicatedPath`, `OpenEstate` of
+// `EstateReplicated`). An entry matching no call FAILS.
 func TestOnlyTheRuntimeReachesTheReplicatedEstate(t *testing.T) {
 	t.Parallel()
 

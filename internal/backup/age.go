@@ -9,37 +9,21 @@ import (
 	"time"
 )
 
-// How old this node's newest backup is, read from the artefacts it wrote.
+// These functions read this node's own artefacts and feed only `crewlet.backup.age`, for the copies THIS node
+// took. The trim's backup term and the `backup_age` alarm read the register
+// instead ([coord.NewestBackupOf], aged from when the copy was TAKEN), because
+// the trim-duty node rarely took the copy and cannot see another host's disk.
 //
-// # It feeds one gauge, and neither the trim nor the alarm
-//
-// These functions answer `crewlet.backup.age`, which a node publishes for the
-// copies IT took: the manifests in the directories the positions register says
-// this node announced. The trim's backup term and the `backup_age` alarm do not
-// read them. Both read the register instead — per log, the newest verified
-// point the operator's policy counts that covers it, aged from when the copy
-// was TAKEN ([coord.NewestBackupOf]) — because the node holding the trim duty
-// is rarely the node that took the copy, and can never see a directory on
-// another host.
-//
-// # The gauge reads the disk because the register cannot say what it says
-//
-// The register records that a backup was announced; the directory records that
-// one still EXISTS. Those differ in exactly the cases an operator watching
-// the gauge wants caught — a copy announced and then deleted, a volume that
-// was never mounted, a schedule pointing at a path nobody ships from — and in
-// every one of them the register, and so the trim and the alarm, still count
-// the copy while the disk says it is gone. So the two answer different
-// questions and can disagree: the alarm says how old the backup the trim
-// counts is, per log and fleet-wide; the gauge says how old the newest copy on
-// this node's own disk is.
-//
-// A MANIFEST IS THE CLAIM, so a directory without one contributes nothing: it
-// is the debris of a run that did not finish, and reading its mtime as a
-// backup would be the gauge silenced by a failure.
+// The gauge reads the disk because the register records only that a backup was
+// announced, while the directory records that one still EXISTS. They differ in
+// the cases an operator wants caught (a copy deleted, a volume never mounted),
+// where the trim and alarm still count the copy: the alarm says how old the
+// counted backup is, the gauge how old the newest copy on this disk is.
 
 // Newest is the finishing instant of the newest complete backup under root,
-// reporting false when there is none.
+// reporting false when there is none. A MANIFEST IS THE CLAIM: a directory
+// without one is the debris of an unfinished run, and reading its mtime as a
+// backup would silence the gauge.
 //
 // It looks at root itself and at ONE level of subdirectories beneath it,
 // because those are the two shapes an operator's schedule produces: a single

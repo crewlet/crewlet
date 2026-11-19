@@ -18,26 +18,18 @@ import (
 	"github.com/crewlet/crewlet/internal/atlas"
 )
 
-// NAMES A PERSON SAYS, KEYS A ROUTE TAKES. A person asks about "the QA
-// Engineer", "the Company space" or "the Product and Engineering unit"; the
-// routes take a seat's handle, a space's key, a project's key and a unit's
-// key. A tool declares which of its arguments name one of those records
-// ([Tool.Names]), and every such argument is resolved by ONE function before
-// the call's request or preview is built ([Resolver.Resolve]): a key as it
-// is, or a name read against the directory of that record, replaced by its
-// key. So the card, the digest the person approves and the request the
-// approval sends all carry the key, and a model that guessed a key from a
-// name ("COMPANY" for the space named Company, whose key is HOME) is told the
-// choices before anything is proposed, rather than after the person approved
-// a change the route refuses.
+// NAMES A PERSON SAYS, KEYS A ROUTE TAKES. A tool declares which arguments
+// name a record ([Tool.Names]), and ONE function resolves each before the
+// request or preview is built ([Resolver.Resolve]): a key as it is, a name
+// replaced by its key from that record's directory. So the card, the digest
+// and the approval's request all carry the key, and a model that guessed one
+// ("COMPANY" for the space keyed HOME) is told the choices before proposing.
 //
 // # It never decides access
 //
-// Each directory is read through the turn's own grant, as the person, so a
-// name resolves only to a record their own read lists. A directory the person
-// may not read, or one that could not be read, resolves nothing: the value is
-// sent as written and the route decides it, in its own words. Resolution is a
-// convenience over what the route would answer, never a second authority.
+// Each directory is read through the turn's grant, so a name resolves only to
+// a record the person's own read lists. An unreadable directory resolves
+// nothing: the value is sent as written and the route decides it.
 
 // Directory is a kind of record a person names by its name as often as by its
 // key.
@@ -290,32 +282,17 @@ func (r *Resolver) SeatName(ctx context.Context, handle string) (string, bool) {
 }
 
 // Resolve answers args with every argument t names ([Tool.Names]) resolved
-// to its record's key: unchanged where it is a key already, replaced where it
-// is the record's name. A value that names two records is refused as
-// [ErrInvalidArguments] listing them, so the model picks one rather than
-// guess. An empty value is left as it is (an assignee of "" unassigns), and so
-// is every value of a directory that could not be read. args itself is never
-// changed.
+// to its record's key; args itself is never changed. A name matching two
+// records is refused as [ErrInvalidArguments] listing them. An empty value
+// stays (an assignee of "" unassigns), as does every value of an unreadable
+// directory. Lists resolve entry by entry (names, or members by `handle`).
 //
-// A LIST IS RESOLVED ENTRY BY ENTRY, by the same rule: a list of names (the
-// people a direct message goes to), or a list of members each naming its seat
-// by `handle` (a room's membership).
-//
-// A VALUE THAT NAMES NOTHING THE DIRECTORY LISTS is refused, listing the
-// choices, for a write, which changes a record that must be there now: a card
-// the route would refuse once approved is never drawn. A read sends a value
-// that could be a key as it is, because a read may name what the directory no
-// longer lists (a seat removed from the chart still has its turns), and the
-// route decides it; only a value no key is spelled like (it has a space in it)
-// is refused with the choices, since it can only have been meant as a name. A
-// membership ([DirMember]) is held to the read's rule for the read's reason: a
-// seat removed from the chart is still in the rooms it was in.
-//
-// EVERY VALUE IT CANNOT PLACE IS NAMED IN ONE REFUSAL (ADR-0059): every
-// argument's and every list entry's, each by its path (`to[1]`,
-// `members[2].handle`), with each directory's choices once after them. A
-// direct message to three people the chart does not hold is told all three at
-// once, where stopping at the first cost the model an attempt per person.
+// A VALUE THAT NAMES NOTHING THE DIRECTORY LISTS is refused with the choices
+// for a write, which needs the record now. A read sends a possible key as is
+// (a removed seat still has turns); only a value with a space is refused. A
+// membership ([DirMember]) takes the read's rule.
+// EVERY UNPLACED VALUE IS NAMED IN ONE REFUSAL (ADR-0059), each by its path
+// (`to[1]`, `members[2].handle`), so three unknown people cost one attempt.
 func (r *Resolver) Resolve(ctx context.Context, t Tool, args map[string]any) (map[string]any, error) {
 	out, faults := r.resolveAll(ctx, t, args, false)
 	if len(faults) > 0 {

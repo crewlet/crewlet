@@ -794,17 +794,15 @@ func TestARepeatedDecisionTheStoreCannotAnswerIsUnconfirmed(t *testing.T) {
 
 // A DECISION THE STORE REFUSED IS THE STORE'S OWN ERROR, never one nobody can
 // confirm: the record was not written, so the surface tells the refusal as
-// the condition or the fault it is. Every store error once came back as
-// Unconfirmed, and a person whose approval a full log refused was told it may
-// have landed and asked to approve again into the same refusal. So is a read
-// of the proposal, or of whether its turn may carry on, that failed before
-// anything was decided. A settlement the store refuses after the write was
-// SENT is still unconfirmed, because the write's own outcome stands whatever
-// kept its record out.
+// the condition or fault it is, not "may have landed, approve again" into the
+// same refusal. So is a failed read of the proposal, or of whether its turn
+// may carry on, before anything was decided. A settlement the store refuses
+// after the write was SENT is still unconfirmed: the write's own outcome
+// stands whatever kept its record out.
 //
-// Mutation: answer a failed move as Unconfirmed (as move did) and the first
-// two rows go red; answer either failed read as Unconfirmed and its row does;
-// return a failed settlement's error as it is and the last case does.
+// Mutation: answer a failed move as Unconfirmed and the first two rows go
+// red; answer either failed read as Unconfirmed and its row does; return a
+// failed settlement's error as it is and the last case does.
 func TestADecisionTheStoreRefusedIsTheStoresOwnError(t *testing.T) {
 	t.Parallel()
 	ada := approvaltest.Person(approvaltest.Noon.Add(time.Hour))

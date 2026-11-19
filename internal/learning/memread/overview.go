@@ -127,17 +127,17 @@ func (r *Reader) Overview(ctx context.Context, seats []Seat) (Overview, error) {
 		return out, nil
 	}
 
-	// ONE LISTING OF EVERY SEAT LEASE rather than a read per seat.
+	// ONE LISTING OF EVERY SEAT LEASE rather than a read per seat, each
+	// listed lease held on the store's word ([coord.Backend.ListLive]).
 	leases, err := r.Leases.ListLive(ctx, coord.ClassSeat)
 	if err != nil {
 		return Overview{}, fmt.Errorf("%w: which nodes hold the seats could not be read: %w",
 			ErrUnavailable, err)
 	}
-	now := r.now()
 	byOwner := map[string][]Seat{}
 	for _, lease := range leases {
 		id, ok := coord.SeatID(lease.Resource)
-		if _, asked := at[id]; !ok || !asked || !lease.Live(now) {
+		if _, asked := at[id]; !ok || !asked {
 			continue
 		}
 		byOwner[lease.Owner] = append(byOwner[lease.Owner], byID[id])

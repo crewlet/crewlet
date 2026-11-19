@@ -15,12 +15,11 @@ import (
 // the floor's measurement reads: every command the engine can send is one the
 // floor was proven against.
 //
-// The two fields of no size make each instantiation a type of its own.
-// Without them every Method would have one underlying type, struct{ name
-// string }, and any package could convert a declared Method to other type
-// arguments and send its command with parameters the measurement never read.
-// They come first because a struct whose last field has no size is padded
-// past it.
+// The two fields of no size make each instantiation a type of its own: with
+// one underlying type, struct{ name string }, any package could convert a
+// declared Method to other type arguments and send parameters the measurement
+// never read. They come first because a struct whose last field has no size is
+// padded past it.
 type Method[P, R any] struct {
 	_    [0]*P
 	_    [0]*R
@@ -41,10 +40,9 @@ func (m Method[P, R]) result() reflect.Type { return reflect.TypeFor[R]() }
 // first — wrapping context.DeadlineExceeded then, and naming the method. No
 // error it returns carries p or the result.
 //
-// A Method that is not an entry of the inventory with P and R the types it is
-// declared with there sends nothing, and Call says why: the zero Method, the
-// only one another package can build, and one this package built by any
-// spelling but its entry's alike.
+// A Method that is not an inventory entry with its declared P and R sends
+// nothing, and Call says why: the zero Method (the only one another package
+// can build) and any other spelling of one alike.
 func Call[P, R any](ctx context.Context, s *Session, m Method[P, R], p P) (R, error) {
 	raw, err := s.c.call(ctx, s, m, p)
 	if err != nil {
@@ -55,20 +53,16 @@ func Call[P, R any](ctx context.Context, s *Session, m Method[P, R], p P) (R, er
 }
 
 // Send sends m with p on s as [Call] does, but returns once the connection's
-// one writer has taken it, without waiting for Chromium's answer, which the
-// [Pending] it returns holds once it comes. So commands sent one after
-// another on a session reach Chromium in the order they were sent, which is
-// what a target Chromium holds needs: its Setup sends what it needs in place
-// and the attacher's resume goes behind it, since a page Chromium holds
-// before it has a renderer answers what its renderer serves only once it has
-// resumed ([AttachOptions] says which, and what was measured).
+// one writer has taken it, the [Pending] holding Chromium's answer once it
+// comes. So commands sent in turn on a session reach Chromium in that order,
+// which a held target needs: its Setup sends what it needs and the attacher's
+// resume goes behind it, since a page held before it has a renderer answers
+// what its renderer serves only once resumed ([AttachOptions.Setup]).
 //
-// ctx bounds the sending alone: under a context that has ended Send sends
-// nothing, as Call does, and the Pending holds why. Once sent, the command is
-// answered, or fails at its session's end or at [CommandTimeout] from its
-// sending, whether anybody waits for it or not, on a goroutine of its own
-// that ends then. A Method that is not an entry of the inventory sends
-// nothing, as Call says.
+// ctx bounds the sending alone: under an ended context Send sends nothing and
+// the Pending holds why. Once sent, the command is answered, or fails at its
+// session's end or [CommandTimeout], whether anybody waits or not, on a
+// goroutine that ends then. An undeclared Method sends nothing, as Call says.
 func Send[P, R any](ctx context.Context, s *Session, m Method[P, R], p P) *Pending[R] {
 	pend := &Pending[R]{method: m.name, done: make(chan struct{})}
 	inFlight, err := s.c.send(ctx, s, m, p)

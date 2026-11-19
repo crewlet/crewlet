@@ -39,6 +39,75 @@ func (e *Engine) workerDuty(name string, ttl time.Duration) schedule.DutyFunc {
 		e.node.Owner(), e.node.ID(), ttl)
 }
 
+// liveDuty is a fleet singleton held where the live projection is seeded, not
+// where `node.roles` says: the flow duty reads which items a turn is on and
+// which seats are stopped from it, and only a node serving the API folds it
+// (ADR-0162). Read without it, a stopped seat's work reads due or stuck, so a
+// worker node that held the duty would tell people wrong things; a fleet whose
+// API and workers run on different nodes still runs it, on an API node.
+//
+//   - NO COORDINATION STORE: a lone node, holding it whenever it is live.
+//   - IN A FLEET: the lease, asked for only while live, and given back the
+//     tick it stops being live, so a live peer takes it at its next tick
+//     rather than after the TTL.
+func (e *Engine) liveDuty(name string, ttl time.Duration) liveLease {
+	if e.backends == nil || e.backends.Coord == nil || e.node == nil {
+		return liveLease{}
+	}
+	e.duties.add(name)
+	return newLiveLease(e.backends.Coord, name, e.node.Owner(), e.node.ID(), ttl)
+}
+
+// liveLease is [Engine.liveDuty]'s claim and give-back; the zero value is a
+// lone node's, which holds the duty whenever it is live.
+type liveLease struct {
+	claim   schedule.DutyFunc
+	release func(context.Context) (bool, error)
+
+	// held is whether the last answer was held, so a node that stops being
+	// live gives back only a lease it took.
+	held bool
+}
+
+// newLiveLease is the lease on name for owner, preferring nodeID.
+func newLiveLease(backend coord.Backend, name, owner, nodeID string, ttl time.Duration) liveLease {
+	resource := coord.WorkerResource(name)
+	return liveLease{
+		claim: schedule.ClaimNamedDuty(backend, name, owner, nodeID, ttl),
+		release: func(ctx context.Context) (bool, error) {
+			lease, err := backend.Get(ctx, resource)
+			if err != nil || lease == nil || lease.Owner != owner {
+				return false, err
+			}
+			return backend.Release(ctx, resource, owner, lease.Epoch)
+		},
+	}
+}
+
+// holds reports whether this node holds the duty this tick: never while not
+// live, giving back a lease it held (retried each tick until the store
+// answers), and by its lease while live.
+func (l *liveLease) holds(ctx context.Context, live bool) (bool, error) {
+	if !live {
+		if l.held && l.release != nil {
+			if _, err := l.release(ctx); err != nil {
+				return false, err
+			}
+		}
+		l.held = false
+		return false, nil
+	}
+	held := true
+	if l.claim != nil {
+		var err error
+		if held, err = l.claim(ctx); err != nil {
+			return false, err
+		}
+	}
+	l.held = held
+	return held, nil
+}
+
 // workerHold is [Engine.workerDuty] for a lease that is GIVEN BACK, gated on
 // the coordination store alone, never on `node.roles`.
 //

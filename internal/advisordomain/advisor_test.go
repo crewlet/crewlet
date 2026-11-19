@@ -366,6 +366,37 @@ func TestAWeeksReportIsWrittenOnce(t *testing.T) {
 	}
 }
 
+// A WEEK'S TALLY COUNTS WHAT HAPPENED IN IT: the episodes it opened, resolved,
+// applied and dismissed, each by when that happened, so a period before them
+// counts none. Mutation: count by state alone, and the earlier period counts them.
+func TestAWeeksTallyCountsWhatHappenedInIt(t *testing.T) {
+	t.Parallel()
+	n := newWriteNode(t, openAdvisorLog(t), "data-1")
+	from := time.Now().Add(-time.Minute)
+	var ids []string
+	for _, key := range []string{idleKey, starvedKey, poolKey} {
+		o := opening(key, advisordomain.SeverityCosts, writerClock)
+		n.open(o)
+		ids = append(ids, o.Episode)
+	}
+	n.move(personCall("ada"), idleKey, advisordomain.Move{Episode: ids[0], Event: advisordomain.EventApplied,
+		State: advisordomain.StateApplied, FixDigest: sha("fix 1"), EffectDueAt: writerClock.Add(time.Hour)})
+	n.move(personCall("ada"), starvedKey, dismissal(ids[1], advisordomain.SeverityCosts, time.Time{}))
+	n.move(engineCall(), poolKey, closing(ids[2]))
+	to := time.Now().Add(time.Minute)
+	r := n.reader()
+	got, err := r.Tally(t.Context(), from, to, stale)
+	if want := (advisordomain.Tally{Opened: 3, Resolved: 1, Applied: 1, Dismissed: 1}); err != nil || got != want {
+		t.Errorf("the week's tally is %+v (%v), want %+v", got, err, want)
+	}
+	if got, err := r.Tally(t.Context(), from.Add(-7*24*time.Hour), from, stale); err != nil || got != (advisordomain.Tally{}) {
+		t.Errorf("the week before counts %+v (%v), want nothing", got, err)
+	}
+	if _, err := r.Tally(t.Context(), to, from, stale); !errors.Is(err, advisordomain.ErrInvalid) {
+		t.Errorf("a period ending before it starts: %v, want ErrInvalid", err)
+	}
+}
+
 // AN ALARM SERIES HOLDS ONE OPEN EPISODE: a raise while one is open and a clear
 // while none is publish nothing.
 func TestAnAlarmSeriesHoldsOneOpenEpisode(t *testing.T) {

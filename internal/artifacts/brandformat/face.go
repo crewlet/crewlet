@@ -4,18 +4,16 @@ import "regexp"
 
 // ---- faces ---------------------------------------------------------------- //
 //
-// A FACE RESOLVES TO ONE font-family LIST, the same everywhere it is drawn: the
-// generated brand stylesheet's `--brand-font-heading` and `--brand-font-body`,
-// the Brand page's preview (the dashboard contract's BRAND_FACE_FAMILIES, gated
-// to [FaceFamilies]), and an agent's answer from `get_company_brand`.
+// A FACE RESOLVES TO ONE font-family LIST everywhere it is drawn: the brand
+// stylesheet's `--brand-font-*`, the Brand page's preview (the dashboard
+// contract's BRAND_FACE_FAMILIES, gated to [FaceFamilies]) and `get_company_brand`.
 //
-// EVERY NAME IS A BARE IDENTIFIER SEQUENCE, never quoted, so the same list is a
-// valid CSS value and a plain TypeScript string, and no value here carries a
-// character a stylesheet would read as syntax. An uploaded family is the one
-// name quoted, by [FontStack], because its grammar admits a word that begins
-// with a digit. A slide's `font-family` grammar is narrower (names that begin
-// with a letter, at most eight), so [SlideTheme] draws its faces from the same
-// lists through that grammar.
+// EVERY NAME IS A BARE IDENTIFIER SEQUENCE, never quoted, so the list is both a
+// valid CSS value and a plain TypeScript string, with no character a stylesheet
+// would read as syntax. An uploaded family is the one name quoted, by
+// [FontStack], as its grammar admits a leading digit. A slide's narrower
+// `font-family` grammar (a leading letter, at most eight) is applied by
+// [SlideTheme] to the same lists.
 
 // FaceFamilies are the font-family lists the kit faces and the system stacks
 // resolve to. The kit faces are the artifact kit's own (@crewlethq/tokens

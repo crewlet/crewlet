@@ -46,50 +46,32 @@ func newKeeper(channels Store, pub queue.Publisher, now func() time.Time) (keepe
 }
 
 // Owed is what the sweep asks before it closes an idle channel: whether the
-// seat the channel asked ([Channel.Target]) still holds the ask somewhere it
-// will take it up from, so that its answer is still coming however long the
-// channel has been quiet.
+// seat it asked ([Channel.Target]) still holds the ask somewhere it will take
+// it up from, so its answer is still coming however long the channel is quiet.
 //
-// DECLARED HERE, by its one caller, and implemented by the engine, which is the
-// only party that knows where an ask can wait: on the record of an executor
-// whose turn took it up, which can wait days on a person's question; or in the
-// seat's inbox, held while one of its runs works — a run has no clock bound —
-// or while a person has paused the seat, or while its budget window is spent.
-// None of those has an end the sweep's idle timeout could be sized to, and a
-// channel closed under any of them drops the answer that arrives later
-// ([ErrClosed]) and leaves the asker, whose turn ended when it asked, never
-// woken.
+// The engine implements it, as the only party that knows where an ask can wait
+// (an executor's record, days on a person's question; the seat's inbox while a
+// run works, the seat is paused or its budget is spent). None has an end the
+// idle timeout could be sized to, and a channel closed under any of them drops
+// the later answer ([ErrClosed]) and leaves the asker never woken.
 //
-// THREE ANSWERS. (true, nil): the answer is owed, and the channel is spared.
-// (false, nil): nothing will answer it — the turn crashed, or the node that ran
-// it died, past every bound the timeout is sized to — and it is closed, as
-// every idle channel used to be. An error: the sweep cannot tell, and spares the
-// channel for this tick, because closing is the step nothing can undo and the
-// next tick asks again.
+// (true, nil): owed, spared. (false, nil): nothing will answer, closed. An
+// error: spared this tick, since closing cannot be undone.
 type Owed interface {
 	AnswerOwed(ctx context.Context, ch Channel) (bool, error)
 }
 
-// Sweeper is THE RETENTION HALF OF A CHANNEL'S LIFE, and a type of its own.
+// Sweeper is the retention half of a channel's life, a type of its own.
 //
-// A [Service] ADDRESSES. An ask names a target, an answer names a recipient,
-// and [New] refuses a service with no [Directory] by name — one that could
-// open a channel and wake nobody reads as a slow colleague rather than as a
-// wiring mistake, which is the worst shape a failure here can take.
+// A [Service] addresses: [New] refuses one with no [Directory], since one that
+// woke nobody would read as a slow colleague, not a wiring mistake.
 //
-// A sweep addresses nothing. It closes channels idle past a cutoff whose answer
-// is no longer owed, and deletes ones closed past another, and the node that
-// runs it deliberately has no directory to give: a directory is built from the
-// RUNNING COMPANY, so demanding one would tie the retention of a fleet-wide
-// record to whether this node has applied a configuration.
-//
-// Both were one type once, and the sweep built it with an empty [Options].
-// The day the directory became required that construction started failing,
-// the engine logged a warning and dropped both channel jobs — so idle asks
-// stayed open for ever and closed ones were never deleted, on a company whose
-// every other surface looked healthy. A capability that asks for exactly what
-// it needs cannot be handed less, which is what makes that unreachable rather
-// than merely fixed.
+// A sweep addresses nothing: it closes channels idle past a cutoff whose answer
+// is no longer owed and deletes ones closed past another. It has no directory
+// to give (one is built from the running company, and demanding it would tie a
+// fleet-wide record's retention to this node having applied a configuration).
+// One type would make the sweep's construction fail wherever the directory is
+// required, silently dropping the channel jobs.
 type Sweeper struct {
 	keeper
 
@@ -100,11 +82,10 @@ type Sweeper struct {
 
 // NewSweeper builds the retention half alone.
 //
-// AN [Owed] IS REQUIRED, for the reason the service requires a directory: a
-// sweep that cannot ask closes every channel idle past its timeout, among them
-// the ask an executor is still working on, and the answer that arrives later
-// is dropped with nothing reporting it as more than an ordinary closed channel.
-// A nil now takes [time.Now] in UTC, so the zero-value path is the real one.
+// An [Owed] is required: a sweep that cannot ask closes every idle channel,
+// including an ask an executor is still working on, and the later answer is
+// dropped with nothing reporting more than an ordinary close. A nil now takes
+// [time.Now] in UTC, so the zero-value path is the real one.
 func NewSweeper(channels Store, pub queue.Publisher, owed Owed, now func() time.Time) (*Sweeper, error) {
 	k, err := newKeeper(channels, pub, now)
 	if err != nil {
@@ -120,33 +101,15 @@ func NewSweeper(channels Store, pub queue.Publisher, owed Owed, now func() time.
 // SweepIdle closes every channel idle since before cutoff whose answer is no
 // longer owed ([Owed]), announces each one, and reports how many it closed.
 //
-// HERE RATHER THAN IN THE SWEEP JOB, because announcing each close is as much
-// the sweep's work as closing: the job used to close through the store and
-// discard the list of what it closed, so nothing was published at all. Three
-// separate places described a close event the sweep
-// never emitted: that method's own contract, the "system" fallback in
-// [types.A2AChannelClosed.Summary], and the event-system doc. What an operator
-// lost with it is the only signal that an ask went unanswered: the requester's
-// turn ended when it asked, so a channel reaching this sweep means some turn
-// never finished, and that is exactly the event worth seeing.
+// It lives here, not in the sweep job: announcing each close is part of
+// closing, and a channel reaching this sweep is the only signal an ask went
+// unanswered. A close somebody else made is not reported: a party closing its
+// own channel mid-sweep comes back carrying the other writer's instant
+// ([Store.Close] keeps the first), and it would draw two closes for one channel.
 //
-// The publisher lives in this package for the reason every other A2A publish
-// does: what a close means on the wire is this package's decision, and
-// internal/maintenance is a scheduler of jobs rather than a second author of
-// event payloads.
-//
-// A CLOSE SOMEBODY ELSE MADE IS NOT REPORTED. The listing is a snapshot, and a
-// party closing its own channel mid-sweep is ordinary: the close then comes
-// back carrying the OTHER writer's instant ([Store.Close] keeps the first),
-// and reporting it would draw two closes on a dashboard for one channel. The
-// instant is the discriminator, read once for the whole sweep.
-//
-// NOTHING STOPS THE REST: a channel the judge could not answer for is spared
-// and the next one asked; a close that failed is skipped; an announcement that
-// failed does not undo its close, which the store already holds. Abandoning the
-// remaining channels would leave a batch half-swept with no record of where it
-// stopped, so the first error is returned once every channel has been
-// attempted.
+// Nothing stops the rest: a spared or failed channel is skipped, and a failed
+// announcement does not undo its close. The first error is returned once every
+// channel has been attempted.
 func (s *Sweeper) SweepIdle(ctx context.Context, cutoff time.Time) (int, error) {
 	idle, err := s.channels.Idle(ctx, cutoff)
 	if err != nil {

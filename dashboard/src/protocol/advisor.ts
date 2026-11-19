@@ -44,7 +44,7 @@ export interface AdvisorFix {
     | "open_setting"
     | "open_page"
     | "external_step"
-    | "draft_with_assistant"
+    | "ask_crewlet"
     | "atlas_act"
     | "none"
     | (string & {});
@@ -59,7 +59,7 @@ export interface AdvisorFix {
   page?: AdvisorPage | (string & {});
   /** What that page opens on: an item's key, a seat's handle. */
   target?: string;
-  /** The question a `draft_with_assistant` fix asks Ask Crewlet. */
+  /** The question an `ask_crewlet` fix asks Ask Crewlet. */
   prompt?: string;
   /** The atlas tool call an `atlas_act` fix sends, once per entry the finding names. */
   act?: AdvisorAtlasAct;

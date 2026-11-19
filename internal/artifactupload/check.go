@@ -12,19 +12,17 @@ import (
 )
 
 // THE CHECK: a version's text files judged as a publish of its kind judges
-// them, with nothing reserved, stored, copied or recorded. It is what lets a
-// person writing a page see the linter's findings while they write, rather
-// than only when a publish is refused.
+// them, with nothing reserved, stored, copied or recorded, so a person writing
+// a page sees the linter's findings while they write.
 //
 // THE SAME STEPS, NOT A COPY OF THEM: the check builds a [run] and calls the
-// steps a publish composes with ([run.checkNewText], [run.lintFiles],
+// steps a publish composes ([run.checkNewText], [run.lintFiles],
 // [run.themeWarnings]), so a rule added to the publish is a rule the check
-// answers. What it leaves out is what needs the bytes stored or the network:
-// the upload, the format a native kind is read by, and the copy of each
-// allowlisted CDN file, which the check names at the path the copy would be
-// served from without fetching it. A page the check passes can therefore
-// still be refused at publish when a CDN refuses a file, fails its integrity
-// check or answers one too large ([lint.CodeVendorFailed]).
+// answers. It leaves out what needs storage or the network: the upload, a
+// native kind's format, and each allowlisted CDN file's copy (named at its
+// would-be path, not fetched). A page the check passes can still be refused at
+// publish when a CDN refuses a file, fails its integrity check or answers one
+// too large ([lint.CodeVendorFailed]).
 
 // MaxCheckFiles bounds the files one check reads.
 const MaxCheckFiles = 64
