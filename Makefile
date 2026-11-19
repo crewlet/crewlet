@@ -494,10 +494,9 @@ test-capture: ## run flock's pin cases, the harness capture's cases and the sock
 # (CREWLET_CHROMIUM_CACHE, by default ~/.cache/crewlet/chromium; a pin bump,
 # or a change to how the recipe lays a build out, is a new build beside the
 # old). Two of them: the newest, Chrome for Testing's Stable, and the floor,
-# the newest patch of the oldest major the engine's CDP client drives
-# (internal/browser/cdp.MinMajor), so what a protocol case asserts is held at
-# both ends of what the engine promises to drive, never on whichever Chrome
-# the machine has.
+# the newest patch of internal/browser.MinChromiumMajor's major, so what a case
+# that drives Chromium asserts is held at both ends of what the engine accepts,
+# never on whichever Chrome the machine has.
 #
 # BOTH ARE FETCHED, so a pin whose version or digest is wrong fails here — at
 # the download its SHA-256 refuses — rather than in whichever later run first

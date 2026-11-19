@@ -5,7 +5,11 @@
  */
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import { color, font, radius, size, spacing } from "@crewlethq/tokens";
+import closeGlyph from "@crewlethq/icons/glyphs/x.svg?raw";
+import previousGlyph from "@crewlethq/icons/glyphs/chevron-left.svg?raw";
+import nextGlyph from "@crewlethq/icons/glyphs/chevron-right.svg?raw";
 import {
+  drawGlyph,
   drawnAs,
   interceptFileLinks,
   KIT,
@@ -268,5 +272,44 @@ test("the viewer is drawn with the design kit's own values", () => {
     spacing2: spacing[2],
     spacing3: spacing[3],
     spacing6: spacing[6],
+  });
+});
+
+/** An element as its tag, its attributes but `class` and `xmlns`, and its children. */
+function shape(el: Element): unknown {
+  return {
+    tag: `${el.namespaceURI} ${el.localName}`,
+    attributes: [...el.attributes]
+      .filter((a) => a.name !== "class" && a.name !== "xmlns")
+      .map((a) => `${a.name}=${a.value}`)
+      .sort(),
+    children: [...el.children].map(shape),
+  };
+}
+
+// THE VIEWER DRAWS EACH KIT GLYPH AS ITS FILE DRAWS IT, built element by
+// element rather than parsed, so a page enforcing Trusted Types still shows
+// its buttons. Mutation: drop an attribute, nest a path wrongly, or keep the
+// file's class, and a glyph differs from the file read as SVG.
+describe("a glyph the viewer draws", () => {
+  test.each([
+    ["close", closeGlyph],
+    ["previous", previousGlyph],
+    ["next", nextGlyph],
+  ])("%s is the kit's file, element for element", (_, source) => {
+    const file = new DOMParser().parseFromString(source, "image/svg+xml").documentElement;
+    const drawn = drawGlyph(document, source);
+    expect(drawn.children.length).toBeGreaterThan(0);
+    expect(drawn.hasAttribute("class")).toBe(false);
+    expect(shape(drawn)).toEqual(shape(file));
+  });
+
+  test.each([
+    ["two roots", "<svg></svg><svg></svg>"],
+    ["a root that is no svg", "<g></g>"],
+    ["an element left open", "<svg><g></svg>"],
+    ["nothing", "<!-- a comment alone -->"],
+  ])("refuses %s", (_, source) => {
+    expect(() => drawGlyph(document, source)).toThrow();
   });
 });

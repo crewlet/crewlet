@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 )
 
 // THE MODEL'S WORDS ARE CHECKED AGAINST THE ENGINE'S NUMBERS (ADR-0157): an
@@ -117,11 +118,15 @@ func GroundSummary(text string, r Report) error {
 }
 
 // recordShaped is a token that names a record: an item's key (ENG-42) or an
-// engine id (a uuid, or a prefixed id such as turn-9).
-var recordShaped = regexp.MustCompile(`\b(?:[A-Z][A-Z0-9]*-\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z]+-\d+)\b`)
+// engine id (a uuid, or a prefixed id such as turn-9). Compiled at first use,
+// as numberShaped is: the binary is every push's Gitlet hook, which pays each
+// package's init (cmd/crewlet's TestTheHookPaysLittleForTheEnginesInit).
+var recordShaped = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`\b(?:[A-Z][A-Z0-9]*-\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z]+-\d+)\b`)
+})
 
 // numberShaped is a number as words say one: 7, 1,200, 26.5M, 812K, 40%.
-var numberShaped = regexp.MustCompile(`\d[\d,]*(?:\.\d+)?[KM]?`)
+var numberShaped = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`\d[\d,]*(?:\.\d+)?[KM]?`) })
 
 // grounded is the check every model sentence passes.
 func grounded(text string, maxBytes, maxSentences int, allowed, records []string) error {
@@ -134,13 +139,13 @@ func grounded(text string, maxBytes, maxSentences int, allowed, records []string
 	case sentences(text) > maxSentences:
 		return fmt.Errorf("%w: it says more than %d sentences", ErrUngrounded, maxSentences)
 	}
-	for _, id := range recordShaped.FindAllString(text, -1) {
+	for _, id := range recordShaped().FindAllString(text, -1) {
 		if !slices.Contains(records, id) {
 			return fmt.Errorf("%w: it cites %s, which it does not rest on", ErrUngrounded, id)
 		}
 	}
-	rest := recordShaped.ReplaceAllString(text, " ")
-	for _, n := range numberShaped.FindAllString(rest, -1) {
+	rest := recordShaped().ReplaceAllString(text, " ")
+	for _, n := range numberShaped().FindAllString(rest, -1) {
 		if !slices.Contains(allowed, strings.TrimRight(n, ",")) {
 			return fmt.Errorf("%w: it says %s, which no number it rests on is", ErrUngrounded, n)
 		}
@@ -186,7 +191,7 @@ func withCommas(digits string) string {
 func numbersOf(texts ...string) []string {
 	var out []string
 	for _, t := range texts {
-		for _, n := range numberShaped.FindAllString(recordShaped.ReplaceAllString(t, " "), -1) {
+		for _, n := range numberShaped().FindAllString(recordShaped().ReplaceAllString(t, " "), -1) {
 			out = append(out, strings.TrimRight(n, ","))
 		}
 	}

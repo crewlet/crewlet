@@ -119,8 +119,8 @@ func (s *surface) ToolDefs() []llm.ToolDef {
 			Parameters: map[string]any{"type": "object", "properties": map[string]any{},
 				"additionalProperties": false}})
 	}
-	return append(out, llm.ToolDef{Name: ExplainTool, Description: explainDescription, Parameters: explainSchema},
-		llm.ToolDef{Name: SubmitTool, Description: submitDescription, Parameters: submitSchema})
+	return append(out, llm.ToolDef{Name: ExplainTool, Description: explainDescription, Parameters: explainSchema()},
+		llm.ToolDef{Name: SubmitTool, Description: submitDescription, Parameters: submitSchema()})
 }
 
 func (s *surface) Revision() uint64 { return 0 }
