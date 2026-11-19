@@ -21,11 +21,16 @@ func (o observing) Observe(context.Context, time.Time) (duty.Observed, error) {
 
 func (observing) Signature(context.Context) (string, error) { return "r1", nil }
 
+func (observing) Week(context.Context, time.Time, time.Time) ([]advisor.Metric, []string, error) {
+	return []advisor.Metric{{Key: "turns", Label: "Turns", Value: 12, Unit: advisor.UnitTurns}}, []string{}, nil
+}
+
 // THE DUTY'S RECORDS ARE ONES THE LOG KEEPS: one tick of the duty, written
 // through the domain's own writer, stores a finding about the whole company
 // (whose subject is the only one of its kind, so it has no id) beside a seat's,
-// and records the run with its start and its end. Mutation: refuse an empty
-// subject id, or record a run with no end, and the log keeps neither.
+// and records the run with its start and its end, and on a Monday morning the
+// week before's report. Mutation: refuse an empty subject id, or record a run
+// with no end, and the log keeps neither.
 func TestTheDutysRecordsAreOnesTheLogKeeps(t *testing.T) {
 	t.Parallel()
 	n := newWriteNode(t, openAdvisorLog(t), "data-1")
@@ -58,5 +63,10 @@ func TestTheDutysRecordsAreOnesTheLogKeeps(t *testing.T) {
 	run, found, err := r.LatestRun(t.Context(), stale)
 	if err != nil || !found || run.Status != advisordomain.RunDone || run.EndedAt.Before(run.StartedAt) {
 		t.Errorf("the latest run is %+v, found %v (%v), want the tick's run recorded done", run, found, err)
+	}
+	// A MONDAY MORNING'S TICK writes the week before's report, which the log keeps.
+	week, _, _, _ := advisor.ReportWeek(writerClock, time.UTC)
+	if _, written, err := r.Report(t.Context(), week, stale); err != nil || !written {
+		t.Errorf("the report of %s: written %v (%v), want it kept", week, written, err)
 	}
 }

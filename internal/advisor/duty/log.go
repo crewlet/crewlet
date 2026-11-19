@@ -310,7 +310,7 @@ func (l advisorLog) WriteReport(ctx context.Context, r advisor.Report) error {
 	if err != nil {
 		return err
 	}
-	_, err = l.writes.WriteReport(ctx, l.call("advisor.report"),
+	_, err = l.writes.WriteReport(ctx, l.call("advisor_report"),
 		advisordomain.Report{Week: r.Week, From: r.From, To: r.To, Body: body})
 	if errors.Is(err, advisordomain.ErrExists) {
 		return nil
