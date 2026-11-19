@@ -76,13 +76,12 @@ func runCredentialWriter(dir string) {
 }
 
 // A WRITER KILLED AT ANY STEP LEAVES ONE LOGIN OR THE OTHER, NEVER HALF OF
-// EACH. A real process writing three logins in turn under the lock, each in a
-// write of its own, is killed at every step of every write, one process per
-// step, and what the directory holds is judged exactly and then read under the
-// same lock as the next process reads it: every time, the login the
-// interrupted write committed. Its steps are held to the exact sequence the
-// protocol takes, so a step the write stops reporting fails here rather than
-// quietly shrinking the matrix.
+// EACH. A real process writing three logins in turn under the lock is killed
+// at every step of every write, one process per step; the directory is judged
+// exactly and then read under the lock as the next process reads it: every
+// time, the login the interrupted write committed. The steps are held to the
+// protocol's exact sequence, so one the write stops reporting fails here
+// rather than quietly shrinking the matrix.
 //
 // Mutation: write the files without the journal, and the run reaches no
 // commit; report the commit ahead of the journal's rename, and the kill there

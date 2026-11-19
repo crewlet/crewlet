@@ -56,17 +56,14 @@ type Payload interface {
 
 // PayloadPtr constrains a type parameter to *T where *T is a Payload.
 //
-// It exists to make ONE fact unconditional: Event.Data always holds the
-// POINTER form of a payload. Decoding produces a pointer because the decoder
-// must have something to write into, so if construction produced a value the
-// same event would carry a different Go type depending on whether it had
-// crossed a wire yet — and DataAs[*T] would work on one node and fail on
-// another for the same event. That divergence is invisible until a handler
-// runs on the publishing node.
+// It makes ONE fact unconditional: Event.Data always holds the POINTER form of
+// a payload. Decoding yields a pointer, so a value from construction would give
+// the same event a different Go type before and after crossing a wire, and
+// DataAs[*T] would work on one node and fail on another.
 //
-// Both New and Register take payloads through this constraint, so the rule is
-// a compile error rather than a convention. A caller writes the value form
-// (events.New(TaskAssigned{...})) and inference does the rest.
+// New and Register take payloads through this constraint, so the rule is a
+// compile error. A caller writes the value form (events.New(TaskAssigned{...}))
+// and inference does the rest.
 type PayloadPtr[T any] interface {
 	*T
 	Payload
@@ -99,21 +96,15 @@ type Event struct {
 	// Node is the node that first published this event — its ORIGIN.
 	//
 	// Stamped by the queue, never by a publisher: every backend fills it in
-	// Publish from the node its client was built for (queue.WithNode),
-	// before any publish listener runs, and ONLY WHEN IT IS EMPTY. So a
-	// node that re-publishes an event it received — a parked delivery
-	// handed back, a dead letter — carries the origin forward rather than
-	// claiming the event as its own.
+	// Publish from the node its client was built for (queue.WithNode), before
+	// any publish listener runs, and ONLY WHEN IT IS EMPTY, so a re-published
+	// event (a parked delivery handed back, a dead letter) keeps its origin.
 	//
-	// It is WHERE THE WORK RAN, which is why it is on the envelope rather
-	// than on the payloads that happened to need it — and why the event
-	// store keeps it as a column of every row (node/0054) rather than
-	// leaving a reader to infer it from which store answered. Those two
-	// stopped being one fact with custody (ADR-0025): a data node's log
-	// holds what it published AND the events it keeps for a node without
-	// the `data` role, which keeps no log of its own. Empty only on an
-	// event published through a queue client built with no node, which
-	// only a test harness builds.
+	// It is WHERE THE WORK RAN, hence on the envelope and a column of every
+	// stored row (node/0054): which store answered no longer says, since a data
+	// node's log also holds events kept for a node without the `data` role
+	// (ADR-0025). Empty only from a queue client built with no node, which only
+	// a test harness builds.
 	Node string `json:"node,omitempty"`
 
 	// Data is the typed body, non-nil when Type is registered in this
@@ -530,18 +521,15 @@ func fieldsOf(t string) map[string]struct{} {
 // Register associates a wire type string with a constructor for its payload:
 // events.Register[TaskAssigned]().
 //
-// Registration is explicit — there is no reflection scan over a types package
-// — so the set of types this build understands is greppable and a typo shows
-// up as an unknown type rather than a silently missing subclass.
+// Registration is explicit, with no reflection scan, so the set of types this
+// build understands is greppable and a typo is an unknown type.
 //
 // The type parameter is the VALUE type and the constructor hands back the
-// pointer, the same asymmetry New has and for the same reason (PayloadPtr).
-// Naming the type rather than passing a prototype instance is what makes
-// Register[*TaskAssigned]() — which would build a registry entry returning an
-// unusable **TaskAssigned — fail to compile instead of at decode time.
+// pointer, as in New (PayloadPtr): Register[*TaskAssigned]() would build an
+// unusable **TaskAssigned, and fails to compile instead of at decode time.
 //
-// Panics on a duplicate type string: two payloads under one name is a
-// programming error that would otherwise decode events into the wrong struct.
+// Panics on a duplicate type string, which would decode events into the wrong
+// struct.
 func Register[T any, P PayloadPtr[T]]() {
 	var zero T
 	t := P(&zero).EventType()
@@ -612,25 +600,14 @@ func DataAs[T Payload](e *Event) (T, bool) {
 
 // NewTrace mints a fresh trace context.
 //
-// One definition, in the package that owns the field. It was written twice
-// before this — once in the scheduler — and two generators for one wire format
-// is how they come to disagree about a length or a case and produce ids a
-// tracer silently drops.
+// One definition, in the package that owns the field: two generators disagree
+// about a length or case and mint ids a tracer drops. SHAPED, not merely random:
+// a 32-hex trace id and 16-hex span id are what a tracer accepts. crypto/rand
+// cannot fail on a supported platform (it panics), so there is no error.
 //
-// SHAPED rather than merely random: a 32-hex trace id and a 16-hex span id are
-// what a real tracer accepts, so ids stored before one was wired stayed
-// meaningful across that change. crypto/rand cannot fail on any supported
-// platform — it panics internally instead — so there is no error to handle and
-// no degraded id to invent.
-//
-// # One caller
-//
-// [github.com/crewlet/crewlet/internal/tracing.TraceOf], which reports the
-// active span's ids and falls back to this when there is no span. That is the
-// single place a root is minted now; the eight publishers that used to call
-// this directly ask TraceOf instead, so an event's trace comes from the span
-// it was published under whenever there is one. Do not add a second caller —
-// a root minted outside TraceOf is an event that has left its turn's trace.
+// One caller: [github.com/crewlet/crewlet/internal/tracing.TraceOf], which falls
+// back to this when there is no span. Do not add a second: a root minted outside
+// it is an event that has left its turn's trace.
 func NewTrace() TraceContext {
 	var buf [24]byte
 	_, _ = rand.Read(buf[:])
@@ -642,21 +619,16 @@ func NewTrace() TraceContext {
 
 // MaxDiagnosticBytes bounds ONE free-text diagnostic field on an event.
 //
-// A delivery guarantee for a field whose length is set by something outside
-// the engine, an error string, which a record carries beside the payloads it
-// holds to their own shares (internal/agent/runner's recordbytes.go: the
-// prompts, responses and tool calls an agent's records carry are whole within
-// those shares, and their openings past them). A provider chain that exhausted can carry every attempt's
-// body, and a decode failure can carry the whole undecodable document.
+// A delivery guarantee for a field whose length is set outside the engine, an
+// error string (payloads keep their own shares: internal/agent/runner's
+// recordbytes.go). An exhausted provider chain can carry every attempt's body,
+// and a decode failure the whole undecodable document.
 //
-// The failure it prevents is worse than a cut. An event over the queue's
+// An event over the queue's
 // [github.com/crewlet/crewlet/internal/queue.MaxPayloadBytes] (8 MiB) is
-// REFUSED, and every telemetry publisher logs the refusal and moves on — so
-// an unbounded error does not arrive shortened, it does not arrive at all,
-// and the operator diagnosing the incident sees no event rather than a long
-// one. 64 KiB is two orders of magnitude past any message written to be read
-// and two orders below the ceiling, so the field can never be what pushes an
-// event over it.
+// REFUSED and telemetry publishers just log it, so an unbounded error does not
+// arrive shortened, it does not arrive. 64 KiB is two orders past any message
+// written to be read and two below the ceiling.
 const MaxDiagnosticBytes = 64 << 10
 
 // ClipDiagnostic applies [MaxDiagnosticBytes], marking the cut.

@@ -53,16 +53,11 @@ func (e WakeHeld) Summary() string {
 // as that record names them, and whom an agent wrote it for.
 //
 // STATED BY THE PRODUCER, because nothing downstream can resolve it. A vendor
-// names its sender by an id in its own namespace (ExternalNotification.Sender),
-// which the party registry maps to a seat where it knows one, and a sender it
-// cannot map is somebody the company does not know. A first-party record has
-// no such namespace: its actor is a seat's handle, a credential's login or a
-// node's name (iam.ActorFor), and which of the three is the record's actor
-// kind, never the spelling. Read as vendor ids, none of them resolved, so a
-// turn a colleague's comment on a work item woke was a stranger's turn, and so
-// was one the engine's own repair woke.
-//
-// Nil on every vendor's notification, and on one an older build published.
+// sender is an id in its own namespace that the party registry maps to a seat;
+// a first-party actor is a seat's handle, a credential's login or a node's name
+// (iam.ActorFor), told apart by the record's actor kind, never the spelling.
+// Read as vendor ids none resolved, so a colleague's comment woke a stranger's
+// turn. Nil on every vendor's notification and on an older build's.
 type NotificationWriter struct {
 	// Kind is how the writer acted: a seat (`agent`), a person as the seat
 	// they hold (`human`), a credential acting as no seat (`operator`), or
@@ -90,23 +85,17 @@ type NotificationWriter struct {
 	Apps []iam.Grant `json:"apps,omitempty"`
 
 	// WorkingFor is whom an AGENT'S write was made for (ADR-0109): whoever the
-	// turn that wrote it worked for, as its record carries it (Worklet's,
-	// Doclet's and Chatlet's MutationRecord.WorkingFor, and the routing of
-	// Gitlet's record, ChangeRouting.WorkingFor), and nil for an agent's write
-	// made for nobody else. ONE EXCEPTION carries it for the ENGINE's writer:
-	// its record about an agent's earlier act made for somebody — Gitlet's
-	// merge queue's ejection of an entry and a close of its change's work item
-	// the queue could not make — carries whom the entry's enqueue was made for
-	// (ADR-0109's amendment; internal/gitlet's writerOf). Nil for a person's
-	// and a credential's writer, who write for nobody but themselves, and for
-	// every other record of the engine's. The turn the write wakes works for
-	// them, composed again on the node that runs it as a colleague's ask's
-	// carrier is, and never for the writing seat, which holds every app, nor
-	// for the seat the engine's record wakes; and since the partition splits on
-	// it (notify.KeyOf), every constituent of one turn carries the same. An
-	// older notify parser cannot read the record that carries it, a version
-	// past its build's, so it passes the wake to a node of the newer build
-	// rather than wake a turn that leaves it out (internal/notify's Deferral).
+	// turn that wrote it worked for, as its record carries it
+	// (MutationRecord.WorkingFor, Gitlet's ChangeRouting.WorkingFor), else nil.
+	// ONE EXCEPTION carries it for the ENGINE's writer: its record about an
+	// agent's earlier act made for somebody (the merge queue's ejection of an
+	// entry) carries whom the enqueue was made for (ADR-0109's amendment;
+	// internal/gitlet's writerOf). Nil for a person's, a credential's and every
+	// other engine record. The woken turn works for them, never for the writing
+	// seat (which holds every app) nor the seat the engine's record wakes; the
+	// partition splits on it (notify.KeyOf). An older notify parser cannot read
+	// the record carrying it, so it defers the wake to a newer node
+	// (internal/notify's Deferral).
 	WorkingFor *WorkingFor `json:"working_for,omitempty"`
 }
 
@@ -380,24 +369,17 @@ func (e TurnTriggerSkipped) Summary() string {
 type NotificationsCoalesced struct {
 	AgentHandle string `json:"agent_handle"`
 
-	// PartitionKey is the inbox PARTITION that merged — the batch, not the
-	// conversation it belongs to. What this event says is "N deliveries
-	// became one turn", and the batch is the subject of that sentence.
+	// PartitionKey is the inbox PARTITION that merged, the batch, not the
+	// conversation it belongs to ("N deliveries became one turn"). Spelled as
+	// notify.PartitionField spells it on a wake's envelope.
 	//
-	// NOT `conversation_key`, which is the conversation IDENTITY on every
-	// event that spells it — the two sandbox events, both turn completions
-	// and the phase record. One promoted tag would otherwise mean the
-	// identity or the partition depending on which row a filter happened to
-	// match, on a pair of values that differ exactly where it matters: a
-	// direct message's identity is the bare channel and its partition can be
-	// a thread inside it. Spelled as notify.PartitionField spells the same
-	// value on a wake's envelope.
-	//
-	// AND NEVER BOTH SPELLINGS, because store.ExtractTags promotes by WIRE
-	// KEY ALONE and is type-blind on purpose — that is what lets a newer
-	// node's unknown event type still be indexed by the dimensions it does
-	// carry. A payload spelling both keys would be tagged both, and the
-	// `conversation_key` tag would hold a partition.
+	// NOT `conversation_key`, the conversation IDENTITY on every event that
+	// spells it: one promoted tag would mean identity or partition by which row
+	// a filter matched, and they differ exactly where it matters (a direct
+	// message's identity is the bare channel, its partition can be a thread).
+	// AND NEVER BOTH SPELLINGS: store.ExtractTags promotes by WIRE KEY ALONE,
+	// type-blind on purpose so a newer node's unknown type is still indexed, so
+	// both keys would tag a partition as `conversation_key`.
 	PartitionKey       string `json:"partition_key"`
 	NotificationSource string `json:"notification_source"`
 	// Count is the number of constituent notifications; FirstAt and LastAt

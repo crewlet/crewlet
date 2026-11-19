@@ -146,22 +146,14 @@ func TestAResumeAtItsModelsLimitIsAWaitNotAFailure(t *testing.T) {
 // A COMPLETION THAT ARRIVES DURING A LIMIT ITS MODELS KNOW IS COLLECTED ONCE,
 // PARKS ITS SEAT, IS NEVER HANDED BACK, AND RESUMES ONCE WHEN IT LIFTS.
 //
-// The seat's review's chain is an entry that already knows its limit, as every
-// seat's on a shared plan does once the first run that spent it is collected.
-// The completion is admitted and collected all the same: its job is over, so
-// its tokens are charged in the window it ran in and its box is paused. Its
-// resume is then refused on the limit before its turn runs, held on this node,
-// and the seat is parked on the limit (`seat_provider_parked`, the chain's
-// probe). An announcement meanwhile is refused before the gate and the claim
-// and acknowledged, never handed back to the broker, and the waiter leaves the
-// box asleep. When the probe finds the model answering, the park's release
-// re-fires the job, which is collected again and resumed, once.
-//
-// Mutation: refuse the completion at the gate for its known limit again
-// (seatCannotRun), and it is never collected while the limit holds; ask it
-// nothing once collected (resumeTurn), and its turn runs into the limit; drop
-// the park from collectedRefusal, and nothing is published or probed; NAK a
-// refusal in controlOutcome, and the held announcement is handed back.
+// The chain already knows its limit, yet the completion is collected (its job is
+// over; its tokens are charged where it ran, its box paused). Its resume is
+// refused before its turn runs and the seat parked (`seat_provider_parked`). A
+// later announcement is refused before the gate, acknowledged, never handed back.
+// Mutation: gate-refuse it again (seatCannotRun) and it is never collected; ask
+// nothing once collected (resumeTurn) and its turn runs into the limit; drop the
+// park from collectedRefusal and nothing is published or probed; NAK in
+// controlOutcome and the held announcement is handed back.
 func TestACompletionDuringALimitIsNeverHandedBackAndResumesOnce(t *testing.T) {
 	t.Parallel()
 	r := newDrainRig(t)
@@ -443,13 +435,11 @@ func (lr *limitedResume) resumedOnce(t *testing.T, lift func()) {
 }
 
 // A RESUMED TURN THAT MEETS THE LIMIT MID-TURN IS A WAIT, END TO END, AND IT
-// PARKS ITS SEAT AS A DISPATCH WOULD. The real resumer runs the real turn, the
-// model refuses a round in, the claim is given back and the completion
-// acknowledged and kept, and it is never handed back to the broker. The seat's
-// mail is held by its run, so no delivery of its own ever met the limit, and
-// still the seat is parked on it: seat_provider_parked names the entry and when
-// it is tried again, and the chain's probe is armed for that instant. When the
-// probe finds the model answering, the release signals the wait and the
+// PARKS ITS SEAT AS A DISPATCH WOULD. The model refuses a round in, the claim is
+// given back and the completion acknowledged and kept, never handed back to the
+// broker. No delivery of the seat's own met the limit (its run holds its mail),
+// yet seat_provider_parked names the entry and when it is tried again, and the
+// probe is armed for that instant; its release signals the wait and the
 // completion resumes, once.
 //
 // Mutation: drop the refusal mapping from resumeTurn and the completion is
@@ -470,14 +460,13 @@ func TestAResumeThatMeetsALimitMidTurnWaitsForTheParksRelease(t *testing.T) {
 
 // A COMPLETION WHOSE RESUME PARKED ITS SEAT WAITS FOR THE PARK, NOT FOR ITS OWN
 // INSTANT. The resume met the limit after its claim, so its node holds the job
-// until the instant the limit named, and the seat is parked. The probe at that
-// instant meets the limit again (the vendor's window outlasts the hour the
-// backend benches an entry for), so the park stands, renewed, and the instant
-// passes: the waiter's next announcement is then refused at the gate, before
-// its claim, with no collection, no review and no box, where the review's own
-// chain, ready again, admitted it into the window the probe had just found
-// spent. The probe that finds the model answering releases the park, and the
-// completion resumes once.
+// and the seat is parked. The probe at the named instant meets the limit again
+// (the vendor's window outlasts the hour the backend benches an entry for), so
+// the park stands, renewed: the waiter's next announcement is then refused at
+// the gate, before its claim, with no collection, review or box, where the
+// review's own chain, ready again, would admit it into the window the probe
+// just found spent. The probe that finds the model answering releases the park,
+// and the completion resumes once.
 //
 // Mutation: drop the park from the turn gate (seatCannotRun), and the
 // announcement past the instant is admitted and reviewed into the limit.
@@ -580,17 +569,14 @@ func (m *countedLimit) Complete(ctx context.Context, req llm.Request) (*llm.Comp
 }
 
 // AN APPLY THAT CARRIES ITS ENTRY'S SIT-OUT PARKS A SEAT WHOSE MAIL ITS RUN HOLDS
-// AGAIN AT ONCE. The seat's resume met the limit mid-turn and parked it, and its
-// node holds the job. A published company releases every park decided under the
-// models it replaces and re-fires the job; its entry, left unchanged by the
-// apply, keeps the sit-out its sign-in is serving (harness.Plans), so the job
-// is collected again and its resume refused on that limit before its turn runs,
-// and the seat is parked on it once more, its probe armed: no review, no model
-// call, and no job collected and reviewed into the vendor's window once the
-// sit-out ends. Before, nothing parked such a seat again (the redelivery that
-// re-parks a dispatched seat never comes to one whose mail its run holds): it
-// read released, left the probe, and its job was reviewed into the window when
-// the sit-out ended.
+// AGAIN AT ONCE. A published company releases every park decided under the
+// models it replaces and re-fires the job; its entry, unchanged by the apply,
+// keeps the sit-out its sign-in serves (harness.Plans), so the job is collected
+// again, its resume refused on that limit before its turn runs, and the seat
+// parked once more, probe armed: no review, no model call. Nothing else re-parks
+// such a seat (the redelivery that re-parks a dispatched seat never comes to one
+// whose mail its run holds); it would read released, and its job would be
+// reviewed into the vendor's window when the sit-out ends.
 //
 // Mutation: drop the park from collectedRefusal, and the seat stays released
 // after the apply.
@@ -689,14 +675,13 @@ func (m *limitOnReturn) Complete(ctx context.Context, _ llm.Request) (*llm.Compl
 }
 
 // A STOP THAT LANDS WHILE A RESUME'S CALL IS OUT DECIDES THE WAIT THAT CALL
-// MEETS. A person pauses the seat with a stop while its finished run's review
-// is waiting on the model, and the call then comes back refused for the
-// model's limit. The stop leaves a claimed run to its turn, whose fence closes
-// it at its next round, and there is none: reverted on the limit, the job was
-// held on its node until the limit's instant, up to the hour an entry is
-// benched for, and the stopped seat parked and probed meanwhile. The resume
-// is settled as the stopped turn it is instead: the run ends at once, the turn
-// is said stopped, and nothing is parked.
+// MEETS. A person stops the seat while its finished run's review waits on the
+// model, and the call comes back refused for the model's limit. The stop leaves
+// a claimed run to its turn, whose fence closes it at its next round, and there
+// is none: reverted on the limit, the job would be held until the limit's
+// instant (up to the hour an entry is benched for) with the stopped seat parked
+// and probed. The resume is settled as the stopped turn it is: the run ends at
+// once, the turn is said stopped, and nothing is parked.
 //
 // Mutation: turn the limit into the resume's refusal without asking whether
 // the seat is stopping (resumeTurn), and the stopped seat is parked and its run

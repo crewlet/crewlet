@@ -473,15 +473,13 @@ func TestAContinuedLaunchIsHeldToItsSessionsFloor(t *testing.T) {
 	}
 }
 
-// A SESSION NO WINDOW CAN CARRY STARTS FRESH; ONE ANY WINDOW CAN, OR NONE CAPS,
-// IS CONTINUED. The launch weighs the session's context with the brief that
-// continues it against the most room the seat's and the company's capped
-// windows can leave the launch, each ceiling less what its own turn spent
-// there: past it, no window turning over ever leaves room, so the session is
-// not continued: the run starts one of its own on its fresh brief's floor,
-// told so before it starts, where a session within it is continued whatever
-// its size, and a seat with no capped window continues any: no budget is
-// protected by refusing it.
+// A session no window can carry starts fresh; one any window can carry, or no
+// window caps, is continued. The launch weighs the session's context with the
+// brief that continues it against the most room the capped windows leave (each
+// ceiling less what its own turn spent): past it no window ever leaves room, so
+// the run starts its own on its fresh brief's floor, told so before it starts.
+// A seat with no capped window continues any session: no budget is protected
+// by refusing it.
 //
 // Mutation: refuse a session for its size alone, wait for a floor no window can
 // meet, or decide by the size of the session without its brief, and a case goes
@@ -671,15 +669,13 @@ func TestAResumeReadsHowTheJobsHarnessEnded(t *testing.T) {
 	}
 }
 
-// A RELAUNCH IS TARGETED AT THE MEMBER IT WOULD BE LAUNCHED ON, as the node
-// holding the seat picks it ([Engine.RelaunchTargets], which a node with no
-// broker, the whole fleet, answers from its own pick): the seat's first member
-// with an in-box runner that is not sitting out its plan there, the cell its
-// run lands in, that node, and its runner — never the runner of the harness
-// that wrote the session, which a seat whose plan member is spent is not
-// relaunched on. A chain every member of which sits out has no member yet, and
-// says it cannot be said rather than that none restores the session; a handle
-// the company holds no seat under has none.
+// A relaunch is targeted at the member it would be launched on, as the node
+// holding the seat picks it ([Engine.RelaunchTargets]; a node with no broker
+// answers from its own pick): the seat's first member with an in-box runner not
+// sitting out its plan, its cell, that node and its runner, never the runner of
+// the harness that wrote the session. A chain whose members all sit out has no
+// member yet and says it cannot be said, not that none restores the session; a
+// handle with no seat has none.
 //
 // Mutation: answer the catalogue's runner for a harness, skip the sit-out,
 // resolve the cell otherwise than the launch does, leave the holder off the
@@ -746,16 +742,14 @@ func TestARelaunchIsTargetedAtTheMemberItWouldBeLaunchedOn(t *testing.T) {
 	}
 }
 
-// A RESUMED TURN'S RELAUNCH IS TARGETED FROM THE REVISION IT RUNS ON. A resumed
-// segment pins the company revision it was admitted under, and a reviewer's
-// send-back from it is launched on that revision's chain whatever an apply put
-// live since; so the node running it answers what that turn's relaunch is
-// launched on from the segment's revision, while a turn with no segment running
-// here — whose next one is admitted under the revision live when it comes — is
-// answered from the live one. Two turns of the seat, one page, two answers. And
-// a conversation's next turn, asked about by no turn, is answered from the live
-// revision whatever segment is pinned: its first launch is admitted under that
-// one.
+// A resumed turn's relaunch is targeted from the revision it runs on. A resumed
+// segment pins the revision it was admitted under, and a reviewer's send-back
+// is launched on that revision's chain whatever an apply put live since, so the
+// node running it answers from the segment's revision; a turn with no segment
+// here, whose next one is admitted under the live revision, is answered from
+// the live one. A conversation's next turn, asked about by no turn, is answered
+// from the live revision whatever segment is pinned: its first launch is
+// admitted under that one.
 //
 // Mutation: answer every turn from the revision the node runs, or an ask of no
 // turn from a pinned segment's, and a row is decided for a member its launch is
@@ -894,15 +888,14 @@ func TestARelaunchsProbeAsksEveryMemberOfTheChain(t *testing.T) {
 	}
 }
 
-// A LAUNCH HOLDS ITS SESSION'S FLOOR TO THE MEMBER IT PICKS. The probe wrote the
-// briefs continuing a session some member of the chain restores; the launch
-// picks its member once, as it launches, and where that member runs another
-// harness than the one that wrote the session — its plan spent, or another's
-// back, since the probe — it continues none: the launch starts the run fresh,
-// held to its fresh brief's floor rather than to a session it will not send,
-// and refused only where that floor does not fit. So with the job before's own
-// session in its box, which a member whose run lands in another cell cannot
-// continue there.
+// A launch holds its session's floor to the member it picks. The probe wrote
+// the briefs continuing a session some member restores; the launch picks its
+// member once, and where that member runs another harness than the one that
+// wrote the session (a plan spent or back since the probe) it continues none:
+// the run starts fresh, held to its fresh brief's floor rather than to a session
+// it will not send, and refused only where that floor does not fit. Likewise
+// the job before's own session in its box, which a member whose run lands in
+// another cell cannot continue.
 //
 // Mutation: reckon the floor before the pick, for the session the probe
 // answered or for the box's whatever the member, and the launch is refused on

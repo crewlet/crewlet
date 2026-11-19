@@ -8,67 +8,18 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// reopenAgentRun serves an executor run's tool bridge again on this node, which
-// has just taken the run over while it works: the coordinator's
-// [sandbox.CoordinatorOptions.Recovered], as this node recovers the run's
-// seat and before the seat's mailbox opens.
+// reopenAgentRun serves a recovered run's tool bridge again on this node, which
+// took the run over while its box works ([sandbox.CoordinatorOptions.Recovered],
+// before the seat's mailbox opens); else every bridged call is refused.
 //
-// # Why a recovered run needs it
-//
-// The box keeps calling the seat's tools for as long as its harness runs, over a
-// session that lived in the process that launched it. That process can
-// restart, or lose the seat to a peer, while the box is still working — and
-// then every bridged call was refused and the rest of the run was done blind:
-// no colleague, no channel, no ticket, no submission, and a turn rescued as
-// incomplete for a box that may well have finished the work.
-//
-// # What is opened, and from what
-//
-// The run's JOB's session, under the job's own name — the launch id on the
-// run's durable row — so the token the box already holds, which names the run
-// and the job and is signed under the fleet's keyring, resolves here (see
-// internal/api/mcpbridge). Its surface is rebuilt from the run's own state by
-// the runner ([runner.Runner.ReopenAgentRun]), on a runner built exactly as the
-// turn's resume builds one ([Engine.parkedTurnRunner]); its ledger records
-// under the same job, from the spend the row already holds; and it is fenced
-// on the seat as THIS node holds it now.
-//
-// # How the box reaches it here
-//
-// The box dials the fleet's bridge address, whichever node answers it — or,
-// for a direct box, the launching node's own listener on loopback — and the
-// node it reaches relays the call to this one by the seat's lease
-// ([mcpbridge.Bridge.Join]) — so a run this node took over from a peer is
-// served here as surely as one it launched.
-//
-// # Not a run whose ending is decided, nor one a person stopped
-//
-// A run a person stopped, or one being failed, has its ending recorded on its
-// row before its steps run ([sandbox.PendingRun.Ending]), and those steps close
-// its session and reclaim its box. Reopened, the box would get its tools back
-// for the moments before its reclaim, as a seat whose stop said otherwise.
-//
-// The same holds a step earlier, for a run on a seat whose pause asks for its
-// running work to stop and whose stop has not been decided yet: the seat's
-// acquisition ends it right after this recovery ([Engine.prepareSeatSandbox]),
-// so a session opened here would serve the seat's tools to a run the person
-// asked to end — every call refused by the session's fence, which reads the
-// same pause, but the box's handshake answered and its surface rebuilt for
-// nothing. A pause this node has not read yet is no stop: the session is
-// opened, and the stop that arrives with the pauses closes it.
-//
-// # Nor one whose job was lost with its host
-//
-// A run whose job was lost — killed with its engine by a restart, its box gone
-// from its host, or its launch node gone from the fleet — carries that verdict
-// on its row ([sandbox.PendingRun.Lost]): nothing in a box is left to call
-// anything, and the completion announced for it carries its round on in a job
-// of its own, which opens a session of its own, the moment the seat's mailbox
-// opens. A session opened for the lost job would serve nobody.
-//
-// NEVER AN ERROR to the recovery that calls it: the seat is this node's
-// whatever becomes of one run's bridge, and the run is still collected when it
-// ends. What could not be opened is said, with why.
+// It opens the JOB's session under the launch id on the run's row, so the token
+// the box holds resolves here (internal/api/mcpbridge), its surface rebuilt by
+// [runner.Runner.ReopenAgentRun] on a runner built as the resume builds one
+// ([Engine.parkedTurnRunner]) and fenced on the seat as THIS node holds it.
+// Not reopened: a run with an ending decided ([sandbox.PendingRun.Ending]) or
+// on a seat whose pause asks its work to stop ([Engine.prepareSeatSandbox]),
+// whose steps close the session (an unread pause is no stop); nor a lost job
+// ([sandbox.PendingRun.Lost]). NEVER AN ERROR: what failed to open is said.
 func (e *Engine) reopenAgentRun(ctx context.Context, run sandbox.PendingRun) {
 	if run.Ending != nil || run.Lost != nil {
 		return

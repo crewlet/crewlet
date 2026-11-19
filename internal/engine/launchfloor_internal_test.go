@@ -159,17 +159,15 @@ func TestASessionTheLaunchsModelCannotCarryIsNotContinued(t *testing.T) {
 	}
 }
 
-// EACH SESSION A LAUNCH MAY CONTINUE IS HELD TO ITS OWN FLOOR. A relaunch may be
-// offered the turn's kept session and the job before's own copy in its box, each
-// with a brief of its own, and its box decides which it takes up as the run
-// starts — the kept one where it can restore it, the copy only where it cannot.
-// So a session whose own floor one request of the launch's model cannot carry is
-// dropped alone, the other still offered; the launch is held to the larger floor
-// of the sessions it still offers, since its box may take up either; and only
-// where neither is left does its run start a session of its own, on its fresh
-// brief's floor. Held both to the larger floor and dropped together, a kept
-// session whose short brief fits was dropped for the copy's longer one, which
-// the launch sends only where its box cannot restore the kept session.
+// Each session a launch may continue is held to its own floor. A relaunch may
+// be offered the turn's kept session and the job before's own copy in its box,
+// each with its own brief; the box takes up the kept one where it can restore
+// it, the copy only where it cannot. So a session whose floor one request of
+// the model cannot carry is dropped alone; the launch is held to the larger
+// floor of those still offered, since the box may take up either; and only
+// where neither is left does the run start its own, on its fresh brief's floor.
+// Dropping both together would drop a kept session whose short brief fits for
+// the copy's longer one, which is sent only where the box cannot restore it.
 //
 // Mutation: drop both sessions where either cannot be carried, or hold the
 // launch to the floor of a session it dropped, and a row goes red.
@@ -293,17 +291,13 @@ func othersSpent(t *testing.T, e *Engine, tokens int) {
 	}
 }
 
-// A FRESH LAUNCH IS HELD TO ITS BRIEF. The static floor
+// A fresh launch is held to its brief. The static floor
 // (turn_engine.executor_min_budget_tokens) is a run's first request before its
-// brief: the harness's own prompt, its tools and the seat's system prompt. A
-// launch that continues no session sends its whole brief in that request, so it
-// needs the static floor with the brief beside it, and its refusal and the hold
-// that waits on it say the brief's share. Held to the static floor alone, a
-// fresh run carrying a round's calls on passed its floor in a window that could
-// not carry its first request. And a floor exactly at the most room a window
-// can leave the launch is not past that room, so it is not held: a window with
-// all of it left admits the launch, and one a token short refuses it, where a
-// launch held at the static floor would go out.
+// brief: the harness's prompt, tools and system prompt. A launch continuing no
+// session sends its whole brief in that request, so it needs the static floor
+// with the brief beside it, and its refusal and hold say the brief's share. A
+// floor exactly at the most room a window can leave is not past it: a window
+// with all of it left admits the launch, one a token short refuses it.
 //
 // Mutation: count no brief beside the static floor where no context is known,
 // leave the brief out of the refusal or of the hold's reason, or hold a floor
@@ -355,17 +349,14 @@ func TestAFreshLaunchIsHeldToItsBrief(t *testing.T) {
 	}
 }
 
-// AN UNMEASURED CONTINUATION IS HELD TO ITS BRIEF. A session nothing measured (a
-// copy in its box that neither its job's newest capture nor its job's record
-// measured) has no known context, and a launch continuing it in its box sends
-// its brief beside the harness's own prompt as surely as a fresh run does: its
-// floor is the static floor with that brief beside it, the launch refused below
-// it, and it is judged by the capped windows as a measured session's floor is:
-// past the smallest ceiling the session is not continued, the launch starting
-// its run on its fresh brief, and the line saying what that floor is made of,
-// never a last request of nothing. Held to the static floor alone, a cut-off
-// copy told every call of its round was continued in a window that could not
-// carry its first request.
+// An unmeasured continuation is held to its brief. A session nothing measured
+// (a copy in its box that neither its job's newest capture nor its record
+// measured) has no known context, and continuing it sends its brief beside the
+// harness's prompt as a fresh run does: its floor is the static floor with that
+// brief, the launch is refused below it, and the capped windows judge it as a
+// measured session's: past the smallest ceiling it is not continued, the run
+// starting on its fresh brief, and the line saying what the floor is made of,
+// never a last request of nothing.
 //
 // Mutation: count no brief beside the static floor where no context is known,
 // hold a session's floor as the fresh brief's is, or say an unmeasured
@@ -468,32 +459,18 @@ func TestALaunchIsHeldToTheLargestFloorOfItsBriefs(t *testing.T) {
 	}
 }
 
-// A FRESH FLOOR PAST THE ROOM IS HELD AT THE STATIC FLOOR, OR AT THE ROOM BELOW
-// IT. Config holds every capped ceiling at or above the static floor alone,
-// never above the static floor with a brief beside it, so a fresh brief can
-// take a launch's floor past the most room a window can leave the launch: each
-// ceiling less what the launch's own turn charged there first, the least of
-// every capped window of either scope. And the fresh brief is the one brief a
-// launch has nothing to drop for, so that floor is held. At the static floor
-// where the static floor fits in the room: a window with that much left admits
-// the launch whatever other seats spent there first, and one a token short of
-// it refuses it. At the room where the launch's own turn left less than the
-// static floor: a window holding nothing but that turn's spend admits it, and
-// one a token past it refuses it. The refusal and the hold's reason say where
-// it is held and what the room is made of, the brief's own estimate kept rather
-// than cut to what the room leaves. Never held under a ceiling config refuses,
-// below the static floor, nor at a room the turn's own spend used up, a window
-// with no room for a single token. Held at the room where the static floor
-// fits, a launch in a busy company waited for a window its other seats had
-// spent nothing in, which they may never leave it.
+// A fresh floor past the room is held at the static floor, or at the room below
+// it. Config holds every capped ceiling at or above the static floor alone, so
+// a fresh brief can take a launch's floor past the most room a window can leave
+// (each ceiling less what the launch's own turn charged, the least of every
+// capped window). That floor is held, since the fresh brief is the one a launch
+// has nothing to drop for: at the static floor where it fits in the room, else
+// at the room. The refusal and the hold's reason say where and what the room is
+// made of. Held at the room where the static floor fits, a busy company's
+// launch waited for a window other seats had spent nothing in.
 //
-// Mutation: refuse the floor past the room at every window, hold it at the room
-// where the static floor fits, at the static floor where the room is below it,
-// at the smallest ceiling, by cutting the brief to what the room leaves, at the
-// window leaving the most room, at the seat's windows alone, with the turn's
-// own spend left in the room, never below the static floor, under a ceiling
-// below it or at a room used up, or leave the hold out of the refusal or of the
-// hold's reason, and a case goes red.
+// Mutation: hold at the room where the static floor fits, below the static
+// floor, or leave the hold out of the reason; a case goes red.
 func TestAFreshFloorPastTheRoomIsHeldAtTheStaticFloorOrTheRoomBelowIt(t *testing.T) {
 	t.Parallel()
 	brief := harness.EstimateTokens(longBrief)
@@ -625,23 +602,17 @@ func TestAFreshFloorPastTheRoomIsHeldAtTheStaticFloorOrTheRoomBelowIt(t *testing
 	})
 }
 
-// A HELD LAUNCH SAYS SO, NAMING THE FLOOR IT IS HELD TO. An operator reading a
+// A held launch says so, naming the floor it is held to. An operator reading a
 // seat whose run took its window past its ceiling is told why by one line: the
-// launch's fresh brief took its floor past the most room a window could leave
-// it, so that floor was held, the brief's estimate that took it there, and the
-// floor the launch is held to and where. Held at the static floor, the fresh
-// floor is below the room, so a session the launch offers, its own floor
-// within that room, may hold the launch higher: the line then names that
-// session's floor, and still says that a run its box starts on the fresh brief
-// may take its window past its ceiling. Said before the sessions were judged,
-// it named the static floor for a launch held to the session's.
-//
-// NOT PARALLEL: it swaps the process-wide logger, which this package otherwise
-// leaves at its boot default.
+// fresh brief took the floor past the most room a window could leave, so it was
+// held, with the brief's estimate and the floor held to and where. Held at the
+// static floor, an offered session whose floor fits the room may hold the
+// launch higher: the line then names that session's floor and still says a run
+// its box starts on the fresh brief may pass its ceiling. Said after the
+// sessions are judged. NOT PARALLEL: it swaps the process-wide logger.
 //
 // Mutation: drop the line, name the fresh floor where a session's holds the
-// launch, say it is held at the static floor there, or say it only where the
-// launch's own floor is the held one, and a case goes red.
+// launch, or say it only where the launch's own floor is held; a case reds.
 func TestAHeldLaunchSaysItIsHeld(t *testing.T) {
 	logs := &stopLineBuffer{}
 	logging.Configure(slog.LevelInfo, logging.FormatJSON, logs)
@@ -745,61 +716,18 @@ roles:
       day: %d
 `
 
-// A TURN'S OWN SPEND NEVER HOLDS ITS LAUNCH FOR EVER, NOR DOES OTHER SEATS'.
-// Every dispatched turn charges its context assembly through its meter, on the
-// seat's auxiliary chain, before its launch reads the window, and charges it
-// again every time the delivery runs; and in a busy company the other seats
-// spend in the company's window first after every turnover. Held at the
-// ceiling, a fresh launch whose brief takes its floor past the room its own
-// turn leaves was refused, parked to the turnover and refused again in every
-// window for as long as the delivery lasted. Held at that room, it went out
-// only in a window nothing else had spent in, which a busy company whose own
-// day is the smallest ceiling never left it. Held at the static floor, which
-// fits in that room, it goes out in the first window with that much left,
-// whatever else was spent there, and in the next where something else took the
-// first below it; and so does a floor within the ceiling but past what its own
-// turn leaves of it.
-//
-// AND A FLOOR WITHIN THE ROOM, PAST WHAT THE BUSY WINDOW LEAVES, WAITS ONE
-// TURNOVER. The other seats' spend before the launch's read is not in the
-// room, so a fresh floor between what the busy window leaves and the room
-// (briefs of 3001 to 4000 tokens here, where the window leaves 28000 and the
-// room is 29000), and a measured session's floor there, are refused in the
-// first window and parked; the park records the window, and the delivery's
-// next launch, in the next window, is held at the static floor and drops the
-// session its window still leaves no room for, so it goes out there. Waited for
-// in every window, such a launch went out in none, where before its brief was
-// counted a fresh one went out at once, and a measured session's, whose floor
-// counted its brief already, had that band then too. A floor the busy window
-// leaves room for goes out at once, and one past the room is held at once. A
-// seat that leaves the node between the two windows takes nothing of the park
-// to its next holder, which parks it once more: it goes out in the third. And
-// the park's record is the delivery's, kept under its events' ids and dropped
-// once the dispatch that launched it acknowledged it, so a later delivery's
-// launch in the same window, which never waited, is held to its floor and
-// parked.
-//
-// ONLY A LAUNCH'S REFUSAL BELOW ITS FLOOR IS RECORDED. A first window that
-// refused the turn's round, or whose gate parked the seat before any turn ran,
-// refused no launch, so the next window's launch, its floor in the band, never
-// waited for that floor: it is refused at it, parked, and goes out in the
-// window after. A park an apply releases before its window turns over hands its
-// launch back into the window it was refused in, which has not turned over:
-// held to its floor there as before, it is parked again, and goes out in the
-// next. And a waited try's fresh floor says it is held after its launch was
-// refused below its floor, never that it is the floor refused: in the measured
-// session's row the session's floor was, which that try drops.
-//
-// Mutation: hold at the ceiling, at the room where the static floor fits in it,
-// or not at all, take the room as the ceiling with the turn's own spend left in
-// it, read the turn's spend off any meter but the one the turn charged
-// through, or tally no auxiliary call the meter posts; leave the wait
-// unbounded, record no window with the park, or one with a park on a round's
-// refusal or the gate's, read the window as turned over in the window it
-// names, keep a session its window still leaves no room for, keep the record
-// when the seat leaves the node or drop it only after the park's hold is
-// lifted, hand a later delivery the window of one that waited, or say a waited
-// floor is the floor its launch was refused below; and a case goes red.
+// A turn's own spend never holds its launch for ever, nor does other seats'.
+// Each turn charges its context assembly through its meter before its launch
+// reads the window, and other seats spend there first after every turnover.
+// Held at the ceiling, a floor past the room the turn's own spend leaves was
+// refused and parked in every window; held at that room, it went out only in a
+// window nothing else spent in. Held at the static floor, it goes out in the
+// first window with that much left. A floor within the room but past what the
+// busy window leaves waits one turnover: it is parked with the window recorded
+// (only a launch's refusal below its floor, never a round's or a gate's), and
+// the next launch drops the session its window leaves no room for. The record
+// is the delivery's, so a later delivery never inherits its wait.
+// Mutation: hold at the ceiling or room, wait unbounded, or record a round's.
 func TestATurnsOwnSpendNeverHoldsItsLaunchForEver(t *testing.T) {
 	t.Parallel()
 	// A DAY OF 30000 UNDER A FLOOR OF 25000, and a thousand tokens of context
@@ -1056,24 +984,17 @@ func TestATurnsOwnSpendNeverHoldsItsLaunchForEver(t *testing.T) {
 	}
 }
 
-// A WAITED LAUNCH'S TURNOVER IS ITS OWN DELIVERY'S. The park records the window
-// a launch was refused below its floor in for the delivery whose launch it was,
-// and its release hands the seat's mail back in the seat's order, which is not
-// the order its deliveries were refused in: a person who writes to the seat
-// while it is parked rides the seat's priority lane, which every drain takes
-// first. Kept for the seat, the window went to the person's launch, which never
-// waited, held at the static floor below its own brief's floor, and the
-// delivery that waited found nothing, was refused at its floor again and parked
-// again, in every window a person wrote to the seat. So, in a busy company, a
-// background delivery whose brief takes its floor to the room is refused and
-// parked, and a person writes meanwhile: at the turnover, whichever of the two
-// runs first, the person's launch goes out on its own floor, held at nothing,
-// and the delivery that waited goes out held at the static floor; and once it
-// has gone out, nothing of its wait is left on the seat.
+// A waited launch's turnover is its own delivery's. The park records the
+// window a launch was refused in for its delivery, and its release hands mail
+// back in the seat's order, not the order of refusal: a person writing to a
+// parked seat rides the priority lane, which every drain takes first. Kept per
+// seat, the window went to the person's launch, which never waited, and the
+// waited delivery was parked again in every window a person wrote. So at the
+// turnover, whichever runs first, the person's launch goes out held at nothing,
+// the waited one held at the static floor, and nothing of its wait is left.
 //
-// Mutation: key the record by the seat, record the wait under none of the
-// delivery's events, drop nothing once a delivery is gone, or drop the seat's
-// every wait with one delivery's, and a case goes red.
+// Mutation: key the record by the seat, record it under none of the delivery's
+// events, or drop nothing or everything once a delivery is gone; a case reds.
 func TestAWaitedLaunchsTurnoverIsItsOwnDeliverys(t *testing.T) {
 	t.Parallel()
 	// THE BUSY COMPANY: a day of 30000, the smallest ceiling, every turn's
@@ -1312,36 +1233,18 @@ func TestADeliveryAnyOfWhoseEventsWaitedIsHeld(t *testing.T) {
 	}
 }
 
-// A LAUNCH REFUSED BELOW ITS FLOOR WAITS ONE TURNOVER AT MOST, ON A RESUME TOO.
-// A resumed segment's relaunch has no mail to park: its hold names the window
-// the relaunch was refused in, the release counts that onto the job's record,
-// and the turn's next relaunch reads it there. In a window after it, the
-// relaunch's fresh brief's floor is held at the static floor, and a session its
-// windows still leave no room for, measured or not, is dropped for the fresh
-// brief, where one they leave room for is still continued. In the window it was
-// refused in, the relaunch is held to its floor as before; and a record naming
-// no window, as a build without the field wrote the job's record, reads as
-// never refused. A session whose floor is exactly what its windows leave is
-// still continued, since its launch goes out at exactly its floor; and a read
-// of what they leave that fails drops no session, the launch's own read of the
-// same counters deciding it then. A relaunch that waited and is refused all the
-// same, its window short of the static floor too, says why it is held: a floor
-// held after its launch was refused below its floor in a window that has turned
-// over since, never past a room it is within, nor that floor the one refused;
-// and a session it drops says what its windows leave. Only a launch's refusal
-// below its floor names its window, in a window short of its floor or full
-// alike, never a round's: a turn whose round was refused never waited for its
-// launch's floor. In a busy company whose day of 30000 leaves 28000 once other
-// seats have spent there, a brief of 4000 beside the static floor is 29000:
-// within the room, past what the window leaves.
-//
-// Mutation: leave the wait unbounded, ignore the job's record, read the window
-// as turned over in the window it names, drop a session the window leaves room
-// for, exactly its floor included, or keep one it does not, drop every session
-// on a read that fails, keep the copy nothing measured, say a waited floor
-// is held past the room or is the floor refused, leave the window out of a
-// dropped session's line, name the window of a round's refusal, or name none
-// for a launch's in either window, and a case goes red.
+// A launch refused below its floor waits one turnover at most, on a resume too.
+// A resumed relaunch has no mail to park: its hold names the window it was
+// refused in, the release counts that onto the job's record, and the next
+// relaunch reads it there. In a later window the fresh floor is held at the
+// static floor and a session the windows leave no room for is dropped; one they
+// leave room for, even at exactly its floor, is continued. In the window it was
+// refused in it is held to its floor; a record naming no window reads as never
+// refused; a failed read drops no session. Only a launch's refusal below its
+// floor names its window, never a round's. Here a busy day of 30000 leaves
+// 28000, so 4000 beside the static floor (29000) is within the room, past what
+// the window leaves. Mutation: leave the wait unbounded, ignore the record, or
+// drop or keep a session wrongly, exactly its floor included.
 func TestALaunchRefusedBelowItsFloorWaitsOneTurnoverAtMost(t *testing.T) {
 	t.Parallel()
 	static := new(config.TurnEngine).ExecutorFloor()

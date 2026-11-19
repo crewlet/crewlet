@@ -719,13 +719,11 @@ func TestAClaudeTakeFitsItsBudgetInUTF16Units(t *testing.T) {
 
 // A RESUMED TURN CARRIES ITS NOTES IN THE ORDER THEY WERE READ — the record's
 // own order of the writes that read them, whatever waits between them and
-// whatever each writer's clock said. A record holds a waiting note between two
-// read ones whenever a note waits while a later one is read — a seal this node
-// cannot open yet, or a later note a harness took first — and the writes that read
-// notes are made by whichever nodes launch the run, serve its bridge and resume
-// the turn, each stamping its own time. The carry is what every later phase and
-// brief renders in order: two notes from one person that disagree must reach the
-// reviewer with the later read last, since a note is the later word.
+// whatever each writer's clock said. A waiting note sits between two read ones
+// whenever a seal cannot be opened yet or a harness took a later note first,
+// and the reads are written by different nodes, each stamping its own time.
+// Two disagreeing notes from one person must reach the reviewer with the later
+// read last, since a note is the later word.
 //
 // Mutation: sort on the reads' times, or with a comparator that ties every pair
 // with a waiting note in it, as carried did, and the read notes come back out of

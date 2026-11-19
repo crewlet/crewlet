@@ -102,19 +102,16 @@ type Principal struct {
 	// Kind is what sort of thing this is.
 	Kind Kind
 
-	// Seat is the seat handle this principal acts as, or "" for one that
-	// acts as itself. For [KindSeat] it is the seat. For [KindPerson] it
-	// is the binding the IDENTITY DIRECTORY holds for them, which is what
-	// lets somebody at the dashboard act AS THEMSELVES rather than as a
-	// credential. Every person holds a human seat (ADR-0032), so a person
-	// with none is one recorded before that rule, which `iam check`
-	// reports; a MACHINE acting as itself is the ordinary unbound case,
-	// and it keeps [KindMachine] — a bound one is composed as the person
-	// it acts as.
+	// Seat is the seat handle this principal acts as, or "" for one that acts
+	// as itself. For [KindSeat] it is the seat; for [KindPerson] the binding
+	// the IDENTITY DIRECTORY holds, which lets somebody at the dashboard act AS
+	// THEMSELVES rather than as a credential (a person with none predates
+	// ADR-0032's rule; `iam check` reports it). A MACHINE acting as itself is
+	// the ordinary unbound case and keeps [KindMachine]; a bound one is
+	// composed as the person it acts as.
 	//
-	// Carried as the string the binding holds and NOT re-validated here:
-	// the grammar is [ValidSeatHandle], asked where a handle is created,
-	// and a principal only ever carries one the chart already holds.
+	// NOT re-validated here: [ValidSeatHandle] is asked where a handle is
+	// created, and a principal only carries one the chart already holds.
 	Seat string
 
 	// Grants are the permissions this principal carries. A slice rather
@@ -152,31 +149,17 @@ type Principal struct {
 	// Stage is how far through enrolment this principal is.
 	Stage Stage
 
-	// Via is the credential this principal is acting THROUGH, named as the
-	// audit trail records it, when that credential is not the principal
-	// itself: `pat:<id>` for a machine token acting as its owner
-	// ([MachineTokenName]), and `session:<lineage>` for a browser session
-	// ([SessionName]) — whoever it stands for, a Tier A token's exchanged
-	// session included.
+	// Via is the credential this principal acts THROUGH, named as the audit
+	// trail records it, when that is not the principal itself: `pat:<id>`
+	// ([MachineTokenName]), `session:<lineage>` ([SessionName], a Tier A token's
+	// exchanged session included) or `assist:<grant>` ([AssistName], ADR-0050).
 	//
-	// EMPTY FOR A PRINCIPAL THAT IS ITS OWN CREDENTIAL — a Tier A bearer's
-	// login already names the token, a seat is its own turn, the engine is
-	// its node — and that is the meaningful zero: [ActorFor] then records
-	// the login as the operator.
+	// EMPTY FOR A PRINCIPAL THAT IS ITS OWN CREDENTIAL, the meaningful zero:
+	// [ActorFor] then records the login as the operator.
 	//
-	// WHY IT EXISTS: a machine token is composed as its OWNER, so without
-	// this every write one made was recorded exactly as the owner's own, and
-	// a token minted on somebody's account could file, edit and close their
-	// work with no row saying a token was used, let alone which. The author
-	// stays the owner — it is their authority being exercised — and this is
-	// the column beside it that says through what. A session is the same
-	// question asked of a browser: the person is the author, and the lineage
-	// is which sign-in — which of their browsers, which shared machine — the
-	// write came through.
-	//
-	// `assist:<grant>` ([AssistName]) is the Dashboard Assistant acting for
-	// a person signed in through a session: the person is the author, and
-	// the grant is the credential the request came through (ADR-0050).
+	// A machine token is composed as its OWNER, so without this its writes
+	// would be recorded as the owner's own. The author stays the owner, whose
+	// authority is exercised; this says through what, and which sign-in.
 	Via string
 
 	// AssistScope is how far the assistant grant named by Via reaches:
@@ -194,16 +177,12 @@ type Principal struct {
 // administrator carries through [Expand].
 //
 // AN UNKNOWN NAME IS IGNORED FOR ITS CAPABILITY, NEVER A REASON TO REJECT THE
-// PRINCIPAL. A rolling upgrade puts a newer build's names in front of an older
-// node — that is what additive evolution means on a shared store — and
-// refusing the whole principal over one string it cannot parse would log every
-// person in the company out for the length of the deploy. So the string simply
-// grants nothing here: this build cannot open a door it has never heard of,
-// and it does not need to in order to open the doors it has.
+// PRINCIPAL: a rolling upgrade puts a newer build's names in front of an older
+// node, and refusing the principal over one would log everybody out for the
+// length of the deploy. The string simply grants nothing.
 //
-// The asked-for permission is checked too, so a caller that composes one from
-// a string cannot accidentally match an unknown one a principal happens to
-// hold.
+// The asked-for permission is checked too, so a caller composing one from a
+// string cannot match an unknown one a principal happens to hold.
 func (p Principal) Can(g Grant) bool {
 	return g.Valid() && slices.Contains(Expand(p.Grants), g)
 }

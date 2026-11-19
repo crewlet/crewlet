@@ -593,9 +593,7 @@ func TestAClientThatHangsUpBeforeItsOpenIsAnsweredRunsNothing(t *testing.T) {
 // ON A TIME THE CASE MOVES ([manualTime]), a heartbeat at a time, each once the
 // holder waits for its next beat with no frame in flight: every beat is pushed
 // and acknowledged before the idle bound can pass, whatever the runner's load.
-// On the wall clock, which this replaced, the case raced the scheduler: a holder
-// kept off its goroutine for the idle bound less a beat cut the stream — one
-// stall of 350 ms did, every time — and a loaded race runner lost it once.
+// A wall clock would race the scheduler.
 //
 // Mutations: reset the entry's idle bound only on a frame that carries
 // something (inbound.pump), or push no empty frame (Relay.push) — the bound
