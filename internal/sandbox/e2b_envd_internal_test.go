@@ -146,6 +146,86 @@ func TestAFileWriteCarriesItsLengthAndCanBeSentAgain(t *testing.T) {
 	}
 }
 
+// A BOX'S FILE CUT OFF PART WAY IS THE PROVIDER'S FAILURE, on every open that
+// streams it: the read fails with [WhyProviderUnavailable], as a whole read's
+// does, and a refused open is classed by its status.
+func TestAStreamCutOffPartWayIsTheProvidersFailure(t *testing.T) {
+	t.Parallel()
+	const path = "/home/user/.crewlet-check/output"
+	for _, tc := range []struct {
+		name   string
+		answer func(*http.Request) *http.Response
+		open   func(c *envdClient) (io.ReadCloser, error)
+	}{
+		{"a stream", answered(http.StatusOK, -1, ""), func(c *envdClient) (io.ReadCloser, error) {
+			return c.openFile(t.Context(), path)
+		}},
+		{"a ranged end", answered(http.StatusPartialContent, 64, "bytes 36-99/100"),
+			func(c *envdClient) (io.ReadCloser, error) {
+				r, _, err := c.openTail(t.Context(), path, 64)
+				return r, err
+			}},
+		{"an end sent whole with its length", answered(http.StatusOK, 100, ""),
+			func(c *envdClient) (io.ReadCloser, error) {
+				r, _, err := c.openTail(t.Context(), path, 64)
+				return r, err
+			}},
+		{"an end sent whole without a length", answered(http.StatusOK, -1, ""),
+			func(c *envdClient) (io.ReadCloser, error) {
+				r, _, err := c.openTail(t.Context(), path, 64)
+				return r, err
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := &envdClient{host: "http://box.example.com", fileIdle: time.Minute,
+				http: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+					return tc.answer(r), nil
+				})}}
+			r, err := tc.open(c)
+			if err == nil {
+				_, err = io.ReadAll(r)
+				_ = r.Close()
+			}
+			if !isClass(err, WhyProviderUnavailable) {
+				t.Errorf("a body cut off after 10 bytes = %v; want it classed as the provider's failure", err)
+			}
+		})
+	}
+	refused := &envdClient{host: "http://box.example.com", fileIdle: time.Minute,
+		http: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Request: r,
+				Body: io.NopCloser(strings.NewReader("down"))}, nil
+		})}}
+	if _, _, err := refused.openTail(t.Context(), path, 64); !isClass(err, WhyProviderUnavailable) {
+		t.Errorf("a 503 on the end's open = %v; want it classed as the provider's failure", err)
+	}
+}
+
+// answered is a response of status whose body yields 10 bytes and then fails,
+// with length as its Content-Length (-1 for none) and contentRange set when
+// not empty.
+func answered(status int, length int64, contentRange string) func(*http.Request) *http.Response {
+	return func(r *http.Request) *http.Response {
+		resp := &http.Response{StatusCode: status, ContentLength: length, Header: http.Header{},
+			Body: io.NopCloser(io.MultiReader(strings.NewReader("0123456789"), failing{})), Request: r}
+		if contentRange != "" {
+			resp.Header.Set("Content-Range", contentRange)
+		}
+		return resp
+	}
+}
+
+// failing is a body whose connection dropped.
+type failing struct{}
+
+func (failing) Read([]byte) (int, error) { return 0, errors.New("connection reset by peer") }
+
+func isClass(err error, want Why) bool {
+	why, ok := WhyOf(err)
+	return ok && why == want
+}
+
 // roundTrip is an http.RoundTripper made of a function.
 type roundTrip func(*http.Request) (*http.Response, error)
 

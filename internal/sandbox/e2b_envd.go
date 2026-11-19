@@ -575,8 +575,7 @@ func (c *envdClient) openFile(ctx context.Context, path string) (io.ReadCloser, 
 		return nil, envdRefused(resp.StatusCode, fmt.Errorf("e2b: open %s: %d: %s", path,
 			resp.StatusCode, httpx.ReadRefusal(resp)))
 	}
-	return &envdStream{body: resp.Body, idle: idle, path: path,
-		cancelled: func() bool { return cancelledBy(ctx) }}, nil
+	return newEnvdStream(ctx, resp, idle, path), nil
 }
 
 // envdStream is an open file's body, read through its idle bound.
@@ -587,6 +586,14 @@ type envdStream struct {
 	// cancelled reports whether the opener's context was cancelled, since
 	// Read takes none; a cancelled read is no class ([unanswered]).
 	cancelled func() bool
+}
+
+// newEnvdStream is resp's body as an [envdStream]: every open of a box's file
+// makes one here, so none is left without the opener's context to class a
+// failed read by.
+func newEnvdStream(ctx context.Context, resp *http.Response, idle *idleReader, path string) *envdStream {
+	return &envdStream{body: resp.Body, idle: idle, path: path,
+		cancelled: func() bool { return cancelledBy(ctx) }}
 }
 
 func (s *envdStream) Read(p []byte) (int, error) {
@@ -649,14 +656,14 @@ func (c *envdClient) openTail(ctx context.Context, path string, n int64) (io.Rea
 			return nil, 0, fmt.Errorf("e2b: open the end of %s: a range answered with Content-Range %q, "+
 				"which names no whole size", path, resp.Header.Get("Content-Range"))
 		}
-		stream := &envdStream{body: resp.Body, idle: idle, path: path}
+		stream := newEnvdStream(ctx, resp, idle, path)
 		return limitedStream{Reader: io.LimitReader(stream, min(n, total-start)), Closer: stream}, total, nil
 	case resp.StatusCode >= 400:
 		defer done()
-		return nil, 0, fmt.Errorf("e2b: open the end of %s: %d: %s", path, resp.StatusCode,
-			httpx.ReadRefusal(resp))
+		return nil, 0, envdRefused(resp.StatusCode, fmt.Errorf("e2b: open the end of %s: %d: %s", path,
+			resp.StatusCode, httpx.ReadRefusal(resp)))
 	case resp.ContentLength >= 0:
-		stream := &envdStream{body: resp.Body, idle: idle, path: path}
+		stream := newEnvdStream(ctx, resp, idle, path)
 		if skip := resp.ContentLength - n; skip > 0 {
 			if _, err = io.CopyN(io.Discard, stream, skip); err != nil {
 				_ = stream.Close()
@@ -668,7 +675,7 @@ func (c *envdClient) openTail(ctx context.Context, path string, n int64) (io.Rea
 	defer done()
 	data, total, err := keepLast(idle, int(n))
 	if err != nil {
-		return nil, 0, fmt.Errorf("e2b: read the end of %s: %w", path, idle.silent(err))
+		return nil, 0, unanswered(ctx, fmt.Errorf("e2b: read the end of %s: %w", path, idle.silent(err)))
 	}
 	return io.NopCloser(bytes.NewReader(data)), total, nil
 }
