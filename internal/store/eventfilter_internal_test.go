@@ -12,15 +12,11 @@ import (
 // EVERY FILTER WITH AN INDEX OF ITS OWN SEEKS IT, rather than walking the whole
 // log newest-first until a page fills.
 //
-// Three of these indexes are PARTIAL (`WHERE x <> ”`, schema/0029, 0033 and
-// 0034), and the planner uses a partial index only when the query itself
-// states the index's predicate: it cannot prove `x = ?` implies `x <> ”` for a
-// value bound after planning. Until the listing stated it, every one of those
-// filters read the primary key instead — which, for an item, a unit of work or
-// a channel with fewer rows than a page, is every row of the thirty-day window
-// on every read. The plan is read back for the EXACT statement [EventLog.List]
-// runs, so a filter that stops naming its predicate goes red here.
-//
+// Three indexes are PARTIAL (`WHERE x <> ”`, schema/0029, 0033, 0034), and the
+// planner uses one only when the query states its predicate: it cannot prove
+// `x = ?` implies `x <> ”` for a value bound after planning. Without it the
+// filter reads the primary key, every row of the thirty-day window. The plan is
+// read for the EXACT statement [EventLog.List] runs.
 // Mutation: drop the `<> ”` term from [ListQuery.predicate]'s addIndexed and
 // the three partial cases name the primary key.
 func TestEveryPartiallyIndexedFilterSeeksItsIndex(t *testing.T) {
@@ -91,39 +87,18 @@ func TestEveryTurnFilterSeeksItsIndex(t *testing.T) {
 	}
 }
 
-// EVERY GROUPED READ SEEKS ITS FILTER'S INDEX, and never through the primary
-// key's floor range.
-//
-// A GROUP BY over the log under the history floor was planned on the primary
-// key `event_time` leads: the floor taken as a range of it and read whole, or
-// that range intersected with the filter's own index (`MULTI-INDEX AND`) —
-// either way the read cost the thirty-day window rather than the rows it was
-// about. Selecting the rows in a derived table and grouping outside it is what
-// makes the planner seek a column's groups (see [EventLog]); the axis's bars
-// group over the table itself by an expression over `event_time`, and seek as
-// they are. Read back for the EXACT statement each read runs: a turn's traces
-// and the nodes that published it, the turn list and its share of named
-// turns, every filter of the facet counts, and every filter of the axis's
-// bars — the category's too — at every bucket width Histogram draws, each
-// over a window it answers rather than refuses. The ones with an index of
-// their own seek it, and none of them, whatever it filters on, intersects the
-// key.
-//
-// A read that names a WINDOW seeks it too, on the filter's index: the count of
-// notification outcomes is two types over `[since, at)`, and the planner seeks
-// the type alone for `event_type IN (…)` and reads every row of it the log
-// holds — so each of its seeks must carry the time range as well.
-//
-// Mutation: select [turnTracesSQL]'s, [turnNodesSQL]'s, [ListQuery.facetSQL]'s
-// or [TurnQuery.partialsSQL]'s rows from the table rather than from a derived
-// table, and its cases read the key — a range of it for the traces, `MULTI-
-// INDEX AND` for a filtered facet count or a unit of work's turns. Force the
-// primary key under [HistogramQuery.barsSQL]'s statement for one bucket width
-// alone, or for the category's windowed bars alone, and that width's cases, or
-// the category's, name it — the statements a gate reading only the hour's
-// bars, or the category's without a window, never read. Spell
-// [OutcomeQuery.countSQL]'s types as one `IN` and its seeks lose the window;
-// as an `OR`, and it intersects two reads of the index.
+// EVERY GROUPED READ SEEKS ITS FILTER'S INDEX, never the primary key's floor
+// range. A GROUP BY under the history floor can plan on the primary key
+// `event_time` leads: the floor as a range read whole, or intersected with the
+// filter's index (`MULTI-INDEX AND`). A derived table grouped outside makes the planner seek a
+// column's groups (see [EventLog]); the axis's bars group by an expression over
+// `event_time` and seek as they are. The plan is read for each read's EXACT
+// statement at every bucket width: an index seeks it, the key is never
+// intersected, and a WINDOW rides every seek (the planner seeks `IN (…)` types
+// alone). Mutation: read [turnTracesSQL], [turnNodesSQL], [ListQuery.facetSQL] or
+// [TurnQuery.partialsSQL] from the table not a derived table; force the primary
+// key under [HistogramQuery.barsSQL] for one width or the windowed category;
+// spell [OutcomeQuery.countSQL]'s types as one `IN` (loses the window) or `OR`.
 func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
 	t.Parallel()
 	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), Options{})
@@ -254,15 +229,11 @@ func TestEveryGroupedReadSeeksItsFiltersIndex(t *testing.T) {
 // THE CUSTODY READS SEEK THE LOG BY IDENTITY, driven from the few rows they
 // name rather than from the log.
 //
-// Every count names its rows of a custody batch in flight — the outcome
-// counts, the axis at every filter it takes, a trace's and a turn's extent, a
-// turn's sums — and a node says which of some named rows it keeps; each is a
-// handful of rows against a log of a month, so each must start from what it
-// names — the unsettled batches, or the names it was handed — and seek the log
-// for every one. Started from the log, any of them would read every row its
-// count reads, or every row the log holds, and probe the names for each. Read
-// back for the EXACT statements each runs.
-//
+// Every custody count (outcomes, the axis at every filter, a trace's and a
+// turn's extent, a turn's sums) and a node's kept-rows read names a handful of
+// rows against a month of log, so each must start from what it names and seek
+// the log for every one; started from the log it would read every row. The plan
+// is read for the EXACT statements each runs.
 // Mutation: join the log first in [unsettledSQL] or [keptSQL], and the plan
 // starts from the log — a seek of the count's own index, or a scan of every
 // row; drop [keptRowSQL] from [keptSQL], and the kept rows no longer probe the
@@ -359,15 +330,12 @@ func TestTheCustodyReadsSeekTheLogByIdentity(t *testing.T) {
 
 // A LOOKUP BY ID SEEKS THE ID INDEX, and only the id index.
 //
-// A link carries an id and no time, so [EventLog.ByID] has the id index to
-// seek and nothing else — and the planner kept reaching for the primary key
-// that `event_time` leads: walking it newest first to satisfy the ORDER BY (the
-// whole log for an old id or a dead link), or, once the history floor was a
-// term, intersecting the id index with that key's entire thirty-day range
-// (`MULTI-INDEX AND`), which costs every lookup the size of the window. Read
-// back for the EXACT statement ByID runs, on an empty log as on a full one:
-// without statistics, which no node gathers, the plan is the same either way.
-//
+// A link carries an id and no time, so [EventLog.ByID] has only the id index,
+// and the planner reaches for the primary key `event_time` leads: walking it to
+// satisfy the ORDER BY (the whole log for a dead link), or intersecting the id
+// index with its thirty-day floor range (`MULTI-INDEX AND`). The plan is read
+// for the EXACT statement on an empty log as a full one: no node gathers
+// statistics, so it is the same either way.
 // Mutation: drop the ORDER BY's unary plus from [byIDSQL] and the plan walks
 // the primary key's autoindex; drop both and it intersects that key's floor
 // range with the id index (`MULTI-INDEX AND`).

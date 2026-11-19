@@ -17,77 +17,15 @@ import (
 
 // ONLY A STATE LOG'S APPLIER WRITES THE REPLICATED ESTATE.
 //
-// The rule, stated once: a mutation to replicated state is published as ONE
-// record on its log, the broker arbitrates it, and it reaches SQL only through
-// that log's deterministic applier, in the replicated estate's file. The
-// stream is the write-ahead log and the file is the derived durable state —
-// never the reverse. [internal/statelog] argues the whole of it; adr/0002 is
-// the decision, and this test is what that decision's `Enforced-by:` names.
-//
-// # Why an absence needs a test, and why this one in particular
-//
-// Every other rule about the estates already had a gate and has never been
-// re-litigated: no statement spans two files, no table is declared in both
-// estates. This one had none, and it is the rule with the failure that cannot
-// be seen from inside the node that breaks it. A local write to the replicated
-// estate succeeds, the rows look right on the node that made them, and the
-// divergence only appears as two nodes answering one question differently —
-// at which point the write that caused it is months behind in the log.
-//
-// The tree carried three such writes when this was added — a version reset
-// after a reanchor, a probe-flag clear and an inbox sweep — and each had to
-// state its case in terms of the rule. The version reset is gone: its case did
-// not survive the arbitration anchor moving off `version` (see
-// internal/worklet/reanchor.go), and a reanchor now writes nothing but the
-// framework's own checkpoint. The two that remain are allowed below.
-//
-// # What it walks, and what it cannot see
-//
-// Every non-test .go file under internal/ and cmd/, parsed with go/parser,
-// looking for three things:
-//
-//  1. A WRITE HANDLE. The replicated estate reaches a caller as one of two
-//     types: [store.ReplicatedHandle], which can open a write transaction and
-//     pin a Writer, and [store.ReplicatedReader], which can only read. Every
-//     reader in the tree is handed the second, so the first IS the capability
-//     this rule is about, and the walk reports every place that holds it: the
-//     type named anywhere — a field, a parameter, a result, a variable — a
-//     call to any function the tree declares as answering one, unless the
-//     answer is narrowed on the spot ([readOnlyOfHandle]), and a call that
-//     takes the estate's own [store.DB]: `.DB()`, `.ReplicatedDB()`,
-//     `.OpenReplicated(…)`. The framework's own write seam, `statelog.Estate`,
-//     is the same capability as an interface, and is reported wherever it is
-//     named outside the framework.
-//  2. A DML string literal naming a table the REPLICATED schema declares, in
-//     a file that is not an applier. This one catches a write whose handle
-//     arrived by a route the first missed — an interface the walk cannot
-//     name, a value `:=` inferred from a call it did not recognise.
-//  3. A DML statement whose table is COMPUTED, which no reader of the source
-//     can check either.
-//
-// The write side was once a method answering the open file itself, and the
-// walk followed its result: a chained write, or a handoff to anything not
-// declared a reader. The handle is now a value the runtime hands every domain
-// — [store.DB.Replicated] answers it, resolved per call rather than captured —
-// and following it would have flagged every domain's constructor; what
-// replaced the handoff list is the TYPE, which a reader is handed instead of
-// declaring itself one.
-//
-// Matching is on the NAME rather than on a resolved type, which is the safe
-// direction for the reason [TestOnlyOnePlaceWritesARunningStreamsConfiguration]
-// gives: a false positive costs one allowance entry with a reason, and a false
-// negative is the silent divergence above. The one name it trusts is an
-// import's: a call qualified by an imported package is that package's
-// function, and is judged by what that function answers.
-//
-// It cannot see a write assembled by reflection. None exists here.
-//
-// # The allowance is two-sided
-//
-// An entry that matches no site in the tree FAILS, the same way
-// internal/skipgate's `Always` entries do. An allowance for a write somebody
-// deleted is an allowance that would silently cover the next write into the
-// same file.
+// A mutation to replicated state is ONE record on its log, arbitrated by the
+// broker and reaching SQL only through the log's applier ([internal/statelog];
+// adr/0002 names this test as its `Enforced-by:`). A local write looks right
+// on its node and diverges months later. Two writes remain, allowed below.
+// It parses non-test .go under internal/ and cmd/ for a WRITE HANDLE
+// ([store.ReplicatedHandle], `.DB()`, `statelog.Estate`; matched on NAME,
+// since a false negative is silent divergence), a DML literal naming a
+// replicated table outside an applier, and a COMPUTED table. An allowance
+// matching no site FAILS, as internal/skipgate's `Always` entries do.
 func TestOnlyTheApplierWritesTheReplicatedEstate(t *testing.T) {
 	t.Parallel()
 
@@ -453,19 +391,12 @@ type allowance struct {
 	Prefix string
 
 	// Kind says which of four things this allowance is, so a reviewer can
-	// tell them apart at a glance rather than by reading seventeen reasons
-	// — and it is what the walk judges each site against
-	// ([allowanceKind.covers]), so an entry allows only the findings its
-	// kind names.
-	//
-	// It was a bool — applier or not — and a third case arrived the moment
-	// the walk learned to read a computed table name: a statement this gate
-	// flags that is not a replicated write at all. A bool would have filed
-	// that under one of the two meanings it does not have. The fourth,
-	// HOLDER, arrived when the write handle became a value the runtime
-	// hands out: a file that only passes it on was allowed as mechanism,
-	// and that allowed its every statement too — a sweep planted there
-	// wrote a replicated table and the gate passed.
+	// tell them apart at a glance, and it is what the walk judges each site
+	// against ([allowanceKind.covers]): an entry allows only the findings its
+	// kind names. A bool (applier or not) could not file a statement this gate
+	// flags that is not a replicated write at all. HOLDER is a file that only
+	// passes the write handle on; allowing it as mechanism allowed its every
+	// statement too, and a sweep planted there passed the gate.
 	Kind allowanceKind
 
 	// Why must say what makes this write legitimate in terms of the RULE
@@ -805,11 +736,9 @@ func allowanceFor(file string, allowed []allowance) (allowance, bool) {
 
 // readOnlyOfHandle names the [store.ReplicatedHandle] methods that do not
 // write: a call answering a write handle and narrowed on the spot by one of
-// these holds nothing a writer could use. `Reader` is the one that matters —
-// it is how the runtime hands a domain's reader the estate — and the rest
-// are what a caller asks of the handle in passing. The test holds this list
-// against the handle's own method set, so a method added there is a decision
-// made here.
+// these holds nothing a writer could use. `Reader` is the one that matters.
+// The test holds this list against the handle's own method set, so a method
+// added there is a decision made here.
 var readOnlyOfHandle = map[string]bool{
 	"Reader": true,
 	"Read":   true,
@@ -990,26 +919,16 @@ const unresolved = "\u2370"
 
 // composedString renders a string-valued expression, as far as it can.
 //
-// # Why a literal alone was not enough
-//
-// The first version of this walk read *ast.BasicLit and nothing else, which
-// left two evasions a contributor reaches by accident rather than by trying: a
+// A literal alone left two evasions a contributor reaches by accident: a
 // statement built by concatenation names no table in any literal, and one
-// built by fmt.Sprintf hides the table behind a verb. Both shapes are already
-// in this tree, and a probe written in a package with no allowance passed the
-// gate on the first of them — an interface handle over the estate, a table
-// name assembled from two constants, and a clean run.
+// built by fmt.Sprintf hides the table behind a verb. So it folds what it can
+// resolve and marks the rest [unresolved], which [writesComputedTable] reports
+// as a write whose table this walk cannot certify: the honest verdict, since a
+// computed table is one a READER cannot check either.
 //
-// So the renderer folds what it can and marks what it cannot. A part it
-// resolves contributes its text; a part it does not contributes [unresolved],
-// which [writesComputedTable] reports as a write whose table this walk cannot
-// certify. That is the honest verdict rather than a pass: a statement whose
-// table is computed is exactly the one a READER cannot check either.
-//
-// Sprintf's FORMAT STRING is the first argument and is rendered with its verbs
-// in place. The arguments are deliberately not resolved: a walk that tried
-// would be guessing at the one point where guessing is what this gate exists
-// to prevent.
+// Sprintf's FORMAT STRING is the first argument, rendered with its verbs in
+// place. The arguments are deliberately not resolved: guessing there is what
+// this gate exists to prevent.
 func composedString(n ast.Node, consts map[string]string) (string, bool) {
 	switch v := n.(type) {
 	case *ast.BasicLit:
@@ -1086,11 +1005,10 @@ func stringConsts(file *ast.File) map[string]string {
 
 // computedDML matches a write whose table this walk could not resolve.
 //
-// AN UPDATE IS ONE ONLY WITH ITS SET: the verb alone is an ordinary English
-// and command-line word, and `update %s` in an operator's command (`nats
-// stream update %s`, `crewlet artifacts update %s`) read as an UPDATE of a
-// computed table, which every such string then needed an allowance to pass.
-// INSERT INTO and DELETE FROM are SQL by their second word already.
+// AN UPDATE IS ONE ONLY WITH ITS SET: the verb alone is an ordinary word, and
+// `update %s` in an operator's command (`nats stream update %s`) read as an
+// UPDATE of a computed table. INSERT INTO and DELETE FROM are SQL by their
+// second word already.
 var computedDML = regexp.MustCompile(
 	`(?is)\b(?:(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|DELETE\s+FROM)\s+(?:` + unresolved + `|%[a-zA-Z])` +
 		`|UPDATE\s+(?:OR\s+\w+\s+)?(?:` + unresolved + `|%[a-zA-Z])\s+SET\b)`)

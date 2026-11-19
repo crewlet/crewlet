@@ -117,21 +117,15 @@ var whyRequired = map[string]string{
 		"change outright from one an operator is running.",
 }
 
-// THE ANCHOR, IN BOTH DIRECTIONS.
-//
-// This is the mechanism the register had no version of before, and the reason
-// its predecessor drifted into six false statements without anybody noticing:
-// nothing pointed at it, so nobody read it, so nobody corrected it.
+// THE ANCHOR, IN BOTH DIRECTIONS. Without one, nothing points at a record, so
+// nobody reads it and nobody corrects it.
 //
 // Forward: a record names an authority, and that authority's own doc carries
 // the record's id — so `go doc ./internal/statelog` shows ADR-0002 to the
 // person about to change the state log.
 //
-// Backward: a doc that cites a record which does not exist fails. This is not
-// hypothetical tidiness. Three package docs in this tree cited a package that
-// migration 0025 had deleted, for months afterwards, and the tree's own
-// withdrawn-vocabulary gate did not catch it — because a dangling reference
-// reads exactly like a live one.
+// Backward: a doc that cites a record which does not exist fails, because a
+// dangling reference reads exactly like a live one and no other gate sees it.
 func TestEveryRecordIsAnchoredAtItsAuthority(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -473,17 +467,13 @@ func TestAnUnenforcedDecisionSaysWhyAndStaysTrue(t *testing.T) {
 // A NAMED TEST EXISTS, IN THE PACKAGE THE RECORD NAMES.
 //
 // `Enforced-by: internal/store.TestOnlyTheApplierWritesTheReplicatedEstate` is
-// a claim about the tree, and a claim nobody checks is how the register's
-// predecessor came to assert that full-text search was unavailable while
-// internal/textindex shipped a BM25 index. A renamed or deleted test leaves the
-// record asserting a gate that is not there — which is worse than `nothing`,
-// because it reads as covered.
+// a claim about the tree. A renamed or deleted test leaves the record
+// asserting a gate that is not there, worse than `nothing` because it reads as
+// covered.
 //
 // THE PACKAGE A NAME IS QUALIFIED BY IS PART OF THE CLAIM. A test that moves
-// with the code it holds still exists by its name, so a check of the name alone
-// passed ADR-0073 while it sent its reader to internal/sandbox for a test
-// internal/engine declares, and would have gone on passing, that test renamed,
-// for as long as any package declared one of its name.
+// still exists by its name, so a check of the name alone would send a reader to
+// the wrong package, and keep passing while any package declared that name.
 func TestEveryNamedGateExists(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -665,27 +655,14 @@ type citation struct {
 
 // citations walks the tree for ADR-NNNN references.
 //
-// Go sources and markdown only: those are the two places a decision is cited
-// in a sentence somebody reads. A reference in a generated file or a committed
-// bundle would be noise, and static/ is skipped for that reason.
-//
-// THE RECORDS THEMSELVES ARE WALKED TOO, which they were not at first. A record
-// cites its neighbours — "which is ADR-0003", "see ADR-0002" — and those are
-// the citations most likely to survive a renumbering, because they are the
-// ones written by somebody who was holding both records in mind at the time
-// and is not around for the edit that moves one. A record's own id is declared
-// by its own file, so walking adr/ costs no false positives.
-//
-// The template is the exception and is skipped by NAME here rather than by
-// number, because what has to be skipped is the FILE: it carries the zero id
-// throughout as the shape of a record, and zero is the one number [adr.Load]
-// never declares.
+// Go sources and markdown only; static/ and dist are generated, so skipped.
+// The records are walked too: a record cites its neighbours, the citations
+// likeliest to survive a renumbering unnoticed. The template is skipped by
+// NAME: its file carries the zero id throughout, which [adr.Load] never declares.
 //
 // A FILE IS SPLIT INTO LINES ONLY IF IT CAN CITE: [adr.Reference] opens with
-// `\b`, so the regexp package has no prefix to jump to and tried it at every
-// byte of the tree, which was most of this gate's twenty-five seconds. Its
-// derived prefilter (see [regexlit.Required]) skips a file that holds no
-// substring a citation needs, and that file holds no citation.
+// `\b`, so regexp has no prefix to jump to. Its derived prefilter (see
+// [regexlit.Required]) skips a file holding no substring a citation needs.
 func citations(t *testing.T, root string) []citation {
 	t.Helper()
 	var out []citation
@@ -804,26 +781,16 @@ func packageDoc(src string) string {
 
 // A REFERENCE THAT POINTS AT NOTHING READS EXACTLY LIKE A LIVE ONE.
 //
-// This is the same failure the anchor above is for, one level out. A doc
-// comment that puts an import path in square brackets is making a claim about
-// the tree; godoc renders it as a link, and when the package goes the claim
-// stays — silently, because a deleted package produces no compile error in a
-// comment.
-//
-// It is not hypothetical. internal/projection was deleted by node migration
-// 0025 and three package docs went on citing it for months, including the
-// state log's own, where the dangling reference sat inside the paragraph that
-// argues the framework's central safety property. The tree's
-// withdrawn-vocabulary gate did not catch it, because that list is keyed on
-// names somebody thought to withdraw.
+// The anchor's failure, one level out. A bracketed import path in a doc comment
+// claims something about the tree; when the package goes the claim stays,
+// silently. The withdrawn-vocabulary gate cannot see it: it is keyed on names
+// somebody thought to withdraw.
 //
 // # What it checks, and what it leaves alone
 //
-// Only a bracketed reference whose text looks like an import path in THIS
-// module — it starts with internal/ or cmd/ — because that is the form whose
-// target this walk can resolve. [Type], [pkg.Func] and [Type.Method] are
-// godoc's other link forms and are left to the compiler and to go vet, which
-// see them.
+// Only a bracketed reference that starts with internal/ or cmd/, the form
+// whose target this walk can resolve. [Type], [pkg.Func] and [Type.Method] are
+// left to the compiler and go vet.
 func TestEveryDocLinkNamesAPackageThatExists(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)

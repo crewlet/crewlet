@@ -14,18 +14,13 @@ import (
 //
 // NAMED AFTER THE VERB, NOT THE SURFACE. `PATCH /worklet/items/{key}` and the
 // `update_work_item` tool are one action asked two ways, so they are one
-// constant — which is the whole of what stops the operator MCP and a seat's
-// own tools answering differently about one write.
+// constant: that stops the operator MCP and a seat's own tools answering
+// differently about one write.
 //
-// WHERE A TOOL EXISTS, ITS NAME IS THE ACTION, and that is load-bearing rather
-// than tidy: it is what lets a walk in internal/agent/builtin hold this table
-// against the tools this build actually registers, in BOTH directions. The
-// walks inside this package can only check the table against itself — they
-// went on passing over `list_work_goals` and `write_work_goal` after the goal
-// verbs left the tracker, two rows deciding nothing, and would have gone on
-// passing for as long as nobody happened to read them. A verb with no tool
-// spells its name with a DOT (`pages.trash`, `config.read`), which is what
-// tells the two apart.
+// WHERE A TOOL EXISTS, ITS NAME IS THE ACTION: it lets a walk in
+// internal/agent/builtin hold this table against the registered tools in BOTH
+// directions; walks in this package only check the table against itself. A
+// verb with no tool spells its name with a DOT (`pages.trash`, `config.read`).
 const (
 	// --- reading what the company is doing -------------------------- //
 	ActionWorkRead      Action = "get_work_item"
@@ -90,22 +85,15 @@ const (
 	// --- the company's code ----------------------------------------- //
 	//
 	// THE GITLET APP AT THE ROUTE, AND DECIDED PER REPOSITORY behind it. A
-	// principal without [iam.GrantGitlet] reaches no repository through any
-	// door: every verb below names the app, so it is refused here, before
-	// any repository is read, with the app's own refusal (ADR-0110). Who
-	// among the holders may read a repository, fetch from it or push to it
-	// is a GRANT the serving node derives from the chart for the repository
-	// a request names (gitlet.GrantOf, ADR-0088): a person maintains every
-	// repository, and a seat holds the least of its code tier and its
-	// relation to the repository's owner — a question the route cannot ask
-	// before the repository is read, and that this table has no chart arm
-	// for. So the route admits every holder of the app the guard resolved,
-	// and the grant decides. DOTTED, because no tool is named for either.
+	// principal without [iam.GrantGitlet] is refused here, before any
+	// repository is read (ADR-0110). Who among the holders may read, fetch or
+	// push is a GRANT the serving node derives from the chart for the
+	// repository a request names (gitlet.GrantOf, ADR-0088), which the route
+	// cannot ask before the repository is read. So the route admits every
+	// holder of the app, and the grant decides. DOTTED: no tool is named.
 	//
-	// ActionCodeRead admits Gitlet's rows: the repositories, one
-	// repository, its push history — the query registry's code questions,
-	// decided by this verb on whichever transport asks them, REST or the
-	// socket.
+	// ActionCodeRead admits Gitlet's rows (repositories, one repository, its
+	// push history) on REST or the socket.
 	ActionCodeRead Action = "code.read"
 	// ActionCodeGit admits the git transport — the advertisement, a
 	// fetch's upload-pack and a push's receive-pack — and its two
@@ -657,17 +645,14 @@ const (
 	// ActionCredentialProof changes how ONE PERSON PROVES WHO THEY ARE:
 	// enrolling or replacing a second factor, regenerating the recovery
 	// codes, and revoking a password, a second factor or the recovery
-	// codes. It is asked from both surfaces that make those changes —
-	// `/auth` for a person's own, `/iam` for anybody's — so one row decides
-	// them whichever route a request took.
+	// codes. Asked from `/auth` (a person's own) and `/iam` (anybody's), so
+	// one row decides them whichever route a request took.
 	//
 	// ITS OWN VERB BESIDE [ActionCredentialWrite], at the same window,
 	// because the two differ in who must be PRESENT: a token revoking a
-	// token — itself included, from wherever somebody found it leaked — is
-	// containment, while a token changing how its owner signs in is the
-	// first half of taking the account. One verb for both left the table
-	// admitting a token on every proof change and each route remembering
-	// to refuse it.
+	// token (itself included) is containment, while a token changing how its
+	// owner signs in is the first half of taking the account. One verb would
+	// admit a token on every proof change and leave each route to refuse it.
 	ActionCredentialProof Action = "iam.credential.proof"
 	// ActionSignInWrite ISSUES OR CLEARS A WAY FOR SOMEBODY ELSE TO SIGN IN:
 	// creating a person with their first password link, inviting an address
@@ -678,10 +663,9 @@ const (
 	// ITS OWN VERB BESIDE THE DIRECTORY'S OTHER WRITES because three of its
 	// four answers carry a bearer credential in clear (a link is a
 	// password) and the fourth clears how somebody proves who they are: a
-	// sign-in ceremony, which the Dashboard Assistant never takes
-	// ([assistantNever]). Kept on [ActionDirectoryWrite] it would have
-	// decided an ordinary edit of somebody's permissions and the issue of a
-	// password with one assistant column.
+	// sign-in ceremony the Dashboard Assistant never takes ([assistantNever]).
+	// On [ActionDirectoryWrite] one assistant column would decide both an
+	// ordinary permissions edit and the issue of a password.
 	ActionSignInWrite Action = "iam.signin.write"
 	ActionSessionEnd  Action = "iam.session.end"
 
@@ -895,14 +879,10 @@ func (p Presence) Valid() bool { return slices.Contains(Presences, p) }
 //
 // A FACT ABOUT THE ROLE, NOT A PERMISSION. A seat holds every app and never
 // admin (internal/agent/turnctx), and a permission is a decision about a
-// PERSON; what a seat may do beyond the apps is its role's to say, in the
-// document an administrator writes — which is why the field that carries a
-// grant is admin's to set and never a lead's (internal/config's org diff
-// lists it apart). The chart answers whether a role carries one
-// ([Chart.SeatGranted]).
-//
-// Its zero is no grant: a row naming none decides every principal by its
-// class.
+// PERSON; what a seat may do beyond the apps is its role's to say, so the
+// field carrying a grant is admin's to set, never a lead's (internal/config's
+// org diff lists it apart). See [Chart.SeatGranted]. Its zero is no grant: a
+// row naming none decides every principal by its class.
 type SeatGrant string
 
 const (
@@ -976,16 +956,13 @@ type rule struct {
 	// [iam.GrantGitlet]), or empty for a verb that belongs to none. It is
 	// the requirement of [ClassApp] and [ClassAppOrAsked], and it is ANDED
 	// onto every relation class ([withApp]): a project's lead who does not
-	// use Worklet does not set its policy, and a comment's author who no
-	// longer uses Doclet does not edit it there. An
-	// administrator holds every app through [iam.Expand], so naming one
-	// never narrows admin's path.
+	// use Worklet does not set its policy. An administrator holds every app
+	// through [iam.Expand], so naming one never narrows admin's path.
 	//
-	// A FIELD ON THE ROW AND NOT A PER-KIND LOOKUP, because the table is
-	// what a REST route, a socket question, a tool and every walk read: an
-	// app derived from the object's kind would answer one verb differently
-	// on two objects, and a walk over the table would certify a row whose
-	// app was decided somewhere else.
+	// A FIELD ON THE ROW, NOT A PER-KIND LOOKUP: every REST route, socket
+	// question, tool and walk reads this table, and an app derived from the
+	// object's kind would answer one verb differently on two objects and let
+	// a walk certify a row whose app was decided elsewhere.
 	app iam.Grant
 
 	// anyOf is the apps a [ClassAnyApp] row admits on, any ONE of them, and
@@ -1026,20 +1003,11 @@ type rule struct {
 
 	// seatOnly is humanOnly's MIRROR: a verb ONLY AN AGENT SEAT may take —
 	// putting a question to a colleague seat, reading back its own executor
-	// sessions — with no permission asked at all. Which seats are offered it
-	// is the role's tool registry's decision, which already says which seat
-	// runs which tool; a person has no turn for a colleague's answer to land
-	// in, and keeps no executor session, reading a seat's as its trail
-	// ([ActionSeatTrailRead]).
-	//
-	// TWO TAKE AN APP BESIDE IT, since they write an app's shared surface:
-	// an agent's record in the atlas and its dispute name the atlas app, so
-	// the requester ceiling holds them to whoever woke the turn (ADR-0132).
-	//
-	// IT REPLACED A PERMISSION. Asking a colleague rode on the permission
-	// that wrote work — so a role that did not use the tracker could not ask
-	// anybody anything — and that was never a decision anybody made about a
-	// PERSON, which is what a permission is for.
+	// sessions — with no permission asked at all. A person has no turn for a
+	// colleague's answer to land in and keeps no executor session, reading a
+	// seat's as its trail ([ActionSeatTrailRead]). Two take an app beside it
+	// (the atlas record and dispute write a shared surface), so the requester
+	// ceiling holds them to whoever woke the turn (ADR-0132).
 	//
 	// CHECKED BEFORE THE CLASS, as humanOnly is, so a person holding admin
 	// is told the verb is an agent's ([ReasonSeatOnly]) rather than sent to
@@ -1050,101 +1018,67 @@ type rule struct {
 	// seatGrant is the ROLE GRANT that decides an AGENT SEAT on this verb in
 	// place of the class ([SeatGrant]): an agent is admitted exactly where the
 	// chart says its role carries the grant ([Chart.SeatGranted]), whatever
-	// permission it holds, and refused everywhere else — and every other
-	// principal, a person, a token and the engine, is decided by the class
-	// as on any row.
+	// permission it holds; every other principal is decided by the class.
 	//
-	// IT EXISTS FOR A VERB WHOSE CLASS NO SEAT MEETS. The health tools are
-	// admin's, as the `fleet` question is, and a seat never holds admin
-	// (internal/agent/turnctx), so without this a seat that watches the
-	// deployment could never be given them; with admin itself handed to a
-	// seat it could rewrite the company it runs inside. The grant opens the
-	// two reads and nothing else.
-	//
-	// READ BY [Decide], AND SO BY EVERYTHING THAT ASKS IT: the gate on every
-	// call, and the question a surface asks before it offers a verb at all
-	// (internal/agent/builtin's Admits, which withholds a verb from a seat's
-	// surfaces when the table refuses it before any object is named). One
-	// rule, so a seat is offered a granted verb exactly where it is admitted
-	// to it. A walk refuses a row that names a grant beside humanOnly, which
-	// would never reach an agent, or beside seatOnly, which would leave the
-	// class deciding nobody.
+	// FOR A VERB WHOSE CLASS NO SEAT MEETS: the health tools are admin's, a
+	// seat never holds admin (internal/agent/turnctx), and admin itself would
+	// let it rewrite the company it runs inside. The grant opens the two
+	// reads and nothing else. Read by [Decide] and internal/agent/builtin's
+	// Admits, so a seat is offered a granted verb exactly where admitted. A
+	// walk refuses a grant beside humanOnly (never reaches an agent) or
+	// seatOnly (the class would decide nobody).
 	seatGrant SeatGrant
 	// seated marks a verb made AS A SEAT: what it writes is attributed to a
 	// seat handle, or what it reads is answered for one, so a principal
-	// acting as itself — a Tier A token, a service account the identity
-	// directory binds to no seat, the development principal — cannot take
-	// it, whatever it holds. A person always acts as their human seat
-	// (ADR-0032) and an agent as its own, so neither is ever refused it.
+	// acting as itself — a Tier A token, a service account bound to no seat,
+	// the development principal — cannot take it, whatever it holds. A person
+	// acts as their human seat (ADR-0032) and an agent as its own.
 	//
-	// A FACT ABOUT THE VERB, beside humanOnly and seatOnly, and for their
-	// reason: the class weighs permissions and relations, and no
-	// permission gives a credential a seat to speak or be answered as.
-	// Left to each tool, the refusal came after the table had already
-	// admitted the call — so a person's surface asking the table what to
-	// offer (internal/agent/builtin's Admits) offered every such verb to
-	// an unbound credential, and every press of it was refused.
-	//
-	// CHECKED AFTER seatOnly and BEFORE THE CLASS: an unbound credential
-	// holding admin is told it has no seat ([ReasonUnseated]) rather than
-	// a grant it already has, and the refusal names no permission. A walk
-	// refuses a row that is both seat-only and seated — a seat-only verb
-	// is a seat's already, so the second mark would read as a decision
-	// nobody made.
+	// A FACT ABOUT THE VERB, beside humanOnly and seatOnly: no permission
+	// gives a credential a seat to speak as, and a per-tool refusal came after
+	// the table admitted the call (internal/agent/builtin's Admits then offered
+	// it). CHECKED AFTER seatOnly and BEFORE THE CLASS: an unbound admin is
+	// told it has no seat ([ReasonUnseated]). A walk refuses a row both
+	// seat-only and seated.
 	seated bool
 
 	// presence is which arms need a PERSON at the keyboard — see
 	// [Presence] — refused to a request that presented a machine token.
 	//
-	// A FIELD ON THE ROW AND NOT A CHECK IN EACH ROUTE: the table is what
-	// every surface and every walk reads, so a route that refused a token
-	// itself was the one place the rule was stated, a walk over the table
-	// certified a row that admitted the token, and the next route on that
-	// verb could forget.
+	// A FIELD ON THE ROW, NOT A CHECK IN EACH ROUTE: every surface and walk
+	// reads the table, so a route refusing a token itself would let a walk
+	// certify a row that admitted the token, and the next route could forget.
 	//
 	// CHECKED BEFORE THE CLASS where it covers every arm, as
-	// [rule.humanOnly] is — a token told it lacks a permission is sent to
-	// ask for something that would change nothing — and AFTER the class
-	// where it spares the self arm, because only the class can say which
-	// arm admitted.
+	// [rule.humanOnly] is (a token told it lacks a permission would ask for
+	// something that changes nothing), and AFTER the class where it spares
+	// the self arm, because only the class can say which arm admitted.
 	presence Presence
 
 	// recency is how recently the principal must have PROVED who they are
 	// for this verb — the step-up requirement, decided on the row so a
-	// REST route, a socket frame and a tool asking about one verb cannot
-	// disagree about it.
+	// REST route, a socket frame and a tool cannot disagree about it.
 	//
-	// EVERY ROW STATES ONE and the zero is refused by a walk in this
-	// package's tests, because the zero would read as [iam.RecencyAny]: a
-	// step-up verb somebody added without deciding would ship open to a
-	// session proved last week, and look exactly like a verb that was
-	// decided to need nothing.
+	// EVERY ROW STATES ONE and a walk in this package's tests refuses the
+	// zero, which would read as [iam.RecencyAny]: a step-up verb added
+	// without deciding would ship open to a session proved last week.
 	//
-	// CHECKED AFTER THE CLASS ALLOWS, never before. A principal refused
-	// the verb outright is told what they lack; telling them to prove who
-	// they are first would send them through a step-up only to be refused
-	// by the rule it was never going to change.
+	// CHECKED AFTER THE CLASS ALLOWS, never before: a principal refused the
+	// verb outright is told what they lack, not sent through a step-up only
+	// to be refused anyway.
 	recency iam.Recency
 
 	// selfRecency is the proof the SELF arm asks for — the person the
 	// object IS, admitted as themselves ([ReasonSelf]) — where that differs
 	// from what every other arm of the row asks.
 	//
-	// IT EXISTS BECAUSE ONE GESTURE HAS TWO RISKS depending on who makes
-	// it. Ending every session somebody holds is the first thing they do
-	// on finding an intruder in their account, and making them re-prove a
-	// password the intruder may also hold turns the fastest response to a
-	// compromise into the slowest — while the SAME verb made by an
-	// administrator ends another person's sessions and every machine token
-	// they hold, and a loop over the directory does it to the whole
-	// company. One recency on the row could only be right for one of them.
-	// ON THE ROW rather than in the handler, so a REST route and a socket
-	// question about the verb still get one answer.
-	//
-	// ITS ZERO MEANS "WHAT THE ROW ASKS", which is the safe direction for
-	// an unset value: a row nobody gave a second window to asks its one
-	// window of everybody. A walk holds a set one to naming a real window
-	// on a class that has a self arm at all.
+	// ONE GESTURE HAS TWO RISKS depending on who makes it. Ending every
+	// session somebody holds is the first thing they do on finding an
+	// intruder, and re-proving a password the intruder may hold slows that,
+	// while the SAME verb by an administrator ends another person's sessions
+	// and tokens. ON THE ROW so REST and the socket agree. ITS ZERO MEANS
+	// "WHAT THE ROW ASKS"; a walk holds a set one to a real window on a class
+	// that has a self arm.
 	selfRecency iam.Recency
 
 	// minRole is the least ROLE on an artifact a [ClassShared] row admits:
@@ -1175,20 +1109,14 @@ type rule struct {
 	// assist is what the verb IS to the Dashboard Assistant (see
 	// [AssistClass]): [AssistRead], a read a turn makes on the person's
 	// behalf, or [AssistApprove], a change it carries only as the one request
-	// the person approved. Asked of a principal acting through an assistant
-	// grant ([iam.AssistPrefix]) and of nobody else.
+	// the person approved. Asked only of a principal acting through an
+	// assistant grant ([iam.AssistPrefix]).
 	//
-	// PARITY WITH THE PERSON DECIDES IT (ADR-0052): a verb the person may
-	// take is one their assistant may take, as a read or as an approved
-	// change. The only verbs it never takes are [assistantNever]'s, each
-	// with its reason, and that list is the ONE place [AssistNever] is
-	// spelled: a row states the verb's nature and never Never, so the
-	// human-only set cannot be widened by a row nobody reads beside the list.
-	//
-	// EVERY ROW STATES ONE and the zero is refused by a walk in this
-	// package's tests, for [rule.recency]'s reason: a verb added without
-	// deciding would otherwise read as one of the classes. [Decide] reads a
-	// zero as [AssistNever] besides, so a missed row fails closed.
+	// PARITY WITH THE PERSON DECIDES IT (ADR-0052). The only verbs it never
+	// takes are [assistantNever]'s, the ONE place [AssistNever] is spelled.
+	// EVERY ROW STATES ONE and a walk refuses the zero, for [rule.recency]'s
+	// reason; [Decide] reads a zero as [AssistNever], so a missed row fails
+	// closed.
 	assist AssistClass
 }
 
@@ -1455,15 +1383,14 @@ var rules = map[Action]rule{
 	//
 	// THE APP, AND A PERSON'S. Every holder corrects every entry (ADR-0127),
 	// each write a claim in their own name that outranks every inference and
-	// keeps the one it replaced as history, so none of them needs a recent
-	// proof: a retire is undone by a restore and a claim by the next one. NEVER
-	// AN AGENT'S, whatever its seat holds: an agent records only what a call
-	// of its own turn showed it, through a tool of its own, and never retires
-	// anything or names an owner, so a model steered by what it read cannot
-	// decide what the company's map says.
-	// AND MADE AS A SEAT: a claim names the person who made it by the seat
-	// they hold, so a credential acting as no seat (a Tier A token, a service
-	// account bound to none) records no claim in a person's rank.
+	// keeps the one it replaced as history, so none needs a recent proof: a
+	// retire is undone by a restore and a claim by the next one. NEVER AN
+	// AGENT'S, whatever its seat holds: an agent records only what a call of
+	// its own turn showed it, through a tool of its own, and never retires or
+	// names an owner, so a model steered by what it read cannot decide what
+	// the company's map says. AND MADE AS A SEAT: a claim names its author by
+	// their seat, so a credential acting as no seat records no claim in a
+	// person's rank.
 	ActionAtlasAddEntry: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
 		recency: iam.RecencyAny, assist: AssistApprove},
 	ActionAtlasCorrect: {class: ClassApp, app: iam.GrantAtlas, humanOnly: true, seated: true,
@@ -1650,20 +1577,16 @@ var rules = map[Action]rule{
 
 	// --- using the chat ---------------------------------------------- //
 	//
-	// THE APP IS THE WHOLE RULE for using chat, as it is for the tracker's
-	// and the knowledge base's own blocks above. WHICH ROOM is the chat
+	// THE APP IS THE WHOLE RULE for using chat. WHICH ROOM is the chat
 	// domain's: a read of a room the caller may not read answers NOT FOUND
-	// (internal/chatlet's Visible — never a refusal that confirms the room
-	// exists), and a write to one is refused inside the write's own
-	// snapshot, which is the state log's one write authority. A room's
-	// membership is a replicated row and not a relation of the chart, so a
-	// relation here would be read in another transaction.
+	// (internal/chatlet's Visible, never a refusal that confirms the room
+	// exists), and a write is refused inside the write's own snapshot, the
+	// state log's one write authority. Membership is a replicated row, not a
+	// chart relation, so a relation here would be read in another transaction.
 	//
-	// EVERY CHAT ROW IS SEATED ([rule.seated]): a room renders a speaker by
-	// seat, its membership is seats and a direct conversation's identity is
-	// their handles, so a credential acting as itself has no seat to speak,
-	// be a member or be shown the rooms as. A pipeline that should post is
-	// given a human seat and its credential bound to it.
+	// EVERY CHAT ROW IS SEATED ([rule.seated]): rooms render speakers and
+	// membership by seat, so a credential acting as itself has no seat to
+	// speak or be a member as. A pipeline that posts gets a human seat.
 	ActionChatList: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
 		assist: AssistRead},
 	ActionChatRead: {class: ClassApp, app: iam.GrantChatlet, seated: true, recency: iam.RecencyAny,
@@ -1849,13 +1772,11 @@ var rules = map[Action]rule{
 	// so setting a shorter one is the same decision taken in advance.
 	//
 	// NOT SEATED, unlike every other chat verb: none of the three is said in
-	// a room, so the store records whoever made it under their own name —
-	// an administrator's pipeline token included — and none READS the room
-	// it destroys from, which is what lets an administrator who is in no
-	// private room take a credential pasted into one out of it without being
-	// shown what else was said there. Which room exists is the store's to
-	// answer; a destruction of a room the store does not hold destroys
-	// nothing and says so.
+	// a room, so the store records whoever made it under their own name, and
+	// none READS the room it destroys from, which lets an administrator in no
+	// private room remove a pasted credential without being shown what else
+	// was said there. A destruction of a room the store does not hold
+	// destroys nothing and says so.
 	ActionChatErase: {class: ClassAdmin, humanOnly: true, irreversible: true,
 		recency: iam.RecencyStepUp, assist: AssistApprove},
 	ActionChatPrune: {class: ClassAdmin, humanOnly: true, irreversible: true,
@@ -2037,17 +1958,13 @@ var rules = map[Action]rule{
 		presence: PresenceRequired, assist: AssistApprove},
 	// ENDING SESSIONS ASKS OPPOSITE PROOFS OF ITS TWO ARMS
 	// ([rule.selfRecency]). The person themselves asks for NONE: it is the
-	// first thing somebody does on finding somebody else in their account —
-	// and it ends every machine token they hold as well — and a gesture
-	// that makes them re-prove a password the intruder may also hold makes
-	// the fastest response to a compromise the slowest, which is the reason
-	// internal/iamdomain's own revocation takes no permission at all. An
-	// administrator ending SOMEBODY ELSE's asks `step_up`, as every other
-	// directory write does, and a person present: it signs a colleague out
-	// of everything and stops every pipeline they run, and a week-old
-	// cookie — or a token — looping over the directory would do it to the
-	// whole company. The self arm stays open to a token for the
-	// revocation's reason above: what it ends includes the token.
+	// first response to an intruder, and re-proving a password the intruder
+	// may hold would make it the slowest (internal/iamdomain's own revocation
+	// takes no permission either). An administrator ending SOMEBODY ELSE's
+	// asks `step_up` and a person present, as every directory write does: it
+	// stops every pipeline the colleague runs, and a week-old cookie or token
+	// looping over the directory would do it to the whole company. The self
+	// arm stays open to a token: what it ends includes the token.
 	ActionSessionEnd: {class: ClassDirectory, recency: iam.RecencyStepUp,
 		selfRecency: iam.RecencyAny, presence: PresenceRequiredForOthers, assist: AssistApprove},
 	// ENDING EVERY SESSION IN THE COMPANY is admin's, a person's, and a
@@ -2196,20 +2113,16 @@ var rules = map[Action]rule{
 
 	// --- the Dashboard Assistant (ADR-0050 to ADR-0053) ---
 	//
-	// THE ASSISTANT'S OWN VERBS, each never the assistant's
-	// ([assistantNever]), HUMAN-ONLY and needing a PERSON PRESENT: a grant
-	// that could converse, approve or read a conversation would be the
-	// assistant acting on its own behalf, and approving its own proposal is
-	// the one gesture the whole design keeps from it.
-	// TestTheHumanOnlyListIsExactlyTheIntendedSet holds every `assistant.`
-	// row here to all three.
+	// THE ASSISTANT'S OWN VERBS, never the assistant's ([assistantNever]),
+	// HUMAN-ONLY and needing a PERSON PRESENT: a grant that could converse or
+	// approve would be the assistant acting for itself.
+	// TestTheHumanOnlyListIsExactlyTheIntendedSet holds every row here to it.
 	//
-	// EVERYBODY'S BY CLASS, and still only a PERSON's: the surface answers
-	// a machine token, a service account and a Tier A token's session
-	// 403 assistant_not_available through the one predicate the guard
-	// derives grants by (iam.Assistable), because using the assistant is
-	// asking it to act as you, and only a person signed in through their
-	// own browser has a you it may act as (decision D04).
+	// EVERYBODY'S BY CLASS, and still only a PERSON's: a machine token, a
+	// service account and a Tier A token's session get 403
+	// assistant_not_available through iam.Assistable, because using the
+	// assistant is asking it to act as you, and only a person signed in
+	// through their browser has a you it may act as (decision D04).
 	ActionAssistantConverse: {class: ClassEverybody, humanOnly: true,
 		presence: PresenceRequired, recency: iam.RecencyAny, assist: AssistApprove},
 	ActionAssistantConversationRead: {class: ClassEverybody, humanOnly: true,
@@ -2420,40 +2333,17 @@ const (
 )
 
 // assistantNever is THE HUMAN-ONLY LIST: every verb the Dashboard Assistant
-// never takes, whoever approved what, each with the reason a reviewer reads
-// and the sentence the person is told (ADR-0052). Every other verb is the
-// person's own through their assistant, as a read or as the one change they
-// approved, because a grant is the person's own session narrowed and never
-// widened (ADR-0050, ADR-0051).
-//
-// FIVE KINDS OF VERB AND NO OTHER, and a verb joins only in a reviewed diff
-// that names which:
-//
-//   - a sign-in or session ceremony: how somebody proves who they are, or
-//     the sessions and tokens that carry it. Creating a person and inviting
-//     one are here because the answer IS a sign-in link, a bearer
-//     credential, which is why a seat is added through the assistant and a
-//     person is not;
-//   - an answer, or a request body, that carries a bearer credential or
-//     secret material in clear, which would then sit in a model's context,
-//     a transcript and a stored proposal;
-//   - the assistant's own decisions, so it can never approve itself;
-//   - a gesture whose effect a grant would falsify or hide: a model spend
-//     outside the turn's own meter, a render only an open page reports, and
-//     a check result only the CI that ran the check reports (its row records
-//     the person whose CI sent it, and a grant is never that CI, whoever
-//     approved it);
-//   - a person's approval of an agent's call: a tool at Needs approval holds
-//     each call so that a person decides it, and an assistant answering it
-//     would be a model approving a model;
-//
-// plus the seat-only verbs — asking a colleague (`a2a_ask`), and an agent
-// seat reading back its own executor sessions (`list_sessions`,
-// `read_session`): no person takes them either, so parity alone keeps them
-// from the person's assistant.
-//
-// BUILT AT FIRST USE: Gitlet's push hook is this binary and pays every linked
-// package's init on every push, and nothing a hook does asks the assistant.
+// never takes, each with a reviewer's reason and the person's sentence
+// (ADR-0052). Every other verb is the person's own (ADR-0050, ADR-0051).
+// FIVE KINDS AND NO OTHER; a verb joins only in a reviewed diff that names
+// which: a sign-in or session ceremony (inviting a person: the answer IS a
+// bearer link); an answer or body carrying a credential in clear, which
+// would sit in a model's context and stored proposal; the assistant's own
+// decisions; a gesture whose effect a grant would falsify (spend outside the
+// turn's meter, a render only an open page reports, a check result only its
+// CI reports); a person's approval of an agent's call. Seat-only verbs
+// (`a2a_ask`, `list_sessions`, `read_session`) are kept out by parity alone.
+// BUILT AT FIRST USE: Gitlet's push hook pays every init.
 var assistantNever = sync.OnceValue(func() map[Action]neverEntry {
 	return map[Action]neverEntry{
 		ActionCredentialWrite: {"a machine token's mint answers the token in clear, and revoking " +

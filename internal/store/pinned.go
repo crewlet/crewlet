@@ -10,69 +10,15 @@ import (
 // Writer is a connection PINNED to one caller for its lifetime, and the
 // transaction path a long-lived writer uses instead of [DB.Tx].
 //
-// # Why a pin at all
-//
-// The pool is bounded on purpose (see [defaultReaderConns]), and every reader
-// on this node draws from it: the dashboard's queries, the coverage probes, a
-// seat's tool reads. A writer that takes a pooled connection per transaction
-// competes with them for one — and the competition has a direction that makes
-// it worse than fair sharing. The readers are usually waiting on state THIS
-// writer is about to commit, so under load they occupy every connection while
-// the writer queues behind them for the one it needs to unblock them. That is
-// a feedback loop rather than a deadlock: the waiters cause the latency they
-// are waiting on, and nothing bounds it.
-//
-// A pin removes the writer from that competition entirely. It costs one
-// connection for the handle's life, which is why the count of logs is
-// declared by the caller ([DB.OpenReplicated]) and added to the pool rather
-// than taken out of it.
-//
-// # The pool's arithmetic, and the second thing that is not the readers'
-//
-// The whole bound is [Options.poolSize]:
-//
-//	pool = readers + identityReserve + pins
-//
-// with the pins held by their writers, [identityReserve] held by the handle
-// itself ([DB.reserve]), and the readers what is left — each of the last two
-// ADDED to the readers rather than taken out of them.
-//
-// [identityReserve] is a pin's SIBLING INVARIANT: one connection that ordinary
-// work may not occupy, kept for the lookups that answer "who is acting". It is
-// HELD for the same reason a pin is — database/sql hands a free connection to
-// whoever asks first, so a spare one nobody holds is taken by the first read
-// burst that wants it, and adding one to the bound alone would buy nothing at
-// all.
-//
-// THE OTHER DESIGN, an admission semaphore in front of the pool, breaks
-// something a pin does not: it would bound ordinary work BELOW the pool, so
-// database/sql would never reach its own limit, `sql.DBStats.WaitCount` would
-// stop counting, and the `pool_starved` alarm — whose entire input is that
-// counter — would go quiet for good. Holding a connection moves no queue.
-// Ordinary work still waits exactly where it waited before.
-//
-// The failure it stops has the same shape as the one a pin stops, one layer
-// up. A socket storm — N dashboards, four concurrent queries each, every one a
-// scan — takes every connection; the identity read that would let those very
-// requests be decided waits among all of them for one, which goes to a waiter
-// drawn at random; and the queue feeds itself.
-//
-// # It is not a second transaction implementation
-//
-// Tx below takes the SAME place in the SAME queue, begins the SAME transaction
-// through [DB.writeOn] and carries the SAME retry loop and classifier [DB.Tx]
-// does, because a second copy is how one of them comes to retry an error the
-// other returns, or to take the write lock in a way the other does not. The
-// only difference is which connection the transaction begins on.
-//
-// The pin keeps a writer out of the POOL's competition, not out of the
-// QUEUE's: every write transaction on this file, pinned or pooled, is served
-// in the order it asked for the lock (see writequeue.go).
-//
-// A Writer is NOT safe for concurrent use: it is one connection, and its
-// owner is one goroutine. Two goroutines sharing one would interleave
-// statements inside each other's transactions. That is also what makes the
-// unguarded fields below safe: only that one goroutine reads or writes them.
+// Readers wait on state THIS writer is about to commit, so under load they hold
+// every pooled connection while it queues for the one that unblocks them. The
+// pin costs one connection, declared by the caller ([DB.OpenReplicated]) and
+// added to the pool: pool = readers + identityReserve + pins. identityReserve is HELD like a pin, since database/sql gives a free
+// connection to whoever asks first; an admission semaphore instead would starve
+// `pool_starved`, whose input is sql.DBStats.WaitCount. Tx shares [DB.Tx]'s
+// queue place and retry loop; a second copy would drift. A Writer is NOT safe
+// for concurrent use: goroutines would interleave statements inside each
+// other's transactions.
 type Writer struct {
 	db *DB
 	// conn is the pinned connection. REPLACED rather than kept when a
@@ -166,21 +112,15 @@ func (w *Writer) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
 // replace retires the writer's connection and pins a fresh one in its place,
 // under the same declared pin.
 //
-// RE-PINNED NOW rather than at the next Tx, so [Writer.Conn] keeps answering
-// a live connection, and drawn WITHOUT the caller's cancellation: a
-// replacement is cleanup, and the failure that made it necessary is often the
-// cancellation itself (CLAUDE.md's rule that a teardown takes
-// context.WithoutCancel). If it cannot be had, conn stays nil and the next Tx
-// tries again and says why.
+// RE-PINNED NOW rather than at the next Tx, so [Writer.Conn] keeps answering a
+// live connection, and drawn WITHOUT the caller's cancellation: the failure that
+// made it necessary is often the cancellation itself. If it cannot be had, conn
+// stays nil and the next Tx tries again and says why.
 //
-// BOUNDED BY THE BUSY TIMEOUT all the same, because a context with the
-// cancellation taken off it has no deadline either. The bound is that knob
-// rather than a constant of its own for the reason every other wait here
-// takes it: it is the one number an operator already sets for "how long this
-// store may block me". A pool wait here is short by construction — the
-// connection just handed back is a free slot — but this also runs on the way
-// out of a PANIC, and an unbounded wait there would hold the panic inside the
-// store with nothing to say so.
+// BOUNDED BY THE BUSY TIMEOUT, since a context without cancellation has no
+// deadline either, and this runs on the way out of a PANIC, where an unbounded
+// wait would hold the panic inside the store. It is that knob, as every wait
+// here is: the one number an operator sets for how long the store may block.
 func (w *Writer) replace(ctx context.Context, conn *sql.Conn) {
 	giveBack(conn, w.retire, false)
 	w.retire = nil
@@ -214,29 +154,15 @@ func (w *Writer) pinned(ctx context.Context) (*sql.Conn, error) {
 // Conn exposes the pinned connection for statements that are not transactions
 // — a PRAGMA, a single read.
 //
-// It is the SAME connection every Tx runs on, until a transaction fails to
-// end and Tx replaces it: ask again after a failed Tx rather than holding the
-// old one. It is NIL only when that replacement could not be had, and the
-// next Tx reports why — so a caller reaching for it directly must check,
-// exactly as one reaching for [DB.ReplicatedDB] must. There is deliberately NO
-// prepared-statement cache on it, and the reason is a measurement rather than
-// a preference: on this driver, executing an applier-shaped upsert 4 000 times
-// through a statement prepared once on this connection is not faster than
-// passing the SQL text each time — 549 ms against 543 ms, and the ordering
-// flips between runs. The driver implements ExecerContext, so an "unprepared"
-// exec is already one round trip with its arguments, and the parse it saves is
-// not what the time is spent on. The shape that DOES pay is the multi-row
-// insert — 4 000 rows in 137 ms against 573 ms, four times faster — which is
-// [RowsPerInsert] and [Chunks] behind [InsertRows], and BenchmarkLogApplyDrain
-// is the record of both numbers.
+// It is the SAME connection every Tx runs on until a failed Tx replaces it, so
+// ask again after one rather than holding the old. It is NIL only when that
+// replacement could not be had, so a direct caller must check.
 //
-// THAT LAST SENTENCE WAS FALSE FOR THE WHOLE OF THIS PACKAGE'S LIFE UNTIL
-// [InsertRows] EXISTED. RowsPerInsert and Chunks had no callers outside their
-// own tests: every applier in the tree wrote its child rows one ExecContext
-// per row, so the shape this comment called the one that pays was measured by
-// a benchmark and shipped nowhere. It is worth recording because nothing
-// caught it — a doc comment naming two exported functions reads exactly like a
-// doc comment describing what the engine does.
+// There is deliberately NO prepared-statement cache: on this driver 4 000
+// upserts through one prepared statement took 549 ms against 543 ms unprepared
+// (ExecerContext is already one round trip). What pays is the multi-row insert,
+// 137 ms against 573 ms: [InsertRows] over [RowsPerInsert] and [Chunks], with
+// BenchmarkLogApplyDrain the record of both.
 func (w *Writer) Conn() *sql.Conn { return w.conn }
 
 // Close releases the pinned connection back to the pool and gives up the pin.
@@ -264,25 +190,15 @@ func (w *Writer) Close() error {
 
 // Read runs fn inside a transaction that only reads.
 //
-// # Why it exists, and why it takes no ReadOnly option
+// A multi-statement read has to see ONE snapshot, or a count and the list after
+// it disagree under an applier's commits.
 //
-// A multi-statement read has to see ONE snapshot: a board that counts its
-// rows in one statement and lists them in the next, against a store an
-// applier is committing to, otherwise reports a total that does not match the
-// page under it. A transaction is what makes the two statements one answer.
-//
-// IT PASSES sql.TxOptions{ReadOnly: true}, and [beginModeDriver] reads that
-// option twice. It takes the DEFERRED begin: a snapshot with no write lock,
-// which is what a multi-statement read wants and what keeps a dashboard query
-// from excluding the engine's writes for its duration. And it runs fn with
-// `query_only` on, so a write inside fn is REFUSED by the engine rather than
-// committed — the promise [ReplicatedReader] is handed to every reader of the
-// replicated estate on, which a doc comment alone did not keep (see
-// [beginModeConn.queryOnlyFor]).
-//
-// It carries the same retry as [DB.Tx]: a read transaction can lose a snapshot
-// race too, and a reader that surfaced "database snapshot is stale" to a
-// dashboard would be reporting the store's internals as the answer.
+// IT PASSES sql.TxOptions{ReadOnly: true}, which [beginModeDriver] reads twice:
+// the DEFERRED begin (no write lock, so a dashboard query does not exclude the
+// engine's writes), and `query_only` on for fn, so a write inside fn is REFUSED
+// by the engine, the promise [ReplicatedReader] rests on (see
+// [beginModeConn.queryOnlyFor]). It carries [DB.Tx]'s retry, so a lost snapshot
+// race does not surface as "database snapshot is stale".
 func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 	// BEFORE `d.busy`, which is the whole of this bug. The guard lived in
 	// [DB.txOpts] alone, and `budget(d.busy, d.pool)` below is an argument —
@@ -327,16 +243,13 @@ func (d *DB) Read(ctx context.Context, fn func(*sql.Tx) error) error {
 // errNoReserve is [DB.readReserved] reporting that there is no reserved
 // connection to run on, so the caller should fall through to the pool.
 //
-// IT MEANS THE RESERVED CONNECTION COULD NOT BE DRAWN JUST NOW — at the open,
-// or after the last one was retired — which is no reason to refuse a question
-// this handle can answer from the pool, where these reads were before the
-// reserve existed. Every handle holds a reserve: it is added to the pool
-// rather than taken out of it ([Options.poolSize]), so no bound is too small
-// to keep one.
+// IT MEANS THE RESERVED CONNECTION COULD NOT BE DRAWN JUST NOW (at the open, or
+// after the last was retired), which is no reason to refuse a question the pool
+// can answer. Every handle holds a reserve, added to the pool ([Options.poolSize]),
+// so no bound is too small to keep one.
 //
-// Unexported and never returned to a caller: it is a control answer between
-// two functions in this file, and a sentinel rather than a second return value
-// because every other path here already answers with an error.
+// Never returned to a caller: a control answer between two functions here, a
+// sentinel because every other path already answers with an error.
 var errNoReserve = errors.New("store: this handle holds no identity reserve")
 
 // readReserved runs a read transaction on the connection [DB.reserve] holds.

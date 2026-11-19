@@ -13,29 +13,11 @@ import (
 	"time"
 )
 
-// WHAT THESE CASES PROTECT: Pending is a second way into a connection, and it
-// had drifted from the first.
-//
-// [Pending] answers "what would `crewlet migrate` apply?" without applying it,
-// which means it opens a pool and reads. It used to do that with its own copy
-// of Open's preamble — resolve, build a pool, ping — and the copy was missing
-// two things Open does and one it does not:
-//
-//   - it never called prepareTursoLibrary, so the FIRST connection the
-//     diagnostic command made went straight into the driver's own loader,
-//     whose answer to a half-written cache is a panic inside a sync.Once. The
-//     command that exists to report the schema safely was the one command
-//     that could take the process down on the exact failure the preparation
-//     was written for. See turso.go.
-//   - it never bounded the pool, so `crewlet migrate` ran on whatever
-//     database/sql felt like opening rather than on the four connections
-//     every other opener gets.
-//   - it took no file lock, so it read the database of a LIVE engine and only
-//     refused at the point it tried to change it. The check that runs first
-//     was the one with no guard.
-//
-// All three are the same defect — a second code path — so the fix is one
-// path (openPrepared) and these cases are what hold it there.
+// WHAT THESE CASES PROTECT: [Pending] shares Open's preamble (openPrepared), as
+// a second copy would miss prepareTursoLibrary (the driver's own loader panics
+// inside a sync.Once on a half-written cache, turso.go), the pool bound every
+// other opener gets, and the file lock, so a LIVE engine's database would be
+// read and refused only when a change was tried.
 
 // pendingChildEnv marks the child half of the panic case, so it is inert in an
 // ordinary run.
@@ -301,24 +283,14 @@ func TestOpenPreparedAppliesThePoolBounds(t *testing.T) {
 
 // A MIGRATION'S NUMBER IS ITS ORDER, so two files may not share one.
 //
-// # Why this is a guard rather than a convention
+// The prefix IS the ordering ([schemaVersions] sorts filenames), so two files at
+// one number run in whatever alphabetical order follows the underscore, which
+// nobody chose. Nothing else notices: both apply and get their own
+// `schema_migrations` row, until two touch the same table and one estate has a
+// column the other lacks.
 //
-// The prefix IS the ordering — [schemaVersions] sorts filenames and there is
-// no second source of truth — so two files at one number are ordered by
-// whatever follows the underscore, alphabetically. That is not an ordering
-// anybody chose, and it is not one anybody reading the directory would
-// predict: `0022_a…` runs before `0022_z…` for a reason nothing states.
-//
-// Nothing else notices. Both files apply, both get their own row in
-// `schema_migrations` (which keys on the base filename), and a fresh database
-// ends up identical to one that applied them in the other order — right up
-// until the day the two touch the same table, when one estate has a column
-// the other does not and the difference is a build artefact.
-//
-// The numbers are also CONTIGUOUS from 1, which is the half that catches the
-// other mistake: a gap is a migration somebody wrote, numbered, and never
-// committed — or one that was deleted after it had already been applied
-// somewhere, which is a divergence no later file can repair.
+// The numbers are also CONTIGUOUS from 1: a gap is a migration never committed,
+// or deleted after being applied somewhere, a divergence no later file repairs.
 func TestEveryMigrationHasItsOwnNumberAndNoneAreMissing(t *testing.T) {
 	t.Parallel()
 	for _, estate := range Estates {

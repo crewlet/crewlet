@@ -9,16 +9,13 @@ import (
 // TestTheRetryClassifierCoversEveryTransientBeginFailure names the three
 // conditions a transaction may be retried on, WHICH ONE each is, and why.
 //
-// The cause matters as much as the retryability: they carry different budgets
-// and different pauses, because a five-second lock wait retried eight times on
-// a one-millisecond backoff is forty seconds of stall — measured — where a
-// stale snapshot retried the same way is microseconds. A classifier that
-// answered only yes/no is what let those share a budget.
+// The cause matters as much as the retryability: causes carry different budgets
+// and pauses, because a five-second lock wait retried eight times is forty
+// seconds of stall where a stale snapshot retried the same way is microseconds.
 //
-// The classifier is a TEXT match over the driver's own messages, which is
-// fragile by construction — so the cases are written out rather than left to a
-// reader to infer, and a message the driver stops using shows up here as a case
-// that no longer describes anything.
+// The classifier is a TEXT match over the driver's own messages, fragile by
+// construction, so the cases are written out, and a message the driver stops
+// using shows up here as a case that no longer describes anything.
 func TestTheRetryClassifierCoversEveryTransientBeginFailure(t *testing.T) {
 	for _, c := range []struct {
 		name string
@@ -88,17 +85,13 @@ func TestTheRetryClassifierCoversEveryTransientBeginFailure(t *testing.T) {
 // A LOCK WAIT IS NOT RETRIED EIGHT TIMES, which is the whole point of the
 // causes above being four facts rather than one bool.
 //
-// The arithmetic is what matters and it is not subtle: this error is only
-// produced AFTER the full busy timeout has elapsed, so every attempt costs
-// seconds rather than microseconds. At the dirty-connection budget that is
-// eight waits of five seconds — forty seconds of stall, with eight full
-// replays of whatever the transaction had done — and it was measured at 40.7s
-// by a test that forced the contention before this split existed.
+// This error is only produced AFTER the full busy timeout has elapsed, so every
+// attempt costs seconds: at the dirty-connection budget, eight waits of five
+// seconds (40.7s measured) and eight full replays of the transaction.
 //
-// The pause is asserted too, and for the same reason: a widening microsecond
-// backoff between two multi-second waits is noise, while a pause anchored to
-// the configured timeout is what de-synchronises two writers that lost
-// together.
+// The pause is asserted too: a microsecond backoff between two multi-second
+// waits is noise, while a pause anchored to the configured timeout is what
+// de-synchronises two writers that lost together.
 func TestALockWaitGetsItsOwnBudgetRatherThanTheOtherCauses(t *testing.T) {
 	const busy, pool = 5 * time.Second, 15
 	b := budget(busy, pool)
@@ -184,14 +177,10 @@ func TestADirtyConnectionIsRetriedBecauseTheNextAttemptDrawsAnother(t *testing.T
 //
 // Each attempt retires the connection it drew, so the worst case is drawing
 // every one the handle holds before the pool opens a clean one: the budget is
-// the pool and one more. It was the literal eight, justified by a pool of
-// "four plus three state-log domains" that no longer existed — the readers are
-// max(8, GOMAXPROCS) now, beside an identity reserve and six pins — so on any
-// ordinary node the budget ran out with dirty connections still in the pool.
-//
-// And the handle carries the bound it opened with, so the budget a
-// transaction is given is the one for its own pool rather than for a pool
-// somebody computed elsewhere.
+// the pool and one more. A literal eight ran out with dirty connections still
+// in the pool on any ordinary node (readers are max(8, GOMAXPROCS), beside an
+// identity reserve and six pins). The handle carries the bound it opened with,
+// so a transaction gets the budget for its own pool.
 //
 // Mutation: return a constant from dirtyAttempts, and the larger pool fails.
 func TestTheDirtyConnectionBudgetIsThePoolAndOneMore(t *testing.T) {
@@ -207,17 +196,14 @@ func TestTheDirtyConnectionBudgetIsThePoolAndOneMore(t *testing.T) {
 	}
 }
 
-// ONLY A LOCK THAT WAS NEVER TAKEN IS ANSWERED BUSY, whichever line the wait
-// was done in — this process's own queue or the driver's busy handler — and
-// only once its budget is spent. Every other way a transaction ends stays the
-// error it ended with: a dirty connection that outlived its budget is a pool
-// that cannot hand out a clean one, and a statement that failed is a failure.
+// ONLY A LOCK THAT WAS NEVER TAKEN IS ANSWERED BUSY, whether the wait was in
+// this process's queue or the driver's busy handler, and only once its budget
+// is spent. Every other ending keeps its own error: a dirty connection past its
+// budget is a pool that cannot hand out a clean one.
 //
-// Driven through retryTransient itself rather than through a database, because
-// the driver's own "database is locked" needs a SECOND process holding the
-// file to produce, and this file's lock refuses a second process by design;
-// TestAWriteThatNeverGotTheLockIsBusy stages the in-process half for real.
-//
+// Driven through retryTransient, not a database: the driver's "database is
+// locked" needs a SECOND process holding the file, which this file's lock
+// refuses; TestAWriteThatNeverGotTheLockIsBusy stages the in-process half.
 // Mutation: drop the ErrBusy wrap, and the two lock rows fail; wrap on every
 // exhausted cause, and the dirty-connection row does; wrap before the budget
 // is spent, and the recovered row does.

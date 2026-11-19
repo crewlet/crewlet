@@ -28,29 +28,17 @@ func RecordArgs(args map[string]any) (string, error) {
 }
 
 // ReadArgs turns a recorded argument document back into the map a renderer
-// works from — the prior-work ledger's, which elides per VALUE and therefore
-// cannot work from text.
+// works from (the prior-work ledger's, which elides per VALUE).
 //
-// THROUGH json.Number, and that is the whole reason this is not a bare
-// `json.Unmarshal`. Decoded into an `any` a number becomes a float64, so a
-// 19-digit id — a Jira issue id, a Slack timestamp, a GitHub node id — comes
-// back as 1.2345678901234568e+18 and re-encodes as 1234567890123456800. The
-// record is written as TEXT precisely so an id survives one decode and not
-// two; a resumed phase that read its own prior calls with the default decoder
-// was the second one, and it re-published the rounded id into the next phase
-// event as though the model had asked for it.
+// THROUGH json.Number, not a bare `json.Unmarshal`: into an `any` a number
+// becomes a float64, so a 19-digit id (Jira, Slack, GitHub node) comes back
+// rounded. The record is TEXT so an id survives one decode and not two.
 //
-// NIL ON ANYTHING IT CANNOT READ, empty text included, and that is the
-// caller's contract rather than a shortcut: nil renders as "no arguments
-// shown" while an empty map is the claim that the tool was CALLED with none.
-// A resumed turn losing one line's arguments is a worse-rendered ledger;
-// failing the resume over it loses the whole conversation.
-//
-// NOT a call as the model made it, which a seat's tool session reads to the
-// same number rule ([github.com/crewlet/crewlet/internal/toolsession]) but
-// REPORTS what it could not parse, because a model's malformed arguments are a
-// fact about this round that the tool loop answers the model with rather than
-// running the call. Here the text came out of a record this engine wrote.
+// NIL ON ANYTHING IT CANNOT READ, empty text included: nil renders as "no
+// arguments shown", an empty map claims the tool was CALLED with none; failing
+// the resume over one line would lose the whole conversation. Unlike
+// [github.com/crewlet/crewlet/internal/toolsession] it does not REPORT parse
+// failures: the text came from a record this engine wrote.
 func ReadArgs(raw string) map[string]any {
 	if raw == "" {
 		return nil

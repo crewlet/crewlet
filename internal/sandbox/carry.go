@@ -11,18 +11,16 @@ import (
 
 // A HARNESS'S OWN SESSION, CARRIED BETWEEN BOXES.
 //
-// A run's harness keeps its conversation in its box — Claude Code as a transcript
-// under its configuration directory, OpenCode in its database — and the box
-// is reclaimed when its turn settles. So a session that is to be continued in
-// another box leaves the one it ran in PACKED, as one archive the box's run
-// wrote when its harness exited ([Result.Captured]), and enters the next one as
-// that archive, written into the box before its run starts
-// ([RunRequest.Carried]) and restored there by the run's own script before its
-// harness takes the session up. What a harness's archive holds, and what it never holds
-// — a login, the harness's own settings, Claude Code's file-edit snapshots of the
-// files a run edited (`file-history/`) — is its runner's to say
-// (internal/sandbox/executor), and so is whether a box can continue one at all
-// ([CarryCheck]).
+// A run's harness keeps its conversation in its box (Claude Code as a
+// transcript, OpenCode in its database) and the box is reclaimed when its turn
+// settles. So a session to be continued in another box leaves PACKED, as one
+// archive the run wrote when its harness exited ([Result.Captured]), and
+// enters the next as that archive, written in before its run starts
+// ([RunRequest.Carried]) and restored by the run's own script. What an
+// archive holds, and never holds (a login, the harness's settings, Claude
+// Code's file-edit snapshots of the files a run edited, `file-history/`), is
+// its runner's to say (internal/sandbox/executor), and so is whether a box can
+// continue one ([CarryCheck]).
 
 // SessionArchive describes a harness's session packed into one archive: by
 // the box its run ended in, or as it is carried into another.
@@ -228,23 +226,17 @@ type SessionRestorer interface {
 }
 
 // SessionTaker is a [Runner] whose harness's session a capture takes out of a
-// box (internal/sandbox/executor's Runner, for a harness it packs and restores):
-// the archive the run packed when its harness exited — at its own end, or at
-// the end a stop, a loss or its turn's cap asked of it — or one packed now, on
-// demand, for a job that never got to: one killed before its script could
-// pack, one lost with its engine whose box is still there, one a box would not
-// end; or a save a taker packed while the job still worked ([SessionTake.Save]).
+// box (internal/sandbox/executor's Runner): the archive the run packed when
+// its harness exited, one packed now for a job that never got to (killed
+// early, lost with its engine, a box that would not end), or a save packed
+// while the job still worked ([SessionTake.Save]).
 //
 // THREE ANSWERS: the session, taken; the zero [TakenSession], where the box
-// holds no session to take — a harness that wrote none, a run whose record
-// names none; and an error, where it holds one that could not be taken — a
-// pack that failed, an archive past its bound — which the capture stamps
-// refused, so a later launch knows the job's session was not kept rather than
-// reading an older capture as its latest.
-//
-// OPTIONAL, as [noteReader] is: a runner that carries no session — a harness not
-// taught to pack one, a test's — keeps nothing, and every capture of its runs
-// is no capture at all.
+// holds none; and an error, where it holds one that could not be taken (a
+// failed pack, an archive past its bound), which the capture stamps refused
+// so a later launch knows the session was not kept rather than reading an
+// older capture as the latest. OPTIONAL, as [noteReader] is: a runner that
+// carries no session keeps nothing.
 type SessionTaker interface {
 	TakeSession(ctx context.Context, box Sandbox, take SessionTake) (TakenSession, error)
 }
@@ -252,35 +244,31 @@ type SessionTaker interface {
 // SessionTake is what a capture asks of a box ([SessionTaker]).
 type SessionTake struct {
 	// Pack says the session is packed NOW, by the runner's own pack: a job
-	// still working, which a box would not end, and which may have gone on
-	// since anything it packed. False is a job that is over: the archive its
-	// script packed when its harness exited where it left one — at its own
-	// end, or at the end it was asked for, a stop's, a loss's or its turn's
-	// cap's — and one packed now where it left none (a crash before its pack,
-	// a job killed part way through it, a job lost with its engine). Every
-	// pack made now, either way, is the take's own, streamed from a place of
-	// its own and never moved over the job's capture, which the job's script
-	// alone writes: so each read streams the archive its own pack made, and
-	// one that streams the job's capture streams an archive nothing moves
-	// over while it reads it. Every pack records the archive's digest in the
-	// box as the script's does — before it moves the archive where its read
-	// reads it, so a pack that could not record it fails — so the box never
-	// takes its own archive for another box's.
+	// still working, which may have gone on since anything it packed. False
+	// is a job that is over: the archive its script packed when its harness
+	// exited where it left one, and one packed now where it left none (a
+	// crash before its pack, a job killed part way, a job lost with its
+	// engine). Every pack made now is the take's own, streamed from a place of
+	// its own and never moved over the job's capture, which only the job's
+	// script writes, so each read streams an archive nothing moves while it
+	// reads. Every pack records the archive's digest in the box, as the
+	// script's does, before moving the archive where its read reads it (a pack
+	// that could not record it fails), so the box never takes its own archive
+	// for another box's.
 	Pack bool
 
 	// Save names the SAVE taken in place of the job's own session: the path
 	// internal/sandbox/executor's Runner.PackSave packed it to and described
-	// it at ([SessionArchive.Path]) — a save the taking process packed of the
+	// it at ([SessionArchive.Path]): a save the taking process packed of the
 	// box's session while its job still worked, under its taker lease
-	// ([SessionCapture.Taker]), at a place of that save's own — streamed by
-	// this take alone and removed once it is done with it. Never the job's
-	// capture, which every read of a job that is over takes as its final
-	// archive; never a path another save moves over, which a take that reads
-	// its archive twice would find changed between its passes; and never
-	// packed by the take: the save is packed first, so the scrub's values
-	// (Scrub) are read after the pack, and hold every value the box was
-	// handed by then. A path that is no save of the box's is refused, and so
-	// is Pack set beside it. "" takes the job's own session.
+	// ([SessionCapture.Taker]), streamed by this take alone and removed once
+	// done. Never the job's capture (every read of a finished job takes it as
+	// its final archive); never a path another save moves over, which a take
+	// reading its archive twice would find changed; never packed by the take:
+	// the save is packed first, so the scrub's values (Scrub) are read after
+	// the pack and hold every value the box was handed by then. A path that
+	// is no save of the box's is refused, and so is Pack beside it. "" takes
+	// the job's own session.
 	Save string
 
 	// Scrub is every secret the engine itself put in the box, by value — its
@@ -362,30 +350,15 @@ type TakenSession struct {
 }
 
 // SessionPackWait bounds a runner's on-demand pack of a session in its box
-// ([SessionTake.Pack]), a save's among them.
-//
-// TWO MINUTES: a minute for what a box's harness takes to come up on a
-// contended box (an OpenCode export runs against a private server it starts,
-// which takes about a second and is given a minute — the room a run's own
-// server is given to listen), and a minute for tar and gzip over a session at
-// its bound, which reads some hundreds of mebibytes of JSON at the tens of
-// mebibytes a second a contended box still packs at. A pack that has not
-// finished by then is not going to, and the capture is refused rather than
-// left holding the box.
-//
-// A CLAUDE CODE PACK BESIDE A WORKING HARNESS starts no server, and its first
-// minute is what its checks add (internal/sandbox/executor's claudeHeldTar):
-// the wait for the box's clock, five seconds at most; walks of the session's
-// files with find, milliseconds (7 to 22 ms measured for the whole manifest),
-// and one more before the marker, which sets a file stamped in the box's
-// future back to the box's present; and its archive decompressed once to list
-// it, once more for the session's own transcript, which it reads back on every
-// pack, and once more for each subagent's thread written as it was packed,
-// each such pass reading the whole archive. gunzip reads several times faster
-// than gzip compresses — a judgment, decompression's pace unmeasured — so at
-// the tens of mebibytes a second the pack's own minute is sized by, a pass
-// over a session at its plaintext bound takes a few seconds, and that first
-// minute covers some ten read-backs — the main transcript's, and those of its
-// subagents' threads growing as the session is packed. A pack past it is
-// refused as any other is, the session's last capture standing.
+// ([SessionTake.Pack]), a save's among them. TWO MINUTES: a minute for a
+// box's harness to come up on a contended box (an OpenCode export starts a
+// private server), and a minute for tar and gzip over a session at its bound,
+// some hundreds of mebibytes of JSON at the tens of mebibytes a second a
+// contended box packs at. A pack not finished by then is not going to; the
+// capture is refused rather than left holding the box. A Claude Code pack
+// beside a working harness starts no server; its first minute covers its
+// checks (internal/sandbox/executor's claudeHeldTar): the clock wait, five
+// seconds at most; find walks (7 to 22 ms measured); its archive decompressed
+// once to list it and once per transcript read-back (gunzip is several times
+// faster than gzip compresses, unmeasured): some ten read-backs.
 const SessionPackWait = 2 * time.Minute

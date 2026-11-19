@@ -17,28 +17,16 @@ import (
 
 // ---- a call held to the schema its tool advertises (ADR-0059) ------------ //
 //
-// EVERY FIRST-PARTY CALL IS CHECKED against the JSON schema its tool hands the
-// model, in one pass, and each finding is one of three kinds, decided by what
-// the tool's own reading of the value would do ([argval], the one rule the
-// tools and this check share):
-//
-//   - A MISREAD is a value the tool would change without saying so: a string
-//     where a boolean belongs (read as false), an object or a list where a
-//     string belongs (read as ""), a fraction where a whole number belongs
-//     (truncated), "5 days" where a number belongs (read as 5), junk the read
-//     replaces with its default. It writes wrong data, and a note after the
-//     write is too late, so the call is refused before the tool runs.
-//   - OUTSIDE is a value the schema refuses and the tool decides on itself: a
-//     missing required argument, a value not in an enum, a number past its
-//     bound, a list too long. The tool runs; its refusal, or its answer,
-//     carries the finding.
-//   - UNKNOWN is a key the schema does not declare, which every tool ignores
-//     today: noted on the answer, logged and counted, never refused here.
-//
-// THE LOSSLESS LENIENCIES STAY ACCEPTED, exactly as the tools read them: a
-// number or a boolean where a string belongs, one string or a comma-separated
-// one where a list of strings belongs, a numeric string where a number
-// belongs. They are not findings at all.
+// EVERY FIRST-PARTY CALL IS CHECKED against its tool's JSON schema; a finding
+// is decided by what the tool's own reading ([argval]) would do:
+//   - A MISREAD is a value the tool would change silently ("false" for a
+//     boolean, a truncated fraction, "5 days" read as 5): a note after the
+//     write is too late, so the call is refused.
+//   - OUTSIDE is a value the schema refuses and the tool decides on itself
+//     (missing required, not in an enum, past a bound): the tool runs.
+//   - UNKNOWN is an undeclared key, which tools ignore: noted, logged, counted.
+// Lossless leniencies (a number for a string, a comma-separated list) are not
+// findings.
 
 // Finding is what an [ArgFault] is: a named string, so a value off the wire
 // is one a reader can branch on and [Finding.Valid] can judge.
