@@ -372,6 +372,11 @@ seat_paused                # a person, or the engine for a failure a
 seat_resumed               # the pause was lifted (resumed_by,
                            # resumed_by_kind, operator_id, and the paused_by,
                            # paused_by_kind and paused_at it ended)
+seat_placed                # a node took a seat (on_node, epoch, and since,
+                           # the tenure's start on the lease store's clock)
+seat_released              # a node gave a seat up or lost it (on_node, epoch,
+                           # reason); with seat_placed, how long no node held
+                           # the seat
 seat_access_drift_restored # an access sync put a seat's level or scope at a
                            # vendor back to what the document asks after
                            # somebody changed it there (integration, lane,

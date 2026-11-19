@@ -201,9 +201,6 @@ func (e *Engine) stopSharedServers(ctx context.Context) {
 	for _, s := range e.takeAllSeatChildren() {
 		e.retireSeatChildren(ctx, s)
 	}
-	if err := e.researchSearcher().Stop(ctx); err != nil {
-		log.WarnContext(ctx, "research_stop_failed", "error", err)
-	}
 	if e.mcp == nil {
 		return
 	}

@@ -217,8 +217,7 @@ func TestTheChildSeesTheRunEnvAndTheBoxHomeButNotTheEngineSecrets(t *testing.T) 
 // EVERY TEMP ROOT A HOST BOX'S PROCESSES READ LIES INSIDE THE BOX, one
 // variable at a time (Claude Code reads CLAUDE_CODE_TMPDIR, not TMPDIR), and
 // as the box's own directory rather than anywhere under its home: a temp root
-// left at its default is a write outside the box, which the host's
-// confinement refuses.
+// left at its default is a write outside the box.
 func TestEveryTempRootOfAHostBoxIsItsOwnTmp(t *testing.T) {
 	t.Parallel()
 	local := newDirect(t)

@@ -155,34 +155,16 @@ type directBox struct {
 	// readCap is the whole-read cap the suite gave the box; zero, every
 	// production box, is [MaxFileBytes] ([readLimit]).
 	readCap int
-	// confine is the boundary every command runs in, nil for a seat's
-	// unconfined Direct cell.
-	confine *boxConfine
 }
 
 var _ Sandbox = (*directBox)(nil)
 
-// boxConfine is one box's confinement: the host's mechanism and its rules.
-type boxConfine struct {
-	host  *HostConfinement
-	rules confineRules
-}
-
-// argv is a shell command line as this box runs it: confined where the box
-// is, and ahead of the engine for the kernel's OOM killer ([oomFirst]). Every
-// setup and exec command and the detached job start here. Its first word is an
-// absolute path (/bin/sh or the helper [ProbeConfinement] resolved), so the
+// argv is a shell command line as this box runs it: ahead of the engine for
+// the kernel's OOM killer ([oomFirst]). Every setup and exec command and the
+// detached job start here. Its first word is the absolute /bin/sh, so the
 // raise searches no PATH of the box's.
-func (b *directBox) argv(cmd string) ([]string, error) {
-	argv := []string{"/bin/sh", "-c", cmd}
-	if b.confine != nil {
-		wrapped, err := b.confine.host.wrap(b.confine.rules, argv)
-		if err != nil {
-			return nil, localErrorf("local sandbox %s: %v", b.layout.id, err)
-		}
-		argv = wrapped
-	}
-	return oomFirst(argv), nil
+func (b *directBox) argv(cmd string) []string {
+	return oomFirst([]string{"/bin/sh", "-c", cmd})
 }
 
 func (b *directBox) ID() string   { return b.layout.id }
@@ -191,8 +173,8 @@ func (b *directBox) Home() string { return b.layout.home() }
 // TempRootEnv is every variable a process in a host box takes its temporary
 // directory from, each pointed at the box's own .tmp.
 //
-// ONE LIST, because a confined box may write only inside itself and a default
-// temp root is a write outside it. TMPDIR alone is not enough: Claude Code
+// ONE LIST, so no process in the box writes a temporary file outside it.
+// TMPDIR alone is not enough: Claude Code
 // roots its per-uid temp directory at CLAUDE_CODE_TMPDIR or else a literal
 // /tmp, and Python's tempfile reads TMP and TEMP. A container or an E2B VM
 // needs none of this: its /tmp is inside the boundary.
@@ -230,9 +212,7 @@ func (b *directBox) childEnv(extra map[string]string) map[string]string {
 // box cannot rename, and its own shell enters the directory by its relative
 // name ([inWorkdir]). Walked by host path on the engine's side, a link the box
 // swapped in on the way would move where its command starts; walked by the
-// box's process, it is the box's walk, under its confinement. It is also the
-// one way every confinement starts where asked: bubblewrap enters the home
-// whatever directory it was handed.
+// box's process, it is the box's walk.
 func (b *directBox) workdir(cwd string) (string, error) {
 	named, rel := b.layout.workspace(), WorkspaceSubdir
 	if cwd != "" {
@@ -264,12 +244,8 @@ func (b *directBox) Exec(ctx context.Context, cmd string, opts ExecOptions) (Exe
 	if err != nil {
 		return ExecResult{}, err
 	}
-	argv, err := b.argv(inWorkdir(rel, cmd))
-	if err != nil {
-		return ExecResult{}, err
-	}
 	return runHost(ctx, hostCommand{
-		argv:    argv,
+		argv:    b.argv(inWorkdir(rel, cmd)),
 		cwd:     b.layout.home(),
 		env:     b.childEnv(opts.Env),
 		timeout: time.Duration(opts.TimeoutSec * float64(time.Second)),
@@ -294,10 +270,7 @@ func (b *directBox) StartBackground(ctx context.Context, cmd string, opts ExecOp
 		return "", err
 	}
 	// Not exec.CommandContext: the job must outlive the turn that starts it.
-	argv, err := b.argv(inWorkdir(rel, cmd))
-	if err != nil {
-		return "", err
-	}
+	argv := b.argv(inWorkdir(rel, cmd))
 	proc := exec.Command(argv[0], argv[1:]...) //nolint:noctx // deliberate; see above
 	proc.Dir = b.layout.home()
 	proc.Env = hostbox.Environ(b.childEnv(opts.Env))
@@ -545,6 +518,20 @@ func (b *directBox) OpenTail(ctx context.Context, path string, n int64) (io.Read
 		return nil, 0, err
 	}
 	r, size, err := openHomeTail(b.layout, rel, path, n)
+	return r, size, b.explain(path, rel, err)
+}
+
+// OpenRange implements [Sandbox] for a box on the engine host: a seek, then the
+// section the open found ([openHomeRange]).
+func (b *directBox) OpenRange(ctx context.Context, path string, off, n int64) (io.ReadCloser, int64, error) {
+	if err := rangeRefused(path, off, n); err != nil {
+		return nil, 0, err
+	}
+	rel, err := b.homeRel(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	r, size, err := openHomeRange(b.layout, rel, path, off, n)
 	return r, size, b.explain(path, rel, err)
 }
 
@@ -1011,6 +998,19 @@ func (b *containerBox) OpenTail(ctx context.Context, path string, n int64) (io.R
 	return r, size, b.explain(path, rel, err)
 }
 
+// OpenRange implements [Sandbox]: a seek on the host side of the mount.
+func (b *containerBox) OpenRange(ctx context.Context, path string, off, n int64) (io.ReadCloser, int64, error) {
+	if err := rangeRefused(path, off, n); err != nil {
+		return nil, 0, err
+	}
+	rel, err := b.homeRel(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	r, size, err := openHomeRange(b.layout, rel, path, off, n)
+	return r, size, b.explain(path, rel, err)
+}
+
 // openHomeFile is a local box's OpenFile once the path is mapped onto its home:
 // the file, or a reader yielding nothing for one not there yet.
 //
@@ -1049,6 +1049,31 @@ func openHomeTail(l boxLayout, rel, path string, n int64) (io.ReadCloser, int64,
 	size := info.Size()
 	start := max(size-max(n, 0), 0)
 	return hostSection{Reader: io.NewSectionReader(f, start, size-start), Closer: f}, size, nil
+}
+
+// openHomeRange is a local box's OpenRange once the path is mapped onto its
+// home: at most n bytes from off of the file as its size stood at the open, a
+// SECTION for [readHomeTail]'s reason, closed with the file. An offset at or
+// past that size is nothing, with the size.
+func openHomeRange(l boxLayout, rel, path string, off, n int64) (io.ReadCloser, int64, error) {
+	f, err := openHomeRegular(l, rel)
+	switch {
+	case absent(err):
+		return io.NopCloser(strings.NewReader("")), 0, nil
+	case err != nil:
+		return nil, 0, fmt.Errorf("local sandbox: open %s: %w", path, err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, 0, fmt.Errorf("local sandbox: stat %s: %w", path, err)
+	}
+	size := info.Size()
+	if off >= size {
+		_ = f.Close()
+		return io.NopCloser(strings.NewReader("")), size, nil
+	}
+	return hostSection{Reader: io.NewSectionReader(f, off, min(n, size-off)), Closer: f}, size, nil
 }
 
 // hostSection is a section of a file on the engine host, closed with it.

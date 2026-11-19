@@ -72,28 +72,6 @@ func (p *params) num(arg, key string, fallback int) *params {
 	return p
 }
 
-// truth carries a boolean argument under key as `true`, when set.
-func (p *params) truth(arg, key string) *params {
-	if p.args.Bool(arg) {
-		p.q.Set(key, "true")
-	}
-	return p
-}
-
-// list carries a list argument under key, comma separated.
-func (p *params) list(arg, key string) *params {
-	if v := p.args.Strings(arg); len(v) > 0 {
-		p.q.Set(key, strings.Join(v, ","))
-	}
-	return p
-}
-
-// fixed carries a constant.
-func (p *params) fixed(key, value string) *params {
-	p.q.Set(key, value)
-	return p
-}
-
 func (p *params) values() url.Values { return p.q }
 
 // act is the request an approved write executes as: the act route's one

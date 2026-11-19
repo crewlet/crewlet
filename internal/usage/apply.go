@@ -192,8 +192,8 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 			(day, node, agent_id, handle, role, turns, failed, reviewed,
 			 first_pass, sent_back, duration_hist, last_ended_at, reads_elided,
 			 tools_elided, changes_opened, reviews_given, findings_received, checks_failed,
-			 ejections, ledger_elided, refusals_elided, ledger_untallied, version)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ejections, ledger_elided, refusals_elided, ledger_untallied, busy_ms, version)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (day, node, agent_id) DO UPDATE SET
 			handle            = excluded.handle,
 			role              = excluded.role,
@@ -214,12 +214,13 @@ func (a Applier) seat(ctx context.Context, tx *sql.Tx, r Record, at statelog.Pos
 			ledger_elided     = excluded.ledger_elided,
 			refusals_elided   = excluded.refusals_elided,
 			ledger_untallied  = excluded.ledger_untallied,
+			busy_ms           = excluded.busy_ms,
 			version           = excluded.version`,
 		s.Day, s.Node, s.Seat, r.Handle, r.Role, r.Turns.Count, r.Turns.Failed,
 		r.Turns.Reviewed, r.Turns.FirstPass, r.Turns.SentBack, string(hist),
 		lastEnded, r.ReadsElided, r.ToolsElided, code.ChangesOpened, code.ReviewsGiven,
 		code.FindingsReceived, code.ChecksFailed, code.Ejections, r.LedgerElided, r.RefusalsElided,
-		r.LedgerUntallied, version); err != nil {
+		r.LedgerUntallied, busyOf(r.Turns), version); err != nil {
 		return 0, fmt.Errorf("usage: write the head of %s: %w", s, err)
 	}
 	rows := 1
@@ -450,3 +451,12 @@ func (Applier) Gated(context.Context, *sql.Tx, statelog.Record) (statelog.Reason
 // nothing waits on a usage record, which is the same fact the absent operation
 // ledger states.
 func (Applier) Committed(context.Context) {}
+
+// busyOf is the turns' busy time as its column keeps it: NULL where the
+// record did not measure it.
+func busyOf(t *Turns) sql.NullInt64 {
+	if t == nil || t.BusyMS == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: *t.BusyMS, Valid: true}
+}

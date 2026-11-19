@@ -18,6 +18,8 @@ import { afterEach, expect, test } from "vitest";
 import {
   Assignee,
   CARD_FACTS,
+  CoverageTags,
+  FlowTag,
   WorkCard,
   blockedBy,
   cardHidden,
@@ -25,7 +27,7 @@ import {
   fitTags,
   type RowChrome,
 } from "./work.tsx";
-import type { WorkSummary } from "~/protocol/index.ts";
+import type { WorkFlow, WorkSummary } from "~/protocol/index.ts";
 
 afterEach(cleanup);
 
@@ -361,4 +363,60 @@ test("a blocked row names a blocker the page holds no row for, by the edge's own
       id === "t-9" ? "PROD-9" : undefined,
     ),
   ).toBe("Blocked · PROD-9");
+});
+
+const flowOf = (state: string, over: Partial<WorkFlow> = {}): WorkFlow => ({
+  state,
+  cause: "",
+  since: null,
+  until: null,
+  reason: "",
+  ...over,
+});
+
+// A CARD SAYS WHY ITS ITEM IS NOT MOVING, as the engine reads it (ADR-0162),
+// with the wait's end in the badge and its words on hover. The ordinary
+// `moving` draws nothing, and a card says working with its band and blocked
+// with its Blocked tag, never a second badge for either.
+test("a card draws the engine's flow, once, and nothing for an item that moves", () => {
+  const card = (flow: WorkFlow | null) =>
+    render(
+      <WorkCard row={row({ status: "in_progress", flow })} href="#/worklet/ENG-9" />,
+    ).container.querySelector("[data-flow]");
+  const waiting = card(
+    flowOf("waiting", {
+      cause: "start",
+      until: "2031-04-20T00:00:00Z",
+      reason: "The vendor's window opens Monday",
+    }),
+  );
+  expect(waiting?.textContent).toMatch(/^Waiting · until \S/);
+  expect(waiting?.getAttribute("title")).toMatch(/: The vendor's window opens Monday$/);
+  cleanup();
+  expect(card(flowOf("held", { cause: "departed" }))?.getAttribute("title")).toBe(
+    "Held: its assignee has left the org chart",
+  );
+  cleanup();
+  for (const state of ["moving", "working", "blocked"]) {
+    expect(card(flowOf(state))).toBeNull();
+    cleanup();
+  }
+  expect(card(null)).toBeNull();
+});
+
+// A LIST ROW HAS NO BAND, so working is its badge; skipping is the caller's.
+test("a flow badge leaves out the states its caller draws another way", () => {
+  const working = flowOf("working", { cause: "turn" });
+  expect(render(<FlowTag flow={working} />).container.textContent).toBe("Working");
+  cleanup();
+  expect(render(<FlowTag flow={working} skip={["working"]} />).container.textContent).toBe("");
+});
+
+// A NODE THAT HAS NOT READ THE SEATS SAYS SO beside the rows, rather than
+// drawing every stopped seat's work as moving.
+test("an answer read without the seats' live state says so", () => {
+  const unread = render(<CoverageTags answer={{ flow_live: false }} />);
+  expect(unread.container.textContent).toBe("live state unread");
+  cleanup();
+  expect(render(<CoverageTags answer={{ flow_live: true }} />).container.textContent).toBe("");
 });

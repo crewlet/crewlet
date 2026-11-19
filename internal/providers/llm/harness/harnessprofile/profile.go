@@ -387,12 +387,80 @@ const (
 	// and Load refuses the stance on it rather than run a harness that still
 	// fetches under a configuration that says it does not.
 	WebToolsDenied WebTools = "denied"
+	// WebToolsSearch runs the harness with its vendor's web search and no
+	// other tool, through the profile's [WebSearch]: Ask Crewlet's search run,
+	// which is handed a query and nothing else.
+	WebToolsSearch WebTools = "search"
 )
 
 // Valid reports whether w is a stance this package knows. The empty value is
 // not one: it is the absence of a stance, which [Profile.EffectiveWebTools]
 // reads as allowed.
-func (w WebTools) Valid() bool { return w == WebToolsAllowed || w == WebToolsDenied }
+func (w WebTools) Valid() bool {
+	return w == WebToolsAllowed || w == WebToolsDenied || w == WebToolsSearch
+}
+
+// WebSearch is how one harness runs a search and nothing else: the argv of
+// that run (replacing complete_args whole), the runs it must carry and the
+// flags it must not, the search tool its event stream names, and how the
+// engine reads the results from that stream. Measured with the doctor's
+// search probe; Note names the release.
+type WebSearch struct {
+	CompleteArgs []string     `yaml:"complete_args"`
+	Args         [][]string   `yaml:"args"`
+	Refuses      []string     `yaml:"refuses,omitempty"`
+	Tool         string       `yaml:"tool"`
+	Format       SearchFormat `yaml:"format"`
+	Note         string       `yaml:"note"`
+}
+
+// SearchFormat is how a search run's results are read from its event stream.
+type SearchFormat string
+
+// SearchClaudeStreamJSON reads each `user` event's `tool_use_result` that the
+// search tool answered: its results' `content` entries, each a title and a URL.
+const SearchClaudeStreamJSON SearchFormat = "claude-stream-json"
+
+// Valid reports whether f is a format this build reads.
+func (f SearchFormat) Valid() bool { return f == SearchClaudeStreamJSON }
+
+// CanSearchWeb reports whether the profile has a measured search-only run.
+func (p *Profile) CanSearchWeb() bool {
+	return p.WebSearch != nil && len(p.WebSearch.CompleteArgs) > 0
+}
+
+// SearchProblem says why the search run's argv could reach anything but the
+// vendor's search, or "" when it cannot: every run of [WebSearch.Args] present
+// once and no flag of [WebSearch.Refuses].
+func (p *Profile) SearchProblem() string {
+	if !p.CanSearchWeb() {
+		return "the profile has no measured search-only run"
+	}
+	w := p.WebSearch
+	return (&ToolsOff{Args: w.Args, Refuses: w.Refuses}).problemIn(w.CompleteArgs)
+}
+
+// SearchRun is the profile as its search-only run uses it, or false where it
+// has no measured one: what Load gives the entry with web_tools set to search.
+func (p Profile) SearchRun() (Profile, bool) {
+	if !p.CanSearchWeb() {
+		return Profile{}, false
+	}
+	return p.withWebSearch(), true
+}
+
+// withWebSearch is the profile as its search run uses it: the stance set, the
+// search argv in place of complete_args, and no mcp block or tool record,
+// since a search run is handed no tool.
+func (p Profile) withWebSearch() Profile {
+	out := p.Clone()
+	out.WebTools = WebToolsSearch
+	if w := p.WebSearch; w != nil {
+		out.CompleteArgs = append([]string(nil), w.CompleteArgs...)
+	}
+	out.MCP, out.Requests = nil, nil
+	return out
+}
 
 // WebDenial is how one harness turns its web tools off: what its run uses INSTEAD
 // when the entry is `web_tools: denied`.
@@ -1199,6 +1267,9 @@ type Profile struct {
 	// WebDenial is how this harness turns its web tools off, or nil where it
 	// has no measured way to. See [WebDenial].
 	WebDenial *WebDenial `yaml:"web_denial,omitempty"`
+	// WebSearch is this harness's search-only run, or nil where it has no
+	// measured one. See [WebSearch].
+	WebSearch *WebSearch `yaml:"web_search,omitempty"`
 
 	// ImageInput is how a call hands the model images beside its prompt, or
 	// nil where the harness has no way to. See [ImageInput].
@@ -1991,8 +2062,26 @@ func (p *Profile) validateEveryStep(add func(string, ...any)) {
 // is written rather than on the first entry that turns web off.
 func (p *Profile) validateWebStance(add func(string, ...any)) {
 	if p.WebTools != "" && !p.WebTools.Valid() {
-		add("web_tools %q (want allowed or denied)", p.WebTools)
+		add("web_tools %q (want allowed, denied or search)", p.WebTools)
 		return
+	}
+	if w := p.WebSearch; w != nil {
+		if len(w.CompleteArgs) == 0 || len(w.Args) == 0 || strings.TrimSpace(w.Tool) == "" {
+			add("web_search needs complete_args, the args runs it must carry and its tool")
+		}
+		if !w.Format.Valid() {
+			add("web_search.format %q (want %s)", w.Format, SearchClaudeStreamJSON)
+		}
+		if strings.TrimSpace(w.Note) == "" {
+			add("web_search.note is empty: say how the search-only run was measured")
+		}
+		if problem := p.SearchProblem(); problem != "" && len(w.CompleteArgs) > 0 {
+			add("web_search: %s", problem)
+		}
+	}
+	if p.EffectiveWebTools() == WebToolsSearch && p.WebSearch == nil {
+		add("web_tools is search but the profile has no web_search, so this harness has " +
+			"no measured search-only run")
 	}
 	if p.WebDenial != nil && !p.WebDenial.changes() {
 		add("web_denial sets neither complete_args nor seed_files, so it turns " +

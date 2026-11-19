@@ -37,8 +37,10 @@ answers:
       role: QA Engineer
       live: {activity: stopped, stopped_reason: budget}
 script:
-  - call: list_decisions
-  - call: list_agents
+  - call: read_api
+    args: {route: GET /worklet/decisions}
+  - call: read_api
+    args: {route: GET /agents}
   - call: answer_brief
     args:
       about: QA waits on your answer on ENG-42, and the QA Engineer is stopped on its budget.
@@ -48,7 +50,7 @@ script:
         - {ref_kind: task, ref_id: ENG-99, do: Chase ENG-99, why: Overdue, tone: warning, action: open}
       follow_ups: ["Why is the QA Engineer out of budget?"]
 expect:
-  calls: [list_decisions, list_agents, answer_brief]
+  calls: [read_api, read_api, answer_brief]
   proposals: 0
   state: completed
   brief:

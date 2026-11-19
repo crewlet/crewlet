@@ -434,17 +434,12 @@ providers:
 assistant:
   model: sonnet                         # a providers.llm key; absent: off
   token_budget: { day: 200000 }         # per person, optional
-  research:                             # optional: absent reads no web page
-    hosts: [developers.cloudflare.com, docs.github.com]
-    search: { mcp_server: tavily }      # optional: an mcp_servers entry running tavily-mcp
 ```
 
 | Field | Default | Meaning |
 |---|---|---|
 | `model` | none | The `providers.llm` entry Ask Crewlet runs on. Absent, Ask Crewlet is off. |
 | `token_budget` | none | Each person's ceiling per calendar window, the shape of [a token budget](#token-budgets), charged on top of the company's own. |
-| `research.hosts` | none | The hosts Ask Crewlet may read web pages from, through the engine, over `https`: each a host name alone, at most 50. Absent, it reads no web page ([Web research](../guides/assistant.md#web-research)). |
-| `research.search.mcp_server` | none | The `mcp_servers` entry Ask Crewlet searches those hosts through: a shared, enabled entry the curated catalogue recognises as Tavily (`tavily-mcp`), whose `tavily_search` is not blocked. Each API node runs its own instance of it for research alone, never a seat's. Absent, Ask Crewlet only reads pages it is given or finds by address. |
 
 Nothing else about a turn is a setting. A turn takes at most 40 model rounds
 and 20 minutes, a proposed change waits 15 minutes for its owner's approval,

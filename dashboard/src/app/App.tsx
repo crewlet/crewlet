@@ -169,6 +169,7 @@ const GitletSettings = lazyScreen("settings", (m) => m.GitletSettings);
 const Diagnostics = lazyScreen("settings", (m) => m.Diagnostics);
 const AdvisorPage = lazyScreen("advisor", (m) => m.AdvisorPage);
 const AdvisorFinding = lazyScreen("advisor", (m) => m.FindingPage);
+const AdvisorReport = lazyScreen("advisor", (m) => m.ReportPage);
 const Account = lazyScreen("account", (m) => m.Account);
 const SignIn = lazyScreen("signin", (m) => m.SignIn);
 const Invite = lazyScreen("signin", (m) => m.Invite);
@@ -374,6 +375,8 @@ export function screenFor(route: Resolved): ReactNode {
       return <AdvisorPage section={route.section} />;
     case "advisor-finding":
       return <AdvisorFinding key={route.id} id={route.id} />;
+    case "advisor-report":
+      return <AdvisorReport key={route.week} week={route.week} />;
     case "audit":
       return <Audit />;
     case "delegated-decisions":

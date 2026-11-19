@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -575,8 +576,7 @@ func (c *envdClient) openFile(ctx context.Context, path string) (io.ReadCloser, 
 		return nil, envdRefused(resp.StatusCode, fmt.Errorf("e2b: open %s: %d: %s", path,
 			resp.StatusCode, httpx.ReadRefusal(resp)))
 	}
-	return &envdStream{body: resp.Body, idle: idle, path: path,
-		cancelled: func() bool { return cancelledBy(ctx) }}, nil
+	return newEnvdStream(ctx, resp, idle, path), nil
 }
 
 // envdStream is an open file's body, read through its idle bound.
@@ -587,6 +587,14 @@ type envdStream struct {
 	// cancelled reports whether the opener's context was cancelled, since
 	// Read takes none; a cancelled read is no class ([unanswered]).
 	cancelled func() bool
+}
+
+// newEnvdStream is resp's body as an [envdStream]: every open of a box's file
+// makes one here, so none is left without the opener's context to class a
+// failed read by.
+func newEnvdStream(ctx context.Context, resp *http.Response, idle *idleReader, path string) *envdStream {
+	return &envdStream{body: resp.Body, idle: idle, path: path,
+		cancelled: func() bool { return cancelledBy(ctx) }}
 }
 
 func (s *envdStream) Read(p []byte) (int, error) {
@@ -649,14 +657,14 @@ func (c *envdClient) openTail(ctx context.Context, path string, n int64) (io.Rea
 			return nil, 0, fmt.Errorf("e2b: open the end of %s: a range answered with Content-Range %q, "+
 				"which names no whole size", path, resp.Header.Get("Content-Range"))
 		}
-		stream := &envdStream{body: resp.Body, idle: idle, path: path}
+		stream := newEnvdStream(ctx, resp, idle, path)
 		return limitedStream{Reader: io.LimitReader(stream, min(n, total-start)), Closer: stream}, total, nil
 	case resp.StatusCode >= 400:
 		defer done()
-		return nil, 0, fmt.Errorf("e2b: open the end of %s: %d: %s", path, resp.StatusCode,
-			httpx.ReadRefusal(resp))
+		return nil, 0, envdRefused(resp.StatusCode, fmt.Errorf("e2b: open the end of %s: %d: %s", path,
+			resp.StatusCode, httpx.ReadRefusal(resp)))
 	case resp.ContentLength >= 0:
-		stream := &envdStream{body: resp.Body, idle: idle, path: path}
+		stream := newEnvdStream(ctx, resp, idle, path)
 		if skip := resp.ContentLength - n; skip > 0 {
 			if _, err = io.CopyN(io.Discard, stream, skip); err != nil {
 				_ = stream.Close()
@@ -668,9 +676,105 @@ func (c *envdClient) openTail(ctx context.Context, path string, n int64) (io.Rea
 	defer done()
 	data, total, err := keepLast(idle, int(n))
 	if err != nil {
-		return nil, 0, fmt.Errorf("e2b: read the end of %s: %w", path, idle.silent(err))
+		return nil, 0, unanswered(ctx, fmt.Errorf("e2b: read the end of %s: %w", path, idle.silent(err)))
 	}
 	return io.NopCloser(bytes.NewReader(data)), total, nil
+}
+
+// openRange streams at most n bytes of a file from off ([Sandbox.OpenRange]) as
+// an HTTP range: `bytes=off-` when off+n reaches past any file, else
+// `bytes=off-(off+n-1)`. A 206 must name the whole size and start at off; a 416
+// is an offset at or past the end, `bytes */size`; a 404 is a missing file. A
+// server that ignores the range answers 200: with a length, the bytes before
+// off are read and dropped; without one, the first min(n, [MaxFileBytes]) after
+// off are kept and the rest read through for the size, so fewer than n may
+// come back and the caller opens again from where they end. Either 200 costs
+// the whole transfer, as [envdClient.openTail]'s does, in bounded memory.
+func (c *envdClient) openRange(ctx context.Context, path string, off, n int64) (io.ReadCloser, int64, error) {
+	empty := io.NopCloser(strings.NewReader(""))
+	if n == 0 {
+		// An empty range is not one HTTP can ask for; such a caller wants
+		// only the size.
+		tail, err := c.readTail(ctx, path, 0)
+		if err != nil {
+			return nil, 0, err
+		}
+		return empty, tail.Size, nil
+	}
+	want := fmt.Sprintf("bytes=%d-", off)
+	if n <= math.MaxInt64-off {
+		want += strconv.FormatInt(off+n-1, 10)
+	}
+	resp, idle, err := c.fileExchange(ctx, http.MethodGet, path, nil, http.Header{"Range": {want}})
+	if err != nil {
+		return nil, 0, fmt.Errorf("e2b: open %s from byte %d: %w", path, off, err)
+	}
+	done := func() {
+		idle.stop()
+		_ = resp.Body.Close()
+	}
+	switch {
+	case resp.StatusCode == http.StatusNotFound:
+		done()
+		return empty, 0, nil
+	case resp.StatusCode == http.StatusRequestedRangeNotSatisfiable:
+		_, total, _ := parseContentRange(resp.Header.Get("Content-Range"))
+		done()
+		if total < 0 {
+			return nil, 0, fmt.Errorf("e2b: open %s from byte %d: a refused range answered with Content-Range "+
+				"%q, which names no whole size", path, off, resp.Header.Get("Content-Range"))
+		}
+		return empty, total, nil
+	case resp.StatusCode == http.StatusPartialContent:
+		start, total, ok := parseContentRange(resp.Header.Get("Content-Range"))
+		if !ok || total < 0 || start != off {
+			done()
+			return nil, 0, fmt.Errorf("e2b: open %s from byte %d: a range answered with Content-Range %q, "+
+				"which names no whole size or starts elsewhere", path, off, resp.Header.Get("Content-Range"))
+		}
+		stream := newEnvdStream(ctx, resp, idle, path)
+		return limitedStream{Reader: io.LimitReader(stream, max(min(n, total-off), 0)), Closer: stream}, total, nil
+	case resp.StatusCode >= 400:
+		defer done()
+		return nil, 0, envdRefused(resp.StatusCode, fmt.Errorf("e2b: open %s from byte %d: %d: %s", path, off,
+			resp.StatusCode, httpx.ReadRefusal(resp)))
+	case resp.ContentLength >= 0:
+		total := resp.ContentLength
+		if off >= total {
+			done()
+			return empty, total, nil
+		}
+		stream := newEnvdStream(ctx, resp, idle, path)
+		if _, err = io.CopyN(io.Discard, stream, off); err != nil {
+			_ = stream.Close()
+			return nil, 0, err
+		}
+		return limitedStream{Reader: io.LimitReader(stream, min(n, total-off)), Closer: stream}, total, nil
+	}
+	defer done()
+	data, total, err := keepFirst(idle, off, min(n, MaxFileBytes))
+	if err != nil {
+		return nil, 0, unanswered(ctx, fmt.Errorf("e2b: read %s from byte %d: %w", path, off, idle.silent(err)))
+	}
+	return io.NopCloser(bytes.NewReader(data)), total, nil
+}
+
+// keepFirst reads r to its end keeping at most n bytes from off, and how many
+// it read in all, in memory bounded by n whatever the stream's length.
+func keepFirst(r io.Reader, off, n int64) ([]byte, int64, error) {
+	skipped, err := io.CopyN(io.Discard, r, off)
+	if errors.Is(err, io.EOF) {
+		return nil, skipped, nil
+	}
+	if err != nil {
+		return nil, skipped, err
+	}
+	data, err := io.ReadAll(io.LimitReader(r, n))
+	if err != nil {
+		return nil, off + int64(len(data)), err
+	}
+	rest, err := io.Copy(io.Discard, r)
+	return data, off + int64(len(data)) + rest, err
 }
 
 // limitedStream is a stream read no further than its limit, closed whole.

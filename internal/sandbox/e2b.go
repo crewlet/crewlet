@@ -373,6 +373,15 @@ func (s *E2BSandbox) OpenTail(ctx context.Context, path string, n int64) (io.Rea
 	return s.envd.openTail(ctx, path, n)
 }
 
+// OpenRange implements [Sandbox]: a byte range on envd's download, its body
+// read as it arrives.
+func (s *E2BSandbox) OpenRange(ctx context.Context, path string, off, n int64) (io.ReadCloser, int64, error) {
+	if err := rangeRefused(path, off, n); err != nil {
+		return nil, 0, err
+	}
+	return s.envd.openRange(ctx, path, off, n)
+}
+
 // SetTimeout implements [Sandbox]: the keepalive.
 func (s *E2BSandbox) SetTimeout(ctx context.Context, seconds float64) error {
 	if seconds <= 0 {

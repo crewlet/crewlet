@@ -118,6 +118,14 @@ func (s *stubWork) EntryWork(_ context.Context, q worklet.EntryWorkQuery, _ time
 	return s.entryWork, s.err
 }
 
+func (s *stubWork) FlowHours(context.Context, worklet.FlowHoursQuery) ([]worklet.FlowHours, error) {
+	return nil, nil
+}
+
+func (s *stubWork) FlowItems(context.Context, worklet.FlowHoursQuery) (map[string]int, error) {
+	return map[string]int{}, nil
+}
+
 func (s *stubWork) WorkPatterns(context.Context, worklet.PatternsQuery) (worklet.WorkPatterns, error) {
 	return s.patterns, nil
 }

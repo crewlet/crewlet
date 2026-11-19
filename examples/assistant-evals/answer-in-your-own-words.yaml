@@ -79,6 +79,9 @@ answers:
   - route: GET /worklet/ENG-38
     body:
       task: {id: 5b7c9d1e-2f3a-4b5c-8d6e-7f8091a2b3c4, key: ENG-38, title: Release the docs backend, status: in_review, body: "The backend that serves /docs ships on Thursday."}
+  - route: GET /worklet/{id}
+    status: 404
+    body: {error: not_found, message: There is no such record here.}
   - route: GET /doclet/pages/{id}
     body:
       page:
@@ -132,7 +135,8 @@ answers:
             rationale: One rule to maintain, and the Pro plan is a small cost.
             role: approver
 script:
-  - call: list_decisions
+  - call: read_api
+    args: {route: GET /worklet/decisions}
   - call: answer_decision
     args:
       item: ENG-41
@@ -141,7 +145,7 @@ script:
         Neither yet. Do it as a Worker in fail-open mode, behind a 4-hour
         grant, exact path match only, and roll back by deleting the route.
 expect:
-  calls: [list_decisions, answer_decision]
+  calls: [read_api, answer_decision]
   never: [comment_on_task]
   shows: [Answer question, fail-open mode, 4-hour grant]
   never_shows: ['"field":"choice"']

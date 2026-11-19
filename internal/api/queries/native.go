@@ -113,6 +113,13 @@ type WorkReader interface {
 	Thread(ctx context.Context, q worklet.ThreadQuery,
 		fresh statelog.Freshness) (worklet.ResolvedThread, error)
 	WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (worklet.WorkPatterns, error)
+	// FlowHours and FlowItems are how long the items in progress stood in each
+	// flow state over a window, by seat, and how many items each seat had
+	// (ADR-0162): the Advisor's flow and staffing reads. ON THE CONTRACT, not
+	// asserted at the read: a reader that left them out degraded those classes
+	// to unread on every real node while every test's reader answered them.
+	FlowHours(ctx context.Context, q worklet.FlowHoursQuery) ([]worklet.FlowHours, error)
+	FlowItems(ctx context.Context, q worklet.FlowHoursQuery) (map[string]int, error)
 	// EntryMarks and EntryWork are the work that names atlas entries, read
 	// for the atlas's questions about it and only for a Worklet reader.
 	EntryMarks(ctx context.Context, level statelog.ReadLevel) (worklet.EntryMarks, error)
