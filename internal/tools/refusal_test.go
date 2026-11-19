@@ -29,31 +29,14 @@ var unclassifiedByDesign = map[string]string{
 // internal/ and refuses a failed tool Result that carries no cause — the one
 // value its class is read out of ([tools.RefusalOf]).
 //
-// A WALK OVER THE SOURCE rather than a list of tools, because the failure it
-// guards against is a NEW refusal: a tool added next month that builds
-// `tools.Result{Output: …, Failed: true}` by hand compiles, runs, reads fine to
-// the model — and answers a person's write surface with no class at all, which
-// that surface can only render as a status it made up. Nothing but a gate
-// notices, because every reader that is not the dashboard is a model reading
-// the sentence.
-//
-// Two shapes are checked: a literal of any type that carries a refusal out of
-// a tool call — the tool Result, the surface's recorded Call and the
-// toolloop's ToolResult — that sets Failed must set Cause, to something other
-// than nil; and every call of a package's `refused(code, msg)` helper must
-// name a class rather than "". A package's bare `failed(msg)` is the argument
-// refusal by definition and passes.
-//
-// WHAT A WALK CAN SEE IS THAT A CAUSE IS THERE, not that it carries a class:
-// a cause is an expression, and whether `err` wraps a [tools.Refusal] is a
-// fact about the value at run time. Each tool's own suite holds that half —
-// a cause a tool hands on unclassified reads as "" and a person's surface
-// renders it as a failure nobody named.
-//
-// THE SURFACE'S OWN TYPES ARE IN THE WALK because the surface refuses calls
-// no tool ever sees — an unknown name, one not offered here, a guard's
-// refusal — and a caller dispatching through it reads those as its answer.
-// Checking only the tool Result left exactly those unclassified.
+// A WALK OVER THE SOURCE: the failure is a NEW hand-built
+// `tools.Result{Failed: true}`, which gives a person's surface no class.
+// Checked: a literal that carries a refusal out of a tool call (tool Result,
+// the surface's recorded Call, the toolloop's ToolResult) and sets Failed must
+// set a non-nil Cause; every `refused(code, msg)` call must name a class. A
+// bare `failed(msg)` is the argument refusal and passes. The walk sees that a
+// cause is there, not that `err` wraps a [tools.Refusal]: each tool's suite
+// holds that.
 func TestEveryFirstPartyRefusalIsClassified(t *testing.T) {
 	t.Parallel()
 	// THROUGH sourcetree, from the module's own internal/: a nested

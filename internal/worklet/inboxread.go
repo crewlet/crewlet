@@ -163,6 +163,7 @@ var DefaultPrimaryReasons = []Reason{
 	ReasonReporter,
 	ReasonUnblocked,
 	ReasonPrioritised,
+	ReasonFlow,
 }
 
 // InboxQuery asks for a page of somebody's inbox.

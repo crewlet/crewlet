@@ -46,6 +46,7 @@ import {
 } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
 import type { EventRecord } from "~/protocol/index.ts";
+import { EngineLine } from "~/components/InlineToken.tsx";
 import { PageActions } from "~/app/frame/PageActions.tsx";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
@@ -365,7 +366,9 @@ function Trace({ traceId }: { traceId: string }) {
                           className="trace-failed-mark"
                         />
                       )}
-                      <span className="truncate">{what}</span>
+                      <span className="truncate">
+                        <EngineLine text={what} refs={event.refs} cut />
+                      </span>
                     </span>
                   );
                 case "actor":

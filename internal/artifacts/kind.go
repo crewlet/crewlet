@@ -10,26 +10,16 @@ import (
 
 // ---- the kind table ------------------------------------------------------ //
 //
-// ONE TABLE, BECAUSE A KIND IS A SET OF ANSWERS, NOT A NAME. Every surface
-// that treats an artifact differently by kind (the manifest's entry check, the
-// agent tools' default entry, the artifact origin's serving decision, the
-// frame and the ticket the dashboard embeds, the page runtime's contract, the
-// linter's dark-mode warning, the search text, the CLI's inference, the
-// dashboard's viewer, compare and Data tab) asks the kind's [KindSpec] for the
-// one facet it needs, rather than switching on the name. A kind added here is
-// a kind every one of those surfaces answers for, or the build fails, and a
-// switch nobody remembered cannot quietly treat a new kind as the old default.
+// ONE TABLE, BECAUSE A KIND IS A SET OF ANSWERS, NOT A NAME. Every surface that
+// treats kinds differently asks the kind's [KindSpec] for the one facet it
+// needs rather than switching on the name, so a kind added here is one every
+// surface answers for or the build fails.
 //
-// THE ORGANISING RULE IS NATIVE OR FRAMED (ADR-0042). A framed kind runs
-// author code, and only on the credential-less artifact origin (adr/0035). A
-// native kind carries no author code: the dashboard draws it from a closed,
-// validated format with its own primitives, so nothing it holds can become
-// script on the dashboard's origin, and a publish outside the format is
-// refused with a named error rather than silently dropped on read.
-//
-// A KIND ENTERS [Kinds] ONLY IN THE CHANGE THAT MAKES IT WORK END TO END: a kind
-// this build does not serve is refused at create, so no build ships a kind
-// that publishes and cannot be opened.
+// NATIVE OR FRAMED (ADR-0042). A framed kind runs author code, only on the
+// credential-less artifact origin (adr/0035). A native kind carries none: the
+// dashboard draws it from a closed, validated format, so nothing in it can
+// become script on its origin. A KIND ENTERS [Kinds] ONLY IN THE CHANGE THAT
+// MAKES IT WORK END TO END, so none publishes unopenably.
 
 // Render is how a kind is drawn.
 type Render string

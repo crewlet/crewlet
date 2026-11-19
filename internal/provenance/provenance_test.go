@@ -89,15 +89,13 @@ func TestAFenceCannotBeClosedByItsContent(t *testing.T) {
 	}
 }
 
-// A CONTINUED SESSION'S FENCES HOLD ACROSS THEIR TOKENS. A relaunch that
-// continues its turn's session puts in one context what an earlier segment
-// read, fenced under that segment's token, and what its own segment reads,
-// fenced or defused under its own — and by then the model has seen the earlier
-// token, and so may anything it wrote that a later read brings back. Text a
-// later read carries that spells the earlier segment's opener or closer reaches
-// the model escaped, as does an earlier read's forgery of a later token's
-// marker: across the whole context the only markers are the four the two
-// fences wrote.
+// A CONTINUED SESSION'S FENCES HOLD ACROSS THEIR TOKENS. A relaunch puts in
+// one context what an earlier segment read, fenced under its token, and what
+// its own segment reads; the model has seen the earlier token, and so may
+// anything a later read brings back. Text spelling the earlier segment's
+// opener or closer reaches the model escaped, as does an earlier read's
+// forgery of a later token's marker: the only markers in the context are the
+// four the two fences wrote.
 //
 // Mutation: escape only the markers of the token a text is fenced or defused
 // under, and the later read closes the earlier fence and reopens it as the

@@ -83,6 +83,7 @@ import (
 	"github.com/crewlet/crewlet/internal/toolsession"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/version"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Engine is one process running a company.
@@ -204,6 +205,11 @@ type Engine struct {
 	// grantSaver saves a chosen request's grant ([Engine.UseGrantSaver]); atomic, as
 	// the API installs it while requests read it.
 	grantSaver atomic.Pointer[GrantSaver]
+
+	// postures are the seats' live facts an item's flow reads
+	// ([Engine.UsePostures]); atomic, as the API installs them while reads
+	// run.
+	postures atomic.Pointer[worklet.Postures]
 
 	// seatAccessPending is why the migration onto per-seat access left each
 	// integration unmigrated on its last attempt here, by integration.Kind,
@@ -1129,6 +1135,9 @@ type Engine struct {
 	// ran out of time or delegated decisions were turned off: a fleet
 	// singleton reading the company per pass, so no apply re-arms it.
 	delegatedSweep *delegatedSweep
+
+	// flowDuty records items' flow and tells who must know (ADR-0162).
+	flowDuty *flowDutyLoop
 
 	// usageEvery is Options.usageEvery.
 	usageEvery time.Duration
@@ -2575,6 +2584,8 @@ func New(ctx context.Context, opts Options) (_ *Engine, err error) {
 	e.startPickups(ctx)
 	// AND THE SWEEP THAT HANDS DELEGATED REQUESTS BACK TO PEOPLE.
 	e.startDelegatedSweep(ctx)
+	// AND THE FLOW DUTY, held where the live projection is (ADR-0162).
+	e.startFlowDuty(ctx)
 	// AFTER the epoch is current, because the dispatcher resolves a turn's
 	// seat against it — and before notifications, so a turn woken by the
 	// first inbound message already has somewhere to write what it learns.
@@ -3186,6 +3197,7 @@ func (e *Engine) teardown(ctx context.Context) {
 	e.stopScheduler()
 	e.stopPickups()
 	e.stopDelegatedSweep()
+	e.stopFlowDuty()
 	// GITLET'S GIT SURFACE WITH THEM, and not with the publishers it shares a
 	// reason with further down (the committer and the estate subject, which
 	// it still stops before): its git reads are answered for peers on this

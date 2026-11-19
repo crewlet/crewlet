@@ -23,34 +23,15 @@ import (
 // stops being a name and becomes syntax.
 const separators = ".*>"
 
-// THIS FILE WAS ABOUT THE HANDLE, and it is re-pointed rather than deleted.
-//
-// [topics.AgentInbox] used to interpolate a seat's HANDLE into a subject, and
-// what made that safe lived entirely on the other side of the tree:
-// org.ValidHandle enforces ^[a-z0-9][a-z0-9-]*$, which happens to exclude
-// every character the subject grammar treats as syntax. The subject carries
-// the seat's ID now (ADR-0013), so that particular dependency is gone — and
-// the invariant it protected is not. It simply moved: what has to be a safe,
-// single, canonical token is whatever [org.Organization.AgentIDFor] derives.
-//
-// The dependency is still load-bearing and still written down nowhere else.
-// Neither package states it: org derives a uuid without knowing a subject is
-// built from it, and topics interpolates and now PARSES a token without
-// knowing where it came from.
-//
-// The consequences, unchanged in kind from the handle's:
-//
-//   - A dot splits the subject into extra tokens, so the seat's inbox no
-//     longer matches crewlet.agent.*.inbox and stops being covered by
-//     anything scoped to one seat.
-//   - A `*` or a `>` turns the seat's OWN inbox into a wildcard PATTERN. A
-//     node subscribing that seat would attach to a subject matching its
-//     peers' inboxes — it receives their mail, and they stop receiving it.
-//   - And one the handle never had: the token is PARSED back by
-//     [topics.SeatFromInbox], which a diagnostic names a seat from and a
-//     retirement sweep DELETES what it names. A derivation that produced a
-//     non-canonical spelling would mint a subject its own inverse refuses,
-//     so the sweep would see an unregistered mailbox for a seat that has one.
+// The subject carries the seat's ID (ADR-0013), so [org.Organization.AgentIDFor]
+// must derive a safe, single, canonical token; neither package states that
+// dependency. A bad token:
+//   - with a dot splits the subject, so the inbox escapes crewlet.agent.*.inbox;
+//   - with a `*` or `>` makes the seat's OWN inbox a wildcard PATTERN, so a node
+//     receives its peers' mail and they stop receiving it;
+//   - non-canonical is refused by [topics.SeatFromInbox], which a retirement
+//     sweep DELETES by, so it would see an unregistered mailbox for a seat that
+//     has one.
 
 // TestEverySeatIDTheOrgDerivesYieldsASafeSubject walks the handles the org
 // accepts and mints, derives each seat's id the way the engine does, and holds
@@ -345,25 +326,15 @@ var suffixReaders = map[string]bool{
 
 // TestNoPackageBuildsASeatsMailboxFromAString fails the build when a package
 // outside this one composes a seat's inbox, control or reflection subject, or
-// any of their consumer groups, out of the grammar's pieces — `AgentInboxPrefix + x +
-// AgentInboxSuffix`, a Sprintf over them, a piece held in a variable to be
-// joined later.
-//
-// THE TYPE ALREADY REFUSES A HANDLE: [topics.AgentInbox] takes a uuid, so a
-// call handing it a handle does not compile. This is the other door.
-// The grammar's pieces are exported — the stream topology and the mailbox
-// sweep need the all-seats wildcard — and a site handed a handle where the
-// type wants an id could reach past the constructor and concatenate the
-// subject itself. That compiles, routes by an address no consumer is named
-// by, and fails silently: the publish lands on a subject nobody is attached to, and
-// [TestNoPackageBuildsASubjectByHand] cannot see it, because no literal in it
-// names a subject.
-//
-// TWO USES ARE READINGS AND STAY LEGAL: the inbox prefix followed by `>` and
-// nothing else — the wildcard over every seat's inbox the stream is created
-// over and the sweep lists — and a piece handed to a strings function that
-// asks whether a name has it. Every other reference to a piece is a name being
-// built, and the constructor is where names are built.
+// a consumer group, from the grammar's pieces (a concatenation, a Sprintf, a
+// piece held in a variable). THE TYPE ALREADY REFUSES A HANDLE
+// ([topics.AgentInbox] takes a uuid); this is the other door: the pieces are
+// exported, and concatenating compiles and fails silently, the publish landing
+// where nobody listens, unseen by [TestNoPackageBuildsASubjectByHand] since no
+// literal names a subject. TWO USES ARE READINGS AND STAY LEGAL: the inbox
+// prefix followed by `>` alone (the wildcard the stream is created over and
+// the sweep lists), and a piece handed to a strings function that asks whether
+// a name has it. Every other reference builds a name, which is the constructor's job.
 func TestNoPackageBuildsASeatsMailboxFromAString(t *testing.T) {
 	t.Parallel()
 

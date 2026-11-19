@@ -101,6 +101,7 @@ func (s *LiveState) applyPause(agent *agentLive, env Envelope, payload map[strin
 func (s *LiveState) SeedPauses(pauses []SeedPause) Change {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.pausesRead = true
 	var change Change
 	for _, p := range pauses {
 		if p.AgentID == "" {

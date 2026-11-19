@@ -255,6 +255,18 @@ type LaunchRequest struct {
 	// answer, or how the job before it was cut off, and where its work is.
 	Continue *Continuation
 
+	// BriefRead is the read of the round's log every brief of this launch was
+	// built from ([ResumeRequest.BridgedRead]), nil for none: a turn's first
+	// launch. Handed to the opening of the job's log ([PendingRun.BriefRead]),
+	// which marks late every call of the round the log took after it — calls
+	// of the job this one replaces that landed while the relaunch was readied,
+	// which no brief told and a later capture of this job, placed by its own
+	// read, would otherwise count as held — or carries them late into the new
+	// round a send-back starts ([BridgeLog.carried]); the call a person
+	// approved apart, which the brief's lead tells. On the launch, never its
+	// Continue: a send-back continues nothing, and its read counts as much.
+	BriefRead *LogRead
+
 	// Session is the session this job continues, in whatever box it gets —
 	// the kept capture of the job before's session, as the launch's caller
 	// chose it before it built the run's surface and briefs
@@ -529,19 +541,6 @@ type Continuation struct {
 	// acts on it ([LaunchRecord.FollowUp]); empty otherwise.
 	Reason FollowUpReason
 
-	// BriefRead is how many calls the round's log had taken at the read the
-	// launch's briefs were built from ([ResumeRequest.BridgedRead]): every
-	// call of the round a brief of this launch can tell. The opening of the
-	// job's log marks every call of the round the log took after it late
-	// ([BridgeCall.Late]) — calls of the job this one replaces that landed
-	// while the relaunch was readied, after the read and before the log moved
-	// on, which no brief of the round told and which a later capture of this
-	// job, placed by its own read, would otherwise count as held — but the
-	// call a person approved, which the brief's lead tells
-	// ([PendingRun.BriefRead]). NIL marks none: a launch that knows no such
-	// read.
-	BriefRead *int
-
 	// Told is what Brief told of the round, and Fresh what the launch's own
 	// Brief, the one a session of the run's own is handed, told of it: the
 	// launch records the one of the brief it hands its run on the job it
@@ -586,7 +585,7 @@ type BriefTold struct {
 	// Omitted is the reads of the round the brief counted without listing
 	// them, by their places in the round's log ([BridgeCall.Appended]): of the
 	// calls it was to tell (those the session it continues lacks, through the
-	// read the brief was built from, [Continuation.BriefRead]), the ones it did
+	// read the brief was built from, [LaunchRequest.BriefRead]), the ones it did
 	// not. Nil where it left none out. Never a late call, which every brief
 	// tells again (LateOmitted), nor one the log dropped from its middle,
 	// which keeps no place to name and is counted by every brief that tells
@@ -841,9 +840,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		LaunchNode: c.node,
 		// The round carried on, whose earlier calls the log keeps — see
 		// [PendingRun.Continues] — and the read its briefs were built from,
-		// past which the opening marks the round's calls late
-		// ([PendingRun.BriefRead]).
-		Continues: req.Continue != nil, BriefRead: briefReadOf(req.Continue),
+		// past which the opening marks the round's calls late, or carries
+		// them into a new round ([PendingRun.BriefRead]).
+		Continues: req.Continue != nil, BriefRead: req.BriefRead,
 		// The model and the entry the launch's own record is filed under;
 		// the store keys the rest of that record on the launch it mints.
 		Launch: LaunchRecord{Model: req.Model, ProviderKey: req.ProviderKey,
@@ -1708,13 +1707,4 @@ func followUpOf(c *Continuation) FollowUpReason {
 		return ""
 	}
 	return c.Reason
-}
-
-// briefReadOf is the read c's briefs were built from ([Continuation.BriefRead]),
-// nil for a launch that carries no round on or knows no such read.
-func briefReadOf(c *Continuation) *int {
-	if c == nil {
-		return nil
-	}
-	return c.BriefRead
 }

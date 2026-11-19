@@ -11,7 +11,7 @@ import {
 
 const held = {
   class: HELD_CLASS,
-  subject: { kind: "seat", seat: "dev", name: "task:t-1" },
+  subject: { kind: "seat", seat: "dev", name: "work:task:t-1" },
   since: "2026-01-01T10:00:00Z",
 };
 
@@ -24,6 +24,10 @@ test("an item's hold is read off the notices by its conversation", () => {
   expect(heldItem(held)).toBe("t-1");
   expect(
     heldItem({ ...held, subject: { kind: "seat", seat: "dev", name: "chat:room/1" } }),
+  ).toBeUndefined();
+  // THE ITEM'S LOCAL NAME, unnamespaced, is no conversation the engine holds.
+  expect(
+    heldItem({ ...held, subject: { kind: "seat", seat: "dev", name: "task:t-1" } }),
   ).toBeUndefined();
 });
 

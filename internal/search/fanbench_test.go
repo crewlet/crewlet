@@ -12,56 +12,17 @@ import (
 	"github.com/crewlet/crewlet/internal/search"
 )
 
-// THE FAN-OUT'S OWN INSTRUMENT: what dividing the buckets buys, what it costs,
-// and what it still answers with a replica down.
+// THE FAN-OUT'S OWN INSTRUMENT: what dividing the buckets buys, and what it
+// still answers with a replica down.
 //
-// # What it measures, and what it deliberately does not
-//
-// It measures the DIVISION, not the transport. Every participant runs the same
-// [search.NodeScanner] against the same node's tables — which is the truth of
-// the deployment anyway, since every data node holds the whole corpus — so what
-// varies across cells is only how many buckets each participant reads. Putting
-// a broker in the loop here would fold a LAN's variance into a number about
-// SQL, and the round trip it would measure is already an explicit term in
-// [search.FanOutFloor].
-//
-// # What it reports
-//
-//   - rows/node: how much of the corpus one participant scanned. This is the
-//     whole point of the step, and the number a fan-out with no predicate
-//     leaves unchanged.
-//   - p95-ms: end to end, because the interactive budget is written against a
-//     p95 and a mean cannot estimate one.
-//   - recall: against the N = 1 golden. A fan-out is a LATENCY decision, so
-//     anything below 1.0 at full participation is a ranking that moved.
-//   - buckets-missing: what the answer says it did not cover, which at full
-//     participation must be zero and with a replica down must not be.
-//
-// # What it measured, on this container, 4 000 documents on four cores
-//
-//	replicas   rows/node   p95      recall   one down: p95 / missing / recall
-//	       1       4 000    89 ms    1.000   —
-//	       2       2 000    64 ms    1.000   60 ms / 32 / 0.70
-//	       4       1 000    70 ms    1.000   55 ms / 16 / 0.95
-//	       8         500    98 ms    1.000   78 ms /  8 / 1.00
-//
-// RECALL IS EXACTLY 1.000 AT EVERY FULL PARTICIPATION, which is the number
-// this step turns on: dividing the buckets changes the latency and does not
-// touch the order.
-//
-// The p95 column turns back up past two replicas, and the reason is this
-// harness rather than the design: every participant here runs in ONE process
-// on FOUR cores, so eight of them contend for the cores a real fleet spreads
-// across eight machines. What the column does show honestly is the shape a
-// deployment shares — a fan-out wider than the CPU underneath it is slower
-// than no fan-out at all — which is why the floor is priced in scan time
-// rather than in node count.
-//
-// The one-down cells show the partial answer costing exactly its replica's
-// buckets: 32, 16 and 8 of 64, with recall falling as those buckets hold more
-// of the answer. At eight replicas one absent slice happens to hold none of
-// the top 20, which is why recall stays at 1.000 there — a reminder that
-// recall alone cannot report coverage, and buckets-missing is not decorative.
+// It measures the DIVISION, not the transport: every participant runs the same
+// [search.NodeScanner] on one node's tables, so only the buckets each reads
+// varies; a broker would fold a LAN's variance into a number about SQL, and the
+// round trip is already a term in [search.FanOutFloor]. Reported: rows/node,
+// p95-ms (the budget is a p95), recall against the N = 1 golden (below 1.0 at
+// full participation is a ranking that moved) and buckets-missing (zero at full
+// participation; recall alone cannot report coverage). A p95 that turns up past
+// two replicas is this one process's four cores, not the design.
 func BenchmarkSearchFanOut(b *testing.B) {
 	const corpus = 4_000
 	db := openStore(b)

@@ -10,87 +10,29 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// Every collection of a run waits for the calls its run's log holds in flight
-// before it reads what the run did.
-//
-// # Why a collection waits
-//
-// A run's turn settles its outcome by the kinds of change its bridged calls
-// committed, read off the run's log as the run is collected ([BridgeLog.Changes]),
-// and its reviewer, its tool log and the account of an ending read the same log.
-// A bridged call runs on its opening's own context, which nothing cancels, so it
-// goes on after its harness stopped waiting for it, after its job's session on
-// the bridge ended (internal/api/mcpbridge, "An opening ends without waiting for
-// its calls"), and after its seat moved to another node. A collection that read
-// the log while such a call ran read it without what the call did: the call's
-// update landed after the read, in no collection of the run, or on no record
-// once the run's ending had deleted it — a work item the call filed, a message
-// it posted, in no outcome of the turn. Where that call made the turn's only
-// change, the turn was booked as one that changed nothing.
-//
-// # On the run's shared record, so any node may collect
-//
-// Every call's entry is on the run's log before the call runs
-// ([BridgeLog.InFlight]), and leaves it in the write that records what the call
-// did. So a collection ENDS THE JOB'S SESSION TO NEW CALLS ([CoordinatorOptions.Ended]),
-// then waits until the log holds no entry of the run's round, and only then
-// reads ([Coordinator.drainCalls]). It waits on the log itself, which every node
-// reads, never on the bridge's own registry of the calls it runs: that is the
-// memory of the node that runs them, and the collection after a seat was handed
-// on is its next holder's, which may be another node.
-//
-// # What ends the wait
-//
-// Each entry is waited for until the FIRST of:
-//
-//   - its update, which takes it out of the log — read off a watch of the log
-//     ([PendingStore.WatchLog]), never a poll: the log is a run's largest value,
-//     read and written whole, and a wait can last as long as a call's bound;
-//   - the turn's wall-clock cap ([PendingRun.Deadline]), where the turn has one;
-//   - the call's own bound ([BridgeCall.Until]: when the bridge took it, its
-//     tool's bound and the bridge's margin), which every entry carries, since
-//     the turn's cap is zero for every turn but a scheduled fire: without it an
-//     entry whose update the store refused would hold a collection for ever;
-//   - its runner gone: the process running the call ([BridgeCall.Runner]) holds
-//     its taker lease at no epoch, read in the coordination store
-//     ([Coordinator.runnerGone]) as the runner first appears in the log and
-//     again every [callsDrainTick], the way a capture's taker is read as
-//     stopped — never by a clock. A crashed node's calls are given up within a
-//     lease's TTL of its last renewal rather than at their bound; a node that
-//     drains holds its lease until its calls are recorded, and is waited for.
-//
-// An entry still in flight when the wait stops is named at warning
-// (`sandbox_calls_unfinished`), and the read that follows reads it as a call
-// whose outcome is unknown: the resumed turn's record lists it, failed, in words
-// that say its effects may stand (internal/agent/runner's UnfinishedNote), the
-// turn's call log counts it by its identity, an ending reads delivery as unknown
-// beside it, and its update, landing later while the record stands, takes the
-// entry out and lists the call with its outcome for every later reader. The
-// ending's delete names any entry still in flight as it removes the record
-// (`sandbox_run_deleted_with_calls_in_flight`), whose update then finds no record.
-//
-// # Where nothing may wait
-//
-// An ending reached on a frame somebody waits on — a completion's handler, a
-// seat's acquisition — waits for nothing that is not the frame's own, so it
-// hands a run whose log holds a call still waited for to this node's retry of
-// the ending ([Coordinator.drainEnding], [errAskAway]), which waits. A seat's
-// retirement ends every run of the seat in one loop and gives the seat up after
-// it, this node's retry of an ending with it ([Coordinator.ReleaseSeat]), so it
-// leaves such a run to its own next tick, and answers it as waiting rather than
-// as a failure ([Coordinator.RetireSeat], [SeatRunsWaiting]).
-//
-// WHAT IT COSTS: a collection holds the run's seat for as long as it waits, as
-// the resumed turn does after it, up to the first of those bounds; one watch of
-// the log while it waits, and one read of each runner's lease as it first
-// appears and every [callsDrainTick] after.
+// Every collection waits for the calls its run's log holds in flight before it
+// reads what the run did. A bridged call runs on its opening's own context,
+// which nothing cancels, so it outlives its harness's wait, its job's session
+// on the bridge (internal/api/mcpbridge) and its seat's move; a collection that
+// read meanwhile would book a turn whose only change it made as no change. So a
+// collection ENDS THE JOB'S SESSION TO NEW CALLS ([CoordinatorOptions.Ended]),
+// waits until the log holds no entry of the run's round ([BridgeLog.InFlight]),
+// then reads ([Coordinator.drainCalls]), on the log, which every node reads,
+// never the bridge's registry, the memory of the node running the calls. An
+// entry still in flight at the end is named at warning
+// (`sandbox_calls_unfinished`, `sandbox_run_deleted_with_calls_in_flight`) and
+// read as a call of unknown outcome (internal/agent/runner's UnfinishedNote).
 
-// callsDrainTick is how often a collection waiting on a run's calls in flight
-// reads the taker lease of each call's runner again: TWO SECONDS, the cadence a
-// wait for a capture reads its taker's lease at (captureWaitTick), for the same
-// read — a wait on another process's work reads that process's lease each pass,
-// one coordination read a runner, so a crash is named within a pass of its lease
-// lapsing. None before: no collection waited for a call.
+// callsDrainTick is how often a collection waiting on a run's calls reads each
+// call's runner's taker lease again: TWO SECONDS, the cadence a wait for a
+// capture reads its taker's lease at (captureWaitTick), one coordination read a
+// runner, so a crash is named within a pass of its lease lapsing, never by a
+// clock. A wait ends at the FIRST of: the entry's update, read off a watch
+// ([PendingStore.WatchLog]), never a poll, the log being a run's largest value;
+// the turn's cap ([PendingRun.Deadline]), zero but for a scheduled fire; the
+// call's own bound ([BridgeCall.Until]), which every entry carries so a refused
+// update cannot hold a collection forever; its runner gone ([Coordinator.runnerGone]),
+// so a crashed node's calls are given up within a lease TTL.
 const callsDrainTick = 2 * time.Second
 
 // callsRewatchBase and callsRewatchCeiling space the watches of a run's log a
@@ -111,19 +53,15 @@ const callDigestPrefix = 8
 
 // SeatRunsWaiting is what a seat's retirement left for its next tick
 // ([Coordinator.RetireSeat]): the runs whose tool log holds a call a collection
-// would still wait for, named by those calls. Its zero value is a retirement
-// that left no run waiting.
+// would still wait for, named by those calls. Zero means none waiting.
 //
-// NOT AN ERROR, so it is answered beside the retirement's error and never inside
-// it. The call is running, which is no fault of the retirement's or of the
-// store's, and the retirement's next tick ends the run once the call is
-// recorded, or once the last of its bounds passes or its process stops; an
-// error is a run the retirement could not end, which somebody may have to act
-// on. Folded into the error, a wait failed the mailbox duty's tick at warning on
-// every tick it lasted, and a real failure beside it was one more member of the
-// same joined error, which no caller could tell from the wait without walking
-// it. Two answers, so a retirement can give both at once and its caller reads
-// each for what it is.
+// NOT AN ERROR, so it is answered beside the retirement's error, never inside
+// it: a running call is no fault of the retirement's or the store's, and the
+// next tick ends the run once the call is recorded or its bounds pass. Folded
+// in, a wait failed the mailbox duty's tick at warning every tick and hid a
+// real failure. The retirement ends every run of the seat in one loop, then
+// gives the seat up, so it leaves such a run to its next tick, as an ending on
+// a frame somebody waits on hands it on ([Coordinator.drainEnding], [errAskAway]).
 type SeatRunsWaiting struct {
 	// Calls names each call still waited for, as the lines naming a call in
 	// flight do — its tool, its place and the opening of its digest — with the
@@ -222,7 +160,7 @@ func (c *Coordinator) nameUnfinished(ctx context.Context, run PendingRun, left [
 			"call", inFlightName(u.call), "runner", u.call.Runner, "why", u.why,
 			"detail", "the collection stopped waiting for a call still in flight and reads it as one "+
 				"whose outcome is unknown: what it committed is in no outcome of the turn unless its "+
-				"update lands while the run's record stands")
+				"update lands before the turn's last collection reads the run's log")
 	}
 }
 

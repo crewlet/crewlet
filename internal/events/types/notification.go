@@ -8,6 +8,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/named"
 )
 
 // Messages reaching the org from outside it, and the bookkeeping around what
@@ -158,6 +159,9 @@ type ExternalNotification struct {
 	// which is no name to title a turn with.
 	SenderName string `json:"sender_name,omitempty"`
 	Subject    string `json:"subject"`
+	// SubjectRefs is what Subject names (package named), set by the
+	// engine's own domain that wrote the subject; a vendor's is nil.
+	SubjectRefs []named.Ref `json:"subject_refs,omitempty"`
 	// Body is the ENRICHED trigger prompt: the notification builder front-loads
 	// its own scaffolding (for chat, the triage guidance and the seat's
 	// identity) before the actual message.
@@ -296,13 +300,13 @@ func (e ExternalNotification) Actor() string { return e.Sender }
 // exactly why both fields exist.
 func (e ExternalNotification) Brief() string { return e.Body }
 
-// Summary leads with the sender and subject. The integration is surfaced by the
-// dashboard as a badge built from NotificationSource, so repeating the source
-// name here would say it twice.
+// PhraseFor leads with the sender and subject, and names what the subject
+// names. The integration is surfaced by the dashboard as a badge built from
+// NotificationSource, so repeating the source name here would say it twice.
 //
 // The sender by the name the company knows them by, where the wake carries one
 // ([ExternalNotification.SenderName]): a first-party Sender is a handle.
-func (e ExternalNotification) Summary() string {
+func (e ExternalNotification) PhraseFor(string) named.Line {
 	sender := cmp.Or(e.SenderName, e.Sender)
 	head := "Notification"
 	switch {
@@ -315,9 +319,9 @@ func (e ExternalNotification) Summary() string {
 		head = "Message from " + sender
 	}
 	if e.Subject != "" {
-		return head + ": " + e.Subject
+		return named.Words(head + ": ").Then(named.Line{Text: e.Subject, Refs: e.SubjectRefs})
 	}
-	return head
+	return named.Words(head)
 }
 
 // TurnTriggerSkipped records a trigger that was NOT worked because a previous

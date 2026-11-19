@@ -51,21 +51,16 @@ func TestTheUsageDomainIsACertifiedDomain(t *testing.T) {
 }
 
 // carryingSuiteField builds a valid record carrying the named versioned field,
-// with its version left for the encoder to stamp: a seat-day of the suite's
-// own shape, with one tool's calls or with a count its cap dropped, or a
-// schedule-day of it, with a fire's tick or a fire its seat did not run; a
-// repository's day; or a seat's day carrying its changes and reviews.
+// with its version left for the encoder to stamp.
 //
 // MAIN'S ROWS (2 and 3) each bring a record carrying that field alone. THE
-// repo_read KIND'S ROWS are each a repository's day — the kind's row, the
-// repository it names and its readers ride every one of them, all at version
-// 4 — with the field the row names set where the base repo_read record would
-// leave it out; THE CODE DAY'S is a seat's day carrying its changes and
-// reviews, at version 5, or its failed checks or ejections, at 6, which ride
-// the code day's own row. A row added to the table without a case here fails
-// the suite rather than passing unexamined: a record that did not carry the
-// field would be stamped below it and reported as the path being wrong, which
-// is a fixture fault dressed as a domain one.
+// repo_read KIND'S ROWS are each a repository's day (kind, repository and
+// readers ride every one, at version 4) with the row's field set; THE CODE
+// DAY'S is a seat's day carrying its changes and reviews, at version 5, or its
+// failed checks or ejections, at 6. A row added without a case here fails the
+// suite rather than passing unexamined: a record not carrying the field would
+// be stamped below it and reported as the path being wrong, a fixture fault
+// dressed as a domain one.
 func carryingSuiteField(field statelog.VersionedField) ([]byte, error) {
 	switch field.Name {
 	case "Subject.Kind repo_read", "Subject.Repo", "Record.RepoReads", "Record.RepoName",

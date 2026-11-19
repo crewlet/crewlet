@@ -12,85 +12,56 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// What a node publishes for one object of one day: what its own log derives,
-// RAISED to what the fleet already holds of it wherever the fleet holds more —
-// the JOIN of the two ([Join]). See the publisher's header for where it runs.
-//
-// # Why a join, and why it is exact in the ordinary case
-//
-// Inside the event log's read floor every figure of a node's day only GROWS: a
-// kept settle adds rows, a late row of the node's own adds one, a settle as not
-// kept deletes rows no count held, a settled batch never goes back in flight,
-// and a turn whose end states no tally gains segments rather than losing them.
-// So the TRUE value of every figure is monotone, and both of the values a
-// publisher can see are LOWER BOUNDS of it: its own derivation (its log can
-// have lost rows — a store restored beside a usage log copied later, one
+// What a node publishes for one object of one day: its own derivation RAISED to
+// what the fleet holds wherever that is more, the JOIN ([Join]).
+
+// Why a join: inside the event log's read floor every figure of a node's day
+// only GROWS (a kept settle adds rows, a settle as not kept deletes rows no
+// count held, a settled batch never goes back in flight, a turn whose end
+// states no tally gains segments). So the TRUE value is monotone and both
+// values a publisher sees are LOWER BOUNDS of it: its own derivation (its log
+// can have lost rows: a store restored beside a usage log copied later, one
 // started empty, an untallied turn whose earliest records the sweep removed)
-// and the record the fleet already holds (derived earlier, so missing whatever
-// the node recorded since). The tightest value either one proves is the larger
-// of the two, figure by figure — and in the ordinary case, where nothing was
-// lost, the fleet's record is an EARLIER derivation of the same rows and every
-// figure of it is at or below the new one, so the join IS the derivation, byte
-// for byte, and nothing about an ordinary day changes.
-//
-// What it replaced held a short derivation back WHOLE — "any figure below the
-// fleet's: publish nothing" — which froze every other figure with it: a day
-// still being written that a restore had cost one failed turn published none
-// of its later turns or spend until another turn failed. A join raises the one
-// figure and lets every other move.
-//
-// # The order each figure grows in
-//
-// Every counter — a spend cell's six figures, a seat's turns, failures,
-// reviewed turns, send-backs, a read entry's count, a tool's calls in each
-// outcome and their time, a repository reader's reads and the bytes they were
-// sent, a seat's changes opened, reviews given and findings received — grows by
-// addition, so it joins by MAX. A seat's first-pass turns do NOT grow (a review
-// that sends a turn back takes it out of them), and what does is its turns with
-// an unaccepted review, so it is that count that joins by max and the
-// first-pass figure is read back from it ([joinTurns]). A turn duration can
-// move UP a bin — an untallied turn that gains a segment — so per-bin counts do
-// not grow but the count AT OR ABOVE every bin does, and the histograms join on
-// those ([Hist.Join]). A newest instant joins by the later one, and a fire, a
-// superseded fire or a read entry the fleet holds that the derivation lacks is
-// kept, under its own identity. A label (a seat's handle and role, a fire's
-// outcome and turn, a read's newest context) is the derivation's wherever the
-// derivation STATES one for the thing it labels, because labels are not counts
-// and a newer one is the truer. A handle or a role the derivation leaves EMPTY
-// keeps the fleet's: an empty one is not a newer label but a seat the chart no
-// longer holds whose day's rows on this node name nobody — spend rows carry no
-// handle, so a day with spend and no ended turn or read derives none — and a
-// handle never changes (ADR-0013), a different one being a different seat, so
-// the fleet's can never name the wrong one. Taken as the derivation's, every
-// older day derived again after a seat left the chart wiped the name its
-// readers fall back on for a seat they can no longer resolve. A label carried
-// this way is not a figure the derivation is SHORT of, so it never says
-// `usage_rederive_short` ([Publisher.publish] compares the join with the
-// derivation under the same labels).
-//
-// # What it cannot do
-//
-// Recover what was lost: a join is still a lower bound. After a restore, a
-// figure the fleet held more of counts the node's NEW rows only once the
-// derivation passes it, so the rows the restored log lost and the rows written
-// since are not both counted in it — the larger of the two is. And it never
-// lowers a figure: a day the build before the kept-rows rule published TOO HIGH
-// — by counting a custody batch another node kept — keeps that figure until the
-// node's own count passes it.
+// and the fleet's record (derived earlier). The tightest value is the larger,
+// figure by figure; in the ordinary case the fleet's record is an EARLIER
+// derivation of the same rows, so the join IS the derivation, byte for byte.
+// Holding a short derivation back WHOLE would freeze every other figure with it.
+
+// The order each figure grows in: every counter grows by addition, so it joins
+// by MAX. A seat's first-pass turns do NOT grow (a review that sends a turn
+// back takes it out), so its turns with an unaccepted review join by max and
+// first-pass is read back from it ([joinTurns]). A turn duration can move UP a
+// bin, so per-bin counts do not grow but the count AT OR ABOVE every bin does,
+// and the histograms join on those ([Hist.Join]). A newest instant joins by the
+// later one; a fire, superseded fire or read entry the fleet holds that the
+// derivation lacks is kept under its own identity.
+
+// A label (handle, role, a fire's outcome, a read's newest context) is the
+// derivation's wherever it STATES one, because a newer label is the truer. A
+// handle or role it leaves EMPTY keeps the fleet's: that is a seat the chart no
+// longer holds (spend rows carry no handle), and a handle never changes
+// (ADR-0013), so the fleet's cannot name the wrong seat; taken as the
+// derivation's, re-deriving an older day would wipe the name readers fall back
+// on. A carried label is not a figure the derivation is SHORT of, so it never
+// says `usage_rederive_short` ([Publisher.publish] compares under the same
+// labels).
+
+// What it cannot do: recover what was lost, or lower a figure. After a restore
+// the larger of the lost and the new rows is counted, not both; a day published
+// TOO HIGH (counting a custody batch another node kept) keeps that figure until
+// the node's own count passes it.
 
 // The statements [Applied] reads an object's rows with, held to the key they
 // seek by the plan test beside this file.
 //
 // `INDEXED BY` ON THE TWO SPEND READS: with no statistics (nothing here runs
-// ANALYZE, so an empty table's plan is the production plan) the planner prefers
-// the one-column day index over the primary key, which covers neither table's
-// figures, and walks the whole company's day — every node's, every seat's — to
-// read one seat's cells. Naming the key also makes the statement a guard: a key
-// reshaped under it fails with `no such index` rather than quietly walking the
-// day again. AND ON A SCHEDULE'S FIRES, for the same planner's other habit: it
-// prefers the schedule's own history index (replicated 0076), three of the
-// key's five columns, and reads every day of that schedule on every node to
-// find one node's day.
+// ANALYZE) the planner prefers the one-column day index over the primary key,
+// which covers neither table's figures, and walks the whole company's day to
+// read one seat's cells. Naming the key also makes the statement a guard: a
+// reshaped key fails with `no such index` rather than quietly walking the day
+// again. AND ON A SCHEDULE'S FIRES, the planner prefers the schedule's history
+// index (replicated 0076) and reads every day of it on every node to find one
+// node's day.
 const (
 	appliedSeatHeadSQL = `
 		SELECT handle, role, turns, failed, reviewed, first_pass, sent_back,

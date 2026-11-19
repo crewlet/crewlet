@@ -12,34 +12,18 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/embeddings"
 )
 
-// THE QUERY'S OWN VECTOR, which is the one piece the semantic half was
-// missing.
+// THE QUERY'S OWN VECTOR: a ranking needs the query in the document vectors'
+// space, which [Semantic] ranks against.
 //
-// The embedding duty fills a vector per DOCUMENT, the vector domain replicates
-// them, and [Semantic] ranks against them — but a ranking needs the query in
-// the same space, and until this existed nothing computed one: both callers of
-// the fan-out passed text, sources and a limit, so every search skipped its
-// semantic slice and answered lexical-only while the corpus was embedded, paid
-// for and replicated to every data node.
+// Cached, because an embedding is a billed provider round trip and the same
+// strings recur (the ⌘K palette as a person types, a seat's `search_knowledge`
+// after the prefetch, a refetch); [QueryEmbeddingCacheEntries] bounds it per node.
 //
-// # Why it is cached, and how much
-//
-// A query embedding is a provider round trip — a network call, billed —
-// before a single row is scanned, and the same strings recur: the ⌘K palette
-// asks as a person types, a seat's `search_knowledge` asks what the prefetch
-// asked a moment earlier, a screen refetches. [QueryEmbeddingCacheEntries] is
-// the bound, per node.
-//
-// # Why the cache is keyed on the MODEL and cleared when it moves
-//
-// A vector is a point in ONE model's space. After an operator changes
-// `providers.embeddings.model`, a cached vector from the old model ranks
-// against rows the duty is re-embedding in the new one — [Semantic] filters
-// by model, so it would match only the rows not yet re-embedded, which is a
-// ranking that silently shrinks as the refill progresses. So the cache
-// belongs to one (model, width) and the first lookup under another empties it.
-// A config apply that replaces the provider with the SAME model keeps it,
-// because the vectors are the same vectors.
+// Keyed on the MODEL and cleared when it moves: a vector is a point in ONE
+// model's space, and after `providers.embeddings.model` changes an old-model
+// vector would match, as [Semantic] filters by model, only rows not yet
+// re-embedded, a ranking that silently shrinks during the refill. The cache
+// belongs to one (model, width); a config apply with the SAME model keeps it.
 
 // QueryEmbeddingCacheEntries bounds the per-node cache of query vectors.
 //
@@ -51,19 +35,16 @@ const QueryEmbeddingCacheEntries = 1024
 
 // QueryEmbedBudget bounds computing one query's vector.
 //
-// TWO SECONDS, against the provider client's own ceilings — fifteen for one
-// input ([embeddings.EmbedTimeout]) and a minute for each batch request
-// ([embeddings.BatchTimeout]) — because those are what a caller that sets no
-// deadline of its own is held to, and this caller sits in front of a person
+// TWO SECONDS, against the provider client's ceilings (fifteen for one input,
+// [embeddings.EmbedTimeout]; a minute per batch request,
+// [embeddings.BatchTimeout]), because this caller sits in front of a person
 // typing or a turn starting. It is twice [SemanticScanBudget]: past it the
 // meaning half has cost two whole scans before it began, and the search serves
-// the words (hybrid) or says so (semantic) rather than hold the reader. A
-// single short input to a hosted embeddings endpoint answers in a few hundred
-// milliseconds at the p99, so a healthy provider never meets it — and nor does
-// the one batch request a query past a narrow model's bound is sent as
-// ([queryEmbedding]), which carries [knowledge.MaxQueryBytes] as typed and at
-// most three times that as sent — the size a query of nothing but stray bytes
-// reaches once each is a U+FFFD ([embeddings.Prepare]).
+// the words (hybrid) or says so (semantic). A short input to a hosted endpoint
+// answers in a few hundred milliseconds at the p99, so a healthy provider never
+// meets it, nor does the one batch request of a long query ([queryEmbedding]),
+// at most three times [knowledge.MaxQueryBytes] as sent (each stray byte
+// becomes a U+FFFD, [embeddings.Prepare]).
 const QueryEmbedBudget = 2 * time.Second
 
 // EmbeddingModel is the company's embedder as a query needs it: the provider,
@@ -165,25 +146,16 @@ func (v *QueryVectors) Vector(ctx context.Context, text string) (QueryVector, kn
 
 // queryEmbedding is the vector of the WHOLE query.
 //
-// NEVER ITS OPENING. The corpus embeds each source as its opening, because one
-// vector stands for one source and an opening says what it is about; a query
-// is a question, and a vector of its first part ranks the answers to another
-// one. So a query too long for the model is embedded whole — in pieces at the
-// model's own bound, every piece in one request, the vectors pooled
-// ([embeddings.EmbedWhole]).
+// NEVER ITS OPENING: a source embeds as its opening because that says what it
+// is about, but a vector of a question's first part ranks the answers to
+// another. A query too long for the model is embedded whole, in pieces at the
+// model's bound in one request, pooled ([embeddings.EmbedWhole]).
 //
-// WHICH ONLY A NARROW MODEL EVER NEEDS. Every surface refuses a query past
-// [knowledge.MaxQueryBytes], and every model this build documents takes at
-// least five times that in one input — more than the three times a query can
-// grow to as sent, every byte of it a stray one that [embeddings.Prepare]
-// makes a U+FFFD — so on those this is one [embeddings.Embedder.Embed] call. A
-// local model stated with a smaller window (`max_input_tokens`, a 256-token
-// sentence encoder) would otherwise refuse every query longer than its bound,
-// and each refusal would read as the provider failing.
-//
-// An embedder that cannot batch is held to its single-input bound, as
-// [embeddings.BatchEmbedder] says a caller falls back; every embedder this build
-// constructs batches.
+// ONLY A NARROW MODEL NEEDS THAT: surfaces refuse a query past
+// [knowledge.MaxQueryBytes] and every documented model takes five times that in
+// one input (it grows to three times as sent, [embeddings.Prepare]). A local
+// model with a smaller `max_input_tokens` would refuse longer queries, each
+// reading as the provider failing. A non-batching embedder keeps its bound.
 func queryEmbedding(ctx context.Context, provider embeddings.Embedder, text string) ([]float32, error) {
 	if batch, ok := provider.(embeddings.BatchEmbedder); ok {
 		return embeddings.EmbedWhole(ctx, batch, text)

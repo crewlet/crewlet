@@ -11,7 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/crewlet/crewlet/internal/advisor/analyst"
+	"github.com/crewlet/crewlet/internal/advisor/modelpass"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/api/livestate"
@@ -252,10 +252,11 @@ type Sources struct {
 	// shares (ADR-0119); nil leaves `diagnostics_insights` unregistered.
 	Insights coord.InsightRecords
 
-	// Analysis is the fleet's records of the advisor's analyst and Analyst
-	// what it runs on (ADR-0157); either nil leaves `advisor_analysis` unregistered.
-	Analysis analyst.Records
-	Analyst  analyst.Models
+	// Advisor is the advisor log's reads (ADR-0164), nil on a node that
+	// reaches no copy, which leaves the findings, the run and the notices
+	// unregistered. AdvisorModel is what the Advisor's model pass runs on.
+	Advisor      AdvisorLog
+	AdvisorModel modelpass.Models
 
 	// MCPChecks reads each MCP server's latest test, which a server's
 	// detail answers. Nil answers none.
@@ -571,9 +572,9 @@ type Sources struct {
 	//
 	// The store is handed it where an answer labels what the store counts
 	// ([store.EventLog.PhaseTokens]), or heading and rows are two windows.
-	// What the store labels itself (a listing's read floor, which must
-	// agree with the retention sweep; `event_series`' axis) stays on its
-	// own clock.
+	// What the store labels itself stays on its own clock: a listing's read
+	// floor, which must agree with the retention sweep; `event_series`' axis;
+	// `fleet`'s lease countdowns, on the lease table's ([coord.TimeLeft]).
 	Now func() time.Time
 
 	// Models is the engine's half of the model questions (`llm_entries`):
@@ -684,6 +685,9 @@ var ErrNotFound = errors.New("queries: no such record")
 // unknown rather than as a failure — the honest answer for a node that does not
 // have that surface at all.
 func Register(r *Registry, s Sources) {
+	// WHAT A PAGE'S LINES NAME, each decided by the question its object's
+	// own page asks (references.go), so everybody's: it grants nothing.
+	r.Register("references", Everybody(), s.references(r))
 	if s.State != nil {
 		r.Register("agent", Everybody(), s.agent)
 		// ONE SEAT'S CALL IN FLIGHT, WHOLE: what a tab asks when an `agents`
@@ -1131,6 +1135,17 @@ func Register(r *Registry, s Sources) {
 		// board is.
 		r.Register("work_search", Requires(iam.GrantWorklet), s.workSearch)
 	}
+	// WHAT THE ADVISOR FOUND, AND THE NOTICES IT RAISES, read off its own
+	// log wherever this node reaches it: the administrator's, as the
+	// document it advises on is.
+	if s.Advisor != nil {
+		r.Register("advisor_findings", Requires(iam.GrantAdmin), s.advisorFindings)
+		r.Register("advisor_finding", Requires(iam.GrantAdmin), s.advisorFinding)
+		r.Register("advisor_run", Requires(iam.GrantAdmin), s.advisorRun)
+		r.Register("advisor_notices", Requires(iam.GrantAdmin), s.advisorNotices)
+		r.Register("advisor_reports", Requires(iam.GrantAdmin), s.advisorReports)
+		r.Register("advisor_report", Requires(iam.GrantAdmin), s.advisorReport)
+	}
 	if s.Config != nil {
 		// ADMIN'S, all four. Reading the config document exposes the
 		// whole company — which integrations are wired, and every ${VAR}
@@ -1139,12 +1154,6 @@ func Register(r *Registry, s Sources) {
 		r.Register("config_audit", Requires(iam.GrantAdmin), s.configAudit)
 		r.Register("config_diff", Requires(iam.GrantAdmin), s.configDiff)
 		r.Register("config_entities", Requires(iam.GrantAdmin), s.configEntities)
-		// WHAT THE SETUP COSTS AND HOW TO FIX IT, read off the same
-		// document, so the administrator's as the document is.
-		r.Register("advisor", Requires(iam.GrantAdmin), s.advisor)
-		if s.Analysis != nil && s.Analyst != nil {
-			r.Register("advisor_analysis", Requires(iam.GrantAdmin), s.advisorAnalysis)
-		}
 		// WHAT EACH AGENT MAY DO AND WHERE IT RUNS, as its next turn is told:
 		// the go-live check's review. Admin's, as the advisor is.
 		if s.AgentAccess != nil {

@@ -2,28 +2,17 @@ package turnctx
 
 import "sync"
 
-// Seen is what the tool calls of one turn answered, kept so a later call of the
-// same turn can be held to what an earlier one showed it: the atlas's record
-// tool cites a call, and the engine reads the value out of that call's own
-// answer rather than out of anything the model says about it (ADR-0132).
+// Seen is what the tool calls of one turn answered, so a later call can be held
+// to what an earlier one showed it: the atlas's record tool cites a call, and
+// the engine reads the value from that call's own answer, never from what the
+// model says about it (ADR-0132). It holds every call answered (failed ones
+// left out) as the text the model was handed. In memory for the turn's life,
+// shared by derived Turns as [Lookups] is; a resumed segment starts empty, so a
+// call from before the park cannot be cited.
 //
-// # What it holds, and for how long
-//
-// Every call the turn's surfaces ran to an answer, failed ones left out, in
-// memory, for the turn's life: one Turn and every Turn derived from it share
-// one, as they share [Lookups]. It is the text the model was handed, so a
-// value an answer withheld from the model is not in it either. A resumed
-// segment starts empty: a call made before the turn was parked can no longer
-// be cited, and the tool that asks says to make the read again.
-//
-// # Bounded in bytes
-//
-// At most [MaxSeenBytes] of answers, the oldest dropped first, each drop
-// counted against its tool so a citation of a dropped call is told apart from
-// one of a call never made. A single answer past the bound is not kept.
-//
-// NIL HOLDS NOTHING: every method is safe on a nil Seen, which has seen no
-// call, for a turn built outside the engine.
+// Bounded at [MaxSeenBytes], oldest dropped first, each drop counted against its
+// tool so a citation of a dropped call is told apart from one never made. A
+// single answer past the bound is not kept. Nil is safe: no call seen.
 type Seen struct {
 	mu      sync.Mutex
 	answers []Answer

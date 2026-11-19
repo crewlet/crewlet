@@ -13,22 +13,14 @@ import (
 
 // AN EXACT RERANK OVER A 1-BIT POOL RECOVERS THE EXACT RANKING.
 //
-// # What this gate measures, and what it deliberately does not
+// Stage one keeps only each vector's ORTHANT, whose worth for cosine rank
+// depends on the corpus's distribution (0.29 to 0.98 recall over generators), so
+// this measures the ARITHMETIC, never a company's recall (`crewlet search eval`).
 //
-// The first stage keeps only each vector's ORTHANT. How much an orthant says
-// about cosine rank is a property of the corpus's own distribution and of
-// nothing else — over a family of embedding-shaped generators the same
-// arithmetic spans 0.29 to 0.98 recall — so this measures the ARITHMETIC and
-// never recall on a particular company's documents. `crewlet search eval` is
-// what answers that, against that company's own vectors.
-//
-// # Why the floor is a curve
-//
-// Recall from a sign code DECREASES with the corpus size. Measured on this
-// fixture at the shipped depth: 0.9888 at twenty thousand, 0.9677 at a
-// hundred and twenty thousand, 0.9287 at half a million. A single scalar
-// would certify the smallest system this engine runs on and say nothing about
-// the largest it claims to support.
+// The floor is a curve: recall from a sign code DECREASES with corpus size.
+// Measured here at the shipped depth: 0.9888 at twenty thousand, 0.9677 at a
+// hundred and twenty thousand, 0.9287 at half a million. A scalar would certify
+// the smallest system and say nothing of the largest supported.
 func TestBinaryRecallFloorAtShippedDepth(t *testing.T) {
 	t.Parallel()
 	for _, n := range gateSizes {
@@ -126,21 +118,14 @@ var passes = map[int]func() gatePass{
 
 // gateFixture builds each corpus ONCE and shares it between the cases.
 //
-// The fixture is deterministic, so two cases building it twice produce two
-// identical corpora at twice the cost — and generation and the pass over it
-// are what the gate's whole wall clock is, so sharing them halves the price
-// every contributor pays on every run.
+// Generation plus the pass over it is the gate's whole wall clock, so a second
+// build doubles the cost.
 //
-// # Why a size's case is NOT parallel to its sibling
-//
-// A parallel subtest of a parallel test waits for a slot behind EVERY
-// top-level test released before it, so the per-size cases these gates once
-// ran in parallel started last of all — measured, the 120 000-row corpus
-// began generating four and a half minutes into the package and was its
-// last two minutes, on one core while the rest sat idle. Run in turn inside
-// each gate, they start when the gate does, early, and the two gates still
-// run beside each other; the second to reach a size waits on the first's
-// memo rather than repeating it.
+// A size's case is NOT parallel to its sibling: a parallel subtest waits behind
+// EVERY top-level test released before it, so per-size cases start last (the
+// 120 000-row corpus began generating four and a half minutes in, on one core).
+// Run in turn inside each gate they start with it, and the second gate to reach
+// a size waits on the first's memo.
 func gateFixture(n int) *search.Fixture { return fixtures[n]() }
 
 // ONE MEMO PER SIZE rather than one lock over all of them: a lock would also
@@ -205,16 +190,14 @@ func TestQuantizeIsASignFunctionWithZeroNegative(t *testing.T) {
 //
 // # The claim this replaces
 //
-// It is tempting to say rank fusion makes semantic recall a lower bound on
-// answer quality — that a document stage one drops merely slides down. It is
-// false, and the arithmetic says so: a document ABSENT from a list contributes
-// nothing from it, so a drop is the LARGEST possible perturbation to that
-// document's score rather than an invisible one.
+// Rank fusion does not make semantic recall a lower bound on answer quality
+// (a document stage one drops does not merely slide down): a document ABSENT
+// from a list contributes nothing from it, so a drop is the LARGEST possible
+// perturbation to its score.
 //
-// What fusion absorbs is the drop of a document the keyword half also found.
-// What it does not absorb is the drop of a SEMANTIC-ONLY document, which
-// leaves the fused answer entirely — and that is exactly the class the
-// semantic half exists for, the question whose answer shares no word with it.
+// Fusion absorbs the drop of a document the keyword half also found, not of a
+// SEMANTIC-ONLY one, which leaves the answer entirely: the very class the
+// semantic half exists for, whose answer shares no word with the question.
 func TestFuseIsNotMonotoneInTheSemanticList(t *testing.T) {
 	t.Parallel()
 	keyword := []string{"shared-a", "shared-b", "shared-c"}

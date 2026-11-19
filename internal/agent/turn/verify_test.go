@@ -48,19 +48,15 @@ func TestDeliveredIgnoresFailedCalls(t *testing.T) {
 	}
 }
 
-// A TURN'S OWN MACHINERY IS NO ACT. Acted decides whether a broken turn's
-// trigger is given up rather than redelivered, so a true answer SPENDS the
-// work — and the tools that must not trip it are the ones a turn calls on
-// every single round.
+// A TURN'S OWN MACHINERY IS NO ACT. A true Acted SPENDS the work (the trigger
+// is given up), so the tools a turn calls every round must not trip it.
 //
-// This is the case that kills the obvious implementation. `submit_work` is
-// registered with NO annotations at all (internal/agent/runner/phases.go), so
-// any predicate of the form "not proven read-only" reads true for the
-// executor's own terminator — and every turn that closed a round would then
-// be abandoned. The rest of that machinery is annotated, none of it
-// open-world: the discovery pair is read-only and closed-world, and the
-// sub-agent spawner and `reflect_and_persist` are closed-world writes, so
-// none of it trips the rule either.
+// This kills the obvious implementation: `submit_work` has NO annotations
+// (internal/agent/runner/phases.go), so "not proven read-only" reads true for
+// the executor's own terminator and every turn that closed a round would be
+// abandoned. The rest is annotated and none open-world: the discovery pair is
+// read-only and closed-world, and the sub-agent spawner and
+// `reflect_and_persist` are closed-world writes.
 func TestATurnsOwnMachineryIsNoAct(t *testing.T) {
 	t.Parallel()
 	s := turn.Surface{
@@ -680,15 +676,12 @@ func TestANoActionAccountNamesFiveOfEachKindAndCountsTheRest(t *testing.T) {
 	}
 }
 
-// A DELIVERY CLAIM THAT ONLY ACTED IS TOLD WHAT IT CALLED. A turn somebody is
-// waiting on that asked a colleague and claimed the work delivered was told "no
-// tool that acts outside the engine was called" — false against its own
-// record, so the model argued with the correction. Now it is told what it
-// called and that none of it delivered, on a named surface and on none, and
-// where it was asked wherever the engine can name that; a turn that only read
-// is still told it called nothing that acts. An ask a closed round made is
-// named as the round's own is, since the claim is judged on the turn's whole
-// record.
+// A DELIVERY CLAIM THAT ONLY ACTED IS TOLD WHAT IT CALLED: told "no tool that
+// acts outside the engine was called" after asking a colleague, the model
+// argued with a correction false against its own record. It is told what it
+// called and that none of it delivered, on a named surface and on none (and
+// where it was asked where nameable); a turn that only read is still told it
+// called nothing that acts. A closed round's ask is named as the round's own.
 //
 // Mutation: drop the acted case, and the colleague ask is told it called
 // nothing that acts outside the engine; drop where it was asked, and the turn

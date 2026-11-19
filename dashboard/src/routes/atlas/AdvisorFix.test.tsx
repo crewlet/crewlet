@@ -8,11 +8,10 @@
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WRITE_REASONS } from "~/lib/useWriteAccess.ts";
-import type { AdvisorFinding } from "~/protocol/advisor.ts";
 import { grownCompany, reviewAnswer, waitingItems } from "~/test/atlas.ts";
 import { mountAtlas } from "~/test/atlasMount.tsx";
 import { ENGINE_HEADERS } from "~/test/engineAnswer.ts";
-import { AdvisorAtlasFix, atlasPlace } from "./AdvisorFix.tsx";
+import { AdvisorAtlasFix, type AtlasFinding, atlasPlace } from "./AdvisorFix.tsx";
 
 /** A holder of Atlas who is no administrator. */
 const ADA = {
@@ -32,18 +31,16 @@ const CHECKOUT = {
   name: "Checkout API",
 } as const;
 
-function finding(over: Partial<AdvisorFinding>): AdvisorFinding {
+function finding(over: Partial<AtlasFinding>): AtlasFinding {
   return {
     class: "atlas.unowned",
-    severity: "note",
-    actor: "owner",
-    source: "atlas",
-    area: "atlas",
-    subject: { kind: "atlas" },
     title: "7 services have no owner.",
     why: "Nobody is named as answering for a service the company runs.",
-    path: "",
-    evidence: [{ key: "entries", value: 7 }],
+    evidence: {
+      window: { from: "2026-01-01T00:00:00Z", to: "2026-01-08T00:00:00Z" },
+      facts: [{ key: "entries", label: "Entries", value: 7, unit: "count" }],
+      records: [],
+    },
     entries: [CHECKOUT],
     fix: {
       kind: "atlas_act",
@@ -80,9 +77,9 @@ afterEach(() => {
   location.hash = "";
 });
 
-function mount(f: AdvisorFinding, answers: Record<string, unknown> = {}) {
+function mount(f: AtlasFinding, answers: Record<string, unknown> = {}) {
   return mountAtlas(
-    "#/settings/advisor",
+    "#/advisor",
     <AdvisorAtlasFix finding={f} onClose={() => {}} />,
     grownCompany(),
     { answers: { viewer: ADA, ...answers } },
@@ -134,10 +131,13 @@ describe("an atlas finding's fix", () => {
     mount(
       finding({
         class: "atlas.source_stale",
-        subject: { kind: "integration", name: "Datadog" },
         title: "The atlas has not read Datadog whole in 4 hours.",
-        evidence: [{ key: "hours", value: 4 }],
-        entries: undefined,
+        evidence: {
+          window: { from: "2026-01-01T00:00:00Z", to: "2026-01-08T00:00:00Z" },
+          facts: [{ key: "hours", label: "Hours since a whole read", value: 4, unit: "hours" }],
+          records: [],
+        },
+        entries: null,
         fix: {
           kind: "atlas_act",
           sentence: "Ask for a read now.",
@@ -191,7 +191,7 @@ describe("an atlas finding's fix", () => {
 
   test("holds every control for a reader the engine would not serve", async () => {
     mountAtlas(
-      "#/settings/advisor",
+      "#/advisor",
       <AdvisorAtlasFix finding={finding({})} onClose={() => {}} />,
       grownCompany(),
       { answers: { viewer: { ...ADA, acts: [] } } },
@@ -205,7 +205,7 @@ describe("an atlas finding's fix", () => {
   test("holds every control for a reader who is not signed in", async () => {
     const viewer = { login: "", grants: [], handle: "", owner: "", name: "", kind: "", acts: [] };
     mountAtlas(
-      "#/settings/advisor",
+      "#/advisor",
       <AdvisorAtlasFix finding={finding({})} onClose={() => {}} />,
       grownCompany(),
       { answers: { viewer } },

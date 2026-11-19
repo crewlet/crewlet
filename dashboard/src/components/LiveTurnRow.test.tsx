@@ -77,14 +77,13 @@ test("a focused row inside a card rings inside its edge", () => {
   const at = shared.indexOf(".list-row.clickable:focus-visible,");
   expect(at).toBeGreaterThan(-1);
   const head = shared.slice(at, shared.indexOf("{", at));
-  for (const row of [
-    ".list-row.clickable",
-    "a.list-row",
-    ".feed-row",
-    ".project-row",
-    "a.live-row",
-  ]) {
+  for (const row of [".list-row.clickable", "a.list-row", ".project-row"]) {
     expect(head, row).toContain(`${row}:focus-visible`);
+  }
+  // A ROW OPENED BY A LINK STRETCHED OVER IT rings when that link is focused,
+  // so a reference inside it stays a link of its own.
+  for (const row of [".feed-row", ".live-row"]) {
+    expect(head, row).toContain(`${row}:has(${row}__open:focus-visible)`);
   }
   const ring = shared.slice(shared.indexOf("{", at), shared.indexOf("}", at));
   expect(ring).toMatch(/outline: 2px solid var\(--color-focus\);/);

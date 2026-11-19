@@ -53,64 +53,35 @@ type Ceiling struct {
 }
 
 // DecideWithin answers whether agent p may do a to o INSIDE A TURN somebody
-// woke: [Decide] for p, and then the same question for the principal the turn
-// is acting for — the app first ([DecideWithinApps]), then the relation.
+// woke: [Decide] for p, then the same for the principal the turn acts for, the
+// app first ([DecideWithinApps]), then the relation.
 //
-// # The confused deputy, closed
-//
-// An agent reads what is shared with it. Somebody who cannot open a private
-// artifact can still message the agent that can, and ask it to summarise the
-// artifact or to tick its approval column. So every verb an agent takes in a
-// turn somebody woke is decided AGAIN FOR THAT REQUESTER on the same object,
-// and admitted only when both are: in that turn the agent discloses no
-// artifact to a requester who could not open it, and writes nothing on a
-// requester's behalf that the requester could not write. The requester's
-// authority is a ceiling and never a source: whatever is admitted is the
-// agent's own act, recorded as the agent.
-//
-// THE CEILING IS THE TURN'S, and every turn it hands on to: it is composed
-// from what woke that turn, and what the turn hands on carries it. A colleague
-// the agent asks answers in a turn worked for whoever the asking turn worked
-// for, and the answer wakes the agent in a turn worked for them too; and what
-// the agent writes on the engine's own surfaces (a work item, a page or a
-// comment on one, a Chatlet message, a change, a review, a comment or a push
-// on Gitlet) wakes its colleague in a turn worked for them as well (ADR-0109,
-// internal/agent/builtin's workingForOf), and so does what the engine records
-// on Gitlet about the agent's earlier push or enqueue, whose close of a
-// landed change's item is decided within the same ceiling. The edge is what
-// carries no requester: a vendor's surface, whose wake comes back by webhook
-// with no field of the engine's. Nor does it reach what the agent already
-// knows. It bounds what a turn does for its requester, not what an agent may
-// go on to tell them.
-//
-// # Except the edits an agent makes to its own work
-//
-// A verb whose row is steerable ([rule.steerable]) on an object the agent
-// OWNS skips the requester's RELATION: anybody who can message an agent
-// steers its own work, as they steer every other piece of work an agent owns,
-// and applying the ceiling there would refuse "please fix the typo in your
-// table" from a colleague who only views it. Reads are never steerable, and
-// neither is sharing, so an agent's private artifact still never reaches a
-// requester who could not open it. A create names the agent as the object's
-// owner: the artifact it makes is its own.
-//
-// THE APP IS ASKED BEFORE THE SPARE: steering an agent's own work in an app
-// is using the app, so a requester who does not use it steers nothing there
-// (ADR-0109). The spare decides relations among the app's users, never
-// whether somebody uses the app at all.
-//
-// ONE DECISION OF THE SAME TABLE, ASKED TWICE: the requester is decided by
-// [Decide] exactly as they would be if they asked themselves, so the ceiling
-// cannot drift from the rules it bounds. A refusal of the requester is
-// [ReasonCeiling], naming no grant of the caller's, because nothing the agent
-// could hold would change it; a requester this node cannot decide is UNKNOWN.
+// THE CONFUSED DEPUTY, CLOSED: somebody who cannot open a private artifact can
+// message the agent that can, so every verb in such a turn is decided AGAIN FOR
+// THAT REQUESTER on the same object and admitted only when both are. Their
+// authority is a ceiling, never a source: what is admitted is the agent's own
+// act. The requester is decided by [Decide] as if they asked themselves, so the
+// ceiling cannot drift. A refusal is [ReasonCeiling] naming no grant of the
+// caller's; an undecidable requester is UNKNOWN.
 func DecideWithin(ctx context.Context, p iam.Principal, c Ceiling, a Action, o Object,
 	chart Chart, now time.Time) Decision {
 
+	// THE CEILING IS THE TURN'S and passes to every turn it hands on: a
+	// colleague the agent asks, the answer, and what the agent writes on the
+	// engine's own surfaces or Gitlet wake their target in a turn worked for
+	// the same requester (ADR-0109, internal/agent/builtin's workingForOf). A
+	// vendor's surface carries none: its webhook wake has no engine field. It
+	// bounds what a turn does for its requester, not what an agent may tell them.
 	d := DecideWithinApps(ctx, p, c, a, o, chart, now)
 	if d.Unknown() || !d.Allowed || c.Kind == CeilingNone {
 		return d
 	}
+	// EXCEPT EDITS TO ITS OWN WORK: a steerable row ([rule.steerable]) on an
+	// object the agent OWNS skips the requester's RELATION, since anybody who
+	// can message an agent steers its work and the ceiling would refuse "fix
+	// the typo in your table" from a viewer. Reads and sharing are never
+	// steerable, so a private artifact never reaches a requester who could not
+	// open it. The app was asked first: steering in an app is using it.
 	if steerable, _ := SteerableOf(a); steerable && ownedBy(p, o) {
 		return d
 	}
@@ -129,35 +100,17 @@ func DecideWithin(ctx context.Context, p iam.Principal, c Ceiling, a Action, o O
 }
 
 // DecideWithinApps answers whether agent p may do a to o INSIDE A TURN
-// somebody woke, as far as the APPS go: [Decide] for p, and then whether the
-// principal the turn is acting for uses the app a's row names (ADR-0109).
+// somebody woke, as far as the APPS go: [Decide] for p, then whether the
+// requester uses the app a's row names (ADR-0109).
 //
-// # Every app, for every family
-//
-// An agent holds every app (ADR-0033). Somebody the company kept off Worklet,
-// Doclet, Chatlet or authoring artifacts could still message an agent and
-// have it use the app for them — so inside a turn somebody woke, every verb
-// whose row names an app is admitted only when the requester holds that app:
-// any one of a [ClassAnyApp] row's set, and on a row that admits without the
-// app ([ClassAppOrAsked]) the requester an open ask names, on the terms the
-// row admits them asking for themselves. It is what the one authorizer every
-// builtin passes decides for a seat's call; [DecideWithin] asks it first and
-// then decides the requester's relation too, for the families whose objects
-// carry one.
-//
-// THE ROW'S APP AND NOTHING ELSE OF IT. The requester's other relations to
-// the object — their own record, their lead, a comment's authorship, the
-// container — stay the agent's own: decided for the requester, they would
-// refuse an agent its own inbox and its own priorities in every turn a person
-// woke, since those rows are decided on the agent's record, which the
-// requester is not.
-//
-// A stranger uses no app. A requester who may not act uses none. A turn
-// nobody woke is bounded by nothing beyond p's own authority, and a ceiling
-// nobody filled in is refused rather than read as one. A refusal is
-// [ReasonCeiling], with why the requester is refused in
-// [Decision.RequesterReason] and, where an app would admit them, the apps in
-// [Decision.RequesterGrants].
+// An agent holds every app (ADR-0033), so somebody kept off an app could have
+// an agent use it for them: a verb whose row names an app is admitted only
+// when the requester holds it (any one of a [ClassAnyApp] set; on a
+// [ClassAppOrAsked] row, the requester an open ask names). THE ROW'S APP AND
+// NOTHING ELSE: their other relations stay the agent's own, or an agent would
+// be refused its own inbox. A stranger, a requester who may not act and an
+// unfilled ceiling use no app: [ReasonCeiling], with [Decision.RequesterReason]
+// and the apps that would admit them in [Decision.RequesterGrants].
 func DecideWithinApps(ctx context.Context, p iam.Principal, c Ceiling, a Action, o Object,
 	chart Chart, now time.Time) Decision {
 

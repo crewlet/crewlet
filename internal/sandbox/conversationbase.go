@@ -12,44 +12,26 @@ import (
 // THE SESSION A CONVERSATION'S NEXT TURN CONTINUES, FROZEN AT ITS FIRST LAUNCH.
 //
 // A turn's dispatch reads its conversation's head once, at `linearizable`
-// (internal/engine): of the conversation's ended turns whose rows still name a
-// session, the one that read the conversation last (executordomain.Head),
-// beside the conversation's other ended turns, which the turn's brief is told
-// how they ended. The turn's first launch freezes that read on the
-// turn's run record ([PendingRun.Base]) — written by [PendingStore.BeginLaunch]
-// on the write that creates the record and by no other, so every relaunch, on
-// whatever node, reads the read the first launch made and never makes another —
-// and records it on the executor log as the turn's `begin`
-// ([SessionWrites.Begin]), whose row then HOLDS the base against every
-// release while the turn is live and has kept no session of its own: a
-// sibling's end, the seat's budget and the retention all pass it over, so a
-// relaunch can still fetch it.
-//
-// WHO READS IT: every capture of the turn, which carries the read as the turn's
-// first read where no begin landed ([Coordinator.recordCapture]); the launch
-// that continues the base ([Coordinator.continueBase]) and the relaunch's
-// question of which session it continues ([Coordinator.ContinuedCapture]); the
-// seat's budget pre-check, which counts the base of every live turn that holds
-// one ([Coordinator.overBudget]); and a reader of the turn's session, told that
-// a relaunch of a turn that has kept nothing continues the base, as that
-// relaunch's question decides it ([ReadContinuityOf], [TargetAsk]).
+// (internal/engine; executordomain.Head). The first launch freezes that read on
+// the run record ([PendingRun.Base]), written by [PendingStore.BeginLaunch] on
+// the write that creates the record and no other, so every relaunch on any node
+// reads the first launch's read; and records it on the executor log as the
+// turn's `begin` ([SessionWrites.Begin]), whose row HOLDS the base against every
+// release while the turn is live and has kept no session, so a relaunch can
+// still fetch it. Readers: [Coordinator.recordCapture], [Coordinator.continueBase],
+// [Coordinator.ContinuedCapture], [Coordinator.overBudget] (counts every live
+// base) and [ReadContinuityOf], [TargetAsk].
 
 // ConversationBaseMaxBytes bounds the freeze as the run's record carries it,
 // as JSON: what [NewConversationBase] can make of any read the executor log
 // answers.
 //
-// TWENTY-FOUR KIBIBYTES, from the log's own bounds: at most
-// internal/executordomain's MaxAbsorbs turns absorbed and its MaxSiblings
-// siblings told, each a canonical turn id with its object's key, digest and
-// size — under two and a half kilobytes together — and one base, whose
-// free-text fields the log holds to their bounds (its content key, harness,
-// harness version and session id, and its home and workspace paths: 2,527
-// bytes), which JSON escapes at worst six bytes for one: about fifteen
-// kilobytes, and with the keys and numbers under nineteen. internal/engine's
-// TestAFrozenReadFitsItsBound builds the largest read the log admits and holds
-// it here. It rides beside the turn's
-// frozen endings in its parked state (internal/agent/prompts' EndingsMaxBytes),
-// each a bounded share of one record.
+// TWENTY-FOUR KIBIBYTES, from the log's bounds: at most executordomain's
+// MaxAbsorbs and MaxSiblings turns (under 2.5 KB) and one base with free text
+// bounded to 2,527 bytes, JSON escaping six bytes a byte: about fifteen
+// kilobytes, under nineteen with keys. internal/engine's
+// TestAFrozenReadFitsItsBound holds the largest admissible read here. It rides
+// beside the frozen endings (internal/agent/prompts' EndingsMaxBytes).
 const ConversationBaseMaxBytes = 24 << 10
 
 // ConversationBase is the read a turn's first launch made of its conversation,
@@ -219,29 +201,18 @@ func (s BaseSession) namedBy(row executorkeep.TurnRow) string {
 	return ""
 }
 
-// BaseContinuityOf is THE decision whether a launch continues a conversation's
-// session that ended with another turn — base, as the turn froze it, or for a
-// reader of a conversation's head, that head — of own, the turn's own row on the
-// executor log (nil where it was not read: a turn's first launch, before its own
-// begin), run, its run record (nil before its first launch), and restorer, the
-// runner the launch would take it up with. [ContinuityOf]'s sibling: that one
-// decides a session the turn kept, of a live row of its own, and refuses an
-// ended row by design; a base is always an ended row of another turn.
+// BaseContinuityOf is THE decision whether a launch continues the session that
+// ended another turn of its conversation (base, as frozen, or a head's). own is
+// the turn's executor-log row (nil where unread), run its record (nil before
+// its first launch). [ContinuityOf]'s sibling: that decides a session the turn
+// kept, of a live row; a base is always another turn's ended row.
 //
-// A BASE IS CONTINUED ONLY WHILE THE TURN HAS KEPT NOTHING: once any capture of
-// its own landed, that session holds the base and everything after, and which
-// session of the turn's own a relaunch continues (the newest capture the job
-// it follows kept, or none) is [ContinuityOf]'s alone, so the base's hold
-// lifts there, and the base may go. AND ONLY WHILE THE TURN'S ROW HOLDS IT: a row that
-// names another base, or that landed a capture, holds nothing the log keeps
-// from a sibling's end or the seat's budget. Either refusal says only why the
-// base is not continued, never which session the launch continues instead,
-// which is not this decision's to know: a relaunch whose job left no kept
-// capture continues none of the turn's own either.
-//
-// What the box a launch gets says of its harness's own release, whether the
-// launch's box is one of its own, and whether the seat's budget can carry the
-// session, are the launch's to ask, and this decides none of them.
+// A BASE IS CONTINUED ONLY WHILE THE TURN HAS KEPT NOTHING: once a capture of
+// its own landed, which session a relaunch continues is [ContinuityOf]'s alone.
+// AND ONLY WHILE THE TURN'S ROW HOLDS IT: one naming another base, or that
+// landed a capture, holds nothing. A refusal says why the base is not
+// continued, never which session continues instead; the box's release and the
+// seat's budget are the launch's to ask.
 func BaseContinuityOf(base BaseSession, own *executorkeep.TurnRow, run *PendingRun,
 	restorer ArchiveRestorer) SessionContinuity {
 
@@ -262,18 +233,16 @@ func BaseContinuityOf(base BaseSession, own *executorkeep.TurnRow, run *PendingR
 }
 
 // baseStanding is "" where base is still the turn's to continue, whoever would
-// take it up — of own, the turn's own row (nil where it was not read), and run,
-// its run record (nil before its first launch) — or why not: [BaseContinuityOf]
-// less what the launch's runner says, and less whether a job of the turn ran out
-// of its model's context in it. Where own was read and this is "", the turn's
-// row HOLDS the base: its begin landed naming it and the turn has kept nothing
-// since, so every release passes it over but a retirement, which takes a
-// session that ran out of context from every ended row that names it, held or
-// not — what a relaunch names to its run as a session it may read, continued or
-// not ([Coordinator.ContinuedCapture]). A base a job of the turn ran out in is
-// one of those: no launch continues it, since another would meet the same end,
-// but its row names it until an end retires it, the turn's own at the latest,
-// and a run that starts a session of its own reads it there.
+// take it up (own: the turn's row, nil where unread; run: its record, nil
+// before its first launch), or why not: [BaseContinuityOf] less the runner's
+// answer and less whether a job of the turn ran out of its model's context in
+// it. Where own was read and this is "", the turn's row HOLDS the base: its
+// begin named it and the turn has kept nothing since, so every release passes
+// it over but a retirement, which takes a context-exhausted session from every
+// ended row naming it, held or not, as a session a relaunch may read
+// ([Coordinator.ContinuedCapture]). A base a job ran out in is one: no launch
+// continues it, another would meet the same end, but its row names it until an
+// end retires it, and a run that starts its own session reads it there.
 func baseStanding(base BaseSession, own *executorkeep.TurnRow, run *PendingRun) string {
 	switch {
 	case base.Object == "" || base.Turn == "":

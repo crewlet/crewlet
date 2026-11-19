@@ -11,30 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 )
 
-// INFERRED CARDS: the card drawn from an answer no spec was written for, the
-// answer of a generic read of any route (internal/assistant/catalog's
-// api_request). The answer's own JSON decides the shape, by one rule:
+// INFERRED CARDS: the card drawn from an answer no spec was written for (a
+// generic read of any route, catalog's api_request), shaped by its own JSON:
+//   - a LIST is a table, a column per plain field the first rows carry, known
+//     fields first; a list of plain values is a list card;
+//   - a record that WRAPS ONE LIST (beside plain values such as a cursor or
+//     count) is the table of that list;
+//   - ANY OTHER RECORD IS ONE THING, an entity card: plain values are its facts,
+//     a nested record's beneath its name, every list of records its list.
 //
-//   - a LIST is a table: of its records, a column per plain field the first
-//     rows carry, the fields a record is known by first; a list of plain
-//     values is a list card of them;
-//   - a record that WRAPS ONE LIST (a page of a collection: the list, beside
-//     nothing but plain values such as a cursor or a count) is the table of
-//     that list;
-//   - ANY OTHER RECORD IS ONE THING, and an entity card: its plain values are
-//     its facts, a nested record's beneath its name, and every list of
-//     records it holds is the card's list, each entry named as the record it
-//     is.
-//
-// The last rule is the one a table got wrong: a company document holding its
-// roles and its units was drawn as the table of whichever list was longer,
-// "2 rows" of a document that is one thing, its every other field dropped.
-//
-// Every text value is prose, because a generic answer can carry anything
-// anybody wrote; the reading tool is fenced for it. Nothing here decides what
-// the person may see: the route answered as them, and its answer is redacted
-// before a card is drawn from it. An inferred record names no
-// [wire.ResourceKind]: it is the API's, not one of the dashboard's objects.
+// Every text value is prose (anybody may have written it; the reading tool is
+// fenced). Nothing here decides what the person may see: the route answered as
+// them, redacted before a card is drawn.
 
 // The bounds an inferred card is drawn to.
 const (

@@ -98,7 +98,7 @@ func TestALaterAttemptAtAnAnswerTellsTheCallItApprovedOnceOffTheRoundsLog(t *tes
 	}
 	row.Launch.HarnessEnd = sandbox.HarnessEndCutOff
 	brief := relaunchedInPlace(t, asking, runnerResume(resumeInput{Run: row, Bridged: logged,
-		BridgedRead: logged.Appends(), State: execstate.State{Version: execstate.Version, Round: 1},
+		BridgedRead: logged.Read(), State: execstate.State{Version: execstate.Version, Round: 1},
 		Asked: &sandbox.AskedRun{Question: "May swe call vendor_post on the vendor MCP server?",
 			By: "founder", SessionID: "sess-ask", BoxKept: true,
 			Held: &sandbox.HeldResume{TurnID: turnID, Call: *claimed.HeldCall, Choice: sandbox.HeldOnce,

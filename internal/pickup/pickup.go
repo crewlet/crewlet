@@ -240,7 +240,7 @@ func CooldownKey(seat uuid.UUID) string { return "pickup|seat|" + seat.String() 
 
 // Event is the pickup's wake: a [types.WorkPickup] naming the item and whom
 // its work is for, under the derived id and the instant of the change the key
-// names, filed under the item's own conversation.
+// names, filed under the item's own conversation at that change's position.
 func Event(seat uuid.UUID, role string, item worklet.ReadyItem, key Key, ready int,
 	capped bool, trace events.TraceContext) *events.Event {
 
@@ -274,5 +274,11 @@ func Event(seat uuid.UUID, role string, item worklet.ReadyItem, key Key, ready i
 	ev.Source = Source
 	conversation := worklet.ItemConversation(item.ID)
 	notify.Stamp(ev, conversation, conversation)
+	if key.Moved != 0 && !item.MovedOn.IsZero() {
+		// AND THE POSITION OF THE CHANGE ITS KEY NAMES, as a wake carries its
+		// record's: the turn reads no older, and its completion moves the
+		// item's seen-through mark (ADR-0162).
+		ev.Payload[notify.TriggerField] = item.MovedOn.String()
+	}
 	return ev
 }

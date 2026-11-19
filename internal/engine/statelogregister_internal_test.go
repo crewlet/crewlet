@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -138,6 +139,9 @@ func TestABarrierDecisionIsExplicit(t *testing.T) {
 		// A BARRIER, for every strict log's reason: a read may ask for
 		// linearizable, though none does today.
 		atlasdomain.Domain{}.Name(): true,
+		// A BARRIER, for every strict log's reason: a read may ask for
+		// linearizable, though none does today.
+		advisordomain.Domain{}.Name(): true,
 	}
 	for name, want := range shipped {
 		if got, held := stated[name]; !held || got != want {
@@ -201,6 +205,9 @@ func TestEveryBarrierDeclaresItsReadModel(t *testing.T) {
 		// linearizable, while a person's edit decides from the entry's
 		// version in its own snapshot.
 		atlasdomain.Domain{}.Name(): new(30),
+		// No read takes a barrier: the duty decides each write in its own
+		// snapshot and the page reads at session.
+		advisordomain.Domain{}.Name(): new(0),
 	}
 	for _, entry := range register() {
 		name := entry.Domain.Name()
@@ -521,6 +528,7 @@ func TestTheRegisteredOrderIsTheDeclaredOrder(t *testing.T) {
 		gitlet.Domain{}.Name(),
 		accessdomain.Domain{}.Name(),
 		atlasdomain.Domain{}.Name(),
+		advisordomain.Domain{}.Name(),
 	}
 	got := []string{}
 	for _, domain := range registeredDomains() {

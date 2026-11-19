@@ -70,7 +70,7 @@ func TestAProposalIsDrawnFromItsPreviewAlone(t *testing.T) {
 		t.Errorf("the card shows digest %q and the proposal holds %q", card.Digest, n.Digest)
 	case card.State != wire.ProposalProposed:
 		t.Errorf("a new proposal's card is %s", card.State)
-	case !n.ExpiresAt.Equal(noon.Add(proposal.DefaultTTL)) || !card.ExpiresAt.Equal(n.ExpiresAt):
+	case !n.ExpiresAt.Equal(noon.Add(proposal.TTL)) || !card.ExpiresAt.Equal(n.ExpiresAt):
 		t.Errorf("expires %v on the proposal and %v on the card", n.ExpiresAt, card.ExpiresAt)
 	case card.Changes[0].Kind != wire.ChangeFact:
 		t.Errorf("the first row is a %s: facts come first (D10)", card.Changes[0].Kind)

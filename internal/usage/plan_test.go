@@ -13,31 +13,14 @@ import (
 // EVERY PAGED STATEMENT SEEKS ITS KEY AND STREAMS — the plan gate behind "a
 // page pays for its own rows".
 //
-// A paged read stops reading where its page ends ([usage.Fill]), and that saves
-// something only if the statement it stops had not already read further: a
-// statement whose plan SORTS hands back its first row after reading every row
-// it matches, and one that seeks a range wider than its key reads whatever the
-// keyset filters out. Both were the case — one statement over the whole window,
-// a seek on its days, a join and a sorter — so every page of a window paid for
-// the window from its resumption to the end: walked in nineteen pages, a
-// ninety-day spend window cost 2.5 whole reads, where it costs 1.1 now
-// (BenchmarkAUsageWindowInPages, recorded in the package doc).
-//
-// So every statement a page issues, in the shape a page that resumes INSIDE
-// its key issues it, is planned over a seeded window, through storetest's one reading of a plan,, and each must seek its
-// leading key — a company day with `day = ?`, a page id from the day it resumes
-// on, a day's index head for the walk's next day — with no sorter and no
-// temporary tree anywhere in its plan: rows come back in the read's order as
-// the index holds them, so a statement stopped at a page's end has read that
-// page's rows and at most the one key's it resumed in.
-//
-// A wall-clock ratio of a paged walk to the whole read cannot hold this in a
-// test, which is why the gate reads the plan: at a window a test can seed
-// (twelve days, two nodes, sixteen seats) the old statements walked at 1.3 to
-// 1.7 times the whole read under the race detector — whose per-row cost in the
-// driver hides the engine's — exactly as the new ones did, and at about 3
-// times without it. The re-reading shows at a company's size, and the plan
-// that causes it shows at any size.
+// A page stops where it ends ([usage.Fill]), which saves something only if
+// the statement had not already read further: a plan that SORTS reads every
+// matching row first, and a seek wider than its key reads what the keyset
+// filters out (BenchmarkAUsageWindowInPages, in the package doc). So each
+// statement, in the shape of a page resumed INSIDE its key, is planned over a
+// seeded window and must seek its leading key with no sorter or temporary
+// tree. A wall-clock ratio cannot hold this: the race detector's per-row cost
+// hides the engine's; the plan shows the re-reading at any size.
 func TestEveryPagedStatementSeeksItsKeyAndStreams(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)

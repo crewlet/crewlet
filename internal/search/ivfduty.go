@@ -12,95 +12,54 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE EMBEDDING DUTY'S SECOND JOB: keeping the corpus's semantic index
-// current — ADR-0028.
+// THE EMBEDDING DUTY'S SECOND JOB: keeping the corpus's semantic index current
+// (ADR-0028). The duty is the vector log's one writer, a fleet singleton, so
+// training happens once per corpus, billed once, as a record every holder
+// applies, not N slightly different indexes from N moments of the log.
 //
-// # Why the duty and nobody else
+// THIS NODE HAS APPLIED THE LOG before it touches the index: the duty moves
+// between nodes on a lease, and a node still catching up would see the index
+// the log already replaced, or none, and train over a healthy one, staling
+// every row on every holder. So the step runs only once the applier has reached
+// the log's end at the tick's start ([LogStanding.Current]), FIRST in the tick,
+// before its own embeds put the node behind again.
+
+// A tick reads the corpus's state and takes at most ONE step ([DecideIndex]):
 //
-// The duty is the vector log's one writer, a fleet singleton, and the index is
-// published on that log. Training where the vectors are published means one
-// training per corpus, billed once — k-means over every code plus a recall
-// measurement that reads every exact vector — and a record every holder
-// applies, rather than N nodes training N slightly different indexes from N
-// slightly different moments of the log.
+//   - TRAIN: no index (and at least [IVFMinCorpus]), the corpus doubled or
+//     halved since training, or lopsided lists. No probe count within
+//     [IVFProbeCeiling] meeting the floor publishes a verdict instead of an
+//     index; below [IVFMinCorpus] the verdict is too small, untrained.
+//   - ROLL OUT: rows not filed under the installed index, every batch whose
+//     range holds one.
+//   - MEASURE: the last measurement is older than [IVFMeasureInterval]; the
+//     training's measurement against the corpus now, or, when no count within
+//     the ceiling meets the floor, a new training from the same reading.
+
+// Training and its rollout are deliberately TWO ticks: each is bounded by the
+// corpus, and a tick by the duty's lease (a cut-off step publishes nothing) and
+// by a budget of PROGRESS, not time ([Budget]), which cuts a wedged tick and
+// not a training on a slow node. Meanwhile a search reads the not-yet-filed
+// rows in full ([Stage1]). A tick never walks the covering index; a training or
+// measurement reads every code and makes one exact pass.
 //
-// # What must be true before it touches the index
-//
-// THIS NODE HAS APPLIED THE LOG. Every decision below reads the duty's own
-// node's rows, and the duty moves between nodes on a lease: a node still
-// catching up would see the index the log has already replaced — or none — and
-// train over a healthy one, making every row of the corpus stale on every
-// holder to get back where it started. So the step runs only on a node whose
-// applier has reached the end the log had when the tick began
-// ([LogStanding.Current]), and it runs FIRST in the tick, before this tick's
-// own embeds put the node behind again.
-//
-// # What a tick does, and why the steps are separate ticks
-//
-// Every tick reads the corpus's own state — how many sources the configured
-// embedding space holds, what index is installed, how many rows are filed under
-// it and how big its fullest list is — and takes at most ONE step
-// ([DecideIndex]):
-//
-//   - TRAIN, when the space has no index (and is at least [IVFMinCorpus]),
-//     when the corpus has doubled or halved since training, or when its lists
-//     have grown lopsided since the training filed them. Training that
-//     concludes no probe count within [IVFProbeCeiling] meets the floor
-//     publishes a verdict instead of an index, and one below [IVFMinCorpus]
-//     publishes the verdict that it is too small, without training at all.
-//   - ROLL OUT, when the installed index has rows not filed under it: every
-//     batch of its rollout whose range holds such a row.
-//   - MEASURE, when the installed index's last measurement is older than
-//     [IVFMeasureInterval]: the same measurement a training makes, against the
-//     corpus as it is now, publishing the probe count that meets the floor
-//     today — or, when none within the ceiling does, training a new index from
-//     the same reading in the same tick.
-//
-// Training and its rollout are deliberately TWO ticks. Each is bounded by the
-// corpus — the training by the k-means and the one exact pass, the rollout
-// by one Hamming search per row against every centroid on every holder — and a
-// tick is bounded by the duty's lease (the engine cuts it off when a renewal
-// answers that another node holds the duty, or when none has confirmed it for
-// as long as the lease is sure to last, and a step cut off publishes nothing)
-// and by a budget of PROGRESS rather than of time ([Budget]): the budget cuts
-// off a tick that wedged, and a training on a slow node is not one. The minute
-// between them costs nothing: until the rollout has applied, a search reads
-// the not-yet-filed rows in full ([Stage1]).
-//
-// # What a tick reads
-//
-// The head row, the per-list counts (at most a few thousand rows), and one
-// count of the space over the model index kb_vectors carries — never a walk of
-// the covering index. A training or a measurement additionally reads every
-// code once and makes one exact pass over the wide table.
-//
-// # Why "rows not filed under the index" is the whole rollout trigger
-//
-// A row written after the index was installed is filed as it is written, so
-// the only rows not filed under it are the ones that predate it. A rollout
-// that has applied leaves none; one that has not, or lost a batch to an
-// unresolved publish, leaves some — on a node that has applied everything the
-// log holds, a batch that did not land — and the next tick publishes the
-// batches that still have such rows. Re-filing is idempotent and every
-// publication of a batch says the same thing, so a repeat costs work and never
-// correctness, and the trigger needs no memory of what was published: it is
-// read off the rows.
+// "Rows not filed under the index" is the whole rollout trigger: a row written
+// after installation is filed as written, so only pre-existing ones qualify.
+// Re-filing is idempotent and every publication of a batch says the same thing,
+// so a repeat costs work, never correctness, and the trigger is read off the
+// rows with no memory of what was published.
 
 // IVFMeasureInterval is how long an installed index's measurement stands
 // before the duty measures it again.
 //
-// A DAY. The retrain rule catches a corpus that doubled or halved; this
-// catches one that DRIFTED inside those bounds — rewritten, re-scoped, grown by
-// half with new subjects — where the probe count measured at training may no
-// longer meet the floor and nothing else would notice until an operator's
+// A DAY. The retrain rule catches a corpus that doubled or halved; this catches
+// one that DRIFTED inside those bounds, where the probe count measured at
+// training may no longer meet the floor and nothing else would notice until a
 // scheduled `crewlet search eval` failed. A measurement is a training without
-// the k-means — every code read once, one exact pass and the probe choice, at
-// the largest corpus an index serves, two to five minutes of one core
-// ([BenchmarkIndexTraining]: 212 µs a source to read idle and 394 µs beside
-// two searchers, and the probe choice) — so a day bounds how long a drifted
-// index can serve below the floor at one pass a day; the evaluation the
-// operator guide asks for is monthly, so the duty has re-measured thirty times
-// before an operator would look.
+// the k-means: at the largest corpus two to five minutes of one core
+// ([BenchmarkIndexTraining]: 212 µs a source idle, 394 µs beside two
+// searchers). The operator guide's evaluation is monthly, so the duty has
+// re-measured thirty times before an operator would look.
 const IVFMeasureInterval = 24 * time.Hour
 
 // IndexAction is the one step a tick takes on the corpus's index.
@@ -208,21 +167,13 @@ func decideIndex(s IndexState, model string, dim int) IndexAction {
 // them: the fullest list above [IVFImbalance] times the mean, AND its share of
 // the corpus at least [IVFRetrainFactor] times what the training left it.
 //
-// # Why against the training and not against the mean alone
-//
-// A list that large is a probe reading four lists' worth of rows whenever it
-// is chosen, which is the cost model's premise failing — but a retrain only
-// cures it when the lopsidedness is NEW. A corpus with many identical codes
-// (blank tasks, a template copied a thousand times) files them all in one list
-// whatever the seed, because identical codes are nearest to the same centroid:
-// 2 000 copies of one code in a 22 000-source corpus left a largest list of
-// about 2 020 against a mean of 85 after every training. Judged against the
-// mean alone, every tick after the rollout decided to train again — a full
-// k-means and exact pass, a new generation making every row stale on every
-// holder, and a rollout re-filing the corpus, every two minutes for ever.
-// Judged against what the training achieved, that index comes to rest, and one
-// whose corpus has drifted since — the fullest list doubling its share — is
-// still retrained, which is the case the rule exists for.
+// A retrain only cures lopsidedness that is NEW. Many identical codes (a
+// template copied a thousand times) file in one list whatever the seed: 2 000
+// copies in a 22 000-source corpus left a largest list of about 2 020 against a
+// mean of 85 after every training. Judged against the mean alone, every tick
+// after the rollout trained again, making every row stale on every holder,
+// every two minutes for ever. Judged against what the training achieved, that
+// index comes to rest, and one whose fullest list doubled its share is retrained.
 func lopsided(s IndexState) bool {
 	if s.Sources <= 0 || s.Head.TrainedOn <= 0 {
 		return false

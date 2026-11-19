@@ -9,31 +9,16 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// WHAT A RUN THAT CONTINUES A SESSION IS TOLD.
-//
-// A relaunch of a turn continues the session its earlier launches worked in
-// (internal/sandbox, restore.go), so its brief is the session's NEXT MESSAGE,
-// not a whole brief: the session holds the task as it read it, where it holds
-// the message that brief was in, and, where its harness ended its own run,
-// every call it made — one it gave up on with no outcome or a failed one — and
-// every note it read. What it is told is what it lacks
-// — what changed since its last message, and of a session cut off, that it was
-// or may have been and what it may not show ([InterruptedSession],
-// [InterruptedCopy], [MayBeInterruptedCopy], [SavedSession]), with the
-// messages that carried its work on, the calls and the notes it may lack
-// ([LeadsToldAgain], [CalledAfter], [NotesReadAgain]) — and, where the box it
-// runs in is not the one it was last worked in, what that changes. The fresh
-// brief a run that starts a session of its own is handed is
-// [BuildPhaseUserMessage]'s, and, for one carrying a round on, what became of
-// the run before it and every call of the round so far ([CalledBefore]).
-//
-// A CONVERSATION'S NEXT TURN continues the session its last turn left, in a box
-// of its own, and that session holds another turn: none of what this turn was
-// asked, and a turn that ended — or, where that turn went on past the session,
-// what it did up to where the session was kept. So its run is told where the
-// turn boundary is, where the session ends where that is not the boundary, and
-// what a new box changes ([BuildNextTurn]), and then the turn's whole fresh
-// brief, the account of how the conversation's earlier turns ended among it.
+// WHAT A RUN THAT CONTINUES A SESSION IS TOLD: its NEXT MESSAGE, not a whole
+// brief (the session holds the task, internal/sandbox restore.go), and only
+// what it lacks: what changed, whether it was cut off and what it may not show
+// ([InterruptedSession], [InterruptedCopy], [MayBeInterruptedCopy],
+// [SavedSession]), the calls and notes it may lack ([LeadsToldAgain],
+// [CalledAfter], [NotesReadAgain]), and what a new box changes. A run starting
+// a session gets [BuildPhaseUserMessage]'s brief ([CalledBefore] for a round
+// carried on). A CONVERSATION'S NEXT TURN continues a session holding another
+// turn, so its run is told where the turn boundary is and where the session
+// ends ([BuildNextTurn]), then the turn's whole fresh brief.
 
 // sentBackHeader opens a reviewer's send-back to the session that did the round.
 // A send-back told again says it in [sentBackAgainHeader]'s words instead.
@@ -44,21 +29,14 @@ const sentBackHeader = "## Your work was reviewed and sent back" +
 
 // ContinuedRoundRules is [PriorWorkHeader]'s rules for a run that continues the
 // session its earlier rounds of the turn worked in: those rounds' calls are in
-// the session above, so it is told the rules without the list.
+// the session above, so it is told the rules without the list. The session
+// remembers each call, but not that an earlier write must not be repeated nor
+// that its delivery is citable: without that a model submitted with no citation.
 //
-// THE RULES AND NOT THE LIST, and the rules still: the session remembers each
-// call, but not that a write an earlier round made must not be repeated, nor
-// that a delivery an earlier round made is citable — a model forbidden to
-// repeat a write it cannot cite submitted with no citation, or went looking
-// for some other surface to deliver on.
-//
-// AND A FAILED CALL WHOSE OUTCOME IS UNKNOWN EXCEPTED, as [PriorWorkHeader]
-// excepts it: a call still in flight as an earlier round was read is on that
-// round's record failed, and told to the session, in the late calls' section
-// of this brief or of an earlier one, in a line that says its outcome is
-// unknown and that what it did may have taken effect. Told beside it that a
-// call that failed did not take effect and to retry it, the run would make it
-// again.
+// A FAILED CALL WHOSE OUTCOME IS UNKNOWN IS EXCEPTED, as [PriorWorkHeader]
+// excepts it: a call in flight when an earlier round was read is on its record
+// failed, and the late calls' section told the session its outcome is unknown.
+// Told beside it that a failed call did not take effect, the run would retry it.
 const ContinuedRoundRules = "## Already done earlier in this turn" +
 	"\nYour earlier rounds of this turn are in this session above, and every call they made" +
 	" that succeeded ALREADY RAN:" + continuedRoundRules
@@ -252,19 +230,15 @@ const calledSinceHeader = "## Calls this run made that the session above may not
 
 // readHeader introduces the calls after the newest point a session cut off is
 // known to hold where a reading of its archive found it holding some of them,
-// which the list then leaves out ([AfterSave.Read]): in place of
-// [calledSinceHeader], whose "they are every call the run working in it made
-// since the last point" is false of a list a reading thinned.
-//
-// TRUE ON EVERY PATH A TELLING BY A READING TAKES: the session may still show
-// some of the calls listed (a call the reading could not hold whole, one it
-// was not asked about, one whose records it could not place), so a call shown
-// both above and here is still one call; "less any it found the session holds
-// or lists below" is true of the calls it held, which no list tells, and of
-// the late calls and a subagent's, which sections below it list. Never "any"
-// of what it left out, which is true of none. NO LONGER THAN THE HEADER IT
-// REPLACES (471 bytes each), so the exact telling's header never outgrows the
-// cut-off one.
+// which the list leaves out ([AfterSave.Read]): in place of [calledSinceHeader],
+// whose "they are every call ... since the last point" is false of a thinned list.
+// TRUE ON EVERY PATH A READING TAKES: the session may still show some listed
+// calls (one the reading could not hold whole, was not asked about or could not
+// place), so a call shown in both places is still one call. "Less any it found
+// the session holds or lists below" is true of the calls it held, which no list
+// tells, and of the late and subagent calls, which sections below list. Never
+// "any" of what it left out, which is true of none. NO LONGER THAN THE HEADER IT
+// REPLACES (471 bytes each).
 const readHeader = "## Calls this run made that the session above may not show" +
 	"\nThe session above may show some of these: the run's calls through your tools since the last point" +
 	" the engine knows it reached, less any it found the session holds or lists below. A call shown both" +
@@ -327,37 +301,15 @@ func subagentsSection(subs []SubagentCalls) string {
 }
 
 // shownAgainHeader introduces the calls the session above may show that a
-// brief lists again ([AfterSave.Shown]): each is one a call in another list of
-// the brief could be taken for. That list's words, and the late calls', say a
-// call shown both above and in it is ONE call, made once; so a model that saw
-// the told call's like in the session could take the told call for it and
-// lose it, re-issuing nothing or reading it as a call that never ran.
-//
-// WHAT IT CLAIMS, OF THE CALLS IT HEADS: that the session MAY show each, never
-// that it shows each, and never that it lacks one. Each is one the save point
-// holds (internal/agent/runner's heldAt), never the call a person approved that
-// the brief's lead tells, which the engine made on the host and which runner
-// keeps off that side, or a call of one of the turn's earlier rounds that the
-// brief tells nowhere else (runner's closedShown), which the session holds as
-// it continued through that round, as a fresh brief's line of it, in a
-// summary's words, or not at all; and a point's claim is not what the session
-// reads back either: the calls a Claude Code subagent made through the bridge
-// are held where its session was saved past them, while the main thread a
-// resumed session reads shows only the subagent's report of them. "May" is
-// true of every one. And it says the call in the other list is one of its own,
-// made as well, so the two are never read as one call shown twice.
-//
-// WHY IT NAMES NO REASON BUT "COULD BE TAKEN FOR": runner lists a held call
-// again wherever it cannot rule out that a model takes the told call for it
-// (internal/agent/runner's readAlike), and that is the one reason true on every
-// path. Two calls' arguments reading alike in the told call's line is one
-// reason among several: a told call in flight, a call sealed for a person's
-// approval, one the record kept less than whole, with no digest or in text that
-// did not read back all read alike whatever their arguments, so words that
-// said the arguments read alike would be false of them. It names neither list,
-// which differ by path (the calls since a save point the session may already
-// show, the late calls), and needs neither: "another list of this message" is
-// true of both.
+// brief lists again ([AfterSave.Shown]), each one a call in another list could
+// be taken for. It claims only that the session MAY show each: a point's claim
+// is not what the session reads back (a Claude Code subagent's bridge calls are
+// held where its session was saved past them, while the resumed main thread
+// shows only its report; runner's closedShown, heldAt). It says only "could be
+// taken for", the one reason true on every path (runner's readAlike): arguments
+// reading alike is one of several (in flight, sealed for approval, kept less
+// than whole). It names neither list, which differ by path; "another list of
+// this message" is true of both.
 const shownAgainHeader = "## Calls the session above may show, listed again" +
 	"\nThe session above may show each of these calls. Each is listed again because a call in another list" +
 	" of this message names the same tool and could be taken for it: that one is a call of its own, made as" +
@@ -380,55 +332,26 @@ func EarlierRoundNote(fire bool) string {
 
 // ToldApartNote is the note a told call's line ends with where another call
 // the same message tells could be taken for it (internal/agent/runner's
-// notes): a line of another list of the message, a line or a tally of the
-// work already done that it renders, or a held call one of its leads tells
-// what became of, or the call a person approved for it. Without it, the words
-// over the late calls and over the calls the session may already show, which
-// say a call shown twice is ONE call, would let a model read the two as one
-// and lose one: take its outcome for the other's, or leave undone what it
-// did not do.
-//
-// TRUE WHEREVER IT IS PRINTED: every partner is a call this message tells,
-// never the marked call itself (two lists of one message hold no call twice,
-// a rendered round is not the round whose calls are told, and a lead's own
-// held call is spared), and the engine could not rule out that one is taken
-// for the other. So it says "could be taken for", the one reason true on every
-// path, as [shownAgainHeader] does, and never which call: the partner may be
-// a tally's count or a lead's words, which no line names. The prior-work line
-// itself carries none: its render is shared with the reviewer.
+// notes): a line of another list, a line or tally of the work already done, a
+// held call a lead tells, or the call a person approved. Without it, the words
+// saying a call shown twice is ONE call would let a model read two as one and
+// lose one. TRUE WHEREVER PRINTED: every partner is a call this message tells,
+// never the marked call itself. So it says "could be taken for", as
+// [shownAgainHeader] does, and never which call: the partner may be a tally's
+// count or a lead's words, which no line names. The prior-work line carries
+// none: its render is shared with the reviewer.
 const ToldApartNote = "(a call of its own: another call this message tells could be taken for it)"
 
 // otherCallsHeader heads the calls the session above may show that no list of
-// the brief below names ([AfterSave.Other]), and otherCallsOpening opens them.
-// otherCallsClosing follows their parts: whatever such a call reads like, it is
-// a call of its own.
-//
-// WHY A SECTION OF ITS OWN, AND WORDS RATHER THAN LINES. The words over the
-// late calls, and over the calls the session may already show, say a call
-// shown both above and in the list is ONE call, made once; a call the session
-// shows that the engine holds is listed again where a told call could be taken
-// for it ([shownAgainHeader]), and one the same message tells is marked
-// ([ToldApartNote]). But the session may also show calls the engine cannot
-// list: an earlier turn's, of which it keeps no call; an earlier round's where
-// the session may hold them only in a summary's words, which no value of a
-// line can be compared with; one the record no longer lists one by one, of
-// which it keeps a tool and a count; and a worker's under a delegation, which
-// reaches the session only as the worker's report. Each could be taken for a
-// told call and lose it, so the section says they may be shown, by the tools
-// the told calls name, and that none of them is a listed call.
-//
-// TRUE OF EVERY PART IT PRINTS: "may" of each (internal/agent/runner's
-// otherCalls decides each part only where its calls may be in the session),
-// and "no list below holds one by one" and the closing of all: the record
-// lists a call or counts it, never both; an earlier turn's call is never this
-// turn's; a worker's call is never one of the run's own, which are the only
-// calls a list below holds; and an earlier round's call alike a told one is
-// listed again, so the part names only the tools of the ones that are not.
-// NEVER "NO LIST BELOW NAMES": the record's tally of the calls it no longer
-// lists prints below (AfterSave.Tally), and it names the same calls by tool
-// that a part names, so a model trusting such words would read the part's
-// calls as others than the tallied ones and count them twice. A tally counts
-// calls and holds none of them one by one, so the words stay true beside it.
+// the brief below names ([AfterSave.Other]); otherCallsOpening opens them and
+// otherCallsClosing follows their parts. WHY WORDS, NOT LINES: the engine
+// cannot list these calls (an earlier turn's, an earlier round's held only in a
+// summary, ones kept only as a tool and a count, a worker's, which reaches the
+// session only as its report), yet each could be taken for a told call and
+// lose it. TRUE OF EVERY PART: "may" of each (runner's otherCalls), and "no
+// list below holds one by one": the record lists a call or counts it, never
+// both. NEVER "NO LIST BELOW NAMES": the tally (AfterSave.Tally) names the same
+// calls by tool, so such words would have a model count them twice.
 const (
 	otherCallsHeader  = "## Other calls the session above may show"
 	otherCallsOpening = "The session above may also show calls no list below holds one by one:"
@@ -514,37 +437,16 @@ func otherCalls(o OtherCalls) string {
 
 // lateCallsHeader introduces the calls of the round that finished only after
 // the run that made them stopped waiting for them, and the ones still in flight
-// as the round was read ([AfterSave.Late]): calls an earlier run of the work
-// made that were still running when a relaunch carried the work on, which its
-// record took only after that run was replaced; calls a run gave up on, or
-// whose session ended under them, before they returned; and calls whose outcome
-// is unknown, not recorded as finished when the round's collection stopped
-// waiting for them (internal/agent/runner's UnfinishedNote). TOLD UNDER WORDS
-// OF THEIR OWN, WHATEVER THE SESSION'S END, since no point tells them and each
-// of the other headings is untrue of them: the session above may show such a
-// call with no outcome, as still running, as interrupted or as failed, its
-// harness having died, given up on it, been answered that it was still running
-// as its session on the bridge ended, or been replaced before the call
-// returned; and an earlier message may have told it: a brief, or the item
-// handing it to the job working as it landed. So it is said to be ONE call,
-// made once, whose outcome as told here stands, never one the session lacks.
-//
-// NEVER THAT THE CALLS FINISHED, NOR THAT EVERY ERROR FAILED. A call still in
-// flight is failed on the record, so that nothing takes it for a delivery or a
-// submission, and its line says its outcome is unknown and that what it did may
-// have taken effect. Under words saying the calls finished after their run
-// stopped waiting for them, and that one marked `→ error` did not take effect,
-// the section contradicted that line, and a run that trusted its words made
-// the call again: a second post or delegation, the duplicate this section
-// exists to prevent. So the words say a call marked `→ error` did not take
-// effect unless its line says its outcome is unknown, in the line's own terms,
-// and that such a one may have, to be checked before it is made again. And
-// they are true of every such call, as the line's are: one still running as the
-// turn stopped waiting for it, one whose process stopped, and one that had
-// returned, its harness handed its answer, whose update the store had not
-// taken. Its run never stopped waiting for that last one, so of each call the
-// words say only that it is one its run stopped waiting for before it
-// finished, or one whose outcome is unknown.
+// as the round was read ([AfterSave.Late]), and ones whose outcome is unknown
+// (internal/agent/runner's UnfinishedNote). TOLD UNDER WORDS OF THEIR OWN,
+// WHATEVER THE SESSION'S END: the session may show such a call with no outcome,
+// as running, interrupted or failed, so it is said to be ONE call whose outcome
+// as told here stands. NEVER THAT THE CALLS FINISHED, NOR THAT EVERY ERROR
+// FAILED: a call in flight is failed on the record, its line saying its outcome
+// is unknown. Words saying `→ error` did not take effect contradicted that
+// line, and a run trusting them made the call again (a second post or
+// delegation). So the words say it did not take effect unless its line says its
+// outcome is unknown: that one may have, so check before making it again.
 const lateCallsHeader = "## Calls the run that made them stopped waiting for, or whose outcome is unknown" +
 	"\nA run of this work made these calls through your tools, and each is one that run stopped waiting for" +
 	" before it finished (it gave up on it, or it was cut off or replaced) or one whose outcome is unknown." +
@@ -605,17 +507,14 @@ func LateCallArrived(outcome, call string, submission bool) string {
 // earlierSubmission tells a run that a successful `submit_work` among the calls
 // listed before it, under [calledAfterHeader], [calledSinceHeader] or
 // [calledBeforeHeader], is no submission of the work it carries on. Every call
-// a brief tells was made before the relaunch whose brief tells it, and none of
-// those is the work's submission (internal/agent/runner's sinceAnswer and
-// carriedRound): the collection takes a submission only from the calls made
-// after the round's last answer, so one made before a run's question, or
-// before an earlier answer, is not the round's; a round lost, or refused on a
-// replaced sign-in or by its provider in a session it continued, whose calls
-// since that answer hold one is collected on it, never carried on, so a brief
-// carrying such a round on tells only one made before that answer; and a
-// send-back's continuation can tell the submission its review sent back. Told
-// as `→ success` with no such word, it read as the work's: a run that took it
-// for done could end without its own, and the work be rescued as incomplete.
+// a brief tells was made before the relaunch whose brief tells it, and none is
+// the work's submission (internal/agent/runner's sinceAnswer and carriedRound):
+// the collection takes a submission only from calls after the round's last
+// answer; a lost or refused round whose calls since that answer hold one is
+// collected on it, never carried on; and a send-back's continuation can tell the
+// submission its review sent back. Told as `→ success` alone, it read as the
+// work's: a run taking it for done could end without its own, and the work be
+// rescued as incomplete.
 const earlierSubmission = "A `" + toolname.SubmitWork + "` among them does NOT stand as this work's" +
 	" submission: the work was carried on after it. When your work is done, call `" + toolname.SubmitWork +
 	"` yourself."
@@ -623,21 +522,14 @@ const earlierSubmission = "A `" + toolname.SubmitWork + "` among them does NOT s
 // heldSubmission tells a run that a successful `submit_work` of its round that
 // the session above shows, and that no list of the brief tells, is no
 // submission of the work it carries on ([AfterSave.HeldSubmission]). It stands
-// no more than a listed one ([earlierSubmission]), and for the same reason:
-// the session holding it was saved past it, or a reading of its archive, cut
-// off, found it holding the call (internal/agent/runner's heldReading), or it
-// is the copy its job's own box holds where that job's harness ended its own
-// run, so it was made before the relaunch whose brief continues that session. The commonest is a run that
-// submitted and then asked, which its gate allows: the copy in its box shows
-// the call answered "submitted", and the cut its answer's opening takes falls
-// past it (internal/agent/runner's sinceAnswer).
-//
-// SAID FIRST, WHETHER OR NOT A CALL IS LISTED, in words true of the session
-// rather than of a list. That copy is told no call at all, so its brief was the
-// answer's lead alone, which says to finish the task as it asks: a run that
-// read its transcript's submission as done ended without its own, and the work
-// was rescued as incomplete. Said under a list, as [earlierSubmission] is, it
-// would name a call that list does not hold.
+// no more than a listed one ([earlierSubmission]), and for the same reason: it
+// was made before the relaunch whose brief continues that session (internal/
+// agent/runner's heldReading). The commonest is a run that submitted and then
+// asked, which its gate allows: the cut its answer's opening takes falls past
+// the call (runner's sinceAnswer). SAID FIRST, WHETHER OR NOT A CALL IS LISTED,
+// in words true of the session, not of a list: that copy is told no call, so a
+// run reading its transcript's submission as done ended without its own. Under
+// a list it would name a call that list does not hold.
 const heldSubmission = "A `" + toolname.SubmitWork + "` the session above shows does NOT stand as this" +
 	" work's submission: the work was carried on after it. When your work is done, call `" +
 	toolname.SubmitWork + "` yourself."
@@ -747,21 +639,17 @@ type AfterSave struct {
 	Subagents []SubagentCalls
 
 	// Shown are calls the session may show that a call told in Calls, Late or
-	// Subagents could be taken for (internal/agent/runner's readAlike: the same tool, and
-	// arguments neither call's line tells apart, or not comparable): first the
-	// calls of the turn's earlier rounds that the brief tells nowhere else, each
-	// line ending with [EarlierRoundNote], then the round's own calls the session
-	// holds, as the prior-work ledger renders them within its budgets, under one
-	// read cap with the other lists', spent on these after every other
-	// (ledger.FormatCallGroups), "" for none, and "" too where the cap left it no
-	// call to list, never a count of reads alone. Told after Calls and before
-	// Late, in a section of their own ([shownAgainHeader]), whose words say the
-	// session may show each and that the told one could be taken for it and is a
-	// call of its own: the words above Calls (where the session may already show
-	// them) and above Late say a call shown both in the session and in the list
-	// is ONE call, so a told call whose like the session shows could be read as
-	// that call and lost. Never set for a run that starts a session of its own
-	// ([CalledBefore]), which holds no call of the round.
+	// Subagents could be taken for (internal/agent/runner's readAlike: the same
+	// tool, and arguments neither line tells apart, or not comparable): first
+	// earlier rounds' calls the brief tells nowhere else, each line ending with
+	// [EarlierRoundNote], then the round's own calls the session holds, rendered
+	// as the prior-work ledger does under the one read cap, spent on these after
+	// every other (ledger.FormatCallGroups). "" for none, and where the cap left
+	// no call, never a count alone. Told after Calls and before Late in a section
+	// of their own ([shownAgainHeader]): the words over Calls and Late say a call
+	// shown in both places is ONE call, so a told call whose like the session
+	// shows could be read as that one and lost. Never set for a run that starts a
+	// session of its own ([CalledBefore]), which holds no call of the round.
 	Shown string
 
 	// Other is what the session may show that no list of the brief names
@@ -772,22 +660,17 @@ type AfterSave struct {
 	Other OtherCalls
 
 	// Late are the calls of the round that finished only after the run that
-	// made them stopped waiting for them — its record took them after that run
-	// was replaced by a relaunch that carried the work on
-	// (sandbox.BridgeCall.Late), or the run gave up on them, or its session
-	// ended, before they returned (sandbox.BridgeCall.Abandoned) — as the
-	// prior-work ledger renders them within its budgets, under one read cap
-	// with Subagents', Calls', Owed's and Shown's, spent on these first, "" for
-	// none: none of them is among Calls. Told in a section of their own, under
-	// [lateCallsHeader], whatever Interrupted says ([lateBeforeHeader] for a
-	// run that starts a session of its own).
+	// made them stopped waiting for them (sandbox.BridgeCall.Late), or that the
+	// run gave up on or whose session ended before they returned
+	// (sandbox.BridgeCall.Abandoned), rendered as the prior-work ledger does
+	// under the one read cap, spent on these first, "" for none; none is among
+	// Calls. Told in a section of their own, under [lateCallsHeader], whatever
+	// Interrupted says ([lateBeforeHeader] for a run that starts a session).
 	//
 	// AND THE CALLS STILL IN FLIGHT AS THE ROUND WAS READ, rendered and capped
 	// with them: each one whose outcome is unknown (ledger.Call.Unfinished),
-	// failed, its line saying that what it did may have taken effect. None of
-	// those finished on the record, so the section's words never say its calls
-	// finished, and say an error whose line says its outcome is unknown may
-	// have taken effect.
+	// failed, its line saying it may have taken effect. None finished on the
+	// record, so the section's words never say its calls finished.
 	Late string
 
 	// LateSubmission says a successful `submit_work` is among Late, which is
@@ -808,57 +691,26 @@ type AfterSave struct {
 }
 
 // CalledAfter is the section telling a run that continues a session what its
-// run did through the seat's tools after the session was saved: the calls the
-// record lists, then how many more it kept only in a tally and that tally, the
-// way every other reader of a long run's calls is told what was dropped — of a
-// session cut off, as calls it may already show ([AfterSave.Interrupted]) —
-// and then, in a section of their own, the calls that finished only after the
-// run that made them stopped waiting for them and the ones whose outcome is
-// unknown ([AfterSave.Late]), and how many more such calls the record dropped
-// ([AfterSave.LateDropped]). "" where there is none of any and the session
-// holds no submission of its round.
+// run did through the seat's tools after the session was saved ([AfterSave]),
+// "" where there is none and the session holds no submission of its round.
 //
-// THE READS AN EARLIER MESSAGE COUNTED WITHOUT LISTING THEM COME FIRST
-// ([AfterSave.Owed]), in a section of their own: the session holds them only
-// as that count, they are the oldest calls the brief tells, and they are told
-// in words true of reads the session was told were made, never as calls after
-// its save. Under the words of calls after a save they would be calls its own
-// run made after it was saved, which they are not.
+// THE TALLY ONCE, beside the LAST count that needs it in section order (reads
+// dropped, calls dropped after the save, late calls dropped), since every count
+// says the tally is below it ([tallyBesideLast]).
 //
-// THE TALLY ONCE, beside the LAST count that needs it in the order the
-// sections come (the reads dropped since the earlier message counted them,
-// then the calls dropped after the save, then the late calls dropped), since
-// every count says the tally is below it ([tallyBesideLast]).
-//
-// THE CALLS A READING TOLD UNDER SUBAGENTS' NAMES COME RIGHT AFTER THE CALLS
-// SINCE THE SAVE ([AfterSave.Subagents]), and THE CALLS THE SESSION SHOWS THAT
-// A TOLD CALL COULD BE TAKEN FOR AFTER THEM AND BEFORE THE LATE ONES
-// ([AfterSave.Shown]), each in a section of its own: so the order is the held
-// submission, the other calls the session may show ([AfterSave.Other]), the
-// owed reads, the calls since the save, the subagents' calls, the calls
-// listed again, then the late calls. They follow the list
-// most of their likes are in, and the late section, whose words also say a
-// call shown twice is one, stays last, as it is on every path. THE OTHER CALLS
-// COME BEFORE EVERY LIST, since their words speak of the lists below them, and
-// list no call, so every list's words stay true after them.
-//
-// A SUCCESSFUL SUBMISSION AMONG ANY LIST is said to be none of the work's,
-// right after the list it is in and in words true of that list: the calls
-// after the save ([AfterSave.EarlierSubmission]), each subagent's
-// ([SubagentCalls.Submission]) and the late ones ([AfterSave.LateSubmission]). AND ONE THE SESSION HOLDS IS SAID FIRST
-// ([AfterSave.HeldSubmission]), before every section and where none lists a
-// call: it is in no list, and the session that shows it is the one the brief
-// continues. A submission listed again is one of those, so its section says
-// nothing of it.
-//
-// A LINE OF CALLS, OF A SUBAGENT'S OR OF LATE MAY END WITH [ToldApartNote],
-// where another call the message tells could be taken for it (internal/agent/runner's notes): the
-// caller's words, already in the lines it hands, as each line of Shown that
-// ends with [EarlierRoundNote] is. Nothing here reads them, and no header
-// needs them: each header stays true of a marked line, which only says the
-// call is one of its own.
+// A LINE MAY END WITH [ToldApartNote] (internal/agent/runner's notes): the
+// caller's words, already in the lines it hands, as with [EarlierRoundNote].
+// Nothing here reads them, and no header needs them.
 func CalledAfter(after AfterSave) string {
 	var sections []string
+	// THE ORDER: the held submission first, where none lists a call; the other
+	// calls before every list, since their words speak of the lists below and
+	// list no call; the owed reads, in words true of reads the session was told
+	// were made, never as calls after its save; the calls since the save; the
+	// subagents' and listed-again sections after the list most of their likes
+	// are in; the late section, whose words also say a call shown twice is
+	// one, last on every path. A successful submission in a list is said to be
+	// none of the work's right after that list, so a listed-again one says nothing.
 	if after.HeldSubmission {
 		sections = append(sections, heldSubmission)
 	}
@@ -1051,32 +903,16 @@ const lateBeforeHeader = "## Calls the runs before you stopped waiting for, or w
 
 // CalledBefore is the section telling a run that starts a session of its own,
 // carrying a round on (internal/agent/runner's continueAgentRun), what the runs
-// before it did through the seat's tools: every call of the round, as
-// internal/agent/runner's calledAfter tells them from the round's start. First
-// the calls its record lists, with a successful `submit_work` among them said
-// not to stand ([AfterSave.EarlierSubmission]), then how many more it kept only
-// in a tally; and then, in a section of their own, the calls that finished only
-// after the run that made them stopped waiting for them and the ones whose
-// outcome is unknown ([AfterSave.Late]), with a late submission said not to
-// stand and how many such calls the record dropped; and the record's tally
-// once, beside the last of those counts, which each says is below it
-// ([tallyBesideLast]). Read from Calls, EarlierSubmission, Dropped, Tally,
-// Late, LateSubmission and LateDropped; "" where the round made no call.
-//
-// IN WORDS OF ITS OWN, never [CalledAfter]'s: those speak of a session above,
-// and a run of its own has none, and remembers none of the calls. Told them as
-// calls made after a save, or ones the session may show, it would look for
-// them in a transcript it does not have. Told nothing of them, the reseed
-// alone saying only that the run before it did things through the seat's
-// tools, it could make them again: a second post, a second delegation.
-//
-// A LINE MAY END WITH [ToldApartNote], where another call the message tells
-// could be taken for it: a line of the other list, a line or a tally of the
-// prior work the fresh brief renders, or a held call a lead of it tells
-// (internal/agent/runner's notes). [lateBeforeHeader] says each late call is
-// ONE call, made once, and a model holding both that and an alike line of
-// work already done could read them as one. The caller's words, already in
-// the lines it hands; nothing here reads them.
+// before it did through the seat's tools: every call of the round, listed
+// then tallied once beside the last count ([tallyBesideLast]), with a
+// successful `submit_work` said not to stand ([AfterSave.EarlierSubmission]),
+// and the late calls in a section of their own ([AfterSave.Late]). "" where
+// the round made no call. IN WORDS OF ITS OWN, never [CalledAfter]'s: a run of
+// its own has no session above, so told calls made after a save it would look
+// for them in a transcript it does not have; told nothing, it could make them
+// again (a second post or delegation). A LINE MAY END WITH [ToldApartNote]
+// (runner's notes), which the caller supplies: [lateBeforeHeader] says each
+// late call is ONE call, which a model could read as one with an alike line.
 func CalledBefore(told AfterSave) string {
 	var sections []string
 	dropped := ""
@@ -1152,28 +988,16 @@ const notesAgainHeader = "## Notes this turn read that the session above may not
 
 // NotesReadAgain is the section that tells a session again notes the turn has
 // read that it may not show, each already rendered as the model reads a note
-// ([SteerMessage]), "" for none: every note the turn has read, to a session its
-// run may have been cut off in; every note from a read whose take's answer
-// never reached its harness on, to one whose harness ended its own run; and,
-// with them, a note the run's bridge served its harness, which may have
-// delivered it unconfirmed, whether the turn read it before this message or
-// reads it in it. The session may not show them, and may show some.
-//
-// NEVER "EVERY NOTE" IN ITS WORDS: the notes before such a read are the
-// session's, and are not told again.
-//
-// SAID AS NOTES IT MAY ALREADY SHOW, ONE NOTE WHEREVER SHOWN, AND COUNTED. Each
-// note says it stands for the rest of the turn, so a model reading one both above
-// and here could do twice what it asks; and the notes the brief is the first to
-// read follow these in the same form, which the count tells apart.
-//
-// AND THE NOTES AFTER THEM AS ONES THE TURN HAD NOT READ, never as new to the
-// session. Which notes the turn has read is the run's record's word, and a
-// harness can be handed a note before the record says it was read: OpenCode's
-// delivery is recorded read only once its plugin confirms it. A note the run's
-// bridge recorded serving is told among these, however it was delivered
-// (internal/agent/runner's toldNotes); one a bridge of an older build served is
-// not marked, and the record cannot tell it from a note no harness was handed.
+// ([SteerMessage]), "" for none: the notes the turn read that the session may
+// not show (every note to a session cut off; every note from a read whose
+// answer never reached its harness; a note the bridge served its harness
+// unconfirmed), told as notes it MAY ALREADY SHOW, ONE NOTE WHEREVER SHOWN, AND
+// COUNTED: each says it stands for the rest of the turn, so a model reading one
+// twice could do what it asks twice. NEVER "EVERY NOTE": earlier ones are the
+// session's. The notes after them are ones the turn had NOT READ, never new to
+// the session: a harness can be handed a note before the record says it was
+// read (OpenCode's is recorded only once its plugin confirms it); a note the
+// bridge recorded serving is told among these (runner's toldNotes).
 func NotesReadAgain(notes []string) string {
 	if len(notes) == 0 {
 		return ""
@@ -1190,24 +1014,17 @@ func NotesReadAgain(notes []string) string {
 }
 
 // BoxReplaced is what a run that continues its session in a box other than the
-// one the session was last worked in is told beside its continuation: the
-// facts a fresh run's reseed carries — a fresh checkout, which branch to check
-// out, the uncommitted work gone — and that the session's absolute paths were
-// another machine's. branch is the work-in-progress branch the session pushed,
-// where the engine knows it, and home the earlier box's home, where it knows
-// it; each is the engine's record of the session, defused by the caller.
-//
-// checkout is the tool the run's surface checks a repository of
-// Gitlet out with (`code_checkout`, ADR-0093), "" where it
-// offers none: a company that hosts no code. WHERE IT OFFERS ONE, "a FRESH
-// checkout" is true only of a repository the box's setup clones. One the
-// session checked out of Gitlet is in no box until a checkout
-// gives it, since nothing is cloned at launch, so a new box holds none of
-// them: the run is told to check each out again — the same branch and
-// access, and no base, so it is cloned at the branch's head with everything
-// pushed there (a round carried on is answered its held grant from that head;
-// any other launch resolves the branch's head anew) — rather than told a
-// checkout is in front of it that is not.
+// one the session was last worked in is told beside its continuation: a fresh
+// checkout, which branch to check out, the uncommitted work gone, and that the
+// session's absolute paths were another machine's. branch (the session's pushed
+// branch) and home (the earlier box's home) are "" where unknown, defused.
+// checkout is the tool that checks a repository of Gitlet out (`code_checkout`,
+// ADR-0093), "" where the surface offers none. WHERE IT OFFERS ONE, "a FRESH
+// checkout" is true only of a repository the box's setup clones: nothing is
+// cloned at launch, so a new box holds none the session checked out of Gitlet.
+// The run is told to check each out again, the same branch and access and no
+// base, so it is cloned at the branch's head with everything pushed there,
+// rather than told a checkout is in front of it that is not.
 func BoxReplaced(branch, home, checkout string) string {
 	var w strings.Builder
 	w.WriteString("## This run is in a new box" +
@@ -1268,29 +1085,15 @@ const KeyKeptSession = "kept_session"
 // KeptSession is what a run that starts a session of its own is told of a kept
 // session it does not continue, which its model cannot otherwise know is there
 // to read: this turn's earlier launches' (thisTurn), or the session its
-// conversation's last turn left; and that `read_session` reads it under turn's
-// id, `match` finding a word in it. turn is the engine's record, defused by the
-// caller.
-//
-// THIS TURN'S IS KEPT ONLY UNTIL THIS RUN FIRST SAVES ITS OWN, which replaces it
-// on the turn's row, so the run is told to read it before then; no time is
-// given, which pacing or a failed save would make false. The last turn's is
-// another row, which nothing this turn keeps replaces.
-//
-// A SCHEDULE'S FIRE IS TOLD IN THE SCHEDULE'S WORDS (fire), as [BuildNextTurn]
-// and the endings block tell it: elsewhere in its brief a run its schedule woke
-// is told of fires, and "this conversation's last turn" would name a turn
-// nothing else there speaks of.
-//
-// ONE SENTENCE, AND ONLY HERE: a standing sentence about the session tools
-// would ride every request of every run and repeat their descriptions; this is
-// the one place a model cannot know a session it could read exists.
-//
-// NEVER WHY IT IS NOT CONTINUED: the log's words quote what said no (a store's
-// or a router's error, a box's output); told in the engine's voice, they would
-// put a box's words outside any fence and an operator's error into a vendor
-// model's prompt, and what the run can do is the same whatever the reason:
-// read what that session did.
+// conversation's last turn left; `read_session` reads it under turn's id (the
+// engine's record, defused by the caller). THIS TURN'S IS KEPT ONLY UNTIL THIS
+// RUN FIRST SAVES ITS OWN, so the run is told to read it before then; no time
+// is given, which pacing or a failed save would make false. A SCHEDULE'S FIRE
+// IS TOLD IN ITS WORDS (fire), as [BuildNextTurn] does. ONE SENTENCE, ONLY
+// HERE: a standing sentence would ride every request of every run. NEVER WHY IT
+// IS NOT CONTINUED: the log's words quote what said no (a store's error, a
+// box's output) and told in the engine's voice would put them outside any
+// fence; what the run can do is the same whatever the reason.
 func KeptSession(turn string, thisTurn, fire bool) string {
 	said := nextTurnWordsFor(NextTurn{Fire: fire})
 	whose, read := "This "+said.whole+"'s last "+said.turn, ". Read what it did"
@@ -1363,31 +1166,15 @@ func (w nextTurnWords) named(turn string) string {
 // BuildNextTurn is the lead of a run that continues the session its
 // conversation's last turn left: the turn boundary the transcript cannot know,
 // that what the session read may be stale and what it set up is set up anew,
-// that its box is a new one — a session the conversation's last turn left is
-// continued only in a box of its own (internal/sandbox, restore.go) — on a
-// fresh checkout, or, where its surface offers Gitlet's checkout,
-// holding none of the repositories the session checked out of that host, as
-// [BoxReplaced] tells a run — and, where its harness was cut off, that it may
-// end mid-call.
-// The turn's fresh brief follows it, which tells how the conversation's earlier
-// turns ended and what this turn is asked. A schedule's fire is told the same
-// in the schedule's words ([NextTurn.Fire]): the schedule's last fire left the
-// session, and the schedule firing again, not a message, is what woke the run.
-//
-// NOT THE SAME-TURN LEAD ([BuildContinuedRound]), which says "the same turn,
-// and the same session": the session above is another turn's, which ended, and
-// this turn's task is none of what it read.
-//
-// AND NEVER "THROUGH" A TURN THAT WENT ON PAST ITS SESSION ([NextTurn.WentOn]):
-// that session was kept while the turn still worked, so the lead says it ends
-// where it was kept, that what the turn did after it is not above, and that how
-// the turn ended is told below — saying too, of a turn that was then lost, that
-// it was. Told it ran through the turn's end, the run would take the turn's
-// last state for the session's, and redo or contradict what the turn did after
-// it. A turn that was lost ([NextTurn.Lost]) and whose end did not say it went
-// on is told through, which is as far as the engine knows the session runs,
-// and that the session may not hold the last of what it did: no frame of that
-// turn saw it end.
+// that its box is a new one (internal/sandbox, restore.go; [BoxReplaced]) and,
+// where its harness was cut off, that it may end mid-call. A schedule's fire is
+// told in its words ([NextTurn.Fire]). NOT THE SAME-TURN LEAD
+// ([BuildContinuedRound]): the session above is another turn's. NEVER "THROUGH" A TURN THAT WENT ON PAST ITS
+// SESSION ([NextTurn.WentOn]): the session ends where it was kept, so the lead
+// says what the turn did after it is not above, or the run would take the
+// turn's last state for the session's and redo or contradict it. A turn lost
+// ([NextTurn.Lost]) without that is told through, as far as the engine knows the
+// session runs, and that it may not hold the last of what it did.
 func BuildNextTurn(m NextTurn) string {
 	said := nextTurnWordsFor(m)
 	var w strings.Builder
@@ -1458,40 +1245,16 @@ func nextTurnSpan(m NextTurn, said nextTurnWords) (span, ended string) {
 
 // NextTurnAgain is the lead of a run that continued the session its
 // conversation's last turn left, as a later brief to a session of the work that
-// may lack it tells it again (internal/agent/runner's leadsAgain): the turn
-// boundary [BuildNextTurn] said, in the past tense and in a schedule's words for
-// a schedule's fire, the two things that boundary makes stale, and then, of a
-// session that began as the one the conversation's earlier turns left, what
-// [BuildNextTurn] said of it: that its files from before the turn are the
-// earlier turn's box's, that it ends where it was kept while that turn still
-// worked ([NextTurn.WentOn]) or may not hold the last of a lost one
-// ([NextTurn.Lost]), and, where it was cut off when it was kept, that it may
-// hold a call with no result from before the turn began. The task it opened
-// with follows it, rendered again by its teller.
-//
-// NEVER THAT THE SESSION ABOVE BEGAN THERE: every claim of it is said of a
-// session that began as the one those turns left, whichever the session above
-// is. The lead reaches a session other than the one its brief went to: a
-// continuation that may be a summary is told every lead the run keeps
-// (internal/agent/runner's leadsAgain), the task of a base continuation whose
-// box could not take the session up, or of one a later launch of the turn
-// gave up for a session of its own, among them, and it hands them on as leads
-// its own brief told, so the job's record marking it says no more of where the
-// session began. Told that it began as the conversation's last turn left it, a
-// session that began with a fresh brief would read its own opening as another
-// turn's, and its files as another box's.
-//
-// NEVER THE NEW BOX. [BuildNextTurn] tells a run it is in a new box, on a fresh
-// checkout or holding none of the repositories the session checked out of
-// Gitlet, where the earlier box's paths were: true of the box that lead's run
-// started in, and stale, or false, of the box a later job continues the
-// session in, which may be that very box after its job worked there. The
-// brief that tells this again says the box it is in, in its own lead and its
-// cut-off section, so nothing here repeats a present-tense claim about a box.
-//
-// AND NEVER "EVERYTHING ABOVE": the session above may hold this turn's own work
-// after the boundary, where its harness wrote any of it, so the boundary is
-// told as where the turn began rather than where the session ends.
+// may lack it tells it again (runner's leadsAgain): the turn boundary
+// [BuildNextTurn] said, in the past tense, what it makes stale, and, of a session that began as the one the earlier turns left, that
+// its files are the earlier box's, that it ends where it was kept
+// ([NextTurn.WentOn]) or may not hold the last of a lost turn ([NextTurn.Lost]),
+// and any cut-off call. NEVER THAT THE SESSION ABOVE BEGAN THERE: the lead
+// reaches sessions other than the one its brief went to (leadsAgain hands on
+// every lead the run keeps), so a session begun with a fresh brief would read
+// its own opening as another turn's. NEVER THE NEW BOX: stale or false of the
+// box a later job continues in; the brief says its own box. NEVER "EVERYTHING
+// ABOVE": the session may hold this turn's own work after the boundary.
 func NextTurnAgain(m NextTurn) string {
 	said := nextTurnWordsFor(m)
 	_, ended := nextTurnSpan(m, said)
@@ -1571,33 +1334,17 @@ const baseCutOffAgain = "**It was cut off when it was kept,** so before this tur
 const leadsAgainHeader = "## Messages that carried this work on that the session above may not show"
 
 // LeadsToldAgain is the section that tells a session again the messages that
-// carried its work on that it may not show, each already rendered under a
-// heading of its own (internal/agent/runner's leadsAgain), "" for none: the
-// answers, the review and the turn's task the brief of the job whose session it
-// continues opened with, or told again in turn, where that session is not known
-// to hold that brief (its harness cut off, or never known to have ended its
-// own run), and every one the run keeps where its harness may hand it as a
-// summary, in the order they were sent, one that cannot be read here or a
-// review the turn's record no longer keeps said in its place ([LeadUnread],
-// [ReviewNotKept]); and how many earlier such messages are not kept to tell
-// again (cut), said rather than left out: those past the engine's bound on
-// them, and every one the store could not give back to the brief's builder,
-// all of them where its read failed, though the store may keep them still, so
-// said as not kept, never as no longer kept.
-//
-// SAID AS MESSAGES IT MAY ALREADY SHOW, ONE MESSAGE WHEREVER SHOWN, as notes
-// told again are ([NotesReadAgain]): a session cut off may hold any of them, an
-// answer read both above and here could be acted on twice, and two of them that
-// differ are told apart by their order, the later standing.
-//
-// AND NEVER WHY IT MAY NOT SHOW THEM, as [NotesReadAgain] and the calls a
-// session may not show ([CalledAfter]) never say: the section before it says
-// that, in the words its record bears out, that it was cut off
-// ([InterruptedSession], [InterruptedCopy]), that it may have been
-// ([MayBeInterruptedCopy]), or that its harness may hand it as a summary
-// ([MayCompactSession]). Said here that the run in it may have been cut off,
-// a session whose record says its harness ended its own run was told what
-// nothing says, under the very section that says its session may be whole.
+// carried its work on that it may not show, each rendered under its own heading
+// (runner's leadsAgain), "" for none: those the job's brief opened with
+// where the session is not known to hold it, and every one the run keeps where
+// its harness may summarize, in order sent (an unreadable one or a review no
+// longer kept said in its place, [LeadUnread], [ReviewNotKept]); and how many
+// earlier ones are not kept to tell (cut), said as not kept, never as no longer
+// kept: the store may keep them still. TOLD AS MESSAGES IT MAY ALREADY SHOW,
+// ONE MESSAGE WHEREVER SHOWN, as [NotesReadAgain] does: an answer read twice
+// could be acted on twice. NEVER WHY IT MAY NOT SHOW THEM: the section before
+// says that ([InterruptedSession], [InterruptedCopy], [MayBeInterruptedCopy],
+// [MayCompactSession]), and here it would say what nothing bears out.
 func LeadsToldAgain(leads []string, cut int) string {
 	if len(leads) == 0 && cut <= 0 {
 		return ""
@@ -1646,18 +1393,14 @@ const LeadUnread = "### A message that carried this work on cannot be read here"
 // messages a session is told again ([LeadsToldAgain]) where the turn's record
 // no longer keeps the round it closed whole (internal/agent/runner's
 // reviewOf): a parked turn past its share folds whole closed rounds into one
-// entry standing for them, which keeps their calls by tool and none of their
-// reviews (internal/agent/ledger's Iteration.Through), and the prior-work
-// ledger says of such a round that it is not kept on the parked turn. Never a
-// word of what the review said, which no record keeps.
+// entry keeping their calls by tool and none of their reviews
+// (ledger's Iteration.Through). Never a word of what the review said.
 //
 // IN ITS PLACE, NEVER AMONG THE EARLIER MESSAGES NOT KEPT, which the section
 // says before every message it tells: a review can follow a message the section
 // tells, and the later of two that differ stands, so said as earlier, the run
 // would take the messages before it as standing over a review that may have
-// redirected the work. And never as a message that cannot be read here
-// ([LeadUnread]), which says the engine holds a copy of it, nor as a send-back
-// that said nothing.
+// redirected the work. Nor as [LeadUnread], which says the engine holds a copy.
 const ReviewNotKept = "### A review that sent this work back, which is not kept" +
 	"\nThe round it reviewed is not kept on the parked turn, and what its reviewer said is gone with it, so it " +
 	"is not told again here."
@@ -1673,38 +1416,16 @@ const KeyAnswersBefore = "answers_before"
 const answersBeforeHeader = "## Earlier answers that carried this work on"
 
 // EarlierAnswers is the section that tells the answers that carried the turn's
-// work on before the brief that tells them, each already rendered under a
-// heading of its own that names the round it came in ([AnswerRound];
-// internal/agent/runner's earlierAnswers), oldest first; and how many earlier
-// messages that carried the work on are not kept to tell (cut), said rather than
-// left out, even where no answer is left to tell. An empty prompt for nothing
-// to tell.
-//
-// SAID AS NOT KEPT TO TELL, never as no longer kept: the cut counts the
-// messages past the engine's bound on them, and every one the store could not
-// give back to the brief's builder, all of them where its read failed, though
-// the store may keep them still. Either way the brief cannot tell them, which
-// is all it says.
-//
-// AN ANSWER IS AN INSTRUCTION TO THE TURN, NOT TO ONE ROUND, nor to the one
-// session it was told to: a person told the work what to do. A run that starts
-// a session of its own holds none of the briefs before it, and its brief told
-// it only the newest of them, the one carrying its round on now, if any: an
-// answer that carried an earlier job on, in this round or in a round a review
-// sent back, was lost to it. Told every answer of the turn, in the order they
-// came, the later of two that differ standing, each naming its round, it can
-// tell which came before a later answer, and before the review that sent its
-// round back.
-//
-// fresh is a run that starts a session of its own, whose session holds none of
-// them, which the section says. Not fresh is the section told again inside the
-// turn's task (internal/agent/runner's taskAgain), which the brief telling it
-// says the session may already show ([LeadsToldAgain]); the cut is said there,
-// once, beside every lead told again, so it is given as zero.
-//
-// BUILT WITH AN OUTLINE, each answer a section of its own under its heading, so
-// the task told again nests it a level down by the headings its builder wrote,
-// and not a byte of the words under them moves ([Prompt.Nested]).
+// work on before the brief that tells them, each under a heading naming its
+// round ([AnswerRound]; runner's earlierAnswers), oldest first, and how many
+// earlier messages are not kept to tell (cut), said as not kept, never as no
+// longer kept (the store may keep them still). AN ANSWER IS AN INSTRUCTION TO
+// THE TURN, NOT TO ONE ROUND: a run starting a session of its own was told only
+// the newest, so told every answer in order, the later of two that differ
+// standing, it can tell which came before a later answer or a send-back.
+// fresh is such a run; not fresh is the section told again inside the task
+// (runner's taskAgain), where [LeadsToldAgain] says the cut, so it is zero.
+// BUILT WITH AN OUTLINE, so the task nests each answer ([Prompt.Nested]).
 func EarlierAnswers(answers []string, cut int, fresh bool) Prompt {
 	if len(answers) == 0 && (cut <= 0 || !fresh) {
 		return Prompt{}

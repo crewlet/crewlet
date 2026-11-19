@@ -21,6 +21,14 @@
 // inline content, a copy of the adopted brand's logo or face) are reserved the
 // same way before they are stored.
 //
+// # Adopting a brand kit
+//
+// A kit's logos are stored sanitised (brandformat.Sanitize), so the bytes a
+// page serves are never the bytes a stranger uploaded. An adoption copies every
+// file the kit serves, sanitised again, beside the stylesheet generated once,
+// all under one reservation, and refuses an unreadable text colour before any
+// byte moves, so a refusal costs nothing to undo.
+//
 // # Two transports, one key
 //
 // On an S3 bucket whose boot probe proved it, a client other than an agent's
@@ -63,6 +71,13 @@
 // retry under the same operation key continues the same reservation, reuses the
 // objects its first attempt stored, and is answered with what the first one
 // landed, so a retried publish never makes a second version.
+//
+// A full object store is a refusal like any other ([StoreFull], reason
+// store_full, 507 on the surfaces that map it), never a failure held for a
+// retry: the same publish meets the same full bucket until an operator makes
+// room. It still counts as a bad publish_success event, because the refusal is
+// the deployment's rather than the client's, so a full bucket burns the
+// objective.
 //
 // Bytes are reserved before they move, and a carried object is named again
 // only by a record that finds it named: ADR-0036, whose authority this package

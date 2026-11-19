@@ -74,18 +74,13 @@ func (o *Organization) Ancestors(r *Role) []*Role {
 // fewest managers above it ([Organization.Ancestors]), ties broken by the
 // chart's own order ([Organization.AllRoles]). Nil when admit accepts no seat.
 //
-// THE MANAGEMENT CHAIN rather than the unit tree, because a seat's rank is
-// who it answers to: a root-level seat that manages nobody and a team member
-// three units down are not separated by how deeply their units nest, and a
-// unit lead is senior to its team because it manages it, which is what the
-// chain counts. A cycle ends the chain as it does for [Organization.Ancestors],
-// so a chart that expresses one ranks its members rather than looping.
+// THE MANAGEMENT CHAIN rather than the unit tree, because rank is who a seat
+// answers to, not how deeply its unit nests. A cycle ends the chain as it does
+// for [Organization.Ancestors], so a chart that expresses one still ranks.
 //
-// THE CHART'S OWN ORDER BREAKS A TIE, because it is the one order every node
-// derives identically from one document: root seats first, then each unit's
-// subtree in the order the document declares it. A map's order would give one
-// room a different answer from one message to the next, and two nodes a
-// different answer for the same one.
+// THE CHART'S OWN ORDER BREAKS A TIE, the one order every node derives
+// identically from one document (root seats, then each unit's subtree as
+// declared). A map's order would vary between messages and between nodes.
 func (o *Organization) Senior(admit func(*Role) bool) *Role {
 	var best *Role
 	bestDepth := 0

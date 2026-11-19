@@ -118,8 +118,10 @@ func TestAQuestionWithNoSourceIsNotRegistered(t *testing.T) {
 	// presented this credential, which is a fact about the request rather
 	// than about anything this process was wired with — so a node with no
 	// sources at all still answers it, and answers "no seat", which is what
-	// lets a screen say what to bind instead of looking broken.
-	if got := r.Names(); !slices.Equal(got, []string{"viewer"}) {
+	// lets a screen say what to bind instead of looking broken. And
+	// `references`, whose source is this registry's own questions: on a node
+	// with none, every reference a page draws is answered closed.
+	if got := r.Names(); !slices.Equal(got, []string{"references", "viewer"}) {
 		t.Errorf("names = %v, want only the caller's own questions", got)
 	}
 	if _, err := r.Answer(everyGrant(t), "events", nil); !errors.Is(err, queries.ErrUnknown) {
@@ -151,10 +153,10 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 	}{
 		// `viewer` answers who presented this credential, which is a fact
 		// about the REQUEST rather than about anything this process was
-		// wired with.
-		{"a node with no sources at all", queries.Sources{}, []string{"viewer"}},
+		// wired with; `references` asks this registry's own questions.
+		{"a node with no sources at all", queries.Sources{}, []string{"references", "viewer"}},
 		{"the live projection alone", queries.Sources{State: state},
-			[]string{"agent", "live_call", "tokens", "viewer"}},
+			[]string{"agent", "live_call", "references", "tokens", "viewer"}},
 		// `turn` is what made "everything that happened in this unit of
 		// work" askable at all (see migration 0015); `turns` is the list
 		// of them, which the dashboard used to fake by paging the raw
@@ -163,7 +165,7 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		// and `event_series` is the log's own time axis, which a page of
 		// rows has no dimension for.
 		{"the fleet's history alone", queries.Sources{Events: fleetOf(db.Events())},
-			[]string{"event", "event_series", "events", "phases",
+			[]string{"event", "event_series", "events", "phases", "references",
 				"trace", "turn", "turns", "viewer"}},
 		// `token_series` is the spend with a time axis, which the
 		// breakdown has no dimension for — folded from the usage domain's
@@ -175,13 +177,13 @@ func TestEachSourceRegistersItsOwnQuestions(t *testing.T) {
 		// `schedule_runs` because one schedule's fires, and what became
 		// of each, are those same replicated rows.
 		{"the usage domain alone", queries.Sources{Usage: usage.Reader{Estate: db.Replicated()}},
-			[]string{"company_feed", "page_reads", "schedule_runs", "seat_activity",
+			[]string{"company_feed", "page_reads", "references", "schedule_runs", "seat_activity",
 				"token_series", "turn_outcomes", "viewer"}},
 		{"all of them", queries.Sources{
 			State: state, Events: fleetOf(db.Events()), Usage: usage.Reader{Estate: db.Replicated()},
 		}, []string{"agent", "company_feed", "event", "event_series", "events", "live_call",
-			"page_reads", "phases", "schedule_runs", "seat_activity", "token_series", "tokens",
-			"trace", "turn", "turn_outcomes", "turns", "viewer"}},
+			"page_reads", "phases", "references", "schedule_runs", "seat_activity", "token_series",
+			"tokens", "trace", "turn", "turn_outcomes", "turns", "viewer"}},
 	} {
 		if got := registryOver(t, c.sources).Names(); !slices.Equal(got, c.names) {
 			t.Errorf("%s answers\n  %v\nwant\n  %v", c.what, got, c.names)

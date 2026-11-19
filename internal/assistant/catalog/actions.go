@@ -16,50 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/authz"
 )
 
-// A GENERIC CHANGE IS NAMED FOR WHAT IT DOES TO WHAT THE PERSON CALLS IT.
-//
-// The route table says how a change is sent and decided (its verb, its check,
-// whether it replaces); it says nothing a person reads. A card titled by its
-// method ("Change through the API") over the route and the body asked a
-// founder to review JSON to learn that it adds a Technical Writer. So the card
-// is described here, from the same diff of the resource as it is now against
-// what the change makes of it that its rows are drawn from, by one rule for
-// every route:
-//
-//   - The NOUN is what the person calls the resource: [resources] names the
-//     ones whose path says it wrong (`/config/roles/{id}` is a seat), and every
-//     other route takes the noun its path names ([RequestTitle]).
-//   - A resource that holds a list of named members (a unit's seats) is
-//     titled for the members a change adds or removes: "Add seat Technical
-//     Writer", "Remove seat QA Engineer". Any other change is titled by its
-//     verb and the record's name: "Change seat QA Engineer", "Create MCP
-//     server linear", "Delete task ENG-4".
-//   - A change that deletes, removes a member, or removes fields of what it
-//     replaces is DESTRUCTIVE ([wire.RiskDestructive]): its summary says what
-//     goes, and its note whether it can be reverted, so a removal is never one
-//     struck-through row among sixty.
-//   - A POST is titled by what its route declares it does
-//     ([authz.Effect]), since its method says nothing: a create by what it
-//     creates, a call on the act route by the tool it calls ([called]), and
-//     anything else by its action and what it acts on ([acted]): "Purge item
-//     ENG-1", "Restore page Runbook".
-//   - A change NOTHING UNDOES is destructive whatever its method: a POST
-//     that destroys, and any change decided by a verb whose row says it is
-//     irreversible ([authz.IrreversibleOf]: a purge, a room's horizon, which
-//     is a PUT). A family the registry reads further is titled and
-//     summarised from what it sends ([resource.Title], [resource.Goes]):
-//     "Erase 2 messages from #general", "Keep #general's messages for 7
-//     days"; one that takes nothing (a horizon kept for ever) is not
-//     destructive.
-//   - A record is named by what it is called, read where its path cannot
-//     say it ([generic.named]: a room by its name), else by a key a person
-//     types, else in neutral words ("the room"), never by an opaque id,
-//     which reads as nothing to anybody.
-//
-// Nothing here is the model's: the names are read from the representation,
-// the request the digest binds and a read of what it acts on, and the risk is
-// computed from the route's own declaration and its verb's row, never from
-// the model.
+// A GENERIC CHANGE IS NAMED FOR WHAT IT DOES TO WHAT THE PERSON CALLS IT: a card
+// titled by method asks a founder to review JSON, so one rule serves every
+// route, from the diff its rows are drawn from.
+//   - The NOUN is [resources]' where the path says it wrong, else the path's
+//     ([RequestTitle]).
+//   - A list of named members is titled for those a change adds or removes
+//     ("Add seat Technical Writer"); any other change by verb and record name.
+//   - A POST is titled by its declared [authz.Effect] ([called], [acted]); a
+//     record is named where its path cannot say it ([generic.named]), never by
+//     an opaque id. DESTRUCTIVE ([wire.RiskDestructive]): see [resource.Goes].
+// Nothing here is the model's: risk comes from the route's declaration and its
+// verb's row, names from the representation and a read of what it acts on.
 
 // resource is what a person calls the records one route family serves.
 type resource struct {
@@ -79,6 +47,13 @@ type resource struct {
 	// sentence its card leads with, or "" for one that takes nothing (a
 	// room's horizon set to keep everything): what the card's risk is
 	// decided by on a route whose verb nothing undoes.
+	//
+	// A change is DESTRUCTIVE ([wire.RiskDestructive]) when it deletes, removes
+	// a member or fields of what it replaces, or NOTHING UNDOES it whatever its
+	// method: a verb row marked irreversible ([authz.IrreversibleOf]: a purge,
+	// a room's horizon, which is a PUT). Its summary says what goes and its
+	// note whether it can be reverted, so a removal is never one struck-through
+	// row among sixty.
 	Goes func(s subject) string
 	// Of is the path of the record a change here is about, where that is not
 	// what its own path names: a room's horizon is the room's. A best-effort
@@ -521,14 +496,12 @@ func phrased(noun, name string) string {
 // approved by the tool's verb, the first word of every operator tool's name
 // ("Approve and react").
 //
-// A CALL, NOT A CREATE. The act route's path names a tool, and the tool alone
-// decides what the call changes: it may add, rewrite or take away. Titled as a
-// POST elsewhere was ("Create act react_to_message"), the card told the person
-// that a tool which replaces or removes what is there only adds to it. The
-// preview reads nothing for a call, so nothing about what it removes is
-// computed here: a write whose effect turns on what is there is a curated
-// write, whose preview reads it, and a call one of them makes is refused
-// ([curatedCall]).
+// A CALL, NOT A CREATE: the act route's path names a tool, which alone decides
+// whether the call adds, rewrites or takes away, so titling it a create would
+// tell the person a replacing tool only adds. The preview reads nothing for a
+// call, so nothing about what it removes is computed here: a write whose effect
+// turns on what is there is a curated write, whose preview reads it, and a
+// call one of them makes is refused ([curatedCall]).
 func called(tool string) described {
 	verb, _, _ := strings.Cut(tool, "_")
 	return described{Title: RequestTitle(ActRoute, map[string]string{"tool": tool}),

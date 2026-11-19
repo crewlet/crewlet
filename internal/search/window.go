@@ -10,22 +10,15 @@ import (
 
 // How much of the corpus lies PAST THE EMBEDDED WINDOW.
 //
-// # Why this is measured, and where
-//
 // A source's vector is computed from its opening ([EmbedInputBytes], or less
-// where the model's own bound is smaller), so whatever a long page says past
-// it is findable by its words — the keyword half indexes the whole body — and
-// never by its meaning. Whether that matters is a property of a company's own
-// corpus: a tracker of two-paragraph tasks loses nothing, a wiki of runbooks
-// may lose most of each page. Several vectors a source (each window of a long
-// text its own row) is the design that would close the gap, and it moves every
-// capacity figure in this package from documents to rows; this report is the
-// measurement that decides whether a company needs it.
+// where the model's bound is smaller), so text past it is findable by its words
+// (the keyword half indexes the whole body) and never by meaning. Several
+// vectors a source would close the gap and move every capacity figure from
+// documents to rows; this report measures whether a company needs that.
 //
-// AN OPERATOR'S REPORT, NEVER A GAUGE. It reads every source's whole body —
-// the one read the embedding duty takes pains not to make — so it belongs in
-// `crewlet search eval`, which an operator runs against a backup's copy, and
-// not in anything a node evaluates on a timer.
+// AN OPERATOR'S REPORT, NEVER A GAUGE: it reads every source's whole body, the
+// read the embedding duty avoids, so it belongs in `crewlet search eval` run
+// against a backup's copy, not on a timer.
 
 // WindowReport is how much of one corpus lies past the embedded window.
 type WindowReport struct {
@@ -43,23 +36,17 @@ type WindowReport struct {
 }
 
 // Window measures, for every corpus, how much of its text lies past an
-// embedded window of window bytes — the bound [Embedder.inputBound] applies,
-// which the caller resolves from the model the vectors were computed with.
+// embedded window of window bytes (the bound [Embedder.inputBound] applies,
+// resolved by the caller from the model the vectors were computed with).
 //
-// It counts the sources the corpora embed and nothing else — live tasks, and
-// published pages that are not in the trash. Each source's whole text is its
-// title, one space and its WHOLE body with every run of whitespace collapsed;
-// what is sent of it is formed exactly as the duty forms it — the body read to
-// the same cut, by the same expression ([taskOpening], [pageOpening]), and
-// then [Document.text] at the window — and everything past that opening is
-// past the window.
+// It counts only the sources the corpora embed: live tasks and published pages
+// not in the trash. A source's text is its title, one space and its WHOLE body,
+// whitespace collapsed; what is sent is formed as the duty forms it
+// ([taskOpening], [pageOpening], then [Document.text] at the window).
 //
-// THE READ CUT IS PART OF WHAT IS SENT, and that is why it is applied here
-// too. The duty reads a body's first [embedReadChars] characters before it
-// prepares anything, so a body whose opening is mostly whitespace — deeply
-// indented code, a padded table — prepares to LESS than the window, and the
-// text past that cut is never sent however short it is once collapsed.
-// Measured from the whole body instead, that text counted as embedded.
+// THE READ CUT IS PART OF WHAT IS SENT: the duty reads a body's first
+// [embedReadChars] characters before preparing, so a mostly-whitespace opening
+// prepares to LESS than the window and the text past the cut is never sent.
 func Window(ctx context.Context, tx *sql.Tx, window int) ([]WindowReport, error) {
 	if window < 1 {
 		return nil, fmt.Errorf("search: a window of %d bytes measures nothing", window)

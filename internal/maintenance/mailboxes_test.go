@@ -254,12 +254,67 @@ func (r *sessionRetirements) fail(err error) {
 	r.failure = err
 }
 
+// workRetirements records every call a retirement makes to re-home a seat's
+// work, what the retirement had done by then, and can be made to fail.
+type workRetirements struct {
+	mu      sync.Mutex
+	calls   []workRetirement
+	failure error
+	// runs is the run retirer of the same harness, read inside each call so
+	// a case can say whether the seat's runs were still there.
+	runs *runRetirements
+	// observe, when set, runs inside each call, as [runRetirements.observe]
+	// does.
+	observe func(seat uuid.UUID) runRetirement
+}
+
+type workRetirement struct {
+	seat     uuid.UUID
+	handle   string
+	retiring time.Time
+	// runsEnded is how many run retirements had been made by then.
+	runsEnded int
+	// seen is what the call could see of the seat: its subscriptions, and
+	// whether another node could claim it.
+	seen runRetirement
+}
+
+func (r *workRetirements) retire(_ context.Context, seat uuid.UUID, handle string,
+	retiring time.Time) error {
+
+	r.mu.Lock()
+	observe, failure := r.observe, r.failure
+	r.mu.Unlock()
+	call := workRetirement{seat: seat, handle: handle, retiring: retiring,
+		runsEnded: len(r.runs.recorded())}
+	if observe != nil {
+		call.seen = observe(seat)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, call)
+	return failure
+}
+
+func (r *workRetirements) recorded() []workRetirement {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.calls)
+}
+
+func (r *workRetirements) fail(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.failure = err
+}
+
 type mailboxHarness struct {
 	t        *testing.T
 	records  *coordmem.Fleet
 	queue    *gatedQueue
 	leases   coord.Backend
 	roster   *roster
+	work     *workRetirements
 	runs     *runRetirements
 	sessions *sessionRetirements
 	m        *maintenance.Mailboxes
@@ -284,7 +339,7 @@ func newMailboxHarness(t *testing.T, tune func(*maintenance.MailboxOptions)) *ma
 	h := &mailboxHarness{
 		t: t, records: coordmem.NewFleet(), queue: &gatedQueue{Queue: q},
 		leases: &coordmem.Backend{}, roster: &roster{}, runs: runs,
-		sessions: &sessionRetirements{runs: runs},
+		work: &workRetirements{runs: runs}, sessions: &sessionRetirements{runs: runs},
 	}
 	h.m = h.build(tune)
 	return h
@@ -296,6 +351,7 @@ func (h *mailboxHarness) build(tune func(*maintenance.MailboxOptions)) *maintena
 	h.t.Helper()
 	opts := maintenance.MailboxOptions{
 		Records: h.records, Queue: h.queue, Leases: h.leases, Roster: h.roster.read,
+		Work:         h.work.retire,
 		Runs:         h.runs.retire,
 		Sessions:     h.sessions.retire,
 		Owner:        fmt.Sprintf("retirement-%d", h.builds.Add(1)),
@@ -1159,6 +1215,97 @@ func TestARetirementEndsTheSeatsExecutorsBeforeItsSubscriptions(t *testing.T) {
 	}
 }
 
+// A RETIREMENT RE-HOMES THE SEAT'S WORK BEFORE IT DELETES THE SEAT'S MAILBOX
+// (ADR-0162): once, for the retired seat alone, by its id and under the instant
+// the retirement was marked at; while the seat's subscriptions still exist and
+// no other node can claim it; and before its runs are ended, so a run on an
+// item is still a fact the rule reads. Never inside the grace period, where a
+// removal can still be undone.
+//
+// Mutations: re-home after the subscriptions are deleted (inbox gone), outside
+// the lease (claimable), after the runs (runs ended), or on the first sweep
+// that saw the absence, and this fails on that fact.
+func TestARetirementReHomesTheSeatsWorkBeforeItDeletesItsMailbox(t *testing.T) {
+	h := newMailboxHarness(t, nil)
+	h.work.observe = h.observeRetirement
+	h.removed()
+	if n := h.mustTick(base.Add(grace - time.Minute)); n != 0 || len(h.work.recorded()) != 0 {
+		t.Fatalf("a sweep inside the grace period retired %d mailboxes and re-homed the work of %+v, "+
+			"want neither", n, h.work.recorded())
+	}
+
+	if n := h.mustTick(base.Add(grace + time.Minute)); n != 1 {
+		t.Fatalf("the sweep after the grace period retired %d mailboxes, want 1", n)
+	}
+	calls := h.work.recorded()
+	if len(calls) != 1 || calls[0].seat != seatID("swe") || calls[0].handle != "swe" {
+		t.Fatalf("work was re-homed for %+v, want once for the retired seat swe (%s)", calls, seatID("swe"))
+	}
+	call := calls[0]
+	if !call.seen.inboxThere || !call.seen.controlThere {
+		t.Errorf("the work was re-homed after the mailbox was deleted (inbox %v, control %v)",
+			call.seen.inboxThere, call.seen.controlThere)
+	}
+	if call.seen.claimable {
+		t.Error("another node could claim the seat while its work was being re-homed")
+	}
+	if call.runsEnded != 0 {
+		t.Errorf("the work was re-homed after %d run retirements, want before the seat's runs are ended "+
+			"while they are still facts", call.runsEnded)
+	}
+	// THE MARK'S OWN INSTANT, which the session removal is handed too: the
+	// one instant this attempt's operations are derived from.
+	if sessions := h.sessions.recorded(); len(sessions) != 1 ||
+		!call.retiring.Equal(sessions[0].retiring) || call.retiring.Equal(base) {
+		t.Errorf("the work was re-homed under %s, want the instant the retirement was marked at, "+
+			"the one its sessions were removed under (%+v), never the absence's %s",
+			call.retiring, sessions, base)
+	}
+	if h.inboxExists("swe") {
+		t.Error("the retired seat's inbox is still there after its work was re-homed")
+	}
+}
+
+// A SEAT WHOSE WORK COULD NOT BE RE-HOMED KEEPS ITS MAILBOX: the retirement is
+// undone before its runs are ended or anything is deleted, and the next tick
+// retries it, because a seat whose mailbox is gone is one no later sweep
+// retires, and its work would stay with nobody for good.
+//
+// Mutation: ignore the re-homer's error, and the mailbox is deleted with the
+// seat's work left where it was.
+func TestARetirementThatCannotReHomeTheSeatsWorkIsRetried(t *testing.T) {
+	h := newMailboxHarness(t, nil)
+	h.removed()
+	stale := errors.New("an item changed since it was read")
+	h.work.fail(stale)
+
+	if _, err := h.tick(h.m, base.Add(grace+time.Minute)); !errors.Is(err, stale) {
+		t.Fatalf("tick = %v, want the re-homing's failure", err)
+	}
+	if got := h.queue.deletes.Load(); got != 0 {
+		t.Fatalf("%d subscriptions were deleted although the seat's work was not re-homed", got)
+	}
+	if runs := h.runs.recorded(); len(runs) != 0 {
+		t.Fatalf("the seat's runs were ended (%+v) although its work, which reads them, was not re-homed",
+			runs)
+	}
+	if rec, _ := h.record("swe"); rec.Retiring() || !rec.AbsentSince.Equal(base) {
+		t.Fatalf("the record is %+v, want it absent since %s and unmarked", rec, base)
+	}
+
+	h.work.fail(nil)
+	if n := h.mustTick(base.Add(grace + time.Hour)); n != 1 {
+		t.Fatalf("the retry retired %d mailboxes, want 1", n)
+	}
+	// A RETRY IS MARKED ANEW, and re-homes under its own mark.
+	calls, sessions := h.work.recorded(), h.sessions.recorded()
+	if len(calls) != 2 || len(sessions) != 1 || calls[1].retiring.Equal(calls[0].retiring) ||
+		!calls[1].retiring.Equal(sessions[0].retiring) {
+		t.Errorf("the work was re-homed under %+v and the sessions removed under %+v, want the "+
+			"retry under its own mark", calls, sessions)
+	}
+}
+
 // A seat whose runs cannot all be ended keeps its mailbox: the retirement is
 // undone to an ordinary absence and retried on the next tick, exactly as one
 // whose deletes fail.
@@ -1684,8 +1831,8 @@ func TestNewMailboxesNamesEveryMissingDependency(t *testing.T) {
 	if err == nil {
 		t.Fatal("NewMailboxes accepted no dependencies")
 	}
-	for _, field := range []string{"Records", "Queue", "Leases", "Owner", "LeaseTTL", "Roster", "Runs",
-		"Sessions"} {
+	for _, field := range []string{"Records", "Queue", "Leases", "Owner", "LeaseTTL", "Roster", "Work",
+		"Runs", "Sessions"} {
 		if !strings.Contains(err.Error(), "MailboxOptions."+field) {
 			t.Errorf("the error does not name %s: %v", field, err)
 		}

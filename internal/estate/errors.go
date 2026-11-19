@@ -8,6 +8,7 @@ import (
 	"reflect"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactdata/canon"
 	"github.com/crewlet/crewlet/internal/artifactdata/query"
@@ -304,6 +305,15 @@ var sentinels = []sentinel{
 	{"atlasdomain.ErrNotDue", atlasdomain.ErrNotDue},
 	{"atlasdomain.ErrPurged", atlasdomain.ErrPurged},
 	{"atlasdomain.ErrStaleVersion", atlasdomain.ErrStaleVersion},
+
+	// The advisor log's ([AdvisorReads], [AdvisorWrites]).
+	{"advisordomain.ErrConflict", advisordomain.ErrConflict},
+	{"advisordomain.ErrExists", advisordomain.ErrExists},
+	{"advisordomain.ErrHeld", advisordomain.ErrHeld},
+	{"advisordomain.ErrIllegalMove", advisordomain.ErrIllegalMove},
+	{"advisordomain.ErrInvalid", advisordomain.ErrInvalid},
+	{"advisordomain.ErrNotFound", advisordomain.ErrNotFound},
+	{"advisordomain.ErrStaleVersion", advisordomain.ErrStaleVersion},
 	// The session bound the executor log refuses a capture past lives in
 	// executorkeep, since the sandbox that takes a session stops at it too.
 	{"executorkeep.ErrSessionTooLarge", executorkeep.ErrSessionTooLarge},
@@ -396,6 +406,7 @@ var typedKinds = []typedKind{
 
 	{"accessdomain.ErrFutureVersion", reflect.TypeFor[*accessdomain.ErrFutureVersion]()},
 	{"atlasdomain.ErrFutureVersion", reflect.TypeFor[*atlasdomain.ErrFutureVersion]()},
+	{"advisordomain.ErrFutureVersion", reflect.TypeFor[*advisordomain.ErrFutureVersion]()},
 	{"executordomain.ErrFutureVersion", reflect.TypeFor[*executordomain.ErrFutureVersion]()},
 
 	{"estate.ErrUnserved", reflect.TypeFor[*ErrUnserved]()},

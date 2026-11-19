@@ -27,7 +27,7 @@
  * # Who a change reached
  *
  * Every announced change carries an expander that asks `work_routing` for its
- * recipients: the one reason of eighteen each person was reached under, and
+ * recipients: the one reason of nineteen each person was reached under, and
  * whether it asked them anything. The three EMPTY answers are three different
  * facts and keep three sentences ([NobodyWoken]).
  *
@@ -127,6 +127,7 @@ import type {
 import { ACTIVITY_TABS, timeline, type ActivityTab, type Entry, type Source } from "./timeline.ts";
 import { useOwnRemark } from "./remark.tsx";
 import { usePaged } from "~/lib/usePaged.ts";
+import { EngineLine } from "~/components/InlineToken.tsx";
 
 /** How often the newest page of each history is asked again: nothing pushes them. */
 const ACTIVITY_POLL_MS = 30_000;
@@ -927,7 +928,9 @@ export function TurnCard({
               turn repeating the reason in full body text read as the turn's
               content. */}
           {turn.summary ? (
-            <p className="task-turn-summary">{turn.summary}</p>
+            <p className="task-turn-summary">
+              <EngineLine text={turn.summary} refs={undefined} />
+            </p>
           ) : (
             <p className="task-turn-nosummary">No summary. See the trace.</p>
           )}
@@ -935,7 +938,7 @@ export function TurnCard({
             <div className="task-turn-review">
               <CornerDownLeftGlyph size="sm" />
               <p>
-                <b>Reviewer:</b> {turn.review}
+                <b>Reviewer:</b> <EngineLine text={turn.review} refs={undefined} />
               </p>
             </div>
           )}

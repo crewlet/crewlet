@@ -7,18 +7,16 @@ import (
 
 // AsksStepUp is the one rule every write that sets an agent's access is held
 // to (D10): whether moving one seat's lane from before to after needs a fresh
-// step-up from a person, as a raise to an administration grant does. The
-// Agents tab's save, its `keep` action and every authored write of the
-// company document ask it.
+// step-up from a person. The Agents tab's save, its `keep` action and every
+// authored write of the company document ask it.
 //
 // IT IS [NeedsStepUp], WHICH FAILS CLOSED: a level the offer cannot vouch for
-// (one the vendor does not list, or any level of a lane whose offer could not
-// be read) is a raise where a seat turns on at it or moves to it, so a vendor
-// that did not answer never lets one through. Turning off, lowering and
-// changing nothing never are.
+// (unlisted, or any level of a lane whose offer could not be read) is a raise
+// where a seat turns on or moves to it, so a vendor that did not answer never
+// lets one through. Turning off, lowering and changing nothing never are.
 //
-// A LANE MANAGED OUTSIDE CREWLET IS NEVER A RAISE HERE: the engine grants
-// nothing on it ([ManagedExternal]), so its setting hands out no access.
+// A LANE MANAGED OUTSIDE CREWLET IS NEVER A RAISE: the engine grants nothing
+// on it ([ManagedExternal]).
 func AsksStepUp(opts Options, before, after Desired) bool {
 	if opts.Managed == ManagedExternal {
 		return false
@@ -41,21 +39,15 @@ type Offers func(kind integration.Kind) map[Lane]Options
 
 // RaisesBetween is every agent seat's lane that moving the company document
 // from prior to next raises ([AsksStepUp]): a seat new to next is compared with
-// a seat that held nothing, and a lane whose setting does not move is never
-// one. prior is nil for a company's first document. managed is whether the
-// deployment's document is written by its operator, which decides GitHub's
-// mode ([config.Company.SeatCredentialMode]).
+// a seat that held nothing. prior is nil for a first document. managed is
+// whether the operator writes the document, which decides GitHub's mode
+// ([config.Company.SeatCredentialMode]).
 //
-// A KIND THE ENGINE STARTS GRANTING IS A TURN-ON FOR EVERY SEAT ON IT. Where
-// prior handed the kind's credentials in from outside Crewlet and next has the
-// engine provision it, each seat's setting was a binding, not a grant: nothing
-// at the vendor held it. Judged as the setting it was, a level written while
-// the kind was external and a provisioning block added in a later write would
-// each move nothing, and the next sync would create the account at that level
-// with no person asked. So the seat is compared with one that held nothing.
-//
-// THE OFFER IS READ LAZILY, only for an integration whose seats the write
-// changes, since reading one asks the vendor.
+// A KIND THE ENGINE STARTS GRANTING IS A TURN-ON FOR EVERY SEAT ON IT: where
+// prior handed credentials in from outside and next has the engine provision
+// them, a seat's setting was a binding, not a grant, so judged as it was, the
+// next sync would create the account at that level with no person asked.
+// The offer is read lazily, only for an integration the write changes.
 func RaisesBetween(prior, next *config.Company, managed bool, offers Offers) []Raise {
 	held := map[string]*config.Role{}
 	for _, seat := range SeatsOf(prior) {

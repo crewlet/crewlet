@@ -16,29 +16,17 @@ import (
 )
 
 // THE PROMPT, assembled in cache-friendly order: what is the same for every
-// turn first, what is the same for this person today next, and what changes
-// with every question last, so a vendor's prompt cache answers the longest
-// prefix it can (ADR-0045).
-//
+// turn first, for this person today next, what changes with every question
+// last, so a vendor's prompt cache answers the longest prefix (ADR-0045).
 //  1. Identity and rules ([identityRules]), stamped [PromptVersion].
 //  2. [provenance.StandingInstruction], the one sentence about fences.
 //  3. The company: its name, its clock's zone and today on it (ADR-0018).
-//  4. The person: their name and seat, the apps they hold, the writes they
-//     may propose, and the sentence that a list may be filtered by access.
-//  5. The conversation so far: its last [HistoryMessages] messages, each card
-//     as a one-line summary and never a raw tool answer.
+//  4. The person: name, seat, apps held, writes they may propose.
+//  5. The last [HistoryMessages] messages, each card a one-line summary.
 //  6. The question, after the page context fenced under the turn's boundary
 //     (source `page_context`, trust colleague: a screen's labels are names
-//     other people chose), or nothing about the page when the person removed
-//     it.
-//
-// The tool catalogue and the response contract follow, rendered by the
-// model's backend from the tools the surface offers (internal/providers/llm).
-//
-// THE PAGE CONTEXT IS IN THE QUESTION'S MESSAGE, not in the system prompt
-// before the conversation: it changes with every question, and anywhere
-// earlier it would invalidate every cached byte of the conversation after it
-// on every turn.
+//     other people chose). It is not in the system prompt: it changes every
+//     question and would invalidate every cached byte after it.
 
 // identityRules is the assistant's standing instruction. A reworded sentence
 // is a behaviour change, and takes a new [PromptVersion].
@@ -168,11 +156,12 @@ type promptInput struct {
 	Boundary provenance.Boundary
 	Question string
 
-	// Deep says the turn offers deep work, DeepConfigured that the company
-	// runs it at all, and Attachments are the files the question carried.
-	Deep           bool
-	DeepConfigured bool
-	Attachments    []wire.FileRef
+	// Delegates says the turn may propose a task (create_task), which is how
+	// a task too big for a turn reaches an agent seat; Attachments are the
+	// images the question carried, and ReadsImages whether its model sees them.
+	Delegates   bool
+	Attachments []wire.FileRef
+	ReadsImages bool
 }
 
 // historyEntry is one earlier message as a turn re-reads it.
@@ -198,15 +187,44 @@ func buildMessages(in promptInput) []llm.Message {
 	system.WriteString(companyBlock(in))
 	system.WriteString("\n\n")
 	system.WriteString(personBlock(in))
-	if in.Deep {
+	if in.Delegates {
 		system.WriteString("\n\n")
-		system.WriteString(deepBlock)
+		system.WriteString(delegateBlock)
 	}
 
 	out := []llm.Message{{Role: llm.RoleSystem, Content: system.String()}}
 	out = append(out, historyMessages(in.History, in.Summary)...)
 	out = append(out, llm.Message{Role: llm.RoleUser, Content: questionBlock(in)})
 	return out
+}
+
+// delegateBlock is the system prompt's sentence about a task too big for one
+// turn: it becomes a task for one of the company's agent seats, which run in
+// boxes with their own tools, budgets and review.
+const delegateBlock = "You have no shell, files or web browser of your own, and a turn is " +
+	"short. When a task needs scripts, generated files or many hours of steps (analysing a " +
+	"month of work to propose new teams, redesigning brand assets), do not attempt it: " +
+	"propose a task for one of the company's agent seats that can do it, with create_task: " +
+	"a title, a brief of what to deliver and how it will be checked, the seat to assign, " +
+	"and links to the records it concerns. Answer a single read or a single change yourself."
+
+// attachmentsBlock tells the model what the question carried and, where its
+// model takes no image, what to offer the person instead.
+func attachmentsBlock(files []wire.FileRef, readsImages bool) string {
+	if len(files) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(files))
+	for _, f := range files {
+		names = append(names, fmt.Sprintf("%s (%s, file id %s)", oneLine(f.Name), f.MediaType, f.FileID))
+	}
+	line := "The person attached: " + strings.Join(names, "; ") + "."
+	if readsImages {
+		return line + " The images are attached to this message, in that order."
+	}
+	return line + " You cannot see them: the model Ask Crewlet runs on takes no image. Say " +
+		"so, and offer what works: they can paste the text the images show, or ask an " +
+		"administrator to assign Ask Crewlet a model that reads images."
 }
 
 // historyMessages is block 5: the summary of the conversation's first messages
@@ -328,7 +346,7 @@ func redactedPage(p *wire.PageContext) *wire.PageContext {
 // the question.
 func questionBlock(in promptInput) string {
 	question := in.Question
-	if block := attachmentsBlock(in.Attachments, in.Deep, in.DeepConfigured); block != "" {
+	if block := attachmentsBlock(in.Attachments, in.ReadsImages); block != "" {
 		question = block + "\n\n" + question
 	}
 	fenced := pageFence(in.Boundary, in.Page)
@@ -339,9 +357,8 @@ func questionBlock(in promptInput) string {
 		"screen itself:\n" + fenced + "\n\nTheir question:\n" + question
 }
 
-// pageFence is a page context as every reader of it sees it, the turn's model
-// and a deep-work run alike: the screen's own description, fenced as the
-// page's. Empty for no page, and for one that does not encode, which a page
+// pageFence is a page context as the turn's model sees it: the screen's own
+// description, fenced as the page's. Empty for no page, and for one that does not encode, which a page
 // context that validated always does.
 //
 // A COLLEAGUE'S, by the one rule for a surface the engine hosts: the screen
@@ -392,12 +409,6 @@ func cardSummary(c wire.Card) string {
 		return fmt.Sprintf("[too large to read: %s]", oneLine(c.Oversize.Title))
 	case wire.CardBrief:
 		return briefSummary(c.Brief)
-	case wire.CardFile:
-		names := make([]string, 0, len(c.File.Files))
-		for _, f := range c.File.Files {
-			names = append(names, oneLine(f.Name)+" (file id "+f.FileID.String()+")")
-		}
-		return "[files: " + strings.Join(names, ", ") + "]"
 	}
 	return "[card]"
 }

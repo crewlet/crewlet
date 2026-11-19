@@ -11,18 +11,13 @@ import (
 // statement binding the reported number really does prepare while one binding
 // one more does not.
 //
-// The second half is what makes this a measurement rather than a constant with
-// a probe-shaped comment, and it is asked of the statement the number SIZES —
-// a multi-row INSERT, one parameter per row of a one-column table — never of
-// the probe's own. A probe held only to its own statement passes whatever
-// bound that statement happens to meet: `SELECT ?,?,…` met the result-set
-// width at 2 000 columns, the probe reported that as the parameter limit, this
-// case asked the same statement whether 2 001 prepared, and every applier
-// chunked to a sixteenth of the parameters the probe can report, with nothing
-// failing.
+// The second half is asked of the statement the number SIZES (a multi-row
+// INSERT, one parameter per row), never the probe's own: a probe held to its
+// own statement passes whatever bound that statement meets, as `SELECT ?,?,…`
+// met the result-set width at 2 000 columns and every applier chunked to it.
 //
-// Mutation: probe with a statement returning a column per parameter again,
-// and an insert binding one more than the reported limit prepares.
+// Mutation: probe with a statement returning a column per parameter, and an
+// insert binding one more than the reported limit prepares.
 func TestMaxVariablesIsMeasuredNotAssumed(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

@@ -210,20 +210,17 @@ func (a *Approver) invalidation(out outcome) *wire.Invalidate {
 }
 
 // refusalOf is a refused write as the person and the model read it: the route's
-// own refusal, except where the route judged the precondition the proposal
-// itself carried ([proposal.Revision.Precondition]) and found it no longer
-// holds. That `412` is about the moments between the approval's re-read and
-// the write, so it says what happened in the proposal's terms (the record
-// changed, or what the change would have created now exists) rather than in
-// headers the person never saw, under [CodeStale], the code a proposal found
-// stale before it was sent carries. A `428` is a route that takes the change
-// only with the version it was based on, which the preview's read did not
-// answer.
+// own refusal, except where the route found the proposal's own precondition
+// ([proposal.Revision.Precondition]) no longer holds. That `412` is about the
+// moments between the approval's re-read and the write, so it is told in the
+// proposal's terms (the record changed, or what it would have created now
+// exists), not in headers the person never saw, under [CodeStale] like a
+// proposal found stale before sending. A `428` is a route taking the change
+// only with the version it was based on, which the preview's read lacked.
 //
-// EVERY OTHER REFUSAL IS THE ROUTE'S, and a person reads it as the engine's
-// sentence for its kind ([cards.PersonRefusal]) with the next step the
-// resumed turn takes: the route's own account names fields, tools and routes,
-// and it is the model's, which is handed the whole answer ([outcomeOf]).
+// EVERY OTHER REFUSAL IS THE ROUTE'S: a person reads the engine's sentence for
+// its kind ([cards.PersonRefusal]); the route's own account names fields,
+// tools and routes and is the model's, handed the whole answer ([outcomeOf]).
 func refusalOf(request exec.Request, resp exec.Response) wire.Refusal {
 	switch {
 	case resp.Status == http.StatusPreconditionFailed && request.IfNoneMatch != "":

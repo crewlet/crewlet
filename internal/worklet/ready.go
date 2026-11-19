@@ -69,6 +69,11 @@ type ReadyItem struct {
 	Moved   uint64    `json:"moved"`
 	MovedAt time.Time `json:"moved_at"`
 
+	// MovedOn is Moved whole, with the log and generation its sequence is on:
+	// the position a pickup's turn reads its item's conversation past
+	// ([ItemConversation], ADR-0162). Zero where Moved is.
+	MovedOn statelog.Position `json:"moved_on,omitzero"`
+
 	// Progressed is the log position of the seat's own last change to a
 	// started item other than a comment: its progress, which hands the
 	// item over again. Zero on an item not started.
@@ -692,7 +697,7 @@ func arms(n int, arm string) string {
 
 // readyMovedArm is the newest notice to the seat about one item that started
 // its turn: a change that would have woken it, by the notifier's own decision.
-const readyMovedArm = `SELECT n.task_id, n.log_seq, n.created_at
+const readyMovedArm = `SELECT n.task_id, n.log_seq, n.created_at, n.log_stream, n.log_generation
 	FROM tracker_notifications n INDEXED BY tracker_notifications_woke_idx
 	WHERE n.task_id = ? AND n.recipient = ? AND n.starts_turn = 1 ORDER BY n.log_seq DESC LIMIT 1`
 
@@ -800,14 +805,14 @@ func loadMoved(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem
 	for _, item := range items {
 		args = append(args, item.ID, handle)
 	}
-	got, err := seqAt(ctx, tx, arms(len(items), readyMovedArm), args)
+	got, err := positionsAt(ctx, tx, arms(len(items), readyMovedArm), args)
 	if err != nil {
 		return fmt.Errorf("worklet: read who last changed %s's ready work: %w", handle, err)
 	}
 	var lonely []any
 	for i := range items {
 		if at, ok := got[items[i].ID]; ok {
-			items[i].Moved, items[i].MovedAt = at.seq, at.at
+			items[i].Moved, items[i].MovedOn, items[i].MovedAt = at.on.Seq, at.on, at.at
 			continue
 		}
 		lonely = append(lonely, items[i].ID)
@@ -830,6 +835,33 @@ func loadMoved(ctx context.Context, tx *sql.Tx, handle string, items []ReadyItem
 type seqInstant struct {
 	seq uint64
 	at  time.Time
+}
+
+// positionInstant is a change's whole log position and its instant.
+type positionInstant struct {
+	on statelog.Position
+	at time.Time
+}
+
+// positionsAt is [seqAt] for arms that also select the row's log and
+// generation.
+func positionsAt(ctx context.Context, tx *sql.Tx, query string, args []any) (map[string]positionInstant, error) {
+	rows, err := tx.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]positionInstant{}
+	for rows.Next() {
+		var id, stream string
+		var seq, at, generation int64
+		if err := rows.Scan(&id, &seq, &at, &stream, &generation); err != nil {
+			return nil, err
+		}
+		out[id] = positionInstant{at: store.DecodeTime(at),
+			on: statelog.Position{Stream: stream, Generation: uint32(generation), Seq: uint64(seq)}}
+	}
+	return out, rows.Err()
 }
 
 func seqAt(ctx context.Context, tx *sql.Tx, query string, args []any) (map[string]seqInstant, error) {

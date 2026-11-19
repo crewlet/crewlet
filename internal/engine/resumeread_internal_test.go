@@ -41,14 +41,14 @@ func (s *openingAhead) BeginLaunch(ctx context.Context, run sandbox.PendingRun,
 
 // A RESUME'S READ REACHES ITS RELAUNCH'S OPENING. A lost job's round is
 // carried on by a relaunch whose briefs come from the coordinator's read of
-// the round's log. The count of calls that read saw travels from the
-// coordinator (sandbox.ResumeRequest.BridgedRead) through the resumer and the
-// runner (runner.Continuation.BriefRead) to the store, whose opening marks
+// the round's log. That read travels from the coordinator
+// (sandbox.ResumeRequest.BridgedRead) through the resumer and the runner
+// (runner.AgentRunRequest.BriefRead) to the store, whose opening marks
 // late every call the log took after it. So a lost job's call landing after
 // the read and before the opening is listed late, and the call the read saw
 // is not.
 //
-// Mutation: drop the count anywhere between the coordinator's read and the
+// Mutation: drop the read anywhere between the coordinator's read and the
 // opening, and the call the read saw is marked late with the rest.
 func TestAResumesReadReachesItsRelaunchsOpening(t *testing.T) {
 	t.Parallel()

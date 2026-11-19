@@ -3,26 +3,17 @@ package seataccess
 import "slices"
 
 // NeedsStepUp reports whether moving one seat's lane from before to after is a
-// raise to an administration grant, which needs a fresh step-up from the
-// person saving it (D10): Datadog Admin Role, GitLab Maintainer or Owner, Jira
-// Administrators, Confluence Admin, Mattermost System Admin, or a GitHub
-// Read and write on Contents or Workflows.
+// raise to an administration grant (Datadog Admin Role, GitLab Maintainer or
+// Owner, Jira Administrators, Confluence Admin, Mattermost System Admin, GitHub
+// write on Contents or Workflows), which needs a fresh step-up (D10). DERIVED
+// FROM THE VENDOR'S OWN FACTS, never stored: opts marks each level
+// ([Level.Administers]) and each permission ([PermissionSpec.AdministersOnWrite]).
+// Keeping a held grant and lowering never need one; an extra write permission
+// is a raise ([RaisesGrant]).
 //
-// DERIVED FROM THE VENDOR'S OWN FACTS, never stored: opts is what the vendor
-// offers now, each level marked by the vendor as administering or not
-// ([Level.Administers]), and each GitHub permission whose write administers
-// ([PermissionSpec.AdministersOnWrite]). Nothing in the document says "admin".
-//
-// A seat that already held the grant does not need a step-up to keep it, and
-// lowering never does: the rule guards the moment power is handed out. An
-// extra grant of a write permission is a raise as an administration level is
-// ([RaisesGrant]).
-//
-// IT FAILS CLOSED. A level the offer cannot vouch for (the vendor's list could
-// not be read, or does not name the level) cannot be shown not to administer,
-// so moving a seat to it needs the step-up. Judged open, an unreachable vendor
-// would let a machine token hand out an administration role unchallenged; the
-// sync still refuses a level the vendor does not offer.
+// IT FAILS CLOSED: a level the offer cannot vouch for cannot be shown not to
+// administer, so moving a seat to it needs the step-up; judged open, an
+// unreachable vendor would let a machine token hand out an administration role.
 func NeedsStepUp(opts Options, before, after Desired) bool {
 	if !after.Enabled {
 		return false

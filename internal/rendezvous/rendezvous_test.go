@@ -132,19 +132,14 @@ func permutations(xs []string, visit func([]string)) {
 	}
 }
 
-// THE ORDER SPREADS KEYS EVENLY, which is the bug this package fixed. The
-// router's private weight was plain FNV-1a, whose last step multiplies by a
-// prime of 2^40 + 0x1b3: two nodes named alike but for a last character were
-// ranked by that character's low bits. Over node-0 … node-4, node-4 came first
-// for half of all keys — half a fleet's askers on one data node — and every
-// other node had ONE fixed runner-up, so all of a silent node's askers failed
-// over to a single neighbour. Every node must come first for its fair share,
-// and every node's keys must spread their second choice across all the
-// others.
+// THE ORDER SPREADS KEYS EVENLY: plain FNV-1a ranked nodes named alike by
+// their last character's low bits, so one node came first for half of all
+// keys and every other node had ONE fixed runner-up. Every node must come
+// first for its fair share, and each node's keys must spread their second
+// choice across all the others.
 //
-// Tolerances: 10% of the fair share for first place, 15% for second. Measured
-// with the finished weight: 1.5% and 4.1% at worst; with plain FNV-1a, 150% and
-// 300%.
+// Tolerances: 10% of the fair share for first place, 15% for second; the
+// finished weight measures 1.5% and 4.1% at worst, plain FNV-1a 150% and 300%.
 func TestTheOrderSpreadsKeysEvenly(t *testing.T) {
 	t.Parallel()
 	const keys = 30_000

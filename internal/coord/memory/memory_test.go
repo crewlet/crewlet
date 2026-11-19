@@ -117,6 +117,7 @@ func TestDeadContextIsUnknownNotRefusal(t *testing.T) {
 		{"Get", func() error { _, err := b.Get(ctx, "seat:ceo"); return err }},
 		{"ListOwned", func() error { _, err := b.ListOwned(ctx, "node-a:1"); return err }},
 		{"ListLive", func() error { _, err := b.ListLive(ctx, coord.ClassNode); return err }},
+		{"Now", func() error { _, err := b.Now(ctx, coord.ClassNode); return err }},
 		{"PreferredResources", func() error {
 			_, err := b.PreferredResources(ctx, coord.ClassSeat, "node-a")
 			return err

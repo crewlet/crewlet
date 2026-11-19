@@ -167,6 +167,8 @@ func (a *Applier) Apply(ctx context.Context, tx *sql.Tx, rec statelog.Record,
 		return 0, nil
 	case KindTurn:
 		return a.applyTurn(ctx, tx, at)
+	case KindFlow:
+		return a.applyFlow(ctx, tx, at)
 	case KindEviction:
 		return a.applyEviction(ctx, tx, at)
 	case KindGeneration:

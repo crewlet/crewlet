@@ -26,6 +26,8 @@ var lateItemCases = []struct {
 	{"NoItemIsFiledForAJobThatCannotTakeIt", testNoItemIsFiledForAJobThatCannotTakeIt},
 	{"AJobsLateItemsStopAtMaxJobItems", testAJobsLateItemsStopAtMaxJobItems},
 	{"AnItemKeepsTheOrdinaryShareOfItsCall", testAnItemKeepsTheOrdinaryShareOfItsCall},
+	{"AnEarlierRoundsCallIsHandedToTheJobTheNextRoundRunsOn", testAnEarlierRoundsCallIsHandedToTheJobTheNextRoundRunsOn},
+	{"EveryCallANewRoundCarriesIsHandedToItsFirstJob", testEveryCallANewRoundCarriesIsHandedToItsFirstJob},
 }
 
 // lateItemStagedCases are the item cases whose subject is a write of the
@@ -148,9 +150,8 @@ func testEveryCallTheOpeningWalksIsHandedToTheJobItOpens(t *testing.T, s sandbox
 		t.Fatalf("the premise: the record holds items %v, want the late call for the second job", got)
 	}
 	// THE BRIEFS' READ BEFORE ANY OF THE THREE: the opening walks them all.
-	told := 0
 	carried := run(turn)
-	carried.Continues, carried.BriefRead = true, &told
+	carried.Continues, carried.BriefRead = true, &sandbox.LogRead{Launch: second}
 	third := mustLaunched(t, s, carried)
 	want := []string{third + "/delegate#1", third + "/read_page#2", third + "/post_message#3"}
 	got := lateItems(t, s, turn)
@@ -350,5 +351,61 @@ func testNoItemIsFiledForAJobTheRowNoLongerNames(t *testing.T, runs *stagedRuns,
 	}
 	if got := itemCalls(lateItems(t, s, turn)); len(got) != 0 {
 		t.Errorf("the record holds items %v, want none: the row names no job the log is open to", got)
+	}
+}
+
+// AN EARLIER ROUND'S CALL IS HANDED TO THE JOB THE NEXT ROUND RUNS ON. The
+// append that lists a record of an earlier round late, in the round a
+// send-back opened, files one item for that round's job, never the job that
+// made it: unsealed, of the round that listed it, the call marked late with no
+// place.
+//
+// Mutation: file items for a late call of the log's own round alone, and the
+// earlier round's call is handed to nobody.
+func testAnEarlierRoundsCallIsHandedToTheJobTheNextRoundRunsOn(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-item-earlier"
+	first := mustLaunched(t, s, run(turn))
+	round := mustGet(t, s, turn).Round
+	next := sendBack(t, s, turn)
+	nextRound := mustGet(t, s, turn).Round
+	if !recordLate(t, s, turn, sandbox.BridgeAppend{Launch: first, Round: round,
+		Call: madeAt("delegate", 3, 3)}) {
+		t.Fatal("the record of the earlier round was not recorded")
+	}
+	items := lateItems(t, s, turn)
+	if got, want := itemCalls(items), []string{next + "/delegate#1"}; !slices.Equal(got, want) {
+		t.Fatalf("the record holds items %v, want %v: the call, for the job the next round runs on", got, want)
+	}
+	item := items[0]
+	if len(item.Sealed) != 0 || !item.Waiting() || item.LateCall.Round != nextRound || !item.LateCall.Call.Late ||
+		item.LateCall.Call.Seq != 0 || item.IsFor(first) || !item.IsFor(next) {
+		t.Errorf("the item is %+v, want it unsealed, waiting, of round %s, its call late with no place, and the "+
+			"next round's job's alone", item, nextRound)
+	}
+}
+
+// EVERY CALL A NEW ROUND CARRIES IS HANDED TO ITS FIRST JOB. The opening of a
+// send-back's round carries the calls the old round's log took after its
+// collection's read, which no brief told and no job of the new round made: it
+// files one item for each, for the job it opens, of the new round, the call as
+// the new log lists it.
+//
+// Mutation: answer no walked calls from a new round's opening, and the carried
+// calls are handed to nobody.
+func testEveryCallANewRoundCarriesIsHandedToItsFirstJob(t *testing.T, s sandbox.PendingStore) {
+	const turn = "t-item-carried"
+	job := mustLaunched(t, s, run(turn))
+	round := mustGet(t, s, turn).Round
+	collectedAt(t, s, turn, job, round, madeAt("read_page", 1, 1))
+	read := mustLogged(t, s, turn).Log.Read()
+	collectedAt(t, s, turn, job, round, madeAt("delegate", 2, 2), madeAt("post_message", 3, 3))
+	next := sendBackFrom(t, s, turn, &read)
+	items := lateItems(t, s, turn)
+	if got, want := itemCalls(items), []string{next + "/delegate#1", next + "/post_message#2"}; !slices.Equal(got,
+		want) {
+		t.Fatalf("the record holds items %v, want %v: each carried call, for the new round's job", got, want)
+	}
+	if nextRound := mustGet(t, s, turn).Round; items[0].LateCall.Round != nextRound || !items[0].LateCall.Call.Late {
+		t.Errorf("the item is %+v, want it of round %s, its call late", items[0], nextRound)
 	}
 }

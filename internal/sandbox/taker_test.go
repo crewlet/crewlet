@@ -243,19 +243,16 @@ func onTheLog(restore *keptRestore, row executorkeep.TurnRow) {
 
 // A CAPTURE WHOSE TAKER'S LEASE LAPSED IS SETTLED FROM THE TURN'S ROW. Every
 // stamp of a take names the taker lease it was taken under, and a take dies with
-// its process, leaving its place begun. Once that lease has lapsed — or was
-// given back at a clean exit — what came of the capture is read off the turn's
-// row on the executor log, which has seen every record the taker published:
-// LANDED where the row names its place, the stamp written from the row (the
-// object, the key that sealed it, what its last request carried) and kept as
-// the turn's; REFUSED where it does not, saying its taker stopped, the turn's
-// kept capture left as it was.
+// its process, leaving its place begun. Once that lease has lapsed or been given
+// back, the turn's row on the executor log, which has seen every record the
+// taker published, decides: LANDED where the row names its place (stamp written
+// from the row and kept as the turn's); REFUSED where it does not, saying its
+// taker stopped, the turn's kept capture left as it was.
 //
 // Mutation: drop the taker's epoch from a take's stamp, and the premise fails;
-// read a lapsed or released lease as held, and the capture is left begun;
-// stamp it refused whatever the row names, and a capture the log took is read
-// as lost; or leave the row's object off the landed stamp, and the turn keeps
-// a capture naming none.
+// read a lapsed or released lease as held, and the capture is left begun; stamp
+// it refused whatever the row names, and a landed capture is read as lost; leave
+// the row's object off the landed stamp, and the turn keeps one naming none.
 func TestACaptureWhoseTakersLeaseLapsedIsSettledFromTheTurnsRow(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -329,21 +326,16 @@ func TestACaptureWhoseTakersLeaseLapsedIsSettledFromTheTurnsRow(t *testing.T) {
 }
 
 // AN END DOES NOT WAIT OUT A CAPTURE WHOSE TAKER'S LEASE LAPSED. The turn's end
-// waits for its captures to settle, since its tombstone refuses a record that
-// lands after it; a capture whose process stopped before it stamped what came
-// of it never settles by itself, and was waited for as long as a capture can
-// live — over an hour at the bounds, the seat's mail held behind it — and then
-// named begun and never finished. Its taker's lease has lapsed, so the end's
-// wait settles it from the turn's row at its first pass, and records the end
-// naming it refused because its taker stopped.
-//
-// IN A SYNCTEST BUBBLE, so the wait is measured on the bubble's clock, which
-// only the wait's own timers advance.
+// waits for its captures to settle, since its tombstone refuses a later record;
+// a capture whose process stopped before stamping its outcome never settles by
+// itself, and was waited for over an hour with the seat's mail held behind it.
+// Its taker's lease has lapsed, so the end's wait settles it from the turn's row
+// at its first pass, refused because its taker stopped. IN A SYNCTEST BUBBLE,
+// so the wait runs on the bubble's clock.
 //
 // Mutation: drop the settle from the end's wait ([Coordinator.awaitCapture]),
 // or the lease store from the coordinator [NewCoordinator] builds, and the end
-// is recorded a capture's life on, naming the capture begun and never
-// finished.
+// is recorded a capture's life on, naming it begun and never finished.
 func TestAnEndDoesNotWaitOutACaptureWhoseTakersLeaseLapsed(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -1222,25 +1214,17 @@ func TestARelaunchsAskOfAnUnansweredRecordEndsWithinItsWait(t *testing.T) {
 }
 
 // A FENCED KEEP UPLOADS AND RECORDS NOTHING. A keep checks the taker lease its
-// stamp names before its upload and again before every attempt at its record,
-// from its own renewals: once that lease has lapsed and been claimed again at
-// a new epoch, a peer may already have settled the capture refused, so the
-// keep sends nothing more. Fenced before its upload, it uploads and records
-// nothing; between its upload and its record, it records nothing — and both
-// stamp the capture refused, since no record of it can land. Fenced between
-// two attempts at its record, it sends no further one, and stamps the capture
-// unresolved: the first may yet have landed, which only an ask under its own
-// operation can say.
+// stamp names before its upload and before every attempt at its record: once
+// that lease has lapsed and been claimed again at a new epoch, a peer may have
+// settled the capture refused, so the keep sends nothing more. Fenced before its
+// upload or before its record, it stamps the capture refused; fenced between two
+// attempts at its record, unresolved, since the first may yet have landed.
 //
-// IN A SYNCTEST BUBBLE: the store's clock moves past the lease's TTL before the
-// collection, and the bubble's clock one renewal interval on while the keep is
-// held, so the coordinator's own renewal finds its lease lapsed and claims it
-// again at a new epoch exactly then — eleven and a quarter seconds on, a
-// quarter of the shipped TTL.
-//
-// Mutation: drop the fence before the upload, or the one before the record, or
-// read a fenced keep that sent its record as refused, and a case below goes
-// red.
+// IN A SYNCTEST BUBBLE: the store's clock passes the lease's TTL before the
+// collection, and the bubble's one renewal interval on (11.25s) while the keep
+// is held, so the renewal claims the lease at a new epoch exactly then.
+// Mutation: drop either fence, or read a fenced keep that sent its record as
+// refused, and a case goes red.
 func TestAFencedKeepUploadsAndRecordsNothing(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -1316,21 +1300,16 @@ func TestAFencedKeepUploadsAndRecordsNothing(t *testing.T) {
 
 // A TAKER LEASE OUTLASTS THE DRAIN AND IS RELEASED AFTER THE LAST KEEP. A drain
 // gives the node's presence up at its first step while its keeps still upload;
-// the taker lease is not presence, and is renewed on its own cadence for as
-// long as they do, at the epoch their stamps name — so a keep that outlasts
-// the drain's first step, and three lease TTLs more, still records its
-// capture. The coordinator's stop lets that keep end before it gives the lease
-// back: released under it, a peer would settle the capture refused while its
-// record was still on its way. Once the last keep has ended, the lease is
-// given back rather than left to lapse.
+// the taker lease is not presence, and is renewed on its own cadence at the
+// epoch their stamps name, so a keep outlasting the drain by three lease TTLs
+// still records its capture. The stop lets the keep end before releasing the
+// lease: released under it, a peer would settle the capture refused with its
+// record on its way. After the last keep ends, the lease is given back.
+// IN A SYNCTEST BUBBLE, so three TTLs pass on the clock the renewals keep.
 //
-// IN A SYNCTEST BUBBLE, so three TTLs pass on the bubble's clock, which the
-// renewals keep pace with.
-//
-// Mutation: renew the taker lease with presence, release it at the drain's
-// first step, or release it before the coordinator's stop has seen the last
-// keep end, and a check below goes red; leave it to lapse, and the last one
-// does.
+// Mutation: renew the lease with presence, release it at the drain's first
+// step, or before the stop has seen the last keep end, and a check goes red;
+// leave it to lapse, and the last one does.
 func TestATakerLeaseOutlastsTheDrainAndIsReleasedAfterTheLastKeep(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -1395,15 +1374,12 @@ func TestATakerLeaseOutlastsTheDrainAndIsReleasedAfterTheLastKeep(t *testing.T) 
 
 // A TAKE WITH NO TAKER LEASE BEGINS NO CAPTURE. A begun capture is waited on
 // for as long as the taker lease its stamp names holds, so one this process
-// could not name — its claim unanswered, or its renewals unanswered past the
-// window of the last one that was, the lease still held at the store — would
-// be read as its taker gone the moment it was begun, or name no lease at all.
-// The take is refused before it begins, saying why, and nothing is uploaded
-// or recorded.
-//
-// IN A SYNCTEST BUBBLE, so the window passes on the bubble's clock: three and a
-// half renewal intervals after the claim, past the three it covers and inside
-// the four of the lease's TTL.
+// could not name a lease for (claim unanswered, or renewals unanswered past the
+// last one's window) would be read as its taker gone at once. The take is
+// refused before it begins, saying why; nothing is uploaded or recorded.
+// IN A SYNCTEST BUBBLE the window passes on the bubble's clock, three and a half
+// renewal intervals after the claim: past the three it covers, inside the TTL's
+// four.
 //
 // Mutation: begin a capture with no taker lease held, naming none, or with
 // one whose window has closed, and the keep uploads and records it.
@@ -1512,27 +1488,17 @@ func TestAStampWithNoTakerIsSettledByAge(t *testing.T) {
 }
 
 // A KEEP IS FENCED ONCE ITS LAST RENEWAL NO LONGER COVERS IT, WHILE ITS LEASE
-// STILL HOLDS. A taker that cannot reach the store never hears it answer no:
-// its lease lapses there one TTL after its last renewal, and what stops the
-// taker first is the window that renewal confirmed, a renewal interval
-// shorter. So once renewals have gone unanswered past it — the lease still held
-// at the store, at the epoch the stamp names — a keep uploads and records
-// nothing, whether it reaches its upload or its record then, and a take begun
-// then finds no tenure to stamp. And the window is the renewals' own word:
-// once one confirms the same epoch again, it is open again.
+// STILL HOLDS. A taker that cannot reach the store never hears it answer no: its
+// lease lapses there one TTL after its last renewal, and the window that renewal
+// confirmed, an interval shorter, stops the taker first. Once renewals go
+// unanswered past it, a keep uploads and records nothing and a take begun then
+// finds no tenure; one renewal confirming the same epoch reopens it. IN A
+// SYNCTEST BUBBLE the keep is held until three and a half intervals after the
+// claim: past the window's three, inside the TTL's four and [keepReadRoom].
 //
-// IN A SYNCTEST BUBBLE: the store goes silent after the claim and the collection
-// comes one renewal interval later, still inside the window, so its capture is
-// begun under the lease. The keep is held at its step while two and a half more
-// intervals pass, and let go three and a half intervals after the claim: past
-// the three intervals its window covers, inside the four of its TTL, and inside
-// the room the keep's first read is given ([keepReadRoom]), so the keep reaches
-// its fence rather than giving its read up.
-//
-// Mutation: read a tenure as held whatever its window, confirm a renewal the
-// store did not answer, or confirm a window as long as the whole TTL, and the
-// keep uploads or records its capture under a lease no renewal covers; leave a
-// renewal of the same epoch unconfirmed, and the window stays shut.
+// Mutation: read a tenure as held whatever its window, confirm an unanswered
+// renewal, or confirm a window as long as the TTL, and the keep records under
+// an uncovered lease; leave a same-epoch renewal unconfirmed, and it stays shut.
 func TestAKeepIsFencedOnceItsLastRenewalNoLongerCoversIt(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -1609,12 +1575,11 @@ func TestAKeepIsFencedOnceItsLastRenewalNoLongerCoversIt(t *testing.T) {
 }
 
 // A TAKE STAMPS THE TENURE IT RESERVES ITS PLACE UNDER. A take packs and scrubs
-// the session before it reserves its place — minutes at the bounds — and the
+// the session before it reserves its place (minutes at the bounds), and the
 // taker lease can lapse and be claimed again at a new epoch meanwhile. The
-// stamp names the tenure the process holds as it reserves, read again then, so
-// the keep goes on under it and lands; named with the tenure read before the
-// pack, the capture would name one every peer reads as gone, and its own keep
-// would fence it.
+// stamp names the tenure read again as it reserves, so the keep lands under it;
+// with the tenure read before the pack, the capture would name one every peer
+// reads as gone, and its own keep would fence it.
 //
 // IN A SYNCTEST BUBBLE: the take is held in its scrub while the store's clock
 // moves past the lease and the coordinator's next renewal claims it again.
@@ -1692,14 +1657,11 @@ func (s *scrubGate) Handed(ctx context.Context, run PendingRun) (string, error) 
 // AN ATTEMPT AT A KEEP'S RECORD ENDS WITH THE WINDOW IT WAS SENT IN. A keep asks
 // its taker lease before every attempt at its record, and an attempt sent a
 // moment before the window of its last confirmed renewal closed went on,
-// bounded by the record's budget alone — thirty seconds, past the window's
-// margin of one renewal interval — so it could land after a peer had read the
-// lease lapsed and settled the capture refused. Here a log that answers no
-// attempt and a store that answers no renewal: the one attempt sent ends at
-// the window's end, the next is fenced, and the capture is left unresolved —
-// sent, and perhaps landed, which a wait asks again.
-//
-// IN A SYNCTEST BUBBLE, so the attempt's deadline is the bubble's arithmetic.
+// bounded by the record's budget alone (thirty seconds, past the window's
+// margin of one renewal interval), so it could land after a peer had settled the
+// capture refused. Here the log answers no attempt and the store no renewal: the
+// one attempt ends at the window's end, the next is fenced, and the capture is
+// left unresolved (sent, perhaps landed). IN A SYNCTEST BUBBLE.
 //
 // Mutation: send an attempt under the record's budget alone, and it ends with
 // the keep's own budget, minutes past the window.

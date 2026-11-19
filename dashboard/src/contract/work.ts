@@ -171,6 +171,7 @@ export const CHANGES = [
     mark: "refresh-cw",
     phrase: "recorded that a pull request it waits on is moving again",
   },
+  { kind: "flow", mark: "circle-alert", phrase: "told that nobody is moving it" },
 ] as const satisfies readonly { kind: string; mark: string; phrase: string }[];
 
 /**
@@ -286,6 +287,14 @@ export const DECISION_MAX_OPTIONS = 4;
  * service's. Held by the same gate.
  */
 export const PROJECT_PAGE = 200;
+
+/**
+ * The conversation a work item is, less its id: every wake about the item and
+ * every pickup of it is filed under this and then the item's id, so a hold the
+ * engine puts on that conversation is the item's. Held to the engine's own
+ * `worklet.ItemConversation` by `internal/worklet/client_gate_test.go`.
+ */
+export const ITEM_CONVERSATION_PREFIX = "work:task:";
 
 /**
  * The chat surfaces a structured ask's `inform` may name — where the asker

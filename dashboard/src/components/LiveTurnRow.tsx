@@ -42,7 +42,7 @@
  */
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { StatusDot, Stepper, Tag, VisuallyHidden } from "@crewlethq/ui";
+import { StatusDot, Stepper, Tag, VisuallyHidden, cx } from "@crewlethq/ui";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import { href } from "~/app/router.tsx";
 import { pathOf } from "~/app/frame/objects.ts";
@@ -52,7 +52,8 @@ import { staleness, stateLine, turnItemKey, type OrgIndex, type Seat } from "~/l
 import { turnIdOf } from "~/lib/turns.ts";
 import { useViewer } from "~/lib/viewer.ts";
 import { lastCallLine, turnSteps } from "~/lib/turnsteps.ts";
-import type { AgentRow } from "~/protocol/index.ts";
+import type { AgentRow, NamedRef } from "~/protocol/index.ts";
+import { EngineLine } from "./InlineToken.tsx";
 
 /** The words a stale or stalled round carries, with how long it has been quiet. */
 export function quietMark(
@@ -88,9 +89,21 @@ export function quietMark(
  */
 export function liveDoing(row: AgentRow, now: number, seat: Seat | null): string {
   const verb = stateLine(row, { now, seat });
-  if (turnItemKey(row)) return verb;
-  const summary = row.live_call?.trigger?.["summary"];
-  return typeof summary === "string" && summary.trim() ? `${verb} · ${summary.trim()}` : verb;
+  const woke = liveTrigger(row);
+  return woke ? `${verb} · ${woke.summary}` : verb;
+}
+
+/**
+ * The trigger [liveDoing] names after the verb, with what its summary names
+ * (`NamedRef`), or null where the turn's item already says what it is on.
+ */
+function liveTrigger(row: AgentRow): { summary: string; refs: NamedRef[] | undefined } | null {
+  if (turnItemKey(row)) return null;
+  const trigger = row.live_call?.trigger;
+  const summary = trigger?.["summary"];
+  if (typeof summary !== "string" || !summary.trim()) return null;
+  const refs = trigger?.["refs"];
+  return { summary: summary.trim(), refs: Array.isArray(refs) ? (refs as NamedRef[]) : undefined };
 }
 
 export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgIndex; now: number }) {
@@ -113,6 +126,7 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
   const quiet = quietMark(row, now);
   const waiting = waitingCount(row.waiting);
   const doing = liveDoing(row, now, seat);
+  const woke = liveTrigger(row);
   const { admin } = useViewer();
   const linked = turnId !== "" && admin;
   const body = (
@@ -125,7 +139,15 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
           </span>
           <span className="live-state">
             <span className="live-doing" title={doing}>
-              {doing}
+              {woke ? (
+                <>
+                  {stateLine(row, { now, seat })}
+                  {" · "}
+                  <EngineLine text={woke.summary} refs={woke.refs} cut />
+                </>
+              ) : (
+                doing
+              )}
             </span>
             {quiet && (
               <Tag size="xs" variant={quiet.tone} className="live-quiet">
@@ -157,15 +179,20 @@ export function LiveTurnRow({ row, index, now }: { row: AgentRow; index: OrgInde
       </span>
     </>
   );
+  // THE ROW OPENS ITS TURN through a link stretched over it, and a reference
+  // the trigger names stands above that link and opens its own page.
   return (
     <li>
-      {linked ? (
-        <a className="live-row" href={href(pathOf({ kind: "turn", id: turnId }))}>
-          {body}
-        </a>
-      ) : (
-        <span className="live-row">{body}</span>
-      )}
+      <span className={cx("live-row", linked && "live-row--linked")}>
+        {linked && (
+          <a
+            className="live-row__open"
+            href={href(pathOf({ kind: "turn", id: turnId }))}
+            aria-label={`${name}: ${doing}`}
+          />
+        )}
+        {body}
+      </span>
     </li>
   );
 }

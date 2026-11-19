@@ -9,11 +9,14 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/statelog"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // The seen-through mark (ADR-0120): a wake whose record a completed turn in
 // its conversation already read past, and which obliges the seat to nothing,
-// is absorbed rather than run.
+// is absorbed rather than run. A Worklet state notice obliges the seat only to
+// its item, which a completed turn on the item discharges, so it is absorbed
+// too (ADR-0162).
 
 // skipCause is why [Dispatcher.dropWorked] dropped a trigger.
 type skipCause int
@@ -86,15 +89,21 @@ func seenAt(ev *events.Event) (statelog.Position, string) {
 	return at, notify.KeyOfAll([]*events.Event{ev})
 }
 
-// obliges reports whether ev asks the seat for anything, as its source routed
-// it: addressed to it, owed on a chat surface, or a question put to the room.
-// Only a notification can be absorbed.
+// obliges reports whether ev asks the seat for anything a completed turn in
+// its conversation did not, as its source routed it: addressed to it, owed on
+// a chat surface, or a question put to the room. A Worklet state notice
+// ([worklet.StateNotice]) asks only for its item. Only a notification can be
+// absorbed.
 func obliges(ev *events.Event) bool {
 	n, ok := events.DataAs[*types.ExternalNotification](ev)
 	if !ok || n == nil {
 		return true
 	}
-	return n.Addressed || n.Owes != "" || n.Metadata[chatlet.MetaAsked] != ""
+	if n.Owes != "" || n.Metadata[chatlet.MetaAsked] != "" {
+		return true
+	}
+	_, state := worklet.StateNotice(n)
+	return n.Addressed && !state
 }
 
 // skippedRecord is the record of a trigger not run, with the disposition the

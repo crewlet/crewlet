@@ -78,19 +78,15 @@ func TestTheIndexAnswersWhatTheChartDoes(t *testing.T) {
 		t.Errorf("a nil chart's index answers %s and %s, want nothing", unitName(u), roleName(r))
 	}
 
-	// EVERY UNIT'S EFFECTIVE LEAD, on a chart with every shape the rule has
-	// to tell apart: a lead among the unit's own seats, one in a grandchild,
-	// one inherited from the division above (Normalize copies the handle
-	// down), one naming nobody, none at all, one in a sibling's subtree, and
-	// a handle three seats share — one in the unit's subtree after another in
-	// the chart's walk, so the subtree's must win, and for a unit whose
-	// subtree holds none of them, one before it and one after, so the
-	// chart's first must, and not the next past the unit's own seats. The
-	// three are told apart by their names, since they share the handle.
+	// EVERY UNIT'S EFFECTIVE LEAD, on a chart with every shape the rule has to
+	// tell apart: a lead among the unit's own seats, in a grandchild, inherited
+	// from the division above, naming nobody, none, in a sibling's subtree, and a
+	// handle three seats share (the unit's subtree's must win; with none in the
+	// subtree, the chart's first must). The three are told apart by name.
 	//
-	// Mutations: answer the chart's first seat of the handle always (Dup
-	// goes red), the subtree's alone (API, Left and Elsewhere), or read a
-	// subtree as running to the chart's end (Elsewhere answers Twin After).
+	// Mutations: answer the chart's first seat of the handle always (Dup goes
+	// red), the subtree's alone (API, Left, Elsewhere), or read a subtree as
+	// running to the chart's end (Elsewhere answers Twin After).
 	led := normalized(&Organization{Name: "Led",
 		Roles: []*Role{{Name: "Twin Root", DeclaredHandle: "twin"}},
 		Units: []*Unit{
@@ -155,18 +151,15 @@ func TestTheIndexAnswersWhatTheChartDoes(t *testing.T) {
 		t.Errorf("a nil unit answered the lead %s, want none", roleName(got))
 	}
 
-	// EVERY SEAT'S PLACE IN THE HIERARCHY — the seat a handle answers, its
-	// manager and every seat that manages it, its reports, its unit chain —
-	// on a chart with every shape those rules tell apart: a root seat
-	// managing across units, a seat three others manage (its lead, which
-	// Normalize makes manage its unit's seats, then two lists after it in
-	// the walk), a list naming nobody, a handle two seats share (the first
-	// in the walk answers it), a seat three units deep and a root seat with
-	// no unit — and a list naming one seat twice, which Normalize never
-	// leaves, so it is written after: the chart asks whether a list
-	// contains a handle, so the seat is its manager once.
+	// EVERY SEAT'S PLACE IN THE HIERARCHY (the seat a handle answers, its
+	// manager and managers, reports, unit chain) on a chart with every shape
+	// those rules tell apart: a root seat managing across units, a seat three
+	// others manage, a list naming nobody, a handle two seats share (the first
+	// in the walk answers), a seat three units deep, a root seat with no unit,
+	// and a list naming one seat twice (written after Normalize, which never
+	// leaves one): the seat is its manager once.
 	//
-	// Mutations: keep a seat once a time its list names it (O1's), keep the
+	// Mutations: keep a seat once per time its list names it (O1's), keep the
 	// last seat of a handle (shared), stop a chain at its home (Deep's), or
 	// answer a seat's unit as its outermost (Deep's).
 	ranked := normalized(&Organization{Name: "Ranked",

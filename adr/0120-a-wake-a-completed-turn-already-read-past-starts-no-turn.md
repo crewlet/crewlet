@@ -36,6 +36,13 @@ that asks the seat for nothing starts no turn.**
    ([ADR-0117](0117-a-failure-a-retry-cannot-cure-pauses-its-seat.md)) with
    `breaker_held`; the turn ledger counts both beside `started` and `held`.
 
+## Amendment: a Worklet state notice is absorbed as its item's
+
+A Worklet state notice, a wake under `assignee`, `blocking` or `unblocked`
+that carries no comment, is addressed and is absorbed all the same: its
+obligation is its item, which a completed turn on the item discharges
+([ADR-0162](0162-an-item-in-progress-says-why-it-is-not-moving.md)). Rule 3 holds for every other addressed wake.
+
 ## Why the obvious alternatives are wrong
 
 **A wall clock** ("drop wakes older than the last turn") compares a writer's

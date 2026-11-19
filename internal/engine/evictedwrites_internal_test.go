@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -435,6 +436,40 @@ var evictedWriters = map[string]evictedWriter{
 			return atlasdomain.NewGates(db)
 		},
 	},
+	advisordomain.Domain{}.Name(): {
+		write: func(ctx context.Context, t *testing.T, e *Engine, tag string) (
+			statelog.Position, statelog.Outcome, error) {
+			t.Helper()
+			// AN EPISODE OF A KEY NOBODY RECORDED, through the writer the
+			// Advisor's duty opens every finding with.
+			res, err := e.core.Load().advisorWriter.Open(ctx, advisordomain.Call{
+				By:   iam.Actor{Name: "engine", Kind: iam.ActorSystem},
+				OpID: statelog.NewOpID(time.Now(), "open-"+tag),
+			}, advisorOpening("evicted.check:"+tag), advisordomain.NoIfMatch)
+			return res.Position, res.Outcome, err
+		},
+		applied: func(t *testing.T, back *Backends, tag string) bool {
+			return rowExists(t, back, "advisor_findings", "key", "evicted.check:"+tag)
+		},
+		evictionSubject: func(node string) string {
+			return advisordomain.EvictionSubject(node).String()
+		},
+		eviction:  advisorEviction,
+		evictions: "advisor_evictions",
+		gates: func(db store.ReplicatedReader) statelog.Gates {
+			return advisordomain.NewGates(db)
+		},
+	},
+}
+
+// advisorOpening is an episode of key as the Advisor's duty opens one.
+func advisorOpening(key string) advisordomain.Opening {
+	class, subject, _ := strings.Cut(key, ":")
+	digest := strings.Repeat("ab", 32)
+	return advisordomain.Opening{Episode: advisordomain.EpisodeID(key, time.Now()), Key: key, Class: class,
+		Source: advisordomain.SourceRule, Actor: advisordomain.ActorOwner, Area: "setup",
+		Severity: advisordomain.SeverityNote, SubjectKind: "company", SubjectID: subject, Revision: 1,
+		VerdictDigest: digest, FixDigest: digest, Body: json.RawMessage(`{"title":"checked"}`)}
 }
 
 // evictedDigest is a snapshot digest's spelling, for a told record whose
@@ -736,6 +771,32 @@ func accessEviction(t *testing.T, node string) []byte {
 			Subject: accessdomain.EvictionSubject(node), Op: accessdomain.OpEviction,
 			Writer: "node-peer", CreatedAt: time.Now().UTC(),
 			Scope: accessdomain.ScopeSet{Subject: true},
+		},
+		Mutation: body, Actor: "operator", ActorKind: iam.ActorOperator,
+		OperatorID: "operator",
+	})
+	if err != nil {
+		t.Fatalf("encode the eviction record: %v", err)
+	}
+	return payload
+}
+
+// advisorEviction is the same for the advisor log.
+func advisorEviction(t *testing.T, node string) []byte {
+	t.Helper()
+	body, err := json.Marshal(advisordomain.Eviction{
+		V: advisordomain.GateRecordVersion, NodeID: node, EvictedBy: "operator",
+		EvictedAt: time.Now().UTC(),
+	})
+	if err != nil {
+		t.Fatalf("encode the eviction: %v", err)
+	}
+	payload, err := advisordomain.Encode(advisordomain.MutationRecord{
+		RecordEnvelope: advisordomain.RecordEnvelope{
+			V: advisordomain.GateRecordVersion, OpID: "op-evict-" + node,
+			Subject: advisordomain.EvictionSubject(node), Op: advisordomain.OpEviction,
+			Writer: "node-peer", CreatedAt: time.Now().UTC(),
+			Scope: advisordomain.ScopeSet{Subject: true},
 		},
 		Mutation: body, Actor: "operator", ActorKind: iam.ActorOperator,
 		OperatorID: "operator",

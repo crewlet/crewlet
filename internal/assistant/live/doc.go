@@ -34,11 +34,15 @@
 // (`assistant.frame`), so reaching the broker reads no conversation, and a
 // frame the fleet did not seal, or captured off another turn, is dropped
 // (broadcast.go). A node asked to stream a turn it is not running listens
-// there and asks the running node for the frames it missed, and a Stop pressed
+// there first and asks the running node to fill every gap, and a quiet
+// stream's possibly lost tail, and a Stop pressed
 // on another node reaches the running one, each over a signed instruction
 // channel (internal/signedask's `assistant.replay` and `assistant.stop`, the
 // replayed pages encrypted the same way), whose server checks the turn's owner
-// before it answers (channels.go). A runner that died is answered by the
+// before it answers (channels.go, `not_yours`) and which only the node a
+// request names answers. A request nobody answers is a runner gone only when
+// the roster says its node left the fleet; a roster that cannot be read is
+// never gone, since a live runner would be misreported as dead. A runner that died is answered by the
 // persisted transcript as a snapshot, and the turn is closed interrupted by
 // exactly one node.
 //

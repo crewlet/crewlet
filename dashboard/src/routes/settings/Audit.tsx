@@ -144,6 +144,7 @@ import type { AgentAvatar } from "~/lib/avatar.ts";
 import { indexOrg, kindOfAuthor, type SeatKind } from "~/lib/seats.ts";
 import { useTimeRange, windowParam, type Offer } from "~/lib/range.ts";
 import { isLogRefusal, rest, RestError } from "~/protocol/index.ts";
+import { EngineLine } from "~/components/InlineToken.tsx";
 import { useRest, type RestResult } from "~/lib/useRest.ts";
 import { authorityWords } from "~/lib/refusal.ts";
 import { throughOf } from "~/lib/attribution.ts";
@@ -154,6 +155,7 @@ import { ACTIONS } from "~/contract/actions.ts";
 import type {
   ArtifactTrailEntry,
   FeedRow,
+  NamedRef,
   SecretRow,
   WorkActivityRecord,
 } from "~/protocol/index.ts";
@@ -462,6 +464,8 @@ export interface AuditEntry {
   noSubject?: string;
   /** The one line that says what actually changed. */
   detail: string;
+  /** What `detail` names, where the engine wrote it (`NamedRef`). */
+  refs?: NamedRef[] | undefined;
   /** The node that served the call — the runtime audit's alone. */
   node?: string;
   /** The call was refused or failed, which only the runtime audit records. */
@@ -905,6 +909,7 @@ export function Audit() {
         ...(event.tags?.node ? { node: event.tags.node } : {}),
         ...(event.failed ? { failed: true as const } : {}),
         detail: runtimeDetail(event),
+        refs: event.refs,
       });
     }
     for (const entry of list(identity.page?.events)) {
@@ -1131,7 +1136,7 @@ export function Audit() {
               className="truncate"
               title={row.node ? `${row.detail}\nOn ${row.node}` : row.detail}
             >
-              {row.detail}
+              <EngineLine text={row.detail} refs={row.refs} cut />
             </span>
           ) : (
             <EmptyValue label="None recorded" />

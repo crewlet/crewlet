@@ -617,7 +617,7 @@ describe("the sidebar's figures", () => {
     const sidebar = runningRows()
       .map((r) => turnOf(r.href))
       .filter(Boolean);
-    const home = [...document.querySelectorAll(".live-list .live-row")].map((row) =>
+    const home = [...document.querySelectorAll(".live-list .live-row__open")].map((row) =>
       turnOf(row.getAttribute("href") ?? ""),
     );
     expect(sidebar).toEqual(["t-a", "t-b", "t-c", "t-d"]);
@@ -637,7 +637,7 @@ describe("the sidebar's figures", () => {
     );
     const homeRows = () =>
       [...document.querySelectorAll(".live-list .live-row")].map((row) =>
-        turnOf(row.getAttribute("href") ?? ""),
+        turnOf(row.querySelector(".live-row__open")?.getAttribute("href") ?? ""),
       );
     expect(runningRows().map((r) => turnOf(r.href))).toEqual(["t-a", "t-b", ""]);
     expect(homeRows()).toEqual(["t-a", "t-b"]);
@@ -1979,12 +1979,12 @@ describe("the assistant", () => {
     }
   });
 
-  test("an assistant the company left off is drawn disabled with its reason, and the panel says why", async () => {
+  test("an assistant with no model is drawn disabled with its reason, and the panel says why", async () => {
     const { win } = await open(1440, "#/worklet");
     try {
       // THE DEFAULT VIEWER ANSWER CARRIES NO `assistant` MEMBER: an engine
-      // that does not serve it, read as off.
-      expect(screen.getByText("Ask Crewlet is off for this company")).toBeDefined();
+      // that does not serve it, read as one with no model.
+      expect(screen.getByText("Ask Crewlet has no model for this company yet")).toBeDefined();
       expect(screen.queryByRole("textbox", { name: "Ask Crewlet" })).toBeNull();
     } finally {
       win.restore();
@@ -1999,7 +1999,13 @@ describe("the assistant", () => {
       owner: "ada",
       name: "Ada Lovelace",
       kind: "human",
-      assistant: { available: true },
+      assistant: {
+        available: true,
+        model: null,
+        notice: null,
+        can_assign: false,
+        reads_images: false,
+      },
     });
     try {
       await waitFor(() =>
@@ -2028,7 +2034,13 @@ describe("the assistant", () => {
       owner: "ada",
       name: "Ada Lovelace",
       kind: "human",
-      assistant: { available: true },
+      assistant: {
+        available: true,
+        model: null,
+        notice: null,
+        can_assign: false,
+        reads_images: false,
+      },
     });
     try {
       expect(app.getAttribute("data-aside")).toBe(shape);

@@ -56,7 +56,7 @@ func TestAnotherPersonsConversationIsNotFound(t *testing.T) {
 			t.Errorf("%s reads for another person as %v, want not found", name, err)
 		}
 	}
-	list, err := n.reader.Conversations(ctx, bob, "", 0)
+	list, err := n.reader.Conversations(ctx, bob, "", 0, "")
 	if err != nil {
 		t.Fatalf("list bob's conversations: %v", err)
 	}
@@ -139,10 +139,10 @@ func TestAListingIsOrderedByTheActivityItShows(t *testing.T) {
 	n.openTurn(c, first)
 	second := n.conversation(c, "Hiring plan")
 	n.openTurn(c, second)
-	if _, err := n.writer.TitleConversation(ctx, fresh(c), first, "Payroll, October"); err != nil {
+	if _, err := n.writer.TitleConversation(ctx, fresh(c), first, "Payroll, October", wire.TitleByModel); err != nil {
 		t.Fatalf("retitle the first conversation: %v", err)
 	}
-	list, err := n.reader.Conversations(ctx, ada, "", 0)
+	list, err := n.reader.Conversations(ctx, ada, "", 0, "")
 	if err != nil {
 		t.Fatalf("list ada's conversations: %v", err)
 	}

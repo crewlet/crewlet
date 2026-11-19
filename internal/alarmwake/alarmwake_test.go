@@ -98,23 +98,16 @@ func idsOf(routed []notify.Routed) []uuid.UUID {
 
 // AN ALARM TRANSITION WAKES EACH GRANTED SEAT ONCE.
 //
-// One transition, as a real tracker hands it on, reaches every agent seat
-// whose role carries the health grant — once each, however the grant list
-// names them — and no seat whose role does not, and no person. A REPUBLISH,
-// the same transition encoded and parsed again as the outbox's retry or a
-// second node's delivery would, routes to the very same wake ids, which is
-// what the inbox's same-id dedupe and the completion ledger collapse; the
-// clear that follows is a transition of its own and wakes under other ids.
-// Each wake is dated by the transition, never by its delivery, and names the
-// alarm instance as what starts its turn — the fire and its clear one
-// instance, each under what it did. A granted seat the company no longer
-// employs is not woken.
+// One transition reaches every agent seat whose role carries the health grant,
+// once each however the list names them, and no other seat or person. A
+// REPUBLISH (outbox retry, second node's delivery) routes to the same wake ids,
+// which the inbox's dedupe and the completion ledger collapse; the clear wakes
+// under other ids. Wakes are dated by the transition, not its delivery, and name
+// the alarm instance as origin. An unemployed granted seat is not woken.
 //
-// Mutation: a random wake id, or one derived from the delivery rather than
-// the transition, and the republish's ids differ; routing every seat rather
-// than the granted ones, and the ungranted seat is woken; name no origin, or
-// the transition rather than the instance, and the fire's and the clear's
-// origins are wrong.
+// Mutation: a random or delivery-derived wake id (republish ids differ);
+// routing every seat (ungranted woken); no origin, or the transition rather than
+// the instance (origins wrong).
 func TestAnAlarmTransitionWakesEachGrantedSeatOnce(t *testing.T) {
 	t.Parallel()
 	o := companyOf(t, grantedCompany)

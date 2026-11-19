@@ -15,20 +15,18 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE BRAND THROUGH THE PIPELINE: a kit's logos stored in the form the engine
-// writes, a framed version's opt-out read from its entry page, and the
-// adoption, which copies every file the adopted brand serves.
+// THE BRAND THROUGH THE PIPELINE: a kit's logos stored in the engine's form, a
+// framed version's opt-out read from its entry page, and the adoption.
 //
-// A KIT'S LOGOS ARE STORED SANITISED (brandformat.Sanitize): an SVG as svgsafe
-// re-serialised it, a PNG or WebP without its metadata, so the bytes a kit
-// version names are already the bytes a brand serves, and a logo the dashboard
-// draws from a draft kit is the engine's form, never the author's.
+// A kit's logos are stored sanitised (brandformat.Sanitize: an SVG as svgsafe
+// re-serialised it, a PNG or WebP without metadata), so the bytes a kit
+// version names are the bytes a brand serves, and a draft kit's logo is never
+// the author's raw form.
 //
-// AN ADOPTION COPIES, NEVER NAMES: every logo and face of the adopted version
+// An adoption copies, never names: every logo and face of the adopted version
 // is read back, sanitised again by this build's rules and stored as a fresh
-// object beside the generated stylesheet, all under one reservation, so the
-// adopted brand names only objects its own record uploaded (artifactsdomain's
-// brand file has the reason).
+// object under one reservation, so the adopted brand names only objects its own
+// record uploaded (artifactsdomain's brand file has the reason).
 
 // brandAssets are the files of a kit that are stored sanitised: its logos. A
 // face is stored as it came once its header is inside the bounds, which

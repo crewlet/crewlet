@@ -11,22 +11,16 @@ import (
 
 // A GESTURE OF SEVERAL DECISIONS IS DECIDED AS DECIDE ORDERS ITS OWN CHECKS.
 //
-// A configuration write is refused part by part, and its answer used to be the
-// first part's reason beside a permission written at the call site, whatever
-// the parts said: an agent's seat was told it needed admin, a write refused
-// for a lead relation and for a credential named the relation alone, and an
-// admin whose proof had lapsed was told on every part to ask for admin.
-// [authz.Combine] is the one answer: a bar on the caller first, then the
-// refusals on authority with the permission that admits every part, then an
-// unknown, the stale proof last.
+// A configuration write is refused part by part; its one answer is
+// [authz.Combine]: a bar first, then the refusals on authority with the
+// permission admitting every part, then an unknown, the stale proof last.
 //
 // Mutations: ask the proof before authority and the lapsed-proof-beside-a-
-// relation row is a step-up; keep the first part's grants rather than the ones
-// that admit every part and the tracker-and-knowledge row names tracker; let
-// authority beat a bar and the seat row names not_lead; let an unknown beat a
-// refusal and the unknown-beside-a-relation row asks the caller to wait; class
-// the assistant's two as refusals on authority, or ask its scope before the
-// verb it never takes, and the assistant's row names assist_scope.
+// relation row is a step-up; keep the first part's grants and the tracker-and-
+// knowledge row names tracker; let authority beat a bar and the seat row names
+// not_lead; let an unknown beat a refusal and the unknown-beside-a-relation row
+// asks the caller to wait; class the assistant's two as authority, or ask its
+// scope before the verb it never takes, and its row names assist_scope.
 func TestCombineDecidesAGestureAsDecideOrdersItsChecks(t *testing.T) {
 	t.Parallel()
 	admin := []iam.Grant{iam.GrantAdmin}

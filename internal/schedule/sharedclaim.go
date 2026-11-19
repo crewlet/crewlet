@@ -10,21 +10,16 @@ import (
 
 // The at-most-once guard, on the fleet.
 //
-// `scheduled_runs` lived in the node's own exclusively-owned database, and the
-// scheduler is a singleton DUTY — so it moves, on a lease lapse, a drain or a
-// rolling upgrade. The new holder read an EMPTY ledger and its catchup pass
-// re-fired everything the previous holder had already claimed: every company
-// got two standups, from the one subsystem whose whole contract is that it
-// cannot. The scheduler already refuses a nil ledger to prevent exactly this
-// ("a scheduler with a process-local claim looks identical to a correct one
-// until there are two nodes"), which the per-node table made a refusal of the
-// symptom rather than the cause.
+// The scheduler is a singleton DUTY, so it moves (lease lapse, drain, rolling
+// upgrade). A claim kept only in the node's own `scheduled_runs` left the new
+// holder an EMPTY ledger, and its catchup pass re-fired everything the previous
+// holder had claimed: two standups per company.
 //
-// The split is the one migration 0011 made for the token counter: what the
-// FLEET has to agree on is "may I start", and, for the catchup pass after a
-// restart, whether anybody started a given minute. The node's own ledger stays
-// as its audit record of what it dispatched, which the usage domain derives
-// the schedules' history from and the retention sweep purges.
+// So the split, as migration 0011 made for the token counter: what the FLEET
+// has to agree on is "may I start" and, for the catchup pass, whether anybody
+// started a given minute. The node's own ledger stays as its audit record of
+// what it dispatched, from which the usage domain derives the schedules'
+// history and the retention sweep purges.
 
 // FireClaims is the fleet-shared half of the guard, satisfied by
 // coord.Fires.
@@ -132,18 +127,16 @@ func (c *SharedClaimer) MinuteClaimed(ctx context.Context, minute FireMinute) (b
 
 // FireMinuteKey renders a fire's minute as one key, injectively.
 //
-// [FireMinute] is deliberately a struct because a delimiter-joined identity
-// COLLIDES the moment a delimiter appears in a name: a unit "Q3|Launch" with a
-// schedule "Launch" would join to the same string as a unit "Q3" with a
-// schedule "|Launch", and one of the two fires would then be silently
-// suppressed by the other. A coordination store has only keys, so the join has
-// to happen somewhere. It happens here, once, with each component escaped so
-// the mapping stays injective. Same reasoning, and same reason, as the
-// resource-name escaping in internal/coord/kv.
+// [FireMinute] is a struct because a delimiter-joined identity COLLIDES when a
+// delimiter appears in a name: unit "Q3|Launch" with schedule "Launch" joins
+// like unit "Q3" with schedule "|Launch", and one fire would be silently
+// suppressed by the other. A coordination store has only keys, so the join
+// happens here, once, with each component escaped to stay injective (as in
+// internal/coord/kv's resource-name escaping).
 //
-// THE RUNNER IS NOT PART OF IT. The store keeps a minute's claims together,
-// one per runner, so that [FireClaims.FireMinuteClaimed] is one question about
-// one minute rather than a scan of every claim the fleet holds.
+// THE RUNNER IS NOT PART OF IT. The store keeps a minute's claims together, one
+// per runner, so [FireClaims.FireMinuteClaimed] is one question about one
+// minute, not a scan of every claim.
 func FireMinuteKey(m FireMinute) string {
 	return strings.Join([]string{
 		escapeFireComponent(string(m.Scope)),

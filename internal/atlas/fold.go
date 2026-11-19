@@ -22,17 +22,16 @@ const (
 
 // Fold is what the atlas says, given every claim and the instant it is read
 // at. It is PURE and DETERMINISTIC: the same claims in any order give the same
-// view, so every node answers alike and nothing has to be written for the
-// answer to be right.
+// view, so every node answers alike with nothing written.
 //
-// Two entries of one kind sharing an exact key (a public address, a
-// repository's forge address, an account's own id) are ONE entry, unless the
-// key is shared inside one source, which makes it a shared address rather than
-// an identity, or a person said the two are not the same, which always wins.
+// Two entries of one kind sharing an exact key (a public address, a forge
+// address, an account's own id) are ONE entry, unless the key is shared inside
+// one source (a shared address, not an identity) or a person said they differ,
+// which always wins.
 //
-// For each fact and relation, a source's newest claim stands for it; across
-// sources the most trusted wins, then the newest. A person outranks every
-// inference, and a disagreement is shown beside the value, never settled.
+// For each fact and relation, a source's newest claim stands; across sources
+// the most trusted wins, then the newest. A person outranks every inference,
+// and a disagreement is shown beside the value, never settled.
 func Fold(claims []Claim, now time.Time) View {
 	var view View
 	live := make([]Claim, 0, len(claims))

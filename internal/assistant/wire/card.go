@@ -28,8 +28,6 @@ type Card struct {
 	Error     *ErrorCard     `json:"error,omitempty"`
 	Notice    *NoticeCard    `json:"notice,omitempty"`
 	Oversize  *OversizeCard  `json:"oversize,omitempty"`
-	// --- deep work (im-deep) ---
-	File *FileCard `json:"file,omitempty"`
 	// Brief is a brief turn's answer ([TurnBrief]).
 	Brief *BriefCard `json:"brief,omitempty"`
 }
@@ -362,7 +360,6 @@ func (c Card) bodies() map[CardKind]bool {
 		CardError:     c.Error != nil,
 		CardNotice:    c.Notice != nil,
 		CardOversize:  c.Oversize != nil,
-		CardFile:      c.File != nil,
 		CardBrief:     c.Brief != nil,
 	}
 }
@@ -422,8 +419,6 @@ func (c Card) Validate() error {
 			return fmt.Errorf("%w: an open in app card is permitted exactly when it names "+
 				"no reason", ErrInvalid)
 		}
-	case CardFile:
-		return c.File.validate()
 	case CardBrief:
 		return c.Brief.Validate()
 	case CardOversize:
@@ -512,15 +507,14 @@ func (p *ProposalCard) validate() error {
 // things the person has to do, ranked, each with the one press that deals
 // with it.
 //
-// THE VERDICT IS NOT A FIELD. Whether anything needs the person is the
-// number of rows ([BriefCard.Verdict]), so no writer can put "nothing needs
-// you" beside a row that needs them. The first row is the recommendation: a
-// separate next step would say it again.
+// THE VERDICT IS NOT A FIELD. Whether anything needs the person is the number
+// of rows ([BriefCard.Verdict]), so no writer can put "nothing needs you"
+// beside a row that needs them. The first row is the recommendation.
 //
 // THE MODEL WRITES THE WORDS, THE ENGINE EVERYTHING ELSE. Each row's record is
-// one this turn read and resolved for the person, its address is the link
-// table's, its danger tone is a fact the engine read, and an action can only
-// open that address or ask a question. A brief never writes.
+// one this turn read for the person, its address is the link table's, its
+// danger tone is a fact the engine read, and an action can only open that
+// address or ask a question. A brief never writes.
 type BriefCard struct {
 	// Scope is what the brief covers: the page, or the one record it has
 	// open.

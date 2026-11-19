@@ -11,56 +11,16 @@ import (
 
 // Enforcing "one file, one process".
 //
-// # Why a lock exists at all
+// The package doc states the rule; this makes it true. The driver does not
+// support multi-process access to a database file and says so only sometimes:
+// turso refuses with "Locking error: File is locked by another process", wrapped
+// in a connect failure that names no holder, and only while the first process
+// has live connections. This lock is taken before any driver work, on every
+// path, and names the holder. `crewlet config`, `crewlet migrate` and
+// `crewlet search eval` open a node's database from a second process.
 //
-// The package doc states the rule; this is what makes it true. The driver
-// does not support multi-process access to a database file, and — the part
-// that turns a rule into an incident — it says so only sometimes. Measured,
-// one process holding the file and a second opening it:
-//
-//	turso   refuses, as "Locking error: File is locked by another process"
-//	        wrapped in a connect failure that names no holder — and only
-//	        while the first process has live connections
-//
-// So the defence, where there is one, is a message an operator cannot act on,
-// and in the window between the engine's connections there is none at all.
-// This lock is taken before any driver work, on every path, and names the
-// holder. (The retired fallback driver, mainline SQLite, did not refuse the
-// second opener at all — two writers, no error, corruption on the first
-// collision. That is what the measurement above was originally a comparison
-// against, and it is why the answer is a lock rather than a better error.)
-//
-// That is not a theoretical shape. `crewlet config`, `crewlet migrate` and
-// `crewlet search eval` open a node's database from a second OS process as
-// their documented gesture, and every command that reaches the company's
-// secrets asks this lock ([Probe]) whether the engine runs. Before this lock
-// the only defence was a printed warning, which is a defence against an
-// operator who reads it.
-//
-// # An OS lock, on a sidecar
-//
-// The lock itself is [flock.Try]'s — an advisory lock the KERNEL releases when
-// its holder exits, however it exits, so a crashed engine leaves nothing to
-// reap; that package says why that beats a pid file, why flock rather than
-// fcntl, why the sidecar is never removed and why a lock that is only advisory
-// is still the right one. It is taken on a SIDECAR file rather than the
-// database itself, because the driver opens and closes the database on its own
-// schedule and a lock on a descriptor it owns is a lock we cannot reason
-// about. What this file adds on top is what only the store needs: the
-// refcount below, and the discard.
-//
-// # Cross-PROCESS, not cross-handle
-//
-// The hazard the package doc names is "a second binary pointed at the same
-// path". Two handles inside ONE process are a different thing and are safe:
-// the driver serialises its own connections, and two pools on one file are
-// the same as one pool with more of them. So the lock is REFCOUNTED per
-// process — a second Open here shares the claim rather than being refused —
-// and only the last Close releases it. That sharing is this file's, on top of
-// one [flock.Lock]: the OS lock itself excludes a second taker in this process
-// as firmly as one in another. Refusing in-process would break the
-// legitimate case (a test proving that mutual exclusion lives in a SQL
-// statement rather than in a pool) while catching nothing the real bug does.
+// The lock is [flock.Try]'s, on a SIDECAR file: the driver opens and closes the
+// database on its own schedule, so a lock on its descriptor can't be reasoned about.
 
 // lockSuffix names the sidecar. Beside the database rather than in a temp
 // directory, so a bind mount or a copied data directory carries the lock with
@@ -77,7 +37,9 @@ var ErrLocked = errors.New("store: the database is open in another process")
 // fileLock is one process's claim on one database path.
 //
 // Shared by every handle this process has open on that path, and freed when
-// the last of them closes — see the refcount note above.
+// the last of them closes. It is refcounted per process because two handles in
+// ONE process are safe (the driver serialises its connections); only another
+// process is the hazard. Refusing in-process would break legitimate cases.
 type fileLock struct {
 	// dbPath is the key this claim is filed under in locksHeld, so the
 	// last release finds its entry without walking the map.
@@ -194,23 +156,14 @@ func claimStore(dbPath string, discarding bool) (*fileLock, error) {
 }
 
 // Probe reports whether another process holds the node database at dbPath —
-// its running engine, or an offline command working on it — as [ErrLocked]
-// naming the holder, WITHOUT OPENING THE FILE AND WITHOUT KEEPING THE CLAIM.
-// A claim this process holds already is shared for the moment, as a second
-// open's is, and answers nil.
+// its running engine, or an offline command — as [ErrLocked] naming the holder,
+// WITHOUT OPENING THE FILE AND WITHOUT KEEPING THE CLAIM. A claim this process
+// holds already is shared, and answers nil.
 //
-// For a process that does not use the database and needs to know whether the
-// engine runs: a `crewlet` command deciding how to reach the fleet's store.
-// Opening the file to learn it would migrate a database the command never
-// reads, and on a node that has never booted create one. And KEEPING the
-// claim would lock a file the command does not use: a second command would
-// then read the first as a running engine, and the engine would be refused
-// over a database nobody had open. What a command does use — a broker on the
-// stream's store directory — has a lock of its own, which is what keeps an
-// engine from starting under it.
-//
-// Not for a scratch store, which the engine deletes before it opens: a node
-// that holds no data has nothing here to ask about.
+// Opening would migrate the file, or create one on a node that never booted;
+// KEEPING the claim would make a second command read the first as a running
+// engine and refuse the engine over a database nobody had open. Not for a
+// scratch store, which the engine deletes before it opens.
 func Probe(dbPath string) error {
 	lock, err := lockStore(dbPath)
 	if err != nil {
@@ -224,20 +177,11 @@ func Probe(dbPath string) error {
 // it, answering the release that gives it back — [ErrLocked] naming the holder
 // where another process has it, as an open is refused.
 //
-// For a caller that has to exclude another PROCESS across a stretch in which
-// it holds no handle of its own. `crewlet run` is the one: it decides what the
-// engine boots on by opening this file, reading it and closing it again, and
-// opens it for the engine only once the broker is up — a gap of seconds, in
-// which an offline `crewlet config import` would replace the very row the boot
-// has already decided on. The claim is REFCOUNTED per process ([claimStore]),
-// so the engine's own open shares this one and the boot's release leaves the
-// engine holding the file with nothing in between.
-//
-// The release is idempotent, so a caller gives the claim back where it knows
-// it is done and defers it for every path that does not.
-//
-// Not for a SCRATCH store, which the engine deletes as it opens it: a discard
-// takes the path alone ([discard]) and is refused while a claim here stands.
+// For a caller excluding another PROCESS while it holds no handle: `crewlet run`
+// opens the file for the engine only once the broker is up, and in that gap an
+// offline `crewlet config import` would replace the row the boot decided on.
+// The claim is refcounted ([claimStore]), so the engine's open shares it; the
+// release is idempotent. Not for a SCRATCH store: [discard] is refused here.
 func Hold(dbPath string) (func(), error) {
 	lock, err := lockStore(dbPath)
 	if err != nil {
@@ -271,26 +215,15 @@ func (l *fileLock) release() {
 // discard deletes a database and every sidecar beside it, holding the store's
 // own lock while it does — see [Options.Scratch].
 //
-// THE LOCK IS WHAT MAKES A DELETE SAFE TO ASK FOR. Without it, a node told its
-// store is scratch and pointed by mistake at a path another engine is running
-// on would unlink that engine's database from under it. With it, that node is
-// refused naming the holder, exactly as a second opener is. A handle THIS
-// process already holds is refused too: the in-process claim is shared rather
-// than exclusive, so the lock alone would let a scratch open delete a
-// database a caller here is reading.
+// THE LOCK MAKES A DELETE SAFE: a scratch node pointed at a path another engine
+// runs on is refused naming the holder. A handle THIS process holds is refused
+// too, since the in-process claim is shared and the lock alone would let a
+// scratch open delete a database a caller here is reading.
 //
-// THE CHECK AND THE CLAIM ARE ONE STEP, and the claim is never shared
-// ([claimStore]). They were two — a look for a handle here, then an ordinary
-// shared claim — so an open landing between them shared the claim and had its
-// database deleted under it, and one landing during the delete opened a file
-// that was being removed.
-//
-// remove is what deletes the files: [removeDatabaseFiles], on the one path
-// that discards. A PARAMETER because the claim's exclusivity is a property of
-// the moment between the claim and the release, and only a case that can hold
-// a discard inside that moment can see whether an open is refused there —
-// [claimStore]'s own case could not tell this function taking the claim from
-// it looking first and then sharing one.
+// THE CHECK AND THE CLAIM ARE ONE STEP, never shared ([claimStore]): as two, an
+// open landing between them lost its database, and one landing during the
+// delete opened a file being removed. remove is a PARAMETER so a case can hold
+// a discard between claim and release and see an open refused there.
 func discard(dbPath string, remove func(dbPath string) error) error {
 	if dbPath == "" || strings.HasPrefix(dbPath, ":memory:") {
 		// Nothing on disk: an in-memory database starts empty by

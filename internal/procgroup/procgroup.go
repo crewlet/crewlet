@@ -24,7 +24,9 @@
 // itself wrote down — a run's script records its own, so that its end can be
 // asked of it — reaches its process only while that process is a living member
 // of the group the caller recorded ([Leader.SignalMember]), because the job
-// could have written any pid of its user's there.
+// could have written any pid of its user's there. On Linux the pid is held as a
+// pidfd BEFORE it is checked, so a pid reissued in between reaches nobody.
+//
 // And one figure about a group: the CPU its members have spent ([GroupCPU]),
 // read from the same process records, because a group signalled as one dies
 // without its leader reaping the rest, and the leader's own usage then counts
@@ -89,20 +91,14 @@ func Terminate(pid int) error { return signal(pid, sigTerm) }
 // so far: every member's user and system time, and that of every child each
 // has waited for.
 //
-// It is the figure a caller reads BEFORE it signals a group whose cost it
-// counts. wait4 hands a parent the time of the children it reaped, and a
-// leader killed with its group dies without reaping the children dying beside
-// it: upload-pack's pack-objects, receive-pack's index-pack, orphaned and
-// reaped by whatever the kernel hands them to. So the leader's own usage at
-// its reap is the leader alone, and what the tree spent until the signal is
-// only to be had here, from the members while they are still members.
+// Read it BEFORE signalling a group whose cost is counted: a leader killed
+// with its group never reaps the children dying beside it (pack-objects,
+// index-pack), so wait4 at its reap is the leader alone.
 //
-// Read from the kernel's own process record on Linux, the members found by a
-// scan of the process table. A record that cannot be read is reported beside
-// the sum of every one that could, so the figure is only ever short and the
-// caller may keep it as a floor. Elsewhere it is [errors.ErrUnsupported]: XNU
-// keeps a process's CPU where only libproc reads it, and the engine builds
-// without cgo.
+// Read from /proc on Linux by a scan. A record that cannot be read is reported
+// beside the sum of every one that could, so the figure is only ever short:
+// keep it as a floor. Elsewhere [errors.ErrUnsupported]: XNU's CPU needs
+// libproc, and the engine builds without cgo.
 func GroupCPU(pid int) (time.Duration, error) {
 	if !addressable(pid) {
 		return 0, fmt.Errorf("procgroup: pid %d is not a process group this package addresses", pid)

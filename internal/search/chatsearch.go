@@ -78,35 +78,18 @@ type ChatHit struct {
 // that FORGOT to resolve its viewer must not be handed one.
 var ErrNoViewer = errors.New("search: a chat search needs the viewer's visible channels")
 
-// The bounds on how many hits one chat search answers.
+// ChatSearchLimit is the default: twenty, against the knowledge search's ten,
+// since a chat hit is a sentence, not a document.
 //
-// ChatSearchLimit is what a query that names no limit is answered with:
-// twenty, against the knowledge search's ten, because a chat hit is one
-// sentence where a knowledge hit is a document, so the same screen holds twice
-// as many of them before a person has to page.
+// MaxChatSearchLimit caps any query as typed (a seat's `limit` included). FORTY,
+// because one answer is ONE TOOL RESULT under a 64 KiB ceiling (the builtin's
+// ToolAnswerBytes): a hit is at most [ChatSnippetBytes] of message plus ids and
+// score, FENCED as somebody else's words, about 1.25 KB as prose. Forty is
+// 50 KiB, 58 KiB with a quoted character per snippet; forty-five would not fit.
 //
-// MaxChatSearchLimit is the most any query is answered with, whatever it
-// asked for — and a caller's number reaches here as it was typed, a seat's
-// `limit` argument included. FORTY, because one answer is ONE TOOL RESULT for
-// a seat and its ceiling is 64 KiB (the builtin's ToolAnswerBytes): a hit is
-// at most [ChatSnippetBytes] of message plus three ids, a handle, an instant
-// and a score, and the snippet arrives FENCED as somebody else's words — a
-// fence whose two lines carry the turn's token and name the author, and an
-// envelope naming every author once — about one and a quarter kilobytes
-// rendered as prose with the longest handle in each place it appears. So
-// forty still renders as one answer rather than a refusal to answer at all —
-// 50 KiB of prose by forty different authors, 58 KiB with a quoted character
-// in every snippet, and forty-five would not; it was fifty until the fence,
-// at which that page is 72 KiB. Without it a query asked for a million hits
-// was ranked and returned whole, and the surface that asked refused to hand it
-// over. A screen of forty is still more than one screen holds.
-//
-// AS PROSE, and the qualifier is the ceiling's to keep: a tool answer writes
-// markup as it was written, but a snippet dense with what its JSON still
-// writes as six bytes — a control character, a terminal's escape pasted with
-// its colours — is four times that, and a page of them is refused by that
-// ceiling naming `limit` — its job, since a smaller page is the remedy —
-// rather than handed over cut.
+// AS PROSE is the ceiling's to keep: a snippet dense with what JSON writes as
+// six bytes (control characters, pasted escapes) is four times that, and a page
+// of them is refused naming `limit`, never handed over cut.
 const (
 	ChatSearchLimit    = 20
 	MaxChatSearchLimit = 40
@@ -115,16 +98,13 @@ const (
 // ChatSnippetBytes bounds a hit's snippet — beside the marks a cut leaves at
 // either end of it.
 //
-// EXPORTED because a surface sizes its answers by it: a page of hits at
-// [MaxChatSearchLimit] is one tool answer, and both bounds together are what
-// keep that answer under its ceiling.
+// EXPORTED because a surface sizes its answers by it: with
+// [MaxChatSearchLimit] it keeps one tool answer under its ceiling.
 //
-// SIX HUNDRED, which holds the whole of most messages — a chat hit IS the
-// message, where a knowledge hit points at a page to open — and cuts only a
-// pasted block, around the words that made it a hit. It bounds what a search
-// answer carries whatever a room holds: a message may be tens of kilobytes,
-// and twenty of them whole would be most of a megabyte handed to a seat as a
-// tool result.
+// SIX HUNDRED holds the whole of most messages (a chat hit IS the message) and
+// cuts only a pasted block, around the words that made it a hit. A message may
+// be tens of kilobytes, and twenty whole would be most of a megabyte handed to
+// a seat as a tool result.
 const ChatSnippetBytes = 600
 
 // chatScanBinds is how many parameters the posting scan binds besides its
@@ -144,37 +124,16 @@ func chatRoomChunk(maxVariables int) int { return max(1, maxVariables-chatScanBi
 
 // SearchMessages ranks a company's chat against a query.
 //
-// IT RAISES rather than answering empty, for the reason the knowledge search
-// gives: this is the storage layer, where "the store would not answer" and
-// "nothing matched" are different facts, and the seam above it is what turns a
-// failure into the empty block a turn tolerates.
+// IT RAISES rather than answering empty: "the store would not answer" and
+// "nothing matched" are different facts, and the seam above turns a failure
+// into the empty block a turn tolerates. A QUERY PAST [knowledge.MaxQueryBytes]
+// IS REFUSED first, as [FanOut.Search] does: each term is a postings read.
 //
-// A QUERY PAST [knowledge.MaxQueryBytes] IS REFUSED before anything runs, as
-// [FanOut.Search] refuses one for the other two ranked searches. Chat is a
-// ranked search on the same terms — a pasted passage ranks on every incidental
-// word in it and answers a question nobody asked — and here each term is also
-// a postings read of its own, so an unbounded query is an unbounded number of
-// them. Every surface refuses first in its own words; this is the one path a
-// chat search takes on the node that ranks it, whichever node or surface
-// asked.
-//
-// # Ranked by the rooms it searches
-//
-// The document count, the average length and every term's document frequency
-// are SUMMED OVER [ChatQuery.Channels], never taken from the whole company.
-// Taken from the company, a score is a function of how often a word is said in
-// rooms the asker cannot read: a private room or a direct conversation saying
-// a word more often lowers its weight in every hit the asker CAN see, and the
-// scores and the order of their own search move with the contents of rooms
-// they are not in. Over the searched rooms, the ranking is BM25 over exactly
-// the corpus the asker reads — which is also the honest one, since that is the
-// corpus they are searching. A [ChatQuery.Author] narrows the postings and not
-// the statistics, as a scope narrows the knowledge search: the same word is not
-// made rare by being looked for in one person's messages.
-//
-// The whole ranking is read in ONE SNAPSHOT of this node's index, so the
-// statistics and the postings they weight agree while the walk writes beside
-// it.
+// Ranked by the rooms it searches: document count, average length and term
+// document frequencies are SUMMED OVER [ChatQuery.Channels], never the
+// company's, or a score would move with words said in rooms the asker cannot
+// read. A [ChatQuery.Author] narrows postings, not statistics. The ranking is
+// read in ONE SNAPSHOT, so statistics and postings agree.
 func (x *ChatIndexer) SearchMessages(ctx context.Context, q ChatQuery) ([]ChatHit, error) {
 	if err := knowledge.CheckQuery(q.Text); err != nil {
 		return nil, fmt.Errorf("search: %w", err)
@@ -275,24 +234,16 @@ func (x *ChatIndexer) termDocs(ctx context.Context, tx *sql.Tx, term string,
 }
 
 // chatPostings reads one term's postings in the searched rooms, narrowed to one
-// speaker when the query names one.
+// speaker when the query names one. AT MOST [maxPostingScan], the NEWEST: the
+// scan walks backwards by message id, a UUIDv7 carrying its post's instant
+// (frequency, the knowledge index's cut, is one almost everywhere here).
 //
-// AT MOST [maxPostingScan] OF THEM, and WHICH ones is the order: the scan walks
-// the term's list backwards by message id, which is a UUIDv7 carrying the
-// instant its post was asked, so a term in more messages than the budget
-// contributes its NEWEST ones. The knowledge index keeps its most frequent
-// instead, at the price of sorting the whole list; in a corpus of sentences
-// the frequency is one almost everywhere, so that sort would buy an arbitrary
-// subset, where the newest is the one a person searching their chat wants.
-//
-// ONE BUDGET ACROSS EVERY CHUNK, not one each: a limit per statement would make
-// the scan this bounds grow with the room count. The chunks are disjoint
-// because a document lives in exactly one room, so concatenating them is
-// exact for a term under the budget; one past it spends the budget in chunk
-// order, so its postings are the newest of the first chunks rather than of
-// the whole list. That needs a viewer who may read more rooms than one
-// statement binds — the store's measured parameter limit, tens of thousands
-// ([chatRoomChunk]), against a company of at most a thousand live rooms.
+// ONE BUDGET ACROSS EVERY CHUNK, not one each, or the scan would grow with the
+// room count. Chunks are disjoint (a document lives in one room), so
+// concatenating them is exact under the budget; past it, the postings are the
+// newest of the first chunks. That needs a viewer who may read more rooms than
+// one statement binds, tens of thousands ([chatRoomChunk]), against at most a
+// thousand live rooms.
 func (x *ChatIndexer) chatPostings(ctx context.Context, tx *sql.Tx, term string,
 	rooms []string, author string, chunk int) ([]textindex.Posting, error) {
 
@@ -371,16 +322,13 @@ func chatHydrateStatement(n int) string {
 // hydrateChat turns the best-scored ids into hits, reading the message rows
 // themselves.
 //
-// FROM THE TRANSCRIPT rather than from the index, because the index keeps no
-// copy of what a message says: a second copy of every message in the node
-// estate would double the largest thing on this disk to save one read of rows
-// this node already holds, and the transcript is current where a copy is only
-// as current as the walk.
+// FROM THE TRANSCRIPT, not the index, which keeps no copy of what a message
+// says: a copy would double the largest thing on this disk to save one read,
+// and the transcript is current where a copy is only as current as the walk.
 //
 // A MESSAGE THE INDEX HAS AND THE TRANSCRIPT NO LONGER DOES IS SKIPPED, not
-// raised. That gap is the ordinary window between a prune, an erase or a
-// tombstone landing and the index following it, and a search that failed
-// during it would turn a few seconds of catch-up into an outage.
+// raised: that is the ordinary window before the index follows a prune, erase
+// or tombstone, and failing there would turn seconds of catch-up into an outage.
 func (x *ChatIndexer) hydrateChat(ctx context.Context, scores map[string]float64,
 	terms []string, limit int) ([]ChatHit, error) {
 

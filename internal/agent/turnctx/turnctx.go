@@ -45,6 +45,16 @@
 // the failure immutable epochs exist to remove. Neither is the phase recorder,
 // whose whole job is to attribute spend to the phase that incurred it — an
 // ambient one attributes it to whichever phase last wrote the context.
+//
+// # What a turn's carried state may be
+//
+// [Lookups], [Holds], [CallLog] and [Seen] are shared by every Turn derived
+// from one and start empty or seeded on a resumed segment. None authorizes
+// anything: the node answering each later read judges the asker again. Seen
+// is never written to a row, a log or a trace, so a server's output still
+// reaches no record (ADR-0107). A seat's principal comes from [SeatPrincipal]
+// alone, so what a seat is offered and what its calls are decided as cannot
+// differ.
 package turnctx
 
 import (
@@ -61,21 +71,16 @@ import (
 
 // Turn is everything a turn's own code needs, and nothing else.
 //
-// IMMUTABLE after construction. Derive a new one rather than mutating it — a
-// tool that could rewrite the seat it runs as would make every authorization
-// decision downstream a suggestion. The six things it POINTS AT that change
-// are [Turn.Written], [Turn.Calls], [Turn.AuxSpend] and [Turn.Holds], each of
-// which only ever grows and authorizes nothing; [Turn.Lookups], which holds
-// what the turn already looked up by name and authorizes nothing either, every
-// read through one being judged again where it is answered; and [Turn.Budget],
-// which only ever learns that a window is full — so the one thing it can
-// decide is to refuse a call, and a tool holding it can make it refuse sooner,
-// never later.
+// IMMUTABLE after construction: derive a new one, since a tool that could
+// rewrite its seat would make every authorization decision a suggestion. What
+// it POINTS AT that changes: [Turn.Written], [Turn.Calls], [Turn.AuxSpend] and
+// [Turn.Holds] only grow and authorize nothing; [Turn.Lookups] authorizes
+// nothing either (each read is judged again where answered); [Turn.Budget] only
+// learns that a window is full, so a tool holding it can make a call refuse
+// sooner, never later.
 //
-// A goroutine that captures a Turn and outlives the turn is a bug, and the one
-// no linter can see. The rule that makes it checkable: a Turn is PASSED, never
-// stored in a struct field that outlives a turn. Anything needing turn state
-// afterwards takes a copy of the values it wants.
+// A goroutine capturing a Turn past the turn is a bug no linter sees, so a Turn
+// is PASSED, never stored in a field that outlives a turn; copy what you need.
 type Turn struct {
 	// RunID names THIS EXECUTION of the turn, and nothing else. Minted
 	// fresh every time the engine runs a turn, so two runs of one trigger
@@ -90,15 +95,11 @@ type Turn struct {
 	// trigger events it was dispatched for, stable across a re-run and
 	// across nodes. See [internal/workkey].
 	//
-	// It is what a write must be idempotent against: a re-run posts the
-	// same comment and files the same tracker operation, and only a key
-	// that survives the re-run collapses them. EMPTY is legitimate and
-	// means "a turn with no ledgerable trigger" — a sub-agent — which has
-	// no cross-run duplicate to collapse. A scheduled fire is not one: it is
-	// a task assignment, a type the completion ledger records
-	// (internal/agent/inbox's ledgered set), so its key is derived from the
-	// fire like any other trigger's, and a merged run's from every fire it
-	// stands for.
+	// It is what a write must be idempotent against: only a key surviving a
+	// re-run collapses its repeated comment or tracker operation. EMPTY means
+	// "no ledgerable trigger" (a sub-agent), with no cross-run duplicate. A
+	// scheduled fire is ledgerable (internal/agent/inbox's ledgered set), so its
+	// key derives from the fire, and a merged run's from every fire it stands for.
 	WorkKey string
 
 	// WorkSince is when that unit of work BEGAN: the earliest instant at
@@ -115,29 +116,18 @@ type Turn struct {
 	// SAME events the key is, for that reason (inbox.WorkSinceFor).
 	WorkSince time.Time
 
-	// RebasedTo is the instant every operation id this turn derives carries
-	// IN PLACE OF the start of the identity it is seeded from — WorkSince
-	// where there is a work key, the run's own start where there is not —
-	// and zero where the ids carry that start, which is every turn whose
-	// work began within the state log's mint horizon.
+	// RebasedTo is the instant every operation id this turn derives carries IN
+	// PLACE OF the start of its seed identity (WorkSince, or the run's start
+	// without a work key); zero when the ids carry that start, i.e. work began
+	// within the state log's mint horizon.
 	//
-	// Set on a turn whose work began longer ago than the operation ledger
-	// remembers: a trigger delivered a month late, a turn resumed a month
-	// after it parked. An operation minted before what a ledger swept,
-	// whose row that ledger no longer holds, is answered `unknown` and
-	// never published, on every node — so every write such a turn made
-	// would be lost for good, where the only thing keeping the start still
-	// bought is collapsing a repeat of an earlier attempt's write onto a
-	// row the sweep has taken anyway. The engine decides it for every
-	// attempt, against the attempt's own clock, and records it in the
-	// fleet's coordination store under the ids' seed, so a crash re-run, a
-	// retried resume and the next half of the turn inherit it while it is
-	// recent enough to (statelog.MintAt).
-	//
-	// A SEPARATE FIELD rather than a new WorkSince, because the choice it
-	// overrides is not always WorkSince: a turn with no work key seeds its
-	// ids from the run and mints them at the run's start, and a resumed
-	// one of those is exactly as old.
+	// Set when work began longer ago than the operation ledger remembers: an
+	// operation minted before a swept ledger row is answered `unknown` and never
+	// published, so every write would be lost. The engine decides it per attempt
+	// against its own clock and records it in the coordination store under the
+	// ids' seed, so re-runs and resumes inherit it while recent enough
+	// (statelog.MintAt). A SEPARATE FIELD, not a new WorkSince: a turn without a
+	// work key mints at the run's start, and a resumed one is as old.
 	RebasedTo time.Time
 
 	// Seat is who is acting. THE authorization fact: a tool that speaks
@@ -388,12 +378,10 @@ type Turn struct {
 	// beside the run's other identities, and read through
 	// [Turn.FenceBoundary].
 	//
-	// ONE TOKEN FOR THE SEGMENT rather than one per read, so the prompt's
-	// thread and every tool answer read in it are fenced alike and a model
-	// pairing an opening line with its closer meets one token, not a dozen.
-	// A resumed segment mints its own: the fences the parked conversation
-	// already holds keep theirs, and their content has had every token
-	// removed either way.
+	// ONE TOKEN FOR THE SEGMENT rather than one per read, so a model pairing
+	// an opening line with its closer meets one token, not a dozen. A resumed
+	// segment mints its own: fences already in the parked conversation keep
+	// theirs, and their content had every token removed either way.
 	Boundary provenance.Boundary
 }
 
@@ -450,17 +438,14 @@ func (t *Turn) InPhase(phase types.Phase) *Turn {
 // WithAuxSpend derives the Turn for calls a DIFFERENT segment pays for: this
 // one, its auxiliary calls tallied on spend rather than on [Turn.AuxSpend].
 //
-// One caller, and the shape of the problem it solves is the reason it exists:
-// every executor hands its tool surface to its harness over the bridge, and
-// the harness goes on calling those tools after the segment that launched it has
-// ended and charged what it spent. Tallied on that segment's
-// tally, every one of those calls was added to a number nothing read again.
-// A copy, for [Turn.InPhase]'s reason; nil in, nil out.
+// One caller: an executor hands its tool surface to its harness over the
+// bridge, and the harness keeps calling after the launching segment ended and
+// charged its spend, so tallied there those calls would add to a number nothing
+// reads again. A copy, for [Turn.InPhase]'s reason; nil in, nil out.
 //
-// [Turn.Budget] is KEPT: the counters are the seat's and the company's
-// whichever segment pays, and the workers the harness delegates to already charge
-// the launching segment's meter, so its auxiliary calls are judged by the same
-// meter rather than by none.
+// [Turn.Budget] is KEPT: the counters are the seat's and company's whichever
+// segment pays, and the harness's workers already charge the launching
+// segment's meter.
 func (t *Turn) WithAuxSpend(spend *auxspend.Tally) *Turn {
 	if t == nil {
 		return nil
@@ -549,17 +534,12 @@ func (t *Turn) WithholdsContacts(handle string) bool {
 
 // AgentID is the acting seat's derived agent id, or "".
 //
-// Derived here rather than carried, because the derivation is a pure function
-// of two values this type already pins — the org's name and the seat's handle
-// — and a carried copy is a value that can disagree with the seat beside it.
-// Empty for a human seat, which has no agent id at all rather than a zero one
-// (see [org.Organization.AgentIDFor]), and for a surface built outside a turn.
-//
-// It exists because an event addressed by agent id is published from both the
-// turn engine and the sub-agent fan-out, and only the first had the id to
-// hand: a `provider_fallback` from inside a delegate call went out with the
-// promoted column empty, so a row whose whole doc says it is addressed like a
-// phase event could not be resolved to the seat that emitted it.
+// Derived, not carried: it is a pure function of the org's name and the seat's
+// handle, and a carried copy could disagree with the seat beside it. Empty for a
+// human seat, which has no agent id (see [org.Organization.AgentIDFor]), and
+// outside a turn. The sub-agent fan-out publishes events addressed by agent id
+// too, and needs it from here so a `provider_fallback` inside a delegate call
+// does not go out with the promoted column empty.
 func (t *Turn) AgentID() string {
 	if t == nil || t.Seat == nil || t.Org == nil {
 		return ""
@@ -599,24 +579,16 @@ func (t *Turn) RequireSeat() (*org.Role, error) {
 const MaxWritten = 128
 
 // Written is the set of work items a turn's writes committed to, in the order
-// each was first written.
+// each was first written. Shared, not copied (see [Turn]): it authorizes
+// nothing and only grows. Concurrent tool calls and delegate workers write to
+// it, and "did this turn write to exactly one item" asks about all, hence the
+// lock.
 //
-// IT IS ONE OF THE TWO MUTABLE THINGS A [Turn] POINTS AT ([Turn.Calls] is the
-// other), and the exception is exactly as wide as it has to be. A Turn is
-// immutable because a tool that could rewrite what it runs as would make
-// every authorization downstream a suggestion; this set authorizes nothing
-// and is only ever added to. It has to
-// be shared rather than copied because the writes it records happen in tool
-// calls and delegate workers that run concurrently under one turn, and what it
-// answers — "did this turn write to exactly one item" — is a question about all
-// of them at once. Hence the lock.
+// THE REF IS THE IDENTITY ([types.WorkItem.Ref]): the same item written under
+// two keys, before and after a project rename, is one item.
 //
-// THE REF IS THE IDENTITY ([types.WorkItem.Ref]): the same item written twice
-// under two keys, before and after a project rename, is one item.
-//
-// The zero value is an empty set, ready to use. A NIL *Written records nothing
-// and reports nothing, which is what a surface built outside a turn — a
-// validate command, a test driving a tool directly — legitimately has.
+// The zero value is an empty set. A NIL *Written records and reports nothing,
+// which a surface built outside a turn legitimately has.
 type Written struct {
 	mu    sync.Mutex
 	refs  map[string]struct{}

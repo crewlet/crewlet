@@ -16,6 +16,11 @@
 // the dashboard's own suite through its own decoder, so a change to either
 // side is a failing test until the other follows it.
 //
+// A walk over the package's own types fails on a JSON-tagged struct no gate
+// holds, so a new shape cannot ship that the client never checks. Every
+// closed set is a named string type with Valid(), so an unknown value off the
+// wire is a value to refuse rather than a panic.
+//
 // It imports the standard library, the uuid package, internal/caveat and
 // internal/words only, which is what lets every assistant package, the API
 // surface and the domain depend on it without depending on each other. caveat

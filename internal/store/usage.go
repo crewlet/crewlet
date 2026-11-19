@@ -21,69 +21,52 @@ import (
 //
 // # Why this is here and the record is not
 //
-// The rows are the node estate's: the audit log this node's own events were
-// written to, and the dispatch ledger its scheduler claimed fires in. Nothing
-// here reads the replicated estate, and nothing here decides what a record
-// looks like — [internal/usage] folds these values into one record per
-// (node, day, object) and publishes it, and every data node's applier writes
-// it.
-// Keeping the SQL here is what lets the estate boundary's static walk see it,
-// and keeping the record there is what keeps this package from knowing about
-// a stream.
-//
+// The rows are the node estate's: its audit log and its scheduler's dispatch
+// ledger. Nothing here reads the replicated estate or decides what a record
+// looks like: [internal/usage] folds these values into one record per (node,
+// day, object). Keeping the SQL here lets the estate boundary's static walk see
+// it; keeping the record there keeps this package from knowing about a stream.
+
 // # A day is a half-open instant range
 //
-// The caller cuts it on the company's clock ([internal/period]) and hands the
-// two instants in. Every read below is `>= start AND < end` on its own time
-// column, so a moment at the boundary belongs to exactly one day and two
-// adjacent days never count one event twice.
-//
+// The caller cuts it on the company's clock ([internal/period]). Every read is
+// `>= start AND < end` on its own time column, so a boundary moment belongs to
+// exactly one day.
+
 // # A day counts the rows this node KEEPS
 //
-// A data node's log also holds the custody batches of nodes without `data`
-// (internal/observe), and a batch it has written and not yet settled may be
-// another node's to keep: until it settles, two logs hold its rows. Every
-// count here therefore leaves out the rows of a batch in flight ([keptRowSQL]) —
-// the PUBLISHED half of the rule every count in this package obeys (see
-// unsettled.go) — so what a node publishes is what it keeps and a fleet's sum
-// holds every row once.
-//
+// A batch written and not yet settled may be another node's to keep: until it
+// settles, two logs hold its rows. Every count leaves out the rows of a batch
+// in flight ([keptRowSQL]), the PUBLISHED half of the rule every count in this
+// package obeys (see unsettled.go), so a fleet's sum holds every row once.
+
 // # A row changes only the day it falls on
 //
-// Every COUNT of a day is read off rows INSIDE it: a spend cell, a read and a
-// person's spend off their own records, and a turn's statistics off the ONE
-// record that ends it, which carries the whole turn ([types.TurnTally]) — its
-// reviews, its send-backs and every segment's duration, wherever and on
-// whichever node those happened. So a batch settled as kept makes its rows
-// count on the days they fall on and on no other day: today and yesterday see
-// it in their fingerprints, whose count it moves, and an older day through the
-// mark [EventLog.SettleCustody] lowers in the settle's own transaction
-// ([DB.UsageRederive]). A batch settled as NOT kept loses rows no count ever
-// held: it changes no count of any day, and at most a fire's label (below).
-//
-// TWO EXCEPTIONS, each stated where it is read. A turn whose ending record
-// carries NO tally — ended by a build before [types.TurnTally], or by a resume
-// of a turn such a build parked, whose earlier segments nobody measured — is
-// read off its records by its id, as it always was ([DB.usageLegacyTurns]),
-// and those reach back to wherever the turn STARTED — days, since a park lasts
-// as long as its executor, which nothing stops on a timer, or as long as a
-// person takes to answer: so for such a turn a row changes the day the turn
-// ended as well as its own. A kept settle that lands only that earlier row
-// marks the earlier day, and the publisher derives every day from a mark
-// through the day before yesterday — so an ending day older than that is
-// derived with it, and one that is still today or yesterday is not until its
-// own fingerprint next moves: a residual of reading the old shape, which ends
-// with the turns it covers. And the event log's sweep can remove the earliest
-// of those records while the end's day is still inside its read floor, so a
-// later derivation reads the turn shorter, with fewer reviews; the publisher
-// publishes every day joined with what the fleet already holds of it, which
-// keeps what the earlier derivation counted (internal/usage).
-//
-// And a schedule fire's turn LABEL ([DB.usageSchedules]) is read off any row
-// of the fire's trace, at any time, kept or in flight, and is never counted,
-// fingerprinted or marked: a custody write can set it and a not-kept settle
-// clear it without the day being derived again, so a derivation in between
-// may publish a label a later one drops.
+// Every COUNT of a day is read off rows INSIDE it; a turn's statistics come off
+// the ONE record that ends it, which carries the whole turn ([types.TurnTally]).
+// So a batch settled as kept makes its rows count on the days they fall on and
+// no other: today and yesterday see it in their fingerprints, an older day
+// through the mark [EventLog.SettleCustody] lowers in the settle's own
+// transaction ([DB.UsageRederive]). A batch settled as NOT kept changes no
+// count of any day, at most a fire's label (below).
+
+// TWO EXCEPTIONS to that, each stated where it is read. A turn whose ending record
+// carries NO tally is read off its records by its id ([DB.usageLegacyTurns]),
+// and those reach back to wherever the turn STARTED, days earlier when a park
+// outlasts a person's answer, so a row changes the day the turn ended as well
+// as its own. A kept settle landing only that earlier row marks the earlier
+// day; the publisher derives every day from a mark through the day before
+// yesterday, so an ending day still today or yesterday is not derived until its
+// own fingerprint next moves, a residual that ends with the turns it covers.
+// The event log's sweep can also remove the earliest of those records, so a
+// later derivation reads the turn shorter; the publisher's join with what the
+// fleet holds keeps what the earlier one counted (internal/usage).
+
+// And a schedule fire's turn LABEL ([DB.usageSchedules]) is read off any row of
+// the fire's trace, kept or in flight, and is never counted, fingerprinted or
+// marked: a custody write can set it and a not-kept settle clear it without the
+// day being derived again, so a derivation in between may publish a label a
+// later one drops.
 
 // UsageWindow is one company day as the reads here take it: a half-open
 // instant range the caller cut on the company's clock, with the two review
@@ -351,39 +334,17 @@ type usageRecord struct {
 const seatNamedSQL = `e.agent_id != ''`
 
 // usageRecords are the thirteen records a day is derived from, taken from their
-// payload types for the reason [phaseCompleted] is: the phase completions, the
-// collected launches and the auxiliary records the spend is summed from, the
-// completions a turn's figures are read off, the turn's SUMMARY record
-// (`agent_turn_completed`), the knowledge reads, the superseded fires, the
-// reads of unit repositories, the held wakes ([DB.usageHeld]), and the changes
-// opened, reviews given, checks failed and ejections on Gitlet ([DB.usageCode]).
-// The auxiliary record is one of them so the fingerprint moves when it lands: a
-// flush writes it up to one ledger interval after its last call, stamped with
-// that call's instant, and a day whose only change was that row would otherwise
-// never be re-derived. A collected launch is one for the reason every spend
-// record is: it is the executor's spend, published when its box is read rather
-// than when any phase of its turn completes. The summary record is one for the same
-// reason as the auxiliary record: a turn whose ending record states no tally
-// is read off its records ([DB.usageLegacyTurns]), whether it failed off the
-// summary, and a summary row that lands in a later custody batch than its
-// turn's end must move the fingerprint — and the settle's mark — when it does.
-// The superseded fire's record is one for the auxiliary record's reason too:
-// it is a fire this node's seat did not run ([DB.usageSchedules]), filed on
-// the day it was recorded, which is when the seat came back to its waiting
-// fires rather than when the scheduler sent them, and a day whose only change
-// was that record would otherwise never be derived again. A held wake is one
-// for the same reason: the turn ledger counts it, and nothing else need land
-// on its day.
+// payload types for the reason [phaseCompleted] is. Each is listed so the
+// fingerprint moves when it lands: a day whose only change was that row would
+// never be re-derived. That covers the auxiliary record (a flush writes it up to
+// one ledger interval late), a collected launch (spend published when its box is
+// read, not when a phase completes), the summary `agent_turn_completed` (a tally-less
+// turn is read off its records, [DB.usageLegacyTurns]) and the superseded fire
+// ([DB.usageSchedules], filed on the day the seat came back to its fires).
 //
-// A CHECK'S ENDINGS ONLY WHERE THEY NAME A SEAT ([seatNamedSQL]): every push of
-// every change ends each check its file defines, passes and candidate, tip
-// and bisect checks included, and only an ending that fails a change's head is
-// counted. Fingerprinted whole, every pass would move today's mark and have the
-// publisher derive the whole day again on its next tick for a figure that did
-// not change — a cost that followed the checks a company runs rather than what
-// its day counts. The predicate is on a column the type's index does not carry,
-// so the fingerprint reads each ending's row for it, where it walked the index
-// alone: a seek an ending a tick, against a derive of the whole day a pass.
+// A CHECK'S ENDINGS ONLY WHERE THEY NAME A SEAT ([seatNamedSQL]): every push
+// ends every check, and fingerprinting each pass would re-derive the day for an
+// unchanged figure, at a seek an ending a tick rather than a derive a pass.
 func usageRecords() []usageRecord {
 	return []usageRecord{
 		{kind: phaseCompleted},
@@ -509,14 +470,12 @@ func (d *DB) UsageRederive(ctx context.Context) (UsageRederive, bool, error) {
 // AT OR BELOW, NEVER ALL: a settle can land between the read and the clear,
 // and every settle stamps its mark above every mark there is, so the one that
 // landed survives and the next pass derives its day. A plain delete would
-// forget that day for good. And the marks it does clear go WHOLE, each with
-// its own oldest instant: one row the whole table shared, lowered by a settle
-// ten days back and then moved by every settle of today's rows after it,
-// would survive every clear, and the publisher would derive the ten days again
-// on every tick for as long as a keeper was taking batches. The publisher is the only
-// thing that clears, one tick at a time, so between its read and its clear the
-// marks it read can be moved by a settle but never removed — and a mark a
-// settle moved is stamped above what was read, so this leaves it.
+// forget that day for good. The marks it does clear go WHOLE, each with its own
+// oldest instant: one row shared by the table, lowered by a settle ten days
+// back and moved by every later settle, would survive every clear and have the
+// publisher derive the ten days on every tick. The publisher is the only thing
+// that clears, so between its read and its clear a mark can be moved by a
+// settle but never removed.
 func (d *DB) ClearUsageRederive(ctx context.Context, seq int64) (bool, error) {
 	if d == nil || d.sql == nil {
 		return false, ErrNoEstate
@@ -950,36 +909,16 @@ func usagePeopleSQL(w UsageWindow) (string, []any) {
 }
 
 // usageTurns reads the turns that ENDED in the window, each off the one record
-// that ended it.
+// that ended it, which states the WHOLE turn ([types.TurnTally]). Nothing here
+// reads a tallied turn's other records: custody batches are kept by whichever
+// node won them, so the node holding the end would count short.
 //
-// THAT RECORD STATES THE WHOLE TURN ([types.TurnTally]): its every segment's
-// duration, whether it failed, how many reviews it took and what they decided
-// — counted by the turn as it ran, and carried across a park on the suspended
-// conversation. So nothing here reads a tallied turn's other records, and that
-// is the point: a stateless node's events reach the data nodes in custody
-// batches a second apart, each kept by whichever node won its claim, and a
-// turn resumed on another node leaves its first segment there — so the node
-// holding the end held only part of the rest, counted its review count, its
-// send-backs and its duration short, and the node holding the rest counted
-// none of them. It also keeps every row a tallied turn's day is derived from
-// INSIDE the day, which is what makes the event log's floor exact for it
-// (internal/usage).
-//
-// A TURN WHOSE ENDING RECORD STATES NO TALLY is not a turn that measured zero:
-// it is one ended by a build before the tally — every `turn_completed` already
-// in a log at the upgrade, and every one a peer still on that build publishes
-// during a rolling upgrade — or by a resume of a turn such a build parked,
-// which cannot state the segments before the park (internal/engine leaves the
-// tally off it). Read as zeros, every such turn would publish a zero-length,
-// unreviewed, unfailed turn over the history the old build published, on the
-// first derivation after the upgrade and for good. So such a turn is read off
-// its records by its id, as the build before the tally read every turn
-// ([DB.usageLegacyTurns]) — and those records reach back to wherever the turn
-// started, which nothing bounds, so the sweep can remove the earliest of them
-// while the end's day is inside the read floor and the turn then reads
-// shorter here; the publisher's join with what the fleet holds keeps what an
-// earlier derivation counted (internal/usage). Where one ending is recorded
-// twice, once with a tally and once without, the tally is read.
+// NO TALLY is not a turn that measured zero: a build before the tally (a peer's
+// in a rolling upgrade) ended it, or a resume of a turn that build parked. It is
+// read off its records by its id ([DB.usageLegacyTurns]), which reach back
+// further than the sweep keeps; the publisher's join with what the fleet holds
+// keeps what an earlier derivation counted (internal/usage). An ending recorded
+// with and without a tally reads the tally.
 func (d *DB) usageTurns(ctx context.Context, w UsageWindow,
 	seat func(string) *UsageSeat, name func(*UsageSeat, string, string)) error {
 
@@ -1392,42 +1331,18 @@ func usageReadsSQL(w UsageWindow) (string, []any) {
 		[]any{types.KnowledgeRead{}.EventType(), EncodeTime(w.Start), EncodeTime(w.End)}
 }
 
-// usageCode counts the window's changes opened and reviews given per seat, the
-// findings the reviews of each seat's own changes raised, the checks that
-// failed its changes' heads and its changes' ejections from their queues —
-// off the events their landings announced ([types.ChangeOpened],
-// [types.ReviewSubmitted], [types.CodeCheckFinished],
-// [types.CodeQueueEjected]), which name every seat they count on by its agent
-// id, resolved when they were published: an opening on its owner, a review on
-// its reviewer, and its findings, a failed head check and an ejection on the
-// change's owner — never on whoever pushed the head or queued the change. A
-// person is named by no agent id, and no seat's day counts what a person did.
+// usageCode counts the window's changes opened, reviews given, findings raised
+// on a seat's own changes, failed head checks and queue ejections per seat, off
+// the events their landings announced ([types.ChangeOpened],
+// [types.ReviewSubmitted], [types.CodeCheckFinished], [types.CodeQueueEjected]).
+// Each names its seat by agent id: an opening on its owner, a review on its
+// reviewer, the rest on the change's owner, never on whoever pushed.
 //
-// EACH OPENING AND EACH REVIEW ONCE, by its change's or its review's id, each
-// failed check once by its attempt and each ejection once by its entry: its
-// landing is announced once (internal/gitlet's announce.go), and counting the
-// thing rather than its rows is what keeps a second announcement of it — none
-// is published, but nothing here has to trust that — from counting twice. A
-// correction of an attempt's ending (types.CodeCheckFinished.Replaces) is the
-// same attempt, so a failure corrected to another failure counts once — and
-// one corrected to a pass stays counted, since a day's figures only grow
-// (usage.CodeDay joins its publications by max), and a count a correction
-// lowered would stand only where the node had not yet published the day.
-//
-// WHAT IS COUNTED IS READ OUT OF THE PAYLOAD, never columns of its own: a seat
-// opens and reviews at most a change a turn, a change is ejected at most once
-// an entry, and a check fails a head only where its owner has code to fix, so
-// a day counts a few of these rows against the tens of thousands of spend and
-// read rows node/0061 promoted columns for. A check's ENDINGS are the one
-// record here that is not rare — every push of every change ends each check
-// its file defines, passes included — so which of them are counted is decided
-// on the promoted `agent_id` column, which only an ending that fails a head
-// fills ([seatNamedSQL]): the branch reads that one column of every ending in
-// the window and the payload of the failures alone, so a passing ending is
-// passed over with its JSON unparsed. An opening and a review are found by the same column, their
-// opener's and reviewer's; a review's findings and an ejection by the owner
-// their payload names, since a review's column is its reviewer's and both are
-// few.
+// EACH THING ONCE, by its id or attempt. A correction of an attempt's ending
+// (types.CodeCheckFinished.Replaces) is the same attempt: a failure corrected
+// to a pass stays counted, since a day's figures only grow (usage.CodeDay joins
+// by max). Read off the payload, not columns (a day holds few such rows), except
+// a check's endings, by the promoted `agent_id` ([seatNamedSQL]): a pass is skipped.
 func (d *DB) usageCode(ctx context.Context, w UsageWindow, seat func(string) *UsageSeat) error {
 	query, args := usageCodeSQL(w)
 	rows, err := d.sql.QueryContext(ctx, query, args...)
@@ -1511,30 +1426,18 @@ func usageCodeSQL(w UsageWindow) (string, []any) {
 			start, end}
 }
 
-// usageRepoReads folds the window's records of reads of `visibility: unit`
-// repositories ([types.CodeFetched], each one reader's reads of a flush) into
-// one entry per (repository, principal kind, principal, via, seat): how many
-// reads their records count, what they were sent, the newest, and the
-// repository's name as the newest of its reads named it.
+// usageRepoReads folds the window's [types.CodeFetched] records of reads of
+// `visibility: unit` repositories into one entry per (repository, principal
+// kind, principal, via, seat): reads counted, bytes sent, the newest, and the
+// repository's name as its newest read named it.
 //
-// OFF THE COLUMNS node/0061 and node/0062 promoted, never the payload: a day is
-// derived again on every tick it moves, and read out of each row's JSON the
-// grouping cost more than the rest of the day did — 272 ms a busy day of 50
-// 000 rows, past the 150 ms (1 % of the publisher's 15 s tick) a derived day
-// may add (BenchmarkUsageForDay; the migrations state the measurements). On
-// the columns, summing each record's count, the same day's 50 000 records
-// add 116 ms (193 ms the day, 77 ms without them; `-benchtime 5x -count 1`,
-// two cores of an Intel Core Ultra 7 265U, beside another session's builds) —
-// the grouping's sort of 50 000 rows, which no index serves without giving up
-// the seek of the window every derivation takes. A record costs that whatever
-// it counts, so the reads a day can hold before this matters grew by as many
-// as the ledger folds into one record.
+// OFF THE COLUMNS node/0061 and node/0062 promoted, never the payload: grouping
+// on each row's JSON cost 272 ms a busy day of 50 000 rows, past the 150 ms
+// (1 % of the publisher's 15 s tick) a derived day may add (BenchmarkUsageForDay).
 //
-// THE NAME IS A LABEL, read once per repository rather than once per read:
-// off the row of its newest read, found by that read's instant
-// ([usageRepoNameSQL]). A repository renamed within the day is one entry of
-// each reader under its newest name, since the id is what the entries are
-// keyed on.
+// THE NAME IS A LABEL, read once per repository off its newest read's row
+// ([usageRepoNameSQL]): a repository renamed within the day is one entry per
+// reader under its newest name, since the id is the key.
 func (d *DB) usageRepoReads(ctx context.Context, w UsageWindow) ([]UsageRepoRead, error) {
 	query, args := usageRepoReadsSQL(w)
 	rows, err := d.sql.QueryContext(ctx, query, args...)
@@ -1630,23 +1533,14 @@ func usageRepoNameSQL(repo string, at int64) (string, []any) {
 // one entry per (server, tool) per seat.
 //
 // OFF THE ONE RECORD THAT ENDS EACH TURN, its tally ([types.ToolTally]), for
-// [DB.usageTurns]' reason: the turn counted its own calls as it ran, every
-// segment, delegated worker and executor run included, so nothing here reads
-// its phase records, which a custody group spreads over the data nodes and a
-// resume leaves on another node. So a call counts on the day its turn ended,
-// as the turn itself does, and a turn still parked counts nowhere yet.
+// [DB.usageTurns]' reason. A call counts on the day its turn ended; a parked
+// turn counts nowhere yet, and a turn ended without a tally counts no calls.
 //
-// ONCE PER TURN: an ending recorded twice (a resume re-run after a failure
-// publishes its end again) states the same turn twice, so each (turn, server,
-// tool) takes the largest of every figure across the copies, the rule the
-// turn's other figures follow ([usageEndedTurnsSQL]), and only then are the
-// turns added up. Folded in Go rather than by MAX in SQL because the newest
-// instant is RFC 3339 text, whose order is not time's once the fractions
-// differ in length.
-//
-// A turn whose end states no tally counts no calls here: there is nothing to
-// read them from but the phase records, and no build that ended a turn without
-// stating its calls has shipped.
+// ONCE PER TURN: an ending recorded twice (a resume re-run after a failure)
+// states the same turn twice, so each (turn, server, tool) takes the largest of
+// every figure across the copies ([usageEndedTurnsSQL]), then the turns are
+// added. Folded in Go, not by MAX in SQL: the newest instant is RFC 3339 text,
+// whose order is not time's once fractions differ in length.
 func (d *DB) usageTools(ctx context.Context, w UsageWindow,
 	seat func(string) *UsageSeat, name func(*UsageSeat, string, string)) error {
 
@@ -1760,30 +1654,15 @@ func usageToolsSQL(w UsageWindow) (string, []any) {
 // usageSchedules reads the fires this node's scheduler recorded in the window,
 // and the fires this node's seats did not run.
 //
-// THE TURN IS FOUND BY THE TRACE, and only where this node ran it: a fire is
-// dispatched to a seat's mailbox and whichever node holds that seat runs the
-// turn, so a turn on a peer is in the peer's event log. The trace names it
-// either way.
+// THE TURN IS FOUND BY THE TRACE, only where this node ran it (a peer's turn is
+// in the peer's log), and NOT THROUGH THE KEPT-ROWS PREDICATE: `scheduled_runs`
+// is this node's own ledger, which custody never writes, and the turn is a
+// LABEL, not a count (neither fingerprinted nor marked, see above).
 //
-// NOT THROUGH THE KEPT-ROWS PREDICATE, and that is the one read here that
-// deliberately does not take it: `scheduled_runs` is this node's scheduler's
-// own ledger, which custody never writes, and the turn is a LABEL rather than
-// a count: the turn a trace ran is that turn whichever data node keeps its
-// rows, so a row of a batch in flight names it as truly as a kept one does.
-// The price is stated in the file doc: the label is read off any row of the
-// trace at any time, and is neither fingerprinted nor marked, so a custody
-// write can set it and a settle as not kept clear it with no derivation of the
-// day following, and a record published in between may carry a label a later
-// one drops. A kept settle never moves it: the rows were already read while in
-// flight.
-//
-// A FIRE'S OUTCOME IS THE LEDGER'S, as the scheduler recorded it. Whether the
-// seat then ran it is a fact of the SEAT'S node, which is often not this one,
-// and of the day the seat came back, which is often not the fire's: so this
-// node reports the fires of each schedule that ITS seats did not run
-// ([usageSupersededSQL]), on the day it recorded each, and the schedule's
-// history joins the two by trace wherever they were published
-// (usage.ScheduleRuns).
+// A FIRE'S OUTCOME IS THE LEDGER'S. Whether the seat ran it is a fact of the
+// SEAT'S node, so this node reports the fires ITS seats did not run
+// ([usageSupersededSQL]) on the day it recorded each; the history joins the two
+// by trace (usage.ScheduleRuns).
 func (d *DB) usageSchedules(ctx context.Context, w UsageWindow) ([]UsageSchedule, error) {
 	rows, err := d.sql.QueryContext(ctx, `
 		SELECT r.scope_type, r.scope_id, r.schedule_name, r.target_handle,

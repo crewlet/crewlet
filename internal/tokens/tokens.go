@@ -196,23 +196,16 @@ type PhaseCounts struct {
 
 // PhaseCalls is a phase record's provider calls.
 //
-//   - An EXECUTOR's record (`execute`) covers none. Every executor is its
-//     harness's own run: the engine's record of the phase states the run
-//     as one round — the launch and its answer — but the engine made no
-//     provider call for it, whether the run was collected or its launch was
-//     refused. The run's calls are its harness's, counted on each launch's own
-//     record ([LaunchCalls]); counting the round as well put two calls on
-//     every turn that nobody made.
-//   - Every other phase covers its rounds: its `rounds` list's length where
-//     it recorded one, its `rounds_used` where it counted rounds without
-//     listing them, and one where neither says (a judge's single call).
+//   - An EXECUTOR's record (`execute`) covers none: the run is its harness's,
+//     and the engine made no call for its one round. The run's calls are
+//     counted on each launch's record ([LaunchCalls]); counting the round too
+//     would add a call nobody made.
+//   - Every other phase covers its rounds: its `rounds` list's length, else
+//     its `rounds_used`, else one (a judge's single call).
 //
-// ONE RULE FOR BOTH PRODUCERS — the event store's writer and the live
-// projection — so a phase counts the same calls on either side of the live
-// edge. The executor's phase name is the event catalogue's (events/types),
-// spelled here so this package stays a leaf; a test holds the spelling to the
-// catalogue's constant, so a renamed phase cannot fall silently to the rounds
-// rule.
+// ONE RULE FOR BOTH PRODUCERS (the event store's writer and the live
+// projection). The executor's phase name is spelled here so this package stays
+// a leaf; a test holds it to the event catalogue's constant.
 func PhaseCalls(c PhaseCounts) int {
 	switch {
 	case c.Phase == PhaseExecute:
@@ -383,17 +376,14 @@ type WorkerRow struct {
 
 // AgentRow is one seat's spend, split by phase.
 //
-// ONE ROW PER AGENT ID, and Role and Handle are what that seat is called. The
-// row was keyed on the role name, which is prose two seats may share, so two
-// "Engineer"s were one row carrying both seats' spend under whichever id was
-// folded last. A record carrying no id — nothing this engine publishes today
-// — keeps a row under the name it does carry, which is the most a record like
-// that can be attributed to.
+// ONE ROW PER AGENT ID, and Role and Handle are what that seat is called. Keyed
+// on the role name, which two seats may share, two "Engineer"s would be one row.
+// A record carrying no id keeps a row under the name it does carry.
 //
-// ByPhase is a MAP here and a list at the top level, and the difference is the
-// consumers': the top-level list is rendered in token order as a bar, while
-// this one is indexed per column of a matrix — `a.by_phase[p]` — so a list
-// would make the client search it once per cell.
+// ByPhase is a MAP here and a list at the top level because of the consumers:
+// the top-level list is rendered in token order as a bar, while this one is
+// indexed per column of a matrix (`a.by_phase[p]`), which a list would make the
+// client search once per cell.
 type AgentRow struct {
 	Role    string `json:"role"`
 	Handle  string `json:"handle"`
@@ -452,15 +442,13 @@ type Rollup struct {
 	// at a number knows what it is a number of. Both are RFC3339 instants
 	// set by the caller that chose them, not derived here.
 	//
-	// INSTANTS RATHER THAN A DAY COUNT, which is what this was. A count is
-	// a window anchored at now, and a heading has to say where the window
-	// sits, not only how long it is.
+	// INSTANTS RATHER THAN A DAY COUNT: a count is anchored at now, and a
+	// heading has to say where the window sits, not only how long it is.
 	//
-	// Until is EXCLUSIVE, matching every other half-open window in this
-	// engine, so two adjacent rollups share their boundary instant without
-	// either losing it or counting it twice. On a named window they are the
-	// first instant of its first company day and the first instant after its
-	// last.
+	// Until is EXCLUSIVE, like every half-open window here, so two adjacent
+	// rollups share their boundary instant without losing or double counting
+	// it. On a named window they are the first instant of its first company
+	// day and the first instant after its last.
 	Since string `json:"since"`
 	Until string `json:"until"`
 
@@ -508,23 +496,16 @@ type Rollup struct {
 
 	// AggregatedThrough is the latest timestamp this rollup counted.
 	//
-	// THE ROLLUP'S OWN FRESHNESS, what a reader shows as "counted through": a
-	// total with no instant beside it cannot be told from a stale one. It is
-	// not a baseline anything folds onto. The client used to do that, with
-	// this as the watermark it skipped already-counted events by; the server
-	// holds the records and re-folds the whole window now, which is what
-	// leaves exactly one implementation of the aggregation.
+	// THE ROLLUP'S OWN FRESHNESS ("counted through"): a total with no instant
+	// beside it cannot be told from a stale one. Not a baseline to fold onto.
 	//
 	// A RECORD'S OWN STAMP, never cut to Until. A node whose clock runs fast
-	// stamps its records past the window's end — by milliseconds, or by a
-	// garbled year — and the live window holds such a record for a day from
-	// its ARRIVAL rather than by that stamp, so for that day this reads past
+	// stamps its records past the window's end, and the live window holds such
+	// a record for a day from its ARRIVAL, so for that day this reads past
 	// Until. Cut to Until it would hide what says a node's clock is wrong,
-	// and disagree with every by_turn bound beside it, which carries the
-	// record's stamp regardless.
+	// and disagree with every by_turn bound beside it.
 	//
-	// The live window's only: a day's row carries no instant per call, so
-	// a named window has no watermark to report and says nothing.
+	// The live window's only: a day's row carries no instant per call.
 	AggregatedThrough string `json:"aggregated_through,omitempty"`
 }
 
@@ -683,19 +664,15 @@ func labelFor(m map[string]*label, key string) *label {
 // Aggregate folds records into the breakdown.
 //
 // Every bucket is a sum and every instant a min or a max, so no figure here
-// depends on the order the records are handed over in — and neither does any
-// NAME. A seat's row is keyed on its agent id and a person's on their handle
-// ([spenderKey]), so neither is chosen by a record at all; what either is
-// CALLED is the chart's name for it now, or, for one the chart no longer holds,
-// the name its NEWEST-stamped record carried ([label]), as a named window names
-// one by its newest day ([FoldDaily]).
+// depends on the order records are handed over in, nor does any NAME. A seat's
+// row is keyed on its agent id and a person's on their handle ([spenderKey]);
+// what either is CALLED is the chart's name for it now, or, for one the chart
+// no longer holds, the name its NEWEST-stamped record carried ([label]), as
+// [FoldDaily] does by newest day.
 //
-// A turn's agent id and work key are the run's own — a run is one turn of one
-// seat, for one unit of work — so every record of it that names one names the
-// same one, and each is filled from whichever record carries it, a record
-// carrying none leaving it be. Never fixed by the FIRST: a turn whose first
-// record in window order came without its work key was listed with none, and
-// the same records handed over the other way round named it.
+// A turn's agent id and work key are the run's own, so every record naming one
+// names the same one; each is filled from whichever record carries it, never
+// fixed by the FIRST, or another order would name the turn differently.
 func Aggregate(records []Record, opts Options) Rollup {
 	limit := opts.RecentTurns
 	switch {
@@ -1009,21 +986,16 @@ func byTokensThen[T any](rows []T, key func(T) (int, string)) {
 
 // laterStamp reports whether a is after b, by INSTANT rather than by bytes.
 //
-// These stamps are RFC3339Nano, which trims trailing zeros — so a whole-second
-// stamp has no fractional part at all and its 'Z' (0x5A) sorts after the '.'
-// (0x2E) of every fractional stamp in the same second. Compared as strings,
-// 03:04:05Z therefore ordered AFTER 03:04:05.9Z.
+// These stamps are RFC3339Nano, which trims trailing zeros, so a whole-second
+// stamp has no fractional part and its 'Z' (0x5A) sorts after the '.' (0x2E)
+// of every fractional stamp in the same second: as strings, 03:04:05Z would
+// order AFTER 03:04:05.9Z. RFC3339Nano does not sort lexicographically; the
+// cost is a display defect (a watermark one phase stale, a TurnRow with start
+// and end inverted), and it would disagree with livestate's own comparison.
 //
-// The load-bearing comment on this comparison stated the opposite premise —
-// that RFC3339Nano sorts lexicographically — and used it to justify never
-// parsing. What it costs is bounded by the sub-second gap, so it is a display
-// defect rather than corruption: a watermark one phase stale, or a TurnRow
-// whose start and end are inverted. It is still wrong, and it disagreed with
-// livestate's own stamp comparison one package over.
-//
-// Falls back to a byte comparison when either side does not parse, which is
-// what livestate's stamp does and for the same reason: an unparseable stamp
-// still has to order somewhere deterministic.
+// Falls back to a byte comparison when either side does not parse, as
+// livestate's stamp does: an unparseable stamp still has to order somewhere
+// deterministic.
 func laterStamp(a, b string) bool { return compareStamp(a, b) > 0 }
 
 // compareStamp orders two stamps the way [laterStamp] compares them, as the

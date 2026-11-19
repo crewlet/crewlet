@@ -14,7 +14,17 @@
 // holds the same centroids and files every row in the same list. How many
 // lists a search reads is that measurement's answer, never a constant, and a
 // corpus with no structure a k-means can find gets no index
-// at all: the full scan stays its first stage. See ADR-0028 for the decision
+// at all: the full scan stays its first stage (below [IVFMinCorpus], with no
+// topics a list can find, or in a space the index was not trained in). Per-node
+// training would give every data node a different index, so one holder would
+// find what another misses. The index's generation is the packed log position
+// of its centroids record, since a counter is minted twice by an unresolved
+// publish. Older rows are re-filed in reassign batches on later ticks, their
+// key ranges cut once by the training and carried in the centroids record,
+// each batch's scope nested under the centroids': ranges re-cut at each
+// publication left a compacted log a replaying node could not tile. A search
+// reads every row not yet re-filed in full beside the lists it probes, so a
+// rollout never hides a document. See ADR-0028 for the decision
 // and ivf.go, ivfrecord.go, apply_ivf.go and ivfduty.go for each half.
 //
 // # Pure functions over values, and why that is the whole point
@@ -77,6 +87,72 @@
 // newest minted changes holding every word, with how far each walk reached and
 // the code log's position its writes were decided from.
 //
+// # The lexical index crosses the estate boundary
+//
+// [Indexer] keeps the BM25 inverted list over [textindex]'s analyzer. Its
+// sources are replicated rows and its index is this node's own, so no query
+// joins them: every comparison is a batch from each side, and the walk that
+// replaces the join repairs a drifted row, where a version compare only ever
+// noticed a source that moved. The same boundary is why fusion is over two
+// ranked lists of ids rather than a UNION.
+//
+// # Shards and the fan-out
+//
+// Every indexed document carries a SHARD in both estates, a stable hash of its
+// own identity into 64 buckets, so a re-filed source keeps its bucket. Nothing
+// routes on it: every data node holds and reads every bucket, and the column
+// only makes a scan's cost measurable per bucket range. Neither estate indexes
+// it (migration 0004 measured 1 min 44 s against 50 ms for an index of that
+// kind); a bucket range is seekable, and an index over it is how a planner
+// stops driving on the term. A coordinator divides the buckets across the
+// live data nodes and merges SCORE-WITHIN-METHOD FIRST, RRF ACROSS METHODS
+// SECOND: RRF over one ranker across disjoint slices ranks by placement (a
+// rank 1 on a weak slice, 0.10, would outrank a rank 2 on a strong one, 0.98).
+// Fusing per slice is exact because the slices are disjoint, and BM25 stays
+// comparable because every node holds the whole corpus: the scan is
+// bucket-limited and the statistics are global. An assignment that does not
+// answer is named (buckets answered, buckets missing, absent nodes), never
+// silently truncated, because a short result is indistinguishable from a short
+// corpus.
+//
+// # The index's probe count and its narrowed searches
+//
+// The probe count is the smallest meeting [FloorAt] with no head miss in every
+// query shape a search is issued in (unfiltered, each source, one container),
+// and an index that would read more than half its lists is not installed. A
+// narrowed search reads lists until it has seen as many of its own rows as an
+// unfiltered one reads ([ProbeCount]) and scans past half of them: the
+// unfiltered count kept 0.949 of a pages-only answer and under 0.75 of one
+// container's. The covering kb_vectors_bin_ivf_idx (0033) does not contradict
+// 0004: a probe reads a share of the rows, the premise 0004 dropped every
+// index for lacking.
+//
+// # The chat index is a second corpus
+//
+// [ChatIndexer] is keyword-only (ADR-0071). Its walk is forward only over
+// chat_messages.version with a durable watermark, and its statistics are
+// maintained and kept per room, because a term's document count off the
+// postings is a range count the length of its list (some 160 ms a term at a
+// year of chat) and because a search is ranked by the rooms it searches, never
+// the company's. Rows that vanish are followed explicitly: the retention prune
+// by a rotation over the rooms, the compliance erase by a forward walk over
+// chat_deletions.version (markers are never pruned). A replaced estate is
+// announced ([ChatIndexer.RequestRebuild]) and its index dropped a batch a
+// sweep from a durable mark, since one transaction would hold the node's only
+// writer. A search names the rooms its viewer may see, and one naming none is
+// refused, not read as everything. A frequent term contributes its newest
+// postings, the scan walking its list backwards by UUIDv7 id.
+//
+// # Plan gates
+//
+// The vector tables' and the lexical index's plan gates refuse a plan that
+// answers a per-row aggregate from its whole child table
+// (storetest.Decorrelated). The lexical gate plans the indexer's own
+// statements and holds them complete with storetest.StatementLiterals over
+// kb_docs and kb_postings, because its hand-written copies had drifted and
+// could not fail. The embedding duty selects stale pages by walking
+// pages_heads_live_updated_idx (0065) in update order.
+//
 // # A read of another domain's table is a named, exported statement
 //
 // This package reads tables it does not own (the tracker's tasks and
@@ -97,23 +173,13 @@ import "math/bits"
 // Quantize turns a vector into its sign code, LSB-first, with ZERO TAKING THE
 // NEGATIVE BIT.
 //
-// # Both halves are measurements against the driver, not conventions
-//
-// The stage-1 scan orders by `vector_distance_cos(bits, :qb)` over values the
-// driver's own `vector1bit` produced, so this function has to agree with it
-// bit for bit or the pure gate certifies a ranking the database does not
-// produce. Measured on `tursogo` at the pin: `vector1bit` of
-// [0,1,-1,0,0.5,-0.5,2,-2] is 0x52, whose bits read LSB-first are
-// [0,1,0,0,1,0,1,0] — so bit i lives at position i%8 of byte i/8, a set bit
-// means STRICTLY POSITIVE, and an exact zero takes the negative bit.
-//
-// The zero is not a corner case to shrug at. A truncated or padded embedding
-// carries exact zeros in whole dimensions, and mapping them to the positive
-// bit would flip every one of them against what the database stored.
-//
-// The result is words rather than bytes because [Hamming] counts over words:
-// the last word is zero-padded, and padding bits are identical in every code
-// so they contribute nothing to any distance.
+// The stage-1 scan orders by `vector_distance_cos(bits, :qb)` over the
+// driver's `vector1bit`, so this must agree bit for bit or the pure gate
+// certifies a ranking the database does not produce. Measured on `tursogo`:
+// `vector1bit` of [0,1,-1,0,0.5,-0.5,2,-2] is 0x52, so bit i is at position
+// i%8 of byte i/8, a set bit is STRICTLY POSITIVE, and zero takes the negative
+// bit (padded embeddings carry whole dimensions of exact zeros). Words, because
+// [Hamming] counts over words; padding bits are identical in every code.
 func Quantize(v []float32) []uint64 {
 	code := make([]uint64, (len(v)+63)/64)
 	for i, x := range v {
@@ -129,16 +195,13 @@ func Quantize(v []float32) []uint64 {
 // # This IS the driver's cosine distance, measured rather than assumed
 //
 // `vector_distance_cos` over two `vector1bit` values returns the raw Hamming
-// distance — verified at the pin over 200 random 64-dimensional pairs, all
-// 200 agreeing exactly. That identity is what lets the stage-1 scan order by
-// a cosine function while this package reasons about bit counts, and it is
-// the one fact the whole two-stage design rests on: without it the pure gate
-// and the SQL would be ranking by two different quantities.
+// distance (verified at the pin over 200 random 64-dimensional pairs, all
+// agreeing). The whole two-stage design rests on it: otherwise the pure gate
+// and the SQL would rank by different quantities.
 //
-// A length mismatch is a caller error rather than a silent short read: two
-// codes of different widths are two different embedding spaces, which is the
-// state `kb_vectors_bin`'s `model` and `dim` columns exist to make
-// impossible.
+// A length mismatch is a caller error, not a silent short read: codes of
+// different widths are different embedding spaces, which `kb_vectors_bin`'s
+// `model` and `dim` columns exist to make impossible.
 func Hamming(a, b []uint64) int {
 	if len(a) != len(b) {
 		panic("search: Hamming over codes of different widths — two widths are " +
@@ -153,24 +216,14 @@ func Hamming(a, b []uint64) int {
 }
 
 // CodeBytes is how many bytes the DRIVER's encoding of an n-dimensional sign
-// code occupies, which is what the table's own size arithmetic is written
-// against.
+// code occupies, which the table's size arithmetic is written against.
 //
-// # The alignment is measured, and the obvious formula is wrong
-//
-// The packed bits are followed by a trailer, and the whole value is padded to
-// an ODD length — two-byte alignment plus a one-byte type tag. So the overhead
-// is three bytes over an even byte-count and two over an odd one, which is not
-// something a reader would guess: at 3 072 and 1 536 dimensions the byte-count
-// is even and a flat `+3` is right, and at 100 dimensions it is one byte over.
-//
-// Measured at the pin across nineteen widths (TestTheEncodedWidthIsTwoByte
-// Aligned): 3 B at 1, 7 and 8 dimensions, 5 B at 9 through 24, 15 B at 100,
-// 195 B at 1 536 and 387 B at 3 072.
-//
-// It is a function rather than two constants because the width is a property
-// of the company's model, and a size claim that only held at one width would
-// be re-derived wrongly at the other.
+// The packed bits are followed by a trailer and the value is padded to an ODD
+// length (two-byte alignment plus a type tag): overhead is three bytes over an
+// even byte-count, two over an odd one, so a flat `+3` is wrong at 100
+// dimensions. Measured across nineteen widths (TestTheEncodedWidthIsTwoByte
+// Aligned): 3 B at 1 to 8, 5 B at 9 to 24, 15 B at 100, 195 B at 1 536, 387 B
+// at 3 072. A function because the width is the company's model's.
 func CodeBytes(dimensions int) int {
 	packed := (dimensions + 7) / 8
 	// The trailer, then padding to an odd total.

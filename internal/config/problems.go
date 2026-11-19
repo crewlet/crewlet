@@ -966,9 +966,11 @@ func (b *Bootstrap) Warnings() []Warning {
 				"turn starts fresh, `stream.code_log_max_bytes`, where it "+
 				"refuses every push to the company's repositories, "+
 				"`stream.access_log_max_bytes`, where it refuses every SSH "+
-				"command and tells no seat a change of its access, and "+
+				"command and tells no seat a change of its access, "+
 				"`stream.atlas_log_max_bytes`, where it refuses every edit "+
-				"somebody makes to the atlas. The two "+
+				"somebody makes to the atlas, and "+
+				"`stream.advisor_log_max_bytes`, where the Advisor records "+
+				"nothing new and refuses every decision on a finding. The two "+
 				"compacted logs "+
 				"(`stream.tracker_vectors_max_bytes`, "+
 				"`stream.usage_log_max_bytes`) age their records out on the "+

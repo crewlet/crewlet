@@ -8,17 +8,15 @@ import (
 )
 
 // THE RECORD SEAL LINKS NOTHING OF THE ENGINE. Every package that signs or
-// verifies — the state log, the estate's envelopes, signedask, presence, the
-// relay, the sandbox's answer seal — imports this one, so whatever this one
-// links, all of them link. One import of a store, a domain or the
-// configuration here would bring that graph back into everything that drives
-// a box, the coupling the seal left the state log to remove, and nothing
-// downstream would notice: the sandbox's own dependency test refuses only the
-// state log, the configuration and Gitlet by name.
+// verifies (state log, estate envelopes, signedask, presence, relay, the
+// sandbox's answer seal) imports this one, so whatever it links, all link. An
+// import of a store, a domain or the configuration here would bring that graph
+// back into everything that drives a box, unnoticed: the sandbox's dependency
+// test refuses only the state log, the configuration and Gitlet by name.
 //
-// So the rule is read from `go list -deps`, what the package's non-test build
-// links, and no path of this module but the seal's own is allowed — not a
-// list of what is refused, which would let the next engine package through.
+// So the rule reads `go list -deps` of the non-test build and allows no path of
+// this module but the seal's own, not a list of what is refused, which would
+// let the next engine package through.
 //
 // Mutation: a blank import of internal/words in recordseal.go — red.
 func TestTheRecordSealLinksNothingOfTheEngine(t *testing.T) {

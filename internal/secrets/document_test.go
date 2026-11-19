@@ -60,23 +60,12 @@ func TestSealingHidesTheSTRUCTURE(t *testing.T) {
 		t.Fatalf("the sealed document is keyed on something else: %s", sealed)
 	}
 
-	// AND NOTHING IS SCANNED FOR A SHORT NEEDLE, in either encoding.
-	//
-	// This used to search `string(sealed)` for "Acme", "CEO", "ceo" and
-	// "roles", which is a coin toss rather than a check: base64 draws from
-	// a 64-symbol alphabet that INCLUDES those characters, so a short ASCII
-	// needle turns up in random ciphertext by luck — about one run in seven
-	// hundred over those four. It did, under `-race` in this tree:
-	// `…AcCEOGNYhF1…`, a "CEO" the cipher put there, reported as a leak of
-	// the document's. Decoding first makes the alphabet 256 symbols wide
-	// and the odds one in a hundred thousand, which is the same defect
-	// wearing a longer fuse — and a test that fails at random teaches a
-	// reader to re-run it, which is the habit that hides a real failure.
-	//
-	// So the two claims left are the two that are exact: the key set above,
-	// which IS "the structure is hidden" — no field name survives as a
-	// field — and the whole plaintext below, 54 bytes of it, which cannot
-	// collide with anything.
+	// AND NOTHING IS SCANNED FOR A SHORT NEEDLE, in either encoding: base64's
+	// alphabet includes "Acme", "CEO" and the like, so a short ASCII needle turns up
+	// in random ciphertext by luck (it did, under `-race`), and decoding first only
+	// lengthens the fuse. A test that fails at random teaches a reader to re-run
+	// it. The two exact claims are left: the key set above, which IS "the structure
+	// is hidden", and the whole 54-byte plaintext below, which cannot collide.
 	payload := token[strings.LastIndex(token, ":")+1:]
 	raw, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil {
@@ -249,17 +238,14 @@ func TestSealedIsStructuralNotASearch(t *testing.T) {
 //
 // A payload wrapped as a sealed document whose seal is in another form (a
 // successor's `enc:v2:`, or the member holding something other than a token)
-// was refused as unsealed, because [Sealed] said no and [Open] took every "no"
-// for plaintext. The two answers send their callers opposite ways: a write may
-// replace a document nothing vouches for having read nothing from it, and that
-// replaced a newer peer's sealed document with whatever the writer typed. So
-// three answers come back before any decrypt, from [Open] and [CheckSealed]
-// alike: unsealed, a form this build does not read, and this build's form
-// damaged, which is a decrypt failure like any tampered ciphertext.
+// was refused as unsealed, because [Open] took every "no" from [Sealed] for
+// plaintext, and a write replaced a newer peer's sealed document. So three
+// answers come back before any decrypt, from [Open] and [CheckSealed] alike:
+// unsealed, a form this build does not read, and this build's form damaged (a
+// decrypt failure).
 //
-// Mutation: answer every payload [Sealed] refuses as ErrUnsealedWithKey (the
-// rule before), and the wrapped rows fail; read only a string member as
-// wrapped, and the object row does.
+// Mutation: answer every payload [Sealed] refuses as ErrUnsealedWithKey, and the
+// wrapped rows fail; read only a string member as wrapped, and the object row does.
 func TestASealThisBuildDoesNotReadIsNotUnsealed(t *testing.T) {
 	t.Parallel()
 	cipher, err := NewCipher(testRing(t))

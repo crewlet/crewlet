@@ -140,20 +140,15 @@ func (s *crossingWrites) MarkLost(ctx context.Context, turnID, launch string, lo
 // EVERY WRITE OF A RUN'S ROW UNDER A BUDGET OF ITS CALLER'S IS GIVEN THE ROW'S
 // CROSSING BESIDE ITS REASON, and each keeps its reason.
 //
-// A row is written whole, up to six megabytes, and a node reaching the store
-// across a slow link sends it at the link's pace; the store keeps a caller's
-// deadline as it is, so every caller that bounds a write of a row for a reason
-// of its own — a resumed turn's carry, a store's slow moment; a capture's stamp,
-// a leader's election outlasted; a teardown's writes, a box call's grace —
-// bounds it by that reason and the time a row at its bound takes to cross
-// (RowBudget). A teardown's writes each take a bound of their own, one run's
-// after another's, and a stamp a read makes is still held to the read's own
-// room. Exact, in a bubble.
+// A row is written whole, up to six megabytes, at a slow link's pace; the
+// store keeps a caller's deadline as it is, so every caller bounding a row
+// write for a reason of its own (a carry, a stamp, a teardown) adds the time a
+// row at its bound takes to cross (RowBudget). Each teardown write takes its
+// own bound, and a read's stamp is still held to the read's room. Exact, in a
+// bubble.
 //
-// Mutation: hold any of these writes to its reason alone, and its row reads the
-// crossing short; share one teardown bound across the runs a stop ends, and the
-// second run's write is handed what the first left of it; give a stamp the
-// crossing past the read's room, and the read's row reads past it.
+// Mutation: hold a write to its reason alone, share one teardown bound across
+// the runs a stop ends, or give a stamp the crossing past the read's room.
 func TestEveryWriteOfARunsRowIsGivenTheRowsCrossingBesideItsReason(t *testing.T) {
 	t.Parallel()
 	const crossing = 7 * time.Minute
@@ -318,18 +313,15 @@ func TestARowsWriteInTheStoresOwnProcessIsGivenItsReasonAlone(t *testing.T) {
 // EVERY CALL AN ENDING MAKES OF THE STORE ON ITS RUN'S ROW IS GIVEN THE
 // TEARDOWN'S GRACE AND THE ROW'S CROSSING OF ITS OWN.
 //
-// An ending calls the store on the row several times — its decision, a read of
-// the row as it stands, reads of the run's log, the delete — and each sends or
-// carries the row whole, which across a slow link takes the row's crossing
-// every time. One bound for the whole ending gave its first call the time its
-// next needed, and an ending each of whose calls would have landed was cut
-// between two of them and kept for the retry. Here each call's bytes take a
-// minute to cross, on the case's clock, and every call is still handed the
-// grace and the crossing whole. Exact, in a bubble.
+// An ending calls the store on the row several times (decision, reads, the
+// delete), each carrying the row whole, which across a slow link takes the
+// crossing every time. One bound for the ending gave the first call the time
+// the next needed, cutting an ending whose calls would each have landed. Here
+// each call takes a minute to cross, and every call is still handed the grace
+// and the crossing whole. Exact, in a bubble.
 //
-// Mutation: bound the ending once — by the teardown that ends the run
-// ([Coordinator.finish]) or by [Coordinator.endRun] — and every call after the
-// first is handed a minute less for each call before it.
+// Mutation: bound the ending once, by [Coordinator.finish] or
+// [Coordinator.endRun], and each call is handed a minute less than the last.
 func TestEveryCallAnEndingMakesOfItsRowIsGivenItsOwnCrossing(t *testing.T) {
 	t.Parallel()
 	const crossing = 7 * time.Minute
@@ -387,17 +379,12 @@ func (s *unansweredStamps) StampCapture(ctx context.Context, turnID string, stam
 // A STOP HOLDS THE STAMPS OF THE KEEPS IT CUTS TO THEIR REASON, NEVER TO A ROW'S
 // CROSSING.
 //
-// A coordinator's stop lets the keeps under way end for a teardown's grace,
-// cuts the rest, and waits for each to stamp what came of it before it gives
-// its taker lease back. A stamp reads and writes the run's row whole, and is
-// given the row's crossing beside its reason, which across a link at the
-// slowest pace allowed is thirteen minutes: a stop that waited that out held a
-// node without `data` for fourteen minutes, past the grace its orchestrator
-// gives it, which then killed it before it closed its store. So once the coordinator stops, a
-// stamp is held to its reason alone: a stop cut at a keep whose stamp the
-// store never answers returns once the keeps' grace and the stamp's reason
-// have passed. The stamp it leaves begun is settled by a peer once the taker
-// lease is gone. Exact, in a bubble.
+// A stop lets keeps under way end for a teardown's grace, cuts the rest, and
+// waits for each to stamp before giving its taker lease back. A stamp given
+// the row's crossing (thirteen minutes on the slowest link) held a node
+// without `data` past its orchestrator's grace, which killed it before it
+// closed its store. So once the coordinator stops, a stamp is held to its
+// reason alone; the stamp left begun is settled by a peer. Exact, in a bubble.
 //
 // Mutation: give a stamp its crossing at a stop too, and the stop returns
 // seven minutes later.
@@ -430,21 +417,15 @@ func TestAStopHoldsTheStampsOfTheKeepsItCutsToTheirReason(t *testing.T) {
 // A STOP HOLDS A RETRY PART-WAY THROUGH A LOST RUN'S TAKE TO ONE GRACE, ALL OF
 // IT.
 //
-// A coordinator's stop waits for every retry still running. A retry finishing
-// the kept ending of a lost run whose box this node hosts takes the run's
-// session before it reclaims the box, and what it does once the stop comes is
-// made on contexts of its own, which the stop's cancellation does not reach:
-// the reservation of the capture's place, the stamp of that place refused once
-// the reservation was cut, and the reclaim's kill of the box. Each held to its
-// own grace from its own start, against a store and a box that never answer
-// they ran one after another — ninety seconds of a stop whose figure gives the
-// work it waits for thirty. So everything the stopped work makes is held to one
-// grace from the stop ([detach]): the stop returns once that grace has passed,
-// whatever the store and the box do. Exact, in a bubble.
+// A retry finishing a lost run's kept ending takes the run's session before it
+// reclaims the box, on contexts the stop's cancellation does not reach (the
+// place's reservation, the refused stamp, the reclaim's kill). Each held to its
+// own grace, against a store and box that never answer, they ran one after
+// another: ninety seconds where the stop gives thirty. So all the stopped work
+// is held to one grace from the stop ([detach]). Exact, in a bubble.
 //
-// Mutation: detach a teardown's or a stamp's context with
-// context.WithoutCancel again, or start the stop's grace at each call's own
-// start, and the stop returns sixty or ninety seconds after it began.
+// Mutation: detach a teardown's or stamp's context with context.WithoutCancel
+// again, or start the grace at each call's own start.
 func TestAStopHoldsARetryPartWayThroughALostRunsTakeToOneGrace(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -488,13 +469,11 @@ func TestAStopHoldsARetryPartWayThroughALostRunsTakeToOneGrace(t *testing.T) {
 // BOUND.
 //
 // The reaper's flip of a parked run past its pause, and the fleet's verdicts
-// on a run whose launch node is gone — its box released, its job lost — each
-// write the run's row whole, a parked turn's state and all. A task is bounded
-// by a box's poll or by the duty's window, neither of which is a row's: held
-// to that alone, a row of megabytes was cut while its bytes were still
-// crossing a slow link, and sent again from its first byte by the next pass,
-// for ever. Each is a compare-and-set, so one past the window beside a peer's
-// changes nothing twice. Exact, in a bubble.
+// on a run whose launch node is gone, each write the run's row whole. A task
+// is bounded by a box's poll or the duty's window, neither a row's: held to
+// that alone, a row of megabytes was cut mid-crossing and resent from its
+// first byte by the next pass, for ever. Each is a compare-and-set, so one
+// past the window beside a peer's changes nothing twice. Exact, in a bubble.
 //
 // Mutation: hold the flip, or either verdict, to its task's bound alone, and
 // its row reads the crossing short.
@@ -562,26 +541,15 @@ func TestAWaitersWriteOfARunsRowIsGivenTheRowsCrossingPastItsTask(t *testing.T) 
 // A BOX READ GIVES EACH CHANGE OF THE RUN'S ROW ITS HOST MAKES ITS CROSSING:
 // the host, on its own connection, and the asker, at the slowest node's.
 //
-// A read of a job's box reserves the capture's place once the session is
-// packed, stamps what came of the take and records how the job's harness ended
-// after it, and records the box's pause before it answers — each a change of
-// the run's row, read whole and written whole, which a row at its bound takes
-// minutes to make across a link at the slowest pace allowed. Held to flat
-// rooms — the reservation to what the pack left of the take's four minutes,
-// the take's records to a grace of thirty seconds — each was cut while its
-// bytes were still crossing (crewlet/crewlet#1151). So on a host whose store
-// takes a crossing, the take's context keeps the reservation one record's
-// reason and that crossing beside the pack's budget, and the read leaves the
-// take's two records and the pause's record a grace and a crossing each; and
-// the asker, which cannot know the host's connection, waits the slowest node's
-// crossing for each change, coord.MaxValueCrossing, and the three graces.
-// Here the host's read is given exactly its share of that budget, and the room
-// it then keeps for each is held. Exact, in a bubble.
+// A read of a job's box reserves the capture's place, stamps the take's
+// outcome and how the harness ended, and records the box's pause: each a row
+// change taking minutes across the slowest link, cut mid-crossing when held to
+// flat rooms. So the take's context keeps the reservation a record's reason
+// and a crossing, and each record a grace and a crossing; the asker waits
+// coord.MaxValueCrossing per change plus the three graces. Exact, bubbled.
 //
-// Mutation: drop the crossing from the reservation's room, from the take's
-// records' room or from the pause's, give the take's two records one grace, or
-// count fewer changes at the slowest crossing in the asker's budget, and its
-// check goes red.
+// Mutation: drop the crossing from any room, or count fewer changes in the
+// asker's budget.
 func TestABoxReadGivesEachChangeOfTheRowItsHostMakesItsCrossing(t *testing.T) {
 	t.Parallel()
 	const crossing = 7 * time.Minute

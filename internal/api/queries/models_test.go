@@ -260,6 +260,27 @@ func TestAModelsUsersAreTheEnginesResolution(t *testing.T) {
 	}
 }
 
+// EVERY MODEL SAYS WHETHER A HELPER CAN RUN ON IT, by the engine's one rule:
+// the ordinary Claude Code entry the seats run with its web tools on can, and
+// Codex, whose apply_patch has no switch, cannot, said in a person's words, so
+// a model picker draws the engine's verdict rather than its own. A member's
+// reading carries neither. Mutation: answer nil for every entry and Codex is
+// offered.
+func TestEveryModelEntrySaysWhetherAHelperCanRunOnIt(t *testing.T) {
+	t.Parallel()
+	backend := coordmemory.New()
+	presentNode(t, backend, "node-a", &coord.NodeStatusRecord{})
+	got := answer(t, modelSources(t, backend), "llm_entries", nil).(queries.ModelEntriesAnswer)
+	if p := entryOf(t, got, "default").HelperProblem; p != nil {
+		t.Errorf("an ordinary Claude Code entry cannot run a helper: %q", *p)
+	}
+	p := entryOf(t, got, "codex-review").HelperProblem
+	if p == nil || !strings.Contains(*p, "cannot run Ask Crewlet or the Advisor") ||
+		strings.Contains(*p, "providers.llm") {
+		t.Errorf("Codex's helper problem = %v, want a person's sentence", p)
+	}
+}
+
 // A MEMBER READS EVERY MODEL'S CONDITION, AND NOTHING THAT NAMES A CREDENTIAL.
 //
 // Decision D7: the plan, every sign-in field but the route and whether it

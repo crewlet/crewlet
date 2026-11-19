@@ -21,57 +21,14 @@ import (
 // THE ONE PROPERTY: a call that takes a run out of the set of things that will
 // come back must tell the engine that the turn stopped.
 //
-// # Why this file exists at all
-//
-// Four times now a path has ended or stranded a run whose turn was still
-// suspended into it and told nothing above this package, and four times the
-// symptom was a working indicator claiming an agent was busy for the life of the
-// process. Each round closed the path it found by hand-listing the others and
-// declaring them safe; each of those lists was wrong. Hand-enumeration is the
-// defect, so the enumeration is taken out of the reviewer's hands here.
-//
-// # What it checks, and why the premise is what it is
-//
-// For every exported [Coordinator] entry point, driven once per status a run
-// can hold, and each of those driven once cleanly and then once per store call
-// that drive makes with THAT CALL REFUSED: if the run was still something that
-// would come back before the call and is not after it, and this call did not
-// hand the turn to the resumer, then [CoordinatorOptions.Stopped] must have
-// fired for it.
-//
-// ALL THREE DIMENSIONS ARE DERIVED, which is the whole mechanism — a path that
-// only misreports from one entry point, under one refusal, out of one starting
-// status is found by the matrix rather than by whoever reads the diff:
-//
-//   - THE ENTRY POINTS are the coordinator's own exported method set, held to
-//     [coordinatorEntries] in both directions by
-//     [TestEveryCoordinatorEntryPointIsDriven].
-//   - THE REFUSALS are OBSERVED, never declared: whatever the drive asked the
-//     store for is what gets refused, so a path that starts calling something
-//     new is injected into on the next run without anybody updating a list.
-//   - THE STARTING STATUS is [Active], every status a record can hold, and
-//     [place] fails rather than skips on one it does not know — so a status
-//     added to the state machine has to say how a run reaches it before
-//     anything here can certify what happens from there. It was hand-written
-//     per drive, which is the same enumeration this file exists to end: a call
-//     that misreports only from a status nobody thought to arrange looks
-//     exactly like a call that is safe.
-//
-// NO (ENTRY, STATUS) PAIR IS SKIPPED, and none needs to be. Every entry point
-// here is reached by something that carries no promise about the row — a
-// broker delivery that is at-least-once and may be hours late, a seat lease
-// changing hands, a retirement — so the status is whatever the store holds
-// when the call lands, including the ones that make the call a no-op. A pair
-// that does nothing costs one cheap rig and proves it does nothing.
-//
-// # What it deliberately does not simulate
-//
-// Concurrency. Every failure injected is a store REFUSAL, never a second party
-// acting on the same row, so `ended == false` — the losing half of a race — is
-// out of scope by construction and has its own case
-// ([TestASettleSomebodyElseEndedReportsNoStop]). A property test that raced
-// would have to decide which party owes the report, which is a different
-// question from this one.
+// Hand-listing the safe paths was wrong each round, so the enumeration is
+// derived. Every exported [Coordinator] entry point is driven once per status a
+// run can hold, cleanly and then once per store call it makes with THAT CALL
+// REFUSED: if the run would have come back before and not after, and the call
+// did not hand the turn to the resumer, [CoordinatorOptions.Stopped] must have
+// fired. Derived: the entry points ([coordinatorEntries]), the refusals
+// (OBSERVED, not declared) and the starting status ([Active], every status a
+// record can hold; [place] fails on one it does not know). No pair is skipped.
 
 // entryDrive is one way of reaching a [Coordinator] entry point with a run in
 // front of it.
@@ -96,22 +53,15 @@ type entryDrive struct {
 // coordinatorEntries is EVERY exported [Coordinator] method, with the drives
 // that put a run in front of it.
 //
-// A ROSTER RATHER THAN A HAND-PICKED LIST, guarded in both directions by
-// [TestEveryCoordinatorEntryPointIsDriven]: a method added to the coordinator
-// fails the build's tests until somebody writes down how it reaches a run, and
-// an entry naming a method that no longer exists fails too. That is the whole
-// mechanism — the next path that ends a suspended run silently is caught by a
-// test rather than by whoever reads the diff.
-//
-// A DRIVE VARIES WHAT IS AROUND THE RUN, NEVER THE RUN'S OWN STATUS, which is
-// [place]'s dimension: two drives differing only in where the run had got to
-// would be a hand-written copy of the one the matrix already derives.
-//
-// Some drives are one line and prove the property trivially, because the method
-// cannot move a run at all (it reads a count, or swaps the manager). That is the
-// honest way to record it: an exemption list would be a second place to state
-// the same judgement, and a wrong exemption is invisible where a trivial drive
-// is at least visible.
+// A ROSTER, held both ways by [TestEveryCoordinatorEntryPointIsDriven]: a new
+// method fails until its drive is written, as does an entry naming a missing one.
+// A DRIVE VARIES WHAT IS AROUND THE RUN, NEVER ITS STATUS ([place]'s dimension).
+// A one-line drive for a method that cannot move a run proves the property
+// trivially; an exemption list would be a second place to state the judgement,
+// and a wrong exemption is invisible where a trivial drive is visible.
+// Concurrency is not simulated: every failure is a store REFUSAL, never a second
+// party on the row; the losing half of a race has its own case
+// ([TestASettleSomebodyElseEndedReportsNoStop]).
 var coordinatorEntries = map[string][]entryDrive{
 	"OnEvent": {{
 		name:    "a completion routed by type",
@@ -620,29 +570,17 @@ func completes(t *testing.T, rig *coordRig) {
 }
 
 // completesUnreadable is the same completion with the settle's own read of the
-// row refused, which is the one failure that reaches the coordinator INSIDE a
-// tail it cannot repeat: the turn has been re-entered, so the delivery cannot
-// come round again.
+// row refused: the failure that reaches the coordinator INSIDE a tail it cannot
+// repeat, the turn having been re-entered. Its own drive, since the matrix
+// refuses a call for the whole drive and the claim reads the row too.
 //
-// Its own drive rather than a refusal of the matrix's, because the refusal
-// dimension refuses a call for the whole drive and the claim reads the row too.
-//
-// WHAT THE MATRIX DOES NOT ASSERT HERE IS THE REPORT, and that is written down
-// rather than left to be discovered, because a drive presenting itself as
-// coverage it lacks is the defect this file exists to end and not an instance
-// of it. The settle this reaches ([Coordinator.settleClaimed]) has two call
-// sites and both sit behind a resume that returned nil or
-// [ErrResumeAbandoned] — every other resume failure gives the claim back
-// instead, which is [Coordinator.unclaim]'s path and not this one. Both of
-// those count as an OWNED re-entry, so from the three statuses whose claim is
-// won ([StatusRunning], [StatusAwaiting], [StatusReseed]) [entryDrive.run]
-// takes the turn-ended-its-own-hold exemption before it asks whether a stop was
-// reported; from [StatusLaunching] and [StatusResumed] the claim is refused
-// and the earlier skip fires. So what this drive certifies is that the path
-// RUNS from every status with that read refused, and nothing about what it
-// says. That the settle REPORTS is held by
-// [TestASettleWhoseRecordCannotBeReadEndsTheRunAnyway], which drives both
-// resume outcomes by name.
+// IT ASSERTS NO REPORT. [Coordinator.settleClaimed]'s two call sites sit behind
+// a resume returning nil or [ErrResumeAbandoned] (other failures give the claim
+// back, [Coordinator.unclaim]), both an OWNED re-entry, so from the statuses
+// whose claim is won [entryDrive.run] takes the turn-ended-its-own-hold
+// exemption; from [StatusLaunching] and [StatusResumed] the claim is refused and
+// the earlier skip fires. It certifies only that the path RUNS; that the settle
+// REPORTS is held by [TestASettleWhoseRecordCannotBeReadEndsTheRunAnyway].
 func completesUnreadable(t *testing.T, rig *coordRig) {
 	t.Helper()
 	rig.coordinator.pending = &refusingStore{

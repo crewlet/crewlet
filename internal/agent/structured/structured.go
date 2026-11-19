@@ -21,7 +21,10 @@
 //     engine turns on.
 //
 // The decoder is the caller's, because what a valid answer IS belongs to the
-// phase asking. This package owns only the shape and the three rules.
+// phase asking. This package owns only the shape and the three rules, and
+// [Remarshal], the one mapping from arguments to a typed payload: a decoder
+// that unmarshalled on its own would silently drop a field the payload lacks,
+// so every decoder, delegate's included, goes through it.
 package structured
 
 import (
@@ -125,22 +128,15 @@ func (t *Tool[T]) Value() (T, bool) {
 
 // Remarshal moves a decoded argument map into a typed struct.
 //
-// Via JSON rather than field-by-field because the arguments already came off
-// the wire as JSON and the struct tags are the schema — one definition of the
-// mapping instead of two that can disagree. json.Number survives the round
-// trip, so a large id in a submission's own arguments stays exact.
+// Via JSON because the arguments came off the wire as JSON and the struct tags
+// are the schema. json.Number survives the round trip, so a large id stays exact.
 //
-// A FIELD THE STRUCT DOES NOT HAVE IS REFUSED, at any depth, naming it. A
-// plain unmarshal DROPS it, and a dropped field is not a no-op: a model that
-// misspelt an optional one — a delegated task's `afer`, a reviewer's
-// `completed_work` — had its submission accepted as though it had said less,
-// so the task ran without the input it was told to wait for and the next
-// round was never told what had already landed, and nothing told the model
-// which field it got wrong. A refusal goes back to the model, which is the
-// one failure it reliably fixes.
-// It is also what lets a test hold a hand-written schema to its struct at
-// all: while a property the struct lacked decoded cleanly, the walk that
-// submits every published property could not fail on the drift it names.
+// A field the struct does not have is refused, at any depth, naming it. A
+// plain unmarshal drops it, and a dropped field is not a no-op: a misspelt
+// optional one (a delegated task's `afer`) had the submission accepted as
+// though it said less, with nothing telling the model. A refusal goes back to
+// the model, which fixes it, and lets a test hold a hand-written schema to its
+// struct: a property the struct lacked used to decode cleanly.
 func Remarshal(args map[string]any, into any) error {
 	blob, err := json.Marshal(args)
 	if err != nil {

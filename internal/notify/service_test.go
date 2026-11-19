@@ -375,8 +375,8 @@ func TestAWakeCarriesItsSendersName(t *testing.T) {
 		return n
 	}
 	if n := wakeOf("engineering-lead"); n.SenderName != "Backend Engineer" ||
-		n.Summary() != "Message from Backend Engineer: ENG-42" {
-		t.Errorf("a colleague's wake carries name %q and reads %q", n.SenderName, n.Summary())
+		n.PhraseFor("").Text != "Message from Backend Engineer: ENG-42" {
+		t.Errorf("a colleague's wake carries name %q and reads %q", n.SenderName, n.PhraseFor("").Text)
 	}
 	if n := wakeOf("backend-engineer"); n.SenderName != "" || n.Sender != "ana" {
 		t.Errorf("a stranger's wake carries name %q for sender %q, want none for ana",
