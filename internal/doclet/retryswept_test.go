@@ -13,16 +13,14 @@ import (
 // POSTED A SECOND TIME, through the real store, the real publisher and the
 // real ledger.
 //
-// A re-run turn, or a retried request, derives the SAME operation for the
-// same comment from its caller's key — that is what the key is for — and the
-// row that would say the first copy landed is gone: here because this node's
-// retention sweep removed it, which the sweep records exactly as staged below
-// (the ledger empty, its cutoff as the watermark — [roundTrip.markLedgerLost]).
-// Decided again on rows that already hold the comment, it is a second record
-// every data node applies: a second history entry and a second wake for one
-// remark. What stops it is the instant the operation id carries, which is the
-// one the key was MINTED at and so the same on every repeat — never the
-// repeat's own clock, which is after the loss by construction.
+// A re-run turn or retried request derives the SAME operation from its
+// caller's key, and the row saying the first copy landed is gone: this
+// node's retention sweep removed it, recorded as staged below (ledger empty,
+// cutoff as the watermark, [roundTrip.markLedgerLost]). Decided again, it is
+// a second record every data node applies: a second history entry and wake
+// for one remark. What stops it is the instant the operation id carries, the
+// one the key was MINTED at, never the repeat's own clock, which is after the
+// loss by construction.
 func TestAKeyedCommentRepostedAfterItsLedgerRowWasSweptIsNotPostedTwice(t *testing.T) {
 	t.Parallel()
 	r := newRoundTrip(t)

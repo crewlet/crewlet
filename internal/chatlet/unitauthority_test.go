@@ -11,17 +11,12 @@ import (
 //
 // # Why all three, in one case
 //
-// Because they were not agreeing, and the disagreement was invisible. Leave
-// refused a unit room — "leaving it would be undone by the next apply, with
-// nothing to say so" — while Join refused only private rooms and SetMembers
-// had no kind gate at all. So a seat could let itself into a team room and
-// could not leave again, and anybody could rewrite the whole membership.
-//
-// None of it mattered while nothing created unit rooms. The moment the chart
-// reconcile exists, every one of those writes is silently undone by the next
-// apply, which is the exact failure Leave's refusal was written to prevent.
-// Asserted together because the property is that they AGREE: a case per
-// gesture passes while two of them drift apart.
+// Leave refuses a unit room ("leaving it would be undone by the next apply,
+// with nothing to say so"); were Join to refuse only private rooms and
+// SetMembers to have no kind gate, a seat could let itself into a team room and
+// not leave again, and anybody could rewrite the membership, all silently
+// undone by the chart reconcile's next apply. The property is that they AGREE:
+// a case per gesture passes while two of them drift apart.
 func TestAUnitsRoomRefusesEveryMembershipGestureButTheCharts(t *testing.T) {
 	t.Parallel()
 	r := newWriteRound(t, agents().withPeople("jane", "bob"))

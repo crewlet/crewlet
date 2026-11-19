@@ -11,37 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The applier, and the four rules that make it a PURE FUNCTION of the log.
+// The applier is a PURE FUNCTION of the log, so replicated files are
+// byte-identical. Four framework rules (the tracker's too):
 //
-// N nodes derive one SQL state from one ordered stream, and the claim that
-// their tables are byte-identical is checkable — a checksum over the
-// replicated file. That claim survives exactly as long as these four hold, and
-// they are the tracker's four because they are properties of the framework
-// rather than of either domain:
+//  1. IT READS NO CONFIG AND NO CLOCK: all arrives in [statelog.ApplyOptions].
+//  2. IT WRITES ONLY WHAT THE RECORD SAYS, so a replay from zero yields the
+//     same rows; the revision prune's retired versions RIDE THE COMMIT.
+//  3. EVERY DERIVED INSTANT IS A MAX OVER A SET, never a fold over arrival
+//     order, which differs between nodes.
+//  4. EVERY UPSERT CARRIES ITS VERSION GUARD, as a SKIP not an error: an
+//     error would abort identically on every node and stall the log.
 //
-//  1. IT READS NO CONFIG AND NO CLOCK. Everything it would otherwise read
-//     arrives in [statelog.ApplyOptions]: the batch's instant, the broker's own
-//     timestamp, and the epoch values the domain declared it reads.
-//  2. IT WRITES ONLY WHAT THE RECORD SAYS. No lookup against a live counter,
-//     no "current" anything: the record carries its complete new values,
-//     because that is what makes a replay from zero produce the same rows as
-//     the original apply did. The revision prune is the sharpest case — the
-//     list of retired versions RIDES THE COMMIT rather than being recomputed.
-//  3. EVERY DERIVED INSTANT IS A MAX OVER A SET, never a fold over an arrival
-//     order. Two nodes at one checkpoint have seen the same set and a different
-//     order, so a fold gives them different answers.
-//  4. EVERY UPSERT CARRIES ITS VERSION GUARD, and the guard is a SKIP rather
-//     than an error: a redelivered record is ordinary traffic, and a constraint
-//     violation inside this transaction would abort it identically on every
-//     node and stall the whole fleet's log.
-//
-// # The one thing it does that the tracker's does not
-//
-// It writes a DIVERGENT row. `pages_skills` is this build's parser answering
-// about this build's rules, so it is recomputed on every apply and excluded
-// from the identity claim — which is exactly what the Divergent class names,
-// and what lets a parser fix reach every existing page on the next rebuild
-// rather than only the pages edited since.
+// Unlike the tracker's, it writes a DIVERGENT row, `pages_skills`.
 
 // Applier writes this node's copy of the knowledge base.
 //
@@ -59,19 +40,13 @@ type Applier struct {
 	// touched is called after a committed batch that changed a TOOL-SKILL
 	// page, so a registry can re-read the container.
 	//
-	// # Why the applier is what notices
-	//
-	// A tool skill reaches the registry by being READ OUT of its
-	// container, and something has to say when to read again. On the
-	// vendor backend that is a page webhook; on Doclet the change feed
-	// deliberately drops these changes — a skill is machinery, and waking
-	// a team about an edit to a procedure written for one phase of one
-	// turn is exactly what the quiet rule exists to prevent — so there is
-	// no delivery to hang the resync off.
-	//
-	// The apply is the other thing that sees every page change, and it
-	// already computes the skill flag. Nil is legal and means nobody is
-	// listening.
+	// The applier is what notices: the registry reads a tool skill out of its
+	// container and needs telling when to read again. On the vendor backend
+	// that is a page webhook; on Doclet the change feed deliberately drops
+	// these changes (the quiet rule: no waking a team about a procedure
+	// edit), so nothing is delivered to hang a resync off. The apply sees
+	// every page change and already computes the skill flag. Nil means nobody
+	// is listening.
 	touched func()
 
 	// skillMoved is set inside Apply and drained by Committed.
@@ -112,17 +87,13 @@ func (a *Applier) Committed(context.Context) {
 
 // Gated reports a record that must produce no rows at all.
 //
-// TWO GATES, READ FROM THIS SAME TRANSACTION, because the answer has to come
-// from the state the record would have applied against rather than from a
-// cache that may be a heartbeat old:
+// TWO GATES, READ FROM THIS SAME TRANSACTION, not a cache a heartbeat old:
 //
-//  1. THE EVICTION GATE. A record written by a node the fleet evicted before
-//     the record's own position is dropped everywhere. It depends on nothing
-//     but the log's own order, which is what makes it the fence that holds
-//     when coordination cannot be reached at all.
-//  2. THE DELETION GATE. A record about a page a purge destroyed applies
-//     nowhere, for ever — otherwise a redelivery months later would resurrect
-//     a page an operator deliberately removed.
+//  1. THE EVICTION GATE. A record written by a node evicted before the
+//     record's position is dropped everywhere. It depends only on the log's
+//     order, so it holds when coordination cannot be reached at all.
+//  2. THE DELETION GATE. A record about a purged page applies nowhere, for
+//     ever, or a late redelivery would resurrect a page an operator removed.
 func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (
 	statelog.Reason, bool, error) {
 
@@ -194,21 +165,14 @@ func (a *Applier) Gated(ctx context.Context, tx *sql.Tx, rec statelog.Record) (
 // false for a subject no page's marker covers.
 //
 // A PAGE SUBJECT NAMES ITS OWN, and a TITLE subject (a create, a rename) names
-// one only in its payload — which the two sides of the gate cannot both read.
-// The applier reaches only a record this build can decode, but the publisher's
-// reader ([Gates.GatedAt]) is handed a record's body only when that record is
-// its OWN operation's, and nil when it is asked about another node's. A gate
-// keyed on the payload would answer one way where the applier asks and another
-// where the reader does, which [statelog.Gates] forbids. So a title record is
-// not gated on the page: it is gated on nothing, and its apply refuses to write
-// a head for a page the deletions table holds ([Applier.applyCreate],
-// [Applier.applyRename]). That keeps the gate answerable from the subject
-// alone, on both sides, while still making a purge permanent.
+// one only in its payload, which the publisher's reader ([Gates.GatedAt])
+// gets only for its OWN operation, while [statelog.Gates] forbids differing
+// answers. So a title record is gated on nothing, and its apply refuses to
+// write a head for a page the deletions table holds ([Applier.applyCreate],
+// [Applier.applyRename]): the gate stays answerable from the subject alone.
 //
-// ONE FUNCTION, asked by [Applier.Gated] and [Gates.GatedAt] alike, because
-// [statelog.Gates] holds the two to one answer and the tracker's two sides
-// drifted apart over exactly this set — its reader covered the task's own
-// subject while its applier dropped the task's turns as well.
+// ONE FUNCTION for [Applier.Gated] and [Gates.GatedAt]: the tracker's two
+// sides drifted over this set.
 func gatedPage(subj statelog.Subject) (string, bool) {
 	if ObjectKind(subj.Kind) == KindPage {
 		return subj.ID, true

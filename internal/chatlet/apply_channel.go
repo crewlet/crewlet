@@ -498,18 +498,15 @@ func removedFrom(held, members []Member) []string {
 
 // writeChannel writes a room's changed state, guarded by its own version.
 //
-// SIX COLUMNS AND THE DOCUMENT, and the ones NOT here are the point: a
-// room's id, its name, its kind and who made it are IMMUTABLE — the name is
-// the address the create arbitrated, and the rest is what the room is — so
-// an update that could move them would be a rename with no claim behind it.
-// The UNIT is here because the org chart may give a unit room to another unit
-// ([MemberSet.Unit]), on the record it arbitrates on the room's own subject;
-// every other write carries the room's unit back unchanged.
+// The columns NOT written are the point: a room's id, name, kind and creator
+// are IMMUTABLE (the name is the address the create arbitrated), so moving them
+// would be a rename with no claim behind it. The UNIT is written because the org
+// chart may give a unit room to another unit ([MemberSet.Unit]); every other
+// write carries it back unchanged.
 //
-// `message_seq` is not here either, and that is the sharpest of them: it is
-// written by MESSAGE records, from another subject, and stamping it from here
-// would overwrite the room's high-water mark with a number this record never
-// read.
+// `message_seq` is written only by MESSAGE records, from another subject;
+// stamping it here would overwrite the room's high-water mark with a number this
+// record never read.
 func (a *Applier) writeChannel(ctx context.Context, tx *sql.Tx, at applyContext,
 	room Channel) (int, error) {
 
@@ -536,16 +533,12 @@ func (a *Applier) writeChannel(ctx context.Context, tx *sql.Tx, at applyContext,
 // replaceMembers rewrites one room's membership.
 //
 // A DELETE AND ONE INSERT PER CHUNK, not one per member: the set's size is the
-// founder's rather than the engine's, and it is bounded at [MaxMembers]
-// precisely so the widest membership write fits in one apply transaction. The
-// DELETE stays — this converges a collection, and a member who left has to
-// lose their row.
+// founder's, bounded at [MaxMembers] so the widest write fits in one apply
+// transaction. The DELETE stays: a member who left has to lose their row.
 //
-// THE ROWS ARE SORTED BY HANDLE, and not because the record's order could
-// differ between nodes — it is one record's bytes, so it cannot. It is so the
-// row order is CANONICAL whatever order a writer happened to list a membership
-// in, which is what keeps a file-level identity claim comparing equal the day
-// a write path starts building the set from a map.
+// ROWS ARE SORTED BY HANDLE so row order is CANONICAL whatever order a writer
+// listed them in, keeping a file-level identity claim equal the day a write path
+// builds the set from a map.
 func replaceMembers(ctx context.Context, tx *sql.Tx, at applyContext,
 	room Channel, members []Member) (int, error) {
 
@@ -618,24 +611,14 @@ func readChannel(ctx context.Context, tx *sql.Tx, id string) (Channel, bool, err
 // memberSource is who a room's members are there by: the org chart, or
 // somebody's decision.
 //
-// DERIVED FROM THE ROOM'S KIND, because a [Member] carries no source of its
-// own: a unit's room is filled and maintained by the chart's reconcile, which
-// restates the WHOLE set at every activation ([Store.SetUnitMembers]), and
-// every other room's membership is somebody's decision. Nothing decides from
-// the column — the chart's write replaces the set rather than withdrawing what
-// it added — so it exists for the screens that render it ([ChannelMember]):
-// one that could not tell the two apart would offer to remove a seat the next
-// apply puts straight back.
-//
-// IT STOPS BEING TRUE THE DAY A PERSON CAN INVITE A GUEST INTO A UNIT ROOM,
-// and what keeps that day away is a rule rather than an accident:
-// [Store.Join], [Store.Leave] and [Store.SetMembers] all REFUSE a unit room,
-// so the chart's own writer ([Store.SetUnitMembers]) is the only thing that
-// ever sets one's membership and every member of it is therefore `org`.
-//
-// Should a guest ever be admitted, this derivation is what has to go first —
-// the seam to widen is a `Source` on [Member], rather than a rule to add here,
-// because only the writer knows which half of a set it is restating.
+// DERIVED FROM THE ROOM'S KIND, because a [Member] carries no source: a unit's
+// room is restated WHOLE by the chart's reconcile ([Store.SetUnitMembers]);
+// every other room's membership is somebody's decision. Only the screens read
+// the column ([ChannelMember]), so they don't offer to remove a seat the next
+// apply puts back. This holds only while [Store.Join], [Store.Leave] and
+// [Store.SetMembers] REFUSE a unit room; if a guest is ever admitted, add a
+// `Source` to [Member], since only the writer knows which half of a set it
+// is restating.
 func memberSource(kind Kind) string {
 	if kind == KindUnit {
 		return MemberSourceOrg

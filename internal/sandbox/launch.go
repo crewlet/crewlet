@@ -1146,6 +1146,9 @@ func (c *Coordinator) Launch(ctx context.Context, m *Manager, req LaunchRequest)
 		// AND WHERE THAT SESSION RESTARTS LAST, as the launch knew it, for a
 		// later relaunch to know whether the job restarted it after its brief.
 		Restart: continued.restart,
+		// AND THE POINT OF THE KEPT CAPTURE IT HANDED, for a later capture of
+		// the job to be raised to ([LaunchRecord.Continued]).
+		Continued: continued.point,
 	}, fence); err != nil {
 		c.abandon(ctx, m, req, fence, box.ID())
 		return LaunchResult{}, fmt.Errorf("sandbox: recording the job: %w", err)

@@ -11,23 +11,16 @@ import (
 
 // NO READ HERE TOUCHES THE BARE CONNECTION.
 //
-// Every statement in this file used to run on the bare connection directly,
-// with no transaction at all. A `Get` therefore read the head, the comments,
-// the history, the children and the ancestors at five different instants: a
-// page could answer with a comment thread from after the revision it reported,
-// or a child list containing a page its own head knew nothing about. D119 says
-// every multi-statement answer runs inside one `BEGIN DEFERRED`, and this
-// reader was the one that did not.
+// D119: every multi-statement answer runs inside one `BEGIN DEFERRED`, or a
+// `Get` reads head, comments, history, children and ancestors at different
+// instants (a comment thread from after the revision it reported). The
+// transaction comes from [statelog.Reader.Read], so this guard protects the
+// snapshot and the read level at once: a statement that escapes the callback is
+// served with no refusal ladder and no coverage probe in front of it.
 //
-// The transaction now comes from [statelog.Reader.Read], which is the same
-// change that made the read level real — so this guard protects both at once:
-// a statement that escapes the callback has escaped the level as well as the
-// snapshot, and is served with no refusal ladder and no coverage probe in
-// front of it.
-//
-// A STRUCTURAL TEST, because the defect is structural. A behavioural one would
-// have to catch two statements disagreeing across a concurrent write, which is
-// a race a test can only lose reliably.
+// A STRUCTURAL TEST, because the defect is structural: a behavioural one would
+// have to catch two statements disagreeing across a concurrent write, a race a
+// test can only lose reliably.
 func TestNoPageReadEscapesItsTransaction(t *testing.T) {
 	t.Parallel()
 

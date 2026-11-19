@@ -20,33 +20,19 @@ import (
 // follow, what they saved, what they sent, a room's shared links, and one
 // message read in place.
 //
-// # The reader's record arrives as a value
-//
-// Where somebody has read to, which threads they marked and what they saved
-// are their read state, kept in coordination rather than on this log
-// (internal/coord's chat read record). It reaches these reads as a value
-// ([ReaderMarks]) for the reason [ChannelsQuery.Cursors] does: a reader that
-// dialled coordination itself would put a fleet round trip inside every read
-// and give this package a second store to be wrong about. A record that could
-// not be read is said ([ReaderMarks.Known]) rather than taken for an empty
-// one, which would call everything unread.
-//
-// # Every row passes [Visible]
-//
-// Each read narrows in SQL with [visibleWhere] so that a LIMIT counts only rows
-// the reader may see, and decides every row with [Visible] in Go, the one rule
-// for who may read a room. A message the reader saved, a thread they once
-// spoke in and a mention of them in a room they have since left are each
-// answered exactly as a room that does not exist: nothing.
-//
-// # Room events are not things somebody said
-//
-// A room's own change (who joined, a new topic) is a row in `chat_messages`
-// with `event` set, so the transcript draws it in place. None of these views
-// lists one: an event names nobody, nobody replies to it, and it carries no
-// link.
+// Each read narrows in SQL with [visibleWhere] and decides every row with
+// [Visible]: a saved message, a followed thread or a mention in a room the
+// reader has since left is answered exactly as a room that does not exist.
+// None lists a room event (`event` set in `chat_messages`): it names nobody,
+// nobody replies to it, and it carries no link.
 
 // ReaderMarks is what the reader's own record says that a read here needs.
+//
+// Read state (where somebody has read to, marked threads, saves) lives in
+// coordination (internal/coord's chat read record) and arrives as a value, for
+// [ChannelsQuery.Cursors]'s reason: no fleet round trip inside every read and
+// no second store here. A record that could not be read is said ([Known])
+// rather than taken for an empty one, which would call everything unread.
 type ReaderMarks struct {
 	// Known is false when the record could not be read: no row is then
 	// called unread, and a thread the reader marked by hand is unknown.
@@ -247,18 +233,12 @@ type activityWindow struct {
 // Activity answers a page of the reader's Activity: mentions of them, replies
 // in threads they follow, and reactions to their messages, newest first.
 //
-// # Three sources, merged by instant
-//
-// Each kind is a range over an index of its own (the mention feed by when the
-// reader was named, the replies of the threads they spoke or were named in,
-// the reactions to their messages by their author), read newest first into a
-// window one longer than the page, and the three are merged. A source that
-// filled its window may have more rows newer than another source's oldest,
-// so the page ends at the newest of the full windows' last rows: nothing older
-// than that is answered before that source has been read past it.
-//
-// A reply that also names the reader is a mention and is listed once, as the
-// mention.
+// Each kind is a range over its own index (mentions, replies in threads they
+// spoke or were named in, reactions to their messages), read newest first into
+// a window one longer than the page, and the three are merged. A source that
+// filled its window may hold rows newer than another's oldest, so the page ends
+// at the newest of the full windows' last rows. A reply that also names the
+// reader is listed once, as the mention.
 func (r *Reader) Activity(ctx context.Context, viewer string, q ActivityQuery,
 	fresh statelog.Freshness) (Activity, error) {
 

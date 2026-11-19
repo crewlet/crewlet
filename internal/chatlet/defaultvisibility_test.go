@@ -8,18 +8,13 @@ import (
 
 // A CREATE THAT NAMES NO VISIBILITY TAKES THE COMPANY'S DEFAULT.
 //
-// # Why this is a security case and not a preference
+// A security case, not a preference: `chat.chatlet.default_channel_private` says
+// "rooms here are private unless somebody says otherwise". With no reader (the
+// create path refused an empty kind) an operator who set it got public rooms and
+// no error; a privacy control fails silently.
 //
-// `chat.chatlet.default_channel_private` is how an operator says "rooms here are
-// private unless somebody says otherwise". It had NO READER: the create path
-// refused an empty kind outright, so there was no way to ask for the default
-// and the setting governed nothing. An operator who set it got public rooms and
-// no error — the failure mode of a privacy control is that it is silent.
-//
-// BOTH DIRECTIONS, because a default only means something if it can be either.
-// Asserting only the private case would pass against a build that made every
-// unstated room private regardless of the setting, which is a different bug
-// with the same test.
+// BOTH DIRECTIONS: asserting only the private case would pass against a build
+// that made every unstated room private regardless of the setting.
 func TestACreateWithNoVisibilityTakesTheCompanyDefault(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
