@@ -17,7 +17,7 @@ import { fmtCount, fmtDateTime } from "~/lib/format.ts";
 import { unreadNames } from "~/lib/advisorUnread.ts";
 import { marked } from "~/ui/Problems.tsx";
 import { useReport } from "./api.ts";
-import { factValue, reportSubject, toneOf, weekWords } from "./words.ts";
+import { factValue, reportSubject, toneOf, weekSpan, weekWords } from "./words.ts";
 
 export function ReportPage({ week }: { week: string }) {
   const read = useReport(week);
@@ -34,8 +34,9 @@ export function ReportPage({ week }: { week: string }) {
       {report ? (
         <article className="col gap-4" aria-label={title}>
           <Text as="p" tone="secondary">
-            {fmtDateTime(report.period.from)} to {fmtDateTime(report.period.to)}, written{" "}
-            {fmtDateTime(report.written_at)}.
+            {weekSpan(report.week) ??
+              `${fmtDateTime(report.period.from)} to ${fmtDateTime(report.period.to)}`}
+            , written {fmtDateTime(report.written_at)}.
           </Text>
           {report.unread.length > 0 ? (
             <Callout variant="warning" title="Some numbers are left out">
