@@ -150,6 +150,10 @@ var contract = []Entry{
 	{"CHAT_SEARCH_PAGE", ReadScalar, "internal/search.TestTheDashboardAsksForTheChatSearchPageTheEngineServes"},
 	{"MAX_READER_MARKS", ReadScalar, "internal/coord.TestTheDashboardsReaderMarkCapIsTheEngines"},
 
+	// named.ts
+	{"NAMED_REF_KINDS", ReadLiteral, "internal/api/queries.TestTheDashboardNamesWhatTheEngineNames"},
+	{"MAX_REFERENCES", ReadScalar, "internal/api/queries.TestTheDashboardNamesWhatTheEngineNames"},
+
 	// presence.ts
 	{"PRESENCE_ROOMS", ReadLiteral, "internal/presence.TestTheDashboardSpeaksThePresenceVocabulary"},
 	{"PRESENCE_ACTIVITIES", ReadLiteral, "internal/presence.TestTheDashboardSpeaksThePresenceVocabulary"},

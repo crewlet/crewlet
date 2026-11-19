@@ -28,6 +28,7 @@ import { PHASE_PAGE } from "./RecentPhases.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
+import { drawnRef, expectNamedLinks, namedAnswer, NAMED_LINE, NAMED_REFS } from "~/test/namedRefs.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -101,6 +102,9 @@ function phaseEvent(id: string, turn: string, agent: string, over: Record<string
 }
 
 type Answer = unknown | ((params: Record<string, unknown>) => unknown);
+
+/** A running turn's row, from the link stretched over it (`LiveTurnRow`). */
+const liveRowOf = (link: HTMLElement) => link.closest<HTMLElement>(".live-row")!;
 
 function mount({
   hash = "#/live",
@@ -198,8 +202,8 @@ test("a turn that has only started is on its Context step, timed from its start"
     ],
   });
   const card = cardOf("Running turns");
-  const row = await within(card).findByRole("link", { name: /Search Engineer/ });
-  expect(row.getAttribute("href")).toBe("#/live/turns/t-start");
+  const row = liveRowOf(await within(card).findByRole("link", { name: /Search Engineer/ }));
+  expect(row.querySelector(".live-row__open")?.getAttribute("href")).toBe("#/live/turns/t-start");
   expect(row.querySelector("[aria-current='step']")?.textContent).toContain("Context");
   expect(row.textContent).toMatch(/2m/);
 });
@@ -235,7 +239,7 @@ test("a running turn's row says who and what waits behind it", async () => {
     ],
   });
   const card = cardOf("Running turns");
-  const busy = await within(card).findByRole("link", { name: /Search Engineer/ });
+  const busy = liveRowOf(await within(card).findByRole("link", { name: /Search Engineer/ }));
   // ONE QUIET COUNT, the words in its tooltip: two tags ran past a narrow card's edge.
   const count = busy.querySelector<HTMLElement>(".live-waiting")!;
   expect(count.querySelector("[aria-hidden]")?.textContent).toBe("· 5 queued");
@@ -244,7 +248,7 @@ test("a running turn's row says who and what waits behind it", async () => {
     "Queued in its inbox: 1 message from a person · 4 other notices",
   );
   expect(busy.querySelectorAll(".crewlet-tag")).toHaveLength(0);
-  const calm = await within(card).findByRole("link", { name: /Docs Writer/ });
+  const calm = liveRowOf(await within(card).findByRole("link", { name: /Docs Writer/ }));
   expect(calm.textContent).not.toMatch(/queued|waiting/);
 });
 
@@ -338,7 +342,7 @@ test("a quiet round is marked on its row, and a parked turn is not", async () =>
     ],
   });
   const card = cardOf("Running turns");
-  const quiet = await within(card).findByRole("link", { name: /Search Engineer/ });
+  const quiet = liveRowOf(await within(card).findByRole("link", { name: /Search Engineer/ }));
   expect(quiet.textContent).toMatch(/stalled/);
   const parked = within(card).getByRole("link", { name: /Payments Engineer/ });
   expect(parked.textContent).not.toMatch(/stalled|no update/);
@@ -804,10 +808,49 @@ test("a running turn on no item names what woke it after the verb", async () => 
       },
     ],
   });
-  const row = await within(cardOf("Running turns")).findByRole("link", { name: /Search Engineer/ });
+  const row = liveRowOf(
+    await within(cardOf("Running turns")).findByRole("link", { name: /Search Engineer/ }),
+  );
   expect(row.textContent).toContain("Drafting the 2.4 launch brief");
   // AND THE ROUND IS ONE FROM THE OPENING FRAME, before the model answers.
   expect(row.textContent).toContain("round 1 of 24");
+});
+
+// WHAT WOKE A RUNNING TURN NAMES WHAT IT IS ABOUT, and each is a marked link
+// to its page the reader may open, above the link that opens the turn.
+test("a running turn's row links what its trigger names, and still opens its turn", async () => {
+  mount({
+    agents: [
+      {
+        agent_id: "a1",
+        id: "a1",
+        role: "Search Engineer",
+        handle: "eng-search",
+        activity: "working",
+        turn: { turn_id: "t-free", started_at: ago(5_000), stage: "phase" },
+        live_call: {
+          versions: ZERO_VERSIONS,
+          turn_id: "t-free",
+          phase: "execute",
+          iteration: 1,
+          trigger: { type: "work_pickup", summary: `Search Engineer was ${NAMED_LINE}`, refs: NAMED_REFS },
+          round_num: -1,
+          rounds_used: 0,
+          max_rounds: 24,
+          in_progress: true,
+          started_at: ago(5_000),
+          updated_at: ago(1_000),
+        },
+      },
+    ],
+    answers: { references: namedAnswer },
+  });
+  const link = await within(cardOf("Running turns")).findByRole("link", { name: /Search Engineer/ });
+  const row = liveRowOf(link);
+  await waitFor(() => expect(drawnRef(row, "ENG-287").tagName).toBe("A"));
+  expectNamedLinks(row);
+  expect(link.getAttribute("href")).toBe("#/live/turns/t-free");
+  expect(row.querySelector("a a")).toBeNull();
 });
 
 // ONE WORKING COUNT, the shell's. The page drew its own "N working" beside the

@@ -46,11 +46,11 @@ import { VendorMark } from "@crewlethq/icons";
 import {
   GlobeGlyph,
   MessageSquareGlyph,
-  SquareKanbanGlyph,
   type GlyphSize,
 } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { ArtifactLink, artifactAddress, artifactHref } from "./ArtifactLink.tsx";
+import { CutLine, NamedRef } from "./NamedRef.tsx";
 import { appRoute } from "~/lib/appRoute.ts";
 import {
   checksLinks,
@@ -69,12 +69,12 @@ import {
   type MessageScope,
 } from "~/lib/inlineTokens.ts";
 import type { LinkHost } from "~/contract/integrations.ts";
+import type { NamedRef as NamedRefWire } from "~/protocol/index.ts";
 import { useLinkHosts } from "~/lib/linkHosts.ts";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { useProjectKeys } from "~/lib/projectKeys.ts";
 import { useRoomNames } from "~/lib/roomNames.ts";
 import { seatPath, useOrgIndex } from "~/lib/seats.ts";
-import { itemPath } from "~/lib/work.ts";
 
 /** The texts of the message a surface draws in several renders ([TokenScope]). */
 const MessageTexts = createContext<readonly string[] | null>(null);
@@ -134,17 +134,22 @@ function scopeOf(texts: readonly string[], hosts: readonly LinkHost[]): MessageS
  *
  * `message` is the message the run was rendered from; undefined, the run is
  * part of the enclosing [TokenScope]'s (or, with none, its own words).
+ *
+ * `refs` is what the line says it names (an engine line's `NamedRef`s), drawn
+ * where its words are before anything is recognised (rule 8).
  */
 export function TokenRun({
   text,
   links,
   highlight,
   message,
+  refs,
 }: {
   text: string;
   links: LinkMode;
   highlight?: readonly string[] | undefined;
   message: string | undefined;
+  refs?: readonly NamedRefWire[] | undefined;
 }) {
   const hosts = useLinkHosts();
   const rooms = useRoomNames();
@@ -152,8 +157,8 @@ export function TokenRun({
   const owners = useMemo(() => codeHostOwners(hosts), [hosts]);
   const scope = scopeOf(message !== undefined ? [message] : (surface ?? [text]), hosts);
   const tokens = useMemo(
-    () => inlineTokens(text, owners, scope, rooms),
-    [text, owners, scope, rooms],
+    () => inlineTokens(text, owners, scope, rooms, refs),
+    [text, owners, scope, rooms, refs],
   );
   const words = (part: string, at: number): ReactNode =>
     highlight ? <Highlight key={`w${at}`} text={part} terms={highlight} /> : part;
@@ -177,6 +182,31 @@ export function TokenRun({
   });
   if (at < text.length) out.push(words(text.slice(at), at));
   return out;
+}
+
+/**
+ * A line the engine wrote, drawn with what it names: a feed line, a turn's
+ * trigger, a wake's subject. ONE DRAWING for every surface that shows one, so
+ * a work item, a change or a page reads and opens alike wherever its line is.
+ * `links` is `text` inside a row that is itself a link, and `cut` says the
+ * line is cut to one row ([CutLine]).
+ */
+export function EngineLine({
+  text,
+  refs,
+  links = "checked",
+  cut = false,
+}: {
+  text: string;
+  refs: readonly NamedRefWire[] | undefined;
+  links?: LinkMode;
+  cut?: boolean;
+}) {
+  return (
+    <CutLine.Provider value={cut}>
+      <TokenRun text={text} refs={refs} links={links} message={text} />
+    </CutLine.Provider>
+  );
 }
 
 /** Punctuation that opens and closes around a token in its sentence (`peelPunctuation`). */
@@ -218,6 +248,8 @@ export function InlineToken({
       return <RoomToken token={token} links={links} {...edges} />;
     case "mention":
       return <MentionToken token={token} links={links} {...edges} />;
+    case "named":
+      return <NamedRef named={token.ref} guessed={token.guessed} links={links} {...edges} />;
   }
 }
 
@@ -436,16 +468,17 @@ function KeyToken({
 }: { token: Extract<Token, { kind: "key" }>; links: LinkMode } & Edges) {
   const projects = useProjectKeys();
   if (!projects.has(token.project)) return asWords(token.text, edges);
+  // A KEY IS A TASK REFERENCE the prose fallback read, drawn as every
+  // reference is ([NamedRef]): its project is the company's, so it links while
+  // the engine is asked, and is drawn closed once it says the reader may not
+  // open it.
   return (
-    <InlineRef
-      mark={<SquareKanbanGlyph />}
-      kind="Task"
-      href={links !== "text" ? href(itemPath({ id: token.text, key: token.text })) : undefined}
-      code
+    <NamedRef
+      named={{ kind: "work_item", id: token.text, text: token.text }}
+      links={links}
+      optimistic
       {...edges}
-    >
-      {token.text}
-    </InlineRef>
+    />
   );
 }
 

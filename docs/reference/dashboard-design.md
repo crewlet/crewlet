@@ -4903,7 +4903,7 @@ and a pane of unmarked lines reads as one that failed to load.
 
 Operator-facing words are full of things a reader has to stop and decode:
 `acme/backend#14` is a pull request on GitHub, `#ffe100` is a yellow,
-`~design-review` is a Mattermost channel, `#launch` is a chat room, `GP-66` is
+`~design-review` is a Mattermost channel, `#launch` is a chat room, `ENG-66` is
 a task. Every surface `lib/markdown.ts` renders (a page, a description, a
 comment, the Inbox, an Ask Crewlet answer, a transcript) draws each with the
 mark that says what it is, a little below the text's size and just before its
@@ -4919,10 +4919,34 @@ alone:
 | `owner/repo`, under an owner the company works in | The code host's mark, linked to the repository |
 | `#11`, where its message places it | The code host's mark, linked to the issue or pull request |
 | A SHA after a reference ("at b5362d2") or after the word *commit* | The same, linked to the commit |
-| `GP-66` | The task glyph, linked to the work item |
+| `ENG-66` | The task glyph, linked to the work item; drawn without a link once the engine says the reader may not open it, or that it is gone |
+| `web!42`, a Gitlet change in prose | The change glyph, linked to the change, once the engine says the reader may open it; its words otherwise, since a word shaped like a change is not one until the engine says so |
 | An artifact's address (`#/artifacts/{id}`, or the whole address Copy link writes), bare or as `[label](address)` | The artifact's kind glyph and its current title (`ArtifactRef` from `@crewlethq/ui`), linked to the artifact; its words as written where the reader may not see it |
 | `#launch`, a chat room the reader may read | The room's mark, linked to the room; `#e2e` and `#2026` too where the company has rooms of those names |
-| `@miles` | Its words, linked to the seat |
+| `@ada` | Its words, linked to the seat |
+
+#### What an engine line names comes first
+
+A line the engine wrote (a feed line, a turn's trigger, a wake's subject) does
+not need guessing: it carries what it names (`refs`, [What a line
+names](api-endpoints.md#what-a-line-names)), and every surface that shows one
+(Live and Home's event cards, the event log, an event's page, a trace, a
+turn's page and its card on a seat, a running turn on Live, the audit log)
+draws it through one renderer (`EngineLine`, `components/NamedRef.tsx`): each
+ref's words, found left to right, are the kit's `InlineRef` with its kind's
+glyph (a task, a change, a commit, a repository, a page, an artifact, a turn,
+a schedule, a channel, a seat, a room), its kind said to a screen reader, its
+title on hover, and a link to its page. The rules below read the rest of the
+line, and the whole of an agent's own words (a turn's account, a review).
+
+Whether the reader may open each, and what it is called now, is asked in one
+`references` ask for every reference a tab draws in one tick
+(`lib/namedRefs.ts`), each answered by the question its own page asks, as the
+reader, and kept for the socket. Until it is answered a reference is its marked
+words; open, it is a link; refused or gone (never told apart), it is its
+marked words with no link, never a dead one. A row that is itself a link (an
+event's card, a running turn) opens through a link stretched over it, under
+the references in its line, so neither link sits inside the other.
 
 `lib/inlineTokens.ts` holds the recognition rules and the reasons for each.
 Each rule is a guess that can go wrong in two directions, and both are

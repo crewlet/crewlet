@@ -24,6 +24,7 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventRecord, TurnAnswer } from "~/protocol/index.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { afterMicrotasks, settled } from "~/test/settle.ts";
+import { drawnRef, expectNamedLinks, namedAnswer, NAMED_LINE, NAMED_REFS } from "~/test/namedRefs.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -142,6 +143,33 @@ function frame(store: Store, socket: LiveSocket) {
     </ClientContext.Provider>,
   );
 }
+
+// WHAT WOKE A TURN NAMES WHAT IT IS ABOUT (the trigger's refs), and the page
+// draws each as a marked link to its page the reader may open, and what they
+// may not, or what is gone, as its marked words.
+test("what woke a turn links what it names", async () => {
+  onTab("context");
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  const trigger = { id: "ev-1", type: "work_pickup", summary: `SRE was ${NAMED_LINE}`, refs: NAMED_REFS };
+  (socket as unknown as { query: (what: string, p: Record<string, unknown>) => Promise<unknown> }).query = (
+    what,
+    p,
+  ) =>
+    what === "turn"
+      ? Promise.resolve({
+          turn_id: TURN,
+          events: [phase("2026-09-13T10:01:30Z", 90_000, { trigger })],
+          truncated: false,
+          nodes: [],
+        })
+      : what === "references"
+        ? Promise.resolve(namedAnswer(p))
+        : Promise.resolve({});
+  frame(store, socket);
+  await waitFor(() => expect(drawnRef(document.body, "ENG-287").tagName).toBe("A"));
+  expectNamedLinks(document.body);
+});
 
 // THE DURATION THE ENGINE MEASURED REACHES THE CARD.
 //

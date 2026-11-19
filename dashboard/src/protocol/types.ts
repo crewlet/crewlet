@@ -151,6 +151,19 @@ import type {
 // Events
 // ---------------------------------------------------------------------------
 
+/**
+ * One object an engine line names (`named.Ref`): its kind, its id, and the
+ * words the line spells it with, which are a run of the line, found left to
+ * right (`lib/inlineTokens.ts`). `kind` is a string rather than a closed
+ * union: a kind a newer engine names arrives as itself and is drawn as its
+ * words.
+ */
+export interface NamedRef {
+  kind: string;
+  id: string;
+  text: string;
+}
+
 /** One payload-free row of the activity feed. */
 export interface FeedRow {
   id: string;
@@ -159,6 +172,8 @@ export interface FeedRow {
   source: string;
   actor: string;
   summary: string;
+  /** What `summary` names (`named.Ref`), absent where it names nothing. */
+  refs?: NamedRef[];
   category: string;
   trace_id: string;
   span_id: string;
@@ -209,6 +224,8 @@ export interface EventRecord {
   source: string;
   actor: string;
   summary: string;
+  /** What `summary` names (`named.Ref`), absent where it names nothing. */
+  refs?: NamedRef[];
   category: string;
   trace_id: string;
   span_id: string;
@@ -5220,6 +5237,18 @@ export interface ChatUnfurl {
  * `{ urls: string[] }` (at most `chatlet.MaxLinks`, eight). Resolved as the
  * reader, by the reads their own screens use.
  */
+/**
+ * Which of the references a page draws the reader may open (`references`):
+ * each through the question its object's own page asks, as the reader. One
+ * absent from both lists is closed (refused or gone, never told apart); one
+ * under `unresolved` could not be settled by the node, and is asked again.
+ */
+export interface ReferencesAnswer {
+  references: { kind: string; id: string; title?: string }[];
+  /** Each `<kind>:<id>` the node could not settle. */
+  unresolved: string[];
+}
+
 export interface ChatUnfurlsAnswer {
   unfurls: ChatUnfurl[];
 }
@@ -8344,6 +8373,7 @@ export interface ArtifactPresencePush {
 
 export interface QueryMap {
   viewer: Viewer;
+  references: ReferencesAnswer;
   work_inbox: WorkInboxAnswer;
   inbox: InboxAnswer;
   agent: AgentAnswer;

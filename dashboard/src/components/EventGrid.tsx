@@ -42,6 +42,7 @@ import type { FeedRow } from "~/protocol/index.ts";
 import { withoutActor } from "~/lib/words.ts";
 import { delegatedRuleOf } from "~/lib/delegation.ts";
 import { DelegatedMark } from "./Delegation.tsx";
+import { EngineLine } from "./InlineToken.tsx";
 
 /**
  * Which day a row belongs to, AS ITS BAND DRAWS IT: the key is the label, in
@@ -118,7 +119,9 @@ const WhatCell: CellOf = memo(function WhatCell({ event }) {
           style={{ color: "var(--color-feedback-danger-ink)", flex: "none" }}
         />
       )}
-      <span className="truncate">{eventWhat(event)}</span>
+      <span className="truncate">
+        <EngineLine text={eventWhat(event)} refs={event.refs} cut />
+      </span>
       {/* AN ANSWER A DELEGATE GAVE says so, with its rule (ADR-0125). */}
       {rule !== null && <DelegatedMark rule={rule} />}
     </span>

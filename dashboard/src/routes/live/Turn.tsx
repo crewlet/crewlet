@@ -180,6 +180,7 @@ import { PageActions } from "~/app/frame/PageActions.tsx";
 import { menuHold, useWriteAccess } from "~/lib/useWriteAccess.ts";
 import { PropertiesRail } from "~/app/frame/PropertiesRail.tsx";
 import { ObjectHeader, type Fact } from "~/app/frame/ObjectHeader.tsx";
+import { EngineLine } from "~/components/InlineToken.tsx";
 
 /** The two records the engine closes every turn with, the newest of each, read as one answer. */
 interface TurnRecord {
@@ -1183,11 +1184,19 @@ function TurnBrief({ view, omit }: { view: TurnView; omit?: string }) {
             prose sat in a narrow band with the rest of the panel empty
             beside it — the shape for a metadata list, and these are
             sentences. */}
-        {!repeated && woke !== "" && <p className="t-body measure">{woke}</p>}
+        {!repeated && woke !== "" && (
+          <p className="t-body measure">
+            <EngineLine text={woke} refs={trigger?.refs} />
+          </p>
+        )}
         {rest !== "" && (
           <>
             <span className="t-label">It set out to</span>
-            <p className="t-body measure">{rest}</p>
+            {/* AN AGENT'S OWN WORDS, which the engine cannot structure: the
+                prose fallback reads what they name (`lib/inlineTokens.ts`). */}
+            <p className="t-body measure">
+              <EngineLine text={rest} refs={undefined} />
+            </p>
           </>
         )}
       </div>
@@ -1486,7 +1495,7 @@ function EventList({ events, actor }: { events: EventRecord[]; actor: string }) 
                   }}
                 />
               )}
-              {withoutActor(r.event.summary, actor) || r.event.type}
+              <EngineLine text={withoutActor(r.event.summary, actor) || r.event.type} refs={r.event.refs} />
               {/* AN ANSWER A DELEGATE GAVE says so, with its rule (ADR-0125). */}
               {delegatedRuleOf(r.event) !== null && (
                 <>
@@ -1997,7 +2006,7 @@ export function TurnScreen({ turnId }: { turnId: string }) {
             kind="Turn"
             icon="layers"
             identifier={turnId}
-            title={title}
+            title={<EngineLine text={title} refs={view.trigger?.refs} />}
             status={turnStatus(view, now)}
             facts={turnFacts(view, now)}
           />
@@ -2387,7 +2396,7 @@ export function TurnPeek({ turnId }: { turnId: string }) {
         kind="Turn"
         icon="layers"
         identifier={turnId}
-        title={title}
+        title={<EngineLine text={title} refs={view.trigger?.refs} />}
         status={turnStatus(view, now)}
         facts={turnFacts(view, now, {
           seat: true,

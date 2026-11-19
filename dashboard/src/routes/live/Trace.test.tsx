@@ -7,7 +7,7 @@
  * chain is absent.
  */
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { TraceScreen } from "./Trace.tsx";
@@ -16,6 +16,7 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
+import { drawnRef, expectNamedLinks, namedAnswer, NAMED_LINE, NAMED_REFS } from "~/test/namedRefs.tsx";
 import { installWindow } from "~/testing.tsx";
 
 class InertWebSocket {
@@ -47,8 +48,11 @@ async function mount(answer: Record<string, unknown>, viewer: unknown = ADMIN) {
   const store = new Store();
   const socket = new LiveSocket(store);
   const asked: string[] = [];
-  (socket as unknown as { query: (what: string) => Promise<unknown> }).query = (what: string) => {
+  (socket as unknown as {
+    query: (what: string, p: Record<string, unknown>) => Promise<unknown>;
+  }).query = (what, p) => {
     asked.push(what);
+    if (what === "references") return Promise.resolve(namedAnswer(p));
     return Promise.resolve(what === "trace" ? answer : what === "viewer" ? viewer : {});
   };
   render(
@@ -99,6 +103,18 @@ test("in the log opens the event log narrowed to this trace", async () => {
   await mount({ trace_id: TRACE, events: [span], truncated: false });
   fireEvent.click(screen.getByRole("button", { name: "In the log" }));
   expect(location.hash).toBe(`#/live/events?trace=${TRACE}`);
+});
+
+// AN EVENT'S LINE NAMES WHAT IT IS ABOUT, and the trace draws each as a marked
+// link to its page the reader may open, and what is gone as its marked words.
+test("a trace's events link what their lines name", async () => {
+  await mount({
+    trace_id: TRACE,
+    events: [{ ...span, summary: `CEO was ${NAMED_LINE}`, refs: NAMED_REFS }],
+    truncated: false,
+  });
+  await waitFor(() => expect(drawnRef(document.body, "ENG-287").tagName).toBe("A"));
+  expectNamedLinks(document.body);
 });
 
 // A NODE THAT DID NOT ANSWER IS A GAP IN THE CHAIN, and says so — a trace

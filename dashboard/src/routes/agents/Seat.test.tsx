@@ -2341,7 +2341,9 @@ test("a turn's keyless work item is named by its kind and the head of its id", a
   const keyless = screen.getByText("task b375beaf");
   expect(keyless.getAttribute("title")).toContain(`Worklet task ${id}`);
   expect(keyless.className).toContain("turn-what-key");
-  expect(screen.getByText("ENG-29").className).toContain("turn-what-key");
+  // A KEYED ITEM IS A TASK REFERENCE (`components/NamedRef.tsx`) in the same token.
+  const keyed = screen.getByText("ENG-29").closest(".turn-what-key");
+  expect(keyed?.querySelector(".crewlet-inline-ref")).not.toBeNull();
   expect(document.body.textContent).not.toContain(`Worklet task ${id}`);
 });
 
