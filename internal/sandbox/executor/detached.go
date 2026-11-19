@@ -1062,13 +1062,22 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 	if err != nil {
 		return sandbox.Result{}, fmt.Errorf("executor: reading the error stream: %w", err)
 	}
-	stderr, unread := streamEnd(errTail, r.failureBound)
-	stderr = strings.TrimSpace(stderr)
-	if result.Transcript == "" && stderr != "" {
+	shown, unread := streamEnd(errTail, r.failureBound)
+	stderr := strings.TrimSpace(shown)
+	// NOTHING OF ITS END SHOWN ([settledEnd]) but blank lines, the stream is
+	// said in the engine's own words, which the failure keeps whole.
+	continued := ""
+	if stderr == "" && unread > 0 {
+		continued = continuedNote(errTail.Size, shown != "")
+	}
+	switch {
+	case result.Transcript != "":
+	case stderr != "" && unread > 0:
+		result.Transcript = unreadNote(unread, false) + "\n" + stderr
+	case stderr != "":
 		result.Transcript = stderr
-		if unread > 0 {
-			result.Transcript = unreadNote(unread, false) + "\n" + stderr
-		}
+	default:
+		result.Transcript = continued
 	}
 
 	codeText, refusal, err := readWhole(ctx, box, paths.ExitCode(), "its exit status")
@@ -1148,7 +1157,7 @@ func (r *Runner) Collect(ctx context.Context, box sandbox.Sandbox, handle sandbo
 		if crashed && result.JobEnd == "" {
 			said = append(said, "the harness exited with status "+code)
 		}
-		said = append(said, result.Error)
+		said = append(said, result.Error, continued)
 		errStream = stderr
 	default:
 		said = append(said, result.Error)
@@ -1336,6 +1345,18 @@ func unreadNote(unread int64, none bool) string {
 	return fmt.Sprintf("(the error stream's first %s were not read: a run's failure is read from "+
 		"its end, as much of it as one condensation can take beside the engine's own account)",
 		humanSize(unread))
+}
+
+// continuedNote is what stands for an error stream of size bytes of whose end
+// nothing is shown: the end, as read, continues what was written before the
+// read, or every line it opens is blank.
+func continuedNote(size int64, blank bool) string {
+	why := "continues what was written before it"
+	if blank {
+		why = "opens only blank lines"
+	}
+	return fmt.Sprintf("(the error stream, %s, is not shown: the end a run's failure reads of it %s)",
+		humanSize(size), why)
 }
 
 // decodeStream reads one event stream through a fresh decoder, and keeps its
