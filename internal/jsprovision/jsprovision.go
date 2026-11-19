@@ -471,22 +471,23 @@ func heard(absent, unanswered error) error {
 // fit inside [ReadBack], not a count.
 const ReadTerm = time.Second
 
-// Place runs create until the cluster stops refusing to place the object, for
-// as long as ctx allows.
+// Place runs create until the cluster stops refusing to place the object, or a
+// consumer of its name stops closing ([ConsumerClosing]), while ctx allows.
 //
 // One loop for every caller: a consumer create that returned on the first
 // [Unplaceable] refusal, while streams and buckets retried at
 // [PlacementRetry], failed a boot on "no suitable peers" while the group was
-// still forming. awaiting is called ONCE, before the first wait, to name the
-// object ([WhenSlow]'s reason: not a line per poll). THE ERROR IT RETURNS IS
-// THE CREATE'S OWN, never the context's. Each attempt is [Timing.Ask]'d at
-// t.AskTerm, a refusal re-asked every t.PlacementRetry, and never once ctx's
-// deadline has passed ([pause]): that create's caller has given up.
+// still forming. awaiting is called ONCE, on the first placement refusal, to
+// name the object ([WhenSlow]'s reason: not a line per poll); a closing
+// consumer awaits no peer. THE ERROR IT RETURNS IS THE CREATE'S OWN, never the
+// context's. Each attempt is [Timing.Ask]'d at t.AskTerm, a refusal re-asked
+// every t.PlacementRetry, and never once ctx's deadline has passed ([pause]).
 func (t Timing) Place(ctx context.Context, create func(context.Context) error, awaiting func()) error {
 	if err := t.unset(); err != nil {
 		return err
 	}
-	for attempt := 0; ; attempt++ {
+	announced := false
+	for {
 		// THROUGH [Ask], because a create is a metadata request like
 		// any other and the server drops those. Without it a create
 		// whose request was destroyed sat on this loop's single call
@@ -495,11 +496,12 @@ func (t Timing) Place(ctx context.Context, create func(context.Context) error, a
 		// budget bought the create the same nothing the missing
 		// placement retry once bought the consumer.
 		err := t.Ask(ctx, create, nil)
-		if err == nil || !Unplaceable(err) {
+		if err == nil || (!Unplaceable(err) && !ConsumerClosing(err)) {
 			return err
 		}
-		if attempt == 0 && awaiting != nil {
+		if !announced && awaiting != nil && Unplaceable(err) {
 			awaiting()
+			announced = true
 		}
 		if !pause(ctx, t.PlacementRetry) {
 			return err
@@ -737,6 +739,19 @@ func Unplaceable(err error) bool {
 	return ok && apiErr.ErrorCode == errCodeNoPeers
 }
 
+// ConsumerClosing reports a consumer create answered "consumer does not exist":
+// the broker still holds a consumer of that name that is being deleted, and a
+// create meeting it updates it, which a closing consumer refuses
+// (server/consumer.go, updateConfig). The only other answer of that code is to
+// an update, which no create site sends. WAITED OUT like [Unplaceable]: the
+// delete ends in milliseconds and the next create makes the consumer, where a
+// read-back ([SettleWith]) asks after one nobody is making until [ReadBack]
+// runs out.
+func ConsumerClosing(err error) bool {
+	apiErr, ok := apiError(err)
+	return ok && apiErr.ErrorCode == jetstream.JSErrCodeConsumerDoesNotExist
+}
+
 // The broker's codes for a create it refused because the reservation would not
 // fit inside the storage limit in force.
 //
@@ -849,16 +864,16 @@ const (
 // reason no peer racing the same create can have produced, so a read-back
 // would ask after an object nobody made. One predicate for every create site:
 // an unlisted refusal fell through to a [ReadBack] poll and appended `(and it
-// is not there: stream not found)`. A LIST, not
-// "everything but a race's shapes": a code wrongly listed turns a peer that
-// won the race into a node refusing to boot; one wrongly left out costs a
-// read-back and a misleading suffix. So only codes proven not a race's, and
-// still read back: a name in use, an unanswered create, an unavailable group,
-// the generic consumer-create failure (the consumer may be placed). Includes
-// [Unplaceable] once [Place] has waited it out, [OutOfCapacity] and
+// is not there: stream not found)`. A LIST, not "everything but a race's
+// shapes": a code wrongly listed turns a peer that won the race into a node
+// refusing to boot; one wrongly left out costs a read-back and a misleading
+// suffix. So only codes proven not a race's, and still read back: a name in
+// use, an unanswered create, an unavailable group, the generic consumer-create
+// failure (the consumer may be placed). Includes [Unplaceable] and
+// [ConsumerClosing] once [Place] has waited them out, [OutOfCapacity] and
 // [NoApplicableLimit]; a caller wording one differently asks for it first.
 func Refused(err error) bool {
-	if Unplaceable(err) || OutOfCapacity(err) || NoApplicableLimit(err) {
+	if Unplaceable(err) || ConsumerClosing(err) || OutOfCapacity(err) || NoApplicableLimit(err) {
 		return true
 	}
 	apiErr, ok := apiError(err)

@@ -17,8 +17,7 @@ import (
 // It judges the public listener when `api.public.port` is set, else `api`
 // (no listener at all is the launch's to report), and only on an
 // ingress-and-seats node: elsewhere no box on this host dials it. A `direct`
-// box shares the host's loopback (cmd/crewlet's boxHostURL), and container
-// deep work on a loopback bridge is refused whatever the bind.
+// box shares the host's loopback (cmd/crewlet's boxHostURL).
 func ContainerReachWarnings(boot *config.Bootstrap, c *config.Company, goos string) []config.Warning {
 	if boot == nil || c == nil || goos != "linux" {
 		return nil

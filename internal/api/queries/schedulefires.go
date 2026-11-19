@@ -154,13 +154,60 @@ func (s Sources) moveReads() ([]movesOf, bool, error) {
 // weekOfFires is every fire sent in the window before now, newest first, read
 // a page at a time back to the window's start; past the bound it is an error.
 func (s Sources) weekOfFires(ctx context.Context, now time.Time) ([]usage.ScheduleRun, error) {
+	return s.weekOfRuns(ctx, now, schedule.OutcomeFired)
+}
+
+// scheduleSkips is every scheduled run the dispatch ledger skipped in the
+// window before now, by its schedule: while its seat was paused, or missed
+// past the catch-up window.
+func (s Sources) scheduleSkips(ctx context.Context, now time.Time) ([]advisor.ScheduleSkip, error) {
+	if s.Usage == nil {
+		return nil, errors.New("queries: no usage half to read the schedules' skipped runs from")
+	}
+	chart := s.chartHandles()
+	var out []advisor.ScheduleSkip
+	for _, outcome := range []schedule.Outcome{schedule.OutcomeSkippedPaused, schedule.OutcomeSkippedCatchup} {
+		runs, err := s.weekOfRuns(ctx, now, outcome)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range runs {
+			skip := advisor.ScheduleSkip{Name: r.Name, Paused: outcome == schedule.OutcomeSkippedPaused}
+			if seat, ok := chart[r.Target]; ok {
+				skip.Target = seat.handle
+			}
+			switch types.ScheduleScope(r.ScopeType) {
+			case types.ScheduleScopeRole:
+				seat, ok := chart[r.ScopeID]
+				if !ok || seat.handle == "" {
+					continue
+				}
+				skip.Seat = seat.handle
+				if skip.Target == "" {
+					skip.Target = seat.handle
+				}
+			case types.ScheduleScopeUnit:
+				skip.Unit = r.ScopeID
+			default:
+				continue
+			}
+			out = append(out, skip)
+		}
+	}
+	return out, nil
+}
+
+// weekOfRuns is every run the dispatch ledger recorded with outcome in the
+// window before now, newest first, read a page at a time back to the window's
+// start; past the bound it is an error.
+func (s Sources) weekOfRuns(ctx context.Context, now time.Time, outcome schedule.Outcome) ([]usage.ScheduleRun, error) {
 	since := now.Add(-advisor.Window)
-	q := usage.ScheduleRunsQuery{Outcome: string(schedule.OutcomeFired), Limit: firesPage}
+	q := usage.ScheduleRunsQuery{Outcome: string(outcome), Limit: firesPage}
 	var out []usage.ScheduleRun
 	for page := 0; page < maxFirePages; page++ {
 		runs, more, err := s.Usage.ScheduleRuns(ctx, q)
 		if err != nil {
-			return nil, fmt.Errorf("queries: read the week's schedule fires: %w", err)
+			return nil, fmt.Errorf("queries: read the week's schedule runs %s: %w", outcome, err)
 		}
 		for _, r := range runs {
 			if r.FiredAt.Before(since) {
@@ -176,5 +223,5 @@ func (s Sources) weekOfFires(ctx context.Context, now time.Time) ([]usage.Schedu
 		last := runs[len(runs)-1]
 		q.BeforeAt, q.BeforeKey = last.FiredAt, last.Key()
 	}
-	return nil, fmt.Errorf("queries: the week holds more than %d schedule fires", firesPage*maxFirePages)
+	return nil, fmt.Errorf("queries: the week holds more than %d schedule runs %s", firesPage*maxFirePages, outcome)
 }

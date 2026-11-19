@@ -309,6 +309,10 @@ func runFakeHarness() {
 		// example instead of the prompt.
 		prompt, _ := io.ReadAll(os.Stdin)
 		fmt.Print(base64.StdEncoding.EncodeToString(prompt))
+	case os.Getenv("FAKE_SEARCH_STREAM") != "":
+		// A JSONL harness with a search-only run, answering each of the
+		// doctor's calls by its prompt and argv: see searchprobe_test.go.
+		fakeSearchHarness()
 	case os.Getenv("FAKE_SHELL_PROBE_STDOUT") != "" || os.Getenv("FAKE_WEB_PROBE_STDOUT") != "":
 		// The doctor's isolation probes are two more completions, and a
 		// test of them needs the fake to answer each differently: which

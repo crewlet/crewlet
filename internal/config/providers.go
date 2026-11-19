@@ -657,6 +657,11 @@ func (l *LLMProvider) validateProfile(path Path) error {
 		return nil // reported at harness; there is no profile to judge
 	}
 	var p problems
+	if stance, _ := l.Overrides["web_tools"].(string); stance == string(harnessprofile.WebToolsSearch) {
+		p.add(at(path, "overrides.web_tools"), ErrConflict, "search is the stance of Ask "+
+			"Crewlet's search run, which the engine sets itself; an entry is allowed or denied")
+		return p.err()
+	}
 	profile, err := harnessprofile.Load(l.HarnessName(), l.Overrides)
 	switch {
 	case errors.Is(err, harnessprofile.ErrOverrides):

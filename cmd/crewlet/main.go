@@ -72,13 +72,6 @@ func main() {
 	if args, ok := host.HookArgs(os.Args[1:]); ok {
 		os.Exit(host.RunHook(args, os.Stdin, os.Stdout, os.Stderr, os.Getenv))
 	}
-	// THE LANDLOCK HELPER, next: a confined host box's every command is this
-	// binary re-executed to restrict itself and become the job
-	// (sandbox.ConfineMain). No operator's command, so it is answered ahead
-	// of dispatch and usage, and never returns on success.
-	if len(os.Args) > 1 && os.Args[1] == sandbox.ConfineCommand {
-		os.Exit(sandbox.ConfineMain(os.Args[2:]))
-	}
 	// The destination is decided here, by the one function that owns the
 	// process. Everything below adjusts only level and format
 	// (logging.SetVerbosity): a command installing a destination would install

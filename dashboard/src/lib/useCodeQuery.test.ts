@@ -155,6 +155,57 @@ describe("a write to the code log is read back at its floor", () => {
   });
 });
 
+describe("a window the clock moves is one question", () => {
+  // ITS NAME IS THE QUESTION AND ITS EDGES ARE READ AT EACH ASK: an edge the
+  // clock moved keeps the answer on screen and asks nothing until the next
+  // ask, which sends it; a window of another name is a new question.
+  // Mutation: put the edges in the key, or send the edges the hook was first
+  // given, and a case below fails.
+  const windowed = (since: string, name = "1d") =>
+    renderHook(
+      (p: { since: string; name: string }) =>
+        useCodeQuery(
+          "code_pushes",
+          { name: "web" },
+          { pollMs: 60_000, window: { name: p.name, edges: { since: p.since } } },
+        ),
+      { initialProps: { since, name } },
+    );
+
+  test("a moved edge keeps the answer, and the next ask sends it", async () => {
+    const sent = stub(() => json(pushesPage(["p1"])));
+    const { result, rerender } = windowed("2026-11-17T13:00:00.000Z");
+    await waitFor(() => expect(result.current.data).not.toBeNull());
+
+    rerender({ since: "2026-11-17T14:00:00.000Z", name: "1d" });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.data?.pushes).toHaveLength(1);
+    await settled(() => sent.length);
+    expect(sent).toHaveLength(1);
+
+    // THE ASK A POLL MAKES: the same quiet read.
+    act(() => result.current.refetch());
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent.map((s) => s.url.searchParams.get("since"))).toEqual([
+      "2026-11-17T13:00:00.000Z",
+      "2026-11-17T14:00:00.000Z",
+    ]);
+    expect(result.current.data?.pushes).toHaveLength(1);
+  });
+
+  test("a window of another name is a new question", async () => {
+    const sent = stub(() => json(pushesPage(["p1"])));
+    const { result, rerender } = windowed("2026-11-17T13:00:00.000Z");
+    await waitFor(() => expect(result.current.data).not.toBeNull());
+
+    rerender({ since: "2026-11-11T00:00:00.000Z", name: "7d" });
+    expect(result.current.data).toBeNull();
+    expect(result.current.loading).toBe(true);
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1]!.url.searchParams.get("since")).toBe("2026-11-11T00:00:00.000Z");
+  });
+});
+
 describe("an answer by object id is held by its tag", () => {
   // A 304 IS THE ANSWER HELD, and the read names the tag it holds.
   // Mutation: drop the If-None-Match header, or read the 304's empty body as

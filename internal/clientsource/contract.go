@@ -126,6 +126,8 @@ var contract = []Entry{
 	{"ITEM_CONVERSATION_PREFIX", ReadScalar,
 		"internal/worklet.TestTheDashboardKnowsAnItemsConversationByTheEnginesKey"},
 	{"InformSurface", ReadUnion, "internal/worklet.TestTheDashboardNamesEveryInformSurface"},
+	{"FLOW_STATES", ReadLiteral, "internal/worklet.TestTheDashboardDrawsEveryFlowStateAndCause"},
+	{"FLOW_CAUSES", ReadLiteral, "internal/worklet.TestTheDashboardDrawsEveryFlowStateAndCause"},
 
 	// backups.ts
 	{"BackupsAnswer", ReadInterface, "internal/api/queries.TestTheBackupsScreenReadsWhatTheAnswerSends"},

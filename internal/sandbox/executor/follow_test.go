@@ -2,6 +2,7 @@ package executor_test
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -366,5 +367,96 @@ func TestALiveReadingShowsARunningClaudeRun(t *testing.T) {
 	if got.Source != sandbox.SourceTranscript || got.Text != want || got.Finished {
 		t.Errorf("read = source %q, finished %v, text\n%s\nwant the stream's transcript so far",
 			got.Source, got.Finished, got.Text)
+	}
+}
+
+// A LIVE READING ENDS ON THE NOTE ITS SKIPPED LINES ARE OWED: once the job is
+// done, a stream that ends on lines past the bound is said to its end as the
+// record says it, every entry a line, whether the last read brings those lines
+// or an earlier one did. At [testLineBound], for both harnesses.
+//
+// Mutation: take a done reading's entries without the end, and it stops short
+// of the note the record ends on.
+func TestALiveReadingEndsOnTheNoteItsSkippedLinesAreOwed(t *testing.T) {
+	t.Parallel()
+	skipped := strings.Repeat("x", testLineBound+1)
+	for _, tc := range []struct {
+		name   string
+		runner func() *executor.Runner
+		stream func(executor.Paths) string
+		lines  []string
+	}{
+		{"claude code", executor.NewClaudeCode, executor.Paths.Stream, claudeRunStream[:3]},
+		{"opencode", executor.NewOpenCode, executor.Paths.Result,
+			[]string{strings.TrimSuffix(textEvent("working"), "\n")}},
+	} {
+		for _, readFirst := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, read before done %v", tc.name, readFirst), func(t *testing.T) {
+				t.Parallel()
+				runner := executor.Bounded(tc.runner(), sandbox.MaxFailureBytes, testLineBound)
+				b := box(t, runner)
+				p := paths(b)
+				b.Put(tc.stream(p), strings.Join(slices.Concat(tc.lines, []string{skipped, skipped}), "\n")+"\n")
+				reading := runner.Follow(sandbox.RunHandle{})
+				var shown strings.Builder
+				if readFirst {
+					shown.WriteString(read(t, reading, b).Text)
+				}
+				b.Put(p.Done(), "0")
+				shown.WriteString(read(t, reading, b).Text)
+
+				res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+				if err != nil {
+					t.Fatalf("Collect: %v", err)
+				}
+				if !strings.HasSuffix(res.Transcript, "[note] 2 line(s) of output, 128 KiB, not read: "+
+					"past the 64 KiB one line of a run's output may hold") {
+					t.Fatalf("the record = %q; want it to end on the note for the two lines", res.Transcript)
+				}
+				if shown.String() != res.Transcript+"\n" {
+					t.Errorf("the reading showed:\n%q\nwant the record, a line each:\n%q",
+						shown.String(), res.Transcript+"\n")
+				}
+			})
+		}
+	}
+}
+
+// A TRANSCRIPT'S ENTRIES ARE THEIR OWN WORDS: each is trimmed, so a done job's
+// live text, a line an entry, is the collected transcript and one break, even
+// where an error ends in spaces or says nothing, or a call's subject holds a
+// blank line or one ending in spaces. One with nothing left is none
+// (TestAnEntryWithNoWordsIsNone).
+//
+// Mutation: add each entry as its decoder wrote it, and the reading ends on the
+// spaces the record trims, and both keep those of a line inside.
+func TestALiveTranscriptsEntriesEndOnTheirWords(t *testing.T) {
+	t.Parallel()
+	runner := executor.NewOpenCode()
+	b := box(t, runner)
+	p := paths(b)
+	b.Put(p.Result(), strings.Join([]string{
+		`{"type":"tool_use","part":{"tool":"bash","state":{"status":"completed",` +
+			`"input":{"command":"make build   \n\nmake test"}}}}`,
+		`{"type":"error","error":""}`,
+		`{"type":"error","error":"boom \n"}`,
+	}, "\n")+"\n")
+	b.Put(p.Done(), "0")
+	shown := read(t, runner.Follow(sandbox.RunHandle{}), b).Text
+
+	res, err := runner.Collect(t.Context(), b, sandbox.RunHandle{})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if !strings.Contains(res.Transcript, "\n[input 1]\n") || !strings.HasSuffix(res.Transcript, "\n[error] boom") {
+		t.Fatalf("the record = %q; want the blank subject line and the error read", res.Transcript)
+	}
+	for _, line := range strings.Split(res.Transcript, "\n") {
+		if line != strings.TrimSpace(line) {
+			t.Errorf("the record's line %q does not end on its words", line)
+		}
+	}
+	if shown != res.Transcript+"\n" {
+		t.Errorf("the reading showed:\n%q\nwant the record, a line each:\n%q", shown, res.Transcript+"\n")
 	}
 }

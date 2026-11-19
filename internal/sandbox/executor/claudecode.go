@@ -46,10 +46,6 @@ func (ClaudeCode) Name() string { return ClaudeCodeName }
 // Resumes says Claude Code continues a session it reported (`--resume`).
 func (ClaudeCode) Resumes() bool { return true }
 
-// HoldsToItsMCPServers says a Claude Code run can be held to the MCP servers
-// it is handed (`--strict-mcp-config`), which the assistant's deep work asks.
-func (ClaudeCode) HoldsToItsMCPServers() bool { return true }
-
 // NoteInstruction is the standing instruction about notes: a run takes a
 // person's notes between its steps through two hooks ([Paths.ClaudeNotesSettings],
 // PostToolBatch and Stop), each a call of the bridge's unlisted `steer_take` tool
@@ -137,18 +133,9 @@ func claudeScript(req sandbox.RunRequest, session Session, paths Paths, configPa
 	if configPath != "" {
 		parts = append(parts, "--mcp-config", sandbox.ShellQuote(configPath))
 	}
-	// THE SERVERS IT IS HANDED ALONE only for a run held to them
-	// ([sandbox.RunRequest.OnlyMCPServers]): the assistant's deep work, with
-	// or without a file of servers. A seat's executor starts what Claude Code
-	// starts for a person beside the engine's servers: the box's own user- and
-	// local-scope servers, the repository's .mcp.json — which a print-mode run
-	// connects without the approval it has nobody to ask for (the vendor's MCP
-	// page, "Project scope") — a plugin's, and the signed-in account's claude.ai
-	// connectors. It used to run strict everywhere, which kept a repository's
-	// own tool servers and the box's from every seat.
-	if req.OnlyMCPServers {
-		parts = append(parts, "--strict-mcp-config")
-	}
+	// NO --strict-mcp-config: beside the engine's servers the run starts what
+	// Claude Code starts for a person, the box's, the repository's .mcp.json, a
+	// plugin's and the signed-in account's connectors.
 
 	var b strings.Builder
 	line := func(format string, args ...any) { fmt.Fprintf(&b, format+"\n", args...) }

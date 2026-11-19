@@ -663,7 +663,7 @@ func readQuestion(ctx context.Context, read proposal.Read, item, id string) (que
 		return question{}, err
 	case found.comment == nil:
 		return question{}, fmt.Errorf("%w: %s holds no comment %s; answers names the comment "+
-			"that asks the question, as list_decisions or the task's thread gives it",
+			"that asks the question, as GET /worklet/decisions or the task's thread gives it",
 			ErrInvalidArguments, item, id)
 	}
 	return found, nil
@@ -729,7 +729,7 @@ func walkThread(ctx context.Context, read proposal.Read, item string, narrow url
 		}
 	}
 	return fmt.Errorf("%w: %s's thread is longer than a preview reads; name the question "+
-		"with answers, its comment id as list_decisions gives it", ErrInvalidArguments, item)
+		"with answers, its comment id as GET /worklet/decisions gives it", ErrInvalidArguments, item)
 }
 
 // askRevision re-reads the question r names, as an answer's card showed it,

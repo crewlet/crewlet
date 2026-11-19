@@ -131,14 +131,11 @@ type TranscriptEntry struct {
 	// most [TranscriptBounds.EntryBytes] of it, marked where it was cut.
 	Text string `json:"text" untrusted:"fence"`
 
-	// Bytes is the size of the entry's whole text as its redaction shows it (the
-	// bytes [EntryPlace.TextFrom] counts in) wherever the read redacted all of it:
-	// a match's hit, and any text short enough to take whole ([redactedWithin]).
-	// Of a longer text it is the recorded size rounded up to a KiB
-	// ([statedSize]). Cut says the text was cut, so a reader says "the first 16
-	// KiB of 2.1 MiB" rather than presenting an opening as the whole. NEVER THE
-	// RECORDED SIZE TO THE BYTE: beside a text shown whole, that says how long
-	// each value the redaction took out was.
+	// Bytes is the size of what the entry's whole text redacts to (the bytes
+	// [EntryPlace.TextFrom] counts in), never its size as recorded, which beside
+	// a text shown whole says how long each value the redaction took out was.
+	// Cut says the text was cut, so a reader says "the first 16 KiB of 2.1 MiB"
+	// rather than presenting an opening as the whole.
 	Bytes int  `json:"bytes"`
 	Cut   bool `json:"cut,omitempty"`
 }
@@ -368,15 +365,14 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // TranscriptReadsAtOnce is the most transcripts this process decodes at once,
 // whichever socket or REST caller asks for them ([ReadTranscript]).
 //
-// TWO, BY WHAT ONE READ CAN HOLD: a value read whole at up to 32 MiB
-// ([TranscriptBounds.LineBytes]), its buffer's growth and its decoded copy,
-// about 100 MiB (97 MiB measured of an OpenCode export at its bound), so about
-// 200 MiB for two. Nothing else bounds it: a node serves every tab open on it.
-// One slot would queue every reader behind the longest archive. A seat's read
-// for words holds a third more, a relaunch's [Runner.ReadHoldings] no more (97
-// MiB OpenCode's, 43 MiB at most Claude Code's), both in the seats' one slot
-// ([SeatTranscriptReadsAtOnce]); a collection's pass in neither. A read past
-// them waits holding no decoder or opened object.
+// TWO, BY WHAT ONE READ HOLDS at the 32 MiB line bound, measured: a Claude
+// Code line's decode 134 MiB live (an OpenCode message's 97) and its whole
+// redaction ([entryOpening]) up to 93 MiB more, so 227 MiB, 454 MiB for two;
+// at the default GOGC the engine runs at (it sets no GOMEMLIMIT) a dense read's
+// heap peaks near 400 MiB, two near 800. That is whole-entry redaction's cost,
+// which a streamed redaction of each entry replaces. One slot would queue every
+// reader behind the longest archive. A seat's read takes the seats' one slot
+// ([SeatTranscriptReadsAtOnce]); a reading has its own ([HoldingsReadsAtOnce]).
 const TranscriptReadsAtOnce = 2
 
 // transcriptReads holds a slot for each transcript this process is reading,
@@ -390,12 +386,7 @@ var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
 //
 // ONE, INSIDE THE PROCESS'S TWO, never a pool beside them, which would double
 // what reads hold at their worst: one slot is always a person's while a seat
-// reads. A relaunch's [Runner.ReadHoldings] takes it too, inside its own wait,
-// so two holdings readings never run at once (a reading and a person's read of
-// one OpenCode export held 193 MiB live together). On two dedicated cores an
-// ordinary archive reads in 72 to 88 ms (BenchmarkAReadingAtItsBounds), 255 MiB
-// of ordinary lines in 3.1 to 3.2 s, the slowest at its bounds 21.4 to 22.6 s;
-// OpenCode's, on two cores, in 54 ms and 7.9 s.
+// reads.
 const SeatTranscriptReadsAtOnce = 1
 
 // seatTranscriptReads holds a slot for each transcript a seat is reading, at
@@ -757,9 +748,9 @@ func (b *transcriptBuilder) add(e TranscriptEntry, raw string) error {
 		e.Text, textFrom, e.Cut = windowAround(shown, at, b.bounds.EntryBytes)
 		whole = len(shown)
 	} else {
-		e.Text, e.Cut, whole = redactedWithin(raw, b.bounds.EntryBytes)
+		e.Text, e.Cut, whole = entryOpening(raw, b.bounds.EntryBytes)
 	}
-	e = shape(e, statedSize(len(raw), whole))
+	e = shape(e, whole)
 	// THE FIRST ENTRY OF A PAGE IS ALWAYS KEPT: one entry is bounded on its
 	// own, and a page that could not hold it would be a page no read gets
 	// past.
@@ -792,71 +783,20 @@ func readingOf(kind EntryKind) textindex.Reading {
 // decoded record of up to a line's 32 MiB, which a page would keep alive.
 func shape(e TranscriptEntry, size int) TranscriptEntry {
 	e.Bytes = size
-	e.Thread, _, _ = redactedWithin(e.Thread, transcriptNameMaxBytes)
-	e.Tool, _, _ = redactedWithin(e.Tool, transcriptNameMaxBytes)
+	e.Thread, _, _ = entryOpening(e.Thread, transcriptNameMaxBytes)
+	e.Tool, _, _ = entryOpening(e.Tool, transcriptNameMaxBytes)
 	e.Text, e.Thread, e.Tool = strings.Clone(e.Text), strings.Clone(e.Thread), strings.Clone(e.Tool)
 	return e
 }
 
-// statedSize is the size an entry states ([TranscriptEntry.Bytes]) of a text
-// its harness recorded in recorded bytes: whole, the size of what the text
-// redacts to, where the read made all of that redaction, and recorded rounded
-// up to a whole [statedSizeGrain] where it did not, whole being negative.
-func statedSize(recorded, whole int) int {
-	if whole >= 0 {
-		return whole
-	}
-	return (recorded + statedSizeGrain - 1) / statedSizeGrain * statedSizeGrain
-}
-
-// statedSizeGrain is what the size of a text a read redacted only the opening
-// of is rounded up to ([statedSize]).
-//
-// A KIBIBYTE: such a text runs past the entry's bound plus twice the longest
-// credential (a private key's block, up to 64 KiB), so a reader's "first 8 KiB
-// of 2.1 MiB" moves under one percent, and a redacted value moves the size
-// only where it carries the text across a kibibyte, never by its own length.
-const statedSizeGrain = 1 << 10
-
-// redactedWithin is text redacted and then cut to at most bound bytes, whether
-// it was cut, and the size of the whole text's redaction where the read made
-// it, else -1: always an OPENING OF WHAT THE WHOLE TEXT REDACTS TO.
-//
-// A credential beginning inside the bound ends within [redactContext] past it
-// (a private key's block is the longest), so only that head is redacted, inside
-// a window [redactContext] longer still, where any credential begun in the head
-// ends: the window's redaction of the head is the whole text's. The rest, up to
-// [maxLineBytes], is never scanned. ONLY WHAT THE HEAD REDACTS TO IS HANDED
-// OUT, never the window's end, where a credential may be cut and so missed: as
-// much of the window's redaction as the head's own agrees with, so a credential
-// running across the head's end is not handed out at all.
-func redactedWithin(text string, bound int) (string, bool, int) {
-	head := textcut.Bytes(text, bound+redactContext)
-	// AT LEAST redactContext PAST THE HEAD: a cut walks back to a rune's
-	// start, at most utf8.UTFMax-1 bytes, and the window is never shorter
-	// than the head and the longest credential after it.
-	window := textcut.Bytes(text, len(head)+redactContext+utf8.UTFMax-1)
-	out := redact.Secrets(window)
-	if len(window) == len(text) {
-		// THE WHOLE TEXT WAS READ, and its redaction is the whole text's.
-		if len(out) <= bound {
-			return out, false, len(out)
-		}
-		return textcut.Within(out, bound), true, len(out)
-	}
-	settled := textcut.Bytes(out, sharedPrefix(out, redact.Secrets(head)))
-	return textcut.Opening(settled, bound), true, -1
-}
-
-// sharedPrefix is how many bytes a and b open with alike.
-func sharedPrefix(a, b string) int {
-	n := min(len(a), len(b))
-	for i := range n {
-		if a[i] != b[i] {
-			return i
-		}
-	}
-	return n
+// entryOpening is text redacted WHOLE and then cut to at most bound bytes,
+// whether it was cut, and the size of the whole redaction: an opening of what
+// the whole text redacts to ([redact.Prefix]), read in bounded memory. An
+// entry's text is at most [maxLineBytes], and one read is bounded by
+// [TranscriptReadBytes] and [TranscriptReadsAtOnce].
+func entryOpening(text string, bound int) (string, bool, int) {
+	opening, whole := redact.Prefix(text, bound+1)
+	return textcut.Within(opening, bound), whole > bound, whole
 }
 
 // windowAround is the window of shown (an entry's whole redaction) around the
@@ -1475,8 +1415,9 @@ type openCodeState struct {
 // openCodeKeys is what one decode of an object of an export saw of its keys
 // ([eachKeyInPlace]): which names of the decode's own set it met (seen, a bit
 // a name), whether it met a name outside that set (other), and whether it met
-// one of them twice (twice). The person reader reads none of it; a holdings
-// reading holds a message and a part to their sets by it.
+// one of them twice (twice). The person reader reads none of it; the one
+// export walk keeps the same facts of each frame ([scanExport]), by which a
+// holdings reading holds a message and a part to their sets.
 type openCodeKeys struct {
 	seen         uint32
 	other, twice bool
@@ -1486,15 +1427,24 @@ type openCodeKeys struct {
 // it is none of them.
 func (k *openCodeKeys) see(names map[string]int, name []byte) int {
 	i, ok := names[string(name)]
+	if !ok {
+		i = -1
+	}
+	k.note(i)
+	return i
+}
+
+// note notes a name by its index in the decode's set, -1 where it is none of
+// them: the export walk's facts ([scanExport]) and the decode's alike.
+func (k *openCodeKeys) note(i int) {
 	switch {
-	case !ok:
+	case i < 0:
 		k.other = true
-		return -1
+		return
 	case k.seen&(1<<i) != 0:
 		k.twice = true
 	}
 	k.seen |= 1 << i
-	return i
 }
 
 // has reports whether the decode met the name of index i.
@@ -1674,11 +1624,11 @@ func (b *transcriptBuilder) openCodeExport(ctx context.Context, archive io.Reade
 	return fmt.Errorf("%w: %w", errNotExport, err)
 }
 
-// openCodeVisitor is what the export walk ([walkOpenCodeExport]) hands what it
-// reads to, as it reads it: a person's transcript ([openCodePerson]), or a
-// holdings reading ([openCodeHoldingsWalk]). Each value it is handed is a
-// sub-slice of the walk's buffer, valid only until it returns, and an error it
-// answers ends the walk.
+// openCodeVisitor is what the decode walk ([walkOpenCodeExport]) hands what it
+// reads to, as it reads it: a person's transcript ([openCodePerson]), its one
+// reader, a holdings reading being a visitor of the one export walk
+// ([scanExport]). Each value it is handed is a sub-slice of the walk's
+// buffer, valid only until it returns, and an error it answers ends the walk.
 type openCodeVisitor interface {
 	// topKey is a top-level key but `messages`, its value held to the bound.
 	topKey(name string, value json.RawMessage) error
@@ -1772,7 +1722,8 @@ func (p openCodePerson) notMessage() error {
 // The names a message of an export is decoded by ([openCodeMessageWire]),
 // each its index in [openCodeMessageNames]: those a person's transcript reads,
 // the message's id, and every other name of an assistant step's, which a
-// holdings reading holds a step to.
+// holdings reading holds a step to on the one export walk, whose message frame
+// is this set ([exportFrameNames]).
 const (
 	msgID = iota
 	msgType
@@ -1838,7 +1789,7 @@ func decodeOpenCodeMessage(raw json.RawMessage) openCodeMessageWire {
 // field's zero value, a time that is no object as none, and the rest of the
 // message as written. Its tokens, its error and when a step settled are left
 // as none: a person's transcript reads none of them, and the context a session
-// carries reads them off the export itself ([exportMessageAt]).
+// carries reads them off the export itself ([exportMeter]).
 func (w openCodeMessageWire) message() openCodeMessage {
 	m := openCodeMessage{Type: openCodeKind(looseString(w.Type)), Text: looseString(w.Text), Content: w.Content,
 		Status: looseString(w.Status), Summary: looseString(w.Summary)}

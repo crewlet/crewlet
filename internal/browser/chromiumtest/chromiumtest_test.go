@@ -3,6 +3,7 @@ package chromiumtest
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -11,12 +12,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/browser/cdp"
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/procgroup"
 	"github.com/crewlet/crewlet/internal/procgroup/procgrouptest"
@@ -50,28 +52,23 @@ func executable(t *testing.T, body string) string {
 }
 
 // A PIN IS NAMED, REQUIRED OR SKIPPED — and held to its major. Unset, a pin's
-// build is a missing prerequisite by internal/prereqtest's rule: under the
-// requirement the make targets that run the suite set it fails, naming its
-// variable and `make chromium`; unset otherwise, it skips. Named, it must be an
-// absolute path to an executable, and what it answers to --version decides: the
-// newest must be at or above cdp.MinMajor, and the floor of cdp.MinMajor
-// exactly, since a newer build in the floor's place is a floor nobody is
-// testing. A build that cannot answer at all fails saying what it printed,
-// what fetches it again, and on Linux the list of the packages it links. A
-// good build is handed back.
+// build is a missing prerequisite (internal/prereqtest): it fails under the
+// requirement the make targets set, naming its variable and `make chromium`,
+// and skips otherwise. Named, it is an absolute path to an executable whose
+// --version decides: the newest at or above browser.MinChromiumMajor, the
+// floor of it exactly. A build that cannot answer fails saying what it
+// printed, what fetches it again, and on Linux what it links; a good build is
+// handed back. Not parallel: it sets the variables the helpers read.
 //
-// Not parallel: it sets the variables the helpers read.
-//
-// Mutations: drop the floor's exact-major check, and a build of MinMajor+1
-// stands for the floor — red; drop the newest's check against MinMajor, and a
-// build of MinMajor-1 stands for the newest — red; fail a build that cannot
-// answer with its exit status alone, and the failure says neither what it
-// printed nor what to do — red.
+// Mutations: drop the floor's exact-major check (a build of the next major
+// stands for it), the newest's (one of the major below stands for it), or what
+// a build that cannot answer printed from its failure — each red.
 func TestAPinIsNamedRequiredOrSkipped(t *testing.T) {
-	floorBuild := stub(t, fmt.Sprintf("%d.0.8010.52", cdp.MinMajor))
-	newestBuild := stub(t, fmt.Sprintf("%d.0.8103.38", cdp.MinMajor+4))
-	belowTheFloor := stub(t, fmt.Sprintf("%d.0.7977.82", cdp.MinMajor-1))
-	aMajorUp := stub(t, fmt.Sprintf("%d.0.8037.92", cdp.MinMajor+1))
+	floor := browser.MinChromiumMajor
+	floorBuild := stub(t, fmt.Sprintf("%d.0.8010.52", floor))
+	newestBuild := stub(t, fmt.Sprintf("%d.0.8103.38", floor+4))
+	belowTheFloor := stub(t, fmt.Sprintf("%d.0.7977.82", floor-1))
+	aMajorUp := stub(t, fmt.Sprintf("%d.0.8037.92", floor+1))
 	notChromium := stub(t, "of no version")
 	const loader = "chrome: error while loading shared libraries: libnss3.so: cannot open shared object file"
 	cannotStart := executable(t, "echo '"+loader+"' >&2\nexit 127\n")
@@ -99,7 +96,7 @@ func TestAPinIsNamedRequiredOrSkipped(t *testing.T) {
 		{name: "no Chrome for Testing version", env: newestEnv, require: "1", value: notChromium, find: Newest,
 			fatal: "names no Chrome for Testing version"},
 		{name: "a newest below the floor", env: newestEnv, require: "1", value: belowTheFloor, find: Newest,
-			fatal: fmt.Sprintf("below cdp.MinMajor %d", cdp.MinMajor)},
+			fatal: fmt.Sprintf("below browser.MinChromiumMajor %d", floor)},
 		{name: "a floor of the next major", env: floorEnv, require: "1", value: aMajorUp, find: Floor,
 			fatal: "a floor nobody is testing"},
 		{name: "a build that cannot start", env: newestEnv, require: "1", value: cannotStart, find: Newest,
@@ -215,68 +212,116 @@ func endsWithItsBinary(t *testing.T, chrome string) {
 	}
 }
 
-// A LAUNCHED BROWSER REACHES NO HOST BUT LOOPBACK, so what it does unasked
-// never leaves the machine, and a case reads no network but what it serves:
-// a page served on 127.0.0.1 loads by that address and by localhost, while
-// another name of the loopback's own — one Chromium answers itself, with no
-// network, as it answers every name under .localhost — and an address of the
-// documentation's range (RFC 5737) are refused before any connection, the
-// server never asked for the name. On both pins, since what a build does in
-// the background moves with its version.
+// A LAUNCHED BROWSER REACHES NO HOST BUT LOOPBACK, so nothing it does unasked
+// leaves the machine. A page served on 127.0.0.1 fetches localhost, a name
+// under .localhost (which Chromium answers itself, with no network), ::1 and an
+// address of RFC 5737's range, the last two written as addresses, and reports
+// each outcome: only localhost is reached, and no server is asked for a host
+// but 127.0.0.1 and localhost. A network may refuse the address off the
+// machine too, so ::1, which only the rules refuse, is the address the
+// mutation turns. On both pins, since what a build does moves with its version.
 //
-// Mutation: drop the resolver's rules from every launch's flags, and the
-// name under .localhost loads the page — red.
+// Mutation: drop the resolver's rules from every launch's flags, and the name
+// under .localhost and ::1 reach their servers — red.
 func TestALaunchedBrowserReachesNoHostButLoopback(t *testing.T) {
 	Each(t, func(t *testing.T, chrome string) {
+		v4, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		v6, err := net.Listen("tcp6", "[::1]:0")
+		if err != nil {
+			t.Fatalf("listening on ::1, the loopback address the case fetches for the rules to refuse: %v", err)
+		}
+		port, port6 := v4.Addr().(*net.TCPAddr).Port, v6.Addr().(*net.TCPAddr).Port
+		arms := map[string]string{
+			"localhost":                  fmt.Sprintf("http://localhost:%d/fetched", port),
+			"a name under .localhost":    fmt.Sprintf("http://reached.localhost:%d/fetched", port),
+			"::1":                        fmt.Sprintf("http://[::1]:%d/fetched", port6),
+			"an address off the machine": fmt.Sprintf("http://192.0.2.1:%d/fetched", port),
+		}
+		page := loopbackPage(t, arms)
+		type ask struct{ server, host string }
+		var mu sync.Mutex
+		var asked []ask // every Host either server was asked for
+		reports := make(chan [2]string, len(arms))
+		serve(t, v4, func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			asked = append(asked, ask{"127.0.0.1", r.Host})
+			mu.Unlock()
+			switch r.URL.Path {
+			case "/":
+				_, _ = w.Write([]byte(page))
+			case "/report":
+				select { // never held: the server's Close waits for its handlers
+				case reports <- [2]string{r.URL.Query().Get("arm"), r.URL.Query().Get("outcome")}:
+				default:
+				}
+			}
+		})
+		serve(t, v6, func(_ http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			asked = append(asked, ask{"::1", r.Host})
+			mu.Unlock()
+		})
+		hosts := func() []ask {
+			mu.Lock()
+			defer mu.Unlock()
+			return slices.Clone(asked)
+		}
+
+		LaunchPort(t, chrome, fmt.Sprintf("http://127.0.0.1:%d/", port))
 		ctx, cancel := context.WithTimeout(t.Context(), listenTimeout)
 		defer cancel()
-		var mu sync.Mutex
-		var hosts []string
-		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			mu.Lock()
-			hosts = append(hosts, r.Host)
-			mu.Unlock()
-			_, _ = w.Write([]byte("<!doctype html><title>served</title>"))
-		}))
-		t.Cleanup(srv.Close)
-		port := srv.Listener.Addr().(*net.TCPAddr).Port
-
-		c, _ := LaunchPipe(t, chrome)
-		created, err := cdp.Call(ctx, c.Browser(), cdp.TargetCreateTarget, cdp.TargetCreateTargetParams{URL: "about:blank"})
-		if err != nil {
-			t.Fatal(err)
-		}
-		attached, err := cdp.Call(ctx, c.Browser(), cdp.TargetAttachToTarget, cdp.TargetAttachToTargetParams{
-			TargetID: created.TargetID, Flatten: true,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		page := c.Session(attached.SessionID)
-		for _, tc := range []struct {
-			host, failure string // failure: the navigation's errorText, empty for a page that loads
-		}{
-			{"127.0.0.1", ""},
-			{"localhost", ""},
-			{"reached.localhost", "net::ERR_NAME_NOT_RESOLVED"},
-			{"192.0.2.1", "net::ERR_NAME_NOT_RESOLVED"},
-		} {
-			got, err := cdp.Call(ctx, page, cdp.PageNavigate, cdp.PageNavigateParams{
-				URL: fmt.Sprintf("http://%s:%d/", tc.host, port),
-			})
-			if err != nil {
-				t.Fatalf("navigating to %s: %v", tc.host, err)
-			}
-			if got.ErrorText != tc.failure {
-				t.Errorf("navigating to %s failed with %q, want %q", tc.host, got.ErrorText, tc.failure)
+		outcomes := map[string]string{}
+		for len(outcomes) < len(arms) {
+			select {
+			case r := <-reports:
+				want := map[bool]string{true: "reached", false: "refused"}[r[0] == "localhost"]
+				if outcomes[r[0]] = r[1]; r[1] != want {
+					t.Fatalf("the fetch of %s %s, want %s; the servers were asked for %+v", r[0], r[1], want, hosts())
+				}
+			case <-ctx.Done():
+				t.Fatalf("the page reported %v of its %d fetches within %s; the servers were asked for %+v",
+					outcomes, len(arms), listenTimeout, hosts())
 			}
 		}
-		mu.Lock()
-		defer mu.Unlock()
-		for _, host := range hosts {
-			if strings.HasPrefix(host, "reached.localhost") {
-				t.Errorf("the server was asked for %s, a name the browser must never resolve: it asked for %q", host, hosts)
+		own, local := fmt.Sprintf("127.0.0.1:%d", port), fmt.Sprintf("localhost:%d", port)
+		if !slices.Contains(hosts(), ask{"127.0.0.1", own}) {
+			t.Errorf("the page was never served by 127.0.0.1: the servers were asked for %+v", hosts())
+		}
+		// Not which server was asked: the two listeners' ports may be one
+		// number, and localhost then reaches the ::1 server as its own.
+		for _, a := range hosts() {
+			if a.host != own && a.host != local {
+				t.Errorf("the %s server was asked for %s, which the browser must never reach: the servers were "+
+					"asked for %+v", a.server, a.host, hosts())
 			}
 		}
 	})
+}
+
+// loopbackPage is a document that fetches each arm's address, without CORS
+// and past any cache, and reports to its own origin whether each was reached.
+func loopbackPage(t *testing.T, arms map[string]string) string {
+	t.Helper()
+	encoded, err := json.Marshal(arms)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return `<!doctype html><script>
+for (const [arm, url] of Object.entries(` + string(encoded) + `)) {
+  fetch(url, {mode: "no-cors", cache: "no-store"}).then(() => "reached", () => "refused").then((outcome) =>
+    fetch("/report?arm=" + encodeURIComponent(arm) + "&outcome=" + outcome, {cache: "no-store"}));
+}
+</script>`
+}
+
+// serve answers l with h until t ends.
+func serve(t *testing.T, l net.Listener, h http.HandlerFunc) {
+	srv := httptest.NewUnstartedServer(h)
+	_ = srv.Listener.Close()
+	srv.Listener = l
+	srv.Start()
+	t.Cleanup(srv.Close)
 }

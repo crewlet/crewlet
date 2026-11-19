@@ -743,12 +743,10 @@ func TestDoctorReportsAFileReadAfterTheShellWasRefused(t *testing.T) {
 	}
 }
 
-// QUICK MODE'S ARGV IS PINNED WHOLE, beside deep work (ADR-0054): the
-// assistant's own model runs Claude Code with no tool of its own and no
-// session, and one tool server, the engine's `crewlet`, whose tools are the
-// person's own requests (ADR-0049); deep work, which runs the same harness with
-// its harness in a box, never reaches this argv. A flag added to it, a tool
-// given back or another server allowed is a change to what a quick answer can
+// THE ASSISTANT'S ARGV IS PINNED WHOLE: its model runs Claude Code with no
+// tool of its own and no session, and one tool server, the engine's `crewlet`,
+// whose tools are the person's own requests (ADR-0049). A flag added to it, a
+// tool given back or another server allowed is a change to what an answer can
 // reach, made on purpose here or not at all. Mutation: drop "--tools" "", or
 // widen the allow list, and this fails beside the test above.
 func TestTheAssistantsQuickModeArgvIsUnchanged(t *testing.T) {

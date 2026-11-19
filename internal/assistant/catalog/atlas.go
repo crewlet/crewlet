@@ -18,6 +18,7 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/atlas"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/provenance"
 )
 
 // THE ATLAS'S PROPOSALS: every change a person makes to the company's atlas,
@@ -693,4 +694,19 @@ func purgeAtlasPreview(t Tool) proposal.Previewer {
 			Changes: c.rows(), Request: req, StepUp: recency.Demands(),
 			SourceRevision: atlasRevision(s)}, nil
 	}
+}
+
+// atlasEntryTrust is how far the model may rely on an entry's answer: external
+// where an integration or a repository's files are among the sources that
+// named it, since a vendor's users name what it reports and anybody with a
+// push writes a file; the company's own words otherwise, by the one rule for
+// a surface the engine hosts.
+func atlasEntryTrust(answer any) Trusted {
+	sources, _ := cards.Lookup(answer, "entry.sources").([]any)
+	for _, src := range sources {
+		if kind := value(src, "kind"); kind == string(atlas.SourceIntegration) || kind == string(atlas.SourceCode) {
+			return Trusted{Trust: provenance.TrustExternal, Source: provenance.SourceAtlas}
+		}
+	}
+	return Trusted{Trust: provenance.TrustForHosted("", nil, false)}
 }

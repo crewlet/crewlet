@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"slices"
 	"strings"
 	"time"
@@ -176,8 +175,9 @@ func modelText(t Tool, trust provenance.Trust, b provenance.Boundary, summary []
 // redact.Secrets, the whole fenced under the turn's boundary with the tool's
 // Source and the call's trust, and cut, fence included, to [cards.ModelBytes].
 // An answer that is not JSON (an export, a file's bytes) is its text, redacted
-// and fenced the same way, with no card. A HEAD, or any answer with no body,
-// is its status and the headers that describe the resource.
+// and fenced the same way, with no card. An answer with no body is its status
+// and the headers that describe the resource. A call naming select reads only
+// the fields it names ([Select]).
 func shapeAnswer(t Tool, args Args, resp exec.Response, b provenance.Boundary,
 	now time.Time) (Result, error) {
 
@@ -208,11 +208,33 @@ func shapeAnswer(t Tool, args Args, resp exec.Response, b provenance.Boundary,
 	if err != nil {
 		return Result{}, fmt.Errorf("catalog: read %s's answer: %w", t.Name, err)
 	}
+	// TRUST IS READ OFF THE WHOLE ANSWER, before any selection, so a field
+	// a call leaves out cannot lift what the answer is fenced as.
 	trust, source := t.Trust, t.Source
 	if t.TrustOf != nil {
 		trust, source = t.trusted(args, doc)
 	}
-	model, err := fitAnswer(t, trust, b, string(body))
+	paths, err := Selection(args)
+	if err != nil {
+		return Result{}, err
+	}
+	answer := string(body)
+	if len(paths) > 0 {
+		picked, found := Select(doc, paths)
+		if !found {
+			model, factErr := modelFact(t, trust, b, map[string]any{
+				"selected_nothing": "no field the select paths name is in this answer",
+				"fields":           topFields(doc),
+			})
+			return Result{Model: model, Trust: trust, Source: source, Empty: true}, factErr
+		}
+		encoded, encodeErr := json.Marshal(picked)
+		if encodeErr != nil {
+			return Result{}, fmt.Errorf("catalog: encode %s's selection: %w", t.Name, encodeErr)
+		}
+		answer, doc = string(encoded), picked
+	}
+	model, err := fitAnswer(t, trust, b, answer)
 	if err != nil {
 		return Result{}, err
 	}
@@ -277,8 +299,7 @@ func fitAnswer(t Tool, trust provenance.Trust, b provenance.Boundary, answer str
 // `history`, `previous`, `include_*`), pages (`limit`, `cursor`, `before_*`),
 // orders, groups or picks a view is left out, and so is any parameter the
 // list does not name. A generic read is offered the ones the API reference
-// documents for its route; a dedicated read's [Tool.Narrow] sends only these
-// (TestEveryNarrowingArgumentNarrows).
+// documents for its route (TestEveryNarrowingArgumentNarrows).
 var narrowingQuery = map[string]bool{
 	"q": true, "seat": true, "actor": true, "agent": true, "type": true, "source": true,
 	"category": true, "trace_id": true, "channel_id": true, "turn_id": true,
@@ -298,15 +319,13 @@ var narrowingQuery = map[string]bool{
 // name.
 var narrowWords = map[string]string{"q": "the search words", "handle": "the seat"}
 
-// narrowing is what would narrow a read, in the words a person reads them in:
-// a dedicated read's [Tool.Narrow], or for a generic read ([Tool.Infer]) the
-// query parameters the API reference documents for the route it read that
-// [narrowingQuery] holds, sorted. Every name is the engine's own (the
-// catalogue's, the reference's), never the answer's.
+// narrowing is what would narrow a generic read ([Tool.Infer]), in the words a
+// person reads them in: the query parameters the API reference documents for
+// the route it read that [narrowingQuery] holds, sorted. Every name is the
+// engine's own (the reference's), never the answer's.
 func narrowing(t Tool, route string) []string {
-	names := t.Narrow
+	var names []string
 	if t.Infer {
-		names = nil
 		for _, name := range slices.Sorted(slices.Values(queryParams(route))) {
 			if narrowingQuery[name] {
 				names = append(names, name)
@@ -327,7 +346,7 @@ func narrowing(t Tool, route string) []string {
 // cutNote is what the model is told of a read past what one step reads.
 const cutNote = "None of this answer reached you or the person: it is larger than one " +
 	"step reads, so do not answer as though you read it. Read it again narrowed: with " +
-	"narrow_by, a smaller page, or (for a route you read with api_request) the route's " +
+	"narrow_by, a smaller page, select naming only the fields you need, or the route's " +
 	"own filters, paging or a flag that leaves out the large field its documentation " +
 	"names. Or tell the person it is too large to show here, and that its screen shows " +
 	"all of it."
@@ -390,13 +409,8 @@ func readRoute(t Tool, args Args) string {
 	}
 	if t.Infer {
 		// THE TABLE'S PATTERN, never free text: Request built the call only
-		// because the route table holds this key (a HEAD read as its GET's
-		// route, both as [generic.request] resolves them).
-		route := args.String("route")
-		if rest, isHead := strings.CutPrefix(route, http.MethodHead+" "); isHead {
-			route = http.MethodGet + " " + rest
-		}
-		return strings.TrimSpace(route)
+		// because the route table holds this key.
+		return strings.TrimSpace(args.String("route"))
 	}
 	route, _ := t.RouteOf(req)
 	return route

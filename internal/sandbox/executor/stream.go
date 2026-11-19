@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -46,8 +47,14 @@ type Decoder interface {
 	// Entries hands over the entries decoded since it was last asked, in
 	// order, and FORGETS them, or an hours-long live reading would hold the
 	// whole transcript. A decoder read this way stops keeping what Result
-	// needs, so it is read one way or the other, never both.
-	Entries() []string
+	// needs, so it is read one way or the other, never both: a live reading
+	// asks once before its first line, so the decoder never holds for a
+	// Result, however much that line's read hands it.
+	//
+	// With end (every line was fed and the run is done), a run of skipped
+	// lines still open is said too, as Result says it, so a reading ends on
+	// the note the record ends on.
+	Entries(end bool) []string
 }
 
 // maxLineBytes is the longest line of a run's output that is read; a longer
@@ -87,24 +94,47 @@ const lineChunkBytes = 64 << 10
 //
 // THE BUFFER IS THE CALLER'S, so a reader of many records (a transcript per
 // subagent) resets one. ONE IMPLEMENTATION for [eachLine] and a captured
-// session's transcript, so there is one answer to how long a line may be.
+// session's transcript, so there is one answer to how long a line may be: a
+// [streamLines] used for one whole read.
 func readLines(br *bufio.Reader, bound int, line func([]byte) error, skipped func(int64) error) error {
-	var (
-		held []byte
-		over int64 // the size of a line already past the bound
-	)
+	l := streamLines{bound: bound}
+	return l.read(br, true, line, skipped)
+}
+
+// streamLines is [readLines] with its place kept between reads that may end
+// anywhere, so a stream read in pieces is read as one read whole.
+type streamLines struct {
+	bound int
+	// held is the line so far while within bound, and over the size so far
+	// of one already past it.
+	held []byte
+	over int64
+	// taken is how many bytes of the stream the reads consumed: handed on,
+	// held or counted.
+	taken int64
+	// broken is whether the line last handed on, or counted as skipped, ended
+	// in a break rather than at the stream's end.
+	broken bool
+}
+
+// read hands line and skipped every line br completes, as [readLines] says.
+// At br's end with end set (the stream is whole), an unfinished last line is
+// handed on; without it, the line waits for the next read. br's own failure
+// returns with the place kept, and hands on nothing it cut short.
+func (l *streamLines) read(br *bufio.Reader, end bool, line func([]byte) error, skipped func(int64) error) error {
 	for {
 		chunk, err := br.ReadSlice('\n')
+		l.taken += int64(len(chunk))
 		switch {
-		case over > 0:
-			over += int64(len(chunk))
-		case len(held)+len(chunk) > bound:
-			over = int64(len(held) + len(chunk))
+		case l.over > 0:
+			l.over += int64(len(chunk))
+		case len(l.held)+len(chunk) > l.bound:
+			l.over = int64(len(l.held) + len(chunk))
 			// RELEASED, not truncated: the buffer has grown to the bound,
 			// and keeping it would hold that much for the rest of the read.
-			held = nil
+			l.held = nil
 		default:
-			held = append(held, chunk...)
+			l.held = append(l.held, chunk...)
 		}
 		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
@@ -114,18 +144,30 @@ func readLines(br *bufio.Reader, bound int, line func([]byte) error, skipped fun
 		if err != nil && !errors.Is(err, io.EOF) {
 			return err
 		}
-		var stop error
-		if over > 0 {
-			stop = skipped(over)
-			over = 0
-		} else if len(held) > 0 {
-			stop = line(bytes.TrimRight(held, "\r\n"))
+		eof := errors.Is(err, io.EOF)
+		if eof && !end {
+			return nil
 		}
-		held = held[:0]
+		var stop error
+		if l.over > 0 {
+			l.broken = !eof
+			stop = skipped(l.over)
+			l.over = 0
+		} else if len(l.held) > 0 {
+			l.broken = !eof
+			stop = line(bytes.TrimRight(l.held, "\r\n"))
+		}
+		// A long line's buffer serves the next line only while a read with end
+		// ([readLines]' one read) goes on; otherwise it goes with its line, so
+		// a reader kept between reads holds only a line in transit.
+		if cap(l.held) > lineChunkBytes && (!end || stop != nil || eof) {
+			l.held = nil
+		}
+		l.held = l.held[:0]
 		switch {
 		case stop != nil:
 			return stop
-		case errors.Is(err, io.EOF):
+		case eof:
 			return nil
 		}
 	}
@@ -139,10 +181,35 @@ func decodeAll(dec Decoder, text string) sandbox.Result {
 	return dec.Result()
 }
 
+// transcriptHoldBytes is how much of a run's transcript a whole reading holds
+// raw: the most the engine reads any one text whole, so below it a transcript
+// costs what it always has. Past it the transcript is redacted as it arrives
+// and only what the run's record keeps is held ([sandbox.TranscriptHalves]).
+const transcriptHoldBytes = sandbox.MaxFileBytes
+
 // transcriptLines builds a run's activity transcript one entry at a time, and
-// is where a skipped line becomes a note.
+// is where a skipped line becomes a note. Each entry is trimmed and a blank one
+// dropped, so the transcript is its entries joined by line breaks.
+//
+// A WHOLE READING PAST THE HOLD STREAMS: its entries so far, then each one
+// after, are written to a redacting stream into the halves the record keeps,
+// a piece at a time. A live reading takes its entries before its first line
+// and after every read ([Decoder.Entries]), so it never streams.
 type transcriptLines struct {
 	lines []string
+	// held is the bytes of lines and the breaks joining them.
+	held int
+	// live is set once a live reading took entries: held raw always.
+	live bool
+	// hold is [transcriptHoldBytes] where zero; a suite lowers it.
+	hold int
+	// newStream is [redact.NewStream] where nil; a suite injects a refusal.
+	newStream func(io.Writer) transcriptStream
+	// stream is set once a whole reading passed the hold; halves is what it
+	// writes, and fedBytes and fedBreaks are what it was fed.
+	stream              transcriptStream
+	halves              sandbox.TranscriptHalves
+	fedBytes, fedBreaks int
 
 	// skipped, skippedBytes and skippedBound are a run of consecutive lines
 	// past the bound, said in ONE note where they were, not one per line.
@@ -151,9 +218,61 @@ type transcriptLines struct {
 	skippedBound int
 }
 
+// transcriptStream is a [redact.Stream].
+type transcriptStream interface {
+	io.Writer
+	Close() error
+}
+
+// add adds entry in its own words, trimmed. One with NO WORDS IS NONE: it
+// leaves an open run of skipped lines open, as a line that adds no entry does.
 func (t *transcriptLines) add(entry string) {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return
+	}
 	t.flushSkipped()
-	t.lines = append(t.lines, entry)
+	t.push(entry)
+}
+
+func (t *transcriptLines) push(entry string) {
+	switch {
+	case t.stream != nil:
+		t.feed(entry)
+		return
+	case t.live || t.held+len(entry)+1 <= cmp.Or(t.hold, transcriptHoldBytes):
+		if len(t.lines) > 0 {
+			t.held++
+		}
+		t.held += len(entry)
+		t.lines = append(t.lines, entry)
+		return
+	}
+	newStream := t.newStream
+	if newStream == nil {
+		newStream = func(w io.Writer) transcriptStream { return redact.NewStream(w) }
+	}
+	t.stream = newStream(&t.halves)
+	// Entry by entry, never the whole join at once.
+	for _, line := range t.lines {
+		t.feed(line)
+	}
+	t.lines, t.held = nil, 0
+	t.feed(entry)
+}
+
+// feed writes entry to the stream, after the line break joining it to the
+// entry before.
+func (t *transcriptLines) feed(entry string) {
+	piece := make([]byte, 0, len(entry)+1)
+	if t.fedBytes > 0 {
+		piece = append(piece, '\n')
+	}
+	piece = append(piece, entry...)
+	t.fedBytes += len(piece)
+	t.fedBreaks += bytes.Count(piece, []byte("\n"))
+	// A refusal is answered again by Close, which result reads.
+	_, _ = t.stream.Write(piece)
 }
 
 func (t *transcriptLines) skip(n int64, bound int) {
@@ -166,37 +285,56 @@ func (t *transcriptLines) flushSkipped() {
 	if t.skipped == 0 {
 		return
 	}
-	t.lines = append(t.lines, activityline.Words(activityline.TagNote, fmt.Sprintf("%d line(s) of output, %s, "+
+	t.push(activityline.Words(activityline.TagNote, fmt.Sprintf("%d line(s) of output, %s, "+
 		"not read: past the %s one line of a run's output may hold", t.skipped, humanSize(t.skippedBytes),
 		humanSize(int64(t.skippedBound)))))
 	t.skipped, t.skippedBytes = 0, 0
 }
 
-func (t *transcriptLines) String() string {
+// result is the transcript and how much of its middle was left out: its
+// entries joined, or, once it streamed, what the record keeps of its
+// redaction ([sandbox.TranscriptHalves]). A transcript the stream refused is
+// WITHHELD: a note saying so stands for it, counted whole, and nothing the
+// stream wrote is kept.
+func (t *transcriptLines) result() (text string, elidedLines, elidedBytes int) {
 	t.flushSkipped()
-	return strings.TrimSpace(strings.Join(t.lines, "\n"))
+	if t.stream == nil {
+		return strings.Join(t.lines, "\n"), 0, 0
+	}
+	if t.stream.Close() == nil {
+		return t.halves.Bounded()
+	}
+	lines := t.fedBreaks + 1
+	note := activityline.Words(activityline.TagNote, fmt.Sprintf("the run's transcript, %d line(s), %s, is "+
+		"not kept: its text could not be redacted in one pass", lines, humanSize(int64(t.fedBytes))))
+	return note, lines, t.fedBytes
 }
 
-// take hands over the entries added since the last take and forgets them.
+// take hands over the entries added since the last take and forgets them,
+// and marks the reading live.
 //
-// A RUN OF SKIPPED LINES STILL OPEN IS NOT FLUSHED: the next entry says it,
-// so a reading in pieces names the same lines as one taken whole.
-func (t *transcriptLines) take() []string {
+// A RUN OF SKIPPED LINES STILL OPEN IS NOT FLUSHED until end ([Decoder.Entries]):
+// the next entry says it, so a reading in pieces names the same lines as one
+// taken whole, and at the stream's end nothing follows to say it.
+func (t *transcriptLines) take(end bool) []string {
+	t.live = true
+	if end {
+		t.flushSkipped()
+	}
 	lines := t.lines
-	t.lines = nil
+	t.lines, t.held = nil, 0
 	return lines
 }
 
 // redactContext is how much a reading that begins inside a stream reads
-// BEFORE what it shows, never shown ([settledEnd]), so a credential that began
-// earlier is still redacted.
+// BEFORE what it shows, never shown ([settledEnd]), so what decides how its
+// first lines redact is read with them.
 //
-// Every credential shape fits on one line but a private key, whose block runs
-// at most [redact.MaxKeyBlockBytes] past BEGIN; a window opening inside one
-// would show its body with no BEGIN to anchor on (package redact's doc). It is
-// the redaction's own bound, so such a key is read whole and the two cannot
-// drift.
-const redactContext = redact.MaxKeyBlockBytes
+// THE REDACTION'S OWN LOOK-BACK ([redact.LookBack]): a key's block and a
+// password's value below its key are decided by text further back than one
+// line, and the redaction states how far, so the two cannot drift. Its doc
+// names the password's reads that reach further than any look-back.
+const redactContext = redact.LookBack
 
 // streamEnd is the end of a stream a person or model can be shown: at most
 // keep bytes of WHOLE lines ([sandbox.KeepEnd]) from tail's end, redacted
@@ -205,10 +343,9 @@ const redactContext = redact.MaxKeyBlockBytes
 //
 // SHOWN ONLY WHERE THE CONTEXT SETTLES IT ([settledEnd]): bounded by redacted
 // bytes alone, the end could reach back into the context when redaction shrank
-// what followed, and show a key whose BEGIN came before the read. A read
-// opened inside a line running to the end has no whole line to show, so that
-// line's end past the context is kept on a character, marked, rather than
-// showing nothing.
+// what followed, and be redacted without what decides it. A read opened inside
+// a line running to the end has no line it opens to show, so it shows nothing,
+// and every byte is counted.
 func streamEnd(tail sandbox.FileTail, keep int) (string, int64) {
 	ctx := 0
 	if tail.Before() > 0 {
@@ -225,8 +362,10 @@ func streamEnd(tail sandbox.FileTail, keep int) (string, int64) {
 //
 // WHAT IS SETTLED ([settledStart]) is shown as the WHOLE text redacts it:
 // redacted alone, a key whose BEGIN is in the context reads as cut off, and a
-// password whose key is there as no password. So only what both redactions agree on is kept, from
-// the line after the last place they part.
+// password whose key is there as no password. So only what both redactions
+// agree on is kept, from the line after the last place they part. A line
+// begun before that is not shown: read from a place that is not its start, it
+// is not read as the whole text reads it.
 func settledEnd(text string, ctx, keep int) (string, int) {
 	from, opensLine := settledStart(text, ctx)
 	part := redact.Secrets(text[from:])
@@ -240,14 +379,8 @@ func settledEnd(text string, ctx, keep int) (string, int) {
 	onLine := start == 0 && opensLine || start > 0 && part[start-1] == '\n'
 	if !onLine {
 		i := strings.IndexByte(part[start:], '\n')
-		if i < 0 || start+i+1 == len(part) {
-			// THE END OF ONE LINE begun before what is settled: kept on a
-			// character and marked, as a line longer than keep is.
-			kept, at := sandbox.KeepEnd(part[start:], keep)
-			if at == 0 {
-				kept = sandbox.KeepEndMark + kept
-			}
-			return kept, from + start + at
+		if i < 0 {
+			return "", from + len(part)
 		}
 		start += i + 1
 	}

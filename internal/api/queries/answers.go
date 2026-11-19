@@ -1013,7 +1013,7 @@ func Register(r *Registry, s Sources) {
 	if s.Work != nil || s.Pages != nil || s.Usage != nil {
 		r.Register("company_feed", Everybody(), s.companyFeed)
 	}
-	if s.Research != nil && s.Company != nil {
+	if s.Research != nil {
 		r.Register("research_page", Everybody(), s.researchPage)
 	}
 	if s.Searcher != nil {

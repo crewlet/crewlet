@@ -53,7 +53,7 @@ type schema struct {
 	// action's payload): any member is taken, an identity name excepted.
 	freeform bool
 	// payload is a request's own parameters or body, which a generic API
-	// call carries to the route that reads them ([APIRequestTool]): any JSON
+	// call carries to the route that reads them ([ReadAPITool]): any JSON
 	// value is taken, nested as deep as the route reads it, and NO NAME IS
 	// REFUSED. An identity argument names who acts, and a generic call
 	// names no actor: identity is the grant it is sent under, which no

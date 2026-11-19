@@ -182,8 +182,7 @@ func overLong(id string) evals.Round {
 func reads(n int) []evals.Round {
 	out := make([]evals.Round, 0, n)
 	for i := 1; i <= n; i++ {
-		out = append(out, evals.Call(fmt.Sprintf("r%d", i), "get_task",
-			map[string]any{"item": "ENG-7"}))
+		out = append(out, evals.Call(fmt.Sprintf("r%d", i), catalog.ReadAPITool, taskArgs("ENG-7")))
 	}
 	return out
 }
@@ -341,7 +340,7 @@ func TestABriefsLastReadRoundLeavesRoomForItsRetry(t *testing.T) {
 // Mutation: drop the read gate and the read runs in the answer's round.
 func TestABriefReadInTheAnswersRoundsIsNotSent(t *testing.T) {
 	t.Parallel()
-	extra := evals.Call("late", "get_task", map[string]any{"item": "ENG-8"})
+	extra := evals.Call("late", catalog.ReadAPITool, taskArgs("ENG-8"))
 	script := append(reads(assistant.BriefReadRounds), extra, briefOf("a1", wire.BriefWarning))
 	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)},
 		Handler: task, Rounds: script})
@@ -371,7 +370,7 @@ func TestABriefReadInTheAnswersRoundsIsNotSent(t *testing.T) {
 // step_limit with no reason logged.
 func TestABriefRefusedInTheTurnsLastRoundIsFinal(t *testing.T) {
 	t.Parallel()
-	extra := evals.Call("late", "get_task", map[string]any{"item": "ENG-7"})
+	extra := evals.Call("late", catalog.ReadAPITool, taskArgs("ENG-7"))
 	script := append(reads(assistant.BriefReadRounds), extra, overLong("a1"),
 		briefOf("a2", wire.BriefWarning))
 	f := assistanttest.NewRig(t, evals.RigOptions{Tools: []catalog.Tool{getTask(t)},
@@ -442,9 +441,9 @@ func TestABriefRowMayCiteAChatRoom(t *testing.T) {
 			"action": "open"}
 	}
 	f := assistanttest.NewRig(t, evals.RigOptions{
-		Tools:   []catalog.Tool{assistanttest.Tool(t, "list_chat_mentions")},
+		Tools:   []catalog.Tool{assistanttest.ReadAPI(t, "GET /chatlet/activity")},
 		Handler: handler, Rounds: []evals.Round{
-			evals.Call("c1", "list_chat_mentions", map[string]any{}),
+			evals.Call("c1", catalog.ReadAPITool, map[string]any{"route": "GET /chatlet/activity"}),
 			evals.Call("c2", catalog.AnswerBriefTool, map[string]any{
 				"about": "Two asks wait on you in chat.",
 				"needs": []any{need(launch, "Answer Ada in #launch: approve the launch copy?"),
@@ -513,9 +512,11 @@ func TestARoomsBriefSummarisesWithPointsCitingMessages(t *testing.T) {
 		return map[string]any{"say": say, "message_id": id}
 	}
 	f := assistanttest.NewRig(t, evals.RigOptions{
-		Tools:   []catalog.Tool{assistanttest.Tool(t, "read_chat_messages")},
+		Tools:   []catalog.Tool{assistanttest.ReadAPI(t, "GET /chatlet/channels/{channel_id}/messages")},
 		Handler: handler, Rounds: []evals.Round{
-			evals.Call("c1", "read_chat_messages", map[string]any{"channel": room}),
+			evals.Call("c1", catalog.ReadAPITool, map[string]any{
+				"route": "GET /chatlet/channels/{channel_id}/messages",
+				"path":  map[string]any{"channel_id": room}}),
 			evals.Call("c2", catalog.AnswerBriefTool, map[string]any{
 				"about": "The 2.4.0 release waits on GP-12.",
 				"needs": []any{},

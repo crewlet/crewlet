@@ -42,17 +42,18 @@ answers:
       outcome: Applied
       plan: []
 script:
-  - call: list_integrations
-  - call: get_seat_access
-    args: {handle: Site Reliability Engineer, integration: github}
+  - call: read_api
+    args: {route: GET /integrations}
+  - call: read_api
+    args: {route: "GET /setup/integrations/{kind}/access/seats/{handle}/{lane}", path: {kind: github, handle: sre, lane: github}}
   - say: >-
       Both are right. GitHub's last check moves on every pass, Check now
       included, which reads the vendor and changes nothing. The agent's last
       applied moves only when a sync writes its grant, which nothing needed
       since. Its access was also checked a minute ago and is in sync.
 expect:
-  calls: [get_seat_access]
+  calls: [read_api]
   never: [set_seat_access]
   proposals: 0
-  shows: [Last check]
+  shows: [Last at, Applied at, Checked at]
   says: [check]

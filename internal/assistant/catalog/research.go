@@ -10,7 +10,7 @@ import (
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
-// FetchWebPageToolName reads a page from a host the company lists (ADR-0151).
+// FetchWebPageToolName reads a public web page, at an address the turn saw.
 const FetchWebPageToolName = "fetch_web_page"
 
 // webFetchesPerTurn is the most pages one turn reads: a hard vendor question
@@ -21,9 +21,10 @@ var fetchWebPage = sync.OnceValues(func() (Tool, error) {
 	t := Tool{
 		Name: FetchWebPageToolName, Kind: KindRead, Tier: TierRead,
 		Phrase: "read a web page",
-		Description: "Read a page of a vendor's documentation, by its https address, from " +
-			"the hosts the company lists for research; the engine reads it, and its text is " +
-			"the site's, not the person's. A long page is read in parts: pass the part's " +
+		Description: "Read a public web page by its https address; the engine reads it, and " +
+			"its text is the site's, not the person's. Only an address the person gave you, " +
+			"a search result, a link of a page you read or an address a read answered is " +
+			"read: never write one yourself. A long page is read in parts: pass the part's " +
 			"next as from. Cite each page you rely on by its title and address.",
 		schema: object([]string{"url"}, map[string]*schema{
 			"url":  text("The page's https address.", 2048),
@@ -51,7 +52,7 @@ var fetchWebPage = sync.OnceValues(func() (Tool, error) {
 })
 
 // FetchWebPageTool is the web read. It is never in [Tools]: the orchestrator
-// offers it while the company lists research hosts.
+// offers it beside them.
 func FetchWebPageTool() Tool {
 	t, err := fetchWebPage()
 	if err != nil {
@@ -60,7 +61,7 @@ func FetchWebPageTool() Tool {
 	return t
 }
 
-// SearchWebToolName searches the hosts the company lists (ADR-0151).
+// SearchWebToolName searches the web through the model's own search run.
 const SearchWebToolName = "search_web"
 
 // webSearchesPerTurn is the most searches one turn makes: a hard vendor
@@ -71,10 +72,9 @@ var searchWeb = sync.OnceValues(func() (Tool, error) {
 	t := Tool{
 		Name: SearchWebToolName, Kind: KindRead, Tier: TierRead,
 		Phrase: "search the web",
-		Description: "Search the hosts the company lists for research, through its own " +
-			"search server: the results' titles, addresses and a snippet each, on those " +
-			"hosts alone. Read a result whole with " + FetchWebPageToolName + ". Never put " +
-			"the company's data (names, keys, addresses) in a query.",
+		Description: "Search the web: the results' titles and addresses, as the search " +
+			"returned them. Read a result with " + FetchWebPageToolName + ". Never put the " +
+			"company's data (names, keys, addresses) in a query.",
 		schema: object([]string{"query"}, map[string]*schema{
 			"query": text("What to find, in a few plain words.", 200),
 		}),
@@ -86,8 +86,7 @@ var searchWeb = sync.OnceValues(func() (Tool, error) {
 		Cards: one(cards.Spec{Table: &cards.Table{Title: "Search results", Rows: "results",
 			Brief: []string{"title", "address"},
 			Columns: []cards.Column{prose("title", "Title", "title"),
-				{Key: "address", Label: "Address", Path: "url", Type: tText},
-				prose("snippet", "Snippet", "snippet")}}}),
+				{Key: "address", Label: "Address", Path: "url", Type: tText}}}}),
 		Label: func(a map[string]any) string {
 			return "Searching the web for “" + Args(a).String("query") + "”"
 		},
@@ -101,7 +100,7 @@ var searchWeb = sync.OnceValues(func() (Tool, error) {
 })
 
 // SearchWebTool is the web search. It is never in [Tools]: the orchestrator
-// offers it while the company names a search server.
+// offers it where the model's harness has a search-only run.
 func SearchWebTool() Tool {
 	t, err := searchWeb()
 	if err != nil {

@@ -112,7 +112,7 @@ func (rc rechecker) recheck(ctx context.Context, id string, option int, by iam.A
 	}
 	s := stored[0]
 	if s.State != advisor.StateOpen {
-		return AdvisorRecheck{}, fmt.Errorf("%w: a finding that is %s is not applied", advisordomain.ErrIllegalMove, s.State)
+		return AdvisorRecheck{}, notOpenOf(row)
 	}
 	out := AdvisorRecheck{Moved: []advisor.Moved{}, CheckedAt: now, ExpiresAt: now.Add(RecheckFor)}
 	outcome, step, f, err := rc.rederive(ctx, s, now)
@@ -287,6 +287,22 @@ func movedOr(err error) error {
 	return err
 }
 
+// errNotOpen is a finding no longer open when a person re-checks it or
+// reports its change sent: another window applied it, or it closed.
+var errNotOpen = errors.New("api: the finding is no longer open")
+
+// notOpenError is [errNotOpen] with what became of the finding, which the
+// person is told in words rather than as a refused move.
+type notOpenError struct{ row advisordomain.FindingRow }
+
+func (e notOpenError) Error() string {
+	return fmt.Sprintf("api: the finding is %s, no longer open", e.row.State)
+}
+
+func (notOpenError) Is(target error) bool { return target == errNotOpen }
+
+func notOpenOf(row advisordomain.FindingRow) error { return notOpenError{row: row} }
+
 // errRecheckAgain is a report of a send the finding no longer matches, or one
 // the configuration does not hold yet: the person re-checks again.
 var errRecheckAgain = errors.New("api: re-check the finding again")
@@ -305,7 +321,10 @@ func (rc rechecker) applied(ctx context.Context, id, digest string, by iam.Actor
 	}
 	s := stored[0]
 	f := s.Observation.Finding
-	if s.State != advisor.StateOpen || f.Fix.Kind != advisor.FixConfigChange {
+	switch {
+	case s.State != advisor.StateOpen:
+		return notOpenOf(row)
+	case f.Fix.Kind != advisor.FixConfigChange:
 		return errRecheckAgain
 	}
 	at := slices.IndexFunc(f.Fix.Options, func(o advisor.Option) bool {
@@ -419,6 +438,10 @@ func (a *App) serveAdvisorApplied(w http.ResponseWriter, r *http.Request) {
 
 // refuseApply says why a re-check or a report was not taken.
 func refuseApply(w http.ResponseWriter, r *http.Request, err error) {
+	if notOpen, ok := errors.AsType[notOpenError](err); ok {
+		refuseNotOpen(w, notOpen.row)
+		return
+	}
 	switch {
 	case errors.Is(err, errRecheckAgain), errors.Is(err, errFindingMoved):
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeConflict, httpjson.Detail{
@@ -433,4 +456,42 @@ func refuseApply(w http.ResponseWriter, r *http.Request, err error) {
 	default:
 		refuseDecision(w, r, err)
 	}
+}
+
+// refuseNotOpen says what became of a finding that is no longer open: applied,
+// with when and until when its effect is checked, or closed, with how.
+func refuseNotOpen(w http.ResponseWriter, row advisordomain.FindingRow) {
+	fields := httpjson.Detail{"state": string(row.State)}
+	if row.State == advisordomain.StateApplied {
+		fields["outcome"] = "applied"
+		fields["detail"] = "This change was applied already; the Advisor is checking whether it worked."
+		if !row.AppliedAt.IsZero() {
+			fields["applied_at"] = row.AppliedAt.UTC()
+		}
+		if !row.EffectDueAt.IsZero() {
+			fields["effect_due_at"] = row.EffectDueAt.UTC()
+		}
+	} else {
+		fields["outcome"], fields["detail"] = "closed", closedWords(row.State)
+		if !row.ClosedAt.IsZero() {
+			fields["closed_at"] = row.ClosedAt.UTC()
+		}
+	}
+	httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeConflict, fields)
+}
+
+// closedWords says a closed finding's state to the person who pressed on it:
+// a switch, not a table, so the engine allocates nothing for it at init.
+func closedWords(state advisordomain.State) string {
+	switch state {
+	case advisordomain.StateResolved:
+		return "This finding is resolved already: what it found no longer holds."
+	case advisordomain.StateDismissed:
+		return "This finding was dismissed; reopen it to act on it."
+	case advisordomain.StateRetired:
+		return "This finding was retired: the Advisor no longer checks for it."
+	case advisordomain.StateExpired:
+		return "This finding expired: it was not seen again for long enough."
+	}
+	return "This finding is closed already."
 }

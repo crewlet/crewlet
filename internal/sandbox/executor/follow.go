@@ -21,8 +21,7 @@ import (
 // [liveWindow]; its ORIGIN names that place and the account, so two owners
 // derive the same text, and beginning again (the stream outran [liveBacklog]
 // or shrank, or the transcript spoke) names another. The error stream reads
-// redaction context before that place ([rawStream.leads]); an event is one
-// line, a credential in it whole, so the event stream needs none.
+// redaction context before that place ([rawStream.leads]).
 
 // liveWindow is how much of a stream's END a reading begins from. An event's
 // size is dominated by what it echoes (a tool's output, twice on Claude Code's
@@ -123,16 +122,35 @@ func (f *follower) readEvents(ctx context.Context, box sandbox.Sandbox, path str
 	}
 	if restarted || f.dec == nil {
 		f.dec, f.transcript = f.harness.Events(), pendingText{}
+		// Read through Entries from its first line ([Decoder.Entries]).
+		_ = f.dec.Entries(false)
 	}
-	if len(lines) == 0 {
+	if len(lines) > 0 {
+		// A bytes.Reader cannot fail, so neither can this.
+		_ = eachLine(bytes.NewReader(lines), f.dec, f.lineBound)
+	}
+	// DONE, every line is fed ([rawStream.take]), so the end is said even by
+	// a read that brought no line: the skipped lines it ends on were fed by
+	// an earlier one.
+	entries := f.dec.Entries(done)
+	if len(entries) == 0 {
 		return nil
 	}
-	// A bytes.Reader cannot fail, so neither can this.
-	_ = eachLine(bytes.NewReader(lines), f.dec, f.lineBound)
-	for _, entry := range f.dec.Entries() {
-		f.transcript.add(entry + "\n")
-		f.spoke = true
+	// ADDED ONCE, each entry a line: an add appends to the pending text, so an
+	// add per entry would copy that text once per entry, quadratic in a read of
+	// many short events. Adding the read's text in one piece settles the same.
+	size := len(entries)
+	for _, entry := range entries {
+		size += len(entry)
 	}
+	var text strings.Builder
+	text.Grow(size)
+	for _, entry := range entries {
+		text.WriteString(entry)
+		text.WriteByte('\n')
+	}
+	f.transcript.add(text.String())
+	f.spoke = true
 	return nil
 }
 
@@ -163,8 +181,8 @@ func (p *pendingText) add(s string) {
 }
 
 // lead adds context: what the stream holds before the text, which comes
-// before any text is added. Only its last [redactContext] bytes are kept,
-// which is as far back as a key reaching into the text can have begun.
+// before any text is added. Only its last [redactContext] bytes are kept, the
+// redaction's look-back.
 func (p *pendingText) lead(s string) {
 	if s == "" {
 		return

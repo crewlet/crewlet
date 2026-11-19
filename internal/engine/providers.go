@@ -439,6 +439,34 @@ func BuildHelper(c *config.Company, key string, r *config.Resolver,
 	return p, nil
 }
 
+// buildSearcher builds Ask Crewlet's search run of `assistant.model`: the
+// entry again with its harness's web search and no other tool
+// ([config.LLMProvider.SearchOverrides]), on the entry's own state directory
+// and sign-in. Nil, and no error, where Ask Crewlet has no model a helper can
+// run on or its harness has no measured search-only run: Ask Crewlet then
+// offers no search.
+func buildSearcher(c *config.Company, r *config.Resolver,
+	plans *harness.Plans) (*harness.Provider, error) {
+
+	key := c.Assistant.Model
+	if key == "" || c.HelperModelProblem(key) != nil {
+		// A MODEL NO HELPER RUNS ON has no search run either; its helper says why.
+		return nil, nil //nolint:nilerr // see the comment above
+	}
+	spec := c.Providers.LLM[key]
+	spec.Overrides = spec.SearchOverrides()
+	if profile, err := harnessprofile.Load(spec.HarnessName(), spec.Overrides); err != nil ||
+		!profile.CanSearchWeb() {
+		// NO SEARCH-ONLY RUN: Ask Crewlet reads pages and offers no search.
+		return nil, nil //nolint:nilerr // see the comment above
+	}
+	p, err := BuildHarness(key, spec, r, plans)
+	if err != nil {
+		return nil, fmt.Errorf("engine: Ask Crewlet's search run of providers.llm.%s: %w", key, err)
+	}
+	return p, nil
+}
+
 // log is the package logger.
 var log = logging.Get("engine")
 
