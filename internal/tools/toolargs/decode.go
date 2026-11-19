@@ -2,6 +2,7 @@ package toolargs
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,30 +14,13 @@ import (
 // at all (empty, whitespace or a literal `null`) is a call with no arguments,
 // and anything else must be exactly one JSON object. The map is never nil.
 //
-// THROUGH json.Number, because every reader of a tool's arguments reads one —
-// a seat's call arrives through its tool session
-// ([github.com/crewlet/crewlet/internal/toolsession]), which decodes it here
-// beside every other transport — and the tools are written for it. Decoded
-// into a float64 instead, an integer past 2^53 is rounded before any tool sees
-// it: a 19-digit vendor id names a different entity, and a whole-number
-// custom-field value is stored as one its writer never typed, and nothing
-// reports an error.
-//
-// EXACTLY ONE VALUE, for the reason
-// [github.com/crewlet/crewlet/internal/tools.ReadArgs] gives: a Decoder reads
-// one value and stops, so a request body `{"a":1} {"a":2}` would decode clean
-// with the second dropped in silence — a call nobody can say which half of to
-// run.
-//
-// ONE FUNCTION for every transport, because the copies had already drifted:
-// the tool session read through json.Number but took the first of two values,
-// while the HTTP write surface, the act transport and the operator's MCP read
-// every number as a float64.
-//
-// ARGUMENTS THAT DO NOT DECODE ARE SAID IN WORDS ([plainjson.Unreadable]), the
-// decoder's error beneath them for a caller that names the document otherwise:
-// a model and a person each read "invalid character '}' looking for beginning
-// of object key string" where they now read where the arguments went wrong.
+// THROUGH json.Number: as a float64 an integer past 2^53 is rounded before any
+// tool sees it, so a 19-digit vendor id names a different entity, silently.
+// EXACTLY ONE VALUE, as [github.com/crewlet/crewlet/internal/tools.ReadArgs]
+// explains: a Decoder stops after one, dropping `{"a":2}` in `{"a":1} {"a":2}`.
+// ONE FUNCTION for every transport, so none can read floats again. Arguments
+// that do not decode are said in words ([plainjson.Unreadable]), the decoder's
+// error beneath.
 func Decode(raw []byte) (map[string]any, error) {
 	if trimmed := bytes.TrimSpace(raw); len(trimmed) == 0 || string(trimmed) == "null" {
 		return map[string]any{}, nil
@@ -54,6 +38,22 @@ func Decode(raw []byte) (map[string]any, error) {
 		args = map[string]any{}
 	}
 	return args, nil
+}
+
+// Key is the SHA-256 of the text a run's log keeps of the arguments raw holds
+// (internal/tools.RecordArgs over [Decode]): the package doc says why two
+// spellings of one call's arguments key equal, and where they key apart. An
+// error is raw that does not decode.
+func Key(raw []byte) ([32]byte, error) {
+	args, err := Decode(raw)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	text, err := plainjson.Marshal(args, "")
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return sha256.Sum256(text), nil
 }
 
 // unreadableArgs is a call's arguments that did not decode, said in words

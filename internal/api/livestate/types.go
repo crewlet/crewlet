@@ -12,6 +12,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/named"
 )
 
 // Envelope is one serialized event as the dashboard sees it.
@@ -22,12 +23,15 @@ import (
 // to decode into. The fields actually read are few and are pulled through the
 // accessors below, so the untyped map never spreads past this package.
 type Envelope struct {
-	ID           string         `json:"id"`
-	Type         string         `json:"type"`
-	Timestamp    string         `json:"timestamp"`
-	Source       string         `json:"source"`
-	Actor        string         `json:"actor"`
-	Summary      string         `json:"summary"`
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Timestamp string `json:"timestamp"`
+	Source    string `json:"source"`
+	Actor     string `json:"actor"`
+	Summary   string `json:"summary"`
+	// Refs is what Summary names ([events.Event.References]), absent where
+	// it names nothing; the same derivation the store's row keeps.
+	Refs         []named.Ref    `json:"refs,omitempty"`
 	Category     string         `json:"category"`
 	TraceID      string         `json:"trace_id"`
 	SpanID       string         `json:"span_id"`
@@ -72,18 +76,20 @@ type Envelope struct {
 // shape is how a field ends up present on a running dashboard and missing after
 // a reload.
 type FeedRow struct {
-	ID           string `json:"id"`
-	Type         string `json:"type"`
-	Timestamp    string `json:"timestamp"`
-	Source       string `json:"source"`
-	Actor        string `json:"actor"`
-	Summary      string `json:"summary"`
-	Category     string `json:"category"`
-	TraceID      string `json:"trace_id"`
-	SpanID       string `json:"span_id"`
-	ParentSpanID string `json:"parent_span_id"`
-	Topic        string `json:"topic"`
-	Failed       bool   `json:"failed"`
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Timestamp string `json:"timestamp"`
+	Source    string `json:"source"`
+	Actor     string `json:"actor"`
+	Summary   string `json:"summary"`
+	// Refs is [Envelope.Refs], carried onto the payload-free row.
+	Refs         []named.Ref `json:"refs,omitempty"`
+	Category     string      `json:"category"`
+	TraceID      string      `json:"trace_id"`
+	SpanID       string      `json:"span_id"`
+	ParentSpanID string      `json:"parent_span_id"`
+	Topic        string      `json:"topic"`
+	Failed       bool        `json:"failed"`
 	// AgentID is [Envelope.AgentID], carried onto the payload-free row.
 	AgentID string `json:"agent_id,omitempty"`
 	// ChannelID is the A2A channel the event belongs to — see

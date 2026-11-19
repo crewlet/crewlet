@@ -684,6 +684,9 @@ var ErrNotFound = errors.New("queries: no such record")
 // unknown rather than as a failure — the honest answer for a node that does not
 // have that surface at all.
 func Register(r *Registry, s Sources) {
+	// WHAT A PAGE'S LINES NAME, each decided by the question its object's
+	// own page asks (references.go), so everybody's: it grants nothing.
+	r.Register("references", Everybody(), s.references(r))
 	if s.State != nil {
 		r.Register("agent", Everybody(), s.agent)
 		// ONE SEAT'S CALL IN FLIGHT, WHOLE: what a tab asks when an `agents`

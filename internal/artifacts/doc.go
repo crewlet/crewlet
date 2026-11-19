@@ -14,6 +14,10 @@
 // half. The durable half of artifacts is internal/artifactsdomain, and the
 // datastore's is internal/artifactdata.
 //
+// The package imports no store, no broker and no clock (leaf_test.go holds it),
+// so internal/authz and internal/config, which import it, stay pure; a value
+// that needs the time is handed one by its caller.
+//
 // One definition per shared shape is the point (one implementation of a shared
 // rule): the role ladder the authority table compares, the share an applier
 // stores, the manifest a publish names, the authority a datastore write is

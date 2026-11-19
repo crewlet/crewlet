@@ -19,7 +19,9 @@
 // person's note, a corrective, a call's result the run ended before. The fold
 // (fold.go) turns each run back into the record the loop kept when it drove
 // each round itself, so nothing downstream can tell the two apart. A round is
-// still one model request. That a phase's tools reach its harness as one MCP
+// still one model request, and the round cap is held here: the last allowed
+// round's answers are withheld and the run ends exhausted; a harness whose
+// record shows no requests counts one round per run. That a phase's tools reach its harness as one MCP
 // server, and every call passes these gates, is ADR-0049.
 //
 // Seven things here are load-bearing and each replaced an incident:
@@ -103,54 +105,30 @@ import (
 
 // MaxFinishingCorrectives bounds the FINISHING correctives: the re-prompts a
 // loop that declares terminators issues when a round ended without the call
-// that finishes it — in prose, or with nothing at all.
+// that finishes it. Exported because the bound is the PHASE's: a caller
+// continuing past a withheld corrective ([Result.Withheld]) seeds
+// [Config.CorrectivesSpent], so a split phase is asked no more than a whole one.
 //
-// Exported because the bound is the PHASE's, not one invocation's: a caller
-// that continues a phase past a corrective this loop withheld on its last
-// round ([Result.Withheld]) sizes the continuation by it, and seeds the next
-// invocation's count with [Config.CorrectivesSpent], so a phase split across
-// two invocations is asked no more often than one that ran in a single one.
-//
-// Two, and every one of them an IDENTICAL message, which is not the waste it
-// would be elsewhere. In a loop that finishes by a call, a round without the
-// call cannot end the phase except into its caller's rescue — a whole extra
-// executor run for the reviewer, `no_result` for a worker, an unmarked seat
-// that re-runs its onboarding on every turn — so a second send is weighed
-// against that, not against nothing. And it caps there because a model that
-// cannot emit the call in three attempts will not emit it in ten, while each
-// attempt is a full priced round charged like any other. Against the budgets
-// that arm it: onboarding's default 10 rounds lose at most 2 to a run of
-// declines; the reviewer's 4 keep 1 for the submission the corrective asks
-// for; a worker with `max_turns: 1` has no round left to read a corrective at
-// all, and gets none — no corrective is ever sent on a round that has none
-// after it.
-//
-// PER RUN OF DECLINED ROUNDS, not per phase — the count clears the moment a
-// round emits a call. The claim it rests on is about a model that keeps
-// declining, and a phase that called a tool in between is not that model.
+// Two, each IDENTICAL: a round without the call ends the phase only into its
+// caller's rescue (an executor run, `no_result`, an onboarding re-run), so a
+// second send is worth it, but a model that cannot emit the call in three
+// attempts will not in ten. A `max_turns: 1` worker gets none: no corrective
+// is sent on a round with none after it. PER RUN OF DECLINED ROUNDS: a round
+// that emits a call clears the count.
 const MaxFinishingCorrectives = 2
 
 // maxEmptyAnswerRetries bounds the corrective re-prompts issued when a round
-// produced NEITHER prose NOR a tool call — a model that spent its whole output
-// budget on hidden reasoning and stopped — in a loop that does NOT finish by a
-// call. A loop that does gets the finishing corrective for that round instead,
-// under [MaxFinishingCorrectives].
+// produced NEITHER prose NOR a tool call (a model that spent its output on
+// hidden reasoning) in a loop that does NOT finish by a call; one that does
+// gets the finishing corrective, under [MaxFinishingCorrectives].
 //
-// One, not two, and the asymmetry with MaxFinishingCorrectives is keyed on the
-// loop's CONTRACT rather than on the round. Here a prose answer is a legitimate
-// finish — today that is only a worker whose submission tool a granted tool
-// shadowed — so whatever the model writes next IS the phase's result, and the
-// rescue a second nudge would be bought against does not exist: a phase that
-// still answers nothing simply ends with nothing, which its record counts.
+// One, not two: here a prose answer is a legitimate finish (today only a worker
+// whose submission tool a granted tool shadowed), so what the model writes next
+// IS the result and the rescue a second nudge is bought against does not exist.
 //
 // PER RUN OF EMPTY ROUNDS, like the finishing allowance. Counted for the
-// phase's lifetime instead, this bounds a different quantity — how many times
-// a model may ever stall — and one stall early then disarms the corrective for
-// every round after it. That is measured, not hypothetical: a seat on a
-// 24-round budget stalled at round 2, filed a work item at round 3, had a
-// submission bounced at round 4, and broke on the stall at round 5 with
-// nineteen rounds unspent — one round before the message it had just said it
-// was about to send.
+// phase's lifetime, one early stall would disarm the corrective for every
+// later round (measured: a stall at round 2 left nineteen rounds unspent).
 const maxEmptyAnswerRetries = 1
 
 // Surface is the set of tools a phase runs against.
@@ -177,19 +155,16 @@ type Surface interface {
 	// first.
 	AnnotationsOf(name string) mcp.Annotations
 
-	// Admit fixes one call's place in its run's call log NOW — the order the
-	// repeat count an operation id carries is read in — and returns the call
+	// Admit fixes one call's place in its run's call log NOW (the order the
+	// repeat count an operation id carries is read in) and returns the call
 	// bound to that place, to be run once.
 	//
-	// AT ADMISSION, NOT AT RETURN, because a harness makes a response's calls at
-	// once and they return in whatever order their tools finish: a count read
-	// against the order calls return in is one a re-run, making the same
-	// calls, does not reproduce. The loop admits each call under its own
-	// lock, in the order the calls arrive.
-	//
-	// CALLED CONCURRENTLY with the calls it returns, which run side by side:
-	// every call but a terminator or a [Detacher]'s detached one, which runs
-	// alone.
+	// AT ADMISSION, NOT AT RETURN: a harness makes a response's calls at once
+	// and they return in whatever order their tools finish, and a count read in
+	// return order is one a re-run does not reproduce. The loop admits each call
+	// under its own lock, in arrival order. CALLED CONCURRENTLY with the calls
+	// it returns, which run side by side (all but a terminator or a [Detacher]'s
+	// detached call, which runs alone).
 	Admit(name string, args map[string]any) Admitted
 
 	// Phase names the phase for telemetry.
@@ -388,18 +363,15 @@ type Execution struct {
 	Images []mcp.ImageRecord
 
 	// StartedAt is when the call was handed to the surface, in UTC, and
-	// Duration how long the surface took to answer — measured on the
-	// monotonic clock (time.Now's, unless a caller hands the loop its own:
-	// [Config.Now]), so a wall-clock correction mid-call cannot report a
-	// negative or inflated one.
+	// Duration how long the surface took to answer, measured on the monotonic
+	// clock (time.Now's, unless a caller hands the loop its own: [Config.Now])
+	// so a wall-clock correction cannot report a negative or inflated one.
 	//
-	// Measured HERE, around the [Admitted] call, because the question a reader
-	// asks of a slow round is which call held it: the round's own span
-	// covers the model's request only, and the phase's covers everything.
-	// Both are zero on an execution nothing timed — a call answered rather
-	// than run: arguments that did not parse, a tool not offered, a call
-	// its run ended before — and zero means "not measured", never
-	// "instant".
+	// Measured HERE, around the [Admitted] call, because a reader asks which
+	// call held a slow round: the round's span covers the model's request only,
+	// the phase's everything. Both are zero on an execution nothing timed (a
+	// call answered rather than run: unparsed arguments, a tool not offered, a
+	// run that ended first), and zero means "not measured", never "instant".
 	StartedAt time.Time
 	Duration  time.Duration
 
@@ -474,15 +446,14 @@ func (a ArgsUnknown) Valid() bool { return slices.Contains(ArgsUnknowns(), a) }
 // took to answer, who answered and what it cost.
 //
 // THE MODEL'S HALF OF A ROUND ONLY. The round's tool calls are timed on their
-// own [Execution] rows, because each is its own question ("which call held
-// this round?"); folding them into the round's duration would make a slow
-// model and a slow tool the same number. A round's wall clock is therefore its
-// StartedAt to the end of its last call, and a reader has both halves to hand.
+// own [Execution] rows, since each answers its own question ("which call held
+// this round?") and folding them in would make a slow model and a slow tool the
+// same number. A round's wall clock is its StartedAt to the end of its last
+// call.
 //
-// Recorded for every request a harness's record showed, including the runs a
-// corrective re-prompt follows: each is a priced request and a reader adding
-// up where the time went needs all of them. A harness whose record shows no
-// requests has its whole run recorded as one round, untimed.
+// Recorded for every request a harness's record showed, corrective re-prompts
+// included: each is priced. A harness whose record shows no requests has its
+// whole run recorded as one round, untimed.
 type Round struct {
 	// Round is one-based, on the same scale as [Execution.Round] and
 	// [Narration.Round], so the three lists join on it.
@@ -668,20 +639,18 @@ func WithRoundOffset(ctx context.Context, prior int) context.Context {
 	return context.WithValue(ctx, roundOffsetKey{}, prior)
 }
 
-// CallRound is the round the calling tool runs in, on the phase's scale — the
+// CallRound is the round the calling tool runs in, on the phase's scale (the
 // one-based scale its records state the call on, which a caller that runs the
-// loop again declares with [WithRoundOffset] — and false outside a tool call
+// loop again declares with [WithRoundOffset]), and false outside a tool call
 // this loop made.
 //
-// Read by a tool whose own answer depends on which round asked for it, and
-// never by the loop itself, which knows its round without asking: the
-// assistant's brief turn refuses a read in a round kept for its answer, says
-// so on a read in the last round that may read, and makes a refused answer in
-// the turn's last round final (internal/assistant). A worker spawned by a
-// delegate call is told its parent's round by its caller instead
-// ([subagent.Config]): the delegate tool is served only on an executor run's
-// surface, whose calls arrive over the tool bridge, where no loop is iterating
-// to stamp one.
+// Read by a tool whose answer depends on which round asked, never by the loop
+// itself: the assistant's brief turn refuses a read in a round kept for its
+// answer, says so on the last round that may read, and makes a refused answer
+// in the last round final (internal/assistant). A worker spawned by a delegate
+// call is told its parent's round by its caller ([subagent.Config]) instead:
+// the delegate tool is served only on an executor run's surface, whose calls
+// arrive over the tool bridge, where no loop stamps one.
 func CallRound(ctx context.Context) (int, bool) {
 	round, ok := ctx.Value(roundKey{}).(int)
 	return round, ok
@@ -722,21 +691,16 @@ func WithCallModel(ctx context.Context, model string) context.Context {
 	return context.WithValue(ctx, modelKey{}, model)
 }
 
-// Narration is one round's model turn — what it said — KEPT ATTACHED TO ITS
+// Narration is one round's model turn (what it said) KEPT ATTACHED TO ITS
 // ROUND.
 //
-// [Result.Text] joins every round's turn into one string, which is the right
-// shape for a transcript and the wrong one for a reader: the join is lossy
-// about WHICH round said what, so a consumer handed only the blob cannot put a
-// round's prose next to the tools it asked for. It also can only be un-joined
-// by guessing — the parts are separated by a blank line, and prose contains
-// blank lines.
-//
-// So the split is recorded where it is still known, at the point the round's
-// assistant message is appended, rather than reconstructed downstream. The
-// round number is recorded rather than inferred from position for the same
-// reason [Execution] carries one: a resumed phase starts with a conversation
-// that already contains assistant turns, so the k-th message is not round k.
+// [Result.Text] joins every round's turn into one string, lossy about WHICH
+// round said what and un-joinable except by guessing (parts are separated by a
+// blank line, and prose contains them). So the split is recorded where it is
+// known, when the round's assistant message is appended, with the round number
+// recorded rather than inferred from position, as [Execution] does: a resumed
+// phase starts with a conversation that already holds assistant turns, so the
+// k-th message is not round k.
 type Narration struct {
 	Round int
 	// Content is the visible prose of that turn.
@@ -757,18 +721,14 @@ type Narration struct {
 
 // SpendOutcome is the shared counter's answer to a spend.
 //
-// It carries the REFUSING SCOPE rather than just a boolean, because the
-// alternative — re-reading the caps to work out which budget said no — is a
-// read a peer's spend can invalidate between the refusal and the report.
-//
-// And the WINDOW it refused in, for the same reason and one more: a ceiling is
-// per calendar window (the day, the ISO week or the month on the company's
-// clock), so "the company is out" says nothing about when it will have room
+// It carries the REFUSING SCOPE, not a boolean, because re-reading the caps to
+// find which budget said no is a read a peer's spend can invalidate. And the
+// WINDOW it refused in: a ceiling is per calendar window (day, ISO week or
+// month on the company's clock), so "out" says nothing of when there is room
 // again. Period, Window and ResetsAt are the refusing window as the counter
-// named it — the one that ends last where several refused, which is when the
-// scope next admits the charge without a ceiling being raised. All three are
-// empty for a refusal that has no calendar window, which is a sub-agent
-// call's own slice.
+// named it, the one ending last where several refused (when the scope next
+// admits the charge without a ceiling being raised); all are empty for a
+// refusal with no calendar window, a sub-agent call's own slice.
 type SpendOutcome struct {
 	OK    bool
 	Scope string
@@ -791,79 +751,43 @@ type SpendOutcome struct {
 }
 
 // BudgetMeter is the shared token counter a turn charges.
+//
+// Refused is CERTAIN, NEVER LIKELY: true only for a window seen with no room
+// for a single token, by ceilings fixed for the meter's life on a counter
+// nothing takes spend back from, so every later charge in it is refused. It
+// stops at the window's turnover ([SpendOutcome.ResetsAt]); a calendar-less
+// window (a worker's slice) never turns over. The meter is told of EVERY
+// charge its turn makes, so it misses only spend outside it (another seat, a
+// background pass), left to the next charge, the gate. It judges ON ITS OWN
+// CALENDAR: a peer's clock ahead can start the next window first and the
+// meter may hold on through that, the closed direction, losing only work never
+// billed. See the engine's meter for why.
 type BudgetMeter interface {
-	// Spend records tokens a model call has ALREADY SPENT, and answers
-	// whether they fitted, in ONE operation against the shared counter.
+	// Spend records tokens a model call has ALREADY SPENT, and answers whether
+	// they fitted, in ONE operation against the shared counter.
 	//
-	// Already spent, because the loop charges a round once its reply is
-	// in — a round's size is known no sooner — as the harness's record shows
-	// it, which is before any tool the round asked for runs: a call waits
-	// for the record of the request that made it. So a refusal decides
-	// what FOLLOWS the round: its tools do not run, and no later model call
-	// of the turn is made ([BudgetMeter.Refused]). A harness whose record shows
-	// no requests is charged for its whole run once it is over, its tools
-	// already run, and the refusal stops the run after it. It does not undo the round, which the vendor
-	// has billed, and a meter must record a round it refuses exactly as it
-	// records one it admits: one that dropped it under-stated the company
-	// by the round that crossed the cap, and admitted the next round
-	// smaller than the room left on top of tokens the refused one had
-	// already used.
-	//
-	// An error means the counter could not be reached, which is not the
-	// same as a refusal and must not be treated as one.
+	// Already spent: the loop charges a round once its reply is in, as the
+	// harness's record shows it, before any tool the round asked for runs. So a
+	// refusal decides what FOLLOWS: its tools do not run and no later model call
+	// is made ([BudgetMeter.Refused]); a record showing no requests charges the
+	// whole run once over. It does not undo the round, which the vendor billed:
+	// a meter must record a refused round as an admitted one, or it understates
+	// the company by the round that crossed the cap. An error means the counter
+	// could not be reached, which is not a refusal.
 	Spend(ctx context.Context, tokens int) (SpendOutcome, error)
 
-	// Refused reports a refusal every further charge is CERTAIN to meet,
-	// from what this meter has already been told — it asks the counter
-	// nothing to decide it. A caller asks it before every model call it is
-	// about to make, and on true makes none: the call would be billed by
-	// the vendor, then refused, and everything it bought thrown away. That
-	// is the half of a refusal Spend cannot carry, because a refusal is
-	// answered to one caller and a turn makes its calls from several — the
-	// next run of this loop, the round-cap judge, the next phase, a sibling
-	// worker, the executor's launch — and before this
-	// each of them paid for one call certain to be refused.
-	//
-	// A TRUE ANSWER IS A REFUSAL, NOT A FORECAST. Every caller asks it
-	// immediately before a call and makes no call on true, so the answer is
-	// the gate turning that call away, exactly as a refused Spend turns a
-	// round's tools away — and a meter whose counter records refusals
-	// records this one there too, which is what the context is for. The
-	// call it stops is the one whose charge would have recorded the
-	// refusal; a meter that recorded nothing left a window refusing every
-	// call of the turn while its counter said it had refused none. The
-	// record is the meter's, made once per window rather than once per
-	// question, and it never changes the answer: a refusal whose record
-	// failed is still a refusal. So it is asked only where a call is about
-	// to be made, never to look.
-	//
-	// CERTAIN, NEVER LIKELY. A meter answers true only for a window it has
-	// seen with no room left for a single token, judged by ceilings that do
-	// not move for the meter's life, on a counter nothing takes spend back
-	// from — so every later charge in that window is refused, whatever its
-	// size. It stops answering true when that window turns over
-	// ([SpendOutcome.ResetsAt]); a window with no calendar, a worker's own
-	// slice, never turns over. A meter is told of EVERY charge its turn
-	// makes — its rounds, its judge, its workers and the turn's auxiliary
-	// calls, which the engine post-charges through it — so what it has not
-	// seen is spend outside the turn: another seat spending the company's
-	// last room, a background pass on this seat's own counter. That is left
-	// to the next charge, which is the gate.
-	//
-	// Certain ON THE CALENDAR THE METER JUDGES BY, which is the one edge: a
-	// counter shared with peers can start counting the next window before
-	// this meter's clock says the held one is over — a peer whose clock is
-	// ahead, or one cutting windows on a calendar that ends this one sooner
-	// — and this meter's next charge could then be admitted in that next
-	// window while it still refuses. A meter may hold on through that; the
-	// error is in the closed direction, so the caller stops as on any
-	// refusal and what it loses is the work it stops, never a call billed
-	// and then refused. See the engine's meter for why it holds on.
-	//
-	// The outcome is a refusal the next call is certain to meet, named by
-	// the counter's own rule — the company's before the seat's, the window
-	// that ends last within a scope — over every window the meter knows to
-	// be full, and is what the caller reports ([Refusal]).
+	// Refused reports a refusal every further charge is CERTAIN to meet, from
+	// what this meter has already been told, asking the counter nothing. A
+	// caller asks it immediately before each model call it is about to make
+	// (the next run, the round-cap judge, the next phase, a sibling worker, the
+	// executor's launch) and makes none on true, which the vendor would bill
+	// and then refuse. It is a refusal, NOT A FORECAST: a meter whose counter
+	// records refusals records this one there too (hence the context), once per
+	// window and never changing the answer, so ask only where a call is about
+	// to be made, never to look. Certainty is stated on [BudgetMeter]. The
+	// outcome names the counter's own rule (the company's before the seat's, the
+	// window ending last within a scope) over every window known full, and is
+	// what the caller reports ([Refusal]).
 	Refused(ctx context.Context) (SpendOutcome, bool)
 }
 
@@ -1099,18 +1023,15 @@ type Result struct {
 	ExhaustedRounds bool
 
 	// Withheld is the finishing corrective this invocation EARNED AND DID
-	// NOT SEND: its last round ended without the call that finishes it, the
-	// run of declines still had allowance, and there was no round left to
-	// read a corrective in. Empty otherwise — including in a loop with no
-	// terminators, whose prose is a finish.
+	// NOT SEND: its last round ended without the finishing call, the run of
+	// declines still had allowance, and no round was left to read it in.
+	// Empty otherwise, including in a loop with no terminators.
 	//
 	// Not appended to Messages, because nothing may be on the record that
-	// nothing answered. Handed back instead, because the round the budget
-	// ended on is the round a phase most naturally SUBMITS on — the
-	// extension nudge tells it to — and only the caller knows whether the
-	// phase may run past this invocation's budget: one that can appends
-	// this as a user message and continues, and one that cannot ends there
-	// and rescues, exactly as before.
+	// nothing answered. Handed back because the round the budget ended on is
+	// where a phase most naturally SUBMITS, and only the caller knows whether
+	// it may run past this budget: one that can appends this as a user
+	// message and continues, one that cannot ends there and rescues.
 	Withheld string
 
 	// CorrectivesSpent is the finishing allowance the current run of
@@ -1202,27 +1123,17 @@ type Config struct {
 	MaxRounds int
 
 	// TerminateAfter names tools that end the loop once they have run
-	// SUCCESSFULLY, even if the model asked for more. A phase whose
-	// delivery tool has fired is finished; letting it keep going spends
-	// rounds re-deciding something already done — measured at four
-	// identical submissions before the round cap stopped it.
+	// SUCCESSFULLY, even if the model asked for more: a delivered phase that
+	// keeps going re-decides what is done. A failed call does not terminate;
+	// its failure went back to the model and the retry must happen.
 	//
-	// A failed call does not terminate: its failure went back to the
-	// model, and ending the phase there means the retry never happens.
-	//
-	// DECLARING ONE IS DECLARING HOW THE LOOP FINISHES, so it also changes
-	// what a run that ends in prose means. Without terminators, a run whose
-	// model stopped with no call is the model's answer and a clean finish.
-	// With them, it cannot be — a successful terminator ends the run — and
-	// the loop re-prompts with a FINISHING corrective naming these tools,
-	// under [MaxFinishingCorrectives]. It names the submission rather than
-	// the surface, which on the onboarding pass is a whole catalogue of
-	// tools that are not how it finishes.
-	//
-	// ONLY A TERMINATOR THE SURFACE OFFERS COUNTS. One it does not carry
-	// cannot be called, so a corrective naming it is a run spent on
-	// nothing, and a loop offering none of its terminators reads prose as
-	// its answer exactly as a loop that declared none.
+	// DECLARING ONE IS DECLARING HOW THE LOOP FINISHES. Without terminators a
+	// run that stops with no call is the model's answer; with them it cannot be
+	// (a successful terminator ends the run), so the loop re-prompts with a
+	// FINISHING corrective naming these tools, under [MaxFinishingCorrectives].
+	// ONLY A TERMINATOR THE SURFACE OFFERS COUNTS: one it does not carry cannot
+	// be called, so a loop offering none reads prose as its answer, as one
+	// that declared none.
 	TerminateAfter []string
 
 	// LastRoundNote is said to the model as a user message before its last
@@ -1263,27 +1174,18 @@ type Config struct {
 	// coalescing deterministic, which is the one honest reason to vary it.
 	PartialInterval time.Duration
 
-	// Now is the clock the loop's record reads: each harness run's, each
-	// round's and each tool call's start and span ([Invocation], [Round],
-	// [Execution]), the start of the call in flight ([RunningCall.StartedAt]),
-	// and the run and the round in flight on the live view
-	// ([Result.RunStartedAt], [Result.RoundStartedAt]). Nil takes time.Now,
-	// whose monotonic reading every span is measured on.
+	// Now is the clock the loop's record reads: each run's, round's and tool
+	// call's start and span ([Invocation], [Round], [Execution]), the call in
+	// flight ([RunningCall.StartedAt]) and the run and round in flight on the
+	// live view ([Result.RunStartedAt], [Result.RoundStartedAt]). Nil takes
+	// time.Now, whose monotonic reading every span is measured on.
 	//
-	// A caller sets it only to decide a span exactly: a test's clock that
-	// moves only as its scripted model and tools say makes the model's half
-	// of a round exactly what the model was scripted to take, where the wall
-	// clock adds whatever a loaded runner spends scheduling the harness and
-	// its socket. It is called from several goroutines at once, some holding
-	// the loop's own lock, so it must be safe for concurrent use, must not
-	// block, and must not call into the loop.
-	//
-	// The loop's bounded waits are not on it — the park ahead of a harness's
-	// own tool timeout, the wait for the record to show a call's response,
-	// the wait for a response's other calls to arrive — because each bounds
-	// how long the loop waits on another process, which no caller's clock
-	// moves. Nor is the live text's pace, which spaces frames for a reader
-	// watching in real time.
+	// A caller sets it only to decide a span exactly: a test clock moving as its
+	// scripted model and tools say, where the wall clock adds a loaded runner's
+	// scheduling. Called from several goroutines, some holding the loop's lock:
+	// it must be concurrency-safe, must not block, and must not call the loop.
+	// The loop's bounded waits (the park ahead of a harness's tool timeout, the
+	// record and sibling-call waits) and the live text's pace are not on it.
 	Now func() time.Time
 
 	// StreamPartials asks the provider to stream, so a response's text
@@ -1852,36 +1754,17 @@ const emptyAnswerCorrective = "Your last reply was empty: you produced no visibl
 	"itself, or call a tool to act on it."
 
 // assistantText renders a conversation's assistant turns as ONE displayable
-// string.
-//
-// This is the SINGLE builder of the response shown on both the per-round live
-// update and the durable phase record. One function over one message list is
-// what makes the dashboard's streaming row and the turn you expand afterwards
-// the same text — they were assembled separately once, and the live row
-// streamed its tool calls against an empty response.
+// string: the SINGLE builder of the text on both the live per-round update
+// and the durable phase record, so the two cannot differ.
 //
 // A CORRECTIVE'S ANSWER IS NOT THE PHASE'S. In a run of rounds that called no
-// tool, the first one that said something is the model's answer to its task;
-// every round of that run after it answers a corrective instead — "you have
-// not finished, call the tool" — and a model that still does not call writes
-// its report out again, near-verbatim. Joined whole, a phase that kept
-// declining through both finishing correctives handed three copies of one
-// report to whoever reads the text: a worker's `no_result` prose to its
-// parent, a reviewer's to the record of its verdict. So those later rounds are
-// left out, and the text is what the model answered the task with. A round that called a tool ends the run of
-// declines, so a model that worked and then stopped again is a new answer, and
-// kept.
-//
-// THE FIRST, NOT THE LAST. Every later one is a reply to the corrective rather
-// than to the task — whatever it says, it was written to a different question —
-// while the first is the report as the model meant it, and the one the phase
-// would have ended on had nobody asked again. Nothing is lost by the cut: every round stays in [Result.Narration] and in
-// the conversation itself, each marked [Narration.Declined].
-//
-// Read off the message list rather than a flag kept beside it, so a phase
-// that runs the loop more than once — a continuation, an extension, a resume
-// — gets the same answer from every invocation over the conversation as it
-// stands.
+// tool, the first that said something is the model's answer; every later one
+// answers a corrective and repeats the report near-verbatim, so joined whole a
+// phase that declined through both correctives hands over three copies. THE
+// FIRST, NOT THE LAST, is the report as the model meant it; a round that called
+// a tool ends the run, so a later stop is a new answer, kept. Every round stays
+// in [Result.Narration], marked [Narration.Declined]. Read off the message
+// list, not a flag, so every invocation over a conversation agrees.
 func assistantText(msgs []llm.Message) string {
 	var parts []string
 	answered := false

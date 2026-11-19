@@ -148,6 +148,8 @@ export function loadRows(rows: WorkloadRow[], seats: Seat[]): Load[] {
     .map((seat) =>
       loadOf(
         {
+          flow: { working: 0, blocked: 0, waiting: 0, held: 0, due: 0, stuck: 0, moving: 0 },
+          load: 0,
           handle: seat.handle,
           open: 0,
           points: 0,

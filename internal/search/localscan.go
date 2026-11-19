@@ -41,18 +41,15 @@ type Copies interface {
 
 // Scan runs both halves over one bucket range.
 //
-// THE SEMANTIC HALF IS BEST EFFORT AND SAYS SO. A company with no embeddings
-// provider has no vectors, a fresh node has not applied them yet, and a
-// replicated store can be slow — none of which may fail a search that the
-// lexical half can already answer. What it may NOT do is degrade silently, so
-// the slice carries [Slice.SemanticSkipped] and the answer above it reports
-// the fraction.
+// THE SEMANTIC HALF IS BEST EFFORT AND SAYS SO: no embeddings provider, vectors
+// not yet applied or a slow store may not fail a search the lexical half can
+// answer. It may not degrade silently, so the slice carries
+// [Slice.SemanticSkipped] and the answer above reports the fraction.
 //
-// THE LEXICAL HALF IS NOT BEST EFFORT, and the difference decides the shape
-// of this function. It is what makes a bucket range covered at all, so an
-// index that has not finished its first lap means this participant did not
-// scan its range — reported as [Slice.Building] and counted MISSING, never as
-// a thin answer merged under complete coverage.
+// THE LEXICAL HALF IS NOT BEST EFFORT: it is what makes a bucket range covered.
+// An index short of its first lap means this participant did not scan its
+// range, reported as [Slice.Building] and counted MISSING, never a thin answer
+// merged under complete coverage.
 func (n NodeScanner) Scan(ctx context.Context, q FanQuery, shards Assignment) (Slice, error) {
 	if n.Index == nil {
 		return Slice{}, fmt.Errorf("search: scan a bucket range with no index")
@@ -195,16 +192,10 @@ func sourcesOf(names []string) []Source {
 
 // ScoreOfDistance turns a semantic scan's distance into a merge score.
 //
-// THE NEGATION, and it is exact rather than pretty. [Scored.Score] is
-// higher-is-better so that one merge serves both methods, and the obvious
-// conversion for a cosine distance is `1 - d`, which is the cosine similarity
-// itself and reads far better in a log.
-//
-// It is also LOSSY exactly where it matters. Floating-point subtraction near 1
-// rounds away anything below the ulp of 1 (≈ 2.2e-16), so two documents at
-// distances 1e-17 and 2e-17 — a real pair on near-duplicate pages — both map
-// to 1.0, become a tie, and are then ordered by their ids instead of by how
-// close they actually are. Negation has no rounding at all: it flips one sign
-// bit, so every distance the scan could distinguish stays distinguishable
-// after the merge.
+// THE NEGATION, exact rather than pretty. [Scored.Score] is higher-is-better so
+// one merge serves both methods; `1 - d` reads better but is LOSSY where it
+// matters: subtraction near 1 rounds away anything below the ulp of 1
+// (≈ 2.2e-16), so near-duplicate pages at distances 1e-17 and 2e-17 both map to
+// 1.0, tie, and are ordered by id. Negation flips one sign bit with no
+// rounding, so every distinguishable distance stays distinguishable.
 func ScoreOfDistance(distance float64) float64 { return -distance }

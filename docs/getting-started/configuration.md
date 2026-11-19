@@ -1369,6 +1369,16 @@ stream:
                                     #   the reference company's rate. How long
                                     #   the history is kept is the company
                                     #   document's atlas.retention_days
+  # advisor_log_max_bytes: 67108864 #   the advisor log, where the Advisor's
+                                    #   findings, runs, weekly reports and
+                                    #   alarm episodes are kept with their
+                                    #   history (64 MiB..64 GiB). UNSET TAKES
+                                    #   64 MiB, its floor, sized by what the
+                                    #   Advisor records rather than by the
+                                    #   disk: about ten days of a completely
+                                    #   blocked trim at the reference company's
+                                    #   ~6 MB a day. Closed findings are kept
+                                    #   90 days, runs 30, reports 26 weeks
   # code_log_max_bytes: 11453246122 #   the code log's ceiling (1 GiB..1 TiB):
                                     #   the ordered stream a repository's refs,
                                     #   packs and settings move on. It runs on
@@ -1397,7 +1407,7 @@ stream:
                                     #   least, which comes out of the other
                                     #   logs' share whole (at 100 GiB free,
                                     #   13.3 GiB beside a mutation log of
-                                    #   6.7 GiB). Once the streams exist, the
+                                    #   6.6 GiB). Once the streams exist, the
                                     #   ratio the two logs' bytes_per_day
                                     #   show in `crewlet retention status` is
                                     #   its own, and `crewlet retention

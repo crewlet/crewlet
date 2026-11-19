@@ -537,12 +537,12 @@ type Resume struct {
 	// submission made after it is the round's ([sinceAnswer]).
 	Answered int
 
-	// BridgedRead is how many calls the round's log had taken at the read
-	// Bridged is (sandbox.ResumeRequest.BridgedRead): every call a brief
-	// built from Bridged can tell. A relaunch that carries the round on hands
-	// it to its launch ([Continuation.BriefRead]), whose opening marks every
-	// call the log took after it late ([BridgedCall.Late]).
-	BridgedRead int
+	// BridgedRead is the read of the round's log Bridged is
+	// (sandbox.ResumeRequest.BridgedRead): every call a brief built from
+	// Bridged can tell. Every relaunch hands it to its launch
+	// ([AgentRunRequest.BriefRead]), whose opening marks late every call the
+	// log took after it ([ledger.Call.Late]), or carries it into a new round.
+	BridgedRead sandbox.LogRead
 
 	// Run describes the detached run this resume is collecting.
 	Run RunRecord
@@ -644,6 +644,11 @@ func (r Resume) parked() execstate.State {
 // run made as untimed, unattributed and in the order the calls happened to
 // finish.
 type BridgedCall struct {
+	// Call is what the call did. A late one ([ledger.Call.Late]) is HELD BY
+	// NO SAVE POINT ([heldAt]): a continuation built after it landed is told it
+	// under words of its own but where a telling credits it ([heldByTelling]),
+	// no rebuilt guard counts a load it made, and it is never the round's
+	// submission ([sinceAnswer]).
 	ledger.Call
 
 	// Seq is the call's place in the order the bridge admitted the run's
@@ -661,16 +666,6 @@ type BridgedCall struct {
 	// have been answered, whatever its place in the order above. Zero on a
 	// call an older build appended, which every save point reads as after it.
 	Appended int
-
-	// Late is a call the round's log took after its job was replaced by a
-	// relaunch that carried the round on (sandbox.BridgeCall.Late): a call of
-	// an earlier job of the round, which no brief of the round had told when
-	// the log took it and the session of the job that made it may not hold.
-	// HELD BY NO SAVE POINT ([heldAt]): a continuation built after it landed
-	// is told it under words of its own but where a telling credits it
-	// ([heldByTelling]), no rebuilt guard counts a load it made, and it is
-	// never the round's submission ([sinceAnswer]).
-	Late bool
 
 	// Abandoned is a call nobody waited for by the time it returned
 	// (sandbox.BridgeCall.Abandoned): its harness had cancelled it — Claude
@@ -747,6 +742,15 @@ type BridgedCall struct {
 	// a word no line of a brief shows, and no record needs, has no place in
 	// either.
 	CallID string
+
+	// ArgsText is the call's arguments as its log keeps their text
+	// (sandbox.BridgeCall.Args), unchanged: "" where it keeps none, and a
+	// marker's text where it cut them ([BridgedCall.ArgsBytes]). Read only to
+	// key an OpenCode call's arguments for a reading of what a cut-off session
+	// holds ([Runner.holdingsAsk]), by the log's own rule on both sides
+	// (internal/tools/toolargs' Key), never rebuilt from Args, which reads ""
+	// and unreadable text alike as none.
+	ArgsText string
 }
 
 // bridgedLedger is an executor run's calls as the turn's record reads them:
@@ -1212,7 +1216,7 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		return turn.Review{}, err
 	}
 
-	// VERBATIM. Review's evidence log takes the zero FormatOptions: the
+	// VERBATIM. Review's evidence log takes no FormatOptions budget: the
 	// budgets belong to the cross-round ledger, and a reviewer judging an
 	// elided log is judging a summary and calling it evidence.
 	offer := r.cfg.Skills.Offer()
@@ -2292,13 +2296,37 @@ func (r *Runner) taskFor(notes string) string {
 // not keep of them, said rather than hidden ([ledger.FormatElided]): a
 // reviewer handed a long run's record with its middle silently gone judges an
 // elision and calls it the run. A value the record left out reads as left out
-// in the line it stands in.
+// in the line it stands in, and a late call's line says an earlier run made
+// it ([lateNotes]).
 func reviewLog(w turn.Work, skip []string) string {
-	text := ledger.FormatCalls(w.Calls, ledger.FormatOptions{Skip: skip})
+	text := ledger.FormatCalls(w.Calls, ledger.FormatOptions{Skip: skip, Notes: lateNotes(w.Calls)})
 	if elided := ledger.FormatElided(w.Elided, skip); elided != "" {
 		text += "\n" + elided
 	}
 	return text
+}
+
+// lateNotes ends each late call's line ([ledger.Call.Late]) with
+// [prompts.ReviewLateCall], BY ITS PLACE in calls, as [ledger.FormatOptions.Notes]
+// reads them, so a skipped name before it moves the words onto no other line;
+// nil where no call is late. Only the reviewer's reading tells the round's own
+// calls apart: the delivery checks and the submission's citations count a
+// late call as the turn's (see [ledger.Call.Late]).
+func lateNotes(calls []ledger.Call) [][]string {
+	var notes []string
+	for i, call := range calls {
+		if !call.Late {
+			continue
+		}
+		if notes == nil {
+			notes = make([]string, len(calls))
+		}
+		notes[i] = prompts.ReviewLateCall
+	}
+	if notes == nil {
+		return nil
+	}
+	return [][]string{notes}
 }
 
 // refusedReplies is the round's refused replies as the review prompt renders

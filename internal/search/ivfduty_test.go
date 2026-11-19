@@ -23,41 +23,14 @@ import (
 // path, on a real broker — AND EVERY LONG STEP OF IT SHOWS THE TICK'S BOUND ITS
 // PROGRESS.
 //
-// The pure gates certify the arithmetic and the applier; this certifies the
-// LOOP. Ticks run until the duty has nothing left to do, and by then: the
-// corpus has been embedded, an index trained each time it reached the minimum
-// or doubled, every such index rolled out on the tick after it, nothing is
-// left unfiled, a search probes the index, and a tick over that state
-// publishes nothing at all. Each step is one tick and each is a record every
-// holder applies.
-//
-// # And the bound sees every step of it working
-//
-// The training shows the tick's bound its progress, in a training and in the
-// day's measurement alike, and no exemption outlives the tick — and so does
-// every request the tick sends, every vector it publishes and every batch of
-// a rollout. The bound exists to cut off a tick that WEDGED, and a wedge is
-// the absence of progress — so every long step of a training must show it,
-// or on a node allowed one core, where a training at the largest corpus is
-// over six minutes of reading and six more of arithmetic, the bound cut off
-// every training such a node began, for ever. The reading of every code and
-// the exact pass stream rows: each reports every [search.ProgressStride] of
-// them. A request reports when the provider answers it, each vector it
-// publishes reports again, and a rollout reports each batch record — each
-// counted against the step that made it, so a publish's report never stands
-// in for the request's. The k-means, the filing and the choice of a probe
-// count cannot wedge — they are arithmetic over values in memory, reading
-// their context every stride — so every context reading they make happens
-// with the bound's clock stopped. And an exemption must be over by the end of
-// the tick: one left open would stop the clock on the reads and publishes
-// after it, which are what the bound is for.
-//
-// ONE RUN FOR BOTH HALVES, because the budget and the context the second
-// watches through only count what they see and hand everything on — the duty
-// under them runs exactly the loop it runs unwatched — and the run, 2 200
-// sources embedded, trained twice, rolled out and measured a day on through a
-// real broker, was most of a minute under the race detector each time it was
-// built.
+// This certifies the LOOP: ticks run until an index is trained at the minimum
+// and each doubling, each rolled out, none unfiled, and a tick publishes
+// nothing. The tick's bound must see progress from every long step, since it
+// cuts off a WEDGE and on one core a training is twelve minutes: reads and the exact
+// pass report every [search.ProgressStride] rows; each request, vector and
+// rollout batch reports, counted against its own step. K-means, filing and probe
+// choice cannot wedge and run with the clock stopped, no exemption outliving the
+// tick. ONE RUN FOR BOTH HALVES: it was most of a minute under -race.
 func TestTheDutyTrainsAnIndexAndItsRolloutConverges(t *testing.T) {
 	t.Parallel()
 	h := newEmbedHarness(t)
@@ -247,21 +220,15 @@ func TestTheDutyTrainsAnIndexAndItsRolloutConverges(t *testing.T) {
 // A MEASUREMENT THAT MISSES THE FLOOR RETRAINS IN THE SAME TICK, rather than
 // recording a failing index for searches to read.
 //
-// Eight topics of about 256 sources each, and the 152 sources the corpus gains
-// after the index is trained at 2 048 all in a NINTH topic its training never
-// saw: each of those is filed in whichever list its noise lands it nearest, so
-// a query among them no longer finds its neighbours in the lists it probes —
-// a corpus that moved since training, which is what the daily measurement
-// exists to catch. The same tick trains its replacement from the reading
-// already in hand, so the one record it publishes is a new index that passes,
-// and no search is left reading one that does not.
-//
-// THE MOVE IS BUILT, NOT DRAWN. This case once rested on the hash of each
-// fixture text happening to produce a corpus whose index failed a day later,
-// and any change to the text the duty sends re-drew it. A spread of 0.8 rather
-// than the 0.5 the other cases use, measured: at 0.5 the retraining over nine
-// tight topics needs more than half its lists and installs no index, which is
-// the verdict another case covers rather than this one.
+// Eight topics of about 256 sources, and the 152 gained after the index is
+// trained at 2 048 all in a NINTH topic it never saw, filed in whichever list
+// their noise lands them nearest: a corpus that moved, which the daily
+// measurement exists to catch. The same tick trains its replacement from the
+// reading in hand, so the one record published is a new index that passes.
+// THE MOVE IS BUILT, NOT DRAWN, so a change to the text the duty sends cannot
+// re-draw it. A spread of 0.8, not the 0.5 of the other cases: at 0.5 nine
+// tight topics need more than half the lists and install no index, the verdict
+// another case covers.
 func TestAMeasurementThatMissesTheFloorRetrains(t *testing.T) {
 	t.Parallel()
 	h := newEmbedHarness(t)

@@ -634,19 +634,16 @@ func browserScript(p *peer, ending func(request) func(*peer) error) func() []str
 }
 
 // AUTO-ATTACH CARRIES ON PAST A CHILD THAT ENDS BEFORE IT IS RESUMED: a target
-// that is closed or crashes before the attacher is done with it — while its
-// Setup waits on its answer, as a Setup may on a target already running; once
-// the command its Setup sent arrives; while its own Target.setAutoAttach is in
-// flight; or before its resume is answered — leaves nothing to resume, and is
-// no failure of the attacher's, which a page closing its own popup would
-// otherwise be: the attacher's Err stays nil, it keeps running, and the next
-// child is set up, auto-attached and resumed. Each in a bubble, so whether the
-// attacher kept running is read once everything the end set off has settled,
-// never raced against it.
+// that is closed or crashes before the attacher is done with it (during its
+// Setup's wait, once its Setup's command arrives, during its own
+// Target.setAutoAttach, or before its resume is answered) leaves nothing to
+// resume and is no failure: Err stays nil, the attacher keeps running, and the
+// next child is set up, auto-attached and resumed. Each in a bubble, so that is
+// read once everything the end set off has settled.
 //
-// Mutations: drop hold's check of a child that has ended, after a Setup that
-// failed, after its own auto-attach, after what its Setup sent, or after its
-// resume, one at a time, and the attacher stops at that point — red.
+// Mutations: drop hold's check of an ended child, after a failed Setup, its
+// own auto-attach, what its Setup sent, or its resume, one at a time, and the
+// attacher stops at that point — red.
 func TestAutoAttachCarriesOnPastAChildThatEndsBeforeItIsResumed(t *testing.T) {
 	for _, point := range []struct {
 		name, method string
@@ -855,18 +852,15 @@ func TestAFilterIsJudgedAsChromiumReadsTheMessageCarryingIt(t *testing.T) {
 }
 
 // A NIL OR EMPTY CHILD FILTER LEAVES OUT WHAT CHROMIUM ANNOUNCES AT MORE THAN
-// ONE LEVEL: AutoAttach with neither filter set, or with both empty, sends its
-// parent no filter, Chromium's own default, and each child Chromium's default
-// without a service worker — read as Chromium reads a filter, it takes a page,
-// a frame, a worker and a shared worker, and leaves out the browser, a tab and
-// a service worker — so a service worker the browser's session takes is held
-// there alone, never again by each page it serves. An empty filter is not one
-// that takes nothing: it goes out as none at all, as a nil one does.
+// ONE LEVEL: AutoAttach with neither filter set, or both empty, sends its
+// parent no filter (Chromium's default) and each child Chromium's default
+// without a service worker, so a service worker the browser's session takes is
+// held there alone, never again by each page. An empty filter takes nothing
+// only as an entry; bare, it goes out as none at all, as a nil one does.
 //
-// Mutations: send a nil ChildFilter as it is, Chromium's own default, and the
-// child's filter takes the service worker — red; put the default in for a nil
-// ChildFilter alone, and the empty one is refused as one that takes a service
-// worker — red.
+// Mutations: send a nil ChildFilter as it is, and the child's filter takes the
+// service worker — red; put the default in for a nil ChildFilter alone, and the
+// empty one is refused as taking a service worker — red.
 func TestANilOrEmptyChildFilterLeavesOutWhatChromiumAnnouncesTwice(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {

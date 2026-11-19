@@ -21,38 +21,14 @@ import (
 
 // EVERY INDEX SERVES A REGISTERED QUERY, AND EVERY REGISTERED QUERY IS SERVED.
 //
-// # Why this is asserted rather than reviewed
+// An index is a write cost on every commit on every node, and a registered
+// query with no index is a full scan of every task, never a failure. A
+// comment naming a reader is a CLAIM, so this runs EXPLAIN QUERY PLAN over the
+// registered query set (INTERNAL: the grammar's own compiler's output).
 //
-// An index is a write cost on every commit, paid on every node, for ever. The
-// hottest table here carries twenty-odd of them and the drain figure fourteen
-// derived numbers rest on is a function of that count — so an index nobody
-// reads is not clutter, it is a measured slowdown with no reader to justify
-// it. The inverse costs more: a registered query with no index behind it is a
-// full scan of every task in the company, which shows up as a slow board and
-// never as a failure.
-//
-// Reading the DDL cannot establish either. A trailing comment naming a reader
-// is a CLAIM, and the planner is the only thing that knows whether the query
-// it names actually reaches the index. So this runs EXPLAIN QUERY PLAN over
-// the registered query set and reads the answer out.
-//
-// It is an INTERNAL test deliberately: the registered query set is the
-// grammar's own compiler, and going through the public reader would be
-// asserting the plan of whatever SQL a caller happened to produce rather than
-// of the queries this package registers.
-//
-// # And the history, whose readers are statements rather than a grammar
-//
-// `tracker_history` is one row per applied commit and nothing sweeps it, so it
-// is the table where a read with no index costs the most and grows for ever —
-// and until it was covered here most of its indexes were held by their
-// comments alone. One of them, `tracker_history_comment_idx`, had lost its only
-// reader with the column that reader read (`actor_seat`, replicated 0041) and
-// was maintained on every commit for nobody until replicated 0054 dropped it.
-// The table's readers are every statement this package runs that finds
-// history rows ([historyReads]), each planned over a company's history, and
-// the set is held COMPLETE: every statement in the module's source that reads
-// the table is one of them ([storetest.StatementLiterals]).
+// `tracker_history` is never swept; its readers are every statement this
+// package runs that finds history rows ([historyReads]), held COMPLETE by
+// [storetest.StatementLiterals] over the module's source.
 func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
@@ -74,19 +50,16 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 		"tracker_field_values"}
 	covered := append(slices.Clone(taskTables), "tracker_history")
 
-	// NO REGISTERED READER READS A COVERED TABLE WITH NO INDEX AT ALL —
-	// at any scope, a query's own subqueries and a duty's statement
-	// included. An index SCAN is a legitimate plan when the order is what
-	// the read is about and the limit stops it early; a bare table scan is
-	// every row the company has read from the heap, and there is no reader
-	// here for which that is right.
+	// NO REGISTERED READER READS A COVERED TABLE WITH NO INDEX AT ALL, at
+	// any scope, a query's own subqueries and a duty's statement included.
+	// An index SCAN is legitimate when the order is what the read is about
+	// and the limit stops it early; a bare table scan reads every row from
+	// the heap, and no reader here warrants that.
 	//
 	// EVERY COVERED TABLE, AND THE DUTIES TOO, because the inventory below
 	// cannot see what this sees: an index somebody DROPS is no longer in
 	// the inventory to go unclaimed, so a duty whose index went with it
-	// fell back to a heap scan and this test stayed green — measured by
-	// dropping tracker_tasks_key_idx, which left key resolution reading
-	// every task and passed.
+	// fell back to a heap scan and the inventory stayed green.
 	refuseHeapScans := func(t *testing.T, plan []string) {
 		t.Helper()
 		for _, table := range covered {
@@ -98,20 +71,16 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	}
 
 	// NO REGISTERED READER ANSWERS A PER-ROW AGGREGATE FROM ITS WHOLE CHILD
-	// TABLE — the plan of a correlated scalar subquery the planner unnested
-	// into one grouped read of every row of the table it counts or bounds,
-	// joined back to the outer rows ([storetest.Decorrelated]). Whether it
-	// does is the planner's cost guess over a database nobody has ANALYZEd,
-	// which no line of the statement decides, so the plan is asked, and a
-	// read it fires on is rewritten in a form the rule cannot reach: a
-	// minimum or maximum as `ORDER BY … LIMIT 1`, a count read for the batch
-	// already in hand by the batch's keys, as the one-sided repair's is
-	// ([blockerDependentsStatement]).
+	// TABLE: the plan of a correlated scalar subquery the planner unnested
+	// into one grouped read of every row of the table it counts or bounds
+	// ([storetest.Decorrelated]). That is the planner's cost guess over a
+	// database nobody has ANALYZEd, so the plan is asked, and a read it
+	// fires on is rewritten in a form the rule cannot reach: a minimum or
+	// maximum as `ORDER BY … LIMIT 1`, a count for the batch in hand by the
+	// batch's keys ([blockerDependentsStatement]).
 	//
-	// THE SAME READERS THE HEAP-SCAN RULE HOLDS — the grammar's statements,
-	// the reads, the censuses and the history's reads — and NOT THE PASSES,
-	// which read the whole table by definition: a grouped read of all of it
-	// is what a pass is, and the active recount is one, over every project.
+	// THE SAME READERS AS THE HEAP-SCAN RULE, NOT THE PASSES, which read the
+	// whole table by definition (the active recount does, over every project).
 	refuseUnnested := func(t *testing.T, plan []string) {
 		t.Helper()
 		if line, unnested := storetest.Decorrelated(plan); unnested {
@@ -159,16 +128,12 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 			// A CUSTOM-FIELD FILTER SEEKS ITS OWN COLUMN'S INDEX,
 			// which the inventory below cannot see: the four lead
 			// with `field_id` alike, so a filter seeking another
-			// column's on `field_id` alone reads every value its
-			// field holds while the index it should have used is
-			// claimed by its neighbour. Measured: the unset filter
-			// sought the choice column's index even over the
-			// statistics this fixture used to take, and passed,
-			// because the number filter claimed the number index.
-			// Spelled from the column rather than through
-			// [fieldValueIndex], which is what is under test. A
-			// FILTER'S, because a sort, a board or a total over a
-			// field reads each task's own value by the key instead
+			// column's index on `field_id` alone reads every value
+			// its field holds while its neighbour claims the index
+			// it should have used. Spelled from the column rather
+			// than through [fieldValueIndex], which is under test.
+			// A FILTER'S, because a sort, a board or a total reads
+			// each task's own value by the key instead
 			// ([TestAFieldValueIsReadByItsTaskOrByItsFilter]).
 			for _, filter := range q.Fields {
 				field := planFields(q)[filter.Ref]
@@ -353,26 +318,11 @@ func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 // child table, reads the task table under any alias but the answer's own
 // other than by a probe, or reads it into a list.
 //
-// A WALK OF THE TASK TABLE in an order a LIMIT stops is a plan; a walk of a
-// task's tags, dependencies or field values is every such row in the company
-// read to answer about some of them, and it is an index scan, so the heap
-// check cannot see it. Measured: `tag=all:` walked every tag row through the
-// primary key, and passed. NOR THE TASK TABLE UNDER ANY ALIAS BUT THE
-// ANSWER'S OWN: `t` is the rows being read, and any other alias is a probe made
-// once per row, so a walk there is the company read once per task. Measured:
-// `has_children` walked every task through the primary key for each task it
-// filtered, and passed.
-//
-// AND NO READ OF THE TASK TABLE SITS BENEATH A LIST SUBQUERY. This engine plans
-// an `IN (SELECT …)` whose subquery stands alone as a LIST SUBQUERY: evaluated
-// once, and held whole before the first outer row is read. Over a child table
-// that is a filter's own matches — a field's values, a person's rows, a tag's —
-// and is the plan those filters are written for; over the task table it is
-// every task the subquery selects, however few rows the page then returns.
-// Measured: the subtask rollup, written as `root_id IN (SELECT t.id …)`, held
-// every live task in the company for the workspace's default listing, a
-// project's whole board for a board and the whole trash at either scope, and
-// passed every other check here, because its subquery reused the alias `t`.
+// A walk of a task's tags, dependencies or field values reads every such row
+// in the company, and as an index scan the heap check cannot see it. `t` is
+// the rows being read; any other alias is a probe made once per row. A list
+// subquery (`IN (SELECT …)`) is held whole before the first outer row: over a
+// child table that is a filter's matches, over the task table every task.
 func refuseSetWalks(t *testing.T, what string, tree []storetest.PlanLine) {
 	t.Helper()
 	plan := storetest.Details(tree)
@@ -562,18 +512,12 @@ func registeredQueries() map[string]map[string]any {
 // and is not about one tree, planned a second time with every row filtered on
 // its own (`subtasks=separate`), as `<name>, flat`.
 //
-// BOTH, because the two modes are two different statements and each is a
-// reader somebody runs. The grammar's default rolls subtasks up onto their
-// root ([compileWhere]) — what a caller of `work_items` that sends no mode
-// gets — while every first-party surface overrules it: the dashboard's
-// listings and counts, `list_work_items` and a pinned view's count all send
-// `separate`. Planned in the default alone, a filter's own index was read only
-// through the rollup's probe of each row's root, so the statement every screen
-// issues was certified by nothing; measured, with the rollup's root read by
-// its key the queue, the unit filing, the routing, the key, the estimate and
-// the points indexes had no other reader here. A query about one tree —
-// `parent=` or `root=` — is the same statement in either mode, since the
-// rollup does not apply to it.
+// BOTH, because the two modes are two different statements, each run by
+// somebody. The default rolls subtasks up onto their root ([compileWhere]),
+// while every first-party surface sends `separate`. Planned in the default
+// alone, a filter's index was read only through the rollup's probe of each
+// row's root, so the statement every screen issues was certified by nothing.
+// A query about one tree (`parent=` or `root=`) is the same in either mode.
 func inBothModes(queries map[string]map[string]any) map[string]map[string]any {
 	out := make(map[string]map[string]any, 2*len(queries))
 	for name, params := range queries {
@@ -595,29 +539,16 @@ func inBothModes(queries map[string]map[string]any) map[string]map[string]any {
 }
 
 // taskReads is every statement outside the query grammar that reads a covered
-// task table — the duty selections, the apply path's probes and writes, the
-// write path's decides, the detail and decoration reads — each with arguments
-// of the shape its reader binds and the index its plan must reach
-// ([indexedRead]). The whole-table passes are [taskPasses] and the censuses,
-// which read every live task in their scope by definition, [taskCensuses].
+// task table (duty selections, apply probes and writes, decides, detail and
+// decoration reads), each with arguments of the shape its reader binds and the
+// index its plan must reach ([indexedRead]). Whole-table passes are
+// [taskPasses] and the censuses [taskCensuses].
 //
-// THEY ARE PLANNED, NOT DECLARED. An index kept because "a duty uses it" is an
-// index nobody has checked: the duty's statement is as much a reader as a
-// board's, and the planner is the only thing that knows whether it reaches
-// what its comment names.
-//
-// AND THEY ARE THE STATEMENTS THE READERS RUN, never a copy written here. The
-// embed duty's entry used to be one — `embed_rev < ? ORDER BY embed_rev`, over
-// a column the applier only ever wrote a zero into — and it kept an index on
-// that column certified for a selection nothing ran, while the selection the
-// duty does run was certified by nothing; the trash and one tag's tasks were
-// two more, each a statement no reader issued. Every one is a named value of
-// this package (the search package exports its own), and the completeness
-// walk ([storetest.StatementLiterals]) is what stops a reader being written
-// inline where no plan of it is taken.
-//
-// AN UPDATE, A DELETE OR AN INSERT … SELECT IS A READER TOO: it finds its rows
-// by its WHERE exactly as a SELECT does.
+// THEY ARE PLANNED, NOT DECLARED, and are the statements the readers run,
+// never a copy: a copy certifies an index for a selection nothing runs. Every
+// one is a named value of this package, and [storetest.StatementLiterals]
+// stops a reader being written inline with no plan. AN UPDATE, A DELETE OR AN
+// INSERT … SELECT IS A READER TOO: it finds its rows by its WHERE.
 func taskReads() map[string]indexedRead {
 	const (
 		key      = "sqlite_autoindex_tracker_tasks_1"
@@ -786,6 +717,7 @@ func taskReads() map[string]indexedRead {
 		// page's rows each by theirs.
 		"a task named":               seek(key, taskRefStatement, task),
 		"a task's badges":            seek(open, detailFlagsStatement, task, task),
+		"a task's flow":              {read(detailFlowStatementFor(task)), key, false},
 		"a task's document":          seek(key, taskDocumentStatement, task),
 		"a task's foreign values":    seek(values, foreignFieldsStatement, task, FieldValueForeign),
 		"a task's own links":         seek(key, linksStatement(false), task),
@@ -849,6 +781,12 @@ func taskReads() map[string]indexedRead {
 			statement, open := holdingWaitersStatement()
 			return seek(blockers, statement, append([]any{task}, open...)...)
 		}(),
+		// A REMOVED SEAT'S OPEN WORK, which its retirement re-homes: a seek
+		// of the queue by the seat and the open groups (ADR-0162).
+		"a departed seat's open work": func() indexedRead {
+			statement, args := departedWorkStatement(planNow, person)
+			return seek(queue, statement, args...)
+		}(),
 	} {
 		reads[name] = read
 	}
@@ -874,7 +812,7 @@ func taskReads() map[string]indexedRead {
 		"dead waits (waiting)": {deadBlock(person, StatusTodo, planNow), queue},
 	} {
 		set := tasksWhere(block.query.where, block.query.args)
-		page, args := taskRowsStatement(set, block.query.terms)
+		page, args := taskRowsStatement(set, block.query.terms, planFlow)
 		reads["my work's "+name+" block"] = seek(block.index, page, append(args, 21)...)
 		reads["my work's "+name+" count"] = seek(block.index,
 			cappedCountStatement(set.from, set.where),
@@ -931,19 +869,15 @@ const (
 	entryPlanB = "0b9d4c1e-2f6a-5e7b-8c3d-4a5f6e7d8c9b"
 )
 
-// taskCensuses is every statement that counts the live work in its scope —
-// today's census of the flow, its blocked and overdue counts, and the
-// company's workload by person — each a function of every live task in the
-// scope by definition, at the workspace and inside a project or a team.
+// taskCensuses is every statement that counts the live work in its scope
+// (the flow's census, its blocked and overdue counts, the workload by person),
+// each a function of every live task in the scope, at the workspace and
+// inside a project or a team; plus the search package's two: the lexical
+// index's count of live tasks and the window report's read of their text.
 //
-// AND THE SEARCH PACKAGE'S TWO: the lexical index's count of the live tasks,
-// and the window report's read of every live task's text, which an operator
-// runs against a backup's copy.
-//
-// A CENSUS IS PLANNED AND HELD TO NO HEAP SCAN, and to nothing else: its walk
-// of the task table is the whole of its scope, which is the question it
-// answers, and the sort it ends with is of its groups rather than its rows.
-// The indexes it reaches count as read, because it does read them.
+// A CENSUS IS HELD TO NO HEAP SCAN, and to nothing else: its walk of the task
+// table is the whole of its scope, and its closing sort is of groups, not
+// rows. The indexes it reaches count as read.
 func taskCensuses() map[string]plannedRead {
 	out := map[string]plannedRead{}
 	for scope, project := range map[string]string{"the company": "", "a project": "P01"} {
@@ -954,17 +888,27 @@ func taskCensuses() map[string]plannedRead {
 	}
 	for scope, units := range map[string][]string{"the company": nil,
 		"two teams": {"eng", "ops"}} {
-		statement, args := workloadStatement(units, store.EncodeTime(planNow))
+		statement, args := workloadStatement(units, store.EncodeTime(planNow), planFlow)
 		out["the workload of "+scope] = plannedRead{statement, args}
 	}
+	// AND THE HOLDERS OF OPEN WORK THE CHART NO LONGER PLACES, which a
+	// retirement knowing a seat by its id alone reads (ADR-0162).
+	statement, args := departedHoldersStatement()
+	out["the departed holders of open work"] = plannedRead{statement, args}
 	// AND THE ADVISOR'S READ OF THE OPEN WORK: who holds it, every open
 	// wait, and every open question on an open item.
-	statement, args := openHoldersStatement()
+	statement, args = openHoldersStatement()
 	out["the open work by holder"] = plannedRead{statement, append(args, MaxOpenRows+1)}
 	statement, args = openEdgesStatement()
 	out["every open wait"] = plannedRead{statement, append(args, MaxOpenRows+1)}
 	statement, args = openQuestionsStatement()
 	out["every open question on open work"] = plannedRead{statement, append(args, MaxOpenRows+1)}
+	// AND THE FLOW DUTY'S PAGE of the items in progress, through the partial
+	// index over them, each item's flow and its recorded flow read inside it
+	// (ADR-0162).
+	statement, args = flowPageStatement(planFlow)
+	out["the flow duty's page of the items in progress"] = plannedRead{statement,
+		append(args, "", flowDutyPage)}
 	// AND THE SEARCH PACKAGE'S: the lexical index's count of the live
 	// tasks, and the window report's read of every live task's text.
 	statement, args = search.TaskCountRead()
@@ -1046,19 +990,16 @@ func holdTagFilter(t *testing.T, plan []string, q Query) {
 
 // holdPeopleFilter fails a plan whose filter on a person — `collaborator=`,
 // `watcher=`, `checklist_assignee=` — is not read from the person's own rows
-// ([peopleClause]): a seek of the person's index, and then each of their tasks
-// by its key, with the task table read no other way. Measured: written as a
-// probe of each task, the filter walked every live task in the company and
-// sought the person's index for each — which seeks the index, so a check of
+// ([peopleClause]): a seek of the person's index, then each of their tasks by
+// its key, with the task table read no other way. A probe of each task walked
+// every live task in the company while still seeking the index, so a check of
 // the seek alone passed it.
 //
-// THE TASK TABLE'S RULE HOLDS A FLAT LISTING AT THE WORKSPACE, which is where
-// the probe it replaced read every live task in the company. Inside a project
-// the planner may page the project's board in its own order and keep the
-// person's tasks, which is bounded by the board; and rolled up, the filter is
-// asked of each row's root by the root's key while the outer statement reads
-// the listing in its own order ([compileWhere]) — a read of the rollup's
-// rather than of the filter's. The person's index is sought in all of them.
+// THE TASK TABLE'S RULE HOLDS A FLAT LISTING AT THE WORKSPACE. Inside a project
+// the planner may page the board in its own order and keep the person's tasks,
+// bounded by the board; rolled up, the filter is asked of each row's root by
+// key while the outer statement reads the listing in its own order
+// ([compileWhere]). The person's index is sought in all of them.
 func holdPeopleFilter(t *testing.T, plan []string, q Query) {
 	t.Helper()
 	shown := strings.Join(plan, "\n")
@@ -1145,24 +1086,15 @@ func holdToIndex(t *testing.T, plan []string, read indexedRead, covered []string
 const historyKey = "sqlite_autoindex_tracker_history_1"
 
 // historyReads is every statement this package runs that finds rows of
-// `tracker_history` by what it asks — the activity feed in each of its filter
-// families, a task's own history, the company-wide flow and feed, the inbox's
-// join, what resolved an ask and what its asker did next, the unblocked repair,
-// and the applier's own probes and rewrites — each with arguments of the shape
-// its reader binds and the index it reaches. The ones that read the whole
-// table are [historyPasses].
+// `tracker_history` by what it asks (feeds, a task's history, the inbox's join,
+// ask resolution, the unblocked repair, the applier's probes and rewrites),
+// each with its reader's argument shape and the index it reaches. The ones
+// that read the whole table are [historyPasses].
 //
-// THE STATEMENTS ARE THE READERS' OWN, never a copy: each is a named value of
-// this package, and the gate's completeness walk
-// ([storetest.StatementLiterals]) is what stops one being written inline where
-// no plan of it is taken.
-//
-// AN UPDATE OR A DELETE IS A READER TOO. It finds its rows by its WHERE exactly
-// as a SELECT does, and the late record's raise and the purge's rewrites run
-// against a table that grows for the life of the company.
-//
-// db is the history fixture: the activity feed resolves a task the way its
-// reader does, inside a transaction, before it has a statement to explain.
+// THE STATEMENTS ARE THE READERS' OWN, never a copy: the completeness walk
+// ([storetest.StatementLiterals]) stops one being written inline unplanned.
+// AN UPDATE OR A DELETE IS A READER TOO: it finds its rows by its WHERE.
+// db is the history fixture the activity feed resolves a task in.
 func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRead {
 	t.Helper()
 	const (
@@ -1240,6 +1172,9 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 		"whether a seat answered an item typed": seek(subject, pickupTypedStatement,
 			task, "ana", int64(0)),
 		"who set a seat's work aside": seek(subject, arms(2, readyWaitArm), task, "t-0008"),
+		// EACH STARTED ITEM PAST ITS START by its key, and its assignee's
+		// writes and turn segments since, sought on the item.
+		"which of a seat's started work is due": seek(subject, arms(2, readyDueArm), task, "t-0008"),
 		"who filed a seat's ready work": seek(subject, arms(2, readyCreatedArm),
 			task, "ana", "t-0008", "ana"),
 		"who assigned a seat's ready work": seek(subject, arms(2, readyAssignedArm),
@@ -1254,9 +1189,9 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 			task, kind, at(9_000)),
 		"a hand-off count written": seek(historyKey, writeHandOffStatement, 1, record),
 		"a purge reads whose inbox it empties": seek(subject, forgottenNoticesStatement,
-			purged, kind, record),
+			purged, kind, record, purged),
 		"a purge empties those inboxes": seek(subject, forgetNoticesStatement,
-			purged, kind, record),
+			purged, kind, record, purged),
 		"a purge reads what the census keeps": seek(subject, censusRowsStatement,
 			purged, kind, record),
 		"a purge deletes what the census does not walk": seek(subject, forgetHistoryStatement,
@@ -1270,6 +1205,13 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 	}
 	one, oneArgs := restampStatement(task)
 	reads["one task's last change"] = seek(subject, one, oneArgs...)
+	// AN ITEM'S FLOW asks whether its assignee wrote on it since its start,
+	// a seek of the item's own history ([flowExpr]).
+	flow, flowArgs := detailFlowStatementFor(task)
+	reads["an item's flow"] = seek(subject, flow, flowArgs...)
+	// AND A REMOVED SEAT'S OPEN WORK, which asks the same of each item.
+	departed, departedArgs := departedWorkStatement(planNow, "h-7")
+	reads["a departed seat's open work"] = seek(subject, departed, departedArgs...)
 	for name, read := range companyWideReads() {
 		// AN UNBOUNDED PAGE WALKS the index newest first and stops after
 		// it; a bounded one seeks its range.
@@ -1490,25 +1432,12 @@ var planNow = time.Date(2031, 4, 16, 14, 30, 0, 0, time.UTC)
 
 // The corpus the task plans are taken against: twenty thousand tasks across
 // thirty projects, and the tag, dependency and field values every fifth one
-// carries.
-//
-// # What the rows decide, measured
-//
-// NOTHING, today. No node ever runs ANALYZE, so a deployment's planner has no
-// statistics and plans from its built-in guesses whatever its tables hold —
-// and this fixture is planned the same way ([seededPlanStore]). Those guesses
-// do not read the rows on this engine: every plan the inventory takes over
-// this corpus is the plan it takes over an empty estate.
-//
-// THEY ARE KEPT because that is a property of the ENGINE, not of the schema,
-// and the engine is a dependency that moves. The shape is a deployment's — a
-// project a thirtieth of the work, a due date a tenth of that, the skew that
-// decides whether a partial index earns the write cost it charges on every
-// commit on every node — so the day an engine release starts weighing a
-// table's contents without being asked, the dependency update that brings it
-// plans the inventory over what a deployment holds rather than over an empty
-// file, and fails there rather than in production. What that costs is about
-// seven of the ten seconds the inventory takes under the race detector.
+// carries. The rows decide NOTHING today: no node runs ANALYZE, so every plan
+// is the plan over an empty estate ([seededPlanStore]). THEY ARE KEPT because
+// that is a property of the ENGINE, a dependency that moves, and the shape is
+// a deployment's: the day a release weighs contents unasked, the update fails
+// here rather than in production. They cost about seven of the inventory's
+// ten seconds under the race detector.
 const (
 	corpusRows = 20_000
 	projects   = 30
@@ -1532,25 +1461,15 @@ func planStore(t *testing.T) store.ReplicatedHandle {
 }
 
 // seededPlanStore is an empty replicated estate filled by seed in ONE
-// transaction — the frame every plan fixture here shares, so each seeds the
-// table its own statements read and nothing else.
+// transaction, so each fixture seeds only the table its statements read.
 //
 // # Never ANALYZEd, because no deployment is
 //
-// Nothing in the engine runs ANALYZE, so every node's planner works from its
-// built-in guesses, and a plan taken over statistics is a plan no node runs.
-// This fixture used to ANALYZE, and that hid exactly the failure it exists to
-// report: counted, the text, number, date and choice filters each sought its
-// own column's index; uncounted, as on every node, each sought ANOTHER
-// column's on `field_id` alone, and the text and number indexes served no
-// read at all — certified as used for as long as the fixture counted what no
-// deployment counts ([fieldClause] now names its index). Statistics were also
-// the only way the rows ever reached a plan: with none, every plan the three
-// plan tests take is the same over an empty estate.
-//
-// seed is handed the estate's own parameter limit, which is what
-// [store.InsertRows] chunks to — the multi-row insert every applier writes a
-// collection through.
+// A plan taken over statistics is a plan no node runs: counted, the field
+// filters each sought their own column's index; uncounted, as on every node,
+// each sought ANOTHER column's on `field_id` alone ([fieldClause] now names
+// its index). seed is handed the estate's parameter limit, which
+// [store.InsertRows] chunks to.
 func seededPlanStore(t *testing.T,
 	seed func(ctx context.Context, tx *sql.Tx, maxVariables int) error) store.ReplicatedHandle {
 
@@ -1800,25 +1719,15 @@ func TestTheSubtaskRollupKeepsItsContainer(t *testing.T) {
 
 // A ROLLED-UP ROW PROBES ITS ANCHOR BY ITS KEY.
 //
-// The subtask rollup asks a query's predicate of each row's root, and the root
-// is one row the row names, so the read is one seek of the table's key per row
-// the statement visits ([anchorProbe]) — never a list of every root in scope,
-// and never another index of the table entered on whatever the predicate
-// offers. Both were measured. As a list (`root_id IN (SELECT t.id …)`) the
-// planner held every live task in the company before the workspace's first
-// row, a project's whole board before a board's, and the whole trash; and as
-// a probe the key does not name, it stole the probe for the predicate's own
-// equalities — `my queue` sought `tracker_tasks_queue_idx (assignee=?)` once
-// per row, and a type, a unit, a lead's routing and a key filter each sought
-// their own index the same way.
-//
-// So every statement the reader runs over a rolled-up set — the page, its
-// count, its totals, a board's columns and rows, and where one task sits —
-// seeks the anchor by its key, and reads the anchor no other way: the probe
-// asking which side of the trash it is on reads it by its key too. The list
-// form is refused for every statement by the gate's own [refuseSetWalks].
-// Which queries roll up is spelled here from their parameters rather than
-// asked of [rollsUp], which is part of what is under test.
+// The rollup asks a query's predicate of each row's root, so the read is one
+// seek of the table's key per row visited ([anchorProbe]): never a list of
+// every root in scope (`root_id IN (SELECT t.id …)` held every live task), and
+// never another index entered on whatever the predicate offers (`my queue`
+// sought `tracker_tasks_queue_idx` once per row). So every statement over a
+// rolled-up set seeks the anchor by key and reads it no other way, the
+// trash-side probe included; [refuseSetWalks] refuses the list form. Which
+// queries roll up is spelled from their parameters, not asked of [rollsUp],
+// which is under test.
 func TestARolledUpRowProbesItsAnchorByKey(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
@@ -1871,32 +1780,16 @@ func TestARolledUpRowProbesItsAnchorByKey(t *testing.T) {
 
 // THE TRASH IS READ THROUGH ITS OWN INDEX, BY EVERY STATEMENT OVER IT.
 //
-// A removed task is a fraction of the company and only the trash reads one, so
-// a trash costs what is in it — never what the company holds. That is a claim
-// about every statement an answer over the trash issues, not only about its
-// page: measured before [taskSource] named the index, the workspace trash's
-// page walked the old index but its count, its totals, a board's column counts
-// and the subtree rollup's own list of roots each read every task in the
-// company from the heap (this engine's planner reaches a partial index only
-// for an order it provides or a seek on its leading column, and the tombstone
-// is neither), a project's trash sought the project's whole board through
-// `tracker_tasks_rank_idx` at every level and sorted it, and a click on the
-// Title column sorted the company.
-//
-// So each statement here is the reader's own ([taskRowsStatement],
-// [cappedCountStatement], [totalsStatement], [groupCountsStatement]) over the
-// set [compile] produces, at both scopes and in both subtask modes, and every
-// line of its plan that reads the task table's rows reads the scope's index.
-// The rollup's probe of each row's root reads that one root by its key, under
-// an alias of its own, and is held to the key by
-// [TestARolledUpRowProbesItsAnchorByKey]. The page in the trash's own order is
-// held to it unsorted as well, because that order is the index's and a LIMIT
-// stops it after a page — and so is every arm of the next page of the trash as
-// a list, which resumes the same walk (a board takes no cursor), and every read
-// of a task's neighbour, which walks it forwards or back: the trash's removal
-// is never NULL inside the trash, so the order reversed is the index read
-// backwards rather than an order that leads with whether the removal is NULL.
-// A page ordered by something else may sort, and sorts the trash.
+// A trash costs what is in it, not what the company holds. The planner reaches
+// a partial index only for an order it provides or a seek on its leading
+// column, and the tombstone is neither, so [taskSource] must name the index.
+// Each statement is the reader's own ([taskRowsStatement],
+// [cappedCountStatement], [totalsStatement], [groupCountsStatement]) over
+// [compile]'s set, at both scopes and in both subtask modes, and every plan
+// line reading task rows reads the scope's index (the root probe is held by
+// [TestARolledUpRowProbesItsAnchorByKey]). The page in the trash's own order,
+// every next-page arm and every neighbour read stay unsorted: removal is never
+// NULL inside the trash, so the reversed order is the index read backwards.
 func TestTheTrashIsReadThroughItsOwnIndex(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
@@ -1983,31 +1876,15 @@ func TestTheTrashIsReadThroughItsOwnIndex(t *testing.T) {
 
 // A LATER PAGE SEEKS THE ORDER ITS FIRST PAGE WALKS.
 //
-// A listing an index serves — a board by its manual order, the workspace by
-// its last update, a project by the same, the company by its spend, the trash
-// by its removal — reads its first page as a walk of that index stopped by a
-// LIMIT. Its later pages resume from a cursor, and a resume the planner cannot
-// seek re-walks the index from its start to the cursor and filters every row
-// on the way: page fifty reads fifty pages' worth, and paging to the end of a
-// listing costs the square of its length. That was the cursor's shape, one
-// lexicographic disjunction, and the gate could not see it, because it planned
-// the first page alone.
-//
-// So for every registered query whose first page walks an index without
-// sorting, every arm of its next page ([readPage], through a cursor
-// [mintCursor] minted and [pageClause] read back, so the arithmetic under test
-// is the reader's own) must read the task table through THAT index, SEEK it
-// with a bound on the order's leading column, and not sort. A first page that
-// sorts is exempt: no index serves its order in its scope, so every page reads
-// the scope, and its arms are held to what every read is held to.
-//
-// The day an index leads with a NULL-able column, a resume past a value is two
-// arms — the values beyond it and the NULL tail — and each must seek: that is
-// [keyset]'s NULL rule, and this test is where an order breaking it shows.
-//
-// NOT VACUOUS: the indexes the checked first pages walk must include every one
-// named below, so a fixture or a planner change that left this test checking
-// nothing fails here instead of passing.
+// A resume the planner cannot seek re-walks the index from its start, so paging
+// to the end costs the square of the listing's length. So for every registered
+// query whose first page walks an index without sorting, every arm of its next
+// page ([readPage], through a cursor [mintCursor] minted and [pageClause] read
+// back) must read the task table through THAT index, SEEK it with a bound on
+// the order's leading column, and not sort. A first page that sorts is exempt.
+// A NULL-able leading column makes a resume two arms, each of which must seek:
+// [keyset]'s NULL rule. NOT VACUOUS: the indexes walked must include every one
+// named below.
 func TestALaterPageSeeksTheOrderItsFirstPageWalks(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
@@ -2079,16 +1956,9 @@ func TestALaterPageSeeksTheOrderItsFirstPageWalks(t *testing.T) {
 // `sort=assignee` joins the roster's places on the seat's key
 // ([assigneeOrder]), and every statement that reads that join (a page, each
 // arm of the next one, the around read's) must seek it, so a row's place is
-// one seek however many seats the chart holds. Measured over 20 000 tasks and
-// a 5 000-seat chart: the order spelled as a CASE naming every seat cost 3 to
-// 5 s for a first page and 10 to 18 s for a later one or a task's neighbours;
-// the seats bound as a list and joined were scanned once per row under the
-// default listing's `status_group IN (…)`, whatever shape the list took
-// (BenchmarkADerivedOrder has the joined table's figures).
-//
-// NOT VACUOUS: a page, a later page and the around read must each have been
-// checked.
-//
+// one seek however many seats the chart holds: a CASE naming every seat, or a
+// bound list joined, costs seconds a page (BenchmarkADerivedOrder).
+// NOT VACUOUS: a page, a later page and the around read must each be checked.
 // Mutation: join the places on an expression of their key
 // (`ON lower(place.handle) = t.assignee`) and every case goes red.
 func TestAnOrderByTheSeatsNamesSeeksItsPlaces(t *testing.T) {
@@ -2196,35 +2066,16 @@ func tasksReadOtherwise(plan []string, index string) ([]string, bool) {
 
 // THE COMPANY-WIDE HISTORY READS SEARCH THEIR PARTIAL INDEX.
 //
-// `work_flow`'s backward walk and `company_feed`'s tracker page select on the
-// instant a change took effect and on nothing that narrows them first, over a
-// table nothing sweeps. Replicated 0029's `tracker_history_moves_idx` is a
-// partial index whose WHERE the two statements state word for word
-// ([historyMoves]); a planner that cannot prove the implication falls back to
-// a scan of the company's whole history on every landing-screen poll, and
-// nothing else would ever say so.
+// `work_flow`'s walk and `company_feed`'s tracker page select on the instant a
+// change took effect. Replicated 0029's `tracker_history_moves_idx` is a
+// partial index whose WHERE both state word for word ([historyMoves]); a
+// planner that cannot prove the implication scans the whole history per poll.
 //
-// # Reaching the index is not the claim
-//
-// The claim is that a poll costs the WINDOW's changes, and a plan can name the
-// index while breaking it, so each read is held to the plan its shape calls
-// for:
-//
-//   - A read that BOUNDS `effective_at` — the flow's window, a feed page past
-//     its cursor — SEEKS the index on it ([storetest.Seeks]). Measured:
-//     wrapping the column in the flow's walk (`effective_at + 0 >= ?`) turns
-//     its SEARCH into a SCAN of the index — every change that ever moved a
-//     count, in the index's order — and that plan still names the index,
-//     which is all this test used to ask.
-//   - A read with NO bound — the newest page, filtered or not — is an order
-//     and a LIMIT, and the right plan is the index walked in its own order and
-//     stopped after a page. Right only while the index's order IS the read's,
-//     so no read here SORTS ([storetest.Sorts]): measured, ordering the feed by
-//     `effective_at, id` kept the index, added a sort of every moving change
-//     before the first row, and passed.
-//
-// PLANNED OVER A COMPANY'S HISTORY ([historyPlanStore]) and with no
-// statistics, as a deployment plans it ([seededPlanStore]).
+// Naming the index is not the claim: a poll must cost the WINDOW's changes. A
+// read that BOUNDS `effective_at` SEEKS it ([storetest.Seeks]; wrapping the
+// column, `effective_at + 0 >= ?`, makes a SCAN that still names it); a read
+// with NO bound walks it in order stopped by a LIMIT, so none SORTS
+// ([storetest.Sorts]). Planned over [historyPlanStore], with no statistics.
 func TestTheFlowAndFeedReadsSearchTheirIndex(t *testing.T) {
 	t.Parallel()
 	db := historyPlanStore(t)
@@ -2297,16 +2148,14 @@ func companyWideReads() map[string]companyWideRead {
 //
 // # Why most of it moves nothing
 //
-// It decides no plan today, for the reason the task corpus decides none
-// ([corpusRows]), and it is a company's shape for the reason that corpus is:
-// an engine that weighs contents judges a PARTIAL index by how much of the
-// table its predicate keeps, and most commits change nothing either reader
-// draws — a title, a tag, a comment, a due date. So one commit in
-// [historyMoveEvery] moves a count (a create, a status, an assignee, a
-// project, a removal), one in [historyNotATask] is not about a task at all,
-// and the rest are the quiet changes that make up a company's history. Twenty
-// thousand rows over two years and two thousand tasks is ten commits a task,
-// and a [MaxFlowPoints]-day window is an eighth of it.
+// It decides no plan today, as the task corpus decides none ([corpusRows]),
+// and keeps a company's shape for the same reason: an engine that weighs
+// contents judges a PARTIAL index by how much of the table its predicate keeps,
+// and most commits change nothing either reader draws (a title, a tag, a
+// comment, a due date). One commit in [historyMoveEvery] moves a count, one in
+// [historyNotATask] is not about a task, the rest are quiet. Twenty thousand
+// rows over two thousand tasks is ten commits a task; a [MaxFlowPoints]-day
+// window is an eighth of it.
 const (
 	historyRows      = 20_000
 	historySubjects  = 2_000
@@ -2413,30 +2262,15 @@ func historyRow(i int) []any {
 
 // A FIELD'S VALUES ARE READ BY THEIR TASK, OR BY THEIR FIELD AS A FILTER.
 //
-// `tracker_field_values` is read two ways and each has its own index. A FILTER
-// asks which tasks hold a value, which the field's own column's index answers
-// as one range, so its subquery is driven from there ([fieldClause]); every
-// other read — a sort's join, a grouping's join and its column filter, a
-// total over the answer — asks for the values of tasks the statement already
-// holds, which the table's key answers one task at a time ([fieldValuesKey]).
-//
-// Both are held to it in every statement the reader runs for the query
-// ([queryStatements]), because the four value indexes all lead with
-// `field_id` and are partial on `hidden = 0`, which every one of these reads
-// states: with no statistics the planner took one of them for a per-task
-// probe and sought `field_id` alone — measured, every value the field holds,
-// read once per task on a page sorted by a choice field, on a board grouped
-// by one and in that board's column counts; one column's rows read the
-// field's values and then the project's board once per value; and a total
-// over a number field read the field's every value through the choice
-// column's index; and a later page sorted by a field, read arm by arm, bounded
-// the joined value, made its LEFT JOIN an inner one and walked every value in
-// the company before a task ([pageArmSets]). Every one of those plans passed
-// the inventory, which only asks that some plan reach each index.
-//
-// So a line seeking the key must seek it on a task, and a line reading a
-// value index must be a filter's — the index of a field the query filters on,
-// read inside the subquery that finds the filtered tasks.
+// `tracker_field_values` is read two ways. A FILTER asks which tasks hold a
+// value, which the field's own column index answers as one range
+// ([fieldClause]); every other read (a join, a total) asks for values of tasks
+// already held, which the key answers one task at a time ([fieldValuesKey]).
+// Both are held in every statement ([queryStatements]): the value indexes all
+// lead with `field_id` and are partial on `hidden = 0`, so with no statistics
+// the planner took one for a per-task probe and read every value the field
+// holds once per task ([pageArmSets]). So a line seeking the key must seek it
+// on a task, and a value-index line must be a filter's, in its subquery.
 func TestAFieldValueIsReadByItsTaskOrByItsFilter(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
@@ -2477,18 +2311,14 @@ func TestAFieldValueIsReadByItsTaskOrByItsFilter(t *testing.T) {
 
 // ONE COLUMN OF A BOARD IS THE ANSWER NARROWED BY A PROBE OF EACH TASK'S ROWS.
 //
-// A statement that reads one column or lane rather than counting them — the
-// column's rows, and where one task sits in it — narrows the answer by the
-// axis's join-free predicate ([columnSet]): a probe of each task's own tag or
-// field rows by their key. Narrowed through the axis's join instead it was an
-// inner join onto the child table, which the planner is free to drive from the
-// child's side, and with no statistics did so as soon as anything moved the
-// task side's estimate — measured at the workspace, a field column walked
-// every value of the field in the company before the first task, and a tag
-// column sought every task carrying the tag and walked the task table once for
-// each. So in every such statement, at both scopes and in both subtask modes, a
-// read of the axis's child table outside a filter's own IN list seeks it on a
-// task.
+// A statement that reads one column or lane rather than counting them (its
+// rows, where one task sits) narrows the answer by the axis's join-free
+// predicate ([columnSet]): a probe of each task's own tag or field rows by key.
+// Narrowed through the axis's join it was an inner join onto the child table,
+// which the planner may drive from the child's side: a field column walked
+// every value of the field in the company before the first task. So in every
+// such statement, at both scopes and in both subtask modes, a read of the
+// axis's child table outside a filter's own IN list seeks it on a task.
 func TestOneColumnIsTheAnswerNarrowedByAProbe(t *testing.T) {
 	t.Parallel()
 	db := planStore(t)
@@ -2596,7 +2426,7 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 		t.Fatalf("compile: %v", err)
 	}
 	terms := sortTerms(q, fields, planBasis())
-	page, pageArgs := taskRowsStatement(set, terms)
+	page, pageArgs := taskRowsStatement(set, terms, planFlow)
 	values, valueArgs := sortValuesStatement(terms, "t-00001")
 	out := map[string]plannedRead{
 		"the page": {page, append(pageArgs, 51)},
@@ -2623,7 +2453,7 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 			t.Fatalf("pageClause: %v", err)
 		}
 		for i, arm := range pageArmSets(set, resume, terms) {
-			statement, args := taskRowsStatement(arm, terms)
+			statement, args := taskRowsStatement(arm, terms, planFlow)
 			out[nextPageArm(i)] = plannedRead{statement, append(args, 51)}
 		}
 	}
@@ -2688,7 +2518,7 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 		columns, columnArgs := groupCountsStatement(axis, set)
 		out["a board's columns"] = plannedRead{columns, append(columnArgs, MaxGroups+1)}
 		for _, key := range []string{"o-high", ""} {
-			rows, rowArgs := taskRowsStatement(columnSet(axis, key, set), terms)
+			rows, rowArgs := taskRowsStatement(columnSet(axis, key, set), terms, planFlow)
 			out[fmt.Sprintf("the rows of column %q", key)] = plannedRead{rows,
 				append(rowArgs, 21)}
 		}

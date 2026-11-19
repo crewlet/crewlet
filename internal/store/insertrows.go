@@ -18,41 +18,15 @@ type Execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-// InsertRows writes n rows through as few multi-row INSERT statements as the
-// engine's parameter limit allows, and it is THE way an applier writes a
-// collection.
+// InsertRows writes n rows through as few multi-row INSERTs as the parameter
+// limit allows, and is THE way an applier writes a collection.
 //
-// # Why this exists rather than a loop at each call site
-//
-// [RowsPerInsert] and [Chunks] are the arithmetic, and for a long time they
-// were the WHOLE of it: nothing in the engine called them. Every applier in
-// the tree wrote its child rows one ExecContext per row — the shape
-// BenchmarkLogApplyDrain names "unprepared" and measures as the SLOWEST of
-// the three — while [Writer.Conn]'s doc comment, the drain benchmark and
-// docs/guides/replication.md all described the multi-row shape as the one the
-// engine ships. It was not shipped anywhere. This is the function that makes
-// those three statements true, and it lives here because the chunker does:
-// written once per applier it would be five copies of one rule, which is the
-// arrangement [textcut] and [whsec] exist to record the cost of.
-//
-// # The statement is given in three parts, not one
-//
-// A caller hands the PREFIX (through the VALUES keyword), ONE parenthesised
-// row template, and whatever SUFFIX follows the value list — normally an
-// ON CONFLICT clause. The parts are separate because the row template is what
-// gets repeated, and the alternative is parsing SQL to find the value list:
-// a row template here carries a CASE, a scalar subquery and string literals,
-// so "find the parentheses after VALUES" is a rule that works until the first
-// applier that needs one of those.
-//
-// The bind width is taken from args(0) rather than by counting '?' in the
-// template, because the argument builder is authoritative and a '?' inside a
-// string literal is not a parameter. Every row must bind the same width; one
-// that does not is a programming error and says so rather than silently
-// shifting every later row's arguments by one.
-//
-// n <= 0 writes nothing and asks the database nothing, which is what makes
-// "write the child rows" safe to call on a record that has none.
+// The statement comes in three parts: the PREFIX (through VALUES), ONE
+// parenthesised row template, and the SUFFIX after the value list, normally an
+// ON CONFLICT clause. Parsing SQL for the value list breaks on a CASE, subquery
+// or string literal in the template. The bind width comes from args(0), not
+// from counting '?'; a row binding another width is a programming error and
+// says so. n <= 0 writes nothing and asks the database nothing.
 func InsertRows(ctx context.Context, tx Execer, maxVariables int,
 	prefix, row, suffix string, n int, args func(i int) []any) (int, error) {
 
@@ -80,13 +54,10 @@ type Querier interface {
 // RETURNING clause: each chunk is QUERIED rather than executed, scan is handed
 // every row a chunk answers, and it answers how many it handed.
 //
-// It exists for the writer that has to know WHICH rows it wrote, not only how
-// many: under ON CONFLICT DO NOTHING a statement answers the rows it inserted
-// and none it skipped, and a count of a chunk says how many were skipped but
-// never which. The alternative was one statement a row, read by its own
-// RowsAffected — the shape this file exists to retire, and the one
-// internal/gitlet's notices measured at 240 ms for one record's 3 904 rows
-// against statelog.ApplyTxTimeBudget's 250.
+// It serves the writer that must know WHICH rows it wrote: under ON CONFLICT DO
+// NOTHING a chunk's count says how many were skipped, never which. One
+// statement a row would answer that but costs too much against
+// statelog.ApplyTxTimeBudget (3 904 rows took 240 ms of its 250).
 //
 // scan reads the current row of rows and must not advance it; an error from
 // it ends the insert, the chunk's rows closed.

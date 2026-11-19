@@ -36,20 +36,14 @@ var modelMix = []struct {
 
 // BenchmarkCarry measures what the bound on a backup's reads of an S3 bucket
 // ([backupFetchConcurrency]) buys a FIRST copy: objects and bytes a second
-// carried into a backup through the real path — the S3 backend over the fake
-// bucket, the store's verifier, the write and fsync of each object — at the
-// production bound, at half of it and at twice it, over the model's mix of
-// sizes, with the fake answering every request a provider's first byte away
-// ([s3fake.Server.Latency]): none, which is this host's own ceiling; 20 ms, a
-// bucket in the node's region on a good day; and 100 ms, one under load.
-//
-// WHAT IT MEASURES is the carry's depth, which is what the bound decides: on
-// loopback a body moves at memory speed once its first byte arrives, so the
-// rate here is the latency-bound one until the host's own work on each object
-// bounds it instead, and a real link's bandwidth only lowers it further.
-// `model-first-copy-h` projects the large model's 2.1 million objects at the
-// measured rate — a floor on a first copy's length, which a slower link
-// stretches, and so on how long the trim hold it spans lasts.
+// carried through the real path (S3 backend over the fake bucket, the verifier,
+// write and fsync of each object) at the production bound, half and twice it,
+// over the model's mix of sizes, with the fake a first byte away
+// ([s3fake.Server.Latency]): none (this host's ceiling), 20 ms, 100 ms.
+// On loopback a body moves at memory speed once its first byte arrives, so the
+// rate is latency-bound until the host's per-object work bounds it; a real link
+// only lowers it. `model-first-copy-h` projects the large model's 2.1 million
+// objects at that rate: a floor on a first copy and on the trim hold it spans.
 //
 //	go test -run '^$' -bench BenchmarkCarry -benchtime 3x ./internal/backup/
 func BenchmarkCarry(b *testing.B) {

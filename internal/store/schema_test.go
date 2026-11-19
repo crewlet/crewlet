@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -26,21 +27,15 @@ import (
 // EVERY DOMAIN'S SHIPPED DDL ACCEPTS THE STATEMENTS THE FRAMEWORK GENERATES.
 //
 // A domain declares three table NAMES and the framework writes their COLUMNS,
-// and nothing in Go connects the two. A migration that spelled a column
-// differently compiles, migrates, opens and serves every read — and fails the
-// first time a record this build cannot decode arrives, which is the rarest
-// path in the system and the one whose failure is a stalled log.
+// and nothing in Go connects the two. A misspelt column compiles, migrates and
+// serves every read, then fails when a record this build cannot decode arrives,
+// the rarest path in the system, whose failure is a stalled log.
 //
-// # Why this lives in internal/store rather than beside each domain
-//
-// Every registered domain reaches it through [statelogtest.Run] as well,
-// which runs the same check as one of its four suites, but the check itself
-// needs only a migrated estate and a declaration, and the migrated estate is
-// this package's. Running every one here also makes
-// the walk two-sided: a domain whose tables stopped being created at all would
-// fail here rather than quietly stop being certified — the two COMPACTED
-// domains (the vectors and each data node's usage) included, whose ledgerless
-// declarations are the ones a migration is likeliest to get wrong unnoticed.
+// It lives here, not beside each domain ([statelogtest.Run] runs the same check
+// per domain), because it needs only a migrated estate. Running every domain
+// here also makes the walk two-sided: a domain whose tables stopped being
+// created fails here rather than quietly stopping its certification, the two
+// COMPACTED domains (vectors, usage) included.
 func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 	t.Parallel()
 
@@ -53,6 +48,7 @@ func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 		gitlet.Domain{},
 		accessdomain.Domain{},
 		atlasdomain.Domain{},
+		advisordomain.Domain{},
 	} {
 		t.Run(domain.Name(), func(t *testing.T) {
 			t.Parallel()
@@ -88,16 +84,13 @@ func TestAProjectCarriesItsActivationStamp(t *testing.T) {
 // EVERY TABLE A DOMAIN DECLARES IS ONE THE ESTATE ACTUALLY SHIPS, AND BACK.
 //
 // The declaration is what the scrub list, the identity claim and the local
-// sweep are all derived from, so a name in it that no migration creates is
-// three lists that are silently short — and a table the migration creates that
-// the domain does not classify joins whichever behaviour its absence resembled.
-// Both directions, for internal/skipgate's reason.
+// sweep derive from, so a name no migration creates leaves three lists silently
+// short, and a created table the domain does not classify joins whichever
+// behaviour its absence resembled. Both directions, for skipgate's reason.
 //
-// The reverse walk is keyed on the table PREFIX each domain names its tables
-// with, which is a convention rather than a rule the framework enforces — so
-// the case also asserts that every declared table actually carries it, or a
-// domain that renamed one out of its own prefix would silently stop being
-// walked in the direction that catches an unclassified table.
+// The reverse walk is keyed on each domain's table PREFIX, a convention the
+// framework does not enforce, so the case also asserts every declared table
+// carries it, or a renamed one would silently leave the walk.
 func TestEachDomainDeclaresExactlyTheTablesItShips(t *testing.T) {
 	t.Parallel()
 
@@ -113,6 +106,7 @@ func TestEachDomainDeclaresExactlyTheTablesItShips(t *testing.T) {
 		{"code_", gitlet.Domain{}},
 		{"access_", accessdomain.Domain{}},
 		{"atlas_", atlasdomain.Domain{}},
+		{"advisor_", advisordomain.Domain{}},
 	} {
 		t.Run(tc.domain.Name(), func(t *testing.T) {
 			t.Parallel()
@@ -186,19 +180,15 @@ func TestTheIamOpsLedgerCarriesTheFrameworksFiveColumns(t *testing.T) {
 // THE IAM TABLES SHIP THE COLUMNS A LATER MIGRATION CANNOT ADD.
 //
 // schema_migrations keys on the FILENAME, so editing a migration that has
-// already run silently never re-runs it. Every column here is one the applier
-// fills from the FIRST record it ever writes — the three directory values on a
-// person's row, which the directory's lookups seek on, and the bucket every
-// table's sweep seeks on — so they have to ship in the migration that creates
-// the table rather than in the one that starts using them.
+// already run never re-runs it. Every column here is one the applier fills from
+// the FIRST record it writes (the three directory values the lookups seek on,
+// and the bucket every sweep seeks on), so it must ship in the migration that
+// creates the table.
 //
-// ONE COLUMN ARRIVES IN A MIGRATION OF ITS OWN, and how it is kept is the
-// rule's other half: an invitation's `seat_id` (replicated migration 0042) is
-// added defaulted and is a DERIVED column — written by the apply and
-// recomputed by the identity applier's own Rederive whenever a checkpoint's
-// rule set differs, in the Go that writes the column, never by an UPDATE in a
-// migration. It is asserted here beside the rest so a later file cannot drop
-// it unnoticed.
+// ONE COLUMN ARRIVES IN A MIGRATION OF ITS OWN: an invitation's `seat_id`
+// (replicated migration 0042) is added defaulted and is DERIVED, recomputed by
+// the identity applier's Rederive when a checkpoint's rule set differs, in Go,
+// never by an UPDATE in a migration. Asserted so a later file cannot drop it.
 func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 	t.Parallel()
 
@@ -225,16 +215,12 @@ func TestTheIamTablesShipTheColumnsAMigrationCannotAddLater(t *testing.T) {
 
 // THE DIRECTORY'S INDEXES ARE DECLARED, AS ITS STATEMENTS NEED THEM.
 //
-// What each statement over the people, the invitations, the trail and the
-// removals plans as is internal/iamdomain's plan gate (TestTheDirectoryStatementsArePlanned),
-// which plans the package's own named statements — this case used to plan
-// copies of them, and the copies had drifted from the statements they stood
-// for. What is left here is the half that is the SCHEMA's: that the migrations
-// declare each index on its table, in its columns, and that the three lookups
-// are PLAIN while the bindings' index is PARTIAL — a partial index over the
-// non-empty rows is one a bound value cannot be proved to satisfy, and the
-// bindings' listing is the one read whose own predicate is the partial
-// index's.
+// How each statement plans is internal/iamdomain's gate
+// (TestTheDirectoryStatementsArePlanned). Here is the SCHEMA's half: the
+// migrations declare each index on its table and columns, and the three lookups
+// are PLAIN while the bindings' index is PARTIAL, since a partial index over
+// the non-empty rows is one a bound value cannot be proved to satisfy, and the
+// bindings' listing is the one read whose own predicate is the index's.
 //
 // Mutation: make `iam_people_login_idx` partial over its non-empty rows, or
 // drop 0069's re-keyed `iam_history_person_idx`, and the case names the index.

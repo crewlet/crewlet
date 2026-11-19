@@ -4,31 +4,15 @@ import "sort"
 
 // Fuse joins two ranked lists by reciprocal rank fusion.
 //
-// # It consumes RANKS and never a distance, which is a decision rather than a
-// convenience
-//
-// The two halves score in incomparable units — a BM25 weight and a cosine
-// distance — and any attempt to put them on one scale is a weighting nobody
-// can defend and everybody tunes. Rank fusion needs neither: a document's
-// contribution from a list is 1/(k+rank), so the only thing read from either
-// half is the ORDER it put things in.
-//
-// # What fusion absorbs, and what it does not
-//
-// A document absent from a list contributes NOTHING from it, so a stage-one
-// drop is the LARGEST possible perturbation to that document's score rather
-// than an invisible one. What fusion absorbs is the drop of a document the
-// keyword half also found: it keeps its lexical term and slides down. What it
-// does not absorb is the drop of a SEMANTIC-ONLY document, which leaves the
-// fused list entirely — and that is precisely the class the semantic half
-// exists for, the question whose answer shares no word with it.
-//
-// So semantic recall is NOT a lower bound on delivered quality, and the
-// arithmetic says something sharper instead: at k = 60, a document present in
-// BOTH lists at any rank beats a semantic-only document at rank one, because
-// 2/(60+r) > 1/61 for every r below 62. A semantic-only document's best
-// possible fused position is therefore already one past the overlap, and
-// losing it costs the answer its best distinct entry.
+// It consumes RANKS, never a distance: the halves score in incomparable units
+// (a BM25 weight, a cosine distance), and one scale is a weighting nobody can
+// defend. A list contributes 1/(k+rank), and a document absent from it NOTHING,
+// so a stage-one drop is the LARGEST perturbation to its score. Fusion absorbs
+// the drop of a document the keyword half also found, which slides down; not
+// that of a SEMANTIC-ONLY document, which leaves the fused list: exactly the
+// class the semantic half exists for. So semantic recall is NOT a lower bound
+// on delivered quality: at k = 60 a document in BOTH lists at any rank beats a
+// semantic-only one at rank one (2/(60+r) > 1/61 for every r below 62).
 func Fuse(lists ...[]string) []string {
 	scores := make(map[string]float64)
 	first := make(map[string]int)

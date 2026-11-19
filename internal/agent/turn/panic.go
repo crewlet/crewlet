@@ -10,19 +10,15 @@ import (
 // PanicError is a panic recovered while handling a turn.
 //
 // A PANIC IS A DEFECT IN THIS PROCESS, not a failure of anything it talks to,
-// and that is why it gets its own type rather than an ordinary error: the two
-// are acted on in opposite directions. A provider that did not answer is worth
-// asking again. A nil map written from a tool handler is not, because a
-// redelivery runs the same code on the same input and panics in the same place
-// having repeated whatever the turn did before it.
+// so it gets its own type: the two are acted on in opposite directions. A
+// provider that did not answer is worth asking again; a nil map written from a
+// tool handler is not, because a redelivery panics in the same place having
+// repeated whatever the turn did before it.
 //
-// Before this type existed nothing between the broker and a seat's turn
-// recovered anything, so a panic unwound all the way into the queue backend's
-// own handler guard. That guard turns any panic into a NAK, which is the right
-// default for a handler it knows nothing about and the wrong one here: the turn
-// was redelivered up to the whole 25-delivery budget, each attempt spending a
-// model round and replaying the writes of the rounds before it, and the seat
-// was left rendered as `working` because nothing closed the turn.
+// Unrecovered, a panic would reach the queue backend's handler guard, which
+// NAKs it: the turn is redelivered up to the whole 25-delivery budget, each
+// attempt spending a model round and replaying earlier writes, and the seat
+// stays rendered as `working` because nothing closed the turn.
 type PanicError struct {
 	// Value is what was passed to panic.
 	Value any
@@ -75,44 +71,26 @@ const (
 	AbandonedPermanent = "the turn was refused for good"
 )
 
-// ErrPermanent marks a phase that refused to run for a reason a redelivery of
-// the same trigger would meet again, wrapped beside the error that says why:
-// an executor's round lost with its host past the limit a round is carried on
-// after (internal/agent/runner's ErrRoundLost). [Abandon] gives such a turn up.
+// ErrPermanent marks a phase that refused to run for a reason a redelivery
+// would meet again, wrapped beside the error that says why (internal/agent/
+// runner's ErrRoundLost). [Abandon] gives such a turn up.
 //
-// A MARK THIS PACKAGE DECLARES AND THE REFUSER WRAPS, because Abandon is one
-// rule for both paths a turn arrives by, and this package imports neither of
-// the packages that decide a refusal is final. Read as an ordinary broken
-// phase, the refusal was handed back, refused again on every announcement of
-// its run, and given up only once its resume had failed for half an hour, the
-// seat held behind it throughout.
+// A MARK THIS PACKAGE DECLARES AND THE REFUSER WRAPS: this package imports
+// neither package that decides a refusal is final. As an ordinary broken phase
+// it was refused again on every announcement, holding the seat for half an hour.
 var ErrPermanent = errors.New("a retry would be refused the same way")
 
 // Abandon reports why a turn that returned err must NOT be run again from its
-// trigger, or false when a redelivery may run it cleanly.
+// trigger, or false when a redelivery may run it cleanly. One answer for both
+// paths a turn arrives by (delivery, run collection); each case outranks the next:
 //
-// ONE ANSWER FOR BOTH PATHS a turn arrives by. The dispatcher asks it about a
-// delivery and the run's collection asks it about a completion, and each used to
-// carry its own copy of the rule; a panic added to one and forgotten in the
-// other is exactly the drift one function makes impossible.
+//   - a PANIC: it destroys its round's record, so "nothing reached outside"
+//     cannot be established, and a retry runs the same defect.
+//   - a refusal a retry would MEET AGAIN ([ErrPermanent]).
+//   - an outward write ([Acted]): the retry would repeat it.
 //
-// Three cases, each outranking the next because it is the more specific
-// account of what happened:
-//
-//   - a PANIC is never retried. The premise a retry rests on is that the
-//     turn's own record shows nothing reached outside, and a panic destroys
-//     the record of the round it happened in, so that premise cannot be
-//     established at all. Even when it could, the redelivery runs the same
-//     defect again.
-//   - a refusal a retry would MEET AGAIN ([ErrPermanent]) is not retried
-//     either: nothing about the trigger changes between its deliveries, so
-//     each is refused the same way, whatever the record shows.
-//   - a turn whose record shows an outward write ([Acted]) is not retried
-//     either, because the retry would repeat the write. See [Result.Acted].
-//
-// Everything else keeps its retry: a provider that did not answer, a runner
-// that could not be built, a refused budget. None of them wrote anything and
-// all of them may succeed next time.
+// Everything else keeps its retry (provider silent, runner not built, refused
+// budget): none wrote anything.
 func Abandon(res Result, err error) (reason string, abandon bool) {
 	if err == nil {
 		return "", false

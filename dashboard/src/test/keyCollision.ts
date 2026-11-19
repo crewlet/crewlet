@@ -31,6 +31,7 @@ export const DUPLICATE_HREF = `#/worklet/${DUPLICATE}`;
 /** The two as board rows, the claimant first. */
 export function collidingRows(over: Partial<WorkSummary> = {}): [WorkSummary, WorkSummary] {
   const base = {
+    flow: null,
     key: SHARED_KEY,
     project: "ENG",
     type: "task",

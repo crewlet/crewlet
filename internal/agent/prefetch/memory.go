@@ -20,21 +20,14 @@ import (
 //
 // # An auxiliary model filters, not cosine similarity
 //
-// The relationship that matters here is "rule X applies to task Y", and
-// similarity misses it constantly: a memory reading "use semantic commit
-// messages" and a task reading "fix the search indexing bug" share almost no
-// vocabulary and are exactly relevant to each other. So the candidates are
-// gathered cheaply — by similarity AND by recency — and a small model
-// decides which of them bear on the task.
+// "Rule X applies to task Y" is what matters, and similarity misses it ("use
+// semantic commit messages" vs "fix the search indexing bug"): candidates come
+// from similarity and recency, and a small model picks.
 //
 // # There is no unfiltered fallback, deliberately
 //
-// When the filter is unavailable or its answer is unparseable, the block is
-// empty. Falling back to "the most recent eight" would leak a memory ABOUT
-// ONE PERSON into a turn triggered by another ("Sam prefers short replies"
-// surfacing on a turn where Morgan is asking), which is the failure the
-// filter exists to prevent, reappearing on exactly the transient outages
-// nobody is watching for.
+// A failed filter gives an empty block: "the most recent eight" would leak a
+// memory about one person into another's turn, on the unwatched outages.
 
 const (
 	// memoryVectorLimit and memoryRecencyLimit are the two halves of the
@@ -79,19 +72,15 @@ const EmptyMemoryHint = "(no stored memories surfaced at turn start — re-run "
 
 // memoryFilterSystemPrompt is the filter's whole instruction.
 //
-// THE THREE RULES ARE THE POINT, and the distinction underneath them is what
-// a memory is ABOUT. An operational memory is about a situation and tells
-// the seat what to do; a per-subject memory is about a person and tells it
-// how to interact with them. Subject matching applies to the second kind
-// only — an operational rule may name somebody incidentally (whoever is on
-// leave, whoever the routing target is) while its meaning is about the
-// situation, and a filter that excluded it on a name mismatch would drop
-// exactly the memories that matter most. The prompt states that once, in
-// rules 1 and 3, rather than as a preamble the rules then repeat.
+// The three rules rest on what a memory is about. An operational memory is
+// about a situation; a per-subject memory is about a person. Subject matching
+// applies to the second only: an operational rule may name somebody
+// incidentally, and excluding it on a name mismatch would drop the memories
+// that matter most. Rules 1 and 3 state that once.
 //
-// "Most relevant first" is the half of the cap the model holds:
-// [memoryMaxSelected] keeps the head of the array, so the order decides what
-// survives it, and the number itself is the code's to enforce.
+// "Most relevant first" is the model's half of the cap: [memoryMaxSelected]
+// keeps the array's head, so order decides what survives; the code enforces
+// the number.
 const memoryFilterSystemPrompt = `You are a memory-relevance filter for an AI agent.
 
 Given the agent's current task and a numbered list of its stored personal memories, answer with a JSON array of the integer indices of the memories relevant to the task, most relevant first, and nothing else; [] if none is.
@@ -253,22 +242,14 @@ func (f *Fetcher) filterMemories(ctx context.Context, r Request, candidates []le
 
 // markRetrieved records that the filter SELECTED these entries.
 //
-// HERE, and only here, because this is where both recall paths meet, the
-// turn-start block and refresh_memory's hinted re-filter, and because what
-// counts as a use is what the filter picked. A candidate is not a use: the
-// pool is similarity union recency, so counting candidates would move the
-// counter for every entry a seat owns on every turn and make the trim's
-// ordering meaningless in the other direction.
+// Only here, where both recall paths meet (the turn-start block and
+// refresh_memory's re-filter), and only for what the filter picked: counting
+// the pool would move every counter every turn, making the trim's ordering
+// meaningless. That trim orders by retrieval count, then last retrieval, then
+// age; with no use marked it would evict the oldest facts, not the least worthy.
 //
-// The trim that bounds a seat's durable memory orders by retrieval count,
-// then last retrieval, then age — so with nothing marking a use it evicted
-// the OLDEST durable facts, which is precisely what a cap on worth rather
-// than age exists to avoid. Nothing called MarkRetrieved before this.
-//
-// DETACHED and bounded: the turn's context is often cancelled the moment the
-// phase ends, and this write happens after the seat already had the benefit
-// of the recall. Inheriting the cancellation would drop the count on exactly
-// the turns that ran longest.
+// Detached and bounded: the turn's context is often cancelled as the phase
+// ends, and inheriting that would drop the count on the longest turns.
 func (f *Fetcher) markRetrieved(ctx context.Context, ids []string) {
 	if f.src.Diary == nil || len(ids) == 0 {
 		return
@@ -280,23 +261,16 @@ func (f *Fetcher) markRetrieved(ctx context.Context, ids []string) {
 
 // memoryFilterPrompt renders the task, the sender and the numbered pool.
 //
-// THE TASK IS WHAT THE TURN WAS ASKED ([Request.Ask]), not the brief the
-// executor is handed. The brief wraps a chat message in scaffolding that is
-// the same on every turn of that surface — the seat's handle and marker, the
-// collectives, a role group in the triage — and the filter's rule 3 admits a
-// per-subject memory about "someone named in the task", so read against
-// the brief, a memory about whoever the scaffolding names is relevant to every
-// chat turn it wraps. It was found that way: while the triage carried worked
-// examples ("@PM open a ticket for @SWE"), a preference about the PM matched
-// every chat turn. What the brief adds that the filter needs is the surface,
-// and the ask carries it in the notification's subject ("Slack message", an
-// issue's key and title).
+// The task is what the turn was asked ([Request.Ask]), not the executor's
+// brief: rule 3 admits a memory about "someone named in the task", so against
+// the brief's scaffolding (handle, collectives, a role group) a memory about
+// whoever it names would match every chat turn. The ask carries the surface
+// the filter needs in the notification's subject.
 //
-// THE TASK ARRIVES FENCED, under a token minted for this call ([Ask]): the
-// filter's answer decides which of the seat's own memories the seat is shown,
-// so a task that addresses the filter must read as somebody's words. The
-// sender line is a display name somebody chose and is neutralised under the
-// same token.
+// The task arrives fenced under a token minted for this call ([Ask]): the
+// answer decides which memories the seat is shown, so a task addressing the
+// filter must read as somebody's words. The sender line is a chosen display
+// name, neutralised under the same token.
 func memoryFilterPrompt(r Request, candidates []learning.DiaryEntry) string {
 	token := provenance.NewBoundary()
 	var b strings.Builder

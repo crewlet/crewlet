@@ -50,21 +50,14 @@ func (j *judge) requests() []llm.Request {
 	return append([]llm.Request(nil), j.asked...)
 }
 
-// THE TURN-START JUDGEMENTS READ SOMEBODY ELSE'S WORDS FENCED, AND WHAT THEY
-// WRITE REACHES THE SEAT DEFUSED (ADR-0040).
+// The turn-start judgements read somebody else's words fenced, and what they
+// write reaches the seat defused (ADR-0040).
 //
-// The memory filter, the knowledge-query writer and the episode summary are
-// each handed the turn's ask, and on most wakes that is somebody else's words:
-// the comment, the message, the colleague's question. What each answers
-// reaches the seat — which of its memories it is shown, which pages, and a
-// briefing written into its system prompt — so a comment addressed to the
-// auxiliary model steers what the seat sees. Each is therefore told what a
-// fence means (the standing sentence, in its system prompt) and handed the
-// foreign words inside a fence labelled as the trigger labelled them, under a
-// token of its own and never the turn's; a part that is the company's own
-// words (a schedule's task) is handed over as itself with every marker it
-// spells defused; and the briefing the summary writes is defused under the
-// turn's token before the seat reads it.
+// The filter, query writer and summary are handed the ask, usually somebody
+// else's words, and their answers reach the seat. Each is told what a fence
+// means (the standing sentence) and handed foreign words fenced as the trigger
+// labelled them, under a token of its own, never the turn's; the company's own
+// words go over defused; the summary is defused under the turn's token.
 //
 // Mutation: an [prefetch.Ask.For] that hands back the plain text, an auxCall
 // that sends no standing sentence, a summary rendered as the model wrote it,

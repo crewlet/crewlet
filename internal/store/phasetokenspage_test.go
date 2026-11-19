@@ -13,12 +13,10 @@ import (
 // and across the spend types.
 //
 // The live spend window's seed reads a busy day in pages, each resuming below
-// the last record the one before kept. Records share a microsecond in a burst,
-// so a cursor on the instant alone would skip the ones that collided with it or
-// read them twice — and a spend record read twice is a double count. The read
-// takes each spend type by its own statement and merges them, so a page is cut
-// from the merge: a phase and a launch sharing an instant are each read once,
-// in the order a single statement would have read them.
+// the last record kept. Records share a microsecond in a burst, so a cursor on
+// the instant alone would skip or re-read them, and a spend record read twice
+// is a double count. Each spend type is its own statement, merged, and a page
+// is cut from the merge, in the order a single statement would give.
 //
 // Mutation: cut each type's page before merging, or merge without the id
 // tiebreak, and a record is read twice or not at all.

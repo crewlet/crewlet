@@ -38,25 +38,18 @@ func readingOf(records map[string]CallRecords) SessionHoldings {
 	return SessionHoldings{Read: true, Kind: HoldingsByID, Calls: records}
 }
 
-// A CALL IS HELD ONLY THROUGH ITS LOGGED RESULT. The session holds a call's
-// logged result where the reading counted records naming it in one thread
-// alone, one use and one result there, the result live, its failure the log's
-// and its text the log's, every byte of an output the log kept whole and the
-// size and opening of one it cut; then it is held, an output the log cut as
-// much as one it kept whole. Anything else is told, in the main list: a call
-// no record names, one whose id the log never recorded, records in two
-// threads, a use or a result missing or repeated, a result before a restart, a
-// failure the log and the session do not share, either way, a text of another
-// length, a whole output's text otherwise anywhere, past its opening among it,
-// a cut output's text that opens otherwise, content that is no text, a log
-// whose kept opening is shorter than the digest or whose size is no size; and
-// every call of no reading, or of a reading of a kind this build does not
-// read, which is by_id alone.
-//
-// Mutation: hold a call whose failure the session and the log do not share,
-// measure a cut output by what the log kept of it rather than by its whole
-// size, or compare a whole output by its opening alone, and a case goes red;
-// drop any other condition and its case goes red.
+// A CALL IS HELD ONLY THROUGH ITS LOGGED RESULT: where the reading counted
+// records naming it in one thread alone, one use and one result there, the
+// result live, its failure and text the log's, every byte of an output kept
+// whole and the size and opening of one cut. Anything else is told, in the main
+// list: no record or an unrecorded id, records in two threads, a use or result
+// missing or repeated, a result before a restart, an unshared failure, a text
+// of another length or otherwise, content that is no text, a kept opening
+// shorter than the digest, a size that is no size; and every call of no reading
+// or of a kind other than by_id and by_content.
+// Mutation: hold a call with an unshared failure, measure a cut output by what
+// the log kept, compare a whole output by its opening alone, or read by_id
+// alone: red; drop any other condition and its case is red.
 func TestACallIsHeldOnlyThroughItsLoggedResult(t *testing.T) {
 	t.Parallel()
 	const id = "toolu_01H8xQ"
@@ -127,7 +120,7 @@ func TestACallIsHeldOnlyThroughItsLoggedResult(t *testing.T) {
 			Calls: map[string]CallRecords{id: recordsOf(output, false)}}, call: logged},
 		"a reading of no kind": {reading: SessionHoldings{Read: true,
 			Calls: map[string]CallRecords{id: recordsOf(output, false)}}, call: logged},
-		"a reading of a kind this build does not read": {reading: SessionHoldings{Read: true, Kind: "by_content",
+		"a reading of a kind this build does not read": {reading: SessionHoldings{Read: true, Kind: "by_name",
 			Calls: map[string]CallRecords{id: recordsOf(output, false)}}, call: logged},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -138,12 +131,12 @@ func TestACallIsHeldOnlyThroughItsLoggedResult(t *testing.T) {
 			}
 		})
 	}
-	// THE KINDS THIS BUILD READS: by_id, and no other.
-	if !HoldingsByID.Valid() || len(HoldingsKinds) != 1 {
-		t.Errorf("this build reads %d kinds, by_id among them %v; want by_id alone", len(HoldingsKinds),
-			HoldingsByID.Valid())
+	// THE KINDS THIS BUILD READS: by_id and by_content, and no other.
+	if !HoldingsByID.Valid() || !HoldingsByContent.Valid() || len(HoldingsKinds) != 2 {
+		t.Errorf("this build reads %d kinds, by_id among them %v and by_content %v; want those two alone",
+			len(HoldingsKinds), HoldingsByID.Valid(), HoldingsByContent.Valid())
 	}
-	for _, k := range []HoldingsKind{"", "by_content", "BY_ID"} {
+	for _, k := range []HoldingsKind{"", "by_name", "BY_ID", "BY_CONTENT"} {
 		if k.Valid() {
 			t.Errorf("%q reads as a kind this build reads", k)
 		}
@@ -313,8 +306,8 @@ func newHoldingsWorld(t *testing.T, ownRun bool) *holdingsWorld {
 	key := objstore.KeyAt(rig.now)
 	kept := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID, State: CaptureLanded,
 		Final: true, Interrupted: !ownRun, Through: new(2), At: rig.now, Harness: "claude-code",
-		HarnessVersion: "2.1.310", SessionID: "s-1", ArchiveFormat: FakeArchiveFormat, Object: key.String(),
-		ObjectHash: strings.Repeat("a", 64), ObjectSize: 1024, ContentKey: "k1"}
+		HarnessVersion: "2.1.310", SessionID: "s-1", RunAfter: "msg_01kept", ArchiveFormat: FakeArchiveFormat,
+		Object: key.String(), ObjectHash: strings.Repeat("a", 64), ObjectSize: 1024, ContentKey: "k1"}
 	if took, err := rig.pending.StampCapture(t.Context(), "t1", kept); err != nil || !took {
 		t.Fatalf("stamping the job's capture = %v, %v", took, err)
 	}
@@ -466,7 +459,9 @@ func TestHoldingsAreReadOnlyOfTheCaptureItsRelaunchContinues(t *testing.T) {
 			if err != nil || !got.Read || got.Kind != HoldingsByID || len(got.Calls) != 2 {
 				t.Fatalf("HoldingsOf = %+v, %v; want the runner's reading of the two calls asked", got, err)
 			}
-			if want := ArchiveOf(keptRow(t, w.kept)); len(asked) != 1 || asked[0] != want {
+			want := ArchiveOf(keptRow(t, w.kept))
+			want.RunStart = w.kept.RunStart()
+			if len(asked) != 1 || asked[0] != want {
 				t.Fatalf("the runner was asked to read %+v, want once the archive the turn's row names, %+v",
 					asked, want)
 			}

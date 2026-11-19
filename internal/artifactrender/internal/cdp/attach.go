@@ -14,27 +14,18 @@ type AttachOptions struct {
 	// type but "browser" and "tab": an empty filter is sent as none at all.
 	// One that takes a tab is refused (the package doc says why).
 	Filter []TargetFilterEntry
-	// ChildFilter is every attached child's filter, in turn: which types
-	// a page, a frame or a worker attaches of its own. Nil or empty is
-	// Chromium's default without a service worker: every type but
-	// "browser", "tab" and "service_worker". A filter that attaches nothing
-	// says so in an entry, {Exclude: true}, since an empty one would be
-	// sent as none at all, which is Chromium's default.
+	// ChildFilter is every attached child's filter, in turn: which types a
+	// page, a frame or a worker attaches of its own. Nil or empty is Chromium's
+	// default without a service worker: every type but "browser", "tab" and
+	// "service_worker". A filter that attaches nothing says so in an entry,
+	// {Exclude: true}, since an empty one is sent as none at all, which is
+	// Chromium's default.
 	//
-	// It is apart from Filter because Chromium announces a service worker
-	// at more than one level — at the browser's and again at every page it
-	// serves — and a target must be held by ONE session: held by two, it is
-	// set up by each and starts only once both have resumed it (measured on
-	// both pinned Chromiums: a command to a service worker two sessions held
-	// went unanswered for as long as both held it, one to a service worker a
-	// single session held was answered at once, and with a page's own
-	// auto-attach taking it, it was announced twice). So a service worker is
-	// taken at the parent's level alone, by Filter, which on the browser's
-	// session is one session however many pages it serves: AutoAttach
-	// refuses a ChildFilter that takes one, which would hold it once for
-	// each page it serves, and a nil or empty ChildFilter leaves it out. A
-	// shared worker is announced at the browser's level alone, and a type
-	// neither filter takes is never attached, and runs unheld.
+	// It is apart from Filter because Chromium announces a service worker at the
+	// browser's level and again at every page, and a target must be held by ONE
+	// session: held by two it starts only once both resume it (measured on both
+	// pins). So Filter alone takes it, and AutoAttach refuses a ChildFilter that
+	// does. A shared worker is announced at the browser's level alone.
 	ChildFilter []TargetFilterEntry
 	// Setup prepares one target as it is attached — the caller's request
 	// gate, bindings and scripts — by SENDING them with [Send], in the order
@@ -117,6 +108,9 @@ type Attacher struct {
 // measured, and why a tab is refused are the package doc's.
 func AutoAttach(ctx context.Context, parent *Session, o AttachOptions) (*Attacher, error) {
 	if takes(o.Filter, "tab") {
+		// With tabs taken Chromium announces each tab's page unheld, so it
+		// would never be resumed; it also attached a page's prerender held
+		// before it had a renderer, where taking pages prerenders nothing.
 		return nil, errors.New("cdp: AttachOptions.Filter takes tab targets: Chromium announces the page in a " +
 			"tab unheld, so the attacher would never resume it and it would not run; take pages, as Chromium's " +
 			"default does")

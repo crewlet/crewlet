@@ -17,9 +17,9 @@ import (
 // It tailors to the routing reason the parser stamped, not the change kind:
 // one assignment reaches the assignee, watchers and perhaps the unit lead,
 // each owing something different, and a prompt keyed on the kind tells all
-// three the weakest thing. The eighteen reasons collapse to three frames
+// three the weakest thing. The nineteen reasons collapse to three frames
 // (somebody is asking you, this is your work, this is activity you follow):
-// eighteen openers would be eighteen places for one sentence to drift.
+// nineteen openers would be nineteen places for one sentence to drift.
 //
 // It names tools, the exception to the tool-capabilities doctrine: this build
 // ships and registers them, under names it chose, on every seat that can read
@@ -130,7 +130,7 @@ func (p Prompt) PartitionKey(metadata map[string]string, subject string) string 
 // wake, written on a person, joins the task at the top of their list.
 func (Prompt) ConversationIdentity(metadata map[string]string, _ string) string {
 	if id := metadata[MetaTaskID]; id != "" {
-		return ItemConversation(id)
+		return itemIdentity(id)
 	}
 	// A non-task wake keys on its own object: a shared empty key would merge
 	// every person-scoped wake in the company into one ledger.
@@ -191,8 +191,9 @@ func (Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 	// The object decides the frame before the reason: the task frame's
 	// openers, **Task:** header and get_work_item pointer are untrue of a
 	// priority list. A task is the default, since the parser always sets
-	// `object`; a hand-built wake without it renders as a task.
-	if kind := ObjectKind(meta[MetaObject]); kind != "" && kind != KindTask {
+	// `object`; a hand-built wake without it renders as a task, and so does a
+	// flow notice, which is about its item.
+	if kind := ObjectKind(meta[MetaObject]); kind != "" && kind != KindTask && kind != KindFlow {
 		return buildObjectPrompt(kind, n, parties)
 	}
 	reason := Reason(meta[MetaVia])
@@ -208,6 +209,30 @@ func (Prompt) Build(n notify.Inbound, parties notify.Parties) string {
 	}
 	promptHandling(&b, meta, reason)
 	return b.String()
+}
+
+// flowOpener is a flow notice's opening sentence: the state its item is in
+// and why, in the role the notice tells its seat in ([MetaFlowRole]).
+func flowOpener(meta map[string]string) string {
+	whose := "A task in a project you lead"
+	if FlowRole(meta[MetaFlowRole]) == FlowToldAssignee {
+		whose = "A task assigned to you"
+	}
+	switch FlowState(meta[MetaFlowState]) {
+	case FlowDue:
+		return whose + " is due: the start it waited for passed, and nothing of" +
+			" its assignee's has moved it since."
+	case FlowStuck:
+		return whose + " is stuck: nothing changed on it for its project's" +
+			" stuck window."
+	case FlowHeld:
+		who := meta[MetaAssignee]
+		if who == "" {
+			who = "its assignee"
+		}
+		return whose + " is held: " + heldWords(FlowCause(meta[MetaFlowCause]), who) + "."
+	}
+	return whose + " is in progress and nobody is moving it."
 }
 
 // isFallback reports a reason that reached this seat because nobody else was
@@ -290,6 +315,8 @@ func promptOpener(b *strings.Builder, n notify.Inbound, parties notify.Parties,
 	case ReasonLeadFallback:
 		b.WriteString("A task in your team's project has activity and nobody " +
 			"here is named on it.")
+	case ReasonFlow:
+		b.WriteString(flowOpener(n.Metadata))
 	default:
 		b.WriteString("A task you are named on changed.")
 	}
@@ -771,6 +798,17 @@ func promptHandling(b *strings.Builder, meta map[string]string, reason Reason) {
 		// makes a lead follow neither.
 		return
 	}
+	if reason == ReasonFlow {
+		// Not the task frame's steps, which are for taking the task on: a
+		// lead told about a colleague's item decides what moves it.
+		b.WriteString("\n## How to handle this" +
+			"\nNobody is moving this task. Read it with `" + GetWorkItemTool +
+			"`, then do what moves it: ask its assignee on the task with `" +
+			CommentOnWorkTool + "`, reassign it or change its dates with `" +
+			UpdateWorkItemTool + "`, or clear what holds it. If it is moving" +
+			" after all, stay silent: no action is needed.\n")
+		return
+	}
 
 	b.WriteString("\n## How to handle this")
 	if !reason.Addressed() {
@@ -827,8 +865,12 @@ func promptSender(n notify.Inbound, parties notify.Parties) string {
 	return actor
 }
 
-// ItemConversation is the conversation a task IS, named by its id: what every
-// wake about the task is filed under ([Prompt.ConversationIdentity]), and what
-// the work pickup stamps its wake with, so a pickup's turn continues the
-// task's own conversation (ADR-0112).
-func ItemConversation(id string) string { return string(KindTask) + ":" + id }
+// ItemConversation is the conversation a task IS, as every wake about it is
+// stamped: its identity ([Prompt.ConversationIdentity]) namespaced by this
+// source ([notify.Prompts.Conversation]), `work:task:<id>`. The work pickup
+// stamps its wake with it, so a pickup's turn continues the task's own session
+// (ADR-0112) and moves the seat's seen-through mark on it (ADR-0162).
+func ItemConversation(id string) string { return notify.Namespaced(Source, itemIdentity(id)) }
+
+// itemIdentity is a task's conversation as this source names it, `task:<id>`.
+func itemIdentity(id string) string { return string(KindTask) + ":" + id }

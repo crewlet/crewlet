@@ -1,7 +1,7 @@
 // Package browser holds what the engine decides about Chromium that more than
 // one package reads: the oldest major the engine accepts and the suite
 // certifies ([MinChromiumMajor]), and that no Go but the artifact render's
-// client speaks DevTools (ADR-0162).
+// client speaks DevTools (ADR-0163).
 //
 // # The floor
 //
@@ -35,7 +35,7 @@
 // runs, and Go's internal-package rule refuses every importer of it outside
 // internal/artifactrender at compile time. So that no second client grows
 // beside it, no Go file of the module names a DevTools method but those in
-// that client's own directory, none beneath it (ADR-0162).
+// that client's own directory, none beneath it (ADR-0163).
 //
 // TestNoGoFileButTheRendersClientNamesADevToolsMethod holds that. It reads
 // every comment and every string and rune literal of the module's Go files,

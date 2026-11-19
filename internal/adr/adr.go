@@ -43,6 +43,15 @@
 // register that pretends they all have gates — and the entries are checked in
 // BOTH directions, so a decision that acquires a gate and forgets to leave the
 // list fails, the same way internal/skipgate's Always entries do.
+//
+// # What the gate checks
+//
+// Every record carries the [Required] fields under a number no other record
+// holds. Its Authority exists and names the record; its Enforced-by names a
+// gate that exists, in the package a qualified name says, or is the literal
+// "nothing" with the reason. Every citation of a record in the tree names one
+// that exists, and the index lists every record on one row. It runs in make
+// check, because the register it replaced was referred to by nothing.
 package adr
 
 import (
@@ -181,19 +190,15 @@ var Reference = regexp.MustCompile(`\bADR-(\d{4})\b`)
 
 // Load reads every record under root/[Dir].
 //
-// The template is skipped by NUMBER rather than by name: it is 0000, which is
-// the one number a real record cannot take, so a template renamed or copied
-// badly shows up as a malformed record instead of being silently ignored.
+// The template is skipped by NUMBER, not name: it is 0000, the one number a
+// real record cannot take, so a badly renamed template shows up as a malformed
+// record instead of being silently ignored.
 //
-// TWO RECORDS WITH ONE NUMBER ARE REFUSED HERE, at the one reader every check
-// goes through, rather than by a test beside it. Every consumer keys the
-// records by their id, and a map keyed on the id keeps whichever record was
-// read last — so the anchor check held one decision's authority and silently
-// skipped the other's, the citation check found the number declared and
-// passed, and a citation of it reached two decisions while the gate certified
-// one. Two branches that each took the next free number and then merged is
-// exactly how it happens, and a merge is the change least likely to be read
-// record by record.
+// Two records with one number are refused here, at the one reader every check
+// goes through. Consumers key records by id, so a map keeps whichever was read
+// last: one decision's authority would go unchecked and a citation would reach
+// two decisions while the gate certified one. Two branches that each took the
+// next free number and then merged is how it happens.
 func Load(root string) ([]Record, error) {
 	dir := filepath.Join(root, Dir)
 	entries, err := os.ReadDir(dir)

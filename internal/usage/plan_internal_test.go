@@ -12,25 +12,16 @@ import (
 
 // EVERY STATEMENT THAT READS OR CLEARS ONE OBJECT SEEKS THAT OBJECT'S KEY.
 //
-// The publisher reads what the fleet holds of an object before every publish
-// ([Applied]) and the applier reads its guard and clears its rows on every
-// record, so each runs once per changed object per tick on every data node.
-// With no statistics the planner prefers the one-column day index over a
-// primary key that does not cover what a statement reads, and a statement that
-// takes it walks every data node's day — every seat's spend cells, every
-// person's — to read one object. Each statement here is the package's own text,
-// so the plan read is the plan run, and it is read through storetest's one
-// reading of a plan, which also asks whether the planner unnested a correlated
-// aggregate ([storetest.Decorrelated]): a guard rewritten that way reads every
-// row of its table however many objects it is asked about.
-//
-// Mutation: drop either `INDEXED BY` from the spend reads, or from the person
-// guard, and its plan names `_day_idx (day=?)`; drop it from a repository's
-// readers, and its plan seeks the covering reader index by the repository
-// alone — its every reader on every node and day; drop it from a schedule's
-// fires or their guard, and the plan names `usage_schedule_runs_schedule_idx`;
-// write the schedule guard as an unfiltered correlated MAX and the
-// decorrelation refusal names it.
+// The publisher ([Applied]) and the applier's guard run once per changed
+// object per tick on every data node. With no statistics the planner prefers
+// the one-column day index over a primary key that does not cover the read,
+// walking every day to read one object. Each statement is planned through
+// storetest, which asks if the planner unnested a correlated aggregate
+// ([storetest.Decorrelated]). Mutation: drop an `INDEXED BY` from the
+// spend reads or the person guard and the plan names `_day_idx (day=?)`; from a
+// repository's readers and it seeks by the repository alone; from a schedule's
+// fires or guard and it names `usage_schedule_runs_schedule_idx`; write the
+// schedule guard as an unfiltered correlated MAX and the refusal names it.
 func TestEveryObjectStatementSeeksItsKey(t *testing.T) {
 	t.Parallel()
 	db, _ := storetest.OpenEstate(t, filepath.Join(t.TempDir(), "node.db"), store.Options{}, 1)

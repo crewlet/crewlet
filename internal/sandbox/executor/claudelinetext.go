@@ -215,7 +215,7 @@ func noticeEnclosed(line []byte, whole bool, opening, closing string) ([]byte, b
 }
 
 // textHandback reads whether a task notification's text ([textNotice]) carries
-// a handback ([carriesHandback]): whether it names [claudeToolHandback]
+// a handback ([lineDecoder.toolResult]): whether it names [claudeToolHandback]
 // anywhere. It carries the piece before's last len(name)-1 bytes, so a name a
 // cut splits is still met.
 //
@@ -266,9 +266,9 @@ var _ [sandbox.MaxBridgeOutputBytes - sandbox.HoldingsOpeningBytes]struct{}
 // zero, since a log keeps no longer output whole. A call holds these 72 bytes
 // by value, whatever the text's length.
 //
-// THE ZERO VALUE IS NO TEXT (a result whose content holds none, [resultText],
-// and every tool_use's call), never a text of no bytes, whose digests are the
-// empty text's.
+// THE ZERO VALUE IS NO TEXT (a result whose content holds none,
+// [lineDecoder.resultContent], and every tool_use's call), never a text of no
+// bytes, whose digests are the empty text's.
 type threadResultText struct {
 	// size is the text's decoded length plus one; 0 where there is no text.
 	size           int64
@@ -310,7 +310,7 @@ func (r *textResult) sum() threadResultText {
 // textUnits counts a text's UTF-16 code units, as JavaScript counts a string's
 // length: two for a character past the basic plane, one for every other. It
 // stops once past [skillListingMaxNameUnits], the only bound its reader
-// ([skillNamesKept]) checks.
+// ([lineDecoder.skillNames]) checks.
 type textUnits struct{ n int }
 
 // write reads the text's next piece.

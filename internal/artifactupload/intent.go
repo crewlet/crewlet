@@ -33,24 +33,17 @@ var UploadNamespace = uuid.MustParse("3f6c2a90-5d1e-5b7a-9e44-6a8d0c2f1b73")
 const VendorPrefix = "_vendor/"
 
 // Intend decides an upload before any byte moves: for an artifact's next
-// version, for a create (a zero id), or into its asset store (req.Asset).
-//
-// # In one decision, before the first byte
-//
-// It holds every declared file to its path, its media type and its size, the
-// publish to its file and byte bounds, finds which files the artifact already
-// holds (those are carried and move no bytes), and reserves the bytes of the
-// rest against the principal's and the company's pending budgets and the
-// company's quota, counted over what its artifacts name and every other hold
-// outstanding. Only then does it mint one key per file on the engine's clock
-// and answer how each file is transferred: a presigned put straight to the
-// bucket, bound to the file's exact length, type and digest, where the object
-// store proved it can take one and the caller can reach it ([reachesBucket]);
-// a put through the engine otherwise.
-//
-// The authority verb is the caller's to have decided. An intent with the
-// caller's operation key is idempotent: the retry an unknown outcome asks for
-// answers the same upload, keys and reservation.
+// version, for a create (a zero id), or into its asset store (req.Asset). It
+// holds every declared file to its path, type and size and the publish to its
+// bounds, finds the files already held (carried, no bytes), and reserves
+// the rest against the principal's and company's pending budgets and the
+// company's quota, counted over what its artifacts name and every other hold.
+// Only then does it mint a key per file: a presigned put straight to the
+// bucket, bound to exact length, type and digest, where the store can take one
+// and the caller reach it ([reachesBucket]); a put through the engine otherwise.
+// The authority verb is the caller's to decide. An intent with the caller's
+// operation key is idempotent: a retry answers the same upload, keys and
+// reservation.
 func (s *Service) Intend(ctx context.Context, c artifactsdomain.Call, id artifacts.ID,
 	req artifacts.UploadRequest) (artifacts.UploadIntent, error) {
 

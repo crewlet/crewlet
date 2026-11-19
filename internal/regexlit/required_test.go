@@ -121,19 +121,16 @@ func TestRequiredKeepsNoClauseAnotherImplies(t *testing.T) {
 
 // NOTHING A PATTERN CAN MATCH IS EVER SKIPPED.
 //
-// The argument for soundness is in the package doc, rule by rule; this is
-// the evidence, over patterns built from every construct the derivation
-// handles and strings GENERATED to match them — folded runes from every orbit
-// member, the long s and the Kelvin sign among them, and bytes that are not
-// UTF-8 wherever the pattern can match one. Random text almost never matches
-// a pattern, so a property test over random text would certify nothing; a
-// generator walking the pattern's own syntax tree produces matches by
-// construction, and the test asserts it did.
+// The soundness argument is in the package doc; this is the evidence, over
+// patterns of every construct the derivation handles and strings GENERATED to
+// match them (every orbit member, the long s and Kelvin sign, non-UTF-8 bytes
+// wherever a pattern can match one). Random text almost never matches, so a
+// generator walking the pattern's syntax tree matches by construction, and the
+// test asserts it did.
 //
-// A FIXED SEED, so a failure reproduces exactly; its breadth is the count. A
-// thousand patterns puts every construct the generator writes into hundreds
-// of them, twenty strings each, and stays under two seconds under the race
-// detector — three thousand cost five and found nothing a thousand did not.
+// A FIXED SEED, so a failure reproduces; breadth is the count: a thousand
+// patterns put every construct into hundreds of them, twenty strings each, in
+// under two seconds under race; three thousand found nothing more.
 func TestRequiredAdmitsEveryMatch(t *testing.T) {
 	t.Parallel()
 	rng := rand.New(rand.NewPCG(20261008, 1))
@@ -244,19 +241,15 @@ func escapeByDefinition(r rune, orbit []rune) bool {
 
 // THE FOLDED COMPARISON IS SOUND FOR EVERY RUNE THERE IS.
 //
-// Not evidence but the proof, by exhaustion: for every rune a (?i) literal
-// can hold, every rune the regexp would match in its place either lowers to
-// what the prefilter looks for, or is an escape that admits the whole text —
-// or the rune is one the prefilter refuses to compare, and a literal is cut
-// there.
+// The proof, by exhaustion: for every rune a (?i) literal can hold, every rune
+// the regexp would match in its place lowers to what the prefilter looks for,
+// or is an escape admitting the whole text, or is one the prefilter refuses to
+// compare and a literal is cut there.
 //
-// An escape is what HasEscape reports, because that is what Admits asks, and
-// what a caller making the comparison from Terms asks: the proof is of the
-// function they call. And it reports EXACTLY the runes that fold with an
-// ASCII letter without lowering to its lowering (escapeByDefinition, which
-// states that rune by rune where the package derives it from the ASCII
-// letters): a rune it missed is a match skipped, and one more is a text
-// admitted, or an index entry passed, for nothing.
+// An escape is what HasEscape reports, which Admits and Terms callers ask. It
+// reports EXACTLY the runes folding with an ASCII letter without lowering to
+// its lowering (escapeByDefinition, rune by rune): a rune missed is a match
+// skipped, one extra a text admitted for nothing.
 func TestTheFoldedComparisonIsSoundForEveryRune(t *testing.T) {
 	t.Parallel()
 	var encoded [utf8.UTFMax]byte
@@ -357,17 +350,14 @@ func TestAPatternThatRequiresNothingAdmitsEverything(t *testing.T) {
 
 // TERMS ARE THE CLAUSES' PIECES, EACH WITH THE COMPARISON ADMITS MAKES.
 //
-// A caller that looks a prefilter's substrings up somewhere other than in a
-// text — an index of the pieces each text holds — reads them through Terms and
-// makes Admits's comparison itself, so a Folded flag that disagreed with
-// Admits would be a hole in that caller's answers which nothing else here
-// would see. Held over the gates' patterns and generated ones: Terms are
-// Clauses' substrings, clause by clause in the same order, a folded one in
-// its lowered form; and the comparison made from Terms and HasEscape alone,
-// as their docs state it, admits exactly the texts Admits does. Each text is
-// also tried upper- and lower-cased, because a wrong flag shows only where
-// the case differs from the pattern's: a plain `ADR-` compared folded admits
-// `adr-`, and a folded `spend_window` compared as it is skips `SPEND_WINDOW`.
+// A caller looking substrings up in an index reads them through Terms and
+// makes Admits's comparison itself, so a Folded flag disagreeing with Admits
+// is a hole nothing else here would see. Held over the gates' patterns and
+// generated ones: Terms are Clauses' substrings in order, a folded one
+// lowered, and the comparison from Terms and HasEscape alone admits exactly
+// what Admits does. Each text is also tried upper- and lower-cased, since a
+// wrong flag shows only where case differs: plain `ADR-` compared folded
+// admits `adr-`; folded `spend_window` compared as is skips `SPEND_WINDOW`.
 func TestTermsAreTheClausesPieces(t *testing.T) {
 	t.Parallel()
 	if got := (Prefilter{}).Terms(); got != nil {

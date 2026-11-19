@@ -72,12 +72,11 @@ func launchHeldIn(until time.Time, w BudgetWindow) error {
 // A RELAUNCH THE BUDGET REFUSED BELOW ITS FLOOR LEAVES ITS WINDOW FOR THE NEXT
 // ONE, A COMPLETION'S AND AN ANSWER'S ALIKE. The hold names the window the
 // relaunch was refused in, and the release counts it onto the job's record, so
-// the resume that comes back once the window has turned over hands the turn a
-// run that names it, and the turn's next relaunch waits for its floor no longer
-// than that window: a floor a busy company's window never leaves at the
-// launch's read held the turn for ever. A completion's is held on its row; an
-// answer's is turned back to wait in its own series, with no hold on the row,
-// and its window is counted all the same, since its next attempt's relaunch
+// the resume that comes back hands the turn a run that names it, and the
+// turn's next relaunch waits for its floor no longer than that window (a floor
+// a busy company never leaves at the launch's read held the turn for ever). A
+// completion's is held on its row; an answer's is turned back with no hold on
+// the row, and its window is counted all the same, since its next relaunch
 // reads the row, on this node or the seat's next holder.
 //
 // Mutation: drop the window from a held completion's release, or from a
@@ -168,13 +167,12 @@ func TestReadmittingTheBudgetLiftsAHeldResume(t *testing.T) {
 // A RESUMED RUN KEEPS ITS SEAT HELD FOR THE WHOLE RESUMED TURN, and lets go of
 // it once the turn is over.
 //
-// What a running engine did: an executor's job finished, its completion
-// claimed the run (`resumed`, which holds the seat) and resumed the turn that
-// launched it. The resume gave the seat's count back BEFORE the resumer ran,
-// so the seat's inbox hold lifted for the length of the resumed turn, and the
-// seat's next mail started a second turn beside it 444 ms later: that turn
-// launched a second job, and the seat held two runs at once. A seat busy
-// coding takes no other work (seathold.go), and the resumed turn is that work.
+// A completion claims the run (`resumed`, which holds the seat) and resumes
+// the turn that launched it. Giving the seat's count back BEFORE the resumer
+// ran lifted the inbox hold for the resumed turn, so the seat's next mail
+// started a second turn beside it, which launched a second job: two runs at
+// once. A seat busy coding takes no other work (seathold.go), and the resumed
+// turn is that work.
 //
 // Mutation: give the count back before the resumer runs, and the inbox is not
 // held during the turn; skip the recount after it, and it is never let go of.
@@ -635,11 +633,10 @@ func TestAStopThatLandsWhileAResumeRunsIsNotKeptOutByItsHold(t *testing.T) {
 // sit-out is the node's own, which no peer shares and a restart forgets
 // (ADR-0064), so the hold is kept in the node's memory and never written to
 // the run's row, which every node reads: written there, it silenced the job
-// for whoever held the seat next, a restarted node or the peer the seat moved
-// to, whose own models may know of no limit at all, until the instant — up to
-// the hour a vendor's window is benched for. Here the seat moves on inside the
-// window, and its next holder resumes the job on the waiter's next
-// announcement.
+// for the next holder (a restarted node or a peer whose models may know of no
+// limit) until the instant, up to the hour a vendor's window is benched. Here
+// the seat moves on inside the window, and its next holder resumes the job on
+// the waiter's next announcement.
 //
 // Mutation: write the refusal onto the row as a hold (unclaimHeld), and the
 // waiter announces nothing, and the next holder resumes nothing, until the

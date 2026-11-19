@@ -36,7 +36,9 @@ import (
 // none, and failing the resume would lose the whole turn. Every other field is
 // the log's, carried as is for the readers [runner.BridgedCall] names (a zero
 // start is "not measured", a left-out value keeps its marker); the round is not
-// set here, since the runner states it from the run's record.
+// set here, since the runner states it from the run's record. The
+// arguments' text rides unchanged beside them ([runner.BridgedCall.ArgsText]):
+// an OpenCode reading keys a call by it, never by the decoded map.
 func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 	out := make([]runner.BridgedCall, 0, len(logged))
 	for _, call := range logged {
@@ -52,10 +54,10 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 				// held call or an approved one.
 				Withheld:   call.Withheld(),
 				ArgsUnread: unread,
+				Late:       call.Late,
 			},
 			Seq:         call.Seq,
 			Appended:    call.Appended,
-			Late:        call.Late,
 			Abandoned:   call.Abandoned,
 			StartedAt:   call.StartedAt,
 			Duration:    time.Duration(call.DurationMS) * time.Millisecond,
@@ -69,6 +71,7 @@ func bridgedCalls(logged []sandbox.BridgeCall) []runner.BridgedCall {
 			Approved:    call.Approved,
 			HeldID:      call.HeldID,
 			CallID:      call.CallID,
+			ArgsText:    call.Args,
 		})
 	}
 	return out
@@ -136,8 +139,8 @@ func decodeBridgeArgs(raw string, unparsed bool) (args map[string]any, unread bo
 //
 // ONE PER SESSION, BOUND TO ITS JOB AND ROUND BEFORE THE BOX EXISTS
 // ([bridgeLedger.bind]): every append names both, so a call outliving its job
-// is listed late in its round, its spend nobody's, or dropped once a new round
-// began, never filed as the next job's ([sandbox.PendingStore.AppendBridgeCall]).
+// is listed late in its round, or in the next round where a new one began, its
+// spend nobody's, never filed as the next job's ([sandbox.PendingStore.AppendBridgeCall]).
 type bridgeLedger struct {
 	store sandbox.PendingStore
 
@@ -379,9 +382,9 @@ func (l *bridgeLedger) Record(ctx context.Context, runID string, call mcpbridge.
 		return fmt.Errorf("%w: %w", mcpbridge.ErrUnrecorded, err)
 	}
 	if !recorded {
-		// The ordinary end of a round for the call: its log is gone or takes
-		// a new round's calls. A late call of a carried-on round never comes
-		// here: the log lists it, `late` on the runs answer.
+		// The ordinary end of a run for the call: its log is gone, or the
+		// append named no round. A late call never comes here, of a carried-on
+		// round or an earlier one: the log lists it, `late` on the runs answer.
 		if call.Abandoned {
 			// Unless nobody waited for it: neither its harness's session nor
 			// any record of the run holds it, though its effect happened
@@ -389,9 +392,9 @@ func (l *bridgeLedger) Record(ctx context.Context, runID string, call mcpbridge.
 			// its calls").
 			l.logger().WarnContext(ctx, "bridge_abandoned_call_after_its_job", "run_id", runID,
 				"launch_id", launch, "call", namedCall(a.Call),
-				"detail", "a call nobody waited for returned once the run's log no longer took the "+
-					"calls of its round: the run ended, or a new round began; it ran and its effect "+
-					"happened, and neither the session that made it nor any record of the run holds it")
+				"detail", "a call nobody waited for returned once the run's log was gone: the run "+
+					"ended; it ran and its effect happened, and neither the session that made it nor any "+
+					"record of the run holds it")
 			return nil
 		}
 		l.logger().DebugContext(ctx, "bridge_call_after_its_job", "run_id", runID,
@@ -521,8 +524,8 @@ func boxStarted(ledger *bridgeLedger, runID string, continuing func() bool,
 // later attempt can only rewrite that spend, so its answer never takes a logged
 // call off the log (and its submission's waiter unnudged). The error answered
 // is the last landed attempt's spend error. A REPLACED JOB answers alike
-// whichever relaunch replaced it (a new round or the run's end: not recorded; a
-// carried-on round: recorded with [sandbox.ErrJobReplaced]): nil if no attempt
+// whichever relaunch replaced it (the run's end: not recorded; a carried-on or
+// a new round: recorded with [sandbox.ErrJobReplaced]): nil if no attempt
 // landed before, a late call's spend being nobody's, else that attempt's spend
 // error, a failure while the job could still take it.
 func (l *bridgeLedger) appendRetrying(ctx context.Context, runID string, a sandbox.BridgeAppend) (bool, error) {
@@ -534,9 +537,9 @@ func (l *bridgeLedger) appendRetrying(ctx context.Context, runID string, a sandb
 		recorded, err := l.store.AppendBridgeCall(ctx, runID, a)
 		switch {
 		case recorded && errors.Is(err, sandbox.ErrJobReplaced), landed && !recorded && err == nil:
-			// The job was replaced (round carried on, or a new round or the
-			// run's end since an attempt landed): the spend can no longer
-			// reach this job's row, and nothing is left to retry.
+			// The job was replaced (its round carried on or a new one begun,
+			// or the run's end since an attempt landed): the spend can no
+			// longer reach this job's row, and nothing is left to retry.
 			return true, spend
 		case recorded:
 			landed, spend = true, err

@@ -15,29 +15,15 @@ import (
 
 // How a worker answers, and how that answer is classified.
 //
-// # A worker submits, it does not narrate
+// A worker submits, it does not narrate: a parent that must ACT on prose would
+// spend a model call parsing it. So a worker ends by CALLING A TOOL with typed
+// arguments (internal/agent/structured), declared in its template.
 //
-// A worker used to end by writing prose, and the parent's only option was to
-// read it. That is fine for "summarise this page" and useless for anything
-// the parent then has to ACT on: an executor that asked three workers to
-// check three repositories got back three paragraphs and had to spend its own
-// model call turning them into three verdicts — a call that could get the
-// parsing wrong, on prose that had no obligation to be parseable.
-//
-// So a worker ends the way every other phase in this engine ends: by CALLING
-// A TOOL with typed arguments (internal/agent/structured). What comes back is
-// fields the parent can index, and the shape of those fields is declared in
-// the worker's template where a founder can read it.
-//
-// # An absent submission is never synthesised
-//
-// A worker that produced prose and never called submit_result has NOT
-// answered, and the engine says so — status `no_result`, with the prose
-// attached. Filling in a result from the transcript would be the engine
-// putting words in the worker's mouth on the one question the parent asked,
-// and a dependent task fed a fabricated answer produces a confident wrong
-// one. The prose is still handed back, because eight rounds of work are worth
-// reading even when the last step was skipped.
+// An absent submission is never synthesised: a worker that produced prose and
+// never called submit_result has NOT answered, so the status is `no_result`
+// with the prose attached. A result filled from the transcript would put words
+// in the worker's mouth, and a dependent task fed it would answer confidently
+// wrong.
 
 // SubmitTool is the name a worker calls to answer.
 //
@@ -352,17 +338,14 @@ func (r Result) Answer() string {
 
 // classify turns a finished loop's error into a status and a message.
 //
-// THE MESSAGE IS WHOLE. It used to be cut to five hundred runes "so a provider
-// error carrying a whole response body would not bury the sibling results" —
-// but the parent reads this to decide whether to retry, and the end of a
-// wrapped error is where its cause is. What bounds it is where it is made: a
-// provider's error is the vendor's error envelope, not its response body, and
+// The message is whole, never cut: the parent reads it to decide whether to
+// retry, and the end of a wrapped error is where its cause is. What bounds it
+// is where it is made: a provider's error is the vendor's error envelope, and
 // every vendor client reads a refusal through a bounded read.
 //
 // The CAUSE decides, never the error's shape: a provider's own HTTP client
-// returns DeadlineExceeded for its own reasons, and reporting somebody
-// else's timeout as the worker's cap sends an operator to raise a limit that
-// was never reached.
+// returns DeadlineExceeded for its own reasons, and reporting that as the
+// worker's cap sends an operator to raise a limit never reached.
 func classify(kind, reason string, err error) (Status, string) {
 	switch {
 	case kind == KindTimeout:

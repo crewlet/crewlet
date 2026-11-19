@@ -16,7 +16,7 @@ import "sync"
 var goPackages = sync.OnceValue(func() map[string]bool {
 	return map[string]bool{
 		"a2a": true, "a2atest": true, "accessdomain": true, "activityline": true, "accessmigrate": true, "accessreview": true, "adr": true, "agentaccess": true, "alarmwake": true,
-		"advisor": true, "analyst": true, "api": true, "atlas": true, "atlasdomain": true, "derive": true, "gather": true, "codescan": true, "collecttest": true, "deployfiles": true,
+		"advisor": true, "advisordomain": true, "analyst": true, "api": true, "atlas": true, "atlasdomain": true, "derive": true, "gather": true, "codescan": true, "collecttest": true, "deployfiles": true,
 		"argval": true, "toolargs": true, "artifactdata": true, "artifactdataapi": true, "artifacts": true,
 		"artifactrender": true, "artifactsapi": true, "artifactsdomain": true, "artifactserve": true,
 		"artifactspike": true, "artifactupload": true,
@@ -49,7 +49,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"lint": true, "linktest": true, "manifest": true, "mcprelay": true, "mediatype": true,
 		"llmapi": true, "mattermost": true, "mcp": true, "mcpapi": true, "mcpbridge": true, "mcpreview": true, "memobj": true, "modelcatalog": true, "modelnote": true,
 		"memory": true, "memread": true, "memsync": true, "metrics": true, "migrate": true, "mirror": true,
-		"natsobj": true, "node": true, "notify": true, "oauth": true, "objstore": true,
+		"named": true, "natsobj": true, "node": true, "notify": true, "oauth": true, "objstore": true,
 		"objstoretest": true, "observe": true, "operator": true,
 		"objectives": true, "query": true,
 		"opkey": true, "org": true, "orgchart": true, "origin": true, "paced": true, "pagepolicy": true,
@@ -73,7 +73,7 @@ var goPackages = sync.OnceValue(func() map[string]bool {
 		"toolsession": true, "toolsessiontest": true,
 		"topics": true, "tracing": true, "turn": true, "turnctx": true, "types": true,
 		"ticket": true, "trashreap": true,
-		"usage": true, "version": true, "webhooks": true, "whsec": true,
+		"usage": true, "version": true, "webhooks": true, "whsec": true, "wiregate": true,
 		"words": true, "workapi": true, "workkey": true, "worklet": true,
 	}
 })

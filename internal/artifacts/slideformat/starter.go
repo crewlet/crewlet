@@ -17,15 +17,13 @@ import (
 //
 // What a person starts a deck from in the dashboard: a PLAN, the theme it is
 // drawn in and the slides it opens with, each a layout and its title. It is
-// the ENGINE'S, not the browser's, because a create from the dashboard carries
-// no upload: the pipeline publishes the composed files inline, held to this
-// format like any deck, so a theme or a layout that drifts from the format
-// fails its own test rather than a person's first save.
+// the engine's, not the browser's, because a dashboard create carries no
+// upload: the pipeline publishes the composed files inline, held to this
+// format, so a drifting theme or layout fails its own test, not a first save.
 //
-// A plan names layouts rather than slides because the deck editor adds a
-// slide the same way: from the layouts of the theme the index names, drawn
-// with this package's markup, so a slide added on day ten looks like the
-// slides the deck began with.
+// A plan names layouts rather than slides because the deck editor adds slides
+// the same way, from the layouts of the theme the index names, so a later
+// slide looks like the opening ones.
 
 // Layout is one kind of slide a starter can hold.
 type Layout struct {

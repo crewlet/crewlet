@@ -285,20 +285,15 @@ func TestOnlyAPositiveReadHintCounts(t *testing.T) {
 }
 
 // A PRESUMED WRITE IS AN MCP TOOL NOBODY MARKED EITHER WAY. The delivery fence
-// counts every MCP tool its annotations do not call a read, and must; a turn
-// told what it did has to know which of those it counts by that default alone,
-// or a turn that only searched is told it wrote. One marked a write is a write,
-// `read_only: false` or `destructive: true`, its server's or an operator's
-// override; one marked a read delivers nothing; and a first-party tool is the
-// engine's own to classify: none of them is presumed, and every presumed one
-// delivers. `destructive: false` alone marks neither, so a tool marked only so
-// is presumed.
+// counts every MCP tool its annotations do not call a read, and a turn told
+// what it did must know which it counts by that default alone, or a turn that
+// only searched is told it wrote. A first-party tool is never presumed, and
+// `destructive: false` alone marks neither, so it is presumed.
 //
 // Mutation: drop the origin test, and the unannotated builtin is presumed; read
 // any hint short of Yes as unknown, and the denied write is presumed; leave the
-// destructive hint unread, and the two tools marked destructive are presumed;
-// read any destructive hint as a write, and the one marked not destructive is
-// not.
+// destructive hint unread, and the two destructive tools are presumed; read any
+// destructive hint as a write, and the not-destructive one is not.
 func TestAPresumedWriteIsAnMCPToolNobodyMarkedEitherWay(t *testing.T) {
 	t.Parallel()
 	r := tools.NewRegistry()

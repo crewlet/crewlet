@@ -267,25 +267,17 @@ type Input struct {
 	// collected is the one whose run was launched.
 	Resume bool
 
-	// Round is the round that executor parked in, so the resumed turn
-	// carries on the budget rather than being handed a fresh one. Read
-	// only when Resume is set, and zero everywhere else.
+	// Round is the round the executor parked in, so the resumed turn carries
+	// on the budget. Read only when Resume is set; zero elsewhere.
 	//
-	// SEPARATE FROM History, although the two arrive together, because
-	// they answer different questions and only one of them is a count of
-	// rounds. History is what CLOSED before the park, and the round that
-	// launched the run closed nothing — [Run] returns on a park without
-	// appending it — so `len(History)+1` is the parked round by
-	// coincidence rather than by rule, and stops being it the moment a
-	// round ends any other way. The number itself is already durable:
-	// [execstate.State.Round], which the runner also stamps the collected
-	// phase's own record with, so the loop and the phase events agree
-	// about which round this is instead of differing by however many
-	// rounds ran before the box did.
+	// SEPARATE FROM History, which is what CLOSED before the park: the
+	// launching round closed nothing ([Run] returns on a park without
+	// appending it), so `len(History)+1` is the parked round only by
+	// coincidence. The durable number is [execstate.State.Round], also
+	// stamped on the collected phase's record.
 	//
-	// Zero or less is read as one: the value comes off a durable row, and
-	// taking a non-positive one literally would run the loop extra rounds
-	// and file them under iteration zero.
+	// Zero or less is read as one: it comes off a durable row, and a
+	// non-positive value taken literally would file rounds under iteration 0.
 	Round int
 }
 
@@ -330,28 +322,17 @@ type Settings struct {
 	Now func() time.Time
 
 	// Deadline is the instant the turn's wall-clock cap ends: a scheduled
-	// fire's TimeoutSeconds from the moment the turn BEGAN, in its first
-	// segment. Zero is unbounded, which is every trigger but a scheduled
-	// fire.
+	// fire's TimeoutSeconds from when the turn BEGAN. Zero is unbounded.
 	//
-	// AN INSTANT, NOT A SPAN FROM THIS CALL, because a turn is several
-	// calls: every executor launch parks the turn, and the segment that
-	// collects the run is a later call — often in another process, hours
-	// on. A cap measured from each call's own start bounded nothing at all:
-	// the launching segment ends at its first round, before the cap can be
-	// read, and every resumed segment started its clock afresh. Fixed once,
-	// when the turn begins, and carried across each park
-	// (execstate.State.Deadline), it bounds the turn the fire started.
+	// AN INSTANT, NOT A SPAN FROM THIS CALL: each executor launch parks the
+	// turn and the collecting segment is a later call, hours on, so a
+	// per-call clock bounds nothing. Carried across each park
+	// (execstate.State.Deadline).
 	//
-	// Checked BETWEEN ROUNDS, never mid-phase. A phase that is running has
-	// possibly already fired side effects, and abandoning it there would
-	// leave a post half-written with nothing recording that it happened —
-	// the same reason the drain lets a running turn finish. So the cap
-	// refuses to start another round rather than interrupting one. The one
-	// phase that can outlast it by much — the executor's run, detached in a
-	// box — carries the same instant on its row, and the poll ends a run
-	// that passes it and hands back what it did (internal/sandbox's
-	// PendingRun.Deadline).
+	// Checked BETWEEN ROUNDS, never mid-phase: a running phase may have
+	// fired side effects, and abandoning it leaves a half-written post with
+	// no record. The detached run carries the same instant and its poll ends
+	// a run past it (internal/sandbox's PendingRun.Deadline).
 	Deadline time.Time
 }
 
@@ -409,56 +390,31 @@ type Result struct {
 	// Suspended marks a turn parked on its executor's run.
 	Suspended bool
 
-	// Acted reports that this attempt's own record shows it already
-	// reached outside the engine (see [Acted]): what a retry of THIS attempt
-	// would repeat. A resumed attempt answers for its own calls, never for
-	// those its executor's run made before the segment that collects it
-	// ([Work.Inherited]).
+	// Acted reports that this attempt's own record shows it already reached
+	// outside the engine (see [Acted]): what a retry of THIS attempt would
+	// repeat, never the calls its executor's run made before the segment
+	// that collects it ([Work.Inherited]). `err != nil` cannot tell a turn
+	// that broke having done nothing from one that posted; callers read this
+	// through [Abandon].
 	//
-	// It exists for the callers that have to tell a turn which broke
-	// having done nothing from one which broke having already posted or
-	// asked a colleague. Those are two different facts and a redelivery is
-	// right for exactly one of them; the dispatcher used to have only
-	// `err != nil`, which is neither. Both callers read it through
-	// [Abandon] rather than directly.
-	//
-	// The zero value is the safe answer and the honest one: a turn whose
-	// record shows no act gets today's behaviour, which is to come back. Set
-	// wherever the loop holds a round's record — never in a defer, because
-	// [Run]'s results are unnamed and a deferred write to `res` would be
-	// discarded at every `return res, …` in this file.
+	// The zero value is the safe answer: no recorded act, the turn comes
+	// back. Set wherever the loop holds a round's record, never in a defer:
+	// [Run]'s results are unnamed, so a deferred write to `res` is discarded
+	// at every `return res, …`.
 	Acted bool
 
 	// Delivered reports whether the party waiting on this turn has its
-	// answer, as of the LAST round — see [Answered], which is not simply
-	// [DeliveredTo]: an A2A ask is answered by the engine and an
-	// unprompted turn has nobody to answer, so neither is a question the
-	// tool record can settle.
+	// answer, as of the LAST round (see [Answered], not simply [DeliveredTo]).
 	//
-	// THE LAST ROUND'S, not the turn's, and that is the whole point of it
-	// being a separate field from [Result.Acted]. Acted accumulates,
-	// because its question is "would a redelivery repeat something
-	// irreversible" and an earlier round's write is irreversible forever.
-	// This one must NOT, because its question is "does the waiting party
-	// know how the turn ENDED" — and a turn that answered a question in
-	// round one and then changed the answer in round two has left them
-	// holding the wrong one. Accumulating it would report that turn as
-	// having communicated its outcome.
+	// THE LAST ROUND'S, unlike [Result.Acted], which accumulates: a turn that
+	// answered in round one and changed the answer in round two left the
+	// waiting party holding the wrong one. The delivery GATES ([Check],
+	// [OverrideDone]) read the whole turn instead.
 	//
-	// Nor is it what the delivery GATES ask. [Check] and [OverrideDone]
-	// read the whole turn, because theirs is "was the person waiting
-	// reached at all" — a fact a later round cannot undo, and one the
-	// prior-work ledger forbids that round to establish a second time.
-	//
-	// It exists for the record of how the turn ENDED, kept on the turn's row
-	// of the executor log beside the session the turn kept: the log's end
-	// (internal/executorkeep's Ending.Delivered), which the conversation's
-	// next turn is told. It cannot ask the session: a transcript in which the
-	// seat was about to reply does not say whether the reply went. On a turn
-	// that delivered nothing, a record of the turn's own artifact as the
-	// seat's reply once wrote a reply that never happened into the one
-	// record the next turn read back — so the failure sealed itself, and a
-	// follow-up asking "did you do it?" was answered against a fiction.
+	// It feeds the turn's ending on the executor log (internal/executorkeep's
+	// Ending.Delivered), which the next turn is told; recording the artifact
+	// as a reply on a turn that delivered nothing would make it answer
+	// against a fiction.
 	Delivered bool
 
 	// PickupAnswer is how a work pickup's turn left its item, as the last
@@ -520,21 +476,15 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err 
 
 	res := Result{Decision: phase.Failed, Iterations: slices.Clone(in.History)}
 	// THE ROUNDS BEFORE THIS SEGMENT COUNT TOWARDS A STALL. Every executor
-	// launch parks the turn, so a segment reviews at most one round before
-	// the next launch parks it again: a detector that saw only its own
-	// segment's rounds could never see two, and a turn re-deriving the same
-	// artifact on every round ran to its round budget instead. Seeded from
-	// the closed rounds, in order, the detector sees the sequence one
-	// uninterrupted run of the loop would have — a closed round is exactly
-	// one the loop observed on its way to closing it.
+	// launch parks the turn, so a segment reviews at most one round and a
+	// detector seeing only its own rounds could never see two. Seeded from
+	// the closed rounds in order, it sees what one uninterrupted run would.
 	//
-	// A SPAN OF ROUNDS A PARK DROPPED IS SEEDED BY ITS LAST ROUND'S HASH
-	// ([ledger.Iteration.Through]), which is all it keeps of them: the
-	// detector compares each round it observes with the one before it, and the
-	// round before whatever follows a span is the span's last. Skipping a span
-	// would compare the round after it with the round before it — rounds
-	// apart, a stall nobody repeated — and miss the one the dropped round and
-	// the next really make.
+	// A SPAN A PARK DROPPED IS SEEDED BY ITS LAST ROUND'S HASH
+	// ([ledger.Iteration.Through]), all it keeps: the detector compares each
+	// round with the one before, and the one before whatever follows a span
+	// is the span's last. Skipping it would compare rounds apart and miss
+	// the repeat the dropped round and the next really make.
 	stall := StallDetector{}
 	for _, closed := range in.History {
 		if closed.ArtifactHash != "" {
@@ -614,23 +564,16 @@ func Run(ctx context.Context, ph Phases, set Settings, in Input) (_ Result, err 
 				return callErr
 			})
 		}
-		// BEFORE THE ERROR CHECK, and that ordering is the point. A phase
-		// that broke halfway through its tool loop hands back the calls it
-		// made before it broke, and this is the only frame that sees them:
-		// the error returns below carry `res`, and everything downstream
-		// reads the turn through it.
+		// BEFORE THE ERROR CHECK: a phase that broke halfway hands back the
+		// calls it made, only this frame sees them, and the error returns
+		// below carry `res`. Accumulated with ||, never assigned: a round
+		// that read nothing must not un-say what round one posted.
 		//
-		// Accumulated with ||, never assigned: a round that read nothing
-		// must not un-say what round one posted.
-		//
-		// THIS ATTEMPT'S CALLS ONLY. A resumed executor's record opens
-		// with its run's calls over the bridge, made before the segment
-		// that collects it ([Work.Inherited]), and a retry of the resume
-		// does not make those again: it collects the same run. Counted,
-		// every resume that broke before writing anything new (a model at
-		// its usage limit, the reviewer's or the relaunch's, a runner that
-		// could not be built) was settled for good as a turn that had
-		// written, and the executor's result never reached the seat.
+		// THIS ATTEMPT'S CALLS ONLY. A resumed executor's record opens with
+		// its run's bridge calls ([Work.Inherited]), which a retry of the
+		// resume does not repeat; counted, a resume that broke before writing
+		// anything new was settled for good as a turn that had written, and
+		// the result never reached the seat.
 		res.Acted = res.Acted || Acted(work.Calls[min(work.Inherited, len(work.Calls)):], surface)
 		// ASSIGNED, never accumulated — the opposite of the line above, and
 		// see [Result.Delivered] for why the two questions differ.

@@ -1124,7 +1124,7 @@ function EntryLinks({ detail }: { detail: WorkItemDetail }) {
   );
   if (viewer.loading) return null;
   if (!holds(viewer.grants, ATLAS)) {
-    const count = detail.entries_withheld ?? ids.length;
+    const count = detail.entries_withheld;
     if (count === 0) return null;
     return (
       <section className="task-rail-section" aria-label="Atlas entries">

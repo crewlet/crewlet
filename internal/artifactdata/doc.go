@@ -17,7 +17,8 @@
 // for every record, refused ones included, so every data node reaches the same
 // verdict and the writer reads its own back by operation id. A schema change
 // is arbitrated on the same subject instead, decided in a snapshot of the
-// schema it replaces, so it is ordered against every write it judges.
+// schema it replaces, so it is ordered against every write it judges. Quotas
+// count growth only, so a write that frees space is never refused.
 //
 // # Authority is stamped
 //
@@ -33,7 +34,7 @@
 // A collection's policy is a preset compiled into rule fields before it is
 // stored (who reads, the least role that creates, the least role that deletes,
 // and each column's write role and condition), so one evaluator reads one
-// vocabulary. A writer below editor changes only rows they created, unless a
+// vocabulary and no rule is ever evaluated by preset name. A writer below editor changes only rows they created, unless a
 // column names a write role, whose condition then decides; `humans_only` refuses
 // an agent whatever its role; `append` admits only growth; `immutable` admits
 // only a row's creation; a `private` collection is each writer's alone. A
@@ -50,8 +51,10 @@
 // Merge granularity is the top-level field: a merge sets the fields it names,
 // an increment adds exactly (on decimal text, never a float), an add or a
 // remove moves one chip, and two writers' changes to different fields of one
-// row both land in log order. A guard (`if_version`) makes a write conditional
-// on the version a reader saw.
+// row both land in log order. A field's last writer is the one the log ordered
+// last, never a clock, so two blind writes converge on every data node. A
+// guard (`if_version`) makes a write conditional on the version a reader saw,
+// and a failed guard refuses the whole batch.
 //
 // # History, undo and the digest
 //

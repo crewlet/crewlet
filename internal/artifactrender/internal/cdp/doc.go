@@ -2,7 +2,7 @@
 // typed client over one websocket to a browser ([Dial]), with every session
 // flat on that connection.
 //
-// It is the engine's one DevTools client (internal/browser's doc, ADR-0162):
+// It is the engine's one DevTools client (internal/browser's doc, ADR-0163):
 // sitting under internal/artifactrender, it is importable from there alone,
 // and its directory is the one whose Go may name a DevTools method.
 //
