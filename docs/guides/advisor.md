@@ -163,7 +163,7 @@ advisor:
 
 **What reaches the list.** The pass submits findings; the engine lists one only when:
 
-- it cites at least one record (an item, a turn or a change) and one number, and every record and number is one this pass's own tools answered, the number at the very place it names;
+- it cites at least one record (an item, a turn or a change) and one number, and every record and number is one this pass's own tools answered, the number at the very place it names and labelled in a few plain words with what it counts, the label its page shows beside it;
 - it is not a rule finding said again: one about the same subject citing only a rule finding's records, or offering a change a rule finding offers, is left out;
 - its fix is one the engine builds itself and checks against the company's rules: a seat's round cap, token budget or learning model, or opening an item it cites or an agent's page. The engine never applies one: it is previewed and applied as every fix here is;
 - its words are plain, at most 120 characters for the title and 600 for the why.

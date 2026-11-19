@@ -187,7 +187,7 @@ func (v findingView) finding(row advisordomain.FindingRow) (AdvisorFinding, erro
 		out.Entries = nonNil(v.entries()[row.Key])
 	}
 	for _, fact := range f.Evidence {
-		out.Evidence.Facts = append(out.Evidence.Facts, AdvisorFact{Key: fact.Key, Label: advisor.FactLabel(fact.Key),
+		out.Evidence.Facts = append(out.Evidence.Facts, AdvisorFact{Key: fact.Key, Label: fact.Said(),
 			Value: fact.Value, Unit: advisor.FactUnit(fact.Key)})
 	}
 	for _, r := range f.Records {
