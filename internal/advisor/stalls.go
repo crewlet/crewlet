@@ -83,6 +83,7 @@ var documented = []documentedDetector{
 	{ClassBudgetStopped, sourceStops, budgetStopped},
 	{ClassWorkConcentrated, sourceWork, workConcentrated},
 	{ClassAlarmNoop, sourceLedger, alarmNoop},
+	{ClassModelHeld, sourceFlow, modelHeld},
 }
 
 // stallWords is each class's words, the same for every subject.
@@ -106,6 +107,9 @@ var stallWords = map[Class]said{
 		"Every agent that holds the health grant is woken each time an alarm fires or clears, so an " +
 			"alarm another agent already answers still starts a turn here, and half or more of these " +
 			"changed nothing."},
+	ClassModelHeld: {"An agent's work waited on its model's limit.",
+		"While the model an agent runs on is at its limit, the agent takes no turn, so the work it " +
+			"holds stands still until the limit resets, however pressing it is."},
 	ClassPoolWaits: {"Callers queued for a database connection on a node.",
 		"The node's database pool had no connection free when callers asked, so they waited, and " +
 			"every request, turn and write on that node waited with them."},
