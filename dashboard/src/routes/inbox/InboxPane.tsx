@@ -1884,9 +1884,13 @@ function NoticePane({
               : "The comment and its replies"
             : "Conversation on this task"
         }
-        to={frame.name}
+        to={frame.who ? frame.name : frame.itemKey || frame.name}
         replyTo={comment || undefined}
-        placeholder={`Reply to ${frame.name}. @mention to bring someone in.`}
+        placeholder={
+          frame.who
+            ? `Reply to ${frame.name}. @mention to bring someone in.`
+            : `Comment on ${frame.itemKey || "the task"}. @mention to bring someone in.`
+        }
         index={index}
         now={now}
       />

@@ -280,3 +280,49 @@ func TestTheBackfillRecordsThePastBeforeTheDutyOnce(t *testing.T) {
 		t.Errorf("after a second backfill the item holds %d backfilled changes, want 2", len(got))
 	}
 }
+
+// THE STATE THE DUTY FIRST READ IS RECORDED ONCE (ADR-0162).
+//
+// An item moving, then set to wait for a start, then first read by the duty
+// waiting: the backfill derives its past, the moving before the wait, and
+// leaves the waiting to the duty's own record rather than recording it again
+// under a key chained to the moving.
+func TestTheBackfillLeavesTheStateTheDutyFirstReadToTheDuty(t *testing.T) {
+	t.Parallel()
+	r := newRoundTrip(t)
+	fileInProgress(t, r, "t-1", "bot", nil)
+	start := time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
+	if _, err := r.writer.UpdateTask(t.Context(), "op-wait", "t-1", "ENG", worklet.NoIfMatch,
+		worklet.TaskPatch{StartAt: &start, WaitReason: new("the release's health check")},
+		worklet.ChangeFields, nil); err != nil {
+		t.Fatalf("set the wait: %v", err)
+	}
+	r.drain()
+
+	now := time.Now().UTC()
+	free := worklet.Posture{Live: true, Seats: map[string]worklet.SeatPosture{}}
+	duty := backfillDutyOn(t, r, fixedPostures(free), nil)
+	flowTick(t, r, duty, now)
+	if got := flowChanges(t, r, "t-1", false); len(got) != 1 || got[0].State != worklet.FlowWaiting {
+		t.Fatalf("the duty recorded %+v, want the item waiting: the case's premise", got)
+	}
+
+	fill := duty.Backfill(t.Context(), now.Add(time.Minute))
+	r.drain()
+	if !fill.Done || fill.Changes != 1 {
+		t.Fatalf("the backfill did %+v, want one change written and the walk done", fill)
+	}
+	past := flowChanges(t, r, "t-1", true)
+	if len(past) != 1 || past[0].State != worklet.FlowMoving {
+		t.Errorf("the item's backfilled flow is %+v, want the moving before its wait alone", past)
+	}
+	waiting := 0
+	for _, e := range detailOf(t, r, "t-1", time.Now()).FlowHistory {
+		if e.Notice == "" && e.State == worklet.FlowWaiting {
+			waiting++
+		}
+	}
+	if waiting != 1 {
+		t.Errorf("the item's history records its wait %d times, want once", waiting)
+	}
+}

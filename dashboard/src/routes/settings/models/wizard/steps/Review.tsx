@@ -128,6 +128,10 @@ export function changesOf(
     show(isRecord(doc.assistant) ? doc.assistant.model : undefined);
   const assistantRow = row("assistant.model", assistantModel(before), assistantModel(after));
   if (assistantRow) out.push(assistantRow);
+  const advisorModel = (doc: CompanyDocument) =>
+    show(isRecord(doc.advisor) ? doc.advisor.model : undefined);
+  const advisorRow = row("advisor.model", advisorModel(before), advisorModel(after));
+  if (advisorRow) out.push(advisorRow);
   // A SECRET'S VALUE IS NEVER DRAWN, before or after: a new one is added,
   // and one replaced reads as changed by an old line that says so.
   for (const name of secrets) {
@@ -156,9 +160,13 @@ export function orphansOf(data: Pick<ModelsData, "models">, draft: Draft): strin
     .filter((m) => m.key !== draft.key)
     .filter((m) => {
       const jobs = SEAT_JOBS.flatMap((j) => m.uses.jobs[j].map((seat) => [j, seat] as const));
-      if (jobs.length === 0 && !m.uses.assistant) return false;
+      if (jobs.length === 0 && !m.uses.assistant && !m.uses.advisor) return false;
       const seatsMoved = jobs.every(([j, seat]) => draft.uses.jobs[j].includes(seat));
-      return seatsMoved && (!m.uses.assistant || draft.uses.assistant);
+      return (
+        seatsMoved &&
+        (!m.uses.assistant || draft.uses.assistant) &&
+        (!m.uses.advisor || draft.uses.advisor)
+      );
     })
     .map((m) => m.key);
 }
@@ -179,7 +187,7 @@ export function Review({
   onGo,
 }: {
   draft: Draft;
-  data: Pick<ModelsData, "models" | "seats" | "assistant">;
+  data: Pick<ModelsData, "models" | "seats" | "assistant" | "advisor">;
   /** The document the change is made on, and the one it makes; null before the document is read. */
   before: CompanyDocument | null;
   after: CompanyDocument | null;

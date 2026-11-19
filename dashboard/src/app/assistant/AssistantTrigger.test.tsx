@@ -16,7 +16,13 @@ afterEach(() => {
   act(() => setAssistantActivity("idle"));
 });
 
-const ready: AssistantControl = { open: false, unavailable: null, toggle: () => {}, ask: () => {} };
+const ready: AssistantControl = {
+  open: false,
+  unavailable: null,
+  toggle: () => {},
+  ask: () => {},
+  draft: () => {},
+};
 
 /** The words the kit's tooltip shows once the button takes keyboard focus. */
 function tipOnFocus(button: HTMLElement): string {

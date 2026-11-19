@@ -586,7 +586,13 @@ function FeedEntry({
  * engine's record, which never touched the item's own history.
  */
 function FlowRow({ entry, chrome, now }: { entry: WorkFlowEntry; chrome: RowChrome; now: number }) {
-  const { what, why } = flowEntryWords(entry, now, chrome.seatName);
+  const zone = useCompanyZone();
+  const { what, why } = flowEntryWords(entry, now, {
+    zone,
+    seatName: chrome.seatName,
+    seatKind: chrome.seatKind,
+    stuckHours: chrome.stuckHours,
+  });
   return (
     <li className="task-entry" data-kind="flow">
       <span className="task-entry-mark" aria-hidden="true">

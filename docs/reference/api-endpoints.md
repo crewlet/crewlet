@@ -422,7 +422,7 @@ every other route.
 | `GET` | `/delegated-decisions/branches` | One of those repositories' branches, `repo=owner/name`: `{repo, branches, more, unread?}`, the first 300 in GitHub's order, `more` saying GitHub holds more. A `repo` that is not `owner/name` is `400 bad_params`; one under an owner the company's GitHub does not name, or no agent's app covers, answers no branches and `unread` saying so. **Takes `admin`** |
 | `GET` | `/delegated-decisions/checks` | The check names a rule can require of one branch, `repo=owner/name&branch=`: `{repo, branch, checks, unread?}`, each name once from the check runs on the branch's newest commit, leaving out any an agent's own app or no app reported, since neither passes a declared check. An app without Checks (Read-only) answers no checks and `unread` naming the permission; a `branch` that is not a branch name is `400 bad_params`. **Takes `admin`** |
 | `GET` | `/advisor/review` | What each agent may do and where it runs, as its next turn is told: per agent (`seat`, `name`), its `access`, the integrations with their levels and permissions, the MCP servers with the tools at each level, and the boxes its runs use with their memory and, once a run has read the box, its browser and container runtime. The go-live check's review. **Takes `admin`** |
-| `GET` | `/advisor/findings` | The [Advisor](../guides/advisor.md)'s findings as its duty keeps them: `state=open` (the default) every live one, the most costly first, then the most hours a week, then the longest standing; `state=closed` the closed ones, the newest first; both narrowed by `severity=`, `area=` and `class=`, a page of `limit=` (1 to 100, 50 by default) at `cursor=`. Answers `{findings, next_cursor, counts, last_run}`: `counts` the open findings neither snoozed nor applied, by severity, and `last_run` the latest run, as `GET /advisor/runs/latest` answers it. Each finding is `{id, key, class, source, actor, area, severity, subject, title, why, item, names, path, entries, explanation, state, close_reason, ineffective, snoozed_until, opened_at, last_confirmed_at, closed_at, effect_due_at, confirmed, revision, seen_before, impact, evidence, fix}`, every field always sent, `null` where it has no value: `id` the episode and `key` its class and subject across episodes; `state` `open`, `applied`, `resolved`, `retired`, `expired` or `dismissed`; `confirmed` `stale` once its class has not run for three of its intervals; `evidence` `{window, facts, records}`, each fact `{key, label, value, unit}`; `entries` what an `atlas_act` fix acts on, for a caller holding `atlas` and `null` for any other ([what the atlas shows](../guides/advisor.md#what-the-atlas-shows)). **Takes `admin`** |
+| `GET` | `/advisor/findings` | The [Advisor](../guides/advisor.md)'s findings as its duty keeps them: `state=open` (the default) every live one, the most costly first, then the most hours a week, then the longest standing; `state=closed` the closed ones, the newest first; both narrowed by `severity=`, `area=` and `class=`, a page of `limit=` (1 to 100, 50 by default) at `cursor=`. Answers `{findings, next_cursor, counts, last_run}`: `counts` the owner's open findings neither snoozed nor applied, by severity (an `engine` finding is the engine's own work and not counted), and `last_run` the latest run, as `GET /advisor/runs/latest` answers it. Each finding is `{id, key, class, source, actor, area, severity, subject, title, why, item, names, path, entries, explanation, state, close_reason, ineffective, snoozed_until, opened_at, last_confirmed_at, closed_at, effect_due_at, confirmed, revision, seen_before, impact, evidence, fix}`, every field always sent, `null` where it has no value: `id` the episode and `key` its class and subject across episodes; `state` `open`, `applied`, `resolved`, `retired`, `expired` or `dismissed`; `confirmed` `stale` once its class has not run for three of its intervals; `evidence` `{window, facts, records}`, each fact `{key, label, value, unit}`; `entries` what an `atlas_act` fix acts on, for a caller holding `atlas` and `null` for any other ([what the atlas shows](../guides/advisor.md#what-the-atlas-shows)). **Takes `admin`** |
 | `GET` | `/advisor/findings/{id}` | One finding, with its `history` (`{at, event, by, moved}`, `by` the engine or a person, `{kind, handle, name}`, `name` the name the company gives their seat (the handle where it no longer holds one), `moved` each fact or field that moved, was and now) and its key's earlier `episodes`. `404` for an id the log does not hold. **Takes `admin`** |
 | `GET` | `/advisor/runs/latest` | The latest run: `{run_id, trigger, by, started_at, ended_at, status, classes_run, unread, opened, resolved, model}`, `status` `running` for a Run now the duty has not taken yet, `unread` the sources it could not read by their words, `model` the model pass's `{status, tokens, listed, dropped, reason}` or `null`. **Takes `admin`** |
 | `GET` | `/advisor/notices` | The platform notices that reach every administrator's Inbox, `{notices, unread}`: an open finding that blocks the company and is the owner's to fix, an alarm standing on any node past the deferral grace and a conversation the engine holds, each `{class, subject, since, nodes, finding}`, `finding` the finding whose fix ends it (`{id, title, fix}`) or `null`; `unread` what the latest run could not read, `findings` where this node could not read the Advisor's own list. **Takes `admin`** |
@@ -2596,7 +2596,8 @@ config write.
   "repoint": [
     {"at": {"seat": "qa", "job": "review"}, "to": "sonnet"},
     {"at": {"seat": "backend-engineer", "job": "executor"}, "to": null},
-    {"at": {"assistant": "chat"}, "to": "aux"}
+    {"at": {"assistant": "chat"}, "to": "aux"},
+    {"at": {"advisor": "findings"}, "to": null}
   ]
 }
 ```
@@ -2609,7 +2610,10 @@ config write.
   each key once; `to` naming the entry being removed is refused at the field
   (`kind: "invalid"`). **`to: null`** removes it; a chain left empty clears the field,
   so the job resolves as an unset one does. `{"assistant": "chat"}` with `null`
-  clears `assistant.model`, which turns Ask Crewlet off in the same revision.
+  clears `assistant.model`, which turns Ask Crewlet off in the same revision;
+  `{"advisor": "findings"}` with `null` clears `advisor.model`, so the Advisor's
+  checks run with no model. An `at` names one place: a seat and its job, Ask
+  Crewlet or the Advisor.
 - The entry leaves `providers.llm` and `providers.llm_order`.
 - The **whole document** is validated with the admission rules, so an executor
   job moved to a harness that cannot run one, or an Ask Crewlet model on a harness
@@ -3021,8 +3025,8 @@ knows".
 - `used_by` is the engine's own resolution of every agent seat's jobs
   (`position` 0 runs the job, more is a fallback; `written` is whether the seat
   wrote the field; `source` the level that decided it: `seat`, `executor`,
-  `default-entry`, `first-entry`), and `{"assistant": "chat", "position": 0}`
-  for Ask Crewlet.
+  `default-entry`, `first-entry`), `{"assistant": "chat", "position": 0}`
+  for Ask Crewlet and `{"advisor": "findings", "position": 0}` for the Advisor.
 - `limits` is the sign-in's vendor limit windows, the newest report of each
   across live nodes: `window` (`session`, `weekly`, `model`, `unknown`),
   `hours` (0 where unsaid), `model` (a model window's family), `state` (`ok`,

@@ -253,9 +253,13 @@ func flowNotify(ctx context.Context, tx *sql.Tx, flow FlowRecord) (*Notify, erro
 	}
 	notice := FlowNotice{ID: flow.ID, Told: flow.Told, Role: flow.Notice,
 		State: flow.State, Cause: flow.Cause, Since: flow.Since, Until: flow.Until}
+	window, err := stuckWindow(ctx, tx, task.Project)
+	if err != nil {
+		return nil, err
+	}
 	return &Notify{
 		Kind:    ChangeFlow,
-		Excerpt: flowExcerpt(notice, task.Assignee),
+		Excerpt: flowExcerpt(notice, task.Assignee, window),
 		Snapshot: Snapshot{
 			Key: task.Key, Project: task.Project, Title: task.Title,
 			Status: task.Status, StatusGroup: task.StatusGroup,
@@ -264,43 +268,74 @@ func flowNotify(ctx context.Context, tx *sql.Tx, flow FlowRecord) (*Notify, erro
 	}, nil
 }
 
-// flowExcerpt is a notice's card line, in the engine's own words only: the
-// wait's words are somebody's and stay on the item.
-func flowExcerpt(n FlowNotice, assignee string) string {
+// flowExcerpt is a notice's card line: one sentence in the engine's own
+// words, the wait's being somebody's and staying on the item. The assignee
+// told is "you"; anybody else reads the assignee's handle, which a seat can ask
+// and a screen names.
+func flowExcerpt(n FlowNotice, assignee string, window time.Duration) string {
 	who := assignee
-	if who == "" {
-		who = "nobody"
+	if n.Role == FlowToldAssignee {
+		who = "you"
 	}
 	switch n.State {
 	case FlowDue:
-		return "Due: its start passed and nothing of " + who + "'s has moved it since."
+		switch {
+		case assignee == "":
+			return "Its start passed and nobody is assigned to it."
+		case who == "you":
+			return "Its start passed and you have not picked it up since."
+		}
+		return "Its start passed and " + who + " has not picked it up since."
 	case FlowStuck:
-		return "Stuck: nothing changed on it for its project's stuck window."
+		return "Nothing changed on it for " + windowWords(window) + ", its project's stuck window."
 	case FlowHeld:
-		return "Held: " + heldWords(n.Cause, who) + "."
+		return heldWords(n.Cause, who) + "."
 	}
-	return "In progress and not moving: " + string(n.State) + "."
+	return "It is in progress and nobody is moving it."
 }
 
-// heldWords says why a held item's assignee cannot take a turn.
+// windowWords is a stuck window as a sentence says it: "8 hours", "1 hour".
+func windowWords(window time.Duration) string {
+	hours := int(window / time.Hour)
+	if hours == 1 {
+		return "1 hour"
+	}
+	return strconv.Itoa(hours) + " hours"
+}
+
+// heldWords says why a held item's assignee cannot take a turn, as a clause
+// that opens a sentence.
 func heldWords(cause FlowCause, who string) string {
+	be := "is"
+	if who == "you" {
+		be = "are"
+	}
 	switch cause {
 	case FlowCausePaused:
-		return who + " is paused"
+		return capitalized(who) + " " + be + " paused, so nobody is moving it"
 	case FlowCauseUnplaced:
-		return who + " is placed on no node"
+		return capitalized(who) + " " + be + " placed on no node, so nobody is moving it"
 	case FlowCauseBudget:
-		return who + " is out of its token budget"
+		return capitalized(who) + " " + be + " out of its token budget, so nobody is moving it"
 	case FlowCauseLimit:
-		return who + " is out of its model limit"
+		return capitalized(who) + " " + be + " out of its model limit, so nobody is moving it"
 	case FlowCauseParkedElsewhere:
-		return who + " is waiting on a person's answer on another item"
+		return capitalized(who) + " " + be + " waiting on a person's answer on another item"
 	case FlowCauseDeparted:
-		return who + " is no longer in the org chart"
+		return capitalized(who) + " " + be + " no longer in the org chart, so nobody is moving it"
 	case FlowCauseNobody:
-		return "it has no assignee"
+		return "Nobody is assigned to it"
 	}
-	return who + " cannot take a turn"
+	return capitalized(who) + " cannot take a turn, so nobody is moving it"
+}
+
+// capitalized is a clause's subject at the head of a sentence: "You", and a
+// handle as it is spelled.
+func capitalized(who string) string {
+	if who == "you" {
+		return "You"
+	}
+	return who
 }
 
 // FlowLeft reports whether an item now read as now (nil for an item no longer

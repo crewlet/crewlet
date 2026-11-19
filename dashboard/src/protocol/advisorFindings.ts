@@ -146,7 +146,7 @@ export interface AdvisorRunSummary {
 export interface AdvisorFindingList {
   findings: AdvisorKeptFinding[];
   next_cursor: string | null;
-  /** Open findings neither snoozed nor applied, by severity. */
+  /** The owner's open findings neither snoozed nor applied, by severity: the engine's own are not counted. */
   counts: Record<AdvisorSeverity, number>;
   last_run: AdvisorRunSummary | null;
 }

@@ -111,7 +111,13 @@ export function workListColumns(ctx: WorkColumnContext, cells: WorkColumnCells =
         )}
         {/* WHY IT IS NOT MOVING, the engine's reading (ADR-0162); the tag
             beside it already names a blocker. */}
-        <FlowTag flow={row.flow} skip={LIST_FLOW_SKIP} />
+        <FlowTag
+          flow={row.flow}
+          skip={LIST_FLOW_SKIP}
+          assignee={row.assignee}
+          chrome={chrome}
+          stuckHours={chrome.stuckHours}
+        />
       </span>
     ),
   };

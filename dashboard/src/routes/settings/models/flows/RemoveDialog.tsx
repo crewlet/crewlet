@@ -34,16 +34,26 @@ import { Modal } from "~/components/Modal.tsx";
 import { listed, plural } from "~/lib/format.ts";
 import { useLifetimeSignal } from "~/lib/useLifetimeSignal.ts";
 import { configGuardedReason } from "~/lib/useWriteAccess.ts";
-import { getEntity, type ConfigWriteOutcome } from "~/protocol/configWrite.ts";
-import { managedSentence, unsettledSentence, type ConfigRefusal } from "~/protocol/configAnswer.ts";
+import {
+  dryRunPatch,
+  getConfig,
+  getEntity,
+  type ConfigWriteOutcome,
+} from "~/protocol/configWrite.ts";
+import {
+  introducedWarnings,
+  managedSentence,
+  unsettledSentence,
+  type ConfigRefusal,
+} from "~/protocol/configAnswer.ts";
 import type { ConfigWarning } from "~/protocol/types.ts";
 import type { ModelReference } from "~/protocol/models.ts";
 import { removeModel, type Removal } from "../api.ts";
 import type { ModelsData, ModelView } from "../data.ts";
 import { JOB_WORDS, placeWords, seatName } from "../places.ts";
-import { HEALTH } from "../words.ts";
+import { ADVISOR_USE, ASSISTANT_USE, HEALTH } from "../words.ts";
 
-/** What one place becomes: another model, or none (for Ask Crewlet's model, Ask Crewlet turned off). */
+/** What one place becomes: another model, or none (Ask Crewlet turned off, or the Advisor run with no model). */
 export type Choice = { to: string } | { to: null };
 
 const UNSET = "__unset__";
@@ -51,9 +61,20 @@ const UNSET = "__unset__";
 /** Whether a reference is Ask Crewlet's model, which pointing at nothing turns off. */
 const askCrewlets = (ref: Pick<ModelReference, "at">) => ref.at.assistant === "chat";
 
+/** Whether a reference is the Advisor's model, which pointing at nothing leaves its checks with no model. */
+const advisors = (ref: Pick<ModelReference, "at">) => ref.at.advisor === "findings";
+
+/** Whether a reference is a helper's (Ask Crewlet's or the Advisor's), company-wide and no seat's. */
+const helpers = (ref: Pick<ModelReference, "at">) => askCrewlets(ref) || advisors(ref);
+
 /** One reference's identity, as the choices are keyed. */
 export const refId = (ref: Pick<ModelReference, "at">) =>
-  JSON.stringify([ref.at.seat ?? "", ref.at.job ?? "", ref.at.assistant ?? ""]);
+  JSON.stringify([
+    ref.at.seat ?? "",
+    ref.at.job ?? "",
+    ref.at.assistant ?? "",
+    ref.at.advisor ?? "",
+  ]);
 
 /** A written field as a path a person can find in the document: `roles[2].llm_review`. */
 function pathOf(segments: readonly (string | number)[]): string {
@@ -64,21 +85,32 @@ function pathOf(segments: readonly (string | number)[]): string {
 
 /**
  * The models a reference may move to: a seat's executor needs a harness that
- * can run one, and Ask Crewlet a model a helper can run on, as the engine says
- * of each (`helper_problem`).
+ * can run one, and Ask Crewlet and the Advisor a model a helper can run on, as
+ * the engine says of each (`helper_problem`).
  */
 export function targetsFor(ref: ModelReference, removing: string, models: readonly ModelView[]) {
   return models.filter(
     (m) =>
       m.key !== removing &&
       (ref.at.job !== "executor" || m.executor) &&
-      (!ref.at.assistant || (m.admin !== null && m.admin.helper_problem === null)),
+      (!helpers(ref) || (m.admin !== null && m.admin.helper_problem === null)),
   );
 }
 
-/** Whether a reference may be left with no model: one whose field names nothing else, and Ask Crewlet's, which is then off. */
+/**
+ * Whether a reference may be left with no model: one whose field names nothing
+ * else, Ask Crewlet's, which is then off, and the Advisor's, whose checks then
+ * run with no model.
+ */
 function unsetAllowed(ref: ModelReference, removing: string): boolean {
-  return askCrewlets(ref) || !ref.chain.some((k) => k !== removing);
+  return helpers(ref) || !ref.chain.some((k) => k !== removing);
+}
+
+/** What leaving a place with no model does, in the one phrasing its option and its move line use. */
+function unsetWords(ref: Pick<ModelReference, "at">): string {
+  if (askCrewlets(ref)) return "Turn Ask Crewlet off";
+  if (advisors(ref)) return "Run the Advisor with no model";
+  return "Leave it unset";
 }
 
 /** The choices a place offers, in the one phrasing every row uses. */
@@ -94,9 +126,7 @@ export function optionsFor(
       label: `Move to ${m.key}`,
       ...(m.entry.health !== "ready" ? { hint: HEALTH[m.entry.health].label } : {}),
     })),
-    ...(unsetAllowed(ref, removing)
-      ? [{ value: UNSET, label: askCrewlets(ref) ? "Turn Ask Crewlet off" : "Leave it unset" }]
-      : []),
+    ...(unsetAllowed(ref, removing) ? [{ value: UNSET, label: unsetWords(ref) }] : []),
   ];
 }
 
@@ -155,7 +185,7 @@ export function summaryOf(key: string, removal: Removal, mood: "says" | "audit" 
   let unset = 0;
   for (const r of removal.repoint) {
     if (r.to) moves.set(r.to, (moves.get(r.to) ?? 0) + 1);
-    else if (!askCrewlets(r)) unset += 1;
+    else if (!helpers(r)) unset += 1;
   }
   const parts = [
     `${verb("remove")} the model ${key}`,
@@ -163,6 +193,9 @@ export function summaryOf(key: string, removal: Removal, mood: "says" | "audit" 
     ...(unset ? [`${verb("leave")} ${unset} unset`] : []),
     ...(removal.repoint.some((r) => askCrewlets(r) && r.to === null)
       ? [`${verb("turn")} Ask Crewlet off`]
+      : []),
+    ...(removal.repoint.some((r) => advisors(r) && r.to === null)
+      ? [`${verb("run")} the Advisor with no model`]
       : []),
   ];
   const sentence = listed(parts);
@@ -178,6 +211,7 @@ export function movesOf(key: string, removal: Removal, seats: ModelsData["seats"
   return removal.repoint.map((r) => {
     const where = placeWords(seats, r.at);
     if (askCrewlets(r) && r.to === null) return `${where}: turned off`;
+    if (advisors(r) && r.to === null) return `${where}: no model, its checks run alone`;
     return `${where}: ${key} → ${r.to ?? "left unset"}`;
   });
 }
@@ -252,8 +286,8 @@ interface SeatPlaces {
 }
 
 /**
- * The places grouped by who runs there: a seat by its name, the assistant as
- * Ask Crewlet. A seat's every job then sits under one name, said once.
+ * The places grouped by who runs there: a seat by its name, and Ask Crewlet and
+ * the Advisor each by theirs. A seat's every job then sits under one name, said once.
  */
 export function placesBySeat(
   refs: readonly ModelReference[],
@@ -261,10 +295,18 @@ export function placesBySeat(
 ): SeatPlaces[] {
   const groups = new Map<string, SeatPlaces>();
   for (const ref of refs) {
-    const key = ref.at.assistant ? "" : (ref.at.seat ?? "");
+    const key = askCrewlets(ref)
+      ? "assistant"
+      : advisors(ref)
+        ? "advisor"
+        : `seat:${ref.at.seat ?? ""}`;
     const group = groups.get(key) ?? {
-      key: key || "assistant",
-      name: key ? seatName(seats, key) : "Ask Crewlet",
+      key,
+      name: askCrewlets(ref)
+        ? "Ask Crewlet"
+        : advisors(ref)
+          ? "Advisor"
+          : seatName(seats, ref.at.seat ?? ""),
       refs: [],
     };
     group.refs.push(ref);
@@ -275,14 +317,21 @@ export function placesBySeat(
 
 /** A place's own row label under its seat: the job, capitalised ("Coding", "Chat"). */
 function jobLabel(ref: ModelReference): string {
-  const words = ref.at.assistant === "chat" ? "chat" : ref.at.job ? JOB_WORDS[ref.at.job] : "";
+  const words = askCrewlets(ref)
+    ? "chat"
+    : advisors(ref)
+      ? "findings"
+      : ref.at.job
+        ? JOB_WORDS[ref.at.job]
+        : "";
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
 type Load =
   | { kind: "loading" }
   | { kind: "failed"; message: string }
-  | { kind: "ready"; etag: string; refs: ModelReference[] };
+  /** `baseline` is the company's own warnings as it stands, which the removal does not cause. */
+  | { kind: "ready"; etag: string; refs: ModelReference[]; baseline: readonly ConfigWarning[] };
 
 type Check =
   | { kind: "checking" }
@@ -354,12 +403,23 @@ export function RemoveDialog({
         return;
       }
       const refs = answer.references;
+      // THE COMPANY'S OWN WARNINGS, as it stands: the ready panel names only
+      // what this removal changes, never a warning the company already had.
+      // Best effort: a baseline that cannot be read leaves every warning shown,
+      // never the removal waiting. It is a check of the whole document, so it
+      // carries the document's tag, not the entry's the removal is sent under.
+      const company = await getConfig(abort.signal).catch(() => null);
+      const before =
+        company?.kind === "document"
+          ? await dryRunPatch({}, company.etag, abort.signal).catch(() => null)
+          : null;
+      const baseline = before?.kind === "valid" ? before.warnings : [];
       setChoices(
         Object.fromEntries(
           refs.map((ref) => [refId(ref), defaultChoice(ref, key, modelsRef.current)]),
         ),
       );
-      setLoad({ kind: "ready", etag: read.etag, refs });
+      setLoad({ kind: "ready", etag: read.etag, refs, baseline });
     })().catch(() => {
       // Only this dialog's own abort rejects.
     });
@@ -370,6 +430,7 @@ export function RemoveDialog({
   const removal = useMemo(() => removalOf(refs, choices), [refs, choices]);
   const removalKey = JSON.stringify(removal);
   const etag = load.kind === "ready" ? load.etag : null;
+  const baseline = load.kind === "ready" ? load.baseline : NO_WARNINGS;
 
   // EVERY CHOICE IS CHECKED AS IT CHANGES, so the button below always removes
   // what the engine just accepted.
@@ -378,7 +439,7 @@ export function RemoveDialog({
     const abort = new AbortController();
     setCheck({ kind: "checking" });
     removeModel(key, removal, { etag, summary: "", dryRun: true }, abort.signal).then(
-      ({ outcome }) => setCheck(checkOf(outcome, key)),
+      ({ outcome }) => setCheck(checkOf(outcome, key, baseline)),
       () => {
         // Superseded by the next choice, or the dialog closed.
       },
@@ -463,16 +524,13 @@ export function RemoveDialog({
               </Text>
               <ul className="models-repoint" aria-label={`Where ${key} is named`}>
                 {placesBySeat(refs, data.seats).map((group) => (
-                  <li
-                    key={group.key}
-                    className="models-repoint__seat"
-                    role="group"
-                    aria-labelledby={`${idBase}-${group.key}`}
-                  >
+                  // A LIST ITEM STAYS ONE: each seat's places are its own list,
+                  // named by the seat, so a reader hears a list of items.
+                  <li key={group.key} className="models-repoint__seat">
                     <span id={`${idBase}-${group.key}`} className="models-repoint__who">
                       {group.name}
                     </span>
-                    <ul className="models-repoint__jobs">
+                    <ul className="models-repoint__jobs" aria-labelledby={`${idBase}-${group.key}`}>
                       {group.refs.map((ref) => {
                         const id = refId(ref);
                         const backup = ref.chain.indexOf(key) > 0;
@@ -486,9 +544,9 @@ export function RemoveDialog({
                               <span className="models-repoint__place">
                                 {backup ? `${job} (backup)` : job}
                               </span>
-                              {ref.at.assistant ? (
+                              {helpers(ref) ? (
                                 <Text as="span" variant="caption" tone="tertiary">
-                                  Only models that deny the harness's web tools can run Ask Crewlet.
+                                  {askCrewlets(ref) ? ASSISTANT_USE.rule : ADVISOR_USE.rule}
                                 </Text>
                               ) : null}
                             </span>
@@ -550,9 +608,17 @@ export function RemoveDialog({
   );
 }
 
-function checkOf(outcome: ConfigWriteOutcome, key: string): Check {
+/** No warning: the baseline before the company's own are read. */
+const NO_WARNINGS: readonly ConfigWarning[] = [];
+
+/** The check of a removal: valid with only the warnings it introduces, or the engine's refusal. */
+export function checkOf(
+  outcome: ConfigWriteOutcome,
+  key: string,
+  baseline: readonly ConfigWarning[],
+): Check {
   if (outcome.kind === "valid" || outcome.kind === "saved")
-    return { kind: "valid", warnings: outcome.warnings };
+    return { kind: "valid", warnings: introducedWarnings(baseline, outcome.warnings) };
   return { kind: "refused", message: refusalWords(outcome, key, "check") };
 }
 

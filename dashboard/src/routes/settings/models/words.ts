@@ -167,11 +167,19 @@ export const ASSISTANT_USE = {
   rule: "Ask Crewlet runs the model with no tools of its own, whatever its entry allows; a model whose tool cannot be run that way is not offered.",
 } as const;
 
+/** The Advisor: the model it explains its findings and writes its weekly summary with. */
+export const ADVISOR_USE = {
+  label: "Advisor",
+  hint: "Explains what it finds worth changing in the company.",
+  tip: "Sets advisor.model. The Advisor is the company's, so no seats are picked; its checks run without a model too, with no explanations.",
+  rule: "The Advisor runs the model with no tools of its own, whatever its entry allows; a model whose tool cannot be run that way is not offered.",
+} as const;
+
 /** Every seat job at once. */
 export const EVERYTHING = {
   label: "Everything",
   hint: "Use this model for every seat job: coding, reviewing and delegations, and routines and evaluations.",
-  tip: "Sets the seat's llm to this model and clears llm_review, llm_subagent, llm_auxiliary and llm_judge, so every seat job resolves to it. Ask Crewlet is separate: choose it on its own.",
+  tip: "Sets the seat's llm to this model and clears llm_review, llm_subagent, llm_auxiliary and llm_judge, so every seat job resolves to it. Ask Crewlet and the Advisor are separate: choose each on its own.",
 } as const;
 
 /**

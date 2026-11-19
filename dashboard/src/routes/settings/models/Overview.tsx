@@ -40,7 +40,7 @@ import type { ModelsData, ModelView } from "./data.ts";
 import { JobGlyph, type Job } from "./JobGlyph.tsx";
 import { EntryMenu, HealthLine, SignInLine, type OnFlow } from "./parts.tsx";
 import { UsageLimitsCell } from "./UsageLimits.tsx";
-import { ASSISTANT_USE, CATEGORY_WORDS, EVERYTHING, ROUTE, product } from "./words.ts";
+import { ADVISOR_USE, ASSISTANT_USE, CATEGORY_WORDS, EVERYTHING, ROUTE, product } from "./words.ts";
 
 /** One use of a model in Used by: the job, its words, and the seats on it. */
 interface UseLine {
@@ -72,6 +72,7 @@ export function linesOf(model: ModelView, name: (handle: string) => string): Use
       });
   }
   if (model.uses.assistant) lines.push({ job: "assistant", label: ASSISTANT_USE.label, seats: [] });
+  if (model.uses.advisor) lines.push({ job: "advisor", label: ADVISOR_USE.label, seats: [] });
   return lines;
 }
 
@@ -85,9 +86,9 @@ const HEALTH_ORDER: readonly ModelView["entry"]["health"][] = [
   "ready",
 ];
 
-/** Whether anything runs on a model: a seat's job or the Dashboard Assistant, for either reader (QA M13). */
+/** Whether anything runs on a model: a seat's job, Ask Crewlet or the Advisor, for either reader (QA M13). */
 const inUse = (m: ModelView) =>
-  m.uses.assistant || SEAT_JOBS.some((j) => m.uses.jobs[j].length > 0);
+  m.uses.assistant || m.uses.advisor || SEAT_JOBS.some((j) => m.uses.jobs[j].length > 0);
 
 /**
  * Who runs on a model, at ONE HEIGHT however many uses it has: the first use
@@ -109,8 +110,8 @@ function UsedBy({ model, name }: { model: ModelView; name: (handle: string) => s
   const seats = new Set(SEAT_JOBS.flatMap((j) => model.uses.jobs[j])).size;
   const said = lines
     .map((l) =>
-      l.job === "assistant"
-        ? "Ask Crewlet"
+      l.job === "assistant" || l.job === "advisor"
+        ? l.label
         : `${l.label}: ${l.seats.length > 0 ? listed(l.seats) : "no seat"}`,
     )
     .join("; ");
@@ -123,7 +124,11 @@ function UsedBy({ model, name }: { model: ModelView; name: (handle: string) => s
               <JobGlyph job={l.job} size="xs" />
               <span>
                 <strong>{l.label}</strong>
-                {l.job === "assistant" ? `: ${ASSISTANT_USE.hint}` : `: ${listed(l.seats)}`}
+                {l.job === "assistant"
+                  ? `: ${ASSISTANT_USE.hint}`
+                  : l.job === "advisor"
+                    ? `: ${ADVISOR_USE.hint}`
+                    : `: ${listed(l.seats)}`}
               </span>
             </span>
           ))}
@@ -293,7 +298,11 @@ export function Overview({ data, onFlow }: { data: ModelsData; onFlow: OnFlow })
             <StatCard
               label="Models"
               value={models.length}
-              sub={unused ? `${unused} not used by any seat or Ask Crewlet` : "every one in use"}
+              sub={
+                unused
+                  ? `${unused} not used by any seat, Ask Crewlet or the Advisor`
+                  : "every one in use"
+              }
             />
             {/* A COUNT OF THE FEW, NOT "3 OF 4" (QA Minor 14): the tile names how
                 many answer and, under it, exactly how many do not. */}

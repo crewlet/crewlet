@@ -188,7 +188,7 @@ func (v findingView) finding(row advisordomain.FindingRow) (AdvisorFinding, erro
 		out.Entries = nonNil(v.entries()[row.Key])
 	}
 	for _, fact := range f.Evidence {
-		out.Evidence.Facts = append(out.Evidence.Facts, AdvisorFact{Key: fact.Key, Label: advisor.FactLabel(fact.Key),
+		out.Evidence.Facts = append(out.Evidence.Facts, AdvisorFact{Key: fact.Key, Label: fact.Said(),
 			Value: fact.Value, Unit: advisor.FactUnit(fact.Key)})
 	}
 	for _, r := range f.Records {
@@ -334,12 +334,15 @@ func (s Sources) advisorFindings(ctx context.Context, p Params) (any, error) {
 	return out, nil
 }
 
-// countsOf is the live findings a person is to look at, by severity: neither
-// snoozed at now nor applied and waiting on its effect.
+// countsOf is the live findings a person is to look at, by severity: the
+// owner's, neither snoozed at now nor applied and waiting on its effect. An
+// engine finding is the engine's own work, never a person's to-do
+// (advisor.ActorEngine), so the sidebar's figure over these counts leaves it out.
 func countsOf(rows []advisordomain.FindingRow, now time.Time) map[advisor.Severity]int {
 	out := map[advisor.Severity]int{advisor.SeverityBlocks: 0, advisor.SeverityCosts: 0, advisor.SeverityNote: 0}
 	for _, r := range rows {
-		if advisor.State(r.State) == advisor.StateOpen && !r.SnoozedUntil.After(now) {
+		if r.Actor == advisordomain.ActorOwner && advisor.State(r.State) == advisor.StateOpen &&
+			!r.SnoozedUntil.After(now) {
 			out[advisor.Severity(r.Severity)]++
 		}
 	}

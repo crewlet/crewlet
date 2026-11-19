@@ -241,6 +241,11 @@ const (
 	// A blocker gives no instant of its own, so a blocked item is blocked
 	// since the flow duty recorded it so: its latest change the duty
 	// recorded, where that change is to blocked.
+	// Since an item in progress had nobody: it entered progress unassigned, or
+	// lost its assignee there, whichever came last.
+	flowNobodySince = "MAX(t.status_entered_at, COALESCE((SELECT fa.effective_at " +
+		"FROM tracker_history fa WHERE fa.subject_id = t.id AND fa.kind = '" +
+		string(ChangeAssignee) + "' ORDER BY fa.log_seq DESC LIMIT 1), 0))"
 	flowBlockedSince = "(SELECT CASE WHEN fb.state = '" + string(FlowBlocked) +
 		"' THEN fb.recorded_at END FROM tracker_flow fb WHERE fb.task_id = t.id " +
 		"AND fb.notice = '' AND fb.backfilled = 0 ORDER BY fb.log_seq DESC LIMIT 1)"
@@ -346,7 +351,8 @@ func flowExpr(at flowAt, how flowRendering) (string, []any) {
 		flowBranch{when: flowOwnAsk, state: FlowWaiting, cause: FlowCauseQuestion})
 	live(itemSeat, parked)
 	branches(
-		flowBranch{when: "t.assignee = ''", state: FlowHeld, cause: FlowCauseNobody},
+		flowBranch{when: "t.assignee = ''", state: FlowHeld, cause: FlowCauseNobody,
+			since: flowNobodySince},
 		flowBranch{when: flowDeparted, args: []any{RosterSubject().ID}, state: FlowHeld,
 			cause: FlowCauseDeparted})
 	live(seat, stops)

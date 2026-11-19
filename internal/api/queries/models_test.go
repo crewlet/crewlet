@@ -43,6 +43,8 @@ roles:
     handle: qa
     llm: default
     llm_review: codex-review
+advisor:
+  model: default
 `
 
 // fakeModels is the engine's half: what this node resolved.
@@ -257,6 +259,17 @@ func TestAModelsUsersAreTheEnginesResolution(t *testing.T) {
 		if u.Seat == "pm" && (u.Written == nil || *u.Written) {
 			t.Errorf("pm's %s reads as written: %+v", u.Job, u)
 		}
+	}
+	// THE ADVISOR'S MODEL IS A USE like Ask Crewlet's: the entry `advisor.model`
+	// names says so, and no other does.
+	advisorOn := func(key string) bool {
+		return slices.ContainsFunc(entryOf(t, got, key).UsedBy, func(u queries.ModelUse) bool {
+			return u.Advisor == "findings" && u.Position == 0 && u.Seat == ""
+		})
+	}
+	if !advisorOn("default") || advisorOn("codex-review") {
+		t.Errorf("the Advisor's use: default %v, codex-review %v; want default alone",
+			advisorOn("default"), advisorOn("codex-review"))
 	}
 }
 
