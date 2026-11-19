@@ -15,10 +15,12 @@ import (
 const prefixWholeBytes = 32 << 20
 
 // Prefix is the first n bytes of what [Secrets] returns for text, and how long
-// all of it is: an opening of the whole redaction, read in bounded memory past
-// [prefixWholeBytes] (the package doc's "A text that arrives in pieces"). An n
-// below 0 is 0. The opening may end inside a rune; a caller that shows it cuts
-// it at a rune's edge.
+// all of it is: an opening of the whole redaction. Past [prefixWholeBytes] it
+// reads in bounded memory through one [Stream] read to its end, whose output is
+// Secrets of the text once Close answers nil (the package doc's "A text that
+// arrives in pieces"); a text the stream refuses is redacted whole, so the
+// opening is always exact. An n below 0 is 0. The opening may end inside a
+// rune; a caller that shows it cuts it at a rune's edge.
 func Prefix(text string, n int) (opening string, whole int) {
 	return prefix(text, n, prefixWholeBytes, holdBytes())
 }
