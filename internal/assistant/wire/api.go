@@ -25,9 +25,6 @@ type TurnRequest struct {
 	// Mode is what the question asks for; absent is [TurnAsk]. A
 	// [TurnBrief] needs the page context, which says what it covers.
 	Mode TurnMode `json:"mode,omitempty"`
-	// Deliberate is Think harder: this question runs on `assistant.deliberate`.
-	// Refused where the company sets none.
-	Deliberate bool `json:"deliberate,omitempty"`
 	// --- deep work (im-deep) ---
 	// Attachments are files the person uploaded to the conversation for
 	// this question, at most [AttachmentsPerTurn].
@@ -219,21 +216,29 @@ type AuditRead struct {
 }
 
 // ViewerAssistant is the `assistant` member of the `/viewer` answer, so the
-// Ask pill decides without a second request.
+// Ask pill and the page decide without a second request.
 type ViewerAssistant struct {
 	Available bool         `json:"available"`
 	Reason    ViewerReason `json:"reason,omitempty"`
-	// Model is what a [ViewerModelNotReady] reason means for this person,
+	// Model is the model Ask Crewlet runs on, absent where none is assigned.
+	Model *ViewerModel `json:"model,omitempty"`
+	// Notice is what a [ViewerModelNotReady] reason means for this person,
 	// absent for every other reason.
-	Model *ModelNotice `json:"model,omitempty"`
+	Notice *ModelNotice `json:"notice,omitempty"`
+	// CanAssign is whether this person may assign Ask Crewlet's model: they
+	// hold the company document's write, through which it is assigned.
+	CanAssign bool `json:"can_assign,omitempty"`
 	// ReadsImages is whether a question's images are read: only deep work
 	// reads them, so false where the company has none, and the composer
 	// does not take them.
 	ReadsImages bool `json:"reads_images,omitempty"`
-	// Deliberate is whether the company sets a stronger chain a question can
-	// ask for ([TurnRequest.Deliberate]), so the composer offers Think
-	// harder only where a question asking it would be answered.
-	Deliberate bool `json:"deliberate,omitempty"`
+}
+
+// ViewerModel is a helper's model as anybody is shown it: its providers.llm
+// key and the model it names.
+type ViewerModel struct {
+	Key   string `json:"key" untrusted:"name"`
+	Label string `json:"label" untrusted:"name"`
 }
 
 // ModelNotice is the model problem a person is told before they ask: the

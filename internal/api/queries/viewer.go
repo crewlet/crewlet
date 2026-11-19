@@ -127,7 +127,7 @@ func (s Sources) viewer(ctx context.Context, _ Params) (any, error) {
 	// WHETHER THE ASSISTANT IS AVAILABLE TO THIS CALLER HERE, with the first
 	// reason not (internal/assistant/wire's ViewerReason), so the Ask pill
 	// is drawn lit, or disabled with its reason, from this one answer.
-	out["assistant"] = wire.ViewerAssistant{Reason: wire.ViewerDisabled}
+	out["assistant"] = wire.ViewerAssistant{Reason: wire.ViewerNoModel}
 	if s.Assistant != nil {
 		out["assistant"] = s.Assistant(ctx, principal)
 	}

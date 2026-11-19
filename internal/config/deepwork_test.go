@@ -13,7 +13,7 @@ const deepEntry = "    deep:\n      harness: claude-code\n      model: sonnet\n"
 // deepCompany is a company running the assistant on its usual entry, with
 // deep work's block lines appended under assistant.deep_work.
 func deepCompany(entries, block string) string {
-	return assistantCompany(assistantEntry+entries, "  enabled: true\n  llm: [assistant]\n  deep_work:\n"+block)
+	return assistantCompany(assistantEntry+entries, "  model: assistant\n  deep_work:\n"+block)
 }
 
 // DEEP WORK RUNS ONLY ON A CLAUDE CODE ENTRY, and is handed out from one
@@ -27,7 +27,7 @@ func TestDeepWorkIsHandedOutOnlyForAClaudeCodeEntry(t *testing.T) {
 	if err != nil || key != "deep" || entry.HarnessName() != string(HarnessClaudeCode) {
 		t.Fatalf("AssistantDeepWork = %q, %+v, %v", key, entry, err)
 	}
-	if off := mustCompany(t, assistantCompany(assistantEntry, "  enabled: true\n  llm: [assistant]\n")); off != nil {
+	if off := mustCompany(t, assistantCompany(assistantEntry, "  model: assistant\n")); off != nil {
 		if _, _, err := off.AssistantDeepWork(); !errors.Is(err, ErrDeepWorkOff) {
 			t.Errorf("a company with no deep_work: err = %v, want ErrDeepWorkOff", err)
 		}
@@ -67,9 +67,9 @@ func TestDeepWorkValidatesEveryRange(t *testing.T) {
 		{deepTokens, AssistantDeepWork.Tokens, func(d *AssistantDeepWork, v int) { d.MaxTokens = v },
 			[3]int{10_000, 20_000_000, 3_000_000}},
 	}
-	if deepTimeout.max != AssistantTurnTimeoutCeiling {
+	if deepTimeout.max != deepTimeoutCeiling {
 		t.Errorf("a deep-work run may outlive the grant its turn holds: %d > %d",
-			deepTimeout.max, AssistantTurnTimeoutCeiling)
+			deepTimeout.max, deepTimeoutCeiling)
 	}
 	for _, f := range fields {
 		t.Run(f.bound.key, func(t *testing.T) {
@@ -121,7 +121,7 @@ func TestDeepWorkPrefersAConfiguredSandbox(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			doc := "name: Acme\nproviders:\n" + c.sandbox + "  llm:\n" + assistantEntry + c.entry +
-				"assistant:\n  enabled: true\n  llm: [assistant]\n  deep_work:\n    llm: deep\n"
+				"assistant:\n  model: assistant\n  deep_work:\n    llm: deep\n"
 			cfg := mustCompany(t, doc)
 			got, ok := cfg.DeepWorkPlacement()
 			if !ok || got != c.want {

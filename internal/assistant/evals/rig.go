@@ -114,7 +114,7 @@ func Assemble(o RigOptions) (*Rig, error) {
 		r.Revoker = &Revoker{}
 		revoker = r.Revoker
 	}
-	models := Models{Model: r.Model, Key: "assistant"}
+	models := Models{Provider: r.Model, Key: "assistant"}
 	if o.Models != nil {
 		models = *o.Models
 	}

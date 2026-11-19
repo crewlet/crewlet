@@ -18,7 +18,6 @@ import (
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/assistant/wire"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/words"
@@ -44,7 +43,7 @@ func (o Options) patience() time.Duration {
 	if o.scripted() {
 		return 10 * time.Second
 	}
-	return config.Assistant{}.TurnTimeout() + 30*time.Second
+	return assistant.TurnTimeout + 30*time.Second
 }
 
 // Result is one case's trials.
@@ -122,7 +121,7 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 		return Trial{}, err
 	}
 	rig, err := Assemble(RigOptions{Person: &person, Company: company,
-		Models: &Models{Model: meter, Key: meter.key}, Catalogue: catalog.Curated{},
+		Models: &Models{Provider: meter, Key: meter.key}, Catalogue: catalog.Curated{},
 		Acts: c.Person.Acts, Handler: handler})
 	if err != nil {
 		return Trial{}, err

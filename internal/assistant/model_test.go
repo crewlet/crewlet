@@ -50,7 +50,7 @@ func TestEveryModelFailureIsToldInItsOwnWords(t *testing.T) {
 			code: wire.ErrorModelBusy, message: "usage limit", hint: "once the limit resets",
 			retryable: true, wait: 1800},
 		"a spent plan, to an administrator": {err: modelFailure(llm.KindRateLimit, errors.New("spent"), reset),
-			admin: true, code: wire.ErrorModelBusy, message: "usage limit", hint: "assistant.llm",
+			admin: true, code: wire.ErrorModelBusy, message: "usage limit", hint: "assign it another model",
 			retryable: true, wait: 1800},
 		"a timeout": {err: modelFailure(llm.KindTimeout, errors.New("ran out of time"), time.Time{}),
 			code: wire.ErrorModelTimeout, message: "took too long", hint: "narrower question",

@@ -112,7 +112,7 @@ type Source interface {
 // the reaper's guard against a mistake destroying what people expected to keep,
 // whichever source states the term.
 //
-// A TERM MAY BE UNKNOWN, and Term then answers why. The assistant's is the
+// A TERM MAY BE UNKNOWN, and Term then answers why. Access history's is the
 // term of the revision the fleet's activation pointer names, which a node that
 // does not run that very revision cannot know, and a term guessed in its
 // place is one the company may have lengthened: every item between the two
