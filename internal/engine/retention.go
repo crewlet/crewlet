@@ -29,47 +29,18 @@ import (
 	"github.com/crewlet/crewlet/internal/worklet"
 )
 
-// THE TRIM, and it is the one loop without which the log only grows.
-//
-// # What it is, in one paragraph
-//
-// Every domain's ordered log is a replay window rather than an archive: the
-// durable tables are the record of truth, and the log's job is to carry
-// records to nodes that have not applied them yet. Once every node the fleet
-// counts has committed past a record — and nothing else needs it — the record
-// can go. [statelog.Trim] is the arithmetic that decides how far, from six
-// terms that each move the point DOWN; this file is what reads those terms
-// from a live fleet, publishes what it concluded — so a node that is not
-// holding the duty can still say why the log is not shrinking, and so every
-// write fence knows what may be gone — and only THEN applies the answer to the
-// broker, for the reason [retention.apply] gives. Last, on a log that writes
-// arbitration anchors, it appends the trimmed records that have every node
-// remove the anchors below what the log no longer holds (ADR-0080,
-// [retention.sweepAnchors]): an anchor there names a record that is gone, and
-// can only send its subject's next write to be refused.
-//
-// # Why nothing here re-decides
-//
-// The six terms have an inversion in them that three readers got backwards,
-// which is exactly why the arithmetic is a pure function over a struct of
-// values. This loop's whole job is to fill that struct honestly — including
-// with the THIRD value, "could not be read", which blocks the trim rather than
-// being treated as satisfied. A term nobody could read is not a term nobody
-// needs.
-//
-// # A fleet singleton, and what happens without one
-//
-// The trim is a burst of purges against shared streams, and two nodes deciding
-// concurrently would race on the register's published floor: the loser's
-// conclusion would overwrite the winner's and `blocked_since` — the field that
-// says how long this has been going on — would reset on every tick. So it is a
-// duty like the sweep, on the `worker:{duty}` lease, and a fleet whose nodes
-// all declare `roles: [seats]` deliberately does not trim.
-//
-// ONLY A DATA NODE ARMS IT, because the trim reads the applied eviction rows
-// of the estate ([retention.tombstones]) and only a node running the logs has
-// them: [Engine.startRetention] is reached only where a state log runs, so a
-// node without `data` never competes for the lease it could not use.
+// THE TRIM: without it the log only grows. Each domain's log is a replay window,
+// not an archive; once every node the fleet counts has committed past a record
+// and nothing else needs it, the record goes. [statelog.Trim] is the pure
+// arithmetic over six terms that each move the point DOWN; this file fills that
+// struct honestly (a term that "could not be read" blocks the trim), publishes
+// its conclusion so every write fence and node can say why the log is not
+// shrinking, and only THEN purges the broker ([retention.apply]). On a log with
+// arbitration anchors it last appends the records that have every node drop
+// anchors below what the log still holds (ADR-0080, [retention.sweepAnchors]).
+// A fleet singleton on the `worker:{duty}` lease: two trimmers would overwrite
+// each other's floor and reset `blocked_since`. ONLY A DATA NODE ARMS IT
+// ([Engine.startRetention]): it reads the estate's eviction rows.
 
 // The trim ticks every [statelog.TrimInterval]. The number lives beside the
 // arithmetic rather than here because it is also the resolution of
@@ -235,22 +206,14 @@ type retention struct {
 	// goroutines.
 	mu sync.Mutex
 
-	// coverFraction and coverKnown are the last tick's coverage
-	// measurement.
-	//
-	// TAKEN ON THE TICK AND READ BY THE REPORT, because the measurement is
-	// a scan of the whole source corpus and a report is assembled on every
-	// operator request, every dashboard poll and every alarm beat. It, each
-	// log's daily intake and the store's connection-pool waits are the ONLY
-	// alarm inputs measured at the trim's [statelog.TrimInterval] — two
-	// scans and a delta of cumulative counters, each honest at a
-	// quarter-hour because none summarises anything that moves faster than
-	// a corpus, a day or a tick. Every other input the reading carries —
-	// apply lag, the backup register, the maintenance window, free space,
-	// the other windowed metrics, each log's held record and whether each
-	// log's floor can be read — is re-read on
-	// every [statelog.AlarmInterval] beat. See [retention.measureCoverage]
-	// and [retention.heartbeat].
+	// coverFraction and coverKnown are the last tick's coverage measurement,
+	// TAKEN ON THE TICK AND READ BY THE REPORT: it scans the whole source corpus,
+	// and a report is assembled on every operator request, dashboard poll and
+	// alarm beat. It, each log's daily intake and the store's pool waits are the
+	// ONLY alarm inputs measured at [statelog.TrimInterval]; none summarises
+	// anything faster than a corpus, a day or a tick. Every other input is
+	// re-read on each [statelog.AlarmInterval] beat. See
+	// [retention.measureCoverage] and [retention.heartbeat].
 	coverFraction float64
 	coverKnown    bool
 
@@ -537,39 +500,18 @@ func (r *retention) tick(ctx context.Context) {
 	r.forgetEvicted(ctx, shared)
 }
 
-// forgetEvicted removes the backup point of every node the fleet has stopped
-// counting on every log that counts nodes — evicted there, past the fence
-// window — so neither a log's backup term nor `GET /backups` counts a copy the
-// operator has said is on a host that is gone.
+// forgetEvicted removes the backup point of every node evicted on every log that
+// counts nodes, past the fence window, so neither a log's backup term nor
+// `GET /backups` counts a copy on a host the operator says is gone.
 //
-// # Why the point goes, when the node's position row stays
-//
-// The position row is what a READMISSION is judged by, so an eviction keeps it,
-// and so does everything else ([coord.PositionRegister]). A backup point is judged by
-// nothing: it is a claim that a verified copy of the logs exists in a directory
-// on that node, and eviction is the operator's word that the node is not
-// coming back. Left standing, it was listed on `/backups` for the life of the
-// fleet, and under `backup_floor: engine` the trim went on counting it — the
-// newest copy of a log could be one on a host that had left, so a log was
-// trimmed against a backup nobody could restore from. Forgetting it is the
-// safe direction whatever the operator does next: a log no surviving copy
-// covers blocks and raises `backup_age` until a live node backs up, and a node
-// readmitted later records its next backup afresh.
-//
-// # Every log, past the window, and nothing guessed
-//
-// ON EVERY IDENTITY-CLAIMING LOG this node runs, because that is the set an
-// eviction is written to and the one a node is counted on: one that a single
-// log still counts is not gone. PAST [statelog.EvictionFenceWindow], the
-// instant [statelog.CountedSet] stops counting the node, so a backup stops
-// counting exactly when its node does. A log whose evictions could not be read
-// forgets nobody, on the trim's own conservative rule. The operator's
-// acknowledgements are never a node's and are never forgotten here.
-//
-// THE DUTY'S, and once per tick: the fleet singleton is the one reader of
-// both halves, the points it already read for this tick and the evictions
-// every data node applies identically. A forget that fails is said and asked
-// again on the next tick, which reads the same evictions.
+// The position row stays ([coord.PositionRegister], what a READMISSION is judged
+// by) but the backup point goes: left standing, `backup_floor: engine` would
+// trim a log against a backup nobody can restore from. Forgetting is safe: a
+// log no surviving copy covers blocks and raises `backup_age`, and a readmitted
+// node records its next backup afresh. Only when EVERY IDENTITY-CLAIMING LOG
+// has evicted it, PAST [statelog.EvictionFenceWindow]; a log whose evictions
+// could not be read forgets nobody. Operator acknowledgements are never
+// forgotten. A failed forget is retried next tick.
 func (r *retention) forgetEvicted(ctx context.Context, shared fleetInputs) {
 	var logs []logEvictions
 	for _, running := range r.state.running() {
@@ -632,15 +574,10 @@ func evictedPoints(now time.Time, logs []logEvictions, points []coord.BackupPoin
 // register's order: the logs that claim identity, whose evictions it counts
 // from this node's own rows ([logTombstones]), and the logs that write
 // arbitration anchors, whose anchors below the log it counts from this node's
-// own rows before appending the records that remove them
-// ([retention.sweepAnchors]). Every other term it reads is the fleet's
-// register or the log itself.
-//
-// THE TWO SETS ARE NAMED APART although they are the same logs today — every
-// strict log the register runs, and neither compacted one — because a log that
-// writes anchors and claims no identity is a domain somebody can add, and a
-// copy of it out of service would have the trim count anchors on rows nobody
-// can trust.
+// own rows ([retention.sweepAnchors]). Every other term is the fleet's register
+// or the log itself. THE TWO SETS ARE NAMED APART though they are the same logs
+// today: a log that writes anchors and claims no identity can be added, and a
+// copy of it out of service would have the trim count anchors on untrusted rows.
 func (r *retention) decidesFrom() []string {
 	if r.state == nil {
 		return nil
@@ -658,14 +595,11 @@ func (r *retention) decidesFrom() []string {
 // hardware, its vector coverage and its logs, then evaluates the alarm table
 // against it at once.
 //
-// THE MEASUREMENT COMES FIRST, because the reading the table is evaluated
-// against reads these back: a tick that observed before it measured would
-// evaluate the previous tick's disk against this tick's log. The vector
-// coverage and the logs' intake are measured HERE and nowhere else — each is
-// a scan a report assembled per dashboard poll must not repeat, and a
-// quarter-hour is the resolution every one of them is honest at (see
-// [statelog.TrimInterval]). What the table is evaluated on between these ticks is
-// [retention.heartbeat].
+// THE MEASUREMENT COMES FIRST: the reading reads these back, so observing
+// before measuring would evaluate the previous tick's disk against this tick's
+// log. Vector coverage and the logs' intake are measured HERE only, each a scan
+// a per-poll report must not repeat, honest at [statelog.TrimInterval]. Between
+// ticks the table is evaluated by [retention.heartbeat].
 func (r *retention) evaluate(ctx context.Context) {
 	r.capacity(ctx)
 	r.measureCoverage(ctx)
@@ -761,22 +695,15 @@ type fleetInputs struct {
 func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 	in := fleetInputs{at: r.clock(), previous: map[string]coord.TrimFloor{}}
 
-	// THE HOLDS ARE READ FIRST, BEFORE WHAT EACH ONE IS HANDED OVER TO, and
-	// the order is the only thing keeping a handover from falling between
-	// two reads. Every pin in the register is released only after its owner
-	// has written what takes its place: a join's once its node's positions
-	// row counts the tail ([stateLog.releaseCountedTail]), a backup's once
-	// it has announced the point its copy covers ([backup.Service]; one it
-	// could not announce leaves the older point standing, which keeps more).
-	// So a hold this read does not see was released before it began, the
-	// write that replaced it landed before that, and the reads below — which
-	// begin later — see that write.
-	//
-	// Read the other way round, a joiner that wrote its row and released its
-	// pin between the two reads was in neither: no row yet in the positions
-	// read, no pin any more in the holds read, and at boot no presence lease
-	// either, so the tick counted nothing below the tail that node had just
-	// installed itself in front of, and could purge it.
+	// THE HOLDS ARE READ FIRST, BEFORE WHAT EACH IS HANDED OVER TO: the order
+	// keeps a handover from falling between two reads. A pin is released only
+	// after its owner wrote what replaces it (a join's positions row counts the
+	// tail, [stateLog.releaseCountedTail]; a backup announced its point,
+	// [backup.Service], and an unannounced one leaves the older, which keeps
+	// more), so a hold this read misses was released, and its replacement landed,
+	// before the later reads below. Read the other way, a joiner that wrote its
+	// row and released its pin between the reads is in neither, and the tick
+	// could purge the tail it just installed itself in front of.
 	var err error
 	if in.holds, err = r.fleet.Holds(ctx); err != nil {
 		return in, fmt.Errorf("read the trim holds: %w", err)
@@ -806,22 +733,17 @@ func (r *retention) read(ctx context.Context) (fleetInputs, error) {
 			in.previous[name] = row
 		}
 	}
-	// THE LIVE DATA NODES ARE WHAT CATCH A NODE WHOSE ROW HAS NOT LANDED —
-	// one holding a presence lease whose heartbeat has not yet published. It
-	// counts at position zero and blocks, which is correct: it applies every
-	// log, and trimming past it would delete what it has still to apply. A
-	// node ADOPTING A SNAPSHOT AT BOOT is caught by neither this nor the
-	// register: its join runs before its presence and before its heartbeat,
-	// and what keeps its tail is its own hold, renewed until its first row
-	// counts it ([stateLog.holdUntilCounted]). The listing is the gate's own
-	// ([livePresences]), so an eviction and the trim judge presence from one
-	// answer.
+	// THE LIVE DATA NODES CATCH A NODE WHOSE ROW HAS NOT LANDED (a presence lease
+	// whose heartbeat has not published): it counts at position zero and blocks,
+	// correctly, since trimming past it would delete what it has to apply. A node
+	// ADOPTING A SNAPSHOT AT BOOT is caught by neither this nor the register: its
+	// own hold, renewed until its first row counts it ([stateLog.holdUntilCounted]),
+	// keeps its tail. The listing is the gate's own ([livePresences]), so an
+	// eviction and the trim judge presence from one answer.
 	//
-	// UNKNOWN IS NOT FATAL TO THE TICK, unlike the register: the logs are
-	// still evaluated, each reading its counted set as UNKNOWN, so every
-	// floor is published BLOCKED on the applied term with the reason — a
-	// presence listing that did not answer, say — rather than left standing
-	// unexplained.
+	// UNKNOWN IS NOT FATAL TO THE TICK, unlike the register: each log reads its
+	// counted set as UNKNOWN and publishes its floor BLOCKED on the applied
+	// term with the reason, rather than unexplained.
 	if r.holders != nil {
 		if in.holders, err = r.holders.LiveData(ctx); err != nil {
 			in.holdersUnknown = fmt.Sprintf("the live data nodes could not be listed (%v)", err)
@@ -905,33 +827,17 @@ type sweepTarget struct {
 	below   statelog.Position
 }
 
-// sweepAnchors appends, on every log the tick trimmed that writes anchors, the
-// trimmed records that remove the arbitration anchors this node's copy holds
-// below what the log no longer holds — one per
-// [statelog.AnchorsPerTrimmedRecord] of them, at most
-// [statelog.TrimmedRecordsPerSweep] a log a tick, and none on a log with none
-// below, so an idle fleet's logs gain nothing.
-//
-// A RECORD AND NEVER A DELETE, because the anchors are replicated-estate state
-// and the trim is not their writer: every node's applier removes them, at the
-// record's position, in the transaction that applies it.
-//
-// ON THIS NODE'S OWN APPLIER, which each log's count waits to have applied the
-// log's end and each log's records are paced on, one committed before the
-// next is appended — so a holder whose copy is behind appends nothing, and a
-// write or a read behind the sweep on this node waits one record's apply
-// rather than the whole run's ([statelog.PlanSweep], [statelog.SweepPlan]).
-//
-// ALL OF IT INSIDE ONE [statelog.AlarmInterval], counted first: every log is counted
-// under the interval's deadline, and then the logs that have anything to
-// sweep share what is left of it ([runSweeps]). See [anchorSweepDeadline] for
-// why one interval, and [runSweeps] for why counted first.
-//
-// A FAILURE DOES NOT FAIL THE TICK. The floor and the purge have already
-// landed, and an anchor kept costs its next write one refused append and never
-// a lost update — so it is said, and the next tick's count retries it. A sweep
-// whose budget ran out is no failure at all: it says what it appended and that
-// more remain, as one stopped by the cap does, and the next tick goes on.
+// sweepAnchors appends, on every trimmed log that writes anchors, the records
+// that remove the anchors this node's copy holds below what the log no longer
+// holds: one per [statelog.AnchorsPerTrimmedRecord], at most
+// [statelog.TrimmedRecordsPerSweep] a log a tick, none where none lie below.
+// A RECORD AND NEVER A DELETE: anchors are replicated-estate state, which every
+// node's applier removes in the transaction that applies the record. Paced ON
+// THIS NODE'S OWN APPLIER, one record committed before the next, so a behind
+// holder appends nothing ([statelog.PlanSweep], [statelog.SweepPlan]). ALL
+// INSIDE ONE [statelog.AlarmInterval], counted first ([runSweeps],
+// [anchorSweepDeadline]). A FAILURE DOES NOT FAIL THE TICK: a kept anchor costs
+// its next write one refused append, never a lost update; the next count retries.
 func (r *retention) sweepAnchors(ctx context.Context, targets []sweepTarget) {
 	deadline := time.Now().Add(anchorSweepDeadline)
 	counting, cancel := context.WithDeadline(ctx, deadline)
@@ -958,19 +864,14 @@ func (r *retention) sweepAnchors(ctx context.Context, targets []sweepTarget) {
 // anchorSweepDeadline is how long a tick's anchor sweeps may take together,
 // counts and appends alike: ONE [statelog.AlarmInterval], ten seconds.
 //
-// THE SWEEPS RUN ON THE TRIM'S OWN GOROUTINE ([retention.run]), one log after
-// another, and each paces its records on this node's applier — so a sweep's
-// length is whatever that applier takes, and what the bound limits is the work
-// every OTHER data node is handed: each applies every record on its one write
-// lane, so a node that applies the records k times slower than this one is
-// left at most about k − 1 of these bounds behind them when the sweep ends
-// ([statelog.SweepPlan.Sweep]) — under [statelog.StallGrace], the lag
-// `apply_lag` names a node at, for any node up to six times slower. The alarms
-// no longer ride this goroutine ([retention.heartbeat]), so the bound delays no
-// evaluation. A longer one queues more in front of a slower node's own writes;
-// a shorter one only drains a backlog slower, and the bound binds only on a
-// large table, where records apply slowest (the drain arithmetic, at these ten
-// seconds, is [statelog.TrimmedRecordsPerSweep]'s).
+// The sweeps run on the trim's own goroutine ([retention.run]), each paced on
+// this node's applier, so the bound limits the work every OTHER data node is
+// handed on its one write lane: a node k times slower is left at most about
+// k − 1 bounds behind when the sweep ends ([statelog.SweepPlan.Sweep]), under
+// [statelog.StallGrace], the lag `apply_lag` names, for any node up to six times
+// slower. A longer bound queues more before a slower node's own writes; a
+// shorter one only drains a backlog slower, and binds only on a large table
+// (the drain arithmetic is [statelog.TrimmedRecordsPerSweep]'s).
 const anchorSweepDeadline = statelog.AlarmInterval
 
 // countedSweep is one log's anchor sweep, counted, as [runSweeps] schedules
@@ -992,16 +893,13 @@ type anchorSweep interface {
 // each within an equal share of what is left before deadline among the sweeps
 // still to run.
 //
-// SHARED AMONG THE LOGS WITH ANYTHING TO SWEEP, AND COUNTED FIRST, because an
-// equal share of the interval for every log that writes anchors spent a share
-// on each idle one: registering a third such log cut the tracker's and the
-// knowledge base's sweeps from five seconds a tick to three and a third on
-// every node, a company with no repositories at all included, and a sixth
-// would cut them again. Counted first, a log with nothing below its floor
-// costs the others its count and nothing more, wherever it sits in the order.
-// And SHARED rather than handed out first come: what one sweep leaves unspent
-// goes to the sweeps after it, and a backlog on an early log never takes the
-// whole interval from a later one.
+// SHARED AMONG THE LOGS WITH ANYTHING TO SWEEP, AND COUNTED FIRST: an equal
+// share for every anchor-writing log spends a share on each idle one, so every
+// further such log would cut the others' sweeps, a company with no repositories
+// included. Counted first, an idle log costs the others its count and nothing
+// more. SHARED rather than first come: what one sweep leaves unspent goes to
+// the sweeps after it, and a backlog on an early log never takes the whole
+// interval from a later one.
 func runSweeps(ctx context.Context, deadline time.Time, now func() time.Time, counted []countedSweep) {
 	var busy []countedSweep
 	for _, c := range counted {
@@ -1067,36 +965,17 @@ func (r *retention) sweepDeps(running *runningLog) (statelog.SweepDeps, bool) {
 	return deps, true
 }
 
-// apply carries out what one tick decided: it publishes the conclusion, and
-// then it purges.
-//
-// THE FLOOR IS PUBLISHED BEFORE THE PURGE IT LICENSES, and a floor that
-// could not be published licenses nothing.
-//
-// The write fence clears an expectation of zero against this floor —
-// [statelog]'s floor theorem, clause (ii) — and the proof needs every record
-// ever removed to sit below the floor a writer reads. Purged first, the two
-// steps leave a window in which the log has lost records the published floor
-// still says are held, and a node the purge just left behind is cleared
-// against the old number. Nor is that window one tick wide: a purge followed
-// by a publish that FAILS leaves it open until some later tick's publish
-// succeeds, for as long as the register refuses writes.
-//
-// The opposite failure — published, then the purge fails or this process dies
-// between the two — is the safe one. Readers treat records the log still holds
-// as possibly gone, which refuses only a node below what this tick licensed; no
-// node the tick counted is, because the applied term put it at or under every
-// counted position, and one it did not count catches up by replay, since the
-// records are still there. Meanwhile a node between the log's first record and
-// the floor refuses reads as `behind` while it replays them
-// ([statelog.FloorReplaying]) and is never sent to adopt a snapshot. The gap
-// closes only when a later tick licenses removing at least that far, and that
-// can be a while: a blocked tick purges nothing, and one whose lowest counted
-// node is lower purges less.
-//
-// It answers the log's first surviving sequence once the tick is done — what
-// it purged to, or the first it was handed — which is the floor the anchor
-// sweep removes below ([retention.sweepAnchors]).
+// apply publishes what one tick decided, then purges. THE FLOOR IS PUBLISHED
+// BEFORE THE PURGE IT LICENSES; one that could not be published licenses
+// nothing. The write fence clears an expectation of zero against this floor
+// ([statelog]'s floor theorem, clause (ii)), which needs every record ever
+// removed to sit below the floor a writer reads. Purged first, a node the purge
+// left behind is cleared against the old number, and a publish that then FAILS
+// keeps that window open. The opposite failure (published, purge fails or the
+// process dies) is safe: a node the tick counted is never below what it
+// licensed, and one it did not count catches up by replay, refusing reads as
+// `behind` meanwhile ([statelog.FloorReplaying]). It answers the log's first
+// surviving sequence, the floor [retention.sweepAnchors] removes below.
 func (r *retention) apply(ctx context.Context, stream *jetstream.DomainLog, name string,
 	generation uint32, decision statelog.TrimDecision, first uint64, shared fleetInputs) (uint64, error) {
 
@@ -1114,33 +993,16 @@ func (r *retention) apply(ctx context.Context, stream *jetstream.DomainLog, name
 	return decision.To, nil
 }
 
-// nextFloor is the [coord.TrimFloor.Floor] a tick publishes: the previous
-// row's floor carried forward, raised by what this tick licenses removing and
-// by what the stream has already lost.
-//
-// # Why it never moves down
-//
-// A tick's own conclusion does. It is zero on every blocked tick, and it falls
-// to the lowest counted node's position whenever that node is lower than the
-// last tick's minimum — a readmitted node, one restored from an old backup,
-// one that came up on its own history because nobody could donate. Records an
-// earlier tick licensed removing are gone all the same, so a floor that
-// followed the conclusion down would tell exactly that node it holds
-// everything that may be missing: a minimum that includes a node can never
-// exceed it. That is the vacuous comparand [stateLog.trimFloor] once was,
-// arriving by a second route.
-//
-// # Why a row from a HIGHER generation refuses
-//
-// This node's positions and this tick's conclusion name a sequence space the
-// fleet has left, and publishing over that row would put a floor nobody on the
-// live generation can read where theirs was — the reader's own rule in
-// [floorFor], applied to the writer. Refusing publishes nothing, and so purges
-// nothing: the purge is licensed only by a floor that was published.
-//
-// A row from a LOWER generation is not carried either: its sequences name a
-// dead number space, so this generation's floor starts from what this tick
-// licenses and what the stream still holds.
+// nextFloor is the [coord.TrimFloor.Floor] a tick publishes: the previous row's
+// floor carried forward, raised by what this tick licenses and what the stream
+// has already lost. It never moves down, though a tick's conclusion does (zero
+// when blocked, a readmitted or restored node's position): records already
+// removed are gone, so a floor following it down would tell that node it holds
+// everything that may be missing, the vacuous comparand [stateLog.trimFloor]
+// once was. A row from a HIGHER generation refuses: publishing over a sequence
+// space the fleet has left would put a floor nobody on the live generation can
+// read where theirs was ([floorFor]); nothing published means nothing purged. A
+// LOWER generation's row is not carried: its sequences name a dead number space.
 func nextFloor(previous coord.TrimFloor, had bool, generation uint32, to, first uint64) (uint64, error) {
 	floor := max(to, first)
 	switch {
@@ -1220,34 +1082,16 @@ func (r *retention) publish(ctx context.Context, name string, generation uint32,
 }
 
 // sayBlock logs a domain's block when it starts, when the term holding it
-// changes, and when it ends — and never on a tick that changed none of those.
+// changes, and when it ends, never on a tick that changed none of those.
 //
-// # Why transitions and not a line per tick
-//
-// It was a WARN on every tick of every blocked domain, and a blocked trim is a
-// state a healthy fleet lives in for weeks: every fresh deployment waits on its
-// first backup and its first donors, and a log nobody writes to is blocked for
-// the life of the deployment, since every node sits at position zero on it.
-// That was four WARN lines an hour for each such log, for ever, on a fleet with
-// nothing wrong — the log-line half of the `trim_blocked` alarm that fired on
-// every young fleet. Whether a block has come to COST something is the alarm's
-// question, at a threshold the configuration already made; a line's job is to
-// say, for whoever reads logs rather than screens, when a block began, what
-// holds it, and how long it lasted — which is the alarm tracker's own rate, for
-// the tracker's reason: a level repeated every tick buries when it started.
-//
-// FROM THE PUBLISHED ROW rather than from memory, because the duty moves on a
-// lease: a holder that took over mid-block reads the block its predecessor
-// published, and says nothing about a block that did not start on its watch —
-// which is the reason `blocked_since` is published at all.
-//
-// BOTH AT WARN, the tracker's pair's level, so a filter that shows a block's
-// start shows its end. Splitting them by the term — a term nobody could read at
-// WARN, one that permits nothing yet at INFO — reads well until a block changes
-// term: one that started on a missing backup and ended on a joining node was a
-// WARN start with an INFO end, and a reader filtering on WARN saw a block that
-// never ended. What it costs is one WARN, once, for each ordinary block a fresh
-// deployment starts with.
+// Transitions, not a line per tick: a blocked trim is a state a healthy fleet
+// lives in for weeks (a fresh deployment awaits its first backup and donors; a
+// log nobody writes to stays at position zero), so a WARN per tick is noise.
+// Whether a block COSTS something is the `trim_blocked` alarm's question. FROM
+// THE PUBLISHED ROW, not memory: a duty holder that took over mid-block says
+// nothing about a block that did not start on its watch. BOTH AT WARN, so a
+// filter that shows a block's start shows its end; splitting by term leaves a
+// WARN start with an INFO end when a block changes term.
 func (r *retention) sayBlock(ctx context.Context, name string,
 	previous coord.TrimFloor, had bool, decision statelog.TrimDecision,
 	row coord.TrimFloor) {
@@ -1463,20 +1307,14 @@ var (
 
 // tombstones is every eviction this node has applied for one domain's log.
 //
-// READ FROM THE REPLICATED ROWS rather than from coordination, because that is
-// where an eviction actually lives: it is a record on the log like any other,
-// so every data node's copy is identical and the applier's own gate depends on
-// this same table. A second copy in a bucket would give the fleet two answers.
-//
-// A read failure yields NO tombstones, which is the conservative direction: an
-// evicted node stays counted and pins the floor, rather than the trim
-// advancing past a node it could not establish was gone.
-//
-// AND IT SAYS SO: read is false wherever the rows were not read. No tombstone
-// is then not an answer about any node — the report prints every node as not
-// evicted on that log, and a reader that took that for a readmission released
-// an eviction it had just made. A domain that claims no identity carries no
-// evictions and was read in full, trivially.
+// READ FROM THE REPLICATED ROWS, not coordination: an eviction is a record on
+// the log, identical on every data node, and the applier's own gate reads this
+// table; a second copy would give the fleet two answers. A read failure yields
+// NO tombstones, the conservative direction (an evicted node stays counted and
+// pins the floor), AND SAYS SO: read is false wherever the rows were not read,
+// so no tombstone is no answer about any node (a reader that took it for a
+// readmission released an eviction it had just made). A domain claiming no
+// identity carries no evictions and was read in full.
 func (r *retention) tombstones(ctx context.Context, running *runningLog,
 	generation uint32) (tombs []statelog.Tombstone, read bool) {
 
@@ -1541,19 +1379,13 @@ func logTombstones(ctx context.Context, db *store.DB, domain statelog.Domain,
 
 // ageFloor is the first sequence the age term will keep.
 //
-// # Why a binary search rather than a stored index
-//
-// The log is ordered by sequence and its timestamps are the BROKER's own, so
-// they are monotone in sequence — which makes "the newest record older than T"
-// a binary search over [first, last] with one [jetstream.DomainLog.At] per
-// step. At a year-five log that is about twenty-eight reads a quarter of an
-// hour, which is cheaper than any index that would have to be maintained on
-// every append and correct after every purge.
-//
-// It answers the FIRST sequence to KEEP, exclusive-style like every other
-// term: a log whose newest record is already older than the floor answers
-// last+1 (everything may go, as far as this term is concerned), and one whose
-// oldest record is younger answers first (nothing may go).
+// A binary search, not a stored index: timestamps are the BROKER's own, so
+// monotone in sequence, and "the newest record older than T" costs one
+// [jetstream.DomainLog.At] per step (about twenty-eight reads a quarter-hour at
+// year five), cheaper than an index maintained on every append and correct after
+// every purge. It answers the FIRST sequence to KEEP, exclusive-style like every
+// term: last+1 when the newest record is already older than the floor
+// (everything may go), first when the oldest is younger (nothing may go).
 func (r *retention) ageFloor(ctx context.Context, log *jetstream.DomainLog,
 	stats jetstream.LogStats, minAge time.Duration, now time.Time) (uint64, error) {
 
@@ -1608,23 +1440,14 @@ func ageFloorOf(first, last, messages uint64, cutoff time.Time,
 
 // gauges publishes the capacity and gate figures a collector reads.
 //
-// # Why here and not where each number is produced
-//
-// Every one of them is a fact about a DOMAIN at a moment, and this tick is the
-// only place that holds all of them at once: the stream's size and ceiling
-// come from one info call, the blocked term from one evaluation, and the
-// backup's age from one register read. Setting them anywhere else would mean
-// re-fetching, and a gauge set from a second fetch describes a state the
-// decision beside it was not taken against.
-//
-// A NIL RECORDER RECORDS NOTHING, which is a legal deployment: the numbers are
-// on the report either way, and a collector is what this adds.
-//
-// THE HEADROOM IS OF THE CEILING ORDINARY WRITES ARE HELD TO, which on a log
-// that keeps a gate reserve is [statelog.Reservation.Bytes] below the broker's —
-// the figure the report prints and the alarm fires on, from the one function
-// all three read, so a collector's graph reaches zero exactly where writes
-// start being refused.
+// Set here because this tick alone holds all of them at once (one info call,
+// one evaluation, one register read); a gauge from a second fetch would
+// describe a state the decision beside it was not taken against. A NIL
+// RECORDER RECORDS NOTHING, a legal deployment: the report carries the numbers.
+// THE HEADROOM IS OF THE CEILING ORDINARY WRITES ARE HELD TO, on a log with a
+// gate reserve [statelog.Reservation.Bytes] below the broker's, from the one
+// function the report and the alarm read too, so a graph reaches zero exactly
+// where writes start being refused.
 func (r *retention) gauges(domain string, reservation statelog.Reservation, stats jetstream.LogStats,
 	decision statelog.TrimDecision, shared fleetInputs) {
 

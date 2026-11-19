@@ -261,20 +261,15 @@ const TestGitTransfers = brokertest.GitTransfers
 
 // PinGitLanes sets b's gitlet.max_transfers to [TestGitTransfers], for every
 // case booting a node that may build Gitlet beside a broker that derives
-// its own limit. The transfer lane sizes the request spools the cache's room is
-// taken out of (host.SpoolAllowance), and unset it follows the machine's cores
-// — four a core, as memory allows. Beside a broker on the same temporary
-// volume, which claims three quarters of its free space, a sixteen-core
-// machine's 4 GiB of spools left a node no room under 16 GiB free, and its node
-// refused to host code: a property of the machine running the suite, never of
-// the case. Pinned, the room is a quarter of the free space less 768 MiB — the
-// request spools' 256 MiB and the revision facts' patch spools' 512 MiB
-// (query.PatchSpoolAllowance) — which every volume a node boots on has.
-//
-// A node whose broker [brokertest.StoreIn] sized declares its cache with
-// [brokertest.GitletCacheIn] instead, which pins this lane and a budget: its
-// broker's declared limit claims a fixed sixteen gibibytes of the room, not a
-// share of the free space, and leaves nothing on a smaller disk.
+// its own limit. The lane sizes the request spools the cache's room is taken
+// out of (host.SpoolAllowance), and unset it follows the machine's cores: beside
+// a broker claiming three quarters of the free space, a sixteen-core machine's
+// 4 GiB of spools left no room under 16 GiB free, a property of the machine,
+// never of the case. Pinned, the room is a quarter of the free space less
+// 768 MiB (256 MiB request spools, 512 MiB patch spools,
+// query.PatchSpoolAllowance), which every volume has. A node whose broker
+// [brokertest.StoreIn] sized declares its cache with [brokertest.GitletCacheIn]
+// instead, which pins this lane and a budget.
 func PinGitLanes(b *config.Bootstrap) { b.Gitlet.MaxTransfers = TestGitTransfers }
 
 // RequireNodeGit holds the git the suite runs to the node floor

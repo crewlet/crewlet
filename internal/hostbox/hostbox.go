@@ -54,25 +54,14 @@ const FileMode os.FileMode = 0o600
 
 // PassthroughEnv is the host environment every child process may inherit.
 //
-// An ALLOWLIST, not a denylist, and that polarity is the whole point: the
-// engine's own environment holds the keyring every session cookie and every
-// sealed revision is signed under, the Tier A token values, any credential
-// in an external stream URL, the
-// collector credential in OTEL_EXPORTER_OTLP_HEADERS and possibly a metered
-// API key,
-// none of which a child has any business reading. A denylist would leak every
-// variable nobody thought to name — and the engine's Tier A `${VAR}`
-// references mean an operator names those variables, not this package.
-//
-// What is on it is what a process needs to run at all — where to find
-// binaries, how to render text, how to talk TLS, how to reach the network —
-// never what to authenticate as. Credentials reach a child only through the
-// environment its config deliberately declares.
-//
-// ONE LIST FOR EVERY CHILD. The harness backend kept its own and had already
-// drifted from this one: it lacked LC_NUMERIC, TERM and the ALL_PROXY pair (so
-// a harness behind a SOCKS proxy reached nothing), and it carried LANGUAGE,
-// which this one did not.
+// An ALLOWLIST, not a denylist: the engine's environment holds the signing
+// keyring, Tier A token values, stream-URL credentials, collector headers and
+// possibly a metered API key, none of which a child may read, and a denylist
+// leaks every variable nobody thought to name. It holds what a process needs
+// to run (binaries, locale, TLS, network reach), never what to authenticate
+// as: credentials reach a child only through the environment its config
+// declares. ONE LIST FOR EVERY CHILD: a second copy drifts (a harness behind
+// a SOCKS proxy lost the ALL_PROXY pair).
 var PassthroughEnv = []string{
 	"PATH",
 	"LANG",
@@ -181,21 +170,15 @@ var ContainerRuntimeEnv = []string{
 var ContainerRuntimeFamilies = []string{"DOCKER_", "CONTAINER_", "CONTAINERS_", "PODMAN_"}
 
 // ContainerRuntime is the host environment a container runtime's CLI runs
-// with: the allowlist, the host user's locations ([HostUserEnv] — where the
-// runtime keeps its config, and XDG_RUNTIME_DIR, where a rootless daemon's
-// socket lives), [ContainerRuntimeEnv] and every member of
+// with: the allowlist, [HostUserEnv] (the runtime's config and a rootless
+// daemon's XDG_RUNTIME_DIR socket), [ContainerRuntimeEnv] and every member of
 // [ContainerRuntimeFamilies] the engine was started with.
 //
-// ONE RULE FOR EVERY CALLER THAT STARTS ONE, and there are two: the local
-// sandbox drives the CLI to make and run a box, and a stdio MCP server
-// declared as `command: docker` or `podman` IS the CLI. Written twice, the
-// copy on the second path is the one that loses DOCKER_HOST — and a rootless
-// runtime without it dials the system socket, which fails as a permission
-// error at the daemon rather than as anything naming the variable.
-//
-// It is what the runtime needs to reach the daemon the operator configured,
-// never what an image or a credential helper authenticates with: a caller
-// with a declared channel layers that over this.
+// ONE RULE FOR BOTH CALLERS (the local sandbox, and a stdio MCP server
+// declared as `command: docker` or `podman`): a second copy loses DOCKER_HOST,
+// and a rootless runtime then dials the system socket and fails as a
+// permission error naming no variable. Never what an image or credential
+// helper authenticates with: a caller's declared channel layers over this.
 func ContainerRuntime() map[string]string {
 	env := Inherit(append(append([]string{}, HostUserEnv...), ContainerRuntimeEnv...)...)
 	InheritFamilies(env, ContainerRuntimeFamilies...)
@@ -267,39 +250,17 @@ var ErrEscape = errors.New("hostbox: path escapes its root")
 // package rather than from a copy of it.
 const ContainerHome = "/home/user"
 
-// InHome is where path lands under a local sandbox box's home: the path
-// relative to that home, and whether it names a file inside it at all.
-//
-// THE LEXICAL HALF OF THE ONE RULE BOTH LOCAL CELLS HOLD A FILE TO — a direct
-// box, which has no filesystem of its own, and a container box, which writes
-// a file on the host side of its one mount — and the half that can be judged
-// before any box exists, which is what config validation does with a setup
-// step's files. Both boxes call this before they touch a path and
-// [SafeJoin] after it, which is the other half: following whatever links the
-// host's existing directories hold, which only a box on that host can do. A
-// copy of the rule in the validator would be the one that drifts, and the
-// symptom of the drift is a document that validates and a seat whose every box
-// fails at setup.
-//
-// A relative path is under the home as it stands. An absolute one is under
-// it only when it names somewhere beneath it, compared after both are
-// cleaned, so "/home/user//x" is inside and "/home/user/../../etc/x" is not.
-// Either is refused when it climbs out with "..", and so is the home itself,
-// which is no file in it — and so is an empty path, which names nothing.
-//
-// A LEADING "~" IS THE HOME, as a remote (E2B) box's own agent reads one when
-// it writes a file there: "~/x" is the relative "x", and "~" alone is the
-// home itself, refused as above. "~name/x" — another account's home — is
-// refused, as that agent refuses it. Read as an ordinary relative path
-// instead, "~/.npmrc" was accepted here and written to a directory named "~"
-// in a local box's home, while the same document put the file in the home in
-// a remote one: one setup step, two places, and a rule that approved both.
-//
-// home is the home as a path inside the box names it: [ContainerHome] for a
-// container box, the host directory a direct box was minted for. EMPTY is a
-// home NO path can name, which is what a direct box's home is to everything
-// written before the box exists — it is minted per box, under a name no
-// document holds — so only a relative path lands in one.
+// InHome is path relative to a local box's home, and whether it names a file
+// inside it. THE LEXICAL HALF OF THE RULE BOTH LOCAL BOXES HOLD A FILE TO,
+// judgeable before any box exists (config validation uses it); [SafeJoin] is the half
+// that follows links. A copy in the validator would drift into a document that
+// validates and boxes that fail at setup. Relative paths are under home;
+// absolute ones only beneath it after cleaning. Refused: "..", the home
+// itself, an empty path. A LEADING "~" IS THE HOME as a remote (E2B) agent
+// reads it ("~/x" is "x"; "~name/x" refused); read as plain relative,
+// "~/.npmrc" landed in a directory named "~" locally. home is the path inside
+// the box ([ContainerHome], or a direct box's host directory); EMPTY is one no
+// path can name, so only a relative path lands in it.
 func InHome(home, path string) (string, bool) {
 	if path == "" {
 		return "", false
@@ -333,35 +294,15 @@ func InHome(home, path string) (string, bool) {
 
 // SafeJoin resolves rel under root, refusing anything that lands outside it.
 //
-// The paths it guards are operator config — a harness profile's credential_paths,
-// a setup step's file entries — so "../../.." is a value someone can write. In
-// a local sandbox that is not a sandboxed write: the box directory is a real
-// host directory, so an escape writes to the engine host itself.
-//
-// Resolution is NON-STRICT, because the target usually does not exist yet
-// (it is about to be created), so the check
-// resolves the longest existing ancestor — which is where a symlink could
-// redirect the write — and appends the rest lexically. A strict resolve would
-// refuse every create, and a purely lexical Clean would miss a symlinked
-// ancestor entirely.
-//
-// The result is the RESOLVED path, with the symlinks in the root and in every
-// existing ancestor already followed, because that is the string the
-// containment check was made against: what the caller writes to is visibly
-// under the resolved root, rather than a join whose meaning depends on links
-// being read again. A caller comparing the result with the root it passed
-// compares against that root's resolved form, which on macOS differs for any
-// directory under /var or /tmp.
-//
-// The root itself is not a valid result: these callers always name a file
-// inside the box, so a rel that resolves back to the root is an escape that
-// happened to stop at the boundary.
-//
-// An ABSOLUTE rel is refused rather than contained. filepath.Join would
-// happily fold "/etc/passwd" into "<root>/etc/passwd", which is safe but
-// silent — and every caller here has a relative-path contract, so an absolute
-// value is a misconfiguration that should be read back to the operator rather
-// than quietly rewritten into a path they did not name.
+// Paths are operator config, and a local box directory is a real host
+// directory, so an escape writes to the engine host. Resolution is NON-STRICT:
+// the target usually does not exist yet, so it resolves the longest existing
+// ancestor (where a symlink could redirect the write) and appends the rest
+// lexically; strict refuses every create, lexical misses a symlinked ancestor. The result is the RESOLVED path the check was
+// made against (it differs from root on macOS under /var or /tmp). The root
+// itself is not a valid result: callers name a file inside the box. An
+// ABSOLUTE rel is refused, not folded into root, as a misconfiguration to
+// read back.
 func SafeJoin(root, rel string) (string, error) {
 	if filepath.IsAbs(rel) {
 		return "", fmt.Errorf("%w: %q is absolute, and this path is relative to %q", ErrEscape, rel, root)
@@ -429,16 +370,13 @@ func resolve(path string) (string, error) {
 // own directory and a rename, at [FileMode] — [ReplaceFileIn] over that
 // directory.
 //
-// Atomic because the file is usually a credential or a record a live process
-// may be reading: a partial write is one that parses as corrupt, and every
-// consumer writes these while something else could be starting up.
+// Atomic because the file is usually a credential or record a live process
+// may be reading: a partial write parses as corrupt.
 //
-// It takes a reader rather than a source path: a caller that opened its
-// source in a particular way — once, so that what it compares is what it
-// writes — must not hand this a path to open again. dst's directory must
-// exist. ONE file: a login of several is [WriteCredentials]'s, because
-// replacing its files one at a time is a login half written whenever the
-// process stops between two of them.
+// It takes a reader, not a path, so a caller that opened its source once (so
+// what it compares is what it writes) never has it opened again. dst's
+// directory must exist. ONE file: a multi-file login is [WriteCredentials]'s,
+// since replacing files one at a time leaves a login half written.
 func ReplaceFile(dst string, content io.Reader) error {
 	dir, err := os.OpenRoot(filepath.Dir(dst))
 	if err != nil {

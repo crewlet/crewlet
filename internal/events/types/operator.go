@@ -9,24 +9,14 @@ import (
 // The runtime audit: what a PERSON did to the company through a running node,
 // on the surfaces that keep no record of their own.
 //
-// # Why these exist beside the records every write already makes
-//
-// A tracker commit names its author and a page revision names its editor, but
-// both are the record of a CHANGE — a call that was refused, or one whose
-// answer never came back, leaves nothing there, and a verb that is not a
-// tracker or wiki write (a backup, and the seat controls the dashboard gains)
-// leaves nothing anywhere. The configuration and credential surfaces keep
-// their own history (a revision names who created it, a credential row who
-// stored it) and are not repeated here. These two events are the fifth
-// source the Audit log reads: every CALL, whatever became of it.
-//
-// # Who has to agree on it
-//
-// Nobody but the node the call reached. The row is written by the event
-// store's publish listener on the publishing node, like every other event, so
-// a fleet's audit is the union of its nodes' logs — which is what the event
-// query already answers. There is no fleet-wide ordering to keep: two people
-// acting on two nodes did two independent things.
+// A tracker commit or page revision records a CHANGE: a refused call or one
+// whose answer never came back leaves nothing there, and a verb that is no
+// tracker or wiki write (a backup, seat controls) leaves nothing anywhere.
+// Configuration and credential surfaces keep their own history. These two
+// events are the fifth source the Audit log reads: every CALL, whatever became
+// of it. Nobody but the node the call reached has to agree on it: the event
+// store's publish listener writes the row on the publishing node, so a fleet's
+// audit is the union of its nodes' logs, with no fleet-wide ordering.
 
 func init() {
 	events.Register[OperatorActed]()
@@ -138,15 +128,13 @@ type AssistantRef struct {
 // of the five transports: the dashboard's act route, an operator's assistant
 // over MCP, the human write surface's tool-backed routes and the Dashboard
 // Assistant's approved writes call the same catalogue, and a person's git
-// client pushes through Gitlet — a person transport of its own
-// (ADR-0085), one record a push (internal/gitlet/host). An audit that depended
-// on which one a person used would be missing whichever surface nobody
-// tested.
+// client pushes through Gitlet (ADR-0085), one record a push
+// (internal/gitlet/host). An audit depending on which one a person used would
+// miss a surface.
 //
-// The ARGUMENTS ARE NEVER HERE, for the reason the act log line omits them: a
-// page body or a comment is the company's content, and it already lives in
-// the history of the object it changed. What is here is who, which verb,
-// which request, and what became of it.
+// The ARGUMENTS ARE NEVER HERE, as in the act log line: a page body or comment
+// is the company's content and lives in its object's history. Here are who,
+// which verb, which request, and what became of it.
 type OperatorActed struct {
 	// ActorName, ActorKind and OperatorID are the caller exactly as every
 	// record the call wrote names it — the three facts iam.ActorFor makes
@@ -225,17 +213,13 @@ func NewOperatorActed(e OperatorActed) OperatorActed {
 
 // OwnRecordMarked is one call a person made to a tool that keeps their OWN
 // BOOKKEEPING and nothing else: a room's read cursor, an inbox's read and
-// snooze marks, their pins. The same record [OperatorActed] is, field for
-// field, under a type of its own, because what a type is decides whether the
-// company's activity feed carries it (events.KeptOutOfFeed), and this one is
-// not activity: a person reading their rooms filled Live's Activity card and
-// the event log with "ran mark_chat_read: applied", four in a row, pushing out
-// what the company did. It is still the audit's, listed beside every other
-// runtime audit record. Which tools keep a person's own bookkeeping is the
-// tool catalogue's to declare (builtin.OwnBookkeeping), never decided here.
-//
-// EMBEDDED, so the wire keys are OperatorActed's own, flattened, and the two
-// records cannot drift apart field by field.
+// snooze marks, their pins. The same record [OperatorActed] is under a type of
+// its own, because a type decides whether the activity feed carries it
+// (events.KeptOutOfFeed) and this is not activity: reading rooms filled the
+// feed with "ran mark_chat_read: applied". It is still the audit's. Which tools
+// keep a person's own bookkeeping is the catalogue's to declare
+// (builtin.OwnBookkeeping), never decided here. EMBEDDED, so the wire keys are
+// OperatorActed's own and the two cannot drift apart.
 type OwnRecordMarked struct {
 	OperatorActed
 }

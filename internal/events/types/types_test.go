@@ -349,26 +349,15 @@ func TestPayloadTagsAreDistinctAndSnakeCase(t *testing.T) {
 }
 
 // wireTags is the OTHER HALF OF THE WIRE CONTRACT: the exact JSON keys each
-// registered type publishes. `wireTypes` above pins the type strings, and
-// nothing pinned the keys — so a renamed tag was as green as a comment
-// change.
+// registered type publishes. `wireTypes` above pins the type strings.
 //
-// A KEY IS A PEER CONTRACT, AND A RENAME IS A SILENT DELETE. ADR-0006 is
-// additive-only from the first build a successor runs beside, because a
-// rolling upgrade runs in both directions at once: a renamed tag is a dropped
-// field on whichever half has not upgraded, and every row already written
-// keeps the old key forever. The failure has no symptom a reviewer can see —
-// the build is green, the tests pass, and a reader of the dashboard gets a
-// confidently wrong `0` where the payload used to answer.
+// A RENAME IS A SILENT DELETE. ADR-0006 is additive-only, because a rolling
+// upgrade runs both directions at once: a renamed tag is a dropped field on
+// the half not upgraded, and rows already written keep the old key forever.
 //
-// GOLDEN, NOT DERIVED. Computing the expected keys from the struct is a test
-// that asserts the code equals itself; the whole value here is that the
-// literal strings live in a file a rename has to edit, in a diff a reviewer
-// reads. An ADDITIVE change — a genuinely new field — edits one line here and
-// that friction is the feature. A rename edits one too, and then has to argue
-// for it.
-//
-// Sorted per type, because the comparison is against sorted marshalled keys.
+// GOLDEN, NOT DERIVED: computing the keys from the struct asserts the code
+// equals itself; the literals live in a file a rename has to edit, in a diff a
+// reviewer reads. Sorted per type, as the marshalled keys are.
 var wireTags = map[string][]string{
 	"org_started":               {"org_name"},
 	"org_stopped":               {"org_name"},
@@ -1013,19 +1002,15 @@ func TestASummaryLeadIsUpperCasedByRuneNotByte(t *testing.T) {
 // A PROMOTED TAG MEANS ONE THING, AND THE CATALOGUE IS WHERE THAT IS HELD.
 //
 // internal/store promotes the flat wire field `conversation_key` out of every
-// event into one column of the event log, and the value a query gets back has
-// to mean the same thing whichever row it matched. It did not: every event a
-// turn publishes puts the conversation IDENTITY there, while the coalescing
-// record put the inbox PARTITION there — two values that differ exactly where
-// it matters, since a direct message's identity is the bare channel and its
-// partition can be a thread inside it. So a filter on that tag silently mixed
-// the thread a seat is talking on with the batch a wake arrived in.
+// event into one event-log column, which must mean the same thing whichever
+// row matched. The conversation IDENTITY and the inbox PARTITION differ exactly
+// where it matters (a direct message's identity is the bare channel, its
+// partition can be a thread inside it), so mixing them makes a filter conflate
+// the thread a seat talks on with the batch a wake arrived in.
 //
-// The rule this holds is the naming one, because that is the half a reviewer
-// can check: a field spelled `conversation_key` on the wire is the
-// conversation and is called ConversationKey, and a field holding a partition
-// is called PartitionKey and spells itself `partition_key`. A new event
-// stamping its batch into the shared tag now has to rename a field to do it.
+// The rule held is the naming one, which a reviewer can check: a field spelled
+// `conversation_key` on the wire is the conversation and is called
+// ConversationKey; a partition is PartitionKey and spells `partition_key`.
 func TestNoPayloadPutsAPartitionInTheConversationField(t *testing.T) {
 	t.Parallel()
 	for _, payload := range catalogue() {

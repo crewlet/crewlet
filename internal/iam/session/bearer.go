@@ -13,110 +13,43 @@ import (
 	"github.com/google/uuid"
 )
 
-// THE BEARER'S WIRE FORMAT, and what each field is doing there.
+// THE BEARER'S WIRE FORMAT.
 //
 //	v4.<key tag>.<generation>.<lineage>~<person>.<epoch>.<start position>.<signed in>.<absolute expiry>.<issued>.<idle expiry>[.<scope>].<mac>
 //
-// ELEVEN FIELDS, dot-separated, with the session's own pair joined by `~` so
-// that the two values a node needs before it reads anything travel as one
-// token — and one more, present only where it says something: the scope, on a
-// session that may do less than everything. Every one of them is here because
-// a node has to answer with it and has no other way to know it:
-//
-//   - the KEY TAG, so a verifier knows which keyring entry to look up rather
-//     than trying each one — which is what makes adding a key zero-downtime;
-//   - the GENERATION, the fleet-wide counter a restore's last step moves, so
-//     one write ends every session in the company;
-//   - the LINEAGE, which is the session's identity and the subject its
-//     records arbitrate on;
-//   - the PERSON, so a node can read their row without first reading the
-//     session's;
-//   - the EPOCH the session was opened at, which is what lets a node that has
-//     NOT YET APPLIED the session's start record still serve reads: the
-//     signature and the epoch together are proof the sign-in happened;
-//   - the START POSITION, which is what turns "no row" into the two answers it
-//     actually is — a session that ended, or one this node has not seen;
-//   - the SIGN-IN instant, carried by every replacement of the session, and
-//     the ABSOLUTE expiry, which no re-issue ever moves;
-//   - the ISSUE instant and the IDLE expiry, which every re-issue moves, with
-//     no store write at all;
-//   - the SCOPE, present only on a session that may do less than everything:
-//     `enrol`, one its sign-in opened on a password alone where a second
-//     factor is required ([Bearer.EnrolmentOnly]).
-//
-// # A session exchanged from a Tier A token carries nothing of the token
-//
-// Its person is the token's LOGIN (`token:<id>`), and the request guard
-// re-composes it from the entry this node holds under that id on every
-// request, so removing or renaming the entry ends it on the next one. What it
-// does NOT answer to is the entry's VALUE: a new value put under the same id
-// leaves the sessions the old one opened working until their one-hour lifetime
-// ends, and an operator who has to cut them off at once rotates by giving the
-// token a new id. A MAC over the value once rode here for that, and went: a
-// second credential check on every request, a key derivation and an ending of
-// its own, to shorten an hour an id change already shortens to nothing.
-//
-// # Why the instants ride beside the deadlines (v4)
-//
-// So a node can hold a session to SHORTER limits set since it was signed
-// ([Bearer.EndsUnder], ADR-0152); a raised limit never stretches it.
-//
-// # There is no rotation index, and v2 had one
-//
-// v2 carried the session's age in rotation windows beside the lineage, derived
-// from the instant inside a uuid7 lineage so that "rotating" a cookie wrote
-// nothing. What an index can PROVE is the whole question, and the answer is
-// nothing a replay leaves behind. A cookie whose index trails the clock is an
-// idle session and a captured one in identical bytes — the only thing that
-// could tell them apart is a record of which index was last issued, which is
-// exactly what deriving the index removed — so that arm was served and
-// re-issued. The one arm that still acted, an index AHEAD of the clock past a
-// two-minute overlap, could not be a replay either: the index is inside the
-// signed payload, so only a node holding the keyring wrote it, and it wrote it
-// from its own clock. That arm fired on exactly one thing — two nodes whose
-// clocks disagreed by more than the overlap — and its answer was to bump the
-// person's revocation epoch, which signed them out everywhere and ended every
-// machine token they held, over an NTP fault on somebody else's host.
-//
-// With neither arm deciding anything, the index did one thing: it forced a
-// re-issue at every window boundary, which [ReissueAfter] already does five
-// minutes into any window. So it is gone, and with it `session.rotate_after`
-// and the reuse revocation. What bounds a captured cookie is what always did:
-// the idle deadline (from the last use), the absolute deadline, the person's
-// revocation epoch and the fleet's generation (one write each, immediate). The
-// version moved because the session pair is a field v2 read as a triple — a v2
-// bearer is malformed here, and a v3 one is malformed to a v2 build, rather
-// than either being misread; v4 moved it again for the two instants.
-//
+// Eleven fields, the session's pair joined by `~`, plus a twelfth scope only on
+// a restricted session, each one a node must answer with: the KEY TAG; the
+// GENERATION (one write ends every session); the LINEAGE (the session's
+// identity) and PERSON; the EPOCH, which with the signature proves a sign-in on
+// a node that has NOT YET APPLIED its start record; the START POSITION (ended
+// versus not yet seen); the SIGN-IN and ABSOLUTE instants, which no re-issue
+// moves; the ISSUE and IDLE instants, which every re-issue moves with no store
+// write, so a node can enforce SHORTER limits ([Bearer.EndsUnder], ADR-0152).
+
 // # Why the scope is in the bearer, and why it is optional
 //
-// IT IS THE SIGN-IN'S OWN FACT, decided once when the session opened, and the
-// bearer is the one copy of the session every node holds. The session's row
-// carries it too, but a node that has not applied the row yet serves reads on
-// the signature and the epoch alone ([RowBehind]) — and every sign-in answers
-// before any node applies its row. A restriction only the row carried was one
-// every node ignored for the apply latency after every password sign-in, the
-// one that answered it included: a password alone read the whole company, the
-// socket's snapshot among it, on a deployment that requires a second factor.
-//
-// ABSENT WHEN THE SESSION IS WHOLE, and that is the rolling-upgrade decision
-// rather than tidiness. A whole session's bearer is byte for byte the eleven
-// fields every v4 build reads, so a fleet part-way through an upgrade keeps
-// every ordinary session on every node. A scoped one is twelve, which a build that
-// knows no scope refuses as MALFORMED — the direction that fails safe, because
-// such a build would otherwise serve it whole. What that costs is a person
-// part-way through enrolling asked to sign in again on that node, for a
-// session that could do nothing but enrol. And a scope this build cannot NAME
-// is refused the same way, for the same reason: a newer build narrowing a
-// session in a way this one would serve whole.
-//
-// NOTHING HERE IS SECRET and nothing here grants anything on its own: a bearer
-// in a proxy log discloses a lineage, a person id, two deadlines and whether
-// the session may only enrol, and is worthless without the mac. What it deliberately does NOT carry is anything
-// about the person — no login, no address, no grants — because a cookie is the
-// value most likely to end up somewhere nobody meant it to.
+// The bearer is the one copy of the sign-in's scope every node holds: a node
+// that has not applied the row serves reads on signature and epoch alone
+// ([RowBehind]), so a restriction only the row carried was ignored for the
+// apply latency after each password sign-in. ABSENT WHEN WHOLE, for rolling
+// upgrades: a whole session is byte for byte the eleven fields every v4 build
+// reads, while a build knowing no scope refuses a twelve-field one as MALFORMED
+// (failing safe), as it does a scope it cannot NAME. NOTHING HERE IS SECRET:
+// it carries nothing about the person (no login, address or grants), because a
+// cookie is the value most likely to leak.
 
 // Bearer is one parsed cookie.
+//
+// A session exchanged from a Tier A token has person `token:<id>`, re-composed
+// each request from this node's entry under that id: removing or renaming the
+// entry ends it, but a new value under the same id leaves old sessions working
+// until their hour ends; cut them off at once by giving the token a new id.
+//
+// There is no rotation index (v2 had one): a trailing index is an idle session
+// and a replay in identical bytes, and one ahead of the clock meant only skewed
+// node clocks. A captured cookie is bounded by the idle and absolute
+// deadlines, the person's revocation epoch and the fleet generation. A v2 or v3
+// bearer is malformed here, never misread.
 type Bearer struct {
 	// KeyTag names the keyring entry this bearer was signed under.
 	KeyTag string

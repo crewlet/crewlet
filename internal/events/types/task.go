@@ -9,30 +9,14 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// The seat's own WAKES, a schedule's fire and a work pickup, and the only
-// task events left.
+// The seat's own WAKES, a schedule's fire and a work pickup, are the only task
+// events: they carry the seat as `agent_id` and `role`, which the live
+// projection and the event store's agent_role tag read (the envelope's source
+// is read by neither), so without them a seat stays "working" past its turn.
 //
-// It carries the agent's seat as `agent_id` and `role` — its id, which the live
-// projection keys an agent by, and its name, which the event store tags a
-// row's agent_role from. Load-bearing, not decorative: a task event published
-// without them is invisible to both. That is what happened — an agent's
-// current task never appeared on a dashboard and a seat stayed "working" past
-// the end of its turn, because the event carried the seat only in the
-// envelope's source, which neither consumer reads.
-//
-// # Why there is no task LIFECYCLE here any more
-//
-// There were five more — created, started, completed, failed, delegated — and
-// none of them had a publisher, because they described an engine-owned task
-// object that Worklet replaced. Work is [internal/worklet]'s first
-// state-log domain now: every change is one arbitrated record, applied into N
-// identical SQL copies with a history row beside it, and reachable through the
-// tracker's own change feed. A second, lossier copy of the same facts on the
-// event stream would be a second answer to "what happened to this item", and
-// the two would disagree the first time one of them was not published.
-//
-// These are not lifecycle events at all. They are what the scheduler and the
-// work pickup put into an INBOX, which is why they survive them.
+// There is no task LIFECYCLE here: work is [internal/worklet]'s state-log
+// domain, and a second, lossier copy on the event stream would disagree the
+// first time one went unpublished. These go into an INBOX, so they survive it.
 
 func init() {
 	events.Register[TaskAssigned]()
@@ -78,16 +62,12 @@ type TaskAssigned struct {
 	//
 	// ENFORCED BETWEEN ROUNDS by the turn loop (turn.Settings.Deadline),
 	// from the moment the turn began and across every park: a turn past the
-	// cap starts no further round — in whichever segment it is — and ends
-	// with a scheduled_timeout breach, which reaches the turn event's
-	// error_kind. Never mid-phase in the engine — a phase that is running
-	// may already have fired side effects, and abandoning it there would
-	// leave a post half-written. The executor's detached run carries the
-	// same instant, and the poll ends a run that outlasts it, collecting
-	// what it did for the turn to judge.
-	//
-	// It travelled as a write-only Payload key before this field existed, so
-	// nothing could read it and the documented cap bounded nothing.
+	// cap starts no further round, in whichever segment it is, and ends with
+	// a scheduled_timeout breach, which reaches the turn event's error_kind.
+	// Never mid-phase: a running phase may already have fired side effects,
+	// and abandoning it would leave a post half-written. The executor's
+	// detached run carries the same instant, and the poll ends a run that
+	// outlasts it, collecting what it did for the turn to judge.
 	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
 	// ScheduledAt is the instant this fire came due, in UTC: the tick it
 	// stands for rather than the moment it was published. It is what orders
