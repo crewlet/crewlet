@@ -595,10 +595,11 @@ describe("a message's links", () => {
     expect(link.getAttribute("href")).toBe("https://github.com/acme/backend/pull/14");
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
-    // UNFURLED: the app's name, the reference it is, and that it opens apart.
-    expect(link.textContent).toContain("GitHub");
+    // UNFURLED: the app's name, the reference it is, and that it opens apart;
+    // the link is named by the reference, and its card shows the app.
     expect(link.textContent).toContain("acme/backend#14");
     expect(link.textContent).toContain("opens in a new tab");
+    expect(link.closest(".crewlet-link-card")?.textContent).toContain("GitHub");
   });
 
   // Mutation: draw a link as written and each address here is a control.
