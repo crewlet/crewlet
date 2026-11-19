@@ -114,7 +114,8 @@ describe("selecting a picture the page links", () => {
     link.focus();
     await userEvent.keyboard("{Enter}");
     await opened();
-    expect(picture()!.alt).toBe("After the fix");
+    // DRAWN ONCE THE ORIGIN ANSWERS the file's HEAD, a request of its own after the open.
+    await eventually(() => expect(picture()?.alt).toBe("After the fix"));
     expect(viewer().activeElement).toBe(button("Close"));
     await userEvent.keyboard("{Escape}");
     await eventually(() => expect(open()).toBe(false));
