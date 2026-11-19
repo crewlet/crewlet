@@ -2015,7 +2015,7 @@ func (c *Coordinator) liftHoldsLocked(cond Condition, handles []string) {
 			if _, held := c.leaseOf(run.AgentHandle); !held {
 				continue
 			}
-			lifted, err := c.pending.LiftHold(ctx, run.TurnID, cond)
+			lifted, err := c.pending.LiftHold(ctx, run.TurnID, cond, run.Holds)
 			switch {
 			case err != nil:
 				log.WarnContext(ctx, "sandbox_hold_lift_failed", "turn_id", run.TurnID,

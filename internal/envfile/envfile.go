@@ -62,18 +62,13 @@ var ErrUnrepresentable = fmt.Errorf("envfile: the value cannot be written safely
 //
 // # Single quotes, and why not double
 //
-// A single-quoted shell string is literal: no expansion, no escapes, no
-// interpretation of $ or ` or \. A double-quoted one expands $NAME and
-// ${NAME} in both the shell AND the dotenv loader — so a token containing a
-// literal `$` (which base64 and many vendor tokens do) would reach the
-// engine with a chunk of itself replaced by an environment variable, or by
-// nothing.
-//
-// The only thing a single-quoted string cannot contain is a single quote.
-// Rather than the usual '\” splice — which `source` handles and several
-// dotenv readers do not — such a value is REFUSED. A provisioner can then
-// mint a different one; silently writing something one reader mangles is
-// how a credential comes to differ between the two.
+// A single-quoted shell string is literal: no expansion or escapes. A
+// double-quoted one expands $NAME and ${NAME} in both the shell AND the dotenv
+// loader, so a token containing a literal `$` (as base64 and many vendor
+// tokens do) would reach the engine partly replaced. A single-quoted string cannot contain a single quote. The usual '\” splice
+// is handled by `source` but not by several dotenv readers, so such a value is
+// REFUSED: a provisioner can mint a different one, where a value one reader
+// mangles makes a credential differ between the two.
 func FormatAssignment(name, value string) (string, error) {
 	if !NameOK(name) {
 		return "", fmt.Errorf("envfile: %q is not a variable name", name)

@@ -12,19 +12,12 @@ import (
 // UNLOCK BEFORE CLOSE: a release frees the lock even while ANOTHER DESCRIPTOR
 // for its open file description is still open.
 //
-// flock belongs to the open file description, not to a descriptor, and every
-// duplicate of the lock's descriptor refers to that same description — a child
-// this process forked and has not yet exec'd holds one (a node that runs git
-// and harnesses forks constantly), and so does anything that dup'd it.
-// Closing the lock's own descriptor leaves the lock held for as long as any
-// such copy lives; only LOCK_UN drops it whoever else has the description
-// open. The copy here is a dup kept open across the release, which is that
-// fork's window made deterministic. Close-on-exec, so the helpers this binary
-// execs in parallel cases never inherit it.
-//
-// Internal, because the descriptor is the lock's own and nothing outside the
-// package can reach it — and a fork cannot be held open at a chosen instant
-// from a test.
+// flock belongs to the open file description, not a descriptor: a forked, not
+// yet exec'd child holds a duplicate, so closing the lock's own descriptor
+// leaves it held while any copy lives; only LOCK_UN drops it. The dup kept
+// open here is that fork's window made deterministic (close-on-exec, so
+// parallel cases' helpers never inherit it). Internal, because a fork cannot
+// be held open at a chosen instant from outside.
 //
 // Mutation: make Release close without unlocking and the copy keeps the lock,
 // so the next Try of the path is refused as held.

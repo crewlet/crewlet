@@ -14,75 +14,30 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// THE BUDGET PARK: A SEAT OUT OF ROOM WAITS FOR ITS WINDOW, IT DOES NOT BURN
-// ITS MAIL.
-//
-// A token ceiling is per calendar window (ADR-0019), so "this seat cannot run"
-// has an end: the instant the refusing window turns over, or an apply that
-// raises the ceiling. Before this, nothing knew that. A wake reaching a seat
-// whose window was spent ran a turn, the turn's first charge was refused, and
-// a refusal proves nothing reached outside the engine — so the dispatcher
-// NAKed it, and the redelivery was refused again, twenty-five times across
-// about ten minutes of backoff, until the broker dead-lettered a perfectly
-// healthy message. A company that hit its daily ceiling at ten in the morning
-// lost every message its seats were sent for the rest of the day.
-//
-// So BEFORE A DELIVERY IS CLAIMED — before the completion ledger, before the
-// answer offer to a parked executor, before any model — the dispatcher asks
-// whether one of the seat's capped windows is refusing ([meter.refusing]). If
-// one is, the seat is PARKED:
-//
-//   - a pause hold under [pauseReasonBudget] is taken on its inbox, so nothing
-//     more is delivered to it;
-//   - the delivery is DEFERRED with a reason naming the window — `budget: day
-//     window 2026-09-23 resets 2026-09-24T07:00:00Z` — which hands it back
-//     unacked for one of its deliveries, and quiesces the attachment;
-//   - an alarm is armed for the window's end;
-//   - and the refusal is recorded on the shared counter as the gate's
-//     ([meter.turnAway]), so the window's `refused_at` says when its seats
-//     were last turned away — a window an executor launch or a background pass
-//     filled used to park every delivery it was sent while reading as one
-//     that had refused nothing.
-//
-// The hold is released at the reset, or at once by an apply that changes what
-// the park was decided under (a ceiling of either scope, or the company's
-// clock, which moves every window's end), and the mail is delivered again in
-// order. A turn refused MID-FLIGHT is the same condition found a phase later,
-// and is answered the same way unless the turn already acted outside the
-// engine — that one is recorded and acked ([Dispatcher.abandon]), because a
-// redelivery would repeat what it did.
-//
-// TWO STOPS, AND EACH HAS ITS OWN OWNER. The quiesce a deferral makes belongs
-// to the seat host: the dispatcher notes it ([Dispatcher.NoteDeferred]) and the
-// next successful lease renew resumes the attachment, exactly as it does for
-// every other deferral. The HOLD is the park's, and is what keeps the resumed
-// attachment from being handed anything. Releasing the park therefore lifts
-// the hold and never touches the quiesce — an Unquiesce from here could resume
-// a consumer the seat host stopped because it cannot prove it owns the seat,
-// which is the one state a consumer must never be resumed in. And it closes
-// the race a quiesce alone would open: an apply's release landing between a
-// deferral's return and the quiesce it causes would find nothing to resume and
-// leave the seat deaf for the rest of the window, while a hold is taken inside
-// the handler, before the deferral returns.
-//
-// ONE DELIVERY PER PARK, not one per renew: the renew resumes the attachment,
-// and the hold keeps it from being handed the message again until the park is
-// released.
-//
-// KEYED ON THE SEAT'S ID, like every hold on a mailbox: the inbox the hold is
-// taken on is named by the agent id derived from the handle (ADR-0013). The
-// handle rides along for the log lines.
-//
-// WHO HAS TO AGREE ON IT: this node alone. A park is a pause hold in this
-// process's queue client and an alarm in its memory. It is derived from the
-// fleet's shared counters every time a delivery arrives, so a restart, or the
-// seat moving to a peer — whose attachment carries no hold — simply asks the
-// counters again on the first delivery.
+// THE BUDGET PARK: A SEAT OUT OF ROOM WAITS FOR ITS WINDOW, NOT BURNS ITS MAIL.
+// A token ceiling is per calendar window (ADR-0019), so a refusal ends at the
+// window's turnover or an apply raising the ceiling; NAKing into a spent window
+// dead-lettered healthy mail. So BEFORE A DELIVERY IS CLAIMED the dispatcher
+// asks whether a capped window is refusing ([meter.refusing]), and if so PARKS
+// the seat: a pause hold under [pauseReasonBudget] on its inbox, the delivery
+// DEFERRED unacked with a reason naming the window, an alarm for the window's
+// end, and the refusal recorded on the shared counter ([meter.turnAway]).
+// Released at the reset or by an apply changing what the park was decided under
+// (a ceiling, or the company's clock); a turn refused MID-FLIGHT after acting
+// outside the engine is recorded and acked ([Dispatcher.abandon]).
 
-// pauseReasonBudget is the hold name the budget park takes on a seat's inbox.
+// pauseReasonBudget is the hold name the budget park takes on a seat's inbox,
+// KEYED ON THE SEAT'S ID like every mailbox hold (the agent id from the handle,
+// ADR-0013). A STABLE KEY, like [pauseReasonNoTurnEngine] beside it: see
+// [parkSpec.hold].
 //
-// A STABLE KEY, like [pauseReasonNoTurnEngine] beside it and for the same
-// reason: see [parkSpec.hold].
+// TWO STOPS, EACH WITH ITS OWN OWNER. The quiesce a deferral makes is the seat
+// host's ([Dispatcher.NoteDeferred]): the next lease renew resumes the
+// attachment. The HOLD is the park's and keeps that attachment from being handed
+// anything. Releasing lifts the hold and never the quiesce: an Unquiesce from
+// here could resume a consumer the seat host stopped because it cannot prove it
+// owns the seat. The hold is taken inside the handler, before the deferral
+// returns, so an apply's release cannot land between them and leave the seat deaf.
 const pauseReasonBudget = "budget_window"
 
 // budgetParkSpec is the budget park's hold and log lines.
@@ -95,64 +50,27 @@ var budgetParkSpec = parkSpec{
 // budgetParks is every seat inbox this node holds for want of budget, by the
 // seat's id, each with the ceilings it was decided under, which a change of
 // the company releases it on. The floor it waits for room for (the static
-// floor, or the one a launch was refused below: its brief beside the static
-// floor, a continued session's context beside its brief, or, where its fresh
-// brief's floor is held, the static floor or the room below it) is the
-// refusal's, read again on the delivery the park hands back, and no reader asks
-// it of the park: an ask waiting behind the park is owed for as long as the
-// park holds, which its holder answers (parkheld.go).
+// one, or the one a launch was refused below) is the refusal's, read again on
+// the delivery the park hands back; no reader asks it of the park, since an ask
+// behind the park is owed as long as it holds, which its holder answers
+// (parkheld.go).
+//
+// WHO HAS TO AGREE ON IT: this node alone (a hold in its queue client, an
+// alarm in its memory), derived from the shared counters on every delivery, so
+// a restart or a seat moving to a peer simply asks them again.
 type budgetParks = seatParks[budgetBasis]
 
 // floorWaits is every delivery this node parked its seat for on a launch's
-// refusal below its floor, by the seat's id and, within the seat, by the id of
-// each of the delivery's events, with the window the park waited on
-// ([Engine.budgetPark]): what that delivery's next launch reads to know that it
-// waited a turnover for that floor ([agentLauncher.continuedFloor]), and so is
-// held, in a later window, to no more than the floor a launch with no brief
-// needs.
+// refusal below its floor, by seat id then event id, with the window the park
+// waited on ([Engine.budgetPark]). The delivery's next launch reads it
+// ([agentLauncher.continuedFloor]) to know it waited a turnover, so a later
+// window holds it to no more than a launch with no brief needs.
 //
-// WAITED FOR WITHOUT A BOUND, A FLOOR ABOVE THE STATIC ONE HELD A DELIVERY FOR
-// EVER. A launch's brief, or a session it continues, can take its floor within
-// the most room a window can leave it and past what a busy window leaves at its
-// read, the company's other seats spending there first after every turnover:
-// refused, parked and refused again in every window, the delivery never ran,
-// where before the brief was counted a fresh brief's or an unmeasured
-// session's launch went out on the static floor, and a measured session's,
-// whose floor counted its brief already, had that band then too. So it waits
-// one turnover, and no more.
-//
-// KEYED BY THE DELIVERY, NEVER BY THE SEAT ALONE. The park holds the seat's
-// whole inbox, and its release hands the seat's mail back in the seat's order,
-// which is not the order its deliveries were refused in: a person who writes
-// to the seat while it is parked rides the seat's priority lane, which every
-// drain takes first (queue.Prioritize), so that message's turn runs before the
-// delivery the park deferred. Kept for the seat, the window went to whichever
-// launch came first: the person's, which never waited, held below its own
-// brief's floor, while the delivery that waited found nothing, was refused at
-// its floor again and parked again, in every window a person wrote to the
-// seat. So the window is kept under the id of each of the delivery's events in
-// its stream ([deliveryOf]), which every redelivery of it and every copy a
-// requeue publishes carries, and never under anything a redelivery renews (its
-// attempt, its turn's run id): a launch reads it only where its own turn
-// carries one of those events, a turn its redelivery merged newer mail into
-// among them.
-//
-// READ, NEVER TAKEN, by the delivery's launch, and dropped once the delivery
-// will not come back ([Dispatcher.Gone]). Taken by the launch, the wait was
-// spent by a try that went no further: refused by every member of its chain,
-// its seat parked on its provider, the try after that park was held to its
-// floor again. So every try of the delivery after the turnover is held, until
-// it is worked, settled or dead-lettered; one that goes out parks its turn on
-// its run, and the dispatch that launched it acknowledges the delivery. And
-// dropped with the seat's other parks when this node lets the seat go
-// ([Engine.forgetBudgetPark]).
-//
-// WHO HAS TO AGREE ON IT: this node alone, as the park does. It rides the park,
-// and the delivery's next launch is this node's: the park holds the seat's
-// whole inbox, so the delivery comes back here. A seat that moves takes nothing
-// of it to its next holder, which may hold the launch one window more, still
-// bounded: refused there, it is parked there, and its next try there reads the
-// record that park writes.
+// BOUNDED: a floor above the static one, waited for without limit, held a
+// delivery for ever (a brief's or session's floor can exceed what a busy window
+// leaves each turnover). It waits one turnover, and no more.
+// WHO HAS TO AGREE ON IT: this node alone, as the park does. A seat that moves
+// leaves it behind; its next holder may wait one window more, still bounded.
 type floorWaits struct {
 	mu    sync.Mutex
 	seats map[uuid.UUID]map[uuid.UUID]sandbox.BudgetWindow
@@ -161,6 +79,13 @@ type floorWaits struct {
 // parked records that the launch of seat's delivery whose events' ids are
 // delivery was refused below its floor and the seat's park waits on window w,
 // each id replacing what an earlier park recorded for it.
+//
+// KEYED BY THE DELIVERY, NEVER BY THE SEAT ALONE. A release hands mail back in
+// the seat's order, and a person's message rides the priority lane
+// (queue.Prioritize), so its turn runs before the delivery the park deferred.
+// Kept per seat, the window went to the person's launch, which never waited,
+// and the delivery that did was parked again in every window. The key is each
+// event id ([deliveryOf]), never what a redelivery renews (attempt, run id).
 func (f *floorWaits) parked(seat uuid.UUID, delivery []uuid.UUID, w sandbox.BudgetWindow) {
 	if len(delivery) == 0 {
 		return
@@ -184,6 +109,10 @@ func (f *floorWaits) parked(seat uuid.UUID, delivery []uuid.UUID, w sandbox.Budg
 // are delivery, in their order, none where none is recorded. A delivery a
 // redelivery merged newer mail into can carry more than one: each of its
 // events that waited keeps the window its own park recorded.
+//
+// READ, NEVER TAKEN, by the launch: taken, a try that went no further (refused
+// by every chain member) would spend the wait and be held to the floor again.
+// Dropped by [floorWaits.gone] and [floorWaits.forget].
 func (f *floorWaits) waited(seat uuid.UUID, delivery []uuid.UUID) []sandbox.BudgetWindow {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -244,33 +173,17 @@ func launchRefusedIn(refused error, r refusal) sandbox.BudgetWindow {
 	return sandbox.BudgetWindow{Period: r.Window.Period, Label: r.Window.Label}
 }
 
-// budgetPark is the dispatcher's budget stage: it parks handle's seat when one
-// of its capped windows is refusing, or leaves less room than the delivery's
-// launch needs, reporting the deferral reason. refused is the budget refusal the
-// delivery's turn met, nil before any turn ran, and delivery the events that
-// turn was dispatched for, nil with it: the floor the park waits for room for
-// is the one that launch was refused below ([floorOf]): its brief beside the
-// static floor; for a first launch that continues its conversation's session,
-// that session's context beside its brief; and, where its fresh brief's floor
-// is held, the static floor or the room below it ([launchFloor.tokens]). It is
-// the static floor where no launch was refused.
+// budgetPark is the dispatcher's budget stage: it parks handle's seat when a
+// capped window is refusing or leaves less room than the delivery's launch
+// needs, reporting the deferral reason. refused is the refusal the turn met
+// (nil before any turn ran). The floor waited for is the one that launch was
+// refused below ([floorOf]), else the static floor. Where a launch was refused
+// the window waited on is recorded for that delivery alone ([floorWaits]).
 //
-// AND WHERE A LAUNCH WAS, the window the park waits on is recorded for that
-// delivery ([floorWaits]), whose next launch reads it in a later window and is
-// held there to no more than the floor a launch with no brief needs: a floor
-// within the most room a window can leave the launch is still past what a busy
-// company's window leaves at the launch's read, and waited for again in every
-// window, it went out in none. So the delivery waits one turnover for it, and
-// no more, and no other delivery the park's release hands the seat is held for
-// a wait it never did.
-//
-// What it does NOT do is decide an unknown: a counter that cannot be read
-// lets the delivery through, logged, because the turn's own meter is the gate
-// and fails closed — parking on a read that failed would hold a seat's mail on
-// a store blip that the meter would have ridden out. The error it returns is
-// the hold that could not be taken, which the dispatcher DEFERS (see
-// [Dispatcher.parkOnBudget]): the refusal is the node's, and a deferral keeps
-// the delivery's place at the head of the seat's inbox.
+// It does NOT decide an unknown: an unreadable counter lets the delivery
+// through, logged, since the turn's meter fails closed. The error it returns
+// is a hold that could not be taken, which the dispatcher DEFERS
+// ([Dispatcher.parkOnBudget]), keeping the delivery's place in the inbox.
 func (e *Engine) budgetPark(ctx context.Context, handle string, delivery []*events.Event,
 	refused error) (string, bool, error) {
 
@@ -347,30 +260,18 @@ func (e *Engine) budgetPark(ctx context.Context, handle string, delivery []*even
 	return reason, true, nil
 }
 
-// parks reports the window that parks a seat's mail, and which of the two
-// conditions holds it there: a capped window refusing outright, or — where none
-// is — one leaving less room than floor, the room the delivery's launch needs
-// ([meter.starved]).
+// parks reports the window that parks a seat's mail, and which condition holds
+// it: a capped window refusing outright, or, where none is, one leaving less
+// room than floor, the room the delivery's launch needs ([meter.starved]).
 //
-// AND A WINDOW TOO SHORT FOR A LAUNCH, which every turn makes: a seat with room
-// left but less than the executor floor refuses every turn at its launch
-// ([executorHeadroom]), and a seat that is not parked takes each redelivery
-// into the same refusal until the broker dead-letters it. Parked, it waits for
-// the window that starves it to turn over, exactly as for a full one.
+// A WINDOW TOO SHORT FOR A LAUNCH parks too: a seat with room left but less
+// than the executor floor refuses every turn at its launch ([executorHeadroom]),
+// and an unparked seat takes each redelivery into it until dead-lettered.
 //
-// ONE RULE for the two readers that ask it: the budget stage that parks a
-// seat's mail ([Engine.budgetPark]), and the idle sweep asking whether an ask
-// waiting in that mail is still owed its answer ([colleagueOwed]). Three-valued
-// as both its halves are.
-//
-// THE FLOOR IS THE CALLER'S: the static one for a delivery no launch has been
-// refused for yet, and the one a launch was refused below where one was
-// ([launchFloor]). A turn's first launch needs its brief beside the static
-// floor, and one that continues its conversation's session that session's
-// context beside its brief, and a window with room for the static floor alone
-// holds either back as surely as a full one; one whose fresh brief's floor is
-// held is refused below the static floor itself, or below the room its own
-// turn's spend left under it, and parks on that.
+// ONE RULE for its two readers: the budget stage ([Engine.budgetPark]) and the
+// idle sweep asking whether an ask in that mail is still owed ([colleagueOwed]).
+// Three-valued as both halves are. THE FLOOR IS THE CALLER'S: the static one,
+// or the one a launch was refused below ([launchFloor]).
 func (m *meter) parks(ctx context.Context, floor launchFloor) (r refusal, refusing, starved bool, err error) {
 	r, refusing, err = m.refusing(ctx)
 	if err == nil && !refusing {
@@ -380,34 +281,17 @@ func (m *meter) parks(ctx context.Context, floor launchFloor) (r refusal, refusi
 }
 
 // budgetHold is what a seat's budget holds a resumed turn back for: a capped
-// window refusing outright, or one leaving less room than an executor launch
-// needs ([meter.starved]) — the two conditions the budget stage parks a seat's
-// mail on — as a refusal that lifts when that window turns over. False where
-// neither holds, and where the counters cannot be read, for the reason
-// [Engine.budgetPark] gives. refused is the budget refusal the resume met, nil
-// for a gate asked before any launch ([Engine.seatCannotRun]).
-//
-// FOR A RESUME THAT WILL LAUNCH, which has no mail to park, and so waits for
-// the window's end rather than parks; a delivery that arrives meanwhile takes
-// the park itself. The turn gate asks it of every attempt at a recorded
-// answer's resume ([Engine.seatCannotRun]) — an answer always relaunches its
-// executor, so a starved window refuses it as surely as a full one — and a
-// collected job's resume that its review or relaunch was refused for is held
-// on it ([sandbox.ErrResumeHeld]). A completion's gate asks it nothing: the
-// job is collected and charged first.
-//
-// AGAINST THE FLOOR THE LAUNCH IT HOLDS BACK WAS REFUSED BELOW ([floorOf]): a
-// relaunch's brief beside the static floor, the context of the turn's session
-// it continues beside its brief, or, where its fresh brief's floor is held,
-// the static floor or the room below it; the static floor where no launch was
-// refused. Held to the static floor alone, a resume refused below a larger
-// floor was found not starved, released, and refused at its launch again.
-//
-// AND NAMING THE WINDOW IT WAITS ON where a launch was refused
-// ([sandbox.Refusal.Window]), which the release counts onto the job's record
-// for the turn's next relaunch, held in a later window to no more than the
-// floor a launch with no brief needs, as a parked delivery's next launch is
-// through what its seat's park recorded for it ([floorWaits]).
+// window refusing, or one leaving less room than an executor launch needs
+// ([meter.starved]), as a refusal lifting when it turns over. False where
+// neither holds or the counters cannot be read (see [Engine.budgetPark]).
+// refused is the refusal the resume met, nil before any launch. A resume has
+// no mail to park, so it waits for the window's end; the turn gate asks it of
+// every resume of a recorded answer ([Engine.seatCannotRun]), and a collected
+// job's resume is held on it ([sandbox.ErrResumeHeld]).
+// AGAINST THE FLOOR THE LAUNCH WAS REFUSED BELOW ([floorOf]): held to the
+// static floor alone, a resume refused below a larger one was found not
+// starved, released and refused again. It names the window waited on
+// ([sandbox.Refusal.Window]), as [floorWaits] does for a parked delivery.
 func (e *Engine) budgetHold(ctx context.Context, c *Company, handle string, refused error) (sandbox.Refusal, bool) {
 	m := e.meterFor(c, handle)
 	if m == nil || !m.basis.capped() {

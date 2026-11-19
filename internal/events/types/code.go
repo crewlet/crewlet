@@ -9,55 +9,18 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 )
 
-// WHO READ A REPOSITORY A UNIT KEEPS TO ITSELF: Gitlet's fetch audit.
-//
-// # Why a read of code is a record
-//
-// A `visibility: unit` repository is code the company has said not every seat
-// may read. Every person and every Tier A token reads it anyway (ADR-0088), and
-// so does every seat the chart relates to its owner, so "who has read it, and
-// how much" is the question somebody answerable for that code asks — and before
-// this record nothing in the engine kept the answer: a fetch was a log line
-// on the node that served it, and a server-side read nothing at all.
-//
-// # A read is one that SENT CONTENTS
-//
-// A git fetch is a read once its request ended well and its answer carried a
-// pack. A fetch over a stateless transport negotiates in ROUNDS, each a request
-// of its own whose answer is acknowledgments and no object, and only the round
-// that ends the negotiation is answered with the pack — so a clone or a fetch
-// is one read however many rounds it took, and a round that sent nothing is
-// none. An `ls-refs`, an advertisement and a fetch the node ended before its
-// answer was whole are no read: they sent no contents, or not all of them. A
-// server-side read — a code tool's tree, file, diff, comparison or landed-in
-// answer — is a read once it answered, from the repository's copy or from its
-// memo alike, since the memo is the copy's and answers every asker.
-//
-// # One record per reader per flush
-//
-// The node that served the reads keeps them in a ledger (internal/gitlet/readaudit)
-// and publishes, every fifteen seconds, ONE record for each reader's reads of
-// one repository by one way — of one kind, for a server-side read — in one
-// company day, counting them ([CodeFetched.Reads]) and summing what they were
-// sent. So a CI token fetching a repository every few seconds is a record a
-// flush rather than a record a fetch, and no read's answer waits for the
-// broker to take its record: the record is published off the read's path.
-//
-// # Never for a company repository
-//
-// Its readers are every seat of the company by declaration, so a list of them
-// would answer nothing anybody asked, and a busy company's fetches would fill
-// the event log with it.
-//
-// # Where it is counted
-//
-// On the node that served the read, as every event is (the event store's own
-// rule), and from there into the replicated `usage` domain as one record per
-// (node, day, repository) naming each reader (internal/usage, kind
-// `repo_read`), which Gitlet's readers route and `code_repo_readers`
-// read summed across the fleet. It is kept out of the activity feed
-// (internal/events' unfed list): a CI token fetching on every build would bury
-// the feed, and the readers' own answer is where the record is read.
+// WHO READ A REPOSITORY A UNIT KEEPS TO ITSELF: Gitlet's fetch audit (ADR-0088).
+// A read is one that SENT CONTENTS: a git fetch whose
+// answer carried a pack (a stateless fetch negotiates in ROUNDS and only the
+// last is answered with the pack, so a clone is one read), or a server-side
+// read (a code tool's tree, file, diff...) once answered, from the copy or its
+// memo alike. An `ls-refs`, an advertisement and a fetch ended early are none.
+// The serving node ledgers reads (internal/gitlet/readaudit) and publishes
+// every fifteen seconds ONE record per reader, repository and way per company
+// day, counting them ([CodeFetched.Reads]), off the read's path. Never for a
+// company repository: its readers are everyone. Counted on the serving node
+// into the `usage` domain (kind `repo_read`); unfed (internal/events): a CI
+// token fetching every build would bury the feed.
 
 func init() {
 	events.Register[CodeFetched]()
@@ -208,50 +171,18 @@ func (e CodeFetched) SummaryFor(actor string) string {
 	return lead(actor, what+" ("+strconv.FormatInt(e.Bytes, 10)+" bytes)")
 }
 
-// CodeCheckFinished records that one attempt of a check of a commit ENDED —
-// passed, failed, errored, cancelled, or skipped at its dispatch — as the
-// attempt's row on the code log keeps the ending: published ONCE, by the data
-// node whose checks writer published the record that set it (internal/gitlet's
-// ChecksWriter), on that record's apply — never by an applier, which every
-// data node runs. An ending the row did not keep — a later infrastructure
-// ending beside a measurement, an ending asked again — is announced by none.
-//
-// # A replaced ending is a correction, never a second ending
-//
-// The row keeps ONE ending, and a later record may replace the one it kept: a
-// measurement replaces an infrastructure ending — a runner that was only slow
-// ends its attempt passed after the home's sweep of dead runners errored it
-// runner_lost — and an earlier ending replaces a later one of its kind, which
-// two writers of one repository across a failover can each record. The
-// replacing ending is announced too, naming in Replaces the ending it
-// replaced, so a reader FILES IT AS A CORRECTION — the attempt moves from
-// Replaces to State — and a day counts each attempt once, by its key. A
-// failure the day counted (Owner, below) STAYS COUNTED when a correction
-// follows, even one to a pass: a day's figures only grow, joined by max
-// across its publications (internal/usage's CodeDay), so a figure a
-// correction lowered would survive only on a node that had not published it
-// yet — one day's figure would turn on when its node last published, not on
-// what happened. Replaces is the ending the replacing record's writer read on
-// the row when it decided; a failover's two writers recording the attempt's
-// first ending at once each read none, which is the one replacement announced
-// without it.
-//
-// # Why an event, beside the row
-//
-// The row is the attempt's state, replicated, and kept CheckHistory; the event
-// is what a NODE'S DAY counts, from its own event log, as a day counts every
-// other activity it derives (store.DB.UsageForDay) — the row is no day's, and
-// a count read off the rows at a day's close would count each attempt on
-// every data node. So the event carries what a day files the ending under and
-// nothing a reader of the attempt needs: the attempt is read from its row.
-//
-// # Where it is filed
-//
-// Persisted, in the `system` category, and kept out of the activity feed
-// (internal/events' unfed list): every push of every change ends each check
-// its file defines, a busy company's faster than a person reads a feed, and an
-// attempt's ending is read where it is asked — the change's checks, the
-// repository's.
+// CodeCheckFinished records that one attempt of a check of a commit ENDED, as
+// the attempt's row on the code log keeps the ending: published ONCE, by the
+// data node whose checks writer published the record (internal/gitlet's
+// ChecksWriter), on its apply — never by an applier. An ending the row did not
+// keep is announced by none. A record may REPLACE the kept ending (a
+// measurement replaces an infrastructure ending; an earlier ending replaces a
+// later one across a failover); it is announced too, naming the replaced one in
+// Replaces, as a CORRECTION a day counts once by attempt key. A failure the day
+// counted (Owner) STAYS COUNTED even after a correction to a pass: a day's
+// figures only grow, joined by max (internal/usage's CodeDay). The event, not
+// the replicated row, is what a NODE'S DAY counts (store.DB.UsageForDay), or
+// each data node would count each attempt. Persisted, `system`, unfed (internal/events).
 type CodeCheckFinished struct {
 	// RepoID is the repository's id, which outlives its name; RepoName its
 	// name when the ending applied.
@@ -303,23 +234,17 @@ type CodeCheckFinished struct {
 	OwnerKind string `json:"owner_kind,omitempty"`
 
 	// Agent is the owner's agent id on such an ending — "" for a person, a
-	// seat the running company no longer has, and every ending that fails no
-	// head — and the day it names counts the failure once by its attempt
-	// (`checks_failed`, internal/store's usageCode), whatever the change and
-	// the attempt did since: a failure of a head the change moved past is
-	// still what its owner's code did, and one a correction replaced stays
-	// counted (the type's doc).
+	// seat the company no longer has, and every ending that fails no head —
+	// and the day counts the failure once by its attempt (`checks_failed`,
+	// internal/store's usageCode), whatever the change did since (the type's
+	// doc).
 	//
-	// `agent_id`, THE COLUMN THE EVENT STORE PROMOTES, because these records
-	// are not rare: every push of every change ends each check its file
-	// defines, passes and candidate, tip and bisect checks among them, and
-	// only an ending that fails a head names a seat. A day reads the column,
-	// so an ending naming none neither moves the day's fingerprint nor has its
-	// payload read, and its cost follows the failures a day counts rather than
-	// the checks a company runs. The column says what the event is ABOUT —
-	// the seat whose code failed, as a read of the log by a seat's agent id
-	// asks — never who acted: the actor is the node that wrote the ending
-	// (its Source).
+	// `agent_id` is THE COLUMN THE EVENT STORE PROMOTES because these records
+	// are common (every push ends each check its file defines) and only an
+	// ending that fails a head names a seat. A day reads the column, so an
+	// ending naming none neither moves the day's fingerprint nor has its
+	// payload read. The column says what the event is ABOUT, the seat whose
+	// code failed, never who acted: the actor is the node that wrote it (Source).
 	Agent string `json:"agent_id,omitempty"`
 }
 
@@ -358,16 +283,9 @@ func (e CodeCheckFinished) SummaryFor(actor string) string {
 // applier, which every data node runs, and never for a retry its operation
 // ledger collapsed onto the record. A change a push merged — its target pushed
 // to its head, or past it — is that push's, and no merge record announces it.
-//
-// # Fed, and stored
-//
-// A merge is what a person watching the company's work wants to see happen,
-// and a company makes few of them beside its pushes and its checks — one a
-// change, bounded by the changes its seats and persons open — so it joins the
-// activity feed, in the `system` category beside Gitlet's other events.
-// What it carries is what a reader of the feed acts on: which change merged
-// into which branch, at which commit, by whom, and a person's reason where they
-// merged it past its gate, which an audit of the branch reads.
+// Fed, in the `system` category, one a change. It carries the change, branch,
+// commit, who merged, and a person's reason for merging past the gate, which
+// an audit of the branch reads.
 type ChangeMerged struct {
 	// RepoID is the repository's id, which outlives its name; RepoName its
 	// name when the merge applied.
@@ -420,22 +338,12 @@ func (e ChangeMerged) SummaryFor(actor string) string {
 // landed the record that opened it, on that record's apply — never by an
 // applier, which every data node runs, and never for a retry its operation
 // ledger collapsed onto the record, which the landing's own call announced.
-//
-// # Why an event, beside the row
-//
-// The row is the change, replicated; the event is what the OWNER'S DAY counts
-// (store.DB.UsageForDay, a seat's `changes_opened`), from the publishing
-// node's own event log, as a day counts every other activity it derives — a
-// count read off the replicated rows at a day's close would count each change
-// on every data node. So the event names its owner's agent id where the owner
-// is a seat ([ChangeOpened.Agent], the `agent_id` column a seat's day groups
-// by), resolved when it is published: a person's change is counted on no
-// seat's day, since a person has none.
-//
-// # Fed, and stored
-//
-// One a change, as a merge is: what a person watching the company's work
-// wants to see begin, and bounded by the turns and pushes that open them.
+// The row is replicated; the event is what the OWNER'S DAY counts
+// (store.DB.UsageForDay, a seat's `changes_opened`) from the publishing node's
+// own log, since a count off the rows would count each change on every data
+// node. So it names the owner's agent id where the owner is a seat
+// ([ChangeOpened.Agent], the `agent_id` column), resolved when published; a
+// person's change is on no seat's day. Fed, one a change, as a merge is.
 type ChangeOpened struct {
 	// RepoID is the repository's id, which outlives its name; RepoName its
 	// name when the change opened.
@@ -493,21 +401,12 @@ func (e ChangeOpened) SummaryFor(actor string) string {
 // review): its verdict on one revision and the findings it raised. Published
 // ONCE, by the data node whose change writer landed the record, on that
 // record's apply — never by an applier, and never for a retry its operation
-// ledger collapsed onto the record.
-//
-// # Two seats' days count it
-//
-// The REVIEWER'S, which gave it (a seat's `reviews_given`), and the change's
-// OWNER'S, which received its findings (`findings_received`): so the event
-// names both agent ids, each resolved when it is published — Agent the
-// reviewer's, the `agent_id` column a seat's day groups by, and OwnerAgent the
-// owner's — and either is "" for a person, whose day is no seat's.
-//
-// # Fed, and stored
-//
-// A review is one turn's result at most — every review a seat gives is a turn
-// of its own — so the feed carries fewer of them than of the turns beside
-// them, and a person watching the company's work wants to see one land.
+// ledger collapsed onto the record. Two seats' days count it: the REVIEWER'S
+// (`reviews_given`) and the change's OWNER'S (`findings_received`), so the
+// event names both agent ids, resolved when published — Agent the reviewer's
+// (the `agent_id` column a day groups by), OwnerAgent the owner's. Either is ""
+// for a person, who has no seat. Fed and stored: a review is at most one
+// turn's result, and a person watching wants to see one land.
 type ReviewSubmitted struct {
 	// RepoID is the repository's id, which outlives its name; RepoName its
 	// name when the review applied.
@@ -568,23 +467,14 @@ func (e ReviewSubmitted) SummaryFor(actor string) string {
 
 // CodeQueueEjected records that a merge queue put an entry OUT (internal/gitlet's
 // Eject): the change it held will not land through this enqueue — a required
-// check failed on what it was tested in, its merge onto what was before it
-// conflicted, its merge gate no longer holds with its enqueuer as the merger,
-// its head moved, or its fast-forward is none. Published ONCE an entry, by the
-// data node whose committer landed the eject record, on that record's apply —
-// or the push record that moved a queued change's head, which ends its entry
-// head_moved in its own apply and names no eject — never by an applier, which
-// every data node runs, and never for a retry its operation ledger collapsed
-// onto the record.
-//
-// # Fed, and stored
-//
-// An ejection is what the change's authors and its enqueuer act on — fix the
-// change, or enqueue it again — and a queue ejects few of what it lands, so it
-// joins the activity feed beside the merge it did not become, in the `system`
-// category. What it carries is what a reader acts on: which change, out of
-// which branch's queue, why, and the failed checks or the conflicted paths it
-// names.
+// check failed on what it was tested in, its merge conflicted, its merge gate
+// no longer holds with its enqueuer as the merger, its head moved, or its
+// fast-forward is none. Published ONCE an entry, by the data node whose
+// committer landed the eject record, on that record's apply — a push that
+// moved a queued head ends its entry head_moved in its own apply and names no
+// eject — never by an applier, and never for a retry its operation ledger
+// collapsed. Fed, in the `system` category: authors and enqueuer act on it and
+// few entries eject. It carries the change, queue, why, failed checks or paths.
 type CodeQueueEjected struct {
 	// RepoID is the repository's id, which outlives its name; RepoName its
 	// name when the eject applied.
@@ -599,11 +489,9 @@ type CodeQueueEjected struct {
 	Number   int64  `json:"number"`
 	Target   string `json:"target"`
 
-	// Reason is why (internal/gitlet's EjectReasons: check_failed, conflict,
-	// gate_unmet, head_moved, not_fast_forward, repo_mirrored); Checks the
-	// required checks
-	// that failed, for check_failed, and Paths the conflicted paths, for
-	// conflict.
+	// Reason is why (internal/gitlet's EjectReasons); Checks the required checks
+	// that failed (check_failed) or that no checks file defines in a form that
+	// runs (checks_undefined); Paths the conflicted paths (conflict).
 	Reason string   `json:"reason"`
 	Checks []string `json:"checks,omitempty"`
 	Paths  []string `json:"paths,omitempty"`
@@ -649,15 +537,9 @@ func (e CodeQueueEjected) SummaryFor(actor string) string {
 // named required checks failed on, the landing before it having passed them.
 // Published ONCE a landing, by the data node whose committer landed the broken
 // record, on that record's apply — never by an applier, which every data node
-// runs.
-//
-// # Fed, and stored
-//
-// A broken branch is what its team stops for — revert the landing or fix
-// forward — and a bisect names few, so it joins the activity feed beside the
-// merge or the push that broke it, in the `system` category. What it carries
-// is what a reader acts on: which branch, which landing and how it landed, the
-// change it landed and who landed it, and the checks it broke.
+// runs. Fed, in the `system` category: a broken branch is what its team stops
+// for and a bisect names few. It carries the branch, landing, change, who
+// landed it and the checks broken.
 type CodeTargetBroken struct {
 	// RepoID is the repository's id, which outlives its name; RepoName its
 	// name when the broken record applied.
@@ -690,16 +572,11 @@ func (CodeTargetBroken) EventType() string { return "code_target_broken" }
 // and onto what, which it deleted there, and which protected branches it held
 // back, each still waiting for a commit its required checks passed
 // (code_green). Published once a push that moved something, by the home Gitlet
-// node that pushed — the code log records no push to another host, so this is
-// the one durable account of what the company published, and when.
-//
-// # Stored, not fed
-//
-// A busy repository's mirror pushes as often as once a minute, and nobody acts
-// on a push that went where it was told to: it is kept in the event log for the
-// audit, out of the activity feed. A push that FAILED is no event: it is the
-// home's state, which code_mirror_failing raises once it outlasts the
-// mirror's refresh.
+// node that pushed: the code log records no push to another host, so this is
+// the one durable account of what the company published. Stored, not fed: a
+// mirror pushes as often as once a minute and nobody acts on a push that went
+// where told. A push that FAILED is no event: it is the home's state, which
+// code_mirror_failing raises.
 type CodeMirrorPushed struct {
 	// RepoID is the repository's id, which outlives its name; RepoName its
 	// name when it was pushed.
@@ -772,24 +649,13 @@ func (e CodeMirrorPushed) SummaryFor(actor string) string {
 // (code_import_repo, `crewlet gitlet import`), a declared `code.repos[].import`,
 // or a pull mirror's first fill — and its end (gitlet.ImportDone) applied,
 // whole or short of its source. Published ONCE an import, by the home Gitlet
-// node that proposed the end and heard it applied. The repository's row keeps
-// only its LATEST import state, and the push rows its chunks wrote (`via
-// import`) name neither the source nor the end, so this is the one durable
-// account of where a repository's contents came from, and when.
-//
-// An end whose answer the home did not hear applied — pending or unknown at
-// its committer, or the home gone between the apply and the publish — is no
-// event: the repository is active by then, so no later attempt ends it again,
-// and its row still names how it ended. A pull mirror's syncs are none
-// either: they move it onto the same source every interval, and its push rows
-// `via mirror` record each.
-//
-// # Stored, not fed
-//
-// A person's import is already in the feed as that person's operator_acted,
-// and a declared one is the company document's: the account of what landed is
-// kept for whoever asks where a repository came from, out of the activity
-// feed.
+// node that proposed the end and heard it applied. The row keeps only the
+// LATEST import state and the push rows (`via import`) name neither source nor
+// end, so this is the one durable account of where contents came from.
+// An end the home did not hear applied is no event (the repository is active
+// by then, so its row names how it ended), nor is a pull mirror's sync (its
+// push rows `via mirror` record each). Stored, not fed: a person's import is
+// already in the feed as `operator_acted`, a declared one is the document's.
 type CodeImported struct {
 	// RepoID is the repository's id, which outlives its name; RepoName its
 	// name when its import ended.
@@ -864,23 +730,12 @@ func (e CodeTargetBroken) SummaryFor(actor string) string {
 // an expunge's COMMIT applied (internal/gitlet/compact, ADR-0099), retiring the
 // packs its begin made dropping and keeping live, as its rescue, whatever of
 // them a push made reachable again. Published ONCE a commit, by the
-// maintainer whose compactor proposed it and heard it applied — a person's
-// purge served (Request names it) and every weekly cycle the maintainer
-// began on its own (Request empty) alike. The code log's rows keep only the
-// LATEST expunge of a repository (its detail's `expunge`), so this is the one
-// durable account of every one: what was destroyed, and when.
-//
-// A commit whose answer the maintainer did not hear applied — pending or
-// unknown at its committer, or the maintainer gone between the apply and the
-// publish — is no event: the next pass finds the expunge closed and has
-// nothing left to announce, and the repository's detail still names it.
-//
-// # Stored, not fed
-//
-// The weekly cycle is the maintainer's housekeeping, and a person's purge is
-// already in the feed as the `operator_acted` of the person who asked: the
-// account of what the commit dropped is kept for whoever asks what left the
-// repository and when, out of the activity feed.
+// maintainer whose compactor proposed it and heard it applied (Request names
+// a person's purge, empty is a weekly cycle). The code log keeps only the
+// LATEST expunge, so this is the one durable account of every one. A commit
+// whose answer was not heard applied is no event: the next pass finds it closed.
+// Stored, not fed: a person's purge is already in the feed as `operator_acted`
+// and the weekly cycle is housekeeping.
 type CodeExpunged struct {
 	// RepoID is the repository's id, which outlives its name; RepoName its
 	// name when the commit applied.

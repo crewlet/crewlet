@@ -223,9 +223,11 @@ export type TranscriptState =
   "read" | "none" | "missing" | "unreadable" | "malformed" | "unsupported";
 
 /** Who an entry of a transcript is from (`executor.EntryKinds`): a note is
- *  one a person sent the run while it worked. */
+ *  one a person sent the run while it worked, and a late call one of the
+ *  work's calls that finished after the run that made it stopped waiting for
+ *  it, as the engine handed it to the run while it worked. */
 export type TranscriptEntryKind =
-  "brief" | "note" | "model" | "tool_call" | "tool_result" | "summary" | "unread";
+  "brief" | "note" | "late_call" | "model" | "tool_call" | "tool_result" | "summary" | "unread";
 
 /**
  * Why a page of a transcript ends before the transcript does

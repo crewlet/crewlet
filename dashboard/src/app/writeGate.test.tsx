@@ -201,6 +201,16 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
       "Close and Reopen — and the dialogs each opens",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
   },
+  "routes/gitlet/change/ChangeEdits.tsx": {
+    why:
+      "a live change's Convert to draft, retarget and work item (code_update_change), and a " +
+      "finished change's Restore branch (code_create_branch), from its rail",
+    suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
+  "routes/gitlet/change/StackNotes.tsx": {
+    why: "a comment on lines picked on Files changed (code_comment_on_change with its anchor)",
+    suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
   "routes/gitlet/change/AskDialog.tsx": {
     why: "asking reviewers from the page bar and the rail (code_request_review)",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
@@ -212,6 +222,10 @@ const WRITE_MODULES: Readonly<Record<string, { why: string; suite: string | null
   "routes/gitlet/change/ReviewDialog.tsx": {
     why: "the review sent with its drafts (code_review_change), from the page bar and Finish review",
     suite: "routes/gitlet/change/ChangePage.test.tsx",
+  },
+  "routes/gitlet/change/CommentCard.tsx": {
+    why: "a comment's Edit (code_comment_on_change) and Delete (code_delete_comment), from its menu",
+    suite: "routes/gitlet/change/CommentCard.test.tsx",
   },
   "routes/gitlet/change/Conversation.tsx": {
     why: "a change's comment, a reply to a thread or a finding, and a thread's Resolve",

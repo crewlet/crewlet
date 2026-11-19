@@ -173,16 +173,13 @@ func demoRun(_ context.Context, _ sandbox.RunRequest) sandbox.Result {
 // buildSandboxProviders turns the catalogue into one backend per placement it
 // configures.
 //
-// THE CLOSED SET AND THIS FUNCTION ARE THE SAME LIST, asserted by a test,
-// because nothing else connects them: the last time they disagreed the
-// config's default named a backend with no case here, so a company validated
-// cleanly, reported a configured sandbox on the dashboard, and failed at its
+// THE CLOSED SET AND THIS FUNCTION ARE THE SAME LIST, asserted by a test: a
+// default naming a backend with no case here validates cleanly and fails at the
 // first launch.
 //
-// ONE LOCAL BACKEND PER LOCAL PLACEMENT, not one shared between them: the two
-// differ in exactly one option, and a single instance would have to be told
-// which cell it was serving on every call — which is the block-wide mode this
-// whole reshape removed, reintroduced one layer down.
+// ONE LOCAL BACKEND PER LOCAL PLACEMENT, not one shared: a single instance would
+// have to be told which cell it serves on every call, a block-wide mode in
+// disguise.
 func buildSandboxProviders(spec *config.SandboxProvider, env *config.Resolver, reached map[config.Placement]string) (map[sandbox.Placement]sandbox.Provider, error) {
 	built := make(map[sandbox.Placement]sandbox.Provider, len(reached))
 	// WALKED IN THE CLOSED SET'S ORDER, not the map's: a map iterates
@@ -397,92 +394,18 @@ type runEnv struct {
 	facted []string
 }
 
-// runEnvironment is one launch's environment and provisioning: the
-// provider-wide setup steps, then the seat's own, and the run environment
-// they, the seat's sandbox block and the engine assemble. Nil-safe on the
-// seat's box settings, since a seat's executor runs in a box whether or not
-// the seat has a sandbox block of its own, and on c, a box launched with no
-// company to read a provisioning plan from — every variable is then the
-// operator's.
+// runEnvironment is one launch's environment and provisioning: the setup steps
+// and the run environment. Nil-safe on the seat's settings and on c.
 //
-// # The environment
+// The engine adds no credential but the integrations' ([seataccess.BoxSet.Credentials]),
+// which win a name over any layer ([BoxCredentialWarnings]). Precedence, later
+// winning: identity, setup steps, the seat's env. Gitlet access (ADR-0093) joins
+// the LAUNCH's environment once the store names the job.
 //
-// THE ENGINE CONTRIBUTES TWO KINDS OF VALUE, NEITHER A CREDENTIAL. The agent's
-// identity, as CREWLET_AGENT_HANDLE and CREWLET_AGENT_EMAIL: per-launch values
-// static config cannot know, which a setup recipe maps into whatever shape its
-// tool needs. And boxDefaults: the non-secret settings an integration's box
-// CLI reads beside the seat's credentials, for a lane the seat has on
-// ([seataccess.BoxDefaults]), such as an organization a person would
-// otherwise copy into every seat. And the seat's own credentials at an
-// integration it is on at, which that integration's box CLI reads
-// ([seataccess.BoxSet.Credentials]): EXPO_TOKEN set to the agent's sealed
-// robot token, GITHUB_TOKEN to its app's token. Those are the integration's,
-// so a layer here that sets the same name is dropped for them, as a setup
-// file at one of an integration's credential files' paths is; config says so
-// ([BoxCredentialWarnings]). Every other credential comes from config: an
-// external token is DECLARED in role.sandbox.env or a setup step's env.
-// Precedence, later winning: identity,
-// then the setup steps' contributions, then the seat's own env, so an
-// operator's explicit value always beats a step's default. The integrations'
-// defaults are returned apart (runEnv.defaults), for the launch to lay beneath
-// the entry's env as well ([newExecutorRun]), and so are the variables naming
-// their files (runEnv.homePaths), beneath those, since only the box knows its
-// home ([sandbox.LaunchRequest.HomePaths]). The names whose value hands a tool
-// one of the seat's own vendor credentials are named apart (runEnv.tools), for
-// the launch to keep out of the run's sign-in.
-//
-// BUT FOR GITLET (ADR-0093): every launch on a node that
-// serves it is given ACCESS TO THAT SURFACE — the run's own credential and
-// the box's git configuration ([Engine.boxGitEnv]), as an executor's run is
-// given the tool bridge's endpoint — a credential the box acts AS, scoped to
-// the run and dying with it. Added to the LAUNCH's environment once the store
-// has named the job, never here: this environment is the spec's, and the
-// credential names the launch. Every OTHER host's credential is still the
-// operator's to declare, and config refuses the engine's own names in any env
-// it writes (config.ReservedSandboxEnv).
-//
-// RESOLVED EXACTLY ONCE, here, at launch — not at load. These values are
-// where an operator declares a code-host token, and Tier B stores its
-// references verbatim so an exported revision carries no resolved secret.
-// Resolving at load as well would double-resolve and mangle any secret whose
-// real value contains a literal ${...}.
-//
-// # Every reference resolves, or the key is declared optional
-//
-// By the rule a tool server's values are held to (toolcredentials.go), and
-// for the reason it is: a run handed an empty code-host token clones nothing
-// and pushes nothing, after spending its box, its install and its model's
-// tokens, and nothing in a value can say that a setting — a test
-// DATABASE_URL, a proxy — may be absent. So a key whose value does not
-// resolve, under the declaration of whichever layer wrote the value that
-// won, is LEFT OUT whole where that layer lists it under `optional_keys`, and
-// is otherwise the run's gap: one a provisioning pass mints for the seat,
-// one that pass cannot mint until a person acts, or one nothing will — and a
-// value a pass mints for the seat is waited for whatever the declaration
-// says, as a tool server's is ([refGap.hold]). The engine's own identity
-// facts are never a gap, since no layer can declare them: each is contributed
-// when it resolves, and one that does not — a seat's `email:` naming a
-// variable nobody set — is left out and SAID, because a setup recipe's
-// `git config user.email "$CREWLET_AGENT_EMAIL"` otherwise commits as nobody
-// with nothing to say why.
-//
-// # The files
-//
-// A file is CONTENT rather than a setting ([secrets.ReadContent]): a body
-// that is exactly one `${VAR}` becomes that variable's value, byte for byte,
-// and any other body is written as it is. The env is the engine's setting
-// and the run environment gets the value; a `${HOME}` in a script and a
-// `${NPM_TOKEN}` in an .npmrc are the box's own, expanded there from the run
-// environment the step's env just filled. A file whose whole reference does
-// not resolve is not written where its step lists the path under
-// `optional_keys`, and is otherwise the run's gap like an env value. The
-// integrations' own files ([seataccess.BoxFile]) are a step of their own,
-// ahead of every other, and never a gap: one that does not resolve is said
-// as a box default is.
-//
-// NEW MAPS, never the steps' own: the provider-wide steps are the manager's,
-// shared by every launch on this node, and a body resolved into them would be
-// a credential cached past the snapshot it came from.
+// RESOLVED EXACTLY ONCE, here: Tier B keeps references verbatim, and resolving
+// at load too would mangle a secret containing a literal ${...}. An unresolved
+// reference is a gap unless `optional_keys` lists it (toolcredentials.go); an
+// identity fact is left out and SAID. NEW MAPS, never the steps' own.
 func (e *Engine) runEnvironment(ctx context.Context, c *Company, seat *org.Role,
 	settings *org.RoleSandbox, defaults []sandbox.SetupStep, boxDefaults []seataccess.BoxDefault) runEnv {
 
@@ -796,30 +719,14 @@ func secondsPtr(v *float64) *time.Duration {
 // sandboxAccountant post-charges a collected launch against the shared
 // counters.
 //
-// The charge happens AFTER the spend, which is why it cannot refuse: a refusal
-// cannot un-spend a run that already ran, and recording it anyway is the only
-// way the meter stays true when the cap is binding. So it goes through
-// [coord.Budgets.PostCharge], never the gate. Charged through
-// [coord.Budgets.Charge] when a refused charge counted nothing, a run that did
-// not fit was recorded not at all, which under-stated the company's spend by
-// the whole run at exactly the moment the cap bound. Charge counts what it
-// refuses now, but its verdict is still the wrong thing to ask for: nothing
-// waits on it — the work the run bought is done — and a refusal would stamp
-// the seat's window as the gate turning a round away, and an admission clear
-// every stamp, for a charge nobody was deciding about.
+// The charge happens AFTER the spend, so it cannot refuse: a refusal cannot
+// un-spend a run, and recording it keeps the meter true when the cap binds.
+// Hence [coord.Budgets.PostCharge], never the gate, whose refusal would stamp
+// the seat's window as turning a round away for a charge nobody was deciding.
 //
-// The run is counted in the windows of COLLECTION — the day, week and month
-// it was collected in, on the company's clock — because that is the only
-// instant the counter is told about: a run that started yesterday and ended
-// today is today's spend as far as any cap can know. The caps only decide
-// whether to SAY the run went over.
-//
-// Charging it once per launch, however often its completion is retried, is the
-// coordinator's side: see [sandbox.PendingRun.Charged]. So is finishing a charge
-// that reached the company and not the seat ([coord.SeatUncountedError]): the
-// coordinator records the partial on the run, and the retry it hands here is
-// told so and records the seat's share alone ([coord.Budgets.PostChargeSeat]),
-// rather than counting the company a second time.
+// The run is counted in the windows of COLLECTION on the company's clock. Once
+// per launch ([sandbox.PendingRun.Charged]) and a charge that reached the
+// company but not the seat ([coord.SeatUncountedError]) are the coordinator's.
 type sandboxAccountant struct {
 	budgets postCharger
 
@@ -889,21 +796,14 @@ var _ sandbox.Resumer = (*resumer)(nil)
 
 // Resume re-enters the suspended turn a completion or an answer names.
 //
-// NO PANIC LEAVES THIS FRAME, for the reason [Dispatcher.Dispatch] gives on the
-// other path. A phase that panics is recovered inside the turn loop; anything
-// else that panics while re-entering a turn is recovered here and abandoned.
-// Unrecovered, it skipped the coordinator's revert as well as its settle, so
-// the run row was stranded in resumed while the queue redelivered a completion
-// the claim then refused.
+// NO PANIC LEAVES THIS FRAME, for the reason [Dispatcher.Dispatch] gives: an
+// unrecovered one skips the coordinator's revert and settle, stranding the row
+// in resumed while a completion is redelivered and refused.
 //
-// AND A PANIC AFTER THE TURN BEGAN ENDS THE TURN ON THE EXECUTOR LOG: the
-// coordinator settles a begun turn that broke without a word of its own
-// ([sandbox.ErrResumeAbandoned]), its frame — which owes the turn's end on
-// every other way out — is what panicked, and no ending of the run owes one
-// for a turn that came back. So the end is owed here, failed, saying it
-// panicked ([panickedEnding]), for the run's ending to record. A panic BEFORE
-// the turn began is the coordinator's to announce as a loss, which owes the
-// turn's end itself ([sandbox.CoordinatorOptions.TurnLost]).
+// A PANIC AFTER THE TURN BEGAN ENDS THE TURN ON THE EXECUTOR LOG: the frame that
+// owes the end is what panicked, so it is owed here, failed ([panickedEnding]).
+// One BEFORE the turn began is the coordinator's to announce as a loss
+// ([sandbox.CoordinatorOptions.TurnLost]).
 func (r *resumer) Resume(ctx context.Context, req sandbox.ResumeRequest) error {
 	return r.engine.resumeGuarded(ctx, req, r.resume)
 }
@@ -1102,22 +1002,12 @@ func refusedRepliesOf(refusals []sandbox.RoundRefusal) []turn.RefusedReply {
 
 // resumedTurn is the turn a parked run is re-entered as.
 //
-// THE SAME RUN AND THE SAME UNIT OF WORK the suspended turn had, both read off
-// the row: the resume re-enters that run, and its writes stay idempotent
-// against the trigger the run was dispatched for, from the instant the first
-// half derived its ids with.
-//
-// THE START, NOT WHERE THE RESUMED HALF MINTS. That is decided afresh by every
-// attempt at the resume, against its own clock, when the telemetry that hands
-// the runner its turn is assembled ([Engine.describeResume], [rebaseFor]) — a
-// resume that comes longer after this start than the operation ledger
-// remembers mints its writes at the attempt, or at the instant an earlier
-// attempt or an earlier half of the turn recorded, never here.
-//
-// AND THE SAME HOLDS, read off the row with the row's writer attached
-// ([Engine.rowHolds]): what the turn named before it parked is still what it
-// may come back to, and a hold it takes from here on is on the row before the
-// request it was taken for.
+// THE SAME RUN AND UNIT OF WORK the suspended turn had, read off the row, so its
+// writes stay idempotent against the first half's trigger. THE START, NOT WHERE
+// THE RESUMED HALF MINTS: every attempt decides that afresh against its own
+// clock ([Engine.describeResume], [rebaseFor]). The SAME HOLDS, read off the row
+// with its writer attached ([Engine.rowHolds]), so a new hold is on the row
+// before its request.
 func resumedTurn(run sandbox.PendingRun, seat *org.Role, organization *org.Organization,
 	holds *turnctx.Holds) *turnctx.Turn {
 	return &turnctx.Turn{
@@ -1256,17 +1146,14 @@ type resumeInput struct {
 
 // resumeTurn re-enters a suspended turn.
 //
-// THE SAME TURN, not a new one: the same id, the same trigger, and the ledger
-// the suspended turn had. What is rebuilt rather than restored is everything
-// LIVE — the budget meter, the phase recorder, the config pin — because those
-// belong to the node doing the resuming, not to the one that suspended.
+// THE SAME TURN, not a new one: same id, trigger and ledger. Everything LIVE
+// (budget meter, phase recorder, config pin) is rebuilt, since it belongs to the
+// node doing the resuming.
 //
-// The config pin is the interesting one: this turn pins the epoch live AT
-// RESUME, not the one it suspended under. A run can be parked for days waiting
-// on a person, and re-entering under a revision that has since been deleted
-// would resume a turn into a company that no longer exists. The cost — a turn
-// observing a config change across its own suspension — is real and accepted,
-// and it is why suspension is a phase boundary rather than a mid-round pause.
+// The turn pins the epoch live AT RESUME, not the one it suspended under: a run
+// parked for days would otherwise re-enter a revision since deleted. The
+// accepted cost, a turn seeing a config change across its suspension, is why
+// suspension is a phase boundary rather than a mid-round pause.
 func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 	// A SUSPEND IS A RETURN, AND A SPAN CANNOT SURVIVE IT. The suspending
 	// phase's span ended when that phase returned; the process may have
@@ -1288,63 +1175,26 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 		attribute.String("crewlet.work_key", in.Run.WorkKey))
 	defer span.End()
 
-	// THE INDICATOR A RESUMED TURN SHOWS, which comes from one of two places
-	// and never from both. Ended below however the resumed turn goes.
-	//
-	// REJOIN FIRST, because a resume a BOX'S COMPLETION drove has nothing to
-	// raise from: the suspended half ended with keepAlive, so the hold is
-	// already up under this same turn id and the box's minutes are visible to
-	// whoever is waiting — and a parked run's row carries no chat metadata by
-	// design, the message that woke the suspended turn being days gone and
-	// never this node's to keep, while the conversation keys the row does
-	// carry are partition keys rather than addresses in a channel. A fresh
-	// raise there would assert a conversation this turn cannot prove it is
-	// in, over an indicator that is already up.
-	//
-	// BEGIN FROM THE TRIGGER WHERE NO HOLD IS LEFT, because that is a resume a
-	// PERSON'S ANSWER drove: the park released the hold, and the answer is an
-	// ordinary chat message carrying the conversation to raise in. Nil where
-	// neither holds — a completion whose session is not on this node, the seat
-	// having moved while the box ran or this process having restarted: the
-	// indicator that node raised lapses on the backend's own expiry, and
-	// nothing here invents a thread for it.
-	//
-	// See [Engine.resumeWorkingStatus], which owns that order and reports
-	// which of the two answered.
+	// THE INDICATOR A RESUMED TURN SHOWS comes from one of two places, never both
+	// ([Engine.resumeWorkingStatus] owns the order). REJOIN FIRST: a BOX'S
+	// COMPLETION resume has nothing to raise from, since the suspended half's
+	// keepAlive left the hold up under this turn id and the row has no chat
+	// metadata (partition keys are not channel addresses). BEGIN FROM THE TRIGGER
+	// WHERE NO HOLD IS LEFT: a PERSON'S ANSWER, whose park released the hold and
+	// whose answer is an ordinary chat message. Nil where neither holds: the old
+	// indicator lapses on the backend's expiry; nothing here invents a thread.
 	status, rejoined := e.resumeWorkingStatus(ctx, in.Turn.Handle(), in.Run.TurnID, in.Trigger)
 	// TRUE UNTIL THE TURN ACTUALLY RUNS, BUT ONLY ON ONE OF THE TWO ROUTES.
-	// Every early return below is a RETRY rather than an ending — a reply
-	// this build cannot read and a runner that could not be built both leave
-	// the coordinator to revert its claim — but the claim reverts to exactly
-	// the status it was taken FROM, and the two routes came from opposite
-	// facts:
-	//
-	//   - A BOX'S COMPLETION was claimed from a live run, so the revert puts
-	//     it back and the completion comes round again. Nothing else could
-	//     re-raise this indicator — the run's row carries no chat metadata,
-	//     so a later resume has only the hold to take back — where on the
-	//     dispatch path a redelivered trigger simply raises a fresh one. So
-	//     it is KEPT.
-	//   - A PERSON'S ANSWER was claimed from the answer recorded on the run
-	//     — a chat reply or an answer by turn, which are both recorded before
-	//     anything is done with them — so the revert puts the run back to
-	//     owing that answer's resume. Nothing is working, and an
-	//     indicator over that wait tells the one person who could move it
-	//     that the run is busy with their reply when it is not — the same
-	//     lie the park exists to stop. So it is CLEARED, and this is the
-	//     only place that clear happens: the coordinator's revert reports no
-	//     stop, deliberately, because the same revert on the completion
-	//     route puts a run back to a box that is still working. See
-	//     [sandbox.Coordinator.unclaim].
-	//
-	//     THE ANSWER ITSELF IS NOT LOST. It is recorded on the run before
-	//     its resume is attempted, on either route, so the coordinator
-	//     retries the resume on its own schedule and each attempt raises its
-	//     own indicator off the recorded trigger. It never falls through to
-	//     an ordinary turn, which answered the person with a turn rather
-	//     than with the executor they were replying to. See
-	//     [sandbox.Coordinator.TryResumeFromAnswer] and
-	//     [sandbox.Coordinator.AnswerByTurn].
+	// Every early return is a RETRY, and the claim reverts to its source status:
+	//   - A BOX'S COMPLETION comes round again and nothing else could re-raise the
+	//     indicator, so it is KEPT.
+	//   - A PERSON'S ANSWER goes back to owing its resume. Nothing is working, and
+	//     an indicator would tell the one person who could move it that the run is
+	//     busy with their reply. So it is CLEARED, only here: the coordinator's
+	//     revert reports no stop since on the completion route the box still
+	//     works ([sandbox.Coordinator.unclaim]).
+	// THE ANSWER IS NOT LOST: it is recorded first and retried
+	// ([sandbox.Coordinator.TryResumeFromAnswer]), never run as an ordinary turn.
 	working := rejoined
 	defer func() { endWorkingStatus(ctx, status, working) }()
 
@@ -1589,25 +1439,15 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			return fmt.Errorf("%w (the resumed turn's relaunch failed and its run was ended with it): %w",
 				sandbox.ErrResumeAbandoned, err)
 		}
-		// Reverted, so the turn is not over — and BOTH KINDS OF RESUME COME
-		// BACK rather than wait for a further signal.
-		//
-		// A BOX'S COMPLETION is NAK'd by the seat's control-topic handler
-		// and redelivered on the broker's own backoff, to this node once
-		// it recovers or to the seat's next owner, until its delivery
-		// budget is spent.
-		//
-		// A PERSON'S ANSWER is recorded on the run — a chat reply and an
-		// answer by turn alike — so the revert leaves it owed its resume
-		// and the coordinator retries that on its own schedule, bounded by
-		// [sandbox.MaxAnswerAttempts] and the run's own
-		// pause_ttl_seconds, and lets the answer go past them: a chat
-		// reply to the seat's ordinary route, an answer by turn spent as
-		// declined. The delivery that carried it is never handed back for
-		// this; it was spent when the answer was recorded.
-		//
-		// ON THE ROUTE'S OWN TERMS, exactly as the seed above: this is the
-		// same retry rule reached one step later, over the same revert.
+		// Reverted, so the turn is not over, and BOTH KINDS OF RESUME COME BACK
+		// rather than wait for a signal. A BOX'S COMPLETION is NAK'd by the
+		// control-topic handler and redelivered on the broker's backoff until its
+		// delivery budget is spent. A PERSON'S ANSWER is recorded on the run, so
+		// the revert leaves it owed its resume and the coordinator retries it,
+		// bounded by [sandbox.MaxAnswerAttempts] and pause_ttl_seconds, then lets
+		// it go (a chat reply to the ordinary route, an answer by turn spent as
+		// declined). The delivery that carried it is never handed back; it was
+		// spent when the answer was recorded. Same retry rule as the seed above.
 		working = rejoined
 		// UNLESS WHAT BROKE IT IS A WAIT: every model at a usage limit
 		// before this attempt wrote anything — the reviewer's, or every
@@ -1626,22 +1466,15 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 			e.parkResumeOnLimit(ctx, in.Turn.Handle(), err)
 			return &sandbox.TurnRefused{Cause: err, Refusal: refusal}
 		}
-		// AND A FAILURE A RETRY CANNOT CURE PAUSES THE SEAT on its second
-		// time in a row, as on the dispatch path (ADR-0117): every model of
-		// the review's chain refused its credential, say. The two paths
-		// share the seat's run of failures, so a dispatched turn and a
-		// resumed one that fail alike are the second time.
-		//
-		// A resume is where such a failure meets a seat most often: a seat's
-		// turn launches its executor's run and parks, and the review of the
-		// run's job is the turn's next model call. Unpaused, that review
-		// was handed back and its completion redelivered on the broker's
-		// backoff, about a second apart, for the half hour of the resume
-		// give-up, each attempt a turn that started and failed, while every
-		// screen drew the seat as working. Paused, the seat says why on
-		// every screen that shows it, and the completion is refused on the
-		// pause, kept for the lift that resumes it, and held at the turn
-		// gate meanwhile ([Engine.failurePauseRefusal]).
+		// AND A FAILURE A RETRY CANNOT CURE PAUSES THE SEAT on its second time in
+		// a row, as on the dispatch path (ADR-0117), which shares the seat's run
+		// of failures: every model of the review's chain refused its credential,
+		// say. A resume is where this meets a seat most often (the run's review
+		// is the turn's next model call); unpaused, the completion was
+		// redelivered about a second apart for the half hour of the give-up
+		// while every screen drew the seat as working. Paused, the seat says
+		// why, and the completion is kept for the lift and held at the turn gate
+		// meanwhile ([Engine.failurePauseRefusal]).
 		reason, paused, holdErr := e.failureHold(ctx, in.Turn.Handle(), err)
 		if holdErr != nil {
 			log.WarnContext(ctx, "seat_failure_pause_not_taken", "seat", in.Turn.Handle(),
@@ -1688,26 +1521,16 @@ func (e *Engine) resumeTurn(ctx context.Context, in resumeInput) error {
 }
 
 // parkedTurnRunner is the runner a parked run's turn is rebuilt with on this
-// node, and the telemetry it was built from: the resume that collects the run
-// ([Engine.resumeTurn]) adds what re-entering the turn takes, and a run taken
-// over while it works ([Engine.reopenAgentRun]) uses it as it is.
+// node, for the resume ([Engine.resumeTurn]) and a run taken over while it works
+// ([Engine.reopenAgentRun]).
 //
-// ONE CONSTRUCTION for both, because a call a box makes over its bridge after
-// a recovery and a call the resumed turn makes are calls of the same turn, and
-// the two must agree on everything a call reads: the turn's identity and unit
-// of work, the rebase its operation ids are minted under, the counter its
-// spend is held to, the seat's registry, skills and fence, and the reply it
-// owes — agreeing by copy is how the call sites drifted before (the skill
-// registry one of them omitted).
-//
-// The results are named so a failure answers their zero values without
-// building a RunnerInput: every literal of one is held to carrying the seat's
-// fence (internal/seat's TestEveryConfigThatCanCarryTheSeatFenceDoes). Every
-// error is a RETRY: nothing has run.
-//
-// notes is the segment's notes on the run's record, which the launcher of the
-// turn's later iterations seals their briefs from ([agentLauncher.notes]); nil
-// where the segment takes none — a reopened run's surface launches nothing.
+// ONE CONSTRUCTION for both: a box's call after a recovery and the resumed
+// turn's calls are the same turn's and must agree on everything a call reads;
+// agreeing by copy drifted once. The results are named so a failure answers
+// their zero values; every RunnerInput literal carries the seat's fence
+// (internal/seat's TestEveryConfigThatCanCarryTheSeatFenceDoes). Every error is
+// a RETRY: nothing has run. notes is the segment's notes on the run's record,
+// which later iterations' launcher seals briefs from ([agentLauncher.notes]).
 func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resumeInput, notes *rowSource,
 ) (input RunnerInput, tel turnTelemetry, err error) {
 	resumedReply, err := resumeReply(in.Run)
@@ -1779,19 +1602,14 @@ func (e *Engine) parkedTurnRunner(ctx context.Context, company *Company, in resu
 
 // heldByBudget is a resumed segment's error as the hold it is, where the seat's
 // budget refused it ([toolloop.ErrBudgetExhausted]) and one of its windows is
-// still refusing or starved ([Engine.budgetHold]) — nil for every other error,
-// and for a refusal whose window has turned over since, which an ordinary
-// retry now runs.
+// still refusing or starved ([Engine.budgetHold]); nil for every other error
+// and for a window that has since turned over.
 //
-// HELD AGAINST THE FLOOR THE LAUNCH WAS REFUSED BELOW ([floorOf]): its brief
-// beside the static floor, the context of the turn's session it continues
-// beside its brief, or, where its fresh brief's floor is held, the static
-// floor or the room below it ([launchFloor.tokens]). Held against the static
-// floor alone, a resume refused below a larger floor was released by a window
-// with room for the static floor into the same refusal. And where a launch was
-// refused below its floor, the hold names the window it was refused in
-// ([sandbox.Refusal.Window]), for the turn's next relaunch to wait for its
-// floor no longer than that window.
+// HELD AGAINST THE FLOOR THE LAUNCH WAS REFUSED BELOW ([floorOf],
+// [launchFloor.tokens]), not the static floor alone: a window with room for the
+// static floor would release a resume into the same refusal below a larger
+// one. The hold names the window it was refused in ([sandbox.Refusal.Window]),
+// so the next relaunch waits for its floor no longer than that window.
 func (e *Engine) heldByBudget(ctx context.Context, company *Company, handle string, err error) *sandbox.HeldError {
 	if !errors.Is(err, toolloop.ErrBudgetExhausted) {
 		return nil
@@ -1801,6 +1619,16 @@ func (e *Engine) heldByBudget(ctx context.Context, company *Company, handle stri
 		return nil
 	}
 	return &sandbox.HeldError{Refusal: refusal, Err: err}
+}
+
+// roundTellings is the tellings of bridged's round among tellings
+// ([sandbox.BridgeLog.Told]), as the runner credits them.
+func roundTellings(bridged sandbox.BridgeLog, tellings []sandbox.CallTelling) []runner.Telling {
+	var out []runner.Telling
+	for _, t := range bridged.Told(tellings) {
+		out = append(out, runner.Telling{Appended: t.Appended, Place: t.Place, Hook: t.Hook})
+	}
+	return out
 }
 
 // runnerResume is the collection a resumed segment's runner takes, read off the
@@ -1835,6 +1663,13 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal,
 		// its box holds them only as that count, so a relaunch carrying the
 		// round on in that box tells them ([runner.Resume.Owed]).
 		Owed: in.Run.Launch.OmittedCalls(),
+		// AND THE LATE CALLS IT COUNTED SO, which that copy is credited no
+		// telling of ([runner.Resume.LateOwed]).
+		LateOwed: in.Run.Launch.LateOmittedCalls(),
+		// AND THE LATE CALLS OF THE LOG'S ROUND A JOB'S SESSION TOOK, off the
+		// row: a continuation of a session holding one is not told it again
+		// ([runner.Resume.Tellings]).
+		Tellings: roundTellings(in.Bridged, in.Run.Steer.Tellings),
 		// AND WHAT THE COPY IN ITS BOX CARRIED, off the job's own record as the
 		// read that collected it measured its newest request, or as the record
 		// carried it along the copy's lineage: a relaunch carrying the round on
@@ -1974,14 +1809,12 @@ func resumeLeads(run sandbox.PendingRun, read sandbox.TurnLeads, seal *sandbox.C
 // run's leads at all ([sandbox.TurnLeads.Unread]): none where it read them,
 // whatever they held, since those it told are among them, marked.
 //
-// THE CHAIN OUTLIVES A READ THAT FAILED. A continuation of the job's session
-// that may lack its brief is to tell those leads again and hand them on, for
-// the job its launch opens to mark, so a continuation of THAT session, which
-// may lack them as well, tells them in turn. Read, they ride the leads
-// themselves ([runner.ResumeLead.Told]); unread, the relaunch says them as not
-// kept and hands their numbers on all the same ([runner.Resume.LeadsUnread]),
-// so the next read that answers tells them rather than leave a session that
-// lacks them told neither them nor that they are missing.
+// THE CHAIN OUTLIVES A READ THAT FAILED. A continuation of a session that may
+// lack its brief tells those leads again and hands them on for the next job to
+// mark, so a continuation of THAT session tells them in turn. Read, they ride
+// the leads ([runner.ResumeLead.Told]); unread, the relaunch says them as not
+// kept and hands their numbers on ([runner.Resume.LeadsUnread]), so the next
+// read that answers tells them rather than leave a session told nothing.
 func unreadLeads(run sandbox.PendingRun, read sandbox.TurnLeads) []int {
 	if !read.Unread {
 		return nil
@@ -2146,30 +1979,15 @@ func runnerLost(lost *sandbox.LostRun) *runner.Lost {
 
 // noteRunEnded sits out the entry a collected run launched on, where the run
 // ended on its vendor's report of a spent plan or a rate limit
-// ([harness.Provider.RunEnded]) — on this node, in the epoch this resume runs
-// in, which is the epoch every launch the resumed turn makes picks its member
-// from.
-//
-// HERE, BECAUSE NOTHING ELSE SEES IT. The run is its harness's own, in a box, and
-// never goes through the entry's runs on this host — the one path that benched
-// an entry. Unread, a reviewer's send-back relaunched the turn into the very
-// plan the run had just spent, and so did every other seat's next launch on
-// the entry, while a reviewer's run on it would have moved the chain on at
-// once. A run that ended otherwise, an entry this epoch does not have —
-// renamed or removed since the launch — and one that is not a harness's
-// bench nothing; a run that succeeded starts the entry's backoff over, as a
-// call that was answered does.
+// ([harness.Provider.RunEnded]), on this node in the epoch the resumed turn's
+// launches pick their member from. HERE, BECAUSE NOTHING ELSE SEES IT: a box's
+// run never passes the entry's runs on this host, the one path that benched an
+// entry, so a send-back would relaunch into the plan just spent.
 //
 // THE ENDING IS THE SIGN-IN'S THE RUN LAUNCHED WITH, never the entry's current
-// one. A run launched before its entry's credential was replaced ran on the
-// old credential to its end, so what it met (a refusal, a spent plan, an
-// answer) says nothing about the new one. Recorded on the entry, a refusal on
-// a revoked token became the NEW sign-in's last failure and readiness verdict
-// (a false `llm_sign_in_refused`, and the assistant refusing the entry for the
-// verdict's ten minutes), and a limit on the old plan benched a new account
-// with quota left. Such an ending records nothing: the old sign-in is no
-// entry's now, and the run itself is carried on with the new one where it was
-// refused ([Engine.signInReplaced]).
+// one: recorded on the entry, a refusal on a revoked token became the NEW
+// sign-in's failure (a false `llm_sign_in_refused`). Such an ending records
+// nothing ([Engine.signInReplaced] carries the run on).
 func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.PendingRun, ended sandbox.RunEnding) {
 	if c == nil || c.Models == nil || run.Launch.ProviderKey == "" ||
 		(ended.Text == "" && ended.Error == "" && ended.Event == "" && ended.Limits == "") {
@@ -2201,30 +2019,17 @@ func (e *Engine) noteRunEnded(ctx context.Context, c *Company, run sandbox.Pendi
 	}
 }
 
-// recordResume owes a finished resumed turn's end to the conversation it was
-// serving when it detached: on its run's record, for the run's ending to
-// record on the executor log once the turn's captures settle
-// ([Engine.oweExecutorEnd]), under the run's own turn and the conversation its
-// row names — the conversation its answer was matched on, never the partition
-// beside it, which for a direct message is another value the conversation's
-// next turn never reads. How it ended — its decision and breach (never the
-// reviewer's last word, which reads `done` after the loop overrode it), whether
-// its reply reached the party waiting and on what, what the reviewer said
-// landed, what stopped a blocked round, and answered, the engine's own answer
-// to a colleague's ask — is what the turn's row on the log keeps beside the
-// session the turn kept ([endingOf]), and what the conversation's next turn is
-// told of it.
+// recordResume owes a finished resumed turn's end on its run's record, for the
+// executor log once the captures settle ([Engine.oweExecutorEnd]), under the
+// conversation the answer was matched on, never the partition beside it. How it
+// ended ([endingOf]; not the reviewer's last word, which reads `done` after the
+// loop overrode it) is what the conversation's next turn is told. A turn that
+// suspended again owes nothing.
 //
-// A turn that suspended again owes nothing: it has not finished, so there is
-// no end to tell. The end that eventually lands comes back through this same
-// frame and is owed then.
-//
-// A REPLY THE RECORD DOES NOT SHOW IS NOT KNOWN TO BE MISSING where a call of
-// the turn's run has an outcome nobody knows — its entry still in flight as
-// the round's calls were read ([sandbox.BridgeLog.InFlight]), or a closed
-// round's record holding one so read, listed ([ledger.Call.Unfinished]) or
-// counted ([ledger.Elided.Unfinished]): that call may be the reply, so the end
-// says its delivery is unknown, never that the turn did not reply.
+// A REPLY THE RECORD DOES NOT SHOW IS NOT KNOWN TO BE MISSING where a call has
+// an unknown outcome ([sandbox.BridgeLog.InFlight], [ledger.Call.Unfinished],
+// [ledger.Elided.Unfinished]): it may be the reply, so the end says delivery is
+// unknown, never that the turn did not reply.
 func (e *Engine) recordResume(ctx context.Context, in resumeInput, res turn.Result, reply turn.Reply,
 	answered colleagueAnswer) {
 	if !res.Suspended {
@@ -2276,15 +2081,12 @@ func resumeTask(in resumeInput) string {
 // resumeInputFor renders a parked run coming back as the loop's own
 // [turn.Input].
 //
-// A NAMED MAPPING for the reason [turnInputFor] is one on the dispatch path,
-// and this literal proved it twice over: every field here is one the resumed
-// loop cannot derive for itself, and each degrades SILENTLY without. A missing
-// History forgets the rounds that closed before the box and re-fires their
-// deliveries; a missing Reply skips every delivery gate; a missing Round hands
-// the turn a whole fresh `max_iterations` and re-numbers rounds the suspended
-// half had already published phase records under. Three of the five come off
-// the parked row rather than off anything in this process, which is precisely
-// why nothing else can notice one going missing.
+// A NAMED MAPPING, as [turnInputFor] is on the dispatch path: every field is one
+// the resumed loop cannot derive and each degrades SILENTLY without. No History
+// re-fires the deliveries of rounds closed before the box; no Reply skips every
+// delivery gate; no Round hands the turn a fresh `max_iterations` and
+// re-numbers rounds already published. Three come off the parked row, so
+// nothing else can notice one missing.
 func resumeInputFor(in resumeInput, reply turn.Reply) turn.Input {
 	return turn.Input{
 		RunID:   in.Run.TurnID,
@@ -2322,55 +2124,18 @@ func resumeReply(run sandbox.PendingRun) (turn.Reply, error) {
 	return reply, nil
 }
 
-// persistSuspension writes a turn's parked state to its row, which
-// is also what OPENS the run to the completion poll, and reports whether the
-// turn is actually coming back.
+// persistSuspension writes a turn's parked state to its row, which OPENS the run
+// to the completion poll ([sandbox.StatusLaunching] is polled by nobody), and
+// reports whether the turn is coming back.
 //
-// Called the moment the turn returns Suspended, because the runner holds the
-// parked state only until its frame unwinds. Until this lands the run sits in
-// [sandbox.StatusLaunching] and nothing polls or claims it — the job is
-// already executing, and a job that finishes first would otherwise be
-// collected against a row with nothing to resume into.
-//
-// EVERY WAY THIS CAN FAIL FAILS THE RUN rather than dropping the suspension: a
-// row with no state is one nothing can resume, and failing here, while the
-// box is still in the engine's hands and the seat's owner is still this
-// process, is far better than leaving a launching row to hold a box until its
-// seat happens to move.
-//
-// # Why it answers, and why the answer is three-valued
-//
-// A caller that has to know whether anything is still working cannot read that
-// off [turn.Result] — every path below leaves it Suspended while settling the
-// run, so the turn's own intent says "coming back" on exactly the endings
-// where nothing is. The working indicator is that caller: driven off the
-// intent it stayed up for the life of the process on every failure here.
-//
-// The three answers are the ordinary three, so the middle one is not collapsed
-// into the loss: (true, nil) the row is open and the poll will resume it;
-// (false, nil) the run is settled and definitively will not; and a non-nil
-// error for the one case nothing can establish — a write that failed MAY have
-// landed, and [sandbox.Coordinator.FailRun] settles only a run still
-// launching, so a row this reports as unwritten can be one the completion poll
-// resumes. The error is for deciding, not for logging: every failure path here
-// has already said what it did and why (see [Engine.failSuspension]), and no
-// caller fails a turn over it — the run is settled either way.
-//
-// WHAT THE TURN HAS WRITTEN SO FAR rides the suspension too (see
-// execstate.State.Written): the segment that finishes the turn may be charged
-// by a sole write, and it can only judge "exactly one" over the whole turn if
-// the half before the park travels with the conversation. So does what the
-// segments so far spent and charged to nothing (execstate.State.Uncharged),
-// for that same finishing segment to pay — see turnspend.go — and what the
-// turn has measured of itself so far (execstate.State.SoFar), for the record
-// that ends it to state the whole turn. And so does what
-// the turn was ASKED (execstate.State.Ask), which the finishing segment's
-// completed-turn event carries and is woken by something else entirely, with
-// who wrote it (execstate.State.AskProvenance), which nothing the finishing
-// segment reads could say again — and who said it, its interactions
-// (execstate.State.Interactions), which that event carries for the post-turn
-// workers that read a settled turn, and which every later segment reads who
-// asked off, as a dispatch does.
+// EVERY FAILURE FAILS THE RUN rather than dropping the suspension: a stateless
+// row cannot be resumed, and failing with the box in hand beats a launching row
+// holding it. THREE-VALUED, since [turn.Result] stays Suspended on every path:
+// (true, nil) the poll will resume it; (false, nil) the run is settled; an error
+// where nothing is established (a failed write MAY have landed, and
+// [sandbox.Coordinator.FailRun] settles only a launching run), for deciding.
+// The turn's written, uncharged and measured state and its ask ride along
+// (execstate.State.Written, Uncharged, SoFar, Ask, AskProvenance, Interactions).
 func (e *Engine) persistSuspension(ctx context.Context, r *runner.Runner, turnID string,
 	tel turnTelemetry, charge segmentCharge,
 ) (bool, error) {
@@ -2520,17 +2285,15 @@ func (e *Engine) failSuspension(ctx context.Context, rt *sandboxRuntime, turnID,
 // launchHold is one executor launch's hand-off of its turn's code holds to the
 // run row it opens ([agentLauncher]).
 //
-// THE SET IS SEALED FROM ITS READ TO THE ROW: the launch reads the turn's set
+// THE SET IS SEALED FROM ITS READ TO THE ROW: the launch reads the set
 // ([turnctx.Holds.Seal]) and hands it to the row it opens
-// ([sandbox.LaunchRequest.CodeHolds]); a hold another call of the turn takes
-// in between waits, and the row's writer is attached the moment the row
-// exists ([sandbox.LaunchRequest.Opened], called after the store opened the
-// job and before any box exists) — from then on every hold is on the row
-// before its request. A RELAUNCH, its row's writer already attached, reads the
-// set unsealed: the row exists, and its reset unions what it is handed with
-// what the row holds. A launch that fails before the row existed unseals the
-// set, and one that fails after it detaches the writer: the coordinator
-// abandons that row, and the turn runs on holding in memory.
+// ([sandbox.LaunchRequest.CodeHolds]); a hold another call takes in between
+// waits, and the row's writer attaches once the row exists
+// ([sandbox.LaunchRequest.Opened], before any box), after which every hold is
+// on the row before its request. A RELAUNCH reads the set unsealed (its reset
+// unions it with the row's). A launch failing before the row existed unseals
+// the set; one failing after detaches the writer, the row is abandoned and the
+// turn holds in memory.
 type launchHold struct {
 	set     *turnctx.Holds
 	pending sandbox.PendingStore
@@ -2568,28 +2331,18 @@ func (h *launchHold) settle(err error) {
 	}
 }
 
-// launchFence is the seat lease this node writes on a seat's behalf under —
-// a launch, the record of an answer, the claim of a completion or an answer —
-// which the run's row is stamped with and every later write the node makes on
-// it carries; see [sandbox.CoordinatorOptions.Lease]. The seat's next holder
-// fences the row to its own, newer lease, and from then on this node's writes
-// are refused rather than landing under it: a release that revives a claim the
-// holder has already reaped, or a resumed turn taking an answer the holder has
-// given back to the run or is handing back to the seat.
+// launchFence is the seat lease this node writes on a seat's behalf under: the
+// run's row is stamped with it and every later write carries it
+// ([sandbox.CoordinatorOptions.Lease]). The seat's next holder fences the row to
+// its newer lease, and this node's writes are then refused. The owner is
+// [seat.Host.Owner], which the acquisition recovers its runs under.
 //
-// The lease's OWN owner, the incarnation [seat.Host.Owner] names, which is the
-// owner the seat's acquisition recovers its runs under — so a node fencing
-// its own rows after a restart within one lease writes the same token.
-//
-// THREE ANSWERS. The seat's lease, held. The zero fence, held — an unfenced
-// write — on a node with no seat host, which has no next holder to be fenced
-// out by. And NOT HELD on a node whose seat host does not hold the seat, which
-// the coordinator refuses every write for ([sandbox.ErrSeatNotHeld]). That last
-// used to be the zero fence too, and the zero fence constrains nothing: a node
-// that had noticed it lost the seat recorded, claimed and took a person's answer
-// past the fence its successor had put on the run, and spent it on a turn the
-// seat's lease no longer stood behind. A node that has NOT noticed answers its
-// old lease, which the successor's fence outranks in the store.
+// THREE ANSWERS: the lease, held; the zero fence, held (an unfenced write), on a
+// node with no seat host; and NOT HELD where the host does not hold the seat,
+// for which every write is refused ([sandbox.ErrSeatNotHeld]). Not-held must not
+// be the zero fence, which constrains nothing: a node that noticed it lost the
+// seat would take a person's answer past its successor's fence. A node that has
+// NOT noticed answers its old lease, which the successor's fence outranks.
 func (e *Engine) launchFence(handle string) (sandbox.Fence, bool) {
 	if e.node == nil {
 		return sandbox.Fence{}, true
@@ -2603,32 +2356,15 @@ func (e *Engine) launchFence(handle string) (sandbox.Fence, bool) {
 }
 
 // sandboxTurnRef is what a detached run's durable row records about the turn
-// that launched it.
+// that launched it: the resume, days later in another process, can recover none
+// of it, and copies drift (one put the partition in both conversation fields,
+// which compiles because both are strings).
 //
-// A BUILDER OF ITS OWN rather than a literal in the launch, because it is the
-// row's whole account of the turn and the resume can recover none of it: it
-// happens in another process, days later, from a trigger that is long gone.
-// Written out at two launch sites once, it drifted inside a single commit: one
-// copy put the partition in both conversation fields, which compiles, because
-// both are strings.
-//
-// EVERY FACT OFF THE TURN'S OWN EPOCH, never the engine's current company. An
-// apply landing mid-turn is the next epoch, and a company renamed there
-// derives a DIFFERENT agent id for the same seat — so a row taking its id from
-// the live company named an agent none of that turn's other events did, and
-// its announcements split the seat in two on every surface that groups by id.
-//
-// The ROLE NAME is the caller's, because it already holds the seat it resolved
-// and the turn's copy is the same pointer — nothing is gained by deriving it a
-// second time here.
-//
-// The TRACE comes from the ACTIVE span, so the box's spans nest under the call
-// that started them rather than appearing as unrelated work minutes later.
-// TurnRef carried these two since the OTLP receiver was written and a launch
-// once left both empty: PendingRun.TraceID was always "", RunEnv
-// minted no telemetry token for any launch (it refuses to scope one to an
-// empty trace, which is the one property that scoping has), and describeResume
-// filed every resumed turn under no trace at all.
+// EVERY FACT OFF THE TURN'S OWN EPOCH, never the engine's current company: a
+// company renamed by an apply mid-turn derives a DIFFERENT agent id for the same
+// seat, splitting it in two on every surface grouping by id. The TRACE comes
+// from the ACTIVE span so the box's spans nest under the call that started
+// them; an empty trace id gets no telemetry token (RunEnv refuses to scope one).
 func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 	ask *sandbox.ColleagueAsk,
 ) sandbox.TurnRef {
@@ -2680,43 +2416,16 @@ func sandboxTurnRef(ctx context.Context, t *turnctx.Turn, role string,
 
 // sandboxMCP renders the seat's SCOPED harness MCP surface.
 //
-// Only the servers role.sandbox.mcp.servers names — never the seat's whole MCP
-// surface by default. A harness inside a box reaches whatever it is given
-// with no per-tool control left, so what it is given is the decision, and it
-// is made here rather than inherited. And never one the company has turned off
-// ([config.MCPServer.IsEnabled]): the listing stays in the seat's block for the
-// day it is turned back on, and gives the box nothing until then. Nor one the
-// seat is not granted ([config.MCPServer.Grants]): a box reaches a server's
-// tools as surely as the seat's surface does, so it is held to the one grant
-// the surface is. Nor one whose address, resolved, is one the engine would not
-// dial its own child of the server at ([config.MCPAddressProblem]). Nor one
-// any tool of which is held back from the agents
-// ([config.MCPToolPolicy.AllowsEveryTool]): the harness in the box dials the
-// server itself, past the engine, so it would reach every tool the server
-// lists, and the seat reaches the allowed ones over the bridge anyway.
+// Only the servers role.sandbox.mcp.servers names, as a box has no per-tool
+// control left; never one turned off ([config.MCPServer.IsEnabled]), not granted
+// ([config.MCPServer.Grants]), at an address the engine would not dial
+// ([config.MCPAddressProblem]) or with any tool held back
+// ([config.MCPToolPolicy.AllowsEveryTool]): the box dials past the engine.
 //
-// The credentials are the seat's OWN, inherited down the org chart at build
-// time, so a seat gets the tokens it is entitled to and no others.
-//
-// RESOLVED HERE, like the run env and for the same reason: an in-box server
-// has to authenticate, and Tier B stores its references verbatim. Only the
-// scoped servers': a block the box is not given is nothing this run resolves
-// or reports. And resolved by the rule every start of a server passes
-// ([resolveServer]), from the same values the engine's own child of the
-// server is started with: the server's own env, headers and url as well as the
-// seat's block. They were once handed over verbatim, `${VAR}` and all, and
-// written into the harness's config that way — OpenCode reads `{env:VAR}` and not
-// `${VAR}`, and Claude Code expands one from the run env, which holds none of
-// the company's secrets.
-//
-// SO A SERVER WITH A VALUE THAT DOES NOT RESOLVE IS NOT OFFERED: an in-box
-// server handed an empty token refuses to start or acts as nobody, and the
-// agent would spend a round finding that out — the reason [sandbox.RenderMCP]
-// skips a server it cannot render. It used to be offered with a warning that
-// it "will not authenticate". What was withheld comes back beside the
-// servers, for the caller to judge and say ([Engine.boxServers]); env is the
-// seat's own resolution ([Engine.seatResolver]) and mint what is minted or
-// issued for the seat ([seatMint]).
+// RESOLVED HERE, for the scoped servers, with the seat's own inherited
+// credentials, by the rule every server start passes ([resolveServer]): the
+// harness cannot expand `${VAR}`. A SERVER WHOSE VALUE DOES NOT RESOLVE IS NOT
+// OFFERED (an empty token acts as nobody); [Engine.boxServers] says it.
 func sandboxMCP(
 	env *config.Resolver, c *Company, seat *org.Role, settings *org.RoleSandbox,
 	mint *seatMint,
@@ -2907,31 +2616,14 @@ func pauseTTL(settings *org.RoleSandbox) *time.Duration {
 // seatSandbox is a seat's own box settings — `role.sandbox` — or nil for a seat
 // with none, whose boxes take the catalogue's alone.
 //
-// KEYED ON THE HANDLE, which is what makes the answer single-valued. Two seats
-// may carry one display NAME — it is an admission rule, so a revision stored
-// before that rule runs with duplicates and a write merely cannot add one —
-// and a walk matching on it returned whichever came first. A seat with no
-// sandbox block would then be handed its namesake's, which is an executor on
-// another seat's setup steps, its credentials and its box.
+// KEYED ON THE HANDLE, which is unique by a runnable rule: two seats may share a
+// display NAME, and matching on it would hand a seat its namesake's block (its
+// setup steps, credentials and box).
 //
-// A handle is unique by a RUNNABLE rule instead: a company carrying two is
-// refused outright, so there is no document on which this can be ambiguous.
-// ONE LOOKUP, NOT A WALK OF ITS OWN, because the seat is what carries the
-// block now.
-//
-// It used to walk the company DOCUMENT — first only the top-level `roles:`,
-// which answered nil for every seat in a unit and refused each of them with
-// "this seat's sandbox is not enabled" on a seat whose block said otherwise;
-// then every seat at any depth, breaking at the first match. Both were
-// walking the wrong thing: a stored revision carries no seats at all, so the
-// walk returned nil for EVERY seat and code work became silently unavailable
-// to the whole company.
-//
-// The seat's own [org.Role] holds it, so this asks the org the company is
-// running, through the one lookup every other layer resolves a handle with —
-// aliases and all. The "two seats with one handle" hazard the walk had to
-// reason about cannot arise there, because that lookup answers a live handle
-// before any retired one and a company carrying two live ones is refused.
+// ONE LOOKUP, NOT A WALK OF THE DOCUMENT: the seat's [org.Role] holds the block,
+// so this asks the running org through the lookup every layer resolves handles
+// with. A stored revision carries no seats, so a document walk found nil for
+// EVERY seat and silently disabled code work.
 func seatSandbox(c *Company, handle string) *org.RoleSandbox {
 	if c == nil || c.Org == nil {
 		return nil
@@ -2991,29 +2683,15 @@ func (e *Engine) startSandboxFor(ctx context.Context, c *Company) error {
 }
 
 // startSandbox brings up this node's code-work machinery for the first company
-// whose catalogue builds a manager, and reports whether this call brought it
-// up.
+// whose catalogue builds a manager, and reports whether this call did.
 //
-// ONCE PER PROCESS, from whichever comes first: the boot of a company that
-// reaches a sandbox cell, or the apply of the first revision that does. It is
-// the second of those that had no path at all — the coordinator was built at
-// boot or never, so a node started unconfigured (the quickstart's own route)
-// or on a company with no providers.sandbox served every later revision's
-// seats with no executor and no way to finish a run a peer had left on one of
-// its seats, until the process restarted. Once up, a revision only swaps the
-// manager ([Engine.Apply]'s `sandbox` stage), because the busy set and the
-// poll loop are this process's.
-//
-// A NIL MANAGER IS NOT A START: the company reaches no cell, and the runtime
-// waits for one that does.
-//
-// SPLIT FROM THE POLL on the boot path, where the two need different things to
-// exist: the coordinator must exist before the node's seats take a turn, every
-// one of which launches its executor through it, and the poll needs the node,
-// whose incarnation its fleet-singleton duty is claimed under. On an apply the node already
-// exists, so this starts the poll too — and PREPARES THE SEATS this node
-// already holds, which took their leases before there was a control topic to
-// attach or a run to recover ([Engine.prepareHeldSeats]).
+// ONCE PER PROCESS, from a boot or the first apply that reaches a sandbox cell,
+// so an unconfigured node still gains code work. Afterwards a revision only
+// swaps the manager ([Engine.Apply]'s `sandbox` stage). A NIL MANAGER IS NOT A
+// START. SPLIT FROM THE POLL on boot: the coordinator must exist before any seat
+// takes a turn, and the poll needs the node. On an apply the node exists, so
+// this starts the poll too and PREPARES THE HELD SEATS, which took their leases
+// before there was a control topic ([Engine.prepareHeldSeats]).
 func (e *Engine) startSandbox(ctx context.Context, manager *sandbox.Manager) (bool, error) {
 	if manager == nil {
 		return false, nil
@@ -3037,21 +2715,15 @@ func (e *Engine) startSandbox(ctx context.Context, manager *sandbox.Manager) (bo
 	return true, nil
 }
 
-// publishSandbox builds this process's runtime over manager and publishes it,
-// and answers it; nil where one is published already, which this call leaves
-// as it is.
+// publishSandbox builds this process's runtime over manager and publishes it;
+// nil where one is published already. PUBLISHED BEFORE THE SEATS ARE PREPARED
+// ([Engine.startSandbox]), so a seat acquired from then on prepares itself.
 //
-// PUBLISHED BEFORE THE SEATS ARE PREPARED ([Engine.startSandbox]), so a seat
-// acquired from then on prepares itself through its own hook, and the walk
-// over the held seats finds it already attached rather than racing it.
-//
-// BUILT AND PUBLISHED UNDER ONE LOCK, never built to lose a race: the
-// coordinator holds this process's taker lease from the moment it is built
-// ([sandbox.CoordinatorOptions.Incarnation]), under the one incarnation the
-// process has, so a second one built beside the published one would claim the
-// same lease at the same epoch — and, stopped as the loser of a
-// compare-and-swap, give it back under the published one's keeps, which every
-// node waiting on their captures would then read as a taker gone.
+// BUILT AND PUBLISHED UNDER ONE LOCK, never built to lose a race: a coordinator
+// holds the process's taker lease from construction
+// ([sandbox.CoordinatorOptions.Incarnation]), so a second beside the published
+// one would claim the same lease and, stopped as the CAS loser, give it back
+// under the published one's keeps, which waiting nodes would read as a taker gone.
 func (e *Engine) publishSandbox(manager *sandbox.Manager) (*sandboxRuntime, error) {
 	e.sandboxStart.Lock()
 	defer e.sandboxStart.Unlock()
@@ -3218,24 +2890,16 @@ func (e *Engine) coordinatorOptions(pending sandbox.PendingStore, manager *sandb
 		// [sandbox.CoordinatorOptions.Refresh] and issued.go).
 		Refresh: e.refreshRunTokens,
 	}
-	// AND THIS PROCESS'S TAKER LEASE, held in this node's lease store — the
-	// one its seats and presence are leased in — under the ENGINE'S OWN
-	// incarnation, minted once in [New] (the node is built after this
-	// coordinator on the boot path, [Engine.startSandbox]), at the seat lease
-	// TTL in force, so a stopped process is read as gone as fast as its seats
-	// move (the coordinator holds the TTL to coord.MaxDutyTTL and renews four
-	// times a TTL, [sandbox.CoordinatorOptions.TakerTTL]). Every capture the
-	// coordinator begins names it, and a capture another process left begun
-	// is settled from the executor log once that process's lease lapses,
-	// rather than waited out for its whole budget (see
-	// [sandbox.SessionCapture.Taker]). The coordinator holds it until its last
-	// keep has ended, which [Engine.stopSandbox] waits for, and gives it back
-	// on the context it claimed it on, which no stop reaches — so through
-	// [holdLeases], whose give-back is a step of the stop's one allowance once
-	// the teardown has begun, as a hold's is. An engine built with no lease
-	// store holds none, and the incarnation comes with the store
-	// ([sandbox.CoordinatorOptions.Incarnation]): its captures name no taker,
-	// and are waited for by their age.
+	// AND THIS PROCESS'S TAKER LEASE, in the node's lease store beside its seats
+	// and presence, under the ENGINE'S OWN incarnation minted once in [New] (the
+	// node is built after this coordinator on boot), at the seat lease TTL so a
+	// stopped process reads as gone as fast as its seats move
+	// ([sandbox.CoordinatorOptions.TakerTTL]). Every capture names it, and one
+	// another process left begun is settled from the executor log once that
+	// lease lapses ([sandbox.SessionCapture.Taker]). Held until the last keep
+	// ends ([Engine.stopSandbox]) and given back on the claim's context, which no
+	// stop reaches, so through [holdLeases]. With no lease store captures name no
+	// taker and are waited for by age ([sandbox.CoordinatorOptions.Incarnation]).
 	if e.backends.Coord != nil {
 		opts.Incarnation, opts.TakerTTL = e.incarnation, e.leaseTTL
 		opts.Takers = holdLeases{Backend: e.backends.Coord, engine: e}
@@ -3423,15 +3087,12 @@ func (e *Engine) sandboxWaiterOptions(
 // still owed its resume included — and the next owner of its seat recovers it,
 // while a box on this host waits for this node's next start.
 //
-// AFTER THE DRAIN, which is the order [Engine.Stop] and [Engine.teardown] keep,
-// and only there: the drain gives presence up at its first step while the
-// node's turns finish and their captures upload, and the coordinator's taker
-// lease is held through all of it, since a peer settles a capture whose
-// taker's lease is gone. The coordinator's stop lets the keeps still under way
-// end, and releases its taker lease only once the last has
-// ([sandbox.Coordinator.Stop]) — through [holdLeases], so the give-back is a
-// step of the one allowance every lease the stop gives back shares
-// ([Engine.stopping]).
+// AFTER THE DRAIN, the order [Engine.Stop] and [Engine.teardown] keep: the drain
+// gives presence up first while turns finish and captures upload, and the taker
+// lease is held through it, since a peer settles a capture whose taker's lease
+// is gone. The stop lets running keeps end and releases the lease after the
+// last ([sandbox.Coordinator.Stop]), through [holdLeases], one step of the
+// allowance every lease give-back shares ([Engine.stopping]).
 func (e *Engine) stopSandbox() {
 	for _, w := range []*sandbox.Waiter{e.sandboxWaiter.Load(), e.sandboxHostWaiter.Load()} {
 		if w != nil {
@@ -3594,17 +3255,10 @@ func (e *Engine) turnGate() sandbox.TurnGate {
 // would only fail on ([Engine.seatCannotRun]).
 //
 // The condition is what the control topic hands a refused completion back by
-// ([controlOutcome]), and the cause stays reachable through the refusal for
-// whoever logs or tests it.
-//
-// AN ENGINE WITH NO NODE ADMITS UNDER THE CALLER'S CONTEXT: it has no
-// admission to pass, as [Engine.launchFence] answers it with the unfenced
-// write and the coordinator's own rule answers a coordinator with no gate
-// ([sandbox.CoordinatorOptions.Gate]). That engine is one a case builds by
-// hand; every engine [New] builds has its node before anything can resume. It
-// is asked HERE, at the resume, and not where the gate is built
-// ([Engine.turnGate]): boot builds the coordinator before it assigns the node,
-// so a gate chosen by looking then would be no gate on every node.
+// ([controlOutcome]). AN ENGINE WITH NO NODE ADMITS UNDER THE CALLER'S CONTEXT
+// (only a hand-built one lacks it). The node is asked HERE, not where the gate
+// is built ([Engine.turnGate]): boot builds the coordinator before assigning
+// the node, so choosing then would leave every node ungated.
 func (e *Engine) admitResume(ctx context.Context, handle string, route sandbox.ResumeRoute) (context.Context, func(), error) {
 	if e.node == nil {
 		return ctx, func() {}, nil
@@ -3635,58 +3289,17 @@ func (e *Engine) admitResume(ctx context.Context, handle string, route sandbox.R
 }
 
 // seatCannotRun reports whether the turn route resumes on handle's seat would
-// only fail on a condition that ends at an instant, and if so what it waits
-// on: the seat's budget, a park this node holds the seat in for its models'
-// limit ([Engine.providerParkRefusal]), or a usage limit every model its first
-// call could take already reported ([Engine.providerRefusing]).
+// only fail on a condition that ends at an instant, and what it waits on: the
+// budget, a park for its models' limit ([Engine.providerParkRefusal]), or a
+// limit every model of its first call reported ([Engine.providerRefusing]).
 //
-// BY ROUTE, because the first call differs, and so does what the resume has
-// to do before it makes it:
-//
-//   - a COMPLETION is asked no budget and no limit its models know. Its job
-//     is over and its tokens are spent, so it is claimed and collected first:
-//     charged in the window it ran in and its box paused, and only then held
-//     on its row if the budget refuses its review or its relaunch
-//     ([Engine.heldByBudget], [sandbox.ErrResumeHeld]), or on this node, its
-//     seat parked, if its review's models sit out a limit
-//     ([Engine.collectedRefusal]). Refused here, before its claim, a
-//     completion stayed uncollected until the condition cleared: its spend
-//     was charged late, into the next window, and the waiter kept its box
-//     awake polling it meanwhile, for the rest of a full window or the hour a
-//     limit's entry sits out, and a limited seat was never parked. Its models
-//     are the reviewer's chain, `llm_review` where the seat names one.
-//   - an ANSWER'S first call is the relaunch that carries the run on, and it
-//     has nothing to collect: its budget refuses on a window full or too
-//     short for that launch ([Engine.budgetHold]), which would refuse the
-//     launch as surely, and its models are the members of the executor chain
-//     a launch can take ([executorRunners]).
-//
-// THE PARK REFUSES BOTH, before the claim. A seat parked here holds no job no
-// collection has read: only a turn of the seat parks it, a delivery's, which
-// runs only while none of the seat's jobs holds it, or a resume's, which
-// collected its job before it parked, and a parked seat starts no turn that
-// could launch another. So a completion the park refuses is one already
-// collected, charged and asleep, and refused here it is not collected again at
-// each probe the limit outlasts.
-//
-// THE ENGINE'S FAILURE PAUSE REFUSES A COMPLETION THE SAME WAY, before the
-// claim ([Engine.failurePauseRefusal]), and for the same reason: the pause was
-// taken by a turn of the seat, a delivery's while no job held the seat, or the
-// resume that collected the job and met the failure, so the job is already
-// collected.
-//
-// A call the turn makes later (a review's send-back to a spent runner, a
-// relaunch below the floor) meets its own refusal mid-turn, and the resume
-// waits on it there ([resumeRefusal], [Engine.heldByBudget]).
-//
-// ASKED BY THE TURN GATE, so every resume asks it before it claims its run,
-// whatever brought it: a box's completion, a person's answer on its inline
-// attempt or its retry, an answer queued on the control topic. Asked of the
-// counters and of what the entries already know, so it launches nothing.
-// A completion it refuses is acknowledged ([controlOutcome]) and kept for the
-// signal that ends the wait, and the waiter announces it again meanwhile, so
-// it spends none of its deliveries; it used to reach the model, revert, and be
-// NAKed through its whole delivery budget in about ten minutes.
+// BY ROUTE: a COMPLETION is asked no budget and no limit, its tokens being
+// spent: it is collected first, then held on its row ([Engine.heldByBudget]) or
+// on this node ([Engine.collectedRefusal]); refused before the claim, its spend
+// landed in the next window. An ANSWER'S first call is the relaunch
+// ([Engine.budgetHold], [executorRunners]). THE PARK AND THE FAILURE PAUSE
+// ([Engine.failurePauseRefusal]) REFUSE A COMPLETION BEFORE THE CLAIM, its job
+// being already collected; a refused one is acknowledged ([controlOutcome]).
 func (e *Engine) seatCannotRun(ctx context.Context, handle string, route sandbox.ResumeRoute) (sandbox.Refusal, bool) {
 	// A COMPLETION ON A SEAT A PERSON STOPPED is refused nothing here: the
 	// turn it re-enters is closed as stopped at its first round by the seat's
@@ -3809,21 +3422,16 @@ func (e *Engine) judgeResumeFailure(ctx context.Context, company *Company, in re
 		return resumeFailure{stop: stop, stopWhy: fmt.Sprintf("a person stopped the seat while "+
 			"its resumed turn met a wait: %v", err)}
 	}
-	// A BUDGET THAT REFUSES THE SEGMENT HOLDS IT, before anything decides it
-	// is lost: the round's relaunch (a reviewer's send-back, or the run an
-	// answer carries on) or a call of its own was refused because the
-	// seat's window is full or too short for a launch. A window turns over,
-	// so this is a wait and not a failure: handed back for an ordinary
-	// retry, every attempt re-collected the job and ran its review again
-	// into the same refusal. Held, the job waits collected in its paused
-	// box, the seat held behind it, until the window that refuses it turns
-	// over, or a revision raises its ceiling, and is resumed then
-	// ([sandbox.ErrResumeHeld]); an answer's resume is reverted and waits on
-	// the same refusal, uncharged, in its own series, whose every attempt
-	// the turn gate asks it of ([Engine.seatCannotRun]). AHEAD OF THE
-	// ABANDON, so a segment that wrote in its own attempt waits for its
-	// window too rather than lose the run's work to one; the run's own
-	// calls, made before the segment began, are no such write
+	// A BUDGET THAT REFUSES THE SEGMENT HOLDS IT, before anything decides it is
+	// lost: the relaunch or a call of its own was refused because the seat's
+	// window is full or too short for a launch. A window turns over, so this is
+	// a wait, not a failure: an ordinary retry re-collected the job and re-ran
+	// its review into the same refusal. Held, the job waits collected in its
+	// paused box until the window turns over or a revision raises the ceiling
+	// ([sandbox.ErrResumeHeld]); an answer's resume is reverted and waits
+	// uncharged on the same refusal ([Engine.seatCannotRun]). AHEAD OF THE
+	// ABANDON, so a segment that wrote in its own attempt waits too rather than
+	// lose the run's work; calls made before the segment are no such write
 	// ([turn.Work.Inherited]).
 	if held := e.heldByBudget(ctx, company, handle, err); held != nil {
 		return resumeFailure{held: held}
@@ -3886,29 +3494,17 @@ func resumeRefusal(err error) (sandbox.Refusal, bool) {
 }
 
 // mayResumeAnswer is the coordinator's [sandbox.Admission]: whether a seat may
-// run a RETRIED resume of a recorded answer now, and if not, what that waits
-// on.
+// run a RETRIED resume of a recorded answer now, and if not, what that waits on.
 //
-// THE SCREENING'S OWN CONDITIONS, read the way a delivery reads them, because
-// the first attempt runs inside the delivery that carried the answer and so
-// passed them; a retry runs outside any delivery and must not be the one way a
-// turn starts on a seat whose lease is not fresh, that a person paused, that
-// has no model, or whose node refuses new work. The seat's budget and its
-// models' limit are the turn gate's, which every attempt passes, the inline
-// one included, and which asks them of the relaunch an answer's turn makes
-// ([Engine.seatCannotRun]). Whether another of the seat's executors holds it
-// is the coordinator's own count, so the coordinator asks that itself first
-// ([sandbox.SeatCoding]), and whether another of its turns is running is the
-// node's, asked at the same gate ([Engine.admitResume]): an answer by turn
-// arrives on the seat's control topic at any moment of its day, and is
-// resumed only once the seat is free of both.
+// THE SCREENING'S OWN CONDITIONS, as a delivery reads them: a retry runs outside
+// any delivery and must not start a turn on a seat whose lease is stale, that a
+// person paused, that has no model, or whose node refuses new work. Budget and
+// model limit are the turn gate's ([Engine.seatCannotRun]); another executor
+// holding the seat is the coordinator's count ([sandbox.SeatCoding]).
 //
 // EACH REFUSAL NAMES WHAT IT WAITS ON, so the retry waits for that rather than
-// re-checking on a timer (see [sandbox.Coordinator.Readmit]). Ownership is an
-// event (the seat host reports the seat established, or its admission back
-// after a blip, node.Config.SeatAdmitted) with one heartbeat on the clock
-// behind it for a renew that was merely late. The rest are events this node
-// observes and passes on in [Engine.readmitResumes]'s callers.
+// polling ([sandbox.Coordinator.Readmit]). Ownership is an event
+// (node.Config.SeatAdmitted) with one heartbeat behind it for a late renew.
 func (e *Engine) mayResumeAnswer(_ context.Context, handle string) (sandbox.Refusal, bool) {
 	c := e.conditionsFor(nil)(handle)
 	switch {
@@ -4237,20 +3833,13 @@ func (e *Engine) markSandboxSeat(handle string, attached bool) {
 // of its preparation, when the runtime comes up after they were taken.
 //
 // A SEAT TAKEN BEFORE THE RUNTIME EXISTED attached no control topic and
-// recovered no run, because its acquisition had nothing to attach them to. Left
-// so, the first run it launched under the revision that brought the runtime
-// would publish its completion to a topic nothing on this node consumes, and a
-// run a peer left on it would be polled by nobody here: the seat held the
-// parked turn for ever and never resumed it.
+// recovered no run: its completions would go to a topic nothing here consumes
+// and a run a peer left would be polled by nobody.
 //
-// UNDER EACH SEAT'S OWN LOCK, the one its acquisition and release run under, so
-// a seat claimed or handed on while this walks is prepared exactly once or not
-// at all ([seat.Host.WithHeldSeat]).
-//
-// A SEAT THAT CANNOT BE PREPARED IS HANDED BACK, exactly as an acquisition that
-// failed the same step is refused: its next acquisition, here or on a peer,
-// runs the whole preparation again. Voluntarily — the lease is good and the turn
-// in flight finishes — which is [seat.ReasonUnprepared].
+// UNDER EACH SEAT'S OWN LOCK ([seat.Host.WithHeldSeat]), so a seat claimed or
+// handed on mid-walk is prepared exactly once or not at all. A SEAT THAT CANNOT
+// BE PREPARED IS HANDED BACK voluntarily ([seat.ReasonUnprepared]), so its next
+// acquisition runs the whole preparation again.
 func (e *Engine) prepareHeldSeats(ctx context.Context, rt *sandboxRuntime) {
 	host := e.node.Host()
 	// THE SEATS THEMSELVES, as the host recorded them at the claim: the
@@ -4273,20 +3862,15 @@ func (e *Engine) prepareHeldSeats(ctx context.Context, rt *sandboxRuntime) {
 
 // publishSeatLifecycle announces a seat arriving on or leaving this node.
 //
-// LIVE-ONLY, and deliberately: placement moves seats between nodes on every
-// rebalance, so a durable row per claim would fill the audit log with a fact
-// about scheduling rather than about the company — which is why neither type
-// is in [events.Category]'s map. What reads them is the live seat state, where
-// "this seat is running here now" is exactly the question.
+// LIVE-ONLY, and deliberately: placement moves seats on every rebalance, so a
+// durable row per claim would fill the audit log with scheduling, not company,
+// facts; hence neither type is in [events.Category]'s map.
 //
-// THE SEAT'S AGENT ID under `agent_id`, because that is what every other
-// seat-level event carries there and what the projection keys a seat by. It
-// carried the HANDLE, so the one field the projection reads its key from meant
-// a different thing on these two types than on every other: a seat's arrival
-// and its first turn landed under two identities. Neither a handle nor a name
-// can stand in for the id — a name is prose two seats may share, and the
-// projection keys every other seat-level event on the id (ADR-0013). The
-// handle and the name ride along for a reader.
+// THE SEAT'S AGENT ID under `agent_id`, as every other seat-level event carries
+// it and the projection keys a seat by it (ADR-0013): a handle there would put a
+// seat's arrival and its first turn under two identities. Neither a handle nor
+// a name can stand in for the id (a name is prose two seats may share); both
+// ride along for a reader.
 func (e *Engine) publishSeatLifecycle(ctx context.Context, handle string,
 	payload events.Payload) {
 
@@ -4338,20 +3922,15 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// THE INBOX'S ATTACHMENT, which the node's detach has ended: a hold asked
 	// from here names none, and the queue refuses it (seatinbox.go).
 	e.detachInbox(seat.ID)
-	// FIRST, while the queue is still reachable and before anything this
-	// release tears down: a seat that went away with no event left its
-	// last state standing on every dashboard — stuck "working" in a phase
-	// that ended, because `terminated` was a state nothing could reach.
+	// FIRST, while the queue is reachable and before the teardown: a seat gone
+	// with no event stays "working" on every dashboard.
 	//
-	// BESIDE THE TEARDOWN BELOW rather than in front of it, because the
-	// event travels on the stream and a stream that will not acknowledge
-	// holds it for its whole bound ([lifecyclePublishBudget]), which the
-	// seat's teardown — its last memory publish among it — has no reason to
-	// wait out. And JOINED BEFORE THIS RETURNS, which is before the host
-	// gives the seat's lease back: a peer that takes the seat over then
-	// announces its `agent_spawned` after this node's `agent_terminated`,
-	// never before it, and the live projection, which keys on the role,
-	// would otherwise show a running seat as terminated.
+	// BESIDE THE TEARDOWN rather than ahead of it: a stream that will not
+	// acknowledge holds the event for [lifecyclePublishBudget], which the
+	// teardown has no reason to wait out. JOINED BEFORE THIS RETURNS, which is
+	// before the lease is given back, so a peer taking over announces
+	// `agent_spawned` after this node's `agent_terminated`, never before, and
+	// the live projection keyed on the role never shows a running seat terminated.
 	var terminated sync.WaitGroup
 	defer terminated.Wait()
 	terminated.Go(func() {
@@ -4389,50 +3968,30 @@ func (e *Engine) releaseSeat(ctx context.Context, seat placement.Seat) {
 	// without waiting out a call.
 	e.bridge.ReleaseSeat(seat.ID)
 
-	// AND THE SEAT'S WORKING INDICATORS, for the reason the event above
-	// exists: a seat that went away with no signal leaves its last state
-	// standing, and on a chat surface that state is a live re-assertion
-	// rather than a stale row. A turn that suspended into a detached
-	// executor deliberately leaves its indicator up, and the resume lands on
-	// whichever node holds the seat when the box reports — so a node that has
-	// handed the seat on would otherwise go on saying "is thinking…" every
-	// refresh interval, for a turn it is not running, until the process died.
-	//
-	// The clear has to go out even when the release is a cancelled drain,
-	// and a chat instance that has stopped answering must cost the drain
-	// seconds rather than a client timeout per seat — both of which the
-	// driver sees to itself, detaching and bounding each request it makes
-	// (see [notify.StatusDriver.ClearFor]).
+	// AND THE SEAT'S WORKING INDICATORS: on a chat surface a left state is a
+	// live re-assertion. A turn suspended into a detached executor leaves its
+	// indicator up and resumes on whichever node holds the seat, so a node that
+	// handed the seat on would keep saying "is thinking…" until the process died.
+	// The clear goes out even on a cancelled drain, and a dead chat instance
+	// costs seconds, not a client timeout per seat: the driver detaches and
+	// bounds each request itself ([notify.StatusDriver.ClearFor]).
 	e.Status().ClearFor(ctx, handle)
 
 	// REFLECTION FIRST, so nothing new writes the seat's memory here after
 	// the flush below.
 	e.detachSeatReflection(ctx, seat)
 
-	// A LAST TURN, then forget the seat ([releaseSeatMemory]). The seat's
-	// holding turns to releasing first, so the memory sync cycle stops
-	// publishing it at its next row and the flush alone carries it from
-	// here, and a seat whose hydration failed or never ran has no holding
-	// and flushes nothing (crewlet/crewlet#511). The flush carries what the cycles have
-	// not, from the marks they left, before the successor hydrates: what the
-	// seat wrote while held here first, then its profiles, skills and
-	// onboarding marker, sent whole, then, while the bound has time, the
-	// rows this node held for the seat when it took it, which the changelog
-	// mostly holds already ([flushSeatMemory]). It has [memoryFlushTimeout],
-	// one broker round trip a row, and what it does not reach of the first
-	// two is lost to the successor as a crash loses it. That is more than
-	// the last cycle's writes when the seat's profiles and skills, sent
-	// whole, outlast the bound (crewlet/crewlet#1040), behind a burst larger
-	// than the bound carries (crewlet/crewlet#1041), and behind a row larger
-	// than the broker takes, at which every pass of the seat that meets it
-	// fails (crewlet/crewlet#349); and the row a cycle was sending as the
-	// release began can still land after the flush's copy of it. Forgetting
-	// the seat ends its holding and drops its marks and boundary, which
-	// makes the seat's next holding here take a new boundary and carry
-	// back, after what it writes, everything this node holds for it, as a
-	// restart does, which is what puts this node's rows back on a changelog
-	// an operator accepted after a recreation, or one restored while the
-	// node ran.
+	// A LAST TURN, then forget the seat ([releaseSeatMemory]). The holding turns
+	// to releasing first, so the sync cycle stops publishing it and the flush
+	// alone carries it; a seat whose hydration failed has no holding and flushes
+	// nothing. The flush sends, from the cycles' marks and before the successor
+	// hydrates, what the seat wrote here, then its profiles, skills and
+	// onboarding marker whole, then, while the bound has time, the rows this
+	// node held when it took the seat ([flushSeatMemory]). It has
+	// [memoryFlushTimeout]; what it does not reach is lost as a crash loses it.
+	// Forgetting drops the marks and boundary, so the seat's next holding here
+	// takes a new boundary and carries back everything this node holds for it, as
+	// a restart does, which restores rows onto a changelog an operator recreated.
 	if e.memory != nil {
 		releaseSeatMemory(ctx, e.memory, handle)
 	}
@@ -4481,21 +4040,12 @@ func (e *Engine) SeatHeldBySandbox(handle string) bool {
 // executorRun is what one coding box is handed to reach a model: the model, the
 // credential files a local backend seeds, and the whole run environment.
 //
-// THREE things travel, and they travel differently on purpose:
-//
-//   - The MODEL, so the agent addresses the model the seat runs on rather
-//     than its catalogue's default — the entry's model exactly as its runs
-//     on this host name it, for its own harness only.
-//   - The ENTRY'S ENVIRONMENT, in the run environment beneath the seat's,
-//     which reaches any box including a remote one: its env — a gateway's
-//     base URL, a cloud switch and its region, a provider's key — and its
-//     sign-in, each a scoped, revocable variable: a subscription's headless
-//     token, an api-key entry's key.
-//   - The credential FILES, only as a host-path map the LOCAL backend seeds
-//     and writes back. They carry a refresh token whose rotation is shared
-//     fleet state, so pushing them onto somebody else's VM is a materially
-//     larger trust step than the token — which is why the map is offered and
-//     each backend decides, rather than being exported like the rest.
+// THREE things travel, differently on purpose: the MODEL, as the entry's runs on
+// this host name it; the ENTRY'S ENVIRONMENT (its env and sign-in, scoped and
+// revocable variables), beneath the seat's, reaching any box; and the credential
+// FILES, only as a host-path map the LOCAL backend seeds and writes back. Their
+// refresh token's rotation is fleet state, so pushing them onto somebody else's
+// VM is a larger trust step than a token: each backend decides.
 type executorRun struct {
 	model string
 	// effort is the entry's reasoning effort, passed beside the model.
@@ -4519,43 +4069,26 @@ type executorRun struct {
 }
 
 // newExecutorRun is the [executorRun] of a box run on agent, the executor-chain
-// member the launch picked ([agentLauncher.member]), over seat, the
-// environment the seat's own config assembled ([Engine.runEnvironment]), with
-// its integrations' box settings beneath everything, the variables naming
-// their files beneath those in the box, and its own integration credentials
-// over everything.
+// member the launch picked ([agentLauncher.member]), over seat, the environment
+// the seat's config assembled ([Engine.runEnvironment]), with the integrations'
+// box settings beneath everything and their credentials over it.
 //
-// ONE CONSTRUCTION for a seat's executor run and the Dashboard Assistant's
-// deep work on its own entry ([assistantDeep.Run]), which brings no seat
-// environment: a box is handed its entry the same way whoever launched it.
-//
-// THE PICKED MEMBER, never a second resolution of the chain: the runner the box
-// runs IS that member's harness, so its model, written in that harness's own grammar,
-// and its env and sign-in, which that harness reads, are always ones the runner can
-// use — and a launch that fell back past the head runs on the member it fell
-// back to, with that member's environment and login rather than the head's.
+// ONE CONSTRUCTION for a seat's executor run and the Dashboard Assistant's deep
+// work ([assistantDeep.Run]). THE PICKED MEMBER, never a second resolution of
+// the chain: the runner IS that member's harness, so a launch that fell back
+// past the head gets the fallback's model, env and login.
 func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
-	// THE MODEL AS THE ENTRY'S RUNS ON THIS HOST PASS IT, AND THE HARNESS IT IS
-	// WRITTEN FOR. An entry's model is in that harness's own grammar — OpenCode
-	// reads `<provider>/<model>`, Claude Code an alias — so the run is handed
-	// the exact string every other phase's run on the entry gives the harness,
-	// resolved and rendered as they render it.
+	// THE MODEL IS HANDED IN THE HARNESS'S OWN GRAMMAR (OpenCode's
+	// `<provider>/<model>`, Claude Code's alias), as every other phase's run on
+	// the entry gets it. No provider of the engine's declaring: a declared one
+	// would shadow the vendor or base URL the entry's own calls reach.
 	//
-	// No provider of the engine's declaring: the harness reaches the model the
-	// way the entry's own calls do, its vendor's endpoint or the one a base
-	// URL in the entry's env names, which the run environment carries — a
-	// provider the engine declared beside it would shadow the one the model
-	// names.
 	// THE SEAT'S OWN VENDOR CREDENTIALS IN ITS BOX ARE A TOOL'S, NEVER A
-	// SIGN-IN ([config.Company.SeatCredentialVariables]): in the box with the
-	// rest of the seat's env, winning a name over the entry's as every line of
-	// it does, and out of every sign-in judgment. OpenCode reads any
-	// credential-named variable as a provider's key, so judged with them, the
-	// agent's DigitalOcean token handed to doctl passed a remote run that had
-	// no model key at all; and for a harness whose seat signs it in itself, a
-	// tool's token named like a sign-in would strip the entry's ([entryEnv]).
-	// Config refuses one under a name the harness signs in by, so in the box
-	// it never stands in for the entry's sign-in either.
+	// SIGN-IN ([config.Company.SeatCredentialVariables]): they win a name over the
+	// entry's but stay out of every sign-in judgment. OpenCode reads any
+	// credential-named variable as a provider key, so a DigitalOcean token for
+	// doctl passed a run with no model key, and a tool token named like a sign-in
+	// would strip the entry's ([entryEnv]).
 	own := maps.Clone(seat.env)
 	for _, name := range seat.tools {
 		delete(own, name)
@@ -4647,40 +4180,17 @@ func referencedValues(env *config.Resolver, value string) []string {
 }
 
 // entryEnv is what an entry contributes to a run's environment, beneath what
-// the seat brought: its whole env with its sign-in — its headless token, its
-// API key, a provider key or a gateway's address in its env
-// ([harness.Provider.SandboxEnv]).
+// the seat brought: its env and sign-in ([harness.Provider.SandboxEnv]),
+// UNDERLAID BY NAME so what the seat names in role.sandbox.env or a step wins.
 //
-// UNDERLAID BY NAME, so a variable the seat names in role.sandbox.env or a
-// setup step wins. For OpenCode that is the whole rule: it reads one key per
-// model provider, and the provider the run's model names reads the one
-// variable it reads.
-//
-// ONE UNIT FOR THE SIGN-IN OF A HARNESS THAT HAS SEVERAL: when the entry's profile
-// lists names that sign its harness in beyond its token and its key
-// ([harnessprofile.Profile.SignInEnv]) and the seat's own environment already signs
-// the harness in ([harness.Provider.CredentialEnvNames], which reads that list),
-// the entry adds none of its own sign-in
-// ([entrySignInName]). Such a harness ranks its sign-ins by name (Claude Code's
-// cloud toggle routes away from the Anthropic API altogether, and
-// ANTHROPIC_API_KEY outranks a plan's CLAUDE_CODE_OAUTH_TOKEN), so underlaying
-// by name cannot see that a seat is already signed in. An api-key entry's key
-// underlaid beside a seat's own plan token silently moved that seat onto the
-// company's metered key, and beside a Bedrock toggle it rode into a box that
-// never reads it.
-//
-// THE PROFILE'S LIST, NOT A LIST OF THE RUNNER'S: the names that sign a harness in
-// are a fact about that harness, which its profile records once and an override
-// can extend, so a cloud switch a build of the harness adds is one profile edit,
-// and an entry's `auth.mode: env` and this rule read the same names.
-//
-// THE REST OF THE ENTRY'S ENV STILL LIES BENEATH IT. A base URL, a region or
-// a proxy says where the run's requests go, not whom they are made as, so a
-// seat that signs in with its own token still reaches its model the way the
-// entry routes every call — a company's gateway included — and a seat meant
-// to bypass it names the variable itself. Dropped whole for such a seat, as
-// the entry's sign-in alone once was, its run would lose the gateway every
-// other phase of its entry goes through.
+// ONE UNIT FOR THE SIGN-IN OF A HARNESS THAT HAS SEVERAL: when the profile lists
+// sign-ins beyond token and key ([harnessprofile.Profile.SignInEnv]) and the
+// seat's env already signs in ([harness.Provider.CredentialEnvNames]), the entry
+// adds none of its own ([entrySignInName]). Such a harness ranks sign-ins by
+// name (ANTHROPIC_API_KEY outranks a plan token), so underlaying by name let the
+// company's metered key displace a seat's plan token.
+// The rest of the entry's env (base URL, region, proxy) stays beneath: it says
+// where requests go, not whom as.
 func entryEnv(agent *harness.Provider, seatEnv map[string]string) map[string]string {
 	env := agent.SandboxEnv()
 	if len(agent.Profile().SignInEnv) == 0 || !signsIn(seatEnv, agent.CredentialEnvNames()) {
@@ -4735,32 +4245,18 @@ type SandboxCredentialError struct{ msg string }
 
 func (e *SandboxCredentialError) Error() string { return e.msg }
 
-// sandboxCredentials refuses a run whose harness has nothing to
-// authenticate with inside its box.
+// sandboxCredentials refuses a run whose harness has nothing to authenticate
+// with inside its box. A subscription login with no headless token uses
+// credential FILES, which never leave the engine host (their refresh token's
+// rotation is fleet state): unguarded, a remote executor would start and fail
+// minutes in with the vendor's "not authenticated".
 //
-// THE FAILURE THIS CLOSES IS SILENT AND EXPENSIVE. A subscription login with
-// no headless token to travel — a Claude Code plan nobody captured a token
-// for — authenticates from credential FILES, and those deliberately never
-// leave the engine host: they carry a refresh token whose rotation is shared
-// fleet state. So an executor on such an entry, placed in a remote cell,
-// provisions a box, installs the agent,
-// applies every setup step, starts the job — and the agent fails at its first
-// model call with the vendor's own "not authenticated", minutes in, naming
-// nothing an operator could act on. The documented error existed in the docs
-// and in no code at all.
-//
-// IT ASKS THE PROFILE WHICH NAMES COUNT rather than recognising a credential
-// by inspection, because the only tool variables the engine names are an
-// integration's own credentials for the seat, which never sign a harness in
-// (ADR-0102), and an operator legitimately declares their own key in
-// role.sandbox.env.
-// That value is in the merged run environment this is handed, so a seat that
-// brought its own credential passes — which is why the check can be a refusal
-// rather than a warning.
-//
-// THE PICKED MEMBER'S ENTRY, the one whose login the box runs under ([newExecutorRun]):
-// a guard that asked the chain's head would wave through a fallback launch on a
-// member with no travelling token, and refuse one whose own entry mints one.
+// IT ASKS THE PROFILE WHICH NAMES COUNT rather than recognising a credential by
+// inspection: the engine's own tool variables never sign a harness in
+// (ADR-0102), and an operator may declare a key in role.sandbox.env. The merged
+// run environment is what it is handed, so a seat that brought one passes,
+// which is why this can refuse rather than warn. It judges the PICKED member's
+// entry ([newExecutorRun]), not the chain's head.
 func sandboxCredentials(agent *harness.Provider, key, seat string, placement sandbox.Placement,
 	env map[string]string) (err error) {
 	defer origin.Stamp(&err)
@@ -4780,34 +4276,25 @@ func sandboxCredentials(agent *harness.Provider, key, seat string, placement san
 // are both held to before a box is started.
 func entrySignsIn(agent *harness.Provider, env map[string]string) bool {
 	// THE PROFILE'S OTHER SIGN-INS COUNT TOO ([harnessprofile.Profile.SignInEnv],
-	// which [harness.Provider.CredentialEnvNames] reads): for Claude Code a
-	// bearer token, or a Bedrock, Vertex AI or Foundry toggle, whether the seat
-	// brought one, which is then handed none of the entry's sign-in
-	// ([entryEnv]), or the entry's own env carries it into the box: a gateway's
-	// bearer token, a cloud of the company's. Judged by the profile's token and
-	// key variables alone, such a remote run was refused as signed in to nothing
-	// when it was signed in to its gateway or its cloud.
+	// read by [harness.Provider.CredentialEnvNames]): for Claude Code a bearer
+	// token or a Bedrock, Vertex AI or Foundry toggle, brought by the seat or
+	// carried by the entry's own env ([entryEnv]). Judged by the token and key
+	// variables alone, a run signed in to its gateway or cloud was refused.
 	if signsIn(env, agent.CredentialEnvNames()) {
 		return true
 	}
 	// A HARNESS THAT READS ITS PROVIDER'S KEY FROM ITS OWN ENVIRONMENT has no one
-	// variable to ask about: which one it reads depends on the provider the
-	// entry's model names, and an operator may give it in role.sandbox.env
-	// rather than env. So any credential-named variable the run carries
-	// passes. That is looser than the question — a code-host token the seat
-	// declared for git passes too — and deliberately so: this guard refuses,
-	// and a refusal of a run whose key it could not recognise would block a
-	// seat that works, which is worse than the vendor's own "not
-	// authenticated" it exists to pre-empt.
+	// variable to ask about: which it reads depends on the provider the model
+	// names, and an operator may give it in role.sandbox.env. So any
+	// credential-named variable passes. That is deliberately loose (a code-host
+	// token passes too): this guard refuses, and refusing a seat that works is
+	// worse than the vendor's own "not authenticated" it pre-empts.
 	//
-	// IT JUDGES THE RIGHT HARNESS, and the key it lets through is one the run can
-	// read: the box is handed the entry's model exactly as its runs on this
-	// host name it, so its provider is the one the operator keyed for those,
-	// and the runner is that entry's own harness ([newExecutorRun]).
-	// Narrowing it to the variable the model's provider segment "should" use
-	// would need a table of that harness's providers the engine does not ship and
-	// would be wrong anyway: OpenCode's `zai` reads ZHIPU_API_KEY,
-	// `moonshotai` MOONSHOT_API_KEY, `amazon-bedrock` the AWS pair.
+	// Narrowing to the variable the provider segment "should" use would need a
+	// table of providers the engine does not ship and be wrong anyway:
+	// OpenCode's `zai` reads ZHIPU_API_KEY, `moonshotai` MOONSHOT_API_KEY,
+	// `amazon-bedrock` the AWS pair. The runner is the entry's own harness
+	// ([newExecutorRun]).
 	if agent.SignsInThroughEnv() {
 		for name, value := range env {
 			if harnessprofile.IsCredentialName(name) && strings.TrimSpace(value) != "" {
@@ -4832,33 +4319,15 @@ func saidNames(names []string) []words.Said {
 // credentialRefusal is the [SandboxCredentialError] for a remote run nothing
 // in whose environment signs its harness in, carrying the remedy for THIS entry.
 //
-// THE REMEDY FOLLOWS THE AUTH MODE BEFORE THE PROFILE, because the mode decides
-// what the entry reads at all ([harness.Provider.ModeSignIn]). Chosen by the
-// profile alone, an api-key Claude Code entry whose key resolved to nothing was
-// told to mint a subscription token: `-capture-token` stored one the entry
-// never reads (api-key gives the token no fallback, and the child has the token
-// variable removed), and the next launch was refused with the same advice. An
-// inherit-env entry reads the engine's process environment and never the secret
-// store the token lands in; its credential files are seeded as under every
-// mode, but those never leave the engine host. So:
-//
-//   - api-key: the key, worded once in harness for every message that names
-//     it, or the seat's own in role.sandbox.env;
-//   - inherit-env: one of the variables it forwards, in the engine's
-//     environment or the seat's role.sandbox.env, or a local cell, which is
-//     seeded with the entry's login;
-//   - subscription: a token that travels where the harness mints one, the
-//     provider's key where the harness reads it from its environment, and
-//     otherwise a local cell, which is seeded with the login itself.
-//
-// A variable the profile names outside the reference grammar is never offered
-// ([harness.ModeSignIn]'s Misnamed): no secret store, ${VAR}, export or token
-// mint can carry a credential under it, so where it is the route the mode or
-// the harness would take, the remedy names the overrides field that names it —
-// beside every route the entry still has, and alone only where it has none.
-//
-// Its own function rather than the tail of [sandboxCredentials] so that the
-// guard's VERDICT — which runs are refused — reads apart from its wording.
+// THE REMEDY FOLLOWS THE AUTH MODE BEFORE THE PROFILE ([harness.Provider.ModeSignIn]):
+// by profile alone, an api-key entry was told to mint a token it never reads.
+// api-key: the key, or the seat's own in role.sandbox.env. inherit-env: a
+// forwarded variable in the engine's environment or role.sandbox.env, or a local
+// cell. subscription: a token where the harness mints one, the provider's key
+// where it reads one from its environment, else a local cell. A variable outside
+// the reference grammar ([harness.ModeSignIn]'s Misnamed) is never offered:
+// nothing can carry a credential under it, so the remedy names the overrides
+// field, beside any route left and alone where none is.
 func credentialRefusal(agent *harness.Provider, key, seat string, placement sandbox.Placement) error {
 	// THE ENTRY'S CELL, which is what places an executor: its own run_in,
 	// or the catalogue's default for an entry that names none. A seat has
@@ -5034,20 +4503,12 @@ func refusedMessage(ended sandbox.RunEnding) string {
 // credential was replaced while it ran (M8 of the Models design), answering the
 // carried round or nil.
 //
-// A process's environment cannot change, and the harnesses re-read no file
-// for a token, so a job running when its entry's credential was rotated keeps
-// the old one until it ends; where the vendor revoked the old one, the job
-// ends refused while the entry already signs in with the new one. Every LAUNCH
-// builds its env from the current epoch's entry, so the next segment carries
-// the new credential: the round is relaunched once, in the job's box,
-// continuing its session, rather than failed for a reason it no longer has.
-//
-// ALL OF IT MUST HOLD: a completion (a person's answer and a lost job carry
-// their rounds on already); a job that is not itself such a relaunch (once per
-// round, so a credential that keeps failing fails the turn); a sign-in
-// recorded at its launch; an ending its entry's harness classifies as an auth
-// failure; and an entry whose sign-in now differs from the one recorded. A
-// refusal on the very sign-in the entry still uses is an ordinary refusal.
+// A running job keeps its launch credential; if the vendor revoked it the job
+// ends refused while the entry already signs in anew. Every LAUNCH reads the
+// current entry, so the round is relaunched once, continuing its session.
+// ALL OF IT MUST HOLD: a completion; a job not itself such a relaunch (once per
+// round, so a failing credential fails the turn); a sign-in recorded at launch;
+// an auth-failure ending; and a sign-in that now differs.
 func (e *Engine) signInReplaced(ctx context.Context, c *Company, in resumeInput) *runner.Rotated {
 	run := in.Run
 	if in.Asked != nil || in.Lost != nil || run.Launch.FollowUp == sandbox.FollowUpSignInReplaced ||

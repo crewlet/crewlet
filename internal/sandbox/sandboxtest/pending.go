@@ -90,6 +90,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 		{"ARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn", testARoundCountsItsLostJobsAcrossTheRelaunchesThatCarryItOn},
 		{"AHeldReleaseHoldsTheResumeUntilItsConditionLifts", testAHeldReleaseHoldsTheResumeUntilItsConditionLifts},
 		{"AHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts", testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts},
+		{"ALiftClearsOnlyTheHoldItRead", testALiftClearsOnlyTheHoldItRead},
 		{"AHeldReleaseOwesItsCompletionOnTheJobsRecord", testAHeldReleaseOwesItsCompletionOnTheJobsRecord},
 		{"ASecondLaunchDropsTheFirstSuspension", testASecondLaunchDropsTheFirstSuspension},
 		{"ASecondLaunchDropsTheFirstRunsBridgedCalls", testASecondLaunchDropsTheFirstRunsBridgedCalls},
@@ -226,6 +227,8 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 	cases = append(cases, refusalCases...)
 	cases = append(cases, standbyCases...)
 	cases = append(cases, lateCases...)
+	cases = append(cases, lateItemCases...)
+	cases = append(cases, tellingCases...)
 	cases = append(cases, briefReadCases...)
 	cases = append(cases, inFlightCases...)
 	cases = append(cases, savingCases...)
@@ -265,7 +268,7 @@ func Run(t *testing.T, newStore func(t *testing.T) (sandbox.PendingStore, coord.
 			tc.fn(t, store, over(runs))
 		})
 	}
-	for _, tc := range slices.Concat(stagedLogCases, lateStagedCases) {
+	for _, tc := range slices.Concat(stagedLogCases, lateStagedCases, lateItemStagedCases) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, runs := newStore(t)
@@ -1030,17 +1033,15 @@ func testAMeasureLandsWhereTheEndIsAlreadyRecorded(t *testing.T, s sandbox.Pendi
 }
 
 // A LAUNCH RECORDS WHAT THE BRIEF IT HANDED LEFT OUT, AND EVERY WRITE OF THE
-// JOB'S RECORD KEEPS IT. The reads of the round the brief a job's run read
-// counted without listing them, and those of the fresh brief its box falls back
-// to beside a continuing brief, are written with the brief by the attach that
-// names the job's command (never by the attach before the job, which names none
-// and unsays nothing), and every later write of the record (a status, a lease, a
-// park, a bridged call, a claim and its release, each before the relaunch that
-// reads them) writes them back as it read them, under their own keys. Only the
-// next launch, which replaces the job's record whole, says none again.
+// JOB'S RECORD KEEPS IT. The reads of the round its brief counted without
+// listing them, and those of the fresh brief its box falls back to, each with
+// the late calls it left out apart ([sandbox.BriefTold.LateOmitted]), are
+// written by the attach that names the job's command (never the one before
+// it), and every later write of the record writes them back unchanged under
+// their own keys. Only the next launch, replacing the record whole, says none.
 //
-// Mutation: drop either set from the attach, record them on the attach before
-// the job, or leave them off the wire, and a check goes red.
+// Mutation: drop any set from the attach, record them before the job, or leave
+// them off the wire, and a check goes red.
 func testALaunchRecordsWhatTheBriefItHandedLeftOut(t *testing.T, s sandbox.PendingStore) {
 	ctx := t.Context()
 	const turn = "t-omitted"
@@ -1054,8 +1055,8 @@ func testALaunchRecordsWhatTheBriefItHandedLeftOut(t *testing.T, s sandbox.Pendi
 			got.BriefOmitted, got.FreshOmitted)
 	}
 	if err := s.AttachSandbox(ctx, turn, sandbox.BoxRef{SandboxID: "box-omitted", CommandID: "cmd-omitted",
-		Brief: sandbox.BriefContinued, BriefOmitted: []int{13, 14}, FreshOmitted: []int{15}},
-		sandbox.Fence{}); err != nil {
+		Brief: sandbox.BriefContinued, BriefOmitted: []int{13, 14}, FreshOmitted: []int{15},
+		BriefLateOmitted: []int{3}, FreshLateOmitted: []int{4}}, sandbox.Fence{}); err != nil {
 		t.Fatalf("the attach that names the job's command: %v", err)
 	}
 	check := func(step string) {
@@ -1064,6 +1065,10 @@ func testALaunchRecordsWhatTheBriefItHandedLeftOut(t *testing.T, s sandbox.Pendi
 		if !slices.Equal(got.BriefOmitted, []int{13, 14}) || !slices.Equal(got.FreshOmitted, []int{15}) {
 			t.Errorf("after %s the job's record says its briefs left out %v and %v, want [13 14] and [15]",
 				step, got.BriefOmitted, got.FreshOmitted)
+		}
+		if !slices.Equal(got.BriefLateOmitted, []int{3}) || !slices.Equal(got.FreshLateOmitted, []int{4}) {
+			t.Errorf("after %s the job's record says its briefs left out late calls %v and %v, want [3] and [4]",
+				step, got.BriefLateOmitted, got.FreshLateOmitted)
 		}
 	}
 	check("the attach that names the job's command")
@@ -1092,9 +1097,10 @@ func testALaunchRecordsWhatTheBriefItHandedLeftOut(t *testing.T, s sandbox.Pendi
 	park(t, s, turn)
 	check("a park on a question")
 	mustBeginLaunch(t, s, run(turn))
-	if got := mustGet(t, s, turn).Launch; len(got.BriefOmitted)+len(got.FreshOmitted) != 0 {
-		t.Errorf("the next launch's job reads %v and %v left out, the job before's, want none", got.BriefOmitted,
-			got.FreshOmitted)
+	if got := mustGet(t, s, turn).Launch; len(got.BriefOmitted)+len(got.FreshOmitted)+
+		len(got.BriefLateOmitted)+len(got.FreshLateOmitted) != 0 {
+		t.Errorf("the next launch's job reads %v, %v, %v and %v left out, the job before's, want none",
+			got.BriefOmitted, got.FreshOmitted, got.BriefLateOmitted, got.FreshLateOmitted)
 	}
 }
 
@@ -2791,10 +2797,10 @@ func testAHeldReleaseHoldsTheResumeUntilItsConditionLifts(t *testing.T, s sandbo
 	if !got.Held(until.Add(-time.Second)) || got.Held(until) {
 		t.Error("the row is not held exactly until its refusal lifts")
 	}
-	if lifted, err := s.LiftHold(t.Context(), "t1", "pause"); err != nil || lifted {
+	if lifted, err := s.LiftHold(t.Context(), "t1", "pause", got.Holds); err != nil || lifted {
 		t.Fatalf("a lift for another condition: lifted=%v err=%v", lifted, err)
 	}
-	if lifted, err := s.LiftHold(t.Context(), "t1", "budget"); err != nil || !lifted {
+	if lifted, err := s.LiftHold(t.Context(), "t1", "budget", got.Holds); err != nil || !lifted {
 		t.Fatalf("a lift for its own condition: lifted=%v err=%v", lifted, err)
 	}
 	if got := mustGet(t, s, "t1"); got.HeldFor != "" || !got.HeldUntil.IsZero() {
@@ -2810,6 +2816,41 @@ func testAHeldReleaseHoldsTheResumeUntilItsConditionLifts(t *testing.T, s sandbo
 	mustRelease(t, s, mustClaim(t, s, "t1"))
 	if got := mustGet(t, s, "t1"); got.HeldFor != "" {
 		t.Fatalf("an ordinary release kept the earlier hold for %q", got.HeldFor)
+	}
+}
+
+// A LIFT CLEARS ONLY THE HOLD IT READ: a lift asked from a read made before a
+// newer hold was written (a claim and its resume, held again, between them)
+// leaves that hold standing, since nothing has signalled its condition since.
+func testALiftClearsOnlyTheHoldItRead(t *testing.T, s sandbox.PendingStore) {
+	until := time.Now().UTC().Add(time.Hour)
+	mustLaunched(t, s, run("t1"))
+	hold := func() sandbox.PendingRun {
+		t.Helper()
+		held := releaseOf(mustClaim(t, s, "t1"))
+		held.Hold = &sandbox.Refusal{Condition: "budget", Until: until}
+		if released, err := s.ReleaseClaim(t.Context(), "t1", held); err != nil || !released {
+			t.Fatalf("held release: released=%v err=%v", released, err)
+		}
+		return mustGet(t, s, "t1")
+	}
+	read := hold()
+	if lifted, err := s.LiftHold(t.Context(), "t1", "budget", read.Holds); err != nil || !lifted {
+		t.Fatalf("a lift of the hold read: lifted=%v err=%v", lifted, err)
+	}
+	newer := hold()
+	if newer.Holds == read.Holds {
+		t.Fatalf("two holds share the number %d", read.Holds)
+	}
+	if lifted, err := s.LiftHold(t.Context(), "t1", "budget", read.Holds); err != nil || lifted {
+		t.Fatalf("a lift of the earlier hold cleared the newer one: lifted=%v err=%v", lifted, err)
+	}
+	if got := mustGet(t, s, "t1"); got.HeldFor != "budget" || got.Holds != newer.Holds {
+		t.Fatalf("the row is held for %q (hold %d); want the newer hold %d standing", got.HeldFor, got.Holds,
+			newer.Holds)
+	}
+	if lifted, err := s.LiftHold(t.Context(), "t1", "budget", newer.Holds); err != nil || !lifted {
+		t.Fatalf("a lift of the newer hold: lifted=%v err=%v", lifted, err)
 	}
 }
 
@@ -2836,7 +2877,7 @@ func testAHeldRunIsClaimedByNoAnnouncementUntilItsHoldLifts(t *testing.T, s sand
 		t.Fatalf("the refused claim moved the run to %s held for %q, want it running and held",
 			got.Status, got.HeldFor)
 	}
-	if lifted, err := s.LiftHold(t.Context(), "t1", "budget"); err != nil || !lifted {
+	if lifted, err := s.LiftHold(t.Context(), "t1", "budget", row.Holds); err != nil || !lifted {
 		t.Fatalf("lift: lifted=%v err=%v", lifted, err)
 	}
 	mustRelease(t, s, mustClaim(t, s, "t1"))
@@ -2870,7 +2911,7 @@ func testAHeldReleaseOwesItsCompletionOnTheJobsRecord(t *testing.T, s sandbox.Pe
 		t.Fatalf("the held job's record owes %q since %v; want the hold's condition owed, since the release",
 			got.Launch.RefusalOwed, got.Launch.RefusalOwedSince)
 	}
-	if lifted, err := s.LiftHold(ctx, "t1", "budget"); err != nil || !lifted {
+	if lifted, err := s.LiftHold(ctx, "t1", "budget", mustGet(t, s, "t1").Holds); err != nil || !lifted {
 		t.Fatalf("a lift of the hold: lifted=%v err=%v", lifted, err)
 	}
 	if lifted := mustGet(t, s, "t1"); lifted.HeldFor != "" || lifted.Launch.RefusalOwed != "budget" {

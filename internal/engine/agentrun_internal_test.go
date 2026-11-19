@@ -541,16 +541,10 @@ func TestALaunchForACompanyWithNoModelsIsConfiguration(t *testing.T) {
 // A SEAT THAT MOVES WHILE ITS EXECUTOR LAUNCHES IS THE MOVE, whatever the
 // launch met, and the dispatcher hands the delivery on to the seat's holder.
 //
-// The box is made and set up between the run's row and its attach, minutes for
-// some setups, and the seat can move meanwhile. What the launch meets then
-// need not say so: the seat's next holder ends a launching run without fencing
-// it, so the attach finds that ending or no record, and only a row that holder
-// stamped first refuses it as a seat not held. Returned as the launch's own
-// failure, each was a broken turn, NAKed onto the failure path's backoff,
-// where a seat that moved is deferred to its holder at once. The turn's own
-// fence is what knows, so it is asked again; where it still holds, a newer
-// lease's refusal is the launch's alone, a disagreement the heartbeat
-// settles, and NAKed as before.
+// The launch's failure need not say the seat moved (the next holder ends a
+// launching run without fencing it), and returned as is it NAKs onto backoff
+// instead of deferring. The turn's fence knows, so it is asked again; where it
+// holds, a newer lease's refusal is the launch's alone and NAKs.
 //
 // Mutation: drop the fence asked again and every moved row NAKs; ask it only
 // of a seat-not-held refusal and the ended row does; answer the fence's error
@@ -1122,17 +1116,13 @@ func TestEachRunsBoxIsGivenItsOwnJobsEndpoint(t *testing.T) {
 	}
 }
 
-// THE DURABLE LOG IS THE RESUME'S WHOLE RECORD, so the conversion has to keep
-// every field the delivery check, the citations, the ledger and the executor's
-// own record read — the bridge's measurement of each call included: its place
-// in the order the run made its calls, when it ran, for how long and who
-// answered, which is what the record's timeline places the run's calls by —
-// and its place in the order the round's log TOOK its calls, which a relaunch
-// that continues a kept session tells the calls after its save point by: the
-// log's number, never one the conversion makes up, so a call an older build
-// appended stays unnumbered. And the id the call's harness gave it, which a
-// reading of what a cut-off kept session holds is asked by: the log's, and
-// none on a call the harness named none.
+// THE DURABLE LOG IS THE RESUME'S WHOLE RECORD, so the conversion keeps every
+// field the delivery check, citations, ledger and executor record read: the
+// bridge's measurement (order made, start, duration, who answered, which the
+// timeline places calls by), the call's place in the order the log TOOK it
+// (the log's own number, never made up, so an older build's call stays
+// unnumbered; a relaunch tells calls after its save point by it) and the
+// harness's call id (none where it named none).
 //
 // Mutation: drop the place, either order's, the start, the duration, the
 // origin or the harness's id from the conversion, and this goes red.

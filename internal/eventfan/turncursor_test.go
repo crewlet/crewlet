@@ -14,16 +14,12 @@ import (
 )
 
 // TWO TURNS THAT START AT ONE MICROSECOND ARE BOTH ON THE WALK, once each and
-// in one order, whichever nodes hold them and whichever side of a page's cut
-// they fall.
+// in one order, on whichever nodes and side of a page's cut.
 //
-// A webhook that wakes two seats starts two turns at one instant, and the two
-// seats are often held by two nodes. The cursor was the instant alone and every
-// node resumed strictly below it, so a page cut between two such turns sent the
-// walk past the second for good. It is the instant and the turn id now, in the
-// order every node's page and the merge share — newest start first, the higher
-// id first within one — so every page resumes after exactly the turn the last
-// one ended on.
+// A webhook waking two seats starts two turns at one instant, often on two
+// nodes. An instant-only cursor sent the walk past the second of a page cut
+// between them. The cursor is the instant and turn id, in the order every page
+// and the merge share (newest first, higher id first within an instant).
 //
 // Mutation: drop the id from the cursor the merge hands back, from the merge's
 // cut at the cursor or at a full node's last turn, or from the wire, and a walk

@@ -195,7 +195,7 @@ type InboxPage struct {
 
 // validateInbox is [ReadQuery.validate] for an `inbox` read.
 func (q ReadQuery) validateInbox() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	in := q.Inbox
 	switch {
 	case in == nil:
@@ -526,7 +526,7 @@ func noticeChangeOf(row changeRow) *NoticeChange {
 // changes it names, each once by its id, at most [MaxNoticeCards] of them —
 // the read's rows, which no cursor or limit pages.
 func (q ReadQuery) validateNoticeCards() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
 	case len(q.NoticeCards) == 0:
 		return refused("notice_cards", "a notice_cards read names the changes whose cards it reads")

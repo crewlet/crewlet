@@ -429,7 +429,8 @@ test("a refused push says what it offered, never zero, and that nothing was stor
   ).toBeTruthy();
 });
 
-// Mutation: link the work key, and the run chip holds two links.
+// Mutations: link the work key, and the run chip holds two links; draw the token's id, and
+// the person's tag reads it.
 test("a person's push names its credential, a seat's its run and turn, each how it was built", async () => {
   atTheStory();
   stubFetch((url) => pageOf(url, STORY));
@@ -442,8 +443,15 @@ test("a person's push names its credential, a seat's its run and turn, each how 
       .getAllByRole("link")
       .map((a) => a.getAttribute("href")),
   ).toEqual(["#/live/turns/turn-ENG-412"]);
+  // A TOKEN'S ID NAMES NOTHING A PERSON KNOWS: its kind is said, the id its title.
   const person = rowOf(feed, "tried").querySelector(".code-list__meta")!;
-  expect(person.textContent).toBe("Personal access token pat:jane-laptopwith git");
+  expect(person.textContent).toBe("Personal access tokenwith git");
+  expect(
+    within(person as HTMLElement)
+      .getByText("Personal access token")
+      .closest("[title]")
+      ?.getAttribute("title"),
+  ).toBe("pat:jane-laptop");
 });
 
 // Mutation: say the loaded count alone, and Yesterday reads "2".

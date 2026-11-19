@@ -31,18 +31,12 @@ import (
 
 // A PERSON'S CHAT REPLY TO A PARKED RUN IS RECORDED AS WHAT THEY TYPED, AND THE
 // RUN READS IT UNDER WHO WROTE IT.
-//
-// Ana answers the question swe's executor stopped on, in the Chatlet thread
-// it asked in, with "Use Postgres". The delivery reaches swe's inbox as the
-// notification service builds every wake: its body is the seat's prompt, the
-// message fenced under the wake's token among the surface's triage guidance
-// and how to reply, and its salient body is the message. What the answer
-// records is read back to Ana among her answered decisions (ADR-0068:
-// `executor_answered`'s `answer` is the answer's body there), sealed onto
-// the run's row, and handed to the run as her answer, so each must be exactly
-// what she typed, with none of the prompt and no fence line: a fence is a
-// model's. The run reads it fenced (runner.Asked), labelled as the trigger
-// labels the message: read in a chat thread, written by ana, a colleague's.
+// Ana answers swe's executor's question in its Chatlet thread with "Use
+// Postgres". The wake's body is the seat's prompt; its salient body is the
+// message. The answer is read back to Ana (ADR-0068), sealed onto the run's row
+// and handed to the run, so each must be exactly what she typed, with no
+// prompt and no fence line: a fence is a model's. The run reads it fenced
+// (runner.Asked), labelled as the trigger labels it (chat thread, ana).
 //
 // Mutation: offer the coordinator [engine.DescribeTrigger] of the delivery
 // (as the dispatch did) and every assertion on the words is red; offer it

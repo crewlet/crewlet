@@ -268,6 +268,30 @@ func TestARecordHeadingIsTheColonForm(t *testing.T) {
 	}
 }
 
+// A FIELD'S LINE IS AS LONG AS ITS VALUE. A record's Enforced-by names every
+// gate behind it on one line, which for a record amended many times runs past
+// a line scanner's default cap of 64 KiB; the record still loads, its field
+// whole. The control is a field just under that cap.
+func TestAFieldLongerThanAScannersLineLoadsWhole(t *testing.T) {
+	t.Parallel()
+	for label, size := range map[string]int{"under 64 KiB": 60 << 10, "over 64 KiB": 96 << 10} {
+		t.Run(label, func(t *testing.T) {
+			t.Parallel()
+			gates := strings.Repeat("`internal/adr.TestX`, ", size/22)
+			body := strings.Replace(recordUnder("# ADR-0001: One decision"),
+				"- **Enforced-by:** nothing\n", "- **Enforced-by:** "+gates+"`internal/adr.TestY`\n", 1)
+			records, err := adr.Load(recordTree(t, map[string]string{"0001-one-decision.md": body}))
+			if err != nil || len(records) != 1 {
+				t.Fatalf("a record whose Enforced-by runs %d bytes loaded %d record(s), err %v",
+					len(gates), len(records), err)
+			}
+			if got := records[0].Fields["Enforced-by"]; !strings.HasSuffix(got, "internal/adr.TestY") {
+				t.Errorf("the field read as %d bytes ending %q, want it whole", len(got), got[max(0, len(got)-40):])
+			}
+		})
+	}
+}
+
 // THE BACKWARD CHECK, ON A TREE WHOSE VERDICT IS KNOWN — through the same walk,
 // the same prefilter and the same matcher the gate runs.
 //

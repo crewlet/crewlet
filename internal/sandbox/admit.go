@@ -185,6 +185,8 @@ type refusedCompletion struct {
 	// hold ([Coordinator.liftAndRefire]). This node refuses nothing for it:
 	// the row does.
 	heldOnRow time.Time
+	// hold is that hold's number ([PendingRun.Holds]), the one its lift names.
+	hold uint64
 
 	// backstop is that re-fire, armed while the completion is kept and
 	// cancelled when it goes ([Coordinator.dropKeptLocked]). Under mu.
@@ -394,7 +396,7 @@ func (c *Coordinator) keepRefused(ev types.ExecutorFinished, trigger *events.Eve
 // signalled before the admission; recovered says the caller is a seat's
 // recovery. It reports whether it kept the completion for the hold's instant.
 // See the package doc, "Kept completions".
-func (c *Coordinator) keepHeldOnRow(run PendingRun, trigger *events.Event, hold Refusal,
+func (c *Coordinator) keepHeldOnRow(run PendingRun, trigger *events.Event, hold Refusal, number uint64,
 	seen map[signal]uint64, recovered bool,
 ) bool {
 	if hold.Condition == "" {
@@ -404,7 +406,8 @@ func (c *Coordinator) keepHeldOnRow(run PendingRun, trigger *events.Event, hold 
 	if trigger == nil {
 		trigger = announced
 	}
-	kept := refusedCompletion{cond: hold.Condition, ev: ev, trigger: trigger, heldOnRow: hold.Until}
+	kept := refusedCompletion{cond: hold.Condition, ev: ev, trigger: trigger, heldOnRow: hold.Until,
+		hold: number}
 	c.mu.Lock()
 	if c.closed || (recovered && c.carriedLocked(ev.TurnID)) {
 		c.mu.Unlock()
@@ -479,6 +482,7 @@ func (c *Coordinator) oweRefused(ctx context.Context, ev types.ExecutorFinished,
 // package doc, "Kept completions".
 func (c *Coordinator) keepAgain(kept refusedCompletion) {
 	kept.heldUntil, kept.reason, kept.until, kept.heldOnRow = time.Time{}, "", time.Time{}, time.Time{}
+	kept.hold = 0
 	c.keepUnlessKept(kept)
 }
 
@@ -593,7 +597,8 @@ func (c *Coordinator) keepHeldClaim(ctx context.Context, ev types.ExecutorFinish
 		// NOT THIS DELIVERY'S ANY MORE: another job, this one claimed or
 		// settled, or a newer lease's.
 	case run.Held(c.now()):
-		c.keepHeldOnRow(run, trigger, Refusal{Condition: run.HeldFor, Until: run.HeldUntil}, seen, false)
+		c.keepHeldOnRow(run, trigger, Refusal{Condition: run.HeldFor, Until: run.HeldUntil}, run.Holds, seen,
+			false)
 	default:
 		c.keepAgain(refusedCompletion{ev: ev, trigger: trigger})
 	}
@@ -649,7 +654,7 @@ func (c *Coordinator) liftAndRefire(kept refusedCompletion) {
 	if _, leased := c.leaseOf(kept.ev.AgentHandle); !leased {
 		return
 	}
-	lifted, err := c.pending.LiftHold(ctx, kept.ev.TurnID, kept.cond)
+	lifted, err := c.pending.LiftHold(ctx, kept.ev.TurnID, kept.cond, kept.hold)
 	if err != nil {
 		log.WarnContext(ctx, "sandbox_hold_lift_failed", "turn_id", kept.ev.TurnID,
 			"agent", kept.ev.AgentHandle, "condition", string(kept.cond), "error", err.Error(),
@@ -675,6 +680,7 @@ func (c *Coordinator) liftAndRefire(kept refusedCompletion) {
 // completions".
 func (c *Coordinator) refireLifted(run PendingRun, cond Condition) {
 	ev, trigger := announcementOf(run)
+	lifted := rowHold{cond: cond, number: run.Holds}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -683,25 +689,32 @@ func (c *Coordinator) refireLifted(run PendingRun, cond Condition) {
 	switch _, kept := c.refused[run.TurnID]; {
 	case c.refiring[run.TurnID] > 0:
 		if c.liftedDuring == nil {
-			c.liftedDuring = map[string]Condition{}
+			c.liftedDuring = map[string]rowHold{}
 		}
-		c.liftedDuring[run.TurnID] = cond
+		c.liftedDuring[run.TurnID] = lifted
 	case kept:
-		c.refireHeldKeepLocked(run.TurnID, cond)
+		c.refireHeldKeepLocked(run.TurnID, lifted)
 	default:
 		c.refireLocked(refusedCompletion{cond: cond, ev: ev, trigger: trigger})
 	}
 }
 
+// rowHold names one hold on a run's row: its condition and its number
+// ([PendingRun.Holds]).
+type rowHold struct {
+	cond   Condition
+	number uint64
+}
+
 // refireHeldKeepLocked re-fires, in its keep's place, a completion this node
-// keeps for the hold on its run's row for cond that a lift has cleared
+// keeps for the hold on its run's row that a lift has cleared
 // ([refusedCompletion.heldOnRow]): no longer waiting for the hold's instant,
-// which the lift ended. A keep for anything else is left to carry the job
-// ([Coordinator.refireLifted]). The caller holds c.mu and has checked the
-// coordinator is not closed.
-func (c *Coordinator) refireHeldKeepLocked(turnID string, cond Condition) {
+// which the lift ended. A keep for anything else, a newer hold included, is
+// left to carry the job ([Coordinator.refireLifted]). The caller holds c.mu
+// and has checked the coordinator is not closed.
+func (c *Coordinator) refireHeldKeepLocked(turnID string, lifted rowHold) {
 	kept, ok := c.refused[turnID]
-	if !ok || kept.heldOnRow.IsZero() || kept.cond != cond {
+	if !ok || kept.heldOnRow.IsZero() || kept.cond != lifted.cond || kept.hold != lifted.number {
 		return
 	}
 	c.dropKeptLocked(turnID)
@@ -746,10 +759,10 @@ func (c *Coordinator) refired(turnID string) {
 		return
 	}
 	delete(c.refiring, turnID)
-	cond, lifted := c.liftedDuring[turnID]
+	hold, lifted := c.liftedDuring[turnID]
 	delete(c.liftedDuring, turnID)
 	if lifted && !c.closed {
-		c.refireHeldKeepLocked(turnID, cond)
+		c.refireHeldKeepLocked(turnID, hold)
 	}
 }
 

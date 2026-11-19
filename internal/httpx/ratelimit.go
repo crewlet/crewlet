@@ -13,17 +13,14 @@ import (
 // RateLimit is how a vendor client waits out a vendor's 429: the vendor says
 // how long, and a wait the call can afford is taken inside the call.
 //
-// THE VENDOR'S ANSWER IS THE ONLY COUNT THAT IS RIGHT. A vendor's limit is the
-// organization's or the token's, spent by every node of the fleet and by every
-// other tool the company points at the same account, so a client keeping its
-// own tally of what is left would be guessing. The client therefore spends
-// nothing up front and waits only when the vendor says so.
+// THE VENDOR'S ANSWER IS THE ONLY RIGHT COUNT: a limit is spent by every node
+// and every other tool on the same account, so a client's own tally would be a
+// guess. It spends nothing up front and waits only when the vendor says so.
 //
-// A WAIT THE CALL CANNOT AFFORD IS HANDED BACK rather than taken: one longer
-// than [RateLimit.Cap], one ending after the caller's deadline, or one more
-// after [RateLimit.Retries] waits. The caller's own schedule (a reconcile
-// pass's backoff, a person pressing the button again) decides when to ask
-// again, and the 429 it is handed says how long the vendor asked for.
+// A WAIT THE CALL CANNOT AFFORD IS HANDED BACK: one longer than
+// [RateLimit.Cap], one ending after the caller's deadline, or one after
+// [RateLimit.Retries] waits. The caller's schedule decides when to ask again,
+// and the 429 says how long the vendor asked for.
 type RateLimit struct {
 	// Retries is how many waits one call takes before it hands the 429 back.
 	Retries int

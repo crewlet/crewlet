@@ -300,15 +300,14 @@ func TestTheJournalIsStagedWhereTheNextHoldLooks(t *testing.T) {
 	}
 }
 
-// A WRITE REPLACES ONE IT FINDS STANDING, unapplied — which is how a logout
-// discards a login that was never put in place, even one that CANNOT be put in
-// place — and carries over only what that write decided about files outside
-// its own names, so nothing it committed is lost.
+// A WRITE REPLACES ONE IT FINDS STANDING, unapplied, which is how a logout
+// discards a login that CANNOT be put in place, and carries over only what
+// that write decided about files outside its own names.
 //
-// The standing write stopped because auth.json could not be written there (an
-// empty directory stands in its place, which a removal takes and a rename onto
-// refuses), so a logout that finished it first would stop at the same place
-// and remove nothing.
+// The standing write stopped because auth.json could not be written (an empty
+// directory stands in its place, which a removal takes and a rename onto
+// refuses), so a logout that finished it first would stop there and remove
+// nothing.
 //
 // Mutation: finish the standing write before replacing it, and the logout
 // fails; drop the standing write's other decisions, and the file outside the

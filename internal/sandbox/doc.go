@@ -1635,7 +1635,8 @@
 // So each section that a later build may add fields to carries an Extra of its
 // own, filled by its decode and written back by its encode under the rule the
 // record's top follows: [RunSteer], [RunNote], [NoteRead], a hook's serve of a
-// note ([HookServed]) and the call it answered ([NoteCall]), [BridgeCall],
+// note ([HookServed]) and the call it answered ([NoteCall]), a late call's
+// item ([LateCall]) and a telling of one ([CallTelling]), [BridgeCall],
 // [ElidedCall], [SessionCapture], [HeldCall], [ConversationBase] with its
 // [BaseSession] and each [BaseSibling], and [LaunchRecord] — the job's own
 // record, which grows a fact about the job with nearly every piece that touches
@@ -1752,8 +1753,8 @@
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... measuredOtherFields     2,309,376
-//	to spare, measured .............. measuredSpare             286,532
+//	every other field, measured ..... measuredOtherFields     2,219,286
+//	to spare, measured .............. measuredSpare             376,622
 //
 // Every other field is the identity, status and time fields, the run its turn's
 // leads are kept for and how many leads that part has taken
@@ -4083,6 +4084,12 @@
 // answer leaves the completion kept as it was, for its re-fire at the hold's
 // instant ([Coordinator.keepUnlessKept]), when no claim is refused for it.
 //
+// A LIFT CLEARS ONLY THE HOLD IT READ ([PendingRun.Holds]): a keep's, a
+// signal's listing's or a stop's. One read before a claim whose resume was
+// held again lifts nothing, since nothing signalled the newer hold's
+// condition since, and re-fires nothing: lifting it re-ran the job's
+// collection and review into a budget that still refused it.
+//
 // ITS LIFETIME IS THE COORDINATOR'S, for the reason [Coordinator.refire] gives.
 //
 // refireLifted re-fires the completion of run's job once a signal's lift of the
@@ -4717,9 +4724,9 @@
 // ADR-0067). The store keeps the seal as the bytes it was handed, as it keeps
 // an answer's ([RecordedAnswer.Sealed]). A FILING IS A PERSON'S NOTE ALONE
 // ([PendingStore.FileNote]): an item for one job is the store's to file, in its
-// own writes of the record, never a filer's, so a filing that names a job is
-// refused ([ErrNoteKind]) and no filer can hand one job words a person's note
-// would not reach it with.
+// own writes of the record, never a filer's, so a filing that names a job or
+// hands one a call is refused ([ErrNoteKind]) and no filer can hand one job
+// words a person's note would not reach it with.
 //
 // # Bounds are the caller's
 //
@@ -4744,14 +4751,14 @@
 // FILED BY THE STORE ALONE, in its own writes of the record, never handed in by
 // a filer: [PendingStore.FileNote] files a person's note and refuses one that
 // names a job ([ErrNoteKind]), since an item tells a job something on the
-// store's account rather than a person's. This build's store files none, and a
-// record holds one only where a store's write put it there: wherever it does,
-// it is counted apart from a person's notes ([MaxJobItems]), handed over by
-// every write only to a reader inside that job ([RunNote.IsFor]), passed over
-// by every reader of a person's notes (the ending, the carry, the review, a
-// launch's brief, the capture's cursor), and removed by the write of the launch
-// that opens the next job ([openNotes]). Empty for a person's note, an item of
-// the whole turn.
+// store's account rather than a person's. The one kind this build files is a
+// late-call item ([RunNote.LateCall], "A late call is handed to the job
+// working as it lands"): it is counted apart from a person's notes
+// ([MaxJobItems]), handed over by every write only to a reader inside that job
+// ([RunNote.IsFor]), passed over by every reader of a person's notes (the
+// ending, the carry, the review, a launch's brief, the capture's cursor), and
+// removed by the write of the launch that opens the next job ([openNotes]).
+// Empty for a person's note, an item of the whole turn.
 //
 // keptCallOf is call as a serve keeps it: whole where its session is of the id
 // charset (letters, digits, `-` and `_`, [ValidCallID]'s) and its id is a JSON
@@ -4841,8 +4848,9 @@
 //   - every ITEM FOR ONE JOB ([RunNote.For]) is removed first: the job this
 //     write opens is new, so every item on the record was the job before it's
 //     alone, and nothing in this one will read it. An item for the job this
-//     write opens is the store's to file after it, held to [MaxJobItems];
-//     the steps below are a person's notes';
+//     write opens is the store's to file after it, once the opening of its log
+//     decides which calls are late, held to [MaxJobItems]; the steps below
+//     are a person's notes';
 //   - the brief's notes ([PendingRun.BriefNotes]) are recorded READ by the job:
 //     a note the record already holds, still waiting, is recorded read; one it
 //     holds read by the take the brief names as lost ([RunNote.LostTake]) is
@@ -4953,10 +4961,10 @@
 // harness confirms it. An item for one job the record holds ([RunNote.For])
 // counts toward neither.
 //
-// A PERSON'S NOTE ALONE: a filing that names a job ([RunNote.For]) is refused
-// with [ErrNoteKind] before anything is read or written, whatever the record
-// holds. An item for one job is the store's to file, in its own writes of the
-// record, never a filer's.
+// A PERSON'S NOTE ALONE: a filing that names a job ([RunNote.For]) or hands
+// one a call ([RunNote.LateCall]) is refused with [ErrNoteKind] before
+// anything is read or written, whatever the record holds. An item for one job
+// is the store's to file, in its own writes of the record, never a filer's.
 //
 // NO FENCE, as [PendingStore.AppendBridgeCall] takes none: a note is an append
 // to the turn, never an ownership decision. The note must carry its id and its
@@ -5040,6 +5048,70 @@
 // whatever its status or its ending. A record that is gone, before the settle
 // or under it, answers nothing, never an error; a settle that names no job is
 // an error.
+//
+// # A late call is handed to the job working as it lands
+//
+// A call whose outcome the session of the job working on its round lacks — one
+// an earlier job made that the round's log took late ([BridgeCall.Late]), or
+// one of the job's own its harness gave up on ([BridgeCall.Abandoned]) — is
+// filed for that job as a LATE-CALL ITEM ([RunNote.LateCall]): a copy of the
+// call as the log listed it, bounded as an ordinary call is ([itemCall]), for
+// the engine to hand the job at its next request. FILED IN THE WRITES THAT
+// DECIDE THE CALL IS LATE OR NOBODY WAITED FOR IT, and nowhere else
+// ([CoordStore.fileLateItems]):
+//
+//   - the APPEND that lists it ([CoordStore.AppendBridgeCall]): a late call
+//     for the job the log is open to, and a call of the log's own job its
+//     harness gave up on for that job, once its spend is written;
+//   - the OPENING of a job's log that carries its round on
+//     ([CoordStore.BeginLaunch]): every call it walks past the read the
+//     relaunch's briefs were built from, late already or not, for the job it
+//     opens, after the reset removed every item of the job before.
+//
+// The log's job, never the caller's: the item is for whichever job the round
+// runs on, which the log's own compare-and-swap read. PINNED as a take is: the
+// row must name that job, in a status its harness takes notes in
+// ([LateCallStatuses]), its ending undecided; a call already filed for the job
+// is filed once ([lateItemID]); at most [MaxJobItems] a job; never a call an
+// older build appended unnumbered, nor one a person approved. A filing that
+// fails or is refused never fails its write: the call keeps its mark, and every
+// continuation of the round tells it (internal/agent/runner's heldAt), as
+// before any item existed. UNSEALED, since it is the log's account, which the
+// log holds in the clear and no seal would prove anything of; the engine hands
+// it under words of its own, never as anybody's note (ADR-0067, ADR-0073).
+//
+// # A late call its job's session took is told to no continuation of it again
+//
+// Where the job's own session is KNOWN TO HOLD an item's call — OpenCode's
+// plugin confirmed it delivered ([NoteTake.Confirms]), or the job's main thread
+// shows its hook took it after its last restart ([HookSettle.Held]) — the write
+// that records the read records a TELLING of the call ([RunSteer.Tellings],
+// [CallTelling]): the round, the call's place in its log, the job, and that
+// write's OWN NEW PLACE among the reads, never the item's. So a capture or a
+// save whose cursor was read off the row before that write has a cursor below
+// it ([SessionCapture.NoteCursor] is at most [RunSteer.Reads] as read, and the
+// count only grows), and only one read after it, of the job's session or a
+// later one's, is past it. Nothing else records one: not a hook's take, whose
+// answer may never reach its harness, not the review's, not a brief. A telling
+// outlives its item, is kept by every relaunch that carries the round on, and
+// is cleared by one that starts a new round, whose log numbers its calls
+// afresh; one a call, at most [MaxCallTellings]. A continuation credits it only
+// to a session not cut off or possibly a summary, whose cursor is at or past
+// it, and whose briefs counted no read of the call without listing it
+// ([BriefTold.LateOmitted]): internal/agent/runner's heldByTelling, ADR-0073.
+// And never one a hook's step recorded ([CallTelling.Hook]) to a box whose
+// release's resume this build did not read: such a box holds no read at a
+// hook's step as the job's session showed it, and the briefs for it
+// ([UnheldTelling]) tell the call.
+//
+// ONE JOB A CALL, BY THE ORDER OF THE WRITES: an item is filed only by the
+// write that appends its call or opens a job's log, for a job launching or
+// running, and a relaunch's briefs read the log only once the collection has
+// claimed the job before. So a call filed for that job was in the log those
+// briefs read, and the opening that carries the round on walks only the calls
+// past it. Were one call told to two jobs all the same, the telling keeps the
+// HIGHER place ([withTelling]): a session that took it only there holds it from
+// there alone, and the lower would credit a capture of it read between the two.
 //
 // # Stopping a seat's running work
 //
@@ -5466,8 +5538,9 @@
 // the hook took it, marked `Restarted` where it shows that only before its last
 // restart, which no capture counts held (`notesHeld` stops before that read,
 // and before an unread note's place). An ITEM FOR ONE JOB (`RunNote.For`) is
-// the store's alone to file, in its own writes of the record: `FileNote` files
-// a person's note alone and refuses one that names a job (`ErrNoteKind`), so no
+// the store's alone to file, in its own writes of the record (a late call's,
+// `fileLateItems`): `FileNote` files a person's note alone and refuses one that
+// names a job or a call (`ErrNoteKind`), so no
 // filer hands a job words on the store's account. One a record holds is counted
 // apart from a person's two bounds (`MaxJobItems`), handed by every write only
 // to a reader inside the job, passed over by the ending and the cursor, and

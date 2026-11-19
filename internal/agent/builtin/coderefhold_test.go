@@ -196,6 +196,8 @@ var notRefArgs = map[string]string{
 	"thread":             "a comment thread's id",
 	"finding":            "a finding's id",
 	"resolve":            "whether a comment resolves its thread",
+	"edit":               "the id of a comment whose words a call replaces",
+	"comment":            "the id of a comment a call deletes",
 	"resolution":         "a finding's resolution",
 	"sha":                "a whole commit id a check is keyed by: nothing resolves it, and nothing is read through it",
 	"checked_for":        "the branch a check's rows are keyed by, which filters them: nothing is read through it",

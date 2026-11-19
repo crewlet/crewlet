@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/recordseal"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/executor"
@@ -94,7 +95,7 @@ func boundInbox(t *testing.T, runs *runSteers, store sandbox.PendingStore, turnI
 		t.Fatalf("Get %s = %v, %v", turnID, found, err)
 	}
 	inbox := runs.inbox(identityOfRun(run), 1)
-	inbox.Bind(t.Context(), launch)
+	inbox.Bind(t.Context(), launch, provenance.NewBoundary())
 	t.Cleanup(inbox.Close)
 	return inbox
 }
@@ -718,13 +719,11 @@ func TestAClaudeTakeFitsItsBudgetInUTF16Units(t *testing.T) {
 
 // A RESUMED TURN CARRIES ITS NOTES IN THE ORDER THEY WERE READ — the record's
 // own order of the writes that read them, whatever waits between them and
-// whatever each writer's clock said. A record holds a waiting note between two
-// read ones whenever a note waits while a later one is read — a seal this node
-// cannot open yet, or a later note a harness took first — and the writes that read
-// notes are made by whichever nodes launch the run, serve its bridge and resume
-// the turn, each stamping its own time. The carry is what every later phase and
-// brief renders in order: two notes from one person that disagree must reach the
-// reviewer with the later read last, since a note is the later word.
+// whatever each writer's clock said. A waiting note sits between two read ones
+// whenever a seal cannot be opened yet or a harness took a later note first,
+// and the reads are written by different nodes, each stamping its own time.
+// Two disagreeing notes from one person must reach the reviewer with the later
+// read last, since a note is the later word.
 //
 // Mutation: sort on the reads' times, or with a comparator that ties every pair
 // with a waiting note in it, as carried did, and the read notes come back out of
@@ -1085,8 +1084,9 @@ func TestANoteAtItsWorstFitsWhatARunsRowKeepsOfOne(t *testing.T) {
 // holds, as the store's own write of the record files one.
 //
 // ONTO THE RECORDS THE STORE IS BUILT ON, because no filer may file one
-// (sandbox.ErrNoteKind) and this build's store files none: what every reader
-// does with an item a record holds is the subject here, whoever put it there.
+// (sandbox.ErrNoteKind) and the store files late calls alone: what every
+// reader does with an item a record holds is the subject here, whoever put it
+// there.
 func placeItemFor(t *testing.T, runs *runSteers, records coord.SandboxRuns, turnID, id, job string) {
 	t.Helper()
 	n, err := runs.seal(turnID, steer.Note{ID: id, Text: "item for the job " + id, By: "founder",

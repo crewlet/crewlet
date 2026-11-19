@@ -120,10 +120,12 @@ func (q checkQueue) overdueAt() int64 {
 }
 
 // checkRun is a row's RUN, as the claim with the lower (startedAt, runner)
-// set it, its holder's later record naming the box.
+// set it, its holder's later record naming the box; required is a person's
+// CI's claim's word of the gate ([CheckStarted.Required]).
 type checkRun struct {
 	runner, placement, box string
 	startedAt              int64
+	required               bool
 }
 
 // checkEnding is a row's ENDING, as the ending a join keeps set it, with the
@@ -137,6 +139,8 @@ type checkEnding struct {
 	testsTotal                          sql.NullInt64
 	testsFailed, testsSkipped, logLines int64
 	tailCut                             bool
+	// required is a reported ending's word of the gate ([CheckFinished.Required]).
+	required bool
 }
 
 // checkPart is what one record says of a row: each of its three parts, nil
@@ -181,7 +185,7 @@ func queuedPart(q CheckQueued, at applyContext) checkPart {
 func startedPart(s CheckStarted) checkPart {
 	return checkPart{run: &checkRun{
 		runner: s.Runner, placement: string(s.Placement), box: s.Box,
-		startedAt: store.EncodeTime(s.StartedAt),
+		startedAt: store.EncodeTime(s.StartedAt), required: s.Required,
 	}}
 }
 
@@ -191,7 +195,7 @@ func finishedPart(f CheckFinished, at applyContext) (checkPart, error) {
 		state: string(f.State), reason: string(f.Reason), url: f.URL, summary: f.Summary, tail: f.Tail,
 		durationMs: f.DurationMs, failuresOmitted: int64(f.FailuresOmitted),
 		finishedAt: store.EncodeTime(f.FinishedAt), position: at.packed, log: f.Log,
-		logLines: int64(f.LogLines), tailCut: f.TailCut,
+		logLines: int64(f.LogLines), tailCut: f.TailCut, required: f.Required,
 	}
 	if f.Tests != nil {
 		e.testsTotal = sql.NullInt64{Int64: int64(f.Tests.Total), Valid: true}
@@ -222,6 +226,19 @@ type checkRow struct {
 	queue  checkQueue
 	run    checkRun
 	ending checkEnding
+}
+
+// required is whether the target's gate requires the check, DERIVED as its
+// state is: the queue's word where one queued it, else a person's CI's, its
+// kept ending's once one ended and its claim's before, so the joins commute.
+func (r checkRow) required() bool {
+	switch {
+	case r.queue.position > 0:
+		return r.queue.required
+	case r.ending.position > 0:
+		return r.ending.required
+	}
+	return r.run.required
 }
 
 // state is the row's state, DERIVED from its parts and never joined on its
@@ -340,7 +357,7 @@ func joinCheck(ctx context.Context, tx *sql.Tx, at applyContext, key CheckKey, p
 	q, r, e := row.queue, row.run, row.ending
 	if _, err = tx.ExecContext(ctx, writeCheckSQL, key.RepoID, key.OID, key.Name, key.Attempt,
 		string(row.state()), q.purpose, q.changeID, q.revision, q.candidateID, q.entryID, key.Target, q.base,
-		q.defsOID, q.required, q.runIn, q.timeoutSeconds, e.reason, r.runner, r.placement, r.box, e.reporter,
+		q.defsOID, row.required(), q.runIn, q.timeoutSeconds, e.reason, r.runner, r.placement, r.box, e.reporter,
 		q.queuedAt, r.startedAt, e.finishedAt, e.durationMs, e.exitCode, e.failuresOmitted,
 		q.position, e.position, row.rowBytes(), q.overdueAt(), e.url, e.summary, q.def, e.failures,
 		e.tail, e.testsTotal, e.testsFailed, e.testsSkipped, e.logLines, e.tailCut); err != nil {
@@ -394,6 +411,10 @@ func readCheckRow(ctx context.Context, tx *sql.Tx, key CheckKey) (checkRow, bool
 		// The state column is derived ([checkRow.state]); it is the
 		// ending's only once there is one.
 		e.state = ""
+	}
+	if q.position == 0 {
+		// So is required ([checkRow.required]): with no queue, the report's.
+		run.required, e.required, q.required = q.required, q.required, false
 	}
 	return r, true, nil
 }

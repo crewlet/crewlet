@@ -44,19 +44,16 @@ func (a ActorKind) Valid() bool { return slices.Contains(ActorKinds, a) }
 
 // AnonymousActor is the name recorded for an actor this build cannot name.
 //
-// NO CREDENTIAL IS EVER RECORDED UNDER IT, which is what keeps a write made
-// with nobody identified apart from a real credential's in an audit row — and
-// the reason is the name grammars, not a refusal anywhere. Every login a
-// principal can hold carries a separator ([ValidLogin] a dot,
+// NO CREDENTIAL IS EVER RECORDED UNDER IT, which keeps an unidentified write
+// apart from a real credential's in an audit row. The reason is the name
+// grammars: every login carries a separator ([ValidLogin] a dot,
 // [ValidMachineHandle] a colon) and this name has neither; and [ActorFor]
 // records a Tier A token under its WHOLE login, `token:<id>` ([TokenLogin]),
-// so even a token whose id is `anonymous` — which [ValidTokenID] accepts, and
-// internal/config therefore admits — writes as `token:anonymous`. A SEAT
-// handle is one segment and may be spelled this way, which is why the name is
-// never read alone: the [Actor.Kind] beside it says whether a seat wrote it.
+// so a token with id `anonymous` writes as `token:anonymous`. A SEAT handle is
+// one segment and may be spelled this way, so the name is never read alone:
+// the [Actor.Kind] beside it says whether a seat wrote it.
 //
-// ONE COPY, here: there is no second spelling of it in config, the chart or
-// the API to keep in step, and this leaf is what each of them imports.
+// One copy, here; every other package imports this leaf.
 const AnonymousActor = "anonymous"
 
 // Actor is how a principal is recorded on a row it authors.
@@ -93,46 +90,16 @@ type Actor struct {
 
 // ActorFor is how a principal is written down.
 //
-// TOTAL OVER FOUR CASES, WITH NO FIFTH — every principal, including a
-// malformed one and one carrying a [Kind] this build has never heard of, comes
-// back as one of [ActorKinds]. There is nowhere for this to return an error
-// to: it is called at the moment a row is written, and a write that fails
-// because the author could not be classified is a decision somebody made that
-// the engine then threw away.
+// TOTAL OVER FOUR CASES: every principal, even of an unknown [Kind], comes back
+// as one of [ActorKinds]; it runs as a row is written, with nowhere to return an
+// error. The DECLARED kind decides and only the NAME degrades to
+// [AnonymousActor]; an unreadable kind becomes an operator, the least it claims.
 //
-// ONE DEGRADATION RULE, stated once: the kind a principal DECLARES decides the
-// actor kind, and only the NAME degrades. A seat principal missing its handle
-// is still an agent's write — pretending it was the engine's, or an operator's,
-// would put somebody else's name on it — so the kind stands and the name falls
-// back to [AnonymousActor]. The one exception is a kind this build cannot
-// read at all, which becomes an operator: that claims neither a seat nor the
-// engine, which is the least this can claim and still be total.
-//
-// A PRINCIPAL SPLITS ON ITS SEAT, and that split is the whole point of the
-// seat binding the identity directory holds: bound, it acts as the seat and
-// its work lands under the seat's handle. Every person holds one human seat
-// for as long as they are here (ADR-0032), so a person is always bound; the
-// unbound arm — acting as the credential, under its login — is the one every
-// MACHINE takes when nothing binds it, a pipeline, an automation, a Tier A
-// token, and for a machine that is ordinary.
-//
-// THE NAME IS [RecordOwner]'s, degraded — one function decides which of a
-// principal's names it acts under, and this one only adds the kind and the
-// name for nobody.
-//
-// WHICH IS WHY EVERY PRINCIPAL ENROLS WITH A LOGIN. The unbound arm has
-// nothing else to write, and a person enrolled by address alone was recorded
-// as [AnonymousActor] beside every change they made; the identity directory
-// now refuses an enrolment that names none, so the degradation above is
-// reached only by a principal no enrolment produced.
-//
-// AND THE OPERATOR IS WHAT IT PRESENTED: [Actor.OperatorID] is the
-// credential beside the name — the machine token or the browser session a
-// principal acts through ([Principal.Via]) or, where it is its own credential,
-// its login. A token acting as its owner is the owner's AUTHORITY being
-// exercised, so the author is the owner; the operator column is what keeps
-// that write distinguishable from one the owner made themselves, and a
-// session's lineage is what says which of their sign-ins made it.
+// A person is bound to a seat (ADR-0032) and acts as it; the unbound arm, the
+// credential under its login, is a MACHINE's, so every principal enrols with a
+// login. The name is [RecordOwner]'s, degraded. [Actor.OperatorID] is
+// [Principal.Via], else the login: a token acting as its owner makes the owner
+// the author, and this column keeps that write distinguishable.
 func ActorFor(p Principal) Actor {
 	name := nameOr(RecordOwner(p))
 	operator := p.Login
@@ -156,21 +123,14 @@ func ActorFor(p Principal) Actor {
 	}
 }
 
-// ActorApps is what a write records of its principal's apps beside the author
-// [ActorFor] writes down: the apps it uses ([AppsOf]) where it is written down
-// as an OPERATOR — a credential acting as no seat — and nothing for any other
-// kind.
+// ActorApps is what a write records of its principal's apps beside [ActorFor]'s
+// author: the apps it uses ([AppsOf]) where it is an OPERATOR, else nothing (a
+// seat's record names the seat; the running node reads its holder).
 //
 // ON THE RECORD, because a turn the write wakes is worked for that credential
-// (ADR-0109), and the node that runs the turn may not be the node that took
-// the write: Tier A is per node, and the directory a node reads may lag. The
-// running node bounds the turn by these apps AND by its own resolution of the
-// credential, so a token one node narrowed never acts on another node's wider
-// grants, and a write recorded before its credential was narrowed or removed
-// is held to what the credential is now.
-//
-// NOTHING FOR A SEAT'S OR A PERSON'S WRITE, whose record names the seat: the
-// running node reads who holds it, as it reads every seat's requester.
+// (ADR-0109) on a node that may not have taken the write, which bounds the turn
+// by these apps AND its own resolution of the credential, so a token narrowed
+// on one node never acts on another's wider grants.
 func ActorApps(p Principal) []Grant {
 	if ActorFor(p).Kind != ActorOperator {
 		return nil
@@ -178,34 +138,18 @@ func ActorApps(p Principal) []Grant {
 	return AppsOf(p.Grants)
 }
 
-// RecordOwner is the name a principal's OWN RECORD is kept under — their
-// inbox, their pins, their priorities, their personal views — and the name
-// every write they make is attributed to.
+// RecordOwner is the name a principal's OWN RECORD (inbox, pins, priorities,
+// personal views) is kept under, and every write they make is attributed to.
 //
-// # One function for the read and the write
+// ONE FUNCTION FOR THE READ AND THE WRITE: a record written under one name and
+// read under another is a record nobody has. A person's name is their SEAT
+// (ADR-0032), where assignments, mentions and priorities are addressed; an
+// unbound machine's is its LOGIN, whose colon keeps it out of the seat
+// namespace; a seat's is its handle.
 //
-// It exists because there were two. The tools wrote a caller's record under
-// the name [ActorFor] gave them, and the query surface read it back under the
-// principal's SEAT — which is the same value for a bound person and nothing at
-// all for an unbound one. So a person the directory binds to no seat, and
-// every unbound token, pinned a view, marked their inbox and saved a personal
-// view under their LOGIN through their assistant, and their dashboard, asking
-// for the record by seat, never showed any of it. A record that is written
-// under one name and read under another is a record nobody has.
-//
-// # Which name
-//
-// A person's is their SEAT — every person holds one (ADR-0032) — because that
-// is where the company's work finds them: an assignment, a mention and a
-// lead's priority list are all addressed to the seat. Every unbound machine's
-// is its LOGIN — the colon in it keeps it out of the seat namespace, so it can
-// never be read as somebody's seat. A seat's is its handle.
-//
-// EMPTY FOR NOBODY, and never [AnonymousActor]: a principal of no known kind,
-// or one missing the name its kind is kept under, has no record, and an empty
-// owner is what every personal rule refuses. A name here would be one a
-// caller could be decided as — every such principal would share a record
-// called "anonymous".
+// EMPTY FOR NOBODY, never [AnonymousActor]: a principal of no known kind, or
+// missing its name, has no record, and an empty owner is what every personal
+// rule refuses; a name would make all of them share one "anonymous" record.
 func RecordOwner(p Principal) string {
 	switch p.Kind {
 	case KindSeat:
@@ -230,16 +174,14 @@ func RecordOwner(p Principal) string {
 // this principal's OWN — the name their record is kept under, or the login
 // they signed in with.
 //
-// BOTH, because a person bound to a seat is known by two names and either one
-// is them: the authority table's own-record rule admits the login as readily
-// as the seat. A surface that compared against [RecordOwner] alone read a
-// bound person's login as SOMEBODY ELSE's name — resolving it through the
-// colleague lookup, or writing a second record under it — while one that
-// compared against the login alone missed the seat. What a caller naming
-// themselves reaches is always the one record, under [RecordOwner].
+// BOTH, because a person bound to a seat is known by two names and the
+// authority table's own-record rule admits either. Comparing against
+// [RecordOwner] alone reads a bound person's login as SOMEBODY ELSE's (a
+// colleague lookup, or a second record); against the login alone it misses the
+// seat. Either name reaches the one record, under [RecordOwner].
 //
-// NOBODY NAMES NOTHING: an empty name, or a principal with no record, is
-// never self.
+// NOBODY NAMES NOTHING: an empty name, or a principal with no record, is never
+// self.
 func NamesSelf(p Principal, name string) bool {
 	owner := RecordOwner(p)
 	if name == "" || owner == "" {
@@ -311,25 +253,16 @@ var errNoLook = errors.New("iam: no authority decision is wired to say whether "
 	"this caller may look a login up")
 
 // MayLook decides whether THIS caller may learn what the identity directory
-// says about somebody else's login — asked by [OwnerOf] BEFORE the directory
-// is, and answering nil to let it be asked or the caller's own refusal to stop
-// it.
+// says about somebody else's login: [OwnerOf] asks it BEFORE the directory, and
+// nil lets the directory be asked.
 //
-// # Why the authority comes first
-//
-// The directory's answers differ by login: nobody holds this one, that one's
-// holder is bound to a seat the chart has moved, a third is covered by a record
-// this node cannot decode and so cannot be said at all. Decided after the
-// lookup, those were answers every caller could tell apart — a login nobody
-// holds refused on the name as typed, a held one this node could not resolve
-// answered 503 naming the seat it was bound to — so a caller with no authority
-// over anybody read which logins exist, and whose seat each holds, off the
-// difference. So the surface decides first whatever it can decide without the
-// record (the admin grant, a verb only a record's owner may take, a caller who
-// leads nobody), and only a caller the record could still admit reaches the
-// directory at all. internal/authz holds the rule as [authz.Object.Unresolved];
-// this is the seam its answer reaches [OwnerOf] through, because this package
-// holds values and decides nothing.
+// The authority comes first because the directory's answers differ by login
+// (nobody holds it, its holder's seat moved, an undecodable record): decided
+// after the lookup, a caller with no authority could read which logins exist
+// and whose seat each holds off the difference. So the surface decides first
+// what it can without the record, and only a caller the record could still
+// admit reaches the directory. internal/authz holds the rule
+// ([authz.Object.Unresolved]); this package only carries its answer.
 type MayLook func(ctx context.Context, login string) error
 
 // LookRefused is [OwnerOf]'s answer when its [MayLook] refused the lookup: the
@@ -341,36 +274,17 @@ type LookRefused struct{ Err error }
 func (r *LookRefused) Error() string { return r.Err.Error() }
 func (r *LookRefused) Unwrap() error { return r.Err }
 
-// OwnerOf is the record a name addresses when THIS caller names it — the name
-// a surface reads a personal record under and writes one under, from a tool's
-// argument, a question's parameter or a route's path alike.
+// OwnerOf is the record a name addresses when THIS caller names it, for reads
+// and writes alike. Somebody ELSE's record must not be addressed by whatever
+// was typed: `jane.doe` for the seat `jane` would touch a record no screen of
+// hers reads, or land via the fuzzy resolver on a lookalike seat.
 //
-// # One function for every name, and for the read and the write
-//
-// [RecordOwner] made a caller's OWN record one name for the read and the
-// write, and [NamesSelf] made either of their names reach it. Somebody ELSE's
-// was still read and written under whatever was typed: an administrator's
-// `jane.doe` for a person the directory binds to the seat `jane` read an empty
-// inbox and wrote pins and inbox marks into a record under the login that no
-// screen of hers reads, and `set_priorities` sent the login through the fuzzy
-// colleague resolver, which set the priorities of whichever seat it resembled.
-// So:
-//
-//   - NO NAME, or either of the caller's own, is the caller's own record —
-//     [RecordOwner], which may be empty for a principal with none.
-//   - A LOGIN is looked up: its holder's record, through [Holders] —
-//     [ErrNoHolder], [ErrHolderUnseated] or an unknown error otherwise. A
-//     login is never a seat, and never read literally. And it is looked up
-//     only once look has let it be: a caller the record could never admit is
-//     answered look's own refusal, as a [LookRefused], and the directory is
-//     never asked — see [MayLook].
-//   - ANYTHING ELSE is returned UNCHANGED and UNSETTLED: a seat's handle, or
-//     words a model typed. That is the chart's to resolve, and this package
-//     holds no chart — a surface resolves it exactly, or against the
-//     colleague lookup, as its verb calls for.
-//
-// SETTLED says which: true when the answer is a record owner this function
-// established, false when it is the name handed back for the chart.
+//   - NO NAME, or either of the caller's own: [RecordOwner], maybe empty.
+//   - A LOGIN is looked up through [Holders] ([ErrNoHolder], [ErrHolderUnseated]
+//     or an unknown error), never read literally, and only once look has let it
+//     be; else the answer is look's refusal as a [LookRefused].
+//   - ANYTHING ELSE comes back UNCHANGED and UNSETTLED, the chart's to resolve.
+//     SETTLED is true only when this function established the owner.
 func OwnerOf(ctx context.Context, p Principal, name string, holders Holders,
 	look MayLook) (owner string, settled bool, err error) {
 

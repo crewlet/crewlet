@@ -22,17 +22,15 @@ import (
 
 // A BUSY SEAT'S MAIL WAITS ON THE BROKER, AND NOTHING CIRCLES, on BOTH backends.
 //
-// What used to spin: while a detached executor held a seat, every delivery to
-// it was PARKED — requeued onto the inbox it had just been fetched from, then
-// acked — and nothing stopped the consumer, so the copy was the next thing it
-// fetched. For the length of the run each waiting message went round fetch,
-// screen, answer lookup, publish, ack, at whatever rate the broker served.
+// Parking a delivery requeued it onto the inbox it was fetched from and acked
+// it, with nothing stopping the consumer, so each waiting message circled
+// (fetch, screen, publish, ack) at the broker's rate for the whole run.
 //
 // Now the coordinator holds the seat's inbox from the moment the launch writes
-// the run's row — not from the started event a separate subscription processes
-// later — so the mail is not fetched at all: no dispatch, no requeue, no
-// publish. When the run stops holding the seat — here, its completion resumes
-// the turn — the hold lifts and each message is worked exactly once.
+// the run's row, not from the started event a separate subscription processes
+// later, so the mail is not fetched at all: no dispatch, no requeue, no
+// publish. When the run stops holding the seat (here, its completion resumes
+// the turn) the hold lifts and each message is worked exactly once.
 func TestABusySeatsMailWaitsWithoutCirclingOnEveryBackend(t *testing.T) {
 	// NOT PARALLEL, and for the broker's sake rather than any shared state:
 	// at the conformance suite's two-second ack wait, a handler a contended

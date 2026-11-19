@@ -29,23 +29,16 @@ import (
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// A DRAINING NODE STARTS NO TURN THROUGH A LAUNCH'S COMPLETION.
-//
-// What a running engine did: the drain closed the node's turn gate and quiesced
-// every seat's inbox, the box's waiter went on running through it (its
-// keepalive protects the box), and a completion it fired reached the seat's
-// CONTROL topic, which nothing quiesced. The coordinator claimed the run,
-// collected the box and resumed the turn on a node that was leaving: two full
-// turns started minutes into a drain, each holding the drain open until it
-// ended, and both abandoned when it did.
+// A DRAINING NODE STARTS NO TURN THROUGH A LAUNCH'S COMPLETION. The drain
+// closes the turn gate and quiesces every inbox, but the box's waiter keeps
+// running and a completion it fires reaches the seat's CONTROL topic, which
+// nothing quiesced: the coordinator would resume the turn on a leaving node.
 //
 // These cases drive that road end to end: a real engine, the coordinator its
-// own builder wires ([Engine.buildSandboxRuntime]) and its own waiters, the one
-// that drives the rig's box firing completions to the seat's control topic as
-// it does in production. The box is `direct`, so that waiter is this node's
-// own (ADR-0065), and the run's record names this node as the one that
-// launched it. The box and its harness are the in-process doubles, so the
-// only thing standing in for production is what runs inside the box.
+// builder wires ([Engine.buildSandboxRuntime]) and the waiter firing
+// completions to the control topic as in production. The box is `direct`, so
+// that waiter is this node's own (ADR-0065). Only what runs inside the box is
+// a double.
 
 // drainRig is one engine over a store and a stream that outlive it, holding the
 // swe seat with its executor in its box.
@@ -715,17 +708,14 @@ func TestADrainWaitsForAResumeAdmittedBeforeIt(t *testing.T) {
 	}
 }
 
-// A RESUMED TURN TAKES A SLOT UNDER node.max_concurrent.
+// A RESUMED TURN TAKES A SLOT UNDER node.max_concurrent: it is a full turn, so
+// with the node at its ceiling a completion waits for a slot before it claims
+// the run, and runs the moment one frees.
 //
-// The ceiling is what the node is sized by, and a resumed turn is a full turn:
-// model calls, tool loops, a harness. With the node at its ceiling, a
-// completion waits for a slot before it claims the run, and runs the moment
-// one frees.
-//
-// THE WAIT IS OBSERVED, NOT SLEPT ON: the completion's handler is seen parked
-// for the slot ([node.Node.TurnsWaiting]), which it can only be before its
-// claim, and an ungated completion is seen collected instead; either ends the
-// wait, and only the first is right.
+// THE WAIT IS OBSERVED, NOT SLEPT ON: the handler is seen parked for the slot
+// ([node.Node.TurnsWaiting]), which it can only be before its claim; an
+// ungated completion is seen collected instead. Either ends the wait, and only
+// the first is right.
 //
 // Mutation: drop the gate from the engine's coordinator and the completion is
 // collected and resumed beside the turn holding the only slot.

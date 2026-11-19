@@ -91,17 +91,14 @@ func TestEachClientKeepsItsOwnTimeout(t *testing.T) {
 
 // CLOSING ONE CLIENT'S IDLE CONNECTIONS CLOSES EVERY CLIENT'S.
 //
-// http.Client.CloseIdleConnections forwards to its transport, and here that is
-// the process's ONE transport — so there is no such thing as "the idle
-// connections this client holds". Three providers had a Close that believed
-// otherwise, and calling one on a config swap would have dropped the warm
-// connections of every other provider, all seven third-party app clients,
-// every remote MCP server and the sandbox control plane.
+// http.Client.CloseIdleConnections forwards to its transport, here the
+// process's ONE transport, so no client holds "its own" idle connections.
+// Calling it on a config swap would drop every other client's warm
+// connections.
 //
-// The property is not a defect to fix — it is the unavoidable other side of
-// one shared pool, and the reason nothing may call the method. Pinned here so
-// the next caller finds a failing test rather than a plausible-looking
-// cleanup.
+// This is the unavoidable other side of one shared pool, and the reason
+// nothing may call the method. Pinned so the next caller finds a failing test
+// rather than a plausible-looking cleanup.
 func TestClosingIdleConnectionsIsProcessWide(t *testing.T) {
 	// Not parallel: it closes the shared transport's idle connections, which
 	// is precisely what it is here to demonstrate.

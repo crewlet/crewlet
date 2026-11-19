@@ -513,3 +513,37 @@ func viewedSurface(t *testing.T, host *viewedHost) http.Handler {
 		Authorize: builtin.Decide(leadsNobody{}),
 	}))
 }
+
+// fieldRefusal is a domain's refusal by one field, naming it as a value
+// (gitlet.FieldRefused's shape) beneath its class's sentinel.
+type fieldRefusal struct {
+	field string
+	err   error
+}
+
+func (f fieldRefusal) Error() string        { return f.err.Error() }
+func (f fieldRefusal) Unwrap() error        { return f.err }
+func (f fieldRefusal) RefusedField() string { return f.field }
+
+// AN INVALID REFUSAL NAMES THE FIELD IT WAS REFUSED BY, as a value a client words its own way
+// (ADR-0060): never the domain's sentence, and no field where the refusal names none.
+// Mutation: answer no fields, or the domain's sentence as detail, and this fails.
+func TestAnInvalidRefusalNamesItsFieldAsAValue(t *testing.T) {
+	t.Parallel()
+	_, answer := act(t, refusingSurface(t, fieldRefusal{field: "labels",
+		err: fmt.Errorf("%w: labels: the `labels` name no tag", worklet.ErrInvalid)}), "founder",
+		builtin.CreateWorkItemTool, "application/json", createBody(), newKey())
+	fields, _ := answer[operator.KeyFields].([]any)
+	if answer["error"] != string(httpjson.CodeInvalid) || len(fields) != 1 || fields[0] != "labels" {
+		t.Errorf("a refusal by its labels answered %v, want invalid naming the field labels", answer)
+	}
+	if _, has := answer["detail"]; has {
+		t.Errorf("a refusal by its labels answered the domain's sentence as detail: %v", answer)
+	}
+	_, answer = act(t, refusingSurface(t, fmt.Errorf("%w: the `labels` name no tag",
+		worklet.ErrInvalid)), "founder", builtin.CreateWorkItemTool, "application/json",
+		createBody(), newKey())
+	if _, has := answer[operator.KeyFields]; has {
+		t.Errorf("a refusal naming no field answered %v, want no fields", answer)
+	}
+}
