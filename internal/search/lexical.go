@@ -77,17 +77,15 @@ const ScanBatch = 1_000
 
 // Indexer maintains the lexical index behind this node's own applied rows.
 //
-// SEPARATE FROM THE APPLIER, and it must be: an apply carries the checkpoint
-// in its own transaction and has to be fast, while indexing a page is
-// tokenising tens of kilobytes and writing hundreds of posting rows. Doing it
-// inline would put the whole index build inside the apply transaction — which
-// holds this store's only writer — and a node catching up on a large company
-// would stop applying records entirely while it worked.
+// SEPARATE FROM THE APPLIER, and it must be: an apply carries the checkpoint in
+// its own transaction and has to be fast, while indexing a page tokenises tens
+// of kilobytes and writes hundreds of posting rows. Inline, the build would sit
+// inside the apply transaction (this store's only writer) and a node catching
+// up on a large company would stop applying while it worked.
 //
-// It also lives in a DIFFERENT ESTATE from what it indexes: the sources are
-// replicated rows derived from a log, and the index is this node's own. No
-// read joins the two, which is why every comparison here is a batch from each
-// side rather than a JOIN.
+// It lives in a DIFFERENT ESTATE from what it indexes: the sources are
+// replicated rows and the index is this node's own. No read joins the two, so
+// every comparison is a batch from each side, never a JOIN.
 type Indexer struct {
 	// db is this node's own estate, where the index is kept, and estate the
 	// replicated estate whose documents it indexes — read only, because the
@@ -98,16 +96,13 @@ type Indexer struct {
 	// built is which sources have completed at least one lap since this
 	// process started, which is what [Indexer.Ready] answers.
 	//
-	// IN MEMORY, beside the cursors and for the same reason: it is a fact
-	// about THIS process's walk rather than about the index, and a
-	// restart honestly re-establishes it on its first lap.
+	// IN MEMORY, beside the cursors: it is a fact about THIS process's walk,
+	// not the index, and a restart re-establishes it on its first lap.
 	//
-	// ATOMIC, unlike the cursors, and that is the one difference that
-	// matters: the cursors are read and written only inside [Indexer.Run],
-	// which is one loop, while this is READ BY EVERY SEARCH — the gate is
-	// asked on every empty answer, from whichever goroutine is serving a
-	// turn. The map itself is built once, at construction, so only the
-	// flags move.
+	// ATOMIC, unlike the cursors, which only [Indexer.Run]'s one loop touches:
+	// this is READ BY EVERY SEARCH, on every empty answer, from whichever
+	// goroutine serves a turn. The map is built once at construction, so only
+	// the flags move.
 	built map[string]*atomic.Bool
 
 	// cursor and orphanCursor are where the two reconciliation walks are.
@@ -377,12 +372,9 @@ const excerptLimit = 600
 // substituted by the JSON encoder and read by a model as a replacement
 // character.
 //
-// MARKED WHERE IT WAS CUT, inside the budget. It used to carry no marker, on
-// the reasoning that a snippet cut from it adds its own — but a snippet only
-// marks the end IT cut, and a window that reached the end of this excerpt
-// marked nothing, so the snippet of a long document ended as though the
-// document did. The marker is part of the snippet's input now, and a window
-// that reaches it carries it.
+// MARKED WHERE IT WAS CUT, inside the budget: a snippet marks only the end IT
+// cut, so a window reaching the end of an unmarked excerpt would end as though
+// the document did. The marker is part of the snippet's input.
 func excerptOf(title, body string) string {
 	return textcut.Within(strings.Join(strings.Fields(readingText(title, body)), " "), excerptLimit)
 }
@@ -479,15 +471,14 @@ func (x *Indexer) Stale(ctx context.Context, limit int) ([]Doc, error) {
 //
 // # The lap is the unit, not the batch
 //
-// It SCANS at [ScanBatch] and only reads bodies for what actually moved, so a
-// pass over an unchanged corpus is a handful of two-column statements rather
-// than a walk paced at the tokeniser's speed. That is the whole difference
-// between "a saved page is findable after an idle tick" and "after a full lap
-// of the corpus", which at ten thousand documents was about seventeen minutes.
+// It SCANS at [ScanBatch] and reads bodies only for what moved, so a pass over
+// an unchanged corpus is a handful of two-column statements, not a walk paced
+// at the tokeniser's speed: a saved page is findable after an idle tick rather
+// than a full lap (about seventeen minutes at ten thousand documents).
 //
-// Returning inside the lap is what keeps the write side bounded: the scan is
-// cheap and unbounded in reach, the fetch is [IndexBatch] documents, and the
-// caller's loop comes straight back for the next one.
+// Returning inside the lap keeps the write side bounded: the scan is cheap and
+// unbounded in reach, the fetch is [IndexBatch] documents, and the caller's
+// loop comes straight back for the next.
 func (x *Indexer) staleIn(ctx context.Context, source LexicalSource,
 	limit int) ([]Doc, error) {
 
@@ -496,30 +487,22 @@ func (x *Indexer) staleIn(ctx context.Context, source LexicalSource,
 		var moved []string
 		var wrapped bool
 		// THE CURSOR IS STAGED, NEVER ADVANCED INSIDE THE TRANSACTION.
-		// It is in-memory state and the transaction below can fail after
-		// it has been set — the index read and the body fetch are both
-		// store reads — and an in-memory write is not rolled back with
-		// the transaction that produced it. Advanced in place, one
-		// transient read failure SKIPPED every document in that scan
-		// window until the walk wrapped, which is exactly the staleness
-		// this walk's whole design is measured against: at ten thousand
-		// documents a lap was about seventeen minutes. Staged here and
-		// committed only on success, a failed step is retried over the
-		// same window on the next call.
+		// The cursor is in-memory state and the transaction below can fail
+		// after it is set (both reads are store reads); an in-memory write
+		// is not rolled back with it. Advanced in place, one transient
+		// failure would SKIP every document in that scan window until the
+		// walk wrapped. Staged and committed only on success, a failed step
+		// is retried over the same window.
 		next, advance := x.cursor[name], false
-		// ONE TRANSACTION PER SCAN STEP, holding the scan and the fetch
-		// together: the walk's correctness argument is that a batch is
-		// compared against one snapshot of the other side, and reading
-		// the bodies in a second transaction would fetch a version the
-		// scan never saw.
+		// ONE TRANSACTION PER SCAN STEP, scan and fetch together: a batch is
+		// compared against one snapshot of the other side, and bodies read
+		// in a second transaction could be a version the scan never saw.
 		//
-		// THROUGH THE HANDLE, NOT A POOL. An estate that is not open
-		// — a legitimate, documented state, since an adoption closes it
-		// between its rename and its reopen — has no pool, and a
-		// statement issued on a closed one panics inside database/sql.
-		// [store.ReplicatedReader.Read] answers [store.ErrNoEstate]
-		// instead, which every caller here already reads as an empty
-		// index pass.
+		// THROUGH THE HANDLE, NOT A POOL: an estate that is not open (an
+		// adoption closes it between its rename and its reopen) has no pool,
+		// and a statement on a closed one panics inside database/sql.
+		// [store.ReplicatedReader.Read] answers [store.ErrNoEstate], which
+		// every caller reads as an empty index pass.
 		var out []Doc
 		if err := x.estate.Read(ctx, func(tx *sql.Tx) error {
 			scan, err := source.Versions(ctx, tx, x.cursor[name], ScanBatch)
@@ -527,26 +510,20 @@ func (x *Indexer) staleIn(ctx context.Context, source LexicalSource,
 				return err
 			}
 			if len(scan) == 0 {
-				// THE WALK WRAPS. It is a cursor over ids rather
-				// than a watermark over versions, so reaching the
-				// end is the ordinary case rather than a failure
-				// — and it is the moment this source is BUILT.
+				// THE WALK WRAPS: a cursor over ids, so reaching the end
+				// is ordinary, and is the moment this source is BUILT.
 				wrapped = true
 				return nil
 			}
 			// A SCAN THAT DID NOT ADVANCE IS A SOURCE BREAKING ITS
-			// CONTRACT, and it has to be an error rather than another
-			// turn of this loop. [LexicalSource.Versions] promises ids
-			// AFTER the cursor, ordered by id; a source that ignores
-			// the cursor — or whose ordering disagrees with the
-			// comparison the cursor is carried through, which is a
-			// collation question rather than a hypothetical — hands
-			// back the same batch for ever. The loop's three exits are
-			// "it wrapped", "it found work" and "the context ended",
-			// and none of them is reachable from there: the indexer
-			// spins on one batch, never indexes again, never marks the
-			// source built, and the only symptom is search that is
-			// permanently scoped with nothing in the log to say why.
+			// CONTRACT, and must be an error, not another turn of the loop.
+			// [LexicalSource.Versions] promises ids AFTER the cursor, ordered
+			// by id; a source that ignores the cursor, or whose ordering
+			// disagrees with the cursor's comparison (a collation question),
+			// returns the same batch for ever. None of the loop's exits
+			// (wrapped, found work, context ended) is reachable from there:
+			// the indexer spins, never marks the source built, and the only
+			// symptom is permanently scoped search with nothing logged.
 			if last := scan[len(scan)-1].ID; last <= x.cursor[name] {
 				return fmt.Errorf("search: source %s answered a scan after %q "+
 					"with a batch ending at %q, which is not after it — the "+
@@ -777,31 +754,15 @@ func (x *Indexer) Pending(ctx context.Context) (int, error) {
 
 // Ready reports whether this node's FIRST INDEX BUILD has finished.
 //
-// THE SEARCH GATE, and it exists because "no results" and "not indexed yet"
-// are different answers a person acts on differently. A seat on a freshly
-// joined node would otherwise be told the company has written nothing down,
-// for the five minutes the first build takes — so the knowledge block renders
-// "index building" instead, and the searcher declines rather than answering
-// empty.
+// THE SEARCH GATE: "no results" and "not indexed yet" differ, so during the
+// first build the knowledge block renders "index building" and the searcher
+// declines rather than tell a seat the company has written nothing down.
 //
-// # Why it is the first LAP and not "nothing is pending"
-//
-// Because "nothing is pending" is a state a company with people in it is
-// almost never in. It was read from [Indexer.Pending] — published documents
-// minus indexed ones — so a single page saved a moment ago made it false,
-// and every empty search on the whole node then answered "the index is still
-// building, try again" rather than "nothing matched". On a company writing
-// continuously it never recovered, and the turn-start knowledge block was
-// suppressed on every turn.
-//
-// The gate's own doc says what it is for: the FIRST build. After that, an
-// index a few documents behind is ordinary staleness — a search over it is a
-// true answer about slightly older rows, which is strictly better than
-// refusing — and a document that has not been indexed yet is exactly the
-// thing the caller is about to search for and would not have found anyway.
-//
-// NO I/O, which is the other half: it was one count per empty search, on a
-// path taken by every turn's knowledge block.
+// It is the first LAP, not "nothing is pending" ([Indexer.Pending]): a page
+// saved a moment ago would make every empty search answer "still building" and,
+// on a company writing continuously, suppress the knowledge block every turn.
+// After the first build a slightly stale index is a true answer, better than
+// refusing. NO I/O: it is asked on every empty search.
 func (x *Indexer) Ready() bool { return x.ReadyFor() }
 
 // ReadyFor is [Indexer.Ready] narrowed to the sources a query actually asks

@@ -87,6 +87,10 @@ type TaskRow struct {
 	Updated  time.Time `json:"updated"`
 	Version  uint64    `json:"version"`
 
+	// Flow is why an item in progress is or is not moving ([Flow]), read
+	// in the page's own statement; null on any other item.
+	Flow *Flow `json:"flow"`
+
 	// THE OPT-IN FACTS, each ABSENT unless named in `fields=` ([RowField]).
 	// When asked for, each is PRESENT even at zero, so "0" is told rather
 	// than left ambiguous: hence `omitzero` on a slice that is non-nil and
@@ -251,6 +255,11 @@ type Answer struct {
 	Complete   bool        `json:"complete"`
 	Incomplete *Incomplete `json:"incomplete,omitempty"`
 
+	// FlowLive says the rows' flow read the seats' live facts ([Posture]):
+	// false on a node whose source is not seeded, where no row reads
+	// working or a seat's stop.
+	FlowLive bool `json:"flow_live"`
+
 	// Around is where [Query.Around]'s task sits in this answer's drawing
 	// order, and NIL when the caller asked and the task is not in it — or
 	// did not ask, which the caller knows. See [Around].
@@ -283,15 +292,18 @@ const (
 // the freshness target, then one read transaction. A reader opening its own
 // transaction would serve whatever this node holds and bound no lag.
 type Reader struct {
-	db  store.ReplicatedReader
-	log *statelog.Reader
+	db       store.ReplicatedReader
+	log      *statelog.Reader
+	postures Postures
 }
 
 // NewReader builds the read surface over a node's replicated estate.
 //
 // The framework reader is REQUIRED: without it every level silently degrades
-// to whatever the local rows say, which is worse than a refusal.
-func NewReader(db store.ReplicatedReader, log *statelog.Reader) (*Reader, error) {
+// to whatever the local rows say, which is worse than a refusal. The postures
+// are this node's live facts for the items' flow ([Postures]); nil reads every
+// flow without them, and each answer says so (`flow_live: false`).
+func NewReader(db store.ReplicatedReader, log *statelog.Reader, postures Postures) (*Reader, error) {
 	if db.IsZero() {
 		return nil, fmt.Errorf("worklet: a reader needs a store")
 	}
@@ -300,7 +312,7 @@ func NewReader(db store.ReplicatedReader, log *statelog.Reader) (*Reader, error)
 			"authority — without it every read level is a label rather than a " +
 			"guarantee, which is silent at every surface that renders one")
 	}
-	return &Reader{db: db, log: log}, nil
+	return &Reader{db: db, log: log, postures: postures}, nil
 }
 
 // Tasks answers one query.
@@ -324,7 +336,8 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			"tool linearizable, a dashboard poll stale) before it reads")
 	}
 
-	answer := Answer{View: q.View, Preset: q.Preset}
+	at := rowsAt{dayStart: q.DayStart, flow: r.flowAt(now)}
+	answer := Answer{View: q.View, Preset: q.Preset, FlowLive: at.flow.live()}
 	// A SET READ: under a deferred scope a point read refuses, but a set
 	// read cannot enumerate what would have ENTERED the set, so it is
 	// served at the level asked for and claims no completeness.
@@ -384,7 +397,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 			// no cursor ([Answer.Groups]), so it reads the unpaged
 			// predicate its per-column counts are over.
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
-			groups, err := readGroups(ctx, tx, q, fields, set, terms)
+			groups, err := readGroups(ctx, tx, q, fields, set, terms, at)
 			if err != nil {
 				return err
 			}
@@ -394,7 +407,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		case listed:
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			all, _, err := readTasks(ctx, tx, set, terms,
-				MaxPriorities, q.DayStart)
+				MaxPriorities, at)
 			if err != nil {
 				return err
 			}
@@ -407,7 +420,7 @@ func (r *Reader) Tasks(ctx context.Context, q Query, now time.Time) (Answer, err
 		default:
 			//nolint:govet // shadow: `x, err := f()` declares x too; see .golangci.yml
 			rows, cursor, err := readPage(ctx, tx, set, resume, terms,
-				limit, q.DayStart)
+				limit, at)
 			if err != nil {
 				return err
 			}
@@ -1589,14 +1602,21 @@ func mintCursor(keys []any, order string) string {
 	return base64.RawURLEncoding.EncodeToString(body)
 }
 
+// rowsAt is what a page of rows is read against: the company's midnight its
+// overdue mark is cut on, and the instant and posture its flow is read at.
+type rowsAt struct {
+	dayStart time.Time
+	flow     flowAt
+}
+
 // readTasks reads one page of a set in an order.
 //
 // A GROUPED ANSWER'S COLUMN is this statement narrowed to one value
 // ([columnSet]), with the same sort, row shape and cursor.
 func readTasks(ctx context.Context, tx *sql.Tx, set taskSet,
-	terms []sortTerm, limit int, dayStart time.Time) ([]TaskRow, string, error) {
+	terms []sortTerm, limit int, at rowsAt) ([]TaskRow, string, error) {
 
-	return readPage(ctx, tx, set, nil, terms, limit, dayStart)
+	return readPage(ctx, tx, set, nil, terms, limit, at)
 }
 
 // readPage reads one page of a set in an order, resuming after a cursor's row
@@ -1610,14 +1630,14 @@ func readTasks(ctx context.Context, tx *sql.Tx, set taskSet,
 // bounded by the order, never by how far the caller paged.
 func readPage(ctx context.Context, tx *sql.Tx, set taskSet,
 	resume []keyset.Arm, terms []sortTerm, limit int,
-	dayStart time.Time) ([]TaskRow, string, error) {
+	at rowsAt) ([]TaskRow, string, error) {
 
 	// ALLOCATED RATHER THAN NIL, a wire contract: a nil slice marshals to
 	// `null`, and a client's `rows.length` on an empty answer throws.
 	out := []TaskRow{}
 	var pageKeys [][]any
 	for _, arm := range pageArmSets(set, resume, terms) {
-		rows, keys, err := scanTaskRows(ctx, tx, arm, terms, limit+1-len(out))
+		rows, keys, err := scanTaskRows(ctx, tx, arm, terms, limit+1-len(out), at.flow)
 		if err != nil {
 			return nil, "", err
 		}
@@ -1638,7 +1658,7 @@ func readPage(ctx context.Context, tx *sql.Tx, set taskSet,
 	// `due=overdue` ("before midnight today, in the company's zone").
 	for i := range out {
 		out[i].Overdue = out[i].Due != nil &&
-			out[i].StatusGroup.Open() && out[i].Due.Before(dayStart)
+			out[i].StatusGroup.Open() && out[i].Due.Before(at.dayStart)
 	}
 	// THE DEPENDENCY EDGES, in ONE statement over the page: a correlated
 	// subquery in the SELECT cannot return a collection.
@@ -1651,9 +1671,9 @@ func readPage(ctx context.Context, tx *sql.Tx, set taskSet,
 // scanTaskRows reads up to n rows of a set in an order, each with its value
 // for every column the order sorts by.
 func scanTaskRows(ctx context.Context, tx *sql.Tx, set taskSet,
-	terms []sortTerm, n int) ([]TaskRow, [][]any, error) {
+	terms []sortTerm, n int, at flowAt) ([]TaskRow, [][]any, error) {
 
-	query, bound := taskRowsStatement(set, terms)
+	query, bound := taskRowsStatement(set, terms, at)
 	rows, err := tx.QueryContext(ctx, query, append(bound, n)...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("worklet: read tasks: %w", err)
@@ -1669,15 +1689,16 @@ func scanTaskRows(ctx context.Context, tx *sql.Tx, set taskSet,
 		var archived, blocked, collision int
 		var updated int64
 		var version int64
+		var flow []byte
 		sortValues := make([]any, len(terms))
 		targets := []any{&row.ID, &row.Key, &collision, &row.Title, &row.Type, &row.Status,
 			&row.StatusGroup, &row.Priority, &row.Assignee, &row.Project,
 			&parentID, &row.Depth, &start, &due, &row.EstimateMinutes,
-			&row.Points, &archived, &row.Rank, &updated, &version, &blocked}
+			&row.Points, &archived, &row.Rank, &updated, &version, &blocked, &flow}
 		for i := range sortValues {
 			targets = append(targets, &sortValues[i])
 		}
-		if err := rows.Scan(targets...); err != nil {
+		if err = rows.Scan(targets...); err != nil {
 			return nil, nil, fmt.Errorf("worklet: read a task row: %w", err)
 		}
 		pageKeys = append(pageKeys, sortValues)
@@ -1697,6 +1718,9 @@ func scanTaskRows(ctx context.Context, tx *sql.Tx, set taskSet,
 		row.KeyCollision = collision == 1
 		row.Updated = store.DecodeTime(updated)
 		row.Version = uint64(version)
+		if row.Flow, err = decodeFlow(flow); err != nil {
+			return nil, nil, err
+		}
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
@@ -1707,7 +1731,7 @@ func scanTaskRows(ctx context.Context, tx *sql.Tx, set taskSet,
 
 // taskRowsStatement is the statement [readTasks] reads a page with, and its
 // arguments up to the trailing LIMIT; named for the plan test.
-func taskRowsStatement(set taskSet, terms []sortTerm) (string, []any) {
+func taskRowsStatement(set taskSet, terms []sortTerm, at flowAt) (string, []any) {
 
 	// THE SORT COLUMNS ARE SELECTED TOO, as opaque values: the page cursor
 	// is their values.
@@ -1716,21 +1740,24 @@ func taskRowsStatement(set taskSet, terms []sortTerm) (string, []any) {
 		keys = append(keys, term.Column)
 	}
 
-	// THE JOINS' ARGUMENTS COME FIRST: the joins precede the WHERE, and
-	// placeholders bind in statement order.
+	// THE FLOW'S ARGUMENTS COME FIRST, then the joins': the select list
+	// precedes the joins, the joins the WHERE, and placeholders bind in
+	// statement order.
+	flow, flowArgs := flowExpr(at, flowWhole)
 	joins, joinArgs := sortJoins(terms)
 	query := `SELECT t.id, t.key, t.key_collision, t.title, t.type, t.status, t.status_group, t.priority,
 	                 t.assignee, t.project_key, t.parent_id,
 	                 t.depth, t.start_at, t.due_at, t.estimate_min, t.points,
 	                 t.archived, t.rank, t.updated_at, t.version,
 	                 EXISTS (SELECT 1 FROM tracker_task_deps d
-	                         WHERE d.task_id = t.id AND d.blocker_open = 1), ` +
+	                         WHERE d.task_id = t.id AND d.blocker_open = 1),
+	                 ` + flow + `, ` +
 		strings.Join(keys, ", ") + `
 	          FROM ` + set.from + joins + `
 	          WHERE ` + set.where + `
 	          ORDER BY ` + renderOrder(terms) + `
 	          LIMIT ?`
-	return query, append(joinArgs, set.args...)
+	return query, append(append(flowArgs, joinArgs...), set.args...)
 }
 
 // blockersStatement is [loadBlockers]' read of n tasks' dependency edges,

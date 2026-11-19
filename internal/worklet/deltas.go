@@ -279,6 +279,8 @@ func projectDeltas(before, after Project) map[string]Delta {
 	moved.prose("unit", before.Unit, after.Unit)
 	moved.add("default_assignee", before.DefaultAssignee, after.DefaultAssignee)
 	moved.add("target_date", before.TargetDate, after.TargetDate)
+	moved.add("stuck_after_hours", windowText(before.StuckAfterHours),
+		windowText(after.StuckAfterHours))
 	moved.add("archived", boolText(before.Archived), boolText(after.Archived))
 	moved.add("policy_version",
 		countText(before.PolicyVersion), countText(after.PolicyVersion))
@@ -409,6 +411,15 @@ func boolText(b bool) string { return strconv.FormatBool(b) }
 // countText is a number as text, zero included: unlike [minutesText]'s
 // estimate, where zero means unsized, a zero count is a fact.
 func countText(n int) string { return strconv.Itoa(n) }
+
+// windowText is a project's stuck window as a delta reads it: empty for none
+// set, which is the default rather than a window of zero hours.
+func windowText(hours int) string {
+	if hours == 0 {
+		return ""
+	}
+	return strconv.Itoa(hours)
+}
 
 // containerText is where an object lives, in the container grammar's two-part
 // form. The workspace carries no ID, so it is the bare word rather than

@@ -2054,7 +2054,8 @@ A third-party MCP server holds its own schema and is not checked here.
   nothing, and a `null` for an argument the tool does not take is not
   refused. A `null` is a value only where the tool's schema declares it one,
   and there it clears what it names: an update's `due`, `start`,
-  `estimate_minutes` and `points`, and a project's `target_date`. Inside an
+  `estimate_minutes` and `points`, and a project's `target_date` and
+  `stuck_after_hours`. Inside an
   object argument a `null` is the object's to read, as a custom field's value
   in `fields` is cleared by one.
 - **The lenient readings are kept.** A number or a boolean where a string

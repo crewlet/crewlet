@@ -67,6 +67,7 @@ afterEach(() => {
 });
 
 const row = (over: Partial<WorkSummary> = {}): WorkSummary => ({
+  flow: null,
   id: "t-1",
   key: "ENG-9",
   project: "ENG",

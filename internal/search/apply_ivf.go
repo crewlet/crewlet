@@ -119,23 +119,13 @@ const indexHeadStatement = `
 // ivfMemo holds the decoded index, checked against the digest of the bytes it
 // was decoded from.
 //
-// # Why a memo, and why its check is the CONTENT
+// Filing a vector reads the centroids (up to 0.75 MB) and a catching-up node
+// applies thousands a second, for a value that changes once per retraining.
+// ONE SLOT: a retrained index REPLACES the old.
 //
-// A written vector is filed by reading the centroids — up to three quarters of
-// a megabyte — and a node catching up applies thousands of vectors a second,
-// so decoding the blob per record is a megabyte of reads per vector for a value
-// that changes once per retraining. A search likewise ranks every list of the
-// index before it reads any.
-//
-// ONE SLOT, because a node holds one index — the estate's, over its one vector
-// log — and a retrained index REPLACES the one before it rather than lingering
-// beside it, so the memo holds nothing a retrain left behind.
-//
-// A hit needs the DIGEST to match, never the generation: a generation is a
-// position on the log, and two stores in one process — a test's, or a snapshot
-// being adopted beside the live file — can hold different centroids at one
-// position. A digest names the bytes, so a hit is the same centroids wherever
-// they were read from.
+// A hit needs the DIGEST to match, never the generation: a generation is a log
+// position, and two stores in one process (a test's, or a snapshot adopted
+// beside the live file) can hold different centroids at one position.
 type ivfMemo struct {
 	mu   sync.Mutex
 	held *memoEntry
@@ -381,16 +371,15 @@ func readListCounts(ctx context.Context, tx *sql.Tx) (ListCounts, error) {
 // install writes the index a centroids record carries — or its verdict that
 // there is none.
 //
-// GUARDED BY THE POSITION, as a vector is: a centroids record at or below the
-// installed generation is a redelivery or a record the compaction has already
-// superseded, and installing it would put an older index over a newer one.
+// GUARDED BY THE POSITION, as a vector is: a record at or below the installed
+// generation is a redelivery or superseded, and installing it would put an
+// older index over a newer one.
 //
-// IT TOUCHES NO ROW. Every row stays filed under the index it was filed under
-// — stale now — until a reassign record for this generation re-files its
-// batch; a search reads the stale rows in full meanwhile ([Stage1]). Filing
-// them here would hold this store's writer for the whole corpus. What it
-// does empty is the per-list counts, because they count the rows filed under
-// the INSTALLED generation, and there are none yet.
+// IT TOUCHES NO ROW. Rows stay filed under their old, now stale, index until a
+// reassign record re-files their batch; a search reads them in full meanwhile
+// ([Stage1]). Filing them here would hold the writer for the whole corpus. It
+// does empty the per-list counts: they count rows filed under the INSTALLED
+// generation, and there are none yet.
 func (a Applier) install(ctx context.Context, tx *sql.Tx, vec VectorRecord, at statelog.Position) (int, error) {
 	head, ok, err := readIndexHead(ctx, tx)
 	if err != nil {
@@ -629,12 +618,9 @@ func refile(ctx context.Context, tx *sql.Tx, generation int64, batch int, moves 
 //
 // THE ARRAY DRIVES AND EACH PAIR SEEKS ITS ROW BY ROWID — the plan gate holds
 // it to that (TestEveryIndexServesARegisteredQuery) — so the statement reads
-// the batch's rows and nothing else, whatever the size of the table. Measured
-// at the pin re-filing 1 000 rows of width 32, without the race detector: 62
-// ms as a statement a row against 22 ms as this one over 2 000 rows, and 173
-// ms against 38 ms over 20 000. A whole batch at the shipped width, its
-// filing arithmetic and its counts included (BenchmarkReassignBatch, 5 000
-// rows, 64 lists, on a shared four-core box): 70–85 ms against 25–31 ms.
+// the batch's rows and nothing else, whatever the table's size: a statement a
+// row took 173 ms over 20 000 rows against 38 ms for this one
+// (BenchmarkReassignBatch has the whole batch).
 //
 // A constant of its own so the plan gate explains the statement the applier
 // runs.

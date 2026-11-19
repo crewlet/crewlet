@@ -25,3 +25,19 @@ var openCodeCountReleases = []string{"2.0.32", "2.1.4", "2.2.7", "2.3.0"}
 func openCodeCountRead(release string) bool {
 	return slices.Contains(openCodeCountReleases, strings.TrimSpace(release))
 }
+
+// openCodeHoldingsReleases are the OpenCode releases whose sessions a holdings
+// reading reads ([openCodeHoldingsRead]): each one whose own export of the
+// engine's bridged calls, written and continued by that release, read as
+// every case of the reading's measurement predicts, writer and box alike. A
+// SET, NEVER A RANGE, compared whole, and a subset of [openCodeCountReleases],
+// since the launch hands a reading's brief only to a box whose count it reads.
+// The package doc says how a release is added.
+var openCodeHoldingsReleases = []string{"2.0.32", "2.1.4", "2.2.7", "2.3.0"}
+
+// openCodeHoldingsRead reports whether release, the writer a session's row
+// records, is one of [openCodeHoldingsReleases], compared whole: never
+// trimmed, as the box's own word is ([openCodeCountRead]).
+func openCodeHoldingsRead(release string) bool {
+	return slices.Contains(openCodeHoldingsReleases, release)
+}

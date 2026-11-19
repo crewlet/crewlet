@@ -8,33 +8,16 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE ENGINE'S OWN KEY MATERIAL, and why it shares a store with the operator's
-// credentials without sharing a namespace.
-//
-// The company's secret store holds two kinds of thing. The OPERATOR's
-// credentials — a provider's API key, a vendor token — are named by the
-// environment-variable grammar, because a `${VAR}` in the company document is
-// how they are used: listed, revealed, rotated and resolved into a provider or
-// a child process. And the ENGINE's key material: the blind-index key the identity directory matches an
-// address under. It lives in the same store because every node must derive
-// under the same key, and this is the one store every node reads.
-//
-// # Why the two must not meet
-//
-// They used to share the environment-variable grammar, which made the engine's
-// keys ordinary operator secrets: `/secrets` listed them, a PUT or a DELETE
-// replaced the blind-index key and orphaned every address in the directory,
-// and every apply decrypted it into each node's `${VAR}` resolver, where a
-// reference in an `mcp_env` handed it to a child process.
-//
-// # A different SHAPE, so no reference grammar can reach it
-//
-// An engine-owned name is a PATH — `iam/blind-index-key` — and the reference
-// grammar has no `/` in it, so no `${VAR}` in any document can name one, by the
-// shape of the value rather than by a check a resolver has to remember to run.
-// The operator surfaces refuse the prefix outright ([ErrReservedName]), and the
-// store's operator view neither lists nor snapshots a reserved row; only the
-// engine's own view ([CheckEstateName]) writes one.
+// THE ENGINE'S OWN KEY MATERIAL shares the operator's store (every node must
+// derive the blind-index key the directory matches an address under) without
+// sharing a namespace. Operator credentials are named by the environment-variable
+// grammar; under it a PUT or DELETE would replace the blind-index key and orphan
+// every address, and an `mcp_env` reference could hand it to a child process.
+// An engine-owned name is a PATH (`iam/blind-index-key`) and the reference
+// grammar has no `/`, so no `${VAR}` can name one, by shape rather than by a
+// check. Operator surfaces refuse the prefix ([ErrReservedName]) and neither
+// list nor snapshot a reserved row; only the engine's view ([CheckEstateName])
+// writes one.
 
 // ErrReservedName reports an operator surface asked to address the engine's own
 // key material.
