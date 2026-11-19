@@ -5,7 +5,7 @@ package commentgate
 var excessInventory = map[string]int{
 	"internal/agent/ledger":         38,
 	"internal/agent/runner":         1007,
-	"internal/api/mcpbridge":        8,
+	"internal/api/mcpbridge":        7,
 	"internal/browser/cdp":          27,
 	"internal/browser/chromiumtest": 6,
 	"internal/coord/coordtest":      43,

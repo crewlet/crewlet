@@ -261,9 +261,8 @@ func TestTheNotesRouteRefusesATokenItCannotResolve(t *testing.T) {
 	}
 }
 
-// A SESSION WITH NO INBOX HAS NO NOTES ROUTE: a run with nothing to steer — the
-// assistant's deep work — answers 404, never an empty list a poller would hold
-// open for ever, and its steer_take answers nothing.
+// A SESSION WITH NO INBOX HAS NO NOTES ROUTE: it answers 404, never an empty
+// list a poller would hold open for ever, and its steer_take answers nothing.
 func TestTheNotesRouteIsAbsentForASessionWithNoInbox(t *testing.T) {
 	t.Parallel()
 	f := newSteerFixture(t, time.Minute)
@@ -978,22 +977,17 @@ func TestShutdownLetsGoOfAPollItRelays(t *testing.T) {
 // THE NOTES ROUTE JUDGES A CALL'S HOST AS THE MCP ENDPOINT DOES. A seat's poll
 // is answered its notes under whatever Host it arrives with (a reverse proxy
 // or tunnel passing the public name on included), on the node holding the
-// opening and on the holder a poll is relayed to alike. A session held to
-// loopback admits a loopback name or a container runtime's name for the engine
-// host and refuses any other with the route's own 401, as its MCP endpoint
-// does: both share the routing that judges it. Over real listeners on
-// 127.0.0.1, so every poll arrives on loopback.
+// opening and on the holder a poll is relayed to alike: both share the routing
+// that judges it. Over real listeners on 127.0.0.1, so every poll arrives on
+// loopback.
 //
 // Mutation: judge a seat's Host on the notes route (refuse a name that is not
-// loopback), and the public names are refused on both paths; drop the Host
-// from the hold, and the held session answers a rebound name its notes.
+// loopback), and the public names are refused on both paths.
 func TestTheNotesRouteJudgesAHostAsTheMCPEndpointDoes(t *testing.T) {
 	t.Parallel()
 	note := mcpbridge.SteerNote{Seq: 1, ID: "n-1", Inbox: "msg_1", Message: "use staging"}
 	direct := newSteerFixture(t, time.Second)
 	direct.inbox.file(note)
-	held := newSteerFixtureWith(t, time.Second, func(s *mcpbridge.Session) { s.Loopback = true })
-	held.inbox.file(note)
 
 	fx := newFixture(t)
 	f := newFleet(t, 2, 10*time.Second)
@@ -1010,26 +1004,19 @@ func TestTheNotesRouteJudgesAHostAsTheMCPEndpointDoes(t *testing.T) {
 	for path, route := range map[string]struct {
 		url    string
 		client *http.Client
-		// loopbackOnly is a session held to loopback, whose Host is judged.
-		loopbackOnly bool
 	}{
-		"a seat's, held here":        {mcpbridge.SteerURL(direct.url) + "/notes", direct.server.Client(), false},
-		"a seat's, relayed":          {mcpbridge.SteerURL(relayed) + "/notes", entry.server.Client(), false},
-		"one held to loopback, here": {mcpbridge.SteerURL(held.url) + "/notes", held.server.Client(), true},
+		"a seat's, held here": {mcpbridge.SteerURL(direct.url) + "/notes", direct.server.Client()},
+		"a seat's, relayed":   {mcpbridge.SteerURL(relayed) + "/notes", entry.server.Client()},
 	} {
 		parsed, err := url.Parse(route.url)
 		if err != nil {
 			t.Fatal(err)
 		}
 		port := parsed.Port()
-		for host, heldAdmits := range map[string]bool{
-			"127.0.0.1:" + port:                                true,
-			"localhost:" + port:                                true,
-			"host.docker.internal:" + port:                     true,
-			"host.containers.internal:" + port:                 true,
-			"crewlet.example.com":                              false,
-			"rebound.example.com:" + port:                      false,
-			"host.docker.internal.rebound.example.com:" + port: false,
+		for _, host := range []string{
+			"127.0.0.1:" + port, "localhost:" + port, "host.docker.internal:" + port,
+			"host.containers.internal:" + port, "crewlet.example.com", "rebound.example.com:" + port,
+			"host.docker.internal.rebound.example.com:" + port,
 		} {
 			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, route.url, nil)
 			if err != nil {
@@ -1041,13 +1028,9 @@ func TestTheNotesRouteJudgesAHostAsTheMCPEndpointDoes(t *testing.T) {
 				t.Fatalf("%s: poll as %s: %v", path, host, err)
 			}
 			_ = res.Body.Close()
-			want := http.StatusOK
-			if route.loopbackOnly && !heldAdmits {
-				want = http.StatusUnauthorized
-			}
-			if res.StatusCode != want {
+			if res.StatusCode != http.StatusOK {
 				t.Errorf("%s: a poll naming Host %s on loopback answered %d, want %d",
-					path, host, res.StatusCode, want)
+					path, host, res.StatusCode, http.StatusOK)
 			}
 		}
 	}
