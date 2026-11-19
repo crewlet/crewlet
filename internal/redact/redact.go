@@ -1212,11 +1212,10 @@ func separatorWithin[T textual](text T, at int) bool {
 // `x ? "Choose your password" : "Choose a new password"` the string after it,
 // and a translation table every translation of `"... without a password":`.
 // Markup is not held to it: `**Admin password**:` is a label with a space in
-// it, and so are most. What it costs is a name in a string, or in a code
-// span, that is no key where it stands: a choice between two strings that
-// opens with one (`masked ? "password" : "text"`) has the other redacted, and
-// a shell's pwd in backquotes before a colon, a container's mount, the path
-// after it.
+// it, and so are most. What it costs is a name in a string, or in a code span,
+// that is no key where it stands: a choice between two strings that opens with
+// one (`masked ? "password" : "text"`) has the other redacted, and a shell's
+// pwd in backquotes before a colon, a container's mount, the path after it.
 //
 // THE NAME IS READ BACK [MaxReach] AT MOST. Read as though the text began
 // there, a name running on past the bound would be refused and its value
@@ -1406,7 +1405,7 @@ func readValue[T textual](whole T, start, end int, prior [][2]int) aValue {
 		}
 	}
 	lineEnd, next := lineAt(text, sep)
-	escaped := escapedOnly(lineEnd, next)
+	escaped := escapedOnly(lineEnd, next, len(whole))
 	switch {
 	case escaped && len(r.suffix) == 0:
 		var named bool
@@ -1735,14 +1734,16 @@ func (r *valueRead[T]) keyOnRest(pos int) bool {
 }
 
 // escapedOnly reports whether the line break ending a line at lineEnd, the
-// line after it starting at next ([lineAt]), is an escaped one with no real
-// one after it: the string's next line, on the same line of the text. An
-// escaped break written at the end of a real line — `password:\n` and then
-// the line ends — is the real one: read as the string's, the next real line
-// was the rest of the key's, and its punctuation the suffix every line after
-// had to end in, so the value two lines down under a diff's `+` was
-// published.
-func escapedOnly(lineEnd, next int) bool { return next == lineEnd+2 }
+// line after it starting at next ([lineAt]) in a text total bytes long, is an
+// escaped one with no real one after it: the string's next line, on the same
+// line of the text. An escaped break written at the end of a real line
+// (`password:\n` and then the line ends) is the real one: read as the
+// string's, the next real line was the rest of the key's, and its punctuation
+// the suffix every line after had to end in, so the value two lines down under
+// a diff's `+` was published. SO IS ONE THAT ENDS THE TEXT, which no line of
+// the string follows: read as the string's, the text read otherwise than it
+// does with a break after it ([Secrets]).
+func escapedOnly(lineEnd, next, total int) bool { return next == lineEnd+2 && next < total }
 
 // lines reads on from the line starting at pos, escaped being whether the break
 // before it is an escaped one with no real one after it: see [readValue].
@@ -1766,7 +1767,7 @@ func (r *valueRead[T]) lines(pos int, escaped bool) aValue {
 		}
 		switch {
 		case len(trimmed) == 0:
-		case escaped && wordless(trimmed) && (next < 0 || !escapedOnly(lineEnd, next)):
+		case escaped && wordless(trimmed) && (next < 0 || !escapedOnly(lineEnd, next, len(r.whole))):
 			// What closes a real line after an escaped break: the `" +` of a
 			// string concatenated across lines. The real line may end in an
 			// escaped break of its own, as [ending] reads it: read as a line
@@ -1842,7 +1843,7 @@ func (r *valueRead[T]) lines(pos int, escaped bool) aValue {
 			v.ran = ran
 			return v
 		}
-		escaped = escapedOnly(lineEnd, next)
+		escaped = escapedOnly(lineEnd, next, len(r.whole))
 		crossed = crossed || !escaped
 		pos = next
 	}
@@ -1864,7 +1865,7 @@ func (r *valueRead[T]) lines(pos int, escaped bool) aValue {
 // wrapping and was then taken for the value, and once a pass had replaced it,
 // `#` ended in no suffix, so a second pass took the key's own `+`.
 func (r *valueRead[T]) ending(trimmed T, lineEnd, next int) (T, bool) {
-	ends, cut, endAt := trimmed, true, lineRest(r.text, lineEnd, next)
+	ends, cut, endAt := trimmed, true, lineRest(r.text, lineEnd, next, len(r.whole))
 	if endAt != lineEnd {
 		ends, cut = trimLine(r.text[next:endAt]), false
 	}
@@ -1889,14 +1890,14 @@ func (r *valueRead[T]) ending(trimmed T, lineEnd, next int) (T, bool) {
 }
 
 // lineRest is where what the line ending at lineEnd ends in ends, the next
-// line starting at next ([lineAt]): the end of the real line an escaped break
-// ends it before, where what follows the break up to there is punctuation
-// alone that no further escaped break follows ([valueRead.ending]), and
-// lineEnd otherwise.
-func lineRest[T textual](s T, lineEnd, next int) int {
-	if escapedOnly(lineEnd, next) {
+// line starting at next ([lineAt]) in a text total bytes long: the end of the
+// real line an escaped break ends it before, where what follows the break up
+// to there is punctuation alone that no further escaped break follows
+// ([valueRead.ending]), and lineEnd otherwise.
+func lineRest[T textual](s T, lineEnd, next, total int) int {
+	if escapedOnly(lineEnd, next, total) {
 		end, after := lineAt(s, next)
-		if rest := trimLine(s[next:end]); len(rest) != 0 && wordless(rest) && (after < 0 || !escapedOnly(end, after)) {
+		if rest := trimLine(s[next:end]); len(rest) != 0 && wordless(rest) && (after < 0 || !escapedOnly(end, after, total)) {
 			return end
 		}
 	}
@@ -1922,7 +1923,7 @@ func (r *valueRead[T]) reached(lineEnd, next int) bool {
 	switch {
 	case r.cutAt(lineEnd):
 		return true
-	case !escapedOnly(lineEnd, next):
+	case !escapedOnly(lineEnd, next, len(r.whole)):
 		return false
 	}
 	end, _ := lineAt(r.text, next)
@@ -2930,9 +2931,8 @@ var (
 
 // pemArmour is any PEM armour line — a private key's, or a certificate's, a
 // public key's, any block's (RFC 7468's labels). A key's block never runs
-// across one, in either direction: what follows it, or comes before it, is
-// that block's, and a certificate's body is base64 at the same width as a
-// key's.
+// across one, in either direction: what follows it, or comes before it, is that
+// block's, and a certificate's body is base64 at the same width as a key's.
 //
 // ITS LABEL IS 64 BYTES AT MOST. RFC 7468 sets no length, but its own labels
 // run to 21 (`ENCRYPTED PRIVATE KEY`), OpenPGP's `PGP PRIVATE KEY BLOCK` is
@@ -3137,7 +3137,9 @@ const minKeyLine = 40
 // under a diff's `+` ([atWidth]).
 const maxKeyLine = 76 + 1
 
-// Secrets replaces known credential patterns with markers.
+// Secrets replaces known credential patterns with markers. A BREAK AFTER THE
+// TEXT'S LAST LINE CHANGES NO REDACTION: Secrets(t+"\n") is Secrets(t)+"\n",
+// t not ending in "\r", which the "\n" after it would join into one break.
 //
 // REDACTING TWICE IS REDACTING ONCE, which matters because this runs at more
 // than one layer and a transcript can pass through both — the coordinator
@@ -5131,7 +5133,7 @@ func (c *claims) endingApart(s [2]int, out [][2]int) ([2]int, [][2]int) {
 			break
 		}
 		lineEnd, next := lineAt(c.text, p[5])
-		if _, after := lineAt(c.text, lineRest(c.text, lineEnd, next)); after >= 0 && s[0] >= p[3] && s[1] > after {
+		if _, after := lineAt(c.text, lineRest(c.text, lineEnd, next, len(c.text))); after >= 0 && s[0] >= p[3] && s[1] > after {
 			if s[0] < p[5] {
 				out = append(out, [2]int{s[0], p[5]})
 			}
