@@ -273,20 +273,23 @@ export function EventRow({ event, onOpen }: { event: FeedRow; onOpen?: () => voi
   const rest = opens ? what.slice(actor.length) : ` ${what}`;
   // THE HOVER TEXT IS THE DRAWN LINE, built from the same two pieces.
   const said = `${actor}${rest}`;
+  // THE LINK SHOWS THE TIME, so its name starts with it (WCAG 2.5.3): a
+  // reader who says what they see reaches the row, and hears what happened.
+  const at = fmtTime(event.timestamp);
   return (
     <div className={cx("feed-row", event.failed && "failed")}>
       <a
         className="feed-row__open"
         href={href(["live", "events", event.id])}
         onClick={onOpen}
-        aria-label={said}
+        aria-label={`${at} ${said}`}
       >
         <time
           className="feed-time"
           dateTime={event.timestamp}
           title={`${fmtDateTime(event.timestamp)} · ${relTime(event.timestamp, now)}`}
         >
-          {fmtTime(event.timestamp)}
+          {at}
         </time>
       </a>
       <span className="feed-what truncate" title={said}>
