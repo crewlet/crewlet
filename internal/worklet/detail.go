@@ -242,6 +242,13 @@ type TaskDetail struct {
 	// for a task with no due date.
 	DueStanding *DueStanding `json:"due_standing,omitempty"`
 
+	// Flow is the item's [Flow] at [DetailWants.Clock]'s instant, read in
+	// the same transaction as the task: null for an item not in progress,
+	// and without a clock, since a flow is cut on an instant. FlowLive is
+	// [Answer.FlowLive] for it.
+	Flow     *Flow `json:"flow"`
+	FlowLive bool  `json:"flow_live"`
+
 	// ReassignmentBudget is [ReassignmentBudget], served beside the
 	// counter it bounds ([Task.Reassignments]) so a screen saying "hand-off
 	// 7 of 8" reads the limit from the engine that enforces it, never a
@@ -383,6 +390,13 @@ const detailFlagsStatement = `
 		       COALESCE((SELECT key_collision FROM tracker_tasks
 		                 WHERE id = ?), 0) = 1`
 
+// detailFlowStatement is [Reader.Task]'s read of the item's flow, named for
+// the plan test: the one expression a board row reads, over the one row.
+func detailFlowStatement(at flowAt) (string, []any) {
+	flow, args := flowExpr(at, flowWhole)
+	return "SELECT " + flow + " FROM tracker_tasks t WHERE t.id = ?", args
+}
+
 // Task reads one task by id or by key, with whatever else was asked for.
 //
 // Every part and the coverage probe are read in ONE transaction, so no comment
@@ -402,6 +416,11 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		return TaskDetail{}, refused
 	}
 	var out TaskDetail
+	var flow *flowAt
+	if want.Clock != nil {
+		at := r.flowAt(want.Clock.Now)
+		flow, out.FlowLive = &at, at.live()
+	}
 	// A read that REPORTS its coverage rather than refusing: a record this
 	// node cannot decode covering the task is served with
 	// [TaskDetail.Incomplete] saying so, since a model or a person can act
@@ -480,6 +499,11 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 			id, id).Scan(&out.Blocked, &out.KeyCollision); err != nil {
 			return fmt.Errorf("worklet: read %s's open blockers: %w", id, err)
 		}
+		if flow != nil {
+			if out.Flow, err = readDetailFlow(ctx, tx, *flow, id); err != nil {
+				return err
+			}
+		}
 
 		// The coverage, in the same transaction as the rows, so it
 		// describes THIS answer.
@@ -524,6 +548,16 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 		out.Complete = false
 	}
 	return out, nil
+}
+
+// readDetailFlow reads one item's flow at an instant.
+func readDetailFlow(ctx context.Context, tx *sql.Tx, at flowAt, id string) (*Flow, error) {
+	statement, args := detailFlowStatement(at)
+	var packed []byte
+	if err := tx.QueryRowContext(ctx, statement, append(args, id)...).Scan(&packed); err != nil {
+		return nil, fmt.Errorf("worklet: read %s's flow: %w", id, err)
+	}
+	return decodeFlow(packed)
 }
 
 // taskReadScopeStatement is [taskReadScope]'s resolution, named for the plan

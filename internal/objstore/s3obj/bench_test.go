@@ -19,47 +19,17 @@ import (
 )
 
 // BenchmarkBackend measures an S3 bucket through the suite every backend runs,
-// at the production [s3obj.PartBytes], so a 16 MiB object goes up in two parts
-// and a 128 MiB one in sixteen, as they would against a real bucket.
+// at the production [s3obj.PartBytes] (a 16 MiB object goes up in two parts).
 //
-// AGAINST THE FAKE (`bucket=fake`) on loopback, at S3's own page of a
-// thousand keys, every request counted:
-//
-//   - `scheme=https` is the NODE'S SIDE of a bucket — the SDK, the
-//     signature, TLS and the store's own hashing, all on this machine's CPU —
-//     and none of the provider's: no round trip, no per-prefix request rate,
-//     no link.
-//   - `scheme=http` is the same where the SDK hashes every body it sends to
-//     sign it — what a MinIO reached without TLS costs.
-//   - `scheme=https/rtt=…` is the node's side with a provider's ROUND TRIP
-//     added to every request ([s3fake.Server.Latency]): 20 ms, a bucket in
-//     the node's own region on a good day, and 50 ms, one under load or a
-//     region away. The round trip is what bounds every request-at-a-time
-//     loop — a multipart upload's parts, a listing's pages, an audit's
-//     stats — and loopback hides it entirely. It charges no bandwidth.
-//   - `scheme=https/bw=80MB/…/read=…` is the reads alone
-//     ([objstoretest.BenchReads]) from a bucket that writes every GetObject
-//     body — an object's bytes — at no more than 80 MB/s
-//     ([s3fake.Server.ConnBytesPerSecond]): a provider's ceiling on one
-//     connection, about what one S3 connection carries. Each is read three
-//     ways: in ranges with the node's spare part buffers free (`read=wide`,
-//     as wide as the reader keeps busy), in ranges with every spare already
-//     taken (`read=narrow`, so the read streams range after range, the next
-//     one's request on its way while the one before is read), and as ONE
-//     GetObject a read (`read=stream`, how every read was made before a
-//     large one was read in ranges). And each at loopback's first byte and
-//     at a provider's 20 and 50 ms (`rtt=`), because a read in ranges pays a
-//     first byte a range where one stream paid it once, and only a first
-//     byte as long as a provider's shows whether the ranges' requests are
-//     sent early enough to hide it. Side by side they are what reading a
-//     large object in ranges buys against a provider that limits each
-//     connection, which loopback's gigabytes a second hide.
+// AGAINST THE FAKE (`bucket=fake`), on loopback: `scheme=https` is the NODE'S
+// SIDE (SDK, signature, TLS, hashing on this CPU) and none of the provider's;
+// `scheme=http` has the SDK hash every body it signs. `rtt=` adds a provider's
+// ROUND TRIP to every request ([s3fake.Server.Latency]), which bounds every
+// request-at-a-time loop and which loopback hides; it charges no bandwidth.
 //
 // AGAINST A REAL BUCKET (`bucket=real`) only when CREWLET_BENCH_S3_BUCKET
-// names one, configured by the variables the package doc lists; otherwise the
-// arm skips, saying so under `go test -v` (which `make bench` passes). Every
-// case puts its objects under a prefix of its own and [objstoretest.Clear]s
-// it when the case ends, since a real bucket outlives the run.
+// names one (the package doc lists the variables); otherwise the arm skips.
+// Each case [objstoretest.Clear]s its own prefix: a real bucket outlives it.
 func BenchmarkBackend(b *testing.B) {
 	for _, arm := range []struct {
 		name string
@@ -87,6 +57,14 @@ func BenchmarkBackend(b *testing.B) {
 			})
 		})
 	}
+	// THE READS ALONE ([objstoretest.BenchReads]) from a bucket writing each
+	// GetObject body at no more than 80 MB/s ([s3fake.Server.ConnBytesPerSecond]),
+	// about one S3 connection. Read in ranges with spare buffers free (`wide`),
+	// with every spare taken (`narrow`: the next range's request goes out while
+	// the one before is read) and as ONE GetObject (`stream`). Each at
+	// loopback's first byte and at 20 and 50 ms, because ranges pay a first
+	// byte each where a stream pays once, and only a provider's first byte
+	// shows whether requests go out early enough to hide it.
 	for _, rtt := range []time.Duration{0, 20 * time.Millisecond, 50 * time.Millisecond} {
 		for _, read := range []string{"wide", "narrow", "stream"} {
 			name := "bucket=fake/scheme=https/bw=80MB"
@@ -201,24 +179,17 @@ func BenchmarkUploadBesideSlowReads(b *testing.B) {
 }
 
 // BenchmarkAThrottledBurst measures what one throttle costs a burst: five
-// hundred heads sent by thirty-two loops — a Gitlet node's sync of five hundred
-// packs, near enough — to a bucket answering each 150 ms after it arrives, the
-// middle of S3's own first byte, from a FRESH client, as at boot and as after
-// its gate was lifted for a quiet minute.
-//
-//   - `throttle=none` throttles nothing, which is the burst's floor: sixteen
-//     rounds of a first byte.
-//   - `throttle=first` answers the burst's first request with a `SlowDown`,
-//     which cuts the gate to seven tenths of the thirty-two out when it comes
-//     back.
+// hundred heads sent by thirty-two loops to a bucket answering each 150 ms
+// after it arrives, from a FRESH client, as at boot and after its gate was
+// lifted for a quiet minute.
+//   - `throttle=none` is the burst's floor: sixteen rounds of a first byte.
+//   - `throttle=first` answers the first request with a `SlowDown`, cutting
+//     the gate to seven tenths of the thirty-two out when it comes back.
 //   - `throttle=quiet` answers a lone head with a `SlowDown` BEFORE the burst,
-//     the client having run one round of thirty-two and then gone quiet —
-//     what a node between two syncs meets when a fleet sits at the prefix's
-//     rate and the bucket throttles requests spread across it — so the cut
-//     comes back with one attempt out of a node that runs thirty-two.
-//   - `throttle=open` answers the client's check at open with a `SlowDown`:
-//     a node throttled before it has had more than one attempt out, which
-//     has no width to keep and climbs from one.
+//     the client having run one round of thirty-two and gone quiet (a node
+//     between two syncs), so the cut comes back with one attempt out.
+//   - `throttle=open` answers the check at open with a `SlowDown`: a node
+//     throttled with one attempt out has no width to keep and climbs from one.
 func BenchmarkAThrottledBurst(b *testing.B) {
 	for _, throttle := range []string{"none", "first", "quiet", "open"} {
 		b.Run("bucket=fake/rtt=150ms/throttle="+throttle, func(b *testing.B) {

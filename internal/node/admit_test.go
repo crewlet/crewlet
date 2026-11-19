@@ -304,18 +304,11 @@ const gateWaitBound = 2 * time.Second
 // A SEAT RUNS ONE TURN AT A TIME, whichever road each arrives by, and says so
 // when the one running ends, to whoever was refused behind it.
 //
-// The road this is about: a person's answer reaches the run it names on the
-// seat's control topic, which no mailbox turn waits for, so its resume used to
-// be able to start while the seat's mailbox was in the middle of a turn. The
-// second turn is refused at once with the sentinel its caller waits on, never
-// queued behind the first, and the seat's turn ending is announced so the
-// waiting work tries again then rather than on a timer. A turn inside the
-// running one is the same turn, and another seat is another turn.
-//
-// AND ONLY THEN: a release nobody was refused behind announces nothing. The
-// engine's gate releases an admission at once when the seat's model is at its
-// limit, and announcing those woke the seat's other waiting resumes for
-// nothing.
+// A person's answer reaches its run on the control topic, which no mailbox turn
+// waits for. The second turn is refused at once, never queued, and the ending
+// is announced so waiting work retries then, not on a timer. AND ONLY THEN: a
+// release nobody was refused behind announces nothing (the engine's gate
+// releases at once when the seat's model is at its limit).
 //
 // Mutation: drop the per-seat check and the second admission is granted; drop
 // the hook call from the release and the ending is never announced; announce
@@ -406,12 +399,10 @@ func TestATurnRefusedAsTheSeatIsReleasedHearsItFreed(t *testing.T) {
 // MAIL WAITING FOR IT.
 //
 // Every hand-back spends one of a message's deliveries, and a seat can be busy
-// for hours with a resumed coding turn. Had the mailbox handed back each
-// delivery that met the busy seat, its queued mail would have walked into the
-// dead-letter subject. The busy turn holds the seat's inbox instead, so the
-// mail waits on the broker untouched and runs once the turn is released:
-// every message exactly once, oldest first, with the headroom a first delivery
-// has.
+// for hours, so handing back would walk its queued mail into the dead-letter
+// subject. The busy turn holds the seat's inbox instead: the mail waits on the
+// broker untouched and runs once released, each message once, oldest first,
+// with a first delivery's headroom.
 //
 // Mutation: drop the inbox hold from AdmitTurn, and the deliveries meet the
 // busy seat; refuse them instead of waiting, and their headroom is spent.

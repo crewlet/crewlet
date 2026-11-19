@@ -30,26 +30,15 @@ func (c *answeredBy) RequestWithContext(ctx context.Context, _ string, _ []byte)
 // A READ OF A MESSAGE AS LARGE AS THE TRANSPORT, ON A MEMBER'S OWN CONNECTION,
 // IS ASKED ONCE WHILE ITS REPLY IS STILL BEING BUILT.
 //
-// A member's own connection crosses no link, but a reply of eleven megabytes —
-// a dead letter at the transport's ceiling, base64-encoded in JSON — is still
-// built by the stream's leader and decoded by its reader, in the engine's own
-// process, which under load takes seconds. Read at the bare read term, such a
-// read was asked again at two seconds and at four while the leader was still
-// building the first reply, each re-ask another whole reply built beside it,
-// and ran out its bound with none of them answered (crewlet/crewlet#1153).
-// Carrying the transport's ceiling at no pace, the read is given that reply's
-// handling: here a leader that answers after a term, a re-ask and half a term
-// more is asked once, and answered; the plain read, the control, is asked
-// again at two seconds, exactly twice.
-//
-// EXACT, IN A BUBBLE: the reads are put on a connection that answers them on
-// the bubble's clock, through the reader's own path — [Leader.At], its get and
-// the hedge its ask runs — so the instants the term, the re-ask and the reply
-// fall at are arithmetic, never a bet on how late a loaded runner wakes.
-//
-// Mutation: give a carrying read no handling, have the reader ask without its
-// arrival, or the ask run at the bare read term, and the carrying read is
-// asked twice.
+// No link is crossed, but an eleven megabyte reply is still built by the leader
+// and decoded in this process, seconds under load. At the bare read term the
+// read was re-asked at two and four seconds, each another whole reply, none
+// answered (crewlet/crewlet#1153). Carrying the ceiling, a leader answering
+// after a term, a re-ask and half a term more is asked once; the control twice.
+// EXACT, IN A BUBBLE: the connection answers on the bubble's clock through the
+// reader's own path ([Leader.At], its get and hedge), never a bet on a runner.
+// Mutation: give a carrying read no handling, ask without its arrival, or run
+// the ask at the bare read term, and the carrying read is asked twice.
 func TestAReadOfAMessageAsLargeAsTheTransportOnAMembersOwnConnectionIsAskedOnce(t *testing.T) {
 	t.Parallel()
 	const transport = 8 << 20

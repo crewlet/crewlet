@@ -95,58 +95,18 @@ func isStalled(err error) bool {
 	return ok
 }
 
-// watchedClient is the bucket's HTTP client as the SDK calls it — once an
-// ATTEMPT, after its retry step, the [gate] and the signature — with every
-// attempt WATCHED: one that has not MOVED for the stall bound is ended, its
-// error a [stalled], whatever its deadline.
-//
-// MOVED IS COUNTED AT THE TRANSPORT, never estimated from a rate, so a write
-// moving at any pace the node's socket can see is never ended, however slow,
-// and one the bucket stopped taking is ended a bound after the last thing it
-// took. Movement is any of: the transport taking bytes of the request's body
-// (a Read of it returning — the time spent INSIDE that Read is the body's
-// source's and is never counted against the bucket); the socket's count of
-// bytes the far end has not acknowledged changing between two samples
-// ([sockcount.Unacked], read at every connection the transport hands the
-// attempt and then every [stallBound.sample]); a connection, a `100 Continue`
-// and the answer's headers; and every byte of an answer the SDK reads
-// itself — all but GetObject's, whose body is handed to the store and read at
-// its reader's pace, which the store's own [objstore.Stall] watch bounds from
-// the reader's side: a watch here would end a download a slow PERSON paces.
-//
-// BOTH THE BODY AND THE SOCKET, because the kernel hides a bucket's pace from
-// the body's reader: its send buffer and the far end's receive buffer take
-// megabytes the bucket's software has not read, so a write moving at the
-// floor across a slow link went 84 s (an 8 MiB put) and 335.8 s (8 MiB parts)
-// between two reads of its body while those buffers drained, and every
-// body-only watch ended writes at the floor that would have landed. The
-// socket alone misses an answer and a body still being copied into an empty
-// send buffer. Together the longest a write at the floor went with nothing
-// moving was 15.0 s — four parts sharing one link — and a bucket that stops
-// changes nothing.
-//
-// THE ONE STOP IT CANNOT SEE is a bucket whose SOFTWARE reads a write slower
-// than its kernel took it, or a proxy in front of it that buffers an upload
-// before passing it on: what they took and have not read sits acknowledged,
-// and nothing the node can see moves while it drains — so a write of which
-// they hold more than a stall's reading is ended where it would have landed.
-// Measured against the S3 fake: a 16 MiB upload whose bucket read the first
-// 4 MiB of each 8 MiB part at once and the rest at the floor was ended at
-// 80.3 s with each part at a floor of its own and 85.3 s with the two sharing
-// one, where it would have landed at about two and four minutes; an 8 MiB
-// put whose bucket read only 2 MiB at once kept less than a minute of it
-// unread and landed, at 185.8 s. From the node's side it is a bucket that
-// stopped; a slow NETWORK in front of a healthy bucket is never ended.
-//
-// A CONNECTION WHOSE COUNT CANNOT BE READ ([sockcount.ErrUncountable]) is
-// never ended here — its deadline still ends it — because a watch blind to
-// the socket would end every write at the floor; on the two platforms the engine builds
-// for, every connection to the bucket is a TCP socket it can read.
-//
-// ONE REQUEST TO A SOCKET: the bucket's transport speaks HTTP/1.1 alone
-// ([bucketClient]), since over HTTP/2 a socket's acknowledgements would be
-// any of the requests it carries, and a request whose stream the bucket
-// stopped reading would never be ended while its siblings moved.
+// watchedClient is the bucket's HTTP client, called once per ATTEMPT after
+// the [gate]; an attempt that has not MOVED for the stall bound ends [stalled].
+// Movement is counted at the transport, never estimated from a rate: the body
+// read returning (time INSIDE it is the source's), the socket's
+// unacked count changing between samples ([sockcount.Unacked]), a connection,
+// headers, or an answer byte the SDK reads (not GetObject's: [objstore.Stall]
+// bounds that). Body AND socket, since kernel buffers hide the bucket's pace
+// from the body (a floor-rate 8 MiB put went 84 s between reads); the socket
+// alone misses answers. An [sockcount.ErrUncountable] connection is left to its
+// deadline. A bucket or proxy reading slower than its kernel took looks
+// stopped; a slow NETWORK is never ended. HTTP/1.1 alone ([bucketClient]): over
+// HTTP/2 a sibling's ack would hide a stalled stream.
 type watchedClient struct {
 	next  s3.HTTPClient
 	bound *stallBound

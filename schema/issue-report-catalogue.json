@@ -174,7 +174,8 @@
             "coordination",
             "code_hook",
             "relay",
-            "api"
+            "api",
+            "session_take"
           ]
         },
         {

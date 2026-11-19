@@ -174,19 +174,17 @@ const (
 	NoMoreValues
 )
 
-// Stored is the read of a version already accepted, for a format that read
-// its JSON with encoding/json and DisallowUnknownFields before ADR-0059
-// tightened the publish: ACCEPTANCE IS THAT EXACT CALL, the decoder, the
-// option, the decode and the format's own trailing rule, so whatever was
-// stored then reads now, to the same value, by construction (a key in another
-// case, a key written twice, a stray closing bracket after a canvas). Only when
-// that call refuses does the walk run, to name every fault at once the way a
-// publish names them.
+// Stored is the read of a version already accepted, for a format that read its
+// JSON with encoding/json and DisallowUnknownFields before ADR-0059 tightened
+// the publish: ACCEPTANCE IS THAT EXACT CALL (decoder, option, decode and the
+// format's own trailing rule), so whatever was stored then reads now, to the
+// same value, by construction (a key in another case or written twice, a stray
+// closing bracket after a canvas). Only when it refuses does the walk run, to
+// name every fault at once as a publish does.
 //
-// WHY NOT ONE READ. A format tightened at publish must not turn a version it
-// stored under the older rule into one its own reader refuses: every read of
-// a stored version (a render, get_artifact, the dashboard's data, a compare)
-// would fail on bytes nobody can now republish without a person's edit.
+// WHY NOT ONE READ. A format tightened at publish must not turn a version
+// stored under the older rule into one its own reader refuses: every read of it
+// would fail on bytes nobody can republish without a person's edit.
 func Stored(trailing Trailing) Reader {
 	return func(raw []byte, form *Form, subject Subject, into any) *Decoded {
 		err := legacy(raw, into, trailing)

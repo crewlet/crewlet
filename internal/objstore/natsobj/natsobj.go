@@ -30,10 +30,23 @@
 // which is a fleet outage rather than a file outage; a full bucket refuses an
 // upload ([objstore.ErrFull]) and nothing else. So the bucket's growth is a
 // RESERVATION of its own, granted by the broker at create time, and how
-// close it is to full is what [Backend.Usage] answers and an alarm reads.
+// close it is to full is what [Backend.Usage] answers, feeding the bucket
+// gauges and objects_bucket_near_ceiling.
 // [Backend.Raise] lifts it and never lowers it: the engine raises it to a
 // larger store.objects.nats_max_bytes at a data node's boot, where the broker
 // can grant the difference beside what the logs and coordination keep.
+//
+// A bucket found without a ceiling is refused naming the `nats stream update`
+// that bounds it; [Open] keeps the ceiling an existing bucket holds, so a
+// smaller figure in config never shrinks one. Unset, the engine derives the
+// figure: the smaller of a quarter of the broker's limit and what the state
+// logs' five eighths and a 1 GiB coordination floor leave. A raise the broker
+// cannot grant without breaking that floor is refused, and the engine raises
+// objects_bucket_raise_refused. A full bucket answers [objstore.ErrFull] inside
+// an [objstore.Full] naming [FullRemedy]. [Backend.Seal] makes the bucket
+// read-only for good once `crewlet objects migrate --to s3` has moved the
+// fleet off it. The bucket advertises no presign: every byte goes through the
+// node.
 //
 // # The bucket's own format, written and read through the stream
 //
@@ -145,6 +158,15 @@
 //     pieces no metadata names, which a put killed before its last message
 //     and a delete interrupted between its purges both leave, and which no
 //     listing of the names shows. The library has no word for them at all.
+//   - A LISTING IS AN ORDERED CONSUMER OF ITS OWN over the metadata subjects,
+//     never the library's List, which gathers the company's whole inventory
+//     into one slice, nor its Watch, which never finishes when the newest
+//     metadata cannot be decoded. Metadata that does not decode is no object
+//     and still a NAME: a stat and a get answer [objstore.ErrCorrupt], and the
+//     listing hands the name on, so the collector clears it like any other.
+//     [Backend.Pending] lists piece SUBJECTS through the leader, never walks
+//     the pieces, which reads the bucket's bytes where the subject index is
+//     in memory (2,000 objects: 103 ms against 2.2 ms).
 //
 // # The window across a link
 //
@@ -205,6 +227,10 @@
 // inside its term behind them (ADR-0161).
 //
 // # What it costs, measured
+//
+// The three-replica figures come from internal/objstore/natsobj/replicated, a
+// package of tests alone: forming a three-member cluster puts a package in the
+// solo half, and this package's whole suite would go with it.
 //
 // `make bench` (BenchmarkBackend, through internal/objstore/objstoretest's
 // Bench) at `stream.sync: always`, production's default — on four vCPUs of a
@@ -467,34 +493,18 @@ func (b *Backend) held(quiet time.Duration) bool {
 // walk's headers-only delivery carries its size in one header.
 const deliveryOverhead = 4 << 10
 
-// Open binds to the bucket, creating it first if it is not there.
-//
-// # A LOOKUP, THEN A CREATE, AND NEVER AN UPDATE
-//
-// Every data node opens the bucket at boot, and a fleet booting together does
-// it at the same moment. The library's create-or-update sends an UPDATE first,
-// and an update of a stream another node has just created — its group not yet
-// through its first election — is applied by members none of which leads that
-// group yet, while only a leader answers an update
-// (server/jetstream_cluster.go, processClusterUpdateStream): its reply is never
-// sent. Measured on a three-member fleet booting together: all three nodes'
-// requests went unanswered for the whole fifteen-second ask term, on each boot
-// instrumented, and nothing said so. It was also the node that booted last deciding
-// the bucket's configuration for everybody.
-//
-// So Open asks whether the bucket exists — a READ, asked again at the read
-// term while nobody answers ([jsprovision.ReadWith]) — and creates it only
-// when told it is absent or when nobody answered, through
-// [jsprovision.Timing.Place] as every replicated create at boot is. A create
-// that is not refused outright may have landed, or found the name taken by a
-// peer that won the race, so the bucket is then read back
-// ([jsprovision.SettleWith]) rather than written again. Nothing here applies
-// a configuration to a bucket that exists.
-//
-// A BUCKET REPLICATED BELOW THIS NODE IS REFUSED, as the queue refuses such a
-// stream: an upload acknowledged there would prove fewer copies than
-// `stream.replicas` promises. Above it is fine, so a node configured for one
-// copy starts against a fleet's three.
+// Open binds to the bucket, creating it first if it is not there: A LOOKUP,
+// THEN A CREATE, NEVER AN UPDATE. The library's create-or-update sends an
+// UPDATE first, and an update of a stream just created, its group not yet
+// through its first election, reaches members none of which leads it while
+// only a leader answers (processClusterUpdateStream): a booting fleet waits
+// out the whole ask term silently. So Open READs ([jsprovision.ReadWith]) and
+// creates only when told the bucket is absent or nobody answered
+// ([jsprovision.Timing.Place]), then reads it back ([jsprovision.SettleWith])
+// rather than write again: the create may have landed or lost to a peer. An
+// existing bucket is never reconfigured. One replicated BELOW THIS NODE IS
+// REFUSED, as the queue refuses it: an upload acknowledged there proves fewer
+// copies than `stream.replicas` promises.
 func Open(ctx context.Context, js jetstream.JetStream, cfg Config) (*Backend, error) {
 	return open(ctx, js, cfg, jsprovision.Clustered(cfg.Clustered).Timing())
 }
@@ -839,22 +849,16 @@ func (b *Backend) Seal(ctx context.Context) error {
 	return nil
 }
 
-// info is the bucket's stream info as the stream's LEADER answered it — its
-// state and its configuration — asked as a metadata read is
-// ([jsprovision.ReadBounded]).
+// info is the bucket's stream info as the stream's LEADER answered it, asked
+// as a metadata read is ([jsprovision.ReadBounded]).
 //
-// ASKED AGAIN WHILE NOBODY ANSWERS, because nobody but the leader does: a
-// member that still believes in a leader its group has just lost takes the
-// request and returns without a word (server/jetstream_api.go,
-// jsStreamInfoRequest: "only the stream leader should answer"). Sent as one
-// request it waited for its caller's deadline, or for the client's five
-// seconds where there was none — the object gauge's reading on every turn of
-// the collector's duty, which has none — for a reply nobody would send. A
-// caller with no deadline keeps those five seconds, asked again inside them.
+// ASKED AGAIN WHILE NOBODY ANSWERS, because only the leader does: a member
+// that still believes in a leader its group has lost returns without a word
+// (jsStreamInfoRequest), so one request would wait out the deadline, or the
+// client's five seconds with none, for a reply nobody sends.
 // THROUGH A HANDLE OF EACH REQUEST'S OWN, never [Backend]'s stream: the
-// client caches an info reply on the handle that fetched it with no lock, the
-// hedge can have two requests out, and the bucket's handle is the one every
-// get and listing reads beside it.
+// client caches an info reply on the handle with no lock, the hedge can have
+// two requests out, and the bucket's handle serves every get and listing.
 func (b *Backend) info(ctx context.Context) (*jetstream.StreamInfo, error) {
 	return jsprovision.ReadBounded(ctx, b.js.Options().DefaultTimeout,
 		func(ctx context.Context) (*jetstream.StreamInfo, error) {
@@ -942,72 +946,42 @@ func (b *Backend) live(ctx context.Context, name string) (jetstream.ObjectInfo, 
 // readAhead is how many of an object's messages a get holds in hand before
 // they are read: half a mebibyte at [MessageBytes].
 //
-// ENOUGH that the next message is usually there when a reader asks for it, so
-// a download streams at the wire's pace rather than a round trip per message:
-// the client asks for more once half the hand is read, so two to four messages
-// are always asked for ahead of the reader. NO MORE, because a hand is what a read on a slow
-// link waits on WHOLE ([pullHeartbeat]) — and what a node serving a handful of
-// downloads at once holds in memory for each, where the library's own default
-// of five hundred would be sixty-four mebibytes a download.
-//
-// FOUR, not the eight it was: a hand of a mebibyte takes thirty seconds at the
-// floor, and no heartbeat could both outlast that and leave a replaced
-// consumer's first hand time to arrive inside [objstore.Stall]'s minute.
+// ENOUGH that the next message is usually there when a reader asks, so a
+// download streams at the wire's pace rather than a round trip per message
+// (the client asks for more once half the hand is read). NO MORE, because a
+// read on a slow link waits on the hand WHOLE ([pullHeartbeat]), and a node
+// serving several downloads holds a hand in memory for each, where the
+// library's default of five hundred would be sixty-four mebibytes a download.
+// A hand of a mebibyte takes thirty seconds at the floor, and no heartbeat
+// could both outlast that and leave a replaced consumer's first hand time to
+// arrive inside [objstore.Stall]'s minute.
 const readAhead = 4
 
 // walkAhead is how many messages a WALK holds in hand — a listing over the
 // bucket's metadata, or a ranged get's walk over an object's message headers.
 //
-// FIVE HUNDRED, the client's own default, stated rather than inherited: what a
-// walk holds is a name's metadata or a message's headers, a few hundred bytes
-// each, so a full hand is a hundred-odd kibibytes however large the objects —
-// where [readAhead] has to be small because each of ITS messages is a whole
-// [MessageBytes]. Stated because it is also where a walk's consumer can be
-// lost unnoticed: everything already in hand is read without asking the broker
-// again, so a consumer reaped while a slow visitor held the listing is found
-// only at the next pull, and the replacement it takes is what
-// [TestAListingWhoseConsumerIsLostFinishesOnItsReplacement] stages past this
-// many names.
+// FIVE HUNDRED, the client's default, stated rather than inherited: a walk's
+// messages are metadata or headers, a few hundred bytes each, so a full hand
+// is a hundred-odd kibibytes, where [readAhead] must be small because each of
+// ITS messages is a whole [MessageBytes]. It is also where a walk's consumer
+// can be lost unnoticed: what is in hand is read without asking the broker, so
+// a consumer reaped while a slow visitor held the listing is found only at
+// the next pull; [TestAListingWhoseConsumerIsLostFinishesOnItsReplacement]
+// stages that past this many names.
 const walkAhead = 500
 
-// pullHeartbeat is how often the broker tells a get or a walk that is waiting
-// on a pull that the pull is still being served. Two going missing while a
-// reader waits and the client replaces the consumer, from the last message
-// read — the one way a read notices that the broker took its consumer away
-// under it: reaped while a slow reader held it, or dropped in a leader change.
+// pullHeartbeat is how often the broker tells a get or a walk waiting on a
+// pull that it is still being served; two missed and the client replaces the
+// consumer from the last message read, the one way a read notices the broker
+// took it away (reaped, or dropped in a leader change).
 //
-// # The longest a healthy read hears nothing
-//
-// The client hears of a heartbeat, or of a message, only once the whole of it
-// has arrived, and the broker sends a heartbeat only while a pull waits with
-// nothing to deliver — never while what it delivered is still crossing the
-// link. And a compressed link, which a leaf's is by default, carries what the
-// broker flushed at once as ONE BLOCK that the far end decodes only whole: a
-// get's first pull puts its whole hand ([readAhead]) on the wire in one flush,
-// so a read hears nothing until the last byte of it has arrived. At the floor
-// every leg of the store is held to ([objstore.MiBPace]) half a mebibyte takes
-// fifteen seconds — on a link many reads share too, since each one's hand
-// waits behind the others' and each has its share. A read replaced in that
-// silence is replaced again before its replacement's hand arrives, behind what
-// its predecessor was sent, and never completes another message. Measured
-// across a leaf link a quarter above the floor with the hand at eight, a
-// heartbeat of one second and one of two each ended their read at its
-// forty-second deadline having handed over nothing — two being the shortest
-// that outlasts one MESSAGE at the floor, which is not what arrives.
-//
-// # A hand at the floor, so two are twice it
-//
-// DERIVED rather than stated, so it moves with the hand and the floor: two
-// heartbeats are thirty seconds, twice the longest a healthy read hears
-// nothing at the floor — the room [objstore.Stall] gives a mebibyte — and
-// a consumer lost under a read costs its quiet second ([quietWait]), those
-// thirty seconds and then its replacement's first hand, forty-six in all,
-// inside the stall's minute (TestAReadsHeartbeatOutlastsItsHandAtTheFloor
-// holds both).
-//
-// WHAT IT NO LONGER COSTS is a read that hears nothing for a second for any
-// other reason — a first pull a cluster dropped, a pull the client skipped:
-// that read looks again ([quietWait]) rather than wait out the heartbeats.
+// DERIVED from the hand and the floor ([objstore.MiBPace]). A heartbeat comes
+// only while a pull waits with nothing to deliver, and a compressed link
+// carries a flush as one block decoded only whole, so a read hears nothing
+// until its whole hand ([readAhead]) has arrived: fifteen seconds at the
+// floor. Two heartbeats are thirty, so a consumer lost under a read costs its
+// [quietWait], those thirty and a replacement's first hand: forty-six, inside
+// [objstore.Stall]'s minute (TestAReadsHeartbeatOutlastsItsHandAtTheFloor).
 const pullHeartbeat = time.Duration(readAhead*MessageBytes) * objstore.MiBPace / objstore.MiB
 
 // pullExpiry is how long one pull a get or a walk sends waits for messages
@@ -1021,50 +995,17 @@ const pullHeartbeat = time.Duration(readAhead*MessageBytes) * objstore.MiBPace /
 const pullExpiry = 2 * pullHeartbeat
 
 // quietWait is how long a read waits for a message before it looks again: at
-// its first message by asking its consumer whether the pull for it ever
-// arrived, and at every later one by waiting again, which is when the client
-// decides whether to send a pull.
+// its first, by asking its consumer whether the pull ever arrived; at later
+// ones, by waiting again.
 //
-// # A CLUSTER DROPS A NEW CONSUMER'S FIRST PULL, routinely
-//
-// The member that makes a consumer answers the request for it as soon as the
-// consumer exists, and that answer can reach the reader's own member ahead of
-// the news that the consumer's member serves its pulls; a pull the reader
-// sends in that gap is dropped without a word. Measured on a three-member
-// fleet (internal/objstore/natsobj/replicated), from one get in twenty-five to
-// one in fifteen hundred lost its first pull that way as the machine's load
-// rose and fell, through a follower's client and through the stream leader's
-// alike, on nats-server v2.15.1 as on v2.15.0. A solo member never showed it.
-//
-// The heartbeats cannot tell that read from one whose first hand is still
-// crossing a slow link — neither hears anything — so a read that waited on
-// them for its first message waited as long as the slowest link must be
-// allowed: ten seconds at the client's own default, thirty at a heartbeat
-// that honours the floor. Its CONSUMER can tell them apart. One that holds no
-// pull and has delivered nothing never got the pull, and is made again; one
-// that holds the pull or has delivered is being read, however slowly, and is
-// waited on. Asked, never guessed, because a read remade while its hand is on
-// the wire waits behind the hand it threw away.
-//
-// # THE CLIENT SKIPS A PULL, now and then
-//
-// The client decides whether to ask for more only as a wait begins, and asks
-// for nothing while the pull it sent last is still being sent — which the
-// goroutine sending it marks done only after the broker may already have
-// answered it. A reader on a loaded machine can take the whole answer and
-// begin its next wait inside that moment, and then the next pull is never
-// sent: the consumer, having delivered its hand, holds no pull and has nothing
-// to say, and the reader waited for two heartbeats. Measured on one member,
-// one 1 MiB get in ten to twenty thousand stalled that way, its consumer
-// showing its first hand delivered, no pull waiting and the rest pending.
-// nats.go v1.54.0 decides so, and its main branch still does. A wait begun
-// again is a decision made again, and the pull the client skipped goes out.
-//
-// ONE SECOND: about twenty times the worst p99 `make bench` measured the
-// broker at three replicas on one shared machine (55 ms, for sixteen writes at
-// once), so a broker that is merely busy is seldom asked, asking costs one
-// small request, and waiting again costs nothing. A dropped first pull or a
-// skipped one costs that second.
+// A CLUSTER DROPS A NEW CONSUMER'S FIRST PULL, routinely, silently. Heartbeats
+// cannot tell that read from a first hand crossing a slow link, but its
+// CONSUMER can: one holding no pull and having delivered nothing is made
+// again; one holding the pull or having delivered is waited on. Asked, never
+// guessed: a read remade while its hand is on the wire waits behind it. The
+// client also skips a pull now and then (nats.go decides to ask only as a
+// wait begins), so a wait begun again decides again. ONE SECOND: about twenty
+// times the worst p99 `make bench` measured at three replicas (55 ms).
 const quietWait = time.Second
 
 // pulls is what every get and walk asks its consumer for: up to batch
@@ -1148,27 +1089,18 @@ var errBehind = errors.New("natsobj: every consumer the broker made for the read
 // them stored before the metadata a get read from the leader.
 const everything = math.MaxUint64
 
-// reading is one ordered consumer being read — a get's, a seek's or a
-// listing's — each message waited for no longer than stall, or for as long as
-// the caller's context allows where stall is zero.
+// reading is one ordered consumer being read (a get's, seek's or listing's),
+// each message waited for no longer than stall, or as long as the caller's
+// context allows where stall is zero.
 //
-// # THE END OF A REPLICA'S COPY IS NOT THE END OF THE STREAM
-//
-// The broker makes an ordered consumer on ONE of the stream's replicas, chosen
-// at random among those it counts as up — and a member just back from a
-// restart, still catching up, is up. A consumer there counts what follows each
-// message from that replica's copy, so its "nothing follows" is the end of
-// what the replica has stored, and the messages it is still catching up are
-// not delivered to a consumer made before they landed until somebody pulls
-// again. Taken for the end of the stream, that answered an object a replica
-// held none of as one with no pieces — read back as zero bytes, which the
-// store calls DAMAGED, a definite answer — a ranged read past what it held as
-// a range past the object's end, and a listing as one missing every object
-// written while the member was down. So a consumer's end is taken as the end
-// only where it is the end the read wanted (an object's last byte) or where
-// the stream's LEADER agrees ([reading.caughtUp]); otherwise the read goes on
-// from a consumer made again ([reading.resume]), which the broker places
-// afresh.
+// THE END OF A REPLICA'S COPY IS NOT THE END OF THE STREAM: the broker makes
+// the consumer on ONE replica at random among those it counts as up, a member
+// still catching up after a restart included, so its "nothing follows" may
+// be a replica's end. Taken as the stream's, it reads an object as zero bytes
+// (DAMAGED), a range as past the end, a listing as missing objects. So an end
+// counts only where it is the one the read wanted (an object's last byte) or
+// the LEADER agrees ([reading.caughtUp]); else the read goes on from a
+// consumer made again ([reading.resume]).
 type reading struct {
 	b *Backend
 	// filter is the subject the read is over, and cfg how its consumer is
@@ -1234,19 +1166,14 @@ func (b *Backend) consume(ctx context.Context, filter string, cfg jetstream.Orde
 // open makes r's consumer and answers its first message, or none where the
 // stream's leader holds nothing on r's filter that r must reach.
 //
-// THE FIRST MESSAGE IS THE ONE A CLUSTER CAN DROP THE PULL FOR ([quietWait]),
-// the client's or across a link the reader's own ([reading.pulled]): one that
-// has not come in a second is asked about, and a consumer that never got the
-// pull is dropped and made again, up to [jsapi.FirstPullRemakes] times, each
-// with a whole stall of its own, since nothing the read made had begun.
-//
+// THE FIRST MESSAGE IS THE ONE A CLUSTER CAN DROP THE PULL FOR ([quietWait],
+// [reading.pulled]): a consumer that never got the pull is made again up to
+// [jsapi.FirstPullRemakes] times, each with a whole stall of its own.
 // A CONSUMER WITH NOTHING TO DELIVER IS ASKED ABOUT TOO ([reading.caughtUp]):
-// where the leader holds what it should have delivered, it was made on a
-// replica behind the leader, and is dropped and made again — at once the
-// first time, since the broker places a new consumer afresh and one replica
-// behind is one of three, then a [quietWait] apart, while the replica catches
-// up — until the read has been behind for [objstore.Stall], the longest it
-// may wait for any one message, when it fails ([errBehind]).
+// where the leader holds what it should have delivered, the consumer was on a
+// replica behind and is made again, at once the first time, then a
+// [quietWait] apart, until the read has been behind for [objstore.Stall] and
+// fails ([errBehind]).
 func (r *reading) open(ctx context.Context) (*message, error) {
 	var behind time.Time
 	for remade := 0; ; {
@@ -1504,26 +1431,16 @@ func (r *reading) stop(ctx context.Context) {
 
 // Get implements [objstore.Backend].
 //
-// AN ORDERED CONSUMER OF THE OBJECT'S OWN MESSAGES, never the library's get —
-// see the package doc. Each message is waited for under
-// [objstore.Stall] and under ctx, so a read whose pieces have stopped
-// arriving ends rather than waits out its caller's whole budget, and a reader
-// that is closed or whose caller gave up stops at once. The FIRST is waited
-// for here, before the reader is handed back, so a consumer a cluster dropped
-// the first pull for is made again before anybody reads ([quietWait]).
-//
-// A RANGE starts at the message holding its offset, found by walking the
-// object's message HEADERS ([Backend.seek]): the library has no ranged read,
-// and the object store's pieces cannot be addressed by their place in the
-// object, so the cost of an offset is a header per message before it rather
-// than every byte.
-//
-// ITS PIECES END WHERE THE LEADER'S DO: a consumer made on a replica still
-// catching up says nothing follows where the leader holds more ([reading]),
-// so a message its consumer calls the last that leaves the object short of
-// the size its metadata states is asked about, and the read goes on from a
-// consumer made again where the leader holds more. A healthy read asks
-// nothing: its last message ends the object exactly.
+// AN ORDERED CONSUMER OF THE OBJECT'S OWN MESSAGES, never the library's get
+// (package doc). Each is waited for under [objstore.Stall] and ctx; the FIRST
+// here, so a consumer a cluster dropped the first pull for is made again
+// ([quietWait]). A RANGE starts at the message holding its offset, found by walking message
+// HEADERS ([Backend.seek]): the library has no ranged read and pieces cannot
+// be addressed by place, so an offset costs a header per message before it.
+// ITS PIECES END WHERE THE LEADER'S DO: a message its consumer calls the last
+// that leaves the object short of its metadata's size is asked about
+// ([reading]) and the read goes on from a consumer made again. A healthy read
+// asks nothing.
 func (b *Backend) Get(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
 	if err := objstore.CheckRead(ctx, off, n); err != nil {
 		return nil, fmt.Errorf("natsobj: get %s: %w", name, err)
@@ -1837,41 +1754,16 @@ func (b *Backend) listBegin(bytes uint64) time.Duration {
 
 // List implements [objstore.Backend].
 //
-// A CONSUMER OF ITS OWN OVER THE METADATA SUBJECTS, the last message on each,
-// rather than the library's Watch — which knows the listing is complete only
-// from a message it could DECODE, so a bucket whose newest metadata it cannot
-// read, or an empty one whose emptiness check failed, never says it is done
-// and holds its caller for ever. Here every message carries how many follow
-// it, whatever its body says, and a listing ends when one says none. Streamed
-// rather than gathered, too: the library's own List holds every object's info
-// in one slice, which is the company's whole inventory in memory at once.
-//
-// A LISTING REACHES WHAT THE STREAM'S LEADER HELD WHEN IT BEGAN, or fails:
-// its consumer is made on whichever replica the broker places it, and one
-// still catching up lists the names it has stored ([reading]). So the
-// listing first reads the leader's newest metadata, and a walk whose
-// consumer says nothing follows short of it ends only where the leader holds
-// nothing it missed — read from a replica behind, it fails, to be asked
-// again, because a name it skipped is an object the caller takes for gone:
-// [Backend.Pending] would hand the collector a finished upload's pieces to
-// abandon. It cannot go on from a consumer made again, as a get does: a
-// listing's consumer delivers each name's newest metadata, and one made from
-// a sequence delivers every message after it, superseded ones among them.
-//
-// A LISTING IS GIVEN WHAT ITS BEGINNING TAKES ([Backend.listBegin]): to make
-// its consumer the broker reads the blocks holding every name's newest
-// metadata, and the client's own five seconds could not cover that read.
-//
-// Every name is visited as it is — what one means is not this backend's to
-// judge. A name holding only the delete marker the library's own delete left —
-// `nats object rm`, or any other client of the bucket's documented format — is
-// visited too, as an object of no bytes written when the marker was: the
-// marker is a message the stream keeps for ever until something purges it,
-// and the collector clears it with the same delete it makes of any name
-// ([Backend.Delete]). So is a name whose metadata does not decode, which a
-// stat and a get answer as [objstore.ErrCorrupt]: named by its subject, which
-// spells the name, and dated when the broker stored the metadata — left out,
-// it would be the one name in the bucket nothing ever judged or cleared.
+// A CONSUMER OF ITS OWN OVER THE METADATA SUBJECTS, not the library's Watch,
+// which knows the listing is complete only from a message it could DECODE and
+// holds its caller for ever on unreadable newest metadata; here every message
+// carries how many follow it. Streamed, as the library's List holds the whole
+// inventory in one slice. A LISTING REACHES WHAT THE LEADER HELD WHEN IT BEGAN,
+// or fails: a consumer on a replica still catching up lists only the names it
+// stored ([reading]), and a skipped name is an object the caller takes for
+// gone ([Backend.Pending] would hand the collector a finished upload's pieces
+// to abandon). It cannot go on from a consumer made again as a get does: one
+// made from a sequence delivers superseded messages too.
 func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) error {
 	return b.eachMeta(ctx, func(info *jetstream.ObjectInfo) error {
 		return visit(infoOf(info))
@@ -1879,11 +1771,15 @@ func (b *Backend) List(ctx context.Context, visit func(objstore.Info) error) err
 }
 
 // eachMeta hands visit the newest metadata on every name's subject, its
-// ModTime the instant the broker stored it — a delete marker the library's
-// own delete left included, and metadata it cannot decode as an object of no
-// bytes and no pieces named by its subject. It logs and steps over only a
-// subject that spells no name at all. See [Backend.List] for why it is a
-// consumer of its own.
+// ModTime the instant the broker stored it. Every name is visited as it is: a
+// delete marker another client of the bucket's format left is an object of no
+// bytes, which the collector clears with the usual delete ([Backend.Delete]),
+// and metadata that does not decode ([objstore.ErrCorrupt] to a stat or get)
+// is one of no bytes named by its subject; left out, nothing would ever judge
+// or clear it. Only a subject spelling no name is logged and stepped over. See
+// [Backend.List] for why it is a consumer of its own, and [Backend.listBegin]
+// for what its beginning is given: the broker reads every name's newest block
+// first, beyond the client's five seconds.
 func (b *Backend) eachMeta(ctx context.Context, visit func(*jetstream.ObjectInfo) error) error {
 	var through uint64
 	switch newest, err := b.leaderFor(metaSubjects).Last(ctx, metaSubjects); {
@@ -1955,86 +1851,44 @@ func (b *Backend) eachMeta(ctx context.Context, visit func(*jetstream.ObjectInfo
 
 // pieceSubjects is every subject the bucket keeps an object's pieces on:
 // `$O.<bucket>.C.<nuid>`, one per object.
+//
+// [Backend.Pending] lists it a page at a time, each page asked again while
+// nobody answers ([jsapi.Leader.Subjects]), since only the leader answers.
+// Each page costs the leader a sort of every piece subject, so a listing asked
+// again whole would repeat that for every page before the slow one. A page is
+// 0.13 s at a hundred thousand objects, 1.26 s at a million, 4.22 s at three
+// million (BenchmarkASubjectListing, four cores), held to the client's five
+// seconds: outgrown at about three and a half million objects, past which
+// every sweep fails. The S3 backend lists unfinished uploads at any size
+// (`crewlet validate` warns of the nats bucket on a fleet).
 const pieceSubjects = "$O." + Bucket + ".C.>"
 
 // Pending implements [objstore.Backend]: every subject holding pieces that no
-// object's metadata names, dated by its oldest piece.
+// object's metadata names, dated by its oldest piece. Pieces of a put that died
+// before its completing metadata, or of a delete interrupted between its two
+// purges ([Backend.Delete]), are on a subject no name reaches; each is
+// [objstore.Pending] with its piece identifier as ID.
 //
-// THE ONLY UPLOADS THE BROKER CAN LEAVE UNFINISHED, and nothing names them:
-// the object store names an object's pieces only in the metadata message that
-// completes it, so the pieces of a put that died before that message — a
-// process killed mid-upload — and the pieces a delete interrupted between its
-// two purges ([Backend.Delete]) are on a subject no name reaches, and a
-// listing of the names never shows them. Each is [objstore.Pending] with no
-// name and its piece identifier as the ID.
-//
-// IN THIS ORDER — the piece subjects, then the metadata, then each orphan's
-// oldest piece — so a put that completes during the walk is never answered:
-// its metadata, written after its pieces, is read after them too. One that is
-// still running is answered, as every put in flight is pending; the collector
-// abandons only what began longer ago than a put may take. Every read is the
-// LEADER's: the subject listing is its stream info, and an orphan's oldest
-// piece is its message read ([jsapi.Leader]) — a replica behind the quorum
-// would answer a subject as holding nothing it in fact holds. A subject the
-// leader holds nothing on by then was finished or purged in between, and is
-// stepped over.
-//
-// THE SUBJECT LISTING IS ASKED A PAGE AT A TIME, each page asked again while
-// nobody answers it ([jsapi.Leader.Subjects]): only the leader answers it, so
-// a member that still believes in a leader its group has just lost drops it
-// without a word, and one request held for the sweep's deadline failed the
-// sweep over a reply nobody would send. A page holds a hundred thousand
-// subjects — an object each — and every page costs the leader a sort of
-// every piece subject the bucket holds, so a listing asked again whole would
-// have asked that of it again for every page before the one that was slow.
-// And the oldest piece is read as a piece is ([Backend]'s pieces): the
-// leader's answer is the whole message.
-//
-// # What a sweep costs as the bucket grows
-//
-// The sort makes a listing grow faster than the bucket: measured on one solo
-// member's file store over the bucket's own piece subjects (internal/jsapi's
-// BenchmarkASubjectListing, one listing each on four cores), a page takes
-// 0.13 s at a hundred thousand objects, 0.39 s at three hundred thousand,
-// 1.26 s at a million and 4.22 s at three million, a whole listing 0.13,
-// 1.36, 13.2 and 120 s — once an hour, holding one of the leader's API
-// workers a page at a time. The sweep runs on its duty's lifetime with no
-// deadline, so each page is held to the client's five seconds on its own,
-// which by that growth a page outgrows at about three and a half million
-// objects on those cores. Past it every sweep fails, and the uploads it would
-// have abandoned stay billed, but after a node's first, each asks the page
-// once ([jsapi.Leader.Subjects] keeps what a page nobody answered was asked
-// for) rather than three sorts of every piece subject at once; a bucket that
-// size has outgrown the broker, and the S3 backend lists its unfinished
-// uploads itself at any size (`crewlet validate` warns of the nats bucket on
-// a fleet).
-//
-// # Why not a walk of the pieces
-//
-// A walk of the piece subjects — an ordered consumer delivering each one's
-// last piece, headers only, as the metadata walk does — is linear in the
-// objects, and a replica serving it would cost nothing here, since every
-// candidate is read again from the leader. It is not taken for what the walk
-// reads: the broker finds each subject's last message in the file-store
-// block holding it, and delivering it loads that block, so the walk's cost is
-// the bucket's BYTES, about all of them for objects smaller than a block, where
-// the listing reads only the per-subject index the store keeps in memory.
-// Measured beside the listing on two thousand objects of one 128 KiB piece
-// each, the walk took 103 ms where it took 6.3 ms over the same subjects on
-// empty messages, and the listing 2.2 ms on either; over a million and three
-// million empty messages it took 3.1 and 6.9 s, where the listing took 13.2
-// and 120. But a million real objects is a hundred gigabytes and more to
-// read for every sweep, beside the metadata walk's own read of the same
-// blocks. And to start it the broker reads the per-subject state of every
-// block whose state is not in memory, which it lets go of two minutes after
-// the block was last read, holding the stream's store lock throughout (the
-// vendored server's filestore.go, multiLastSeqsLocked), so an hourly walk
-// would hold every append to the bucket on that member behind a read of the
-// bucket.
+// IN THIS ORDER (piece subjects, metadata, each orphan's oldest piece) so a
+// put completing during the walk is never answered: its metadata is written
+// and read after its pieces. A put still running is answered; the collector
+// abandons only what is older than a put may take. Every read is the
+// LEADER's ([jsapi.Leader]): a replica behind would answer a subject as empty;
+// one it then holds nothing on was finished or purged, and is stepped over.
 func (b *Backend) Pending(ctx context.Context, visit func(objstore.Pending) error) error {
+	// WHY NOT A WALK OF THE PIECES, headers only as the metadata walk does:
+	// it is linear in the objects, but the broker loads the file-store block
+	// holding each subject's last message, so it costs the bucket's BYTES (a
+	// million real objects is a hundred gigabytes read per sweep), where the
+	// listing reads only the in-memory per-subject index. Measured on two
+	// thousand 128 KiB objects: 103 ms against the listing's 2.2. Starting it
+	// also reads the state of every block not in memory while holding the
+	// stream's store lock (filestore.go, multiLastSeqsLocked), stalling every
+	// append on that member behind a read of the bucket.
+
 	// THE CANDIDATES ARE THE SUBJECT LISTING ITSELF, whittled down by the
 	// metadata walk, so the pass holds no more than the broker's answers
-	// already did — never a second copy of the bucket's inventory.
+	// already did, never a second copy of the bucket's inventory.
 	orphans := make(map[string]uint64)
 	err := b.leader.Subjects(ctx, pieceSubjects, func(page map[string]uint64) error {
 		maps.Copy(orphans, page)
