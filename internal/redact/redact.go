@@ -1966,7 +1966,7 @@ func (r *valueRead) gutter(crossed bool) string {
 	if !r.read[k] {
 		lo := segmentStart(r.text, r.start)
 		found := lo == 0 || r.text[lo-1] == '\n' || lo >= 2 && r.text[lo-2:lo] == `\n`
-		if found {
+		if found && (lo == 0 || r.text[lo-1] == '\n') {
 			lo = stringOpening(r.text, lo, r.start)
 		}
 		if crossed {
@@ -1980,10 +1980,11 @@ func (r *valueRead) gutter(crossed bool) string {
 	return r.gutters[k]
 }
 
-// stringOpening is where the key at start's piece of the string it is written
-// in begins, its line or the piece after an escaped break beginning at lo:
-// past the last quote before the key that no backslash escapes, which opens
-// the string, or lo where there is none ([valueRead.gutter]).
+// stringOpening is where the string a key at start is written in begins on the
+// real line that starts at lo: past the last quote before the key that no
+// backslash escapes, or lo where there is none ([valueRead.gutter]). Only a
+// string's first piece holds what its line has before the string; a piece
+// after an escaped break begins inside it, and a quote there is the text's.
 func stringOpening(text string, lo, start int) int {
 	for i := start - 1; i >= lo; i-- {
 		if text[i] == '"' && (i == lo || text[i-1] != '\\') {
