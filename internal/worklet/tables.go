@@ -45,9 +45,9 @@ var ReproducibleTables = []string{
 	// The roster's places, which `sort=assignee` joins on the seat's key.
 	"tracker_seat_places",
 
-	// The history tables.
+	// The history tables, and an item's flow beside them (ADR-0162).
 	"tracker_history", "tracker_turns",
-	"tracker_notifications",
+	"tracker_notifications", "tracker_flow",
 
 	// The deletion marker: how a node that was away tells a task that never
 	// existed from one that was deliberately destroyed.

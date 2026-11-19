@@ -264,7 +264,7 @@ invitation holds.
 What the binding buys:
 
 - **The work the chart hands a seat reaches you.** `#/inbox` — one click
-  from the dashboard's landing screen — shows your notices, the one reason of eighteen
+  from the dashboard's landing screen — shows your notices, the one reason of nineteen
   that routed each one, and what is waiting on a decision; `#/me` is your own
   work, and both are Worklet's: they need the `worklet` app. Both ask the
   engine who is looking, and your own record is kept under

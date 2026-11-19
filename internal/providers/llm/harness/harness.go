@@ -300,6 +300,10 @@ func New(cfg Config) (*Provider, error) {
 	return p, nil
 }
 
+// ReadsImages reports whether this provider's calls take images beside the
+// prompt ([harnessprofile.ImageInput]).
+func (p *Provider) ReadsImages() bool { return p.profile.ImageInput != nil }
+
 // Model is the configured model identity.
 func (p *Provider) Model() string { return p.model }
 
@@ -404,6 +408,10 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 			"harness cannot be handed a seat's tools — declare providers.llm.%s.overrides.mcp, or "+
 			"run seats on another entry and keep this one for text functions", p.harness, p.key))
 	}
+	if len(req.Images) > 0 && p.profile.ImageInput == nil {
+		return nil, p.fail(llm.KindFatal, fmt.Errorf("%w: the %q profile declares no "+
+			"image_input", llm.ErrNoImages, p.harness))
+	}
 	seat := llm.SeatOf(ctx)
 	callID := CallOf(ctx)
 
@@ -489,6 +497,9 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 		lineStream: p.profile.EffectiveOutput() == harnessprofile.OutputJSONL,
 		hooks:      p.hooks,
 		janitor:    &p.janitor,
+	}
+	if len(req.Images) > 0 {
+		in.args = append(in.args, p.profile.ImageInput.Args...)
 	}
 	// Streamed only for a JSONL profile, where each event's text IS a
 	// fragment of the answer. The other two output modes are extracted
@@ -608,6 +619,12 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 		in.args = append(in.args, rendered...)
 	default:
 		in.stdin = prompt
+		if len(req.Images) > 0 {
+			in.stdin, err = imageMessage(p.profile.ImageInput.Format, prompt, req.Images)
+			if err != nil {
+				return nil, p.fail(llm.KindFatal, err)
+			}
+		}
 	}
 
 	// A SERVE LIFECYCLE'S SERVER, started now that everything the run writes

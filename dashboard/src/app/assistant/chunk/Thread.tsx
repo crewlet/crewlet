@@ -54,9 +54,7 @@ import { remedyOf } from "~/protocol/remedy.ts";
 import {
   ActionReceipt,
   CardBlock,
-  DeepRunBlock,
   ReplyProse,
-  deepRunsOf,
   runChipOf,
   stepsOf,
   thinkingOf,
@@ -198,7 +196,6 @@ function Turn({
   const open = isOpen(turn.phase);
   const chip = runChipOf(turn, now);
   const steps = stepsOf(turn, technical);
-  const deepRuns = deepRunsOf(turn);
   const thinking = thinkingOf(turn);
   // EACH ANSWER'S CARDS ARE ONE ARRAY while the turn's cards are, so an
   // answer works out its reads and its mentions once per change of its cards,
@@ -263,9 +260,6 @@ function Turn({
           {steps.length > 0 ? <StepList label="Steps" steps={steps} /> : undefined}
         </RunChip>
       ) : null}
-      {deepRuns.map((run) => (
-        <DeepRunBlock key={run.step.step_id} run={run} now={now} technical={technical} />
-      ))}
       {turn.replies.map((reply) => (
         <Answer
           key={reply.id}

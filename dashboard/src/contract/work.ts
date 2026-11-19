@@ -171,6 +171,7 @@ export const CHANGES = [
     mark: "refresh-cw",
     phrase: "recorded that a pull request it waits on is moving again",
   },
+  { kind: "flow", mark: "circle-alert", phrase: "told that nobody is moving it" },
 ] as const satisfies readonly { kind: string; mark: string; phrase: string }[];
 
 /**

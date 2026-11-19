@@ -73,6 +73,7 @@ describe("which chunk draws a screen", () => {
     expect([...CHUNKS].sort()).toEqual(
       [
         "account",
+        "advisor",
         "agents",
         "artifacts",
         "assistant",

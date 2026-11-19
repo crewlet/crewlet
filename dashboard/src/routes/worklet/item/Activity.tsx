@@ -27,7 +27,7 @@
  * # Who a change reached
  *
  * Every announced change carries an expander that asks `work_routing` for its
- * recipients: the one reason of eighteen each person was reached under, and
+ * recipients: the one reason of nineteen each person was reached under, and
  * whether it asked them anything. The three EMPTY answers are three different
  * facts and keep three sentences ([NobodyWoken]).
  *

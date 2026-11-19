@@ -14,18 +14,9 @@ const LikeEscape = `\`
 // LikeContains builds a LIKE pattern matching rows that CONTAIN needle, with
 // every wildcard in needle escaped so it matches itself.
 //
-// # Why this exists
-//
-// `"%" + text + "%"` is the obvious form and it is wrong for exactly the text
-// people type. `%` and `_` are LIKE's own wildcards, so a search for "100%"
-// matches every row, a search for "a_b" matches "axb", and a person filtering
-// a list gets more than they asked for with nothing saying why. It is not a
-// safety hole — the value is still bound as a parameter, so nothing is
-// injected — it is a WRONG ANSWER, which is harder to notice.
-//
-// The engine's own fixtures are full of the shape: a unit named "100%
-// coverage" is one of the awkward names the schedule suite claims and reads
-// back, precisely because a percent sign is what breaks a naive filter.
+// `"%" + text + "%"` is wrong for the text people type: `%` and `_` are LIKE's
+// wildcards, so "100%" matches every row and "a_b" matches "axb". Not an
+// injection (the value is still bound), but a wrong answer nothing explains.
 //
 // The pattern is meant to be bound to `column LIKE ? ESCAPE '\'`.
 func LikeContains(needle string) string {

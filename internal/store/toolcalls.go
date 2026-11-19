@@ -12,30 +12,17 @@ import (
 	"github.com/crewlet/crewlet/internal/mcp"
 )
 
-// A server's recent calls, read out of the phase records that made them.
+// A server's recent calls, read out of the phase records that made them: turn
+// detail, not a table of its own. Each call is already on the phase record that
+// made it (`tool_executions`, types.ToolExecution), in the event log of the
+// node that ran the phase, so it is read there at query time
+// (internal/eventfan, ADR-0021); only the count is replicated
+// (`usage_tool_calls`). A listing never selects the payload, so rows are
+// narrowed by [ExtractTags]' `mcp_servers` before any tool log is walked.
 //
-// # Turn detail, not a table of its own
-//
-// Which call to a server's tool ran when, for which seat and how it ended is
-// already on the phase record of the phase that made it (its
-// `tool_executions`, types.ToolExecution), in the event log of the node that
-// ran the phase or kept its events in custody. So it is read there, on every
-// data node at query time (internal/eventfan, ADR-0021); what is replicated
-// is how many (the usage domain's `usage_tool_calls`).
-//
-// # Found by the tag, read by the call
-//
-// A phase record carries its whole prompt and tool log, and a listing never
-// selects the payload, so the rows are narrowed by the servers their calls
-// named ([ExtractTags]' `mcp_servers`) before any payload is read, and only
-// then is each record's tool log walked for the server's calls.
-//
-// # Never an argument, never a result
-//
-// A call's arguments and its answer are a model's and a server's words, and
-// can hold a credential or a customer's data. What a row answers is the
-// engine's own account of it: the tool, the seat, the instant, the outcome,
-// the class of a refusal and the time it took.
+// Never an argument, never a result: those are a model's and a server's words
+// and can hold a credential or customer data. A row is the engine's own
+// account: tool, seat, instant, outcome, class of a refusal, duration.
 
 // ToolCallQuery asks for one server's newest calls.
 type ToolCallQuery struct {

@@ -9,7 +9,9 @@
 // internal/tools rather than in that package, because the tool session a
 // harness's calls arrive through sits below internal/tools: the tools import the
 // tool loop, which imports the session, so a decode kept beside the tools
-// could not serve the session, which kept a copy of its own. This package
+// could not serve the session, which kept a copy of its own that took the
+// first of two values and dropped the second ([Decode] says what it reads and
+// refuses). This package
 // imports no transport, nor anything that imports one, which is what lets
 // every one of them import it.
 //

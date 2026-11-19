@@ -25,7 +25,7 @@ func TestTheAdvisorDomainIsACertifiedDomain(t *testing.T) {
 			Domain:  advisordomain.Domain{},
 			Applier: advisordomain.NewApplier(),
 			// Migrate is nil: the tables ship in the replicated estate's own
-			// migration (0192).
+			// migration (0193).
 			Encode:        encodeSuiteRecord,
 			Kinds:         kindNames(),
 			Rows:          advisordomain.NewRows,

@@ -3,10 +3,12 @@ package engine
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/coord"
+	coordmem "github.com/crewlet/crewlet/internal/coord/memory"
 )
 
 // A SEAT THAT TAKES NO WORK IS NOT WOKEN ABOUT ITS ATLAS ENTRY (ADR-0143): the
@@ -41,6 +43,43 @@ func TestASeatThatCannotStartATurnTakesNoAtlasWake(t *testing.T) {
 			r.e.adoptSeatPauses(t.Context(), pauses)
 			got, err := r.e.seatTakesWork(t.Context(), tc.handle)
 			if err != nil || got != tc.want {
+				t.Fatalf("takes work = %v (%v), want %v", got, err, tc.want)
+			}
+		})
+	}
+}
+
+// A SEAT'S HOLDER IS THE STORE'S WORD, whatever this node's clock says: a seat
+// held on a store whose clock runs ninety seconds behind this node's, its
+// lease's deadline already past here, takes its atlas wake, and a seat no node
+// holds takes none (the coord package doc, "A lease a read hands out is the
+// store's word").
+//
+// Mutation: judge the lease on this node's clock in seatTakesWork, and the
+// held seat takes no wake.
+func TestASeatHeldOnTheStoresWordTakesItsAtlasWake(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		held, want bool
+	}{
+		{name: "a seat held on a store whose clock runs behind", held: true, want: true},
+		{name: "a seat no node holds"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newParkRig(t, "100")
+			store := &coordmem.Backend{Clock: func() time.Time { return time.Now().Add(-90 * time.Second) }}
+			r.e.backends.Coord = store
+			if tc.held {
+				lease, _, err := store.TryAcquire(t.Context(), coord.SeatResource(seatOf("lead")),
+					coord.AcquireOptions{Owner: "node-a:1", TTL: time.Minute})
+				if err != nil || lease == nil {
+					t.Fatalf("hold the Lead's seat: %v", err)
+				}
+			}
+			r.e.adoptSeatPauses(t.Context(), nil)
+			if got, err := r.e.seatTakesWork(t.Context(), "lead"); err != nil || got != tc.want {
 				t.Fatalf("takes work = %v (%v), want %v", got, err, tc.want)
 			}
 		})

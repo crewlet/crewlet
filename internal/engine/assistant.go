@@ -30,26 +30,25 @@ import (
 // runs in: this process's one [toolsession.Host], the seats' own (ADR-0049).
 func AssistantToolSessions(e *Engine) *toolsession.Host { return e.sessions }
 
-// AssistantModels is the assistant's model chain off the company this node
-// runs NOW, per turn.
+// AssistantModels is the assistant's model off the company this node runs
+// NOW, per turn.
 func AssistantModels(e *Engine) assistant.Models { return assistantModels{e: e} }
 
 type assistantModels struct{ e *Engine }
 
-// Chain resolves `assistant.llm` through its ONE accessor
-// ([config.Company.AssistantChain], which refuses a chain the assistant's rules
-// do not admit) and wraps every member so each completion is RECORDED on the
-// auxiliary-spend ledger under use, as the person's spend on the operator stage,
-// and CHARGED NOWHERE: the turn's own meter ([AssistantBudget]) charges a round,
-// so it is counted once. Each member is recorded under its own key, then
-// chained, so a round a fallback served is filed under the entry that served it.
-func (m assistantModels) Chain(_ context.Context, person iam.Principal,
-	use auxspend.Use, strength assistant.Strength) (llm.Provider, string, error) {
+// Model resolves `assistant.model` through its ONE accessor
+// ([config.Company.AssistantModel], which refuses a model no helper can run
+// on) to the helper's run of that entry this node built ([buildHelpers]), and
+// wraps it so each completion is RECORDED on the auxiliary-spend ledger under
+// use, as the person's spend on the operator stage, and CHARGED NOWHERE: the
+// turn's own meter ([AssistantBudget]) charges a round, so it is counted once.
+func (m assistantModels) Model(_ context.Context, person iam.Principal,
+	use auxspend.Use) (llm.Provider, string, error) {
 
 	if err := use.Validate(); err != nil {
 		return nil, "", err
 	}
-	c, keys, providers, err := m.entries(strength)
+	c, key, provider, err := m.entry()
 	if err != nil {
 		return nil, "", err
 	}
@@ -59,70 +58,51 @@ func (m assistantModels) Chain(_ context.Context, person iam.Principal,
 			seat.PersonRole = role.Name
 		}
 	}
-	zone := basisOf(c, nil).zone
-	members := make([]chain.Member, 0, len(keys))
-	for i, key := range keys {
-		provider := providers[i]
-		members = append(members, chain.Member{Key: key, Provider: recordedProvider{
-			inner: provider, key: key, use: use, seat: seat, ledger: m.e.auxSpend,
-			zone: zone, now: m.e.now,
-		}})
-	}
-	built, err := chain.New(members, chain.Options{OnFallback: func(f chain.Fallback) {
-		log.Warn("assistant_model_fallback", "from", f.From, "to", f.To,
-			"kind", f.Kind.String(), "error", f.Err)
-	}})
-	if err != nil {
-		return nil, "", fmt.Errorf("engine: assistant chain: %w", err)
-	}
-	return built, keys[0], nil
+	return recordedProvider{inner: provider, key: key, use: use, seat: seat,
+		ledger: m.e.auxSpend, zone: basisOf(c, nil).zone, now: m.e.now}, key, nil
 }
 
-// Unready is the failure the assistant's chain would meet as far as its
-// members know without a call ([chain.Unready] over the entries
-// `assistant.llm` names, as this node built them), or nil when any may answer
-// or the chain does not resolve.
-func (m assistantModels) Unready(ctx context.Context, strength assistant.Strength) error {
-	_, _, providers, err := m.entries(strength)
+// Unready is the failure the assistant's model would meet as far as it knows
+// without a call ([chain.Unready] over the helper's run this node built), or
+// nil when it may answer or the model does not resolve.
+func (m assistantModels) Unready(ctx context.Context) error {
+	_, _, provider, err := m.entry()
 	if err != nil {
-		// An unresolved chain is the turn's own refusal ([assistantModels.Chain])
-		// and `/viewer`'s no_model, not a model's state.
+		// An unresolved model is the turn's own refusal
+		// ([assistantModels.Model]) and `/viewer`'s reason, not a model's state.
 		return nil //nolint:nilerr // see above: not a model's state
 	}
-	return chain.Unready(ctx, providers)
+	return chain.Unready(ctx, []llm.Provider{provider})
 }
 
-// entries resolves the chain strength names through its one accessor
-// (AssistantChain or DeliberateChain) to the providers this node built.
-func (m assistantModels) entries(strength assistant.Strength) (*Company, []string,
-	[]llm.Provider, error) {
+// ReadsImages is whether the helper's run of `assistant.model` takes images
+// ([llm.ImageReader]), false where the model does not resolve.
+func (m assistantModels) ReadsImages() bool {
+	_, _, provider, err := m.entry()
+	if err != nil {
+		return false
+	}
+	r, ok := provider.(llm.ImageReader)
+	return ok && r.ReadsImages()
+}
 
+// entry resolves `assistant.model` to the helper's run of it this node built.
+func (m assistantModels) entry() (*Company, string, llm.Provider, error) {
 	c := m.e.Company()
 	if c == nil || c.Config == nil {
-		return nil, nil, nil, errors.New("engine: this node runs no company yet, so it has " +
+		return nil, "", nil, errors.New("engine: this node runs no company yet, so it has " +
 			"no assistant to run")
 	}
-	chainOf, named := c.Config.AssistantChain, "assistant.llm"
-	if strength == assistant.Deliberate {
-		chainOf, named = c.Config.DeliberateChain, "assistant.deliberate.llm"
-	}
-	keys, err := chainOf()
+	key, err := c.Config.AssistantModel()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, "", nil, err
 	}
-	if c.Models == nil {
-		return nil, nil, nil, errors.New("engine: the company configures no providers.llm entry")
+	provider, ok := c.Helpers[key]
+	if !ok {
+		return nil, "", nil, fmt.Errorf("engine: assistant.model names %q, which the running "+
+			"company does not build", key)
 	}
-	providers := make([]llm.Provider, 0, len(keys))
-	for _, key := range keys {
-		provider, ok := c.Models.Provider(key)
-		if !ok {
-			return nil, nil, nil, fmt.Errorf("engine: %s names %q, which the "+
-				"running company does not build", named, key)
-		}
-		providers = append(providers, provider)
-	}
-	return c, keys, providers, nil
+	return c, key, provider, nil
 }
 
 // AssistantBudget is the meter an assistant turn charges its rounds through.
@@ -322,12 +302,12 @@ func (a assistantRecords) CreateConversation(ctx context.Context, w assistant.Wr
 }
 
 func (a assistantRecords) TitleConversation(ctx context.Context, w assistant.Write,
-	id uuid.UUID, title string) error {
+	id uuid.UUID, title string, by wire.TitleSource) error {
 	c, err := a.call(w)
 	if err != nil {
 		return err
 	}
-	return settled(a.w.TitleConversation(ctx, c, id, title))
+	return settled(a.w.TitleConversation(ctx, c, id, title, by))
 }
 
 func (a assistantRecords) SummarizeConversation(ctx context.Context, w assistant.Write,

@@ -519,8 +519,8 @@ than on anything the profile says.
 it. Absent, the engine passes nothing and the harness runs at its own default,
 which is how every entry ran before the field existed. Set, it reaches every run
 on the entry: the phases on this host (the reviewer, workers, onboarding, side
-passes, Ask Crewlet's questions and its Think harder chain, a model check) and an
-executor run in a box, Ask Crewlet's deep work included.
+passes, Ask Crewlet's questions, a model check) and an
+executor run in a box.
 
 The levels are each harness's own rather than one vocabulary of the engine's,
 because the harnesses do not agree: Claude Code has no `none` or `minimal`, Pi
@@ -2311,11 +2311,12 @@ of an unrecorded read, accepted. A seat on a harness with no web tool of its own
 reaches the web the way it reaches everything external, through the MCP servers
 you configure.
 
-**An entry can turn the web off, and Ask Crewlet requires it.**
-Web stays on for every seat unless its entry says otherwise. An entry whose
-model must read nothing the engine's own guard did not hand it
-([Ask Crewlet's](../getting-started/configuration.md#ask-crewlet)) sets `overrides: {web_tools: denied}`, and the profile's `web_denial` says
-what that harness runs with instead:
+**The web can be turned off, and a helper's run always is.**
+Web stays on for every seat unless its entry sets `overrides: {web_tools: denied}`.
+A helper's run of an entry ([Ask Crewlet's](../getting-started/configuration.md#ask-crewlet))
+is built with it denied whatever the entry says, so its model reads nothing the
+engine's own guard did not hand it while a seat on the same entry keeps its web.
+The profile's `web_denial` says what that harness runs with instead:
 
 | Profile | How web is turned off | Measured |
 |---|---|---|
@@ -2328,9 +2329,9 @@ Every other profile has no `web_denial`, says why in `web_tools_note`, and
 refuses `web_tools: denied`, so it cannot serve Ask Crewlet until one is
 measured and added (an operator may supply their own `web_denial` in
 `overrides`, and owns that claim). Whichever profile it is, `crewlet llm
-doctor` runs its web probe on a denied entry and reports a fetch that
-succeeded as a problem, exactly as it reports a shell that ran on a profile
-denying local tools; run it before Ask Crewlet goes live.
+doctor` runs its web probe on a denied entry, and on the helper's run of an
+entry a helper is assigned, and reports a fetch that succeeded as a problem,
+exactly as it reports a shell that ran on a profile denying local tools.
 
 **Ask Crewlet needs more than a denial: no tool of its own, by
 construction.** Its tools are the person's own requests, served to its harness as
@@ -2341,10 +2342,9 @@ seats' deny list still left thirteen tools on offer, Workflow, SendMessage and
 EnterWorktree among them. So a profile Ask Crewlet runs on declares
 `tools_off`: the argument runs that leave the harness with no built-in tool and no
 server but the ones its `mcp` block names, and the flags that would bring one
-back. Ask Crewlet's chain admits an entry only when the argv its calls run
-(web denied) carries each run once and none of those flags, and its `mcp`
-allow list names the engine's tools alone, which an override cannot quietly
-undo:
+back. A helper runs on an entry only when the argv its calls run (web
+denied) carries each run once and none of those flags, and its `mcp` allow
+list names the engine's tools alone, which an override cannot quietly undo:
 
 | Profile | No tool by construction | Ask Crewlet |
 |---|---|---|
@@ -4134,8 +4134,9 @@ it runs on.
 | `local_tools_note` | Why a `vendor-default` stance is one. |
 | `web_tools` | The entry's stance on the harness's own web tools: `allowed` (the default, and every seat's) or `denied`. `denied` runs the harness through `web_denial`, and is refused on a profile that has none. |
 | `web_tools_note` | How the profile's web denial was measured, or why it has none. |
-| `tools_off` | `{args, refuses, note}`: how the harness's run is left with no tool of its own, by construction. `args` are argument runs (`[["--tools", ""], ["--strict-mcp-config"]]`), each of which must appear adjacent and once in the argv; `refuses` are flags that bring a tool back in the call's own arguments; the `mcp` block's arguments are judged apart, and its `allow_args` may name only the engine's tools. Requires `local_tools: denied` and a `note` saying how it was measured. Ask Crewlet admits only an entry whose argv passes it. |
+| `tools_off` | `{args, refuses, note}`: how the harness's run is left with no tool of its own, by construction. `args` are argument runs (`[["--tools", ""], ["--strict-mcp-config"]]`), each of which must appear adjacent and once in the argv; `refuses` are flags that bring a tool back in the call's own arguments; the `mcp` block's arguments are judged apart, and its `allow_args` may name only the engine's tools. Requires `local_tools: denied` and a `note` saying how it was measured. A helper runs only on an entry whose argv passes it. |
 | `web_denial` | `{complete_args, seed_files, mcp: {complete_args, seed}}`: what the run uses instead when `web_tools` is `denied`. Each field set replaces the profile field of that name whole; a field left unset keeps it. `mcp` does the same for a run with tools, whose `mcp` block runs an argv or writes settings of its own: a denial that replaces `complete_args` or `seed_files` must replace the mcp block's own counterpart too, or an entry that denies the web is refused, since that run would keep it. Overriding `complete_args` (or `seed_files`) beside `web_tools: denied` is refused where the denial replaces it: override `web_denial.complete_args` instead. |
+| `image_input` | `{args, format, note}`: how a call hands the model images beside its prompt, the way Ask Crewlet hands it a question's attachments. `args` switch the harness's headless run to its structured input on stdin (`["--input-format", "stream-json"]`), and `format` names what is written there: `claude-stream-json`, one user message whose content is the prompt's text and then a base64 block per image. Requires `prompt_mode: stdin` and a `note`. Its `args` are judged with the rest of the argv by `tools_off`, so they can bring no tool back. Absent, a call carrying images is refused and Ask Crewlet tells the person its model takes none. Claude Code declares it. |
 | `seed_files` | `{path, in, content}` (`in` is `home` or `work`): settings files written before a call. `path` must name a file inside its scope, and never one another field needs: a login file, a system prompt file, a `config_env` or `work_config_env` directory, the call's `.git` project-root marker, or a directory above any of them. |
 | `key_seed_files` | `{path, content}`: settings files written into a seat's **key** home alone — where its calls run when they sign in with a key — after `seed_files`, each over a `seed_files` entry at the same path. For a harness that picks its sign-in from settings before its environment, so no variable can tell it to use the key: Gemini CLI takes a `GOOGLE_GEMINI_BASE_URL` gateway as its gateway sign-in, and refuses it (exit 41), unless its settings name the key sign-in, which in a login home would send every subscription call to a key it does not have. The seat's home only. |
 | `mcp` | How a run is handed the seat's tools as the one MCP server `crewlet` ([Tool calls](#the-seats-tools-as-one-mcp-server)); absent, a seat's phase on the entry is refused and text functions still run. `args` (added after the model and session arguments) and `allow_args` (the harness's allowlist for the server's tools — prefer a wildcard, since a tool activated mid-run is on no argv written before it); `seed` (`{path, in: work, content}`: files written into the call's own directory — never the seat's home, which every call of the seat shares, while the socket is the run's alone); `env` (set on a run with tools over every other layer — never a credential or an isolation variable); `tool_timeout_seconds` (required: how long the harness waits for one call before giving up on it — the value the route sets or the harness's own fixed one; a call still running near it is answered "still running" by the engine first); `relists` (the harness re-reads the list when told it changed; false ends the run after an activation); `concurrency` (required: which of a response's calls the harness makes without waiting — `at_once`, `read_only` or `in_turn`); `failure_events` (`{match, fields}`: the harness's own failure reports, and the fields of each a failed run's error shows — `jsonl` only); `complete_args`, `usage_args` and `output` (a run with tools' own argv, usage command and output format, where they differ from a text function's); and `lifecycle` — `run` (the default: one process, which starts the server itself) or `serve`, with `serve` `{args, ready: [{prefix, as}], poll: {args, items, match, starting}}`: the harness's own server started first, the values it prints when up (an address, a password it mints) available to the rest of the route as `{<as>}`, and polled until it lists the crewlet server as started (OpenCode). Every string may carry `{relay_command}`, `{relay_command_json}`, `{relay_args_json}`, `{relay_argv_json}`, `{socket}`, `{tool_timeout_seconds}`, `{tool_timeout_ms}` and `{work}`; one naming no relay command or no relay arguments is refused, and so is a placeholder the field does not substitute. |
@@ -4374,9 +4375,10 @@ are each named as what they are. On a profile with no `mcp` block the smoke test
 fails naming `overrides.mcp`, after asking plainly whether the harness is signed in.
 
 The `web` line leads with the entry's stance. On an entry with
-`overrides: {web_tools: denied}` (the one Ask Crewlet runs on) the probe's
-expectation is reversed: a refusal is the healthy answer, and a fetch is a
-problem naming the denial that did not take effect:
+`overrides: {web_tools: denied}`, and on the helper's run of an entry a helper
+is assigned (reported after the entry's own, headed "as a helper runs it"), the
+probe's expectation is reversed: a refusal is the healthy answer, and a fetch
+is a problem naming the denial that did not take effect:
 
 ```
 web           : denied by entry (WebFetch and WebSearch on --disallowedTools; measured refused on Claude Code 2.1.310); probe: refused

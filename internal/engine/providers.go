@@ -1730,6 +1730,7 @@ import (
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/envref"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
@@ -1766,6 +1767,50 @@ func buildProviders(c *config.Company, r *config.Resolver, plans *harness.Plans)
 		entries = append(entries, phase.Entry{Key: key, Provider: p})
 	}
 	return phase.NewRegistry(entries)
+}
+
+// buildHelpers builds a helper's run of every entry a helper names and can run
+// on ([config.Company.HelperKeys]): the entry again, with its harness's web
+// tools forced off ([config.LLMProvider.HelperOverrides]), on the entry's own
+// state directory and sign-in, with slots of its own so a busy company's seats
+// never queue a person's question. An entry no helper can run on is skipped:
+// its helper answers why ([config.Company.HelperModelProblem]).
+func buildHelpers(c *config.Company, r *config.Resolver,
+	plans *harness.Plans) (map[string]llm.Provider, error) {
+
+	var out map[string]llm.Provider
+	for _, key := range c.HelperKeys() {
+		if _, done := out[key]; done || c.HelperModelProblem(key) != nil {
+			continue
+		}
+		p, err := BuildHelper(c, key, r, plans)
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			out = map[string]llm.Provider{}
+		}
+		out[key] = p
+	}
+	return out, nil
+}
+
+// BuildHelper constructs a helper's run of the providers.llm entry key, or
+// why no helper runs on it ([config.Company.HelperModelProblem]). Exported for
+// `crewlet assistant eval`, which must measure the run Ask Crewlet makes.
+func BuildHelper(c *config.Company, key string, r *config.Resolver,
+	plans *harness.Plans) (*harness.Provider, error) {
+
+	if err := c.HelperModelProblem(key); err != nil {
+		return nil, err
+	}
+	spec := c.Providers.LLM[key]
+	spec.Overrides = spec.HelperOverrides()
+	p, err := BuildHarness(key, spec, r, plans)
+	if err != nil {
+		return nil, fmt.Errorf("engine: a helper's run of providers.llm.%s: %w", key, err)
+	}
+	return p, nil
 }
 
 // log is the package logger.

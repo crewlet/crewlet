@@ -259,15 +259,12 @@ func TestAHistogramWithNoTopEdgeDrawsTheBucketInProgress(t *testing.T) {
 
 // EVERY COUNT ON THE AXIS IS FLOORED AT THE INSTANT IT IS CUT AGAINST.
 //
-// [store.ListQuery.At] is where the window is cut and where the history
-// floor sits — and a fleet pins it on the asker, so by the time any other node
-// reads it is in that node's past. The bars, the totals and the facet counts
-// were floored at a SECOND read of the log's own clock instead, so a row
-// between At's floor and the reader's sat inside the first bar the answer
-// reported and was in none of its counts. The row here is that row: above
-// At − EventHistory, below now − EventHistory, and still on disk because
-// retention keeps a day past the floor.
-//
+// [store.ListQuery.At] is where the window is cut and the history floor sits; a
+// fleet pins it on the asker, so it is in another node's past. Flooring at a
+// SECOND read of the log's clock leaves a row between At's floor and the
+// reader's inside the first bar but in none of its counts. The row here is that
+// one: above At − EventHistory, below now − EventHistory, still on disk
+// (retention keeps a day past the floor).
 // Mutation: floor [store.ListQuery]'s predicate at `now()` rather than the
 // instant it is handed, and the first bar, Total, Failed and the task chip all
 // lose the row; hand the facet count a fresh `now()` and the chip alone does;
@@ -321,25 +318,15 @@ func TestEveryCountOnTheAxisIsFlooredAtTheInstantItIsCutAgainst(t *testing.T) {
 // A WINDOW THE FLOOR CLIPS IS CUT AS EVERY BUILD CUTS IT, AND SHOWN FROM ITS
 // FIRST WHOLE BAR.
 //
-// Every count is floored at the instant minus the thirty-day history, and the
-// default window — any ask that names no `since` — starts at that floor, which
-// lies mid-bucket whenever the instant does. Here the instant is half past an
-// hour, so the floor is half past too, and the bucket it falls in holds a row
-// on each side of it.
-//
-// TWO SHAPES OF ONE AXIS, and each is held. One node's part is cut DOWN to the
-// bucket the floor falls in, that bar counting only the row above the floor:
-// it is the window every node cuts from the asker's instant, and a fleet sums
-// its nodes' parts bar for bar. What a caller is shown drops that partial bar
-// and begins at the first whole bucket inside the history, since a bar
-// labelled with the whole bucket and counting only its upper part is what the
-// outward snap exists to prevent.
+// The instant is half past an hour, so the floor's bucket holds a row each side.
+// TWO SHAPES OF ONE AXIS, each held: one node's part is cut DOWN to that bucket,
+// counting only the row above the floor (a fleet sums parts bar for bar); what a
+// caller is shown drops it and begins at the first whole bucket.
 //
 // Mutation: start [store.HistogramQuery.Window] at the first whole bucket and
-// the part's `since` is a bar later than the window it was asked for; drop
-// nothing in [store.EventHistogram.InsideHistory] and the axis shown begins
-// with the partial bar; leave its Total alone and it counts the row the
-// dropped bar held.
+// the part's `since` is a bar late; drop nothing in
+// [store.EventHistogram.InsideHistory] and the shown axis begins with the
+// partial bar; leave its Total alone and it counts the dropped bar's row.
 func TestAWindowTheFloorClipsIsCutAsEveryNodeCutsItAndShownFromItsFirstWholeBar(t *testing.T) {
 	t.Parallel()
 	log := open(t).Events()
@@ -684,15 +671,12 @@ func TestTheChannelAndSeatFiltersNarrowTheListingAndItsAxis(t *testing.T) {
 
 // "FAILURES ONLY" IS A FILTER, answered by the rule every read stamps.
 //
-// The event log narrowed the rows it had already paged in, so its axis counted
-// every event in the window while the list showed the failures among the
-// newest hundred. Filtered here, the list and the axis are one set again, and
-// the rule is the one [store.EventRecord.Failed] is read by: a `failed` tag
-// OR a type in the failure set — and its negation keeps a row that carries no
-// tag at all, which a bare NOT over a NULL comparison would drop. Asked with a
-// related agent too, because that FROM joins the party table and the rule's
-// columns have to be qualified to mean the log's.
-//
+// Filtered in SQL, the list and the axis are one set (post-filtering paged rows
+// would count every event while the list showed the failures among the newest
+// hundred). The rule is [store.EventRecord.Failed]'s: a `failed` tag OR a type
+// in the failure set; its negation keeps a row with no tag, which a bare NOT
+// over a NULL comparison would drop. Asked with a related agent too, because
+// that FROM joins the party table and the columns must be qualified.
 // Mutation: drop the clause from the predicate, and every case counts four;
 // drop the COALESCE, and the clean half loses the untagged row.
 func TestTheFailedFilterIsTheRuleEveryReadStamps(t *testing.T) {
