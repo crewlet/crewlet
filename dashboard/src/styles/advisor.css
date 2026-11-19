@@ -6,7 +6,9 @@
  */
 
 /* The Advisor's page (routes/advisor): its head, when the checks last ran,
-   Run now and the model, on one wrapping row. */
+   then Run now and the model, on one wrapping row. THE LINE TAKES A LINE OF
+   ITS OWN where it cannot have 16rem beside the controls (a phone), and the
+   controls wrap under it; on a wide screen all three share the row. */
 .advisor-head {
   display: flex;
   flex-wrap: wrap;
@@ -15,9 +17,18 @@
 }
 
 .advisor-head__run {
-  flex: 1;
-  min-width: 12rem;
+  flex: 1 1 16rem;
+}
+
+.advisor-head__run > p {
   margin: 0;
+}
+
+.advisor-head__controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2) var(--spacing-3);
 }
 
 /* The Advisor's model picker, captioned with what it picks. */
@@ -33,6 +44,42 @@
   flex-wrap: wrap;
   align-items: center;
   gap: var(--spacing-1);
+}
+
+/* The subjects inside a row of one class: each its name and how fresh it is,
+   and its fix and menu at the line's end, wrapping under on a phone. */
+.advisor-group {
+  display: grid;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.advisor-group__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-1) var(--spacing-3);
+}
+
+/* Whose words follow: the Advisor's model's, before its explanation. */
+.advisor-said {
+  font-weight: var(--font-weight-medium);
+}
+
+/* A finding's fix in words, its presses at the line's end, wrapping under. */
+.advisor-fix-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-2) var(--spacing-3);
+}
+
+.advisor-fix-line > p {
+  margin: 0;
 }
 
 .advisor-finding__tags {

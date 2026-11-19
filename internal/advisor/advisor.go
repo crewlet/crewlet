@@ -155,10 +155,22 @@ type Subject struct {
 	Name string `json:"name,omitempty"`
 }
 
-// Fact is one number a finding's evidence states.
+// Fact is one number a finding's evidence states. A rule's facts are said by
+// their key ([FactLabel]); a model finding's carry the words the model labelled
+// them with, since its keys are its own and a key read as a label ("blocks 1").
 type Fact struct {
 	Key   string `json:"key"`
 	Value int64  `json:"value"`
+	Label string `json:"label,omitempty"`
+}
+
+// Said is how the fact is labelled: its own words where it carries them, else
+// its key's ([FactLabel]).
+func (f Fact) Said() string {
+	if f.Label != "" {
+		return f.Label
+	}
+	return FactLabel(f.Key)
 }
 
 // RecordKind is what a record names, so a reader knows how to open it.
