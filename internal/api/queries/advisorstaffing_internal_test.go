@@ -42,9 +42,9 @@ func TestASeatsStopsAreReadFromItsOwnRecords(t *testing.T) {
 	}
 	s := Sources{Events: stopLog{rows: map[string][]store.EventRecord{
 		types.SeatPaused{}.EventType():           {event(a, at(time.Hour))},
-		types.SeatResumed{}.EventType():          {event(a, at(3 * time.Hour))},
-		types.SeatProviderParked{}.EventType():   {event(a, at(5 * 24 * time.Hour))},
-		types.SeatProviderReleased{}.EventType(): {event(b, at(-40 * time.Hour))},
+		types.SeatResumed{}.EventType():          {event(a, at(3*time.Hour))},
+		types.SeatProviderParked{}.EventType():   {event(a, at(5*24*time.Hour))},
+		types.SeatProviderReleased{}.EventType(): {event(b, at(-40*time.Hour))},
 	}}, Pauses: pauseList{pauses: []coord.SeatPause{{Seat: b, At: now.Add(-40 * 24 * time.Hour)}}}}
 	stops, err := s.seatStops(t.Context(), from, to, now)
 	if err != nil {
@@ -82,7 +82,9 @@ type busyDays struct {
 	rows []usage.SeatDay
 }
 
-func (b busyDays) SeatDays(context.Context, usage.SpendQuery) ([]usage.SeatDay, error) { return b.rows, nil }
+func (b busyDays) SeatDays(context.Context, usage.SpendQuery) ([]usage.SeatDay, error) {
+	return b.rows, nil
+}
 
 // A SEAT'S BUSY TIME IS ITS DAYS' EXACT SUM ACROSS NODES, and a day with turns
 // whose busy time was not measured leaves the seat unmeasured. Mutation: read
