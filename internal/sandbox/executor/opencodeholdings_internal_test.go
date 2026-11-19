@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -1080,7 +1081,8 @@ func (c *ohCountdown) Err() error {
 
 // THE READER TAKES NO SLOT OF ITS OWN: a reading under ReadHoldings, which
 // holds the seats' one slot, completes; a reader taking the slot again would
-// wait on itself until its caller left.
+// wait on itself until its caller left, which this case's liveness bound
+// reports as its own failure.
 //
 // Not parallel: the slots are the process's own.
 //
@@ -1088,13 +1090,26 @@ func (c *ohCountdown) Err() error {
 func TestTheReaderTakesNoSlotOfItsOwn(t *testing.T) {
 	c := ohCall(1, "echo", `{"t":1}`, "done")
 	archive := ohGzip(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, "done"))))
-	got, err := NewOpenCode().ReadHoldings(t.Context(), ohArchive("2.2.7"), func(context.Context) (io.ReadCloser,
-		error) {
-		return io.NopCloser(bytes.NewReader(archive)), nil
-	}, sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.2.7"})
-	if err != nil || !got.Read || SeatTranscriptReadsHeld() != 0 {
-		t.Errorf("a reading = %+v, %v, seats' slot held after %d; want it read and the slot given back", got, err,
-			SeatTranscriptReadsHeld())
+	type reading struct {
+		got sandbox.SessionHoldings
+		err error
+	}
+	done := make(chan reading, 1)
+	go func() {
+		got, err := NewOpenCode().ReadHoldings(t.Context(), ohArchive("2.2.7"), func(context.Context) (io.ReadCloser,
+			error) {
+			return io.NopCloser(bytes.NewReader(archive)), nil
+		}, sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.2.7"})
+		done <- reading{got, err}
+	}()
+	select {
+	case r := <-done:
+		if r.err != nil || !r.got.Read || SeatTranscriptReadsHeld() != 0 {
+			t.Errorf("a reading = %+v, %v, seats' slot held after %d; want it read and the slot given back", r.got,
+				r.err, SeatTranscriptReadsHeld())
+		}
+	case <-time.After(time.Minute): //fixedwait:liveness
+		t.Fatal("a reading of one small step waited a minute: the reader waits on a slot its caller holds")
 	}
 }
 
