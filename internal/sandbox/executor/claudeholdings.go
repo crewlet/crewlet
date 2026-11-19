@@ -577,14 +577,15 @@ func outsideArchive(name string) bool {
 }
 
 // mainThread reads the session's main thread, whose bytes member hands out, a
-// whole line at a time, into Claude Code's resume's model ([threadChain]) and
-// the pairing rule's marks ([holdingsPairing]), and once it is read whole,
-// which of its calls the request a resumed session sends pairs
-// ([holdingsWalk.mainEnd]). No reading at once where a line is no record, a
-// user or assistant record's message does not decode, a record replaces
-// results or carries a batch in no shape Claude Code writes, or the model
-// cannot place the thread ([threadChain.Unknown]): read on, the reading
-// would vouch for a thread no model says the resume hands its model.
+// line at a time in one pass, holding none whole ([threadReader]), into Claude
+// Code's resume's model ([threadChain]) and the pairing rule's marks
+// ([holdingsPairing]), and once it is read to its end, which of its calls the
+// request a resumed session sends pairs ([holdingsWalk.mainEnd]). No reading
+// at once where a line is no record, a user or assistant record's message
+// does not decode, a record replaces results or carries a batch in no shape
+// Claude Code writes, or the model cannot place the thread
+// ([threadChain.Unknown]): read on, the reading would vouch for a thread no
+// model says the resume hands its model.
 func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
 	lines := w.reader(member)
 	chain, pairing := newThreadChain(""), &holdingsPairing{}
@@ -1006,10 +1007,11 @@ func originOf(line threadLine) string {
 }
 
 // subagentThread reads subagent agent's thread, whose bytes member hands out,
-// a whole line at a time, into a, the model of its own load ([threadChain],
-// newThreadChain(agent)) and the pairing rule's marks ([holdingsPairing]), and
-// once it is read whole, what rule 2 and the pairing rule read off the one
-// conversation that load hands ([holdingsWalk.subagentEnd]).
+// a line at a time in one pass, holding none whole ([threadReader]), into a,
+// the model of its own load ([threadChain], newThreadChain(agent)) and the
+// pairing rule's marks ([holdingsPairing]), and once it is read to its end,
+// what rule 2 and the pairing rule read off the one conversation that load
+// hands ([holdingsWalk.subagentEnd]).
 //
 // IT READS ON past every line that leaves the subagent not whole, the model's
 // bound among them, so every record's calls are still counted: each is told

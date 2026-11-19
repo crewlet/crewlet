@@ -205,8 +205,10 @@ seal the node cannot open, refuses the capture, and so does
 a login read again past what a launch may hand, or a set past four times that.
 A key's PEM armour is never a value: every key of its kind carries it, and the
 shapes read a key by it. Keys of JSON objects, members' names (by value and by
-shape) and the tar's metadata are scrubbed too, and the scrub is bounded on
-what it reads and holds, refusing a session past either.
+shape) and the tar's metadata are scrubbed too. The scrub reads at most eight
+times the archive's bound of plaintext, refusing a session past it, and holds
+no line, string or stretch of text whole, so it refuses none for its length
+and what it holds stays within its own bound whatever the box wrote.
 
 **A turn's end is owed on the run's row**, written there by whatever decides
 it, and recorded by the run's ending only after every capture of the turn has
