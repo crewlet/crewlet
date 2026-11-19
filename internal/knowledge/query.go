@@ -9,34 +9,15 @@ import (
 // MaxQueryBytes bounds the text of a search, in bytes, and a longer one is
 // REFUSED naming the limit, never cut.
 //
-// ONE BOUND FOR EVERY RANKED SEARCH THE ENGINE RUNS — the knowledge search,
-// the tracker's item search and chat's message search — and for every surface
-// that takes one: a seat's `search_knowledge`, `search_work_items`,
-// `search_messages` and `answer_knowledge`, the operator's catalogue, the
-// API's `knowledge`, `work_search` and `chat_search` and the dashboard that
-// asks them (`SEARCH_QUERY_MAX`), the fan-out every Doclet or Worklet
-// search passes through, and the chat index every chat search is ranked by,
-// whichever surface asked. Declared here because this package is already the
-// first two searches' shared vocabulary ([Mode], [Outcome]), and a bound
-// spelled once per surface is a bound that drifts until one of them cuts. Chat
-// shares only the bound: it is a keyword corpus of its own (ADR-0071), but a
-// pasted passage ranks on every incidental word in it there exactly as it
-// does here.
-//
-// FOUR HUNDRED BYTES is a long sentence and several keywords. A query is what
-// somebody is looking for, and past that it is a pasted thread or a document:
-// the keyword half would rank on dozens of incidental terms, the semantic half
-// would place one vector at the mean of everything pasted, and either way the
-// answer is to a question nobody asked.
-//
-// REFUSED, NOT CUT, which is the opposite of what the corpus does with a long
-// page. A page is embedded as its OPENING because one vector stands for one
-// source and an opening already says what a source is about; a query is a
-// question, and a search on its first part is a different search whose answer
-// the asker would read as the answer to theirs. So a query never goes through
-// the corpus's cut: its vector is the whole query's, in one input on every
-// model this build knows (each takes at least 2 032 bytes) and in pieces
-// pooled on a model stated narrower (internal/search's queryEmbedding).
+// ONE BOUND FOR EVERY RANKED SEARCH (knowledge, tracker items, chat messages)
+// and every surface taking one, the dashboard's `SEARCH_QUERY_MAX` included:
+// spelled per surface it drifts until one cuts. Chat shares only the bound
+// (its corpus is its own, ADR-0071). FOUR HUNDRED BYTES is a long sentence and
+// several keywords; past that it is a pasted thread. REFUSED, NOT CUT,
+// unlike a long page: a search on a query's first part is a different search
+// the asker would read as theirs. So the vector is the whole query's: one
+// input on every model this build knows (each takes at least 2 032 bytes),
+// pooled pieces on a narrower stated one (internal/search's queryEmbedding).
 const MaxQueryBytes = 400
 
 // ErrQueryTooLong is a search whose text is past [MaxQueryBytes].

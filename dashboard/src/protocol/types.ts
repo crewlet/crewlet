@@ -28,6 +28,12 @@ import type { TurnOutcomesAnswer } from "./turnOutcomes.ts";
 import type { InsightsAnswer } from "./insights.ts";
 import type { AccessFixAnswer, AdvisorAnalysisAnswer, AdvisorAnswer } from "./advisor.ts";
 import type {
+  AdvisorFindingDetail,
+  AdvisorFindingList,
+  AdvisorNoticesAnswer,
+  AdvisorRunSummary,
+} from "./advisorFindings.ts";
+import type {
   ModelCheck,
   ModelDevice,
   ModelEntriesAnswer,
@@ -3040,6 +3046,47 @@ export interface WorkSummary {
   /** Questions on the task still waiting for their answer. */
   open_asks?: number;
   spend?: WorkRowSpend;
+  /** Why the item is or is not moving, read by the engine in the row's own
+   *  statement; null on an item not in progress. Draw what it says: no screen
+   *  compares a start with its own clock. */
+  flow: WorkFlow | null;
+}
+
+/** Why an item in progress is or is not moving, the first that holds winning:
+ *  a turn or run on it, an open blocker, a wait (a later start, the
+ *  assignee's own question, a run parked on it), a seat that cannot take a
+ *  turn, a start that passed with nothing done, nothing changed for the
+ *  project's window, or none of these. `moving` is the ordinary case. */
+export type WorkFlowState =
+  "working" | "blocked" | "waiting" | "held" | "due" | "stuck" | "moving" | (string & {});
+
+/** The fact behind a working, waiting or held item; "" on the other states. */
+export type WorkFlowCause =
+  | ""
+  | "turn"
+  | "run"
+  | "start"
+  | "question"
+  | "parked"
+  | "paused"
+  | "unplaced"
+  | "budget"
+  | "limit"
+  | "parked_elsewhere"
+  | "departed"
+  | "nobody"
+  | (string & {});
+
+/** An item's flow. Every key is sent: an instant nobody knows is null. */
+export interface WorkFlow {
+  state: WorkFlowState;
+  cause: WorkFlowCause;
+  /** When the state began, where the facts give it. */
+  since: string | null;
+  /** When it ends, where known: the start waited for, a seat's reset. */
+  until: string | null;
+  /** The wait's words, on an item waiting for its start; "" otherwise. */
+  reason: string;
 }
 
 /** What one task has cost, as a card and the most expensive tasks draw it:
@@ -3086,12 +3133,33 @@ export interface WorkloadRow {
   blocked: number;
   overdue: number;
   unscheduled: number;
+  /** Their items in progress, a count per flow state. */
+  flow: WorkFlowCounts;
+  /** Their items in progress that want the seat now: working, moving, due and
+   *  stuck. An item parked until tomorrow, blocked or held is open work and
+   *  no load. */
+  load: number;
+}
+
+/** One seat's items in progress, a count per `WorkFlowState`. */
+export interface WorkFlowCounts {
+  working: number;
+  blocked: number;
+  waiting: number;
+  held: number;
+  due: number;
+  stuck: number;
+  moving: number;
 }
 
 export interface WorkloadAnswer {
   rows: WorkloadRow[];
   /** The answer stopped at the handle cap. */
   truncated?: boolean;
+  /** The rows' flow read the seats' live facts; false on a node whose live
+   *  projection is not seeded, where no item reads working or held by a
+   *  seat's stop. */
+  flow_live: boolean;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
@@ -3214,6 +3282,8 @@ export interface WorkItemsAnswer {
    *  are different facts, and `read_level` speaks only to the first. */
   complete: boolean;
   incomplete?: WorkIncomplete;
+  /** The rows' flow read the seats' live facts (`WorkloadAnswer.flow_live`). */
+  flow_live: boolean;
   /** Present only when the request named `around=`, and NULL when that task
    *  is not in this answer — it moved off the board — rather than absent. */
   around?: WorkAround | null;
@@ -3447,6 +3517,11 @@ export interface WorkProjectDetail extends WorkProjectRow {
   tags?: WorkProjectTag[];
   /** The labels that take no new work, which `tags` leaves out. */
   archived_tags?: WorkProjectTag[];
+  /** How many hours an item in progress here may go unchanged before it
+   *  reads stuck: the lead's setting, or the default where
+   *  `stuck_after_hours_set` is false. */
+  stuck_after_hours: number;
+  stuck_after_hours_set: boolean;
   policy_stamp: number;
   read_level?: ReadLevel;
   log_seq?: number;
@@ -3965,6 +4040,11 @@ export interface WorkItemDetail {
    *  the next one — the limit `task.reassignments` counts against, served by
    *  the engine that enforces it so no screen carries a figure of its own. */
   reassignment_budget?: number;
+  /** The item's flow at the read's instant, as its board row reads it; null
+   *  on an item not in progress. */
+  flow: WorkFlow | null;
+  /** The flow read the seats' live facts (`WorkloadAnswer.flow_live`). */
+  flow_live: boolean;
   read_level?: ReadLevel;
   log_seq?: number;
   applied_through?: number;
@@ -5808,6 +5888,8 @@ export interface WorkMyWork {
   log_lag?: number;
   complete: boolean;
   incomplete?: WorkIncomplete;
+  /** Every row's flow read the seats' live facts (`WorkloadAnswer.flow_live`). */
+  flow_live: boolean;
 }
 
 /** One notice in a person's inbox, as `worklet.InboxNotice` serialises it.
@@ -8293,6 +8375,10 @@ export interface QueryMap {
   diagnostics_insights: InsightsAnswer;
   advisor: AdvisorAnswer;
   advisor_analysis: AdvisorAnalysisAnswer;
+  advisor_findings: AdvisorFindingList;
+  advisor_finding: AdvisorFindingDetail;
+  advisor_run: AdvisorRunSummary;
+  advisor_notices: AdvisorNoticesAnswer;
   advisor_access: AccessFixAnswer;
   /** The administrator's reading, or a member's: narrow on `reading`. */
   mcp_servers_status: McpServersStatusAnswer | McpMemberServersStatusAnswer;

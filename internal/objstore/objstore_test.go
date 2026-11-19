@@ -216,18 +216,13 @@ func TestADeclarationStatesItsStanding(t *testing.T) {
 
 // A WALK READS ONLY THE STANDINGS ITS PASS IS OWED (ADR-0081). A retired or
 // derived row keeps its object from the collector exactly as a live one does
-// — so the collector's batch question is the same statement whatever the
-// standing — and names nothing the company is owed: a retired one a replaced
-// object, a derived one an object the engine builds again. So the walk the
-// audit takes and the one a backup takes are REFUSED for either, and so is the
-// question about given keys a backup asks past its copy; a store move's walk
-// reads a derived table besides — its objects are ones the moved fleet would
-// otherwise build again on every node — and still refuses a retired one, whose
-// rows no pass reads at all. Each refusal comes on the walk's first page,
-// before anything is read, so a pass that forgot to leave such a table out
-// fails on its first pass rather than paging somebody about an object nobody
-// has to repair, copying it into every backup, or carrying a replaced one into
-// the store the fleet moves to.
+// (so the collector's batch question is one statement whatever the standing)
+// and names nothing the company is owed. So the audit's walk and a backup's,
+// and a backup's question about given keys, are REFUSED for either; a store
+// move's walk also reads a derived table, and still refuses a retired one.
+// Each refusal comes on the first page, before anything is read, so a pass
+// that forgot to leave such a table out fails at once rather than paging
+// somebody about an object nobody repairs or copying it into every backup.
 func TestAWalkReadsOnlyTheStandingsItsPassIsOwed(t *testing.T) {
 	t.Parallel()
 	live := ReferenceTable{Domain: "tracker", Table: "replaced_packs", Key: "object", Hash: "hash",

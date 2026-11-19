@@ -1172,7 +1172,7 @@ over the project's [files](#a-projects-files):
 | `get_work_catalogue` | the types a task may be and the fields it may carry |
 | `list_projects` | every project work is filed into, with how much work each holds — `task_counts` is `{todo, active, done, closed}`, so waiting work and started work are two numbers — when its work last changed and who changed it, its `target_date`, and who leads it. `archived` picks the set — `false` (the default) for the live ones, `only` for the retired ones alone, `true` for both — and `sort` orders the whole company before the page is taken (`key`, `name`, `unit`, `todo`, `active`, `done`, `closed`, `last_change`, `target`, each with an optional leading `-`), so `-todo` is where the pile actually is rather than the biggest of the fifty keys that sort first. A seat's answer carries **50** and says `total` beside `truncated` — narrow with `q` or `unit` — because a tool answer is read out of the turn's own context window |
 | `describe_project` | one project in full: the six statuses with what each means, the types it files, the fields grouped by which type they apply to (required first, with their options), its tags and its lead. Omitting the project means the seat's own |
-| `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields, setting the default assignee and setting the **target date** are the project **lead's**; archiving the project is the lead's too, and is never an agent's — see [Who may do what](#who-may-do-what) |
+| `write_project` | a project's own settings. Declaring a **tag** is open to every seat; renaming or archiving one, declaring project fields, setting the default assignee, the **target date** and the [stuck window](#a-projects-stuck-window) are the project **lead's**; archiving the project is the lead's too, and is never an agent's — see [Who may do what](#who-may-do-what) |
 | `task_activity` | what HAPPENED, in the order the log made it happen: every change to one task or one project, with who made it and exactly which fields moved |
 | `my_work` | everything this seat is expected to look at, in one call — see below |
 | `list_project_files` | a project's files in path order, a page at a time; `folder` narrows to the paths under one |
@@ -1603,8 +1603,66 @@ progress — **blocked**, **overdue** and **unscheduled** — because a person
 whose whole queue is blocked has a different problem from one who is simply
 busy, and a total alone cannot tell them apart.
 
+**Load is the work that wants the seat now.** Each row counts its items in
+progress by [flow state](#why-an-item-in-progress-is-not-moving), `flow:
+{working, blocked, waiting, held, due, stuck, moving}`, and `load` is
+`working + moving + due + stuck`. An item parked until tomorrow's health check,
+a blocked one or one held by a stopped seat is open work and no load: it would
+not move whatever the seat did.
+
 `GET /worklet/workload`, optionally narrowed to one `unit`: the people whose open
 work sits in projects that unit owns.
+
+## Why an item in progress is not moving
+
+An item in `in_progress` that nobody is moving reads like one somebody is.
+So every item in progress carries a **flow**, derived by the engine and never
+stored as a status: no status changes because no turn is running
+([ADR-0162](../../adr/0162-an-item-in-progress-says-why-it-is-not-moving.md)).
+The first state that holds wins:
+
+| State | Holds when | `cause` | `since` / `until` |
+|---|---|---|---|
+| `working` | a turn or an executor run of the assignee is on the item now | `turn`, `run` | since it started |
+| `blocked` | the item has an open blocker | | |
+| `waiting` | its start is in the future, the assignee's own question on it is unanswered, or the assignee's run is parked on it waiting on a person | `start`, `question`, `parked` | `until` the start, with the wait's words as `reason` |
+| `held` | the assignee cannot take a turn: paused, placed on no node, out of its token budget, out of its model limit, parked on another item waiting on a person, gone from the chart, or there is no assignee | `paused`, `unplaced`, `budget`, `limit`, `parked_elsewhere`, `departed`, `nobody` | `until` the limit's or the budget's reset, where known |
+| `due` | its start has passed and nothing of the assignee's is on it since: no turn of theirs on it ended and they wrote nothing on it | | since the start |
+| `stuck` | nothing changed on it for its project's [stuck window](#a-projects-stuck-window) | | since the last change |
+| `moving` | none of the above: the ordinary case | | since the last change |
+
+`waiting` comes before `held`: a hold matters only to an item that wants a turn
+now, so an item parked until tomorrow on a seat out of its limit until noon is
+waiting, and held once its start passes with the limit still on.
+
+- **Where it is read.** `flow: {state, cause, since, until, reason}` is on every
+  board row, the item's detail, `my_work` and a seat's ready work, and `null` on
+  an item that is not in progress. [Workload](#who-is-carrying-how-much) counts
+  it per seat. It is one SQL expression evaluated inside the statement each of
+  those already runs, so no screen or tool derives its own, and none compares a
+  start with its own clock.
+- **The live facts.** Which items a turn or run is on, and why a seat cannot
+  take a turn, come from the live projection's ranking of a seat's stop reasons.
+  An answer read on a node whose projection is not seeded says
+  `flow_live: false`: its rows read no live fact, rather than reading every
+  stopped seat's work as moving.
+- **`departed` needs a chart.** An assignee is gone once the chart's seats have
+  been applied to the tracker and do not name them; a tracker that has never
+  been told the chart departs nobody.
+- **A departed seat's work is re-homed a day later.** The item keeps the seat's
+  handle through the 24 hours a removal can be undone in, then the seat's
+  retirement hands each open item to its lead or returns it to `todo`,
+  unassigned, with a history note naming the seat: see
+  [Seat Ownership § The removed seat](../concepts/seat-ownership.md#the-removed-seat).
+
+### A project's stuck window
+
+`stuck_after_hours` is how long an item in progress in the project may go
+unchanged before it reads `stuck`: a whole number of hours from 1 to 168, and 8
+(a working day) where the lead sets none. It is the lead's, like the
+[target date](#a-projects-target-date):
+`write_project(stuck_after_hours: 24)`; `null` or `0` restores the default.
+`work_project` answers the window in force and `stuck_after_hours_set`.
 
 ## How the work has moved
 

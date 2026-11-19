@@ -12,12 +12,11 @@ import (
 // CONTENT IS THE SAME ONE.
 //
 // The ledger answers an operation it already holds before the write is
-// decided, so a write's id derived from the key, the verb and the page alone
-// made the same key sent with another body, another title or another remark
-// the first write's operation: answered from the ledger, with nothing of the
-// second written — a change reported as made and silently dropped. What the
-// write says is in the id now, so the retry (the same input again) is still
-// one operation and anything else under the key lands as asked.
+// decided, so an id derived from key, verb and page alone made another body,
+// title or remark under the same key the first write's operation: answered
+// from the ledger, nothing written, a change reported and silently dropped.
+// What the write says is in the id, so an identical retry is one operation and
+// anything else under the key lands as asked.
 //
 // Mutation: drop the content from [doclet.Store]'s derivation and every second
 // write is answered as the first, leaving the page as it was.

@@ -38,7 +38,7 @@ subcommand below is served by it.
 | `crewlet fleet broker credential [config] -o FILE` | Write the operator key a clustered member's broker admits on its loopback client listener — derived from this host's `secrets.keys`, to a file created `0600` and never to the terminal — and print the `nats` invocation that reaches the broker with it, from this host only. The token takes `admin` |
 | `crewlet feeds dead-letters [config] [-json]` | The wake feeds' dead letters — records no node could read in the hour each was handed back — read from a running node: one row per entry, by the id `discard` names, with its feed, why no node read it, where its record was delivered from, and how long ago it was kept and how long it has left. A feed the node could not list is named with its error and **exits non-zero**. The token takes `admin` |
 | `crewlet feeds discard <id> -confirm <id>` | Give one dead letter's wake up for good — for an entry no build will ever read, such as a record sealed under a key retired from every node. No node will derive it. The token takes `admin` |
-| `crewlet doctor [config] [-json] [-words]` | The [setup advisor](../guides/advisor.md)'s findings, read from a running node: one row per class of finding with its severity, who acts on it, its class, every subject as a kind and an ordinal (`seat#1`), and each one's evidence as counts. The subjects' handles and each finding's title and reason, which are the company's own names, only with `-words`. **Exits 2** while a finding blocks the company, 1 when it could not ask or the node could not read a source. The token takes `admin` |
+| `crewlet doctor [config] [-json] [-words]` | The [Advisor](../guides/advisor.md)'s open findings, read from a running node: one row per class of finding with its severity, who acts on it, its class, every subject as a kind and an ordinal (`seat#1`), and each one's evidence as counts. The subjects' handles and each finding's title and reason, which are the company's own names, only with `-words`. **Exits 2** while a finding blocks the company, 1 when it could not ask, the latest run could not read a source or the Advisor has not run yet. The token takes `admin` |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends its running work: the turn it is on at its next round, and its executor in its box at once. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
 | `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head (its runtime contract and capabilities among it) and audience, its versions, each with its contract and capabilities, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
@@ -2372,12 +2372,12 @@ run it again. A discard the node did not answer may have been made;
 crewlet doctor [-json] [-words] [<config.yaml>] [-api URL]
 ```
 
-The [setup advisor](../guides/advisor.md)'s findings about the running node's
+The [Advisor](../guides/advisor.md)'s open findings about the running node's
 company, the most costly first: what its document costs it, what its
 integrations' last check reported, and the patterns the engine read in its last
-7 days of work. It is a client of
-[`GET /advisor`](api-endpoints.md), and the token in `CREWLET_API_TOKEN` takes
-`admin`.
+7 days of work, as its latest run left them, neither snoozed nor applied. It is
+a client of [`GET /advisor/findings`](api-endpoints.md), and the token in
+`CREWLET_API_TOKEN` takes `admin`.
 
 Each row is a class of finding: its number,
 its **severity** (`blocks`, `costs`, `note`), its **actor** (`owner` for a change
@@ -2397,9 +2397,9 @@ answer as JSON for a script, its keys sorted, with every name in it.
 
 The command **exits 2** while any finding is `blocks`, so a script can hold a
 go-live or a configuration change on it, and **1** when it could not ask (no
-node, a refused token, an answer it cannot read) or the node could not read a
-source (`Not read:`), since a finding that blocks may be missing from the list;
-a listed block still exits 2. `costs` and `note` findings exit zero. It sends nothing: a fix is previewed and sent from the dashboard, or
+node, a refused token, an answer it cannot read), the latest run could not read
+a source (`Not read:`) or the Advisor has not run yet, since a finding that
+blocks may be missing from the list; a listed block still exits 2. `costs` and `note` findings exit zero. It sends nothing: a fix is previewed and sent from the dashboard, or
 with `PUT /config` as the advisor's guide shows.
 
 ## `crewlet seats`
@@ -2889,6 +2889,7 @@ evict node-4 (operation 01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4)
   code: applied at CREWLET_CODE_LOG 2207
   access: applied at CREWLET_ACCESS_LOG 4120
   atlas: applied at CREWLET_ATLAS_LOG 310
+  advisor: applied at CREWLET_ADVISOR_LOG 5140
   node-4 stays COUNTED for about a minute, so a live node is certain to have read its own tombstone before the trim passes it.
   tracker trim floor 918100000 → 918100000
   pages trim floor 4100 → 4100
@@ -3052,7 +3053,7 @@ Changes a log's byte ceiling, raising or lowering it. A log's Tier A ceiling
 `stream.artifact_data_log_max_bytes`, `stream.assistant_log_max_bytes`,
 `stream.chat_log_max_bytes`, `stream.executor_log_max_bytes`,
 `stream.code_log_max_bytes`, `stream.access_log_max_bytes`,
-`stream.atlas_log_max_bytes`) is not a live
+`stream.atlas_log_max_bytes`, `stream.advisor_log_max_bytes`) is not a live
 setting, only the value its stream is created with. A resize is decided
 against the usage the log is at, and a
 publisher makes that a moving quantity, so this runs with the whole fleet in a

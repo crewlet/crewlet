@@ -10,21 +10,16 @@ import (
 
 // EVERY KNOWN-FIELD SET NAMES EXACTLY THE FIELDS ITS TYPE HAS.
 //
-// The sets are what [decodeInto] tells a newer build's field from one of this
-// build's, and they are written out by hand because a zero value does not
-// marshal its omitempty fields — so both directions of a drift are silent:
+// The sets tell [decodeInto] a newer build's field from this build's, and are
+// hand-written (a zero value does not marshal omitempty fields), so drift is
+// silent both ways:
 //
-//   - a name the type does not have is decoded into nothing and is no longer
-//     carried either, so a newer build's field of that name is DROPPED on the
-//     next re-encode — the lossless round trip the package doc promises,
-//     broken for exactly one key. The message set went on naming `imported`
-//     after the field it stood for was deleted with the importer.
-//   - a name the type has and the set lacks is decoded into the struct AND
-//     carried as unknown, so the next encode writes the stale carried copy
-//     back over what the caller set.
+//   - a name the type lacks is not carried, so a newer build's field of that
+//     name is DROPPED on re-encode, breaking the lossless round trip.
+//   - a name the type has and the set lacks is decoded AND carried as unknown,
+//     so the next encode writes the stale copy over the caller's value.
 //
-// The type's own json tags are the answer, read the way encoding/json reads
-// them — an untagged embedded struct's fields are promoted, `-` is no field.
+// The answer is the type's json tags, read as encoding/json does.
 func TestEveryKnownFieldSetIsItsTypesOwn(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {

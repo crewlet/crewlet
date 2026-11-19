@@ -5,7 +5,9 @@
 // every event that asks it: have I already handled this delivery, how many
 // notifications in the last second, has this fire already been claimed, has
 // this trigger already been worked, who is on this agent-to-agent channel,
-// where is each node on the config pointer.
+// where is each node on the config pointer. The same sweep keeps each state-log
+// domain's operation ledger ([StatelogJobs]) and the coordination store's
+// removal markers ([MarkerJobs]), which no clock ages and every listing re-reads.
 //
 // They were all designed to be swept — every one of their migrations says
 // so, and each ships the index a range delete needs. The failure to avoid is
@@ -36,6 +38,15 @@
 // delete that cannot be undone is not idempotent in the way a range delete is,
 // so it does not lean on the duty at all. Every write is a compare-and-set,
 // and the retirement claims the seat's own lease while it deletes.
+// A seat whose run waits on a still-running tool call is no failure: the
+// mailbox is kept and retried, and said at info ([SeatRunsWaiting]).
+//
+// The retirement is also where a removed seat's open work stops being its own
+// (ADR-0162): before its runs are ended it hands the seat to a
+// [SeatWorkRehomer], which returns each item it still holds or hands it to the
+// item's lead. At the retirement and not at the removal, because the grace
+// that keeps a removed seat's mail for an undo keeps its work for one too; and
+// before the record is deleted, because nothing retires the seat again after.
 //
 // A human seat's chat read state is judged the same way and for the same
 // reason ([ChatReadJobs], chatreads.go): it lives in a coordination bucket with
@@ -73,21 +84,16 @@ var log = logging.Get("maintenance")
 
 // Interval is how often the sweep runs.
 //
-// Fifteen minutes, deliberately SHORTER than every retention below it. That
-// ordering is the module's invariant: a tick longer than a retention would
-// let a table sit past its horizon for the difference, and the retention
-// would stop describing the table. Every sweep enforces it rather than
-// trusting it ([Worker.horizon] raises a horizon at or below the tick, and
-// says so), because two of the retentions are the company's and an apply can
-// move them under a running worker.
+// Fifteen minutes, deliberately SHORTER than every retention below it: a tick
+// longer than a retention would let a table sit past its horizon. Every sweep
+// enforces this ([Worker.horizon] raises a horizon at or below the tick, and
+// says so), because two retentions are the company's and an apply can move
+// them under a running worker.
 //
-// It does not need to be much shorter. These are range deletes on indexed
-// columns answering a question nothing reads back, so a faster tick buys
-// only a slightly smaller table between runs and costs a write burst plus a
-// lease round-trip per node. Tables are sized by their retention, not by
-// this interval, so a node that misses several ticks changes nothing an
-// operator would notice — which is why the value sits well below the floor
-// rather than just under it.
+// It need not be much shorter: these are range deletes on indexed columns, so
+// a faster tick buys a slightly smaller table and costs a write burst plus a
+// lease round-trip per node, and a node that misses several ticks changes
+// nothing an operator would notice.
 const Interval = 15 * time.Minute
 
 // DutyFunc claims the single-owner sweep duty for one tick. Nil means "no
@@ -97,32 +103,13 @@ type DutyFunc func(ctx context.Context) (bool, error)
 
 // Scope says who a job's rows belong to, and therefore where it must run.
 //
-// # Why this is an enum and not a bool
-//
-// It was `PerNode bool`, and a bool has a zero value that is a valid SETTING
-// rather than an absence — so a job that never mentioned it was silently a
-// fleet job, which is the wrong answer for every table a node owns its own
-// copy of. The local sweeps in [StoreJobs], [LearningJobs],
-// [CounterpartyJobs] and [ScheduleJobs] took that default by omission:
-// `crewlet_events`, `chat_thread_follows`, `agent_diary`,
-// `counterparty_profiles` and `scheduled_runs` were swept only on the node
-// holding the duty and grew for ever on every peer.
-// The audit log was among them, so the event retention an operator configured
-// applied on one node of the fleet.
-//
-// The two classes are not a spectrum, and the question has exactly one right
-// answer per job: is this state the FLEET agrees on, or state THIS MACHINE
-// owns alone? An enum with no valid zero makes a new job answer it, which a
-// bool cannot — see [New], which refuses a job that did not.
-//
-// The asymmetry is worth naming, because it decides which way this fails. A
-// node-local job left as [Fleet] grows a table for ever on every node but
-// one, and looks identical to a sweep that works to the operator who checks
-// the node it ran on. A fleet job left as [NodeLocal] costs N times the write
-// amplification for one table's worth of benefit and is otherwise correct,
-// since these are idempotent range deletes. Neither is acceptable, but only
-// the first is invisible — which is why the refusal is at construction rather
-// than a warning somebody reads later.
+// An enum, not a bool, because a bool's zero value is a valid SETTING: a job
+// that never mentioned it was silently a fleet job, wrong for every node-owned
+// table. An enum with no valid zero makes each job answer: is this state the
+// FLEET agrees on, or THIS MACHINE's alone? [New] refuses a job that did not.
+// The failure is asymmetric: a node-local job left [Fleet] grows a table for
+// ever on every node but one, invisibly; a fleet job left [NodeLocal] only
+// multiplies idempotent deletes by N. Hence refusal at construction.
 type Scope string
 
 const (
@@ -164,38 +151,31 @@ type Job struct {
 
 	// Run does the work for the tick, reporting rows touched.
 	//
-	// A job that did part of its work and then failed reports BOTH: the rows
-	// it touched and the error. A job that walks records one at a time (the
-	// mailbox retirement) can retire three seats and fail on a fourth, and
-	// the three are as real as a clean tick's.
+	// A job that did part of its work and then failed reports BOTH the rows
+	// it touched and the error: the mailbox retirement can retire three
+	// seats and fail on a fourth, and the three are real.
 	//
-	// It takes BOTH times because the two kinds of job need different
-	// ones: a range delete needs the cutoff, while closing an abandoned
-	// channel needs the cutoff to select it AND now to stamp it closed.
-	// The worker derives cutoff from Horizon on every sweep, so a horizon
-	// the company moves — or one the worker raises to its tick — takes
-	// effect without a job rebuilding anything.
+	// It takes BOTH times: a range delete needs the cutoff, while closing an
+	// abandoned channel needs the cutoff to select it AND now to stamp it
+	// closed. The worker derives cutoff from Horizon on every sweep, so a
+	// moved or raised horizon takes effect without rebuilding the job.
 	Run func(ctx context.Context, now, cutoff time.Time) (int64, error)
 
 	// Scope says whether this job's rows are the fleet's or this node's
 	// own, and therefore whether it runs under the duty or on every node.
 	//
-	// It has no default. [New] refuses a job whose scope is not [Valid],
-	// because the answer is a property of the table that only the author of
-	// the job knows and the cost of guessing it wrong is invisible — see
-	// [Scope] for what the guess cost when the field was a bool.
+	// It has no default. [New] refuses a job whose scope is not [Valid]: only
+	// the job's author knows the answer, and a wrong guess is invisible (see
+	// [Scope]).
 	Scope Scope
 
-	// Gate reports whether this job has anything to do at all.
+	// Gate reports whether this job has anything to do at all, so a RARE job
+	// costs nothing on the ticks with none: a re-spread walk runs when a
+	// project's own row says it needs one, one indexed read where its own
+	// selection would be a scan. A nil gate always runs.
 	//
-	// It exists so a job whose work is RARE can cost nothing on the ticks
-	// where there is none: a re-spread walk runs when a project's own row
-	// says it needs one, and asking that is one indexed read where doing
-	// the walk's own selection would be a scan. A nil gate always runs.
-	//
-	// A gate that ERRORS skips its job and is reported: "I could not tell
-	// whether there is work" is not "there is no work", and treating it as
-	// the second is how a duty stops running and nothing says so.
+	// A gate that ERRORS skips its job and is reported: "could not tell" is
+	// not "no work", and treating it so is how a duty stops silently.
 	Gate func(ctx context.Context) (bool, error)
 }
 
@@ -203,17 +183,12 @@ type Job struct {
 // sweep, never once.
 //
 // A FUNCTION RATHER THAN A DURATION, because a horizon can be the COMPANY's
-// (the inbox's `inbox.retention_days`), and every apply replaces the company
-// under a running engine. Read once when the sweep was built, it held the sweep
-// to the revision the node booted on: a revision shortening it was honoured by
-// everything else at once and by the sweep only after a restart, so rows the
-// company had asked to forget were kept for as long as the node stayed up, and
-// a lengthened horizon deleted rows the company had just asked to keep. The
-// other horizons are this build's own and never move; they take [Fixed].
-//
-// An answer of zero or less is REFUSED for that sweep rather than used: the
-// cutoff it makes is now, which deletes every row the table holds. A horizon
-// with a floor applies it inside the function.
+// (the inbox's `inbox.retention_days`) and every apply replaces the company
+// under a running engine: read once, it would hold the sweep to the booted
+// revision, keeping rows the company asked to forget, or deleting rows it just
+// asked to keep. This build's own horizons never move; they take [Fixed].
+// An answer of zero or less is REFUSED for that sweep: its cutoff is now, which
+// deletes every row. A horizon with a floor applies it inside the function.
 type Horizon func() time.Duration
 
 // Fixed is a horizon that never moves: a retention this build decides.
@@ -282,25 +257,14 @@ type Worker struct {
 
 // New builds a worker, refusing a job that did not say whose rows it sweeps.
 //
-// The interval-below-every-horizon invariant is enforced per SWEEP rather
-// than here, because a horizon is asked for at every sweep ([Horizon]): a
-// horizon below the tick is RAISED to the tick and logged, rather than
-// refused. Two horizons are the company's, and failing a sweep over a
-// retention that is merely shorter than the tick would be a hard stop for a
-// soft problem — while silently accepting it would mean a table swept on a
-// schedule that cannot honour its own horizon.
-//
-// A MALFORMED JOB IS REFUSED RATHER THAN DROPPED, and that is the opposite
-// of what this did. It used to skip a job with no Run or no Name and carry
-// on, which is the same silence as the one [Scope] describes: the worker
-// starts, logs the jobs it kept, and the table the dropped job was for grows
-// with nothing anywhere saying a sweep was configured for it. There is no
-// caller for whom "I asked for this job and it is not running" is the
-// outcome they wanted, so it is an error the wiring has to answer for.
-//
-// The error names every offending job in one message rather than the first,
-// because a caller fixing one and re-running to find the next is the loop
-// this is meant to save them.
+// The interval-below-every-horizon invariant is enforced per SWEEP, not here,
+// because a horizon is asked for at every sweep ([Horizon]): one below the tick
+// is RAISED to the tick and logged, not refused. Two horizons are the
+// company's, and failing a sweep over a short retention would be a hard stop
+// for a soft problem, while silently accepting it would sweep on a schedule
+// that cannot honour its horizon. A MALFORMED JOB IS REFUSED RATHER THAN
+// DROPPED: skipping a job with no Run or Name is the silence [Scope] describes.
+// The error names every offending job, not the first.
 func New(opts Options) (*Worker, error) {
 	w := &Worker{
 		interval:  opts.Interval,
@@ -354,17 +318,14 @@ func (w *Worker) Jobs() []string {
 // horizon is how far back a job keeps rows on THIS sweep: its own answer,
 // asked now, raised to the tick when it asks for no more than the tick.
 //
-// AT OR BELOW, because the invariant [Interval] states is that the tick is
-// SHORTER than every horizon. A horizon exactly on the tick does not move when
-// it is raised — the value already is the floor — so the warning is the whole
-// of the behaviour there, and that is the point: a retention sitting on the
-// sweep's own cadence is one the SWEEP decides rather than the caller, and the
-// caller is the only one who will size a table from it. Strictly below was the
-// condition, which let the boundary pass in silence.
+// AT OR BELOW, because [Interval]'s invariant is that the tick is SHORTER than
+// every horizon. A horizon exactly on the tick does not move when raised, so
+// the warning is the whole behaviour there: a retention on the sweep's own
+// cadence is one the SWEEP decides, while the caller sizes a table from it.
 //
-// A horizon that answers zero or less is refused for the sweep — the cutoff
-// it makes is the sweep's own instant, which deletes every row the table
-// holds, and no retention anybody configured means that.
+// A horizon answering zero or less is refused for the sweep: its cutoff is the
+// sweep's own instant, which deletes every row, and no configured retention
+// means that.
 func (w *Worker) horizon(ctx context.Context, j Job) (time.Duration, error) {
 	if j.Horizon == nil {
 		return 0, nil
@@ -463,17 +424,14 @@ func (w *Worker) loop(ctx context.Context) {
 
 // Tick sweeps every job once, reporting rows removed per job.
 //
-// EVERY JOB RUNS even when one fails. They are independent tables, and
-// letting the first failure skip the rest means one unreachable store stops
-// the housekeeping for all of them — the failure mode this package exists to
-// fix, arrived at from the other direction. The errors are joined and
-// returned together, and a job that failed part-way still has the rows it did
-// touch counted: dropping them made a tick that retired a mailbox and then hit
-// one unreadable record report that it had retired nothing.
+// EVERY JOB RUNS even when one fails: they are independent tables, and letting
+// the first failure skip the rest means one unreachable store stops all the
+// housekeeping. The errors are joined, and a job that failed part-way still has
+// the rows it did touch counted.
 //
 // Returns a nil map and no error when this node does not hold the duty:
-// "somebody else swept" and "nothing needed sweeping" are different facts,
-// and an empty map would merge them.
+// "somebody else swept" and "nothing needed sweeping" are different facts, and
+// an empty map would merge them.
 func (w *Worker) Tick(ctx context.Context) (map[string]int64, error) {
 	// THE DUTY IS CLAIMED ONCE AND CONSULTED PER JOB. A [NodeLocal] job
 	// runs whether or not this node holds it, because the table it sweeps

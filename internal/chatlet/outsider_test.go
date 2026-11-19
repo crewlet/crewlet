@@ -9,16 +9,13 @@ import (
 )
 
 // A PRIVATE ROOM IS NOT THERE TO SOMEBODY OUTSIDE IT, on every write that takes
-// its membership rule, in exactly the words a room with no such id gets — the
-// reader's answer, which the writer gave as "#deal-room is for its members only,
-// and bob isn't one".
-//
-// That told anybody holding a private room's id what it was called and that it
-// existed, and a direct conversation's id is derived from the two people in it,
-// so it told anybody holding two handles whether those two talk — which the
-// reader refuses to say. A membership change of a direct conversation said so
-// first of all, refusing "a direct conversation is the people in it" before it
-// asked whether the caller was one of them.
+// its membership rule, in exactly the words a room with no such id gets (the
+// reader's answer). The writer once said "#deal-room is for its members only,
+// and bob isn't one", telling anybody holding a private room's id its name and
+// existence; a direct conversation's id derives from its two people, so it
+// also told anybody holding two handles whether they talk. A direct
+// conversation's membership change refused "a direct conversation is the
+// people in it" before asking whether the caller was one.
 //
 // Mutation: answer an outsider with a forbidden naming the room again, or
 // refuse a direct conversation's membership change before reachable, and a row

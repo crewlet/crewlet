@@ -82,21 +82,14 @@ func TestAFirePartitionCannotCollideAcrossScopes(t *testing.T) {
 	}
 }
 
-// EACH FIRE OF A SCHEDULE IS ONE CONVERSATION OF ITS RUNNER SEAT.
-//
-// A fire is stamped with its schedule's conversation as BOTH keys: the
-// partition, so the fires that wait in a seat's inbox together reach it
-// together and run once, on that one key (the dispatcher's half,
+// EACH FIRE OF A SCHEDULE IS ONE CONVERSATION OF ITS RUNNER SEAT. A fire is
+// stamped with its schedule's conversation as BOTH keys: the partition, so fires
+// waiting in a seat's inbox together run once (the dispatcher's half,
 // internal/engine's TestFiresOfOneScheduleThatWaitedTogetherRunOnce); and the
-// identity, so the fire's turn reads the head the schedule's last fire left on
-// its seat's executor log and continues that session. The log keys a session
-// on its seat and its conversation, so a unit schedule fanned out to two seats
-// is two conversations, one per seat: each seat's fire reaches its own inbox
-// under the one key. The schedule's identity keys it and nothing else: an edit
-// to its task, its cron and its timeout keeps the conversation, and a renamed
-// schedule's next fire starts one of its own. And it is no conversation
-// anybody can reply into, so no fire is taken for the reply to a question the
-// last fire's run parked on.
+// identity, so the turn continues the session the last fire left on the seat's
+// executor log. A unit schedule fanned out to two seats is two conversations.
+// Only the schedule's identity keys it (an edit to its task, cron or timeout
+// keeps it, a rename starts a new one), and nobody can reply into it.
 //
 // Mutation: stamp the partition alone, put the runner, the fire, the task or
 // the cron in the key, or leave the name out of it, and a check goes red.
@@ -154,24 +147,17 @@ func TestEachFireOfAScheduleIsOneConversationOfItsRunner(t *testing.T) {
 }
 
 // THE LONGEST SCHEDULE NAME A COMPANY ADMITS KEYS A CONVERSATION THE EXECUTOR
-// LOG TAKES.
-//
-// Every fire is filed on its runner seat's executor log under its schedule's
-// conversation, a key the log refuses past its bound rather than cut — so a
-// schedule a company admits must key a conversation within it, or none of its
-// fires would keep a session or leave an ending. The longest such key is a
-// unit schedule's: the unit's key at the longest the company document's id
-// grammar admits, and a name at org.ScheduleNameMaxBytes once escaped as the key
-// spells it — a path segment — whether nothing in it escapes, every byte does,
-// its letters lie outside ASCII, its spaces take three bytes each (a query
-// would spell them in one), its colons one (a query would take three), or
-// spaces pad it that the key keeps and a trim would drop; a role schedule's
-// scope is its seat's agent id, shorter. A name one byte longer is refused, at
-// its field, on either.
-//
+// LOG TAKES. Every fire is filed on its runner seat's executor log under its
+// schedule's conversation, a key the log refuses past its bound rather than cut,
+// so an admitted schedule must key one within it. The longest key is a unit
+// schedule's: the unit's key at the longest the id grammar admits, and a name at
+// org.ScheduleNameMaxBytes escaped as a path segment (nothing escapes, every
+// byte does, letters outside ASCII, spaces at three bytes (a query spells one),
+// colons at one (a query takes three), or padding a trim would drop); a role
+// schedule's key is shorter. One byte longer is refused, at its field.
 // Mutation: raise org.ScheduleNameMaxBytes past the room the log's bound
-// leaves the name, measure the name unescaped, as url.QueryEscape spells it or
-// trimmed, or widen the unit id grammar, and a check goes red.
+// leaves, measure the name unescaped, as url.QueryEscape spells it or trimmed,
+// or widen the unit id grammar, and a check goes red.
 func TestTheLongestScheduleNameFitsTheLogsKey(t *testing.T) {
 	t.Parallel()
 	document := func(unitID, name string) []byte {

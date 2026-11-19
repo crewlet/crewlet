@@ -182,13 +182,10 @@ func TestTheFeedAcksEveryChangeThatWakesNobody(t *testing.T) {
 // A PAYLOAD FROM A NEWER BUILD IS DEFERRED TO A PEER ON THAT BUILD, never
 // answered "no wake".
 //
-// The envelope decodes at every version, so this node knows what the record is
-// about and knows it cannot read the rules it was written under. Waking
-// somebody from a payload it cannot decode would be inventing a notification —
-// and answering "no wake" is no better: the feed acknowledges a decision, and
-// its consumer is the fleet's, so the record would reach no peer on the newer
-// build either and its wake would be gone fleet-wide (#838). It answers the
-// feed's deferral, which hands the record back for that peer.
+// Waking from a payload this node cannot decode would invent a notification,
+// and "no wake" is acknowledged for the fleet, so no peer on the newer build
+// would see the record and its wake would be gone fleet-wide (#838). The
+// feed's deferral hands the record back for that peer.
 //
 // Mutation: answer the newer build's record "no wake" again, and it is not
 // deferred.
@@ -240,19 +237,15 @@ func TestTheFeedRefusesBytesThatAreNotARecord(t *testing.T) {
 
 // THE SOURCE AND THE GROUP ARE THE NAMES THE FLEET IS POSITIONED ON.
 //
-// Both are addresses rather than labels, and both fail silently when changed.
+// Both are addresses, and both fail silently when changed.
 //
-// THE SOURCE is what the parser publishes wakes under AND what this domain's
-// posting tools declare as their delivery surface. Spelled differently at
-// either end, the turn's delivery gate finds no delivery for the source and
-// falls back to "any delivery counts" — so every addressed chat turn is then
-// allowed to end in silence, which is the failure the source-scoped gate was
-// introduced to fix.
+// THE SOURCE is what the parser publishes under AND what the posting tools
+// declare as their delivery surface; spelled differently, the delivery gate
+// falls back to "any delivery counts" and addressed turns may end in silence.
 //
-// THE GROUP is where the fleet's durable position IS. A rename does not move
-// the consumer; it starts a second one at the head of the log and abandons
-// everything the first had not handled — a company that silently stops being
-// told about its own conversation, with nothing to replay from.
+// THE GROUP is where the fleet's durable position IS: a rename starts a second
+// consumer at the head of the log and abandons everything the first had not
+// handled.
 func TestTheSourceAndTheFeedGroupAreTheNamesTheFleetIsPositionedOn(t *testing.T) {
 	t.Parallel()
 	if chatlet.Source != "chat" {

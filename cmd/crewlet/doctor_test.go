@@ -3,23 +3,42 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/api/queries"
 )
 
+// doctorNode is a node whose Advisor keeps answer's findings open, its latest
+// run unable to read answer's unread sources.
 func doctorNode(t *testing.T, answer advisor.Answer) string {
 	t.Helper()
+	ended := time.Date(2030, 1, 7, 9, 0, 0, 0, time.UTC)
+	list := queries.AdvisorFindingList{Findings: []queries.AdvisorFinding{},
+		LastRun: &queries.AdvisorRunSummary{RunID: "run-" + answer.Revision, Status: "done", EndedAt: &ended,
+			Unread: append([]string{}, answer.Unread...)}}
+	for i, f := range answer.Findings {
+		g := queries.AdvisorFinding{ID: fmt.Sprintf("f-%d", i), Class: string(f.Class), Severity: f.Severity,
+			Actor: f.Actor, State: advisor.StateOpen, Title: f.Title, Why: f.Why, Item: f.Item, Names: f.Names,
+			Subject: queries.AdvisorSubject{Kind: f.Subject.Kind, Seat: f.Subject.Seat, Unit: f.Subject.Unit,
+				Schedule: f.Subject.Schedule, Name: f.Subject.Name}}
+		for _, fact := range f.Evidence {
+			g.Evidence.Facts = append(g.Evidence.Facts, queries.AdvisorFact{Key: fact.Key, Value: fact.Value})
+		}
+		list.Findings = append(list.Findings, g)
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/advisor" {
+		if r.Method != http.MethodGet || r.URL.Path != "/advisor/findings" || r.URL.Query().Get("state") != "open" {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(answer)
+		_ = json.NewEncoder(w).Encode(list)
 	}))
 	t.Cleanup(server.Close)
 	return bootstrapForURL(t, server.URL)
@@ -49,7 +68,7 @@ func TestTheDoctorPrintsKindsOrdinalsAndCountsUnlessAskedForWords(t *testing.T) 
 	config := doctorNode(t, doctorAnswer)
 	out, _, _ := cli(t, "doctor", config)
 	for _, want := range []string{"SEVERITY", "blocks", "durability.no_verified_backup", "company",
-		"logs=12", "schedule#1", "seat#1", "named=6", "rev-7"} {
+		"logs=12", "schedule#1", "seat#1", "named=6", "Last checked at 2030-01-07T09:00:00Z"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the doctor does not print %q:\n%s", want, out)
 		}
@@ -113,7 +132,7 @@ func TestTheDoctorExitsTwoOnABlockAndOneWhenItCannotAsk(t *testing.T) {
 			t.Errorf("%v exited %v, want status %d", args, err, exitBlocked)
 		}
 		if args[1] == "-json" {
-			var got advisor.Answer
+			var got doctorReading
 			if jerr := json.Unmarshal([]byte(out), &got); jerr != nil || len(got.Findings) != 4 {
 				t.Errorf("-json printed %q (%v), want the node's answer", out, jerr)
 			}
@@ -141,7 +160,7 @@ func TestTheDoctorExitsZeroWhenNothingBlocks(t *testing.T) {
 		t.Fatalf("a company with no blocking finding exited %v", err)
 	}
 	out, _, err := cli(t, "doctor", doctorNode(t, advisor.Answer{Revision: "rev-9", Findings: []advisor.Finding{}}))
-	if err != nil || !strings.Contains(out, "No findings at revision rev-9.") {
+	if err != nil || !strings.Contains(out, "No open findings.") {
 		t.Fatalf("an empty answer printed %q and exited %v", out, err)
 	}
 }
@@ -156,7 +175,7 @@ func TestTheDoctorSaysWhatItCouldNotReadAndNamesEachIntegrationApart(t *testing.
 		Findings: []advisor.Finding{}, Unread: []string{advisor.UnreadIntegrations}})
 	out, _, err := cli(t, "doctor", unread)
 	var exit *exitError
-	if err == nil || errors.As(err, &exit) || !strings.Contains(out, "No findings at revision rev-10.") ||
+	if err == nil || errors.As(err, &exit) || !strings.Contains(out, "No open findings.") ||
 		!strings.Contains(out, `Not read: "integrations".`) {
 		t.Fatalf("an answer with integrations unread printed %q and exited %v, want status 1", out, err)
 	}
@@ -182,5 +201,21 @@ func TestTheDoctorSaysWhatItCouldNotReadAndNamesEachIntegrationApart(t *testing.
 	out, _, _ = cli(t, "doctor", "-words", config)
 	if !strings.Contains(out, "integration:GitHub") || !strings.Contains(out, "integration:Linear") {
 		t.Errorf("-words does not name each integration by its product:\n%s", out)
+	}
+}
+
+// AN ADVISOR THAT HAS NOT RUN FAILS CLOSED: an empty list before its first run
+// says nothing about what blocks, so it exits 1 as a failure to ask.
+func TestTheDoctorFailsClosedBeforeTheAdvisorsFirstRun(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(queries.AdvisorFindingList{Findings: []queries.AdvisorFinding{}})
+	}))
+	t.Cleanup(server.Close)
+	out, _, err := cli(t, "doctor", bootstrapForURL(t, server.URL))
+	var exit *exitError
+	if err == nil || errors.As(err, &exit) || !strings.Contains(out, "The Advisor has not run yet.") {
+		t.Fatalf("before the first run the doctor printed %q and exited %v, want status 1", out, err)
 	}
 }

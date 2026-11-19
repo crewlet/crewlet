@@ -454,7 +454,7 @@ func register() []registration {
 		},
 	}, artifactsRegistrations(), artifactDataRegistrations(), assistantRegistrations(),
 		chatRegistrations(), executorRegistrations(), codeRegistrations(), accessRegistrations(),
-		atlasRegistrations())
+		atlasRegistrations(), advisorRegistrations())
 }
 
 // codeRegistrations is Gitlet's entry in the register: the company's git

@@ -1721,6 +1721,18 @@ type Stream struct {
 	// the company's own `atlas.retention_days`, and does not depend on this.
 	AtlasLogMaxBytes int64 `yaml:"atlas_log_max_bytes,omitempty" json:"atlas_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the atlas log, where what people record about what the company runs on is kept with its history; unset takes 128 MiB, scaled down to 64 MiB where the broker is short, 64 MiB..64 GiB."`
 
+	// AdvisorLogMaxBytes is the byte ceiling on the advisor log, where what
+	// the Advisor finds and what becomes of it (each finding's episodes and
+	// history, its runs, weekly reports and alarm episodes) is recorded
+	// before it is applied.
+	//
+	// UNSET TAKES 64 MiB ([DefaultAdvisorLogMaxBytes]), sized by what the
+	// Advisor records rather than by the disk. Crossing it refuses the
+	// append: the Advisor records nothing new and a person's decision on a
+	// finding is refused. How long its history is kept is the domain's own
+	// retention, and does not depend on this.
+	AdvisorLogMaxBytes int64 `yaml:"advisor_log_max_bytes,omitempty" json:"advisor_log_max_bytes,omitempty" js:"min=67108864;max=68719476736" desc:"Byte ceiling on the advisor log, where the Advisor's findings, runs, reports and alarm episodes are kept with their history; unset takes 64 MiB, 64 MiB..64 GiB."`
+
 	// TrackerRetention is when the log may be trimmed, and it is the one
 	// block here that can stop a fleet's log growing for ever — or stop it
 	// trimming at all, deliberately, when a term it depends on is unknown.
@@ -2200,13 +2212,15 @@ func (s *Stream) validate(path Path) error {
 		AccessLogMaxBytesFloor, AccessLogMaxBytesCeiling)
 	bytesInRange(&p, path, "atlas_log_max_bytes", s.AtlasLogMaxBytes,
 		AtlasLogMaxBytesFloor, AtlasLogMaxBytesCeiling)
+	bytesInRange(&p, path, "advisor_log_max_bytes", s.AdvisorLogMaxBytes,
+		AdvisorLogMaxBytesFloor, AdvisorLogMaxBytesCeiling)
 	bytesInRange(&p, path, "store_max_bytes", s.StoreMaxBytes,
 		StoreMaxBytesFloor, StoreMaxBytesCeiling)
 	// A LIMIT SMALLER THAN THE CEILINGS DECLARED INSIDE IT is a refusal waiting for
 	// a boot: the broker compares each stream's ceiling to it, so a log cannot be
 	// created and the node fails naming whichever it reached last.
-	// EVERY STATE LOG IS IN THE SUM (identity, usage, chat, executor, code, access
-	// and atlas included): a log left out is a limit this check passes and the boot
+	// EVERY STATE LOG IS IN THE SUM (identity, usage, chat, executor, code, access,
+	// atlas and advisor included): a log left out is a limit this check passes and the boot
 	// refuses. Only EXPLICIT ceilings are summed; a derived one is scaled to fit
 	// (engine.sizeCeilings).
 	// NECESSARY, NOT SUFFICIENT: the state logs get a SHARE of what the broker can
@@ -2224,7 +2238,7 @@ func (s *Stream) validate(path Path) error {
 				"artifact_data_log_max_bytes %d + assistant_log_max_bytes %d + "+
 				"chat_log_max_bytes %d + executor_log_max_bytes %d + "+
 				"code_log_max_bytes %d + access_log_max_bytes %d + "+
-				"atlas_log_max_bytes %d = %d): the "+
+				"atlas_log_max_bytes %d + advisor_log_max_bytes %d = %d): the "+
 				"broker refuses a stream "+
 				"whose ceiling it cannot back, so this node would fail to "+
 				"provision one of them. Raise store_max_bytes, or lower the "+
@@ -2235,7 +2249,7 @@ func (s *Stream) validate(path Path) error {
 			s.PagesLogMaxBytes, s.IamLogMaxBytes, s.UsageLogMaxBytes,
 			s.ArtifactsLogMaxBytes, s.ArtifactDataLogMaxBytes, s.AssistantLogMaxBytes,
 			s.ChatLogMaxBytes, s.ExecutorLogMaxBytes, s.CodeLogMaxBytes, s.AccessLogMaxBytes,
-			s.AtlasLogMaxBytes, declared)
+			s.AtlasLogMaxBytes, s.AdvisorLogMaxBytes, declared)
 	}
 	p.wrap(s.TrackerRetention.validate(at(path, "tracker_retention")))
 	// Refused here rather than at the broker. nats-server validates an

@@ -747,6 +747,15 @@ type BridgedCall struct {
 	// a word no line of a brief shows, and no record needs, has no place in
 	// either.
 	CallID string
+
+	// ArgsText is the call's arguments as its log keeps their text
+	// (sandbox.BridgeCall.Args), unchanged: "" where it keeps none, and a
+	// marker's text where it cut them ([BridgedCall.ArgsBytes]). Read only to
+	// key an OpenCode call's arguments for a reading of what a cut-off session
+	// holds ([Runner.holdingsAsk]), by the log's own rule on both sides
+	// (internal/tools/toolargs' Key), never rebuilt from Args, which reads ""
+	// and unreadable text alike as none.
+	ArgsText string
 }
 
 // bridgedLedger is an executor run's calls as the turn's record reads them:

@@ -69,17 +69,15 @@ func wakes(t *testing.T, rec chatlet.MutationRecord, reg *notify.Registry) []not
 
 // ONE MESSAGE MAKES ONE WAKE PER HANDLE, EACH WITH ITS OWN DERIVED ID.
 //
-// A message legitimately concerns several seats at once — one named, one
-// following, one who started the thread — and each of them is a separate turn
-// on a separate node. The id is DERIVED so that a redelivery is recognisable
-// as one: the feed's claim is the first dedupe layer and it FAILS OPEN by
-// design, because a coordination store that cannot be reached must not
-// silently stop notifications, so something else has to catch what slips
-// through.
+// A message may concern several seats (one named, one following, one who
+// started the thread), each a separate turn on a separate node. The id is
+// DERIVED so a redelivery is recognisable: the feed's claim is the first dedupe
+// layer and FAILS OPEN by design (an unreachable coordination store must not
+// silently stop notifications), so something else must catch what slips through.
 //
-// PER RECIPIENT is the whole of it. One id shared by all three would deliver
-// the first wake and deduplicate the other two away — the seat that was named
-// hears nothing, and nothing anywhere reports a missing notification.
+// PER RECIPIENT is the whole of it: one id shared by all would deliver the
+// first wake and deduplicate the rest away, so the named seat hears nothing and
+// nothing reports it.
 func TestOneRecordMakesOneWakePerHandleWithIdsOfTheirOwn(t *testing.T) {
 	t.Parallel()
 	rec := aPost()
@@ -129,17 +127,14 @@ func TestOneRecordMakesOneWakePerHandleWithIdsOfTheirOwn(t *testing.T) {
 
 // THE PARSER AND THE WRITE PATH ROUTE ONE RECORD THE SAME WAY.
 //
-// This is the reason the routing arithmetic is ONE function set rather than
-// two implementations that agree today: the decide resolves the recipients
-// inside its own snapshot and puts them on the record, and the parser resolves
-// them again on another node, minutes later, from that snapshot. Both call
-// [chatlet.Candidates] and [chatlet.Route]. If they could disagree, a seat would be
-// listed on the record as concerned and woken by nobody — a message that
-// reached the log and reached no one, with no error anywhere.
+// The routing arithmetic is ONE function set, not two implementations that
+// agree today: the decide resolves the recipients in its snapshot onto the
+// record, and the parser resolves them again on another node, minutes later.
+// Both call [chatlet.Candidates] and [chatlet.Route]. Were they to disagree, a
+// seat would be listed as concerned and woken by nobody, with no error.
 //
-// The record here is written by the SHIPPED writer against a real broker and a
-// real applier, so what the parser reads is what a company actually puts on
-// its log.
+// The record is written by the SHIPPED writer against a real broker and
+// applier, so the parser reads what a company actually puts on its log.
 func TestTheParserWakesExactlyTheSeatsTheWriterRouted(t *testing.T) {
 	t.Parallel()
 	r := newWriteRound(t, agents().withPeople("jane", "sarah"))
@@ -282,17 +277,15 @@ func TestAParserWithNoRosterWakesNobody(t *testing.T) {
 
 // EVERY KEY A READER SOMEWHERE ELSE DEPENDS ON IS STAMPED.
 //
-// A chat notification travels as a map, and each key in it is a contract
-// between this parser and a reader in another package — the coalescer, the
-// working indicator, the reply obligation, the prompt, the self-action guard.
-// Spelled at one end only, that contract is invisible: the reader gets "" and
-// answers as though the message had nothing to say, and nothing fails, logs or
-// tells the two halves apart.
+// A chat notification travels as a map, each key a contract between this parser
+// and a reader in another package (coalescer, working indicator, reply
+// obligation, prompt, self-action guard). Spelled at one end only, the reader
+// gets "" and answers as though the message had nothing to say, and nothing
+// fails or logs.
 //
-// PRESENCE, NOT CONTENT, for the required set: the thread key is empty on a
-// top-level message and stamped anyway, because an absent key and an empty one
-// are the same to every reader and the difference is exactly what a check like
-// this cannot see afterwards.
+// PRESENCE, NOT CONTENT, for the required set: the thread key is stamped even
+// when empty on a top-level message, since an absent key and an empty one are
+// the same to every reader and a check cannot see the difference afterwards.
 func TestTheParserStampsEveryKeyItsReadersDependOn(t *testing.T) {
 	t.Parallel()
 	rec := aPost()
@@ -422,13 +415,11 @@ func TestAWakeCarriesBothTheRoomsOwnKindAndTheCanonicalOne(t *testing.T) {
 // A RECORD WRITTEN BEFORE THE ANSWERER STILL TRANSLATES AND STILL WAKES.
 //
 // The chat log holds records an earlier build wrote, whose snapshot named the
-// fallback seat under `lead` and routed it as `lead_fallback`. The feed naks
-// a record it cannot translate, and a nak comes back for ever and holds every
-// wake behind it, so such a record must decode, be relayed and be parsed on
-// this build. It may route differently, and does: `lead` is no field here and
-// is passed over, and `lead_fallback` is a reason this build does not know,
-// which is still a wake, carried unaddressed. Nothing reads the old names, so
-// nothing has to keep them.
+// fallback seat under `lead` and routed it as `lead_fallback`. The feed naks a
+// record it cannot translate, and a nak comes back for ever and holds every
+// wake behind it, so such a record must decode, relay and parse. It routes
+// differently: `lead` is no field here and is passed over, and `lead_fallback`
+// is an unknown reason, still a wake, carried unaddressed.
 //
 // Mutation: refuse an unknown reason in the parser, or decode the snapshot
 // strictly, and this fails.
@@ -479,20 +470,16 @@ func TestARecordWrittenBeforeTheAnswererStillTranslates(t *testing.T) {
 
 // THE INDICATOR AND THE DELIVERY GATE CANNOT DISAGREE.
 //
-// Three subsystems ask "is somebody waiting on this seat?" and none of them
-// may answer differently: the working indicator raises "is thinking…" while
-// the agent works, the delivery check refuses to let an addressed turn end in
-// silence, and the prompt tells the agent which of the two it is in. A spinner
-// over a turn that is allowed to end in silence, and a silence after a
-// spinner, are the same bug — one question answered twice.
+// Three subsystems ask "is somebody waiting on this seat?" and must not differ:
+// the working indicator ("is thinking…"), the delivery check that refuses to
+// let an addressed turn end in silence, and the prompt. A spinner over a turn
+// allowed to end in silence is the same bug as a silence after one.
 //
-// Here they are one evaluation read twice: the parser evaluates
-// [chatlet.AddressRule] once and stamps the verdict, the prompt reads the stamp,
-// and the indicator evaluates the same rule over the same metadata. The case
-// that proves it is a reason notify has never heard of (`reply_to_own_root`,
-// `collective_request` and `answerer` are not follows on any vendor), which a
-// rule that fell back to the vendor vocabulary would read as "does not
-// address".
+// They are one evaluation read twice: the parser evaluates [chatlet.AddressRule]
+// once and stamps the verdict, the prompt reads the stamp, and the indicator
+// evaluates the same rule over the same metadata. The proof is a reason notify
+// has never heard of (`reply_to_own_root`, `collective_request`, `answerer`),
+// which a vendor-vocabulary fallback would read as "does not address".
 func TestTheStampedVerdictIsTheRuleTheIndicatorEvaluates(t *testing.T) {
 	t.Parallel()
 	prompt := chatlet.NewPrompt()

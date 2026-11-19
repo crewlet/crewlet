@@ -37,49 +37,34 @@ type Unit struct {
 	Name string   `yaml:"name" json:"name"`
 	Type UnitType `yaml:"type,omitempty" json:"type,omitempty"`
 
-	// ID is this unit's STABLE IDENTITY, and the reason it exists is that
-	// a name is not one.
+	// ID is this unit's STABLE IDENTITY: a name, renamed as prose is, is not
+	// one. An id is chosen once and IMMUTABLE (ADR-0013's rule for a seat's
+	// handle), so what is keyed on it survives a rename; a document that
+	// changes it has removed one unit and created another.
 	//
-	// A unit's name is what people read — in a prompt, on a board, in a
-	// channel topic — so it is renamed for the reasons prose is renamed,
-	// and everything keyed on it moves when it does. An id is chosen once
-	// and IMMUTABLE (ADR-0013's rule for a seat's handle), so what is keyed
-	// on it survives the rename: a document that changes a unit's id has
-	// removed one unit and created another.
+	// IT IS WHAT REFERENCES IT: a `manages:` entry and a root seat's `unit:`
+	// both resolve by [Unit.Key], which is this id. The config layer REQUIRES
+	// one on every authored unit and mints it from the name at import
+	// (config.MintUnitID); the fallback in [Unit.Key] is for a tree built in Go.
 	//
-	// IT IS WHAT REFERENCES IT. A `manages:` entry naming a unit and a root
-	// seat's `unit:` both resolve by [Unit.Key], which is this id, so
-	// renaming a team moves nothing that points at it. The config layer
-	// REQUIRES one on every authored unit and mints it from the name at
-	// import (config.MintUnitID), so a document read from YAML always
-	// carries one; the fallback in [Unit.Key] is for a tree built in Go.
-	//
-	// IT DOES NOT STOP A RENAME RE-ONBOARDING THE SEATS BENEATH IT. That
-	// is a different mechanism: onboarding turns on the unit's NAME, which
-	// is what an agent reads as its team, so changing the name changes the
-	// context those seats were introduced with, id or no id.
+	// IT DOES NOT STOP A RENAME RE-ONBOARDING THE SEATS BENEATH IT: onboarding
+	// turns on the unit's NAME, which an agent reads as its team.
 	ID string `yaml:"id,omitempty" json:"id,omitempty"`
 
 	Purpose string `yaml:"purpose,omitempty" json:"purpose,omitempty"`
 
-	// Lead is the HANDLE of the seat that leads this unit: routing work
-	// within it, acting as its single point of contact, and auto-managing
-	// any direct member that no direct member of this unit already manages
-	// (see [Organization.Normalize] for how a unit reference counts).
+	// Lead is the HANDLE of the seat that leads this unit: routing its work,
+	// its single point of contact, auto-managing any direct member no direct
+	// member already manages (see [Organization.Normalize]).
 	//
-	// THE HANDLE, never the display name, and that is the whole reason a
-	// seat has a handle. A name is prose a founder edits; the handle is the
-	// identity every other layer already addresses the seat by — its inbox,
-	// its derived agent id, its external accounts — so a unit's lead and the
-	// seat the engine runs cannot come apart. Resolving a display name meant
-	// two derivations of one answer, and they disagreed on every seat whose
-	// operator declared a handle.
+	// THE HANDLE, never the display name: it is the identity every other layer
+	// addresses the seat by, so a unit's lead and the seat the engine runs
+	// cannot come apart.
 	//
-	// The handle may resolve to a seat in this unit, in a descendant, or —
-	// after inheritance — in an ancestor. A unit with no lead of its own
-	// inherits its parent's, cascading to any depth. Read the resolved seat
-	// through [Unit.LeadRole] or [Organization.EffectiveLead]; a
-	// reference that resolves to nothing reads as no lead.
+	// It may resolve to a seat in this unit, a descendant or, after
+	// inheritance, an ancestor; a unit with no lead inherits its parent's.
+	// Read it through [Unit.LeadRole] or [Organization.EffectiveLead]; a
+	// reference resolving to nothing reads as no lead.
 	Lead string `yaml:"lead,omitempty" json:"lead,omitempty"`
 
 	Goals []string `yaml:"goals,omitempty" json:"goals,omitempty"`
@@ -92,18 +77,14 @@ type Unit struct {
 	// recorded by [Organization.Normalize] before the cascade fills Lead and
 	// Channel with an ancestor's value. Empty means the unit named none.
 	//
-	// They mirror [Role.DeclaredHandle]: every reader resolves through the
-	// effective field, and the authored half exists for the questions the
-	// effective value can no longer answer once the cascade has run. Two
-	// such questions exist. A dangling-reference report has to name the unit
-	// that wrote a misspelled lead ONCE, rather than every descendant that
-	// inherited it and whose author wrote nothing; and a chart has to tell
-	// an inherited lead from a unit naming the same seat itself, which read
-	// identically in Lead.
+	// They mirror [Role.DeclaredHandle]: readers resolve through the effective
+	// field, and the authored half answers what the cascade erased: a
+	// dangling-reference report names the unit that wrote a misspelled lead
+	// ONCE, not every descendant that inherited it, and a chart tells an
+	// inherited lead from a unit naming the same seat itself.
 	//
-	// Not part of the wire form: the authored values are `lead` and
-	// `channel` in the document, and these are derived from them. A caller
-	// building a Unit sets Lead and Channel.
+	// Not part of the wire form: they derive from `lead` and `channel`. A
+	// caller building a Unit sets Lead and Channel.
 	DeclaredLead    string `yaml:"-" json:"-"`
 	DeclaredChannel string `yaml:"-" json:"-"`
 
@@ -122,10 +103,7 @@ type Unit struct {
 	//
 	// VENDOR-NEUTRAL, because the identity is the company's rather than a
 	// product's: the same key names a Worklet project and a Jira one, and a
-	// company that switches backends keeps the org chart it wrote. The
-	// fields were `jira_project` and `confluence_space`, which was the
-	// `slack_channel` mistake — a chat channel is a channel whoever hosts
-	// it — made twice.
+	// company that switches backends keeps the org chart it wrote.
 	Project string `yaml:"project,omitempty" json:"project,omitempty"`
 	Space   string `yaml:"space,omitempty" json:"space,omitempty"`
 

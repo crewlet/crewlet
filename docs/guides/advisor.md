@@ -1,18 +1,18 @@
-# The Setup Advisor
+# The Advisor
 
-The setup advisor is one list of what your company's setup costs it, why each item matters, and the change that fixes it. It is for administrators. The engine builds each change; you preview it and send it. **The engine never applies a fix on its own**, because a grant, a model, a schedule or a policy is your company's decision.
+The Advisor watches your company in the background and keeps a list of what its setup and its way of working cost it, why each item matters, and the change that fixes it. It is for administrators. It needs nothing but a model, and even that is optional: its rules run whether or not one is assigned. The engine builds each change; you preview it and send it. **The engine never applies a fix on its own**, because a grant, a model, a schedule or a policy is your company's decision ([ADR-0164](../../adr/0164-the-advisor-keeps-what-its-detectors-find-and-a-fix-is-applied-only-after-the-engine-re-checks-it.md)).
 
 ```mermaid
 flowchart LR
-  D[Company document] -->|the same checks crewlet validate runs| A[GET /advisor]
-  A -->|finding and its change| Y[You]
-  Y -->|PUT the change with dry_run=true| P[Preview: the server's own answer]
-  P -->|Apply: PUT again under the entity tag| C[New revision]
+  R[The company's records and document] -->|detectors, on a schedule and on a change| D[The Advisor's duty]
+  D -->|open, revise, resolve| L[The Advisor's log]
+  L -->|GET /advisor/findings| Y[You]
+  Y -->|Apply: the change, previewed, sent by you| C[New revision]
 ```
 
 ## Where you see it
 
-**Advisor** in the sidebar (`g v`, administrators) is its page: when its checks last ran, **Run now**, and the model it explains findings and writes reports with, which an administrator chooses there. It has three tabs.
+**Advisor** in the sidebar (`g v`, administrators) is its page: when its checks last ran, **Run now**, and the model it explains findings with, which an administrator chooses there. It has two tabs, Findings and History.
 
 **Findings** lists what is worth changing now, the most costly first (what blocks the company, what costs it, what is worth knowing; within each, the largest measured cost, then the newest), with what the engine is handling listed apart so it never reads as yours to do. Each row says when the finding was found and when its check last confirmed it; one whose check has not run for a while says it was not re-checked since then, so an old observation never reads as the engine's view now. Each row offers its fix and a menu: **Snooze for 7 days**, **Dismiss** with a reason (won't fix, already known, or wrong), and **Ask Crewlet about this**. A finding's title opens its page: why it was raised, the facts it rests on and the window they were measured over, the records it cites, its fix, and everything that happened to it.
 
@@ -20,9 +20,31 @@ flowchart LR
 
 **The go-live check** heads Findings while anything blocks the company: the three things to do before your agents start, each done when nothing of its kind is left (fix what blocks the company, look at what costs it, read what is worth knowing), counted from the same list as the rows under it. Under it, **Review what each agent can do** lists, for every agent, what its turns are told about its own access: the vendors it acts at, with its level, the permissions it may write with (who can merge pull requests, for example) and where (the repositories, projects or hosts, and an SSH host's read commands), its tool servers with the tools each level names and what every other tool does (a server granted by its default runs every tool at that level), and the sandbox its runs use, with its memory and, once a run has read the box, whether it has a browser and a container runtime. These are facts to check against what you want each agent to do; whether they match your policies is your reading. `GET /advisor/review` returns the same for a script (administrators). When you create a company in the organization builder, its last step opens the Advisor.
 
-**Reports** lists each week's report: the week's numbers against the week before, what it opened, resolved, applied and dismissed, and the open findings that cost the most. **History** lists what closed and why.
+**History** lists what closed and why.
 
-A finding that **blocks** the company and is yours to fix also waits in every administrator's **Inbox** under **Needs you**, and counts on **Home**, with what to do and a button that opens the advisor, as a [platform notice](#platform-notices). It leaves both once the setup no longer raises it. Findings that cost or are worth knowing stay on the advisor alone, so they never crowd the decisions your agents are waiting on.
+A finding that **blocks** the company and is yours to fix also waits in every administrator's **Inbox** under **Needs you**, and counts on **Home**, with what to do and a button that opens it, as a [platform notice](#platform-notices). It leaves both once a run no longer finds it. Findings that cost or are worth knowing stay on the Advisor's page alone, so they never crowd the decisions your agents are waiting on.
+
+## When it runs
+
+One server of the fleet at a time runs the Advisor, holding a lease it renews every minute; another takes over within three minutes of it stopping. Each minute it asks what is due:
+
+- **Its rules**, every hour, and at once when the setup they read changes: a new revision of the company, a seat paused or resumed, an integration's reconcile. One run reads the company document, the integrations' last reconcile, the seats' pauses, the atlas and the last 7 days of work, and runs every rule over them.
+- **Its model**, once a day at 06:00 on the company clock, where `advisor.model` names one ([Found by the Advisor's model](#found-by-the-advisors-model)).
+- **Run now**, from any server: the run is asked for on the Advisor's log and the server holding the lease takes it within a minute, everything at once.
+
+## A finding's life
+
+Every run re-derives every finding of the classes it ran, so the list says what is true now rather than what was true when somebody last looked:
+
+- **Found**: a condition no open finding holds opens one. A finding is one condition, its class and what it is about (a seat, a schedule, an item, a document path), so the numbers moving under it never make a second one.
+- **Revised**: what the finding decides (its severity, who acts, what it names) or the change that fixes it moved. It keeps its place and says what moved; the model's explanation of it is hidden until rewritten.
+- **Refreshed**: only its numbers moved. They are updated in place, with when.
+- **Resolved**: a run no longer finds it, so it closes on its own; one you applied a fix for closes as fixed by it.
+- **Retired**: what it was about is gone, a seat or a schedule the company no longer has.
+- **Stale**: a source its class reads could not be read for three of its runs in a row (a run says nothing about a finding whose source it could not read). It is shown as not re-checked since then, and expires a week later.
+- **Snoozed** for 7 days, and back if a run still finds it; **dismissed** as one you will not fix (held quiet 90 days), already known (30 days) or wrong (for good, and the model is told). A dismissed finding returns early only if it becomes more costly. **Reopen** lifts either.
+
+A condition that comes back after closing is a new finding that says how many times it was seen before. Closed findings are kept 90 days, runs 30 days and reports 26 weeks.
 
 ## Platform notices
 
@@ -30,7 +52,7 @@ A platform notice is how something only an administrator can fix, or something t
 
 | Notice | Raised while | Opens |
 |---|---|---|
-| A finding that blocks the company and is yours to fix | The advisor lists it. | The advisor, with the finding's fix. The no-verified-backup finding opens **Take a backup** on Backups & retention instead. |
+| A finding that blocks the company and is yours to fix | The Advisor lists it open. | The Advisor's page, with the finding's fix. The no-verified-backup finding opens **Take a backup** on Backups & retention instead. |
 | An alarm that has not cleared (`alarm`) | An alarm has stood on any server for at least 30 minutes (the deferral grace, where the engine itself stops waiting for a condition to clear on its own). One notice names every server it stands on, and a restart keeps when it was raised. An alarm raised again less than 30 minutes after it cleared counts from its first raise, so a condition that keeps coming back still reaches you. | Where the alarm is fixed: **Take a backup** for `backup_age`, File storage for `objects_bucket_near_ceiling`, and otherwise the section that draws the alarm (Backups & retention's alarm list, Models, or Gitlet). An MCP server's alarm is already its own row in Needs you. |
 | A conversation the engine holds (`conversation.held`) | An agent's conversation whose context did not fit its models twice in a row, the second time on a fresh session, whose models' provider refused the request its runs make twice in a row, the second time on a fresh session (`cause` `request_refused`: a schedule whose every fire is refused is held this way), or whose work ran out of its sandbox's memory twice in a row: the engine stopped starting turns on it ([Agent runtime § Pausing a seat](../concepts/agent-runtime.md#pausing-a-seat)). Its subject is the seat, and `name` the conversation. There is nothing to decide: writing on the conversation, or changing what it failed on (the seat's models, its sandbox, or for a refused request the models or the company's tool servers), releases it. | The item the conversation is about, where there is one, or the seat. |
 
@@ -116,41 +138,33 @@ Six more are read from the week's records, each the owner's (`costs`), each with
 
 If a server cannot read the week's budget refusals or its merge decisions, the answer's `unread` names `budget_stops` or `merges`, and their findings are left out.
 
-## Found by the analyst
+## Found by the Advisor's model
 
-The rules above name what somebody already wrote a rule for. The **analyst** reads the same week of records on the company's own models and lists problems no rule names, under the rule-based list, in a section of its own. It is off until you name a model for it ([ADR-0157](../../adr/0157-the-advisors-analyst-lists-only-what-the-engines-records-show.md)):
+The rules above name what somebody already wrote a rule for. The Advisor's **model** reads the same week of records and lists problems no rule names, beside the rules' findings with the same life. Its one setting is the model it runs on, any entry of the company's whose harness can run with no tool of its own (the engine turns the harness's own web and local tools off for it); absent, the rules still run and the model does not:
 
 ```yaml
 advisor:
-  analyst:
-    llm: [assistant]        # providers.llm keys; absent is off
-    cadence: daily          # daily (the default), weekly (on Mondays) or off
-    hour: 6                 # the company-clock hour a scheduled run starts at
-    max_tokens: 200000      # one run's token ceiling, at least 20000
+  model: assistant        # a providers.llm key
 ```
 
-**What it reads.** Only the engine's own records, through read tools served to the run: the company document's shape (each seat's model entries, round cap, budgets and schedules, and the delegation rules), the agents' turns by what woke them and what they did, the runs that ended on their round cap or for memory, the turns a budget refused, where open work sits and what waits on what, decisions and merges, schedule fires, what the rules above already list, and how people answered earlier findings. Every answer is numbers, closed words, times, handles and record ids. No comment, message, item title or transcript is read, so words somebody wrote cannot steer what you are told, and the document it reads is the redacted one.
+**What it reads.** Only the engine's own records, through read tools served to the pass: the company document's shape (each seat's model entries, round cap, budgets and schedules, and the delegation rules), the agents' turns by what woke them and what they did, the runs that ended on their round cap or for memory, the turns a budget refused, where open work sits and what waits on what, decisions and merges, schedule fires, what the rules above already list, and the findings of its own people dismissed. Every answer is numbers, closed words, times, handles and record ids. No comment, message, item title or transcript is read, so words somebody wrote cannot steer what you are told, and the document it reads is the redacted one.
 
-**How it runs.** Daily at 06:00 on the company clock by default, or weekly, and whenever an administrator presses **Run now**; one run at a time across the fleet. A run its hour missed (the analyst just turned on, or every server down at that hour) starts at the next check, once. Each model entry is held to Ask Crewlet's rules for a member (the harness's local and web tools denied). Its rounds are charged to the company's budget windows and never a seat's, under the run's own `max_tokens`, and recorded as background spend with the purpose `advisor_analysis`. The section shows the last run's time, model entry and tokens. Measured on a company of twelve agents with a busy week, every read together answers about 21,000 tokens; a run that reads them in one round, as it is asked to, spends about 60,000 to 80,000, and one that reads them one round at a time about 200,000, the default ceiling, since each round sends everything read so far again.
+**How it runs.** Once a day at 06:00 on the company clock, and with every **Run now**. Its rounds are charged to the company's budget windows and never a seat's, under a ceiling of 200,000 tokens a pass, and recorded as background spend with the purpose `advisor_model`. Measured on a company of twelve agents with a busy week, every read together answers about 21,000 tokens; a pass that reads them in one round, as it is asked to, spends about 60,000 to 80,000, and one that reads them one round at a time reaches the ceiling, since each round sends everything read so far again. The latest run says what the pass did: its status, tokens, how many it listed and how many it left out, by why.
 
-**What reaches the list.** The run submits findings; the engine lists one only when:
+**What reaches the list.** The pass submits findings; the engine lists one only when:
 
-- it cites at least one record (an item, a turn or a change) and one number, and every record and number is one this run's own tools answered, the number at the very place it names;
+- it cites at least one record (an item, a turn or a change) and one number, and every record and number is one this pass's own tools answered, the number at the very place it names;
 - it is not a rule finding said again: one about the same subject citing only a rule finding's records, or offering a change a rule finding offers, is left out;
 - its fix is one the engine builds itself and checks against the company's rules: a seat's round cap, token budget or learning model, or opening an item it cites or an agent's page. The engine never applies one: it is previewed and applied as every fix here is;
 - its words are plain, at most 120 characters for the title and 600 for the why.
 
-What was left out is counted by why under the list, so a short list never hides a run that found more than it could prove.
+A model finding is one condition by what it is about (its subject, records and kind of fix), not its words, so a pass that says it again in other words keeps it; one a pass that read and submitted does not list again is resolved. Model findings never reach the Inbox, Home or the go-live check.
 
-**Your answers.** Each finding takes **Useful**, **Wrong** or **Already known**. A wrong one is never listed again and the next run is told; an already-known one stays off the list for 30 days. Answers are kept by what the finding is about (its subject, records and kind of fix), not its words. Analyst findings never reach the Inbox, Home or the go-live check.
-
-**When it cannot say.** A model that declines, or does not submit findings the engine can read, is said as such; a run that reaches its ceiling says so; a model or a company budget that is not available fails the run in those words; a source a run could not read is named; a last run older than two of its periods is marked out of date. **Nothing found** is said only for a fresh run that read everything and found nothing the rules do not list.
-
-`GET /advisor/analysis` answers the same for a script, and `POST /advisor/analysis` runs it now ([API reference](../reference/api-endpoints.md)).
+**When it cannot say.** A model that declines, or does not submit findings the engine can read, is said as such and resolves nothing; a pass that reaches its ceiling says so and resolves nothing, since its list may be short; a model or a company budget that is not available fails the pass in those words.
 
 ## What the atlas shows
 
-The advisor also lists what your company's [atlas](atlas.md) shows needs a person. Each is read from the atlas when the list is read and stored nowhere, so it leaves the list once it is fixed. None blocks the company.
+The Advisor also lists what your company's [atlas](atlas.md) shows needs a person, read as the engine reads the whole atlas and kept with how many entries it counts. Which entries is never stored: an administrator holding the atlas app is named them when the finding is read, from the atlas as they read it (a repository only to a holder of Gitlet), and anyone else is told how many and never which (ADR-0141). Each leaves the list once a run no longer finds it. None blocks the company.
 
 | Finding | Listed when | The fix you send |
 |---|---|---|
@@ -182,16 +196,18 @@ If the entity changed after your read, the write is refused for its `If-Match` i
 
 ## What never happens on its own
 
-The engine does not grant access, change a model, move or remove a schedule, edit a policy or close anything because of a finding. The advisor only reads, and its package has no way to write (ADR-0115).
+The engine does not grant access, change a model, move or remove a schedule, edit a policy or close anything because of a finding. The Advisor keeps findings and nothing else; a fix is sent by a person (ADR-0115).
 
 ## Reading it
 
-`GET /advisor` takes `admin`. From a script, with an administrator's token in `CREWLET_API_TOKEN`:
+Every read takes `admin`. From a script, with an administrator's token in `CREWLET_API_TOKEN`:
 
 ```sh
-curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" https://crewlet.example.com/advisor
+curl -s -H "Authorization: Bearer $CREWLET_API_TOKEN" https://crewlet.example.com/advisor/findings
 ```
 
-Or with `crewlet doctor`, which prints the classes, subjects by kind and ordinal, and counts (`-words` adds the handles and the reasons) and exits 2 while a finding blocks the company, or 1 while the node could not read a source, so a block it holds is never passed over ([CLI reference](../reference/cli.md#crewlet-doctor)).
+Or with `crewlet doctor`, which reads every open finding and prints the classes, subjects by kind and ordinal, and counts (`-words` adds the handles and the reasons), and exits 2 while a finding blocks the company, or 1 while the latest run could not read a source or the Advisor has not run yet, so a block it holds is never passed over ([CLI reference](../reference/cli.md#crewlet-doctor)).
 
-The answer is `{"revision": "...", "findings": [...], "notices": [...], "unread": [...]}`, the most costly finding first and the longest-standing notice first; the patterns above are read over the 7 days before the request. A notice is `{"class", "subject", "since", "nodes", "alarm"}`: the finding's class and subject, or `alarm` with the alarm's kind as the subject's `name`, or `conversation.held` with the seat and the conversation. A finding's notice that an alarm raised (the backup alarm's) also carries the alarm's kind in `alarm`, so the Inbox still says the alarm stands while the answering server has not evaluated its own alarms and so lists no finding. A notice an alarm raised also carries the alarm's `title` and `person`, what is wrong and what to do in words for a company owner. `unread` names each source the server could not read, so a short list never reads as nothing to do: `integrations` (their last check), `work` (the week's comments, answers, reviews and notices, whose patterns are then left out), `ledger` (the agents' turns by what woke them and what they did, whose patterns are then left out), `pauses` (the seats' pauses, so an agent the engine paused is left out), `runs` (the week's failed executor runs, so a box that ran out of memory and runs that ended on their round cap are left out), `budget_stops` (the week's budget refusals, so an agent its budget stopped is left out), `merges` (the week's merge decisions, so a repository whose merges wait for want of a required check is left out), `fires` (the week's schedule fires and what their turns wrote, so a schedule that rarely changes anything is left out and `schedule.frequent` says no share), `alarms`, named once for either cause (the node's alarm table has not been evaluated yet, as right after a start, so the backup finding cannot be judged; or the fleet's alarms could not be read, or a live node has not evaluated its own yet, so a standing alarm may have no notice), and `holds` (the conversations the engine holds could not be read). `crewlet doctor` fails while any source is unread. See the [API reference](../reference/api-endpoints.md).
+`GET /advisor/findings` answers a page of findings, the open ones by default, the most costly first, with the open ones counted by severity and the latest run; `GET /advisor/findings/{id}` one finding with its history; `GET /advisor/runs/latest` the latest run; `POST /advisor/runs` runs everything now; and `POST /advisor/findings/{id}/decision` snoozes, dismisses, reopens or marks a finding useful ([API reference](../reference/api-endpoints.md)). A run's `unread` names each source it could not read, so a short list never reads as nothing to do: `integrations` (their last check), `work` (the week's comments, answers, reviews and notices), `ledger` (the agents' turns by what woke them and what they did), `pauses` (the seats' pauses), `runs` (the week's failed executor runs), `budget_stops` (the week's budget refusals), `merges` (the week's merge decisions), `fires` (the week's schedule fires and what their turns wrote), `alarms` (the node's alarm table has not been evaluated yet, as right after a start) and `atlas` (the company's atlas). The findings of a source it could not read are neither confirmed nor resolved by that run.
+
+`GET /advisor/notices` answers the [platform notices](#platform-notices), `{"notices": [...], "unread": [...]}`, the longest-standing first. A notice is `{"class", "subject", "since", "nodes", "alarm", "finding"}`: the finding's class and subject, or `alarm` with the alarm's kind as the subject's `name`, or `conversation.held` with the seat and the conversation; `finding` is the finding whose fix ends it, `{id, title, fix}`, or `null`. A notice an alarm raised also carries the alarm's `title` and `person`, what is wrong and what to do in words for a company owner. Its `unread` adds `alarms` where the fleet's alarms could not be read or a live node has not evaluated its own yet, `holds` where the conversations the engine holds could not be read, and `findings` where the Advisor's own list could not be read.

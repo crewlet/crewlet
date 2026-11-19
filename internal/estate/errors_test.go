@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
@@ -528,6 +529,7 @@ var flooredDomains = []statelog.Domain{
 	worklet.Domain{}, doclet.Domain{}, usage.Domain{}, gitlet.Domain{},
 	iamdomain.Domain{}, artifactsdomain.Domain{}, artifactdata.Domain{},
 	chatlet.Domain{}, executordomain.Domain{}, accessdomain.Domain{}, atlasdomain.Domain{},
+	advisordomain.Domain{},
 }
 
 // crossingDomains is the package of every domain an operation floors on,

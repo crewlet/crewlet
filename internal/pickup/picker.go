@@ -23,6 +23,11 @@ import (
 // Holder answers what only the node holding a seat knows about it.
 type Holder interface {
 	Conditions(ctx context.Context, seat Seat) Conditions
+
+	// LaneWaiting reports a delivery waiting on the seat's priority lane:
+	// asked only before a lane pickup to a seat busy or with mail waiting,
+	// since one found idle but for its settle has nothing waiting at all.
+	LaneWaiting(ctx context.Context, seat Seat) (bool, error)
 }
 
 // ReadyReader reads one seat's ready work.
@@ -203,20 +208,36 @@ func (p *Picker) decide(ctx context.Context, seat Seat, people []worklet.PersonS
 	cond := p.Holder.Conditions(ctx, seat)
 	cond.IdleBefore = p.settle(seat.ID, IdleNow(cond))
 	idle, skip := Idle(cond)
-	if !idle && !UrgentMayJump(cond) {
+	if !idle && !LaneMayJump(cond) {
 		out.Skip = skip
 		return out
 	}
 	now := p.Now()
 	cooled := false
-	// A SEAT THAT IS NOT IDLE is handed urgent work alone (ADR-0159).
+	// A SEAT THAT IS NOT IDLE is handed lane work alone (ADR-0159,
+	// ADR-0162), and only while its lane is empty.
+	// A SEAT FOUND IDLE BUT FOR ITS SETTLE has an empty inbox, lane included.
+	laneRead := IdleNow(cond)
 	pick, err := p.choose(ctx, seat, people, now, !idle, func(c candidate) (bool, Skip, error) {
+		if !laneRead {
+			laneRead = true
+			waiting, err := p.Holder.LaneWaiting(ctx, seat)
+			switch {
+			case err != nil:
+				return false, SkipUnknown, fmt.Errorf("read %s's priority lane: %w", seat.Handle, err)
+			case waiting:
+				return false, SkipLaneWaiting, nil
+			}
+		}
 		return p.hold(ctx, seat.ID, c, now, &cooled)
 	})
 	out.Ready, out.Item = pick.ready, pick.item
 	switch {
+	case !idle && err == nil && pick.skip == SkipLaneWaiting:
+		out.Skip = SkipLaneWaiting
+		return out
 	case !idle && err == nil && pick.skip != "":
-		// Nothing urgent to hand: the seat is as busy as it was.
+		// Nothing for the lane to hand: the seat is as busy as it was.
 		out.Skip = skip
 		return out
 	case pick.skip != "":
@@ -235,7 +256,7 @@ func (p *Picker) decide(ctx context.Context, seat Seat, people []worklet.PersonS
 		item.For = &types.WorkingFor{Kind: types.WorkingForStranger}
 	}
 	ev := Event(seat.ID, seat.Role, item, key, out.Ready, pick.capped, trace)
-	if item.Priority == worklet.PriorityUrgent {
+	if onLane(item) {
 		// AHEAD OF THE SEAT'S BACKGROUND MAIL, which drains in arrival order.
 		queue.Prioritize(ev)
 	}
@@ -277,12 +298,19 @@ type candidate struct {
 	passed bool
 }
 
+// onLane reports an item a pickup hands on the seat's priority lane, which a
+// seat that is not idle is handed too: urgent work, and a due item, which
+// the ready order puts right after it.
+func onLane(item worklet.ReadyItem) bool {
+	return item.Priority == worklet.PriorityUrgent || item.Why == types.PickupDue
+}
+
 // choose walks the seat's ready work page by page and asks the ledger key by
 // key, offering each item the seat has not had until offer takes one. An item
 // offer answers neither taken nor stopped is cooling, and the walk goes on.
-// With urgentOnly the walk stops, unread, at the first item that is not urgent.
+// With laneOnly the walk stops, unread, at the first item not [onLane].
 func (p *Picker) choose(ctx context.Context, seat Seat, people []worklet.PersonSeat, now time.Time,
-	urgentOnly bool, offer func(candidate) (bool, Skip, error)) (picked, error) {
+	laneOnly bool, offer func(candidate) (bool, Skip, error)) (picked, error) {
 
 	var out picked
 	passed, cooling := false, false
@@ -314,7 +342,7 @@ func (p *Picker) choose(ctx context.Context, seat Seat, people []worklet.PersonS
 			return out, nil
 		}
 		for _, item := range ready.Items {
-			if urgentOnly && item.Priority != worklet.PriorityUrgent {
+			if laneOnly && !onLane(item) {
 				out.skip = SkipBusy
 				return out, nil
 			}

@@ -1,7 +1,6 @@
 package executor
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -42,27 +41,28 @@ type threadReading interface {
 	end(torn bool, err error)
 }
 
-// walkThread reads r, one thread member, a whole line at a time within maxBytes
-// ([newThreadReader], which checks ctx before each line), handing each line to
-// every reading in order and each reading's end once. It goes on past a refused
+// walkThread reads r, one thread member, a line at a time within maxBytes,
+// handing each line to every reading in order and each reading's end once,
+// ctx heard through [threadReader.Next] alone. It goes on past a refused
 // line, so a reading that tolerates one (the floor's figure) reads every line
 // after it.
 //
 // HELD TO A BASE, past it ONE SLOT (the package doc's "A collection's read of
-// a thread"): held for a line past [collectionBaseLineBytes] ([lineRun]) or
-// once a reading keeps more than [collectionBaseRecords] records, to the end
-// where one keeps records ([recordKeeper]; its caller releases large), for
-// the line alone otherwise. A wait its ctx ends ends the walk ([errLargeWait]).
+// a thread"): held before a line's facts charge past [collectionBaseLineCharge]
+// ([threadReader.Gate]) or once a reading keeps more than
+// [collectionBaseRecords] records, to the end where one keeps records
+// ([recordKeeper]; its caller releases large), for the line alone otherwise. A
+// wait its ctx ends ends the walk ([errLargeWait]).
 func walkThread(ctx context.Context, r io.Reader, maxBytes int64, large *passBudget, readings ...threadReading) {
 	gate := large.gate(ctx)
 	if keepsRecords(readings) {
 		gate.drop = nil
 	}
-	run := &lineRun{r: r, gate: gate}
-	defer run.done()
-	reader := newThreadReader(run, maxBytes)
+	reader := newThreadReader(r, maxBytes)
+	reader.Gate(gate)
+	defer reader.dropGate()
 	for _, reading := range readings {
-		if asker, ok := reading.(takeAsker); ok {
+		if asker, ok := reading.(lineAsker); ok {
 			asker.ask(reader)
 		}
 	}
@@ -102,15 +102,18 @@ func walkThread(ctx context.Context, r io.Reader, maxBytes int64, large *passBud
 }
 
 // recordKeeper is a reading that keeps records from line to line (the chain
-// in a collection's pass): records is how many it holds now.
+// in a collection's pass): records is how many it holds now, every item it
+// keeps of them counted ([threadChain.items]).
 type recordKeeper interface {
 	records() int
 }
 
-// takeAsker is a reading that asks which take tokens a hook's words name
-// ([threadReader.Asking]) of reader, before its first line, and keeps a
-// refusal as its own: the receipts' ([hookReading]).
-type takeAsker interface {
+// lineAsker is a reading that asks reader for what it reads of every line,
+// before its first line: the receipts' the take tokens a hook's words name
+// ([hookReading], [threadReader.Asking]), keeping a refusal as its own, and
+// the next request's every line's estimate ([nextReading],
+// [threadReader.Estimating]).
+type lineAsker interface {
 	ask(reader *threadReader)
 }
 
@@ -126,7 +129,7 @@ func keepsRecords(readings []threadReading) bool {
 }
 
 // keepsPastBase reports whether a reading holds more than
-// [collectionBaseRecords] records.
+// [collectionBaseRecords] records, as [recordKeeper] counts them.
 func keepsPastBase(readings []threadReading) bool {
 	for _, reading := range readings {
 		if keeper, ok := reading.(recordKeeper); ok && keeper.records() > collectionBaseRecords {
@@ -136,16 +139,39 @@ func keepsPastBase(readings []threadReading) bool {
 	return false
 }
 
-// collectionBaseLineBytes is the longest line a pass reads before it takes
-// the large slot: 256 KiB, four times the census's p99 line, about 2.3 MiB
-// held for it at its worst content (the package doc's "A collection's read
-// of a thread" has the derivation and the measurement).
-const collectionBaseLineBytes = 256 << 10
+// collectionBaseLineCharge is what a line's facts may charge ([lineMeter])
+// before its pass takes the large slot, its length taking nothing: 128 KiB,
+// held as 160 KiB at most, a charged byte holding 1.25 bytes (a string just
+// past 32 KiB takes whole 8 KiB pages): what [baseTierReadBytes] leaves beside
+// the chain at [collectionBaseRecords], the reader within a line and the
+// strings a charge covers. The facts of the census's lines hold 753 bytes at
+// most. The package doc's "A collection's read of a thread" has the
+// derivation and the measurement.
+const collectionBaseLineCharge = 1 << 17
 
-// collectionBaseRecords is the most records a pass's readings keep before it
-// takes the large slot: 2^13, about 2.7 MiB of the chain at End's peak, a
-// thread of some 16 MiB of ordinary lines (the package doc, as above).
+// collectionBaseRecords is the most a pass's readings keep before it takes the
+// large slot, in the chain's items ([threadChain.items]), its call ids among
+// them: 2^13, at most 2.7 MiB at End's peak, a thread of at least 4,096
+// records, some 8 MiB of ordinary lines (the package doc, as above).
 const collectionBaseRecords = 1 << 13
+
+// The bases' coefficients in bytes, each at its worst (the package doc's THE
+// COEFFICIENTS): one of the chain's items at End's peak
+// (BenchmarkAThreadChainAtItsBounds); a line's reader within the line; and the
+// strings one charge covers, the last with the buffer json v2 unquotes it
+// through. TestTheBaseCoefficientsHold measures the last two. baseTierReadBytes
+// is what the base tier counts each read in flight at, about 5.3 MiB.
+const (
+	chainItemBytes     = 344
+	readerLineBytes    = 1730 << 10
+	chargeStringsBytes = 808 << 10
+	baseTierReadBytes  = 5450 << 10
+)
+
+// A pass at both bases holds no more than the base tier counts it at, its
+// facts at 1.25 bytes a charged byte: a negative constant does not compile.
+const _ = uint(baseTierReadBytes - collectionBaseRecords*chainItemBytes - readerLineBytes - chargeStringsBytes -
+	collectionBaseLineCharge*5/4)
 
 // CollectionLargeReadsAtOnce is how many passes past their base this process
 // reads at once: ONE, a pool apart from [TranscriptReadsAtOnce], so a person
@@ -272,65 +298,6 @@ type pieceGate struct {
 // gate is b's gate for a reader waiting within ctx.
 func (b *passBudget) gate(ctx context.Context) pieceGate {
 	return pieceGate{hold: func() error { return b.hold(ctx) }, drop: b.drop}
-}
-
-// lineRun is a member's reader that holds gate BEFORE it hands on a byte of a
-// line past [collectionBaseLineBytes], counting the bytes since the last break,
-// and drops it at the next read once that line's break has passed: beneath a
-// bufio reader, that read comes only once the reader above has taken the line
-// whole and is done with it. Read-ahead may hold early, never late, and the
-// line primitive above it ([readLine]) stays the one copy. A hold's error is
-// its own; done drops what it still holds.
-type lineRun struct {
-	r    io.Reader
-	gate pieceGate
-	run  int
-	// held is whether it holds the gate; open, whether the line it holds for
-	// has not yet broken.
-	held, open bool
-}
-
-func (l *lineRun) Read(p []byte) (int, error) {
-	if l.held && !l.open && l.gate.drop != nil {
-		l.gate.drop()
-		l.held = false
-	}
-	n, err := l.r.Read(p)
-	if l.held && l.gate.drop == nil {
-		return n, err
-	}
-	for rest := p[:n]; ; {
-		brk := bytes.IndexByte(rest, '\n')
-		if brk < 0 {
-			l.run += len(rest)
-		} else {
-			l.run += brk
-		}
-		if l.run > collectionBaseLineBytes {
-			if !l.held {
-				if holdErr := l.gate.hold(); holdErr != nil {
-					return 0, holdErr
-				}
-				l.held = true
-			}
-			l.open = true
-			if l.gate.drop == nil {
-				return n, err
-			}
-		}
-		if brk < 0 {
-			return n, err
-		}
-		l.open, l.run, rest = false, 0, rest[brk+1:]
-	}
-}
-
-// done drops the gate where the run still holds it and drops at all.
-func (l *lineRun) done() {
-	if l.held && l.gate.drop != nil {
-		l.gate.drop()
-		l.held = false
-	}
 }
 
 // mainThreadHarness is a harness that reads the main thread of the session a

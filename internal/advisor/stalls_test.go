@@ -264,11 +264,10 @@ func TestMergesThatWaitedForWantOfAChecksAreOnePerRepository(t *testing.T) {
 	}
 }
 
-// EVERY CLASS SAYS ONE THING ABOUT EVERY SUBJECT, so a class reads as one row naming them all;
-// only the subject, item, facts and records differ. Each class here is raised for two subjects.
-// Mutation: put a seat's number back into a class's why, and its row splits.
-func TestEveryClassSaysOneThingAboutEverySubject(t *testing.T) {
-	t.Parallel()
+// richAnswer is an answer in which every evidence class is raised for two
+// subjects or more, over a company with a static warning of each kind.
+func richAnswer(t *testing.T) advisor.Answer {
+	t.Helper()
 	at := monday.Add(-30 * time.Hour)
 	stop := func(seat string) advisor.BudgetStop {
 		return advisor.BudgetStop{Seat: seat, Turn: "t", Period: "day", Ceiling: 400_000, At: at, Resets: at.Add(6 * time.Hour)}
@@ -297,8 +296,16 @@ func TestEveryClassSaysOneThingAboutEverySubject(t *testing.T) {
 			{Request: "4", Repo: "b"}, {Request: "5", Repo: "b"}, {Request: "6", Repo: "b"}},
 	}
 	in := advisor.Inputs{Company: company(t, doc), Revision: "r1", Integrations: []integration.State{}}
-	answer := advisor.ReadWithEvidence(in, advisor.Evidence{Until: monday, Work: ev.Work, Ledger: ev.Ledger,
+	return advisor.ReadWithEvidence(in, advisor.Evidence{Until: monday, Work: ev.Work, Ledger: ev.Ledger,
 		Runs: ev.Runs, Stops: ev.Stops, Merges: ev.Merges})
+}
+
+// EVERY CLASS SAYS ONE THING ABOUT EVERY SUBJECT, so a class reads as one row naming them all;
+// only the subject, item, facts and records differ. Each class here is raised for two subjects.
+// Mutation: put a seat's number back into a class's why, and its row splits.
+func TestEveryClassSaysOneThingAboutEverySubject(t *testing.T) {
+	t.Parallel()
+	answer := richAnswer(t)
 	byClass := map[advisor.Class][]advisor.Finding{}
 	for _, f := range answer.Findings {
 		byClass[f.Class] = append(byClass[f.Class], f)

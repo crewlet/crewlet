@@ -45,27 +45,17 @@ import (
 // a company with twenty schedules gets a line that says which one to fix.
 var ErrInvalid = errors.New("invalid cron expression")
 
-// Horizon bounds how far Next and Prev will scan before reporting that an
-// expression has no fire in that direction.
+// Horizon bounds how far Next and Prev scan before reporting no fire.
 //
-// Sized to the GRAMMAR, not to a round number. The longest gap between two
-// fires of any valid 5-field expression is `0 0 29 2 *` across a century that
-// is not a leap year — 2096-02-29 to 2104-02-29 is 2921 days, because 2100 is
-// divisible by 100 and not by 400. Anything shorter reports "never" for a
-// legitimate quadrennial schedule. A 400-day scan — the natural choice — does
-// exactly that in three years out of four, and in seven out of eight across
-// the century gap: the dashboard draws no next run, and the catchup window
-// silently falls back to its minimum clamp.
+// Sized to the GRAMMAR: the longest gap between fires of a valid 5-field
+// expression is `0 0 29 2 *` across a non-leap century, 2096-02-29 to
+// 2104-02-29 = 2921 days (2100 is not a leap year). Anything shorter reports
+// "never" for a legitimate quadrennial schedule: no next run on the dashboard,
+// catchup at its minimum clamp.
 //
-// The cost of the larger horizon falls only on an expression that never
-// matches at all (`0 0 30 2 *` — February 30th), because every reachable one
-// terminates at its next fire. Measured, not assumed: BenchmarkNextUnreachable
-// walks the whole horizon in 143 ms, BenchmarkNextDaily finds an ordinary
-// weekday fire in 25 µs. The full walk is reachable at most twice per such
-// schedule on the first tick (the catchup window asks for two fires) and once
-// per schedule per dashboard projection, so a company that writes an
-// impossible date pays milliseconds where it currently gets a wrong answer.
-// See the note on scanning in [Expr.Next].
+// Only an expression that never matches (`0 0 30 2 *`) pays the full walk:
+// BenchmarkNextUnreachable 143 ms against BenchmarkNextDaily 25 µs, at most
+// twice per schedule on the first tick and once per dashboard projection.
 const Horizon = 2925 * 24 * time.Hour
 
 // Expr is a parsed 5-field cron expression.
@@ -321,26 +311,15 @@ func (e Expr) FireTimes(after, until time.Time, loc *time.Location) []time.Time 
 // Next returns the first UTC fire time strictly after `after`, reporting
 // false when the expression has none within [Horizon].
 //
-// False is not an error: `0 0 30 2 *` parses and simply never happens. The
-// callers treat it as "this schedule has no knowable period", which the
-// catchup window resolves to its minimum clamp.
+// False is not an error: `0 0 30 2 *` parses and never happens; catchup takes
+// its minimum clamp.
 //
-// # Why this walks minute by minute
-//
-// The walk iterates UTC instants and matches their LOCAL projection, and that
-// direction is the whole DST design: every UTC instant has exactly one local
-// time, so a repeated local hour yields two fire instants and a vanished one
-// yields none, with no ambiguity to resolve. Constructing local times instead
-// — the obvious way to skip whole days — has to invent an answer in both of
-// those cases, and Go's time.Date explicitly does not promise which one it
-// picks in a gap.
-//
-// Skipping ahead by a whole hour is also unavailable: zone offsets are not all
-// whole hours (Asia/Kathmandu is +05:45, Pacific/Chatham +12:45), so an
-// hour-granular jump lands on the wrong minute in exactly the zones nobody
-// tests. The scan is therefore linear, and bounded: every expression with a
-// reachable fire terminates at it, and only an impossible date pays the full
-// horizon.
+// The walk iterates UTC instants and matches their LOCAL projection, the whole
+// DST design: each UTC instant has one local time, so a repeated local hour
+// yields two fires and a vanished one none. Constructing local times to skip
+// days must invent an answer in both cases (time.Date does not promise one in
+// a gap), and skipping whole hours fails on offsets like Asia/Kathmandu
+// +05:45. So the scan is linear and bounded.
 func (e Expr) Next(after time.Time, loc *time.Location) (time.Time, bool) {
 	m := firstMinuteAfter(after)
 	limit := m.Add(Horizon)

@@ -12,65 +12,15 @@ import (
 // EVERY INDEX ON A PAGE TABLE SERVES A REGISTERED QUERY, AND EVERY STATEMENT
 // THAT READS ONE IS REGISTERED.
 //
-// # Why this is asserted rather than reviewed
-//
-// An index is a write on every apply of every page record on every data node,
-// for ever, and a statement with no index behind it reads every page, revision
-// or change the company has ever made and shows up as a slow screen rather than
-// a failure. The schema's trailing comments name a reader for every index, and
-// a comment is a CLAIM: three indexes were maintained for no reader until
-// replicated 0064 dropped them — one for a digest ordered by an instant nothing
-// orders by, a second copy of the revisions' own key, and one for the skills
-// registry's re-read, which is driven from the heads. And the embedding duty's
-// selection had no index in its order at all until replicated 0065, nor the
-// trash reaper's listing until replicated 0066. The planner is the only thing
-// that knows whether a statement reaches an index, so this runs EXPLAIN QUERY
-// PLAN over every statement that reads a page table and reads the answer out —
-// planned as a deployment plans it, with no statistics, over [pagePlanStore]'s
-// company.
-//
-// # What it holds
-//
-//   - every statement in the module's source that reads one of the covered
-//     tables is registered here, matched whole ([storetest.StatementLiterals]):
-//     this package's reader, applier and writer, and search's statements over
-//     the pages (its lexical walk, its fetches and the embedding duty's page
-//     corpus). A reader nobody registered is one whose plan nobody checked;
-//   - a registered READ — a point read, a probe, a batch by key, the reads an
-//     apply makes — seeks the index it names, or walks it in its own order
-//     with no sort when the read is about that order ([pageReads]);
-//   - a CENSUS — a listing's total and its window in every shape the surfaces
-//     ask for, the change feed in every shape, the rail's per-container counts
-//     — reads every row its question names by definition, and is held to no
-//     heap scan ([pageCensuses]);
-//   - a PASS reads the whole live corpus by definition, so it may read the
-//     heads' rows, and is held to no sort ([pagePasses]);
-//   - no read and no census reads a covered table from the heap, and none
-//     answers a per-row aggregate from its whole child table
-//     ([storetest.Decorrelated]);
-//   - and the inverse: every index the schema declares on a covered table is
-//     in some registered plan.
-//
-// The listing's own order, its resumed windows, its children's counts, its
-// filters and the feed's arms are held in their own tests, which say what each
-// costs when it goes wrong; this test is what makes the set they are drawn
-// from complete.
-//
-// # The tables it speaks for
-//
-// A page's own rows — its head, its address, its revisions, its comments, its
-// labels, its watchers, its derived marks — and the history. The containers and
-// the deletion markers are not here: each is read by its primary key alone and
-// declares no other index, so there is no inventory to keep and no second
-// index for a read to lose its way to. The log's own tables are the state-log
-// framework's.
-//
-// Mutation: recreate any of the three indexes 0064 dropped, and the inventory
-// names it; drop `pages_heads_live_updated_idx` (replicated 0065), and the
-// embedding duty's selection reads every page from the heap; read a page table
-// in a new literal anywhere in the module without registering it, and the walk
-// names the file; drop `pages_comments_page_idx`, and a thread and a purge's
-// clear of the comments read every comment from the heap.
+// An index is a write on every apply on every data node, and an unindexed read
+// shows up as a slow screen, not a failure; schema comments are only claims. So
+// EXPLAIN QUERY PLAN (no statistics, over [pagePlanStore]) runs on every
+// statement that reads a covered table ([storetest.StatementLiterals], matched
+// whole): a READ seeks or walks its index with no sort ([pageReads]), a CENSUS
+// may not scan the heap ([pageCensuses]), a PASS may not sort ([pagePasses]),
+// none answers a per-row aggregate from its whole child table
+// ([storetest.Decorrelated]), and every declared index is in some plan.
+// Mutation: drop `pages_comments_page_idx`, or read a page table unregistered.
 func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := pagePlanStore(t)

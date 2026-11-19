@@ -107,12 +107,9 @@ atlas:                                  # optional: the atlas, the map of what t
                                         #   wake an entry a day; false wakes nobody.
 assistant: {...}                        # optional, Ask Crewlet; off until a model is assigned
                                         #   (see "Ask Crewlet" below)
-advisor:                                # optional, the setup advisor's analyst; off unless llm
-  analyst:                              #   names a model (see guides/advisor.md, "Found by the analyst")
-    llm: [assistant]                    #   providers.llm keys, each on a harness a helper can run
-    cadence: daily                      #   daily (default), weekly (Mondays) or off; Run now always runs
-    hour: 6                             #   company-clock hour a scheduled run starts, 0..23 (default 6)
-    max_tokens: 200000                  #   one run's token ceiling, at least 20000 (default 200000)
+advisor:                                # optional, the Advisor's model; its rules run either way
+  model: assistant                      #   a providers.llm key on a harness a helper can run
+                                        #   (see guides/advisor.md, "Found by the Advisor's model")
 
 turn_engine:                            # optional — executor/reviewer turn config
   max_iterations: 3                     # hard cap on self_iterate loops per turn
@@ -1352,6 +1349,16 @@ stream:
                                     #   the reference company's rate. How long
                                     #   the history is kept is the company
                                     #   document's atlas.retention_days
+  # advisor_log_max_bytes: 67108864 #   the advisor log, where the Advisor's
+                                    #   findings, runs, weekly reports and
+                                    #   alarm episodes are kept with their
+                                    #   history (64 MiB..64 GiB). UNSET TAKES
+                                    #   64 MiB, its floor, sized by what the
+                                    #   Advisor records rather than by the
+                                    #   disk: about ten days of a completely
+                                    #   blocked trim at the reference company's
+                                    #   ~6 MB a day. Closed findings are kept
+                                    #   90 days, runs 30, reports 26 weeks
   # code_log_max_bytes: 11453246122 #   the code log's ceiling (1 GiB..1 TiB):
                                     #   the ordered stream a repository's refs,
                                     #   packs and settings move on. It runs on
@@ -1380,7 +1387,7 @@ stream:
                                     #   least, which comes out of the other
                                     #   logs' share whole (at 100 GiB free,
                                     #   13.3 GiB beside a mutation log of
-                                    #   6.7 GiB). Once the streams exist, the
+                                    #   6.6 GiB). Once the streams exist, the
                                     #   ratio the two logs' bytes_per_day
                                     #   show in `crewlet retention status` is
                                     #   its own, and `crewlet retention

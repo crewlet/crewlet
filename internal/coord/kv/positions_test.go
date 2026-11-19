@@ -15,19 +15,14 @@ import (
 
 // THE POSITIONS REGISTER HAS NO TTL, and this is the case that says why.
 //
-// Every other bucket in this estate expires its keys — that is what a lease,
-// a claim, a dedupe window and a rate window ARE. The register is the one bucket
-// where a key's disappearance would be read as a fact rather than as silence:
-// a node whose position key expired reads as a node that has applied NOTHING,
-// and the trim takes a MINIMUM across those rows. So an expiry here does not
-// lose information, it produces the wrong answer — the floor collapses to
-// zero and the fleet stops trimming, or, with the inequality the other way,
-// trims past a node that was merely quiet.
+// Every other bucket expires its keys (that is what a lease, claim or window
+// IS). Here a vanished key reads as a fact: a node whose position expired has
+// applied NOTHING, and the trim takes a MINIMUM across rows, so the floor
+// collapses to zero and the fleet stops trimming, or trims past a merely quiet
+// node.
 //
-// The other buckets' short TTL is what makes this checkable in a test rather
-// than in a year: the store is opened with a one-second TTL, a lease and a
-// position are written together, and the lease is gone while the position is
-// not.
+// The test opens the store with a one-second TTL and writes a lease and a
+// position together: the lease must be gone while the position is not.
 func TestThePositionRegisterSurvivesASweepThatExpiresEverythingElse(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -113,21 +108,16 @@ func openFleetWithTTL(t *testing.T, nc *nats.Conn, ttl time.Duration) *FleetStor
 
 // THE BROKER FILTERS THE CLASS, AND THE WALK ONLY SEES ITS OWN.
 //
-// Eight classes share the positions register, and a walk that read all of them
-// to use one was what this replaced — on a read the state-log write fence
-// takes on every first write to a subject. A key here is
-// coord.DocumentKey(class, id), whose separator is a dot because a key IS a
-// subject token path, so the class is a token the broker can match.
+// Many classes share the positions register. A key is
+// coord.DocumentKey(class, id), dotted because a key IS a subject token path,
+// so the class is a token the broker can match.
 //
-// What this asserts is the NARROWING, through the walk every class listing
-// takes ([FleetStore.eachPositionKey]): with keys of every class in the bucket,
-// each class read must see its own and nothing else, AND the filter the walk
-// asks the broker to watch must hand back its own key and nothing else. The
-// walk's own class test drops a neighbour's key, so its rows stay right
-// whether or not the broker narrowed; only the filter it asked for says
-// whether every class was moved over the wire for one. Counted through a walk
-// the test built itself, with a filter of its own, it held the grammar and
-// never the listing.
+// Asserts the NARROWING through the walk every class listing takes
+// ([FleetStore.eachPositionKey]): each class read sees only its own keys, AND
+// the filter the walk asks the broker to watch hands back only its own. The
+// walk drops a neighbour's key itself, so rows stay right whether or not the
+// broker narrowed; only the filter says whether every class crossed the wire.
+// It must be counted through the walk's own filter, not one the test builds.
 func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)
@@ -144,7 +134,7 @@ func TestAPositionClassWalkSeesOnlyItsOwnClass(t *testing.T) {
 	classes := []string{
 		"node", "floor", "hold", "backup",
 		"maintenance", "admitted", "maintenance-ack", coord.SeatPauseClass,
-		coord.ConversationHoldClass, coord.AtlasWakeClass, coord.AdvisorRecordClass,
+		coord.ConversationHoldClass, coord.AtlasWakeClass,
 	}
 	for _, class := range classes {
 		key := coord.DocumentKey(class, "n-1")
@@ -235,13 +225,11 @@ func TestAClassFilterMatchesAKeyOfAnyDepth(t *testing.T) {
 // ONE LOG'S MAINTENANCE ACKNOWLEDGEMENTS ARE NARROWED BY THE BROKER, on the
 // log's own segment of the key ([coord.MaintenanceAckKey]).
 //
-// A window is per log and two can be open at once, so the seal reads one log's
-// acknowledgements, and it is the broker that has to pick them out: a listing
-// handed every log's and dropping the rest still answers right, which is why
-// the count is taken from the filter MaintenanceAcks itself asks the broker to
-// watch, never from a filter the test builds. A log whose name begins with
-// another's is the adversarial neighbour for a filter built by concatenation
-// rather than by the grammar.
+// Two logs' windows can be open at once, and the broker must pick out one
+// log's acknowledgements: a listing handed all and dropping the rest still
+// answers right, so the count comes from the filter MaintenanceAcks itself
+// asks the broker to watch. A log named as a prefix of another is the
+// adversarial neighbour for a filter built by concatenation.
 //
 // Mutation: have the walk filter on the class alone and every log's records
 // are handed back to each log's listing, while its rows stay right.

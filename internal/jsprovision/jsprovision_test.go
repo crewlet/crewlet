@@ -15,21 +15,18 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// fast is a [Timing] at a scale a case can afford, for the mechanism's own
-// cases: each window, term and cadence a few hundred milliseconds or less, so
-// a branch that only an EXHAUSTED window reaches is reached in under a second
-// rather than after the production five.
+// fast is a [Timing] scaled so a branch only an EXHAUSTED window reaches is
+// reached in under a second.
 //
-// IT KEEPS EVERY RELATION THE PRODUCTION NUMBERS KEEP —
-// [TestEveryTimingKeepsTheRelationsTheMechanismRestsOn] holds both to the same
-// list — because the cases below discriminate on those relations and not on
-// the numbers: a hung ask plus its pause must fit twice in a read-back, and
-// the two cadences must be far enough apart to tell which one ran.
+// It keeps every relation the production numbers keep
+// ([TestEveryTimingKeepsTheRelationsTheMechanismRestsOn]), because the cases
+// discriminate on those relations: a hung ask plus its pause must fit twice in
+// a read-back, and the cadences must be far enough apart to tell which ran.
 //
-// THE CADENCES ARE FORTY TIMES APART, wider than production's four, and that
-// is the cadence case's margin rather than a taste: a timer that fires late on
-// a loaded runner stretches the 5 ms pause, and the case passes a swapped
-// cadence only if lateness alone carries 5 ms past 200.
+// The cadences are forty times apart, wider than production's four, as the
+// cadence case's margin: a late timer on a loaded runner stretches the 5 ms
+// pause, and a swapped cadence passes only if lateness alone carries 5 ms
+// past 200.
 var fast = Timing{
 	Budget:         2 * time.Second,
 	Sequence:       5 * time.Second,
@@ -96,21 +93,15 @@ func relationsBroken(tm Timing) []string {
 	return broken
 }
 
-// EVERY TIMING KEEPS THE RELATIONS THE MECHANISM RESTS ON — both topologies'
-// production timings and the scaled one the mechanism's cases run at — held
-// against each other rather than restated in a comment.
+// EVERY TIMING KEEPS THE RELATIONS THE MECHANISM RESTS ON: both topologies'
+// production timings and the scaled one the cases run at.
 //
-// [ReadTerm] bounds ONE attempt so a request that hangs cannot spend the whole
-// window, and [ReadBack] bounds the run of them. A term at or above the window
-// makes the first hung ask the entire read-back, which is the single lookup
-// this re-asking replaced. And the production numbers reach these timings
-// unchanged — [TestEachTopologysTimingCarriesTheNumbersThisPackageNames] — so
-// this is the relation test for the named numbers too.
-//
-// The scaled one is held to the same list because a case run at a timing that
-// broke one of them would be exercising some other mechanism: a read-back that
-// fits one ask cannot show the re-ask, and cadences that crossed cannot show
-// which one ran.
+// [ReadTerm] bounds ONE attempt so a hung request cannot spend the whole
+// window, and [ReadBack] bounds the run of them; a term at or above the window
+// makes the first hung ask the entire read-back. The scaled timing is held to
+// the same list because one that broke a relation would exercise some other
+// mechanism: a read-back fitting one ask cannot show the re-ask, and crossed
+// cadences cannot show which ran.
 func TestEveryTimingKeepsTheRelationsTheMechanismRestsOn(t *testing.T) {
 	t.Parallel()
 	for name, tm := range map[string]Timing{
@@ -580,21 +571,15 @@ func TestCancellingTheCallerStopsTheReAsking(t *testing.T) {
 	}
 }
 
-// THE WINDOW BOUNDS THE LOOKUPS, NOT ONLY THE GAPS BETWEEN THEM — and what
+// THE WINDOW BOUNDS THE LOOKUPS, NOT ONLY THE GAPS BETWEEN THEM, and what
 // comes back at the end of it still names the object.
 //
-// # Why both halves are one case
-//
-// Because the second is what the first costs if nobody arranges it. A window
-// the CALLER built separately left each attempt free to block past it: the one
-// metadata read that hangs is exactly what is slow on a group that has not
-// settled, so the function documented as bounded by [ReadBack] would sit there
-// until the boot's own context expired.
-//
-// Bounding the attempts fixes that and introduces the other half: the attempt
-// the window interrupts comes back with a DEADLINE, and a deadline says
-// nothing about the object. `stream not found` is what tells an operator which
-// stream; `context deadline exceeded` sends them to look at the cluster.
+// The halves are one case because the second is what the first costs. A window
+// the CALLER built separately left each attempt free to block past it, and the
+// metadata read that hangs is what is slow on an unsettled group. Bounding the
+// attempts means the interrupted one returns a DEADLINE, which says nothing
+// about the object: `stream not found` tells an operator which stream, while
+// `context deadline exceeded` sends them to look at the cluster.
 func TestTheWindowBoundsEachLookupAndTheAnswerStillNamesTheObject(t *testing.T) {
 	t.Parallel()
 
@@ -869,19 +854,14 @@ func TestTheProvisioningPredicatesAreDisjoint(t *testing.T) {
 }
 
 // A LOOKUP IS SIZED BY THE SERVER'S OWN HOLD WINDOW, not by the create it
-// precedes.
-//
-// The two shared one deadline, so a lookup nobody answered spent the whole
-// clustered [Budget] and left none of it for the create that would have
-// settled the question. The anchor is nats-server's own raft timing: an
-// election runs to maxElectionTimeout, a group notices lost quorum after
+// precedes: sharing one deadline let an unanswered lookup spend the whole
+// clustered [Budget]. The anchor is nats-server's raft timing: an election
+// runs to maxElectionTimeout, a group notices lost quorum after
 // lostQuorumInterval and re-checks on lostQuorumCheckInterval. Past their sum
-// the server has itself decided, so a request still unanswered is one that
-// waiting will not answer.
+// the server has decided, so waiting longer will not answer.
 //
-// The three constants are spelled here for the reason clusterReadyTimeout is
-// spelled above: a Go test cannot reach a vendored package's unexported
-// constants, and a change to them must be reflected here.
+// The constants are spelled here because a Go test cannot reach a vendored
+// package's unexported ones; a change to them must be reflected here.
 func TestALookupIsSizedByTheServersHoldWindow(t *testing.T) {
 	t.Parallel()
 
@@ -1199,19 +1179,14 @@ func lateBy(parent context.Context, deadline, lag time.Duration) (context.Contex
 // cannot say so yet: not by a read's hedge, a write's re-ask, a placement's
 // retry, nor a read-back's next question.
 //
-// Each paused on a timer of its own and took ctx.Done for the only word on
-// the deadline, which the runtime closes only once it runs the deadline's own
-// timer, late on a stalled process ([overdue]). After a stall across both, the
-// loop took its pause and asked past its caller's deadline: natsobj's
-// unanswered stream info was asked a third time inside a 3.9-second bound
-// whose third request was due at four, on a loaded CI runner. Each case's
+// A loop took ctx.Done for the only word on the deadline, but the runtime
+// closes it only when it runs the deadline's timer, late on a stalled process
+// ([overdue]); the loop then asked past its caller's deadline. Each case's
 // context is [lagging], its deadline midway through the pause before the
-// request that must not go out and its ending after that request comes due;
-// IN A SYNCTEST BUBBLE, so all three fall exactly there. A request due AT the
-// deadline is not sent either: it has no time left to be answered in. The
-// loop ends when its context does, returning what it returns then, with the
-// context's own error set beside it, as on a runtime that ran every timer on
-// time.
+// request that must not go out and its ending after that request comes due,
+// IN A SYNCTEST BUBBLE so all fall exactly there. A request due AT the
+// deadline is not sent either. The loop ends when its context does, returning
+// what it returns then, with the context's error set beside it.
 func TestNothingIsAskedAgainOnceItsDeadlineHasPassed(t *testing.T) {
 	t.Parallel()
 	placement := &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400}
@@ -1465,14 +1440,12 @@ func TestAPlacementLoopReissuesADestroyedCreate(t *testing.T) {
 //
 // [context.DeadlineExceeded] from a term this package set means the request
 // was destroyed and the next one will be answered. The identical value from
-// the CALLER's own deadline — the boot's sequence ceiling, an operator's
-// Ctrl-C — means time is up and nobody is waiting for the answer any more.
-// Reading the second as the first sends a doomed request on a context that is
-// already done, and reports whatever that produces instead of the ceiling that
-// actually expired.
+// the CALLER's own deadline (the boot's sequence ceiling, an operator's
+// Ctrl-C) means nobody is waiting any more; reading it as the first sends a
+// doomed request and reports its result instead of the expired ceiling.
 //
-// This is the guard [Ask]'s own cases cannot provide: its select on ctx.Done()
-// ends the loop either way, so the predicate has to be exercised directly.
+// [Ask]'s own cases cannot guard this: its select on ctx.Done() ends the loop
+// either way, so the predicate is exercised directly.
 func TestUnansweredTellsThisPackagesDeadlineFromTheCallers(t *testing.T) {
 	t.Parallel()
 
@@ -1601,17 +1574,14 @@ func TestAReadBackNobodyEverAnsweredNamesTheSilence(t *testing.T) {
 
 // A CEILING THAT DOES NOT FIT IS TERMINAL AND IS NOT A CLUSTER STILL FORMING.
 //
-// The two are both create refusals from the same call, and waiting is the
-// answer to exactly one of them: a forming cluster gains members, and a
-// storage limit gains nothing by anybody waiting. Confusing them costs the
-// whole provisioning budget and ends with the same message — and a read-back
-// after it appends a not-found for an object nobody made, which is how the
-// measured failure came to name `CREWLET_PAGES_LOG` twice for a limit the
-// other two logs had already spent.
+// Both are create refusals from the same call, and waiting answers only one: a
+// forming cluster gains members, a storage limit gains nothing. Confusing them
+// costs the whole provisioning budget, and a read-back after it appends a
+// not-found for an object nobody made, naming `CREWLET_PAGES_LOG` for a limit
+// the other logs had already spent.
 //
 // BOTH CODES, because which one a broker answers with is decided by where its
-// streams live rather than by what went wrong, so an assertion naming one
-// certifies half the rule.
+// streams live, not by what went wrong; naming one certifies half the rule.
 func TestACeilingThatDoesNotFitIsTerminal(t *testing.T) {
 	t.Parallel()
 	for name, refusal := range map[string]*jetstream.APIError{
@@ -1702,25 +1672,16 @@ func TestNeitherRefusalPredicateFiresOnAnOrdinaryError(t *testing.T) {
 
 // A CREATE REFUSED FOR HAVING NO APPLICABLE LIMIT IS ITS OWN FACT.
 //
-// # What it was, unclassified
+// Unclassified, 10120 fell through to the read-back kept for a peer that won
+// the race, spending [ReadBack] on an object the broker refused to make and
+// appending `(and it is not there: stream not found)` to the real cause.
 //
-// 10120 matched neither [OutOfCapacity] nor [Unplaceable], so every create path
-// fell through to the read-back it keeps for a peer that won the race: it spent
-// [ReadBack] asking after an object the broker had just refused to make, found
-// nothing, and appended `(and it is not there: stream not found)` to the one
-// sentence that said what was actually wrong. An operator reading that goes
-// looking for a missing stream on a cluster whose account never carried a limit
-// for it.
-//
-// # And why it is not a third arm of OutOfCapacity
-//
-// Because the remedy differs. OutOfCapacity means the ceiling asked for does
-// not fit inside a limit that exists, and its sentence names that limit, what
-// is already reserved against it and `stream.store_max_bytes`. Here there is no
-// limit at all: the account's are tiered and it carries none for this node's
-// replica class, so those three numbers do not exist and the lever is
-// `stream.replicas` or the account's own tier declarations. Folded in, the
-// refusal would offer a field that changes nothing.
+// It is not a third arm of OutOfCapacity because the remedy differs: that one
+// means the ceiling does not fit a limit that exists, and names it and
+// `stream.store_max_bytes`. Here the account is tiered with no limit for this
+// node's replica class, so the lever is `stream.replicas` or the tier
+// declarations; folded in, the refusal would offer a field that changes
+// nothing.
 func TestACreateWithNoApplicableLimitIsClassifiedOnItsOwn(t *testing.T) {
 	t.Parallel()
 	refusal := &jetstream.APIError{ErrorCode: errCodeNoLimits, Code: 400,
@@ -1807,17 +1768,15 @@ func TestTheNoApplicableLimitClauseNamesTheClassAndNotTheCapacityLever(t *testin
 // A CREATE THE BROKER REFUSED ON THE REQUEST ALONE IS NOT READ BACK, and one a
 // peer's race can explain still is.
 //
-// The two lists are the two halves of the risk [Refused] weighs. A refusal it
-// missed spends [ReadBack] asking after an object nobody made and reports it as
-// "not there"; a race's shape it took would turn a peer that won into a node
-// that refuses to boot. The second list is therefore the one that matters
-// most: every answer a create can come back with while a peer is making the
-// same object, the generic consumer-create failure included, because a create
-// the server held can come back as that with the consumer placed.
+// The two lists are the two halves of the risk [Refused] weighs: a refusal
+// missed spends [ReadBack] on an object nobody made; a race's shape taken
+// turns a peer that won into a node that refuses to boot. The second matters
+// most: every answer a create can return while a peer makes the same object,
+// the generic consumer-create failure included.
 //
-// The codes are this package's own spelling; that they are the pinned
-// server's is held where the server is linked, by
-// internal/queue/jetstream's TestTheRefusalsNotReadBackAreThePinnedServersCodes.
+// The codes are this package's spelling; that they are the pinned server's is
+// held by internal/queue/jetstream's
+// TestTheRefusalsNotReadBackAreThePinnedServersCodes.
 func TestOnlyARefusalNoRaceCanProduceSkipsTheReadBack(t *testing.T) {
 	t.Parallel()
 	for name, err := range map[string]error{

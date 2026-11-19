@@ -9,26 +9,16 @@ import (
 
 // CHAT'S HALF OF A REANCHOR, and it is one record.
 //
-// [statelog.Reanchor] owns the steps and their order; this domain's part is to
-// say, in its own record format, that its log was adopted at a new generation.
-// The applier already knows what that record is — [Applier] writes
-// `chat_log_generations` from it — and the record is what the audit row
-// derives from, so nothing here writes a row of its own.
+// [statelog.Reanchor] owns the steps and their order; this domain says, in its
+// own record, that its log was adopted at a new generation. The engine's
+// reanchor refuses a log whose domain cannot. The record is what
+// `chat_log_generations` (via [Applier]) derives from, so nothing here writes a
+// row of its own.
 //
-// It had no such part until now, and the engine's reanchor refuses, by name, a
-// log whose domain cannot say it was adopted — so a recreated CREWLET_CHAT_LOG
-// was a log no operator could ever move the fleet onto.
-//
-// # And, like the tracker's and the knowledge base's, no version reset
-//
-// A room's `version` is compared by the applier's guards and by a caller's
-// revision check, and both against positions in the NEW generation, which are
-// above every old version by construction. A message's `channel_seq` is the
-// one number here that is NOT a position — it is minted from the room's own
-// high-water mark — and a reanchor leaves it alone for the same reason: the
-// room's mark is a row the new generation's records go on counting from, so
-// the transcript stays contiguous across the move and a browser's gap check
-// keeps meaning what it meant.
+// No version reset: a room's `version` is compared against positions in the NEW
+// generation, above every old version by construction. A message's
+// `channel_seq` is NOT a position (it is minted from the room's high-water
+// mark row), so it is left alone too and the transcript stays contiguous.
 
 // GenerationRecord is chat's [statelog.GenerationEncoder].
 type GenerationRecord struct{}
@@ -44,15 +34,12 @@ func (GenerationRecord) GenerationSubject(gen uint32) (statelog.Subject, bool) {
 // create-only on the generation's own subject so two operators deriving the
 // same number race at the broker and exactly one record lands.
 //
-// THE OPERATION ID NAMES THE WRITER ([statelog.GenerationFacts.OpID]), for
-// the tracker's reason: two nodes deriving the same number are two operations,
-// and one id between them let the broker's duplicate window acknowledge the
-// second as though it had landed. The transition reads back whose record
-// landed ([statelog.Reanchor]).
-//
-// THE PRINCIPAL WHO RAN IT IS THE AUTHOR, recorded the way every write here
-// is — see [generationActor]. A reanchor is said about a log, not in a room,
-// so it needs no seat to speak as.
+// THE OPERATION ID NAMES THE WRITER ([statelog.GenerationFacts.OpID]): two nodes
+// deriving the same number are two operations, and one shared id let the
+// broker's duplicate window acknowledge the second as landed. The transition
+// reads back whose record landed ([statelog.Reanchor]). The principal who ran it
+// is the author ([generationActor]); a reanchor is about a log, not a room, so
+// it needs no seat.
 func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.GenerationRecord, bool, error) {
 	subject := GenerationSubject(f.Generation)
 	scope := ScopeSet{Subject: true}

@@ -298,15 +298,16 @@ Two policies decide which copies count:
   acknowledged is never trimmed: the ordered logs, `CREWLET_TRACKER_LOG`,
   `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_ARTIFACTS_LOG`,
   `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`, `CREWLET_CHAT_LOG`,
-  `CREWLET_EXECUTOR_LOG`, `CREWLET_CODE_LOG`, `CREWLET_ACCESS_LOG` and
-  `CREWLET_ATLAS_LOG`, each
+  `CREWLET_EXECUTOR_LOG`, `CREWLET_CODE_LOG`, `CREWLET_ACCESS_LOG`,
+  `CREWLET_ATLAS_LOG` and `CREWLET_ADVISOR_LOG`, each
   grow until their own ceiling refuses writes — a full identity log refuses
   every sign-in, a full Ask Crewlet log every question Ask Crewlet is asked, a
   full chat log every message, a full executor log every session a turn would
   keep for its conversation's next, a full code log every push and every
   record of a change, a full access log every SSH command and every change
-  of access a seat would be told, and a full atlas log every edit somebody
-  makes to the atlas — while the two compacted logs,
+  of access a seat would be told, a full atlas log every edit somebody
+  makes to the atlas, and a full advisor log every finding the Advisor would
+  record and every decision a person makes on one — while the two compacted logs,
   `CREWLET_TRACKER_VECTORS` and `CREWLET_USAGE_LOG`, age their
   records out on the broker whatever the trim decides; their trim and its
   alarms wait on an acknowledgement just the same.
@@ -1345,6 +1346,7 @@ So the reserve is the larger of two terms:
 | executor | 128 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
 | access | 256 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
 | atlas | 256 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
+| advisor | 256 KiB | 64 MiB | 4 MiB (a sixteenth) | 60 MiB |
 
 While a rolling upgrade runs, a node on an older build keeps no reserve, so
 the reserve holds once every node counts its own.
@@ -1362,7 +1364,7 @@ A log's Tier A ceiling (`stream.tracker_log_max_bytes`,
 `stream.artifacts_log_max_bytes`, `stream.artifact_data_log_max_bytes`,
 `stream.assistant_log_max_bytes`, `stream.chat_log_max_bytes`,
 `stream.executor_log_max_bytes`, `stream.access_log_max_bytes`,
-`stream.atlas_log_max_bytes`) is not a live setting: it is the value the log's stream is created with, sized with the
+`stream.atlas_log_max_bytes`, `stream.advisor_log_max_bytes`) is not a live setting: it is the value the log's stream is created with, sized with the
 other logs inside what the broker can grant (see
 [Replication](replication.md#how-the-byte-ceilings-are-sized)). Changing a
 running log's ceiling, raising it or lowering it, is a **fleet-wide
@@ -2361,6 +2363,15 @@ by the broker instants its rows hold. An administrator's
 [purge](../concepts/atlas.md#the-atlass-own-log) is the other way something
 leaves it, at once and history included.
 
+The **Advisor's history** (its findings with their history, runs, weekly
+reports and alarm episodes, on `CREWLET_ADVISOR_LOG`) is kept on fixed
+horizons: a closed finding and its history **90 days**, a run and a cleared
+alarm episode **30 days**, a weekly report **26 weeks**. An open finding never
+expires, and a finding's key outlives its episodes while a dismissal still
+holds it quiet or a fix that did not take is remembered against it. A day's
+expiry is one record that every node applies by the instants its rows hold,
+and a day is expired once.
+
 Two tables are the exception, and both are swept **per node** rather than once
 across the fleet — each data node applies the log into its own copy, so a fleet
 singleton would tidy one node and let the table grow for ever on every other,
@@ -2789,9 +2800,9 @@ only on a small volume:
    leaves about 59 % of the 19.1 GiB a 200 GiB volume creates it with, about
    33 % of the 11.7 GiB a 128 GiB volume does and about 13 % of the 9.0 GiB a
    100 GiB volume does; and a 64 GiB volume creates the log at 5.6 GiB, too
-   small to hold that re-embedding at all: below about 97 GiB free, set
+   small to hold that re-embedding at all: below about 98 GiB free, set
    `stream.tracker_vectors_max_bytes` to at least 9 GiB. The alarm fires
-   within a tenth of the ceiling, so **on a volume of less than about 97 GiB
+   within a tenth of the ceiling, so **on a volume of less than about 98 GiB
    free, a year-five re-embedding raises `log_headroom`**, and below about
    88 GiB the log refuses it. The line would be about 81 GiB without the code
    log's share of the same budget

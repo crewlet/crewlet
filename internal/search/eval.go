@@ -11,63 +11,27 @@ import (
 
 // Evaluating the semantic half against a COMPANY'S OWN VECTORS.
 //
-// # Why the deterministic gate cannot answer this
+// The test gate measures only the ARITHMETIC (an exact rerank over a 1-bit
+// pool recovers the exact ranking at depth) on a seeded fixture. Recall on a
+// company's documents is a property of its own distribution, since a sign code
+// keeps only each vector's orthant; across embedding-shaped generators the same
+// arithmetic spans 0.29 to 0.98. Only the operator's vectors settle it.
 //
-// The gate in this package's tests measures the ARITHMETIC — that an exact
-// rerank over a 1-bit candidate pool recovers the exact ranking at sufficient
-// depth — on a seeded fixture. It cannot measure recall on a particular
-// company's documents, and no figure anywhere in this engine does: a sign code
-// keeps only each vector's orthant, and how much an orthant says about cosine
-// rank is a property of the corpus's own distribution and of nothing else.
-// Over a family of embedding-shaped generators at one corpus size the same
-// arithmetic spans 0.29 to 0.98.
+// Nobody authors a judgement: the ground truth is the EXACT f32 scan's top-K
+// over the same filtered set, and the queries are DOCUMENTS from the corpus,
+// points it actually contains, which is the shape a real query lands in.
+
+// An index (ADR-0028) is measured TWICE, through itself ([EvalReport.Passed]
+// judges this) and with the full scan as first stage, so the report shows what
+// the index COSTS against the exact stage; the two failures have different
+// remedies.
 //
-// So the operator's own vectors are the only thing that settles it, and this
-// is what asks them.
-//
-// # Nobody authors a judgement
-//
-// The ground truth is the EXACT f32 scan's own top-K over the same filtered
-// set. That is the answer the two-stage search is approximating, so it is the
-// only honest reference — and it removes the step where an evaluation depends
-// on somebody writing down what the right answer was, which is the step that
-// makes an evaluation stop being run.
-//
-// The queries are DOCUMENTS from the corpus itself, each measured against the
-// rest of it (see below). A synthetic query vector would be a draw from a
-// distribution nobody measured; a document is a point the corpus actually
-// contains, which is the same shape a real query lands in after the embedding
-// model has read it.
-//
-// # An index is measured TWICE: what searches run, and the scan it replaces
-//
-// When the corpus has an index (ADR-0028), every query runs through it —
-// that is the recall the company actually gets, and the one [EvalReport.Passed]
-// judges — and again with the full scan as its first stage, so the report says
-// what the index COSTS in recall against the exact first stage it
-// approximates. A report of the index alone could not tell a corpus the 1-bit
-// codes fail from an index that fails a corpus the codes serve, and the two
-// have different remedies.
-//
-// # And in every SHAPE a search is issued in
-//
-// Every search the engine issues is narrowed — to a source, and often to the
-// containers a knowledge scope names — and a narrowed search reads other lists
-// than an unfiltered one ([ProbeCount]). So each query document is measured
-// unfiltered, narrowed to each source, and narrowed to its own source and
-// container ([QueryShape]), each against the exact top-K of the rows that shape
-// searches and the floor for how many there are; the evaluation passes only
-// if every shape does.
-//
-// # The query document is never its own answer
-//
-// A query is a document the corpus holds, and every first stage finds a
-// document from its own code at distance zero — so counting it would add a
-// free hit to every query's recall and hide one of the top ten from the
-// head-miss count. The ground truth is the exact top-K of the REST of the
-// shape's rows, which is what a search for anything but that document is
-// answered from, and what the floor curve was fitted on: queries the corpus
-// does not contain.
+// Every shape a search is issued in is measured: unfiltered, narrowed to each
+// source, and to its own source and container ([QueryShape]), because a
+// narrowed search reads other lists ([ProbeCount]); it passes only if every
+// shape does. The query document is never its own answer: it matches its own
+// code at distance zero and would add a free hit to every recall, so the ground
+// truth is the exact top-K of the REST of the shape's rows.
 
 // EvalOptions is one evaluation run.
 type EvalOptions struct {
@@ -460,19 +424,15 @@ type sampledDoc struct {
 	Vector    []byte
 }
 
-// sampleDocuments takes n documents SPREAD ACROSS the corpus.
-//
-// Deterministically, by taking every (total/n)th row in primary-key order
-// rather than by a random sample: two runs on one store must be comparable, and
-// a random sample makes a difference between two runs indistinguishable from a
-// difference between two samples.
+// sampleDocuments takes n documents SPREAD ACROSS the corpus: every
+// (total/n)th row in primary-key order, not a random sample, so two runs on one
+// store are comparable.
 //
 // THE ROWS ARE NUMBERED ON THE NARROW TABLE and only the chosen ones read from
-// the wide one. Numbered over kb_vectors itself, the window carried every
-// row's 12 KB vector through the sort to keep twenty-five of them — measured
-// at about 230 µs a source, three times the exact pass it feeds, and the
-// largest term of a training's reading. The narrow table holds the same keys
-// in the same space, written by the same apply.
+// the wide one: numbered over kb_vectors itself, the window carried every row's
+// 12 KB vector through the sort to keep twenty-five, the largest term of a
+// training's reading. The narrow table holds the same keys in the same space,
+// written by the same apply.
 func sampleDocuments(ctx context.Context, tx *sql.Tx, model string, dim, n int) ([]sampledDoc, error) {
 	rows, err := tx.QueryContext(ctx, sampleStatement, model, dim, n, n)
 	if err != nil {
@@ -556,20 +516,13 @@ type ExactTop struct {
 // f32 top limit of each over the rows its shape searches, as [Key]s, best
 // first, never counting the query document itself.
 //
-// # One pass, not one per query
-//
-// The wide table's rows are 12 KB, and reading them is the whole cost of an
-// exact scan — the distance is a few microseconds beside the overflow pages.
-// So every row is read ONCE with a distance per query, and a bounded heap per
-// (query, shape) keeps its top. The order is the one the per-query statement
-// this replaces declared — distance, then source, then source id, compared as
-// the database compares text — so the answer is the same answer.
-//
-// It is the one ground truth in the package: the evaluation and the index's
-// own training both measure against it, so an index a training installs is
-// judged by the reference an operator's evaluation uses. It tells advanced
-// every [progressStride] rows it reads, which a training's bound measures it
-// by ([Budget]).
+// One pass, not one per query: reading the wide table's 12 KB rows is the
+// whole cost of an exact scan, so every row is read ONCE with a distance per
+// query and a bounded heap per (query, shape) keeps its top. The order is
+// distance, then source, then source id, compared as the database compares text.
+// It is the one ground truth: the evaluation and the index's training both
+// measure against it. It tells advanced every [progressStride] rows read,
+// which a training's bound measures it by ([Budget]).
 func exactTops(ctx context.Context, tx *sql.Tx, queries []sampledDoc, shapes [][]ShapeQuery, model string, dim, limit int, advanced func()) ([][]ExactTop, error) {
 	if len(queries) == 0 {
 		return nil, nil
