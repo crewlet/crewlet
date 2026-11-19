@@ -206,3 +206,50 @@ export interface AdvisorNoticesAnswer {
 export type AdvisorDecision =
   | { decision: "snooze" | "reopen" | "useful" }
   | { decision: "dismiss"; reason: "wont_fix" | "wrong" | "known" };
+
+/** One field a re-checked change writes, as the server reads it now and as it would be. */
+export interface AdvisorPreviewRow {
+  field: string;
+  label: string;
+  before: string | null;
+  after: string | null;
+}
+
+/** The one request a person's session sends, after its dry run, under the If-Match the re-check read. */
+export interface AdvisorSend {
+  method: "PUT" | "PATCH" | "POST" | "DELETE" | (string & {});
+  path: string;
+  body: unknown;
+  headers: Record<string, string>;
+  dry_run_path: string | null;
+}
+
+/**
+ * `POST /advisor/findings/{id}/recheck` (body `{option}`, the fix's option, 0 by default):
+ * the finding's class run again now. `holds` and `changed` carry the request to send and
+ * the digest to report it with; `resolved` and `not_applicable` closed the finding and
+ * send nothing. Send within `expires_at`, else re-check again.
+ */
+export interface AdvisorRecheck {
+  outcome: "holds" | "changed" | "resolved" | "not_applicable";
+  finding: AdvisorKeptFinding;
+  moved: AdvisorMoved[];
+  /** The fix as it stood, where the re-check rebuilt another. */
+  previous_fix: AdvisorFix | null;
+  preview: { rows: AdvisorPreviewRow[]; notes: string[] } | null;
+  send: AdvisorSend | null;
+  digest: string;
+  checked_at: string;
+  expires_at: string;
+  /** A change that holds and cannot be sent from here; the finding stays open. */
+  refusal: { reason: string; who_can: string } | null;
+}
+
+/**
+ * `POST /advisor/findings/{id}/applied`'s body, once the request was sent: answers the
+ * finding, now `applied`, or `409 {outcome: "recheck"}` where it moved or the
+ * configuration does not hold the change.
+ */
+export interface AdvisorAppliedReport {
+  digest: string;
+}
