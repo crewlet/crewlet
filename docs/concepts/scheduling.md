@@ -680,12 +680,16 @@ the last word anybody said about that item.
   refuse its next launch, and the node neither shedding nor draining. All of
   that must hold on two passes in a row, so the writes of the turn that just
   ended are on the node's copy first: a seat is handed its next item within
-  about two minutes of going idle. **Urgent work does not wait for idle:** a
-  seat whose first ready item is urgent is handed it while a turn or its
-  executor's run is in flight, while mail waits in its inbox or before its
-  settle, on the inbox's priority lane, so its next turn takes it ahead of the
-  background wakes queued before it; every other condition still holds it
-  back, a run waiting on a person's answer among them. The same pass ends a parked run nobody can
+  about two minutes of going idle. **Urgent and due work do not wait for
+  idle:** a seat whose next ready item is urgent or due (below) is handed it
+  while a turn or its executor's run is in flight, while mail waits in its
+  inbox or before its settle, on the inbox's priority lane, so its next turn
+  takes it ahead of the background wakes queued before it; every other
+  condition still holds it back, a run waiting on a person's answer among
+  them. Such a pickup goes on the lane only while nothing waits there, so at
+  most one waits on it and a person's message waits behind at most one such
+  turn; a pass that finds the lane holding a delivery hands nothing and asks
+  again a minute later. The same pass ends a parked run nobody can
   continue any more: one whose Worklet item was finished or removed while it
   waited (`executor_failed`, reason `item_finished`) and one whose saved state
   no live build reads (`state_retired`); its question is withdrawn and a reply
@@ -707,14 +711,21 @@ the last word anybody said about that item.
   date comes ([ADR-0122](../../adr/0122-a-pickup-is-answered-with-a-typed-outcome-and-a-wait-on-a-person-is-an-ask.md)).
   And one wait on a blocker is ready: a **dead wait**, an item whose every open
   blocker is a pull request nothing is moving (below).
-- **Next** is urgent work first, then the rest
-  ([ADR-0159](../../adr/0159-urgent-ready-work-comes-before-started-work.md)),
+- **Next** is urgent work first, then due work, then the rest
+  ([ADR-0159](../../adr/0159-urgent-ready-work-comes-before-started-work.md),
+  [ADR-0162](../../adr/0162-an-item-in-progress-says-why-it-is-not-moving.md)),
   each in this order: work the seat already started, then the reviews it holds,
   then its own items in review nobody reviews, then its waits on a person
   nobody asked, then its dead waits, then its priority list in the order its
   lead set, then the rest by priority and due date, the order `my_work` lists
   them in. So an urgent item comes before started work that is not urgent, and
   below urgent a seat finishes what it started before it starts anything else.
+  An item in progress is **due** once the start it was set aside until has
+  passed with nothing of the seat's on it since: no turn of the seat on it has
+  ended and the seat has written nothing on it after the start. A check parked
+  until a release's health check therefore comes before every item that is
+  not urgent once its date passes, however long the seat's backlog, and is
+  ordinary started work again once a turn of the seat on it ends.
 - **Once per item version.** A pickup is made once per seat, item, last change
   to the item that would have woken the seat, status and, for started work, the
   seat's own last progress on it other than a comment. That change is the
@@ -823,13 +834,18 @@ dead wait handed back is counted under a wake of its own,
 `work_item:dead_wait`, beside `work_item:pickup`, so the spend screen shows how
 often items came back because nobody moved their pull requests, and the advisor
 counts it among the pickups.
-An item set aside until a date is handed once when the date comes. A company
+An item set aside until a date is handed once when the date comes. A due
+item's brief says its wait ended, names the date it waited until and quotes
+the wait's reason inside a fence labelled with whoever set it
+([ADR-0040](../../adr/0040-content-a-model-reads-carries-its-provenance.md)). A company
 on a vendor tracker, or with no model, gets no pickups.
 
 `crewlet.work.pickups{outcome}` counts what each pickup decided for an idle
 seat (`woken`, `nothing_ready`, `all_offered`, `cooldown`, `claimed`,
 `unknown`), and every pickup logs `work_pickup_woken` with the seat, the item
 and why; a pickup that could not be sent logs `work_pickup_skipped` at warn.
+A busy seat whose lane already holds a delivery is not counted: its pass logs
+`work_pickup_skipped` with the reason `lane_waiting` at debug.
 The poll logs `dead_wait_recorded` and `dead_wait_ended` for each item it marks,
 and `dead_wait_asks_unread` at warn, once, while the held merge asks cannot be
 read (no wait is judged then).
