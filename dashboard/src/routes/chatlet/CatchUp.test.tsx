@@ -52,7 +52,7 @@ const answers = {
 
 /** The company left Ask Crewlet off, as the frame tells every control. */
 const OFF = assistantUnavailableFor(
-  { anonymous: false, asking: false, assistant: "disabled" },
+  { anonymous: false, asking: false, assistant: "no_model" },
   "Acme",
 )!;
 

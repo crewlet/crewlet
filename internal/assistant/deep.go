@@ -535,9 +535,6 @@ func (s *Service) deepConfig() (config.AssistantDeepWork, error) {
 	if _, _, err := c.AssistantDeepWork(); err != nil {
 		return config.AssistantDeepWork{}, err
 	}
-	if c.Assistant.Tools.Denies(config.FamilyDeepWork) {
-		return config.AssistantDeepWork{}, errors.New("assistant.tools.deny turns deep work off")
-	}
 	return *c.Assistant.DeepWork, nil
 }
 

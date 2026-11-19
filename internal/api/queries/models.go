@@ -166,6 +166,11 @@ type ModelEntry struct {
 	UsedBy       []ModelUse        `json:"used_by"`
 	DeviceSignIn *ModelDevice      `json:"device_sign_in"`
 	Limits       []ModelLimit      `json:"limits"`
+	// HelperProblem is why no helper (Ask Crewlet, the Advisor) can run on
+	// the entry, in a person's words, or null where one can: the one rule
+	// ([config.Company.HelperModelProblem]), so a model picker never states
+	// its own.
+	HelperProblem *string `json:"helper_problem"`
 }
 
 // ModelSignIn is how an entry signs in, the admin's reading.
@@ -583,7 +588,7 @@ func (s Sources) modelEntry(company *config.Company, organization *org.Organizat
 
 	e := ModelEntry{Key: key, Harness: string(cmp.Or(entry.Harness, config.Harness("claude-code"))),
 		Model: entry.Model, UsedBy: usedBy(company, key),
-		Usage: usage}
+		Usage: usage, HelperProblem: helperProblem(company, key)}
 	if e.Usage.Days == 0 {
 		e.Usage = ModelUsage{Days: ModelUsageDays}
 	}
@@ -813,13 +818,23 @@ func usedBy(company *config.Company, key string) []ModelUse {
 				Position: position, Written: &written, Source: string(source)})
 		}
 	}
-	if position := slices.Index(company.Assistant.LLM, key); position >= 0 {
-		out = append(out, ModelUse{Assistant: "chat", Position: position})
+	if company.Assistant.Model == key {
+		out = append(out, ModelUse{Assistant: "chat", Position: 0})
 	}
 	if deep := company.Assistant.DeepWork; deep != nil && deep.LLM == key {
 		out = append(out, ModelUse{Assistant: "deep_work", Position: 0})
 	}
 	return out
+}
+
+// helperProblem is why no helper can run on the entry key, in a person's
+// words where the rule wrote them, or nil where one can.
+func helperProblem(company *config.Company, key string) *string {
+	problems := config.Problems(company.HelperModelProblem(key))
+	if len(problems) == 0 {
+		return nil
+	}
+	return ptr(cmp.Or(problems[0].Said, problems[0].Message))
 }
 
 func ptr[T any](v T) *T { return &v }

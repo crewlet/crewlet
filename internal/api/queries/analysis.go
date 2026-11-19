@@ -90,10 +90,7 @@ func (s Sources) advisorAnalysis(ctx context.Context, _ Params) (any, error) {
 	case err != nil:
 		return nil, revisionRefusal("advisor_analysis", err)
 	}
-	suggest := ""
-	if company.Assistant.On() && len(company.Assistant.LLM) > 0 {
-		suggest = company.Assistant.LLM[0]
-	}
+	suggest := company.Assistant.Model
 	last, found, err := svc.Last(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("%w: the analyst's records could not be read: %w", ErrUnavailable, err)

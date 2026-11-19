@@ -242,10 +242,10 @@ func TestEveryShippedProfileDeclaresItsLocalToolsStance(t *testing.T) {
 // both are refused. A seat's argv is untouched by any of it.
 func TestTheAssistantArgvLeavesTheHarnessWithNoToolOfItsOwn(t *testing.T) {
 	t.Parallel()
-	if got, want := harnessprofile.AssistantEligible(), []string{"claude-code", "pi"}; !slices.Equal(got, want) {
+	if got, want := harnessprofile.HelperEligible(), []string{"claude-code", "pi"}; !slices.Equal(got, want) {
 		t.Errorf("assistant-eligible profiles = %v, want %v", got, want)
 	}
-	for _, name := range harnessprofile.AssistantEligible() {
+	for _, name := range harnessprofile.HelperEligible() {
 		p, err := harnessprofile.Load(name, map[string]any{"web_tools": "denied"})
 		if err != nil {
 			t.Fatal(err)

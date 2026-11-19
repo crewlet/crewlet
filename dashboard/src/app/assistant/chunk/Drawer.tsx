@@ -70,7 +70,6 @@ import {
 import { ConfirmModal } from "~/components/Modal.tsx";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import {
-  BrainGlyph,
   LayoutDashboardGlyph,
   LockGlyph,
   MessageSquareGlyph,
@@ -128,10 +127,6 @@ import { Thread } from "./Thread.tsx";
 import { bouncedOf, locksTheBox, waitLeft } from "./bounce.ts";
 import { openTurn } from "./turn.ts";
 
-/** What Think harder does, said on the control. */
-const THINK_HARDER_HINT =
-  "Answer the next question with the company's stronger model. It takes longer and costs more.";
-
 export interface DrawerProps {
   /** Why the reader may not ask, or null where they may. */
   unavailable: AssistantUnavailable | null;
@@ -139,8 +134,6 @@ export interface DrawerProps {
   model: AssistantModelProblem | null;
   /** Why a question cannot carry images, or null where it can. */
   attach: AttachClosed | null;
-  /** The company sets a stronger chain: the composer offers Think harder. */
-  deliberate: boolean;
   /** The reader holds admin: the model notice also opens the models' settings. */
   admin: boolean;
   /** Close the panel; focus goes back to the Ask button. */
@@ -177,7 +170,6 @@ export function Drawer({
   unavailable,
   model,
   attach,
-  deliberate,
   admin,
   onClose,
   initialFocus,
@@ -307,18 +299,15 @@ export function Drawer({
   // A QUESTION CARRIES THE IMAGES IN THE COMPOSER, or, asked again by Try
   // again, the ones it was first sent with.
   const { take } = attachments;
-  // Think harder holds for the next question only.
-  const [harder, setHarder] = useState(false);
   const ask = useCallback(
     (text: string, again?: readonly AssistantFileRef[]) => {
       const question = text.trim();
       if (question === "" || !questionFits(question)) return;
       draft.write("");
       setAsked((n) => n + 1);
-      setHarder(false);
-      void send(question, attached, again ?? take(), "ask", deliberate && harder);
+      void send(question, attached, again ?? take(), "ask");
     },
-    [attached, take, draft, deliberate, harder],
+    [attached, take, draft],
   );
   // A BRIEF IS OF THE PAGE AS IT IS NOW, attached whatever the chip says: it
   // is what the brief is about. What the reader was typing stays in the box.
@@ -608,31 +597,16 @@ export function Drawer({
                     )
                   }
                   actions={
-                    <>
-                      <FilePickButton
-                        size="small"
-                        variant="ghost"
-                        leadingIcon={<PaperclipGlyph size="sm" />}
-                        accept={ATTACH_ACCEPT}
-                        disabledReason={dropClosed}
-                        onFiles={(picked) => attachments.add(picked.map((p) => p.file))}
-                      >
-                        Attach image
-                      </FilePickButton>
-                      {deliberate ? (
-                        <Button
-                          size="small"
-                          variant="ghost"
-                          leadingIcon={<BrainGlyph size="sm" />}
-                          pressed={harder}
-                          title={THINK_HARDER_HINT}
-                          disabledReason={disabledReason}
-                          onClick={() => setHarder((on) => !on)}
-                        >
-                          Think harder
-                        </Button>
-                      ) : null}
-                    </>
+                    <FilePickButton
+                      size="small"
+                      variant="ghost"
+                      leadingIcon={<PaperclipGlyph size="sm" />}
+                      accept={ATTACH_ACCEPT}
+                      disabledReason={dropClosed}
+                      onFiles={(picked) => attachments.add(picked.map((p) => p.file))}
+                    >
+                      Attach image
+                    </FilePickButton>
                   }
                   trailing={(text) => (
                     <SendButton

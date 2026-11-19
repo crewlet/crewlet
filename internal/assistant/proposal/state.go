@@ -10,11 +10,10 @@ import (
 	"github.com/crewlet/crewlet/internal/assistantdomain"
 )
 
-// DefaultTTL is how long a proposal waits on its person: fifteen minutes, long
+// TTL is how long a proposal waits on its person: fifteen minutes, long
 // enough to read a change and check it against the screen it is about, short
-// enough that the object it previewed has rarely moved, and the bound
-// `assistant.proposal_ttl_seconds` overrides (60 to 3600 seconds).
-const DefaultTTL = 15 * time.Minute
+// enough that the object it previewed has rarely moved (ADR-0051).
+const TTL = 15 * time.Minute
 
 // UnknownAfter is how long an approved or executing proposal may go without a
 // settlement before it reads as unknown: two minutes, twice the exec grant's

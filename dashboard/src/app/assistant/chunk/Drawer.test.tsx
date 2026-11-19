@@ -129,7 +129,6 @@ function mount(
   model: AssistantModelProblem | null = null,
   admin = false,
   attach: AttachClosed | null = null,
-  deliberate = false,
 ) {
   const store = new Store();
   store.applyOrg(withDerived({ name: "Nimbus", roles: [] }));
@@ -146,7 +145,6 @@ function mount(
                 unavailable={unavailable}
                 model={model}
                 attach={attach}
-                deliberate={deliberate}
                 admin={admin}
                 onClose={() => {}}
                 initialFocus="composer"
@@ -187,7 +185,7 @@ test("a question is sent with its page, streamed, and drawn with every card the 
   expect(new Headers(turn.init.headers).get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
   const body = JSON.parse(String(turn.init.body));
   expect(body).toMatchObject({
-    protocol_version: 1,
+    protocol_version: 2,
     input: { text: "Fix the flaky sign-in test" },
   });
   expect(body.page_context).toMatchObject({ screen: "worklet-tasks", title: "Worklet › Tasks" });
@@ -256,31 +254,20 @@ test("a follow-up typed fast under a turn with cards keeps every keystroke and r
   );
 });
 
-// Think harder is offered only where the company sets a stronger chain, and
-// asks for it on the next question alone.
-test("Think harder sends the next question to the stronger chain, and only that one", async () => {
+// A question runs on Ask Crewlet's one model: the composer offers no stronger
+// one, and the question it sends asks for none.
+test("a question asks for no stronger model", async () => {
+  const sent = engine();
   mount();
   expect(screen.queryByRole("button", { name: "Think harder" })).toBeNull();
-  cleanup();
-
-  const sent = engine();
-  mount(null, null, false, null, true);
-  const harder = screen.getByRole("button", { name: "Think harder" });
-  expect(harder.getAttribute("aria-pressed")).toBe("false");
-  fireEvent.click(harder);
-  expect(harder.getAttribute("aria-pressed")).toBe("true");
-
   const box = screen.getByRole("textbox", { name: "Ask Crewlet" });
   fireEvent.change(box, { target: { value: "Which way should we route it?" } });
   await act(async () => {
     fireEvent.keyDown(box, { key: "Enter" });
   });
   await waitFor(() => expect(sent.some((r) => r.url.endsWith("/turns"))).toBe(true));
-  const turns = () => sent.filter((r) => new URL(r.url).pathname.endsWith("/turns"));
-  expect(JSON.parse(String(turns()[0]!.init.body))).toMatchObject({ deliberate: true });
-  expect(screen.getByRole("button", { name: "Think harder" }).getAttribute("aria-pressed")).toBe(
-    "false",
-  );
+  const turns = sent.filter((r) => new URL(r.url).pathname.endsWith("/turns"));
+  expect(JSON.parse(String(turns[0]!.init.body))).not.toHaveProperty("deliberate");
 });
 
 test("a question past the length a turn takes is not sent", async () => {
@@ -346,12 +333,12 @@ test("the panel's body is flush for the thread and scrolls for the offline notic
   unmount();
 
   mount({
-    reason: "disabled",
-    short: "An admin turned Ask Crewlet off.",
-    title: "Ask Crewlet is off for Nimbus",
-    body: "An admin turned it off.",
+    reason: "no_model",
+    short: "No model is assigned to Ask Crewlet yet.",
+    title: "Ask Crewlet has no model for Nimbus yet",
+    body: "An admin has not chosen the model Ask Crewlet runs on.",
   });
-  expect(screen.getByText("Ask Crewlet is off for Nimbus")).toBeDefined();
+  expect(screen.getByText("Ask Crewlet has no model for Nimbus yet")).toBeDefined();
   expect(document.querySelector(".crewlet-side-panel__body--flush")).toBeNull();
 });
 

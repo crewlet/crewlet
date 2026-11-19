@@ -211,14 +211,6 @@ var limits = []limit{
 			}
 			return horizon.Hours() / 24
 		}},
-	{key: "assistant.max_steps", group: LimitAssistant, unit: LimitCount,
-		read: func(c *config.Company) float64 { return float64(c.Assistant.Steps()) }},
-	{key: "assistant.turn_timeout_seconds", group: LimitAssistant, unit: LimitSeconds,
-		read: func(c *config.Company) float64 { return c.Assistant.TurnTimeout().Seconds() }},
-	{key: "assistant.proposal_ttl_seconds", group: LimitAssistant, unit: LimitSeconds,
-		read: func(c *config.Company) float64 { return c.Assistant.ProposalTTL().Seconds() }},
-	{key: "assistant.retention_days", group: LimitAssistant, unit: LimitDays,
-		read: func(c *config.Company) float64 { return c.Assistant.Retention().Hours() / 24 }},
 	{key: "assistant.deep_work.timeout_seconds", group: LimitAssistant, unit: LimitSeconds,
 		read: func(c *config.Company) float64 { return deepWorkOf(c).Timeout().Seconds() }},
 	{key: "assistant.deep_work.max_steps", group: LimitAssistant, unit: LimitCount,

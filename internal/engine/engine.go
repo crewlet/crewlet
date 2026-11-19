@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/origin"
+	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness"
 	"github.com/crewlet/crewlet/internal/queue"
 	"github.com/crewlet/crewlet/internal/sandbox"
@@ -50,6 +51,11 @@ type Company struct {
 	// ([phase.ErrNoProviders]), so a consumer that forgets to ask is refused
 	// rather than crashed.
 	Models *phase.Registry
+
+	// Helpers are the entries a helper (Ask Crewlet, the Advisor) runs on,
+	// each built again as a helper's run ([buildHelpers]), by key. Nil where
+	// no helper runs on any.
+	Helpers map[string]llm.Provider
 
 	// contacts resolves the `${VAR}` contact ids in the prompts' roster
 	// through the chain this epoch was built with (the secret store, then the
@@ -183,6 +189,10 @@ func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans) (
 	if err != nil {
 		return nil, err
 	}
+	helpers, err := buildHelpers(c, env, plans)
+	if err != nil {
+		return nil, err
+	}
 	// Described before anything is filed, so every MCP tool here and in each
 	// seat's clone carries its server's description into the prompt.
 	registry := tools.NewRegistry()
@@ -191,6 +201,7 @@ func newCompany(c *config.Company, env *config.Resolver, plans *harness.Plans) (
 		Config:   c,
 		Org:      organization,
 		Models:   models,
+		Helpers:  helpers,
 		Tools:    registry,
 		contacts: env.LookupOK,
 	}, nil

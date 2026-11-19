@@ -89,6 +89,7 @@ export function modelEntry(over: Partial<ModelEntry> & { key: string }): ModelEn
     used_by: [],
     device_sign_in: null,
     limits: [],
+    helper_problem: null,
     ...over,
   };
 }

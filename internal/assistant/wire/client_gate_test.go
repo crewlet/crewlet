@@ -215,6 +215,7 @@ func shapes() map[string]reflect.Type {
 		"AssistantAuditRead":           reflect.TypeFor[wire.AuditRead](),
 		"AssistantTurnOutcome":         reflect.TypeFor[wire.TurnOutcome](),
 		"AssistantViewerAssistant":     reflect.TypeFor[wire.ViewerAssistant](),
+		"AssistantViewerModel":         reflect.TypeFor[wire.ViewerModel](),
 		"AssistantModelNotice":         reflect.TypeFor[wire.ModelNotice](),
 		// --- deep work (im-deep) ---
 		"AssistantDeepProgress": reflect.TypeFor[wire.DeepProgress](),

@@ -93,11 +93,11 @@ func BuiltinNames() []string {
 	return names
 }
 
-// AssistantEligible lists the built-in profiles the Dashboard Assistant can
-// run on, sorted: those whose web-denied run is left with no tool of its own
-// by construction ([Profile.ToolsOffProblem]). Derived from the table, as
-// [WebDeniable] is, of which it is a subset.
-func AssistantEligible() []string {
+// HelperEligible lists the built-in profiles a helper (Ask Crewlet, the
+// Advisor) can run on, sorted: those whose web-denied run is left with no tool
+// of its own by construction ([Profile.ToolsOffProblem]). Derived from the
+// table, as [WebDeniable] is, of which it is a subset.
+func HelperEligible() []string {
 	var out []string
 	for _, name := range WebDeniable() {
 		p, err := Load(name, map[string]any{"web_tools": string(WebToolsDenied)})
