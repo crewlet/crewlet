@@ -261,8 +261,7 @@ func inboxSubjectKey(fromRow string, notify *Notify) string {
 // row for the actor is a notice in their own inbox about what they just did.
 //
 // The retention horizon is applied around [Candidates], keeping it free of a
-// clock. Every row is keyed on record: the history row's id, or a flow
-// notice's own key ([Applier.applyFlow]).
+// clock. Rows are keyed on record, a history id or a flow notice's own key.
 func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 	record, subjectKey string) (int, error) {
 

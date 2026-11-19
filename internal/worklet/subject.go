@@ -147,6 +147,34 @@
 // expression every read evaluates, recorded when it changes and told to a
 // person when nobody is moving the item; no status changes on its own.
 //
+// THE FLOW DUTY ([FlowDuty]) records and tells. It reads every item in
+// progress every minute, a page at a time through the partial index over
+// them: a state changes with time and with seats, which nothing written marks,
+// so unlike the tracker's other jobs ([Jobs]) it cannot be gated on a fact
+// somebody wrote, and its cost is the company's work in progress, not its
+// trouble. It is held where the live projection is seeded, since read without
+// it a stopped seat's work reads due or stuck, and it records nothing from a
+// posture that is not live.
+//
+// A change of state and a notice are each a `flow` record on the item's own
+// flow subject ([FlowSubject]), applied into `tracker_flow` and never into
+// the item's row, version, history or `updated_at`: recording a state must not
+// change the state it records or wake anybody the item's changes wake. Each
+// lands once by a key derived from what it says, never from the tick: a change
+// from the item, the state, its cause, the instant the facts give and the
+// change before it ([FlowChangeID]); a notice from the item, the state, the
+// instant it entered it and the person told ([FlowNoticeID]). A notice's key
+// is also its inbox row's and its wake's, so a duty that publishes one twice,
+// after a restart or a hand-over of its lease, tells it once.
+//
+// WHOM IT TELLS: a person assignee once the state has lasted its threshold,
+// then the project's lead a threshold later if the item is still in that
+// state since the same instant. An agent assignee's notice is its pickup,
+// which carries the typed answer a notice cannot, so its lead is told first.
+// A held item tells its lead alone, and only when the hold costs something:
+// the item is urgent, or it would be due past the grace or quiet past its
+// window were it not held.
+//
 // # What a day costs the log, measured
 //
 // The reference company — 100 000 tasks a year, 300 000 comments, 1 000 edits

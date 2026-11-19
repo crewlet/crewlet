@@ -15,32 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The flow duty records each change of an item's flow state and tells a person
-// when the state means nobody is moving the item (ADR-0162). A FLEET
-// SINGLETON EVERY MINUTE that reads every item in progress on each tick, one
-// statement per page: a flow state changes with time and with seats as well as
-// with writes, and nothing written marks those changes, so unlike the
-// tracker's other jobs ([Jobs]) it cannot be gated on a fact somebody wrote.
-// Its cost is the company's work in progress, read through the partial index
-// over items in progress, not its trouble.
-//
-// IT RUNS WHERE THE LIVE FACTS ARE. The flow reads which items a turn is on
-// and which seats are stopped from the live projection, which only a node
-// serving the API folds; read without them, a stopped seat's work reads due or
-// stuck and a working item moving. So the duty is eligible on any node whose
-// posture is live, whatever its roles, takes the singleton's lease only while
-// it is, and gives it back when it stops being live; a tick on a posture that
-// is not live records and tells nothing ([FlowTick.Live]).
-//
-// WHOM IT TELLS: a person assignee first, once the state has lasted its
-// threshold, and the project's lead one threshold later if the item is still
-// in that state since the same instant. An agent assignee's notice is its
-// pickup, which hands it the item with the typed answer a notice cannot carry,
-// so the first person told about an agent's item is its lead. A held item
-// tells its lead alone, and only when the hold costs something
-// ([flowItem.holdCosts]). Each notice is a record keyed on the item, the
-// state, the instant it entered it and the person ([FlowNoticeID]), so it is
-// told once per transition however often the duty reads it.
+// The flow duty records each change of an item's flow state and tells a
+// person when nobody is moving the item (ADR-0162; package doc, "An item in
+// progress says why it is not moving"): a fleet singleton every minute, held
+// where the live projection is, reading every item in progress a page at a
+// time, since nothing written marks a state that changed with time or a seat.
 
 // FlowDueGrace is how long a due item may wait before a person is told, and
 // the lead's step after it. BORROWED, not chosen (ADR-0015): it is the inbox's

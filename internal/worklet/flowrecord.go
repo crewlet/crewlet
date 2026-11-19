@@ -15,20 +15,11 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// An item's flow is recorded when it changes and told when nobody is moving
-// the item (ADR-0162). Both are a `flow` record on the item's own flow subject
-// ([FlowSubject]), applied into `tracker_flow` and never into the item's row,
-// version, history or `updated_at`: recording a state must not change the
-// state it records or wake anybody the item's changes wake. A record that
-// tells somebody carries its notice ([FlowNotice]) and writes its one inbox
-// row itself ([Applier.applyFlow]).
-//
-// Each record lands once by a key derived from what it says ([FlowRecord.ID]),
-// never from the tick that published it: a change of state from the item,
-// the state, its cause, the instant the facts give and the change before it;
-// a notice from the item, the state, the instant it entered it and the
-// person told. So a duty that publishes the same fact twice, after a restart
-// or a hand-over of its lease, records and tells it once.
+// A change of an item's flow and a notice of it are each a `flow` record on the
+// item's own flow subject, applied into `tracker_flow` and never into the
+// item's row (package doc, "An item in progress says why it is not moving"),
+// and each lands once by a key derived from what it says, never from the tick
+// that published it.
 
 // FlowRole is how a flow notice reaches the one person it tells: as the
 // item's assignee, or as the lead of its project.
