@@ -419,10 +419,11 @@ test("a ready model draws no notice", () => {
   );
 });
 
-// ONLY DEEP WORK READS AN IMAGE: where the company runs none, Attach image is
-// drawn disabled with that reason, and a pasted screenshot is refused in words
-// that say what works, never uploaded and kept unread.
-test("a company without deep work takes no image, and says what works instead", () => {
+// AN IMAGE IS TAKEN ONLY WHERE ASK CREWLET'S MODEL READS IT: where it does
+// not, Attach image is drawn disabled with that reason, and a pasted
+// screenshot is refused in words that say what works, never uploaded and kept
+// unread.
+test("a model that reads no image takes none, and says what works instead", () => {
   const sent = engine();
   const closed = attachClosedFor({ assistantReadsImages: false })!;
   mount(null, null, false, closed);

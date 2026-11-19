@@ -132,18 +132,21 @@ export interface AttachClosed {
 }
 
 /**
- * Why a question cannot carry images, or null where it can. ONLY DEEP WORK
- * READS AN IMAGE, so where the company runs none the composer takes no image
- * rather than keeping one nothing reads; the button stays drawn, disabled,
- * with this reason, and a dropped or pasted image is refused with the body.
+ * Why a question cannot carry images, or null where it can. EVERY TURN HANDS
+ * A QUESTION'S IMAGES TO ASK CREWLET'S MODEL, so whether one is taken is
+ * whether that model reads images (the viewer's `reads_images`, the engine's
+ * reading of the model, never a setting). Where it does not, the composer
+ * takes no image rather than keeping one nothing reads; the button stays
+ * drawn, disabled, with this reason, and a dropped or pasted image is refused
+ * with the body.
  */
 export function attachClosedFor(
   viewer: Pick<ViewerState, "assistantReadsImages">,
 ): AttachClosed | null {
   if (viewer.assistantReadsImages) return null;
   return {
-    short: "Images are read only in deep work, which is off here",
-    body: "Ask Crewlet reads images only in deep work, which this company has not turned on. Paste the text instead, or ask an admin to turn on deep work.",
+    short: "Ask Crewlet's model does not read images",
+    body: "Ask Crewlet's model does not read images. Paste the text the image shows instead, or ask an admin to choose a model that reads them.",
   };
 }
 

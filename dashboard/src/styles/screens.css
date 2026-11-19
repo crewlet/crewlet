@@ -10692,3 +10692,12 @@ a.live-row:hover {
   place-items: center;
   padding: var(--spacing-6) var(--ask-page-pad-x);
 }
+
+/* A helper's model in its page's head (components/HelperModel.tsx): the
+   picker, and what its last change came to beside it. */
+.helper-model {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-2);
+}

@@ -171,8 +171,8 @@ export interface ViewerState {
    */
   assistantModel: AssistantModelNotice | null;
   /**
-   * Whether a question's images are read: only deep work reads them, so false
-   * where the company runs none, and the composer takes no image.
+   * Whether a question's images are read: Ask Crewlet's model reads them, as
+   * the engine says of the model assigned; false and the composer takes none.
    */
   assistantReadsImages: boolean;
   /**
