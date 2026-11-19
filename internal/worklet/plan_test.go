@@ -786,6 +786,7 @@ func taskReads() map[string]indexedRead {
 		// page's rows each by theirs.
 		"a task named":               seek(key, taskRefStatement, task),
 		"a task's badges":            seek(open, detailFlagsStatement, task, task),
+		"a task's flow":              {read(detailFlowStatementFor(task)), key, false},
 		"a task's document":          seek(key, taskDocumentStatement, task),
 		"a task's foreign values":    seek(values, foreignFieldsStatement, task, FieldValueForeign),
 		"a task's own links":         seek(key, linksStatement(false), task),
@@ -874,7 +875,7 @@ func taskReads() map[string]indexedRead {
 		"dead waits (waiting)": {deadBlock(person, StatusTodo, planNow), queue},
 	} {
 		set := tasksWhere(block.query.where, block.query.args)
-		page, args := taskRowsStatement(set, block.query.terms)
+		page, args := taskRowsStatement(set, block.query.terms, planFlow)
 		reads["my work's "+name+" block"] = seek(block.index, page, append(args, 21)...)
 		reads["my work's "+name+" count"] = seek(block.index,
 			cappedCountStatement(set.from, set.where),
@@ -954,7 +955,7 @@ func taskCensuses() map[string]plannedRead {
 	}
 	for scope, units := range map[string][]string{"the company": nil,
 		"two teams": {"eng", "ops"}} {
-		statement, args := workloadStatement(units, store.EncodeTime(planNow))
+		statement, args := workloadStatement(units, store.EncodeTime(planNow), planFlow)
 		out["the workload of "+scope] = plannedRead{statement, args}
 	}
 	// AND THE ADVISOR'S READ OF THE OPEN WORK: who holds it, every open
@@ -1270,6 +1271,10 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 	}
 	one, oneArgs := restampStatement(task)
 	reads["one task's last change"] = seek(subject, one, oneArgs...)
+	// AN ITEM'S FLOW asks whether its assignee wrote on it since its start,
+	// a seek of the item's own history ([flowExpr]).
+	flow, flowArgs := detailFlowStatementFor(task)
+	reads["an item's flow"] = seek(subject, flow, flowArgs...)
 	for name, read := range companyWideReads() {
 		// AN UNBOUNDED PAGE WALKS the index newest first and stops after
 		// it; a bounded one seeks its range.
@@ -2596,7 +2601,7 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 		t.Fatalf("compile: %v", err)
 	}
 	terms := sortTerms(q, fields, planBasis())
-	page, pageArgs := taskRowsStatement(set, terms)
+	page, pageArgs := taskRowsStatement(set, terms, planFlow)
 	values, valueArgs := sortValuesStatement(terms, "t-00001")
 	out := map[string]plannedRead{
 		"the page": {page, append(pageArgs, 51)},
@@ -2623,7 +2628,7 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 			t.Fatalf("pageClause: %v", err)
 		}
 		for i, arm := range pageArmSets(set, resume, terms) {
-			statement, args := taskRowsStatement(arm, terms)
+			statement, args := taskRowsStatement(arm, terms, planFlow)
 			out[nextPageArm(i)] = plannedRead{statement, append(args, 51)}
 		}
 	}
@@ -2688,7 +2693,7 @@ func queryStatements(t *testing.T, q Query) map[string]plannedRead {
 		columns, columnArgs := groupCountsStatement(axis, set)
 		out["a board's columns"] = plannedRead{columns, append(columnArgs, MaxGroups+1)}
 		for _, key := range []string{"o-high", ""} {
-			rows, rowArgs := taskRowsStatement(columnSet(axis, key, set), terms)
+			rows, rowArgs := taskRowsStatement(columnSet(axis, key, set), terms, planFlow)
 			out[fmt.Sprintf("the rows of column %q", key)] = plannedRead{rows,
 				append(rowArgs, 21)}
 		}

@@ -18,32 +18,15 @@ const RefinerSource = "skill_refiner"
 
 // Refiner appends what practice taught to a skill the turn was working from.
 //
-// # The auto path, which was documented and absent
+// The AUTO half of the loop (`refine_skill` is the manual one). One call, one
+// bullet, one skill: per-skill calls would cost a completion per skill per
+// turn for answers that are almost always NOOP, so the model sees the turn and
+// its skills and picks at most ONE thing to write down.
 //
-// `refine_skill`, the manual half, has always existed: an agent that finds
-// a skill wrong rewrites it mid-turn. The AUTO half is what closes the loop
-// without the model having to notice, and it was config only:
-// `auto_refine_on_success` and `auto_refine_on_failure` validated, shipped in
-// the example company, and had no reader outside internal/config. The only
-// per-turn worker touching skills stamped their use counters and stopped.
-//
-// # One call, one bullet, one skill
-//
-// Not one call per offered skill. A turn is offered its whole catalogue, so
-// per-skill calls would cost a completion per skill per turn for answers that
-// are almost always NOOP. Instead the model is shown the skills the turn had
-// and the turn itself, and picks at most ONE thing worth writing down —
-// which is also the honest shape of the question: a turn rarely teaches two
-// procedures something new at once.
-//
-// # NOOP is the expected answer
-//
-// A model asked "what did this turn teach that skill" will produce something
-// for any turn at all, and a skill that grows a bullet per turn stops being a
-// procedure and becomes a diary of the turns that read it. So the prompt says
-// twice that answering nothing is correct, and the body cap is the hard stop
-// behind that: past it the refinement is SKIPPED rather than truncated,
-// because a clipped procedure lands mid-step.
+// NOOP is the expected answer: a skill growing a bullet per turn becomes a
+// diary, so the prompt says twice that nothing is correct, and the body cap is
+// the hard stop. Past it the refinement is SKIPPED, not truncated, since a
+// clipped procedure lands mid-step.
 type Refiner struct {
 	models Models
 	skills *Skills

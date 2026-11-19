@@ -19,6 +19,7 @@ afterEach(cleanup);
 const NOW = Date.parse("2031-04-16T09:00:00Z");
 
 const row = (id: string): WorkSummary => ({
+  flow: null,
   id,
   key: id.toUpperCase(),
   project: "ENG",

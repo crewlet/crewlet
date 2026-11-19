@@ -46,6 +46,7 @@ const NAMES: Record<string, string> = { jane: "Jane Founder", maya: "Maya Ops", 
 const seatName = (handle: string) => NAMES[handle] ?? handle;
 
 const ROW: WorkSummary = {
+  flow: null,
   id: "eng-1",
   key: "ENG-1",
   project: "ENG",

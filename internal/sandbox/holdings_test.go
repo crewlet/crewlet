@@ -46,10 +46,10 @@ func readingOf(records map[string]CallRecords) SessionHoldings {
 // missing or repeated, a result before a restart, an unshared failure, a text
 // of another length or otherwise, content that is no text, a kept opening
 // shorter than the digest, a size that is no size; and every call of no reading
-// or a kind other than by_id.
+// or of a kind other than by_id and by_content.
 // Mutation: hold a call with an unshared failure, measure a cut output by what
-// the log kept, or compare a whole output by its opening alone: red; drop any
-// other condition and its case is red.
+// the log kept, compare a whole output by its opening alone, or read by_id
+// alone: red; drop any other condition and its case is red.
 func TestACallIsHeldOnlyThroughItsLoggedResult(t *testing.T) {
 	t.Parallel()
 	const id = "toolu_01H8xQ"
@@ -120,7 +120,7 @@ func TestACallIsHeldOnlyThroughItsLoggedResult(t *testing.T) {
 			Calls: map[string]CallRecords{id: recordsOf(output, false)}}, call: logged},
 		"a reading of no kind": {reading: SessionHoldings{Read: true,
 			Calls: map[string]CallRecords{id: recordsOf(output, false)}}, call: logged},
-		"a reading of a kind this build does not read": {reading: SessionHoldings{Read: true, Kind: "by_content",
+		"a reading of a kind this build does not read": {reading: SessionHoldings{Read: true, Kind: "by_name",
 			Calls: map[string]CallRecords{id: recordsOf(output, false)}}, call: logged},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -131,12 +131,12 @@ func TestACallIsHeldOnlyThroughItsLoggedResult(t *testing.T) {
 			}
 		})
 	}
-	// THE KINDS THIS BUILD READS: by_id, and no other.
-	if !HoldingsByID.Valid() || len(HoldingsKinds) != 1 {
-		t.Errorf("this build reads %d kinds, by_id among them %v; want by_id alone", len(HoldingsKinds),
-			HoldingsByID.Valid())
+	// THE KINDS THIS BUILD READS: by_id and by_content, and no other.
+	if !HoldingsByID.Valid() || !HoldingsByContent.Valid() || len(HoldingsKinds) != 2 {
+		t.Errorf("this build reads %d kinds, by_id among them %v and by_content %v; want those two alone",
+			len(HoldingsKinds), HoldingsByID.Valid(), HoldingsByContent.Valid())
 	}
-	for _, k := range []HoldingsKind{"", "by_content", "BY_ID"} {
+	for _, k := range []HoldingsKind{"", "by_name", "BY_ID", "BY_CONTENT"} {
 		if k.Valid() {
 			t.Errorf("%q reads as a kind this build reads", k)
 		}
@@ -306,8 +306,8 @@ func newHoldingsWorld(t *testing.T, ownRun bool) *holdingsWorld {
 	key := objstore.KeyAt(rig.now)
 	kept := SessionCapture{LaunchSeq: run.LaunchSeq, CaptureSeq: 1, Launch: run.LaunchID, State: CaptureLanded,
 		Final: true, Interrupted: !ownRun, Through: new(2), At: rig.now, Harness: "claude-code",
-		HarnessVersion: "2.1.310", SessionID: "s-1", ArchiveFormat: FakeArchiveFormat, Object: key.String(),
-		ObjectHash: strings.Repeat("a", 64), ObjectSize: 1024, ContentKey: "k1"}
+		HarnessVersion: "2.1.310", SessionID: "s-1", RunAfter: "msg_01kept", ArchiveFormat: FakeArchiveFormat,
+		Object: key.String(), ObjectHash: strings.Repeat("a", 64), ObjectSize: 1024, ContentKey: "k1"}
 	if took, err := rig.pending.StampCapture(t.Context(), "t1", kept); err != nil || !took {
 		t.Fatalf("stamping the job's capture = %v, %v", took, err)
 	}
@@ -459,7 +459,9 @@ func TestHoldingsAreReadOnlyOfTheCaptureItsRelaunchContinues(t *testing.T) {
 			if err != nil || !got.Read || got.Kind != HoldingsByID || len(got.Calls) != 2 {
 				t.Fatalf("HoldingsOf = %+v, %v; want the runner's reading of the two calls asked", got, err)
 			}
-			if want := ArchiveOf(keptRow(t, w.kept)); len(asked) != 1 || asked[0] != want {
+			want := ArchiveOf(keptRow(t, w.kept))
+			want.RunStart = w.kept.RunStart()
+			if len(asked) != 1 || asked[0] != want {
 				t.Fatalf("the runner was asked to read %+v, want once the archive the turn's row names, %+v",
 					asked, want)
 			}

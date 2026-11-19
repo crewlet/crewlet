@@ -581,14 +581,12 @@ func ctPadded(n int) string {
 	return head + strings.Repeat("x", n-len(head)-len(tail)) + tail
 }
 
-// A LINE OR A MEMBER PAST ITS BOUND ENDS THE READING: a line one byte longer
-// than the take's scrub would hold, or a member one byte longer than its
-// reader's bound, ends it with errThreadBound, saying which of the two it ran
-// past, and the reading stays over, the record after the line never read. A
-// member past its bound is past it EVEN WHERE THE BOUND FALLS RIGHT AFTER A
-// LINE BREAK, where a member metered by io.LimitReader would end cleanly and
-// read as whole. A line or a member AT its bound reads whole, and the bounds
-// are the take's scrub's own.
+// A LINE OR A MEMBER PAST ITS BOUND ENDS THE READING: one byte past the
+// layer's line bound or its reader's member bound ends it with errThreadBound,
+// saying which, and the reading stays over, EVEN WHERE THE BOUND FALLS RIGHT
+// AFTER A LINE BREAK, where io.LimitReader would end cleanly. A line or a
+// member AT its bound reads whole, and a reader's member bound is the
+// plaintext the take's scrub reads of a kept session.
 //
 // Mutation: skip a line past the bound and read on, and the record after it
 // is read; meter the member with io.LimitReader, and a member past its bound
@@ -596,10 +594,8 @@ func ctPadded(n int) string {
 // a line past its bound reads as a member past its.
 func TestALineOrAMemberPastItsBoundEndsTheReading(t *testing.T) {
 	t.Parallel()
-	kept := boundsFor(executorkeep.SessionMaxBytes)
-	if threadLineMax != kept.piece || threadPlainMax != kept.plain {
-		t.Errorf("a thread is read within %d bytes a line and %d a member, the take's scrub within %d and %d",
-			threadLineMax, threadPlainMax, kept.piece, kept.plain)
+	if kept := boundsFor(executorkeep.SessionMaxBytes); threadPlainMax != kept.plain {
+		t.Errorf("a thread's member is read within %d bytes, the take's scrub reads %d", threadPlainMax, kept.plain)
 	}
 	brief := ctBrief(ctUUID(1))
 	head := ctThread(ctEnqueue, brief)

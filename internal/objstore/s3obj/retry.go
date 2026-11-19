@@ -40,13 +40,10 @@ var throttleCodes = func() map[string]struct{} {
 // own, which the client cannot read as an S3 error).
 //
 // A 503 NAMING ANOTHER CODE IS NO THROTTLE: it is a gateway's own failure, and
-// often one object's — MinIO answers an object it cannot rebuild from its
-// drives with `503 XMinioReadQuorum` — so read as a throttle it would cut the
-// node's every request at each attempt of the one request asking about that
-// object: on the SDK's adaptive mode, which read every 503 so, four loops of
-// thirty-two asking about such objects cost the other twenty-eight four
-// fifths of their answers (measured in review, 2026-10-15). It is asked again
-// as any server error is, and slows nothing else.
+// often one object's (MinIO answers an object it cannot rebuild with `503
+// XMinioReadQuorum`). Read as a throttle it would cut the node's every
+// request at each attempt of the one asking about that object, as the SDK's
+// adaptive mode does. It is asked again as any server error is.
 func isThrottle(err error) bool {
 	if err == nil {
 		return false
@@ -89,26 +86,17 @@ var refusedCertificate = retry.IsErrorRetryableFunc(func(err error) aws.Ternary 
 })
 
 // unreachableByConstruction reads a dial no attempt can complete as FINAL: an
-// address the dialer cannot parse — a port past 65535 or none at all where the
-// address leaves no room for one, an IPv6 zone holding a `]`, too many colons —
-// or a connection asked of port 0, which no listener ever holds. The SDK asks
-// every failure to send again: it reads any dial's error as a connection worth
-// asking again, so an endpoint such as `http://127.0.0.1:65536` held the boot's
-// check of the bucket for the minute a failing request is given up after
-// ([judge.giveUpAfter]) and the check's clean-up after it — 77 to 86 s for a
-// node to refuse an address it could never reach.
+// address the dialer cannot parse (a port past 65535 or none, an IPv6 zone
+// holding a `]`, too many colons) or port 0, which no listener holds. The SDK
+// reads any dial error as worth asking again, so such an endpoint held the
+// boot's bucket check for the whole give-up window ([judge.giveUpAfter]).
 //
-// ONLY WHAT NO RETRY CAN CHANGE. A connection refused on any other port, a
-// timeout, an unreachable network and a name the resolver could not answer
-// yet are asked again as before: the bucket's server may not be up yet, the
-// network may come back. And only the dialer's own words for an address it
-// could not parse ([unparsedAddress]), never every *net.AddrError: "no
-// suitable address found" is what a resolver's answer left, and the next
-// answer may differ.
-//
-// Config validation refuses an endpoint like these before a node starts
-// (config's checkS3Endpoint). This holds for what it cannot see: the address
-// of the proxy HTTPS_PROXY names, which every request is dialed through.
+// ONLY WHAT NO RETRY CAN CHANGE: a refusal on another port, a timeout, an
+// unreachable network and an unresolved name are asked again. And only the
+// dialer's own words for an unparsable address ([unparsedAddress]), never
+// every *net.AddrError: "no suitable address found" may differ next time.
+// Config validation (checkS3Endpoint) refuses these endpoints before boot;
+// this covers what it cannot see: the HTTPS_PROXY address.
 var unreachableByConstruction = retry.IsErrorRetryableFunc(func(err error) aws.Ternary {
 	if addr, ok := errors.AsType[*net.AddrError](err); ok && unparsedAddress[addr.Err] {
 		return aws.FalseTernary
@@ -138,89 +126,49 @@ var unparsedAddress = map[string]bool{
 // standard mode with no client-wide quota, no count of attempts and backoff
 // pacing the attempts — [fullJitter] in production, a case's own in this
 // package's tests.
-//
-// NO QUOTA ([ratelimit.None]): the SDK's standard retryer holds 500 tokens for
-// a whole client and spends five on every retry, so under a sustained
-// `SlowDown` its retries ran out after about a hundred and every request after
-// that failed at once — the opposite of slowing down. What holds a throttled
-// node back is the [gate], which slows every attempt the node sends rather
-// than refusing the ones that come after a count; and what bounds the requests
-// asking again is who sends them. Every caller in the engine but one is a
-// CLOSED LOOP of its own width — the git cache's fetches, the collector's
-// audit and deletions, the backup's copy — so a request asking again holds the
-// slot it was sent in and never adds one. The one that is not is the API's
-// files: a person's upload or download arrives when they ask, and its requests
-// are bounded by their own deadlines alone until a throttle engages the gate,
-// which holds them as it holds every other. So a bucket failing with a server
-// error that is no throttle — the gate's not to answer — is asked again by
-// every request open at the time, each at the backoff, for no longer than a
-// minute after its first failure ([judge.giveUpAfter]) or its deadline,
-// whichever is first: nine attempts a request at the median and twelve at the
-// 95th percentile ([judge.giveUpAfter] says where those figures come from),
-// then it stops, where a part asked a failing bucket again for its whole
-// sixteen and a half minutes, about a hundred. No node-wide cap is put on top:
-// what is left is the retry of a 500 for a minute that AWS recommends, which a
-// cap would shorten only by failing requests that would have been answered.
-//
-// NO COUNT OF ATTEMPTS: every request's attempts end at its own DEADLINE —
-// [callBudget], [sendBudget], [partBudget], [completeBudget], or a read's
-// caller's, whose open the store holds to [objstore.Stall] too — or
-// inside a minute of nothing but failures ([judge]), and the SDK's three
-// attempts failed a request a bucket would have answered a few seconds later.
-// MaxAttempts answers zero, which the SDK reads as no count, and [Open] sets
-// the client's RetryMaxAttempts to zero too, because the SDK copies
-// `AWS_MAX_ATTEMPTS`, or a shared profile's `max_attempts`, into the client and
-// wraps the retryer in that count after every option has run.
-//
-// WHAT IS ASKED AGAIN is the SDK's own — a 500, 502, 503 or 504, its throttle
-// codes, every failure to send — but a request given up ([gaveUp]), a
-// certificate the node does not trust ([refusedCertificate]) and a dial no
-// attempt can complete ([unreachableByConstruction]), each final, and with a
-// 429 besides: the SDK retries a gateway's `429 Too Many Requests` by no rule
-// of its own.
 func newRetryer(backoff retry.BackoffDelayer) aws.Retryer {
 	return retry.AddWithMaxAttempts(retry.NewStandard(func(s *retry.StandardOptions) {
+		// NO QUOTA ([ratelimit.None]): the SDK's standard retryer holds 500
+		// tokens per client, so under a sustained `SlowDown` its retries ran
+		// out and every request after failed at once, the opposite of slowing
+		// down. The [gate] holds a throttled node back by slowing every
+		// attempt. Requests asking again are bounded by who sends them: every
+		// caller but the API's files is a CLOSED LOOP of its own width, so a
+		// retry holds its slot and adds none, and a person's upload or
+		// download is bounded by its deadline and the gate. No node-wide cap
+		// goes on top: it would only fail requests that would have been
+		// answered.
 		s.RateLimiter = ratelimit.None
+		// WHAT IS ASKED AGAIN is the SDK's own (500, 502, 503, 504, its
+		// throttle codes, every failure to send) except a request given up
+		// ([gaveUp]), an untrusted certificate ([refusedCertificate]) and a
+		// dial no attempt can complete ([unreachableByConstruction]), each
+		// final; plus a 429, which the SDK retries by no rule of its own.
 		s.Retryables = append(append([]retry.IsErrorRetryable{gaveUp, refusedCertificate,
 			unreachableByConstruction}, s.Retryables...),
 			retry.RetryableHTTPStatusCode{Codes: map[int]struct{}{http.StatusTooManyRequests: {}}})
 		s.Backoff = backoff
+		// NO COUNT OF ATTEMPTS: attempts end at the request's DEADLINE
+		// ([callBudget], [sendBudget], [partBudget], [completeBudget], or a
+		// read's caller's, held to [objstore.Stall]) or after
+		// [judge.giveUpAfter] of nothing but failures; the SDK's three
+		// attempts failed requests a bucket would have answered seconds later.
+		// The zero below is no count, and [Open] zeroes the client's
+		// RetryMaxAttempts too: the SDK copies `AWS_MAX_ATTEMPTS` or a
+		// profile's `max_attempts` into the client and wraps the retryer in
+		// that count after every option has run.
 	}), 0)
 }
 
 // fullJitter is how long a request waits before it is asked again: a random
 // share of 2^attempt seconds, up to [retry.DefaultMaxBackoff] (twenty
-// seconds) — "full jitter", the SDK's own curve up to its ceiling and
-// jittered AT the ceiling too.
+// seconds): "full jitter", the SDK's curve jittered AT its ceiling too.
 //
 // The SDK's own backoff waits every retry past the fourth exactly twenty
-// seconds, with no jitter at all. A count of three attempts never let a
-// request reach it; with none, every request asked again past its fourth retry
-// — one the bucket keeps throttling, until its deadline (a part's sixteen and
-// a half minutes, a completion's five), and one it keeps failing, until its
-// span's bound inside the minute ([judge.giveUpAfter]), half of them nine
-// attempts or more — would wait in lockstep with every other that was answered
-// when it was, all asking again in the same instant once the bucket recovered
-// and none in the twenty seconds before it. Jittered, they are spread over the
-// twenty seconds and the first are asked again at once.
-//
-// Under AWS_NEW_RETRIES_2026 the SDK numbers a request's retries from zero
-// rather than one, which takes the curve one doubling down: the first retry
-// waits up to a second rather than two — and it may add up to five seconds
-// a bucket's `X-Amz-Retry-After` asks for, past what this answers.
-//
-// THE LAST ATTEMPT AT THE SPAN'S OWN BOUND: a request inside its span of
-// failures ([failing]) waits no longer than what is left of the bound the
-// [judge] drew for that span — a point in the last third of
-// [judge.giveUpAfter], between forty seconds and the minute ([judge.bound]) —
-// so it is asked once more AT that bound rather than at a random point up to
-// twenty seconds past it: the give-up comes one attempt after the bound, and a
-// failure shorter than it is ridden through whenever an attempt lands after
-// the failure. A bound OF ITS OWN, never the minute for every request: cut to
-// one bound, these waits put the last attempt of every request that began
-// failing in one instant ON that instant's minute, all within a round trip of
-// each other — every write open on every node, onto a bucket that may just be
-// recovering — the herd this jitter exists to spread.
+// seconds, unjittered, so with no count of attempts every request that far
+// would ask again in lockstep the instant the bucket recovered. Under
+// AWS_NEW_RETRIES_2026 the SDK numbers retries from zero, one doubling down,
+// and may add up to five seconds from `X-Amz-Retry-After`, past this.
 type fullJitter struct {
 	// draw is a random share of n: math/rand/v2's, or a case's own seeded one
 	// so a figure the docs quote is the same on every run.
@@ -233,6 +181,14 @@ func (j fullJitter) BackoffDelay(attempt int, err error) (time.Duration, error) 
 		ceiling = min(ceiling, time.Second<<max(attempt, 0))
 	}
 	d := shareOf(j.draw, ceiling)
+	// THE LAST ATTEMPT AT THE SPAN'S OWN BOUND: a request inside its span of
+	// failures ([failing]) waits no longer than what is left of the bound the
+	// [judge] drew for it ([judge.bound], between forty seconds and the
+	// minute), so it is asked once more AT that bound, not up to twenty
+	// seconds past it. The bound is its OWN, never one minute for all: else
+	// every request that began failing together would make its last attempt in
+	// one instant, onto a bucket that may just be recovering, the herd this
+	// jitter exists to spread.
 	if f, ok := errors.AsType[*failing](err); ok {
 		d = min(d, f.left)
 	}
@@ -263,123 +219,28 @@ const throttleShare = 0.7
 // [gate] is lifted and the client's attempts are let out as fast as their
 // callers send them.
 //
-// A MINUTE: three of the backoff's twenty-second ceiling ([fullJitter]), so
-// a bucket still throttling the requests a node keeps sending is heard
-// throttling several times inside it and the limit stays; and long past the
-// time the limit takes to climb back over any width the node runs while it
-// is being answered — one attempt more each round, a round a first byte, so
-// thirty-two cut to twenty-two are back past thirty-two in ten rounds, under
-// two seconds at S3's 100 to 200 ms. What lifting it frees is a node that
-// went QUIET after a throttle: it gets too few answers to climb, and without
-// the lift its next burst — a Gitlet node's sync of thirty-two packs — would be
-// held to the limit the last throttle left it, the bucket long since ready
-// for it.
-//
-// A LIFTED GATE COSTS A BUCKET STILL THROTTLING ONE ROUND: the attempts in
-// flight when its first throttle comes back, which cut the gate once to
-// seven tenths of the node's width ([gate.leave]) — the most it has had out
-// since its last cut, which a lift leaves as it was — and never to less,
-// whether the throttle answers the round's first attempt or the node's one
-// lone HEAD between two bursts.
-//
-// LIFTED BY A TIMER the first throttle arms ([gate.armLocked]), so a gate
-// whose places are all held by attempts that have stopped answering — a part
-// on a bucket that took its connection and stopped reading, a read whose
-// headers never come — is still lifted on time: lifted only when an attempt
-// next entered or left it, it held its waiters until their own deadlines, past
-// the minute this promises.
+// A MINUTE: three of the backoff's twenty-second ceiling ([fullJitter]), so a
+// bucket still throttling is heard several times inside it; and long past the
+// time the limit takes to climb back over the node's width (thirty-two cut to
+// twenty-two recover in ten rounds, under two seconds). The lift frees a node
+// gone QUIET: it gets too few answers to climb. A lifted gate costs a bucket
+// still throttling one round, then cuts again ([gate.leave]). A TIMER the
+// first throttle arms ([gate.armLocked]) lifts it, so places held by stalled
+// attempts do not hold waiters past this minute.
 const throttleQuiet = time.Minute
 
 // gate is the client's answer to a throttle: how many attempts it lets the
-// bucket hold at once — the node's every request to its `files/` prefix,
-// whoever sent it — so the first throttle slows the whole node rather than
-// the one request it answered. Unlimited until the bucket throttles.
+// bucket hold at once, across the node's every request to its `files/`
+// prefix, so the first throttle slows the whole node. Unlimited until then.
 //
-// A LIMIT ON ATTEMPTS IN FLIGHT, NOT A RATE. Every caller of the client
-// sends its requests in a loop of its own width, so how many attempts are out
-// is what the node is doing, known exactly — and a cut is a share of the
-// node's WIDTH ([gate.width]): the most attempts it has had out at once since
-// the gate last cut it. The SDK's adaptive mode limited a rate instead, which
-// it had to measure: a fresh one had measured none, so its first throttle —
-// at every boot, and after every quiet spell its limiter was retired over —
-// dropped the whole client to the half a request a second its floor allows;
-// and a limiter that kept its measurement would have measured a quiet node's
-// rate, too low for its next burst.
+// A LIMIT ON ATTEMPTS IN FLIGHT, NOT A RATE: callers send in loops of their
+// own width, so what is out is known exactly, and a cut is a share of the
+// node's WIDTH ([gate.width]). The SDK's adaptive mode limited a measured
+// rate: a fresh one had none, so its first throttle (every boot) dropped to
+// half a request a second. An attempt holds its place
+// until the bucket's answer BEGINS (a read's headers, a put's whole body).
 //
-// THE WIDTH, NEVER THE MOMENT. A cut of what was out at the instant a
-// throttle came back did to a node between two bursts what the adaptive mode
-// did to a fresh one: a fleet at a prefix's rate has its requests throttled
-// across the prefix, and one answered to the node's lone HEAD left it ONE
-// place, so its next sync of thirty-two climbed back a place a round for the
-// minute before the gate lifted. The width is what the node runs at, so a
-// throttle costs a burst the same seven tenths wherever in the node's work it
-// lands; it is the node's OWN, so one that never ran wider than four is cut
-// to two; and a cut sets it to the limit the cut leaves, so a throttle heard
-// while the node is quiet takes seven tenths again, as one heard while it
-// runs does. A node throttled before it has had more than one attempt out —
-// the check at open — has a width of one and climbs from it a place a round
-// until the gate lifts: it has no width to keep yet, and one presumed for it
-// would leave a node that runs fewer than that unslowed by its first several
-// throttles, each of which cuts only seven tenths of the presumption.
-//
-// Five hundred heads by thirty-two loops against a bucket 150 ms away took
-// 2.43 seconds unthrottled; with the burst's first answer a `SlowDown`, 9.6
-// to 9.7 on the adaptive mode and 2.72 to 2.74 through this gate; with a lone
-// head throttled before the burst, the client having run thirty-two and gone
-// quiet, 2.72 to 2.73 where a cut of the moment took 4.99 to 5.00; and with
-// the check at open throttled, 5.00 to 5.02 (BenchmarkAThrottledBurst, the
-// adaptive arm measured once beside it on the mode as this package configured
-// it; four vCPUs of a 2.1 GHz Xeon, 2026-10-15). An attempt holds its place
-// until the bucket's answer BEGINS — the headers of a read, the whole body of
-// a put — which is what the bucket counts against its rate.
-//
-// ONE CUT A ROUND: a throttle answered to an attempt let out before the last
-// cut is the bucket's reply to the width that cut already answered, and
-// cuts nothing more; only a throttle to an attempt let out since cuts again.
-// Without it a burst of thirty-two throttled together would cut thirty-two
-// times — to nothing — for one round of answers. GROWN BY ONE A ROUND: every
-// answer the bucket gives a request it served ([answered]) adds one over the
-// limit, one more attempt for every limit's worth of them — TCP's additive
-// increase, so a fleet sharing one prefix converges on shares of its rate
-// rather than taking turns at it. A server error or a failure to send moves
-// it neither way. LIFTED after [throttleQuiet] without a throttle, by a timer
-// the first throttle arms, so a gate whose places are all held by attempts
-// that have stopped answering is still lifted on time — lifted only when an
-// attempt next entered or left, it held its waiters until their own
-// deadlines.
-//
-// A MIDDLEWARE ROUND EACH ATTEMPT, never the retryer's attempt token: the
-// SDK asks the retryer for a token at every attempt and, under
-// AWS_NEW_RETRIES_2026, gives back only the first attempt's — so a limit
-// kept by tokens would lose a place for every retry under that environment,
-// and hear no throttle answered to one. Placed directly after the SDK's retry
-// step, BEFORE the attempt resolves its identity and is signed, so an attempt
-// that waits carries a credential — and a signature — taken when it is sent:
-// a credential resolved before the wait could expire during it, and a bucket
-// refuses an expired one as final (`ExpiredToken`), never as worth asking
-// again.
-//
-// EXCEPT S3 EXPRESS'S SESSION REQUEST (`CreateSession`), which the SDK sends
-// through this same client, under the context of a request that already
-// holds a place and waits for it in `GetIdentity`: held here it would wait
-// behind its own waiter, and every request needing the session with it, until
-// their deadlines or the lift. At one place — a node throttled at its check
-// at open starts there — that is every time: a Stat needing a new session
-// ended at its two-second deadline with no CreateSession sent, four runs of
-// four, where with the session request let through it was answered in 0.8 to
-// 1.0 ms (TestTheSessionRequestIsNeverHeldByTheGate against s3fake on
-// loopback, 2026-10-18); wider, it is a matter of how many requests wait
-// ahead of the session request when the session expires, and an asynchronous
-// refresh, which runs under the context of the request that started it, is
-// lost whenever that request finishes first. Known by the operation the SDK names in its own context
-// ([sessionOperation]), never by URL or bucket — a directory bucket's object
-// requests share both and must still wait; it holds no place and tells the
-// gate nothing, and the SDK sends at most one at a time per bucket.
-//
-// FIRST COME, FIRST SERVED: an attempt that has to wait waits in line under
-// its own context, and is let out as a place frees or the limit grows — never
-// overtaken by one that arrived later, so no request starves behind a stream
-// of newer ones until its deadline.
+// FIRST COME, FIRST SERVED: waiters are never overtaken, so none starves.
 type gate struct {
 	// now is the clock the quiet minute is measured on, and after the timer
 	// that ends it ([clock]): the wall clock's, or a case's own.
@@ -393,12 +254,13 @@ type gate struct {
 	// out is how many attempts are out now.
 	out int
 	// width is the node's width: the most attempts it has had out at once
-	// since the gate last cut it, and since a cut never less than the
-	// limit that cut left; a lift leaves it as it is. It is never fewer
-	// than the attempts out when a throttle that cuts comes back — every
-	// attempt let out raises it to what is then out, and one let out since
-	// the last cut was let out under the limit the cut set it to — so a cut
-	// takes its share of the width alone.
+	// since the gate last cut it, and since a cut never less than the limit
+	// that cut left; a lift leaves it as it is. THE WIDTH, NEVER THE MOMENT:
+	// a cut of what was out when a throttle came back would leave a node
+	// throttled on its lone HEAD between bursts at ONE place, climbing a
+	// place a round for the minute before the lift. A node throttled before
+	// it has had more than one attempt out has a width of one: a presumed
+	// width would leave a narrower node unslowed by its first throttles.
 	width float64
 	// cuts counts the cuts so far; an attempt carries the count it was
 	// let out under ([pass]).
@@ -462,6 +324,13 @@ func (g *gate) enter(ctx context.Context) (pass, error) {
 // leave gives back the place p held, and tells the gate what the bucket made
 // of the attempt: a throttle cuts it to [throttleShare] of the node's width —
 // once a round — an answer grows it, and anything else moves it neither way.
+//
+// ONE CUT A ROUND: a throttle to an attempt let out before the last cut is
+// the bucket's reply to the width that cut already answered and cuts nothing
+// more; else a burst of thirty-two throttled together would cut to nothing.
+// GROWN BY ONE A ROUND: every answer to a served request ([answered]) adds
+// 1/limit, TCP's additive increase, so a fleet sharing a prefix converges on
+// shares of its rate. A server error or failure to send moves it neither way.
 func (g *gate) leave(p pass, err error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -573,18 +442,25 @@ func (g *gate) ID() string { return "crewlet.ThrottleGate" }
 // requests with, which the [gate] lets straight through: see
 // [gate.HandleFinalize].
 //
-// THE SDK'S OWN NAME FOR WHAT IT IS RUNNING: invokeOperation clears the stack
-// values of the context it is handed and names the operation in it, so inside
-// the session request's own stack the name is `CreateSession` though it was
-// called from another operation's `GetIdentity`, and inside a directory
-// bucket's object request it is that request's own — a URL (`?session`) or a
-// bucket (`…--x-s3`) would let the object requests through too.
+// THE SDK'S OWN NAME FOR WHAT IT IS RUNNING: invokeOperation names the
+// operation in a fresh context, so inside the session request it is
+// `CreateSession` though called from another operation's `GetIdentity`, and
+// inside a directory bucket's object request it is that request's own. A URL
+// (`?session`) or bucket (`…--x-s3`) would let object requests through too.
 const sessionOperation = "CreateSession"
 
 // HandleFinalize sends one attempt through the gate: it waits for a place,
 // sends the attempt, and gives the place back with the bucket's answer — save
 // an attempt of S3 Express's session request ([sessionOperation]), which is
 // sent at once, holds no place and tells the gate nothing.
+//
+// A MIDDLEWARE ROUND EACH ATTEMPT, never the retryer's attempt token: under
+// AWS_NEW_RETRIES_2026 the SDK gives back only the first attempt's token. It
+// sits after the SDK's retry step, BEFORE identity and signing: a credential
+// resolved before the wait could expire during it (`ExpiredToken`, final).
+// The session request is let through because it runs under a request already
+// holding a place, so held here it would wait behind its own waiter
+// (TestTheSessionRequestIsNeverHeldByTheGate).
 func (g *gate) HandleFinalize(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (
 	middleware.FinalizeOutput, middleware.Metadata, error) {
 	if middleware.GetOperationName(ctx) == sessionOperation {
@@ -603,82 +479,15 @@ func (g *gate) HandleFinalize(ctx context.Context, in middleware.FinalizeInput, 
 }
 
 // giveUpAfter is how long a request the bucket answers with nothing but
-// FAILURES is asked again, at the most, before it is given up ([judge]): a
-// minute from its first failure — each span of failures given a bound of its
-// own inside it, between forty seconds and the minute ([judge.bound]). It is
-// the client's ONE stall bound ([stallBound]), which every attempt's watch
-// reads too ([watchedClient]).
-//
-// A FAILURE is an attempt the retryer would ask again that is neither a
-// throttle ([isThrottle]) nor answered ([answered]) nor ended by its own
-// context: a 500, 502, 503 naming a gateway's own fault, 504, an S3
-// `InternalError`-class code — and NO ANSWER AT ALL, a connection refused or
-// reset, a name that does not resolve for now, a TLS handshake that failed for
-// any reason but the certificate ([refusedCertificate], final already). No
-// answer counts as failing, though only server errors were asked about: a
-// bucket that refuses connections holds a person's part exactly as long as
-// one answering 500, and both are the bucket failing rather than slowing the
-// node down.
-//
-// A MINUTE, and one minute four ways: it is [objstore.Stall], the minute
-// a READ already waits on its backend before it ends as stalled — "a bucket
-// that keeps failing the request it asks again" is in its own doc — and the
-// minute a write the bucket stops taking is let run ([watchedClient]), so a
-// read and a write the bucket keeps failing or stops moving end at the same
-// point, and a person reads the same minute in all of them; it is three of
-// the backoff's twenty-second
-// ceiling ([fullJitter]), so a failing request is asked again several times
-// at the ceiling; and it is [throttleQuiet], the minute the gate itself takes
-// a bucket's silence to mean a throttle is over. Shorter (a [callBudget])
-// would give up inside the ceiling's first two waits and on a gateway's
-// ordinary failover; longer buys a person nothing. A constant, never
-// configuration: no honest reason makes two deployments differ, and the one
-// value that might, Stall, it follows.
-//
-// A STALLED ATTEMPT IS GIVEN UP AT ONCE, BY ITS KIND ([stalled]), never by
-// dating its last movement against this span: the watch's bound is real time
-// read on the transport's side, and the span is read on the judge's clock — a
-// case's own in this package's stepped tests — so dated across the two, a
-// stall would be asked again there. An attempt the watch ended has gone a
-// whole bound with nothing moving, which this rule's minute of nothing but
-// failures already meets; asked again, it would hold the person another minute
-// (and an upload in parts the thirty seconds of its abort besides) for a
-// bucket that has just shown it hangs.
-//
-// EACH SPAN'S OWN BOUND, drawn evenly from the minute's last third at the
-// span's first failure ([judge.bound]), is where its last attempt is sent
-// ([fullJitter]): so the requests that began failing in one instant — every
-// write open on every node when the bucket fell over — send their last
-// attempts across twenty seconds rather than all in one instant at the
-// minute, onto a bucket that may just be recovering, which is the burst the
-// backoff's jitter exists to spread. THE TRADE: a request is given up as soon
-// as forty seconds into a failure, and rides through one that ends in the
-// minute's last twenty seconds only where its own bound lies past it — where
-// one bound of a minute for every request rode through any failure shorter
-// than the minute, and sent every last attempt at once.
-//
-// WHAT A FAILING REQUEST SENDS inside its bound is the backoff's to decide, so
-// it is a distribution, not a figure: at S3's 100 ms first byte, a median of
-// nine attempts, twelve at the 95th percentile and at most fourteen in two
-// thousand requests, given up fifty seconds into the failure at the median
-// (TestAFailingRequestsLastAttemptsAreSpreadOverTheirBounds: the production
-// backoff and bounds seeded, the bucket's answers on a clock of its own).
-//
-// PER REQUEST AND BY TIME. Per request rather than a node-wide judgement of
-// the bucket, which would fail a request that has had one failure because
-// others had many, and would be a second health model beside the gate; by
-// time rather than a count of attempts, because a person waits on time and the
-// backoff makes a count mean anything from twenty-five seconds to two hundred
-// — and the SDK's count is what [newRetryer] removed.
-//
-// WHAT IT CHANGES, caller by caller: a READ — a person's download, a git sync,
-// the backup — whose open the bucket keeps failing ends at its span's bound,
-// forty seconds to a minute in, where [objstore.Stall] ended it a minute
-// after the open; a request on [callBudget] — the collector, the check at
-// open, an upload's start and abandonment — nothing, its thirty seconds come
-// first; a WRITE — a put of up to a part (four and a half minutes to a minute
-// at the most), a part ([partBudget]'s sixteen and a half to one), a
-// completion (five to one). Every writer is somebody waiting.
+// FAILURES is asked again before it is given up ([judge]): a minute from its
+// first failure, each span given its own bound inside it ([judge.bound]), the
+// client's ONE stall bound ([stallBound]). A FAILURE is a retryable attempt
+// that is no throttle, no answer ([answered]) and not ended by its own
+// context, NO ANSWER AT ALL included. A minute because it is [objstore.Stall]
+// (a read and a write the bucket keeps failing end together), three of the
+// backoff's ceiling ([fullJitter]) and [throttleQuiet]; shorter would give up
+// on a gateway's failover. A constant: no honest reason makes deployments
+// differ. By time, not attempts: a count means 25 to 200 seconds.
 func (j *judge) giveUpAfter() time.Duration { return j.stall.stall }
 
 // gaveUp reads a request its [judge] gave up ([givenUp]) as final, ahead of
@@ -818,26 +627,6 @@ func (r *request) attemptsSent() int {
 // ([requestOutcome]) and how many attempts it sent; and adds the bucket's last
 // answer to an operation that ends because its context did.
 //
-// THE DEADLINE ALONE SAYS NOTHING: a request the bucket keeps throttling, or
-// one it fails for less than [judge.giveUpAfter] before the deadline comes,
-// ends at its deadline, and the SDK reports that as the request cancelled —
-// the `SlowDown`, the 500 or the connection refused that kept it waiting are
-// gone. So the last one is named beside it, as TEXT: the error is still the
-// deadline, and no caller that judges an error by what it is reads a throttle
-// or a server error out of it.
-//
-// AND HOW LONG ITS LAST ATTEMPT HAD NOT MOVED, where its own deadline ended
-// that attempt IN FLIGHT before the watch's bound did and it had been quiet
-// for more than a sample of the bound ([stallBound]): a request whose
-// deadline came first — a body of a mebibyte or less, whose deadline is the
-// same minute — reads as the deadline alone, and the clause says the bucket
-// had stopped moving it rather than that it ran out of time while moving.
-// ONLY THEN: a deadline that comes while no attempt is in flight — the
-// request waiting to be asked again, or in line at the [gate] — ended nothing
-// the bucket had gone quiet on, since its last attempt was answered, and a
-// request the bucket kept throttling told otherwise reads as a bucket that
-// went silent ([request.quiet]).
-//
 // ONE STEP PER CLIENT, built with the client's recorder and stall bound as the
 // gate and the judge are: a step shared by every client could count into none.
 func follows(count counted, bound *stallBound) middleware.InitializeMiddleware {
@@ -849,6 +638,15 @@ func follows(count counted, bound *stallBound) middleware.InitializeMiddleware {
 			out, md, err := next.HandleInitialize(middleware.WithStackValue(ctx, requestKey{}, r), in)
 			attempts := r.attemptsSent()
 			count.request(operation, requestOutcome(ctx, attempts, err), attempts)
+			// THE DEADLINE ALONE SAYS NOTHING: a request the bucket keeps
+			// throttling, or fails for less than [judge.giveUpAfter], ends
+			// cancelled with the `SlowDown` or 500 that kept it waiting gone,
+			// so the last answer is named as TEXT (the error stays the
+			// deadline; no caller reads a throttle out of it). So is how long
+			// the last attempt had not moved, ONLY where the deadline ended
+			// it IN FLIGHT and it had been quiet past a sample of the bound
+			// ([stallBound], [request.quiet]): a deadline with no attempt in
+			// flight ended nothing the bucket went quiet on.
 			if err != nil && ctx.Err() != nil {
 				if answer := r.lastAnswer(); answer != nil {
 					err = fmt.Errorf("%w; the bucket's last answer before then: %s", err, answer.Error())
@@ -864,41 +662,16 @@ func follows(count counted, bound *stallBound) middleware.InitializeMiddleware {
 
 // judge is the step that reads each attempt's answer into its [request], and
 // gives up a request the bucket has answered with nothing but failures to the
-// end of its span's bound ([judge.bound], inside [judge.giveUpAfter]): the
-// failure at or past the bound is handed on as [givenUp], which the retryer
-// reads as final ([gaveUp]). Every failure before then is handed on as
-// [failing], carrying what is left of the bound.
-//
-// THE SPAN IS WALL TIME BETWEEN THE REQUEST'S OWN FAILURES, a wait at the gate
-// included: a request that failed once, then waited out its bound at a gate
-// other requests' throttles hold, and failed again, heard nothing but
-// failures for that long, which is what the rule judges — and a gate held
-// that long is a node far over its prefix's rate. Only a THROTTLE ANSWERED TO
-// THE REQUEST ITSELF ends the span: the bucket is up and asking the node to
-// slow down, which the gate and the request's own deadline govern. A throttle
-// answered to ANOTHER request never does, or a failure of one object — MinIO's
-// `XMinioReadQuorum` — beside a bucket throttling the rest would be asked
-// until its deadline. A HEAD's 503 carries no code and is a throttle by
-// [isThrottle]'s rule, so a Stat is never given up on 503s: telling a gateway's
-// 503 from a throttle there would need a body S3 does not send.
-//
-// AFTER THE GATE, so it sees only attempts the gate let out — a wait whose
-// context ended there is no attempt, and is the gate's own cancellation — and
-// S3 Express's session request, which the gate lets straight through: a
-// session the bucket keeps failing is given up like any request, and the
-// request waiting for it in GetIdentity fails with it — as TEXT, since the SDK
-// flattens the session's error (`get credentials: %v`), so nothing in the
-// waiter's error is a [givenUp] or reads as worth asking again. The SDK's own
-// text match for a reset connection is the one exception: a session whose last
-// answer names one leaves its waiter a failure by this rule, asked again, and
-// given up at the first of its sessions' give-ups that its own span, measured
-// from the first of them, reaches its bound at — bounded, a minute or two in.
-//
-// IT COUNTS EVERY ATTEMPT into count, by its operation and what the bucket
-// made of it ([attemptOutcome]) — a success, the session request and an
-// attempt whose identity could not be had included — from the attempt's own
-// answer, before it is judged: what the counter reads as a throttle or an
-// answer is exactly what the gate, just before it, cut or grew by.
+// end of its span's bound ([judge.bound]): a failure at or past it is handed
+// on as [givenUp] (final, [gaveUp]), any before it as [failing].
+// THE SPAN IS WALL TIME BETWEEN THE REQUEST'S OWN FAILURES, gate waits
+// included. Only a THROTTLE ANSWERED TO THE REQUEST ITSELF ends it: one
+// answered to ANOTHER never does, or one object's failure (MinIO's
+// `XMinioReadQuorum`) beside a throttled bucket would be asked until its
+// deadline. A HEAD's 503 is a throttle by [isThrottle], so a Stat is never
+// given up on 503s. It runs AFTER THE GATE, so it sees only attempts let out
+// (a wait ended there is no attempt) and S3 Express's session request; a waiter's error carries that failure as TEXT, so nothing
+// there reads as [givenUp]. Every attempt is counted before it is judged.
 type judge struct {
 	now     func() time.Time
 	retryer aws.Retryer
@@ -938,9 +711,12 @@ func (j *judge) judged(ctx context.Context, r *request, err error) error {
 	}
 	r.last = err
 	if isStalled(err) {
-		// BY ITS KIND, whatever wraps it — the SDK's send error around a
-		// body the bucket stopped taking, or an answer's own error around
-		// one that went silent: see [judge.giveUpAfter].
+		// GIVEN UP AT ONCE, BY ITS KIND, whatever wraps it, never by dating
+		// its last movement against the span: the watch's bound is real time
+		// on the transport's side and the span is on the judge's clock (a
+		// case's own in stepped tests). An attempt the watch ended has gone a
+		// whole bound with nothing moving; asked again, it would hold the
+		// person another minute for a bucket that just showed it hangs.
 		return &givenUp{err: err, stalled: true, most: j.giveUpAfter(), attempts: r.attempts}
 	}
 	switch {

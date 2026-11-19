@@ -80,24 +80,15 @@ type Mark struct {
 
 // Classify is the mark one notice carries for this person at now.
 //
-// READ IS THE SEEN-THROUGH POSITION FIRST and the entry list second, which is
-// the whole reason the position exists: the read list is PRUNED at every
-// write to what sits above it ([Apply]), so a notice below the position
-// carries no read entry at all. Reading only the lists would report every
-// pruned notice unread — which is every notice older than the person's last
-// visit, the exact set an inbox must not resurface. Reading only the position
-// would miss what they marked read out of order, which is what a person
-// working their queue does.
+// READ IS THE SEEN-THROUGH POSITION FIRST, then the entry list: the read list
+// is PRUNED at every write to what sits above the position ([Apply]). Lists
+// alone would resurface every notice older than the last visit; the position
+// alone would miss what was marked read out of order. AN UNREAD MARK OUTRANKS
+// THE POSITION: it is the one way to bring back a covered notice.
 //
-// AND AN UNREAD MARK OUTRANKS THE POSITION. It is the one way to bring back a
-// notice the position already covers — after a "mark all read", that is every
-// notice — and a reader that consulted only the position and the read list
-// made that gesture a mark nothing could ever see.
-//
-// A SNOOZE WHOSE TIME HAS COME IS NOT SNOOZED: the entry is reported due by
-// the domain's own read rather than silently promoted, because putting one
-// back is a write and a read that performed one would change the fleet's
-// state from a path with no operation id and no record.
+// A SNOOZE WHOSE TIME HAS COME IS NOT SNOOZED, reported due by this read
+// rather than promoted: putting it back is a write, which a read must not
+// perform from a path with no operation id.
 func (c Classifier) Classify(n Ref, now time.Time) Mark {
 	mark := Mark{
 		Primary: c.primary[n.Reason],

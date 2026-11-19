@@ -78,19 +78,13 @@ const paced = 1 << 20
 // A LARGE READ RUNS ITS RANGES CONCURRENTLY once its reader shows it waits on
 // the bucket: [s3obj.PartsInFlight] ranges read ahead at once, and beside
 // them the request for each range that will take a buffer next, sent before
-// the buffer is free so its first byte is not waited for — more than
-// PartsInFlight requests at the bucket, and never more than twice that. Its
-// bytes are handed out strictly IN ORDER, whatever order the ranges arrive
-// in. One connection is one connection's throughput from a provider that
-// limits each, which is what a round's largest bundle, a large download and a
-// backup's copy were held to.
+// the buffer is free so its first byte is not waited for: more than
+// PartsInFlight requests at the bucket, never more than twice that. Bytes are
+// handed out strictly IN ORDER, whatever order the ranges arrive in, held by a
+// bucket answering the second range only once the fifth has been answered.
 //
-// A read the first range holds whole costs ONE request, as it did before
-// there were ranges: an object of a byte, and one exactly a part long.
-//
-// The order is held by a bucket that answers the second range only once the
-// fifth has been answered: a reader handing ranges out as they arrive hands
-// out the third first.
+// A read the first range holds whole costs ONE request: an object of a byte,
+// and one exactly a part long.
 func TestALargeReadRunsItsRangesConcurrently(t *testing.T) {
 	t.Parallel()
 	srv := s3fake.Start(t, "files")
@@ -537,19 +531,17 @@ func TestClosingALargeReadStopsItsRanges(t *testing.T) {
 	}
 }
 
-// NO RANGE IS STILL BEING WRITTEN WHEN CLOSE RETURNS: every buffer a read
-// held goes back to the node's pool as Close returns, and the next upload or
-// read draws it from there and writes it — so a range's goroutine still
-// reading its body into one would be writing under somebody else's bytes.
-// Close waits for every range's goroutine before it gives a buffer back.
+// NO RANGE IS STILL BEING WRITTEN WHEN CLOSE RETURNS: every buffer a read held
+// goes back to the node's pool, and the next upload or read writes into it, so
+// a range's goroutine still reading its body into one would write under
+// somebody else's bytes. Close waits for every range's goroutine first.
 //
 // NOT PARALLEL: it looks for any goroutine of this package still filling a
 // range, and a parallel case's reads would be found too. The ranges are held
-// mid-body by a bucket sending a second a range, and each takes a third of a
-// second to let go of its answer once cancelled ([s3obj.LateToLetGo]); the
-// read is closed, and then an upload draws every pooled buffer and writes it
-// whole — a write the race detector reports against any range still filling
-// one.
+// mid-body by a bucket sending a second a range, each taking a third of a
+// second to let go once cancelled ([s3obj.LateToLetGo]); after the close an
+// upload writes every pooled buffer whole, which the race detector reports
+// against any range still filling one.
 func TestAClosedReadFillsNoBufferAfterClose(t *testing.T) {
 	srv := s3fake.Start(t, "files")
 	srv.ConnBytesPerSecond = part
@@ -594,17 +586,15 @@ func goroutinesIn(frame string) int {
 
 // A READ FINDING NO SPARE STREAMS ITS RANGES ONE AT A TIME, and still
 // completes, at one connection's rate rather than below it: a read takes a
-// buffer only while the node's allowance has one free and never waits for
-// one, so however many reads and uploads are under way the node's part
-// memory is that one allowance — and the next range's request is sent while
-// the range before it is still being read, so its first byte arrives while
-// the reader is busy rather than after. A range asked for only once the
-// reader reached it cost a first byte every part, which a read in one stream
-// paid once.
+// buffer only while the node's allowance has one free and never waits for one,
+// so the node's part memory stays that one allowance, and the next range's
+// request is sent while the range before it is still being read, so its first
+// byte arrives while the reader is busy. A range asked for only once the
+// reader reached it cost a first byte every part, which one stream paid once.
 //
-// The bucket answers a twentieth of a second after it is asked and sends a
-// range in about 65 ms: the next range's request must be at the bucket while
-// the range before it is still crossing — two at once, and never more.
+// The bucket answers 50 ms after it is asked and sends a range in about 65 ms:
+// the next range's request must be at the bucket while the range before is
+// still crossing, two at once and never more.
 func TestAReadFindingNoSpareStreamsItsRanges(t *testing.T) {
 	t.Parallel()
 	srv := s3fake.Start(t, "files")

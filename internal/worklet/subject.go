@@ -140,6 +140,13 @@
 // comes before every item that is not, started work included; below urgent,
 // and among urgent items, started work still comes first.
 //
+// # An item in progress says why it is not moving
+//
+// ADR-0162 is the record: an item in progress carries a read-only flow state
+// (working, blocked, waiting, held, due, stuck, moving), derived by one SQL
+// expression every read evaluates, recorded when it changes and told to a
+// person when nobody is moving the item; no status changes on its own.
+//
 // # What a day costs the log, measured
 //
 // The reference company — 100 000 tasks a year, 300 000 comments, 1 000 edits

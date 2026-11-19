@@ -58,6 +58,9 @@ type OwnAskRow struct {
 type OwnAsks struct {
 	Asks  []OwnAskRow `json:"asks"`
 	Total ClaimTotal  `json:"total"`
+
+	// FlowLive is [Answer.FlowLive] for every ask's item here.
+	FlowLive bool `json:"flow_live"`
 }
 
 // ownAsksFrom and ownAsksWhere are the asker's open asks to one person, bound
@@ -100,7 +103,8 @@ func (r *Reader) OwnAsks(ctx context.Context, q OwnAsksQuery, now time.Time) (Ow
 		Set:   true,
 	}, func(tx *sql.Tx) error {
 		var err error
-		out, err = readOwnAsks(ctx, tx, q.Asker, q.AskedOf, limit, now.UTC())
+		out, err = readOwnAsks(ctx, tx, q.Asker, q.AskedOf, limit,
+			rowsAt{dayStart: now.UTC(), flow: r.flowAt(now)})
 		return err
 	})
 	if err != nil {
@@ -111,7 +115,7 @@ func (r *Reader) OwnAsks(ctx context.Context, q OwnAsksQuery, now time.Time) (Ow
 
 // readOwnAsks is [Reader.OwnAsks]' read inside its transaction.
 func readOwnAsks(ctx context.Context, tx *sql.Tx, asker, person string, limit int,
-	now time.Time) (OwnAsks, error) {
+	at rowsAt) (OwnAsks, error) {
 
 	args := []any{asker, person}
 	total, capped, err := countCapped(ctx, tx, ownAsksFrom, ownAsksWhere, args)
@@ -141,7 +145,8 @@ func readOwnAsks(ctx context.Context, tx *sql.Tx, asker, person string, limit in
 	if err := rows.Err(); err != nil {
 		return OwnAsks{}, err
 	}
-	out := OwnAsks{Asks: []OwnAskRow{}, Total: ClaimTotal{Total: total, Capped: capped}}
+	out := OwnAsks{Asks: []OwnAskRow{}, Total: ClaimTotal{Total: total, Capped: capped},
+		FlowLive: at.flow.live()}
 	if len(page) == 0 {
 		return out, nil
 	}
@@ -150,7 +155,7 @@ func readOwnAsks(ctx context.Context, tx *sql.Tx, asker, person string, limit in
 		ids = append(ids, p.task)
 	}
 	tasks, _, err := readTasks(ctx, tx, tasksWhere("t.id IN ("+placeholders(len(ids))+")", ids),
-		[]sortTerm{{Column: "t.id"}}, len(ids), now)
+		[]sortTerm{{Column: "t.id"}}, len(ids), at)
 	if err != nil {
 		return OwnAsks{}, err
 	}
