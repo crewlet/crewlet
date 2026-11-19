@@ -253,6 +253,13 @@ var modelCalls = map[string]modelCall{
 	"internal/engine/providerpark.go:providerProbe": {
 		none: "the probe asks a fixed prompt the engine wrote, and reads nothing of " +
 			"its answer but whether one came"},
+	// A web search: the run is handed the query alone, with no tool but the
+	// vendor's search, and what it answers is the addresses its search tool
+	// returned, never the run's prose.
+	"internal/providers/llm/harness/search.go:Search": {tests: []string{
+		"internal/providers/llm/harness.TestTheSearchRunHasNoToolButTheVendorsSearch",
+		"internal/providers/llm/harness.TestASearchResultsURLIsTakenFromTheToolResultNotTheProse",
+	}},
 	"internal/providers/llm/harness/doctor.go:probeRequest": {
 		none: "every probe the doctor sends (the smoke test, the shell probe and " +
 			"the web probe) asks a fixed prompt the engine wrote"},
