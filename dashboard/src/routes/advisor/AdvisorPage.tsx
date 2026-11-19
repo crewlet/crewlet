@@ -1,12 +1,12 @@
 /**
  * The Advisor's page (`#/advisor`): what its checks found that is worth an
  * operator's attention, each with the change that fixes it, its weekly
- * reports, and what was found before.
+ * what was found before.
  *
  * # Anatomy
  *
  * The HEAD says when the checks last ran ("Checked 4 minutes ago"), offers
- * Run now, and names the model its explanations and reports run on (an
+ * Run now, and names the model its explanations run on (an
  * administrator's is the picker, `components/HelperModel.tsx`).
  *
  * FINDINGS, the first tab: the go-live check while anything blocks the
@@ -36,17 +36,18 @@ import { useAssistantControl } from "~/app/assistant/control.ts";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
 import { ago } from "~/lib/ago.ts";
-import { fmtDateTime, plural, relTime } from "~/lib/format.ts";
+import { plural, relTime } from "~/lib/format.ts";
 import { GoLiveReview } from "./GoLiveReview.tsx";
 import { ApplyDialog } from "./ApplyDialog.tsx";
-import { decide, runNow, useFindings, useLatestRun, useReports } from "./api.ts";
-import { findingItem, type RowActions } from "./rows.tsx";
-import type { AdvisorFinding, AdvisorRunSummary, AdvisorSeverity } from "./types.ts";
+import { decide, runNow, useFindings, useLatestRun } from "./api.ts";
+import { AtlasFix, findingItem, type RowActions } from "./rows.tsx";
+import type { AdvisorKeptFinding, AdvisorRunSummary } from "~/protocol/advisorFindings.ts";
+import type { AdvisorSeverity } from "~/protocol/advisor.ts";
 import { CLOSE_REASONS, SEVERITIES, STATE_WORDS, ranked } from "./words.ts";
 import { AdvisorModel } from "./AdvisorModel.tsx";
 
 /** The Advisor page's tabs, as its address names them. */
-export type AdvisorSection = "findings" | "reports" | "history";
+export type AdvisorSection = "findings" | "history";
 
 export function AdvisorPage({ section }: { section: AdvisorSection }) {
   // A RUN THAT ENDED is read by the list under it: its key moves, so it reads again.
@@ -56,7 +57,6 @@ export function AdvisorPage({ section }: { section: AdvisorSection }) {
     <div className="col gap-4">
       <RunHead onEnded={ended} />
       {section === "findings" ? <Findings key={runs} /> : null}
-      {section === "reports" ? <Reports /> : null}
       {section === "history" ? <History /> : null}
     </div>
   );
@@ -90,7 +90,7 @@ function RunHead({ onEnded }: { onEnded: () => void }) {
         onClick={() => {
           setStarted(true);
           void runNow().then(
-            () => void latest.reload({ quiet: true }),
+            () => latest.refetch(),
             () =>
               toast.show({
                 variant: "danger",
@@ -129,7 +129,7 @@ const GO_LIVE_LABELS = { done: "Done", waiting: "To do", pending: "Can't say yet
  * is left. Read off the same list as the rows under it, so the two cannot
  * differ.
  */
-export function goLiveSteps(owner: readonly AdvisorFinding[]): StepListStep[] {
+export function goLiveSteps(owner: readonly AdvisorKeptFinding[]): StepListStep[] {
   const count = (severity: AdvisorSeverity) => owner.filter((f) => f.severity === severity).length;
   const blocks = count("blocks");
   const costs = count("costs");
@@ -157,9 +157,10 @@ export function goLiveSteps(owner: readonly AdvisorFinding[]): StepListStep[] {
 function useRowActions(reload: () => void) {
   const assistant = useAssistantControl();
   const toast = useToast();
-  const [applying, setApplying] = useState<AdvisorFinding | null>(null);
+  const [applying, setApplying] = useState<AdvisorKeptFinding | null>(null);
+  const [reviewing, setReviewing] = useState<AdvisorKeptFinding | null>(null);
   const answer = useCallback(
-    (f: AdvisorFinding, press: () => Promise<unknown>, done: string) => {
+    (f: AdvisorKeptFinding, press: () => Promise<unknown>, done: string) => {
       void press().then(
         () => {
           toast.show({ variant: "success", title: done, message: f.title });
@@ -177,20 +178,34 @@ function useRowActions(reload: () => void) {
   );
   const actions: RowActions = {
     apply: setApplying,
+    review: setReviewing,
     ask: assistant.unavailable ? null : (question) => assistant.ask(question),
-    snooze: (f) => answer(f, () => decide(f.id, "snooze"), "Snoozed for 7 days"),
-    dismiss: (f, reason) => answer(f, () => decide(f.id, "dismiss", reason), "Dismissed"),
+    snooze: (f) => answer(f, () => decide(f.id, { decision: "snooze" }), "Snoozed for 7 days"),
+    dismiss: (f, reason) =>
+      answer(f, () => decide(f.id, { decision: "dismiss", reason }), "Dismissed"),
   };
-  const dialog = applying ? (
-    <ApplyDialog finding={applying} onClose={() => setApplying(null)} onSettled={reload} />
-  ) : null;
+  const dialog = (
+    <>
+      {applying ? (
+        <ApplyDialog finding={applying} onClose={() => setApplying(null)} onSettled={reload} />
+      ) : null}
+      <AtlasFix
+        finding={reviewing}
+        onClose={() => {
+          setReviewing(null);
+          reload();
+        }}
+      />
+    </>
+  );
   return { actions, dialog };
 }
 
 function Findings() {
   const open = useFindings("open");
   const now = useNow();
-  const reload = useCallback(() => void open.reload({ quiet: true }), [open]);
+  const { refetch } = open;
+  const reload = useCallback(() => refetch(), [refetch]);
   const { actions, dialog } = useRowActions(reload);
   const all = ranked(open.data?.findings ?? []);
   const owner = all.filter((f) => f.actor === "owner");
@@ -199,7 +214,8 @@ function Findings() {
   const blocked = owner.some((f) => f.severity === "blocks");
   return (
     <QueryState
-      error={open.code}
+      error={open.error}
+      detail={open.detail}
       refusal={open.refusal}
       loading={open.loading && open.data === null}
     >
@@ -248,49 +264,16 @@ function Findings() {
   );
 }
 
-function Reports() {
-  const reports = useReports();
-  return (
-    <QueryState
-      error={reports.code}
-      refusal={reports.refusal}
-      loading={reports.loading && reports.data === null}
-    >
-      {reports.data ? (
-        reports.data.reports.length === 0 ? (
-          <EmptyState
-            size="compact"
-            title="No report yet"
-            description="The Advisor writes a report every Monday morning: the week's numbers against the week before, and what it found."
-          />
-        ) : (
-          <ul className="advisor-reports" aria-label="Weekly reports">
-            {reports.data.reports.map((r) => (
-              <li key={r.id}>
-                <Link href={href(["advisor", "reports", r.id])}>
-                  Week of {fmtDateTime(r.period.from)}
-                </Link>{" "}
-                <Text as="span" variant="caption" tone="secondary">
-                  written {fmtDateTime(r.written_at)}
-                </Text>
-              </li>
-            ))}
-          </ul>
-        )
-      ) : null}
-    </QueryState>
-  );
-}
-
 function History() {
   const [cursor, setCursor] = useState<string | null>(null);
-  const [held, setHeld] = useState<AdvisorFinding[]>([]);
+  const [held, setHeld] = useState<AdvisorKeptFinding[]>([]);
   const closed = useFindings("closed", cursor);
   const now = useNow();
   const rows = [...held, ...(closed.data?.findings ?? [])];
   return (
     <QueryState
-      error={closed.code}
+      error={closed.error}
+      detail={closed.detail}
       refusal={closed.refusal}
       loading={closed.loading && closed.data === null && held.length === 0}
     >

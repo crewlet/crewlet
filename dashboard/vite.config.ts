@@ -471,9 +471,10 @@ export default defineConfig({
       // An answer to a usage insight waiting for review (Settings ›
       // Diagnostics). The records are read over the socket.
       "/diagnostics": { target: "http://localhost:8000" },
-      // Running the advisor's analyst and answering its findings (Settings ›
-      // Advisor). Its answer is read over the socket.
-      "/advisor/analysis": { target: "http://localhost:8000" },
+      // The Advisor's presses: Run now, a person's answer to a finding, the
+      // re-check before a fix is sent and the report that it was (#/advisor).
+      // Its findings and runs are read over the socket.
+      "/advisor": { target: "http://localhost:8000" },
       // Signing in, out and up, and an invitation's redemption — how a
       // browser comes to hold a session cookie (protocol/auth.ts).
       "/auth": { target: "http://localhost:8000" },

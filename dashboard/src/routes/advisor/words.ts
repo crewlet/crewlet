@@ -10,14 +10,14 @@
  */
 
 import type { AttentionTone } from "@crewlethq/ui";
-import { fmtCount, plural } from "~/lib/format.ts";
+import { fmtBytes, fmtCount, plural } from "~/lib/format.ts";
 import type {
   AdvisorCloseReason,
   AdvisorFact,
   AdvisorFactUnit,
-  AdvisorFinding,
-  AdvisorSeverity,
-} from "./types.ts";
+  AdvisorKeptFinding,
+} from "~/protocol/advisorFindings.ts";
+import type { AdvisorSeverity } from "~/protocol/advisor.ts";
 
 /** Each severity, most costly first, as the list heads it and the tone it is drawn in. */
 export const SEVERITIES: readonly {
@@ -54,7 +54,7 @@ export const CLOSE_REASONS: Readonly<Record<AdvisorCloseReason, string>> = {
 };
 
 /** Where a finding stands, in one word. */
-export const STATE_WORDS: Readonly<Record<AdvisorFinding["state"], string>> = {
+export const STATE_WORDS: Readonly<Record<AdvisorKeptFinding["state"], string>> = {
   open: "Open",
   applied: "Applied",
   resolved: "Resolved",
@@ -64,7 +64,8 @@ export const STATE_WORDS: Readonly<Record<AdvisorFinding["state"], string>> = {
 };
 
 /** A number in its unit, as a reader compares two of them. */
-export function factValue(value: number | string, unit: AdvisorFactUnit): string {
+export function factValue(value: number | string | null, unit: AdvisorFactUnit): string {
+  if (value === null) return "none";
   if (typeof value === "string") return value;
   switch (unit) {
     case "hours":
@@ -79,8 +80,11 @@ export function factValue(value: number | string, unit: AdvisorFactUnit): string
       return plural(value, "item");
     case "turns":
       return plural(value, "turn");
-    case "count":
-      return fmtCount(value);
+    case "bytes":
+      return fmtBytes(value);
+    default:
+      // A UNIT THIS BUILD DOES NOT KNOW is the number with its word.
+      return `${fmtCount(value)} ${unit}`;
   }
 }
 
@@ -93,7 +97,7 @@ export function factWords(fact: AdvisorFact): string {
 }
 
 /** What a finding is measured to cost a week, where its class can say: the row's quiet figure. */
-export function impactWords(finding: AdvisorFinding): string | null {
+export function impactWords(finding: AdvisorKeptFinding): string | null {
   const parts: string[] = [];
   const hours = finding.impact?.hours_per_week;
   const tokens = finding.impact?.tokens_per_week;
@@ -103,9 +107,9 @@ export function impactWords(finding: AdvisorFinding): string | null {
 }
 
 /** The open findings ranked: the most costly severity first, then the largest measured cost, then the newest. */
-export function ranked(findings: readonly AdvisorFinding[]): AdvisorFinding[] {
+export function ranked(findings: readonly AdvisorKeptFinding[]): AdvisorKeptFinding[] {
   const order = (s: AdvisorSeverity) => SEVERITIES.findIndex((x) => x.severity === s);
-  const weight = (f: AdvisorFinding) =>
+  const weight = (f: AdvisorKeptFinding) =>
     (f.impact?.hours_per_week ?? 0) * 1_000_000 + (f.impact?.tokens_per_week ?? 0);
   return [...findings].sort(
     (a, b) =>

@@ -652,6 +652,21 @@ describe("the resolver", () => {
     expect(resolve(["settings", "ask-crewlet"]).resolved).toBe(false);
   });
 
+  // THE ADVISOR IS A PAGE OF ITS OWN with two tabs and a page per finding;
+  // its settings page is gone.
+  test("the Advisor's page is its tabs and a finding by its id", () => {
+    const id = "1f2e3d4c-5b6a-4978-8877-665544332211";
+    expect(resolve(["advisor"])).toMatchObject({ screen: "advisor", section: "findings" });
+    expect(resolve(["advisor", "history"])).toMatchObject({
+      screen: "advisor",
+      section: "history",
+    });
+    expect(resolve(["advisor", "findings", id])).toMatchObject({ screen: "advisor-finding", id });
+    expect(resolve(["advisor", "findings", "x"]).resolved).toBe(false);
+    expect(resolve(["advisor", "findings"]).resolved).toBe(false);
+    expect(resolve(["settings", "advisor"]).resolved).toBe(false);
+  });
+
   // THE SIGN-IN SCREENS take exactly the tail their address has. An
   // invitation and a reset link are the exceptions: each screen answers a link
   // that is not whole (an empty one) rather than Not Found, since its holder

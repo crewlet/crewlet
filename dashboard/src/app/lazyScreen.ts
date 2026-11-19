@@ -219,7 +219,6 @@ const SCREEN_CHUNKS: Readonly<Record<FramedScreen["screen"], Chunk>> = {
   ask: "assistant",
   advisor: "advisor",
   "advisor-finding": "advisor",
-  "advisor-report": "advisor",
   principles: "settings",
   brand: "brand",
   "brand-setup": "brand",

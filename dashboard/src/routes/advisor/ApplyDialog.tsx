@@ -18,7 +18,8 @@ import { Modal } from "~/components/Modal.tsx";
 import { fmtDateTime } from "~/lib/format.ts";
 import { marked } from "~/ui/Problems.tsx";
 import { applyFrom, failureWords, recheck, sendable, type ApplyState } from "./apply.ts";
-import type { AdvisorFinding, AdvisorMoved, AdvisorPreviewRow, AdvisorRecheck } from "./types.ts";
+import type { AdvisorKeptFinding, AdvisorMoved } from "~/protocol/advisorFindings.ts";
+import type { AdvisorPreviewRow, AdvisorRecheck } from "./types.ts";
 import { CLOSE_REASONS, factWords } from "./words.ts";
 
 /** What the change sets, field by field, as the kit's diff draws it. */
@@ -36,13 +37,13 @@ export function movedRows(moved: readonly AdvisorMoved[]): DiffRow[] {
   return moved.map((m) => ({
     kind: "changed",
     path: m.label,
-    from: String(m.was),
-    to: String(m.now),
+    from: String(m.was ?? "none"),
+    to: String(m.now ?? "none"),
   }));
 }
 
 /** The dialog's title for each answer. */
-function titleOf(state: ApplyState, finding: AdvisorFinding): string {
+function titleOf(state: ApplyState, finding: AdvisorKeptFinding): string {
   if (state.kind === "checking") return "Checking it still holds";
   if (state.kind === "applied") return "Applied";
   const check = state.check;
@@ -64,7 +65,7 @@ export function ApplyDialog({
   onClose,
   onSettled,
 }: {
-  finding: AdvisorFinding;
+  finding: AdvisorKeptFinding;
   onClose: () => void;
   /** The finding moved (applied, resolved, retired, revised): the page reads it again. */
   onSettled: () => void;
@@ -255,7 +256,7 @@ function Answer({ check }: { check: AdvisorRecheck }) {
 }
 
 /** A sent change, waiting on the engine's check of its effect. */
-function Applied({ finding }: { finding: AdvisorFinding }) {
+function Applied({ finding }: { finding: AdvisorKeptFinding }) {
   return (
     <Callout variant="success" title="The change was applied">
       {finding.effect_due_at

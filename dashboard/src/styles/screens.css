@@ -10742,8 +10742,7 @@ a.live-row:hover {
   font-variant-numeric: tabular-nums;
 }
 
-/* Reports and closed findings, one row each. */
-.advisor-reports,
+/* Closed findings, one row each. */
 .advisor-history {
   display: grid;
   gap: var(--spacing-2);
@@ -10757,26 +10756,6 @@ a.live-row:hover {
   flex-wrap: wrap;
   align-items: baseline;
   gap: var(--spacing-1) var(--spacing-2);
-}
-
-/* A week's measures against the week before. */
-.advisor-report__metrics {
-  border-collapse: collapse;
-  width: 100%;
-  max-width: 40rem;
-}
-
-.advisor-report__metrics caption {
-  text-align: start;
-  padding-bottom: var(--spacing-1);
-}
-
-.advisor-report__metrics th,
-.advisor-report__metrics td {
-  padding: var(--spacing-1) var(--spacing-2);
-  border-bottom: 1px solid var(--color-border-default);
-  text-align: start;
-  font-variant-numeric: tabular-nums;
 }
 
 /* A helper's model in its page's head (components/HelperModel.tsx): the

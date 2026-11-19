@@ -11,7 +11,7 @@
  * Dismiss with a reason, and Ask Crewlet about it.
  */
 
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 import {
   Button,
   IconButton,
@@ -24,12 +24,17 @@ import {
 } from "@crewlethq/ui";
 import { EllipsisGlyph } from "@crewlethq/icons/glyphs";
 import type { AdvisorPage } from "~/protocol/advisor.ts";
+import { ChunkRegion, lazyScreen } from "~/app/lazyScreen.ts";
 import { href } from "~/app/router.tsx";
 import { TAKE_BACKUP } from "~/lib/backups.ts";
 import { ago } from "~/lib/ago.ts";
 import { fmtDateTime, plural } from "~/lib/format.ts";
 import { marked } from "~/ui/Problems.tsx";
-import type { AdvisorDismissReason, AdvisorEvidenceRecord, AdvisorFinding } from "./types.ts";
+import type {
+  AdvisorDecision,
+  AdvisorKeptFinding,
+  AdvisorRecordRef,
+} from "~/protocol/advisorFindings.ts";
 import { impactWords, toneOf } from "./words.ts";
 
 /** Where an `open_page` fix is taken, by the page the engine names and what it opens on. */
@@ -51,7 +56,7 @@ const PAGE_FIXES: Readonly<
 
 /** A cited record's page and how a list names it; null for one that has no page. */
 export function recordLink(
-  r: Pick<AdvisorEvidenceRecord, "kind" | "id"> & { name?: string | null },
+  r: Pick<AdvisorRecordRef, "kind" | "id"> & { name?: string | null },
 ): { href: string; label: string; external?: boolean } | null {
   const named = (fallback: string) => r.name || fallback;
   switch (r.kind) {
@@ -76,7 +81,7 @@ export function recordLink(
 }
 
 /** The records a finding cites, as links; the rest counted. */
-export function RecordLinks({ records }: { records: readonly AdvisorEvidenceRecord[] }) {
+export function RecordLinks({ records }: { records: readonly AdvisorRecordRef[] }) {
   if (records.length === 0) return null;
   const links = records.flatMap((r) => {
     const link = recordLink(r);
@@ -100,7 +105,7 @@ export function RecordLinks({ records }: { records: readonly AdvisorEvidenceReco
 }
 
 /** How fresh a finding is, and what became of it, in its row's quiet line. */
-export function freshness(f: AdvisorFinding, now: number): string[] {
+export function freshness(f: AdvisorKeptFinding, now: number): string[] {
   const parts: string[] = [];
   const impact = impactWords(f);
   if (impact) parts.push(impact);
@@ -118,24 +123,29 @@ export function freshness(f: AdvisorFinding, now: number): string[] {
   return parts;
 }
 
+/** Why a person dismisses a finding. */
+type DismissReason = Extract<AdvisorDecision, { decision: "dismiss" }>["reason"];
+
 /** What a row's presses do. */
 export interface RowActions {
   /** Open the Apply dialog on a finding whose change the engine builds. */
-  apply: (f: AdvisorFinding) => void;
+  apply: (f: AdvisorKeptFinding) => void;
+  /** Open an atlas finding's fix on the entries it names. */
+  review: (f: AdvisorKeptFinding) => void;
   /** Ask Crewlet about the finding, beside the page. */
   ask: ((question: string) => void) | null;
-  snooze: (f: AdvisorFinding) => void;
-  dismiss: (f: AdvisorFinding, reason: AdvisorDismissReason) => void;
+  snooze: (f: AdvisorKeptFinding) => void;
+  dismiss: (f: AdvisorKeptFinding, reason: DismissReason) => void;
 }
 
 /** What Ask Crewlet is asked about a finding: the finding by its id, which it reads itself. */
-export function askAbout(f: AdvisorFinding): string {
+export function askAbout(f: AdvisorKeptFinding): string {
   const prompt = f.fix.kind === "ask_crewlet" && f.fix.prompt ? `${f.fix.prompt} ` : "";
   return `${prompt}Explain the Advisor's finding "${f.title}" (finding ${f.id}): what it rests on, whether it still holds, and what its fix would change.`;
 }
 
 /** Whether the engine builds a change for the finding that Apply re-checks and sends. */
-export function appliable(f: AdvisorFinding): boolean {
+export function appliable(f: AdvisorKeptFinding): boolean {
   return (
     f.state === "open" &&
     ((f.fix.kind === "config_change" && f.fix.options.length > 0) || f.fix.kind === "api_change")
@@ -143,7 +153,7 @@ export function appliable(f: AdvisorFinding): boolean {
 }
 
 /** The one press a finding's fix offers, by its kind. */
-export function fixAction(f: AdvisorFinding, actions: RowActions): ReactNode {
+export function fixAction(f: AdvisorKeptFinding, actions: RowActions): ReactNode {
   if (appliable(f)) {
     return (
       <Button size="small" onClick={() => actions.apply(f)}>
@@ -182,6 +192,16 @@ export function fixAction(f: AdvisorFinding, actions: RowActions): ReactNode {
       </Link>
     );
   }
+  // AN ATLAS FIX IS SENT WITH THE ATLAS'S OWN TOOLS, on the entries the
+  // finding names; a reader the engine names none (no atlas app) is sent to
+  // the atlas instead.
+  if (f.fix.kind === "atlas_act" && f.fix.act && f.entries !== null) {
+    return (
+      <Button size="small" onClick={() => actions.review(f)}>
+        Review the fix
+      </Button>
+    );
+  }
   if (f.fix.kind === "atlas_act") {
     return (
       <Link href={href(["company", "atlas"])} size="caption">
@@ -193,7 +213,7 @@ export function fixAction(f: AdvisorFinding, actions: RowActions): ReactNode {
 }
 
 /** The row's menu: what a person answers a finding with besides its fix. */
-export function FindingMenu({ f, actions }: { f: AdvisorFinding; actions: RowActions }) {
+export function FindingMenu({ f, actions }: { f: AdvisorKeptFinding; actions: RowActions }) {
   if (f.state !== "open") return null;
   const items: MenuEntry[] = [
     { key: "snooze", label: "Snooze for 7 days", onSelect: () => actions.snooze(f) },
@@ -235,7 +255,11 @@ export function FindingMenu({ f, actions }: { f: AdvisorFinding; actions: RowAct
 }
 
 /** One finding as a row of a list: what is wrong, how fresh it is, its fix and its menu. */
-export function findingItem(f: AdvisorFinding, now: number, actions: RowActions): AttentionItem {
+export function findingItem(
+  f: AdvisorKeptFinding,
+  now: number,
+  actions: RowActions,
+): AttentionItem {
   const action = fixAction(f, actions);
   return {
     key: f.id,
@@ -268,4 +292,28 @@ export function findingItem(f: AdvisorFinding, now: number, actions: RowActions)
       </div>
     ),
   };
+}
+
+/**
+ * An atlas finding's fix (ADR-0141), from the atlas's own chunk: its pickers
+ * and decisions are the atlas's, loaded when a reader first opens one.
+ */
+const AtlasFixDialog = lazyScreen("atlas", (m) => m.AdvisorAtlasFix);
+
+/** The atlas fix dialog on `finding`, or nothing. */
+export function AtlasFix({
+  finding,
+  onClose,
+}: {
+  finding: AdvisorKeptFinding | null;
+  onClose: () => void;
+}) {
+  if (finding === null) return null;
+  return (
+    <ChunkRegion resetKey={finding.id}>
+      <Suspense fallback={null}>
+        <AtlasFixDialog finding={finding} onClose={onClose} />
+      </Suspense>
+    </ChunkRegion>
+  );
 }

@@ -338,8 +338,8 @@ export type SignInScreen =
   | { screen: "invite"; link: string }
   | { screen: "reset"; link: string };
 
-/** The Advisor page's tabs: what is open now, the weekly reports, and what closed. */
-export const ADVISOR_SECTIONS = ["findings", "reports", "history"] as const;
+/** The Advisor page's tabs: what is open now, and what closed. */
+export const ADVISOR_SECTIONS = ["findings", "history"] as const;
 export type AdvisorSection = (typeof ADVISOR_SECTIONS)[number];
 
 /** Every screen the frame draws, with what its path names. */
@@ -354,8 +354,6 @@ export type FramedScreen =
   | { screen: "advisor"; section: AdvisorSection }
   /** One finding, by its episode's id. */
   | { screen: "advisor-finding"; id: string }
-  /** One weekly report, by its id. */
-  | { screen: "advisor-report"; id: string }
   | { screen: "worklet-projects" }
   | { screen: "worklet-tasks" }
   | { screen: "worklet-views"; id?: string }
@@ -519,14 +517,11 @@ export function resolve(path: string[]): Route {
     case "advisor": {
       const [first, second] = rest;
       if (first === undefined) return screen({ screen: "advisor", section: "findings" });
-      if (rest.length === 1 && (first === "reports" || first === "history")) {
+      if (rest.length === 1 && first === "history") {
         return screen({ screen: "advisor", section: first });
       }
       if (rest.length === 2 && first === "findings" && second && ID_SHAPE.test(second)) {
         return screen({ screen: "advisor-finding", id: second });
-      }
-      if (rest.length === 2 && first === "reports" && second && ID_SHAPE.test(second)) {
-        return screen({ screen: "advisor-report", id: second });
       }
       return missing("advisor", under("Advisor"));
     }

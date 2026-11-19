@@ -35,7 +35,8 @@
  */
 
 import { RestError, pathSegment, rest } from "~/protocol/rest.ts";
-import type { AdvisorFinding, AdvisorRecheck, AdvisorSend } from "./types.ts";
+import type { AdvisorKeptFinding } from "~/protocol/advisorFindings.ts";
+import type { AdvisorRecheck, AdvisorSend } from "./types.ts";
 
 /** Where an Apply stands. */
 export type ApplyState =
@@ -44,7 +45,7 @@ export type ApplyState =
   | { kind: "checked"; check: AdvisorRecheck }
   | { kind: "sending"; check: AdvisorRecheck }
   /** The change was sent and the engine took it: its effect is being checked. */
-  | { kind: "applied"; finding: AdvisorFinding }
+  | { kind: "applied"; finding: AdvisorKeptFinding }
   /** The re-check, the send or the report failed in a way a re-check does not answer. */
   | { kind: "failed"; message: string; check: AdvisorRecheck | null };
 
@@ -106,13 +107,13 @@ export async function reportApplied(
   digest: string,
   answer: SendAnswer,
   signal?: AbortSignal,
-): Promise<AdvisorFinding> {
+): Promise<AdvisorKeptFinding> {
   try {
     const reply = await rest.request("POST", `/advisor/findings/${pathSegment(id)}/applied`, {
       body: { digest, answer },
       ...(signal ? { signal } : {}),
     });
-    return reply.body as AdvisorFinding;
+    return reply.body as AdvisorKeptFinding;
   } catch (err) {
     if (err instanceof RestError && err.status === 409) throw new RecheckFirst();
     throw err;
@@ -166,7 +167,7 @@ export async function applyFrom(
   now: () => number,
   signal?: AbortSignal,
 ): Promise<
-  { kind: "applied"; finding: AdvisorFinding } | { kind: "rechecked"; check: AdvisorRecheck }
+  { kind: "applied"; finding: AdvisorKeptFinding } | { kind: "rechecked"; check: AdvisorRecheck }
 > {
   let check = pressed;
   if (!fresh(check, now())) {

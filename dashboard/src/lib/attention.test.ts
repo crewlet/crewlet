@@ -14,7 +14,6 @@ import { describe, expect, test } from "vitest";
 import type { AtlasReviewItem } from "~/contract/atlas.ts";
 import type { BudgetWindow, OrgBudget } from "~/protocol/index.ts";
 import type { McpAlarm } from "~/contract/mcp.ts";
-import type { AdvisorNotice } from "~/protocol/advisor.ts";
 import {
   attentionQueue,
   conditionsToDecide,
@@ -46,8 +45,15 @@ const SETUP_BLOCKER = {
   fix: { kind: "external_step", sentence: "Replace the credential.", options: [] },
 };
 
-/** The notice the engine sends for SETUP_BLOCKER. */
-const SETUP_NOTICE = { class: SETUP_BLOCKER.class, subject: SETUP_BLOCKER.subject };
+/** A platform notice as `advisor_notices` answers it: a finding's carries the finding. */
+type Notice = AttentionInput["notices"][number];
+
+/** The notice the engine sends for SETUP_BLOCKER, carrying its finding's words and fix. */
+const SETUP_NOTICE: Notice = {
+  class: SETUP_BLOCKER.class,
+  subject: SETUP_BLOCKER.subject,
+  finding: { id: "f-datadog", title: SETUP_BLOCKER.title, fix: SETUP_BLOCKER.fix.sentence },
+};
 
 /** An alarm's notice, as the engine sends one that has stood past its threshold. */
 /** The engine's words for the kinds these cases raise, as a notice carries them. */
@@ -55,13 +61,14 @@ const ALARM_WORDS: Record<string, { title: string; person: string }> = {
   backup_age: { title: "No recent backup", person: "Take a backup, then schedule them." },
 };
 
-function alarmNotice(kind: string, nodes = ["node-a"]): AdvisorNotice {
+function alarmNotice(kind: string, nodes = ["node-a"]): Notice {
   return {
     class: "alarm",
     subject: { kind: "alarm", name: kind },
     since: "2026-01-01T10:00:00Z",
     nodes,
     ...ALARM_WORDS[kind],
+    finding: null,
   };
 }
 
@@ -77,7 +84,6 @@ function input(over: Partial<AttentionInput> = {}): AttentionInput {
     nameOf: (key) => key,
     mcpAlarms: [],
     notices: [],
-    findings: [],
     setupUnread: [],
     atlasDrift: [],
     ...over,
@@ -455,9 +461,12 @@ describe("what it surfaces", () => {
         notices: [
           SETUP_NOTICE,
           alarmNotice("backup_age"),
-          { class: "conversation.held", subject: { kind: "seat", seat: "dev", name: "task:t-1" } },
+          {
+            class: "conversation.held",
+            subject: { kind: "seat", seat: "dev", name: "task:t-1" },
+            finding: null,
+          },
         ],
-        findings: [SETUP_BLOCKER],
         engine: healthFrame({ configured: false }),
         budget: meter(win({ state: "refusing", used: 100 })),
         runs: [parked("awaiting_clarification")],
@@ -712,8 +721,13 @@ describe("a stopped seat's row", () => {
     const items = attentionQueue(
       input({
         agents: [engineSeat("ai"), engineSeat("swe"), person],
-        notices: [{ class: finding.class, subject: finding.subject }],
-        findings: [finding],
+        notices: [
+          {
+            class: finding.class,
+            subject: finding.subject,
+            finding: { id: "f-ai", title: finding.title, fix: finding.fix.sentence },
+          },
+        ],
       }),
     );
     const titles = items.map((i) => i.title);
@@ -925,11 +939,12 @@ describe("an MCP server's alarms", () => {
 // THE SETUP'S BLOCKERS ARE A PERSON'S, in the Inbox and on Home: each opens the
 // advisor, says what to do, and clears when the setup no longer raises it.
 test("a finding that blocks the company is a condition a person decides", () => {
-  const queue = attentionQueue(input({ notices: [SETUP_NOTICE], findings: [SETUP_BLOCKER] }));
+  const queue = attentionQueue(input({ notices: [SETUP_NOTICE] }));
   const row = queue.find((a) => a.subject === "setup");
   expect(row?.title).toBe("Datadog refused the credential.");
   expect(row?.detail).toBe("Replace the credential.");
-  expect(row?.path).toEqual(["advisor"]);
+  // IT OPENS THE FINDING ITSELF, on the Advisor's page.
+  expect(row?.path).toEqual(["advisor", "findings", "f-datadog"]);
   expect(conditionsToDecide(queue)).toContainEqual(row);
 });
 
@@ -945,6 +960,7 @@ test("a notice an alarm raised is drawn as that alarm when its finding is missin
           since: "2026-01-01T10:00:00Z",
           nodes: ["node-a"],
           alarm: "backup_age",
+          finding: null,
         },
       ],
     }),
@@ -957,15 +973,18 @@ test("a notice an alarm raised is drawn as that alarm when its finding is missin
   expect(conditionsToDecide(queue)).toContainEqual(row);
 });
 
-// ONLY WHAT THE ENGINE NOTICED REACHES THE QUEUE: a blocking finding with no
-// notice is the advisor's to show, and a notice whose finding is gone draws nothing.
-test("a finding is a condition only through its notice", () => {
+// ONLY WHAT THE ENGINE NOTICED REACHES THE QUEUE, in the finding's words the
+// notice carries: a notice whose finding is gone draws nothing.
+test("a finding is a condition only through its notice, which carries it", () => {
+  expect(attentionQueue(input()).filter((a) => a.subject === "setup")).toEqual([]);
   expect(
-    attentionQueue(input({ findings: [SETUP_BLOCKER] })).filter((a) => a.subject === "setup"),
+    attentionQueue(input({ notices: [{ ...SETUP_NOTICE, finding: null }] })).filter(
+      (a) => a.subject === "setup",
+    ),
   ).toEqual([]);
   expect(
     attentionQueue(input({ notices: [SETUP_NOTICE] })).filter((a) => a.subject === "setup"),
-  ).toEqual([]);
+  ).toHaveLength(1);
 });
 
 // AN ALARM THAT HAS STOOD REACHES THE ADMINISTRATORS: one row a kind, opening
@@ -1036,8 +1055,13 @@ test("a held conversation is a row that opens its item", () => {
           class: "conversation.held",
           subject: { kind: "seat", seat: "dev", name: "task:t-1" },
           since: "2026-01-01T10:00:00Z",
+          finding: null,
         },
-        { class: "conversation.held", subject: { kind: "seat", seat: "dev", name: "chat:room/1" } },
+        {
+          class: "conversation.held",
+          subject: { kind: "seat", seat: "dev", name: "chat:room/1" },
+          finding: null,
+        },
       ],
     }),
   );

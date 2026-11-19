@@ -29,6 +29,7 @@ import { marked } from "~/ui/Problems.tsx";
 import { ApplyDialog } from "./ApplyDialog.tsx";
 import { decide, useFinding } from "./api.ts";
 import {
+  AtlasFix,
   FindingMenu,
   RecordLinks,
   appliable,
@@ -36,30 +37,36 @@ import {
   freshness,
   type RowActions,
 } from "./rows.tsx";
-import type { AdvisorFindingDetail, AdvisorHistoryEntry } from "./types.ts";
+import type { AdvisorFindingDetail } from "~/protocol/advisorFindings.ts";
 import { CLOSE_REASONS, STATE_WORDS, factWords, severityWord, toneOf } from "./words.ts";
 
-/** What each transition is called on the timeline. */
-const EVENTS: Readonly<Record<AdvisorHistoryEntry["event"], string>> = {
+/** What each transition is called on the timeline; one this build does not know is said by its name. */
+const EVENTS: Readonly<Record<string, string>> = {
   opened: "Found",
   revised: "Its numbers or its change moved",
-  confirmed: "Seen again",
   applied: "A change was applied",
   ineffective: "The change did not clear it",
   snoozed: "Snoozed",
-  dismissed: "Dismissed",
-  reopened: "Reopened",
+  unsnoozed: "Back from a snooze",
+  useful: "Marked useful",
   closed: "Closed",
   explained: "Explained",
+  released: "Back on the list",
 };
 
 export function FindingPage({ id }: { id: string }) {
   const read = useFinding(id);
   const finding = read.data;
   usePageLabels(finding ? { [id]: finding.title } : {});
-  const reload = useCallback(() => void read.reload({ quiet: true }), [read]);
+  const { refetch } = read;
+  const reload = useCallback(() => refetch(), [refetch]);
   return (
-    <QueryState error={read.code} refusal={read.refusal} loading={read.loading && !finding}>
+    <QueryState
+      error={read.error}
+      refusal={read.refusal}
+      detail={read.detail}
+      loading={read.loading && !finding}
+    >
       {finding ? <Finding finding={finding} reload={reload} /> : null}
     </QueryState>
   );
@@ -70,6 +77,7 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
   const toast = useToast();
   const assistant = useAssistantControl();
   const [applying, setApplying] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
   const answer = (press: () => Promise<unknown>, done: string) =>
     void press().then(
       () => {
@@ -85,9 +93,11 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
     );
   const actions: RowActions = {
     apply: () => setApplying(true),
+    review: () => setReviewing(true),
     ask: assistant.unavailable ? null : (question) => assistant.ask(question),
-    snooze: () => answer(() => decide(f.id, "snooze"), "Snoozed for 7 days"),
-    dismiss: (_, reason) => answer(() => decide(f.id, "dismiss", reason), "Dismissed"),
+    snooze: () => answer(() => decide(f.id, { decision: "snooze" }), "Snoozed for 7 days"),
+    dismiss: (_, reason) =>
+      answer(() => decide(f.id, { decision: "dismiss", reason }), "Dismissed"),
   };
   const facts: DescriptionListEntry[] = f.evidence.facts.map((fact) => [
     fact.label,
@@ -162,7 +172,7 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
             <Button
               size="small"
               variant="secondary"
-              onClick={() => answer(() => decide(f.id, "reopen"), "Reopened")}
+              onClick={() => answer(() => decide(f.id, { decision: "reopen" }), "Reopened")}
             >
               Reopen
             </Button>
@@ -179,13 +189,13 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
             {f.history.map((h, i) => (
               <TimelineItem key={`${h.at}-${i}`} label={false}>
                 <Text as="p">
-                  {EVENTS[h.event]}
-                  {h.by.kind === "person" ? ` by ${h.by.name}` : ""}
+                  {EVENTS[h.event] ?? h.event}
+                  {h.by.kind === "person" && h.by.handle ? ` by ${h.by.handle}` : ""}
                 </Text>
                 <Text as="p" variant="caption" tone="secondary">
                   {fmtDateTime(h.at)}
                   {h.moved.length > 0
-                    ? ` · ${h.moved.map((m) => `${m.label}: ${m.was} to ${m.now}`).join(", ")}`
+                    ? ` · ${h.moved.map((m) => `${m.label}: ${m.was ?? "none"} to ${m.now ?? "none"}`).join(", ")}`
                     : ""}
                 </Text>
               </TimelineItem>
@@ -217,6 +227,13 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
       {applying ? (
         <ApplyDialog finding={f} onClose={() => setApplying(false)} onSettled={reload} />
       ) : null}
+      <AtlasFix
+        finding={reviewing ? f : null}
+        onClose={() => {
+          setReviewing(false);
+          reload();
+        }}
+      />
     </article>
   );
 }

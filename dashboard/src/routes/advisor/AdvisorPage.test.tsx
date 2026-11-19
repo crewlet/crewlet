@@ -11,7 +11,7 @@ import { Router } from "~/app/router.tsx";
 import { ClientContext } from "~/lib/store-hooks.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { AdvisorPage, goLiveSteps, runWords } from "./AdvisorPage.tsx";
-import type { AdvisorFinding, AdvisorRunSummary } from "./types.ts";
+import type { AdvisorKeptFinding, AdvisorRunSummary } from "~/protocol/advisorFindings.ts";
 import { ranked } from "./words.ts";
 
 vi.mock("./AdvisorModel.tsx", () => ({ AdvisorModel: () => null }));
@@ -21,7 +21,7 @@ const NOW = Date.now();
 const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
 
 let serial = 0;
-function finding(patch: Partial<AdvisorFinding> = {}): AdvisorFinding {
+function finding(patch: Partial<AdvisorKeptFinding> = {}): AdvisorKeptFinding {
   serial += 1;
   const id = `00000000-0000-4000-8000-${String(serial).padStart(12, "0")}`;
   return {
@@ -32,9 +32,20 @@ function finding(patch: Partial<AdvisorFinding> = {}): AdvisorFinding {
     actor: "owner",
     area: "capacity",
     severity: "costs",
-    subject: { kind: "seat", id: `s${serial}`, name: `Seat ${serial}` },
+    subject: {
+      kind: "seat",
+      id: `s${serial}`,
+      name: `Seat ${serial}`,
+      seat: `s${serial}`,
+      unit: "",
+      schedule: "",
+    },
     title: `Finding ${serial}`,
     why: "Because the records say so.",
+    item: "",
+    names: [],
+    path: "",
+    entries: null,
     explanation: null,
     state: "open",
     close_reason: null,
@@ -57,8 +68,13 @@ function finding(patch: Partial<AdvisorFinding> = {}): AdvisorFinding {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
-function engine(findings: AdvisorFinding[], run: AdvisorRunSummary | null = null) {
+/**
+ * The engine as the page meets it: the reads are its questions over the
+ * socket, the presses requests over `fetch`, every one recorded.
+ */
+function engine(findings: AdvisorKeptFinding[], run: AdvisorRunSummary | null = null) {
   const sent: { method: string; path: string; body: unknown }[] = [];
+  const asked: { name: string; params: Record<string, unknown> }[] = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string, init: RequestInit = {}) => {
@@ -69,28 +85,36 @@ function engine(findings: AdvisorFinding[], run: AdvisorRunSummary | null = null
         path: url.pathname,
         body: init.body ? JSON.parse(String(init.body)) : null,
       });
-      if (url.pathname === "/advisor/findings") {
-        return json({
-          findings: url.searchParams.get("state") === "open" ? findings : [],
-          next_cursor: null,
-          counts: { blocks: 0, costs: 0, note: 0 },
-          last_run: run,
-        });
-      }
-      if (url.pathname === "/advisor/runs/latest") return json(run);
       if (url.pathname === "/advisor/runs") return json({ run_id: "r2" }, 202);
       const decision = /^\/advisor\/findings\/([^/]+)\/decision$/.exec(url.pathname);
       if (decision) return json(findings.find((f) => f.id === decision[1]));
       return json({ error: "not_found" }, 404);
     }),
   );
-  return sent;
+  const answer = (name: string, params: Record<string, unknown>) => {
+    asked.push({ name, params });
+    if (name === "advisor_findings") {
+      return {
+        findings: params.state === "closed" ? [] : findings,
+        next_cursor: null,
+        counts: { blocks: 0, costs: 0, note: 0 },
+        last_run: run,
+      };
+    }
+    if (name === "advisor_run") return run;
+    return {};
+  };
+  return { sent, asked, answer };
 }
 
-function mount() {
+function mount(answer: (name: string, params: Record<string, unknown>) => unknown) {
   const store = new Store();
   const socket = new LiveSocket(store);
-  (socket as unknown as { query: () => Promise<unknown> }).query = () => Promise.resolve({});
+  (
+    socket as unknown as {
+      query: (name: string, params?: Record<string, unknown>) => Promise<unknown>;
+    }
+  ).query = (name, params) => Promise.resolve(answer(name, params ?? {}));
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <Router>
@@ -134,7 +158,7 @@ test("findings are ranked by severity, then measured cost, then recency", () => 
 });
 
 test("each row says how fresh it is: checked when, or not re-checked since, and what became of a fix", async () => {
-  engine([
+  const { answer } = engine([
     finding({ title: "Fresh one", impact: { hours_per_week: 12, tokens_per_week: null } }),
     finding({ title: "Stale one", confirmed: "stale", last_confirmed_at: "2026-11-01T08:00:00Z" }),
     finding({
@@ -144,7 +168,7 @@ test("each row says how fresh it is: checked when, or not re-checked since, and 
       seen_before: 2,
     }),
   ]);
-  mount();
+  mount(answer);
   await screen.findByText("Fresh one");
   expect(screen.getByText(/^12 h a week · found .+ · checked 4 minutes ago$/)).toBeDefined();
   expect(screen.getByText(/not re-checked since/)).toBeDefined();
@@ -164,8 +188,8 @@ test("a finding the engine builds a change for offers Apply, which re-checks it 
     },
   });
   const { id } = add;
-  const sent = engine([add]);
-  mount();
+  const { sent, answer } = engine([add]);
+  mount(answer);
   await screen.findByText("Add a seat");
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply" }));
@@ -181,9 +205,11 @@ test("a finding the engine builds a change for offers Apply, which re-checks it 
 
 test("Snooze and Dismiss send the person's answer and read the list again", async () => {
   const f = finding({ title: "Noisy alarm" });
-  const sent = engine([f]);
-  mount();
+  const { sent, asked, answer } = engine([f]);
+  mount(answer);
   await screen.findByText("Noisy alarm");
+  const reads = () => asked.filter((q) => q.name === "advisor_findings").length;
+  const before = reads();
   fireEvent.click(screen.getByRole("button", { name: "More for Noisy alarm" }));
   await act(async () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Dismiss: it's wrong" }));
@@ -194,15 +220,16 @@ test("Snooze and Dismiss send the person's answer and read the list again", asyn
       reason: "wrong",
     }),
   );
-  const reads = sent.filter((r) => r.path === "/advisor/findings").length;
-  await waitFor(() =>
-    expect(sent.filter((r) => r.path === "/advisor/findings").length).toBeGreaterThan(reads - 1),
-  );
+  // THE LIST IS READ AGAIN after the answer lands.
+  await waitFor(() => expect(reads()).toBeGreaterThan(before));
 });
 
 test("what blocks the company brings the go-live check to the top", async () => {
-  engine([finding({ severity: "blocks", title: "No model signs in" }), finding({ title: "Slow" })]);
-  mount();
+  const { answer } = engine([
+    finding({ severity: "blocks", title: "No model signs in" }),
+    finding({ title: "Slow" }),
+  ]);
+  mount(answer);
   const check = await screen
     .findByRole("list", { name: /Go-live check/ })
     .catch(() => screen.findByLabelText(/Go-live check/));
@@ -218,6 +245,9 @@ test("what blocks the company brings the go-live check to the top", async () => 
 test("the head says when the checks last ran, and Run now starts them", async () => {
   const run: AdvisorRunSummary = {
     run_id: "r1",
+    trigger: "schedule",
+    by: "",
+    unread: [],
     started_at: ago(5),
     ended_at: ago(4),
     status: "done",
@@ -226,8 +256,8 @@ test("the head says when the checks last ran, and Run now starts them", async ()
     resolved: 1,
     model: null,
   };
-  const sent = engine([], run);
-  mount();
+  const { sent, answer } = engine([], run);
+  mount(answer);
   await screen.findByText("Checked 4 minutes ago. It found 2 new findings and closed 1.");
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Run now" }));
@@ -236,4 +266,29 @@ test("the head says when the checks last ran, and Run now starts them", async ()
     expect(sent.some((r) => r.method === "POST" && r.path === "/advisor/runs")).toBe(true),
   );
   expect(runWords(null, NOW)).toBe("The checks have not run yet.");
+});
+
+// R5: AN ATLAS FIX IS OFFERED ON THE ENTRIES THE ENGINE NAMES, only to a reader
+// it names them to (a holder of the atlas app); anybody else is sent to the
+// atlas.
+test("an atlas finding offers its fix where the engine named its entries, and the atlas where not", async () => {
+  const act = {
+    kind: "atlas_act",
+    sentence: "Name the seat that answers for each.",
+    options: [],
+    act: { tool: "atlas_set_owner", asks: "owner" },
+  };
+  const named = finding({
+    title: "3 services have no owner",
+    fix: act,
+    entries: [{ id: "e1", kind: "service", key: "checkout", name: "Checkout" }],
+  });
+  const unnamed = finding({ title: "2 sources are stale", fix: act, entries: null });
+  const { answer } = engine([named, unnamed]);
+  mount(answer);
+  await screen.findByText("3 services have no owner");
+  expect(screen.getAllByRole("button", { name: "Review the fix" })).toHaveLength(1);
+  expect(screen.getByRole("link", { name: "Open the atlas" }).getAttribute("href")).toBe(
+    "#/company/atlas",
+  );
 });

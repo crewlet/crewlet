@@ -8,7 +8,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import { ApplyDialog } from "./ApplyDialog.tsx";
-import type { AdvisorFinding, AdvisorRecheck } from "./types.ts";
+import type { AdvisorKeptFinding } from "~/protocol/advisorFindings.ts";
+import type { AdvisorRecheck } from "./types.ts";
 
 afterEach(() => {
   cleanup();
@@ -17,7 +18,7 @@ afterEach(() => {
 
 const ID = "1f2e3d4c-5b6a-4978-8877-665544332211";
 
-const FINDING: AdvisorFinding = {
+const FINDING: AdvisorKeptFinding = {
   id: ID,
   key: "capacity.add_seat:group:eng/backend",
   class: "capacity.add_seat",
@@ -25,9 +26,20 @@ const FINDING: AdvisorFinding = {
   actor: "owner",
   area: "capacity",
   severity: "costs",
-  subject: { kind: "group", id: "eng/backend", name: "Backend Engineer" },
+  subject: {
+    kind: "group",
+    id: "eng/backend",
+    name: "Backend Engineer",
+    seat: "backend",
+    unit: "eng",
+    schedule: "",
+  },
   title: "Work waits for Backend Engineer every day",
   why: "Ready work waited 5 item-hours a day while the seat was busy 85% of the time.",
+  item: "",
+  names: [],
+  path: "",
+  entries: null,
   explanation: null,
   state: "open",
   close_reason: null,
