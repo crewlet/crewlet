@@ -89,10 +89,10 @@ func (s Sources) advisorStaffing(ctx context.Context, company *config.Company, n
 	}
 	if days == advisor.AddSeatDays {
 		for d := from; d.Before(to); d = d.AddDate(0, 0, 1) {
-			hours, err := flows.FlowHours(ctx, worklet.FlowHoursQuery{Since: d, Until: d.AddDate(0, 0, 1),
+			hours, dayErr := flows.FlowHours(ctx, worklet.FlowHoursQuery{Since: d, Until: d.AddDate(0, 0, 1),
 				Level: statelog.ReadStale})
-			if err != nil {
-				return nil, err
+			if dayErr != nil {
+				return nil, dayErr
 			}
 			due := map[string]time.Duration{}
 			for _, h := range hours {
