@@ -30,6 +30,8 @@ const UNREAD_WORDS: Readonly<Record<string, string>> = {
   flow: "How long work items stood in each state couldn't be read, so work that has stopped moving may be missing.",
   schedule_skips:
     "The schedules' skipped runs couldn't be read, so a schedule that keeps skipping may be missing.",
+  staffing:
+    "The agents' busy and stopped time couldn't be read in full, so advice to add or remove an agent may be missing.",
 };
 
 /** What each unread source is called in a sentence that names it. */
@@ -50,6 +52,7 @@ const UNREAD_NAMES: Readonly<Record<string, string>> = {
   alarm_episodes: "the engine's alarm history",
   flow: "how long work items stood in each state",
   schedule_skips: "the schedules' skipped runs",
+  staffing: "the agents' busy and stopped time",
 };
 
 /**
