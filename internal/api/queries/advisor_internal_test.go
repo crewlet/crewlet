@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/advisor/duty"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
 	coordmemory "github.com/crewlet/crewlet/internal/coord/memory"
@@ -139,8 +141,7 @@ func TestTheAdvisorNoticesTheFleetsAlarms(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("the fleet's notices are\n%+v\nwant\n%+v", got, want)
 	}
-	raw, err := json.Marshal(advisorAnswer{Answer: advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}},
-		Notices: got})
+	raw, err := json.Marshal(AdvisorNotices{Notices: got, Unread: []string{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,8 +149,8 @@ func TestTheAdvisorNoticesTheFleetsAlarms(t *testing.T) {
 	if err := json.Unmarshal(raw, &fields); err != nil {
 		t.Fatal(err)
 	}
-	if keys := slices.Sorted(maps.Keys(fields)); !slices.Equal(keys, []string{"findings", "notices", "revision", "unread"}) {
-		t.Errorf("the advisor answers %v", keys)
+	if keys := slices.Sorted(maps.Keys(fields)); !slices.Equal(keys, []string{"notices", "unread"}) {
+		t.Errorf("the notices answer %v", keys)
 	}
 	// ONCE EVERY LIVE NODE HAS EVALUATED, the fleet's alarms are known.
 	settled := coordmemory.New()
@@ -172,28 +173,106 @@ func TestTheAdvisorNoticesTheFleetsAlarms(t *testing.T) {
 	}
 }
 
-// `alarms` IS NAMED UNREAD ONCE, whether this node's evaluation has not run,
-// the fleet's marks could not be read, or both.
+// noticeLog is an advisor log whose latest run could not read unread, and
+// whose live findings are live.
+type noticeLog struct {
+	unread []string
+	live   []advisordomain.FindingRow
+}
+
+func (noticeLog) Findings(context.Context, advisordomain.Filter, statelog.Freshness) ([]advisordomain.FindingRow, string, error) {
+	return nil, "", nil
+}
+func (l noticeLog) NonClosed(context.Context, statelog.Freshness) ([]advisordomain.FindingRow, error) {
+	return l.live, nil
+}
+func (noticeLog) Finding(context.Context, string, statelog.Freshness) (advisordomain.FindingRow, []advisordomain.HistoryRow, error) {
+	return advisordomain.FindingRow{}, nil, advisordomain.ErrNotFound
+}
+func (noticeLog) Episodes(context.Context, string, statelog.Freshness) ([]advisordomain.FindingRow, error) {
+	return nil, nil
+}
+func (l noticeLog) LatestRun(context.Context, statelog.Freshness) (advisordomain.RunRow, bool, error) {
+	var scopes []duty.ScopeRecord
+	for _, word := range l.unread {
+		scopes = append(scopes, duty.ScopeRecord{Class: "evidence/" + word, Status: advisordomain.ClassUnread})
+	}
+	raw, err := json.Marshal(scopes)
+	return advisordomain.RunRow{ID: "r", Status: advisordomain.RunDone, Classes: raw}, true, err
+}
+func (noticeLog) PendingRequests(context.Context, statelog.Freshness) ([]advisordomain.RunRow, error) {
+	return nil, nil
+}
+func (noticeLog) LastRunOfClasses(context.Context, statelog.Freshness) (map[string]time.Time, error) {
+	return map[string]time.Time{}, nil
+}
+
+// `alarms` IS NAMED UNREAD ONCE, whether the latest run could not read this
+// node's evaluation, the fleet's marks could not be read, or both; and what
+// the latest run could not read is named beside it.
 func TestTheAdvisorNamesItsAlarmsUnreadOnce(t *testing.T) {
 	t.Parallel()
-	now := time.Date(2030, 1, 9, 12, 0, 0, 0, time.UTC)
+	settled := coordmemory.New()
+	if _, _, err := settled.TryAcquire(t.Context(), coord.NodeResource("node-a"), coord.AcquireOptions{
+		Owner: "node-a:1", TTL: time.Minute,
+		Meta: map[string]any{coord.StatusKey: coord.NodeStatus{AlarmsEvaluated: true}.Meta()},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	for _, c := range []struct {
-		name       string
-		unread     []string
-		fleetKnown bool
-		want       []string
+		name   string
+		unread []string
+		fleet  coord.Backend
+		want   []string
 	}{
-		{"both read", []string{}, true, []string{}},
-		{"this node not evaluated", []string{advisor.UnreadAlarms}, true, []string{advisor.UnreadAlarms}},
-		{"the fleet unread", []string{advisor.UnreadWork}, false, []string{advisor.UnreadWork, advisor.UnreadAlarms}},
-		{"both unread", []string{advisor.UnreadWork, advisor.UnreadAlarms}, false,
+		{"both read", []string{}, settled, []string{}},
+		{"this node not evaluated", []string{advisor.UnreadAlarms}, settled, []string{advisor.UnreadAlarms}},
+		{"the fleet unread", []string{advisor.UnreadWork}, nil, []string{advisor.UnreadWork, advisor.UnreadAlarms}},
+		{"both unread", []string{advisor.UnreadWork, advisor.UnreadAlarms}, nil,
 			[]string{advisor.UnreadWork, advisor.UnreadAlarms}},
 	} {
-		got := noticedWith(advisor.Answer{Findings: []advisor.Finding{}, Unread: c.unread}, nil, c.fleetKnown,
-			nil, true, now)
-		if !slices.Equal(got.Unread, c.want) {
-			t.Errorf("%s: unread %v, want %v", c.name, got.Unread, c.want)
+		s := Sources{Advisor: noticeLog{unread: c.unread}, Coord: c.fleet}
+		got, err := s.advisorNotices(t.Context(), Params{})
+		if err != nil {
+			t.Fatal(err)
 		}
+		if unread := got.(AdvisorNotices).Unread; !slices.Equal(unread, c.want) {
+			t.Errorf("%s: unread %v, want %v", c.name, unread, c.want)
+		}
+	}
+}
+
+// A BLOCKING FINDING'S NOTICE NAMES ITS FINDING, so the Inbox opens it and says
+// its fix; a finding a person snoozed raises no notice while it sleeps.
+func TestABlockingFindingsNoticeNamesItsFinding(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2030, 1, 9, 12, 0, 0, 0, time.UTC)
+	f := advisor.Finding{Class: advisor.ClassSandboxUnstartable, Severity: advisor.SeverityBlocks,
+		Actor: advisor.ActorOwner, Source: advisor.SourceEvidence, Subject: advisor.Subject{Kind: advisor.SubjectSeat, Seat: "dev"},
+		Title: "Paused because the sandbox could not start as configured.",
+		Fix:   advisor.Fix{Kind: advisor.FixOpenSetting, Sentence: "Fix the sandbox's image.", Options: []advisor.Option{}}}
+	body, err := json.Marshal(advisor.Observe(f, advisor.Span{From: now, To: now}, "r1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := advisordomain.FindingRow{ID: "f-1", Key: advisor.Key(f), Class: string(f.Class),
+		Severity: advisordomain.Severity(f.Severity), State: advisordomain.State(advisor.StateOpen), Body: body}
+	notices := func(rows ...advisordomain.FindingRow) []notice.Notice {
+		t.Helper()
+		got, err := Sources{Advisor: noticeLog{live: rows}, Now: func() time.Time { return now }}.
+			advisorNotices(t.Context(), Params{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got.(AdvisorNotices).Notices
+	}
+	got := notices(row)
+	if len(got) != 1 || got[0].Finding == nil || got[0].Finding.ID != "f-1" || got[0].Finding.Fix != f.Fix.Sentence {
+		t.Fatalf("notices %+v, want one naming finding f-1 and its fix", got)
+	}
+	row.SnoozedUntil = now.Add(time.Hour)
+	if got := notices(row); len(got) != 0 {
+		t.Errorf("a snoozed finding raised %+v", got)
 	}
 }
 

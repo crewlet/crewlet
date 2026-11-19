@@ -95,7 +95,7 @@ type Company struct {
 	// on which models, and the bounds of one turn. See [Assistant].
 	Assistant Assistant `yaml:"assistant,omitempty" json:"assistant,omitzero"`
 
-	Advisor Advisor `yaml:"advisor,omitempty" json:"advisor,omitzero" desc:"The setup advisor's own settings: its analyst, which reads the week's records with a model and lists only what it can cite."`
+	Advisor Advisor `yaml:"advisor,omitempty" json:"advisor,omitzero" desc:"The Advisor: the model it runs on. Its rules run whatever this says."`
 
 	// DelegatedDecisions is which requests agent seats decide in a person's
 	// place, within the engine's rules. See [DelegatedDecisions].

@@ -413,12 +413,14 @@ func workBottleneck(ev Evidence, kind func(string) SeatKind) []Finding {
 		if kind(b.Holder) == SeatAgent {
 			subject = Subject{Kind: SubjectSeat, Seat: b.Holder}
 		}
-		out = append(out, stallFinding(ClassWorkBottleneck, AreaWork, subject,
+		f := stallFinding(ClassWorkBottleneck, AreaWork, subject,
 			fmt.Sprintf("%s: %s wait on it", b.Key, words.Count(b.Blocks, "item", "items")),
 			[]Fact{{Key: "waiting", Value: int64(b.Blocks)}, {Key: "ready", Value: int64(b.Ready)}},
 			recordsOf(RecordItem, append([]string{b.Key}, b.Waiting...)),
 			Fix{Kind: FixOpenPage, Page: PageItem, Target: b.Key, Options: []Option{},
-				Sentence: "Open the item: move it first, or take off the waits that need not be there."}))
+				Sentence: "Open the item: move it first, or take off the waits that need not be there."})
+		f.Focus = ItemFocus(b.Key)
+		out = append(out, f)
 	}
 	return out
 }
@@ -440,13 +442,15 @@ func workHeldByPerson(ev Evidence, kind func(string) SeatKind) []Finding {
 		if len(b.Asks) > 0 {
 			item += ", " + words.Count(len(b.Asks), "open question", "open questions")
 		}
-		out = append(out, stallFinding(ClassWorkHeldByPerson, AreaWork, Subject{Kind: SubjectSeat, Seat: who},
+		f := stallFinding(ClassWorkHeldByPerson, AreaWork, Subject{Kind: SubjectSeat, Seat: who},
 			item,
 			[]Fact{{Key: "ready", Value: int64(b.Ready)}, {Key: "waiting", Value: int64(b.Blocks)},
 				{Key: "questions", Value: int64(len(b.Asks))}},
 			recordsOf(RecordItem, append([]string{b.Key}, b.ReadyKeys...)),
 			Fix{Kind: FixOpenPage, Page: PageItem, Target: b.Key, Options: []Option{},
-				Sentence: "Open the item: answer what it waits on, or take the wait off the work behind it."}))
+				Sentence: "Open the item: answer what it waits on, or take the wait off the work behind it."})
+		f.Focus = ItemFocus(b.Key)
+		out = append(out, f)
 	}
 	return out
 }

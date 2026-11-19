@@ -39,7 +39,7 @@ var excessInventory = map[string]int{
 var rowInventory = map[string]int{
 	"accessreview":                          1294,
 	"adr":                                   549,
-	"advisor":                               2510,
+	"advisor":                               1279,
 	"agent/ledger":                          4742,
 	"agent/prefetch":                        3613,
 	"agent/prompts":                         14448,

@@ -107,12 +107,9 @@ atlas:                                  # optional: the atlas, the map of what t
                                         #   wake an entry a day; false wakes nobody.
 assistant: {...}                        # optional, Ask Crewlet; off until a model is assigned
                                         #   (see "Ask Crewlet" below)
-advisor:                                # optional, the setup advisor's analyst; off unless llm
-  analyst:                              #   names a model (see guides/advisor.md, "Found by the analyst")
-    llm: [assistant]                    #   providers.llm keys, each on a harness a helper can run
-    cadence: daily                      #   daily (default), weekly (Mondays) or off; Run now always runs
-    hour: 6                             #   company-clock hour a scheduled run starts, 0..23 (default 6)
-    max_tokens: 200000                  #   one run's token ceiling, at least 20000 (default 200000)
+advisor:                                # optional, the Advisor's model; its rules run either way
+  model: assistant                      #   a providers.llm key on a harness a helper can run
+                                        #   (see guides/advisor.md, "Found by the Advisor's model")
 
 turn_engine:                            # optional — executor/reviewer turn config
   max_iterations: 3                     # hard cap on self_iterate loops per turn

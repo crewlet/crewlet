@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/advisor/analyst"
+	"github.com/crewlet/crewlet/internal/advisor/duty"
 	"github.com/crewlet/crewlet/internal/api/assistantapi"
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/api/httpjson"
@@ -67,10 +67,13 @@ type App struct {
 	insights     *insights.Sharer
 	stopInsights func()
 
-	// analyst is the advisor's analyst (ADR-0157), nil where the fleet keeps
-	// no record of it; stopAnalyst ends its cadence and waits for a run.
-	analyst     *analyst.Service
-	stopAnalyst func()
+	// advisor is the advisor log's two sides and the duty over them
+	// (ADR-0164), nil on a node that reaches no copy; advisorFinding reads
+	// one finding as a person sees it; stopAdvisor ends the duty's loop.
+	advisor        AdvisorLog
+	advisorDuty    *duty.Duty
+	advisorFinding func(ctx context.Context, id string) (queries.AdvisorFinding, error)
+	stopAdvisor    func()
 
 	// chatLive is the process's chat hub, which the socket carries chat
 	// through. The App's to mount and never to start or stop.
@@ -881,7 +884,16 @@ func New(opts Options) (*App, error) {
 		}
 		a.insights = sources.InsightSharer(origin, send)
 	}
-	a.analyst = sources.AnalystService()
+	// THE ADVISOR, where this node reaches its log: its questions read it,
+	// its routes write a person's decisions to it, and its duty runs here
+	// while this node holds the duty's lease (built below, once every
+	// source the duty reads is set).
+	advisorRT, _ := opts.Runtime.(advisorRuntime)
+	if advisorRT != nil {
+		if reads, writes, ok := advisorRT.AdvisorLog(); ok {
+			sources.Advisor, a.advisor = reads, advisorLog{reads, writes}
+		}
+	}
 	// And each server's OAuth grant, which every node reads from the
 	// coordination store, with the addresses a vendor is given.
 	sources.MCPGrants = opts.Runtime.MCPGrants()
@@ -958,6 +970,12 @@ func New(opts Options) (*App, error) {
 	// source beside it: one surface, so a clone and a listing asked of one
 	// node cannot disagree about whether it hosts code.
 	sources.Code = codeQuestions{surface: opts.Code}
+	// THE ADVISOR'S DUTY AND ITS FINDING READS take sources by value, so
+	// they are built from the sources as complete as the questions are.
+	if a.advisor != nil {
+		a.advisorDuty = sources.AdvisorDuty(duty.LogOf(a.advisor, a.advisor, time.Now), advisorRT.AdvisorClaim())
+		a.advisorFinding = sources.AdvisorFindingOf
+	}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
 	a.backup, a.audit = opts.Backup, opts.Audit
@@ -989,8 +1007,8 @@ func New(opts Options) (*App, error) {
 	if err := a.mountDeployment(mux); err != nil {
 		return nil, fmt.Errorf("api: mount the deployment's controls: %w", err)
 	}
-	// The advisor's analyst: a run now and an answer to a finding (ADR-0157).
-	if err := a.mountAnalysis(mux); err != nil {
+	// The Advisor: a run now and a person's decision on a finding (ADR-0164).
+	if err := a.mountAdvisor(mux); err != nil {
 		return nil, err
 	}
 	// Gitlet and its reads: git on a node with the gitlet
@@ -1564,7 +1582,7 @@ func (a *App) Start(ctx context.Context) {
 	a.stream.StartHealthTicks(ctx)
 	a.listens.Join(ctx)
 	a.startInsights(ctx)
-	a.startAnalyst(ctx)
+	a.startAdvisor(ctx)
 }
 
 // Stop ends the tick, disconnects every client and leaves the fleet's
@@ -1575,8 +1593,8 @@ func (a *App) Stop(ctx context.Context) {
 	if a.stopInsights != nil {
 		a.stopInsights()
 	}
-	if a.stopAnalyst != nil {
-		a.stopAnalyst()
+	if a.stopAdvisor != nil {
+		a.stopAdvisor()
 	}
 	for _, stop := range a.stopRooms {
 		stop()

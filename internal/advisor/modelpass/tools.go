@@ -1,4 +1,4 @@
-package analyst
+package modelpass
 
 import (
 	"cmp"
@@ -33,7 +33,7 @@ type tool struct {
 	answer      func(d Data) (any, []advisor.Record)
 }
 
-// tools is every read the analyst is offered. Each answers numbers, closed
+// tools is every read the model pass is offered. Each answers numbers, closed
 // words, times, handles and record ids, never words somebody wrote.
 var tools = map[string]tool{
 	"company_outline": {"The company document's shape: every seat (agent or person) with the model " +
@@ -52,7 +52,7 @@ var tools = map[string]tool{
 		"delegate allowed that went to a person for want of a required check.", decisionsOf},
 	"schedule_fires": {"Each schedule's fires in the last 7 days and how many moved any work.", firesOf},
 	"rule_findings":  {"What the advisor's own rules already list this week. Never repeat one.", rulesOf},
-	"past_answers":   {"How people answered earlier analyst findings: useful, wrong or already known.", answersOf},
+	"past_answers":   {"How people dismissed earlier findings of yours: wrong or already known.", answersOf},
 }
 
 // toolNames is every read, sorted.
@@ -90,7 +90,7 @@ func (s *surface) AnnotationsOf(name string) mcp.Annotations {
 	return mcp.Annotations{ReadOnly: mcp.Yes}
 }
 
-func (s *surface) Phase() string { return "advisor_analysis" }
+func (s *surface) Phase() string { return "advisor_model" }
 
 func (s *surface) Admit(name string, _ map[string]any) toolloop.Admitted {
 	return func(_ context.Context, call llm.ToolCall) (toolloop.ToolResult, error) {

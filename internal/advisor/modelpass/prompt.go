@@ -1,4 +1,4 @@
-package analyst
+package modelpass
 
 import (
 	"github.com/crewlet/crewlet/internal/advisor"
@@ -6,7 +6,7 @@ import (
 )
 
 // system is what the run is told it is for and how its answer is checked.
-const system = `You are the setup advisor's analyst for a company of AI agents and the people who direct them.
+const system = `You are the Advisor of a company of AI agents and the people who direct them.
 Read the company's last 7 days with the read tools, calling the ones you need together in your first round (each round
 sends everything read so far again), then call submit_findings once with the problems you find that
 cost the company time, tokens or waiting, and that the advisor's own rules (rule_findings) do not already list.
@@ -19,7 +19,7 @@ How each finding is checked before anyone sees it, so write it to pass:
 - Offer only a fix the engine builds: round_cap or token_budget for an agent seat, auxiliary_model with a
   providers.llm entry, open_item with an item key you cite, open_seat with an agent's handle, or none.
 - Title at most 120 characters, why at most 600, plain sentences, no links or markup. Severity is costs or note.
-- Leave out what people answered wrong in past_answers. Submit an empty list if you find nothing.`
+- Leave out what people dismissed in past_answers. Submit an empty list if you find nothing.`
 
 // opening is the run's first messages.
 func opening() []llm.Message {

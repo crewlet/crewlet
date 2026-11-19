@@ -2,8 +2,8 @@
 
 - **Status:** superseded
 - **Superseded-by:** ADR-0164
-- **Authority:** `internal/advisor/analyst`
-- **Enforced-by:** `internal/advisor/analyst.TestTheAnalystListsOnlyWhatItsOwnReadsShow`, `internal/advisor/analyst.TestARunThatDeclinesOrRunsOutSaysSo`, `internal/advisor/analyst.TestOneRunAtATimeAndAnswersSetFindingsAside`, `internal/advisor.TestNoDetectorCallsAModel`, `internal/config.TestTheAnalystsChainIsHeldToAskCrewletsRules`
+- **Authority:** `internal/advisor/modelpass`
+- **Enforced-by:** `internal/advisor/modelpass.TestTheModelPassListsOnlyWhatItsOwnReadsShow`, `internal/advisor/modelpass.TestARunThatDeclinesOrRunsOutSaysSo`, `internal/advisor.TestNoDetectorCallsAModel`, `internal/config.TestAHelperRefusesOnlyAHarnessItCannotRunWithNoToolOfItsOwn`
 - **Cost-when-tried:** not tried. The rule list named only what a rule was written for: six costly patterns in one company's week (runs ending on their round cap, a seat stopped on its budget, open work on one agent, an item twelve others waited on, merges escalated for want of CI, ready work behind a person) went unmentioned until each got a rule.
 - **Tag-status:** unreleased
 

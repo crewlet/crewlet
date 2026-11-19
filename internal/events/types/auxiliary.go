@@ -121,9 +121,9 @@ const (
 	// so what briefs cost is read on its own, and charged to the company's
 	// windows by the turn's own meter like any turn's.
 	AuxAssistantBrief AuxPurpose = "assistant_brief"
-	// AuxAdvisorAnalysis is a round of the setup advisor's analyst: company
-	// background spend on no seat, charged to the company's windows (ADR-0157).
-	AuxAdvisorAnalysis AuxPurpose = "advisor_analysis"
+	// AuxAdvisorModel is a round of the Advisor's model pass: company
+	// background spend on no seat, charged to the company's windows (ADR-0164).
+	AuxAdvisorModel AuxPurpose = "advisor_model"
 )
 
 // auxCondensePrefix is what every compaction's purpose begins with.
@@ -152,7 +152,7 @@ var auxPurposes = []AuxPurpose{
 	AuxPersistDecider, AuxCounterpartyProfiler, AuxSkillSynthesizer, AuxSkillRefiner,
 	AuxEpisodeCompaction, AuxSkillClustering, AuxSkillPromotion, AuxProviderProbe,
 	AuxAnswerKnowledge, AuxAssistantTurn, AuxAssistantTitle,
-	AuxAssistantBrief, AuxAssistantSummary, AuxAdvisorAnalysis,
+	AuxAssistantBrief, AuxAssistantSummary, AuxAdvisorModel,
 }
 
 // AuxPurposes is every purpose this build publishes, compactions included.

@@ -557,6 +557,7 @@ func reviewIdle(ev Evidence, _ func(string) SeatKind) []Finding {
 			words.Count(len(keys), "item in review", "items in review"),
 			[]Fact{{Key: "idle", Value: int64(len(keys))}}, recordsOf(RecordItem, keys))
 		f.Title, f.Why = reviewWords[w.how].title, reviewWords[w.how].why
+		f.Focus = w.how
 		out = append(out, f)
 	}
 	return out
