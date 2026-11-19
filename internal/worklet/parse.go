@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/named"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/routing"
@@ -289,13 +290,15 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		metadata[notify.BodyAuthorField] = record.Actor
 		metadata[notify.BodyAuthorKindField] = string(record.ActorKind)
 	}
+	subject := subjectLine(snapshot, record.Subject, record.Notify.Kind)
 	return notify.Inbound{
-		Source:    Source,
-		EventType: string(record.Notify.Kind),
-		Sender:    record.Actor,
-		Subject:   subjectLine(snapshot, record.Subject, record.Notify.Kind),
-		Body:      body,
-		Metadata:  metadata,
+		Source:      Source,
+		EventType:   string(record.Notify.Kind),
+		Sender:      record.Actor,
+		Subject:     subject.Text,
+		SubjectRefs: subject.Refs,
+		Body:        body,
+		Metadata:    metadata,
 		// WHO THE SENDER IS, by the record's own kind: the actor may be a seat's
 		// handle, a credential's login or a node's name, and only the kind tells
 		// the woken turn whether a colleague is asking or nobody is
@@ -410,16 +413,16 @@ func jsonText(value any) string {
 // false, and digests coalesce on the subject. AND THE TASK BY ITS ADDRESS
 // ([Snapshot.Address]), the id where another task claimed its key first: it
 // is the first reference a seat is shown, and a key there lands it on the
-// claimant.
-func subjectLine(snapshot Snapshot, subject Subject, kind ChangeKind) string {
-	key := snapshot.Address(subject)
-	if key == "" {
-		key = objectLabel(subject)
+// claimant. The task is named as one (package named), by its id.
+func subjectLine(snapshot Snapshot, subject Subject, kind ChangeKind) named.Line {
+	line := named.Words(objectLabel(subject))
+	if key := snapshot.Address(subject); key != "" {
+		line = named.Words("").Name(named.Item(snapshot.TaskID(subject), key))
 	}
 	if snapshot.Title == "" {
-		return fmt.Sprintf("%s: %s", key, kind)
+		return line.Words(fmt.Sprintf(": %s", kind))
 	}
-	return fmt.Sprintf("%s %s: %s", key, kind, snapshot.Title)
+	return line.Words(fmt.Sprintf(" %s: %s", kind, snapshot.Title))
 }
 
 // objectLabel is what a non-task subject is CALLED in one line.

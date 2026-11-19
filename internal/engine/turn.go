@@ -1864,8 +1864,8 @@ func DescribeTrigger(evs []*events.Event, fence provenance.Boundary) string {
 				continue
 			}
 		}
-		if summary, ok := ev.Data.(events.Summarizer); ok {
-			if s := provenance.Neutralise(fence, summary.Summary()); s != "" {
+		if summarised(ev) {
+			if s := provenance.Neutralise(fence, ev.Summary()); s != "" {
 				parts = append(parts, s)
 				continue
 			}
@@ -1879,6 +1879,14 @@ func DescribeTrigger(evs []*events.Event, fence provenance.Boundary) string {
 		return ""
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// summarised reports a payload that writes its own line, as a summary or as a
+// line that names what it is about ([events.Phraser]).
+func summarised(ev *events.Event) bool {
+	_, summary := ev.Data.(events.Summarizer)
+	_, phrase := ev.Data.(events.Phraser)
+	return summary || phrase
 }
 
 // fencedBriefer is a wake whose ask carries somebody else's words: its brief,

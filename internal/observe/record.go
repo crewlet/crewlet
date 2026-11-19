@@ -97,6 +97,7 @@ func Record(ev *events.Event) (store.EventRecord, bool) {
 		Time:         at,
 		Category:     category,
 		Summary:      ev.Summary(),
+		Refs:         ev.References(),
 		Actor:        ev.Actor(),
 		TraceID:      ev.TraceID,
 		SpanID:       ev.SpanID,
@@ -153,6 +154,7 @@ func Envelope(ev *events.Event) (livestate.Envelope, bool) {
 		Source:       ev.Source,
 		Actor:        ev.Actor(),
 		Summary:      ev.Summary(),
+		Refs:         ev.References(),
 		Category:     category,
 		TraceID:      ev.TraceID,
 		SpanID:       ev.SpanID,
@@ -247,7 +249,7 @@ func FeedRow(rec store.EventRecord) livestate.FeedRow {
 		// RFC3339Nano in UTC, the spelling [Envelope] gives a live row, so
 		// the two order against each other by instant.
 		Timestamp: rec.Time.UTC().Format(time.RFC3339Nano),
-		Source:    rec.Source, Actor: rec.Actor, Summary: rec.Summary,
+		Source:    rec.Source, Actor: rec.Actor, Summary: rec.Summary, Refs: rec.Refs,
 		Category: rec.Category, TraceID: rec.TraceID, SpanID: rec.SpanID,
 		ParentSpanID: rec.ParentSpanID, Topic: topic,
 		Failed: rec.Failed,

@@ -1063,7 +1063,14 @@ a colliding one.
 
 `Data` is the typed half: each registered event type is a Go type with its
 own fields and its own `Summary()` ("who did what", in a person's words) and
-an `Actor()` (role, then source, then agent id, then `system`). An event type
+an `Actor()` (role, then source, then agent id, then `system`). A type whose
+line names something a person can open (a work item, a change, a commit, a
+page, a turn) writes it as a line that says so (`internal/named`): the summary
+is the same words, and `References()` is each object it names, by its kind, its
+id and the words that spell it. The event store keeps them beside the summary
+(`refs`), the live feed and a turn's trigger carry them, and the dashboard
+draws each as a marked link to its page, only where the reader may open it
+([What a line names](../reference/api-endpoints.md#what-a-line-names)). An event type
 this build does not know decodes into the envelope with `Data` nil and its
 fields kept verbatim in `Extra`, and re-publishes losslessly.
 

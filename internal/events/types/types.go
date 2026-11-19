@@ -67,6 +67,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/named"
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
@@ -164,7 +165,11 @@ type Trigger struct {
 	Type string
 	// Summary is the waking event's one line ([events.Event.Summary]), held
 	// to [MaxTriggerSummaryBytes] where the descriptor is built.
-	Summary   string
+	Summary string
+	// Refs is what Summary names ([events.Event.References]). A ref whose
+	// words the bound cut off is kept: a reader that cannot find its words
+	// leaves it unmarked.
+	Refs      []named.Ref
 	Actor     string
 	Timestamp time.Time
 
@@ -264,6 +269,7 @@ func DescribeTrigger(e *events.Event) Trigger {
 		ID:        e.ID.String(),
 		Type:      e.Type,
 		Summary:   textcut.Within(e.Summary(), MaxTriggerSummaryBytes),
+		Refs:      e.References(),
 		Actor:     e.Actor(),
 		Timestamp: e.Timestamp,
 	}
@@ -293,7 +299,7 @@ func DescribeTrigger(e *events.Event) Trigger {
 // `t == Trigger{}` no longer compiles. A field added to Trigger must be added
 // here too; TestTriggerIsZeroSeesEveryField fails until it is.
 func (t Trigger) IsZero() bool {
-	return t.ID == "" && t.Type == "" && t.Summary == "" && t.Actor == "" &&
+	return t.ID == "" && t.Type == "" && t.Summary == "" && len(t.Refs) == 0 && t.Actor == "" &&
 		t.Timestamp.IsZero() && t.Integration == "" && t.Sender == "" &&
 		t.SourceEventType == "" && t.Origin.IsZero() && len(t.Origins) == 0
 }
@@ -319,6 +325,9 @@ func (t Trigger) Map() map[string]any {
 		"summary":   t.Summary,
 		"actor":     t.Actor,
 		"timestamp": timestamp,
+	}
+	if len(t.Refs) > 0 {
+		descriptor["refs"] = t.Refs
 	}
 	if t.Integration != "" {
 		descriptor["integration"] = t.Integration
@@ -362,6 +371,7 @@ type triggerWire struct {
 	ID              string          `json:"id"`
 	Type            string          `json:"type"`
 	Summary         string          `json:"summary"`
+	Refs            []named.Ref     `json:"refs"`
 	Actor           string          `json:"actor"`
 	Timestamp       string          `json:"timestamp"`
 	Integration     string          `json:"integration"`
@@ -383,7 +393,7 @@ func (t *Trigger) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("unmarshal trigger: %w", err)
 	}
 	*t = Trigger{
-		ID: wire.ID, Type: wire.Type, Summary: wire.Summary, Actor: wire.Actor,
+		ID: wire.ID, Type: wire.Type, Summary: wire.Summary, Refs: wire.Refs, Actor: wire.Actor,
 		Integration: wire.Integration, Sender: wire.Sender,
 		SourceEventType: wire.SourceEventType,
 		Origin:          wire.Origin, Origins: wire.Origins,
@@ -415,6 +425,20 @@ func lead(actor, phrase string) string {
 		return upperFirst(phrase)
 	}
 	return actor + " " + phrase
+}
+
+// leadLine is [lead] for a line that names what a person can open.
+func leadLine(actor string, l named.Line) named.Line {
+	if actor != "" {
+		return named.Words(actor + " ").Then(l)
+	}
+	// A line opening on a reference keeps its words as written: upper-cased,
+	// they would no longer be the words the reference is found by.
+	if len(l.Refs) > 0 && strings.HasPrefix(l.Text, l.Refs[0].Text) {
+		return l
+	}
+	l.Text = upperFirst(l.Text)
+	return l
 }
 
 // subject renders the "who, doing what" that the turn-engine summaries open

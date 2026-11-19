@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/named"
 )
 
 // The agent-learning lifecycle. Each fires from a learning worker after one
@@ -51,9 +52,10 @@ type ReflectionDue struct {
 // EventType is the "reflection_due" wire type.
 func (ReflectionDue) EventType() string { return "reflection_due" }
 
-// Summary names the turn the reflection is for.
-func (e ReflectionDue) Summary() string {
-	return fmt.Sprintf("Reflection due on %s's turn %s", e.Turn.AgentHandle, e.Turn.TurnID)
+// PhraseFor names the seat and the turn the reflection is for.
+func (e ReflectionDue) PhraseFor(string) named.Line {
+	return named.Words("Reflection due on ").Name(named.SeatRef(e.Turn.AgentHandle, e.Turn.AgentHandle)).
+		Words("'s turn ").Name(named.TurnRef(e.Turn.TurnID))
 }
 
 // MemoryScope is whose memory a persisted reflection belongs to.

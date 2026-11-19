@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/named"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
@@ -363,20 +364,27 @@ func (e AgentTurnStarted) Role() string { return e.RoleName }
 // AgentID is the instance running the turn.
 func (e AgentTurnStarted) AgentID() string { return e.Agent }
 
-// SummaryFor names the item when the turn has one, because that is the
-// question a feed line about a turn beginning is read to answer.
-func (e AgentTurnStarted) SummaryFor(actor string) string {
+// PhraseFor names the item when the turn has one, because that is the
+// question a feed line about a turn beginning is read to answer. A Worklet
+// task is named as one; another tracker's item is its words.
+func (e AgentTurnStarted) PhraseFor(actor string) named.Line {
 	verb := "started a turn"
 	if e.Resumed {
 		verb = "resumed a turn"
 	}
-	if e.WorkItem != nil {
-		if label := e.WorkItem.Key; label != "" {
-			return lead(actor, verb+" on "+label)
-		}
-		return lead(actor, verb+" on "+e.WorkItem.Ref())
+	if e.WorkItem == nil {
+		return leadLine(actor, named.Words(verb))
 	}
-	return lead(actor, verb)
+	line := named.Words(verb + " on ")
+	switch {
+	case e.WorkItem.Backend == WorkWorklet && e.WorkItem.Key != "":
+		line = line.Name(named.Item(e.WorkItem.ID, e.WorkItem.Key))
+	case e.WorkItem.Key != "":
+		line = line.Words(e.WorkItem.Key)
+	default:
+		line = line.Words(e.WorkItem.Ref())
+	}
+	return leadLine(actor, line)
 }
 
 // AgentTurnCompleted is the single-phase summary a dashboard reads at turn end.

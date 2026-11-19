@@ -744,6 +744,7 @@ func (s *Service) deliver(ctx context.Context, prompts Prompts, reg *Registry, e
 		SenderName:           senderName(reg, r.Inbound),
 		Writer:               r.Writer,
 		Subject:              r.Subject,
+		SubjectRefs:          r.SubjectRefs,
 		Body:                 Render(prompt, r.Inbound, reg),
 		FenceBoundary:        string(r.Fence),
 		SalientBody:          &salient,
