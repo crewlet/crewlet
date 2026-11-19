@@ -1458,8 +1458,6 @@ func notReanchored(t *testing.T, e *Engine, domain string, before cursorRow, dur
 			stats.CreatedAt, during)
 	}
 	for seq := before.at.Seq + 1; seq <= got.at.Seq; seq++ {
-		// A RECORD IS READ AS ITS APPLIER READS IT, through the fleet's seal: the
-		// log holds each one framed, and only its verified body is an envelope.
 		subject, payload, _, ok, err := statelog.VerifiedLog{Log: running.log,
 			Verifier: running.verifier}.At(t.Context(), seq)
 		if err != nil || !ok {
@@ -1472,18 +1470,20 @@ func notReanchored(t *testing.T, e *Engine, domain string, before cursorRow, dur
 			t.Errorf("%s's record %d on %s does not decode: %v", domain, seq, subject, err)
 			continue
 		}
-		// THE ALARMS' HISTORY is written by every node as its alarms move, and a
-		// recreated log raises one: an alarm episode on the advisor log is the
-		// node's own record of that, not a write the reanchor made.
-		if domain == (advisordomain.Domain{}).Name() && env.Kind == string(advisordomain.KindAlarm) {
-			continue
-		}
-		if !slices.Equal(env.Scope.Paths, []string{statelog.FrameworkScope}) {
+		if !slices.Equal(env.Scope.Paths, []string{statelog.FrameworkScope}) && !takenOfItsOwn(domain, env) {
 			t.Errorf("%s's checkpoint moved across record %d, a %q on %s — not a "+
 				"framework record, so something wrote the log during %s",
 				domain, seq, env.Kind, subject, during)
 		}
 	}
+}
+
+// takenOfItsOwn reports a record a log takes on a booting node whatever a
+// reanchor does: every alarm the node raises (a fresh node's backup_age among
+// them) is kept as an episode on the Advisor's log ([advisordomain.KindAlarm]),
+// a write no reanchor of another log makes.
+func takenOfItsOwn(domain string, env statelog.Envelope) bool {
+	return domain == (advisordomain.Domain{}).Name() && env.Kind == string(advisordomain.KindAlarm)
 }
 
 // testActivation is the activation an internal test's direct container writes

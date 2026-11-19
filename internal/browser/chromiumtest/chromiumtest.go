@@ -1,10 +1,10 @@
 // Package chromiumtest hands a case the Chromiums the suite drives and
 // launches them: the two Chrome for Testing builds scripts/chromium-pin.env
-// pins, the newest and the floor of internal/browser/cdp ([cdp.MinMajor]), and
-// never whichever Chrome the machine has. A case that drives Chromium drives
-// both ([Each]), so what it asserts holds at both ends of what the engine
-// promises to drive — unless its doc says why the floor adds nothing to its
-// claim, and it drives the newest alone ([Newest]).
+// pins, the newest and the floor ([browser.MinChromiumMajor]), and never
+// whichever Chrome the machine has. A case that drives Chromium drives both
+// ([Each]), so what it asserts holds at both ends of what the engine accepts —
+// unless its doc says why the floor adds nothing to its claim, and it drives
+// the newest alone ([Newest]).
 //
 // # Where the builds come from
 //
@@ -15,30 +15,30 @@
 // prerequisite by internal/prereqtest's one rule: it fails the case under
 // those targets, and skips it only in a bare `go test` outside make. A
 // build that is named is held to its pin's major — the newest at or above
-// MinMajor, the floor of MinMajor exactly, since a newer build in the floor's
-// place is a floor nobody is testing — by what it answers to --version.
+// MinChromiumMajor, the floor of MinChromiumMajor exactly, since a newer build
+// in the floor's place is a floor nobody is testing — by what it answers to
+// --version.
 //
 // # How a launch runs
 //
-// [LaunchPipe] speaks to Chromium over --remote-debugging-pipe, as a backend
-// on the engine host will; [LaunchPort] opens a DevTools port on loopback, as
-// a pool or a vendor hands one out, and [Dial] dials it. Each launch runs in a
-// process group of its own, with a profile in the case's temporary directory,
-// and is killed with its whole group and waited for when the case ends. It
-// ends with its test binary too, however the binary ends — interrupted,
-// signalled, killed for memory, or at go test's -timeout, none of which runs
-// a case's cleanup — rather than run on with a few hundred megabytes and a
-// profile directory and nothing left to stop it: every launch, LaunchPort's
-// too, speaks over the DevTools pipe, whose ends the binary holds, and exits
-// once they close, and on Linux the kernel kills it the moment its binary
-// dies. Its flags, each for a reason:
+// [LaunchPort] opens a DevTools port on loopback, which the artifact render's
+// client dials, as it dials the Chromium an operator runs, and through which
+// [Methods] reads a pin's own description of its protocol. Each launch runs in
+// a process group of its own, with a profile in the case's temporary
+// directory, and is killed with its whole group and waited for when the case
+// ends. It ends with its test binary too, however the binary ends —
+// interrupted, signalled, killed for memory, or at go test's -timeout, none of
+// which runs a case's cleanup — rather than run on with a few hundred
+// megabytes and a profile directory and nothing left to stop it: every launch
+// holds Chromium's DevTools pipe, which nothing writes, and exits once its ends
+// close, and on Linux the kernel kills it the moment its binary dies. Its
+// flags, each for a reason:
 //
 //   - --headless=new: the only headless mode a Chrome for Testing `chrome`
-//     has, and what a backend on the engine host runs;
+//     has;
 //   - --no-sandbox: whether Chromium's own sandbox starts is a property of the
 //     host (Ubuntu from 23.10, GitHub's runners among them, restricts the
-//     unprivileged user namespaces it needs), and no protocol case asserts it
-//     — the engine's own backend holds its sandbox itself;
+//     unprivileged user namespaces it needs), and no case here asserts it;
 //   - --no-first-run and --no-default-browser-check: nothing waits on a
 //     question nobody answers;
 //   - --host-resolver-rules, mapping every host but localhost and
@@ -51,7 +51,10 @@
 //     and what none reaches the resolver's rules refuse;
 //   - --password-store=basic and --use-mock-keychain: macOS never prompts for
 //     its keychain and hangs a case;
-//   - about:blank, last: the first tab opens on nothing.
+//   - about:blank, last, unless a case names its first tab's address among a
+//     launch's args: the first tab opens on nothing, where it would open the
+//     new tab page, and a headless Chromium opens one tab from its command
+//     line alone.
 //
 // Real-browser cases run one Chromium at a time — no t.Parallel among them —
 // since each takes a few hundred megabytes and a core beside the rest of a
@@ -64,20 +67,24 @@ package chromiumtest
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/crewlet/crewlet/internal/browser/cdp"
+	"github.com/crewlet/crewlet/internal/browser"
 	"github.com/crewlet/crewlet/internal/httpx"
 	"github.com/crewlet/crewlet/internal/prereqtest"
 	"github.com/crewlet/crewlet/internal/procgroup"
@@ -92,37 +99,52 @@ const (
 )
 
 // remedy is what makes a pin's build present, for the words of a case that
-// lacks it.
+// lacks it: its loop runs the case's own package.
 func remedy(pin string) string {
 	return fmt.Sprintf("`make chromium` fetches it and `scripts/chromium.sh %s` prints its path, which the make "+
-		"targets that run the whole suite name here; for one package, as three statements, each substitution "+
-		"its own: newest=$(scripts/chromium.sh newest) && floor=$(scripts/chromium.sh floor) && "+
-		"%s=\"$newest\" %s=\"$floor\" go test ./internal/browser/cdp/", pin, newestEnv, floorEnv)
+		"targets that run the whole suite name here; for this package alone, as three statements, each "+
+		"substitution its own: newest=$(scripts/chromium.sh newest) && floor=$(scripts/chromium.sh floor) && "+
+		"%s=\"$newest\" %s=\"$floor\" go test %s", pin, newestEnv, floorEnv, testedPackage())
 }
 
+// testedPackage is the package this test binary tests, as go test names it
+// from the module's root: a test binary's build info gives its main package
+// the tested package's path with .test after it.
+var testedPackage = sync.OnceValue(func() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "<the case's package>"
+	}
+	tested := strings.TrimSuffix(bi.Path, ".test")
+	if rel, ok := strings.CutPrefix(tested, bi.Main.Path+"/"); ok {
+		return "./" + rel + "/"
+	}
+	return tested
+})
+
 // Newest is the newest pinned Chromium, Chrome for Testing's Stable: an
-// executable at or above cdp.MinMajor.
+// executable at or above browser.MinChromiumMajor.
 func Newest(t testing.TB) string {
 	t.Helper()
-	chrome := prereqtest.Named(t, newestEnv, "the newest pinned Chromium, which every protocol case drives",
-		remedy("newest"))
-	if v := versionOf(t, newestEnv, "newest", chrome); v.major < cdp.MinMajor {
-		t.Fatalf("%s=%s is Chromium %s, below cdp.MinMajor %d, the oldest the engine drives: %s",
-			newestEnv, chrome, v.version, cdp.MinMajor, remedy("newest"))
+	chrome := prereqtest.Named(t, newestEnv, "the newest pinned Chromium, which every case that drives Chromium "+
+		"drives", remedy("newest"))
+	if v := versionOf(t, newestEnv, "newest", chrome); v.major < browser.MinChromiumMajor {
+		t.Fatalf("%s=%s is Chromium %s, below browser.MinChromiumMajor %d, the oldest the engine accepts: %s",
+			newestEnv, chrome, v.version, browser.MinChromiumMajor, remedy("newest"))
 	}
 	return chrome
 }
 
-// Floor is the floor's pinned Chromium, the newest patch of cdp.MinMajor: an
-// executable of that major exactly, since a newer one in its place is a floor
-// nobody is testing.
+// Floor is the floor's pinned Chromium, the newest patch of
+// browser.MinChromiumMajor: an executable of that major exactly, since a newer
+// one in its place is a floor nobody is testing.
 func Floor(t testing.TB) string {
 	t.Helper()
-	chrome := prereqtest.Named(t, floorEnv, "the floor's pinned Chromium, the oldest the engine drives, which the "+
-		"protocol cases drive", remedy("floor"))
-	if v := versionOf(t, floorEnv, "floor", chrome); v.major != cdp.MinMajor {
-		t.Fatalf("%s=%s is Chromium %s, and the floor is major %d (cdp.MinMajor): a floor nobody is testing — %s",
-			floorEnv, chrome, v.version, cdp.MinMajor, remedy("floor"))
+	chrome := prereqtest.Named(t, floorEnv, "the floor's pinned Chromium, the oldest the engine accepts, which every "+
+		"case that drives Chromium drives unless its doc says why the floor adds nothing to its claim", remedy("floor"))
+	if v := versionOf(t, floorEnv, "floor", chrome); v.major != browser.MinChromiumMajor {
+		t.Fatalf("%s=%s is Chromium %s, and the floor is major %d (browser.MinChromiumMajor): a floor nobody is "+
+			"testing — %s", floorEnv, chrome, v.version, browser.MinChromiumMajor, remedy("floor"))
 	}
 	return chrome
 }
@@ -281,21 +303,24 @@ func (w *tail) String() string {
 }
 
 // command is chrome under every launch's flags and args, its first tab on
-// about:blank, speaking the protocol over --remote-debugging-pipe on the
-// pipes p hands it, in a process group of its own that t's end kills, and
-// tied to this test binary (tie).
+// about:blank or on the one address args name (a headless Chromium opens one
+// tab from its command line), holding Chromium's DevTools pipe, which nothing
+// writes, on the pipes p hands it, in a process group of its own that t's end
+// kills, and tied to this test binary (tie).
 //
 // The launch's cleanup kills that group, and only then reaps the leader. The
 // context's Cancel stays the standard library's, which kills the leader alone
-// through its *os.Process and refuses one already reaped. A Cancel that
-// signalled the group by the leader's pid would not be safe: t's context
-// ends just before the cleanup runs, and nothing makes os/exec call Cancel
-// before the cleanup's Wait, so the call can come once Wait has reaped the
-// leader, whose pid may by then lead somebody else's group.
+// and refuses one already reaped: t's context ends just before the cleanup
+// runs, and nothing orders os/exec's Cancel before the cleanup's Wait, so a
+// Cancel that signalled the group by the leader's pid could reach a recycled
+// one.
 func command(t testing.TB, p *pipes, chrome string, args ...string) *exec.Cmd {
 	argv := append(flags(t.TempDir()), "--remote-debugging-pipe")
 	argv = append(argv, args...)
-	cmd := exec.CommandContext(t.Context(), chrome, append(argv, "about:blank")...)
+	if !slices.ContainsFunc(args, func(arg string) bool { return !strings.HasPrefix(arg, "-") }) {
+		argv = append(argv, "about:blank")
+	}
+	cmd := exec.CommandContext(t.Context(), chrome, argv...)
 	cmd.ExtraFiles = []*os.File{p.chromeReads, p.chromeWrites}
 	procgroup.Set(cmd)
 	tie(cmd)
@@ -304,14 +329,14 @@ func command(t testing.TB, p *pipes, chrome string, args ...string) *exec.Cmd {
 }
 
 // pipes are a launch's two DevTools pipes: fd 3, which Chromium reads, and
-// fd 4, which it writes. Every launch speaks over them, LaunchPort's too, and
-// that is what ends a Chromium with the test binary that started it whatever
-// ends the binary — an interrupt, a signal, an out-of-memory kill, go test's
-// -timeout, none of which runs a case's cleanup — on every platform: the
-// binary holds its ends until the case's cleanup, the kernel closes them when
-// the binary goes, and a Chromium whose pipe is closed exits, rather than run
-// on with a few hundred megabytes and a profile directory and nothing left to
-// stop it. On Linux the kernel's parent-death signal ends it sooner (tie).
+// fd 4, which it writes. Every launch holds them, and that is what ends a
+// Chromium with the test binary that started it whatever ends the binary — an
+// interrupt, a signal, an out-of-memory kill, go test's -timeout, none of
+// which runs a case's cleanup — on every platform: the binary holds its ends
+// until the case's cleanup, the kernel closes them when the binary goes, and a
+// Chromium whose pipe is closed exits, rather than run on with a few hundred
+// megabytes and a profile directory and nothing left to stop it. On Linux the
+// kernel's parent-death signal ends it sooner (tie).
 type pipes struct {
 	chromeReads, chromeWrites *os.File // Chromium's ends, its own once it starts
 	weRead, weWrite           *os.File // the test binary's
@@ -348,32 +373,6 @@ func (p *pipes) started() {
 	_ = p.chromeWrites.Close()
 }
 
-// LaunchPipe launches chrome speaking the protocol over
-// --remote-debugging-pipe — fd 3 what it reads, fd 4 what it writes — and
-// returns the connection over those pipes and the process, both ended with
-// t. args come before the first tab's about:blank.
-func LaunchPipe(t testing.TB, chrome string, args ...string) (*cdp.Conn, *Process) {
-	t.Helper()
-	p := newPipes(t)
-	cmd := command(t, p, chrome, args...)
-	stderr := &tail{}
-	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("starting %s: %v", chrome, err)
-	}
-	t.Cleanup(func() {
-		_ = procgroup.Kill(cmd.Process.Pid)
-		_ = cmd.Wait()
-		if t.Failed() {
-			t.Logf("%s's stderr ended with:\n%s", chrome, stderr)
-		}
-	})
-	p.started()
-	c := cdp.NewPipe(p.weRead, p.weWrite, cdp.Options{})
-	t.Cleanup(func() { _ = c.Close() })
-	return c, &Process{cmd: cmd}
-}
-
 // Endpoint is a Chromium launched with a DevTools port on loopback.
 type Endpoint struct {
 	// Browser is its browser websocket, as it printed it:
@@ -400,9 +399,9 @@ const listenTimeout = time.Minute
 
 // LaunchPort launches chrome with a DevTools port on loopback, chosen by
 // Chromium (--remote-debugging-port=0), and returns where it listens once it
-// has printed so; it is ended with t. It speaks over the DevTools pipe as
-// well, which the case never writes and holds to end the browser with the
-// test binary (pipes). args come before the first tab's about:blank.
+// has printed so; it is ended with t. It holds the DevTools pipe too, which
+// nothing writes, to end the browser with the test binary (pipes). args come
+// before the first tab's about:blank, which an address among them replaces.
 func LaunchPort(t testing.TB, chrome string, args ...string) Endpoint {
 	t.Helper()
 	p := newPipes(t)
@@ -462,14 +461,50 @@ func LaunchPort(t testing.TB, chrome string, args ...string) Endpoint {
 	return Endpoint{}
 }
 
-// Dial dials ep's browser websocket over the engine's own transport, as a
-// backend dials a pool, and closes the connection when t ends.
-func Dial(t testing.TB, ep Endpoint) *cdp.Conn {
+// Methods is every command and event chrome's own protocol describes, each
+// spelled as its domain and its name joined by a dot, read from the
+// /json/protocol of a launch under t: per call, since a launch runs under its
+// caller's t, whose end ends it.
+func Methods(t testing.TB, chrome string) map[string]bool {
 	t.Helper()
-	c, err := cdp.Dial(t.Context(), ep.Browser, cdp.DialOptions{HTTPClient: httpx.Client(0)})
+	ep := LaunchPort(t, chrome)
+	ctx, cancel := context.WithTimeout(t.Context(), listenTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ep.HTTP+"/json/protocol", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = c.Close() })
-	return c
+	resp, err := httpx.Client(0).Do(req)
+	if err != nil {
+		t.Fatalf("%s/json/protocol: %v", ep.HTTP, err)
+	}
+	defer resp.Body.Close()
+	type named struct {
+		Name string `json:"name"`
+	}
+	var desc struct {
+		Domains []struct {
+			Domain   string  `json:"domain"`
+			Commands []named `json:"commands"`
+			Events   []named `json:"events"`
+		} `json:"domains"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&desc); err != nil {
+		t.Fatalf("%s/json/protocol: %v", ep.HTTP, err)
+	}
+	if len(desc.Domains) < minDomains {
+		t.Fatalf("%s/json/protocol described %d domains: it is describing nothing", ep.HTTP, len(desc.Domains))
+	}
+	methods := map[string]bool{}
+	for _, d := range desc.Domains {
+		for _, m := range slices.Concat(d.Commands, d.Events) {
+			methods[d.Domain+"."+m.Name] = true
+		}
+	}
+	return methods
 }
+
+// minDomains is the fewest domains a pin's protocol may describe: both pins
+// describe nearly sixty, so an answer of fewer than twenty is one that
+// describes nothing the walk could hold Go to.
+const minDomains = 20

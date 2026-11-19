@@ -1,6 +1,8 @@
 package modelpass
 
 import (
+	"sync"
+
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 )
@@ -42,59 +44,64 @@ const submitDescription = "Submit the findings, each citing the records and numb
 const explainDescription = "Submit an explanation of each finding findings_to_explain lists, by its id. " +
 	"The engine keeps only those that cite that finding's own numbers and records."
 
-// explainSchema is the explanations' shape.
-var explainSchema = map[string]any{
-	"type": "object", "additionalProperties": false, "required": []string{"explanations"},
-	"properties": map[string]any{"explanations": map[string]any{
-		"type": "array", "maxItems": advisor.MaxExplained,
-		"items": map[string]any{
-			"type": "object", "additionalProperties": false, "required": []string{"id", "text"},
-			"properties": map[string]any{
-				"id":   map[string]any{"type": "string"},
-				"text": map[string]any{"type": "string", "maxLength": advisor.MaxExplanationBytes},
+// explainSchema is the explanations' shape, built at first use as submitSchema
+// is, off every push's hook (cmd/crewlet's TestTheHookPaysLittleForTheEnginesInit).
+var explainSchema = sync.OnceValue(func() map[string]any {
+	return map[string]any{
+		"type": "object", "additionalProperties": false, "required": []string{"explanations"},
+		"properties": map[string]any{"explanations": map[string]any{
+			"type": "array", "maxItems": advisor.MaxExplained,
+			"items": map[string]any{
+				"type": "object", "additionalProperties": false, "required": []string{"id", "text"},
+				"properties": map[string]any{
+					"id":   map[string]any{"type": "string"},
+					"text": map[string]any{"type": "string", "maxLength": advisor.MaxExplanationBytes},
+				},
 			},
-		},
-	}},
-}
+		}},
+	}
+})
 
 // submitSchema is the submission's shape, [advisor.Submitted] for each finding.
-var submitSchema = map[string]any{
-	"type": "object", "additionalProperties": false, "required": []string{"findings"},
-	"properties": map[string]any{"findings": map[string]any{
-		"type": "array", "maxItems": advisor.MaxAnalystFindings,
-		"items": map[string]any{
-			"type": "object", "additionalProperties": false,
-			"required": []string{"title", "why", "severity", "subject", "facts", "records", "fix"},
-			"properties": map[string]any{
-				"title":    map[string]any{"type": "string", "maxLength": advisor.MaxAnalystTitle},
-				"why":      map[string]any{"type": "string", "maxLength": advisor.MaxAnalystWhy},
-				"item":     map[string]any{"type": "string", "maxLength": advisor.MaxAnalystTitle},
-				"severity": map[string]any{"enum": []string{string(advisor.SeverityCosts), string(advisor.SeverityNote)}},
-				"subject": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind"},
-					"properties": map[string]any{
-						"kind": map[string]any{"enum": []string{string(advisor.SubjectCompany),
-							string(advisor.SubjectSeat), string(advisor.SubjectRepository)}},
-						"seat": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}}},
-				"facts": map[string]any{"type": "array", "minItems": 1, "items": map[string]any{
-					"type": "object", "additionalProperties": false, "required": []string{"key", "value", "from"},
-					"properties": map[string]any{"key": map[string]any{"type": "string"},
-						"value": map[string]any{"type": "integer"}, "from": map[string]any{"type": "string"}}}},
-				"records": map[string]any{"type": "array", "minItems": 1, "maxItems": advisor.MaxAnalystRecords,
-					"items": map[string]any{"type": "object", "additionalProperties": false,
-						"required": []string{"kind", "id"}, "properties": map[string]any{
-							"kind": map[string]any{"enum": []string{string(advisor.RecordItem),
-								string(advisor.RecordTurn), string(advisor.RecordChange)}},
-							"id": map[string]any{"type": "string"}}}},
-				"fix": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"builder"},
-					"properties": map[string]any{
-						"builder": map[string]any{"enum": builderNames()},
-						"seat":    map[string]any{"type": "string"}, "period": map[string]any{"enum": []string{"day", "week", "month"}},
-						"value": map[string]any{"type": "integer"}, "entry": map[string]any{"type": "string"},
-						"target": map[string]any{"type": "string"}}},
+var submitSchema = sync.OnceValue(func() map[string]any {
+	return map[string]any{
+		"type": "object", "additionalProperties": false, "required": []string{"findings"},
+		"properties": map[string]any{"findings": map[string]any{
+			"type": "array", "maxItems": advisor.MaxAnalystFindings,
+			"items": map[string]any{
+				"type": "object", "additionalProperties": false,
+				"required": []string{"title", "why", "severity", "subject", "facts", "records", "fix"},
+				"properties": map[string]any{
+					"title":    map[string]any{"type": "string", "maxLength": advisor.MaxAnalystTitle},
+					"why":      map[string]any{"type": "string", "maxLength": advisor.MaxAnalystWhy},
+					"item":     map[string]any{"type": "string", "maxLength": advisor.MaxAnalystTitle},
+					"severity": map[string]any{"enum": []string{string(advisor.SeverityCosts), string(advisor.SeverityNote)}},
+					"subject": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"kind"},
+						"properties": map[string]any{
+							"kind": map[string]any{"enum": []string{string(advisor.SubjectCompany),
+								string(advisor.SubjectSeat), string(advisor.SubjectRepository)}},
+							"seat": map[string]any{"type": "string"}, "name": map[string]any{"type": "string"}}},
+					"facts": map[string]any{"type": "array", "minItems": 1, "items": map[string]any{
+						"type": "object", "additionalProperties": false, "required": []string{"key", "value", "from"},
+						"properties": map[string]any{"key": map[string]any{"type": "string"},
+							"value": map[string]any{"type": "integer"}, "from": map[string]any{"type": "string"}}}},
+					"records": map[string]any{"type": "array", "minItems": 1, "maxItems": advisor.MaxAnalystRecords,
+						"items": map[string]any{"type": "object", "additionalProperties": false,
+							"required": []string{"kind", "id"}, "properties": map[string]any{
+								"kind": map[string]any{"enum": []string{string(advisor.RecordItem),
+									string(advisor.RecordTurn), string(advisor.RecordChange)}},
+								"id": map[string]any{"type": "string"}}}},
+					"fix": map[string]any{"type": "object", "additionalProperties": false, "required": []string{"builder"},
+						"properties": map[string]any{
+							"builder": map[string]any{"enum": builderNames()},
+							"seat":    map[string]any{"type": "string"}, "period": map[string]any{"enum": []string{"day", "week", "month"}},
+							"value": map[string]any{"type": "integer"}, "entry": map[string]any{"type": "string"},
+							"target": map[string]any{"type": "string"}}},
+				},
 			},
-		},
-	}},
-}
+		}},
+	}
+})
 
 func builderNames() []string {
 	var out []string
