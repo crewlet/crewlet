@@ -120,15 +120,26 @@ type WeekFlow struct {
 	Pickups []time.Duration
 }
 
-// heldWords is why work was held, as each held cause's metric says it.
-var heldWords = map[worklet.FlowCause]string{
-	worklet.FlowCausePaused:          "its seat was paused",
-	worklet.FlowCauseUnplaced:        "no server ran its seat",
-	worklet.FlowCauseBudget:          "its seat was out of budget",
-	worklet.FlowCauseLimit:           "its seat's model was at its limit",
-	worklet.FlowCauseParkedElsewhere: "its seat waited on a person for other work",
-	worklet.FlowCauseDeparted:        "its assignee left the company",
-	worklet.FlowCauseNobody:          "it had no assignee",
+// heldWords is why work was held, as each held cause's metric says it: a
+// switch, not a table, so the engine allocates nothing for it at init.
+func heldWords(cause worklet.FlowCause) string {
+	switch cause {
+	case worklet.FlowCausePaused:
+		return "its seat was paused"
+	case worklet.FlowCauseUnplaced:
+		return "no server ran its seat"
+	case worklet.FlowCauseBudget:
+		return "its seat was out of budget"
+	case worklet.FlowCauseLimit:
+		return "its seat's model was at its limit"
+	case worklet.FlowCauseParkedElsewhere:
+		return "its seat waited on a person for other work"
+	case worklet.FlowCauseDeparted:
+		return "its assignee left the company"
+	case worklet.FlowCauseNobody:
+		return "it had no assignee"
+	}
+	return string(cause)
 }
 
 // WeekMetrics is the numbers of the week ev and flow were read for, each
@@ -206,11 +217,7 @@ func heldByCause(held map[worklet.FlowCause]time.Duration) []Metric {
 	var out []Metric
 	for _, cause := range worklet.FlowCauses {
 		if h := hours(held[cause]); h > 0 {
-			words, ok := heldWords[cause]
-			if !ok {
-				words = string(cause)
-			}
-			out = append(out, Metric{Key: "held_h." + string(cause), Label: "Hours held because " + words,
+			out = append(out, Metric{Key: "held_h." + string(cause), Label: "Hours held because " + heldWords(cause),
 				Value: h, Unit: UnitHours})
 		}
 	}

@@ -472,11 +472,7 @@ func refuseNotOpen(w http.ResponseWriter, row advisordomain.FindingRow) {
 			fields["effect_due_at"] = row.EffectDueAt.UTC()
 		}
 	} else {
-		words, ok := closedWords[row.State]
-		if !ok {
-			words = "This finding is closed already."
-		}
-		fields["outcome"], fields["detail"] = "closed", words
+		fields["outcome"], fields["detail"] = "closed", closedWords(row.State)
 		if !row.ClosedAt.IsZero() {
 			fields["closed_at"] = row.ClosedAt.UTC()
 		}
@@ -484,10 +480,18 @@ func refuseNotOpen(w http.ResponseWriter, row advisordomain.FindingRow) {
 	httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeConflict, fields)
 }
 
-// closedWords says a closed finding's state to the person who pressed on it.
-var closedWords = map[advisordomain.State]string{
-	advisordomain.StateResolved:  "This finding is resolved already: what it found no longer holds.",
-	advisordomain.StateDismissed: "This finding was dismissed; reopen it to act on it.",
-	advisordomain.StateRetired:   "This finding was retired: the Advisor no longer checks for it.",
-	advisordomain.StateExpired:   "This finding expired: it was not seen again for long enough.",
+// closedWords says a closed finding's state to the person who pressed on it:
+// a switch, not a table, so the engine allocates nothing for it at init.
+func closedWords(state advisordomain.State) string {
+	switch state {
+	case advisordomain.StateResolved:
+		return "This finding is resolved already: what it found no longer holds."
+	case advisordomain.StateDismissed:
+		return "This finding was dismissed; reopen it to act on it."
+	case advisordomain.StateRetired:
+		return "This finding was retired: the Advisor no longer checks for it."
+	case advisordomain.StateExpired:
+		return "This finding expired: it was not seen again for long enough."
+	}
+	return "This finding is closed already."
 }
