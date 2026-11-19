@@ -1790,15 +1790,15 @@ func TestAThreadIsWalkedWithinItsRecordsBound(t *testing.T) {
 // written twice read by its last value. Every other content, a ToolSearch's
 // list of tool references, two text blocks, an empty list, an image, a key
 // spelt in another case, a `text` that is no string (null among it), absent
-// or null, has no text, -1, which no log's output matches. And a list a line
-// long is read no further than its second element: it costs no more than a
-// list of two.
+// or null, has no text, -1, which no log's output matches. And a list of a
+// MiB is passed over past its second element: it costs its line's reading at
+// most 16 KiB more than a list of two, no allocation per element.
 //
 // Not parallel: the allocations are the process's, and a parallel case's
 // would be counted with this one's.
 //
-// Mutation: decode a result's content whole, its list before its first
-// element is held to a type, and the long list costs an allocation an element;
+// Mutation: keep a copy of each element of a result's content list past its
+// first, and the long list costs an allocation an element;
 // or take any list's first text block for its text, and two blocks match;
 // take an element's `text` of any kind for its text, and a null one reads as
 // the empty text.
@@ -1850,20 +1850,23 @@ func TestAResultsTextIsAStringOrOneTextBlock(t *testing.T) {
 			t.Errorf("its records %+v; want one result with no text", records)
 		}
 	})
-	t.Run("a list a line long", func(t *testing.T) {
-		head := `[{"type":"text","text":"x"},`
-		short := []byte(head + `1]`)
-		long := []byte(head + strings.Repeat(`1,`, (listBytes-len(head))/2) + `1]`)
-		for _, list := range [][]byte{short, long} {
-			if text, ok := resultText(list); ok {
-				t.Fatalf("a list of a text block and more reads as the text %q; want none", text)
-			}
+	t.Run("a list of a MiB", func(t *testing.T) {
+		line := func(n int) []scanPart {
+			return scanLine(scanLit(`{"type":"user","message":{"role":"user","content":[{"type":"tool_result",`+
+				`"tool_use_id":"`+id+`","content":[{"type":"text","text":"x"}`),
+				[]scanPart{{",1", n}}, scanLit(`]}]}}`))
 		}
-		shortObjects, _ := allocationsOf(func() { _, _ = resultText(short) })
-		longObjects, longBytes := allocationsOf(func() { _, _ = resultText(long) })
-		if longObjects > shortObjects+listSlack || longBytes >= uint64(len(long)) {
-			t.Errorf("a list of %d bytes costs %d allocations and %d bytes, where a list of two costs %d: "+
-				"it is read past its second element", len(long), longObjects, longBytes, shortObjects)
+		short, long := line(1), line(listBytes/2)
+		shortCost, _, shortErr := scanAllocated(t.Context(), short, short, 3)
+		longCost, read, err := scanAllocated(t.Context(), short, long, 2)
+		m, refused := read.Message()
+		if shortErr != nil || err != nil || refused != nil || len(m.Calls()) != 1 || m.Calls()[0].Text.Bytes() != -1 {
+			t.Fatalf("a result of a text block and a MiB more reads as %v, %v, its calls %+v; want one result "+
+				"of no text", err, refused, m.Calls())
+		}
+		if longCost > shortCost+16<<10 {
+			t.Errorf("a result list of a MiB costs its line's reading %d bytes, where a list of two costs %d: it is "+
+				"read past its second element", longCost, shortCost)
 		}
 	})
 }
@@ -2074,7 +2077,7 @@ func TestAReadPathHeldTwiceLeavesTheSessionUnread(t *testing.T) {
 // Mutation: hand eachMember no plaintext bound, and the member past it passes.
 func TestAnUnreadMemberIsHeldToTheStreamsBound(t *testing.T) {
 	t.Parallel()
-	bounds := scrubBounds{plain: 1 << 20, piece: scrubPieceMaxBytes}
+	bounds := scrubBounds{plain: 1 << 20}
 	other := claudeProjectPrefix + ctOther + ".jsonl"
 	for name, tc := range map[string]struct {
 		size int
@@ -2217,25 +2220,28 @@ func TestAReadingStopsBetweenLinesWhenItsContextEnds(t *testing.T) {
 	}
 }
 
-// HOLDINGS ARE HELD TO THEIR BOUNDS: a line one byte past the longest a thread
-// is read with ends the reading, the layer's bound named, where one at it is
-// read; a main thread that is no regular file, a link or a directory, is not
-// read, as the box restores none; an archive holding no main thread is no
-// reading, never one of a session that holds nothing; and an archive naming
-// more subagents than [holdingsMaxAgents], or a main thread holding more legs
-// of their work than [holdingsMaxLegs], its notifications among them, is no
-// reading, where one at each bound is read.
+// HOLDINGS ARE HELD TO THEIR BOUNDS: a line holding a value it reads whole
+// past [threadValueMax], or whose facts pass [threadLineMax], ends the
+// reading, the layer's bound named, where a 9 MiB line of a value no reader
+// reads is read; a main thread that is no regular file is not read, as the
+// box restores none; an archive holding no main thread is no reading; and one
+// naming more subagents than [holdingsMaxAgents], or more legs than
+// [holdingsMaxLegs], notifications among them, is none, where one at each
+// bound is read.
 //
-// Mutation: read a main thread that is no regular file as one with no lines,
-// or an archive with no main thread as a session holding none of its calls,
-// and the reading stands; or keep a notification beside the legs uncounted,
-// and the notification past the bound is read.
+// Mutation: read a main thread that is no regular file, or no main thread, as
+// a session of no calls; count no notification beside the legs; or read a line
+// past a bound as a refused line: and the reading stands.
 func TestHoldingsAreHeldToTheirBounds(t *testing.T) {
 	t.Parallel()
 	call := hsLogged("toolu_bounds", "bounds done")
 	pad := func(n int) string { // a line of n bytes, its break included
 		head, tail := `{"type":"queue-operation","content":"`, `"}`
 		return head + strings.Repeat("x", n-1-len(head)-len(tail)) + tail
+	}
+	called := func(n int) string { // a reply of n calls, whose facts pass their bound before its bytes do
+		return ctAssistant(ctUUID(1), ctUUID(2), "["+strings.Repeat(`{"type":"tool_use","id":"toolu_1",`+
+			`"name":"Bash","input":{}},`, n-1)+`{"type":"tool_use","id":"toolu_1","name":"Bash","input":{}}]`)
 	}
 	main := func(lines ...string) tarMember {
 		return tarMember{h: tar.Header{Name: hsMain, Mode: 0o600, Typeflag: tar.TypeReg}, body: hsThread(lines...)}
@@ -2270,10 +2276,10 @@ func TestHoldingsAreHeldToTheirBounds(t *testing.T) {
 		"legs at their bound":                         {legs(holdingsMaxLegs, false), true, false},
 		"legs past their bound":                       {legs(holdingsMaxLegs+1, false), false, false},
 		"legs at their bound, and one's notification": {legs(holdingsMaxLegs, true), false, false},
-		"a line at its bound": {[]tarMember{{h: tar.Header{Name: hsMain, Mode: 0o600, Typeflag: tar.TypeReg},
-			body: hsThread(pad(threadLineMax))}}, true, false},
-		"a line past its bound": {[]tarMember{{h: tar.Header{Name: hsMain, Mode: 0o600, Typeflag: tar.TypeReg},
-			body: hsThread(pad(threadLineMax + 1))}}, false, true},
+		"a 9 MiB line of a value no reader reads":     {[]tarMember{main(pad(9 << 20))}, true, false},
+		"a value past its bound": {[]tarMember{main(ctBrief(strings.Repeat("u", threadValueMax-1)))}, false,
+			true},
+		"facts past their bound": {[]tarMember{main(called(200_000))}, false, true},
 		"a link named as the main thread": {[]tarMember{{h: tar.Header{Name: hsMain, Typeflag: tar.TypeSymlink,
 			Linkname: "elsewhere.jsonl"}}}, false, false},
 		"a directory named as the main thread": {[]tarMember{{h: tar.Header{Name: hsMain + "/", Mode: 0o700,
@@ -3534,7 +3540,7 @@ func TestACallsRecordsInTwoThreadsAreTold(t *testing.T) {
 // its line; an agent or a leg outside its rule; the ids in the other order; a
 // line between them and the status; or a status other than completed, or with
 // more on its line. Read as the walk reads one: the text a user record's
-// content, through the line's decode ([decodeThreadLine]) and the message's
+// content, through the line's reading ([threadReader.Next]) and the message's
 // [threadMessage.Notification].
 //
 // Mutation: read any status as completed, read past a line that is no output
@@ -3847,6 +3853,41 @@ func TestEveryThreadOfASessionIsReadThroughOneReader(t *testing.T) {
 	}
 }
 
+// THE LINES' BOUND IS THE READING'S, SHARED BY ITS THREADS
+// ([holdingsWalk.reader]): each thread member the walk reads takes what the
+// ones before it left of [threadLinesMax], as their bytes share
+// [threadPlainMax], so a session of many subagents reads one bound's lines,
+// never one a thread. A session whose main thread and subagent's thread hold
+// the bound between them reads whole; with one line fewer left, the
+// subagent's thread ends the reading with errThreadBound.
+//
+// Mutation: hand each member the whole bound, and the session past it reads
+// whole.
+func TestEveryThreadOfASessionSharesTheLinesBound(t *testing.T) {
+	t.Parallel()
+	s := hsResumed(t)
+	lines := len(s.main) + len(s.thread)
+	for name, tc := range map[string]struct {
+		left int
+		past bool
+	}{
+		"the bound its threads hold between them": {left: lines},
+		"one line fewer left":                     {left: lines - 1, past: true},
+	} {
+		w := newHoldingsWalk(ctSession, hsAsk(hsLogged(hsSubCall, hsSubOut)), hsBounds())
+		w.linesLeft = tc.left
+		err := eachMember(bytes.NewReader(tarOfMembers(t, s.members())), hsBounds(),
+			func(h *tar.Header, member io.Reader) error { return w.member(t.Context(), h, member) })
+		switch {
+		case tc.past && !errors.Is(err, errThreadBound):
+			t.Errorf("%s: the walk ended with %v; want the lines' bound", name, err)
+		case !tc.past && (err != nil || !w.read[hsMain] || !w.read[hsAgentThread]):
+			t.Errorf("%s: the walk ended with %v, its main thread read %t and its subagent's %t; want both read "+
+				"whole", name, err, w.read[hsMain], w.read[hsAgentThread])
+		}
+	}
+}
+
 // NO ID THE CALL-ID RULE REFUSES IS KEPT: an id is the box's word, as long as a
 // line, and nothing can link, answer or notice a call under one, so a leg filed
 // under it would hold the box's bytes until the walk ends, a hundred mebibytes
@@ -3899,17 +3940,17 @@ func TestNoIDTheCallIDRuleRefusesIsKept(t *testing.T) {
 // of it is read. Its subagent's calls are told under its heading, whatever that
 // result says, and its thread recording no second leg; and what it says why
 // quotes no such id: a send under an id one byte past the rule's bound, one
-// holding a space and one a mebibyte long each leave a few words of the
-// reading's own.
+// holding a space and one as long as a value the layer reads whole
+// ([threadValueMax]) each leave a few words of the reading's own.
 //
 // Mutation: read such a send as no leg at all, and its subagent is reported;
-// or file it under its id, and the subagent's why quotes the mebibyte.
+// or file it under its id, and the subagent's why quotes the long id.
 func TestASubagentSentAMessageUnderAnIDTheLogKeepsNoneOfIsNotReported(t *testing.T) {
 	t.Parallel()
 	for name, id := range map[string]string{
 		"an id past the rule's bound": strings.Repeat("s", sandbox.MaxBridgeCallIDBytes+1),
 		"an id holding a space":       "toolu test send",
-		"an id a mebibyte long":       "toolu_" + strings.Repeat("m", 1<<20),
+		"an id at the value bound":    "toolu_" + strings.Repeat("m", threadValueMax-len(`"toolu_"`)),
 	} {
 		for outcome, success := range map[string]string{"that its result took": "true", "that its result refused": "false"} {
 			t.Run(name+", "+outcome, func(t *testing.T) {
@@ -3944,7 +3985,7 @@ func TestASubagentSentAMessageUnderAnIDTheLogKeepsNoneOfIsNotReported(t *testing
 // the long thread is read.
 func TestWhatMembersHandOutIsHeldToTheArchivesBudget(t *testing.T) {
 	t.Parallel()
-	bounds := scrubBounds{plain: 1 << 20, piece: scrubPieceMaxBytes}
+	bounds := scrubBounds{plain: 1 << 20}
 	thread := func(agent string, hole int) []byte {
 		first := ctSubagentPrompt(ctUUID(101)) + "\n"
 		return sparseMember(claudeProjectPrefix+ctSession+"/subagents/agent-"+agent+".jsonl",

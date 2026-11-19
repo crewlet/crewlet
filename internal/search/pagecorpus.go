@@ -10,46 +10,15 @@ import (
 
 // The knowledge base's own pages, as the embedding duty's second corpus.
 //
-// # Why it is one anti-join now and could not have been before
-//
-// When the pages were this node's own projection they lived in a different
-// estate from `kb_vectors`, and no statement may name a table in both: the
-// arm would have been a bounded cursor sweep whose whole shape existed to work
-// around a boundary. The pages domain removed the boundary — `pages_heads` is
-// written by an applier into the REPLICATED estate, beside the vectors — so
-// the selection is the same single anti-join [TaskCorpus] uses, and the seam
-// the duty was built around costs nothing to fill.
-//
-// # A page is selected when what its vector was computed from moved — exactly
-//
-// A vector stands for a page's TITLE and the opening of its BODY, filed under
-// its CONTAINER, and those three move on three different paths: a save moves
-// the body and the page's own edit number, `edit_version`; a rename moves the
-// title and — across containers — the container, and a retitle moves the
-// displayed title, and neither stamps the edit number. So the selection asks
-// all three, each against what the vector row says it was computed from: the
-// edit number it stores as `source_rev`, the title it stores as `title`, and
-// the container it is filed under.
-//
-// Keyed on the edit number alone it was blind to the other two: a renamed
-// page kept a vector of its old title, and a page moved to another container
-// kept answering scoped semantic searches from the one it left — returned
-// inside a knowledge scope it had been moved out of, missing from the one it
-// had been moved into — while the lexical half, which keys on the log
-// version, had already moved it.
-//
-// NOT THE LOG VERSION, MAX(version, scoped_through), which the lexical index
-// keys on and which would also catch all three: every comment, watcher change
-// and child re-parent stamps it too, so every one of those would select the
-// page and publish a ~17 KB vector record for a text nobody touched. Exact
-// costs one column on the vector row; the broad key costs a record per
-// comment, for ever.
-//
-// AND WHAT IS SELECTED WITHOUT A NEW TEXT IS RESTAMPED: a move to another
-// container keeps the title and the body, so the digest the stored vector
-// carries is still the text's, and the vector is republished under the new
-// container with no provider call ([Embedder.Tick]). A rename to another title
-// is a new text, and is embedded.
+// `pages_heads` sits in the REPLICATED estate beside `kb_vectors`: the single
+// anti-join [TaskCorpus] uses. A vector stands for a page's TITLE and BODY
+// opening, filed under its CONTAINER; a save moves the body and `edit_version`,
+// a rename or retitle the title (a rename also the container) without stamping
+// the edit number. So selection asks all three against the row's `source_rev`,
+// `title` and container; on the edit number alone, moved pages answered scoped
+// searches from the container they left. NOT THE LOG VERSION: every comment
+// stamps it, each publishing a ~17 KB record for an untouched text. A container
+// move is RESTAMPED with no provider call ([Embedder.Tick]).
 
 // PageCorpus embeds the knowledge base's published pages.
 type PageCorpus struct{ DB store.ReplicatedReader }

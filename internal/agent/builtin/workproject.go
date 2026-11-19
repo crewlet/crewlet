@@ -52,7 +52,7 @@ func (t *writeProject) Description() string {
 		"may add to — declare a label before filing work under it, because " +
 		worklet.CreateWorkItemTool + " refuses one this project does not have. Renaming or " +
 		"archiving a tag, declaring project fields, setting the default " +
-		"assignee and setting the target date are the project lead's; archiving " +
+		"assignee, the target date and the stuck window are the project lead's; archiving " +
 		"the project itself takes a person. A project's name, purpose and " +
 		"owning unit come from the org chart and are not writable here."
 }
@@ -129,6 +129,16 @@ func (t *writeProject) Parameters() map[string]any {
 					"project lead's, and a person's own gesture: an agent " +
 					"is refused it even where it leads the project.",
 			},
+			"stuck_after_hours": map[string]any{
+				"type":    []string{"integer", "null"},
+				"minimum": 0,
+				"maximum": worklet.MaxStuckAfterHours,
+				"description": fmt.Sprintf("How many hours an item in progress "+
+					"here may go unchanged before it reads stuck: %d to %d. "+
+					"Null or 0 restores the default of %d. The project lead's.",
+					worklet.MinStuckAfterHours, worklet.MaxStuckAfterHours,
+					worklet.DefaultStuckAfterHours),
+			},
 		},
 	}
 }
@@ -178,7 +188,8 @@ func (t *writeProject) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 	if tagEdit.Empty() && edit.Empty() {
 		return failed("This call changes nothing. Send `tags_add`, " +
 			"`tags_rename`, `tags_archive`, `fields`, " +
-			"`default_assignee`, `target_date` or `archived`."), nil
+			"`default_assignee`, `target_date`, `stuck_after_hours` or " +
+			"`archived`."), nil
 	}
 	// THE AUTHORITY IS RESOLVED ONCE, before either write, so the two halves
 	// cannot be decided on different answers. And PER FACET: adding a label is
@@ -349,6 +360,22 @@ func projectPolicyEdit(args map[string]any) (worklet.ProjectEdit, string) {
 	if _, held := args["archived"]; held {
 		archived := argBool(args, "archived")
 		edit.Archived = &archived
+	}
+	// NULL AND 0 BOTH CLEAR the window back to the default; the tracker
+	// refuses a whole number outside its bounds.
+	if raw, held := args["stuck_after_hours"]; held {
+		hours := 0
+		if raw != nil {
+			whole, ok := argIntValue(raw)
+			if !ok {
+				return worklet.ProjectEdit{}, fmt.Sprintf("`stuck_after_hours` is a "+
+					"whole number of hours, %d to %d, or null for the default of %d.",
+					worklet.MinStuckAfterHours, worklet.MaxStuckAfterHours,
+					worklet.DefaultStuckAfterHours)
+			}
+			hours = whole
+		}
+		edit.StuckAfterHours = &hours
 	}
 	return edit, ""
 }

@@ -24,15 +24,16 @@ import (
 // MainThreadReadWait bounds the read of a job's main thread at its collection
 // ([Coordinator.readMainThread]): one wait every reading of the read shares.
 //
-// FIFTEEN SECONDS: the main thread at its bound, its chain, count and receipts
-// in one walk, reads in 2.78 to 2.85 s on two cores of the engine host (the
-// executor's claudechain.go), twice that on a loaded host or streamed through
-// envd. A read past its base waits for the executor's one large slot INSIDE
-// this wait, never beside it: 11.4 s at worst behind one holder (the executor's
-// package doc, "A collection's read of a thread"). A read past it answers
-// [CountUnread] and decides no receipt, the safe side. It is held in the box
-// read's budget ([BoxReadBudget]) before the take.
-const MainThreadReadWait = 15 * time.Second
+// TWENTY-SEVEN SECONDS: the slowest shape a session writes, a tool result of
+// text blocks to the plaintext's bound, read with the count and the next
+// request's estimate in one walk, takes 9.45 to 9.49 s on a dedicated two-core
+// slot (the executor's BenchmarkTheMainThreadReadAtItsBound), twice that
+// loaded or through envd, and the wait keeps holdingsReadWait's headroom over
+// that, about 1.4x. Lines no release writes run past it loaded and are cut,
+// the safe side (the executor's package doc, "A collection's read of a
+// thread"): a read past it answers [CountUnread] and decides no receipt. It is
+// held in [BoxReadBudget] before the take.
+const MainThreadReadWait = 27 * time.Second
 
 // mainThreadReader is a [Runner] whose harness reads the main thread of the
 // session a job's box ran: ONE READ, which every reading a collection asks of

@@ -24,6 +24,12 @@
 // time by internal/eventfan, and a read of one node's store alone is a third
 // of a three-node fleet (ADR-0021).
 //
+// A node without `data` writes no rows of its own, so [Custody] hands its
+// events to the data nodes and one fleet-wide group of [Keeper]s keeps each
+// batch once (custody.go). The boot seeds fill the projection from the fleet,
+// each read until it lands, and a late one reaches every open socket
+// (seeding.go).
+//
 // # A custody batch sent back is this node's failure, not the batch's
 //
 // A data node's [Keeper] that could not write or settle a custody batch sends
@@ -60,6 +66,13 @@
 //     the claim's answer, whether the store was closed under the keeper or
 //     failed with an error it left unmarked. A full disk or a busy store fails
 //     a healthy batch that a peer, or this node a moment later, writes whole.
+//
+// # A batch this node already settled is not written again
+//
+// A redelivery of a batch this node settled, kept or not, writes nothing: the
+// store answers from its `custody_settled` rows, swept with the event log.
+// Written again, its kept rows would be in flight a second time and leave every
+// usage count until the claim answered again.
 package observe
 
 import "github.com/crewlet/crewlet/internal/events"

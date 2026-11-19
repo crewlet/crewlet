@@ -87,35 +87,24 @@ func TestAWindowAcrossALinkCrossesWithinARequestsTerm(t *testing.T) {
 
 // A READ SENT BEHIND A FULL WINDOW IS ANSWERED INSIDE ITS TERM.
 //
-// A node without `data` reaches the members across one leaf link, and sends
-// its uploads and its fleet-store reads on one connection of it, the
-// coordination store's. The relay in front of the members' leaf listener
-// carries that whole link, both ways, at the floor and in the order it was
-// sent ([linktest.SlowEachWay]), as a link that queues first in first out
-// does; here the upload and the read go out on two connections of the leaf's
-// broker, which its one link carries in the order the leaf sends them, as it
-// would one connection's. An upload fills its window with bytes no
-// compressing link shrinks, and once the leaf has taken the window's every
-// message onto its link (a subscription on the leaf sees each as the leaf
-// routes it), a fleet-store read is sent behind them.
-//
-// DECIDED BY ORDER, NEVER BY THE CLOCK. The member counts the upload's
-// messages as the link delivers them, and the count is taken again where the
-// read's request arrives among them ([watchReadArrival]): the messages that
-// arrived after the read was sent and before it are those it crossed behind,
-// however late the case reads the count, and a message sent after the request
-// arrives after it. Those messages must cross the floor within what the read's
-// term leaves after its own round trip ([requestBudget]), which is what
-// decides whether a read sent behind a full window is answered inside
-// [jsapi.RequestTerm] at the floor, and is so on a link whose pacing a loaded
-// machine runs late. The read is given a minute only so a case that is never
-// answered ends.
-//
-// Mutation: size the window across a link by the shipped lease heartbeat
-// again, and four messages, fifteen seconds at the floor, cross ahead of the
-// read.
+// A node without `data` sends its uploads and fleet-store reads over one leaf
+// link, which the relay carries both ways at the floor and in the order sent
+// ([linktest.SlowEachWay]), as a first-in-first-out link does; here they go on
+// two connections of the leaf's broker. An upload fills its window with bytes
+// no compressing link shrinks, and once the leaf has taken every message onto
+// its link (a subscription on the leaf sees each routed), a read is sent
+// behind them. Mutation: size the window across a link by the shipped lease
+// heartbeat again, and four messages, fifteen seconds at the floor, cross ahead.
 func TestAReadSentBehindAFullWindowIsAnsweredInsideItsTerm(t *testing.T) {
 	t.Parallel()
+	// DECIDED BY ORDER, NEVER BY THE CLOCK. The member counts the upload's
+	// messages as the link delivers them, again where the read's request
+	// arrives ([watchReadArrival]): those arriving after the read was sent and
+	// before it are what it crossed behind, however late the case reads the
+	// count. They must cross the floor within what the term leaves after its
+	// round trip ([requestBudget]) for the read to be answered inside
+	// [jsapi.RequestTerm], on a link a loaded machine paces late too. The
+	// read's minute only ends a case never answered.
 	across := kvtest.SlowLeaf(t, floorRate)
 	b := openWith(t, client(t, across.LeafBroker), acrossLink())
 	sent := watchPieces(t, client(t, across.LeafBroker).Conn())

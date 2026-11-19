@@ -65,7 +65,15 @@ type nextEntry struct {
 	sum  threadEstimate
 }
 
-var _ threadReading = (*nextReading)(nil)
+var (
+	_ threadReading = (*nextReading)(nil)
+	_ lineAsker     = (*nextReading)(nil)
+)
+
+// ask asks reader for every line's estimate ([threadReader.Estimating]), which
+// the figure reads: a line read unasked answers no estimate, so a walk that
+// forgot to ask makes no figure rather than an estimate of nothing.
+func (r *nextReading) ask(reader *threadReader) { reader.Estimating() }
 
 // line reads one whole line.
 func (r *nextReading) line(l threadLine) {
@@ -152,8 +160,9 @@ func (r *nextReading) capacity() int {
 
 // nextCharge is the harness's estimate of l, a chained main-thread record
 // after the anchor ([nextReading]'s rules), and false where it does not read:
-// a content the harness's own estimate throws on, and a PDF read whose pages
-// do not read, which no bytes of its line bound.
+// a line read unasked ([errNotEstimated]), a content the harness's own
+// estimate throws on or nested past [estimateNestMax], and a PDF read whose
+// pages do not read, which no bytes of its line bound.
 func nextCharge(l threadLine) (threadEstimate, bool) {
 	switch l.Head.Type {
 	case recordUser, recordAssistant:

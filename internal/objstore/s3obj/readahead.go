@@ -21,37 +21,29 @@ import (
 )
 
 // piecesPerRange is how many pieces a range read ahead is handed to the reader
-// in: a range is filled a piece at a time, and every piece is the reader's the
-// moment it lands rather than once the whole range has.
+// in, each the reader's the moment it lands.
 //
 // SIXTY-FOUR, a piece of 128 KiB of a production part, so a read a provider
-// is moving is a read [objstore.Store]'s stall watchdog sees moving. A range is
-// a part, eight mebibytes, and a read keeps up to [partsInFlight] of them
-// crossing one link together; handed over only whole, the range the reader
-// waits on would cross at a quarter of the link with nothing handed out — over
-// four minutes at [objstore.MiBPace], where [objstore.Stall] ends a read
-// that hears nothing for one. A piece at a quarter of the floor's 35 KB/s
-// lands every fifteen seconds; at the 80–90 MB/s one S3 connection carries,
-// every millisecond and a half — a mutex and a wake each, which the reader's
-// copy of the piece dwarfs. A share of the PART rather than a size of its
-// own, so a case running the backend at a small part reads its ranges in
-// pieces too.
+// is moving is one [objstore.Store]'s stall watchdog sees moving. Up to
+// [partsInFlight] 8 MiB ranges cross one link together; handed over only
+// whole, the range the reader waits on crosses at a quarter of the link with
+// nothing handed out, over four minutes at [objstore.MiBPace], where
+// [objstore.Stall] ends a read that hears nothing for one. A piece lands every
+// fifteen seconds at a quarter of the floor's 35 KB/s, and every millisecond
+// and a half at 80-90 MB/s (a mutex and a wake each, dwarfed by the reader's
+// copy). A share of the PART, so a case at a small part reads in pieces too.
 const piecesPerRange = 64
 
 // askAhead is how many first bytes ahead of the reader a range's request is
-// sent: the time the bucket takes to answer a request, at the rate the reader
-// is handed bytes, twice over.
+// sent, at the rate the reader is handed bytes.
 //
-// TWO, so an answer that takes twice the read's usual first byte still
-// arrives before the reader needs it, and a reader handed bytes at a steady
-// rate never waits on a first byte at all. What asking early costs is an
-// answer that waits on its connection, unread, for about one first byte — tens
-// of milliseconds a range, with the bucket's bytes held by the connection
-// rather than by a buffer of the node's. Asked only when its buffer was free,
-// every range cost its first byte in turn: at 50 ms, a 128 MiB read four
-// ranges wide moved at 196–199 MB/s where its four connections carry 320, and
-// one with no buffer at all at 54 against one stream's 78; asked for ahead,
-// at 219–246 and 102 (BenchmarkBackend's `bw=80MB` arms).
+// TWO, so an answer taking twice the usual first byte still arrives before the
+// reader needs it. Asking early costs an answer waiting on its connection,
+// unread, about one first byte (tens of ms a range), held by the connection,
+// not a node buffer. Asked only when a buffer was free, every range cost its
+// first byte in turn: at 50 ms a 128 MiB read four ranges wide moved at
+// 196-199 MB/s of 320, and one with no buffer at 54 against one stream's 78;
+// asked ahead, 219-246 and 102 (BenchmarkBackend's `bw=80MB` arms).
 const askAhead = 2
 
 // firstByteWeight is the share of the read's estimate of its first byte each
@@ -65,15 +57,13 @@ const firstByteWeight = 4
 // ([wideRead]).
 //
 // THE FIRST RANGE IS STREAMED STRAIGHT THROUGH, never buffered, and its answer
-// says how large the object is: an object the first range holds whole — every
-// object of a part or less, most of what a company keeps — costs the one
-// request and the memory a read cost before there were ranges.
+// says the object's size: one it holds whole (any object of a part or less)
+// costs one request and no extra memory.
 //
 // EVERY RANGE AFTER IT IS HELD TO THE FIRST ONE'S ETAG (If-Match). Keys are
-// never reused ([objstore.Key]), so a later range answered 412 is a bucket
-// somebody wrote into while it was read — a failed read, never two objects
-// stitched together. An object the bucket gives no tag is refused past its
-// first range for the same reason: there would be nothing to hold the rest to.
+// never reused ([objstore.Key]), so a later 412 is a bucket written into
+// mid-read: a failed read, never two objects stitched together. An object
+// with no tag is refused past its first range: nothing to hold the rest to.
 func (b *Backend) getWide(ctx context.Context, name string, off, n int64) (io.ReadCloser, error) {
 	// THE READ'S CONTEXT, which every range's descends from: Close, a
 	// failure the reader is handed and the caller giving up all end every
@@ -189,47 +179,14 @@ func (o *oneRange) Close() error {
 	return err
 }
 
-// wideRead is a read of more than one range. Its reader is handed the range at
-// the FRONT and only that one, a piece at a time — from the range's answer
-// when it is STREAMED, from its buffer when it was READ AHEAD — while the
-// ranges behind it are asked for and read ahead by goroutines of their own.
-//
-// THE READ IS AS WIDE AS ITS READER. A range is read ahead into a buffer from
-// the node's spare allowance ([spareParts]), taken only while one is free and
-// never waited for, and a read holds as many as its reader keeps busy, up to
-// [partsInFlight]: one to begin with — the second range read ahead while the
-// first streams — and then what the reader's ranges say, once it has been
-// handed half the first and each time it has been handed one whole
-// ([wideRead.fit]). A reader that waited on the bucket for a share f of its
-// time on a range would have kept 1 / (1 − f) times the connections busy, and
-// the read takes that many — one more only when the reader would keep at
-// least half of it busy — and a reader that never waited on a range, and then
-// reaches one read ahead which landed whole before it got there, had more in
-// hand than it could use: the read gives a buffer back. So a reader slower than
-// one connection — a download paced to a person's link, for hours — holds one
-// buffer, and one faster than its connections — the git cache's install, a
-// verified read, a backup's copy — holds as many as its connections need. A
-// read that finds no buffer free streams every range, and takes one as soon
-// as one is free.
-//
-// A RANGE IS ASKED FOR BEFORE IT IS NEEDED, buffer or not: a request goes out
-// [askAhead] first bytes before the reader will need its answer — the moment
-// a buffer frees for it, or the reader reaches it — and its answer waits on its
-// connection, costing the node no buffer, until then. Asked only once a
-// buffer was free, every range cost a whole first byte with its connection
-// idle, which held a read four ranges wide well under its connections' rate,
-// and one streaming its ranges under the rate of a single stream. At most one
-// range waits so for each buffer the read holds — one when it holds none — and
-// a read holds at most twice [partsInFlight] ranges, the one it streams among
-// them ([wideRead.due]), so it has at most twice [partsInFlight] requests at
-// the bucket.
-//
-// STRICTLY IN ORDER: the reader hands out the front range and only that one,
-// as it lands, however far the ranges behind it have got. A range that fails
-// ends EVERY RANGE AFTER IT at once — its context is every later range's
-// ancestor — while every range before it lands and is handed out; the read
-// then asks for nothing more, and its failure is handed out at the Read that
-// would have handed out the range's first byte not yet handed out.
+// wideRead is a read of more than one range, handed out STRICTLY IN ORDER: the
+// reader gets the FRONT range only, a piece at a time (from its answer when
+// STREAMED, its buffer when READ AHEAD) while goroutines ask for and read the
+// ranges behind. A range that fails ends EVERY RANGE AFTER IT at once (its
+// context is every later range's ancestor) while the ranges before it land and
+// are handed out; the failure surfaces at the Read that would have handed out
+// its first byte not yet handed out. Width and asking ahead: see `held` and
+// `ranges`.
 //
 // ONE READER: Read and Close are the caller's, in turn. Close may still be
 // called while a Read waits, and ends it.
@@ -253,14 +210,35 @@ type wideRead struct {
 	// the ranges — which is what ends a Read waiting on one.
 	mu sync.Mutex
 
-	ranges []*rangeRead    // asked for and not yet handed out, the front first
+	// ranges is asked for and not yet handed out, the front first.
+	//
+	// A RANGE IS ASKED FOR BEFORE IT IS NEEDED, buffer or not: a request goes
+	// out [askAhead] first bytes before the reader will need its answer, which
+	// waits on its connection, costing no buffer, until then. Asked only once a
+	// buffer was free, every range cost a whole first byte with its connection
+	// idle, holding a read four ranges wide well under its connections' rate
+	// and a streaming one under a single stream's. At most one range waits so
+	// per buffer held (one when none), and a read holds at most twice
+	// [partsInFlight] ranges, the streamed one included ([wideRead.due]).
+	ranges []*rangeRead
 	last   context.Context // the last range asked for's: the next one's parent
 	next   int64           // the first byte no range has been asked for yet
 	end    int64           // where the read ends
 	pos    int64           // the next byte the reader is handed
 
-	held int // buffers held, each one of the node's spares
-	debt int // buffers to give back to the node rather than put to a new range
+	// held is buffers held, each one of the node's spares ([spareParts]).
+	//
+	// THE READ IS AS WIDE AS ITS READER: a buffer is taken only while one is
+	// free, never waited for, up to [partsInFlight]: one to begin with, then
+	// what the reader's ranges say ([wideRead.fit]). A reader waiting on the
+	// bucket for a share f of a range's time keeps 1 / (1 - f) times the
+	// connections busy and the read takes that many (one more only when half of
+	// it would be kept busy); one that never waited gives a buffer back. A
+	// slow reader holds one, a fast one as many as it needs. With none free the
+	// read streams every range and takes one as soon as one frees.
+	held int
+	// debt is buffers to give back to the node rather than put to a new range.
+	debt int
 
 	frontAt     time.Time     // when the front range became the front
 	frontWaited time.Duration // how long the reader has waited on the bucket since
@@ -482,28 +460,17 @@ func (w *wideRead) handedOut(r *rangeRead) {
 }
 
 // fit sets how many buffers the read holds from how its reader took the range
-// it has just been handed: spent on it in all, and waited on the bucket of
-// that.
+// just handed it: time spent on it, and waited on the bucket of that.
 //
-// AS MANY AS THE READER KEEPS BUSY. A reader that waited a share f of its time
-// was handed bytes 1 − f as fast as it takes them, so the read's n buffers —
-// one connection when it holds none — are n / (1 − f) of what it needed,
-// rounded: one more is taken only when the reader would keep at least half of
-// it busy. One that never waited on the range it finished may have more than
-// it needs, and says so by reaching a range read ahead that had landed whole
-// before it got there: the read then gives one buffer back — the next it frees
-// — and withdraws the ranges asked for at the old pace ([wideRead.withdraw]).
-// NEVER WAITED, because a fast reader can reach a range that happened to land
-// before it got there too — the second, read ahead beside the first — and one
-// that waited at all on the range before was keeping the read busy.
-//
-// FROM WHAT THE READER DID, NEVER FROM WHAT THE BUCKET COULD: a reader slower
-// than one connection — a download paced to a person's link, for hours —
-// never waits, and holds the one buffer it began with. Widened whenever a
-// buffer was free and the connections in flight were fewer than
-// [partsInFlight], three such downloads held a quarter of the node's
-// allowance each for as long as they lasted, and every upload and wide read
-// on the node went a part at a time meanwhile.
+// AS MANY AS THE READER KEEPS BUSY: a reader that waited a share f takes bytes
+// 1 - f as fast as handed, so n buffers (one when none) become n / (1 - f),
+// rounded; one more only when the reader would keep at least half of it busy.
+// One that NEVER WAITED on the range it finished and reached one that had
+// landed whole has more than it needs: the read gives a buffer back at its
+// next free and withdraws ranges asked for at the old pace
+// ([wideRead.withdraw]). From what the reader did, NEVER WHAT THE BUCKET COULD:
+// widened whenever a buffer was free, three downloads paced to a person's link
+// held a quarter of the node's allowance each and starved every upload.
 func (w *wideRead) fit(spent, waited time.Duration) {
 	if w.broken.Load() {
 		return
@@ -535,24 +502,17 @@ func (w *wideRead) fit(spent, waited time.Duration) {
 	}
 }
 
-// withdraw takes back every range asked for that waits for a buffer — its
-// request cancelled, and the range asked for again by [wideRead.plan] at the
-// reader's pace as it is now. A read narrowing under a reader that took
-// longer over its last range than the lead a range is asked with
-// ([askAhead] first bytes) withdraws them.
+// withdraw cancels every range asked for that waits for a buffer; the range is
+// asked again by [wideRead.plan] at the reader's pace as it now is. A read
+// narrowing under a reader slower over its last range than the lead
+// ([askAhead] first bytes) withdraws them: a NARROWER READ FREES BUFFERS
+// LATER, so each waiting range would wait one more range (minutes, for a
+// reader slowed to a person's link).
 //
-// A NARROWER READ FREES ITS BUFFERS LATER, and each range waiting was asked
-// for to be answered by the moment the buffer it was to be given would free
-// at the old width: given the buffers the read now frees instead, each waits
-// one more of the reader's ranges — for a reader that has slowed to a
-// person's link, minutes with an answer unread on its connection — and the
-// read keeps its old width until the last of them has had one.
-//
-// ONLY THEN, because a range's request withdrawn is a first byte paid again:
-// a reader a range of which takes no longer than the lead — one just slower
-// than the read's connections, a verified read on a CPU hashing at about
-// their rate — holds an answer no longer than the lead it was asked with, and
-// withdrawn at every narrowing such a read moved a tenth slower.
+// ONLY THEN, because a withdrawn request is a first byte paid again: a reader
+// whose range takes no longer than the lead (a verified read on a CPU hashing
+// at about the connections' rate) holds an answer no older than its lead, and
+// withdrawing at every narrowing made such a read a tenth slower.
 func (w *wideRead) withdraw() {
 	for i, r := range w.ranges {
 		if r.buf != nil || r.streamed {
@@ -626,37 +586,27 @@ func (w *wideRead) plan() {
 }
 
 // due is the byte the reader will have reached when the next range asked for
-// is needed — when the buffer it will be given frees, or, with no buffer to
-// free, when the reader reaches it — and false when no more may wait: one for
-// each buffer the read holds, or one when it holds none, and none that would
-// make the read hold more than twice [partsInFlight] ranges.
+// is needed (when its buffer frees, or, with none to free, when the reader
+// reaches it), and false when no more may wait: one per buffer held (one when
+// none), and none that would make the read hold over twice [partsInFlight]
+// ranges, the streamed one among them, which bounds the requests at the bucket.
 //
-// TWICE [partsInFlight] RANGES IN ALL, the one streamed among them, so a read
-// has at most twice [partsInFlight] requests at the bucket. A range waiting
-// for each buffer keeps a read within that but in ONE case, its FIRST range:
-// a read streams it beside the buffers it reads ahead into, and four wide by
-// half of it, a range waiting for each of the four beside the range still
-// streaming was one past the bound. There the cap holds back the range that
-// would wait for the LAST buffer — the buffer of a range asked for at that
-// half — and costs the read nothing, whatever the bucket's first byte: the
-// range held back is asked for once the first range is handed out, at most
-// half a range later, while the range whose buffer it waits for cannot be
-// handed out before its own first byte and its whole transfer, which takes
-// longer than that half. The first range streams at one connection's rate
-// with the reader waiting on it, or the read would not be four wide.
-//
-// THE STREAMED RANGE IS NOT ONE OF THE WAITING: it frees no buffer, so a range
-// waiting for one beside it waits for a buffer of its own. Counted against
-// them instead, a read that took a spare while it streamed a later range — one
-// that held none when its reader reached it — would withhold the next range's
-// request until that range was handed out, and its reader could then wait up
-// to a first byte on the range after.
+// That cap bites only on the FIRST range, streamed beside the buffers read
+// ahead: four wide by half of it, one waiting per buffer beside the streaming
+// one was past the bound. It holds back the range waiting for the LAST buffer
+// at no cost: it is asked once the first range is handed out, at most half a
+// range later, before the range whose buffer it awaits can finish its first
+// byte and whole transfer.
 func (w *wideRead) due() (int64, bool) {
 	buffered, waiting := 0, 0
 	for _, r := range w.ranges {
 		switch {
 		case r.buf != nil:
 			buffered++
+		// THE STREAMED RANGE IS NOT ONE OF THE WAITING: it frees no buffer.
+		// Counted among them, a read that took a spare while streaming a later
+		// range would withhold the next request until that range was handed
+		// out, and its reader could wait a first byte on the range after.
 		case !r.streamed:
 			waiting++
 		}
@@ -686,19 +636,17 @@ func (w *wideRead) due() (int64, bool) {
 }
 
 // lead is how far ahead of the reader a range is due when its request goes
-// out: [askAhead] first bytes at the rate the reader is handed bytes — the
-// rate it took the last range at, or the one it is taking the front at once
-// it has been handed an eighth of it, whichever is slower — and nothing until
-// either is known.
+// out: [askAhead] first bytes at the rate the reader is handed bytes (the
+// last range's, or the front's once an eighth of it is handed, whichever is
+// slower), and nothing until either is known.
 //
-// THE SLOWER, because a request sent late costs the reader one first byte and
-// one sent early holds an answer unread on its connection for as long as it
-// was early, which for a reader that has just slowed down is however long it
-// has slowed down for. AN EIGHTH, a mebibyte of a production range, before
-// the front's own rate counts: a rate taken over its first pieces is the
-// rate they happened to land at — a range read ahead hands its landed pieces
-// out at memory speed — where a mebibyte is a read's own pace, and still
-// leaves most of the range to ask the next one in.
+// THE SLOWER, because a request sent late costs one first byte and one sent
+// early holds an answer unread on its connection for as long as it was early,
+// which for a reader just slowed is as long as it has been slow. AN EIGHTH, a
+// mebibyte of a production range, before the front's rate counts: its first
+// pieces land at whatever rate (a range read ahead hands landed pieces out at
+// memory speed), where a mebibyte is the read's own pace and still leaves most
+// of the range to ask the next one in.
 func (w *wideRead) lead() int64 {
 	rate := w.rate
 	if len(w.ranges) > 0 {

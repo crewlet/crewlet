@@ -73,35 +73,15 @@ const (
 
 // Recall returns a seat's most similar past episodes.
 //
-// A SCAN, and the database does the arithmetic. There is still no ANN index
-// reachable from the Go driver, re-measured at the pin, so every embedded
-// row for the seat is visited — what the per-seat time index
-// buys is that it is one seat's episodes rather than the whole table. A
-// company's seat has thousands of turns, not millions.
+// A SCAN: no ANN index is reachable from the Go driver, so every embedded row
+// of the one seat is visited, but `vector_distance_cos` in an ORDER BY means
+// only rows surviving the LIMIT cross the driver boundary (5 000 x 1 536-dim
+// episodes: 34 ms and 35.8 KB, against 144 ms and 35.8 MB scoring in Go).
 //
-// It used to visit them in Go: select every row, decode every vector, cosine
-// each one. That was written when a second driver with no vector functions
-// had to be served and it then ran on BOTH drivers unconditionally, because
-// nothing ever called the other path. With one driver the
-// ordering is `vector_distance_cos` in an ORDER BY, and only the rows that
-// survive the LIMIT cross the driver boundary.
-//
-// Measured on this store, 5 000 episodes of 1 536 dimensions with ~1 KB of
-// text apiece, keeping 5: the Go loop was 144 ms and 35.8 MB across the driver
-// boundary; this is 34 ms and 35.8 KB.
-//
-// Rows with no embedding of the query's model are skipped rather than scored:
-// they were written during an embeddings outage or under another model, and
-// treating a missing vector as a zero vector would score them as maximally
-// dissimilar to everything and rank them consistently last — which reads as a
-// judgment about their content. The node holding the seat fills them
-// ([Episodes.Unfilled]), and until it has, [Episodes.Unsearchable] says how
-// many a search did not reach.
-//
-// RAW TURNS ONLY. A compacted row summarises a cluster of turns and reads in
-// a prompt like one turn that did all of them, and it carries no vector (see
-// [Summary]); the `kind` predicate states that rather than leaning on the
-// vector being absent.
+// Rows with no embedding of the query's model are skipped, not scored: a zero
+// vector would rank them last, a judgment about their content.
+// [Episodes.Unfilled] fills them; [Episodes.Unsearchable] counts the misses.
+// RAW TURNS ONLY: a compacted row carries no vector (see [Summary]).
 func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 	if q.Handle == "" {
 		return nil, fmt.Errorf("learning: recall needs a seat")
@@ -124,19 +104,10 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 
 	// RANK IDS, THEN FETCH THE WINNERS BY PRIMARY KEY.
 	//
-	// The inner query carries only what the ranking needs — an id, the
-	// tie-break column and the distance — so the sort over the seat's whole
-	// row set moves a few dozen bytes per row instead of the ~7 KB an
-	// episode weighs once its text columns and its 6 KB vector are in
-	// scope. Same fixture as above: 78 ms carrying every column through the
-	// sort, 34 ms this way.
-	//
-	// The outer statement returns an UNORDERED set, which is fine here and
-	// would be a bug in a query that returned it to a caller: [rank] below
-	// imposes the total order in Go and deliberately does not lean on the
-	// order the database gave. That was already true — it is written down
-	// at rank — and this shape is what makes it load-bearing rather than
-	// belt-and-braces.
+	// The inner query carries only id, tie-break and distance, so the sort
+	// moves dozens of bytes per row, not the ~7 KB an episode weighs (78 ms
+	// against 34 ms). The outer statement returns an UNORDERED set: [rank]
+	// imposes the total order in Go.
 	rows, err := e.db.SQL().QueryContext(ctx,
 		`SELECT `+episodeColumns+` FROM episodes WHERE id IN (
 		    SELECT id FROM (
@@ -162,20 +133,10 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 		return nil, err
 	}
 
-	// SCORED AGAIN IN GO, over the rows that survived rather than over all
-	// of them. Two reasons, and neither is distrust of the ordering — the
-	// two agree to eight decimal places (measured).
-	//
-	// The first is that `Hit.Similarity` is read by callers and rendered
-	// into prompts, so it has to keep meaning exactly what it meant: the
-	// value [cosine] returns, computed in float64 from the same vectors.
-	//
-	// The second is a guard the SQL cannot express. vector_distance_cos
-	// answers 0 — a PERFECT match — for a vector holding a NaN or an
-	// infinity, so a single poisoned embedding would sort itself to the top
-	// of every recall this seat ever ran. [cosine] rejects those, and the
-	// rows it rejects are dropped here. That costs at most `limit`
-	// computations, against the thousands the loop used to do.
+	// SCORED AGAIN IN GO, over the survivors only: `Hit.Similarity` is
+	// rendered into prompts, so it stays [cosine]'s float64 value; and
+	// vector_distance_cos answers 0, a PERFECT match, for a vector holding a
+	// NaN or infinity, which [cosine] rejects and this drops.
 	var hits []Hit
 	for _, ep := range candidates {
 		sim, ok := cosine(q.Embedding, ep.Embedding)
@@ -192,18 +153,12 @@ func (e *Episodes) Recall(ctx context.Context, q RecallQuery) ([]Hit, error) {
 // a stored row must have to be comparable with it.
 //
 // THE WIDTH FILTER IS NOT AN OPTIMISATION. vector_distance_cos fails the whole
-// statement on a width mismatch — "Vectors must have the same dimensions",
-// raised during iteration, after the query has already succeeded — and a
-// company that changes its embedding model leaves exactly those rows behind.
-// The Go loop skipped them silently (cosine returns false on a shape
-// mismatch); without `length(embedding) = ?` the SQL would turn that same
-// history into a recall that errors instead of one that returns what it can.
-//
-// AND IT STAYS beside the model filter, which does not subsume it: one model
-// answers at whatever width is asked (the text-embedding-3 models truncate to
-// `dimensions`), so a width changed by a restart leaves rows of the SAME model
-// at the old width — a space the model filter admits and the distance
-// function refuses.
+// statement on a width mismatch, and a changed embedding model leaves such
+// rows behind; without `length(embedding) = ?` recall would error instead of
+// returning what it can. It stays beside the model filter, which does not
+// subsume it: one model answers at whatever width is asked (text-embedding-3
+// truncates to `dimensions`), so a width change leaves rows of the SAME model
+// at the old width.
 func vectorProbe(db *store.DB, embedding []float32) ([]byte, int, error) {
 	blob, err := db.EncodeVector(embedding)
 	if err != nil {
@@ -215,16 +170,14 @@ func vectorProbe(db *store.DB, embedding []float32) ([]byte, int, error) {
 // rank orders hits: most similar first, then most recent, then by id
 // descending.
 //
-// A TOTAL order, and self-contained: it does not lean on the order the
-// database returned. SQL leaves the order of equal ORDER BY keys unspecified,
-// and SQLite happens to give insertion order — which means a tie-break that
-// deferred to the input would be correct today and silently change with a
-// query plan. Two episodes of one recurring task score identically, and a seat
-// that recalled a different one on every turn would be reacting to its own
-// storage layout.
+// A TOTAL order, self-contained: SQL leaves the order of equal ORDER BY keys
+// unspecified (SQLite happens to give insertion order), so a tie-break
+// deferring to the input would silently change with a query plan. Two
+// episodes of one recurring task score identically, and a seat recalling a
+// different one each turn would be reacting to its storage layout.
 //
-// Split out so it can be exercised on a shuffled slice. Through Recall the
-// database's incidental determinism masks it completely.
+// Split out so a test can shuffle the slice; through Recall the database's
+// incidental determinism masks it.
 func rank(hits []Hit) {
 	// EVERY KEY DESCENDS — most similar, then newest, then the higher id —
 	// so every compare takes its arguments reversed.
@@ -240,17 +193,12 @@ func rank(hits []Hit) {
 // cosine returns the cosine similarity of two vectors, and false when it is
 // not defined for them.
 //
-// Undefined in three ways, all of which happen: mismatched widths (a company
-// that changed embedding model mid-life), a zero vector (an embedding of empty
-// text), and a non-finite component (a provider returning NaN or an
-// overflowed value). The first is caught by shape; the other two both arrive
-// at the same place — a NaN result — which is why there is ONE check for them
-// rather than one each.
-//
-// It matters that they are caught at all rather than ranked: a NaN compares
-// false against everything, so a single one lands wherever the sort's pivot
-// choices put it, and a seat's recall order becomes a property of its data
-// layout.
+// Undefined in three ways, all of which happen: mismatched widths (embedding
+// model changed mid-life), a zero vector (empty text), and a non-finite
+// component (a provider returning NaN or an overflow). The last two both end
+// in a NaN, so ONE check covers them. They must be caught rather than ranked:
+// a NaN compares false against everything and lands wherever the sort's
+// pivots put it, making recall order a property of the data layout.
 func cosine(a, b []float32) (float64, bool) {
 	if len(a) == 0 || len(a) != len(b) {
 		return 0, false

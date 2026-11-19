@@ -91,10 +91,11 @@ import (
 // of a subagent's thread filters retractions, so a subagent's thread holding
 // one is not whole. RULE 4, THE LOGGED RESULT: a call is held only through its
 // one result, whose is_error is the log's failure and whose text
-// ([resultText]) matches the log's output by digest, whole or by length and
-// opening ([sandbox.CallRecords.Whole], [sandbox.HoldingsOpeningBytes]). It
-// meets rule 3: a result written without the call's outcome (a resume's, a
-// stopped harness's) never carries the log's text, so no mark is read.
+// ([lineDecoder.resultContent]) matches the log's output by digest, whole or
+// by length and opening ([sandbox.CallRecords.Whole],
+// [sandbox.HoldingsOpeningBytes]). It meets rule 3: a result written without
+// the call's outcome (a resume's, a stopped harness's) never carries the log's
+// text, so no mark is read.
 
 // RULE 2, A SUBAGENT CUT OFF WITH THE SESSION: a call in a subagent's thread is
 // held only where the subagent is reported ([holdingsWalk.unreported]) and the
@@ -114,7 +115,7 @@ import (
 //     hands under every variant ([textNotice]); each SendMessage to it its
 //     result did not refuse ([holdingsWalk.leg]) by a notification. AN ANSWER
 //     CARRYING A HANDBACK ANSWERS NO LEG, nor does any answer of a leg one of
-//     whose answers does ([carriesHandback], [textHandback]).
+//     whose answers does ([lineDecoder.toolResult], [textHandback]).
 //  4. NO UNSEEN LEG: its file starts no more legs ([legStart]) than the main
 //     thread gave it.
 //  5. EVERY LEG FINISHED along every order its own load hands
@@ -125,17 +126,18 @@ import (
 // SendMessage's `to` that does not decode costs only the fact it could have
 // been, the safe direction, condition 4 the backstop of the last.
 
-// THE BOUNDS: the plaintext and what read members hand out at
-// [threadPlainMax], a line at [threadLineMax], the model at
-// [threadChainMaxRecords] and [threadChainMaxCalls], a metadata at
-// [holdingsMetaMaxBytes], the ask at [sandbox.MaxBridgeCalls], subagents at
-// [holdingsMaxAgents], legs at [holdingsMaxLegs]; every id kept is one the
-// call-id rule holds ([holdingsWalk.leg], [subagentMetaOf]), since an id is the
-// box's word, as long as a line. MEASURED (BenchmarkAReadingAtItsBounds, whose
-// doc says how): the worst, a line of the smallest results at its bound after a
-// main thread at both of the model's bounds, holds 102 MiB live and peaks at
-// 181 MiB in 1.7 s, within the about 133 MiB a seat's read for words holds at
-// its worst ([SeatTranscriptReadsAtOnce]); an ordinary session reads in 68 ms.
+// THE BOUNDS: the plaintext and what read members hand out at [threadPlainMax],
+// the lines of the threads read at [threadLinesMax], a line's facts at
+// [threadLineMax], the model at [threadChainMaxRecords] and
+// [threadChainMaxCalls], a metadata at [holdingsMetaMaxBytes], the ask at
+// [sandbox.MaxBridgeCalls], subagents at [holdingsMaxAgents], legs at
+// [holdingsMaxLegs]; every id kept is one the call-id rule holds
+// ([holdingsWalk.leg], [subagentMetaOf]). MEASURED
+// (BenchmarkAReadingAtItsBounds; two dedicated cores): the most held, a main
+// thread at both of the model's bounds, 43 MiB live, peaking at 70 MiB, in 2.3
+// to 2.5 s, and with a line of the smallest results as the record that fills
+// both, 39 and 57 MiB; the slowest, a subagent's lines of blocks to the lines'
+// and the plaintext's bounds, 21.4 to 22.6 s; an ordinary session 72 to 88 ms.
 
 // holdingsWriterFloor is the oldest Claude Code release whose sessions a
 // reading reads ([ClaudeCode.holdingsFloor]).
@@ -344,21 +346,25 @@ type holdingsWalk struct {
 	unnamed map[string]bool
 	kept    int
 	// lines is the one line reader every thread member the walk reads is
-	// read through ([holdingsWalk.reader]).
-	lines *threadReader
+	// read through ([holdingsWalk.reader]), and linesLeft what of
+	// [threadLinesMax] the members before the one it reads left.
+	lines     *threadReader
+	linesLeft int
 }
 
 // reader is the walk's one line reader, made to read member within what the
-// members read so far left of the reading's budget ([threadPlainMax]): one
-// reader for every member, so a session of many subagents costs the walk one
-// reader's buffers ([threadReader.Reset]), never one a member.
+// members read so far left of the reading's budgets ([threadPlainMax] bytes,
+// [threadLinesMax] whole lines): one reader for every member, so a session of
+// many subagents costs the walk one reader's buffers ([threadReader.Reset]),
+// never one a member.
 func (w *holdingsWalk) reader(member io.Reader) *threadReader {
-	handed := &handedReader{r: member, handed: &w.handed}
 	if w.lines == nil {
-		w.lines = newThreadReader(handed, w.bounds.plain-w.handed)
+		w.lines = newThreadReader(nil, 0)
 	} else {
-		w.lines.Reset(handed, w.bounds.plain-w.handed)
+		// The member before's whole lines, read before its reading ended.
+		w.linesLeft -= w.lines.n
 	}
+	w.lines.Reset(&handedReader{r: member, handed: &w.handed}, w.bounds.plain-w.handed, w.linesLeft)
 	return w.lines
 }
 
@@ -449,7 +455,7 @@ type legFact struct {
 	// results is how many counted results name it; resultRec, resultLine,
 	// failed, completed, agent and refused are the first's: its record, its
 	// line, its is_error, and what its record's own toolUseResult says where
-	// the record holds that one result alone ([agentAnswer]).
+	// the record holds that one result alone ([answerOf]).
 	results    int
 	resultRec  int32
 	resultLine int
@@ -459,7 +465,7 @@ type legFact struct {
 	refused    bool
 	// handback is whether a record of a result of it, or a task notification
 	// of it, carries a handback: no answer of the leg is then its subagent's
-	// report ([carriesHandback], [textHandback]).
+	// report ([lineDecoder.toolResult], [textHandback]).
 	handback bool
 	// answered is whether the request a resumed session sends pairs the
 	// first call with the first result, by the pairing rule
@@ -485,7 +491,7 @@ type noticeFact struct {
 // calls ask marks asked.
 func newHoldingsWalk(session string, ask sandbox.HoldingsAsk, bounds scrubBounds) *holdingsWalk {
 	main, _ := claudeMainThread(session)
-	w := &holdingsWalk{session: session, main: main, bounds: bounds,
+	w := &holdingsWalk{session: session, main: main, bounds: bounds, linesLeft: threadLinesMax,
 		read: map[string]bool{}, calls: map[string]*callFacts{}, agents: map[string]*subagentFacts{},
 		legs: map[string]*legFact{}, notices: map[legNotice]noticeFact{}, unnamed: map[string]bool{}}
 	for _, c := range ask.Calls {
@@ -571,20 +577,19 @@ func outsideArchive(name string) bool {
 }
 
 // mainThread reads the session's main thread, whose bytes member hands out, a
-// whole line at a time, into Claude Code's resume's model ([threadChain]) and
-// the pairing rule's marks ([holdingsPairing]), and once it is read whole,
-// which of its calls the request a resumed session sends pairs
-// ([holdingsWalk.mainEnd]). No reading at once where a line is no record, a
-// user or assistant record's message does not decode, a record replaces
-// results or carries a batch in no shape Claude Code writes, or the model
-// cannot place the thread ([threadChain.Unknown]): read on, the reading
-// would vouch for a thread no model says the resume hands its model.
+// line at a time in one pass, holding none whole ([threadReader]), into Claude
+// Code's resume's model ([threadChain]) and the pairing rule's marks
+// ([holdingsPairing]), and once it is read to its end, which of its calls the
+// request a resumed session sends pairs ([holdingsWalk.mainEnd]). No reading
+// at once where a line is no record, a user or assistant record's message
+// does not decode, a record replaces results or carries a batch in no shape
+// Claude Code writes, or the model cannot place the thread
+// ([threadChain.Unknown]): read on, the reading would vouch for a thread no
+// model says the resume hands its model.
 func (w *holdingsWalk) mainThread(ctx context.Context, member io.Reader) error {
 	lines := w.reader(member)
 	chain, pairing := newThreadChain(""), &holdingsPairing{}
 	for {
-		// ctx is asked before each line ([threadReader.Next]), and an error
-		// of its is the walk's to answer ([holdingsWalk.failed]).
 		line, err := lines.Next(ctx)
 		switch {
 		case errors.Is(err, io.EOF):
@@ -1002,10 +1007,11 @@ func originOf(line threadLine) string {
 }
 
 // subagentThread reads subagent agent's thread, whose bytes member hands out,
-// a whole line at a time, into a, the model of its own load ([threadChain],
-// newThreadChain(agent)) and the pairing rule's marks ([holdingsPairing]), and
-// once it is read whole, what rule 2 and the pairing rule read off the one
-// conversation that load hands ([holdingsWalk.subagentEnd]).
+// a line at a time in one pass, holding none whole ([threadReader]), into a,
+// the model of its own load ([threadChain], newThreadChain(agent)) and the
+// pairing rule's marks ([holdingsPairing]), and once it is read to its end,
+// what rule 2 and the pairing rule read off the one conversation that load
+// hands ([holdingsWalk.subagentEnd]).
 //
 // IT READS ON past every line that leaves the subagent not whole, the model's
 // bound among them, so every record's calls are still counted: each is told

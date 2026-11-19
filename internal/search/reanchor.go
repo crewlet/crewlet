@@ -5,32 +5,15 @@ import "github.com/crewlet/crewlet/internal/statelog"
 // THE VECTOR DOMAIN'S HALF OF A REANCHOR, which is to declare that it has none
 // — and why a recreated vector log still needs the reanchor.
 //
-// # Why the generation matters here at all
+// The applier's guard IS a position: a vector row moves only for a record whose
+// packed position, (generation << 40) | sequence, is above the row's own. A log
+// rebuilt at the SAME generation counts from 1, so every re-embed is refused and
+// the corpus silently stops following its sources. The next generation puts
+// every adopted-log record above every old row.
 //
-// This domain arbitrates nothing and claims no identity, but its applier's
-// guard IS a position: a vector row moves only for a record whose packed
-// position — (generation << 40) | sequence — is above the row's own. A log
-// rebuilt at the SAME generation counts from 1 again, so every re-embed the
-// duty publishes onto it sits below every vector the node already holds and
-// is refused by that guard: the corpus silently stops following its sources,
-// with nothing anywhere reporting it. Moving the domain to the next generation
-// is what puts every record on the adopted log above every row from the old
-// one — which is exactly the supersession the guard exists for — so a
-// recreated vector log is recovered by the same verb as the others.
-//
-// # And why it keeps no record of it
-//
-// A generation record exists for two readers, and this domain has neither. The
-// first is first-writer-wins between two operators, which protects an identity
-// claim two independent reanchors could violate; the vectors make no such
-// claim, since per-node coverage legitimately differs. The second is an audit
-// table, and this domain's two tables are the vectors and their codes. The
-// reanchor's own `statelog_reanchored` line names the generation, the stream
-// and the instant it was keyed to.
-//
-// Nor does it reset any row: every vector below the new generation is below
-// every record the adopted log will carry, which is the order the guard wants,
-// and a row nobody re-embeds stays exactly as current as it was.
+// It keeps no generation record (that serves first-writer-wins between
+// operators and an audit table; the vectors claim no identity) and resets no
+// rows; `statelog_reanchored` names the generation.
 
 // GenerationRecord is the vector domain's [statelog.GenerationEncoder], and it
 // reports that the domain keeps none.

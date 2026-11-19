@@ -144,6 +144,37 @@ func TestAScanHoldsItsBufferWhateverTheInput(t *testing.T) {
 			}
 			return err
 		}, stateCeiling},
+		{"a 64 MiB text past ASCII counted, read and passed over", func() io.Reader {
+			return spell(segment{text: `["`}, segment{pattern: "\u00e9\\n\U0001F600\\u20ac", n: mib64 - mib64%14},
+				segment{text: `","`}, segment{pattern: "\u65e5\\u0041", n: mib64 - mib64%9}, segment{text: `"]`})
+		}, func(s *jsonscan.Scanner, p []byte) error {
+			// Counting from the first token: the list's first string read, its second passed over.
+			s.CountUnits(true)
+			for i := 0; ; i++ {
+				k, err := s.Next()
+				switch {
+				case errors.Is(err, io.EOF):
+					return nil
+				case err != nil:
+					return err
+				case k != jsonscan.String:
+					continue
+				case i == 1:
+					for {
+						if _, err = s.Read(p); errors.Is(err, io.EOF) {
+							break
+						}
+						if err != nil {
+							return err
+						}
+					}
+				default:
+					if err = s.Skip(); err != nil {
+						return err
+					}
+				}
+			}
+		}, stateCeiling},
 		{"a 64 MiB string captured past a 1 MiB bound", func() io.Reader {
 			return spell(segment{text: `["`}, segment{pattern: "A", n: mib64}, segment{text: `"]`})
 		}, func(s *jsonscan.Scanner, _ []byte) error {

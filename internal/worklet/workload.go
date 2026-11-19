@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/crewlet/crewlet/internal/period"
@@ -14,7 +15,8 @@ import (
 // Who is carrying how much, across every project at once, in one read and one
 // transaction, so no surface fans out a read per project and sums the rows.
 // It counts every OPEN assigned task whatever its dates: "is this person
-// overloaded" is about their whole queue.
+// overloaded" is about their whole queue. Beside it, each in-progress item
+// by its flow ([FlowState]), and the load: the items that want the seat now.
 
 // WorkloadQuery asks who is carrying how much.
 type WorkloadQuery struct {
@@ -61,6 +63,49 @@ type WorkloadRow struct {
 	Blocked     int `json:"blocked"`
 	Overdue     int `json:"overdue"`
 	Unscheduled int `json:"unscheduled"`
+
+	// Flow counts their items in progress by flow state, read with the
+	// expression every row reads ([Flow]).
+	Flow FlowCounts `json:"flow"`
+
+	// Load is their items in progress that want the seat now
+	// ([FlowState.Loads]): an item parked until tomorrow, blocked or held
+	// is open work and no load.
+	Load int `json:"load"`
+}
+
+// FlowCounts is one seat's items in progress, a count per [FlowState].
+// Nested rather than beside the totals: [WorkloadRow.Blocked] already counts
+// every open item with an open blocker, to do and in review included.
+type FlowCounts struct {
+	Working int `json:"working"`
+	Blocked int `json:"blocked"`
+	Waiting int `json:"waiting"`
+	Held    int `json:"held"`
+	Due     int `json:"due"`
+	Stuck   int `json:"stuck"`
+	Moving  int `json:"moving"`
+}
+
+// counter is where a census of state counts into.
+func (c *FlowCounts) counter(state FlowState) *int {
+	switch state {
+	case FlowWorking:
+		return &c.Working
+	case FlowBlocked:
+		return &c.Blocked
+	case FlowWaiting:
+		return &c.Waiting
+	case FlowHeld:
+		return &c.Held
+	case FlowDue:
+		return &c.Due
+	case FlowStuck:
+		return &c.Stuck
+	case FlowMoving:
+		return &c.Moving
+	}
+	return nil
 }
 
 // WorkloadAnswer is the whole company's load.
@@ -69,6 +114,9 @@ type WorkloadAnswer struct {
 
 	// Truncated says the answer stopped at [MaxWorkloadHandles].
 	Truncated bool `json:"truncated,omitempty"`
+
+	// FlowLive is [Answer.FlowLive] for every row's flow counts.
+	FlowLive bool `json:"flow_live"`
 
 	Level          statelog.ReadLevel `json:"read_level,omitempty"`
 	LogSeq         uint64             `json:"log_seq,omitempty"`
@@ -90,7 +138,8 @@ func (r *Reader) Workload(ctx context.Context, q WorkloadQuery, now time.Time,
 			"names no level — a surface resolves an absent read_level to " +
 			"its own default before it reads")
 	}
-	var out WorkloadAnswer
+	flow := r.flowAt(now)
+	out := WorkloadAnswer{FlowLive: flow.live()}
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level: q.Level,
 		// THE DOMAIN, as in [Reader.MyWork]: a narrower closure would
@@ -103,7 +152,7 @@ func (r *Reader) Workload(ctx context.Context, q WorkloadQuery, now time.Time,
 		MaxLagSeq: q.MaxLagSeq,
 		Set:       true,
 	}, func(tx *sql.Tx) error {
-		return readWorkload(ctx, tx, q, now, loc, &out)
+		return readWorkload(ctx, tx, q, flow, loc, &out)
 	})
 	if err != nil {
 		return WorkloadAnswer{}, err
@@ -119,43 +168,52 @@ func (r *Reader) Workload(ctx context.Context, q WorkloadQuery, now time.Time,
 
 // workloadStatement is [readWorkload]'s one statement, named for the plan
 // test: every assignee's open work, across the company or in the projects of
-// units, counted against the day that begins at dayStart.
-func workloadStatement(units []string, dayStart int64) (string, []any) {
+// units, counted against the day that begins at dayStart, with each item's
+// flow at `at` read once per row inside it and counted per state.
+func workloadStatement(units []string, dayStart int64, at flowAt) (string, []any) {
+	flow, args := flowExpr(at, flowStateOnly)
+	args = append(args, dayStart)
 	where := "t.removed_at IS NULL AND t.archived = 0 AND t.assignee <> '' " +
 		"AND t.status_group IN (" + openGroupsSQL + ")"
-	args := []any{dayStart}
 	if len(units) > 0 {
 		where += " AND EXISTS (SELECT 1 FROM tracker_projects p " +
 			"WHERE p.key = t.project_key AND p.unit IN (" +
 			placeholders(len(units)) + "))"
 		args = append(args, anyOf(units)...)
 	}
+	var buckets strings.Builder
+	for _, state := range FlowStates {
+		fmt.Fprintf(&buckets, ",\n\t\t       COALESCE(SUM(CASE WHEN w.flow = '%s' THEN 1 ELSE 0 END), 0)", state)
+	}
 	return `
-		SELECT t.assignee,
+		SELECT w.assignee,
 		       COUNT(*),
-		       COALESCE(SUM(t.points), 0),
-		       COALESCE(SUM(t.estimate_min), 0),
-		       COALESCE(SUM(CASE WHEN EXISTS (
-		           SELECT 1 FROM tracker_task_deps d
-		           WHERE d.task_id = t.id AND d.blocker_open = 1)
-		         THEN 1 ELSE 0 END), 0),
-		       COALESCE(SUM(CASE WHEN t.due_at IS NOT NULL AND t.due_at < ?
-		         THEN 1 ELSE 0 END), 0),
-		       COALESCE(SUM(CASE WHEN t.start_at IS NULL AND t.due_at IS NULL
-		         THEN 1 ELSE 0 END), 0)
-		FROM tracker_tasks t
-		WHERE ` + where + `
-		GROUP BY t.assignee
-		ORDER BY 2 DESC, t.assignee
+		       COALESCE(SUM(w.points), 0),
+		       COALESCE(SUM(w.estimate_min), 0),
+		       COALESCE(SUM(w.blocked), 0),
+		       COALESCE(SUM(w.overdue), 0),
+		       COALESCE(SUM(w.unscheduled), 0)` + buckets.String() + `
+		FROM (SELECT t.assignee, t.points, t.estimate_min,
+		             ` + flow + ` AS flow,
+		             EXISTS (SELECT 1 FROM tracker_task_deps d
+		                     WHERE d.task_id = t.id AND d.blocker_open = 1) AS blocked,
+		             CASE WHEN t.due_at IS NOT NULL AND t.due_at < ?
+		               THEN 1 ELSE 0 END AS overdue,
+		             CASE WHEN t.start_at IS NULL AND t.due_at IS NULL
+		               THEN 1 ELSE 0 END AS unscheduled
+		      FROM tracker_tasks t
+		      WHERE ` + where + `) w
+		GROUP BY w.assignee
+		ORDER BY 2 DESC, w.assignee
 		LIMIT ?`, append(args, MaxWorkloadHandles+1)
 }
 
 func readWorkload(ctx context.Context, tx *sql.Tx, q WorkloadQuery,
-	now time.Time, loc *time.Location, out *WorkloadAnswer) error {
+	flow flowAt, loc *time.Location, out *WorkloadAnswer) error {
 
 	// The company's own midnight, resolved as [readMyWork] does, so the
 	// overdue count matches what a board marks overdue.
-	anchor, err := period.Resolve("today", now, loc)
+	anchor, err := period.Resolve("today", flow.now, loc)
 	if err != nil {
 		return err
 	}
@@ -163,7 +221,7 @@ func readWorkload(ctx context.Context, tx *sql.Tx, q WorkloadQuery,
 
 	// Through the chart ([unitKeys]): the unit came from another screen,
 	// so its id and its name both have to work.
-	statement, args := workloadStatement(unitKeys(q.Units, []string{q.Unit}), dayStart)
+	statement, args := workloadStatement(unitKeys(q.Units, []string{q.Unit}), dayStart, flow)
 	rows, err := tx.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return fmt.Errorf("worklet: read the company's workload: %w", err)
@@ -173,10 +231,18 @@ func readWorkload(ctx context.Context, tx *sql.Tx, q WorkloadQuery,
 	out.Rows = []WorkloadRow{}
 	for rows.Next() {
 		var row WorkloadRow
-		if err = rows.Scan(&row.Handle, &row.Open, &row.Points,
-			&row.EstimateMinutes, &row.Blocked, &row.Overdue,
-			&row.Unscheduled); err != nil {
+		targets := []any{&row.Handle, &row.Open, &row.Points,
+			&row.EstimateMinutes, &row.Blocked, &row.Overdue, &row.Unscheduled}
+		for _, state := range FlowStates {
+			targets = append(targets, row.Flow.counter(state))
+		}
+		if err = rows.Scan(targets...); err != nil {
 			return fmt.Errorf("worklet: scan a workload row: %w", err)
+		}
+		for _, state := range FlowStates {
+			if state.Loads() {
+				row.Load += *row.Flow.counter(state)
+			}
 		}
 		out.Rows = append(out.Rows, row)
 	}
