@@ -208,6 +208,10 @@ func TranscriptReadsHeld() int { return len(transcriptReads) }
 // slots reads hold now.
 func SeatTranscriptReadsHeld() int { return len(seatTranscriptReads) }
 
+// HoldingsReadsHeld is how many of the readings' [HoldingsReadsAtOnce] slots
+// are held.
+func HoldingsReadsHeld() int { return len(holdingsReads) }
+
 // The Crewlet trailers' keys, for the cases that read a commit's trailers.
 const (
 	SeatTrailer     = seatTrailer
