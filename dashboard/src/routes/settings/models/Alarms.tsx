@@ -202,6 +202,7 @@ function stopsOf(models: readonly ModelView[], seats: readonly Seat[]): string[]
     if (rest.size > 0) out.push(`${categoryWords(category)} for ${who(rest)}`);
   }
   if (models.some((m) => m.uses.assistant)) out.push("Ask Crewlet");
+  if (models.some((m) => m.uses.advisor)) out.push("the Advisor");
   return out;
 }
 
