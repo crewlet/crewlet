@@ -344,6 +344,43 @@ func TestAStreamReadInPiecesIsReadAsOneWhole(t *testing.T) {
 	}
 }
 
+// A LONG LINE'S BUFFER SERVES ITS READ AND GOES WITH IT: one read with end
+// hands two long lines on from one buffer (Collect's and ReadTranscript's
+// reads grow it once, not per line), and a kept reader holds at most a chunk
+// once such a read returns, at the stream's end or on a callback's stop.
+// Addresses and capacities are compared, no allocation counted, so -race
+// leaves it stable.
+//
+// Mutation: let the buffer go after every long line, keep it after a read
+// with end returns, or keep it on a stop, and one of the three fails.
+func TestALongLinesBufferServesItsReadAndGoesWithIt(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("x", 2*lineChunkBytes)
+	var firsts []*byte
+	err := readLines(bufio.NewReaderSize(strings.NewReader(long+"\n"+long+"\n"), lineChunkBytes), 1<<20,
+		func(l []byte) error { firsts = append(firsts, &l[0]); return nil }, nil)
+	if err != nil || len(firsts) != 2 || firsts[0] != firsts[1] {
+		t.Errorf("read %d lines, one buffer %v, %v; want two from one buffer", len(firsts),
+			len(firsts) == 2 && firsts[0] == firsts[1], err)
+	}
+	stop := errors.New("enough")
+	for _, tc := range []struct {
+		name string
+		line func([]byte) error
+		want error
+	}{
+		{"at the end", func([]byte) error { return nil }, nil},
+		{"on a stop", func([]byte) error { return stop }, stop},
+	} {
+		r := streamLines{bound: 1 << 20}
+		err := r.read(bufio.NewReaderSize(strings.NewReader(long+"\ntail"), lineChunkBytes), true, tc.line, nil)
+		if !errors.Is(err, tc.want) || cap(r.held) > lineChunkBytes {
+			t.Errorf("%s: read = %v holding %d bytes of buffer; want %v, at most %d", tc.name, err, cap(r.held),
+				tc.want, lineChunkBytes)
+		}
+	}
+}
+
 type recorder struct {
 	line func([]byte)
 	skip func(int64, int)
