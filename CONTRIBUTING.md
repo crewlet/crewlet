@@ -2135,9 +2135,11 @@ Signed-off-by: Jane Developer <jane@example.com>
 That line is not decoration and it is not an authorship credit. It is your
 certification of the [Developer Certificate of Origin](DCO) — the file at the
 root of this repository — over that commit: that you wrote the change, or that
-it came from work you have the right to submit under the MIT licence this
-project ships under, and that you understand the commit and your sign-off are
-published permanently. Read it once; it is 34 lines.
+it came from work you have the right to submit under the licence this project
+ships under (the
+[PolyForm Shield License 1.0.0](https://polyformproject.org/licenses/shield/1.0.0),
+whose text is in [LICENSE](LICENSE)), and that you understand the commit and
+your sign-off are published permanently. Read it once; it is 34 lines.
 
 Because the DCO covers relayed work as well as your own (clauses (b) and (c)),
 a commit may carry more than one sign-off and the trailer need not name the

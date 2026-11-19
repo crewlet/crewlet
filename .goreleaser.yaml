@@ -262,7 +262,7 @@ dockers_v2:
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.created: "{{ .Date }}"
       org.opencontainers.image.source: "https://github.com/crewlet/crewlet"
-      org.opencontainers.image.licenses: MIT
+      org.opencontainers.image.licenses: LicenseRef-PolyForm-Shield-1.0.0
 
 # Keyless Sigstore signing over every image pushed above, BY DIGEST — the same
 # identity and the same short-lived certificate as the checksum signature,

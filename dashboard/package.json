@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "The Crewlet dashboard. Built into ../static/dashboard, which the engine binary embeds.",
-  "license": "MIT",
+  "license": "SEE LICENSE IN ../LICENSE",
   "scripts": {
     "dev": "vite",
     "build": "vite build && vite build --config vite.protocol.config.ts && vite build --config vite.runtime.config.ts",

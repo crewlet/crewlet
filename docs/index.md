@@ -2,8 +2,8 @@
 
 # Crewlet Documentation
 
-Crewlet is an open-source engine for orchestrating hierarchically organized AI
-agent companies. It treats the organizational hierarchy as the primary
+Crewlet is a source-available engine for orchestrating hierarchically organized
+AI agent companies. It treats the organizational hierarchy as the primary
 orchestration structure — knowledge, permissions, communication, and decisions
 are all scoped by position in the org chart.
 
