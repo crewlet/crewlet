@@ -322,7 +322,7 @@ func (rc rechecker) applied(ctx context.Context, id, digest string, by iam.Actor
 	if holds, err := advisor.Holds(entity, option.Change); err != nil || !holds {
 		return errors.Join(errRecheckAgain, err)
 	}
-	_, err = rc.log.Move(ctx, advisordomain.Call{By: by, OpID: statelog.NewOpID(now, "advisor.applied")}, row.Key,
+	_, err = rc.log.Move(ctx, advisordomain.Call{By: by, OpID: statelog.NewOpID(now, "advisor_applied")}, row.Key,
 		advisordomain.Move{Episode: id, Event: advisordomain.EventApplied, State: advisordomain.StateApplied,
 			FixDigest: advisor.OptionDigest(option), EffectDueAt: now.Add(advisor.EffectHorizon(f))}, row.KeyVersion)
 	return movedOr(err)
@@ -376,7 +376,7 @@ func (a *App) serveAdvisorRecheck(w http.ResponseWriter, r *http.Request) {
 	out, err := a.rechecker().recheck(r.Context(), strings.TrimSpace(r.PathValue("id")), body.Option,
 		iam.ActorFor(principal))
 	if err != nil {
-		refuseApply(w, err)
+		refuseApply(w, r, err)
 		return
 	}
 	httpjson.Write(w, http.StatusOK, out)
@@ -405,19 +405,19 @@ func (a *App) serveAdvisorApplied(w http.ResponseWriter, r *http.Request) {
 	}
 	id := strings.TrimSpace(r.PathValue("id"))
 	if err := a.rechecker().applied(r.Context(), id, body.Digest, iam.ActorFor(principal)); err != nil {
-		refuseApply(w, err)
+		refuseApply(w, r, err)
 		return
 	}
 	finding, err := a.advisorFinding(r.Context(), id)
 	if err != nil {
-		httpjson.Refuse(w, err)
+		refuseAdvisorLog(w, r, log, "advisor_finding", err)
 		return
 	}
 	httpjson.Write(w, http.StatusOK, finding)
 }
 
 // refuseApply says why a re-check or a report was not taken.
-func refuseApply(w http.ResponseWriter, err error) {
+func refuseApply(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, errRecheckAgain), errors.Is(err, errFindingMoved):
 		httpjson.FailWithFields(w, http.StatusConflict, httpjson.CodeConflict, httpjson.Detail{
@@ -430,6 +430,6 @@ func refuseApply(w http.ResponseWriter, err error) {
 		httpjson.FailWith(w, http.StatusNotFound, httpjson.CodeNotFound, map[string]string{
 			"detail": "no finding of the Advisor's has this id"})
 	default:
-		refuseDecision(w, err)
+		refuseDecision(w, r, err)
 	}
 }
