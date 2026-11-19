@@ -3506,7 +3506,10 @@ opens the question the executor answered last once none is open.
 Every row is a real link to it, so a modified or middle press opens a tab and
 its link copies. Opening an item (a press, Enter, `j` or `k`) pushes, so Back
 and Forward step between the items read; the screen's own moves (the next item
-after an answer, an address said another way) replace. The address opens its
+after an answer, an address said another way) replace. Beside the list,
+`#/inbox` opens the first item not yet dealt with and takes that item's address
+in its place, so the open item always has its link and Back leaves the inbox in
+one step; an empty inbox and the narrow screen's list stay `#/inbox`. The address opens its
 item in a new tab, after a reload and on another device, wherever it is now:
 an answered, put-off, snoozed or read item opens its group, and a notice no
 loaded page holds is read by its id (`inbox{record, snoozed: include}`, from
