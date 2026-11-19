@@ -441,16 +441,21 @@ func (r Reply) recordedOn(runs []PendingRun) (PendingRun, bool) {
 }
 
 // answerOf is what recording this delivery writes: the words the seal carries
-// and the record they are sealed onto ([Coordinator.record]).
+// and the record they are sealed onto ([Coordinator.record]). The words are
+// read only as far as an answer's share ([MaxAnswerBytes]): words whose
+// redaction passes it are sealed as its first MaxAnswerBytes+1 bytes
+// ([redact.Prefix]), which alone weigh the record past the share, so the store
+// refuses it as it refuses every answer past it ([answerFits]).
 func (r Reply) answerOf(now time.Time) (AnswerWords, RecordedAnswer) {
 	who := chatAnswerer(r.trigger())
+	text, _ := redact.Prefix(r.Text, MaxAnswerBytes+1)
 	words := AnswerWords{
 		// Redacted HERE, at the one place the reply becomes a record a
 		// second store keeps: it is sealed onto the run's row, and handed
 		// as it is to the run's harness — the asking session's next
 		// message, or a fresh run's brief — which the box and the harness's
 		// own session keep.
-		Text: redact.Secrets(r.Text), Via: types.AnswerViaChat,
+		Text: text, Via: types.AnswerViaChat,
 		By: who.by, ByKind: who.kind, OperatorID: who.operatorID,
 		Label: r.Label,
 	}
@@ -653,8 +658,9 @@ func (c *Coordinator) recordAnswer(ctx context.Context, run PendingRun, reply Re
 // the refusal leaves the run ([AnswerRefused]). See [Coordinator.record].
 //
 // FROM THE FIGURES THE STORE REFUSED IT ON, never measured again here: the
-// answer the store weighed is the one a run would have taken, and the figures
-// the run, the record and the dashboard state are what it weighed there.
+// answer the store weighed is the one a run would have taken (past the share,
+// its words' opening: [Reply.answerOf]), and the figures the run, the record
+// and the dashboard state are what it weighed there.
 func (c *Coordinator) recordRefusal(ctx context.Context, run PendingRun, reply Reply,
 	tooLarge *AnswerTooLargeError,
 ) (PendingRun, bool, error) {
