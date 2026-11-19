@@ -96,7 +96,7 @@ import { RestError } from "~/protocol/rest.ts";
 import { questionFits } from "~/protocol/assistantWire.ts";
 import { fmtWait } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
-import { rereadViewer } from "~/lib/viewer.ts";
+import { rereadViewer, useViewer } from "~/lib/viewer.ts";
 import { keyRow, matchesRow, pressText } from "../../keymap.ts";
 import { useKeyHints } from "../../layout.ts";
 import { on as onBus, emit } from "../bus.ts";
@@ -480,27 +480,61 @@ export function AskProvider({ place, children }: { place: AskPlace; children: Re
   return <AskContext.Provider value={value}>{children}</AskContext.Provider>;
 }
 
+/**
+ * Ask Crewlet with no model: it needs one, chosen in Settings › Models alone,
+ * where a reader who may choose it (the engine's `can_assign`) is sent. Anybody
+ * else reads why, with no way there. Neither is shown a model or a picker.
+ */
+function NoModel({ unavailable }: { unavailable: AssistantUnavailable }) {
+  const mayChoose = useViewer().assistantCanAssign;
+  return (
+    <EmptyState
+      icon={<LockGlyph size="lg" />}
+      title={unavailable.title}
+      description={
+        mayChoose
+          ? "Ask Crewlet needs a model to answer. Choose one in Settings › Models; any of the company's models a helper can run on will do."
+          : unavailable.body
+      }
+      action={
+        mayChoose ? (
+          <Button
+            size="small"
+            variant="secondary"
+            onClick={() =>
+              emit("assistant.navigation.open", {
+                path: ["settings", "models"],
+                query: {},
+                mode: "here",
+              })
+            }
+          >
+            Model settings
+          </Button>
+        ) : undefined
+      }
+    />
+  );
+}
+
 /** The conversation: the home until a question is asked, then its turns; or why the reader may not ask. */
 export function AskThread({
   label = "Conversation",
-  offlineAction,
   onNew,
 }: {
   label?: string;
-  /** The one step offered beside why the reader may not ask, where there is one they can take. */
-  offlineAction?: ReactNode;
   /** Leave for a new conversation, as the holder's own New conversation does. */
   onNew: () => void;
 }) {
   const a = useAsk();
   const { unavailable, admin, name } = a.place;
   if (unavailable !== null) {
+    if (unavailable.reason === "no_model") return <NoModel unavailable={unavailable} />;
     return (
       <EmptyState
         icon={<LockGlyph size="lg" />}
         title={unavailable.title}
         description={unavailable.body}
-        action={offlineAction}
       />
     );
   }

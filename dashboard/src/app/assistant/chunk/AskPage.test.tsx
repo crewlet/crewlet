@@ -5,6 +5,7 @@
  */
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { on as onBus } from "../bus.ts";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { LayerHost, ToastProvider } from "@crewlethq/ui";
 import { AppAnnouncer } from "~/app/announcer.tsx";
@@ -395,26 +396,32 @@ const assistantViewer = (assistant: Record<string, unknown>) => ({
   },
 });
 
-// CHOOSING A MODEL IS WHAT TURNS ASK CREWLET ON, so a reader who may assign
-// one is offered the picker where the conversation would be.
-test("with no model, a reader who may assign one is offered the picker in place of the conversation", async () => {
+// ASK CREWLET'S MODEL IS CHOSEN IN SETTINGS › MODELS ALONE: with none, a reader
+// who may choose it is sent there, by a step and no picker; the page names no
+// model and offers no choice of one.
+test("with no model, a reader who may choose one is sent to Settings › Models, with no picker", async () => {
   engine([]);
+  const opened: unknown[] = [];
+  const off = onBus("assistant.navigation.open", (target) => opened.push(target));
   mount("#/ask", NO_MODEL, assistantViewer({ can_assign: true }));
-  await screen.findByText("Choose the model Ask Crewlet runs on");
-  expect(screen.getAllByRole("combobox", { name: "Ask Crewlet's model" }).length).toBeGreaterThan(
-    0,
-  );
+  await screen.findByText(/Ask Crewlet needs a model to answer/);
+  expect(screen.queryByRole("combobox")).toBeNull();
   expect(screen.queryByRole("textbox", { name: "Ask Crewlet" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Model settings" }));
+  expect(opened).toEqual([{ path: ["settings", "models"], query: {}, mode: "here" }]);
+  off();
 });
 
-test("with no model, anybody else is told an administrator has not chosen one, with no picker", async () => {
+test("with no model, anybody else is told an administrator has not chosen one, with no way there", async () => {
   engine([]);
   mount("#/ask", NO_MODEL, assistantViewer({ can_assign: false }));
   await screen.findByText("Ask Crewlet has no model for Nimbus yet");
-  expect(screen.queryByRole("combobox", { name: "Ask Crewlet's model" })).toBeNull();
+  expect(screen.getByText("An admin has not chosen the model Ask Crewlet runs on.")).toBeDefined();
+  expect(screen.queryByRole("button", { name: "Model settings" })).toBeNull();
+  expect(screen.queryByRole("combobox")).toBeNull();
 });
 
-test("the conversation's head names the model Ask Crewlet runs on", async () => {
+test("the conversation's head names no model and offers no picker", async () => {
   engine([]);
   mount(
     "#/ask",
@@ -422,10 +429,14 @@ test("the conversation's head names the model Ask Crewlet runs on", async () => 
     assistantViewer({
       available: true,
       reason: undefined,
+      can_assign: true,
       model: { key: "sonnet", label: "Claude Sonnet" },
     }),
   );
-  await screen.findByText("Runs on sonnet");
+  const head = await waitFor(() => document.querySelector<HTMLElement>(".ask-page__head")!);
+  await act(async () => {});
+  expect(head.textContent).not.toMatch(/sonnet|Claude Sonnet|Runs on/);
+  expect(screen.queryByRole("combobox")).toBeNull();
 });
 
 // ONLY A 404 SAYS THE CONVERSATION IS NOT THEIRS. Mutation: read every
