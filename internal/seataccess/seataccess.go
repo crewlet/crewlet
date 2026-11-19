@@ -216,29 +216,18 @@ type Desired struct {
 	// keeps it (D1).
 	Enabled bool `json:"enabled"`
 
-	// Level is the vendor's identifier for the access held; empty on a lane
-	// that has no levels (GitHub, Slack). Per lane:
+	// Level is the vendor's identifier for the access held; empty on a lane that
+	// has no levels (GitHub, Slack). Per lane:
 	//
-	//   - datadog: the role id.
-	//   - gitlab: the access level as its integer (`30`), or
-	//     `member_role:<id>` for a custom role on Ultimate.
-	//   - jira: the project role id.
-	//   - confluence: the space role id, or, where the site has no space
-	//     roles, the space permissions as `<operation>:<target>` entries,
-	//     sorted and space-separated (`create:page read:space`).
-	//   - mattermost: the roles, space-separated in Mattermost's own order
-	//     ([config.MattermostRoleSets]).
-	//   - cloudflare: `read`, `operate`, `configure` or `secure`, an unset level
-	//     reading as read.
-	//   - expo: `viewer`, `runner`, `developer` or `release_manager`, an
-	//     unset level reading as viewer.
-	//   - scaleway: `read`, `operate` or `administer`, an unset level
-	//     reading as read.
-	//   - aws: `read`, `operate` or `administer`, an unset level reading as
-	//     read.
-	//   - google_cloud: `viewer`, `operator` or `administer`, an unset level
-	//     reading as viewer.
-	//   - ssh: `read` or `operate`, an unset level reading as read.
+	//   - datadog, jira: the role id.
+	//   - gitlab: the access level integer (`30`), or `member_role:<id>` (Ultimate).
+	//   - confluence: the space role id, else the space permissions as sorted,
+	//     space-separated `<operation>:<target>` (`create:page read:space`).
+	//   - mattermost: the roles, space-separated ([config.MattermostRoleSets]).
+	//   - cloudflare `read`..`secure`; expo `viewer`, `runner`, `developer`,
+	//     `release_manager`; scaleway and aws `read`, `operate`, `administer`;
+	//     google_cloud `viewer`, `operator`, `administer`; ssh `read`, `operate`.
+	//     Unset reads as the first.
 	Level string `json:"level,omitempty"`
 
 	// Permissions is GitHub's per-permission grant; nil elsewhere.

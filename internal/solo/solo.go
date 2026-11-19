@@ -4,7 +4,10 @@
 // list to keep in step, no build tag, and no environment variable. The
 // partition both `make test` and ci.yml run is COMPUTED from that import
 // (`go run ./internal/solo/partition`), and [roster_test.go] fails the build
-// when a package that stands up a multi-member broker has not declared it.
+// when a package that stands up a multi-member broker has not declared it, and
+// when a package declares it without standing one up (a flake-suppressant).
+// `internal/solo/partition` derives both halves, orders and shards them; its
+// package doc holds how weights are used.
 //
 // # What a solo package costs when it is not solo
 //

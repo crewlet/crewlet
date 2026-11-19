@@ -3,48 +3,25 @@ package search
 import "hash/fnv"
 
 // SEARCH SHARDS: how a corpus is divided so a scan can be measured, and later
-// split, without any node needing a plan.
+// split, without any node needing a plan. A shard is a stable hash of a
+// document's own identity into a fixed number of buckets, UNRELATED to anything
+// else the engine partitions on (stream, project, container, log position,
+// holding node). So a SOURCE THAT MOVES KEEPS ITS BUCKET (a re-file would otherwise hide it from a scan of the old bucket,
+// silently), the DISTRIBUTION FOLLOWS THE CORPUS, and a DOCUMENT WITH NO
+// EMBEDDING IS STILL IN A BUCKET, as the bucket is a function of its id.
 //
-// # What a shard is, and what it is deliberately not
-//
-// A shard is a stable hash of a document's own identity into a fixed number of
-// buckets. It is UNRELATED to anything else the engine partitions on — not a
-// stream, not a project, not a container, not a log position, not the node
-// that holds the row. That independence is the whole value:
-//
-//   - A SOURCE THAT MOVES KEEPS ITS BUCKET. Sharding on the filed project
-//     would re-bucket every task a re-file touches, and a query scanning the
-//     old bucket would miss it — silently, because a search that returns one
-//     fewer result looks exactly like a search over a corpus that has one
-//     fewer document.
-//   - THE DISTRIBUTION FOLLOWS THE CORPUS, not the company's shape. Sharding
-//     on a project puts a company's busiest project in one bucket, and the
-//     node holding it scans as much as the whole fleet did.
-//   - A DOCUMENT WITH NO EMBEDDING IS STILL IN A BUCKET, because the bucket is
-//     a function of its id rather than of anything derived from it. A scheme
-//     keyed on the vector would leave an un-embedded document out of every
-//     assignment.
-//
-// # Why every query still consults every bucket
-//
-// There is NO ROUTING PLAN here and nothing computes one. A single node takes
-// every bucket, which is exactly what it does today; what the column buys now
-// is that a scan's cost is measurable per BUCKET RANGE rather than per corpus
-// held, which is the measurement the fan-out is decided from.
+// Every query still consults every bucket: there is NO ROUTING PLAN, a single
+// node takes all of them, and the column makes a scan's cost measurable per
+// BUCKET RANGE, the measurement the fan-out is decided from.
 
 // SearchShards is how many buckets a corpus is divided into.
 //
-// SIXTY-FOUR, and the number is chosen for what it divides rather than for
-// what it holds: it is a fleet's worth of assignments at every size an
-// operator will run — 64 nodes take one each, 8 take eight, 3 take 21 or 22 —
-// and it is a power of two, so an assignment is a contiguous range with no
-// remainder to hand to somebody.
+// SIXTY-FOUR, chosen for what it divides: 64 nodes take one each, 8 take eight,
+// 3 take 21 or 22, and as a power of two an assignment is a contiguous range
+// with no remainder.
 //
-// It is FIXED for the life of a deployment. Changing it re-buckets every
-// document, which costs a full index rebuild rather than a rebalance, so it is
-// deliberately not configurable: a knob that can only be turned once, at the
-// price of the whole index, is a knob that will be turned by somebody who did
-// not know the price.
+// FIXED for the life of a deployment: changing it re-buckets every document (a
+// full index rebuild), so it is deliberately not configurable.
 const SearchShards = 64
 
 // ShardOf is a document's bucket.
@@ -70,17 +47,13 @@ func ShardOf(source, id string) int {
 // ChatShardOf is a chat message's bucket.
 //
 // ONE RULE FOR BOTH ESTATES that file a message: the chat applier stamps it on
-// the replicated row, and the chat keyword index ([ChatIndexer]) on its own
-// document. Two copies of the namespace beside two calls to [ShardOf] are two
-// answers that agree only while nobody edits one of them, and a fan-out that
-// assigned a node the range [16, 32) over two estates that disagreed would read
-// a message in one bucket and look for it in another — a search returning one
-// fewer hit, which looks exactly like a corpus holding one fewer message.
+// the replicated row and the chat keyword index ([ChatIndexer]) on its document.
+// Two copies could disagree, and a fan-out range such as [16, 32) would look for
+// a message in the wrong bucket: one fewer hit, silently.
 //
-// A NAMESPACE OF ITS OWN rather than a member of [Source], deliberately: that
-// enum is the list the embedding duty walks, and a value added there to name
-// chat's bucket would enrol the whole transcript in the semantic half. What the
-// bucket needs is a stable string, and this is one.
+// A NAMESPACE OF ITS OWN rather than a member of [Source]: that enum is what the
+// embedding duty walks, so a value added for chat would enrol the transcript in
+// the semantic half.
 func ChatShardOf(messageID string) int { return ShardOf(chatShardSource, messageID) }
 
 // chatShardSource is the namespace [ChatShardOf] hashes a message under.

@@ -14,16 +14,13 @@ import (
 // THE WINDOW REPORT MEASURES WHAT THE EMBEDDED OPENING LEAVES OUT, AS THE DUTY
 // PREPARES IT.
 //
-// It is the measurement that decides whether a company needs more than one
-// vector a source, so it must count what the semantic half actually cannot
-// see: each source the corpora embed — never a trashed page or a draft — as
-// its title, one space and its whole body with the whitespace collapsed,
-// against the opening the duty really sends. That opening is formed from the
-// body as the duty READS it — its first [search.EmbedReadChars] characters —
-// so a body that opens on a long run of whitespace sends less than the window
-// even when its whole text is short once collapsed: what follows the run was
-// never read, and is past the window. Measured from the whole body, the report
-// counted it as embedded.
+// It decides whether a company needs more than one vector a source, so it must
+// count what the semantic half cannot see: each source the corpora embed (never
+// a trashed page or a draft) as its title, one space and its whole body with
+// whitespace collapsed, against the opening the duty sends. That opening is
+// formed from the body as the duty READS it (its first [search.EmbedReadChars]
+// characters), so a body opening on a long whitespace run sends less than the
+// window and what follows the run is past it.
 func TestTheWindowReportMeasuresWhatTheEmbeddedOpeningLeavesOut(t *testing.T) {
 	t.Parallel()
 	db := pagesStore(t)

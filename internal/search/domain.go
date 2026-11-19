@@ -25,53 +25,28 @@ type Domain struct{}
 func (Domain) Name() string { return "vectors" }
 
 const (
-	// VectorLogMaxBytes is the ceiling this domain declares for its
-	// compacted stream, which is what the framework's own suites provision
-	// it with. A node sizes the stream from Tier A
-	// (`stream.tracker_vectors_max_bytes`) instead, together with every
-	// other state log, inside what the broker can actually grant.
+	// VectorLogMaxBytes is the compacted stream's ceiling as the framework's
+	// suites provision it; a node sizes it from Tier A
+	// (`stream.tracker_vectors_max_bytes`). ONE MESSAGE PER SOURCE, so the size
+	// is the corpus, not its history: ≈ 17 KB at 3 072 dimensions (12 KiB packed
+	// vector as base64 JSON, plus envelope, digest, title). 16 GiB is the
+	// mutation log's, from the same share (config.Stream.VectorsMaxBytes); it
+	// holds a model change (the whole corpus at once) twice over for the
+	// reference fifth year (8.46 GB). NOT sized from what one node can SEARCH
+	// ([SemanticScanBudget]): every data node holds every vector.
 	//
-	// ONE MESSAGE PER SOURCE, so the stream's size is the corpus rather
-	// than its history: ≈ 17 KB a source at 3 072 dimensions (≈ 8.8 KB at
-	// 1 536). The packed vector is 12 KiB, but a record carries it as JSON,
-	// so base64 makes it 16 KiB, and the envelope, the digest and the title
-	// add the rest — an encoded embed record measures 16 902 bytes with no
-	// title and 17 169 with a 256-byte one. The ceiling is the mutation
-	// log's declared one (the tracker domain's 16 GiB), because a node
-	// derives both from the same share of the stream volume
-	// (config.Stream.VectorsMaxBytes) — so this harness sizes the two as a
-	// node does. At that figure it holds a model change, which puts the
-	// whole corpus in the window at once, twice over for the reference
-	// company's fifth year (8.46 GB).
-	//
-	// It is NOT sized from the corpus one node can SEARCH, and it must
-	// not be: that is ≈ 345 000 sources idle and ≈ 136 000 under eight
-	// concurrent readers through the full scan, ≈ 545 000 and ≈ 183 000
-	// through an index at its probe ceiling (see [SemanticScanBudget]) —
-	// between ≈ 2.3 GB and ≈ 9.3 GB of messages. A corpus past those
-	// figures is a fleet dividing its buckets, and every data node still
-	// holds every vector — so the log carries the whole corpus however the
-	// search is divided.
-	//
-	// Crossing it REFUSES an append rather than dropping the oldest
-	// record. A dropped vector is a document that silently stops being
-	// findable by meaning, with nothing to say so.
+	// Crossing it REFUSES an append rather than dropping the oldest record: a
+	// dropped vector silently stops being findable by meaning.
 	VectorLogMaxBytes = 16 << 30
 
 	// VectorLogMaxAge is how long a message survives.
 	//
-	// NON-ZERO ONLY BECAUSE THIS DOMAIN IS COMPACTED, and it is what
-	// collects the forget tombstones: a withdrawn source leaves a record
-	// that exists to tell a replaying node the vector is gone, and once
-	// the embed it supersedes is also gone there is nothing left for it to
-	// say. Ninety days, because that is comfortably longer than the
-	// longest adoption window an operator is asked to plan for, and a node
-	// that has been away longer than that is adopting a snapshot rather
-	// than replaying.
-	//
-	// It is safe here for the reason it is refused on a log: the state is
-	// durable in SQL on every node, so an aged-out message is not state
-	// anyone lost.
+	// NON-ZERO ONLY BECAUSE THIS DOMAIN IS COMPACTED, and it collects the
+	// forget tombstones: once the embed one supersedes is gone it has nothing
+	// left to tell a replaying node. Ninety days, comfortably longer than the
+	// longest adoption window an operator plans for; a node away longer adopts
+	// a snapshot rather than replaying. Safe because the state is durable in
+	// SQL on every node, so an aged-out message is not state anyone lost.
 	VectorLogMaxAge = 90 * 24 * time.Hour
 
 	// VectorLogDuplicates is the window the broker collapses a repeated
@@ -240,16 +215,13 @@ func (Domain) FeedGroup() string { return "" }
 
 // NewRows builds the publisher's read seam for this domain.
 //
-// THE FRAMEWORK IMPLEMENTS IT, for the reason the tracker's own seam gives:
-// three of the four things a snapshot returns are the framework's own tables,
-// and the two-clause containment probe over them is the one piece of SQL where
-// a wrong clause is silent data loss rather than a wrong answer.
+// THE FRAMEWORK IMPLEMENTS IT, as for the tracker: three of a snapshot's four
+// parts are framework tables, and the two-clause containment probe over them is
+// where a wrong clause is silent data loss.
 //
-// The guards answer FALSE for both, and that is this domain's own answer
-// rather than an omission: an object here is created by its first record and
-// removed by a forget record, so there is no permanent deletion marker to
-// consult and no guarding row a first write has to see. It publishes
-// additively and arbitrates nothing.
+// The guards answer FALSE for both, as this domain's own answer: an object is
+// created by its first record and removed by a forget record, so there is no
+// permanent deletion marker and no guarding row. It arbitrates nothing.
 //
 // spec is the log the publisher writes, whose checkpoint the seam reads.
 func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows, error) {
@@ -261,19 +233,14 @@ func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows
 
 // Fence is this domain's eviction fence, and it is OPEN BY DECLARATION.
 //
-// # Why an eviction does not reach here, and what does instead
-//
 // The mutation log's fence exists because an evicted node's append is accepted
-// by the broker and dropped by every applier, so a writer that does not know
-// it is out collects acknowledgements for records nobody applies. Neither half
-// of that is true here: this domain installs no apply gate, so a record from
-// any node is applied on every data node, and nothing is waiting on the
-// acknowledgement.
+// by the broker and dropped by every applier, so the writer collects
+// acknowledgements for records nobody applies. Neither half holds here: no
+// apply gate is installed, so a record from any node is applied everywhere.
 //
-// What actually stops an evicted node writing vectors is stronger than a
-// fence: the duty is a FLEET SINGLETON and an evicted node does not hold the
-// lease. That guard is also earlier — it stops the provider call, which a
-// fence checked at append time would already have paid for.
+// What stops an evicted node writing vectors is stronger: the duty is a FLEET
+// SINGLETON and an evicted node does not hold the lease. That guard is also
+// earlier, stopping the provider call a fence at append time would have paid for.
 type Fence struct{}
 
 // NewFence builds it.
