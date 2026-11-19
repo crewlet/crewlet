@@ -488,6 +488,8 @@ describe("the table is the only way a key is bound", () => {
       "follow mode's stop, on the element of the artifact's body only: it binds nothing (no press is prevented, the browser's own scroll keys still scroll) and reads a navigation key as the reader moving the view themselves, as it reads a wheel, a touch drag or a press beside it",
     "runtime/runtime.ts":
       "the page runtime's Mod+Escape, inside an artifact's own document on its own origin, where no keymap of the frame's runs",
+    "runtime/viewer.ts":
+      "the page runtime's file viewer stepping between a page's own files with the arrow keys, on its own dialog inside an artifact's document on its own origin, where no keymap of the frame's runs; a player's own arrows still seek",
   };
 
   test("nothing but the table calls the mechanism", () => {

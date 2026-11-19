@@ -447,7 +447,7 @@ func (s Sources) advisorFinding(ctx context.Context, p Params) (any, error) {
 			entry.By = AdvisorActor{Kind: "person", Handle: h.ByName}
 		}
 		if len(h.Moved) > 0 {
-			if err := json.Unmarshal(h.Moved, &entry.Moved); err != nil {
+			if err = json.Unmarshal(h.Moved, &entry.Moved); err != nil {
 				return nil, fmt.Errorf("queries: finding %s's history does not decode: %w", id, err)
 			}
 		}
