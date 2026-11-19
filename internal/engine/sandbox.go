@@ -834,10 +834,12 @@ func (e *Engine) resumeGuarded(ctx context.Context, req sandbox.ResumeRequest,
 
 // panickedEnding is how a resumed turn that panicked once it had begun ended:
 // failed, saying it panicked and with what — redacted, since a panic's value
-// can quote what a tool or a box said. The stack stays in the log.
+// can quote what a tool or a box said, and fit as the log keeps it
+// ([executorkeep.Excerpt]). The stack stays in the log.
 func panickedEnding(panicked *turn.PanicError) executorkeep.Ending {
 	return executorkeep.Ending{Outcome: executorkeep.OutcomeFailed,
-		Failure: redact.Secrets(fmt.Sprintf("the resumed turn panicked and was abandoned: %v", panicked.Value))}
+		Failure: executorkeep.Excerpt(fmt.Sprintf("the resumed turn panicked and was abandoned: %v",
+			panicked.Value), executorkeep.FailureMaxBytes)}
 }
 
 // resume is [resumer.Resume]'s body, separated so the recovery around it is
@@ -4486,8 +4488,10 @@ func refusedSaid(in resumeInput) string {
 	return refusedMessage(in.Ended)
 }
 
-// refusedMessage is what the provider said of a refused request, redacted: the
-// run's error, else its text, else that it said nothing.
+// refusedMessage is what the provider said of a refused request, redacted whole
+// and clipped as a diagnostic, keeping only the opening of the redaction the
+// clip reads ([redact.Prefix]): the run's error, else its text, else that it
+// said nothing.
 func refusedMessage(ended sandbox.RunEnding) string {
 	said := strings.TrimSpace(ended.Error)
 	if said == "" {
@@ -4496,7 +4500,8 @@ func refusedMessage(ended sandbox.RunEnding) string {
 	if said == "" {
 		return "the provider gave no message"
 	}
-	return events.ClipDiagnostic(redact.Secrets(said))
+	opening, _ := redact.Prefix(said, events.MaxDiagnosticBytes+1)
+	return events.ClipDiagnostic(opening)
 }
 
 // signInReplaced decides whether a collected run is carried on because a
