@@ -88,6 +88,13 @@
 // (internal/whsec): a grammar that more than one caller must agree on has one
 // definition.
 //
+// Each endpoint signs under a DOMAIN mixed into the key derivation, so a
+// token minted for one endpoint (OTLP, the tool bridge, Gitlet's box git, an
+// artifact view ticket) never validates at another. A keyring that cannot
+// sign for the fleet is refused ([ErrNoKeyring]), never given a per-process
+// key: that key validated only on the node that minted it, and no node lacks
+// a keyring any more.
+//
 // The per-key derivation is that rule's too beyond tokens: [DeriveKey] and
 // [KeyTag] also yield an embedded fleet's broker credentials — each route's
 // password, each leaf link's and operator's nkey — under domains of their own
@@ -247,20 +254,13 @@ var ErrSubject = errors.New("runtoken: a token over this subject would not be re
 // keyring's active key and naming it, or refuses a subject its token could
 // not carry ([ErrSubject]).
 //
-// The SUBJECT is whatever the endpoint needs to know about the caller and
-// nothing more: a trace id for the telemetry receiver, a run id for the tool
-// bridge. It is not secret — it travels in a URL — so it must never be a
-// value that grants anything on its own.
-//
-// AND IT IS ONE REDACTION KNOWS A TOKEN BY ([redactable]), or it is refused:
-// a token whose subject held a dot, a `[`, a `\`, a space, a tab, a line
-// feed, a form feed or a carriage return ([subjectEnds]), or ran past
-// [redact.MaxReach] bytes, is a token internal/redact does not know by its
-// shape (the package doc's "The version is what redaction keys on"), so a
-// box that printed it would have it persisted as printed. That was a rule
-// every caller was trusted to keep, and nothing held it. Refused with an
-// error, never a panic: a subject can carry what a person named, as a Slack
-// install's state carries a seat's handle and an app's id.
+// The SUBJECT is what the endpoint needs to know about the caller and nothing
+// more (a trace id, a run id); it travels in a URL, so it grants nothing alone.
+// AND IT IS ONE REDACTION KNOWS A TOKEN BY ([redactable]), or it is refused: a
+// byte of [subjectEnds] or more than [redact.MaxReach] bytes makes a token
+// internal/redact does not know by shape (the package doc's "The version is
+// what redaction keys on"), persisted as printed. An error, never a panic: a
+// subject can carry what a person named.
 func (s *Signer) Mint(subject string, ttl time.Duration) (string, error) {
 	if err := redactable(subject); err != nil {
 		return "", err

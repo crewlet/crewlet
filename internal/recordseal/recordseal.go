@@ -53,6 +53,12 @@
 //
 // # The frame names the key that signed it
 //
+// The frame is "cslg", a version, the key id and an HMAC-SHA256 over the
+// domain, the record's id and its body, so a sealed body cannot be replayed
+// under another channel's domain or another id. The derivation label
+// predates the package and is part of every signature; recordKeyLabel says
+// why it must not change.
+//
 // A verifier looks the id up and refuses a record signed under a key it does
 // not hold, rather than retrying against whichever key is active. That is what
 // makes a keyring rotation survivable in both directions during a rollout: a
@@ -261,23 +267,16 @@ func (s *Signer) Seal(body []byte) []byte {
 
 // Open verifies a framed record and returns the body it carries.
 //
-// THE BODY COMES BACK FOR [Verified] AND [KeyUnknown], and never for
-// [Tampered]. A record signed under a key this node does not hold still has to
-// be FILED — retained under its own scope, so that later records touching the
-// same objects wait behind it rather than applying on rows it never wrote —
-// and the scope is inside the body. So the framework decodes that body to file
-// it and applies nothing: there is exactly one apply site and it applies on
-// [Verified] alone.
+// THE BODY COMES BACK FOR [Verified] AND [KeyUnknown], never [Tampered]. A
+// record under a key this node lacks must still be FILED, retained under its
+// own scope (inside the body) so later records on the same objects wait behind
+// it; it is decoded to file, never applied: the one apply site applies on
+// [Verified] alone. [Tampered] bytes get no domain decoder.
 //
-// [Tampered] bytes are not from this fleet, so no domain decoder is handed
-// them at all.
-//
-// TWO RESULTS AND NO ERROR, because there is no fourth answer and never can
-// be: the keys were derived when this verifier was built, and every way a
-// record can fail to open — a frame that is not one, a truncated one, an id
-// this node does not hold, a MAC that does not match — is one of the three
-// verdicts. An error channel here would be nil at every call site, and a
-// reader would have to write a branch that cannot be reached to satisfy it.
+// TWO RESULTS AND NO ERROR: keys were derived when the verifier was built, and
+// every way a record fails to open (not a frame, truncated, an id not held, a
+// MAC mismatch) is one of the three verdicts; an error would force an
+// unreachable branch.
 func (v *Verifier) Open(framed []byte) ([]byte, Verdict) {
 	id, mac, body, ok := splitFrame(framed)
 	if !ok {

@@ -40,7 +40,26 @@
 // earlier fires ended, as a conversation's next turn continues its last
 // turn's. The schedule's identity keys it — its scope, the scope's id and its
 // name — so renaming a schedule starts it afresh, and editing its task or its
-// cron does not.
+// cron does not. The partition is both of a fire's keys, so the fires waiting
+// in one inbox run once and in order. org.ScheduleNameMaxBytes holds every key
+// under the log's bound (TestTheLongestScheduleNameFitsTheLogsKey).
+//
+// # A restart records a missed fire only when nobody holds its minute
+//
+// A restart records its most recent fire as missed only when no node holds
+// that minute ([Claimer.MinuteClaimed], answered by the fleet). Claiming the
+// runner-less skip cannot say so, since it collides with no runner's fire, and
+// the node's own ledger cannot, since a moved duty does not carry it. A fire
+// older than the claim retention is not judged at all.
+//
+// # A run a person asks for is not a tick
+//
+// A manual run evaluates no window and is not the duty's, so whichever node
+// the person reached claims it on the fleet under [ManualFireLabel], derived
+// from the request and never a minute: it neither takes nor is refused a
+// tick's claim and never answers MinuteClaimed. It goes through the tick's own
+// dispatch (claim before publish, conversation, record) and is recorded
+// fired_manually. A schedule switched off is refused, not overruled.
 //
 // # What it is NOT
 //
@@ -127,16 +146,13 @@ type Mailboxes interface {
 // DutyFunc reports whether this node holds the scheduler duty for this tick.
 //
 // It is CLAIMED PER TICK rather than held, so a node that dies between ticks
-// releases the duty by lapsing and needs no failure detector. Nil means there
-// is no fleet to be a singleton within — the single-node case, which always
-// holds it.
+// releases the duty by lapsing and needs no failure detector. Nil means no
+// fleet: the single node always holds it.
 //
-// The tri-state is the return signature: (true, nil) holds, (false, nil) is a
-// peer holding it, and any error is UNKNOWN. A tick treats unknown as "do not
-// fire", which is the fail-closed direction: an unreadable lease store says
-// nothing about who holds the duty, and firing on that basis puts every node
-// back to racing the ledger claim — the exact duplicated work the duty exists
-// to remove.
+// (true, nil) holds, (false, nil) is a peer holding it, and any error is
+// UNKNOWN. A tick treats unknown as "do not fire" (fail closed): an unreadable
+// lease store says nothing about who holds it, and firing on that puts every
+// node back to racing the ledger claim, the duplicated work the duty removes.
 type DutyFunc func(ctx context.Context) (bool, error)
 
 // Options configures a [Scheduler]. Everything but the first three and
@@ -159,20 +175,14 @@ type Options struct {
 	Ledger Claimer
 
 	// ClaimRetention is how long Ledger remembers a claim: in the engine,
-	// the fleet's fire retention (coord.FireRetention), since the fleet
-	// answers every question the scheduler asks of its ledger. Required,
-	// and refused when not positive.
+	// the fleet's fire retention (coord.FireRetention). Required, and
+	// refused when not positive.
 	//
-	// It bounds the one judgement the first tick after a restart makes
-	// about the past: whether the most recent fire was MISSED. That is
-	// read from the ledger ([Claimer.MinuteClaimed]), and a fire older than
-	// the ledger's memory reads unclaimed whether it ran or not, so a
-	// monthly schedule restarted a fortnight after its fire recorded that
-	// fire as missed. Past this horizon the tick records nothing.
-	//
-	// No default, for the reason Ledger has none: a guessed retention
-	// longer than the real one writes those misses back, and the engine
-	// is the one caller that knows the real one.
+	// It bounds whether the first tick after a restart judges the most
+	// recent fire MISSED ([Claimer.MinuteClaimed]): a fire older than the
+	// ledger's memory reads unclaimed whether it ran or not, so past this
+	// horizon the tick records nothing. No default: a guessed retention
+	// longer than the real one writes those misses back.
 	ClaimRetention time.Duration
 
 	// Zone is the company's clock (ADR-0018), which a schedule that names
@@ -224,18 +234,14 @@ type Options struct {
 	// its derived agent id, so its fire is recorded [OutcomeSkippedPaused]
 	// instead of dispatched. Nil pauses nothing.
 	//
-	// BY THE SEAT'S ID, because a pause is kept on the agent id derived from
-	// the seat's handle (ADR-0013).
-	//
-	// SKIPPED, not dispatched into the held inbox, because a fire parked
-	// behind a pause is a standup that runs whenever somebody resumes the
-	// seat — days late, and one per day it was paused.
+	// By the agent id derived from the seat's handle (ADR-0013). SKIPPED, not
+	// dispatched into the held inbox: a parked fire runs whenever somebody
+	// resumes the seat, days late, one per day paused.
 	//
 	// An ERROR IS UNKNOWN and the fire is DISPATCHED, the opposite of the
-	// duty's polarity and for a reason: the paused seat's inbox is held by
-	// the node that runs it, so a fire that reaches a paused seat waits
-	// there rather than running, while a fire skipped on a read that
-	// failed is a standup lost for a seat nobody paused.
+	// duty's polarity: a fire reaching a paused seat waits in its held inbox,
+	// while one skipped on a failed read is a standup lost for a seat nobody
+	// paused.
 	Paused func(seat uuid.UUID) (bool, error)
 
 	// Mailboxes confirms a runner seat's mailbox before a fire for it is
@@ -443,23 +449,15 @@ func (s *Scheduler) Tick(ctx context.Context, at time.Time) int {
 	}
 
 	// A FIRE WHOSE SEAT'S MAILBOX COULD NOT BE CONFIRMED WAS NOT CLAIMED,
-	// and the window stays open for it, exactly as a shed tick leaves it:
-	// the next tick evaluates the same window, the fires already claimed
-	// are absorbed by the ledger, and the deferred one is claimed and sent
-	// once its mailbox is confirmed. Fires of one schedule that waited this
-	// way reach the seat together and run once, as the latest, with the
-	// rest recorded superseded ([FirePartition]).
+	// and the window stays open for it, as a shed tick leaves it: the next
+	// tick re-evaluates it, the ledger absorbs fires already claimed, and the
+	// deferred one is sent once confirmed. Waiting fires of one schedule run
+	// once, the rest superseded ([FirePartition]).
 	//
-	// FOR AT MOST THE CATCHUP WINDOW'S CEILING, the bound this scheduler
-	// already puts on how late a fire may run: a fire older than that is
-	// closer to its next one than to the moment it was due. Past it the
-	// window moves on and each deferred fire is RECORDED as a missed tick,
-	// so a seat whose mailbox never came back leaves a row saying so rather
-	// than a fire that silently never happened. A first tick holds its
-	// window without that test: it replays only the most recent missed fire,
-	// and once that one ages out of its own catchup window it is recorded as
-	// missed, unless some runner already holds its minute
-	// ([Scheduler.recordMissed]).
+	// FOR AT MOST THE CATCHUP CEILING, the bound on how late a fire may run.
+	// Past it the window moves on and each deferred fire is RECORDED as a
+	// missed tick, not a silent gap. A first tick holds its window without
+	// that test: it replays only the latest missed fire ([Scheduler.recordMissed]).
 	if len(deferred) > 0 && (first || at.Sub(windowStart) <= s.catchupMax) {
 		log.InfoContext(ctx, "schedule_window_held", "deferred", len(deferred),
 			"detail", "a runner seat's mailbox could not be confirmed, so its fire was not "+
@@ -848,41 +846,16 @@ func (d dispatcher) dispatch(ctx context.Context, f dispatch) dispatched {
 }
 
 // FirePartition is the inbox partition every fire of one schedule shares, and
-// the conversation every fire of it is: the schedule's conversation
-// (internal/notify's ScheduleConversation), which a fire is stamped with as
-// both keys.
+// its conversation (internal/notify's ScheduleConversation), stamped as both
+// keys.
 //
-// # Why fires share one partition
-//
-// A seat that cannot work (a provider limit, a budget, an executor holding
-// it) leaves its inbox held, and a schedule keeps firing into it. Each fire
-// used to key a partition of its own, so when the seat came back every
-// waiting fire was its own turn: a health check due every five hours ran
-// three times within four minutes after a limit cleared, each run reporting
-// the same thing. Sharing one partition hands the waiting fires to ONE
-// handler call, and the dispatcher runs only the latest of them
-// (internal/engine, mergeScheduledFires) and records the rest as superseded.
-//
-// # Why they are one conversation
-//
-// A schedule's work is one line of work: a health check reads what the last
-// one found, a standup what the last one said. Each fire's turn is a turn of
-// the schedule's conversation, so the executor log keys its session under the
-// schedule, the next fire's dispatch reads the head the last fire left, and
-// its run continues that session and is told how the earlier fires ended
-// (internal/engine's readConversation) — as a conversation's next turn does.
-// A fire is still nobody's reply: a schedule's conversation is one nobody can
-// reply into, so a fire is never taken for the answer to a question the last
-// fire's run parked on (internal/notify's Derived).
-//
-// The runner is not part of the key because the key is read inside one
-// seat's inbox and on one seat's executor log, and a unit schedule fanned out
-// to several seats fires into several inboxes: one conversation of each seat.
-//
-// ESCAPED, each part, for the reason [FireKey] is a struct: a joined key
-// collides the moment a separator appears in a name, and a unit "Q3:Launch"
-// with a schedule "Launch" must not merge with a unit "Q3" and a schedule
-// ":Launch".
+// One partition, so waiting fires reach ONE handler call: the dispatcher runs
+// only the latest and records the rest superseded (internal/engine,
+// mergeScheduledFires). One conversation: each fire continues the schedule's
+// executor session (internal/engine's readConversation), and nobody can reply
+// into it (internal/notify's Derived). The runner is not in the key: it is read
+// inside one seat's inbox. Parts are ESCAPED, as [FireKey] is a struct, because
+// separators in names collide.
 func FirePartition(e Entry) string {
 	return notify.ScheduleConversation(e.Scope, e.ScopeID, e.Schedule.Name)
 }
@@ -890,18 +863,15 @@ func FirePartition(e Entry) string {
 // recordMissed records the first tick's most recent fire as missed, if it was.
 //
 // A FIRE IS MISSED ONLY WHEN NOBODY HOLDS ITS MINUTE. The most recent fire
-// before a restart is usually one the node ran before it went down: claimed
-// fired for its runners, or skipped paused for a paused one. Its skip names no
-// runner, so claiming it collides with none of theirs ([Scheduler.recordSkip])
-// and cannot itself say whether the minute ran. Every restart past the catchup
-// window therefore recorded the last fire it had sent as missed as well, and
-// the schedule's history showed one tick twice, fired and skipped. So the
-// ledger is asked about the minute as a whole first, and a minute any runner,
-// or an earlier pass's skip, already holds records nothing.
+// before a restart is usually one the node already ran (claimed fired, or
+// skipped paused). Its skip names no runner, so claiming it collides with none
+// of theirs ([Scheduler.recordSkip]) and cannot say whether the minute ran;
+// recording it would show one tick twice, fired and skipped. So the ledger is
+// asked about the minute as a whole first, and a minute any runner, or an
+// earlier pass's skip, holds records nothing.
 //
-// AN UNREADABLE LEDGER RECORDS NOTHING, the direction that costs a history row
-// rather than inventing one: nothing is dispatched either way, and a skip
-// written on a guess is a miss that never happened.
+// AN UNREADABLE LEDGER RECORDS NOTHING: that costs a history row rather than
+// inventing one, since nothing is dispatched either way.
 func (s *Scheduler) recordMissed(ctx context.Context, e Entry, fireUTC time.Time, loc *time.Location) {
 	minute := FireMinute{
 		Scope:        e.Scope,

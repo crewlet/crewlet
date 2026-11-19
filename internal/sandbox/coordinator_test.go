@@ -231,17 +231,15 @@ func (a *audienceSpy) questions() []string {
 
 // ledgerSpy records post-charges, on the company's counter and the seat's.
 //
-// IT RECORDS AN OVER-CAP CHARGE, which is what the engine's accountant does:
-// it is coord.Budgets.PostCharge underneath, which moves both counters whatever
-// the caps say, and answers whether the run took one PAST its cap. A spy that
-// dropped those tokens would certify a coordinator that offers an over-cap run
-// again on every retry.
+// IT RECORDS AN OVER-CAP CHARGE, as the engine's accountant does
+// (coord.Budgets.PostCharge moves both counters whatever the caps say and
+// answers whether the run went PAST its cap). A spy that dropped those tokens
+// would certify a coordinator that offers an over-cap run again on every retry.
 //
-// AND IT KEEPS A PARTIAL as the counter does: a charge that reaches the
-// company and fails on the seat leaves the company's share counted, and a
-// charge handed companyCharged records the seat's share alone. A spy that
-// counted one figure could not tell a retry that finished the seat from one
-// that counted the company twice.
+// AND IT KEEPS A PARTIAL as the counter does: a charge reaching the company and
+// failing on the seat leaves the company's share counted, and a charge handed
+// companyCharged records the seat's share alone. One figure could not tell a
+// retry that finished the seat from one that counted the company twice.
 type ledgerSpy struct {
 	mu      sync.Mutex
 	charged int // the company's counter
@@ -578,20 +576,14 @@ func TestAParkedClarificationFreesTheSeat(t *testing.T) {
 // AND THE PARK IS REPORTED TO THE ENGINE, which is the only way anything above
 // this package can learn that an agent STOPPED.
 //
-// A parked run is neither finished nor working: the turn that suspended into
-// it does not return, so nothing on the Ended path fires, and a person who may
-// take days is now the only thing that can move it. Whatever the engine holds
-// up "while the agent works" — the working indicator first of all — has
+// A parked run is neither finished nor working: the suspended turn does not
+// return, so nothing on the Ended path fires and the working indicator has
 // nothing else to come down on.
 //
-// AFTER THE QUESTION IS ON THE ROW, and NOT BEFORE — which is the order the
-// report's whole value depends on. Until that write lands the completion can
-// still be retried, and a retry that resumed the turn would find the hold
-// already dropped; what comes down here is a claim on somebody's screen.
-//
-// The ANNOUNCEMENT goes first, ahead of both, and is not what this asserts:
-// see [Coordinator.park] for why a question recorded but never announced is
-// the worse of the two orders.
+// AFTER THE QUESTION IS ON THE ROW, and NOT BEFORE: until that write lands the
+// completion can be retried, and a retry that resumed the turn would find the
+// hold already dropped. The ANNOUNCEMENT goes first and is not asserted here:
+// see [Coordinator.park].
 func TestAParkedRunIsReportedOnlyOnceItsQuestionIsOnTheRow(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -829,18 +821,16 @@ func TestAFailedResumeUnclaimsSoTheRetryCanWin(t *testing.T) {
 
 // AND A REVERT THAT CANNOT BE WRITTEN IS NOT A RETRY AT ALL.
 //
-// The un-claim above is the whole reason a failed resume is harmless, so the
-// write that makes it is load-bearing: with it refused the row stays in
-// [StatusResumed], where the completion poll does not look, a redelivery is
-// refused by the very claim it would retake, no answer matches and no reaper
-// expires it. "Leave it for next time" is then a turn destroyed in silence,
-// with its box paused and billed until the seat happens to change hands — and
-// the indicator the suspended turn left up heart-beating over it for the life
-// of the process, which is the same hole a park that could not be written had
-// and the fifth instance of it found in this file.
+// The un-claim above is why a failed resume is harmless, so its write is
+// load-bearing: refused, the row stays in [StatusResumed], where the completion
+// poll does not look, a redelivery is refused by the claim it would retake, no
+// answer matches and no reaper expires it. That is a turn destroyed in silence,
+// its box paused and billed until the seat changes hands and its indicator
+// heart-beating for the life of the process, the same hole as a park that could
+// not be written.
 //
-// So the run is ENDED instead, under the same reason a stranded park takes:
-// nothing about the two failures differs once the claim is stuck.
+// So the run is ENDED instead, under the reason a stranded park takes: the two
+// failures do not differ once the claim is stuck.
 func TestAResumeWhoseClaimCannotBeGivenBackEndsTheRun(t *testing.T) {
 	t.Parallel()
 	rig := newCoordRig(t)
@@ -1605,26 +1595,16 @@ func TestALostRunIsAnnouncedWithTheReasonItWasLost(t *testing.T) {
 	}
 }
 
-// AND SO IS EVERY OTHER WAY A RUN STOPS, which is the property this file has
-// missed one path of in each of three rounds.
+// AND SO IS EVERY OTHER WAY A RUN STOPS.
 //
-// A settle ends a turn that is still SUSPENDED into its run: the record is
-// deleted, the box reclaimed and the seat freed, and the frame that started the
-// turn returned the moment it suspended. So nothing above this package learns
-// that the agent stopped unless [CoordinatorOptions.Stopped] says so, and the
-// working indicator was the first victim each time it did not — a run whose
-// collect failed kept it up for the life of the process.
+// A settle ends a turn still SUSPENDED into its run, so nothing above this
+// package learns the agent stopped unless [CoordinatorOptions.Stopped] says so.
 //
-// EVERY ENDING, NOT EVERY ENDING SOMEBODY ENUMERATED. The report is made by
-// [Coordinator.endRecord], the one place a run's record is deleted, so the
-// cases below are evidence rather than the rule: a path added later reports
-// because it deletes, not because anybody remembered. That is what makes a
-// retirement — which ends runs without going through [Coordinator.finish] at
-// all — one of them rather than a third site somebody has to remember. That includes a run whose turn
-// came back and ended its own hold — the sentence "this run is over, stop
-// holding anything up for its turn" is simply TRUE there, the resume frame has
-// already acted on it, and a gate would be a second opinion about a question
-// the store has answered.
+// EVERY ENDING, NOT EVERY ENDING SOMEBODY ENUMERATED: the report is made by
+// [Coordinator.endRecord], the one place a run's record is deleted, so the cases
+// below are evidence, not the rule; a retirement, which ends runs without
+// [Coordinator.finish], is one. So is a run whose turn came back and ended its
+// own hold: "this run is over" is TRUE there, and a gate would second-guess it.
 func TestEveryWayARunStopsReportsIt(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1755,24 +1735,16 @@ func TestEveryWayARunStopsReportsIt(t *testing.T) {
 
 // A PARK THAT COULD NOT BE WRITTEN IS A RETRY OR AN ENDING, NEVER A SILENCE.
 //
-// Its two branches are opposites and the row is what decides which: the run
-// arrives here claimed, and a claim is the promise that a tail will run.
+// The run arrives claimed, and a claim promises a tail will run:
+//   - THE CLAIM GOES BACK, so the completion comes round again; nothing stopped,
+//     so nothing is reported and the indicator is CORRECT to stay up. The error
+//     goes to the caller so the delivery retries.
+//   - THE CLAIM CANNOT GO BACK, and then nothing retries: a row left in
+//     [StatusResumed] is polled, claimed, matched or expired by nothing. So the
+//     run is ENDED and the stop reported; that turn is never coming back.
 //
-//   - THE CLAIM GOES BACK, so the completion comes round again — the poll reads
-//     running rows and the box is still there to collect a second time. Nothing
-//     stopped, so nothing is reported and the indicator a suspended turn left up
-//     is CORRECT to still be up. The error goes back to the caller so the
-//     delivery does too.
-//   - THE CLAIM CANNOT GO BACK, and then nothing retries at all: a row left in
-//     [StatusResumed] is polled by nothing, refused by the claim a redelivery
-//     would retake, matched by no answer and expired by no reaper. So the run is
-//     ENDED — box reclaimed, record deleted, loss announced under its own reason
-//     — and the stop reported, because that turn is never coming back.
-//
-// AND THE SEAT'S COUNTS FOLLOW THE ROW, which is the third thing this branch
-// got wrong: the park's two counts moved before the write, so a question the
-// store never recorded left the seat reading as free with an answer pending —
-// the exact state in which a person's reply is run as an unrelated turn.
+// AND THE SEAT'S COUNTS FOLLOW THE ROW: moved before the write, an unrecorded
+// question left the seat free, so a reply ran as an unrelated turn.
 func TestAParkThatCouldNotBeWrittenIsRetriedOrEnded(t *testing.T) {
 	t.Parallel()
 	asks := whichBranch()

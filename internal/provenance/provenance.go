@@ -350,18 +350,14 @@ func Fence(b Boundary, src Source, trust Trust, authors []Author, text string) s
 // text, and returns text unchanged otherwise.
 //
 // FOR WRITES: a model that read a page body as a fence and saves its edit has
-// been handed the body with two lines around it, and the likeliest mistake is
-// sending both back. Stored, they would sit in the page for ever as junk every
-// later reader sees. Only the turn's own boundary is recognised, because only
-// a fence this turn wrote can be told apart from text that merely looks like
-// one, and only a fence around the WHOLE text, because a quoted fence inside
-// a longer text is the writer's own choice to keep.
+// the body with two lines around it, and the likeliest mistake is sending both
+// back as junk. Only the turn's own boundary is recognised (only a fence this
+// turn wrote can be told from text that merely looks like one), and only a
+// fence around the WHOLE text (a quoted fence inside is the writer's choice).
 //
-// What comes back is the fenced text as the fence carried it, escapes
-// included: the escapes are not undone, since the original bytes are not
-// recoverable from them and a marker-shaped run in a page is better left
-// defused. The newline [Fence] adds before its closing line is taken off with
-// it, so text with nothing to escape round-trips byte for byte.
+// Escapes come back as carried: the original bytes are not recoverable and a
+// marker-shaped run is better left defused. The newline [Fence] adds before
+// its closing line goes too, so text with nothing to escape round-trips.
 func Unfence(b Boundary, text string) string {
 	if !b.Valid() {
 		return text
@@ -390,17 +386,12 @@ func Unfence(b Boundary, text string) string {
 // Rekey moves every fence text carries under from onto to, and neutralises
 // everything else in text under to ([Neutralise]).
 //
-// FOR TEXT FENCED BEFORE ITS READER HAD A TOKEN: a wake's prompt is built where
-// a delivery is routed, before the turn that will read it exists, so its
-// foreign text is fenced under a token minted for that wake alone — and the
-// turn re-keys it onto its own, so a model pairing an opening line with its
-// closer meets one token in a turn rather than one per wake. Only a fence
-// [Fence] wrote under from is moved: content inside it can carry neither from
-// nor a marker-shaped run, and from was minted after anything outside it was
-// written, so nothing the text carries can pass for one of its lines. What is
-// outside the fences — a sender's display name, a room's name, every other
-// string a prompt wove in — is neutralised as a tool answer's other strings
-// are, so none of it opens or closes a fence either.
+// FOR TEXT FENCED BEFORE ITS READER HAD A TOKEN: a wake's prompt is built
+// before its turn exists, so its foreign text is fenced under a token minted
+// for that wake, and the turn re-keys it onto its own. Only a fence [Fence]
+// wrote under from is moved: content inside it carries neither from nor a
+// marker-shaped run, and from was minted after anything outside was written.
+// Everything outside the fences (display names, room names) is neutralised.
 //
 // An INVALID from moves nothing and neutralises the whole text; an invalid to
 // keeps from, since a fence is never written with a token that is not one.
@@ -677,31 +668,17 @@ func TrustForPartial(self string, named []Author) Trust {
 	return TrustColleague
 }
 
-// TrustForHosted is THE ONE RULE for text on a surface the engine hosts — its
-// own tracker, knowledge base, chat, artifacts, project files and
-// agent-to-agent channels — whichever door the text comes through: a wake, a
-// read tool, a search hit, a thread handed to a turn.
-//
-// named is who the record says wrote the text, and complete says the record
-// names EVERY writer. Named in full, it is [TrustFor]. Short of that — a body
-// edited by writers its row no longer lists, a title the row records no
-// writer for, a hit an index keeps no writer for, a change whose record names
-// no actor — it is [TrustForPartial]: never `own`, and `colleague` with nobody
-// named at all, because the SURFACE vouches for whoever wrote it. Every write
-// to it is authenticated as a seat, a person, an operator credential or the
-// engine, so text nobody named was still written by somebody in the company.
-//
-// A NAMED WRITER WHO IS NO COMPANY PRINCIPAL is a writer the record could not
-// name, not an outside party — a row that carried neither a handle nor a kind
-// — because nothing outside the company writes these surfaces: such an author
-// is dropped, and the text is read as partly attributed. The same text on a
-// VENDOR's surface (a Confluence page, a Jira comment, a Slack message) takes
-// [TrustFor] instead, where nobody named is `external`: a site the company
-// shares with the rest of the world vouches for nobody.
-//
-// ONE RULE because the same page reached a seat two ways before it: as a wake
-// whose record named nobody it read `external`, and as a search hit naming
-// nobody `colleague`, so one text was trusted by the door it came through.
+// TrustForHosted is THE ONE RULE for text on a surface the engine hosts (its
+// tracker, knowledge base, chat, artifacts, files, A2A channels), whichever
+// door it comes through, so no text is trusted by its door. named is who the
+// record says wrote it, and complete says it names EVERY writer. Named in
+// full, it is [TrustFor]; short of that (a body edited by writers its row no
+// longer lists) it is [TrustForPartial]: never `own`, and `colleague` with
+// nobody named, because the SURFACE vouches: every write is authenticated as
+// a seat, a person, an operator credential or the engine. A named writer who
+// is no company principal (neither handle nor kind) is one the record could
+// not name, not an outsider: it is dropped. A VENDOR's surface (Confluence,
+// Jira, Slack) takes [TrustFor], where nobody named is `external`.
 func TrustForHosted(self string, named []Author, complete bool) Trust {
 	known, unnamed := hostedWriters(named)
 	if !complete || unnamed || len(known) == 0 {
@@ -872,21 +849,12 @@ var FieldKinds = []string{FieldFence, FieldName}
 // Label is what a fence says about the text inside it: the surface it was read
 // from, how far its reader may rely on it, and who wrote it.
 //
-// A VALUE, so the label a text was read under travels with the text — on the
-// record of what a turn was asked, on the row a past turn is kept in, on a
-// search hit crossing between nodes — and whatever reads the text later fences
-// it under the label it was decided with, rather than deciding again from what
-// a later reader can no longer see: a learning worker that runs after the turn
-// has no notification to ask, and a seat recalling a turn a month on has no
-// trigger at all.
-//
-// THE TRUST IS THE ONE IT EARNED FROM ITS READER when the label was decided,
-// which is why a label is kept with that reader's own records and never handed
-// to another reader's.
-//
-// The ZERO LABEL SAYS NOTHING — no surface, nobody named, and a trust [Fence]
-// writes as `external` — which is how every reader takes a label it was not
-// given: as text nothing vouches for.
+// A VALUE, so the label travels with the text (a turn's record, a search hit
+// crossing nodes) and a later reader fences it under the label it was decided
+// with: a learning worker after the turn has no notification to ask. The
+// trust is the one earned from ITS READER, so a label is never handed to
+// another reader's records. The ZERO LABEL SAYS NOTHING (no surface, nobody
+// named, trust `external`): text nothing vouches for.
 type Label struct {
 	Source  Source   `json:"source"`
 	Trust   Trust    `json:"trust"`
@@ -896,18 +864,15 @@ type Label struct {
 // Repository is the label of text read out of one of the company's git
 // repositories (src is [SourceRepoFile], [SourceRepoPatch] or
 // [SourceRepoCommit]), or printed by a check of one of its commits
-// ([SourceCheckLog]: what the commit's code and tests wrote, or a person's CI
-// sent): THE ONE RULE for a repository's bytes and what running them printed,
-// which every door they reach a model through takes.
+// ([SourceCheckLog]): THE ONE RULE for a repository's bytes and what running
+// them printed, whichever door they reach a model through.
 //
 // EXTERNAL, naming nobody, and never [TrustForHosted], although the engine
-// hosts the repository: the hosted rule vouches for whoever wrote a record
-// because every write to such a surface is authenticated as somebody in the
-// company, and a repository's bytes are not such a record. A read by object id
-// knows the bytes and not whose they are, the author a commit states is text
-// its pusher wrote, and an import or a contributor's branch carries commits
-// authored anywhere. Read by the hosted rule, a file nobody named would be a
-// colleague's.
+// hosts the repository: the hosted rule vouches because every write to such a
+// surface is authenticated as somebody in the company, and a repository's
+// bytes are not such a record. A read by object id knows the bytes, not whose
+// they are; a commit's stated author is text its pusher wrote; an import or
+// contributor's branch carries commits authored anywhere.
 func Repository(src Source) Label {
 	return Label{Source: src, Trust: TrustExternal}
 }
@@ -932,19 +897,14 @@ func DelegatedRequest(requester string) Label {
 // Executor is the label of what a seat's executor puts to a person (its
 // question, the context it gives with it, the options it offers), naming the
 // seat whose run wrote it where the reader knows it: THE ONE RULE for those
-// words, which every door they reach a model through takes, so one ask is
-// trusted alike whether it is answered, listed among decisions or read back
-// once answered.
+// words, so one ask is trusted alike whether answered, listed or read back.
 //
-// EXTERNAL, decided here and never inferred from its writer: the words are
-// a vendor's harness's, composed in its box from a brief that may be an
-// outside message or a webhook's payload and from whatever it read there (a
-// repository, the open web), and put to a person to decide on. Whoever reads
-// them, a person's assistant among them, takes them as data and acts on none
-// of it, as it reads a deep-work run's account of what it did. What the same
-// harness writes through the seat's tools is another matter: each such write is
-// a record on a surface the engine hosts, made as the seat and read by the one
-// rule for such a surface ([TrustForHosted]) with every other writer there.
+// EXTERNAL, decided here and never inferred from its writer: the words are a
+// vendor harness's, composed from a brief that may be an outside message or a
+// webhook's payload and whatever it read (a repository, the open web), and
+// every reader takes them as data. What the same harness writes through the
+// seat's tools is another matter: a record on a hosted surface, made as the
+// seat and read by [TrustForHosted].
 func Executor(seat string) Label {
 	l := Label{Source: SourceExecutor, Trust: TrustExternal}
 	if seat != "" {
@@ -954,20 +914,15 @@ func Executor(seat string) Label {
 }
 
 // ExecutorSession is the label of what one of a seat's kept executor sessions
-// holds as the seat reads it back — an entry of a past run's transcript, what
-// its turn was asked, how it ended — naming the seat whose run kept it where
-// the reader knows the words are that run's record: THE ONE RULE for those
-// words, which every door they reach a model through takes.
+// holds as the seat reads it back (a transcript entry, what its turn was
+// asked, how it ended), naming the seat whose run kept it where known: THE ONE
+// RULE for those words, whichever door they reach a model through.
 //
-// EXTERNAL, decided here and never inferred from its writer, by [Executor]'s
-// reasoning: a transcript is a vendor harness's record, composed in its box,
-// and it holds a brief that may be an outside message or a webhook's payload,
-// the notes people sent the run, its model's text, and whatever its tools
-// returned — files, command output, the open web — so the least trust of
-// those parts is the whole's. `own`, every writer the reading seat itself,
-// would be false of a tool's answer quoted in it. A note a person sent that
-// run was an instruction to it; read back later it is the history of one,
-// fenced like every other entry.
+// EXTERNAL, by [Executor]'s reasoning: a transcript holds a brief that may be
+// an outside message, people's notes, the model's text and whatever its tools
+// returned, so the least trust of those parts is the whole's, and `own` would
+// be false of a quoted tool answer. A note a person sent that run was an
+// instruction to it; read back later it is history, fenced like every entry.
 func ExecutorSession(seat string) Label {
 	l := Label{Source: SourceExecutorSession, Trust: TrustExternal}
 	if seat != "" {

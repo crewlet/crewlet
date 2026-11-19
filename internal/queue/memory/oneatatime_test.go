@@ -14,38 +14,17 @@ import (
 )
 
 // A HANDLER NEVER RUNS BESIDE ITSELF ON THE TWIN: a listener is handed one
-// broadcast at a time, and a handler that publishes into its own subscription
-// is handed that event only once it has returned, neither on a goroutine beside
-// it nor inside its own publish.
-//
-// The conformance suite states both (one_listener_hears_one_message_at_a_time,
-// a_handler_that_publishes_to_its_own_subscription_is_not_re_entered) and
-// decides there the halves every backend can show. What is left is an absence,
-// which a case could read on every backend only behind a quiet window, and a
-// second delivery the runner made late passed that window with the bug present.
-// So each backend's half is decided where it can be exact: JetStream's by where
-// its code sits (its TestAHandlerRunsInlineOnTheGoroutineThatTookItsDelivery),
-// and the twin's here, a twin-only test because only a bubble decides it.
-//
-// In a bubble the handler is held inside the first delivery, and what it was
-// handed meanwhile is read twice: once every goroutine of the case is durably
-// blocked, and again once the case has moved the bubble's clock past every
-// timer the twin arms (pastEveryTimer) and every goroutine has blocked again.
-// A delivery the twin was going to make beside the held handler, on a goroutine
-// of its own or inside the handler's own publish, has been made by the first
-// read, and one that waited on the twin's clock first by the second:
-// synctest.Wait returns with a goroutine asleep on that clock, and only the
-// advance wakes it. The re-entry half reads the mailbox too, where the event
-// the handler published must still be waiting. No window is read, since the
-// advance is the bubble's own arithmetic, and it fires no timer of the twin's
-// own. The handler is then let go, and the second delivery is read after it.
-//
-// Mutation: hand each broadcast to its listener on a goroutine of its own, at
-// once or after a wait on the twin's clock, and the listener hears the second
-// beside the first; let a publish from inside a handler start a drain of its
-// own rather than ask the running one to go round again, at once or after such
-// a wait, or run a pass's delivery on a goroutine of its own, and the handler
-// is handed the event it published while it is held.
+// broadcast at a time, and a handler publishing into its own subscription is
+// handed that event only after it returns, neither beside it nor inside its
+// own publish. The conformance suite states both and decides the halves every
+// backend can show; the rest is an absence a quiet window cannot decide, so
+// JetStream's is decided by where its code sits and the twin's here, in a
+// bubble: the handler is held inside the first delivery and what it was handed
+// is read once every goroutine is durably blocked, and again after the bubble's
+// clock passes every timer the twin arms (pastEveryTimer), catching a delivery
+// that waited on that clock. Mutation: deliver on a goroutine of its own, or
+// start a nested drain from a handler's publish, and the held handler is
+// handed a second event.
 func TestAHandlerNeverRunsBesideItself(t *testing.T) {
 	t.Parallel()
 
