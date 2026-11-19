@@ -34,6 +34,7 @@ type AdvisorLog interface {
 	LastRunOfClasses(ctx context.Context, fresh statelog.Freshness) (map[string]time.Time, error)
 	Reports(ctx context.Context, cursor string, limit int, fresh statelog.Freshness) ([]advisordomain.ReportRow, string, error)
 	Report(ctx context.Context, week string, fresh statelog.Freshness) (advisordomain.ReportRow, bool, error)
+	AlarmEpisodes(ctx context.Context, since time.Time, fresh statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, error)
 }
 
 // advisorFresh is what every advisor read reads at: this node's copy, which a

@@ -257,6 +257,7 @@ const (
 	UnreadHolds        = "holds"
 	UnreadStops        = "budget_stops"
 	UnreadMerges       = "merges"
+	UnreadEpisodes     = "alarm_episodes"
 )
 
 // Inputs is what one answer is read from.

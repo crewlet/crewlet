@@ -104,6 +104,9 @@ func (emptyAdvisor) PendingRequests(context.Context, statelog.Freshness) ([]advi
 func (emptyAdvisor) LastRunOfClasses(context.Context, statelog.Freshness) (map[string]time.Time, error) {
 	return map[string]time.Time{}, nil
 }
+func (emptyAdvisor) AlarmEpisodes(context.Context, time.Time, statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, error) {
+	return nil, nil
+}
 func (emptyAdvisor) Reports(context.Context, string, int, statelog.Freshness) ([]advisordomain.ReportRow, string, error) {
 	return nil, "", nil
 }
