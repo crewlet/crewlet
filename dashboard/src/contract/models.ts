@@ -153,12 +153,11 @@ export type ModelCheckName =
 
 /**
  * The work a written reference points at a model (`config.ProviderJob`): a
- * seat's executor or one of its satellites, or the assistant's chat or deep
- * work. Held against `config.ProviderJobs` by
+ * seat's executor or one of its satellites, or the assistant's model. Held
+ * against `config.ProviderJobs` by
  * `internal/config.TestTheModelsScreenReadsAnEntryAsTheEngineDoes`.
  */
-export type ModelJob =
-  "executor" | "review" | "subagent" | "auxiliary" | "judge" | "assistant" | "deep_work";
+export type ModelJob = "executor" | "review" | "subagent" | "auxiliary" | "judge" | "assistant";
 
 /**
  * The seat field each seat job is written in, as the page writes it: the

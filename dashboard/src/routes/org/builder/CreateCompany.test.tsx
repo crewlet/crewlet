@@ -196,7 +196,7 @@ test("the save is a create-only PUT, and says what is left to do", async () => {
   );
   // AND THE GO-LIVE CHECK: the advisor, before the agents start.
   expect(screen.getByRole("link", { name: "Open the advisor" }).getAttribute("href")).toBe(
-    "#/settings/advisor",
+    "#/advisor",
   );
   fireEvent.click(screen.getByRole("button", { name: "Or from a terminal" }));
   expect(screen.getByText(/crewlet config export > company\.yaml/).textContent).toBe(

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -135,12 +136,14 @@ func (s *Store) ownedTurn(owner, id uuid.UUID) (*storedTurn, error) {
 }
 
 // Conversations implements [assistant.Transcripts].
-func (s *Store) Conversations(_ context.Context, owner uuid.UUID, _ string, _ int) (wire.ConversationList, error) {
+func (s *Store) Conversations(_ context.Context, owner uuid.UUID, _ string, _ int,
+	q string) (wire.ConversationList, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := wire.ConversationList{Conversations: []wire.ConversationSummary{}}
+	q = strings.ToLower(strings.TrimSpace(q))
 	for _, c := range s.conversations {
-		if c.Owner == owner {
+		if c.Owner == owner && strings.Contains(strings.ToLower(c.Title), q) {
 			out.Conversations = append(out.Conversations, c.Summary())
 		}
 	}
@@ -253,7 +256,8 @@ func (s *Store) CreateConversation(_ context.Context, w assistant.Write, id uuid
 }
 
 // TitleConversation implements [assistant.Records].
-func (s *Store) TitleConversation(_ context.Context, w assistant.Write, id uuid.UUID, title string) error {
+func (s *Store) TitleConversation(_ context.Context, w assistant.Write, id uuid.UUID, title string,
+	by wire.TitleSource) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.keep(w, "conversation_titled", title); err != nil {
@@ -263,7 +267,10 @@ func (s *Store) TitleConversation(_ context.Context, w assistant.Write, id uuid.
 	if err != nil {
 		return err
 	}
-	c.Title = title
+	if c.TitleSetBy == wire.TitleByPerson && by != wire.TitleByPerson {
+		return nil
+	}
+	c.Title, c.TitleSetBy = title, by
 	return nil
 }
 

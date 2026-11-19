@@ -22,7 +22,6 @@ import (
 	"github.com/crewlet/crewlet/internal/api/opkey"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/runtoken"
 )
@@ -46,11 +45,9 @@ import (
 const AssistDomain = "crewlet.assistant.grant.v1"
 
 // AssistReadLifetime is the longest a turn's read grant lives: the longest a
-// turn may run (internal/config's AssistantTurnTimeoutCeiling), so a grant
-// outlives no turn it could serve and no turn outlives its grant. A turn ends
-// or parks its grant as it ends (internal/assistant), so a shorter turn holds
-// it no longer than it runs.
-const AssistReadLifetime = config.AssistantTurnTimeoutCeiling * time.Second
+// turn may run ([exec.ReadLifetime]), so a grant outlives no turn it could
+// serve and no turn outlives its grant.
+const AssistReadLifetime = exec.ReadLifetime
 
 // AssistExecLifetime is the longest an exec grant lives: one in-process request
 // with a slow write's p99 behind it, and nothing else.

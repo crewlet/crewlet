@@ -45,9 +45,11 @@ const (
 const E2BClientTimeout = 60 * time.Second
 
 // e2bPrivateFloor is the oldest e2b-dev/infra release a self-hosted cluster
-// may run: the first that makes a box private with envd's port left exempt.
-// The two changes it is the first to carry: the package doc, "AND AN E2B BOX
-// IS PRIVATE".
+// may run: the first to carry both e2b-dev/infra#1474, which mints the traffic
+// token for a private box, and e2b-dev/infra#1482, which exempts envd's port
+// from it. A cluster built from e2b-dev/infra's main in the hour between the
+// two, which no release carries, guards envd's port too, so its boxes pass
+// [e2bAPI.createBox]'s check and fail at their first envd call.
 const e2bPrivateFloor = "2025.46"
 
 // e2bAPI is the control plane for one deployment.
@@ -203,8 +205,11 @@ type e2bBox struct {
 	// a read alike, so every handle carries it. Never logged or stored: every
 	// call that reaches the box hands it back.
 	//
-	// Source: the Sandbox and SandboxDetail schemas of
-	// https://github.com/e2b-dev/infra/blob/main/spec/openapi.yml.
+	// Sources: E2B's "Secured access"
+	// (https://docs.e2b.dev/sandbox/secured-access); the Sandbox and
+	// SandboxDetail schemas of
+	// https://github.com/e2b-dev/infra/blob/main/spec/openapi.yml, and
+	// envd's WithAuthorization in packages/envd/internal/api/auth.go.
 	EnvdAccessToken string `json:"envdAccessToken,omitempty"`
 
 	// TrafficToken is whether the answer carried the box's traffic access
@@ -226,7 +231,14 @@ func (a *answered) UnmarshalJSON(raw []byte) error {
 
 // e2bNetwork is a create's network settings. AllowPublicTraffic is never
 // omitempty: a false left out is the project's default, public on a project
-// that predates E2B's private default.
+// that predates E2B's private default. maskRequestHost is never set: it
+// rewrites the Host header a box's service sees, and nothing the engine runs
+// needs it. Sources: E2B's "Restricting public access"
+// (https://docs.e2b.dev/network/restrict-public-access); in e2b-dev/infra,
+// spec/openapi.yml (SandboxNetworkConfig, Sandbox.trafficAccessToken),
+// packages/api/internal/handlers/sandbox_create.go,
+// packages/api/internal/orchestrator/create_instance.go, and the proxy's
+// ResolveIngress in packages/shared/pkg/proxy/ingress.go.
 type e2bNetwork struct {
 	AllowPublicTraffic bool `json:"allowPublicTraffic"`
 }
@@ -253,12 +265,12 @@ func (b e2bBox) host(domain string) string {
 // box's traffic token, which nothing here keeps; an answer carrying none came
 // from an API that ignored the field, so its box is killed and refused as
 // configuration ([e2bAPI.refusePublic]). `secure` is sent for a cluster from
-// before E2B secured every box itself, and envd requires the token every
-// answer carries ([e2bBox.EnvdAccessToken]). maskRequestHost is never sent.
-// The TTL is the box's kill timer, refreshed by [E2BSandbox.SetTimeout] every
-// poll tick: it bounds how long a box outlives a stopped engine, never how
-// long a job runs. Why, with E2B's sources: the package doc, "AND AN E2B BOX
-// IS PRIVATE".
+// before E2B secured every box itself (e2b-dev/infra 315a94e737), and envd
+// requires the token every answer carries ([e2bBox.EnvdAccessToken]); E2B
+// refuses a template whose envd is below 0.2.0. The TTL is the box's kill
+// timer, refreshed by [E2BSandbox.SetTimeout] every poll tick: it bounds how
+// long a box outlives a stopped engine, never how long a job runs. Why: the
+// package doc, "AND AN E2B BOX IS PRIVATE", and [e2bNetwork].
 func (a *e2bAPI) createBox(ctx context.Context, template string, timeoutSec float64, env map[string]string) (e2bBox, error) {
 	type request struct {
 		TemplateID string            `json:"templateID"`

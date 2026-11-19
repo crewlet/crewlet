@@ -111,6 +111,12 @@ var Unenforced = []Exemption{
 			"opposite of the decision: a field is explicitly not a bump.",
 	},
 	{
+		ID: "ADR-0054",
+		Why: "Ask Crewlet no longer hands a task to a harness running its own " +
+			"tools: the code this record governed was deleted with it, so there " +
+			"is nothing left for a gate to look at.",
+	},
+	{
 		ID: "ADR-0010",
 		Why: "The engine's exporter and the sandbox forwarder agree because " +
 			"they read the same standard environment variables directly, " +

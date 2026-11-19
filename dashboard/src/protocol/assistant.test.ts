@@ -158,11 +158,11 @@ describe("a turn's stream", () => {
   });
 
   test("a frame of another protocol version stops the stream for good", async () => {
-    const other = FIRST[0]!.replace('"v":1', '"v":2');
+    const other = FIRST[0]!.replace('"v":2', '"v":3');
     const sent = serve(() => sse(body([other, ...FIRST.slice(1)])));
     const w = watch(URL_);
     await w.ended;
-    expect(w.stops).toEqual([{ code: "protocol_mismatch", version: 2 }]);
+    expect(w.stops).toEqual([{ code: "protocol_mismatch", version: 3 }]);
     expect(w.frames).toEqual([]);
     expect(sent).toHaveLength(1);
   });
@@ -170,7 +170,7 @@ describe("a turn's stream", () => {
   // A FAULT ENDS THE CONNECTION TOO, not only the reading: a body left open
   // and unread holds the engine's handler on a write until the tab closes.
   test("a stream stopped by a fault aborts its connection", async () => {
-    const other = FIRST[0]!.replace('"v":1', '"v":2');
+    const other = FIRST[0]!.replace('"v":2', '"v":3');
     const sent = serve(() => sse(body([other], "hang")));
     const w = watch(URL_);
     await w.ended;
@@ -377,7 +377,7 @@ describe("a route", () => {
     expect(headers.get("Idempotency-Key")).toBe("op-1");
     expect(headers.get("Content-Type")).toBe("application/json");
     expect(JSON.parse(String(sent[0]!.init.body))).toEqual({
-      protocol_version: 1,
+      protocol_version: 2,
       input: { text: "hi" },
       page_context: null,
     });

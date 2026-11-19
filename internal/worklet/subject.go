@@ -167,6 +167,16 @@
 // is also its inbox row's and its wake's, so a duty that publishes one twice,
 // after a restart or a hand-over of its lease, tells it once.
 //
+// THE BACKFILL ([FlowDuty.Backfill]) records the past the duty never read: an
+// item in progress before the duty's first change has it evaluated, by the
+// same expression, at each instant its history, its turns, its blockers and
+// its seat's retained events say it could have changed, over common tables
+// that shadow the ones the expression reads with what each held then, and
+// each change recorded as the duty would have under the duty's own key,
+// dated by its past and saying whether the seats' events were read. The
+// duty's own reads skip a backfilled change, which is published after its
+// own and would otherwise read as the item's latest.
+//
 // WHOM IT TELLS: a person assignee once the state has lasted its threshold,
 // then the project's lead a threshold later if the item is still in that
 // state since the same instant. An agent assignee's notice is its pickup,

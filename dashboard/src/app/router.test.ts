@@ -210,6 +210,10 @@ describe("navigation identity", () => {
       home: "h",
       inbox: "i",
       me: "m",
+      // `q`, a question: `a` is the Org chart's.
+      ask: "q",
+      // `v`: `a` is the Org chart's and `d` Schedules'.
+      advisor: "v",
       company: "c",
       brand: "e",
       org: "a",
@@ -270,18 +274,18 @@ describe("am I already here", () => {
 });
 
 describe("the navigation grammar", () => {
-  // SIXTEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
+  // NINETEEN WORKSPACES ARE SIDEBAR ROWS, in four runs, and the sidebar draws
   // them and nothing else from the table: a section that became a sidebar row
   // is a second column of navigation arriving one row at a time. Workspace
   // runs in the order `nav.ts` argues: the work and its code, then the
   // talking, then what the talking produced (so Gitlet sits after Worklet, and
-  // Chatlet after Gitlet and before Doclet). The SEVENTEENTH is the reader's own
+  // Chatlet after Gitlet and before Doclet). The TWENTIETH is the reader's own
   // Account, which has no row (the user block at the sidebar's foot is the
   // reader, and its menu links it) and is a workspace all the same, so the
   // palette and its chord reach it.
-  test("the sidebar's rows are seventeen workspaces, in the story's order, and the menu holds the eighteenth", () => {
+  test("the sidebar's rows are nineteen workspaces, in the story's order, and the menu holds the twentieth", () => {
     const run = (place: string) => WORKSPACES.filter((w) => w.place === place).map((w) => w.key);
-    expect(run("you")).toEqual(["home", "inbox", "me"]);
+    expect(run("you")).toEqual(["home", "inbox", "me", "ask", "advisor"]);
     expect(run("company")).toEqual([
       "company",
       "brand",
@@ -326,7 +330,7 @@ describe("the navigation grammar", () => {
     for (const s of workspaceRow("settings")!.sections) (groups[s.group ?? ""] ??= []).push(s.key);
     expect(groups).toEqual({
       Company: ["general"],
-      Runtime: ["models", "ask-crewlet", "mcp-tools", "secrets", "limits", "advisor"],
+      Runtime: ["models", "mcp-tools", "secrets", "limits"],
       Spend: ["spend", "spend-tasks"],
       Access: ["people", "service-accounts", "tokens", "sign-in", "delegated-decisions", "audit"],
       Engine: ["nodes", "config", "backups", "storage", "gitlet", "diagnostics"],
@@ -634,6 +638,33 @@ describe("the resolver", () => {
     expect(resolve(["inbox", "task", "ENG-1"]).resolved).toBe(false);
     expect(resolve(["inbox", "ask"]).resolved).toBe(false);
     expect(inboxItemPath("r-1")).toEqual(["inbox"]);
+  });
+
+  // ASK CREWLET IS A PAGE OF ITS OWN, everybody's, on one conversation by id
+  // or on none; its settings page is gone, the model being chosen on it.
+  test("Ask Crewlet's page is its own address, on a conversation by id or on none", () => {
+    const id = "6c1d8b63-52b5-4a1f-8e1f-3c9a2d4f0b21";
+    expect(resolve(["ask"])).toMatchObject({ screen: "ask", workspace: "ask" });
+    expect(resolve(["ask"])).not.toHaveProperty("conversation");
+    expect(resolve(["ask", id])).toMatchObject({ screen: "ask", conversation: id });
+    expect(resolve(["ask", "payroll"]).resolved).toBe(false);
+    expect(resolve(["ask", id, "x"]).resolved).toBe(false);
+    expect(resolve(["settings", "ask-crewlet"]).resolved).toBe(false);
+  });
+
+  // THE ADVISOR IS A PAGE OF ITS OWN with two tabs and a page per finding;
+  // its settings page is gone.
+  test("the Advisor's page is its tabs and a finding by its id", () => {
+    const id = "1f2e3d4c-5b6a-4978-8877-665544332211";
+    expect(resolve(["advisor"])).toMatchObject({ screen: "advisor", section: "findings" });
+    expect(resolve(["advisor", "history"])).toMatchObject({
+      screen: "advisor",
+      section: "history",
+    });
+    expect(resolve(["advisor", "findings", id])).toMatchObject({ screen: "advisor-finding", id });
+    expect(resolve(["advisor", "findings", "x"]).resolved).toBe(false);
+    expect(resolve(["advisor", "findings"]).resolved).toBe(false);
+    expect(resolve(["settings", "advisor"]).resolved).toBe(false);
   });
 
   // THE SIGN-IN SCREENS take exactly the tail their address has. An

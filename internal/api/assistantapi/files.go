@@ -158,7 +158,7 @@ func pathFile(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 // is never handed to a browser as anything it might render.
 func serveFile(w http.ResponseWriter, f wire.FileRef, content []byte) {
 	mediaType := f.MediaType
-	if !slices.Contains(wire.FileMediaTypes, mediaType) {
+	if !slices.Contains(wire.AttachmentMediaTypes, mediaType) {
 		mediaType = "application/octet-stream"
 	}
 	h := w.Header()

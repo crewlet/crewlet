@@ -204,6 +204,9 @@ func (advisorDomainReads) Reports(context.Context, string, int,
 func (advisorDomainReads) Report(context.Context, string, statelog.Freshness) (advisordomain.ReportRow, bool, error) {
 	return advisordomain.ReportRow{}, false, nil
 }
+func (advisorDomainReads) Tally(context.Context, time.Time, time.Time, statelog.Freshness) (advisordomain.Tally, error) {
+	return advisordomain.Tally{}, nil
+}
 func (advisorDomainReads) AlarmEpisodes(context.Context, time.Time,
 	statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, error) {
 	return nil, nil

@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go"
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -1457,7 +1458,8 @@ func notReanchored(t *testing.T, e *Engine, domain string, before cursorRow, dur
 			stats.CreatedAt, during)
 	}
 	for seq := before.at.Seq + 1; seq <= got.at.Seq; seq++ {
-		subject, payload, _, ok, err := running.log.At(t.Context(), seq)
+		subject, payload, _, ok, err := statelog.VerifiedLog{Log: running.log,
+			Verifier: running.verifier}.At(t.Context(), seq)
 		if err != nil || !ok {
 			t.Errorf("%s's record %d, applied since the checkpoint was read, cannot be "+
 				"read back (found %v): %v", domain, seq, ok, err)
@@ -1468,12 +1470,20 @@ func notReanchored(t *testing.T, e *Engine, domain string, before cursorRow, dur
 			t.Errorf("%s's record %d on %s does not decode: %v", domain, seq, subject, err)
 			continue
 		}
-		if !slices.Equal(env.Scope.Paths, []string{statelog.FrameworkScope}) {
+		if !slices.Equal(env.Scope.Paths, []string{statelog.FrameworkScope}) && !takenOfItsOwn(domain, env) {
 			t.Errorf("%s's checkpoint moved across record %d, a %q on %s — not a "+
 				"framework record, so something wrote the log during %s",
 				domain, seq, env.Kind, subject, during)
 		}
 	}
+}
+
+// takenOfItsOwn reports a record a log takes on a booting node whatever a
+// reanchor does: every alarm the node raises (a fresh node's backup_age among
+// them) is kept as an episode on the Advisor's log ([advisordomain.KindAlarm]),
+// a write no reanchor of another log makes.
+func takenOfItsOwn(domain string, env statelog.Envelope) bool {
+	return domain == (advisordomain.Domain{}).Name() && env.Kind == string(advisordomain.KindAlarm)
 }
 
 // testActivation is the activation an internal test's direct container writes

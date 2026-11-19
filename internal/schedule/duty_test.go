@@ -195,6 +195,9 @@ func (f faultyBackend) ListOwned(context.Context, string) ([]coord.Lease, error)
 func (f faultyBackend) ListLive(context.Context, coord.Class) ([]coord.Lease, error) {
 	return nil, f.err
 }
+func (f faultyBackend) Now(context.Context, coord.Class) (time.Time, error) {
+	return time.Time{}, f.err
+}
 func (f faultyBackend) WatchLive(context.Context, coord.Class) (<-chan coord.LeaseWrite, error) {
 	return nil, f.err
 }
