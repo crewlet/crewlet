@@ -16,14 +16,9 @@ import (
 //	llm: claude-sonnet
 //	llm: [claude-sonnet, claude-haiku, gpt-4o]
 //
-// The scalar form is not a special case downstream — it is a chain of one.
-// Callers get a []string and never learn which shape the operator wrote,
-// which is why nothing in the engine has to hold an `any` for this field.
-//
-// A nil chain means UNSET, and that is load-bearing for the per-phase
-// fields: an unset llm_plan falls back to llm, while an explicitly empty
-// one would have to mean "no provider at all". Config cannot express the
-// second, so nil is the only reading.
+// The scalar form is a chain of one; callers never learn which was written.
+// A nil chain means UNSET, load-bearing for the per-phase fields: an unset
+// llm_plan falls back to llm, and "no provider at all" cannot be expressed.
 type ProviderKeys []string
 
 // Ensure both decoders are wired. A custom unmarshaler is matched
@@ -148,16 +143,14 @@ func compactKeys(in []string) ProviderKeys {
 // Toggle is a boolean a config may leave unset, where unset is a third
 // answer rather than false.
 //
-// Three fields need it and each would be a bug as a plain bool: an unset
-// learning_enabled means "inherit the system setting", while false means
-// "opt this seat out"; schedule enabled and catchup default to TRUE, so a
-// bare bool would silently disable every schedule an operator did not
-// annotate. The zero Toggle is unset, so the zero Schedule is an enabled
-// one — which is the reading its author intended.
+// Three fields need it: an unset learning_enabled means "inherit the system
+// setting", false "opt this seat out"; schedule enabled and catchup default to
+// TRUE, so a bare bool would disable every schedule an operator did not
+// annotate. The zero Toggle is unset, so the zero Schedule is enabled.
 //
-// It is a struct rather than a *bool so no consumer can dereference a nil,
-// and so that reading it forces a decision: [Toggle.Or] takes the default
-// that applies when the operator said nothing.
+// A struct rather than a *bool so no consumer can dereference a nil and
+// reading it forces a decision: [Toggle.Or] takes the default that applies
+// when the operator said nothing.
 type Toggle struct {
 	value bool
 	set   bool
@@ -251,29 +244,17 @@ func (t Toggle) MarshalJSON() ([]byte, error) {
 // seat rather than once per company.
 type MCPEnv map[string]map[string]string
 
-// THE BLOCKS THE ENGINE READS BY NAME, which is the one thing about this map
-// that is not keyed on `mcp_servers`.
+// THE BLOCKS THE ENGINE READS BY NAME, the exception to this map being keyed
+// on `mcp_servers`: the MCP layer looks credentials up per declared server
+// (internal/engine/mcp.go), so a key naming no server is inert. These six
+// VENDOR blocks (GitHub App, GitLab, Datadog, the Atlassian shared block and
+// each product's own) are read by the engine itself whether or not a tool
+// server of that name exists.
 //
-// Almost every block here is named after a server the company declares, and
-// nothing reads a block whose key names no server: the MCP layer walks
-// `mcp_servers` and looks each seat's credentials up per server
-// (internal/engine/mcp.go), so an undeclared key is inert.
-//
-// These six are the exception. Each is a VENDOR block the engine itself
-// reads, directly, whether or not a tool server of that name exists — a
-// GitHub App's per-seat token, a GitLab account's, a Datadog application
-// key, an Atlassian account's API token under the shared block or under
-// either product's own. A company can legitimately hold every one of them
-// with an empty `mcp_servers:`.
-//
-// ONE TABLE, and each vendor's own `SeatEnv` is defined from it rather than
-// beside it. That is the lesson the Atlassian reader already carries in its
-// own doc: three packages each kept a private list of the blocks and key
-// spellings that identify one account, the lists drifted, and a seat holding
-// `mcp_env.atlassian.JIRA_API_TOKEN` read as configured under Jira and as
-// having no credential at all under Confluence — permanently, silently, on
-// one account in one block. A validator with a seventh private copy would
-// fail the other way round and refuse a document the engine runs perfectly.
+// ONE TABLE, and each vendor's `SeatEnv` is defined from it, not beside it:
+// private lists drifted, so a seat holding `mcp_env.atlassian.JIRA_API_TOKEN`
+// read as configured under Jira and credential-less under Confluence. A
+// validator with its own copy would refuse a document the engine runs.
 const (
 	// MCPEnvAtlassian is the SHARED Atlassian block: one account, two
 	// products, and where a provisioned seat's credential lands.

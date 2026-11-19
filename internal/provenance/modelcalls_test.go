@@ -21,20 +21,14 @@ const modulePath = "github.com/crewlet/crewlet"
 
 // modelInputs are the types a model is handed its prompt in, by the import
 // path of the package that declares them: a provider's request
-// (internal/providers/llm), and every request a harness's run is launched
-// or continued from, whose system and brief are what the harness prompts its model
-// with. Every seat's executor is such a run (ADR-0066), and so is the
-// Dashboard Assistant's deep work, so a walk over provider requests alone saw
-// no executor at all.
+// (internal/providers/llm), and every request a harness's run is launched or
+// continued from. Every seat's executor is such a run (ADR-0066), as is the
+// Dashboard Assistant's deep work.
 //
-// AND WHAT A RUN IS HANDED TO REMEMBER: the session a relaunch continues, and
-// the one a conversation's next turn continues, is a model's context before it
-// reads a word of its brief, so the type that names which session is restored
-// into a run (sandbox.CarriedSession, the restore carrier) is an input, and so
-// is the continuation that tells it what it lacks (SessionContinuation, and
-// beside it the briefs told by a reading of what it holds, ExactTelling): each
-// function that chooses either is listed with the tests that hold whose session
-// it is and what it reads.
+// AND WHAT A RUN IS HANDED TO REMEMBER: a continued session is a model's
+// context before it reads its brief, so the type naming the restored session
+// (sandbox.CarriedSession) is an input, and so is the continuation telling it
+// what it lacks (SessionContinuation, ExactTelling).
 var modelInputs = map[string][]string{
 	modulePath + "/internal/providers/llm": {"Request"},
 	modulePath + "/internal/agent/runner": {"AgentRunRequest", "Continuation", "SessionContinuation",
@@ -121,48 +115,17 @@ var modelCalls = map[string]modelCall{
 		"internal/learning.TestTheBackgroundPassesDefuseWhatTheyRead",
 	}},
 	// THE SEAT'S EXECUTOR, its harness's run (ADR-0066): launched with the
-	// seat's system prompt and the turn's brief, and carried on, after its
-	// question was answered or its job lost, with that brief again and what
-	// became of the run before it. Every foreign word in either arrived
-	// fenced under the token of the segment that built it (the trigger the
-	// task is described from, the prefetched blocks, what the run's tools
-	// read over the bridge), the system says what a fence is, and a reply to
-	// the run's question is a chat participant's words, fenced as the trigger
-	// labelled them.
+	// seat's system prompt and the turn's brief. Every foreign word in either
+	// arrived fenced under the token of the segment that built it (the trigger,
+	// the prefetched blocks, what the run's tools read over the bridge), the
+	// system says what a fence is, and a reply to the run's question is a chat
+	// participant's words, fenced as the trigger labelled them.
 	//
-	// A RELAUNCH CONTINUES THE TURN'S SESSION (continued.go), whose context
-	// holds what earlier segments read, fenced under THEIR tokens, and what
-	// the run's harness read in its boxes: a model reads mixed tokens, and
-	// what holds them is that no foreign word in any of it carries an
-	// unescaped marker of any token (provenance.Neutralise, ADR-0040), so
-	// nothing an earlier read wrote opens or closes a later fence. What the
-	// continuation adds — the notes the session has not read, the calls made
-	// after it was saved, the engine's record of its box — is fenced or
-	// defused under the relaunching segment's token; and so is every call of
-	// the round a fresh run carrying it on is told, its arguments a model's and
-	// a failed call's error whatever the tool said, in the reseed and in the
-	// base's continuation, which takes the reseed whole; and every answer that
-	// carried the turn's work on before a fresh brief, a send-back's included,
-	// told in words of its own, a chat reply fenced under the relaunching
-	// segment's token as the one carrying the round on now is.
-	//
-	// TWO THINGS RIDE UNFENCED, defused, ON PURPOSE: an answer by turn and a
-	// note a person sends the turn. Each is a person's instruction to this
-	// turn, given by somebody the engine let direct it (an answer, by the
-	// run's requester, its seat's lead or an administrator,
-	// authz.ActionExecutorAnswer and ADR-0068; a note, by somebody whose authority
-	// was decided on the seat's sealed anchor, ADR-0067), and sealed on the
-	// run's record under the fleet keyring with who gave it (ADR-0031's
-	// amendments), so the run is told whose it is; a fence would tell the run
-	// not to follow the one instruction it waited for. A lost job's reseed,
-	// the question the run's own session asked and the run's standing
-	// framing are the engine's or the seat's own words.
-	//
-	// AND HOW THE CONVERSATION'S EARLIER TURNS ENDED, which every brief of the
-	// turn carries as its dispatch rendered it: every account somebody else
-	// wrote in it — what a turn was asked, its reviewer's and its executor's
-	// words, a stop's reason, the engine's accounts that quote a box — fenced
-	// under that segment's token, and every name and engine word defused.
+	// AND HOW THE CONVERSATION'S EARLIER TURNS ENDED, which every brief carries
+	// as its dispatch rendered it: every account somebody else wrote in it
+	// (what a turn was asked, its reviewer's and executor's words, a stop's
+	// reason, the engine's accounts that quote a box) fenced under that
+	// segment's token, and every name and engine word defused.
 	"internal/agent/runner/agentrun.go:executeAsAgentRun": {tests: []string{
 		"internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote",
 		"internal/engine.TestTheTurnsAskIsFencedAsItsTriggerIs",
@@ -172,6 +135,17 @@ var modelCalls = map[string]modelCall{
 		"internal/agent/runner.TestAFreshRunsEarlierAnswersAreFencedUnderItsToken",
 		"internal/agent/prompts.TestAConversationsEndingsAreFencedUnderTheTurnsToken",
 	}},
+	// A RELAUNCH CONTINUES THE TURN'S SESSION (continued.go), holding what
+	// earlier segments read, fenced under THEIR tokens: the mix holds because
+	// no foreign word carries an unescaped marker of any token
+	// (provenance.Neutralise, ADR-0040). What the continuation adds is fenced
+	// or defused under the relaunching segment's token.
+	//
+	// TWO THINGS RIDE UNFENCED, defused, ON PURPOSE: an answer by turn and a
+	// note a person sends the turn. Each is an instruction from somebody the
+	// engine let direct it (ADR-0068, authz.ActionExecutorAnswer; ADR-0067),
+	// sealed on the run's record with who gave it (ADR-0031); a fence would
+	// tell the run not to follow the one instruction it waited for.
 	"internal/agent/runner/agentrun.go:continueAgentRun": {tests: []string{
 		"internal/agent/runner.TestARunReadsAReplyFencedAndAnAnswerByTurnAsItsAnswerersOwn",
 		"internal/agent/runner.TestAFreshRunsToldCallsAreDefusedUnderItsToken",
@@ -309,14 +283,11 @@ var modelCalls = map[string]modelCall{
 
 // EVERY MODEL CALL IS ACCOUNTED FOR (ADR-0040). The gate walks every non-test
 // Go file in the tree for a composite literal of a model's input
-// ([modelInputs]: a provider request, or the request an executor is launched
-// or continued from) and requires the function that builds it, or the
-// package-level variable that holds it, to be in [modelCalls] — with the tests
-// that hold its fences, each of which must exist, or the reason it reads
-// nobody's words — and every entry there to still build one. It is the walk,
-// not the list, that finds a new call: a model call added anywhere, an
-// executor's launch among them, is refused until somebody decides what it
-// reads and names what holds it.
+// ([modelInputs]) and requires the function that builds it, or the variable
+// that holds it, to be in [modelCalls] (with the tests that hold its fences,
+// each of which must exist, or the reason it reads nobody's words), and every
+// entry there to still build one. The walk, not the list, finds a new call: it
+// is refused until somebody decides what it reads and names what holds it.
 //
 // Mutation: launch an executor from a function nothing lists, or hold a
 // provider request in a package-level variable nothing lists, and this is

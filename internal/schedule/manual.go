@@ -17,42 +17,16 @@ import (
 
 // A run a person asks for: one schedule fired now, off its cron.
 //
-// # Why it is not a tick
-//
-// The tick answers "what came due", and a person asking for a run is not
-// asking that: nothing came due. So the ask evaluates no window, moves none,
-// and is not the scheduler duty's. Any node that publishes can make it (the
-// claim is the fleet's, and the fire is an event on the runner seat's inbox,
-// which the node holding that seat consumes), so the node a person reaches
-// fires it, and the duty's holder never hears of it.
-//
-// # Its own identity
-//
-// A tick's fire is claimed on the schedule's LOCAL MINUTE ([FireLabel]). An
-// ask is claimed on the ASK ([ManualFireLabel]), a label no minute renders
-// to, so the two never meet in the ledger: an ask at 09:00 does not take the
-// 09:00 tick's claim, the tick does not refuse the ask, and the catchup
-// pass's question about a minute ([Claimer.MinuteClaimed]) is never answered
-// by an ask. What it keeps is the ledger's one promise, on its own key: the
-// same ask made again (a retry of a request whose answer was lost) is the
-// same fire, and is not sent twice.
-//
-// # What it shares with a tick
-//
-// Everything after the decision to fire ([dispatcher]): the claim before the
-// publish, the trace, the schedule's conversation, the task the seat is
-// handed and the record of the fire. So a run asked for continues the session
-// the schedule's last fire left, and the schedule's history lists it, as
-// [OutcomeFiredManually] rather than `fired`, so it reads as the run a person
-// asked for.
-//
-// # What it refuses
-//
-// A schedule that is switched off (`enabled: false`) is refused
-// ([ErrScheduleDisabled]): switching it off is somebody's decision that it
-// does not run, and a run now would overrule it without changing it. Switch
-// it on, then run it. So is a schedule nothing can run ([ErrNoRunners]), and
-// a seat a person paused is answered [ManualPaused] rather than woken.
+// It is not a tick: nothing came due, so it evaluates and moves no window and
+// is not the scheduler duty's. Any publishing node can make it, so the node a
+// person reaches fires it. A tick is claimed on the schedule's local minute
+// ([FireLabel]); an ask on [ManualFireLabel], a label no minute renders to, so
+// neither takes nor refuses the other's claim and [Claimer.MinuteClaimed] never
+// answers for an ask. The same ask made again is the same fire. Past the
+// decision to fire it shares the [dispatcher] path and is recorded as
+// [OutcomeFiredManually]. A disabled schedule is refused
+// ([ErrScheduleDisabled]), as is one with no runners ([ErrNoRunners]); a paused
+// seat is answered [ManualPaused].
 
 // manualLabelPrefix opens every ask's label. A tick's label is thirteen
 // characters of digits around a `T`, so nothing a clock renders begins with

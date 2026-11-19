@@ -3,17 +3,14 @@ package topics
 // THE ARTIFACTS SUBJECTS: two state logs. An artifact's room crosses the fleet
 // on the presence channel every kind of room shares (presence.go).
 //
-// TWO LOGS, NOT ONE, because a publish is a human-scale event and a datastore
-// write is a click: on one log the two would share one pinned writer, one
-// ceiling, one trim and one gate reserve sized by the larger record, and a
-// record one build cannot decode would freeze both. Each log is sized by its
-// own records instead.
+// TWO LOGS, NOT ONE: a publish is human-scale and a datastore write is a click,
+// and on one log they would share one pinned writer, ceiling, trim and gate
+// reserve sized by the larger record, and a record one build cannot decode
+// would freeze both.
 //
 // THE DATASTORE'S PREFIX IS `crewlet.artifactdata`, NOT `crewlet.artifacts.data`,
-// so no log's prefix is a dotted extension of another's: a parser matching
-// on a looser head would read one domain's record as the other's, which is
-// the hazard the tracker's mutation log and its vectors already share a head
-// for and are tested against.
+// so no log's prefix is a dotted extension of another's: a parser matching a
+// looser head would read one domain's record as the other's.
 const (
 	// ArtifactsLogStream is the artifacts domain's ordered stream: every
 	// create, publish, share, trash and purge of an artifact.
