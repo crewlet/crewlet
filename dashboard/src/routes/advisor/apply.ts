@@ -35,8 +35,12 @@
  */
 
 import { RestError, pathSegment, rest } from "~/protocol/rest.ts";
-import type { AdvisorKeptFinding } from "~/protocol/advisorFindings.ts";
-import type { AdvisorRecheck, AdvisorSend } from "./types.ts";
+import type {
+  AdvisorAppliedReport,
+  AdvisorKeptFinding,
+  AdvisorRecheck,
+  AdvisorSend,
+} from "~/protocol/advisorFindings.ts";
 
 /** Where an Apply stands. */
 export type ApplyState =
@@ -49,10 +53,14 @@ export type ApplyState =
   /** The re-check, the send or the report failed in a way a re-check does not answer. */
   | { kind: "failed"; message: string; check: AdvisorRecheck | null };
 
-/** Ask the engine whether the finding still holds, now. */
-export async function recheck(id: string, signal?: AbortSignal): Promise<AdvisorRecheck> {
+/** Ask the engine whether the finding still holds, now, with its fix's `option` built again. */
+export async function recheck(
+  id: string,
+  option: number,
+  signal?: AbortSignal,
+): Promise<AdvisorRecheck> {
   const answer = await rest.request("POST", `/advisor/findings/${pathSegment(id)}/recheck`, {
-    body: {},
+    body: { option },
     ...(signal ? { signal } : {}),
   });
   return answer.body as AdvisorRecheck;
@@ -65,29 +73,19 @@ export class MovedSinceRecheck extends Error {
   }
 }
 
-/** What a send came to, as the engine is told it. */
-export interface SendAnswer {
-  status: number;
-  etag: string | null;
-}
-
 /**
  * Send the change the re-check built: its dry run first, where its route has
  * one, then the change itself, each under the re-check's revision.
  */
-export async function sendFix(send: AdvisorSend, signal?: AbortSignal): Promise<SendAnswer> {
-  const headers: Record<string, string> = {};
-  if (send.headers["If-Match"]) headers["If-Match"] = send.headers["If-Match"];
-  if (send.headers["If-None-Match"]) headers["If-None-Match"] = send.headers["If-None-Match"];
+export async function sendFix(send: AdvisorSend, signal?: AbortSignal): Promise<void> {
   const options = {
     ...(send.body === undefined || send.body === null ? {} : { body: send.body }),
-    headers,
+    headers: send.headers,
     ...(signal ? { signal } : {}),
   };
   try {
     if (send.dry_run_path) await rest.request(send.method, send.dry_run_path, options);
-    const answer = await rest.request(send.method, send.path, options);
-    return { status: answer.status, etag: answer.etag };
+    await rest.request(send.method, send.path, options);
   } catch (err) {
     if (err instanceof RestError && err.status === 412) throw new MovedSinceRecheck();
     throw err;
@@ -101,16 +99,19 @@ export class RecheckFirst extends Error {
   }
 }
 
-/** Tell the engine what the send came to: the finding is then applied, its effect to be checked. */
+/**
+ * Tell the engine the change was sent: it reads the target itself and marks
+ * the finding applied, its effect to be checked.
+ */
 export async function reportApplied(
   id: string,
   digest: string,
-  answer: SendAnswer,
   signal?: AbortSignal,
 ): Promise<AdvisorKeptFinding> {
+  const report: AdvisorAppliedReport = { digest };
   try {
     const reply = await rest.request("POST", `/advisor/findings/${pathSegment(id)}/applied`, {
-      body: { digest, answer },
+      body: report,
       ...(signal ? { signal } : {}),
     });
     return reply.body as AdvisorKeptFinding;
@@ -163,6 +164,7 @@ export function failureWords(err: unknown): string {
  */
 export async function applyFrom(
   id: string,
+  option: number,
   pressed: AdvisorRecheck,
   now: () => number,
   signal?: AbortSignal,
@@ -171,23 +173,23 @@ export async function applyFrom(
 > {
   let check = pressed;
   if (!fresh(check, now())) {
-    const again = await recheck(id, signal);
+    const again = await recheck(id, option, signal);
     if (again.digest !== pressed.digest || !sendable(again))
       return { kind: "rechecked", check: again };
     check = again;
   }
-  let answer: SendAnswer;
   try {
-    answer = await sendFix(check.send!, signal);
+    await sendFix(check.send!, signal);
   } catch (err) {
     if (err instanceof MovedSinceRecheck)
-      return { kind: "rechecked", check: await recheck(id, signal) };
+      return { kind: "rechecked", check: await recheck(id, option, signal) };
     throw err;
   }
   try {
-    return { kind: "applied", finding: await reportApplied(id, check.digest, answer, signal) };
+    return { kind: "applied", finding: await reportApplied(id, check.digest, signal) };
   } catch (err) {
-    if (err instanceof RecheckFirst) return { kind: "rechecked", check: await recheck(id, signal) };
+    if (err instanceof RecheckFirst)
+      return { kind: "rechecked", check: await recheck(id, option, signal) };
     throw new SentUntold();
   }
 }

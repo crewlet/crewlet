@@ -13,13 +13,18 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, Callout, DiffList, Text, type DiffRow } from "@crewlethq/ui";
+import { Button, Callout, ChoiceList, DiffList, Text, type DiffRow } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import { fmtDateTime } from "~/lib/format.ts";
 import { marked } from "~/ui/Problems.tsx";
 import { applyFrom, failureWords, recheck, sendable, type ApplyState } from "./apply.ts";
-import type { AdvisorKeptFinding, AdvisorMoved } from "~/protocol/advisorFindings.ts";
-import type { AdvisorPreviewRow, AdvisorRecheck } from "./types.ts";
+import type {
+  AdvisorKeptFinding,
+  AdvisorMoved,
+  AdvisorPreviewRow,
+  AdvisorRecheck,
+} from "~/protocol/advisorFindings.ts";
+
 import { CLOSE_REASONS, factWords } from "./words.ts";
 
 /** What the change sets, field by field, as the kit's diff draws it. */
@@ -71,6 +76,10 @@ export function ApplyDialog({
   onSettled: () => void;
 }) {
   const [state, setState] = useState<ApplyState>({ kind: "checking" });
+  // WHICH OF THE FIX'S OPTIONS IS RE-CHECKED: the one the person picks, where
+  // the engine offers more than one, each re-checked as it is picked.
+  const options = finding.fix.options;
+  const [option, setOption] = useState(0);
   const live = useRef(new AbortController());
   const settled = useRef(false);
 
@@ -89,16 +98,18 @@ export function ApplyDialog({
     }
   }, []);
 
-  // THE RE-CHECK RUNS AS THE DIALOG OPENS: nothing is offered from the
-  // finding as it was stored, however recently.
+  // THE RE-CHECK RUNS AS THE DIALOG OPENS, and again for each option picked:
+  // nothing is offered from the finding as it was stored, however recently.
   useEffect(() => {
-    const controller = live.current;
+    const controller = new AbortController();
+    live.current = controller;
+    setState({ kind: "checking" });
     void run(async () => ({
       kind: "checked",
-      check: await recheck(finding.id, controller.signal),
+      check: await recheck(finding.id, option, controller.signal),
     }));
     return () => controller.abort();
-  }, [finding.id, run]);
+  }, [finding.id, option, run]);
 
   // ANY ANSWER BUT "HOLDS" MOVED THE FINDING (revised, closed): the page is
   // told once, so its row says so when the dialog closes.
@@ -114,7 +125,7 @@ export function ApplyDialog({
   const apply = (check: AdvisorRecheck) => {
     setState({ kind: "sending", check });
     void run(async () => {
-      const answer = await applyFrom(finding.id, check, Date.now, live.current.signal);
+      const answer = await applyFrom(finding.id, option, check, Date.now, live.current.signal);
       return answer.kind === "applied"
         ? { kind: "applied", finding: answer.finding }
         : { kind: "checked", check: answer.check };
@@ -154,6 +165,15 @@ export function ApplyDialog({
       }
     >
       <div className="col gap-3" aria-busy={busy}>
+        {options.length > 1 && state.kind !== "applied" ? (
+          <ChoiceList
+            label="Which change"
+            value={String(option)}
+            options={options.map((o, i) => ({ value: String(i), label: o.label }))}
+            disabled={state.kind === "sending"}
+            onChange={(value) => setOption(Number(value))}
+          />
+        ) : null}
         {state.kind === "checking" ? (
           <Text as="p" tone="secondary">
             Reading the latest records and building the change again, so nothing is applied on what

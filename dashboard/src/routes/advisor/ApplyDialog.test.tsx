@@ -8,8 +8,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import { afterEach, expect, test, vi } from "vitest";
 import { LayerHost } from "@crewlethq/ui";
 import { ApplyDialog } from "./ApplyDialog.tsx";
-import type { AdvisorKeptFinding } from "~/protocol/advisorFindings.ts";
-import type { AdvisorRecheck } from "./types.ts";
+import type { AdvisorKeptFinding, AdvisorRecheck } from "~/protocol/advisorFindings.ts";
 
 afterEach(() => {
   cleanup();
@@ -162,11 +161,12 @@ test("a finding that still holds shows the change and sends it under the revisio
   expect(dry!.path).toBe("/config/units/eng?dry_run=true");
   expect(real!.path).toBe("/config/units/eng");
   expect(new Headers(real!.init.headers).get("If-Match")).toBe('"rev-41"');
+  // THE RE-CHECK NAMED THE FIX'S OPTION, and the report names the digest the
+  // change was sent under, for the engine to read the target itself.
+  const checked = sent.find((r) => r.path === `/advisor/findings/${ID}/recheck`)!;
+  expect(JSON.parse(String(checked.init.body))).toEqual({ option: 0 });
   const told = sent.find((r) => r.path === `/advisor/findings/${ID}/applied`)!;
-  expect(JSON.parse(String(told.init.body))).toEqual({
-    digest: "sha256:aaa",
-    answer: { status: 200, etag: '"rev-42"' },
-  });
+  expect(JSON.parse(String(told.init.body))).toEqual({ digest: "sha256:aaa" });
 });
 
 test("a finding that changed since it was found shows what moved, and sends nothing until confirmed", async () => {
@@ -308,4 +308,44 @@ test("an engine holding a newer revision of the finding answers the send with a 
   });
   await waitFor(() => expect(screen.getByText("It changed since it was found")).toBeDefined());
   expect(sent.filter((r) => r.path.endsWith("/recheck"))).toHaveLength(2);
+});
+
+// A FIX WITH SEVERAL CHANGES IS CHOSEN FROM, and each choice is re-checked
+// before it can be sent: the engine builds and checks the change picked.
+test("a fix with several options re-checks the one the person picks", async () => {
+  const sent = engine([answer(), answer({ digest: "sha256:opt1" })]);
+  render(
+    <LayerHost>
+      <ApplyDialog
+        finding={{
+          ...FINDING,
+          fix: {
+            ...FINDING.fix,
+            options: [
+              {
+                label: "Add one seat",
+                change: { entity: "units", id: "eng", set: {}, summary: "a" },
+              },
+              {
+                label: "Raise the round cap",
+                change: { entity: "roles", id: "backend", set: {}, summary: "b" },
+              },
+            ],
+          },
+        }}
+        onClose={() => {}}
+        onSettled={() => {}}
+      />
+    </LayerHost>,
+  );
+  await screen.findByText("It still holds");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("radio", { name: /Raise the round cap/ }));
+  });
+  await waitFor(() => expect(sent.filter((r) => r.path.endsWith("/recheck"))).toHaveLength(2));
+  const bodies = sent
+    .filter((r) => r.path.endsWith("/recheck"))
+    .map((r) => JSON.parse(String(r.init.body)));
+  expect(bodies).toEqual([{ option: 0 }, { option: 1 }]);
+  expect(writes(sent)).toEqual([]);
 });
