@@ -902,8 +902,8 @@ func TestAPlansBitsAreReadBackAsTheyWereWritten(t *testing.T) {
 // Code line holding a PDF's base64 twice and an OpenCode export holding an
 // image's data URI, each packed as a box packs it (level 9 standing in for GNU
 // gzip, which codes base64 as it does), are kept within 1% of the box's
-// archive, since the take and the seal hold the two to one bound (the package
-// doc's "The scrub writes what the box packed, no larger").
+// archive, since the take and the seal hold the two to one bound
+// ([keptGzipLevel]).
 //
 // Mutation: write the kept archive at any level from one to six
 // (gzip.NewWriter's is six) and each case is kept about 1.31 times the box's.

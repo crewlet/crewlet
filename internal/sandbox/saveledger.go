@@ -73,8 +73,8 @@ const saveMarginFloor = 64 << 10
 // sealed, with a margin of an eighth or 64 KiB for what the scrub changes, and
 // never past the largest object a session is stored as. The scrub's rewrite
 // measured within 1% of the box's pack for media and 2% under it for text
-// (internal/sandbox/executor's "The scrub writes what the box packed, no
-// larger"), so the margin is the markers' and the re-tar's room; a spool
+// (internal/sandbox/executor's keptGzipLevel), so the margin is the markers'
+// and the re-tar's room; a spool
 // sealing past it is refused before its keep, and the saved line's counted and
 // bytes measure it.
 func countedFor(size int64) int64 {

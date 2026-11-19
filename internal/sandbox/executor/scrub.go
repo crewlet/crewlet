@@ -70,13 +70,15 @@ const minScrubBytes = 8
 // two bounds make together, raised by raising this with the budget.
 const scrubExpansion = 8
 
-// keptGzipLevel is the level the scrub writes a kept archive at.
-//
-// SEVEN, the lowest of Go's compress/flate levels that entropy-codes base64:
-// at one to six it stores an image's or a PDF's base64 as it is, a kept
-// archive 1.31 times what the box's gzip packed, which the take admits and
-// the seal refuses. Seven keeps it within 1% of the box's (the package doc's
-// "The scrub writes what the box packed, no larger" has the measurements).
+// keptGzipLevel is the level the scrub writes a kept archive at: seven, the
+// lowest of Go's compress/flate levels that entropy-codes base64. The take
+// holds the box's archive and the seal the rewrite to one bound, and media is
+// where the rewrite would grow: at one to six flate stores base64 of bytes
+// already compressed (an image's, a PDF's) as it is, 0.996 of its size, where
+// seven and the box's GNU gzip -6 reach 0.75. A Claude Code session holding a
+// 20 MiB PDF read, a 40.36 MiB box archive, was kept as 53.10 MiB at six (the
+// take admits it, the seal refuses it) and 40.13 MiB at seven, for about 0.4 s
+// more a PDF read and 1.2 s more on 118 MiB of text (build VM, two cores).
 const keptGzipLevel = 7
 
 // newKeptGzip is the gzip writer a kept archive is written through.
