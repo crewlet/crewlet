@@ -95,10 +95,13 @@ type Evidence struct {
 	Waiting map[string]int
 	// Episodes is every alarm episode on any node that stood in the window.
 	Episodes []AlarmEpisode
+	// Flow is how long each seat's items in progress stood in each flow
+	// state over the window (ADR-0162).
+	Flow []worklet.FlowHours
 	// The Unread flags say the caller could not read that source, so its
 	// classes raise nothing and the answer names it.
 	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread, RunsUnread, FiresUnread bool
-	StopsUnread, MergesUnread, EpisodesUnread                                     bool
+	StopsUnread, MergesUnread, EpisodesUnread, FlowUnread                         bool
 }
 
 // source is the record a detector reads.
@@ -123,6 +126,8 @@ const (
 	sourceMerges
 	// sourceEpisodes is the advisor log's alarm history, [Evidence.Episodes].
 	sourceEpisodes
+	// sourceFlow is the tracker's flow record, [Evidence.Flow].
+	sourceFlow
 )
 
 // unread reports whether ev could not read src.
@@ -146,6 +151,8 @@ func (ev Evidence) unread(src source) bool {
 		return ev.MergesUnread
 	case sourceEpisodes:
 		return ev.EpisodesUnread
+	case sourceFlow:
+		return ev.FlowUnread
 	}
 	panic(fmt.Sprintf("advisor: a detector reads source %d, which is none", src))
 }
@@ -332,6 +339,9 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 	}
 	if ev.EpisodesUnread {
 		answer.Unread = append(answer.Unread, UnreadEpisodes)
+	}
+	if ev.FlowUnread {
+		answer.Unread = append(answer.Unread, UnreadFlow)
 	}
 	return answer
 }
