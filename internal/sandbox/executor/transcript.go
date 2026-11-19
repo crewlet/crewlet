@@ -365,15 +365,14 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // TranscriptReadsAtOnce is the most transcripts this process decodes at once,
 // whichever socket or REST caller asks for them ([ReadTranscript]).
 //
-// TWO, BY WHAT ONE READ CAN HOLD at the 32 MiB line bound, measured (GOGC=10):
-// a Claude Code line's decode 134 MiB (an OpenCode message's 97), its whole
-// redaction ([entryOpening]) 63 MiB more where it rewrites the text and 93 MiB
-// where it lengthens it, so 227 MiB at worst, about 454 MiB for two. A node
-// serves every tab open on it, and one slot would queue every reader behind the
-// longest archive. A seat's read for words holds as much, in the seats' one
-// slot ([SeatTranscriptReadsAtOnce]); a relaunch's [Runner.ReadHoldings] has its
-// own ([HoldingsReadsAtOnce]), a collection's pass neither. A read past them
-// waits holding no decoder or opened object.
+// TWO, BY WHAT ONE READ HOLDS at the 32 MiB line bound, measured: a Claude
+// Code line's decode 134 MiB live (an OpenCode message's 97) and its whole
+// redaction ([entryOpening]) up to 93 MiB more, so 227 MiB, 454 MiB for two;
+// at the default GOGC the engine runs at (it sets no GOMEMLIMIT) a dense read's
+// heap peaks near 400 MiB, two near 800. That is whole-entry redaction's cost,
+// which a streamed redaction of each entry replaces. One slot would queue every
+// reader behind the longest archive. A seat's read takes the seats' one slot
+// ([SeatTranscriptReadsAtOnce]); a reading has its own ([HoldingsReadsAtOnce]).
 const TranscriptReadsAtOnce = 2
 
 // transcriptReads holds a slot for each transcript this process is reading,

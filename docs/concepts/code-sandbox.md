@@ -2215,8 +2215,11 @@ measured for a Claude Code line at that bound (97 MiB for an OpenCode export's
 message at it), and up to 93 MiB more where the redaction lengthens the text, so
 227 MiB at worst; a node answers every dashboard tab open on it and every REST
 caller, each with a read of its own. So each node decodes at most two
-transcripts at once (`TranscriptReadsAtOnce`), about 454 MiB at their worst,
-whichever socket or route asks. A relaunch's reading of a kept session for the
+transcripts at once (`TranscriptReadsAtOnce`), about 454 MiB live at their
+worst, whichever socket or route asks. The engine sets no `GOMEMLIMIT` and runs
+at Go's default `GOGC`, so two reads of credential-dense text can take the heap
+to about 800 MiB: the cost of redacting each entry whole, which a pod's memory
+limit has to leave room for. A relaunch's reading of a kept session for the
 calls it holds is none of them: one runs at a time, in a slot of its own
 (`HoldingsReadsAtOnce`), holding at most 43 MiB (an OpenCode session's at most
 2 MiB, however long one of its messages runs), so the two reads and a reading
