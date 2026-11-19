@@ -4,6 +4,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/redact"
+	"github.com/crewlet/crewlet/internal/textcut"
 )
 
 // AN ENDING'S PROSE IS CUT TO ITS BOUND, MARKED, AND NEVER INSIDE A RUNE: a
@@ -156,5 +159,60 @@ func TestAnEndingsLastWordIsPlacedFromTheFirstCapture(t *testing.T) {
 				t.Errorf("Fit moved the last word to %+v, want %+v", got, tc.place)
 			}
 		})
+	}
+}
+
+// excerptOfTheWhole is [Excerpt] over the whole text's redaction: the answer
+// an excerpt read from an opening must give.
+func excerptOfTheWhole(text string, bound int) string {
+	shown := redact.Secrets(text)
+	if len(shown) <= bound {
+		return shown
+	}
+	kept := textcut.Bytes(shown, bound-len(textcut.Opening("", bound)))
+	if begin, _, inside := redact.MarkersAround(shown, len(kept)); inside {
+		kept = kept[:begin]
+	}
+	return textcut.Opening(kept, bound)
+}
+
+// AN EXCERPT IS THE WHOLE REDACTED, THEN CUT: read from an opening of the
+// redaction, it answers what cutting the whole redaction answers, with a run
+// of markers at every cut near the bound, the longest marker the pass writes
+// straddling where the cut falls, and past the length up to which the
+// redaction reads a text whole (32 MiB). A literal [REDACTED: run in the
+// text's own words longer than any marker the pass writes is not one of its
+// markers; an excerpt there shows the text's own words and nothing else.
+//
+// Mutation: read the opening only one byte past the bound, and a marker the
+// cut falls in is kept in part.
+func TestAnExcerptIsTheWholeRedactedThenCut(t *testing.T) {
+	t.Parallel()
+	// The DigitalOcean token's marker, [REDACTED:digitalocean-token], is the
+	// longest a rule writes, and longer than the token it replaces.
+	do := "dop_v1_" + strings.Repeat("0a", 16)
+	words := func(n int) string { return strings.Repeat("work went on ", n/13+1)[:n] }
+	runs := []string{do, do + " " + githubToken, githubToken + do, "pwd=" + strings.Repeat(`x\n`, 6) + "\n" + do}
+	for _, bound := range []int{64, 1 << 10} {
+		for _, run := range runs {
+			for at := bound - 3 - 2*len(redact.Secrets(run)); at <= bound+1; at++ {
+				text := words(max(at, 0)) + " " + run + " and after it " + words(bound)
+				if got, want := Excerpt(text, bound), excerptOfTheWhole(text, bound); got != want {
+					t.Errorf("bound %d, %q at byte %d: got %q, want %q", bound, run, at, got, want)
+				}
+			}
+		}
+	}
+	long := words(FailureMaxBytes-20) + " " + do + " " + words(33<<20)
+	if got, want := Excerpt(long, FailureMaxBytes), excerptOfTheWhole(long, FailureMaxBytes); got != want {
+		t.Errorf("a %d-byte text: got %q, want %q", len(long), got[max(0, len(got)-80):],
+			want[max(0, len(want)-80):])
+	}
+	const bound = 1 << 10
+	literal := words(bound-20) + redact.Marker + strings.Repeat("a", 2*redact.LongestMarker()) + "] after"
+	got := Excerpt(literal, bound)
+	if len(got) > bound || !strings.HasPrefix(literal, strings.TrimSuffix(got, "…")) {
+		t.Errorf("a literal marker run across the cut gave %q, want an opening of the text's own words",
+			got[max(0, len(got)-80):])
 	}
 }

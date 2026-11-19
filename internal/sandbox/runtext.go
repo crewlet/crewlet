@@ -26,7 +26,7 @@ import (
 // a few KiB of identifiers; a new field of box-written text needs a term here.
 // Past it the report and failure are condensed ([Condenser]), since a cut head
 // reads as the whole; the transcript, read only by a person, keeps whole lines
-// from both ends ([transcriptHeadBytes]).
+// from both ends and the note between them, all within it ([transcriptHeadBytes]).
 const MaxRunTextBytes = 256 << 10
 
 // MaxFileBytes is the most one [Sandbox.ReadFile] reads out of a box, bounding
@@ -206,9 +206,21 @@ func BoundFellBack(why string) string { return boundReason(why, MaxFellBackBytes
 // as executorkeep.UnkeptReasonMaxBytes). Redacted first, because a token
 // straddling the cut would survive as an unrecognisable fragment; cut after
 // every redaction, because a marker can be longer than what it replaces and a
-// cut text redacted again can read a partial marker as a value. A reader that
-// redacts again re-applies this whole rule, as the publish does.
-func boundReason(why string, bound int) string { return textcut.Within(redact.Secrets(why), bound) }
+// cut text redacted again can read a partial marker as a value. The cut reads
+// one byte past its bound, so only that much of the redaction is kept
+// ([redact.Prefix]). A reader that redacts again re-applies this whole rule.
+func boundReason(why string, bound int) string {
+	opening, _ := redact.Prefix(why, bound+1)
+	return textcut.Within(opening, bound)
+}
+
+// clippedRedacted is text redacted whole, then clipped as a record's
+// diagnostic ([events.ClipDiagnostic]), keeping only as much of the redaction
+// as the clip reads ([redact.Prefix]).
+func clippedRedacted(text string) string {
+	opening, _ := redact.Prefix(text, events.MaxDiagnosticBytes+1)
+	return events.ClipDiagnostic(opening)
+}
 
 // MaxCondenseBytes is the most text one [Condenser] call reads: the engine
 // compactor's compact.MaxChunks pieces of compact.ChunkBytes, 2 MiB; past it
@@ -263,9 +275,14 @@ func (c *Coordinator) fitResult(ctx context.Context, run PendingRun, result Resu
 // boundBox is the half of [Coordinator.fitResult] that reads no model: the
 // transcript and the delivered refs held to their bounds, what was left out
 // counted. Applied ONCE, where the box is read: a second pass counts nothing.
+// The transcript's counts are ADDED to a runner's, which counted what it left
+// out as it read the transcript: that one is within the bound, so this keeps
+// it whole and adds nothing. A count below zero is no count.
 func boundBox(result Result) Result {
-	result.Transcript, result.TranscriptElidedLines, result.TranscriptElidedBytes =
-		boundTranscript(result.Transcript)
+	text, lines, bytes := boundTranscript(result.Transcript)
+	result.Transcript = text
+	result.TranscriptElidedLines = max(result.TranscriptElidedLines, 0) + lines
+	result.TranscriptElidedBytes = max(result.TranscriptElidedBytes, 0) + bytes
 	result.DeliveredRefs, result.DeliveredRefsElided = boundRefs(result.DeliveredRefs)
 	if len(result.Event) > MaxRunEventBytes {
 		// DROPPED WHOLE, never cut: a cut event is no JSON, and the one
@@ -341,7 +358,7 @@ func (c *Coordinator) fitText(ctx context.Context, run PendingRun, result Result
 	result.Pushed, result.PushedElided = boundPushed(result.Pushed, result.PushedElided, left)
 	// AND WHY THE PUSH RECORD WAS UNREAD, built from Gitlet's answer: redacted
 	// and held to a record's diagnostic bound.
-	result.PushedUnread = events.ClipDiagnostic(redact.Secrets(result.PushedUnread))
+	result.PushedUnread = clippedRedacted(result.PushedUnread)
 	// AND WHAT BECAME OF THE CHANGES IT ASKED TO OPEN, each sentence as
 	// that one is ([fitOpened]).
 	result.Opened = fitOpened(result.Opened)
@@ -383,11 +400,17 @@ func boundRefs(refs []string) ([]string, int) {
 // ([wholeLines]). The START is kept for the run's plan, which a log cut to its
 // end loses. 64 KiB is some 370 tool lines at their longest (a tool's name and
 // at most 160 bytes of what it ran, never its output); the rest of
-// [MaxRunTextBytes] is the end.
+// [MaxRunTextBytes] is the end, but for [transcriptNoteRoom].
 const (
 	transcriptHeadBytes = 64 << 10
-	transcriptTailBytes = MaxRunTextBytes - transcriptHeadBytes
+	transcriptTailBytes = MaxRunTextBytes - transcriptHeadBytes - transcriptNoteRoom
 )
+
+// transcriptNoteRoom is the room the note standing for a transcript's middle
+// ([elidedNote]) takes inside [MaxRunTextBytes]: several times the note at its
+// widest, some 220 bytes. Inside the bound, a bounded transcript fits it, so
+// bounding it again keeps it whole and counts nothing.
+const transcriptNoteRoom = 1 << 10
 
 // boundTranscript holds a run's transcript to its record: REDACTED WHOLE FIRST
 // (a secret straddling a cut would survive as an unrecognisable fragment),
@@ -397,69 +420,11 @@ const (
 // whole one; a single line past its half keeps its own start (or end), on a
 // character, marked. A transcript that fits is carried as it is.
 func boundTranscript(text string) (string, int, int) {
-	text = redact.Secrets(text)
-	if len(text) <= MaxRunTextBytes {
-		return text, 0, 0
-	}
-	lines := strings.SplitAfter(text, "\n")
-	if lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
-	}
-	head, size := 0, 0
-	for head < len(lines) && size+len(lines[head]) <= transcriptHeadBytes {
-		size += len(lines[head])
-		head++
-	}
-	tail, size := len(lines), 0
-	for tail > head && size+len(lines[tail-1]) <= transcriptTailBytes {
-		size += len(lines[tail-1])
-		tail--
-	}
-
-	// What lies between the halves; the text is past the budget, so there is
-	// always some. A half that kept no whole line keeps its edge line's start
-	// or end instead.
-	middle := lines[head:tail]
-	const marker = "…"
-	var startOf, endOf string
-	if head == 0 {
-		// Within the half with room for the line break it ends on, so a
-		// line that did not fit whole is always marked as kept in part.
-		startOf = textcut.Within(strings.TrimRight(middle[0], "\n"), transcriptHeadBytes-1) + "\n"
-	}
-	if tail == len(lines) {
-		endOf = textcut.Tail(middle[len(middle)-1], transcriptTailBytes-len(marker))
-	}
-	dropped := 0
-	for _, line := range middle {
-		dropped += len(line)
-	}
-	// Bytes kept of a partial line are not left out; the marker each carries
-	// is not content, so it is not counted against what was.
-	if startOf != "" {
-		dropped -= len(startOf) - len(marker)
-	}
-	if endOf != "" {
-		dropped -= len(endOf) - len(marker)
-	}
-	// Lines kept in part are not lines left out: one when only one edge line
-	// was partial or the text is that one line, two when both edges were.
-	partial := 0
-	if startOf != "" {
-		partial++
-	}
-	if endOf != "" && (startOf == "" || len(middle) > 1) {
-		partial++
-	}
-	whole := len(middle) - partial
-
-	var b strings.Builder
-	b.WriteString(strings.Join(lines[:head], ""))
-	b.WriteString(startOf)
-	b.WriteString(elidedNote(whole, partial, dropped))
-	b.WriteString(endOf)
-	b.WriteString(strings.Join(lines[tail:], ""))
-	return b.String(), whole, dropped
+	// ONE implementation of the rule: the halves hold the text, so they
+	// answer it whatever its length.
+	var halves TranscriptHalves
+	_, _ = halves.WriteString(redact.Secrets(text))
+	return halves.Bounded()
 }
 
 // elidedNote is the line standing where a transcript's middle was left out:
@@ -565,13 +530,16 @@ func (c *Coordinator) condensed(ctx context.Context, run PendingRun, part RunPar
 	}
 	rewritten, cost, err := c.condense.Condense(ctx, run, part, text, budget)
 	*spent = spent.Plus(cost)
+	var detail string
 	if err == nil {
-		if rewritten = redact.Secrets(rewritten); len(rewritten) <= budget {
-			return rewritten, true
+		// The whole redaction's size decides, and one within budget is all
+		// of its opening ([redact.Prefix]).
+		redacted, whole := redact.Prefix(rewritten, budget)
+		if whole <= budget {
+			return redacted, true
 		}
-	}
-	detail := "the rewrite, redacted, came back past the bound"
-	if err != nil {
+		detail = fmt.Sprintf("the rewrite, redacted, came back at %d bytes, past the %d-byte bound", whole, budget)
+	} else {
 		detail = err.Error()
 	}
 	log.WarnContext(ctx, "sandbox_run_text_not_condensed", "turn_id", run.TurnID,
