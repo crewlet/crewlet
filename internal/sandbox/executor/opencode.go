@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/activityline"
+	"github.com/crewlet/crewlet/internal/redact"
 	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
@@ -1497,8 +1498,16 @@ type openCodeEvents struct {
 	// order, and message that message's id. A text event that names no
 	// message belongs to the latest one: only a message that names itself
 	// and differs ends it, so a stream that names none is read whole.
-	answers    []string
-	message    string
+	// answerBytes is what answers hold joined, and answerDropped what the
+	// message wrote past [openCodeEvents.bound], counted rather than kept.
+	answers       []string
+	message       string
+	answerBytes   int
+	answerDropped int
+	// readBound is the most of the answer, or of the plain output, kept:
+	// [sandbox.MaxFileBytes], what a run's report is read to whatever the
+	// harness wrote it as, where zero; a test lowers it.
+	readBound  int
 	transcript transcriptLines
 	// seq numbers the run's tool calls ([activityline]).
 	seq     int
@@ -1517,7 +1526,7 @@ type openCodeEvents struct {
 	// plain is the output while no event has been seen: a run that printed its
 	// answer as text, not the event stream, whose whole output is then the
 	// answer (its exit status, not this decoder, says whether it failed). Held
-	// to [sandbox.MaxFileBytes], what lies past it counted rather than kept.
+	// to [openCodeEvents.bound], what lies past it counted rather than kept.
 	plain        strings.Builder
 	plainDropped int64
 
@@ -1719,21 +1728,53 @@ func (d *openCodeEvents) request() contextRead {
 // answer adds one text event's chunk to the answer: after the latest message's
 // text where the event is that message's, or names none; in its place where it
 // names a later one.
+// A later message lets the earlier one's chunks go. A chunk that would take
+// the message past the bound, its line break counted, is counted rather than
+// kept, and so is every later chunk of the message.
 func (d *openCodeEvents) answer(message, chunk string) {
 	if message != "" {
 		if d.message != "" && message != d.message {
-			d.answers = d.answers[:0]
+			d.answers, d.answerBytes, d.answerDropped = nil, 0, 0
 		}
 		d.message = message
 	}
+	if d.answerDropped > 0 || d.answerBytes+len(chunk)+1 > d.bound() {
+		d.answerDropped += len(chunk) + 1
+		return
+	}
 	d.answers = append(d.answers, chunk)
+	d.answerBytes += len(chunk) + 1
+}
+
+// bound is [openCodeEvents.readBound], or [sandbox.MaxFileBytes] where unset.
+func (d *openCodeEvents) bound() int {
+	if d.readBound > 0 {
+		return d.readBound
+	}
+	return sandbox.MaxFileBytes
+}
+
+// settledHead is text, whole lines that a bound cut after, held to what its
+// redaction settles ([redact.Settled]), so a reader that redacts it reads an
+// opening of what the whole text redacts to; and the bytes it held back.
+func settledHead(text string) (string, int) {
+	kept := text[:redact.Settled(text)]
+	return kept, len(text) - len(kept)
+}
+
+// withNote is text with note on a line after it, or note alone.
+func withNote(text, note string) string {
+	if text == "" {
+		return note
+	}
+	return text + "\n" + note
 }
 
 func (d *openCodeEvents) keepPlain(line []byte) {
 	if d.following {
 		return
 	}
-	if d.plainDropped > 0 || d.plain.Len()+len(line)+1 > sandbox.MaxFileBytes {
+	if d.plainDropped > 0 || d.plain.Len()+len(line)+1 > d.bound() {
 		d.plainDropped += int64(len(line) + 1)
 		return
 	}
@@ -1765,15 +1806,28 @@ func (d *openCodeEvents) Result() sandbox.Result {
 	if !d.sawEvent {
 		// Output that is not the event stream: the whole of it is the
 		// answer.
-		text := strings.TrimSpace(d.plain.String())
+		text := d.plain.String()
 		if d.plainDropped > 0 {
-			text += fmt.Sprintf("\n(%s more of the output not read: past the %s a run's plain "+
-				"output is read to)", humanSize(d.plainDropped), humanSize(sandbox.MaxFileBytes))
+			kept, held := settledHead(text)
+			text = withNote(strings.TrimSpace(kept), fmt.Sprintf("(%s more of the output not kept: past the %s "+
+				"a run's plain output is read to)", humanSize(d.plainDropped+int64(held)), humanSize(int64(d.bound()))))
 		}
+		text = strings.TrimSpace(text)
 		return sandbox.Result{Text: text, Success: true, DeliveredRefs: deliveredRefs(text)}
 	}
 	body := strings.TrimSpace(strings.Join(d.answers, "\n"))
 	success := body != "" && d.errText == ""
+	if d.answerDropped > 0 {
+		var lines strings.Builder
+		for _, chunk := range d.answers {
+			lines.WriteString(chunk)
+			lines.WriteByte('\n')
+		}
+		kept, held := settledHead(lines.String())
+		body = withNote(strings.TrimSpace(kept), fmt.Sprintf("(%s more of the answer not kept: past the %s "+
+			"a run's answer is read to)", humanSize(int64(d.answerDropped+held)), humanSize(int64(d.bound()))))
+		success = d.errText == ""
+	}
 	res := sandbox.Result{
 		Text:          body,
 		Success:       success,
