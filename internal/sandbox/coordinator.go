@@ -1207,11 +1207,10 @@ type Coordinator struct {
 	// signal's lift of the job's hold and a seat's recovery start none beside
 	// them ([Coordinator.carriedLocked]). Under mu.
 	refiring map[string]int
-	// liftedDuring is, by turn id, the condition of a signal's lift of a
-	// job's hold that landed while a re-fire of the job was on its way, for
-	// the last of those re-fires to take up as it returns ([Coordinator.refired]).
-	// Under mu.
-	liftedDuring map[string]Condition
+	// liftedDuring is, by turn id, the hold a signal's lift cleared while a
+	// re-fire of the job was on its way, for the last of those re-fires to
+	// take up as it returns ([Coordinator.refired]). Under mu.
+	liftedDuring map[string]rowHold
 	// blocked are the completions whose last resume here failed on a
 	// condition only an operator clears, by turn id ([blockedResume]).
 	// Under mu.
@@ -1408,7 +1407,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		republish:    map[string]*refirePublish{},
 		refused:      map[string]refusedCompletion{},
 		refiring:     map[string]int{},
-		liftedDuring: map[string]Condition{},
+		liftedDuring: map[string]rowHold{},
 		blocked:      map[string]blockedResume{},
 		owed:         map[string]map[string]struct{}{},
 		held:         map[string]bool{},
@@ -4374,7 +4373,9 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			// a re-fire of its own at the hold's instant and for the
 			// signal that lifts it: the poll reads the row through its
 			// host's store, whose silence has no bound.
-			c.keepHeldOnRow(run, trigger, hold, seen, false)
+			// The release numbered its hold next after the claimed row's: no
+			// other write holds a claimed row ([CoordStore.ReleaseClaim]).
+			c.keepHeldOnRow(run, trigger, hold, run.Holds+1, seen, false)
 			return AnswerConsumed, nil
 		}
 		// Un-claim so a retry can win the flip again; otherwise the redelivered
@@ -6270,7 +6271,8 @@ func (c *Coordinator) rearmOwed(ctx context.Context, runs []PendingRun) {
 func (c *Coordinator) keepHeldRows(ctx context.Context, runs []PendingRun, seen map[signal]uint64) {
 	var kept []PendingRun
 	for _, run := range runs {
-		if c.keepHeldOnRow(run, nil, Refusal{Condition: run.HeldFor, Until: run.HeldUntil}, seen, true) {
+		if c.keepHeldOnRow(run, nil, Refusal{Condition: run.HeldFor, Until: run.HeldUntil}, run.Holds, seen,
+			true) {
 			kept = append(kept, run)
 		}
 	}

@@ -133,17 +133,12 @@ func (m *fakeMattermost) post(t *testing.T, id, message string) {
 // pushed to it so far: claimed each post and queued it, or found a peer's claim
 // and dropped it.
 //
-// A PING BEHIND THE FRAMES, answered by the node itself. The client library
-// answers a ping only from inside a read (coder/websocket runs no reader of its
-// own), and a seat's pump reads its socket again only once it has delivered the
-// frame before (internal/mattermost's pump) — so a node's pong is its own word
-// that every frame ahead of the ping is done with. It is the only word a node
-// that lost a post's claim gives: it publishes nothing and logs nothing,
-// because nothing is owed, and an absence read after a fixed sleep instead
-// passed whenever the duplicate came later than the sleep.
-//
-// [TestANodeAnswersAPingOnlyOnceItHasQueuedThePostAheadOfIt] holds that
-// premise, since nothing else here would notice it stop holding.
+// A PING BEHIND THE FRAMES, answered by the node itself. A ping is answered
+// only from inside a read, and a seat's pump reads again only once it has
+// delivered the frame before (internal/mattermost's pump), so a pong says every
+// frame ahead is done with: the only word a node that lost a post's claim
+// gives, since it publishes and logs nothing. Held by
+// [TestANodeAnswersAPingOnlyOnceItHasQueuedThePostAheadOfIt].
 func (m *fakeMattermost) caughtUp(t *testing.T) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), waitBudget)
@@ -190,18 +185,16 @@ var mattermostEnv = map[string]string{"CREWLET_TEST_MM_TOKEN": "tok-ceo"}
 
 // A NODE ANSWERS A PING ONLY ONCE IT HAS QUEUED THE POST AHEAD OF IT.
 //
-// Held here because [fakeMattermost.caughtUp] rests on it rather than because
+// Held here because [fakeMattermost.caughtUp] rests on it, not because
 // anything promises it: the fleet case reads the absence of a duplicate once
-// every node has answered a ping sent behind the post, and that is whole only
-// if a node cannot answer while a frame ahead of the ping is still being
-// delivered. A pump that handed posts to goroutines, or a socket given a reader
-// of its own, would answer at once — and the fleet case would be back to
-// reading an absence at an arbitrary moment, with nothing failing.
+// every node has answered a ping behind the post, which is whole only if a node
+// cannot answer while a frame ahead of it is still being delivered. A pump
+// handing posts to goroutines, or a socket with a reader of its own, would
+// answer at once, and nothing would fail.
 //
 // The post's queueing is held INSIDE its publish, by a listener the publishing
 // goroutine runs, and the ping is given [holdFirst] to go unanswered: a node
-// that answered pings beside its deliveries would answer within milliseconds,
-// and one that does not costs this case that second once.
+// answering beside its deliveries would answer within milliseconds.
 func TestANodeAnswersAPingOnlyOnceItHasQueuedThePostAheadOfIt(t *testing.T) {
 	t.Parallel()
 	mm := startFakeMattermost(t)
@@ -301,20 +294,15 @@ func (p *published) by(tally map[string][]string, post string) []string {
 
 // ONE POST WAKES ITS SEAT ONCE ON A FLEET, and is counted as one delivery.
 //
-// Every node opens every seat's socket — that is the redundancy a restart
-// relies on — so a post arrives once per node. Deduplicated only within each
-// process, a two-node fleet published it twice, woke the seat twice under two
-// random wake ids, and the seat answered twice. Here two real engines — a data
-// node and a stateless one, which reaches the claim store and the data node's
-// event log over its leaf link — both read the bot's socket, and the seat is
-// woken once under the post's derived wake id, with ONE delivery row on the
-// data node whichever of the two delivered it.
+// Every node opens every seat's socket, so a post arrives once per node and,
+// deduplicated only within each process, would wake the seat twice. Here a
+// data node and a stateless one (reaching the claim store and event log over
+// its leaf link) both read the bot's socket, and the seat is woken once under
+// the post's derived wake id, with ONE delivery row on the data node.
 //
 // COUNTED ONCE BOTH NODES ARE DONE WITH THE POST ([fakeMattermost.caughtUp]),
 // never after a sleep: the node that loses the claim publishes nothing, so the
-// absence of its copy can only be read once that node has said it is past the
-// post. The two one-second sleeps this replaced passed a copy the losing node
-// queued three seconds late.
+// absence of its copy can only be read once it has said it is past the post.
 func TestAMattermostPostWakesItsSeatOnceOnAFleet(t *testing.T) {
 	t.Parallel()
 	mm := startFakeMattermost(t)

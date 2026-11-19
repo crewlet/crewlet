@@ -56,6 +56,7 @@ import type { ToolRow } from "../contract/tools.ts";
 import type { Coverage } from "../contract/coverage.ts";
 import type { OrgServices } from "../contract/services.ts";
 import type {
+  CHANGE_MOVE_KINDS,
   CHANGE_STATES,
   CodeSearchAnswer,
   COMMAND_OUTCOMES,
@@ -3115,9 +3116,9 @@ export interface WorkBlocker {
   key?: string;
   /** The blocker's key is one another task claimed first. */
   key_collision?: boolean;
-  /** Whether the blocker is still holding this task up. `false` is a settled
-   *  fact rather than a missing one — the blocker has finished. */
-  open?: boolean;
+  /** Whether the blocker is still holding this task up. Always stated:
+   *  `false` is a settled fact, the blocker has finished. */
+  open: boolean;
   /** The blocker not listing this task back: the residue of a dependency
    *  gesture whose mirror did not land, which the repair duty is working on. */
   one_sided?: boolean;
@@ -8816,6 +8817,9 @@ export interface CodeChangeRow {
   opened_position: LogPosition;
   closed_at?: string;
   close_reason?: string;
+  /** Who closed it, while it is closed; absent where a push nobody made closed it. */
+  closed_by?: string;
+  closed_by_kind?: CodePartyKind;
   merged_at?: string;
   merged_via?: string;
   merge_oid?: string;
@@ -8854,6 +8858,8 @@ export interface CodeChangeSummary extends CodeChangeRow {
   updated_at: string;
   /** Its card, where `cards=true` asks (`gitlet.ChangeSummary.Card`); absent is not answered. */
   card?: CodeChangeCard;
+  /** On a `needs=me` listing, why it is listed: the reader's `review`, or a `fix` of their own. */
+  waits_for?: "review" | "fix" | (string & {});
 }
 
 /** One reviewer on a listed change's card (`gitlet.ReviewerFace`). */
@@ -8981,8 +8987,12 @@ export interface CodeChangeDetail extends CodeChangeSummary {
   conversation?: CodeConversationRow;
   /** Absent for a change its home has merged no revision of yet. */
   mergeability?: CodeMergeabilityRow;
+  /** Its target branch's tip as the read found it; absent where no live branch holds the name. */
+  target_tip?: string;
   /** Who takes part in its conversation, by handle (`gitlet.ParticipantList`); absent where not answered. */
   participants?: CodeParticipantList;
+  /** The latest change opened to revert this one (`code_revert_change`); absent where none was. */
+  reverted_by?: CodeChangeName;
 }
 
 /** A revision's facts, as its home Gitlet node recorded them (`gitlet.RevisionFactsRow`). */
@@ -9022,6 +9032,10 @@ export interface CodeRevisionRow {
   push_id?: string;
   position: LogPosition;
   at: string;
+  /** How the push that made it was built (`git`, `engine`); absent where no push made it. */
+  via?: string;
+  /** It rewrote the source branch: a force-push, or through the engine a rebase onto the target. */
+  forced?: boolean;
   /** Absent for a revision its home has recorded no facts of yet. */
   facts?: CodeRevisionFacts;
 }
@@ -9093,9 +9107,16 @@ export interface CodeCommentRow {
   resolved_by?: string;
   resolved_by_kind?: CodePartyKind;
   turn_id?: string;
+  /** Empty on a deleted comment, whose row keeps its place in its thread. */
   body: string;
   position: LogPosition;
   at: string;
+  /** When its author last edited it. */
+  edited_at?: string;
+  /** When it was deleted, and by whom. */
+  deleted_at?: string;
+  deleted_by?: string;
+  deleted_by_kind?: CodePartyKind;
 }
 
 /** One finding on a change (`gitlet.FindingRow`). */
@@ -9202,6 +9223,10 @@ export interface CodeChangeAnswer extends CodePage {
   change?: CodeChangeDetail;
   revisions?: CodeRevisionRow[];
   reviewers?: CodeReviewerRow[];
+  /** The `moves` part: the moves of its lifecycle, oldest first. */
+  moves?: CodeChangeMoveRow[];
+  /** The `queue` part: its queue entries, in queue order. */
+  queue_entries?: CodeChangeQueueEntryRow[];
   comments?: CodeCommentRow[];
   reviews?: CodeReviewRow[];
   findings?: CodeFindingRow[];
@@ -9220,6 +9245,40 @@ export interface CodeChangeAnswer extends CodePage {
   /** The `excerpts` part: each finding's excerpt by its id, and the context applied. */
   excerpts?: Record<string, CodeExcerpt>;
   context?: number;
+}
+
+/**
+ * One lifecycle move (`gitlet.ChangeMove`); `was`/`became` are a retarget's or work item's values.
+ */
+export interface CodeChangeMoveRow {
+  kind: (typeof CHANGE_MOVE_KINDS)[number] | (string & {});
+  by?: string;
+  by_kind?: CodePartyKind;
+  reason?: string;
+  was?: string;
+  became?: string;
+  position: LogPosition;
+  at: string;
+}
+
+/**
+ * One queue entry of a change (`gitlet.ChangeQueueEntry`); `reason` is absent for a landing.
+ */
+export interface CodeChangeQueueEntryRow {
+  entry_id: string;
+  target_ref: string;
+  head_oid: string;
+  method: string;
+  enqueued_by: CodeParty;
+  state: (typeof QUEUE_STATES)[number] | (string & {});
+  reason?: string;
+  checks?: string[];
+  paths?: string[];
+  commit_oid?: string;
+  enqueued_position: LogPosition;
+  enqueued_at: string;
+  ended_position?: LogPosition;
+  ended_at?: string;
 }
 
 /** One line of a finding's excerpt (`gitlet.ExcerptLine`). */
@@ -9639,7 +9698,9 @@ export interface CodeBlameLine {
   commit: string;
   orig_line: number;
   orig_path?: string;
+  /** Left out for an empty line too. */
   text?: string;
+  /** Its size where its text was too long to send: the one mark of a line elided. */
   text_bytes?: number;
 }
 

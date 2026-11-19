@@ -186,21 +186,13 @@ func (s *harnessServer) values() map[string]string {
 // (the relay among them) is in it. Safe to call more than once.
 //
 // EVERY SIGNAL IS CHECKED against the group recorded at the start
-// ([harnessGroup.signal]): the kill comes after the server may have been
-// reaped, and the first signal may too, since the server can exit between the
-// look at exited and the signal. What the log lines are told is the run's
-// context as the server started under it, never its cancellation, which is
-// often what ended the run.
-//
-// A SIGNAL THE GROUP DID NOT GET GOES TO THE LEADER, through os/exec's own
-// handle on it, which never reaches another process: on linux it signals
-// through the process's pidfd, and once Wait has reaped the server it sends
-// nothing. A server never exits on its own, so a stop whose group signals
-// were withheld (the kernel's record of the group could not be read) and
-// sent nowhere else would wait on exited for ever, and the run's teardown
-// with it, holding the seat's slot. The leader's end bounds the wait: its
-// end ([childRun.end]) returns within the grace, whatever its group still
-// holds.
+// ([harnessGroup.signal]): the server may be reaped before the kill, or between
+// the look at exited and the first signal. Logs get the run's context as the
+// server started under it, never its cancellation. A SIGNAL THE GROUP DID NOT GET GOES TO THE LEADER, through os/exec's own
+// handle, which never reaches another process (once Wait has reaped the server
+// it sends nothing): a server never exits on its own, so withheld group signals
+// would wait on exited for ever, holding the seat's slot. The leader's end
+// ([childRun.end]) bounds the wait.
 func (s *harnessServer) stop() {
 	s.stopOnce.Do(func() {
 		s.stopping.Store(true)

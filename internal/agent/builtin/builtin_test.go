@@ -338,6 +338,8 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.CodeCherryPickTool:    true,
 		builtin.CodeCreateBranchTool:  true,
 		builtin.CodeDeleteBranchTool:  true,
+		builtin.CodeCreateTagTool:     true,
+		builtin.CodeDeleteTagTool:     true,
 		builtin.CodeCreateRepoTool:    true,
 		builtin.CodeUpdateRepoTool:    true,
 		builtin.CodeDeleteRepoTool:    true,
@@ -355,6 +357,7 @@ func TestEveryBuiltinDeclaresWhetherItWritesWhereAHumanCanRead(t *testing.T) {
 		builtin.CodeRequestReviewTool:   true,
 		builtin.CodeReviewChangeTool:    true,
 		builtin.CodeCommentOnChangeTool: true,
+		builtin.CodeDeleteCommentTool:   true,
 		builtin.CodeResolveFindingTool:  true,
 		// AND ITS SUGGESTIONS APPLIED, a commit onto its branch, and ITS
 		// REBASE, a forced push of it.

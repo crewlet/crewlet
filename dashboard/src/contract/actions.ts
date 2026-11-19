@@ -723,6 +723,23 @@ export const ACTIONS = {
     refreshes: [],
     scope: "person",
   },
+  // A TAG MADE AND DELETED (`routes/gitlet/repo/TagWrites.tsx`): made at a
+  // revision, annotated where a message is given, and deleted at the value the
+  // listing showed (`expected_target`).
+  code_create_tag: {
+    args: ["repo", "tag", "at", "message"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  code_delete_tag: {
+    args: ["repo", "tag", "expected_target"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
   // A FILE COMMITTED FROM THE BROWSER (`routes/gitlet/repo/FileWrites.tsx`): one
   // commit on a branch, at the head the file was read at (`expected_head`),
   // that writes, adds or deletes one file with the message the person gives.
@@ -769,8 +786,17 @@ export const ACTIONS = {
   },
   code_comment_on_change: {
     // THE CONVERSATION'S COMPOSER: a comment of its own; a reply to a thread
-    // or a finding; one on a line (`anchor`); and Resolve on a thread.
-    args: ["repo", "change", "body", "thread", "finding", "anchor", "resolve"],
+    // or a finding; one on a line (`anchor`); Resolve on a thread; and a
+    // comment's Edit (`edit`, its id).
+    args: ["repo", "change", "body", "thread", "finding", "anchor", "resolve", "edit"],
+    domain: "code",
+    apps: ["gitlet"],
+    refreshes: [],
+    scope: "person",
+  },
+  code_delete_comment: {
+    // A COMMENT'S DELETE, from its menu: its words cleared, its place kept.
+    args: ["repo", "change", "comment"],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],
@@ -785,9 +811,10 @@ export const ACTIONS = {
     scope: "person",
   },
   code_update_change: {
-    // READY FOR REVIEW on a draft (`draft: false`), or a new title and
-    // description, against the version on screen.
-    args: ["repo", "change", "expected_version", "draft", "title", "body"],
+    // ONE EDIT A CALL, against the version on screen: Ready for review and
+    // Convert to draft (`draft`), the title and description, the work item,
+    // or the branch it merges into (`target`).
+    args: ["repo", "change", "expected_version", "draft", "title", "body", "work_item", "target"],
     domain: "code",
     apps: ["gitlet"],
     refreshes: [],

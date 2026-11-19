@@ -31,7 +31,25 @@
 //
 // ONE SOCKET PER HARNESS RUN, retired when the run ends. A run that outlives its
 // end — a harness killed past its grace whose relay was in a process group of its
-// own — finds its socket gone rather than the next run's calls.
+// own — finds its socket gone rather than the next run's calls. The socket goes
+// only after the calls running on it have returned.
+//
+// # What a dispatcher is handed of a call
+//
+// A call runs under the context of the run its dispatcher serves, never the MCP
+// request's: a harness that cancels or drops a call must not cancel a tool
+// half-way through, and the request's context is not on offer to be used by
+// mistake. What a dispatcher gets of the request is [Call.Abandoned], [Call.Over]
+// and [Call.Running].
+//
+// A harness counts as connected once it has LISTED the tools, not once it sent
+// `notifications/initialized`, which a client on a newer protocol revision never
+// sends. For a client that re-reads the list when told it changed (every harness
+// whose profile re-lists, and every box), the answer to a call that changed it is
+// held until the client has listed again, for two seconds at most
+// ([Server.HoldAnswersForRelist]): answered at once, Gemini CLI, Copilot and
+// OpenCode asked their model again first and offered an activated tool a request
+// late.
 //
 // # A running call's answer, kept going where its transport needs it
 //

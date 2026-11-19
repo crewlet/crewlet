@@ -17,32 +17,15 @@ import (
 
 // A seat's install link, and the landing that finishes it.
 //
-// # Why the state carries proof
+// The landing Slack returns a browser to is unauthenticated and seals a bot
+// token into a seat, so only the state stands between it and anybody who can
+// reach the engine. The state is an HMAC over the seat's handle, app, a random
+// nonce and an expiry, signed under the fleet keyring through [runtoken], so
+// any node verifies what another minted and a rotation leaves older links
+// valid until they lapse.
 //
-// The landing Slack returns a person's browser to is unauthenticated: a
-// redirect carries no engine credential. It exchanges the code and seals a bot
-// token into a seat, so the only thing between it and anybody who can reach
-// the engine is the state. It is therefore an HMAC over the seat's handle, its
-// app, a random nonce and an expiry, signed under the fleet keyring through
-// [runtoken] (the signer every per-run token uses, with its own domain, its
-// key tags and its constant-time compare), so the node Slack returns the
-// browser to verifies what another node minted, and a keyring rotation leaves
-// a link minted under the previous key valid until it lapses.
-//
-// # Single use
-//
-// The nonce is recorded when the link is minted and spent when the install
-// completes, both on the fleet's claim registry, so a link that reached a log
-// or a browser history cannot be presented twice, on this node or any other,
-// even inside its fifteen minutes. A registry that cannot answer refuses: this
-// is an authorization check, and refusing costs a person one more click.
-//
-// # One completion
-//
-// [CompleteSeatInstall] is the only code that exchanges a code and seals a bot
-// token. The landing reaches it through [Installs.Complete], and the
-// provisioning command's paste reaches it directly, so there is one place that
-// checks the app and revokes a token it could not seal.
+// [CompleteSeatInstall] is the only code that exchanges a code and seals a
+// token, so one place checks the app and revokes a token it could not seal.
 
 // InstallTTL is how long an install link stays good: a browser round trip to
 // Slack and one click, with room for a person to read the approval page.
@@ -58,6 +41,10 @@ const stateSep = "~"
 
 // Claims records nonces, first claim wins. The fleet's coord.Claims
 // satisfies it.
+//
+// A nonce is recorded when the link is minted and spent on completion, so a
+// link from a log or browser history cannot be presented twice on any node. A
+// registry that cannot answer refuses: this is an authorization check.
 type Claims interface {
 	Claim(ctx context.Context, key string, ttl time.Duration, now time.Time) (bool, error)
 	Release(ctx context.Context, key string) error

@@ -184,6 +184,34 @@ test("an applied press is re-read at the position it landed at, and named in a t
   expect((await screen.findAllByText("Pinned Triage")).length).toBeGreaterThan(0);
 });
 
+// A WRITE WITH AN INVERSE OFFERS IT on its toast: Undo runs the press it
+// names. Mutation: drop the label's undo from the applied toast, and this fails.
+test("an applied press with an undo offers it on its toast", async () => {
+  engine(() => json({ tool: "set_pins", outcome: "applied" }, 200));
+  const undone = vi.fn();
+  function Undoable() {
+    const pin = useAct("set_pins");
+    return (
+      <WriteButton
+        write={pin}
+        onPress={() =>
+          void pin.run({ views: { add: ["v1"] } }, { done: "Pinned Triage", undo: undone })
+        }
+      >
+        Pin
+      </WriteButton>
+    );
+  }
+  render(
+    <ToastProvider>
+      <Undoable />
+    </ToastProvider>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Pin" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+  expect(undone).toHaveBeenCalledTimes(1);
+});
+
 test("pending tells the person this node has not applied it, and the reads wait for it", async () => {
   engine(() =>
     json({ tool: "set_pins", outcome: "pending", position: "CREWLET_TRACKER_LOG@1:901" }, 200),

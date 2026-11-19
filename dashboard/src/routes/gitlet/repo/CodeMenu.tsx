@@ -12,7 +12,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { shortOID } from "~/lib/code.ts";
 import type { CodeRepoDetail } from "~/protocol/index.ts";
-import { archiveHref, useDownloadsServed } from "./downloads.ts";
+import { archiveHref } from "./downloads.ts";
 
 /** Said where the deployment names no address of its own. */
 export const NO_CLONE_ADDRESS =
@@ -61,19 +61,14 @@ function CopyCommand({ url }: { url: string | undefined }) {
   );
 }
 
-/** Download ZIP of the listing's commit, held while it is unknown or where the fleet serves none. */
+/** Download ZIP of the listing's commit, held while it is unknown. */
 function DownloadZip({ name, commit, failed }: { name: string; commit: string; failed: boolean }) {
-  const served = useDownloadsServed(name, true);
   const held =
     commit === ""
       ? failed
         ? "The commit could not be read, so there is nothing to download yet."
         : "Waiting for the commit to download."
-      : served === "no"
-        ? "Downloading a ZIP is not available on this fleet yet."
-        : served === "checking"
-          ? "Checking whether this fleet serves downloads."
-          : null;
+      : null;
   const glyph = <ArrowDownToLineGlyph size="sm" />;
   return held ? (
     <Button

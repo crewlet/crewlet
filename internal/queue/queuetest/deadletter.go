@@ -32,31 +32,15 @@ var lettersUnder = topics.DeadLettersUnder(lettersTopic)
 
 // runDeadLetters certifies the dead-letter verbs: KeepDeadLetter,
 // DeadLettersOn, DeadLetterFrame, DeadLetterMarks and DropDeadLetter.
-//
-// # Why they are certified at all
-//
-// Because the reader that keeps one acts on every answer they give. A wake
-// feed dead-letters a record no node could read for an hour and acks the
-// record only once the entry is kept (internal/changefeed): a keep that
-// returned before the entry was durable, or a frame read back other than it
-// was kept, is a wake lost with nothing reporting it. And the alarm's reading
-// counts an entry that VANISHED between two listings as let go by the
-// retention, lists again only when the marks move, and trusts a listing only
-// once its count is the marks': marks that lagged a keep, or still counted a
-// drop, would hide an entry from the alarm or count an expiry that never
-// happened. And a listing that carried an entry's body would move every
-// record a feed gave up on to every data node on every beat it lists. Each
-// case below is one way a plausible backend answers wrongly while every other
-// case in this suite passes.
-//
-// # A listing is read as its reader reads it
-//
-// The contract lets a listing come from a copy behind the broker, and holds
-// the marks to the broker itself — so every listing a case asserts on is the
-// one that agrees with the marks ([listedAsMarked]), which is how the alarm's
-// reading takes one. A backend whose listing never catches up fails there,
-// and one whose marks lag a keep or a drop fails the cases that read the
-// marks with no wait.
+// A wake feed acks a record only once its entry is kept (internal/changefeed):
+// a keep returning before the entry was durable, or a frame read back other
+// than kept, is a wake lost silently. The alarm counts an entry that VANISHED
+// between listings as expired and trusts a listing only once its count is the
+// marks': lagging marks would hide an entry or count an expiry that never
+// happened. A listing carrying bodies would ship every given-up record to
+// every data node on every beat. Every listing a case asserts on agrees with
+// the marks ([listedAsMarked]), as the alarm reads it: a listing may come
+// from a copy behind the broker, the marks are held to the broker.
 func (s *suite) runDeadLetters(t *testing.T) {
 	ctx := t.Context()
 
@@ -324,19 +308,15 @@ func (s *suite) runDeadLetters(t *testing.T) {
 
 	// ONE ENTRY FOR ONE IDENTITY. A reader that settles its own deliveries
 	// is handed one record twice whenever its keep outlasts the delivery's
-	// window — a keep across a slow link waits as long as its bytes take —
-	// and it cannot hold the delivery meanwhile, so the second keep is what
-	// must come to nothing. A backend that kept it would hold two entries of
-	// one record; one that collapsed two identities, or one identity across
-	// two subjects, would lose an entry somebody else kept.
-	//
-	// AND A DROPPED ENTRY'S IDENTITY IS STILL KEPT for the rest of the
-	// window, the broker running: an operator who discarded the entry
-	// decided no node is to read it, so a keep of it again keeps nothing.
-	//
-	// Mutation: forget an identity when its entry is dropped (the twin's
-	// DropDeadLetter clearing the subject's identities), and the keep after
-	// the drop stores the entry again, on the memory backend.
+	// window, and cannot hold the delivery meanwhile, so the second keep must
+	// come to nothing. A backend that kept it would hold two entries of one
+	// record; one that collapsed two identities, or one identity across two
+	// subjects, would lose an entry somebody else kept.
+	// A DROPPED ENTRY'S IDENTITY IS STILL KEPT for the rest of the window,
+	// the broker running: an operator who discarded it decided no node is to
+	// read it, so a keep of it again keeps nothing.
+	// Mutation: the twin's DropDeadLetter clearing the subject's identities
+	// makes the keep after a drop store the entry again.
 	t.Run("a_second_keep_of_one_identity_keeps_nothing_and_is_answered_already_kept", func(t *testing.T) {
 		t.Parallel()
 		q := s.start(ctx, t)
@@ -647,53 +627,27 @@ func marksErr(_ queue.Marks, err error) error { return err }
 // newQueue builds a fresh UNSTARTED queue, as [Capabilities.WithDeliveryAttempts]
 // does, that hands a persistently passed event over exactly attempts times,
 // and whose ack window outlasts the keep of a copy at the ceiling, as
-// production's does: a window a harness shortened redelivers the message
-// mid-keep, a redelivery production never makes, and a copy at the ceiling has
-// no room for the identity that collapses a second keep.
-//
-// OUTSIDE THE PARALLEL SUITE ([RunWith]): the case moves megabytes four times
-// (the publish, the delivery, the keep and a read back) and the suite runs its
-// cases side by side, so on a loaded runner under the race detector it
-// starved. A member's read of the frame was cut at its read term, and a leaf's
-// delivery came minutes late (crewlet/crewlet#1132's CI). So each backend runs
-// it where nothing else runs beside it: JetStream's from a package of the solo
-// roster (internal/solo), and the in-memory twin's from its own package, whose
-// copies are pointers.
+// production's does: a shortened window redelivers mid-keep, and a copy at
+// the ceiling has no room for the identity that collapses a second keep.
+// OUTSIDE THE PARALLEL SUITE ([RunWith]): it moves megabytes four times and
+// beside other cases, under the race detector, it starves. Each backend runs
+// it alone: JetStream's from a package of the solo roster (internal/solo),
+// the in-memory twin's from its own package.
 func RunCeilingCopy(t *testing.T, newQueue func(t *testing.T, attempts int) queue.EventQueue) {
 	t.Helper()
 	ctx := t.Context()
 	// A COPY A PASS RETIRED IS KEPT ON ITS GROUP'S UNHANDLED SUBJECT
 	// WHATEVER ITS SIZE (queue.RetiredTo). A delivery is as large as the
-	// transport carries, so a copy at that ceiling has no room for a
-	// header beside it: marked by a header, it was kept with none, read
-	// as the group's poison and never replayed. Marked by where it is
-	// kept, every byte of it is where a reader of the group's unhandled
-	// deliveries lists it, reads it and drops it.
-	//
-	// THE PAD fills the copy to within half the framing of the ceiling:
-	// past the room a header and its framing would have needed, and no
-	// more than the transport carries. A probe measures the bytes a copy
-	// carries beside the pad — its kept frame, exactly what the backend
-	// keeps, whatever it stamps on a delivery — so the large event lands
-	// there on every backend. One timestamp for both, so the two encode
-	// alike but for the pad.
-	//
-	// READ BACK BY ITS FRAME AND DROPPED, as the reader that replays it
-	// reads and drops it: on the JetStream backend's run through a leaf,
-	// across the leaf's link, raw where the leader's reply would not
-	// cross it (internal/queue/jetstream's copyread.go).
-	//
-	// THE KEEP'S OWN COMPLETION DECIDES IT, never a wait on the clock: a
-	// copy at the ceiling moves its megabytes three times more before it
-	// is kept, as long as that takes on the machine. Once the large event
-	// is in its handler, a drain returns when its return is settled, and
-	// settling the pass that spends its budget is the keep
-	// (WaitForHandlers). Its queue's ack window outlasts the keep, as
-	// production's does.
-	//
-	// Mutation: count a pass as a failure of its message, and its copy is
-	// kept with the pair's poison while the unhandled subject holds
-	// nothing.
+	// transport carries, so a copy at that ceiling has no room for a header:
+	// marked by one, it was kept with none, read as poison and never
+	// replayed. Marked by where it is kept, a reader of the group's unhandled
+	// deliveries lists, reads and drops every byte of it.
+	// THE PAD fills the copy to within half the framing of the ceiling, past
+	// the room a header would need. Read back by frame and dropped as the
+	// replaying reader does (jetstream's copyread.go).
+	// THE KEEP'S OWN COMPLETION DECIDES IT, never the clock: a drain returns
+	// when the pass that spends the budget is settled, which is the keep.
+	// Mutation: count a pass as a failure, and its copy is kept as poison.
 	q := newQueue(t, 1)
 	if err := q.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)

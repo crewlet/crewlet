@@ -19,36 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// CHECKING AN ADDRESS BEFORE IT IS ADDED: what a remote server at it is, and
-// how it is signed in to.
+// CHECKING AN ADDRESS BEFORE IT IS ADDED: a [Test] with nothing configured.
+// A server listing tools with no credential needs no sign-in; a 401 with a
+// Bearer challenge wants OAuth, read from its protected-resource metadata
+// (RFC 9728) and the first authorization server's (RFC 8414 or OpenID
+// Connect); a refusal without one wants a header credential.
 //
-// A check is a [Test] of the address with nothing configured: no header, no
-// prefix, no override. Where the server answers its handshake and lists its
-// tools to a request that carries no credential, it needs no sign-in. Where it
-// answers 401 with a Bearer challenge, it wants an OAuth sign-in, and the
-// check reads how one is made: the server's protected-resource metadata
-// (RFC 9728), at the address its challenge names or at the well-known address
-// on its own origin, and the metadata of the first authorization server that
-// names (RFC 8414, or OpenID Connect discovery where only that is published).
-// A server that refuses without a Bearer challenge wants a credential in a
-// header.
-//
-// # Whose address each request goes to
-//
-// The address a person typed is the operator's, and is dialled as the server
-// would be once added, a private address included (ADR-0072): typing it is
-// what adding it would make the engine dial. Every other address the check
-// reaches is one the SERVER named, in its challenge or its metadata, and is
-// fetched through the public-address guard ([httpx.Guarded]) unless it is on
-// the typed address's own origin, which the operator already chose. A
-// metadata address on another origin is https or it is not fetched, no fetch
-// follows a redirect, every body is read to [maxMetadataBody] and no further,
-// and every fetch is bounded by [metadataFetchBudget]. Nothing the check sends
-// carries a credential: it has none.
-//
-// An address the guard refuses ends the discovery with [FailBlockedAddress]:
-// the server's sign-in points somewhere the engine does not follow, which its
-// vendor fixes.
+// The typed address is the operator's, dialled as the added server would be,
+// a private address included (ADR-0072). Every address the SERVER named goes
+// through the public-address guard ([httpx.Guarded]) unless on the typed
+// origin; on another origin it must be https. No fetch follows a redirect,
+// bodies stop at [maxMetadataBody], fetches at [metadataFetchBudget], and none
+// carries a credential. A refusal ends discovery: [FailBlockedAddress].
 
 // AddressCheck is what checking an address found.
 type AddressCheck struct {

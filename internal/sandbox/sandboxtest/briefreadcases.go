@@ -18,15 +18,13 @@ var briefReadCases = []struct {
 
 // A CALL TAKEN AFTER THE BRIEFS' READ IS MARKED LATE BY THE OPENING. A relaunch
 // that carries the round on builds its briefs from one read of the round's log,
-// then readies its launch — a probe of the kept session, a rewrite of long calls
-// by the seat's auxiliary model, the call a person approved — before its opening
-// moves the log on. A call of the job it replaces that lands in between is taken
-// as that job's own: none of the briefs told it, and a later capture of the new
-// job, placed by its own read, would count it among the calls its session holds.
-// So the opening marks every call of the round the log took after the read late,
-// as it marks one taken after it — but the call a person approved, which the
-// relaunch's lead tells — and leaves the calls the read saw as they were. A
-// launch that knows no read marks none.
+// then readies its launch (session probe, rewrite of long calls, the approved
+// call) before its opening moves the log on. A call of the replaced job landing
+// in between is taken as that job's own though no brief told it, and a later
+// capture of the new job would count it among the calls its session holds. So
+// the opening marks every call the log took after the read late, except the
+// approved call, which the relaunch's lead tells, and leaves the calls the read
+// saw as they were. A launch that knows no read marks none.
 //
 // Mutation: open the log without the briefs' read, or mark the approved call
 // with the rest, and this goes red.

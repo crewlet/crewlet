@@ -17,13 +17,11 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// A CHANGE'S CONVERSATION, DECIDED: each [ConversationWrite] — an ask for
-// review, a comment, a thread's resolution, a review, an answer to findings,
-// and the home Gitlet node's own revise, mergeability and settling of asks —
+// A CHANGE'S CONVERSATION, DECIDED: each [ConversationWrite] ([ConversationOps])
 // is decided by the repository's committing data node ([ChangeWriter.Converse])
-// in ONE snapshot, as a record of its own op ([ConversationOps]) on the change's
-// subject. [decideConversation] holds the rules in order, the first that fails
-// being the answer and none writing anything: the repository, the change, the
+// in ONE snapshot, as a record of its own op on the change's subject.
+// [decideConversation] holds the rules in order, the first that fails being
+// the answer and none writing anything: the repository, the change, the
 // asker's grant to READ the repository (before any rule admitting a writer by
 // its relation to the change), each write's own decideX, and then whoever a
 // seat's turn works for ([WriteCeiling.changeRefusal]). A write asking what the
@@ -31,7 +29,7 @@ import (
 // a review: two saying the same are two, and the ledger collapses a retry.
 
 // Validate refuses, before anything is read, a write no change's writer could
-// decide ([ErrInvalidProposal], naming the field): not exactly one of the eight
+// decide ([ErrInvalidProposal], naming the field): not exactly one of the ten
 // records; an operation id statelog.CheckCallerOpID refuses; an asker that is
 // no principal or names a run, or any asker on the home's own revise,
 // mergeability or settling of asks; a WrittenFor [writtenForUnder] refuses; a
@@ -89,7 +87,7 @@ func (w ConversationWrite) measure() (int, error) {
 		if w.Review != nil {
 			why += ": split it into two reviews of the same revision, which supersede nothing of each other"
 		}
-		return 0, fmt.Errorf("%w: %s: %s", ErrInvalidProposal, op, why)
+		return 0, refusedf("%w: %s: %s", ErrInvalidProposal, op, why)
 	}
 	return stamped, nil
 }
@@ -114,6 +112,10 @@ func (w ConversationWrite) record() (OpKind, any) {
 		return OpComment, *w.Comment
 	case w.ThreadResolve != nil:
 		return OpThreadResolve, *w.ThreadResolve
+	case w.CommentEdit != nil:
+		return OpCommentEdit, *w.CommentEdit
+	case w.CommentDelete != nil:
+		return OpCommentDelete, *w.CommentDelete
 	case w.Review != nil:
 		return OpReview, *w.Review
 	case w.FindingResolve != nil:
@@ -140,6 +142,10 @@ func (w ConversationWrite) RepoID() string {
 		return w.Comment.RepoID
 	case w.ThreadResolve != nil:
 		return w.ThreadResolve.RepoID
+	case w.CommentEdit != nil:
+		return w.CommentEdit.RepoID
+	case w.CommentDelete != nil:
+		return w.CommentDelete.RepoID
 	case w.Review != nil:
 		return w.Review.RepoID
 	case w.FindingResolve != nil:
@@ -164,6 +170,10 @@ func (w ConversationWrite) ChangeID() string {
 		return w.Comment.ChangeID
 	case w.ThreadResolve != nil:
 		return w.ThreadResolve.ChangeID
+	case w.CommentEdit != nil:
+		return w.CommentEdit.ChangeID
+	case w.CommentDelete != nil:
+		return w.CommentDelete.ChangeID
 	case w.Review != nil:
 		return w.Review.ChangeID
 	case w.FindingResolve != nil:
@@ -202,16 +212,18 @@ func (w ConversationWrite) validFields() error {
 		return err
 	}
 	set := 0
-	for _, isSet := range []bool{w.Reviewers != nil, w.Comment != nil, w.ThreadResolve != nil, w.Review != nil,
-		w.FindingResolve != nil, w.Revise != nil, w.Mergeability != nil, w.Asks != nil} {
+	for _, isSet := range []bool{w.Reviewers != nil, w.Comment != nil, w.ThreadResolve != nil, w.CommentEdit != nil,
+		w.CommentDelete != nil, w.Review != nil, w.FindingResolve != nil, w.Revise != nil, w.Mergeability != nil,
+		w.Asks != nil} {
 		if isSet {
 			set++
 		}
 	}
 	if set != 1 {
 		return fmt.Errorf("%w: a write of a change's conversation is exactly one of an ask for review, a "+
-			"comment, a thread's resolution, a review, an answer to findings, a revision's facts, a change's "+
-			"mergeability and a settling of its asks, and this one sets %d", ErrInvalidProposal, set)
+			"comment, a thread's resolution, a comment's edit, a comment's delete, a review, an answer to "+
+			"findings, a revision's facts, a change's mergeability and a settling of its asks, and this one sets "+
+			"%d", ErrInvalidProposal, set)
 	}
 	if err := statelog.CheckCallerOpID(w.OpID); err != nil {
 		return badField("op_id", "%v", err)
@@ -225,7 +237,7 @@ func (w ConversationWrite) validFields() error {
 				"are the repository's home Gitlet node's own, which no principal asks")
 		}
 	case why != "":
-		return fmt.Errorf("%w: asker: %s", ErrInvalidProposal, why)
+		return refusedf("%w: asker: %s", ErrInvalidProposal, why)
 	case !w.Asker.Run.IsZero():
 		return badField("asker.run", "a comment keeps the turn that said it in its own field, and an asker "+
 			"names no run")
@@ -258,6 +270,10 @@ func (w ConversationWrite) validFields() error {
 		return w.Reviewers.validFields()
 	case w.Comment != nil:
 		return w.Comment.validFields()
+	case w.CommentEdit != nil:
+		return w.CommentEdit.validFields()
+	case w.CommentDelete != nil:
+		return w.CommentDelete.validFields()
 	case w.Review != nil:
 		return w.Review.validFields()
 	case w.FindingResolve != nil:
@@ -476,6 +492,27 @@ func (c *Comment) validFields() error {
 	return stampedBy("comment", c.By)
 }
 
+// validFields holds a comment's edit to [ConversationWrite.Validate]'s rules;
+// who edits is the writer's to stamp.
+func (e *CommentEdit) validFields() error {
+	if err := bareUUIDv7("comment_edit.comment_id", e.CommentID); err != nil {
+		return err
+	}
+	if why := commentProblem(e.Body); why != "" {
+		return badField("comment_edit.body", "%s", why)
+	}
+	return stampedBy("comment_edit", e.By)
+}
+
+// validFields holds a comment's delete to [ConversationWrite.Validate]'s
+// rules; who deletes is the writer's to stamp.
+func (c *CommentDelete) validFields() error {
+	if err := bareUUIDv7("comment_delete.comment_id", c.CommentID); err != nil {
+		return err
+	}
+	return stampedBy("comment_delete", c.By)
+}
+
 // conversationDecision is one round's decision of a conversation write: a
 // refusal and its sentence, unchanged, or the stamped payload and the rows its
 // apply will touch; and either way the conversation's version, position and
@@ -641,6 +678,10 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 		d, err = decideReviewers(ctx, tx, w, seats.Roster, repo.grantRef(repoID), row, named, grant, noGitlet, d)
 	case w.Comment != nil:
 		d, err = decideComment(ctx, tx, w, row, named, d)
+	case w.CommentEdit != nil:
+		d, err = decideCommentEdit(ctx, tx, w, asker, kind, row, named, d)
+	case w.CommentDelete != nil:
+		d, err = decideCommentDelete(ctx, tx, w, asker, kind, row, named, grant, d)
 	case w.Review != nil:
 		d, err = decideReview(ctx, tx, w, asker, kind, row, named, grant, d)
 	case w.FindingResolve != nil:
@@ -663,6 +704,10 @@ func decideConversation(ctx context.Context, tx *sql.Tx, w ConversationWrite, se
 		what, seats.Roster); why != "" {
 		refused := conversationDecision{version: d.version, position: d.position, readiness: d.readiness}
 		return refused.refuse(ConversationRefusalNotPermitted, why)
+	}
+	if w.CommentEdit != nil || w.CommentDelete != nil {
+		// AN EDIT OR A DELETE TELLS NOBODY: no notice, no wake.
+		return d, nil
 	}
 	return routeConversation(ctx, tx, w, seats.Roster, repo.name, row, d)
 }
@@ -1216,6 +1261,99 @@ func decideThreadResolve(ctx context.Context, tx *sql.Tx, w ConversationWrite, a
 	return d, nil
 }
 
+// decideCommentEdit is a comment's edit's rules over row: a comment of this
+// change not deleted (comment_gone), edited by its author alone
+// (not_permitted); unchanged where its words are the ones it holds.
+func decideCommentEdit(ctx context.Context, tx *sql.Tx, w ConversationWrite, asker string, kind PartyKind,
+	row changeRow, named string, d conversationDecision) (conversationDecision, error) {
+
+	e := *w.CommentEdit
+	c, found, err := commentStateIn(ctx, tx, e.CommentID)
+	if err != nil {
+		return conversationDecision{}, err
+	}
+	switch {
+	case !found || c.changeID != row.id:
+		return d.refuse(ConversationRefusalCommentGone, fmt.Sprintf("%s holds no comment %s", named,
+			e.CommentID))
+	case c.deleted:
+		return d.refuse(ConversationRefusalCommentGone, fmt.Sprintf("comment %s on %s is deleted, and a "+
+			"deleted comment takes no edit", e.CommentID, named))
+	case c.author != asker || c.authorKind != kind:
+		return d.refuse(ConversationRefusalNotPermitted, fmt.Sprintf("comment %s on %s is %s's: a comment is "+
+			"edited by its author alone", e.CommentID, named, c.author))
+	case c.body == e.Body:
+		d.unchanged = true
+		return d, nil
+	}
+	e.By = w.Asker
+	d.payload = e
+	// THE COMMENT, and the conversation's row.
+	d.rows = 2
+	return d, nil
+}
+
+// decideCommentDelete is a comment delete's rules over row: a comment of this
+// change (comment_gone), by its author, a maintainer of the repository or a
+// person (not_permitted); unchanged where it is deleted already.
+func decideCommentDelete(ctx context.Context, tx *sql.Tx, w ConversationWrite, asker string, kind PartyKind,
+	row changeRow, named string, grant Grant, d conversationDecision) (conversationDecision, error) {
+
+	del := *w.CommentDelete
+	c, found, err := commentStateIn(ctx, tx, del.CommentID)
+	if err != nil {
+		return conversationDecision{}, err
+	}
+	switch {
+	case !found || c.changeID != row.id:
+		return d.refuse(ConversationRefusalCommentGone, fmt.Sprintf("%s holds no comment %s", named,
+			del.CommentID))
+	case c.deleted:
+		d.unchanged = true
+		return d, nil
+	case kind == PartyPerson, c.author == asker && c.authorKind == kind, grant.Access >= AccessMaintain:
+	default:
+		return d.refuse(ConversationRefusalNotPermitted, fmt.Sprintf("%s did not write comment %s on %s and "+
+			"holds %s on its repository: a comment is deleted by its author, a principal that maintains the "+
+			"repository, or a person", grant.who(), del.CommentID, named, grant.Access))
+	}
+	del.By = w.Asker
+	d.payload = del
+	// THE COMMENT, and the conversation's row; the notices quoting it are
+	// this node's own (code_notifications is divergent).
+	d.rows = 2
+	return d, nil
+}
+
+// commentState is what an edit's and a delete's decide read of one comment:
+// its change, its author, whether it is deleted and its words.
+type commentState struct {
+	changeID, author string
+	authorKind       PartyKind
+	deleted          bool
+	body             string
+}
+
+// commentStateIn reads the comment id names, and false where no comment has
+// it. Apart from [commentIn]: its columns sit past the body, which a thread's
+// resolution and a reply need not read.
+func commentStateIn(ctx context.Context, tx *sql.Tx, id string) (commentState, bool, error) {
+	var (
+		c       commentState
+		kind    string
+		deleted int64
+	)
+	err := tx.QueryRowContext(ctx, commentStateSQL, id).Scan(&c.changeID, &c.author, &kind, &deleted, &c.body)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return commentState{}, false, nil
+	case err != nil:
+		return commentState{}, false, fmt.Errorf("gitlet: read comment %s: %w", id, err)
+	}
+	c.authorKind, c.deleted = PartyKind(kind), deleted != 0
+	return c, true, nil
+}
+
 // withinConversation refuses a decision past a record's bytes or rows, which
 // [ConversationWrite.Validate]'s bounds keep from forming: it makes the
 // invariant the record's own, as [withinChange] does a change's.
@@ -1343,6 +1481,7 @@ const (
 	conversationSQL = `SELECT version, position, readiness_version FROM code_conversations WHERE change_id = ?`
 	commentSQL      = `SELECT id, change_id, thread_id, parent_id, author, author_kind, resolved
 		FROM code_comments WHERE id = ?`
+	commentStateSQL = `SELECT change_id, author, author_kind, deleted_at, body FROM code_comments WHERE id = ?`
 	authorsAmongSQL = `SELECT a.author, a.author_kind FROM json_each(?2) AS j CROSS JOIN code_change_authors AS a
 		WHERE a.change_id = ?1 AND a.author = CAST(j.value AS TEXT)`
 	reviewersNamedSQL = `SELECT r.reviewer, r.state FROM json_each(?2) AS j

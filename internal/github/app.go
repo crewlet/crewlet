@@ -26,30 +26,13 @@ import (
 //
 // # Why a manifest at all
 //
-// A published app on the marketplace would let an operator install one thing
-// and be done. This engine has none, and a per-operator app is the honest
-// alternative: the engine writes a manifest describing the app it wants, the
-// operator's browser POSTs it to GitHub, and GitHub hands back an app that
-// belongs to that operator's organization. Nobody types a credential.
-//
-// # Why the browser, and not the engine
-//
-// The manifest is submitted as a FORM POST carrying the operator's own GitHub
-// session cookie. There is no server-to-server equivalent: the whole point is
-// that a person, signed in as somebody who may create apps on that
-// organization, confirms what is being created. So this half of the flow is a
-// page the dashboard renders and a redirect the engine receives, and it is
-// the one place in this integration where the reconcile loop cannot act
-// alone.
-//
-// # The credentials come back exactly once
-//
-// [ExchangeManifest] is the only moment GitHub will ever hand over the app's
-// private key and webhook secret. There is no endpoint that reissues either.
-// A crash between that response and the seal is unrecoverable: the app exists,
-// the engine cannot authenticate as it, and the operator has to delete it and
-// start again. That is why the exchange does nothing but decode, and why its
-// caller seals before it does anything else.
+// The operator's browser POSTs the engine's manifest to GitHub, which hands
+// back an app owned by their organization. Nobody types a credential.
+// It is a FORM POST carrying the operator's own session cookie, with no
+// server-to-server equivalent: a person who may create apps there must confirm
+// what is created. So this half is a dashboard page and a redirect, the one
+// place the reconcile loop cannot act alone. The credentials come back
+// exactly once, at [ExchangeManifest].
 
 // AppCreateTimeout bounds the manifest exchange.
 //
@@ -165,18 +148,15 @@ type ManifestOptions struct {
 // AppName is the name GitHub registers a seat's app under.
 //
 // GLOBALLY UNIQUE AND AT MOST 34 CHARACTERS, which is GitHub's rule and the
-// one constraint that shapes this. A name built from the seat alone collides
-// the second time any two companies both have an `sre-lead`, and the failure
-// arrives as a manifest rejection an operator cannot do anything about.
+// one constraint that shapes this. A seat-only name collides when two
+// companies both have an `sre-lead`, as a rejection an operator cannot act on.
 //
-// So the company's own name leads and the seat follows. A name past the limit
-// is shortened WITHOUT LOSING WHAT TELLS TWO APPS APART: it used to be cut at
-// 34, so in a company whose name alone ran to 34 every seat's app had the same
-// name — the seat, the one part that differs, was what the cut removed. Now
-// the company is shortened first and the seat kept, and a short digest of the
-// whole name rides at the end, so two names that shorten alike still differ.
-// Shortened on a RUNE boundary, because a name sliced through a multi-byte
-// character is rejected by GitHub as malformed rather than as too long.
+// So the company's name leads and the seat follows. A name past the limit is
+// shortened WITHOUT LOSING WHAT TELLS TWO APPS APART: the company is shortened
+// first and the seat kept, and a short digest of the whole name rides at the
+// end, so names that shorten alike still differ. Shortened on a RUNE boundary,
+// because a name sliced through a multi-byte character is rejected by GitHub
+// as malformed rather than as too long.
 func AppName(company, seat string) string {
 	company, seat = strings.TrimSpace(company), strings.TrimSpace(seat)
 	parts := make([]string, 0, 2)
@@ -266,28 +246,14 @@ func eventsFor(hook map[string]any) []string {
 // deployment's webhook address ([config.API.WebhookBase]). enterprise is
 // whether the company runs Enterprise Server rather than github.com.
 //
-// AN APP'S DELIVERY ADDRESS IS BAKED IN AT CREATION, and only a person at
-// GitHub changes it afterwards. So an address GitHub can never reach is not
-// written into a manifest at all: the app is created with no webhook and no
-// event subscriptions ([BuildManifest]), which is a state GitHub's own
-// settings page shows, rather than pointed at an address that fails every
-// delivery while the app reads as healthy. That is what a local engine is: one a person
-// reaches at `http://localhost:8200`, whose agents act on GitHub perfectly
-// well through their apps and hear nothing back from it.
-//
-// TWO READINGS OF "REACHABLE", because the two products sit in different
-// places. github.com delivers from the public internet, so it reaches no
-// address [httpx.Public] refuses (loopback, private, link-local, carrier-grade
-// NAT, documentation and every other range the public internet does not
-// route) and no name that is not a public domain: a single label (`devbox`),
-// `localhost` and the `.localhost`, `.local`, `.internal`, `.lan` and
-// `.home.arpa` suffixes, which no public resolver answers. Which addresses
-// the public internet routes is httpx's one rule (ADR-0072) rather than a
-// list here, because a second list is the copy that drifts. An Enterprise
-// Server runs inside the company's own network and routinely delivers to
-// private addresses, so there only an address that names the server's own
-// host (loopback, an unspecified address, `localhost`) is refused. Either way
-// the scheme is http or https, which is what GitHub accepts for a hook.
+// The address is BAKED IN AT CREATION, so an unreachable one is not written
+// into a manifest: the app gets no webhook and no events ([BuildManifest])
+// rather than failing every delivery while reading healthy. TWO READINGS OF
+// "REACHABLE". github.com delivers from the public internet:
+// no address [httpx.Public] refuses (ADR-0072) and no non-public name (a
+// single label, `localhost`, `.local`, `.internal`, `.lan`, `.home.arpa`). An
+// Enterprise Server delivers inside the company's network, so only an address
+// naming the server's own host is refused. The scheme is http or https.
 func Deliverable(base string, enterprise bool) bool {
 	u, err := url.Parse(strings.TrimSpace(base))
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
@@ -368,14 +334,14 @@ var ErrCodeSpent = errors.New("github: this app-creation code has been used or h
 
 // ExchangeManifest turns the one-time code into an app.
 //
-// UNAUTHENTICATED, which is GitHub's design: the code IS the authentication,
-// which is why it is single use, why it expires in an hour, and why the state
-// that travels beside it has to be verified by the caller rather than trusted.
+// UNAUTHENTICATED by GitHub's design: the code IS the authentication, so it is
+// single use, expires in an hour, and the state travelling beside it is the
+// caller's to verify.
 //
-// This function decodes and returns. It deliberately does not log, retry or
-// wrap the response body: the body carries the private key of an app, and the
-// ordinary reflex of logging a response on error would put the root credential
-// of every agent's identity into a log file.
+// THE ONLY MOMENT GitHub hands over the app's private key and webhook secret;
+// nothing reissues either, so the caller seals first. It decodes and returns,
+// and never logs, retries or wraps the response body, which carries the root
+// credential of an agent's identity.
 func ExchangeManifest(ctx context.Context, apiBase, code string) (*CreatedApp, error) {
 	if strings.TrimSpace(code) == "" {
 		return nil, errors.New("github: no app-creation code")
@@ -556,21 +522,15 @@ const RepositorySelectionAll = "all"
 // an installation that is simply gone.
 func (i Installation) Suspended() bool { return strings.TrimSpace(i.SuspendedAt) != "" }
 
-// SuspendedByPerson reports a suspension a person placed at GitHub (an
-// organization owner on the installation's page), as opposed to one an app
-// placed through the API. A person's suspension is a decision made at GitHub,
-// so it is lifted there by a person, never by this engine on its own.
+// SuspendedByPerson reports a suspension a person placed at GitHub, as opposed
+// to one an app placed through the API. A person's is lifted there by a
+// person, never by this engine.
 //
 // AN ASSUMPTION, and guarded. GitHub documents `suspended_by` as null or a
-// Simple User, whose `type` is "User" or "Bot"
-// (https://docs.github.com/en/rest/apps/apps#get-an-installation-for-the-authenticated-app),
-// and documents the suspend and unsuspend endpoints as answering 204 or 404
-// (https://docs.github.com/en/rest/apps/apps#unsuspend-an-app-installation).
-// It does not say which account an app's own API suspension records; this
-// reads a User as a person and a Bot (the app's own account) as the app. If
-// GitHub records an app's suspension as a User, this engine only stops lifting
-// a suspension it could have lifted, and where it records a person's as a
-// Bot, the unsuspend GitHub refuses becomes the same person's step
+// Simple User of `type` "User" or "Bot" but not which an app's own API
+// suspension records; this reads a User as a person, a Bot as the app. If
+// wrong one way the engine only stops lifting one it could have lifted; the
+// other way, the unsuspend GitHub refuses becomes the person's step
 // ([liftRefused]).
 func (i Installation) SuspendedByPerson() bool {
 	return i.Suspended() && i.SuspendedBy != nil && strings.EqualFold(i.SuspendedBy.Type, "User")
@@ -670,19 +630,16 @@ const installWalkCeiling = 1000
 
 // Exists reports whether GitHub still knows this app.
 //
-// THE ONE PROBE THAT SEPARATES "NOT INSTALLED" FROM "NOT THERE". Both answer
-// 404 from the installation endpoints, and they call for opposite things: an
-// app installed nowhere needs a person to install it, an app that no longer
-// exists needs a person to create another, and sending an operator to install
-// a deleted app hands them a link GitHub itself 404s.
+// THE ONE PROBE THAT SEPARATES "NOT INSTALLED" FROM "NOT THERE". Both 404 from
+// the installation endpoints but call for opposite things: install the app, or
+// create another.
 //
-// The JWT is signed with the app's own key and GitHub validates it by looking
-// the app up, so `Integration not found` here is that lookup failing rather
-// than a permission this credential lacks. The conflation [APIError.NotFound]
-// warns about does not arise, because an app is never invisible to itself.
+// GitHub validates the JWT by looking the app up, so `Integration not found`
+// is that lookup failing, not a missing permission ([APIError.NotFound]'s
+// conflation does not arise: an app is never invisible to itself).
 //
-// Three answers, and the middle one is why this is not a bool: true, false
-// for "GitHub says it is gone", and an error for "GitHub could not say".
+// Three answers, hence not a bool: true, false for "GitHub says it is gone",
+// and an error for "GitHub could not say".
 func (c *AppClient) Exists(ctx context.Context) (bool, error) {
 	var out struct {
 		ID int64 `json:"id"`
@@ -712,16 +669,13 @@ func (c *AppClient) Installation(ctx context.Context, id int64) (*Installation, 
 // MintToken issues a token for one installation, scoped to perms.
 //
 // SCOPED DOWN AT MINT TIME, which is where a seat's permissions become real.
-// The app may hold more than the seat asks for, because a person installed it
-// and a person can widen it; the token carries only what perms lists, so a
-// read-only seat cannot write even on an installation that could. The other
-// direction is GitHub's to refuse: a request naming a permission the
-// installation does not hold mints nothing, which the seat-app pass reports
-// as the seat's shortfall ([Permissions.Short]).
+// The installation may hold more than the seat asks for; the token carries
+// only what perms lists, so a read-only seat cannot write. The other direction
+// is GitHub's to refuse: a permission the installation does not hold mints
+// nothing, reported as the seat's shortfall ([Permissions.Short]).
 //
-// Repositories narrow it further where the seat names any. Empty means every
-// repository the installation covers, which is what the operator chose when
-// they installed it.
+// Repositories narrow it further; empty means every repository the
+// installation covers.
 func (c *AppClient) MintToken(
 	ctx context.Context, installationID int64, perms Permissions, repos []string,
 ) (*InstallationToken, error) {

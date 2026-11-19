@@ -20,26 +20,16 @@ import (
 
 // RunFleet is the contract suite every [coord.Fleet] must pass.
 //
-// A SECOND entry point rather than more cases in [Run], because the two
-// surfaces are separately implementable: a deployment can have a lease
-// backend without the shared state (the memory twin serves a single node),
-// and a case that could not be run without both would make the twin's own
+// A SECOND entry point rather than more cases in [Run]: the memory twin has a
+// lease backend and no shared state, so a case needing both would make its
 // certification depend on the KV.
 //
-// The names are the invariants, and each one is a thing that was WRONG when
-// this state lived on the node's own database: a valve that counted per node,
-// a claim a peer could not see, a completion ledger a redelivery to another
-// node walked straight past.
-//
 // newFleet makes the fresh store one case runs against and answers how a NODE
-// opens a handle on it. Most cases need one handle; the cases about what
-// concurrent writers must agree on spread their writers across several
-// ([fleetHarness.nodes]), because a backend may serialise one handle's writes
-// before its store ever sees them — the KV store sends a node's concurrent
-// read-modify-writes of one key as a single compare-and-swap — and a race run
-// through one handle would then certify nothing about how the store itself
-// arbitrates between nodes. A backend whose store is its handle answers the
-// same handle every time.
+// opens a handle on it. Cases about what concurrent writers must agree on
+// spread them across several handles ([fleetHarness.nodes]): the KV store
+// sends one handle's concurrent read-modify-writes of a key as one
+// compare-and-swap, so a race through one handle certifies nothing about how
+// the store arbitrates between nodes. A store that is its handle repeats it.
 func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet)) {
 	t.Helper()
 	groups := []struct {
@@ -1285,21 +1275,14 @@ var planeCases = []fleetCase{{
 		}
 	},
 }, {
-	// WHAT A NODE RUNS IS NOT WHAT THE EPOCH ASKED FOR when it refused
-	// that revision, and the fleet view is where an operator sees a node
-	// still serving the previous company. A backend that dropped the
-	// field reported every refusing node as running nothing.
-	//
-	// AND WHAT IT BOOTS ON IS A THIRD REVISION while a write to its boot
-	// row is being retried: the node runs rev-6 and would come back on
-	// rev-5, and a backend that dropped that field reported a node as
-	// booting on nothing — which is what a reader keeping a revision's
-	// credentials acts on.
-	//
-	// AND THE EPOCH IT LAST APPLIED IS NOT THE ONE IT ATTEMPTED: the node
-	// refused 7 and runs what it applied at 6, and a backend that dropped
-	// that field reported it as having applied nothing — which a writer
-	// judging whether its save reached the node reads as "not yet" for good.
+	// Three revisions, none the one asked for. WHAT A NODE RUNS differs from
+	// the epoch's when it refused that revision (the fleet view shows a node
+	// still serving the previous company). WHAT IT BOOTS ON is a third while a
+	// write to its boot row is retried (runs rev-6, returns on rev-5), which a
+	// reader keeping a revision's credentials acts on. THE EPOCH IT LAST
+	// APPLIED is not the one attempted (refused 7, applied 6), which a writer
+	// judging whether its save reached the node would read as "not yet" for
+	// good. A backend dropping any field reported nothing for it.
 	name: "an apply record carries what its node applied, serves and boots on",
 	fn: func(h *fleetHarness) {
 		if err := h.f.RecordApply(h.ctx, coord.NodeApply{

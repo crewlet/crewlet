@@ -14,37 +14,16 @@ import (
 
 // A SIT-OUT AND A READINESS VERDICT BELONG TO THE SIGN-IN, NOT TO THE ENTRY.
 //
-// A vendor's limit is a property of the account a call is made as: Claude
-// Code's session and weekly windows are shared by every model on the plan, and
-// a refused token is refused whichever entry hands it over. So the record of
-// what the vendor said is kept per sign-in ([SignInID]) in one node-wide
-// registry, [Plans], which every provider build is handed and which outlives
-// every apply, and an entry reads and writes the [Plan] of the sign-in it
-// calls as.
-//
-// What that settles, each of which keying by the entry got wrong:
-//
-//   - AN APPLY KEEPS A SIT-OUT. Every apply rebuilds every entry. A sit-out
-//     kept on the provider died with it, and the one rescue, copying it to a
-//     rebuilt entry whose config spec was unchanged, read the wrong thing: a
-//     spec holds `${VAR}` names, not values, so a new token stored under the
-//     same name stayed benched for up to an hour, while an edit to the
-//     entry's timeout dropped a sit-out the vendor still held. A rebuilt
-//     provider with the same sign-in finds the same Plan; one with a new
-//     credential has a new id, and so a clean one.
-//   - ENTRIES ON ONE CREDENTIAL PAUSE TOGETHER (decision D6). Each used to
-//     learn the same plan-wide limit for itself, one process launch each.
-//   - A LIMIT OF ONE MODEL HOLDS THAT MODEL ONLY. "Opus limit" leaves Sonnet
-//     on the same plan answering, so a window whose report names
-//     [llm.LimitModel] is kept under the model argument the harness was given
-//     ([Plan.scoped]) and holds no other entry. Matched on the exact
-//     argument ("sonnet" is not "claude-sonnet-5-5"), which is conservative:
-//     the other spelling learns at its first call.
-//
-// WHO HAS TO AGREE: this node alone. The registry is in memory and lost on a
-// restart, as the sit-out always was, and every other node learns the same
-// window from its own calls (the fleet-wide retry and clear are the engine's,
-// over [Plan.Clear]).
+// A vendor's limit belongs to the account a call is made as (Claude Code's windows
+// are shared by every model on the plan), so it is kept per sign-in ([SignInID]) in
+// one node-wide registry, [Plans], which every build is handed and every apply outlives.
+//   - AN APPLY KEEPS A SIT-OUT: a spec holds `${VAR}` names, not values, so copying a
+//     sit-out to an unchanged spec kept a new token benched and dropped one on a
+//     timeout edit. A rebuild with the same sign-in finds its Plan; a new credential, a clean one.
+//   - ENTRIES ON ONE CREDENTIAL PAUSE TOGETHER (decision D6).
+//   - A LIMIT OF ONE MODEL HOLDS THAT MODEL ONLY ([llm.LimitModel], [Plan.scoped]),
+//     matched exactly: "sonnet" is not "claude-sonnet-5-5".
+// WHO HAS TO AGREE: this node alone; in memory, lost on restart (fleet clear: [Plan.Clear]).
 
 // Plans is the node's registry of sign-ins, created once by the engine and
 // handed to every provider build ([Config.Plans]), so that a rebuilt provider

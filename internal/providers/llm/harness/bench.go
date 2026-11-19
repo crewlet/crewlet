@@ -12,85 +12,54 @@ import (
 )
 
 // An entry whose harness reported a spent plan or a rate limit SITS OUT for a
-// while, on this node: every call in that window fails at once as a rate
-// limit, so the seat's chain moves to its next model without launching a
-// process to hear the same sentence again — a call that arrives in it, and a
-// call that was already queued for a slot when it began, which is refused
-// once it holds the slot ([Provider.Complete]).
+// while, on this node: every call in that window fails at once as a rate limit,
+// so the seat's chain moves to its next model without launching a process to
+// hear the same sentence again, and so does a call already queued for a slot,
+// refused once it holds the slot ([Provider.Complete]). A spent subscription
+// window lasts hours and a seat makes a call per round, so unbenched every round
+// would hold one of the entry's few slots for seconds of runtime to be told the
+// plan is spent. It is benched here, not in the chain, because only the backend
+// knows the reset instant its harness named.
+
+// A seat's EXECUTOR reads the sit-out at launch ([Provider.SittingOut]): its run
+// is started in a box, not through [Provider.Complete], so the engine asks first
+// and takes the next member of the executor chain that can run in a box. A run
+// that meets the limit after it started is not relaunched (its work lives in its
+// box and session), but its ending is classified like any call's when collected
+// ([Provider.RunEnded]), so the NEXT launch, and every other seat's on this
+// node, skips the spent entry.
+
+// A sit-out takes a working entry from every seat on the node, so only the
+// VENDOR'S report may start one, never the model's sentence. The classification
+// guarantees it (classifyMarkers): a sentinel counts on stderr, in a run the
+// harness reported failed, in its own failure event, or where it OPENS what a
+// clean run said, and nowhere else. A seat writing about the GitHub rate limit,
+// or a tool call carrying "Usage limit reached", is an answer. That rule makes
+// the generic, unmeasured sentinels (Copilot's "rate limit", Cursor's "quota")
+// safe to bench on.
+
+// The bench is this provider's own, not shared with the fleet: every node learns
+// from its own calls, once per window. It ends at the reset instant the vendor
+// named ([harnessprofile.ResetReading]), never later than [maxLimitBench]; where
+// none was named it grows through [limitBackoff], one step per report that finds
+// the window already over, and restarts once the entry answers after the window.
+// Short at first on purpose: sitting out a plan that has already reset costs the
+// fallback's spend, or the seats' whole afternoon with no fallback.
 //
-// # Two readers
+// A WINDOW IS DATED BY ITS REPORT ([Provider.bench]), not the clock that reads
+// it: a run's ending is read on every collection of its job, and the same
+// ending read twice is one report, one window, one step.
+
+// THE BENCH IS KEPT ON THE WALL CLOCK ([onTheWall]), the clock a vendor names its
+// reset on and every reader of [SitOut.Until] compares against. An instant from
+// [time.Now] also carries a monotonic reading, which Go compares alone and which
+// stops while the host sleeps, so a window kept with one outlasted a sleep by
+// its length: the entry went on refusing while the instant it named, on the wall
+// clock, was past, and the probe re-armed for it thousands of times a second.
 //
-// A call through [Provider.Complete] reads the sit-out as it arrives and again
-// once it holds a slot.
-// A seat's EXECUTOR reads it at launch ([Provider.SittingOut]): the run is the
-// harness's own, started in a box rather than through [Provider.Complete], so the
-// engine asks before it launches and takes the next member of the seat's
-// executor chain that can run in a box when this one sits out. A run that
-// meets the limit after it started is not relaunched on another member — its
-// work so far lives in its own box and session — but how it ended is read by
-// the same classification every call takes, the harness's structured limit report
-// first, when it is collected ([Provider.RunEnded]), so the turn's NEXT
-// launch, and every other seat's on this node, skips the spent entry as a call
-// on this host would.
-//
-// # Why the backend benches itself
-//
-// A spent subscription window lasts hours, and a seat makes a call per round.
-// Unbenched, every round of every seat on the entry starts a harness — seconds of
-// a Node or Rust runtime holding one of the entry's few slots — only to be told
-// the plan is spent and fall through to the next model anyway. The entry holds
-// ONE login, so there is one thing to bench, and it is benched here rather than
-// in the chain because only the backend knows the reset instant its harness named.
-//
-// # Only on the vendor's word
-//
-// A sit-out takes a working entry from every seat on the node, so what starts
-// one has to be the vendor's report and never the model's sentence. The
-// classification is what guarantees it, not this file: a sentinel counts on
-// stderr, in a run the harness reported failed, in the harness's own failure event, or
-// where it OPENS what a clean run said — the vendor's sentence standing where
-// the answer should be — and nowhere else (classifyMarkers). A seat writing
-// about the GitHub rate limit, or a tool call carrying "Usage limit reached"
-// in its arguments, is an answer, so every rate limit that reaches
-// [Provider.bench] is evidence from the harness. That rule, and not the wording of
-// a sentinel, is what makes the shipped profiles' generic, unmeasured
-// sentinels — Copilot's "rate limit", Cursor's "quota" — safe to bench on.
-//
-// # On this node, and for not too long
-//
-// The bench is the provider's own and is not shared with the fleet: every
-// other node learns the same thing from its own calls, once per window. It ends
-// at the reset instant the vendor named ([harnessprofile.ResetReading]), never
-// later than [maxLimitBench]. Where the vendor named none it grows through
-// [limitBackoff], one step per report that finds the window already over, and
-// starts again from the first once the entry answers after the window it sat
-// out: a limit that lifts in a minute costs a minute, and one that lasts all
-// afternoon costs four process launches an hour per entry rather than one per
-// round of every seat. Short at first on purpose: sitting out a plan that has
-// already reset costs the fallback's spend, or the seats' whole afternoon where
-// there is no fallback, for every minute of it.
-//
-// A WINDOW IS DATED BY ITS REPORT, not by the clock that reads it
-// ([Provider.bench]): a run's ending is read on every collection of its job,
-// and the same ending read twice is one report, which opens one window and
-// takes one step.
-//
-// AND IT IS KEPT ON THE WALL CLOCK ([onTheWall]), the clock a vendor names its
-// reset on and every reader of [SitOut.Until] compares against. An instant
-// read from [time.Now] also carries the process's monotonic reading, and Go
-// compares two instants that both carry one on that reading alone. The
-// monotonic clock stops while the host sleeps (it is mach_absolute_time on
-// macOS, CLOCK_MONOTONIC on Linux), so a window kept with one outlasted a
-// sleep by the sleep's length: the entry went on refusing while the instant
-// it named as its end, read on the wall clock, was already past. The
-// engine's probe re-armed for that instant, which is due at once, and asked
-// again, thousands of times a second, until the monotonic clock caught up.
-//
-// A LOGIN IS NOT BENCHED. `crewlet llm login` mends it — usually from another
-// process this one hears nothing from — and the very next call must find it,
-// where a window would hold a signed-in seat on its fallback for nothing; and
-// finding out that a login is still missing costs a harness that exits at once
-// rather than a model call.
+// A LOGIN IS NOT BENCHED. `crewlet llm login` mends it, usually from another
+// process, and the next call must find it; a missing login costs a harness that
+// exits at once, not a model call.
 
 // limitBackoff is how long an entry sits out after a limit report that named
 // no reset instant: the first step for the first report, and each later step
@@ -149,29 +118,18 @@ type limitReport struct {
 	window llm.LimitWindow
 }
 
-// bench sits the entry's sign-in out for a report: until reset (the instant
-// the vendor named, or a step of [limitBackoff] when it named none), capped at
+// bench sits the entry's sign-in out for a report: until reset (the vendor's
+// instant, or a step of [limitBackoff] when it named none), capped at
 // [maxLimitBench], and answers when the entry is tried again. A report whose
 // window is one model's ([llm.LimitModel]) holds that model alone
 // ([Plan.scoped]); every other holds the whole sign-in.
 //
-// A later bench never SHORTENS an earlier one: two seats' calls that both met
-// the spent plan report the same window, and the one that lands last must not
-// cut it. For the same reason a report made while a window is still in force
-// does not step the backoff: only a probe made after the window ended, and
-// refused again, does.
-//
-// THE WINDOW RUNS FROM THE REPORT, NOT FROM THE CLOCK THAT READS IT. A call's
-// report is read as it is made, but a run's ending is read when its job is
-// collected ([Provider.RunEnded]), and a completion held on a limit is
-// collected again when its hold lifts. Dated by the reading, the same ending
-// opened a fresh window on every collection and, naming no reset, stepped the
-// backoff as a probe that met the limit again would: the resume that waited
-// out one window found the entry benched again before any call was made, held
-// itself for a longer one, and went round again at every step, a quarter of an
-// hour at a time, with nothing ever asking the vendor whether the quota was
-// back. Dated by the report, an ending read again lands inside the window its
-// first reading opened, or opens the same one, and moves nothing.
+// A later bench never SHORTENS an earlier one (two seats report the same
+// window, and the last must not cut it), and a report made inside a window does
+// not step the backoff: only a probe after the window, refused again, does. THE
+// WINDOW RUNS FROM THE REPORT, NOT FROM THE CLOCK THAT READS IT: a run's ending
+// is read on every collection, and dated by the reading each opened a fresh
+// window and stepped the backoff, a quarter of an hour at a time, forever.
 func (p *Provider) bench(report limitReport) time.Time {
 	plan := p.Plan()
 	plan.mu.Lock()
@@ -214,23 +172,17 @@ func (b *bench) record(report limitReport) time.Time {
 }
 
 // answered ends the reports behind the windows this entry's calls are held by,
-// for an answer heard at `at` once those windows are over: the limit has
-// lifted, so a later report that names no reset starts the backoff from its
-// first step again, and no refusal names the reset of a limit that is over.
-// The answer is the sign-in's last ([PlanState.LastAnswer]).
+// for an answer heard at `at` once those windows are over: the limit has lifted,
+// so a later report naming no reset starts the backoff from its first step, and
+// no refusal names the reset of a limit that is over. The answer is the
+// sign-in's last ([PlanState.LastAnswer]).
 //
-// NOT AN ANSWER FROM INSIDE THE WINDOW, OR FROM BEFORE IT. No call is made
-// while the entry sits out, but one already running when another call's report
-// opened the window can answer inside it; and a run's ending is read when its
-// job is collected, which is hours after the run ended for a completion its
-// seat's conditions held, and again on every collection. Either says the
-// vendor answered at some instant before the report or inside its window,
-// which is not that the limit lifted. Taken as one, it erased the reset the
-// vendor named while the entry still sat it out, so every refusal in the
-// window read "resume time unknown", and it restarted a backoff the limit had
-// earned. One comparison holds both: a window runs from the report that
-// opened it ([Provider.bench]), so an answer from before that report is from
-// before the window's end as well.
+// NOT AN ANSWER FROM INSIDE THE WINDOW, OR FROM BEFORE IT. A run already going
+// when another call's report opened the window can answer inside it, and a run's
+// ending is read when its job is collected, hours later, and again on every
+// collection; neither says the limit lifted. Taken as one it erased the reset the
+// vendor named, so every refusal read "resume time unknown". One comparison holds
+// both: a window runs from the report that opened it ([Provider.bench]).
 func (p *Provider) answered(at time.Time) {
 	plan := p.Plan()
 	model := p.ModelArgument()
@@ -377,38 +329,16 @@ type RunEnd struct {
 }
 
 // RunEnded reads how one of this entry's EXECUTOR runs ended by the one
-// classification every call takes, the harness's structured limit report first
-// ([harnessprofile.Profile.LimitEvents]), and sits the entry out exactly as a call
-// on this host that met the same report would. It reports whether it did.
-//
-// THE OTHER HALF OF THE SECOND READER. A launch skips a member that sits out
-// ([Provider.SittingOut]), but an executor's run never goes through
-// [Provider.Complete], so a run that spent the plan benched nothing: the next
-// launch on the entry — a reviewer sending the turn back an hour into the same
-// window — walked straight into the same limit while a call on any other
-// seat would already have moved on. The resuming node calls this before the
-// turn launches again, and that node is the one whose launch must see it.
-//
-// ON THE VENDOR'S WORD ALONE (classifyMarkers): the run's terminal event where
-// the profile reads a limit off one — Claude Code says a spent plan as
-// `api_error_status` 429 on its result line, in a sentence ("You've hit your
-// 5-hour limit") that is deliberately no sentinel — then the sentinels, by the
-// rules a call's output is held to: the answer of a run that did not fail
-// counts only where a sentinel opens it, its error anywhere, and for a harness
-// whose failures are typed events ([harnessprofile.MarkerScopeEvents]) the error
-// the runner collected is that event's own payload, read at the profile's
-// marker path as the event it came in.
-//
-// READ AGAINST ITS OWN INSTANT, AND SO ONCE ([RunEnd.At]): a held completion
-// is collected again when its hold lifts, and the same ending read again is
-// the same report, which sits out the window its first reading opened and
-// nothing more ([Provider.bench]). One whose window is already over sits
-// nothing out, and reports that it did not: the limit's next word is the next
-// call's.
-//
-// A RUN THAT SUCCEEDED ON NO LIMIT IS AN ANSWER, as a call's is, once its
-// ending is dated after the entry's window ([Provider.answered]): the entry's
-// backoff starts again from its first step.
+// classification every call takes (the structured limit report first,
+// [harnessprofile.Profile.LimitEvents]) and sits the entry out as a call that
+// met the same report would. It reports whether it did. An executor's run never
+// goes through [Provider.Complete], so the resuming node calls this first. ON THE VENDOR'S WORD ALONE (classifyMarkers): the terminal event where the
+// profile reads a limit off one (Claude Code's `api_error_status` 429, whose
+// sentence is deliberately no sentinel), then the sentinels. READ AGAINST ITS OWN
+// INSTANT, SO ONCE ([RunEnd.At]): the same ending read again is the same report
+// ([Provider.bench]); one whose window is over sits nothing out and reports so.
+// A run that SUCCEEDED on no limit is an answer once dated after the window
+// ([Provider.answered]).
 func (p *Provider) RunEnded(ctx context.Context, end RunEnd) bool {
 	at := end.At
 	if at.IsZero() {

@@ -16,18 +16,13 @@ import (
 
 // A USAGE REPORT THAT ARRIVED AND COULD NOT BE READ IS SAID OUT LOUD.
 //
-// A report the harness produced and this profile cannot read — one that does not
-// decode, or in which the input and output counts no longer resolve, which is
-// what a release renaming `data.tokens` leaves — falls back to what stdout
-// reported, an estimate for a harness that reports none there. It used to fall back
-// SILENTLY, so every call was charged a guess and there was no event to search
-// for. A command that succeeded and printed nothing is the same failure from
-// the other side: it reported nothing, and the empty report handed on looked
-// like no report at all. A report that was never asked for, or arrived whole,
-// says nothing.
-//
-// NOT PARALLEL: it reads the process's log, which every parallel case writes
-// to, and a sequential test runs with none of them.
+// A report the harness produced and this profile cannot read (it does not
+// decode, or its counts no longer resolve, as when a release renames
+// `data.tokens`) falls back to stdout's figures or an estimate, and says so:
+// silently, every call was charged a guess with no event to search for. A
+// command that succeeded and printed nothing is the same failure. A report never
+// asked for, or whole, says nothing. NOT PARALLEL: it reads the process's log,
+// which every parallel case writes to.
 //
 // Mutation: drop the warning from completion(), or treat an empty report as
 // none at the call site, and a case here is red.

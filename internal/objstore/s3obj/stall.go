@@ -150,13 +150,16 @@ func isStalled(err error) bool {
 type watchedClient struct {
 	next  s3.HTTPClient
 	bound *stallBound
+	// now dates every movement and the bound's test of it: the client's
+	// clock ([clock]), whose samples are still a wall timer's.
+	now func() time.Time
 	// live is how many attempts' watches are running.
 	live atomic.Int64
 }
 
-// watching is next with every attempt watched under bound.
-func watching(next s3.HTTPClient, bound *stallBound) *watchedClient {
-	return &watchedClient{next: next, bound: bound}
+// watching is next with every attempt watched under bound, on the clock now.
+func watching(next s3.HTTPClient, bound *stallBound, now func() time.Time) *watchedClient {
+	return &watchedClient{next: next, bound: bound, now: now}
 }
 
 // Do implements [s3.HTTPClient]: one attempt, watched.
@@ -170,7 +173,8 @@ func (c *watchedClient) Do(req *http.Request) (*http.Response, error) {
 		stall:  c.bound.stall,
 		sample: c.bound.sample,
 		of:     req.ContentLength,
-		last:   time.Now(),
+		now:    c.now,
+		last:   c.now(),
 	}
 	w.record, _ = middleware.GetStackValue(parent, requestKey{}).(*request)
 	if w.record != nil {
@@ -227,7 +231,7 @@ func (c *watchedClient) Do(req *http.Request) (*http.Response, error) {
 		cancel(nil)
 		return nil, err
 	}
-	w.last, w.answered = time.Now(), true
+	w.last, w.answered = w.now(), true
 	switch {
 	case middleware.GetOperationName(parent) == "GetObject":
 		// ITS BODY IS THE STORE'S TO WATCH, at its reader's pace: the
@@ -260,6 +264,7 @@ type watch struct {
 	cancel context.CancelCauseFunc
 	stall  time.Duration
 	sample time.Duration
+	now    func() time.Time
 	// record is the request the attempt belongs to, where how long the
 	// attempt had been quiet is left when its own context ends it in flight
 	// ([request.quiet]); nil outside an operation.
@@ -296,7 +301,7 @@ type watch struct {
 func (w *watch) gotConn(info httptrace.GotConnInfo) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.last = time.Now()
+	w.last = w.now()
 	w.conn, w.counted, w.blind = info.Conn, false, false
 	switch n, err := sockcount.Unacked(info.Conn); {
 	case errors.Is(err, sockcount.ErrUncountable):
@@ -310,7 +315,7 @@ func (w *watch) gotConn(info httptrace.GotConnInfo) {
 func (w *watch) moved() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	w.last = time.Now()
+	w.last = w.now()
 }
 
 // tick samples the attempt's socket and ends an attempt that has not moved for
@@ -328,7 +333,7 @@ func (w *watch) tick() {
 		w.endLocked()
 		return
 	}
-	now := time.Now()
+	now := w.now()
 	if w.conn != nil && !w.blind {
 		if n, err := sockcount.Unacked(w.conn); err == nil {
 			if w.counted && n != w.count {
@@ -363,7 +368,7 @@ func (w *watch) endLocked() {
 	}
 	w.client.live.Add(-1)
 	if w.record != nil && w.fired == nil && w.parent.Err() != nil {
-		end := time.Now()
+		end := w.now()
 		if deadline, ok := w.parent.Deadline(); ok && deadline.Before(end) {
 			end = deadline
 		}
@@ -386,7 +391,7 @@ func (b *watchedBody) Read(p []byte) (int, error) {
 	b.w.mu.Lock()
 	b.w.reading--
 	b.w.took += int64(n)
-	b.w.last = time.Now()
+	b.w.last = b.w.now()
 	b.w.mu.Unlock()
 	return n, err
 }
@@ -411,7 +416,7 @@ func (a *watchedAnswer) Read(p []byte) (int, error) {
 		return n, a.w.fired
 	}
 	if n > 0 {
-		a.w.last = time.Now()
+		a.w.last = a.w.now()
 	}
 	if err != nil {
 		a.w.endLocked()

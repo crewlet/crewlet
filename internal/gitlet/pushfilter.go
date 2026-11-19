@@ -61,7 +61,7 @@ type PushScan struct {
 // within its window and never beside a pusher: code_push_days counts every pusher's pushes.
 func (q ReadQuery) validatePushFilter() error {
 	f := q.PushFilter
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
 	case q.Push != "":
 		return refused("push_filter", "one push is read whole, never narrowed")

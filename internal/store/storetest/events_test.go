@@ -13,13 +13,11 @@ import (
 // WRITTEN IN ONE TRANSACTION, STORED AS APPEND STORES THEM, and nothing left
 // unsettled.
 //
-// A fixture seeded through WriteEvents is a fixture for the readers Append's
-// rows feed, so the two must leave the same rows — the log's own and the
-// parties index, every derived column included — and the custody batch the
-// write rides on must not outlive it: an unsettled batch is a state a reader
-// of the custody table would see. The parties are AGENT IDS, the event's own
-// and each seat a participant tag names resolved through the seats the
-// handle was given, so both handles are given the same seats.
+// A fixture seeded through WriteEvents feeds the readers Append's rows feed,
+// so the two must leave the same rows (the log's and the parties index, every
+// derived column) and the custody batch must not outlive the write. The
+// parties are AGENT IDS, the event's own and each seat a participant tag names
+// resolved through the handle's seats, so both handles get the same seats.
 //
 // Mutation: skip the settle, and a batch is left unsettled; derive the rows
 // by any other path — the parties resolved without the handle's seats among

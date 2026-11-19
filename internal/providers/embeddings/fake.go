@@ -13,42 +13,16 @@ import (
 
 // Fake is a deterministic embedder for tests.
 //
-// # It is a real similarity function, not a stub
+// It is a real similarity function, not a stub: a constant would make a recall
+// test meaningless. It hashes TOKENS into a bag-of-words vector; not semantic
+// ("car" and "automobile" score zero), so no configured provider type.
 //
-// A stub returning a constant makes every memory equally similar to every
-// task, which is the one answer that makes a recall test meaningless: the
-// floor admits everything and the ranking is arbitrary. This hashes TOKENS
-// into a bag-of-words vector, so text that shares words scores high and text
-// that shares none scores near zero — enough for a test to assert that the
-// right memory came back and the wrong one did not.
-//
-// It is emphatically NOT a semantic embedder: "car" and "automobile" score
-// zero here. That is the honest limit, and it is why this is not offered as
-// a configured provider type — a company running on it would find its recall
-// silently worse in exactly the cases recall exists for.
-//
-// # And it refuses what the real one refuses
-//
-// A twin that accepted anything would certify a caller that sends what every
-// real provider refuses, so it holds the same [Limits] and enforces them by
-// the same code: an input past the bound is a [TooLongError] before anything
-// is "sent", a batch is packed into requests by [Limits.Requests], and every
-// request is recorded ([Fake.Requests]) so a caller's test can see how its
-// work was divided. It starts at the limits of the default provider's models
-// (OpenAI's text-embedding-3, as config.EmbeddingModels states them), so a
-// test sending what production would refuse is refused here too; a test
-// about a smaller model sets its own ([Fake.SetLimits]).
-//
-// It FAILS on request, too, in the provider's own classes: [Fake.Refuse]
-// makes every request carrying a marked input an [ErrRefused] — a whole
-// request, because that is what a provider refuses over one input it cannot
-// take — [Fake.FailTransiently] makes the next few an [ErrTransient], and
-// [Fake.FailConfiguration] the next few an [ErrConfiguration]. So a caller
-// that isolates a poison input, retries a transient one or stops on a refused
-// credential can be tested failing, which a twin that only ever succeeded
-// could not. And it answers what a provider answers that is no failure at all
-// and still nothing a caller can keep: [Fake.AnswerZero] makes a marked
-// input's vector all zeros, in an accepted request.
+// It refuses what the real one refuses, through the same [Limits] code, and
+// records every request ([Fake.Requests]). It starts at text-embedding-3's
+// limits (config.EmbeddingModels); [Fake.SetLimits] sets another's. It fails
+// on request in the provider's classes: [Fake.Refuse] (a whole request),
+// [Fake.FailTransiently], [Fake.FailConfiguration], and [Fake.AnswerZero]
+// (an all-zero vector in an accepted request).
 type Fake struct {
 	width int
 

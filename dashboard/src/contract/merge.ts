@@ -65,3 +65,8 @@ export const MERGE_REFUSALS = [
  * the Gitlet node's, naming the conflicting paths. Held with [MERGE_REFUSALS].
  */
 export const MERGE_CONFLICT = "conflict";
+
+/**
+ * A fast-forward BUILD's refusal: the target moved past the branch (`gitlet.WriteNotFastForward`).
+ */
+export const MERGE_NOT_FAST_FORWARD = "not_fast_forward";

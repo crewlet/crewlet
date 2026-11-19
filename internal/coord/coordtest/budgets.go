@@ -20,25 +20,13 @@ const testSeat = "agent:11111111-1111-1111-1111-111111111111"
 // through EACH node's handle at once, released together, across
 // [ContendingNodes] of them.
 //
-// TEN TIMES THE CONTENTION THE STORE BEFORE IT FAILED AT. coord/kv bounded a
-// charge's compare-and-swap at sixteen attempts with a wait doubling to a
-// 32 ms ceiling, and thirty-two concurrent charges through a leaf under load
-// lost every one of them — a healthy round failed closed as an outage. At
-// this figure a backend fails these cases with an attempt bound near the
-// charges in flight, or a backoff whose spread was tuned to one topology's
-// round trip rather than the one it meets.
-//
-// WHAT THE CASES CANNOT TELL is HOW a backend survives. Measured on coord/kv
-// with every charge made a compare-and-swap contender of its own — its
-// coalescing off, its 256 attempts and its round-trip window kept — the
-// contended cases passed through one handle, on a member and through a leaf,
-// and on three handles on a member, as a store that coalesces does: enough
-// attempts and a spread wait carry this many charges. What tells the two
-// apart is the backend's own count of what reaches its store
-// (coord/kv's TestANodesChargesOnOneScopeAreOneContender), and production is
-// where the difference binds: a counter's writers are every round in flight
-// on every node, which no attempt bound can be sized for, or the nodes, which
-// one can.
+// TEN TIMES THE CONTENTION THE STORE BEFORE IT FAILED AT: sixteen attempts
+// with a wait doubling to 32 ms lost every one of thirty-two concurrent
+// charges through a leaf under load. At this figure a backend fails with an
+// attempt bound near the charges in flight, or a backoff tuned to one
+// topology's round trip. The cases cannot tell HOW a backend survives (with
+// coalescing off coord/kv still passed): coord/kv's
+// TestANodesChargesOnOneScopeAreOneContender counts what reaches the store.
 const ContendedCharges = 320
 
 // ContendingNodes is how many nodes the contention cases spread their charges
@@ -755,19 +743,14 @@ var budgetCases = []fleetCase{{
 	name: "a refusal names the refusing window that ends last",
 	fn: func(h *fleetHarness) {
 		// A scope refused by two windows can spend again only when BOTH have
-		// turned over, so the answer names the one that ENDS LAST — decided
-		// by its end, never by where its period sits in the list. Naming an
-		// earlier one would send a caller waiting for a turnover that
-		// changes nothing. Three instants pin it from both sides and at the
-		// tie: mid-month the day, listed FIRST, ends before the month; on
-		// Tuesday 31 March the month, listed LAST, ends before the week (on
-		// Sunday 5 April); and on Sunday 31 May all three end at the same
-		// midnight, where the longest period is named so that every backend
-		// gives one answer. A backend that named the first refusing period,
-		// or the last, fails one of the first two.
-		//
-		// In calendar order, because the org's counter is shared by all
-		// three and a slot never rolls back.
+		// turned over, so the answer names the one that ENDS LAST, by its end
+		// and never its place in the list; an earlier one would send a caller
+		// waiting for a turnover that changes nothing. Three instants pin it:
+		// mid-month the day (listed FIRST) ends before the month; Tuesday 31
+		// March the month (listed LAST) ends before the week; Sunday 31 May all
+		// three end at one midnight, where the longest period is named so every
+		// backend gives one answer. In calendar order, because the org's
+		// counter is shared by all three and a slot never rolls back.
 		for _, tc := range []struct {
 			what string
 			at   time.Time
