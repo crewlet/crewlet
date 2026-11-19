@@ -505,7 +505,9 @@ func (d *claudeEvents) lost(line string) {
 func (d *claudeEvents) Entries() []string { return d.transcript.take() }
 
 func (d *claudeEvents) Result() sandbox.Result {
-	return sandbox.Result{Transcript: d.transcript.String()}
+	var r sandbox.Result
+	r.Transcript, r.TranscriptElidedLines, r.TranscriptElidedBytes = d.transcript.result()
+	return r
 }
 
 // claudeSteerPrefix opens the `system/informational` line a hook of the run's

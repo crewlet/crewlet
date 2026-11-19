@@ -11339,14 +11339,10 @@ scanned only to be dropped.
 **Bounded, and the cut said.** A page holds at most `bounds.entries` (200)
 entries and `bounds.bytes` (1 MiB) of their text; an entry's text is at most
 `bounds.entry_bytes` (16 KiB), cut on a character and marked, with
-`cut: true`. Every entry's `bytes` is the size of what its whole text redacts to —
-the text it would show whole — wherever the read redacted all of it, which is
-every text short enough to fit what the read redacts of one (the entry's bound
-and twice the longest credential the redaction knows, 64 KiB, past it); of a
-longer one, whose redaction past its opening the read never made, it is the
-size the harness recorded, rounded up to a whole KiB. **Never the size as
-recorded to the byte**, which beside a text shown whole said how long each
-value its redaction took out was. A line of the
+`cut: true`. Every entry's text is redacted whole before it is cut, and its
+`bytes` is always the size of what its whole text redacts to, the text it would
+show whole. **Never the size as recorded**, which beside a text shown whole
+says how long each value its redaction took out was. A line of the
 record is read to `bounds.line_bytes` (32 MiB), and one read takes at most
 `bounds.read_bytes` (256 MiB) of the archive as it inflates — and, apart, at
 most as many bytes as a tar's members hand out, which a sparse member can make
@@ -11378,10 +11374,10 @@ not kept — each only of a turn that ended — and an ended turn is never captu
 again.
 
 **Two transcripts at a time on each node.** One read can hold a line at
-`bounds.line_bytes`, as much again while the buffer gathering it grows, and the
-copy decoding it makes — on the order of 100 MiB — so a node decodes at most
-two transcripts at once, about 200 MiB at their worst, whichever socket
-question or REST request asks for them. A request past them waits for a slot,
+`bounds.line_bytes`, as much again while the buffer gathering it grows, the
+copy decoding it makes and the entry's whole redaction, on the order of 130 MiB,
+so a node decodes at most two transcripts at once, about 270 MiB at their
+worst, whichever socket question or REST request asks for them. A request past them waits for a slot,
 its session's object not yet opened, for as long as its caller waits, and a
 slot frees within one bounded read; nothing in the answer says it waited, and a
 caller that gives up first is answered nothing.
