@@ -422,7 +422,7 @@ func TestDecisionsTakenAsRecommendedAreTheOwnersToWeigh(t *testing.T) {
 			f := found[0]
 			if f.Class != advisor.ClassApprovalRubberStamp || f.Actor != advisor.ActorOwner ||
 				f.Severity != advisor.SeverityNote || f.Subject.Seat != "pm" ||
-				f.Fix.Kind != advisor.FixDraftWithAssistant || len(f.Fix.Options) != 0 {
+				f.Fix.Kind != advisor.FixAskCrewlet || len(f.Fix.Options) != 0 {
 				t.Errorf("finding = %+v, want the owner's note about pm with a draft to review", f)
 			}
 			for _, want := range []string{"owner", "pm", strconv.Itoa(tc.decided), "Show me the change"} {

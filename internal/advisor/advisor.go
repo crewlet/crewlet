@@ -12,6 +12,15 @@
 // administrator's session and under the entity's own tag, only when they press
 // Apply. ADR-0115 records the rule.
 //
+// # Kept, re-derived, and re-checked before a fix is sent (ADR-0164)
+//
+// A background duty runs every detector on its class's cadence and keeps what
+// it finds with the evidence, verdict and fix it rests on; each run re-derives
+// its class's findings, and Apply runs the detector for the finding's subject
+// again before the person sends the fix under the revision that re-check
+// read. The model pass on `advisor.model` explains and adds findings only as
+// ADR-0157 grounded them, which ADR-0164 supersedes and carries.
+//
 // # One detection, read where it is decided
 //
 // A finding about the document is a [config.Warning]: the same check answers
@@ -205,6 +214,10 @@ type Finding struct {
 	// Item is the one thing within the subject the finding is about, as a
 	// person reads it in a list: a schedule's name and how often it runs.
 	Item string `json:"item,omitempty"`
+	// Focus is what within the subject a class that raises several findings
+	// on one subject is about, stable across reads: a document path, an
+	// item's key, an integration finding's own subject. Part of [Key].
+	Focus string `json:"focus,omitempty"`
 	// Names is every seat the finding is about by display name, in the order
 	// of their handles, where one finding holds several.
 	Names []string `json:"names,omitempty"`
@@ -298,6 +311,7 @@ func fromWarning(c *config.Company, w config.Warning) Finding {
 	}
 	f.Title, f.Why = entry.words(c, place, w)
 	f.Item = w.Item
+	f.Focus = staticFocus(w)
 	f.Fix = entry.fix(c, place, w)
 	return f
 }

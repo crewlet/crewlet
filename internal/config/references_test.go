@@ -12,8 +12,8 @@ import (
 // referencesDoc writes the entry `big` in every shape a document can name a
 // providers.llm entry in: a scalar llm, a list llm, the llm mapping's default
 // beside another phase and each of its satellites, each flat satellite, a seat
-// at the root and seats nested two units deep, the assistant's chain and its
-// deep work. `other` is named beside it, so a chain is reported whole.
+// at the root and seats nested two units deep, and the assistant's model.
+// `other` is named beside it, so a chain is reported whole.
 const referencesDoc = `
 name: Acme
 providers:
@@ -53,9 +53,7 @@ units:
             llm_auxiliary: big
             llm_judge: big
 assistant:
-  llm: [other, big]
-  deep_work:
-    llm: big
+  model: big
 `
 
 // EVERY FIELD THAT NAMES AN ENTRY IS A REFERENCE TO IT, at the path it is
@@ -89,8 +87,7 @@ func TestProviderReferencesCoverEveryWrittenShape(t *testing.T) {
 		{"flat", config.JobSubagent, "units[0].children[0].roles[1].llm_subagent", []string{"other", "big"}},
 		{"flat", config.JobAuxiliary, "units[0].children[0].roles[1].llm_auxiliary", []string{"big"}},
 		{"flat", config.JobJudge, "units[0].children[0].roles[1].llm_judge", []string{"big"}},
-		{"", config.JobAssistant, "assistant.llm", []string{"other", "big"}},
-		{"", config.JobDeepWork, "assistant.deep_work.llm", []string{"big"}},
+		{"", config.JobAssistant, "assistant.model", []string{"big"}},
 	}
 	var got []ref
 	for _, r := range cfg.ProviderReferences("big") {
@@ -109,7 +106,7 @@ func TestProviderReferencesCoverEveryWrittenShape(t *testing.T) {
 	for _, r := range cfg.ProviderReferences("other") {
 		seats = append(seats, r.Seat)
 	}
-	if !slices.Equal(seats, []string{"untouched", "listed", "mapped", "flat", ""}) {
+	if !slices.Equal(seats, []string{"untouched", "listed", "mapped", "flat"}) {
 		t.Errorf("ProviderReferences(other) seats = %q", seats)
 	}
 	if refs := cfg.ProviderReferences("missing"); len(refs) != 0 {

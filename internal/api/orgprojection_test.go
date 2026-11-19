@@ -92,7 +92,7 @@ var companyFields = map[string]classified{
 	"NotificationCoalesceMaxBatch":      {exposure: exposureGuarded, why: "an operational setting"},
 	"Workers":                           {exposure: exposureGuarded, why: "operational configuration of the delegate surface"},
 	"Assistant":                         {exposure: exposureGuarded, why: "the Dashboard Assistant's model chain and limits, an operational setting"},
-	"Advisor":                           {exposure: exposureGuarded, why: "the advisor analyst's model chain, cadence and ceiling, an operational setting"},
+	"Advisor":                           {exposure: exposureGuarded, why: "the Advisor's model, an operational setting"},
 	// GUARDED, as Integrations is: which integrations the engine has moved
 	// onto per-seat access is the engine's own migration state about those
 	// blocks, nothing a reader of the chart draws, and the Agents tab reads

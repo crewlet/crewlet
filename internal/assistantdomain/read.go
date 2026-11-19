@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -133,9 +134,11 @@ var childKey = map[string]string{
 
 // Conversation is one conversation as its owner reads it.
 type Conversation struct {
-	ID             uuid.UUID
-	Owner          uuid.UUID
-	Title          string
+	ID    uuid.UUID
+	Owner uuid.UUID
+	Title string
+	// TitleSetBy is who wrote Title, empty before it has one.
+	TitleSetBy     wire.TitleSource
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	LastActivityAt time.Time
@@ -151,10 +154,24 @@ type Conversation struct {
 
 // Summary is the conversation as a listing shows it.
 func (c Conversation) Summary() wire.ConversationSummary {
-	return wire.ConversationSummary{
-		ID: c.ID, Title: c.Title, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
-		LastActivityAt: c.LastActivityAt, LastTurnState: c.LastTurnState,
+	s := wire.ConversationSummary{ID: c.ID, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
+		LastActivityAt: c.LastActivityAt}
+	if c.Title != "" {
+		title, by := c.Title, c.TitleSetBy
+		if !by.Valid() {
+			by = wire.TitleByModel
+		}
+		s.Title, s.TitleSetBy = &title, &by
 	}
+	if c.LastTurnState != "" {
+		state := c.LastTurnState
+		s.LastTurnState = &state
+	}
+	if c.OpenTurn != uuid.Nil {
+		open := c.OpenTurn
+		s.OpenTurnID = &open
+	}
+	return s
 }
 
 // Turn is one turn.
@@ -282,10 +299,15 @@ type Transcript struct {
 // ---- listings ----------------------------------------------------------- //
 
 // Conversations is one page of the owner's conversations, the most recently
-// used first. cursor is a page's NextCursor, empty for the first; limit is at
-// most [MaxListLimit], zero for [DefaultListLimit].
+// used first, and only those whose title holds q where q is set. cursor is a
+// page's NextCursor, empty for the first; limit is at most [MaxListLimit], zero
+// for [DefaultListLimit].
+//
+// A SEARCH IS MATCHED AFTER UNSEALING: titles are sealed, so the owner's rows
+// are read in order until a page of matches is found, which the retention
+// bounds to what thirty days of one person's conversations hold.
 func (r *Reader) Conversations(ctx context.Context, owner uuid.UUID, cursor string,
-	limit int) (wire.ConversationList, error) {
+	limit int, q string) (wire.ConversationList, error) {
 
 	switch {
 	case limit == 0:
@@ -293,6 +315,11 @@ func (r *Reader) Conversations(ctx context.Context, owner uuid.UUID, cursor stri
 	case limit < 0 || limit > MaxListLimit:
 		return wire.ConversationList{}, invalid("a listing takes 1 to %d conversations",
 			MaxListLimit)
+	}
+	q = strings.ToLower(strings.TrimSpace(q))
+	if utf8.RuneCountInString(q) > wire.SearchMaxRunes {
+		return wire.ConversationList{}, invalid("a search is at most %d characters",
+			wire.SearchMaxRunes)
 	}
 	after, err := decodeCursor(cursor)
 	if err != nil {
@@ -306,29 +333,37 @@ func (r *Reader) Conversations(ctx context.Context, owner uuid.UUID, cursor stri
 			where += ` AND (c.last_activity_at < ? OR (c.last_activity_at = ? AND c.id < ?))`
 			args = append(args, after.at, after.at, after.id)
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT `+conversationColumns+`
-			FROM assistant_conversations c WHERE `+where+`
-			ORDER BY c.last_activity_at DESC, c.id DESC LIMIT ?`, append(args, limit+1)...)
+		query := `SELECT ` + conversationColumns + `
+			FROM assistant_conversations c WHERE ` + where + `
+			ORDER BY c.last_activity_at DESC, c.id DESC`
+		if q == "" {
+			query += ` LIMIT ?`
+			args = append(args, limit+1)
+		}
+		rows, err := tx.QueryContext(ctx, query, args...)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = rows.Close() }()
 		var page []Conversation
-		var activity []int64
+		var lastAt int64
 		for rows.Next() {
 			c, at, err := r.scanConversation(rows)
 			if err != nil {
 				return err
 			}
-			page = append(page, c)
-			activity = append(activity, at)
+			if q != "" && !strings.Contains(strings.ToLower(c.Title), q) {
+				continue
+			}
+			if len(page) == limit {
+				next := encodeCursor(lastAt, page[limit-1].ID)
+				list.NextCursor = &next
+				break
+			}
+			page, lastAt = append(page, c), at
 		}
 		if err := rows.Err(); err != nil {
 			return err
-		}
-		if len(page) > limit {
-			page = page[:limit]
-			list.NextCursor = encodeCursor(activity[limit-1], page[limit-1].ID)
 		}
 		for _, c := range page {
 			list.Conversations = append(list.Conversations, c.Summary())
@@ -374,7 +409,7 @@ func decodeCursor(cursor string) (*cursorAt, error) {
 
 // conversationColumns is every column a Conversation is read from, in
 // [Reader.scanConversation]'s order, the newest turn's state included.
-const conversationColumns = `c.id, c.owner_id, c.title_sealed, c.created_at, c.updated_at,
+const conversationColumns = `c.id, c.owner_id, c.title_sealed, c.title_set_by, c.created_at, c.updated_at,
 	c.last_activity_at, c.turns, c.open_turn_id,
 	COALESCE((SELECT t.state FROM assistant_turns t WHERE t.conversation_id = c.id
 		ORDER BY t.seq DESC LIMIT 1), '')`
@@ -387,10 +422,11 @@ func (r *Reader) scanConversation(row rowScanner) (Conversation, int64, error) {
 	var (
 		c                          Conversation
 		id, owner, title, open     string
+		by                         string
 		created, updated, activity int64
 		last                       string
 	)
-	if err := row.Scan(&id, &owner, &title, &created, &updated, &activity, &c.Turns,
+	if err := row.Scan(&id, &owner, &title, &by, &created, &updated, &activity, &c.Turns,
 		&open, &last); err != nil {
 		return Conversation{}, 0, err
 	}
@@ -409,6 +445,7 @@ func (r *Reader) scanConversation(row rowScanner) (Conversation, int64, error) {
 	if c.Title, err = r.sealer.openString(title, AAD(c.ID, RecordConversation, c.ID, ColumnTitle)); err != nil {
 		return Conversation{}, 0, fmt.Errorf("conversation %s's title: %w", id, err)
 	}
+	c.TitleSetBy = wire.TitleSource(by)
 	c.CreatedAt, c.UpdatedAt = store.DecodeTime(created), store.DecodeTime(updated)
 	c.LastActivityAt = store.DecodeTime(activity)
 	c.LastTurnState = wire.TurnState(last)

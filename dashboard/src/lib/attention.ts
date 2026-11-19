@@ -42,7 +42,8 @@ import { QUESTION_WITHHELD, questionWithheld } from "./access.ts";
 import { fmtAt, possessive } from "./format.ts";
 import type { Remedy } from "~/protocol/remedy.ts";
 import { andList } from "./words.ts";
-import type { AdvisorFinding, AdvisorNotice, AdvisorSubject } from "~/protocol/advisor.ts";
+import type { AdvisorNotice } from "~/protocol/advisor.ts";
+import type { AdvisorNoticesAnswer } from "~/protocol/advisorFindings.ts";
 import { alarmHome, alarmTitle, alarmsLink, drawnOnBackups } from "./alarms.ts";
 import { ALARM } from "./mcpAlarmWords.ts";
 import { HELD_CLASS, heldItem, heldReason, heldSetting } from "./heldConversation.ts";
@@ -257,12 +258,12 @@ export interface AttentionInput {
    */
   mcpAlarms: readonly McpAlarm[];
   /**
-   * The platform notices the advisor answers: empty for a reader it does not
-   * answer. The engine decided each one and when it ends; this only words it.
+   * The platform notices the Advisor answers (`advisor_notices`): empty for a
+   * reader it does not answer. The engine decided each one and when it ends,
+   * and a finding's notice carries the finding's words and its fix; this only
+   * words it.
    */
-  notices: readonly AdvisorNotice[];
-  /** The advisor's findings, where a notice about one finds its words and fix. */
-  findings: readonly AdvisorFinding[];
+  notices: readonly AdvisorNoticesAnswer["notices"][number][];
   /** What the advisor could not read, for the same reader; empty when it read everything. */
   setupUnread: readonly string[];
   /**
@@ -354,17 +355,6 @@ function alarmRow(kind: string, n: AdvisorNotice): Attention {
   };
 }
 
-/** Whether a finding is about the subject a notice names. */
-function sameSubject(a: AdvisorSubject, b: AdvisorSubject): boolean {
-  return (
-    a.kind === b.kind &&
-    a.seat === b.seat &&
-    a.unit === b.unit &&
-    a.schedule === b.schedule &&
-    a.name === b.name
-  );
-}
-
 const ORDER: Record<Severity, number> = { critical: 0, caution: 1, info: 2 };
 
 const BUDGET_CLEARS = "Clears on its own when the window resets, or once the limit is raised.";
@@ -395,7 +385,7 @@ function stopRemedy(agent: AgentRow): { action: string; clears: string } {
 export function attentionQueue(input: AttentionInput): Attention[] {
   const out: Attention[] = [];
   const { agents, runs, budget, engine, connected, authRejected, now, nameOf, mcpAlarms } = input;
-  const { notices, findings, setupUnread, atlasDrift } = input;
+  const { notices, setupUnread, atlasDrift } = input;
 
   // --- the engine itself ---------------------------------------------------
   if (authRejected) {
@@ -601,7 +591,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
 
   // THE FINDINGS DRAWN FOR SEATS THE ENGINE PAUSED, one per failure, each
   // naming the agents it holds and the fix: what says those pauses ([seats]).
-  const pauseFindings: AdvisorFinding[] = [];
+  const pauseNotices: AdvisorNotice[] = [];
 
   // --- the platform notices -------------------------------------------------
   // WHAT THE ENGINE SAYS NEEDS AN ADMINISTRATOR, open for as long as it holds.
@@ -638,28 +628,28 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       });
       continue;
     }
-    const f = findings.find((f) => f.class === n.class && sameSubject(f.subject, n.subject));
+    const f = n.finding;
     // AN ALARM'S FINDING THIS ANSWER COULD NOT RAISE (its node has not evaluated
     // yet) is still said, in the alarm's words.
     if (!f) {
       if (n.alarm) out.push(alarmRow(n.alarm, n));
       continue;
     }
-    if ((PAUSED_SEAT_CLASSES as readonly string[]).includes(f.class)) pauseFindings.push(f);
+    if ((PAUSED_SEAT_CLASSES as readonly string[]).includes(n.class)) pauseNotices.push(n);
     // AN ALARM'S FINDING IS FIXED WHERE THE ALARM IS: the backup the
     // no-verified-backup finding asks for is taken on Backups & retention.
     const fix = n.alarm ? NOTICE_FIXES[n.alarm] : undefined;
     out.push({
-      id: `setup-${[f.class, f.path, f.subject.seat, f.subject.unit, f.subject.schedule].join("-")}`,
+      id: `setup-${f.id}`,
       severity: "critical",
       subject: "setup",
       icon: "list-checks",
       title: f.title,
-      detail: f.fix.sentence,
+      detail: f.fix,
       ...(fix
         ? { path: fix.path, ...(fix.query ? { query: fix.query } : {}), action: fix.action }
-        : { path: ["settings", "advisor"], action: "Open the advisor" }),
-      clears: fix?.clears ?? "Clears once the setup no longer raises it.",
+        : { path: ["advisor", "findings", f.id], action: "Open the finding" }),
+      clears: fix?.clears ?? "Clears once the Advisor no longer finds it.",
       spread: n.nodes?.length ?? 0,
       ...(n.alarm ? { alarm: n.alarm } : {}),
       ...at,
@@ -675,9 +665,9 @@ export function attentionQueue(input: AttentionInput): Attention[] {
       icon: "list-checks",
       title: unreadTitle(setupUnread),
       detail: unreadSentences(setupUnread).join(" "),
-      path: ["settings", "advisor"],
-      action: "Open the advisor",
-      clears: "Clears once the advisor reads every source again.",
+      path: ["advisor"],
+      action: "Open the Advisor",
+      clears: "Clears once the Advisor reads every source again.",
     });
   }
 
@@ -704,7 +694,7 @@ export function attentionQueue(input: AttentionInput): Attention[] {
     // paused for it.
     const saidByFinding =
       agent.paused?.by_kind === "system" &&
-      pauseFindings.some((f) => f.subject.kind !== "seat" || f.subject.seat === agent.handle);
+      pauseNotices.some((n) => n.subject.kind !== "seat" || n.subject.seat === agent.handle);
     if (
       (state === "paused" || state === "stopped") &&
       agent.stopped_reason !== "budget" &&

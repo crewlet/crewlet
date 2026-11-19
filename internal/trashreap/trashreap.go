@@ -103,17 +103,17 @@ type Source interface {
 }
 
 // Termed is a [Source] whose items keep a term of their own rather than the
-// reaper's: the assistant's conversations, kept `assistant.retention_days` after
-// they were last used, beside a trash every other source keeps thirty days.
+// reaper's: access history, kept the `access_history.retention_days` of the
+// fleet's revision, beside a trash every other source keeps thirty days.
 //
 // OPTIONAL, and asked at every pass, because an apply may change the term. A
 // term under [MinTerm] fails that source's pass and purges nothing: the floor
 // guards against a mistake destroying what people expected to keep.
 //
-// A TERM MAY BE UNKNOWN, and Term then answers why: the assistant's is the term
-// of the revision the activation pointer names, unknowable to a node not running
-// it, and a guessed term the company has lengthened would purge items for good.
-// The pass fails like one under the floor; other sources are reaped as ever.
+// A TERM MAY BE UNKNOWN, and Term then answers why: access history's is the
+// term of the revision the activation pointer names, unknowable to a node not
+// running it, and a guessed term the company has lengthened would purge items
+// for good. The pass fails like one under the floor; others are reaped as ever.
 type Termed interface {
 	Term(ctx context.Context) (time.Duration, error)
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/crewlet/crewlet/internal/assistant/wire"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
@@ -249,13 +250,22 @@ func (w *Writer) CreateConversation(ctx context.Context, c Call, id uuid.UUID,
 
 // TitleConversation sets a conversation's title.
 func (w *Writer) TitleConversation(ctx context.Context, c Call, id uuid.UUID,
-	title string) (statelog.Result, error) {
+	title string, by wire.TitleSource) (statelog.Result, error) {
 
 	if err := c.validate(true); err != nil {
 		return statelog.Result{}, err
 	}
+	if !by.Valid() {
+		return statelog.Result{}, invalid("a title is written by %s, not %q",
+			words.Or(wire.TitleSources), by)
+	}
 	if err := checkText("the title", title, TitleMaxBytes); err != nil {
 		return statelog.Result{}, err
+	}
+	if by == wire.TitleByPerson {
+		if err := checkPersonTitle(title); err != nil {
+			return statelog.Result{}, err
+		}
 	}
 	sealed, err := w.sealer.sealString(title, AAD(id, RecordConversation, id, ColumnTitle))
 	if err != nil {
@@ -269,8 +279,20 @@ func (w *Writer) TitleConversation(ctx context.Context, c Call, id uuid.UUID,
 				return statelog.Decision{}, err
 			}
 			return decision(stamp, c.By, subject, OpConversationTitled, scope, c.OpID,
-				ConversationTitled{V: baseRecordVersion, TitleSealed: sealed}, at)
+				ConversationTitled{V: baseRecordVersion, TitleSealed: sealed, By: by}, at)
 		}))
+}
+
+// checkPersonTitle refuses a title a person may not give: blank, or past
+// [wire.TitleMaxRunes].
+func checkPersonTitle(title string) error {
+	switch n := utf8.RuneCountInString(title); {
+	case strings.TrimSpace(title) == "":
+		return invalid("a title needs words")
+	case n > wire.TitleMaxRunes:
+		return invalid("a title is at most %d characters, and this one is %d", wire.TitleMaxRunes, n)
+	}
+	return nil
 }
 
 // SummarizeConversation records the summary of a conversation's first through

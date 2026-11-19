@@ -114,12 +114,11 @@ func (s *surface) AnnotationsOf(name string) mcp.Annotations {
 }
 
 // Detached reports a tool whose call may park the turn: a change waiting on
-// the person's approval, or deep work, which can park on one of its own. Such
-// a call runs alone ([toolloop.Detacher]), since a parked turn waits
-// on one decision.
+// the person's approval. Such a call runs alone ([toolloop.Detacher]), since a
+// parked turn waits on one decision.
 func (s *surface) Detached(name string) bool {
 	switch s.byName[name].Kind {
-	case catalog.KindWrite, catalog.KindPageAction, catalog.KindDeep:
+	case catalog.KindWrite, catalog.KindPageAction:
 		return true
 	}
 	return false
@@ -157,8 +156,6 @@ func (s *surface) Execute(ctx context.Context, call llm.ToolCall) (toolloop.Tool
 		return s.navigate(ctx, tool, call.Arguments)
 	case catalog.KindDocs:
 		return s.docs(ctx, tool, call.Arguments)
-	case catalog.KindDeep:
-		return s.deep(ctx, tool, call.Arguments)
 	case catalog.KindBrief:
 		return s.answerBrief(ctx, tool, call.Arguments)
 	}
@@ -494,16 +491,10 @@ func (s *surface) applyAtOnce(ctx context.Context, step stepClock,
 
 // draft is the proposal a write's preview becomes: bound by [proposal.New]
 // to its digest and revision, with the page's own revision for a page action,
-// the outside source the turn read before proposing, and the company's
-// proposal lifetime.
+// and the outside source the turn read before proposing.
 func (t *turn) draft(tool catalog.Tool, scope wire.ProposalScope, preview proposal.Preview,
 	pageRevision string) (assistantdomain.NewProposal, error) {
 
-	c, _ := t.svc.company()
-	var ttl time.Duration
-	if c != nil {
-		ttl = c.Assistant.ProposalTTL()
-	}
 	// A WRITE ON THE ROUTE ITS CALL NAMES is decided by that route's verb,
 	// which its preview names; every other write executes as its tool's own.
 	act := tool.Act
@@ -513,7 +504,7 @@ func (t *turn) draft(tool catalog.Tool, scope wire.ProposalScope, preview propos
 	return proposal.New(proposal.Draft{Owner: t.person.ID, Conversation: t.conversation,
 		Turn: t.id, Tool: tool.Name, Act: act, Scope: scope, Preview: preview,
 		ChangesVisibility: tool.ChangesVisibility, PageRevision: pageRevision,
-		Taint: t.taint(), Now: t.svc.now(), TTL: ttl})
+		Taint: t.taint(), Now: t.svc.now()})
 }
 
 // navigate builds an open in app link, asking whether the person may open it

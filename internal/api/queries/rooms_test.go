@@ -2,7 +2,6 @@ package queries_test
 
 import (
 	"context"
-	"errors"
 	"os"
 	"reflect"
 	"regexp"
@@ -12,7 +11,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
-	"github.com/crewlet/crewlet/internal/advisor/analyst"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/agent/builtin"
 	"github.com/crewlet/crewlet/internal/agent/phase"
 	"github.com/crewlet/crewlet/internal/api/livestate"
@@ -81,11 +80,35 @@ func roomQueries(t *testing.T) map[string][]string {
 	return calls
 }
 
-// noModels is an analyst whose models never start.
-type noModels struct{}
+// emptyAdvisor is an advisor log holding nothing.
+type emptyAdvisor struct{}
 
-func (noModels) Deps(context.Context, *config.Company) (analyst.Deps, error) {
-	return analyst.Deps{}, errors.New("no models in this sweep")
+func (emptyAdvisor) Findings(context.Context, advisordomain.Filter, statelog.Freshness) ([]advisordomain.FindingRow, string, error) {
+	return nil, "", nil
+}
+func (emptyAdvisor) NonClosed(context.Context, statelog.Freshness) ([]advisordomain.FindingRow, error) {
+	return nil, nil
+}
+func (emptyAdvisor) Finding(context.Context, string, statelog.Freshness) (advisordomain.FindingRow, []advisordomain.HistoryRow, error) {
+	return advisordomain.FindingRow{}, nil, advisordomain.ErrNotFound
+}
+func (emptyAdvisor) Episodes(context.Context, string, statelog.Freshness) ([]advisordomain.FindingRow, error) {
+	return nil, nil
+}
+func (emptyAdvisor) LatestRun(context.Context, statelog.Freshness) (advisordomain.RunRow, bool, error) {
+	return advisordomain.RunRow{}, false, nil
+}
+func (emptyAdvisor) PendingRequests(context.Context, statelog.Freshness) ([]advisordomain.RunRow, error) {
+	return nil, nil
+}
+func (emptyAdvisor) LastRunOfClasses(context.Context, statelog.Freshness) (map[string]time.Time, error) {
+	return map[string]time.Time{}, nil
+}
+func (emptyAdvisor) Reports(context.Context, string, int, statelog.Freshness) ([]advisordomain.ReportRow, string, error) {
+	return nil, "", nil
+}
+func (emptyAdvisor) Report(context.Context, string, statelog.Freshness) (advisordomain.ReportRow, bool, error) {
+	return advisordomain.ReportRow{}, false, nil
 }
 
 // everySeam is a Sources with every seam present, which is what makes the
@@ -146,9 +169,8 @@ func everySeam(t *testing.T) queries.Sources {
 		// THE ATLAS, read off a node that runs no company yet.
 		Atlas:    builtin.AtlasDeps{},
 		Insights: coordmemory.NewFleet(),
-		// THE ADVISOR'S ANALYST: its records, and models no run here reaches.
-		Analysis: coordmemory.NewFleet(),
-		Analyst:  noModels{},
+		// THE ADVISOR'S LOG, holding nothing.
+		Advisor: emptyAdvisor{},
 		// THE FLEET'S BACKUP REGISTER, which every node opens.
 		Backups: register{},
 		// THE ARTIFACTS AND THEIR DATASTORES, each its own seam because a

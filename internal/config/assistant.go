@@ -2,65 +2,33 @@ package config
 
 import (
 	"errors"
-	"fmt"
-	"maps"
 	"regexp"
 	"slices"
-	"strings"
 	"sync"
-	"time"
 
 	"github.com/crewlet/crewlet/internal/mcp/catalogue"
-	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
-	"github.com/crewlet/crewlet/internal/words"
 )
 
-// Assistant is the Tier B `assistant:` block: whether the Dashboard Assistant
-// runs for this company, which models it runs on, and the bounds of one turn.
+// Assistant is the Tier B `assistant:` block: the one model Ask Crewlet runs
+// on, and each person's spend ceiling.
 //
 //	assistant:
-//	  enabled: true       # absent means off
-//	  llm: [assistant]    # providers.llm keys, a fallback chain
+//	  model: assistant    # a providers.llm key; absent means off
 //
-// Enabled is a pointer because its meaningful zero is OFF: an upgrade never
-// switches on a model reading the company's data. Every numeric zero lies
-// outside its range, so it reads as the default without a pointer; an
-// out-of-range value is refused at admission and, on a stored revision,
-// clamped by its accessor.
+// Every bound of a turn is fixed in code where it is consumed. An
+// absent model is off, so an upgrade never switches on a model reading the
+// company's data.
 type Assistant struct {
-	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Run Ask Crewlet for this company. Absent or false: off."`
-
-	// LLM is the assistant's provider chain, the first key tried first, in
-	// the shape a seat's llm_auxiliary takes. Every member must be an entry
-	// whose profile denies the harness's local tools AND its web tools, so its
-	// only tool source on the engine host is the engine's `crewlet` server,
-	// serving the person's own requests (ADR-0049, ADR-0050): a shell reads
-	// whatever the engine user can, and a web fetch is text no authority
-	// decision saw and a way out for whatever the data put in the prompt.
-	// [Company.AssistantChain] hands the chain out and refuses one that breaks
-	// this, leaving the assistant unavailable rather than unsafe.
-	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero" desc:"providers.llm keys Ask Crewlet runs on, a fallback chain. Required when enabled. Each must be an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools."`
-
-	MaxSteps           int `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=40" desc:"Most model rounds one Ask Crewlet turn may take before its answer, each calling any number of tools, 1..40. Absent: 30."`
-	TurnTimeoutSeconds int `yaml:"turn_timeout_seconds,omitempty" json:"turn_timeout_seconds,omitempty" js:"min=0;max=1200" desc:"Longest one Ask Crewlet turn may run, 30..1200 seconds. Absent: 900."`
-	ProposalTTLSeconds int `yaml:"proposal_ttl_seconds,omitempty" json:"proposal_ttl_seconds,omitempty" js:"min=0;max=3600" desc:"How long a proposed change waits for approval, 60..3600 seconds. Absent: 900."`
-	RetentionDays      int `yaml:"retention_days,omitempty" json:"retention_days,omitempty" js:"min=0;max=365" desc:"How long a person's Ask Crewlet conversations are kept, 1..365 days. Absent: 30."`
+	// Model is the providers.llm entry Ask Crewlet runs on, held to
+	// [Company.HelperModelProblem]: a harness whose run leaves the model no
+	// tool of its own and no web tool, so its only tool source on the engine
+	// host is the engine's `crewlet` server, serving the person's own
+	// requests (ADR-0050). [Company.AssistantModel] hands it out.
+	Model string `yaml:"model,omitempty" json:"model,omitempty" desc:"The providers.llm key Ask Crewlet runs on: an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools. Absent: Ask Crewlet is off."`
 
 	// TokenBudget is each PERSON's ceiling per calendar window, in the shape
 	// a seat's budget takes, charged on top of the company's own.
 	TokenBudget TokenBudget `yaml:"token_budget,omitempty" json:"token_budget,omitzero" desc:"Each person's Ask Crewlet token ceilings per calendar window on the company clock: day, week and month, each optional. Absent = no per-person ceiling; the company's own budget still applies. A ceiling at or above the company's on a window that holds it is warned of, since the company's is reached first."`
-
-	// DeepWork is the assistant's escalation into a harness's own
-	// harness for a task that needs research, scripts, files or many steps
-	// (ADR-0054). Absent: the assistant answers in quick mode only.
-	DeepWork *AssistantDeepWork `yaml:"deep_work,omitempty" json:"deep_work,omitempty" desc:"Deep work: Ask Crewlet hands a large task to a harness running its own tools in a sandbox, reaching Crewlet only through the person's own Ask Crewlet tools. Absent: quick mode only."`
-
-	// Tools narrows which tools Ask Crewlet offers anybody; it never widens a person's.
-	Tools AssistantTools `yaml:"tools,omitempty" json:"tools,omitzero" desc:"Which of Ask Crewlet's tools the company turns off for everybody. It only narrows what a person's own permissions already offer."`
-
-	// Deliberate is a stronger chain for a hard question, which a person
-	// asks for one question at a time. Absent: every question runs on LLM.
-	Deliberate *AssistantDeliberate `yaml:"deliberate,omitempty" json:"deliberate,omitempty" desc:"A stronger model chain for hard questions: a person asks for it with Think harder, one question at a time, and briefs of a decision may use it. Held to assistant.llm's rules and charged to the same budgets. Absent: every question runs on assistant.llm."`
 
 	// Research is the web Ask Crewlet may read, through the engine (ADR-0151).
 	Research *AssistantResearch `yaml:"research,omitempty" json:"research,omitempty" desc:"Web research: Ask Crewlet reads pages, through the engine, from the hosts listed here. Absent: it reads no web page."`
@@ -172,491 +140,54 @@ func (r *AssistantResearch) problems(path Path) error {
 	return p.err()
 }
 
-// AssistantDeliberate is the `assistant.deliberate` block: a stronger chain
-// for Think harder, held to `assistant.llm`'s rules and charged to its budgets.
-type AssistantDeliberate struct {
-	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero" desc:"providers.llm keys a question asked to think harder runs on, a fallback chain held to assistant.llm's rules: each an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools. Required."`
-	// DecisionBriefs is whether "Brief me on this decision" runs on this
-	// chain: a decision is the hard question it exists for.
-	DecisionBriefs bool `yaml:"decision_briefs,omitempty" json:"decision_briefs,omitempty" desc:"Run a brief of a decision (Brief me on this decision) on this chain too. Absent or false: briefs run on assistant.llm."`
-}
-
-// AssistantTools is the `assistant.tools` block.
-type AssistantTools struct {
-	Deny []AssistantToolFamily `yaml:"deny,omitempty" json:"deny,omitempty" js:"enum=writes|generic_changes|generic_reads|chat_writes|atlas_writes|agent_controls|page_changes|deep_work" desc:"Tool families Ask Crewlet never offers, each once: writes (every change it could propose, so it only reads), generic_changes (a change to any API route), generic_reads (a read of any API route), chat_writes, atlas_writes, agent_controls (pausing, resuming, steering and answering an agent's run), page_changes (a change to the screen the person has open), deep_work."`
-}
-
-// AssistantToolFamily is a family of Ask Crewlet's tools an administrator can turn off.
-type AssistantToolFamily string
-
-// The families, each a set of tools internal/assistant/catalog's FamiliesOf names.
-const (
-	FamilyWrites         AssistantToolFamily = "writes"
-	FamilyGenericChanges AssistantToolFamily = "generic_changes"
-	FamilyGenericReads   AssistantToolFamily = "generic_reads"
-	FamilyChatWrites     AssistantToolFamily = "chat_writes"
-	FamilyAtlasWrites    AssistantToolFamily = "atlas_writes"
-	FamilyAgentControls  AssistantToolFamily = "agent_controls"
-	FamilyPageChanges    AssistantToolFamily = "page_changes"
-	FamilyDeepWork       AssistantToolFamily = "deep_work"
-)
-
-// AssistantToolFamilies are the families, in declaration order.
-var AssistantToolFamilies = []AssistantToolFamily{FamilyWrites, FamilyGenericChanges,
-	FamilyGenericReads, FamilyChatWrites, FamilyAtlasWrites, FamilyAgentControls,
-	FamilyPageChanges, FamilyDeepWork}
-
-// Valid reports whether f is a family this build knows.
-func (f AssistantToolFamily) Valid() bool { return slices.Contains(AssistantToolFamilies, f) }
-
-// Denies reports whether the company turned family f off.
-func (t AssistantTools) Denies(f AssistantToolFamily) bool { return slices.Contains(t.Deny, f) }
-
-// AssistantDeepWork is the `assistant.deep_work` block.
-//
-// The entry it names runs as its harness's own run in a box, as a seat's
-// executor does: the harness's shell, files, web search and image reading are
-// the point. Its one way into Crewlet is the person's own assistant tools,
-// bridged, so every read is still the person's request and every write a
-// proposal they approve. It runs where the entry's `run_in` says, else the
-// first of e2b and container configured, else the host under OS confinement,
-// which a host that cannot enforce one refuses (internal/sandbox).
-//
-// Numeric zeros read as their defaults, as in [Assistant].
-type AssistantDeepWork struct {
-	LLM            string `yaml:"llm,omitempty" json:"llm,omitempty" desc:"providers.llm key deep work runs on: an entry driving claude-code. Required."`
-	TimeoutSeconds int    `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0;max=1200" desc:"Longest one deep-work run may take, 60..1200 seconds. Absent: 1200."`
-	MaxSteps       int    `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=400" desc:"Most agentic rounds and Crewlet tool calls one deep-work run may make, 10..400. Absent: 150."`
-	MaxTokens      int    `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty" js:"min=0;max=20000000" desc:"Most tokens one deep-work run may spend before it is stopped, 10000..20000000. Absent: 3000000. The person's and the company's budgets still apply."`
-}
-
-// assistantBound is one numeric field's range and the default its zero reads as.
-type assistantBound struct {
-	key      string
-	min, max int
-	def      int
-	unit     string
-}
-
-// Deep work's bounds, each anchored where it is consumed:
-//
-//   - timeout_seconds: a run lives inside one turn segment, whose read grant
-//     lasts at most [AssistantTurnTimeoutCeiling], so twenty minutes is both
-//     default and ceiling; a longer run parks on a proposal and continues on
-//     the fresh grant its approval derives. One minute reads one page.
-//   - max_steps: a redesign that reads a brand, writes assets, renders and
-//     checks them takes a hundred-odd rounds; four hundred is the most a
-//     twenty-minute run makes at the harness's three-second round.
-//   - max_tokens: 150 rounds re-reading a growing context are about three
-//     million tokens, mostly cache reads; twenty million bounds a run nobody meant.
-var (
-	deepTimeout = assistantBound{key: "timeout_seconds", min: 60, max: AssistantTurnTimeoutCeiling, def: AssistantTurnTimeoutCeiling, unit: "seconds"}
-	deepSteps   = assistantBound{key: "max_steps", min: 10, max: 400, def: 150, unit: "steps"}
-	deepTokens  = assistantBound{key: "max_tokens", min: 10_000, max: 20_000_000, def: 3_000_000, unit: "tokens"}
-)
-
-// The four bounds, each anchored where it is consumed:
-//
-//   - max_steps: a step is one tool call and one model round. Thirty lets a
-//     turn look a route up, read the records around it, correct a refused call
-//     and propose. Forty is the ceiling: every result stays in the context the
-//     model re-reads, and forty of internal/assistant's 16 KiB results (~160,000
-//     tokens) fit a 200,000 token context where sixty would not.
-//   - turn_timeout_seconds: a round is a harness launch of 15 to 25 seconds, so
-//     thirty rounds need up to 12.5 minutes (default fifteen) and twenty carries
-//     the forty-step ceiling. Thirty seconds is one slow round.
-//   - proposal_ttl_seconds: long enough to read a diff, short enough that what was previewed is what the write meets.
-//   - retention_days: a transcript holds whatever the person's reads returned.
-var (
-	assistantSteps     = assistantBound{key: "max_steps", min: 1, max: 40, def: 30, unit: "steps"}
-	assistantTimeout   = assistantBound{key: "turn_timeout_seconds", min: 30, max: AssistantTurnTimeoutCeiling, def: 900, unit: "seconds"}
-	assistantProposal  = assistantBound{key: "proposal_ttl_seconds", min: 60, max: 3600, def: 900, unit: "seconds"}
-	assistantRetention = assistantBound{key: "retention_days", min: 1, max: 365, def: 30, unit: "days"}
-)
-
-// AssistantTurnTimeoutCeiling is the longest any assistant turn may run, in
-// seconds: the top of turn_timeout_seconds' range, and so the longest a turn's
-// read grant has to live (internal/api/auth's AssistReadLifetime).
-const AssistantTurnTimeoutCeiling = 1200
-
-// value is v with its default applied and clamped into range.
-func (b assistantBound) value(v int) int {
-	switch {
-	case v == 0:
-		return b.def
-	case v < b.min:
-		return b.min
-	case v > b.max:
-		return b.max
-	}
-	return v
-}
-
-// rangeOf is b as the settings registry declares it ([settingRanges]); 0 is
-// absent, the default.
-func (b assistantBound) rangeOf() Range {
-	return Range{Min: float64(b.min), Max: atMost(float64(b.max)), OrZero: true}
-}
-
-// check reports v when it is set and out of range; absent (0) is the default.
-func (b assistantBound) check(path Path, v int, p *problems) {
-	if v == 0 {
-		return
-	}
-	p.within(at(path, b.key), float64(v), fmt.Sprintf("in %s, or absent for the default of %d",
-		b.unit, b.def))
-}
-
-// On reports whether the company turned the assistant on.
-func (a Assistant) On() bool { return a.Enabled != nil && *a.Enabled }
-
-// Steps is the most tool steps one turn may take.
-func (a Assistant) Steps() int { return assistantSteps.value(a.MaxSteps) }
-
-// TurnTimeout is the longest one turn may run.
-func (a Assistant) TurnTimeout() time.Duration {
-	return time.Duration(assistantTimeout.value(a.TurnTimeoutSeconds)) * time.Second
-}
-
-// ProposalTTL is how long a proposed change waits for its owner's approval.
-func (a Assistant) ProposalTTL() time.Duration {
-	return time.Duration(assistantProposal.value(a.ProposalTTLSeconds)) * time.Second
-}
-
-// Retention is how long a person's conversations are kept.
-func (a Assistant) Retention() time.Duration {
-	return time.Duration(assistantRetention.value(a.RetentionDays)) * 24 * time.Hour
-}
+// On reports whether the company assigned Ask Crewlet a model.
+func (a Assistant) On() bool { return a.Model != "" }
 
 // IsZero lets an unset block drop out of a JSON round trip.
 func (a Assistant) IsZero() bool {
-	return a.Enabled == nil && len(a.LLM) == 0 && a.MaxSteps == 0 && a.TurnTimeoutSeconds == 0 &&
-		a.ProposalTTLSeconds == 0 && a.RetentionDays == 0 && a.TokenBudget == (TokenBudget{}) &&
-		a.DeepWork == nil && a.Research == nil
+	return a.Model == "" && a.TokenBudget == (TokenBudget{}) && a.Research == nil
 }
 
-// Timeout is the longest one deep-work run may take.
-func (d AssistantDeepWork) Timeout() time.Duration {
-	return time.Duration(deepTimeout.value(d.TimeoutSeconds)) * time.Second
-}
+// ErrAssistantOff is what [Company.AssistantModel] answers for a company that
+// assigns Ask Crewlet no model.
+var ErrAssistantOff = errors.New("assistant.model is not set, so Ask Crewlet is off for this " +
+	"company: set it to a providers.llm key")
 
-// Steps is the most agentic rounds and bridged calls one run may make.
-func (d AssistantDeepWork) Steps() int { return deepSteps.value(d.MaxSteps) }
-
-// Tokens is the most tokens one run may spend.
-func (d AssistantDeepWork) Tokens() int { return deepTokens.value(d.MaxTokens) }
-
-// ErrDeepWorkOff is what [Company.AssistantDeepWork] answers for a company
-// whose assistant has no deep work.
-var ErrDeepWorkOff = errors.New("deep work is off for Ask Crewlet: set assistant.deep_work.llm " +
-	"to a Claude Code providers.llm entry")
-
-// AssistantDeepWork is the providers.llm entry deep work runs on and its key,
-// or why there is none: [ErrAssistantOff], [ErrDeepWorkOff], or the problems
-// admission reports for the block. THE ONE PLACE IT IS HANDED OUT, for the
-// reason [Company.AssistantChain] is.
-func (c *Company) AssistantDeepWork() (string, LLMProvider, error) {
-	if !c.Assistant.On() {
-		return "", LLMProvider{}, ErrAssistantOff
-	}
-	d := c.Assistant.DeepWork
-	if d == nil || d.LLM == "" {
-		return "", LLMProvider{}, ErrDeepWorkOff
-	}
-	if err := c.deepWorkProblems(at(field("assistant"), "deep_work")); err != nil {
-		return "", LLMProvider{}, err
-	}
-	return d.LLM, c.Providers.LLM[d.LLM], nil
-}
-
-// DeepWorkPlacement is the cell deep work runs in, and whether the company
-// runs deep work at all: its entry's own `run_in`, else the first of e2b and
-// container the company configures, else [PlacementDirect], the engine host,
-// where the engine confines every run (ADR-0054). A REMOTE OR CONTAINED CELL
-// IS PREFERRED whenever one is configured, because the host is the cell whose
-// boundary is the engine's to hold rather than a machine's.
-func (c *Company) DeepWorkPlacement() (Placement, bool) {
-	_, entry, err := c.AssistantDeepWork()
-	if err != nil {
-		return "", false
-	}
-	if entry.RunIn != "" {
-		return entry.RunIn, true
-	}
-	sb := c.Providers.Sandbox
-	switch {
-	case sb.Configured(PlacementE2B):
-		return PlacementE2B, true
-	case sb.Configured(PlacementContainer) && sb.Local != nil && sb.Local.Image != "":
-		return PlacementContainer, true
-	}
-	return PlacementDirect, true
-}
-
-// deepWorkProblems reports every way `assistant.deep_work` cannot run: no
-// entry, an unknown one, a harness other than Claude Code, or a run_in this
-// company configures no backend for.
-func (c *Company) deepWorkProblems(path Path) error {
-	var p problems
-	d := c.Assistant.DeepWork
-	if d == nil {
-		return nil
-	}
-	for _, b := range []struct {
-		bound assistantBound
-		value int
-	}{
-		{deepTimeout, d.TimeoutSeconds},
-		{deepSteps, d.MaxSteps},
-		{deepTokens, d.MaxTokens},
-	} {
-		b.bound.check(path, b.value, &p)
-	}
-	llmPath := at(path, "llm")
-	if d.LLM == "" {
-		p.add(llmPath, ErrMissing, "deep work names no model: set it to a providers.llm "+
-			"key whose entry has harness: claude-code")
-		return p.err()
-	}
-	entry, ok := c.Providers.LLM[d.LLM]
-	if !ok {
-		p.add(llmPath, ErrUnknownValue, "%q is not a configured provider: providers.llm has %s",
-			d.LLM, strings.Join(slices.Sorted(maps.Keys(c.Providers.LLM)), ", "))
-		return p.err()
-	}
-	entryField := func(f string) Path { return at(entryPath(d.LLM), f) }
-	// CLAUDE CODE ALONE. Both in-box runners continue a parked run in its
-	// harness's own session after the approval, but deep work's run on the
-	// engine host is confined around one harness's install and temp roots
-	// (internal/sandbox's confinement, measured against Claude Code's), and
-	// the engine drives it with that harness's runner: another harness there would
-	// meet a confinement nobody measured it against.
-	if Harness(entry.HarnessName()) != HarnessClaudeCode {
-		p.add(llmPath, ErrConflict, "providers.llm.%s drives %s, and deep work runs on %s "+
-			"alone: its run is confined around that harness's own install and temp "+
-			"directories, which no other harness has been measured against. Set %s: %s",
-			d.LLM, entry.HarnessName(), HarnessClaudeCode, entryField("harness"), HarnessClaudeCode)
-	}
-	if entry.RunIn != "" && entry.RunIn != PlacementDirect && !c.Providers.Sandbox.Configured(entry.RunIn) {
-		p.add(entryField("run_in"), ErrConflict, "deep work on providers.llm.%s runs in %s, "+
-			"which providers.sandbox configures no backend for: configure it, or remove "+
-			"run_in to take the first of e2b and container the company configures, else "+
-			"the engine host under confinement", d.LLM, entry.RunIn)
-	}
-	return p.err()
-}
-
-// ErrAssistantOff is what [Company.AssistantChain] answers for a company that
-// has not turned the assistant on.
-var ErrAssistantOff = errors.New("assistant.enabled is not true, so Ask Crewlet is off for this company: set it to true")
-
-// AssistantChain is the provider chain the assistant runs on, or why there is
-// none: [ErrAssistantOff] for a company that has not turned it on, and
-// otherwise the same problems admission reports for `assistant.llm`.
+// AssistantModel is the providers.llm key Ask Crewlet runs on, or why there is
+// none: [ErrAssistantOff] for a company that assigns it none, and otherwise the
+// problem admission reports for `assistant.model`.
 //
-// THE ONE PLACE THE CHAIN IS HANDED OUT. Admission refuses a document whose
-// chain breaks the assistant's rules, but a revision is APPLIED under the
-// runnable rules alone (see [Company.ValidateRunnable]), so a stored revision
-// can still carry one. Whatever builds the assistant's models asks here on
-// every turn rather than reading `Assistant.LLM`, so such a revision leaves
-// the assistant unavailable, with this error as the reason, and every seat
-// running.
-func (c *Company) AssistantChain() (ProviderKeys, error) {
+// THE ONE PLACE THE MODEL IS HANDED OUT. Admission refuses a document whose
+// model no helper can run on, but a revision is APPLIED under the runnable
+// rules alone (see [Company.ValidateRunnable]), so a stored revision can still
+// carry one. Whatever builds the assistant's model asks here on every turn
+// rather than reading `Assistant.Model`, so such a revision leaves Ask Crewlet
+// unavailable, with this error as the reason, and every seat running.
+func (c *Company) AssistantModel() (string, error) {
 	if !c.Assistant.On() {
-		return nil, ErrAssistantOff
+		return "", ErrAssistantOff
 	}
-	if err := c.assistantChainProblems(field("assistant")); err != nil {
-		return nil, err
+	if err := c.helperModelProblem(field("assistant.model"), c.Assistant.Model); err != nil {
+		return "", err
 	}
-	return slices.Clone(c.Assistant.LLM), nil
-}
-
-// ErrNoDeliberate is what [Company.DeliberateChain] answers for a company that
-// sets no `assistant.deliberate` block.
-var ErrNoDeliberate = errors.New("assistant.deliberate is not set, so Ask Crewlet has no " +
-	"stronger model to think harder on: set assistant.deliberate.llm")
-
-// DeliberateChain is the one place `assistant.deliberate.llm` is handed out:
-// [ErrAssistantOff], [ErrNoDeliberate], or the chain held to `assistant.llm`'s rules.
-func (c *Company) DeliberateChain() (ProviderKeys, error) {
-	if !c.Assistant.On() {
-		return nil, ErrAssistantOff
-	}
-	d := c.Assistant.Deliberate
-	if d == nil {
-		return nil, ErrNoDeliberate
-	}
-	if err := c.chainProblems(field("assistant.deliberate.llm"), d.LLM,
-		"Ask Crewlet's stronger chain names no model: list a providers.llm key, e.g. "+
-			"llm: [assistant-strong]"); err != nil {
-		return nil, err
-	}
-	return slices.Clone(d.LLM), nil
+	return c.Assistant.Model, nil
 }
 
 // validateAssistant holds the `assistant:` block to its rules.
 //
 // AN ADMISSION RULE, every part of it: nothing about running a SEAT depends on
-// the block, and the chain's safety is enforced again where the chain is
-// handed out ([Company.AssistantChain]), so applying a revision that breaks
-// one of these is safe and refusing it would stop every seat over a drawer.
+// the block, and the model's rule is enforced again where it is handed out
+// ([Company.AssistantModel]), so applying a revision that breaks one of these
+// is safe and refusing it would stop every seat over Ask Crewlet.
 func (c *Company) validateAssistant() error {
 	path := field("assistant")
 	a := c.Assistant
 	var p problems
-	for _, b := range []struct {
-		bound assistantBound
-		value int
-	}{
-		{assistantSteps, a.MaxSteps},
-		{assistantTimeout, a.TurnTimeoutSeconds},
-		{assistantProposal, a.ProposalTTLSeconds},
-		{assistantRetention, a.RetentionDays},
-	} {
-		b.bound.check(path, b.value, &p)
-	}
 	p.wrap(a.TokenBudget.validate(at(path, "token_budget")))
-	if a.On() || len(a.LLM) > 0 {
-		p.wrap(c.assistantChainProblems(path))
-	}
-	p.wrap(c.deepWorkProblems(at(path, "deep_work")))
-	if a.Deliberate != nil {
-		p.wrap(c.chainProblems(at(path, "deliberate.llm"), a.Deliberate.LLM,
-			"assistant.deliberate names no model: list a providers.llm key, e.g. "+
-				"llm: [assistant-strong], or remove the block"))
-	}
-	deny := at(path, "tools.deny")
-	seen := map[AssistantToolFamily]int{}
-	for i, f := range a.Tools.Deny {
-		switch was, dup := seen[f]; {
-		case !f.Valid():
-			p.add(idx(deny, i), ErrUnknownValue, "%q (want %s)", f, words.Or(AssistantToolFamilies))
-		case dup:
-			p.add(idx(deny, i), ErrConflict, "%q is listed twice (first at tools.deny[%d])", f, was)
-		default:
-			seen[f] = i
-		}
+	if a.On() {
+		p.wrap(c.helperModelProblem(at(path, "model"), a.Model))
 	}
 	p.wrap(a.Research.problems(at(path, "research")))
 	p.wrap(c.searchProblems(at(path, "research.search")))
 	return p.err()
-}
-
-// assistantChainProblems reports every way `assistant.llm` cannot carry the
-// assistant: empty while enabled, a key providers.llm does not configure, or
-// an entry whose merged profile leaves the harness's local or web tools
-// reachable. Each problem names the field to change.
-func (c *Company) assistantChainProblems(path Path) error {
-	return c.chainProblems(at(path, "llm"), c.Assistant.LLM,
-		"Ask Crewlet is enabled but names no model: list a providers.llm "+
-			"key, e.g. llm: [assistant], whose harness's local tools are denied and "+
-			"whose entry has overrides: {web_tools: denied}")
-}
-
-// chainProblems reports every way chain, at llmPath, cannot carry the assistant.
-// Both chains are held to it, so a stronger model is never one the quick chain refuses.
-func (c *Company) chainProblems(llmPath Path, chain ProviderKeys, empty string) error {
-	var p problems
-	if len(chain) == 0 {
-		p.add(llmPath, ErrMissing, "%s", empty)
-		return p.err()
-	}
-	known := slices.Sorted(maps.Keys(c.Providers.LLM))
-	for i, key := range chain {
-		member := idx(llmPath, i)
-		entry, ok := c.Providers.LLM[key]
-		if !ok {
-			configured := "none"
-			if len(known) > 0 {
-				configured = strings.Join(known, ", ")
-			}
-			p.add(member, ErrUnknownValue,
-				"%q is not a configured provider: providers.llm has %s", key, configured)
-			continue
-		}
-		p.wrap(assistantMemberProblems(member, key, &entry))
-	}
-	return p.err()
-}
-
-// AssistantEntryProblems reports every way the providers.llm entry key could
-// not carry the assistant, judged as a member of `assistant.llm` would be:
-// for `crewlet assistant eval -model`, which measures a candidate before the
-// chain names it, so a model that may never run the assistant is never
-// measured as though it could.
-func (c *Company) AssistantEntryProblems(key string) error {
-	entry, ok := c.Providers.LLM[key]
-	if !ok {
-		return fmt.Errorf("%w: providers.llm has no entry %q", ErrUnknownValue, key)
-	}
-	return assistantMemberProblems(entryPath(key), key, &entry)
-}
-
-// assistantMemberProblems judges one chain member against the assistant's
-// rules, naming the entry's own field each time, since that is what changes.
-func assistantMemberProblems(member Path, key string, entry *LLMProvider) error {
-	var p problems
-	entryField := func(f string) Path { return at(entryPath(key), f) }
-	if entry.Harness != "" && !entry.Harness.Valid() {
-		return p.err() // the entry's own rule names the agent; there is no profile
-	}
-	profile, err := harnessprofile.Load(entry.HarnessName(), entry.Overrides)
-	if err != nil {
-		// The entry's own validation reports why its profile does not
-		// load; an assistant member nobody can judge is refused here too,
-		// so AssistantChain never hands one out.
-		p.add(member, ErrConflict,
-			"providers.llm.%s cannot be judged for Ask Crewlet because its profile "+
-				"does not load (see %s)", key, entryField("overrides"))
-		return p.err()
-	}
-	// NO TOOL OF ITS OWN, BY CONSTRUCTION. The stance is a claim; what the
-	// assistant is admitted on is the argv its calls run (the profile Load
-	// returned, its web denial applied), which must leave the model no shell,
-	// file tool or tool server but the engine's own: one on the engine host
-	// reads the engine's own data and keys, outside every request of the
-	// person's (ADR-0050).
-	eligible := strings.Join(harnessprofile.AssistantEligible(), ", ")
-	switch {
-	case profile.LocalTools != harnessprofile.LocalToolsDenied:
-		p.add(member, ErrConflict,
-			"providers.llm.%s runs the %s harness with its own local tools %s (%s), so a shell "+
-				"or a file reader on the engine host could read what no request of the "+
-				"person's returned: Ask Crewlet needs a harness whose profile has local_tools: "+
-				"denied and whose run has no tool of its own, which of the built-in profiles "+
-				"is %s", key, entry.HarnessName(), localToolsWord(profile.LocalTools),
-			strings.TrimSpace(profile.LocalToolsNote), eligible)
-	default:
-		if problem := profile.ToolsOffProblem(); problem != "" {
-			p.add(member, ErrConflict,
-				"providers.llm.%s says the %s harness's local tools are denied, but %s, so its "+
-					"run is not shown to leave the model without a tool of its own: a shell or "+
-					"a file reader on the engine host could read what no request of the "+
-					"person's returned. Ask Crewlet runs only on a harness whose argv removes "+
-					"every tool (tools_off), which of the built-in profiles is %s; check %s",
-				key, entry.HarnessName(), problem, eligible, entryField("overrides"))
-		}
-	}
-	if profile.EffectiveWebTools() != harnessprofile.WebToolsDenied {
-		remedy := fmt.Sprintf("set %s: {web_tools: denied}", entryField("overrides"))
-		if !profile.CanDenyWeb() {
-			remedy = fmt.Sprintf("the %s profile has no measured web denial (%s), so "+
-				"use a harness that has one: %s",
-				entry.HarnessName(), strings.TrimSpace(profile.WebToolsNote),
-				strings.Join(harnessprofile.WebDeniable(), ", "))
-		}
-		p.add(member, ErrConflict,
-			"providers.llm.%s keeps the harness's own web tools on, so the model could "+
-				"read pages no authority decision saw and send the person's data "+
-				"out: %s", key, remedy)
-	}
-	return p.err()
-}
-
-// localToolsWord renders a local-tools stance inside a sentence.
-func localToolsWord(t harnessprofile.LocalTools) string {
-	if t == "" {
-		return "undeclared"
-	}
-	return "at the " + string(t) + " stance"
 }

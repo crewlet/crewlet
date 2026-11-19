@@ -252,16 +252,6 @@ var modelCalls = map[string]modelCall{
 		"internal/agent/runner.TestALaunchedRunIsToldWhatAFenceIs",
 		"internal/agent/runner.TestARunReadsAReplyFencedAndAnAnswerByTurnAsItsAnswerersOwn",
 	}},
-	// THE DASHBOARD ASSISTANT'S DEEP WORK, a harness's run too: the brief
-	// the assistant composes carries the person's screen fenced as the page's
-	// own words, under the assistant turn's token, beside the standing
-	// sentence; the engine's Run is its transport.
-	"internal/assistant/deep.go:runDeep": {tests: []string{
-		"internal/assistant.TestADeepRunsBriefFencesTheScreenUnderTheTurnsToken",
-	}},
-	"internal/engine/assistantdeep.go:Run": {tests: []string{
-		"internal/assistant.TestADeepRunsBriefFencesTheScreenUnderTheTurnsToken",
-	}},
 	"internal/engine/providerpark.go:providerProbe": {
 		none: "the probe asks a fixed prompt the engine wrote, and reads nothing of " +
 			"its answer but whether one came"},

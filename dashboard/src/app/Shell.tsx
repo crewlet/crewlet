@@ -114,13 +114,7 @@ import {
   useViewportWidth,
 } from "./layout.ts";
 import { STORAGE_KEYS } from "~/lib/storage.ts";
-import { useOrg } from "~/lib/store-hooks.ts";
-import { ownName } from "~/lib/viewer.ts";
-import {
-  assistantModelFor,
-  assistantUnavailableFor,
-  attachClosedFor,
-} from "./assistant/availability.ts";
+import { useAskReading } from "./assistant/place.ts";
 import {
   ASSISTANT_COMPOSER_ID,
   AssistantControlContext,
@@ -130,7 +124,7 @@ import {
 import { framePageOf, setFramePage } from "./assistant/context.ts";
 import { on as onAssistantBus } from "./assistant/bus.ts";
 import { readTab, writeTab } from "./assistant/tab.ts";
-import { pagePath, resolves } from "./routes.ts";
+import { pagePath, resolve, resolves } from "./routes.ts";
 import { ToastRoom, useToastInset } from "./toastInset.tsx";
 import { goSignIn } from "~/lib/session.ts";
 import type { CoverageFacts } from "~/components/work.tsx";
@@ -605,13 +599,23 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
   // keeps the conversation beside it. A reload brings back what this tab had
   // (`assistant/tab.ts`), and the hand-over that empties a tab's storage when
   // somebody else signs in takes that too.
-  const [assistantOpen, setAssistantOpen] = useState(() => readTab().open);
+  const [assistantWanted, setAssistantOpen] = useState(() => readTab().open);
   const [assistantFocus, setAssistantFocus] = useState<AssistantFocus>("heading");
   const showAssistant = useCallback((open: boolean, focus: AssistantFocus = "composer") => {
     setAssistantFocus(focus);
     setAssistantOpen(open);
     writeTab({ open });
   }, []);
+  // ASK CREWLET'S PAGE IS THE CONVERSATION ITSELF, the one the drawer holds
+  // (`assistant/chunk/AskPage.tsx`): no drawer is drawn over it, the drawer
+  // open on arrival is closed, and the Ask button and its key go to the
+  // page's own composer.
+  const routed = resolve(route.path);
+  const askHere = routed.resolved && routed.screen === "ask";
+  const assistantOpen = assistantWanted && !askHere;
+  useEffect(() => {
+    if (askHere && assistantWanted) showAssistant(false);
+  }, [askHere, assistantWanted, showAssistant]);
 
   const [labels, setLabels] = useState<Labels>({});
   const [coverage, setCoverage] = useState<CoverageFacts | null>(null);
@@ -682,7 +686,8 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
     // focus inside the panel it closes it, and the panel hands focus back.
     "assistant.open": () => {
       const panel = document.querySelector(".crewlet-app-shell__aside");
-      if (!assistantOpen) showAssistant(true, "composer");
+      if (askHere) document.getElementById(ASSISTANT_COMPOSER_ID)?.focus();
+      else if (!assistantOpen) showAssistant(true, "composer");
       else if (panel?.contains(document.activeElement)) showAssistant(false);
       else document.getElementById(ASSISTANT_COMPOSER_ID)?.focus();
     },
@@ -785,35 +790,25 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
       }),
     [nav, assistantShape, showAssistant],
   );
-  const org = useOrg();
-  // ONE VALUE WHILE IT SAYS THE SAME THING: the control below is read by every
-  // message row in a room, and a fresh reason on each render of the frame (a
-  // health tick every five seconds) redrew them all.
-  const companyName = org?.name ?? "";
-  const assistantUnavailable = useMemo(
-    () => assistantUnavailableFor(viewer, companyName),
-    [viewer, companyName],
-  );
-  const assistantModel = assistantModelFor(viewer);
-  const readsImages = viewer.assistantReadsImages;
-  const assistantAttach = useMemo(
-    () => attachClosedFor({ assistantReadsImages: readsImages }),
-    [readsImages],
-  );
+  const ask = useAskReading();
+  const assistantUnavailable = ask.unavailable;
   const assistantControl = useMemo(
     () => ({
       open: assistantOpen,
       unavailable: assistantUnavailable,
-      toggle: (focus: AssistantFocus = "composer") => showAssistant(!assistantOpen, focus),
+      toggle: (focus: AssistantFocus = "composer") => {
+        if (askHere) document.getElementById(ASSISTANT_COMPOSER_ID)?.focus();
+        else showAssistant(!assistantOpen, focus);
+      },
       // --- assistant page actions (WP12) ---
       ask: (question: string) => {
         if (assistantUnavailable !== null) return;
         queueQuestion(question);
-        if (!assistantOpen) showAssistant(true, "composer");
+        if (!assistantOpen && !askHere) showAssistant(true, "composer");
       },
       // --- end assistant page actions (WP12) ---
     }),
-    [assistantOpen, assistantUnavailable, showAssistant],
+    [assistantOpen, assistantUnavailable, showAssistant, askHere],
   );
 
   // THE TAB SAYS WHERE YOU ARE, so a reader with four tabs open can tell
@@ -928,15 +923,14 @@ function Frame({ children, standalone }: { children: ReactNode; standalone: bool
               assistantOpen ? (
                 <AsideBoundary onClose={() => showAssistant(false)}>
                   <AssistantDrawer
-                    unavailable={assistantUnavailable}
-                    model={assistantModel}
-                    attach={assistantAttach}
-                    deliberate={viewer.assistantDeliberate}
-                    admin={viewer.admin}
+                    unavailable={ask.unavailable}
+                    model={ask.model}
+                    attach={ask.attach}
+                    admin={ask.admin}
                     onClose={() => showAssistant(false)}
                     initialFocus={assistantFocus}
                     shape={assistantShape}
-                    name={ownName(session.answer)}
+                    name={ask.name}
                   />
                 </AsideBoundary>
               ) : null

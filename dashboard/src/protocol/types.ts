@@ -28,6 +28,14 @@ import type { TurnOutcomesAnswer } from "./turnOutcomes.ts";
 import type { InsightsAnswer } from "./insights.ts";
 import type { AccessFixAnswer, AdvisorAnalysisAnswer, AdvisorAnswer } from "./advisor.ts";
 import type {
+  AdvisorFindingDetail,
+  AdvisorFindingList,
+  AdvisorNoticesAnswer,
+  AdvisorReport,
+  AdvisorReportList,
+  AdvisorRunSummary,
+} from "./advisorFindings.ts";
+import type {
   ModelCheck,
   ModelDevice,
   ModelEntriesAnswer,
@@ -8426,6 +8434,12 @@ export interface QueryMap {
   diagnostics_insights: InsightsAnswer;
   advisor: AdvisorAnswer;
   advisor_analysis: AdvisorAnalysisAnswer;
+  advisor_findings: AdvisorFindingList;
+  advisor_finding: AdvisorFindingDetail;
+  advisor_run: AdvisorRunSummary;
+  advisor_notices: AdvisorNoticesAnswer;
+  advisor_reports: AdvisorReportList;
+  advisor_report: AdvisorReport;
   advisor_access: AccessFixAnswer;
   /** The administrator's reading, or a member's: narrow on `reading`. */
   mcp_servers_status: McpServersStatusAnswer | McpMemberServersStatusAnswer;

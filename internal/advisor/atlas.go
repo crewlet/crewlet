@@ -258,16 +258,27 @@ func atlasFinding(d atlasDetector, entries []AtlasEntry, ev AtlasEvidence) Findi
 }
 
 // named gives f its entries and its fix where the reader holds the atlas app.
-// WITHOUT IT THE FINDING COUNTS AND NAMES NOTHING: no entry, no id, and no
-// call, which the atlas's own tools would refuse them anyway (ADR-0127).
 func named(f Finding, entries []AtlasEntry, sentence string, act AtlasAct, ev AtlasEvidence) Finding {
-	if !ev.Names {
-		f.Fix = Fix{Kind: FixNone, Options: []Option{},
-			Sentence: "Reading the atlas takes the Atlas permission. Somebody who holds it sees which, and can fix it."}
-		return f
-	}
 	f.Entries = entries[:min(len(entries), MaxAtlasEntries)]
 	f.Fix = Fix{Kind: FixAtlasAct, Sentence: sentence, Options: []Option{}, Act: &act}
+	if !ev.Names {
+		return Unnamed(f)
+	}
+	return f
+}
+
+// Unnamed is f as a reader without the atlas app reads it (ADR-0141): an
+// atlas finding counts its entries and names nothing, no entry, no id and no
+// call, which the atlas's own tools would refuse them anyway (ADR-0127). Any
+// other finding is as it is. A stored finding keeps no entry, so every read by
+// such a reader is cut here.
+func Unnamed(f Finding) Finding {
+	if f.Source != SourceAtlas {
+		return f
+	}
+	f.Entries = nil
+	f.Fix = Fix{Kind: FixNone, Options: []Option{},
+		Sentence: "Reading the atlas takes the Atlas permission. Somebody who holds it sees which, and can fix it."}
 	return f
 }
 

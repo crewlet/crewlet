@@ -36,7 +36,7 @@ const REFS: ModelReference[] = [
     segments: ["roles", 1, "llm_review"],
     chain: ["default", "sonnet"],
   },
-  { at: { assistant: "chat" }, segments: ["assistant", "llm"], chain: ["sonnet"] },
+  { at: { assistant: "chat" }, segments: ["assistant", "model"], chain: ["sonnet"] },
 ];
 
 const refusal = {
@@ -60,16 +60,24 @@ afterEach(() => {
   window.location.hash = "";
 });
 
-function open(assistantWebDenied: boolean) {
+/** The dialog on `sonnet`, Ask Crewlet's model, with `big` one a helper can run on or not. */
+function open(bigRunsAHelper: boolean) {
   const data = modelsData({
     entries: [
       apiKeyEntry({ key: "sonnet" }),
-      apiKeyEntry({ key: "big" }),
-      apiKeyEntry({ key: "default", harness: "codex" }),
+      apiKeyEntry({
+        key: "big",
+        helper_problem: bigRunsAHelper ? null : "Its tool runs with tools Crewlet cannot turn off.",
+      }),
+      apiKeyEntry({
+        key: "default",
+        harness: "codex",
+        helper_problem: "Its tool runs with tools Crewlet cannot turn off.",
+      }),
     ],
-    doc: modelsDoc(assistantWebDenied ? { big: { overrides: { web_tools: "denied" } } } : {}),
+    doc: modelsDoc({}),
     seats: [seat("backend-engineer", "Backend Engineer"), seat("qa", "QA")],
-    assistant: { enabled: true, key: "sonnet", fallbacks: [] },
+    assistant: { key: "sonnet" },
   });
   const onDone = vi.fn();
   view = render(
@@ -119,7 +127,7 @@ test("each place is named in words, a backup said apart, and no handle or path i
   ).toBeDefined();
   expect(list.textContent).not.toMatch(/backend-engineer|llm_review|roles\[/);
   // The first ask carried no repoints: the engine's refusal drew the list.
-  expect(removeModel.mock.calls[0]![1]).toEqual({ repoint: [], assistantOff: false });
+  expect(removeModel.mock.calls[0]![1]).toEqual({ repoint: [] });
 });
 
 test("every choice is checked by a dry run as it is made, and summarised in words", async () => {
@@ -127,8 +135,8 @@ test("every choice is checked by a dry run as it is made, and summarised in word
   await screen.findByRole("list", { name: "Where sonnet is named" });
   await settle();
   // Defaults: coding moves to a model that can code (codex cannot), the backup
-  // to the model already ahead of it in its field, the assistant to one that
-  // denies web tools.
+  // to the model already ahead of it in its field, Ask Crewlet to one a helper
+  // can run on.
   const checked = removeModel.mock.calls.at(-1)!;
   expect(checked[1]).toEqual({
     repoint: [
@@ -136,7 +144,6 @@ test("every choice is checked by a dry run as it is made, and summarised in word
       { at: REFS[1]!.at, to: "default" },
       { at: REFS[2]!.at, to: "big" },
     ],
-    assistantOff: false,
   });
   expect(checked[2]).toMatchObject({ etag: '"llm-providers-sonnet"', dryRun: true });
   expect(
@@ -155,12 +162,14 @@ test("every choice is checked by a dry run as it is made, and summarised in word
   ).toBeDefined();
 });
 
-test("with no other model that denies web tools, the assistant's chat turns the assistant off", async () => {
+// ASK CREWLET'S MODEL POINTED AT NONE TURNS IT OFF: the engine reads the
+// repoint itself, so the body carries nothing else.
+test("with no other model a helper can run on, Ask Crewlet's model is repointed to none, which turns it off", async () => {
   open(false);
   await screen.findByRole("list", { name: "Where sonnet is named" });
   await settle();
   const removal = removeModel.mock.calls.at(-1)![1];
-  expect(removal.assistantOff).toBe(true);
+  expect(Object.keys(removal)).toEqual(["repoint"]);
   expect(removal.repoint[2]).toEqual({ at: { assistant: "chat" }, to: null });
   expect(screen.getByText(/turns Ask Crewlet off/)).toBeDefined();
 });
@@ -315,11 +324,9 @@ test("a place's default is a model that answers, on the same harness where one d
     segments: ["roles", 0, "llm_review"],
     chain: ["sonnet"],
   };
-  expect(defaultChoice(ref, "sonnet", data.models, false)).toEqual({ to: "d-ready" });
+  expect(defaultChoice(ref, "sonnet", data.models)).toEqual({ to: "d-ready" });
   // Its own backup still wins, whatever the list order.
-  expect(
-    defaultChoice({ ...ref, chain: ["sonnet", "c-codex"] }, "sonnet", data.models, false),
-  ).toEqual({
+  expect(defaultChoice({ ...ref, chain: ["sonnet", "c-codex"] }, "sonnet", data.models)).toEqual({
     to: "c-codex",
   });
 });

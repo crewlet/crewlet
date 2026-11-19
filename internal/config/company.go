@@ -95,7 +95,7 @@ type Company struct {
 	// on which models, and the bounds of one turn. See [Assistant].
 	Assistant Assistant `yaml:"assistant,omitempty" json:"assistant,omitzero"`
 
-	Advisor Advisor `yaml:"advisor,omitempty" json:"advisor,omitzero" desc:"The setup advisor's own settings: its analyst, which reads the week's records with a model and lists only what it can cite."`
+	Advisor Advisor `yaml:"advisor,omitempty" json:"advisor,omitzero" desc:"The Advisor: the model it runs on. Its rules run whatever this says."`
 
 	// DelegatedDecisions is which requests agent seats decide in a person's
 	// place, within the engine's rules. See [DelegatedDecisions].
@@ -1172,7 +1172,7 @@ func (c *Company) validateProviderKeys() error {
 	}
 	known := slices.Sorted(maps.Keys(c.Providers.LLM))
 	for _, ref := range c.providerReferences() {
-		if ref.Job == JobAssistant || ref.Job == JobDeepWork {
+		if ref.Job == JobAssistant {
 			continue
 		}
 		for _, key := range ref.Chain {
@@ -1340,14 +1340,6 @@ func (c *Company) seatPlacements() map[Placement]string {
 			continue
 		}
 		reached[box.Cell] = at(entryPath(box.Executor), "run_in").String()
-	}
-	// DEEP WORK'S CELL, where the catalogue serves it: the engine host is
-	// the engine's own confined cell (internal/engine), never the
-	// catalogue's unconfined direct one.
-	if cell, ok := c.DeepWorkPlacement(); ok && cell != PlacementDirect {
-		if _, seen := reached[cell]; !seen {
-			reached[cell] = "assistant.deep_work.llm"
-		}
 	}
 	return reached
 }

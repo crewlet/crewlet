@@ -33,6 +33,7 @@ type AdvisorReader interface {
 	Reports(ctx context.Context, cursor string, limit int,
 		fresh statelog.Freshness) ([]advisordomain.ReportRow, string, error)
 	Report(ctx context.Context, week string, fresh statelog.Freshness) (advisordomain.ReportRow, bool, error)
+	Tally(ctx context.Context, from, to time.Time, fresh statelog.Freshness) (advisordomain.Tally, error)
 	AlarmEpisodes(ctx context.Context, since time.Time,
 		fresh statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, error)
 }
@@ -240,6 +241,16 @@ var opAdvisorReport = advisorRead("advisor.report",
 	func(ctx context.Context, r AdvisorReader, a advisorIDArgs) (advisorReport, error) {
 		report, found, err := r.Report(ctx, a.ID, a.Fresh)
 		return advisorReport{Report: report, Found: found}, err
+	})
+
+type advisorPeriodArgs struct {
+	From, To time.Time
+	Fresh    statelog.Freshness
+}
+
+var opAdvisorTally = advisorRead("advisor.tally",
+	func(ctx context.Context, r AdvisorReader, a advisorPeriodArgs) (advisordomain.Tally, error) {
+		return r.Tally(ctx, a.From, a.To, a.Fresh)
 	})
 
 type advisorSinceArgs struct {
@@ -470,6 +481,12 @@ func (x AdvisorReads) Report(ctx context.Context, week string,
 	fresh statelog.Freshness) (advisordomain.ReportRow, bool, error) {
 	out, err := call(ctx, x.r, opAdvisorReport, nil, advisorIDArgs{ID: week, Fresh: fresh})
 	return out.Report, out.Found, err
+}
+
+// Tally answers how many episodes a period opened, resolved, applied and dismissed.
+func (x AdvisorReads) Tally(ctx context.Context, from, to time.Time,
+	fresh statelog.Freshness) (advisordomain.Tally, error) {
+	return call(ctx, x.r, opAdvisorTally, nil, advisorPeriodArgs{From: from, To: to, Fresh: fresh})
 }
 
 // AlarmEpisodes answers the alarm episodes open at any instant since since.

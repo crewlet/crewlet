@@ -526,6 +526,16 @@ func validKey(key string) error {
 	return printable("key", key, MaxKeyBytes)
 }
 
+// subjectID refuses a subject id the log cannot keep. Empty is a subject that
+// is the only one of its kind (the company, its atlas), which its kind alone
+// names; any other is printable.
+func subjectID(id string) error {
+	if id == "" {
+		return nil
+	}
+	return printable("subject_id", id, MaxSubjectIDBytes)
+}
+
 // printable refuses text that is empty, longer than max bytes, not UTF-8, or
 // that carries a control character or surrounding space.
 func printable(field, s string, max int) error {
@@ -627,7 +637,7 @@ func (o Opening) validate() error {
 	for _, check := range []error{
 		printable("area", o.Area, MaxWordBytes),
 		printable("subject_kind", o.SubjectKind, MaxWordBytes),
-		printable("subject_id", o.SubjectID, MaxSubjectIDBytes),
+		subjectID(o.SubjectID),
 		digests(o.VerdictDigest, o.FixDigest),
 		impacts(o.ImpactMinutes, o.ImpactTokens),
 		jsonOf("body", o.Body, '{', MaxBodyBytes, false),

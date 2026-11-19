@@ -351,7 +351,7 @@ func TestAWorkerOnlyNodeServesNoHTTPAndSaysSo(t *testing.T) {
 			if err != nil || listeners != nil {
 				t.Fatalf("bindListeners on api.port 0 = %v, %v; want nothing bound", listeners, err)
 			}
-			surface, err := serveAPI(t.Context(), boot, nil, nil, nil, nil, nil, nil, listeners, engine.DeepHost{}, log)
+			surface, err := serveAPI(t.Context(), boot, nil, nil, nil, nil, nil, nil, listeners, log)
 			if err != nil {
 				t.Fatalf("serveAPI: %v", err)
 			}
@@ -840,7 +840,7 @@ func serveBound(t *testing.T, boot *config.Bootstrap, e *engine.Engine,
 		t.Fatalf("config surface: %v", err)
 	}
 	surface, err := serveAPI(t.Context(), boot, e, reconciler, cipher, configSurface,
-		chatLive.Hub(), nil, listeners, engine.DeepHost{}, log)
+		chatLive.Hub(), nil, listeners, log)
 	if err != nil {
 		// THE CALLER'S TO CLOSE until the handover, as in runEngine.
 		listeners.close(context.Background(), log)
@@ -865,7 +865,7 @@ func TestTheChatHubServesSocketsOnlyWhereTheAPIIsMountedOverIt(t *testing.T) {
 	t.Cleanup(func() { chatLive.Stop(context.WithoutCancel(t.Context())) })
 
 	surface, err := serveAPI(t.Context(), bootstrapFor(t, 0), e, nil, nil, nil,
-		chatLive.Hub(), nil, nil, engine.DeepHost{}, log)
+		chatLive.Hub(), nil, nil, log)
 	if err != nil || surface != nil {
 		t.Fatalf("a node with api.port 0 served %v (%v)", surface, err)
 	}

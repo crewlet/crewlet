@@ -502,9 +502,10 @@ const (
 	// credential's write and a device sign-in are `secrets.write`.
 	ActionModelsCheck Action = "models.check"
 	ActionModelsRetry Action = "models.retry"
-	// ActionAdvisorRun starts the advisor's analyst now, or records an answer
-	// to one of its findings (`POST /advisor/analysis`, `.../answers`): runtime
-	// records the company keeps, never config or a credential (ADR-0157).
+	// ActionAdvisorRun asks the Advisor to run now, or records a person's
+	// decision on one of its findings (`POST /advisor/runs`, `POST
+	// /advisor/findings/{id}/...`): records the company keeps, never config
+	// or a credential, which a fix's own route writes (ADR-0164).
 	ActionAdvisorRun Action = "advisor.run"
 	// ActionToolsRetry restarts an MCP server now, on every node or on the
 	// node holding one seat (`POST /mcp-servers/{name}/retry`). Like a

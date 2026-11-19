@@ -102,6 +102,16 @@
 // error, never an interrupted the record does not say. Everything a resume can
 // fail on is read before its resume record lands.
 //
+// # One model, the API as its read surface, no deep work (ADR-0163)
+//
+// Ask Crewlet runs on the one entry `assistant.model` names, under bounds that
+// are constants, with the harness's own web and local tools turned off when
+// the engine builds the run, whatever the entry says. It reads through the
+// generic read of the API's own routes, hands a task too large for a turn to
+// an agent as a work item, and reads the web only through the engine, at
+// addresses the conversation was given. ADR-0163 supersedes the deep work and
+// listed hosts described below (ADR-0054, ADR-0151).
+//
 // # A write is a proposal
 //
 // A write tool's call is never sent by the turn. It becomes a proposal
@@ -110,19 +120,17 @@
 // unanswered, and only the person's approval, made from their own browser,
 // sends it, once (ADR-0051).
 //
-// # Deep work
+// # One model, and no tool of its own
 //
-// A turn may hand its task to a deep-work run (start_deep_work, ADR-0054): a
-// harness with its own harness, in a box or confined on the engine host, whose one way into
-// Crewlet is this turn's own surface, bridged ([DeepWork], deep.go). Quick
-// mode's model keeps no tool of its own. A proposal parks the turn and its
-// approval continues the run in the same box. A file the run delivers that the
-// store did not keep for a condition of the node comes back [Unkept], worded
-// for a model by the engine, which reaches the condition table this package may
-// not.
+// A turn runs on the one model the company assigns (`assistant.model`), as a
+// helper's run whose harness keeps no tool of its own, and hands no task to a
+// harness running tools of its own (ADR-0054's deep work is gone): a task that
+// needs a shell, files or many hours becomes a task proposed for one of the
+// company's agent seats. The images a question carries are handed to the model beside
+// its prompt, where its harness takes them.
 //
 // # The web, only through the engine (ADR-0151)
 //
-// Quick mode reads the web only through the engine's own reads, from hosts the
+// A turn reads the web only through the engine's own reads, from hosts the
 // company lists; the harness's own web tools stay denied.
 package assistant
