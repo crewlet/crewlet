@@ -13,48 +13,16 @@ import (
 )
 
 // TurnGate admits the turn a resume re-enters, or refuses it: the node's own
-// admission, which every turn on the node passes whatever started it.
-//
-// # Why a resume asks
-//
-// A resume STARTS A TURN. It re-enters the turn its executor's run parked and
-// runs every phase left in it: model calls, tool calls, posts to chat, writes
-// to the tracker. The node admits each turn a seat's mailbox delivers (the seat owned
-// fresh, a concurrency slot, a drain's closed gate), and a resume is not a
-// mailbox delivery: a completion arrives on the seat's control topic, and a
-// recorded answer's retry on this coordinator's own timer. Neither asked, so a
-// draining node went on starting full turns through both, past the cap the
-// node is sized by, while every mailbox was quiesced.
-//
-// # When it is asked
-//
-// BEFORE THE CLAIM, on both routes. A refused completion leaves the run exactly
-// as it found it, unclaimed, and goes back to the broker for the seat's next
-// holder; refused after the claim, the run would be claimed and its box
-// collected, then given back, on every redelivery of a completion the node had
-// already decided not to run. And the admission is HELD until the resume and
-// its settle return, so the slot it takes covers the whole of the turn.
-//
-// # What a refusal says
-//
-// An error, and a [*TurnRefused] when the refusal names what would lift it: an
-// answer's retry waits on that ([Coordinator.waitOwed]), and a completion is
-// handed back carrying it, so the caller that settles the delivery keys what it
-// does on the condition (a node that is leaving, or a condition that clears by
-// waiting) rather than on the error behind it.
-//
-// # Which route it is told
-//
-// The route the resume takes ([ResumeRoute]), because the turn's first model
-// call is on a different chain on each: a completion's is its reviewer's, and
-// an answer's is the relaunch that carries the run on. A gate that refuses a
-// resume whose models are all at their limit has to ask the chain that call
-// would be made on, and a gate asked one chain for both refused a finished
-// run's review for its executor's limit, or admitted an answer into it.
-//
-// Admitted, it returns the context the turn runs under, which the admission may
-// end (a drain that can no longer wait for it), and the release, which the
-// caller calls once the resume is over.
+// admission. A resume STARTS A TURN but is no mailbox delivery (a completion arrives on
+// the control topic, an answer's retry on a timer), so it must pass admission
+// or a draining node starts turns past its cap. Asked BEFORE THE CLAIM: a
+// refused completion stays unclaimed for the next holder, where refusing after
+// would collect its box on every redelivery. HELD until the resume settles.
+// A refusal is a [*TurnRefused] when it names what would lift it
+// ([Coordinator.waitOwed]), so callers key on the condition. It is told the
+// [ResumeRoute] because the first model call is on a different chain on each
+// (reviewer's, relaunch's). Admitted, it returns the turn's context (a drain
+// may end it) and the release.
 type TurnGate func(ctx context.Context, handle string, route ResumeRoute) (context.Context, func(), error)
 
 // ResumeRoute is which of the two roads a resume takes into its turn, as its
@@ -96,17 +64,14 @@ func (r *TurnRefused) Unwrap() error { return r.Cause }
 
 // admitted is a resume's hold on its turn's admission.
 //
-// UNEXPORTED, AND THE ONE WAY TO A RESUME. [Coordinator.resumeAndSettle] is
-// the only frame that calls the [Resumer], and it takes one of these rather
-// than a bare context, so a resume cannot be written outside this package
-// without one. INSIDE it the compiler proves nothing: any frame here could
-// declare one and fill it in. What holds that is the guard
-// (internal/node.TestEveryTurnStartIsAdmitted): only [Coordinator.admitTurn]
-// may mention this type in a value (a literal, a variable, new, a conversion,
-// an alias, a field), only it and the three frames that take one
-// (resumeAndSettle, completeAdmitted, resumeOwedAdmitted) may name it at all,
-// and each of those three is called only from the frame that asked the gate
-// for it, or from one of the other two.
+// UNEXPORTED, AND THE ONE WAY TO A RESUME. [Coordinator.resumeAndSettle], the
+// only frame that calls the [Resumer], takes one of these rather than a bare
+// context, so a resume cannot be written outside this package without one.
+// INSIDE it the compiler proves nothing; the guard
+// (internal/node.TestEveryTurnStartIsAdmitted) holds it: only
+// [Coordinator.admitTurn] may build a value of this type, only it and the three
+// frames taking one (resumeAndSettle, completeAdmitted, resumeOwedAdmitted) may
+// name it, and each of those is called only from the frame that asked the gate.
 type admitted struct {
 	ctx     context.Context
 	release func()

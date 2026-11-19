@@ -9,25 +9,15 @@ import (
 
 // The fleet-singleton duty.
 //
-// Every node in a fleet runs the same scheduler against the same org, so
-// without a singleton every node enumerates every schedule and all but one
-// lose the ledger claim on every due fire. That is not INCORRECT — the claim
-// is what makes a fire at-most-once, and it holds under any number of racers —
-// it is pure duplicated work: N walks of the org and N claim round trips per
-// tick to produce one dispatch.
+// Without a singleton every node walks the org and all but one lose the ledger
+// claim on every due fire: correct (the claim makes a fire at-most-once) but N
+// walks and N claim round trips per tick for one dispatch.
 //
-// It is a CLAIM PER TICK, not a leader election, and the difference is the
-// point. A claim needs no term, no quorum, no failure detector and no
-// step-down protocol: a node that dies between ticks releases the duty by
-// letting its lease lapse, and the next node to tick takes it. Nothing has to
-// notice the death, because nothing was waiting for the dead node to say
-// anything.
-//
-// Losing the duty is also harmless in a way a lost leadership is not. A node
-// that stops winning it stops advancing its own window (see [Scheduler.Tick]),
-// so it stays on its first tick; when it does win one, the catchup pass
-// evaluates what it skipped rather than a window stretching back to boot. The
-// ledger absorbs whatever the previous holder already fired.
+// It is a CLAIM PER TICK, not a leader election: no term, quorum, failure
+// detector or step-down. A node that dies releases the duty by letting its lease
+// lapse, and the next node to tick takes it. A node that stops winning it stops
+// advancing its window ([Scheduler.Tick]); on winning again, catchup evaluates
+// what it skipped, and the ledger absorbs what the previous holder fired.
 
 // dutyTTLTicks is how many missed ticks the duty survives.
 //
@@ -39,20 +29,16 @@ const dutyTTLTicks = 3
 
 // dutyTTLFloor is the shortest duty TTL, whatever the tick interval.
 //
-// A very short tick would otherwise mint a very short lease and re-claim it
-// constantly, which is store traffic bought for nothing: the duty's job is to
-// stop N nodes doing one node's work, and it does that just as well at 30 s as
-// at 3 s.
+// A very short tick would mint a very short lease and re-claim it constantly:
+// store traffic for nothing, since the duty works as well at 30 s as at 3 s.
 //
-// The ceiling on the same value is the number that actually matters, and it is
-// not enforced here because it cannot be: when the holder dies, the duty is
-// unclaimable for up to one TTL, and a schedule whose period is shorter than
-// that can lose a fire (the successor's catchup pass replays the most recent
-// missed fire, not every one). At the default 10 s tick the TTL is 30 s — half
-// a cron minute, so a dead holder costs at most one delayed fire, which
-// catchup then makes up. An operator who raises the tick toward MaxTick is
-// already accepting minute-scale dispatch latency, and the TTL scales with
-// that choice rather than fighting it.
+// The ceiling on the same value matters more and cannot be enforced here: when
+// the holder dies the duty is unclaimable for up to one TTL, and a schedule
+// whose period is shorter can lose a fire (the successor's catchup replays only
+// the most recent missed fire). At the default 10 s tick the TTL is 30 s, half a
+// cron minute, so a dead holder costs one delayed fire that catchup makes up. A
+// tick raised toward MaxTick already accepts minute-scale latency, and the TTL
+// scales with it.
 const dutyTTLFloor = 30 * time.Second
 
 // DutyTTL is the lease TTL a duty claim is made with, for a given tick
@@ -64,26 +50,16 @@ func DutyTTL(tick time.Duration) time.Duration {
 
 // ClaimDuty builds a [DutyFunc] over a coordination backend.
 //
-// owner is this process INCARNATION — not the machine, and not the node id.
-// Two processes sharing an owner string would both believe they hold the duty
-// at the same epoch, which is the one way this arrangement can produce two
-// schedulers. nodeID is the stable id, recorded as the stickiness hint so a
-// restarted node tends to get its own duty back.
+// owner is this process INCARNATION, not the machine or node id: two processes
+// sharing an owner string would both hold the duty at the same epoch, the one
+// way to get two schedulers. nodeID is the stickiness hint, so a restarted node
+// tends to get its duty back.
 //
-// The claim is UNGATED against the protocol floor, deliberately, and for the
-// reason coord's own doc gives ([coord.AcquireOptions.Ungated]): the floor
-// guards what holding a SEAT means, so a fleet singleton keeps running through
-// a rolling upgrade rather than stalling until the last lower-protocol lease
-// lapses. Ungated skips the check, never the stamp: the claim carries this
-// build's protocol (an omitted [coord.AcquireOptions.Protocol] is this
-// build's). The stamp is a fact for a reader of the lease and holds no claim
-// back — the gate counts presence and seats, never a duty
-// ([coord.ProtocolGateCounts]) — so a duty an older node crashed holding
-// cannot keep a newer fleet from placing seats for its TTL.
-//
-// TryAcquire doubles as a renew for the current owner and keeps its epoch, so
-// the per-tick claim is one store round trip and the holder stays the holder
-// while it keeps ticking.
+// UNGATED against the protocol floor ([coord.AcquireOptions.Ungated]), which
+// guards what holding a SEAT means, so a singleton survives a rolling upgrade.
+// It skips the check, never the stamp: the claim carries this build's protocol,
+// which holds nothing back (the gate counts presence and seats, never a duty,
+// [coord.ProtocolGateCounts]). TryAcquire doubles as a renew keeping its epoch.
 func ClaimDuty(backend coord.Backend, owner, nodeID string, tick time.Duration) DutyFunc {
 	return ClaimNamedDuty(backend, DutyName, owner, nodeID, DutyTTL(tick))
 }
@@ -97,22 +73,15 @@ type HoldFunc func(ctx context.Context) (release func(), held bool, err error)
 // HoldNamedDuty is mutual exclusion around one piece of work, where
 // [ClaimNamedDuty] is a fleet SINGLETON.
 //
-// The difference is what the TTL is for, and it is the whole reason both
-// exist. A singleton re-claims every tick and the holder stays the holder, so
-// a TTL that outlives one tick is the point of it. This is a lock around work
-// with a beginning and an end — a provisioning pass writing at a third-party
-// app — where the TTL is only a backstop for a node that died mid-pass, and
-// holding it afterwards locks every other node out of a surface for minutes
-// after the work finished.
+// The difference is what the TTL is for. A singleton re-claims every tick, so a
+// TTL outliving one tick is the point. This locks work with an end (a
+// provisioning pass at a third-party app), where the TTL only backstops a node
+// that died mid-pass; holding it afterwards locks out every other node.
 //
-// RELEASED ON A CONTEXT THAT CANNOT BE CANCELLED, because the thing being
-// undone is frequently the cancellation itself: a pass whose context died
-// mid-run is exactly when the lease most needs giving back, and a release
-// inheriting that context would do nothing at all.
-//
-// The release EXPIRES the record rather than deleting it, which is
-// [coord.Backend.Release]'s own contract: a deleted record restarts the epoch
-// counter that a zombie from the released tenure is still fencing with.
+// RELEASED ON A CONTEXT THAT CANNOT BE CANCELLED: a pass whose context died is
+// when the lease most needs giving back. The release EXPIRES the record rather
+// than deleting it ([coord.Backend.Release]): a deleted record restarts the
+// epoch counter a zombie from the released tenure still fences with.
 func HoldNamedDuty(backend coord.Backend, duty, owner, nodeID string, ttl time.Duration) HoldFunc {
 	if backend == nil {
 		// No coordination store is the single-node case, which always

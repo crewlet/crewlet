@@ -11,22 +11,16 @@ import (
 
 // A PID IS NOT AN IDENTITY.
 //
-// The kernel hands a pid out again once the process holding it is gone, so a
-// pid written down and read back later (by another process, after a restart,
-// hours on) may name a process that has nothing to do with the one it was
-// recorded for. Signalling that pid's group signals a stranger's tree, and
-// probing it keeps state alive on behalf of a job that ended long ago.
+// The kernel hands a pid out again once its process is gone, so a recorded pid
+// read back later may name an unrelated process: signalling its group hits a
+// stranger's tree. What does not repeat is the pair of the pid and its
+// process's start time, read from the kernel's own record on both release
+// platforms (see [inspect]). [Leader] is that pair, and [Leader.Current] is
+// the one question a caller holding a recorded pid may ask before acting.
 //
-// What does not repeat is the pair of the pid and the moment its process
-// started, read from the kernel rather than inferred from anything the caller
-// can see. [Leader] is that pair, and [Leader.Current] is the one question a
-// caller holding a recorded pid is allowed to ask before acting on it.
-//
-// The start time is read from the process's own kernel record on both release
-// platforms (see [inspect]). It is deliberately NOT a file's timestamp: the
-// mtime of /proc/<pid> on Linux is the moment the kernel first instantiated
-// that directory's inode, which is whenever somebody first looked, and it
-// resets when the inode is evicted, so an old process can read as brand new.
+// The start time is deliberately NOT a file's timestamp: the mtime of
+// /proc/<pid> is when the kernel first instantiated the inode, and resets on
+// eviction, so an old process can read as brand new.
 
 // StartTime identifies when a process started, as an opaque token.
 //
@@ -107,42 +101,16 @@ func Identify(pid int) (Leader, error) {
 }
 
 // Current reports whether the group this names still exists AND is still the
-// group it was recorded for.
-//
-// False with a nil error is definitive: the group is gone, or its pid now
-// leads a group of some later process. An error means the kernel could not be
-// asked, and a caller must decide which way that fails for what it is about to
-// do; see the callers in the sandbox package, which keep a directory on an
-// unknown answer and withhold a signal on one.
+// group it was recorded for. False with a nil error is definitive. An error
+// means the kernel could not be asked; the caller decides which way that fails
+// (the sandbox keeps a directory, withholds a signal).
 //
 // A GROUP IS CURRENT ONLY WHILE ONE OF ITS MEMBERS HAS NOT EXITED. A zombie
-// keeps its place in its group until its parent reaps it, and kill(2) with
-// signal 0 answers such a group as present: that is [Exists], and it is the
-// wrong question here. A job whose last worker has exited is over, whether or
-// not somebody has collected the corpse yet, and nothing guarantees anybody
-// will do so promptly. An orphan is reaped by whatever the kernel reparents it
-// to, which in a container is often a first process that never waits, so a
-// finished run read through the probe alone would keep its box directory and
-// its "running" status for as long as that corpse lingers. So the members are
-// read from the kernel's own process record (see [groupLiving]) and only a
-// member that has not exited counts.
-//
-// The leader is read first, because while it has not exited it answers the
-// question alone: the pid and start time name this very process, and it still
-// leads the group. That is every poll of a running job, which then costs one
-// record rather than a scan of the process table.
-//
-// Otherwise a group whose leader has exited while a living member runs on is
-// still current. The kernel does not hand out a pid while a process group
-// still carries it as its id (Linux keeps the pid allocated for as long as
-// anything references it as a group, and XNU's allocator skips every live
-// group and session id), so the pid cannot have been reused while this group
-// lives. The members are read BEFORE the leader is read again for that
-// reason: a pid reissued between the two readings shows up in the later one as
-// a leader with another start time. The one sequence this cannot see through
-// is a recycled pid that became a group leader and then exited leaving members
-// behind, which needs a full pid wrap, a setsid or setpgid by the stranger,
-// and its early exit, all between two readings of the same record.
+// keeps its place in its group until reaped, and kill(2) with signal 0 answers
+// such a group as present ([Exists], the wrong question here); an orphan's
+// reaper may never collect it, leaving a finished run "running". So members
+// are read from the kernel's record (see [groupLiving]) and only one that has
+// not exited counts.
 func (l Leader) Current() (bool, error) {
 	if !addressable(l.PID) || !validStartTime(l.Start) {
 		return false, nil
@@ -151,6 +119,9 @@ func (l Leader) Current() (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("procgroup: reading the start time of pid %d: %w", l.PID, err)
 	}
+	// The leader is read first: while it has not exited it answers alone (pid
+	// and start time name this very process, still leading the group), so every
+	// poll of a running job costs one record, not a scan of the process table.
 	if found && proc.Start == l.Start && !proc.Zombie && proc.Group == l.PID {
 		return true, nil
 	}
@@ -167,13 +138,19 @@ func (l Leader) Current() (bool, error) {
 	if !living {
 		return false, nil
 	}
+	// A group whose leader exited while a living member runs on is still
+	// current: the kernel does not hand out a pid while a group carries it as
+	// its id (Linux keeps it allocated while referenced, XNU skips every live
+	// group and session id), so it cannot have been reused. The members are
+	// read BEFORE the leader is read again: a pid reissued between the readings
+	// shows as a leader with another start time. Not seen through: a recycled
+	// pid that became a group leader and exited leaving members, which needs a
+	// full pid wrap, a setsid or setpgid, and an early exit between readings.
 	proc, found, err = inspect(l.PID)
 	if err != nil {
 		return false, fmt.Errorf("procgroup: reading the start time of pid %d: %w", l.PID, err)
 	}
 	if !found {
-		// A living member answered and its leader is gone: see the
-		// paragraph above for why that group can only be this one.
 		return true, nil
 	}
 	return proc.Start == l.Start, nil
@@ -184,34 +161,18 @@ func (l Leader) Current() (bool, error) {
 // one recorded.
 var ErrNotMember = errors.New("procgroup: not a living member of the recorded process group")
 
-// SignalMember sends sig to ONE process, pid, and only while it is a living
-// member of the group l names and that group is still the one recorded
-// ([Leader.Current]).
-//
-// FOR A PID THE CALLER DID NOT START. A job's own process can tell its engine
-// which of its processes to address — a run's script records its pid in its
-// box so its end can be asked of it, and a direct box's job runs on the engine
-// host as the engine's own user — so the pid is the job's word, and the job
-// can name any process of that user, the engine included. The group it is held
-// to is the engine's own record of the job, read from the kernel when the
-// engine started it, which the job cannot rewrite; so a pid that is not the
-// job's own reaches nobody, and the answer says so ([ErrNotMember]).
+// SignalMember sends sig to ONE process, pid, only while it is a living member
+// of the group l names and that group is still the one recorded.
 //
 // THE PROCESS IS HELD BEFORE IT IS CHECKED, and the signal goes to what was
-// held. On Linux that is a pidfd ([os.FindProcess], from 5.3), which names the
-// very process it was opened on: a pid that ends and is handed to somebody else
-// between the check and the signal leaves the pidfd naming the process that
-// ended, and its signal reaches nobody. Where the kernel opens none — darwin,
-// a Linux older than 5.3, or a seccomp profile that refuses pidfd_open — the
-// process is the pid, and what is left is the residual every signal of this
-// package's carries: a pid reissued in the instant between the check and the
-// signal.
+// held: on Linux a pidfd ([os.FindProcess], from 5.3), which names the very
+// process it opened on, so a pid reissued meanwhile reaches nobody. Without
+// one (darwin, older Linux, seccomp refusing pidfd_open) the residual is a pid
+// reissued in that instant.
 //
-// Three answers, as [Leader.Current]'s are: sent; [ErrNotMember], definitive;
-// and any other error, a kernel record that could not be read, which licenses
-// no signal either and is never read as absence. A pid this package addresses
-// no group by — one, and below — is refused unsent everywhere: one is init, or
-// the engine itself when it runs as a container's first process.
+// Answers as [Leader.Current]'s: sent; [ErrNotMember], definitive; or an
+// unreadable record, which licenses no signal. A pid of one or below is
+// refused unsent: init, or the engine as a container's first process.
 func (l Leader) SignalMember(pid int, sig os.Signal) error {
 	if !addressable(pid) {
 		return fmt.Errorf("%w: pid %d is no process this package signals", ErrNotMember, pid)
@@ -222,6 +183,12 @@ func (l Leader) SignalMember(pid int, sig os.Signal) error {
 // memberOf reports whether pid, which the caller holds, is a living member of
 // the group l names and that group is still the one recorded: [ErrNotMember]
 // where it is not, and the kernel's failure where it could not be asked.
+//
+// IT SERVES A PID THE CALLER DID NOT START. A job's process can tell its
+// engine which of its processes to address, so the pid is the job's word and
+// can name any process of the engine's user, the engine included. The group
+// it is held to is the engine's own record, read from the kernel at start,
+// which the job cannot rewrite; a pid not the job's own reaches nobody.
 func (l Leader) memberOf(pid int) error {
 	proc, found, err := inspect(pid)
 	switch {

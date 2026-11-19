@@ -11,17 +11,16 @@ import (
 
 // inspect reads the process's kinfo_proc through sysctl kern.proc.pid.
 //
-// The start time is p_starttime, the wall-clock instant XNU stamped when the
-// process was forked. It is stored in the process record rather than derived
-// from the current clock, so it does not move when the clock is stepped, and
-// being an absolute time it cannot repeat across reboots the way a tick count
+// The start time is p_starttime, the wall-clock instant XNU stamped at fork.
+// It is stored in the process record, so it does not move when the clock is
+// stepped, and being absolute it cannot repeat across reboots as a tick count
 // can. The token is its microseconds.
 //
 // A pid with no process answers the sysctl with an empty buffer, which the
-// x/sys wrapper reports as EIO because the length is not a kinfo_proc's. No
-// other outcome of this call produces EIO (the kernel returns either nothing or
-// the whole record), so EIO is read as "no such process" rather than as a
-// failure. A zombie keeps its record, and its p_stat says so.
+// x/sys wrapper reports as EIO (the length is not a kinfo_proc's). Nothing
+// else produces EIO (the kernel returns nothing or the whole record), so it
+// is read as "no such process", not a failure. A zombie keeps its record, and
+// its p_stat says so.
 func inspect(pid int) (Process, bool, error) {
 	kinfo, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
 	if errors.Is(err, unix.EIO) {

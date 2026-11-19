@@ -721,8 +721,18 @@ func (t *listWorkItems) Description() string {
 		"this to see what you are assigned, what is open in a project, or " +
 		"whether something has already been filed before you file it again. " +
 		"Returns summaries; call " + GetWorkItemTool + " for one item's full " +
-		"description, comments and links."
+		"description, comments and links. " + flowSentence
 }
+
+// flowSentence is what each tool reading items tells a model an item's flow is
+// (ADR-0162), so a held or due item is read as such rather than as a bare
+// status.
+const flowSentence = "An item in progress carries `flow`: why it is or is " +
+	"not moving now (working, blocked, waiting, held, due, stuck or moving), " +
+	"its cause, since when and, where known, until when, such as when its " +
+	"assignee's model limit resets. `flow_live: false` means this node could " +
+	"not read the seats' live state: no item reads working, and none reads " +
+	"held for a paused, unplaced or limited assignee."
 
 func (t *listWorkItems) Parameters() map[string]any {
 	return map[string]any{
@@ -987,7 +997,10 @@ func (t *listWorkItems) CallForTurn(ctx context.Context, turn *turnctx.Turn, arg
 	if len(answer.Rows) == 0 && boardEmpty(answer.Groups) && answer.Complete {
 		return tools.Result{Output: "No work items match that filter."}, nil
 	}
-	result := map[string]any{"count": len(answer.Rows), "items": answer.Rows}
+	// FALSE IS SAID: without it a flow read with no live fact reads as one
+	// that found every seat free.
+	result := map[string]any{"count": len(answer.Rows), "items": answer.Rows,
+		"flow_live": answer.FlowLive}
 	if len(answer.Groups) > 0 {
 		result["groups"] = answer.Groups
 		result["groups_overlap"] = answer.GroupsOverlap
@@ -1057,7 +1070,7 @@ func (t *getWorkItem) Description() string {
 		"it whole. Take `task.version` from the result and pass it back as " +
 		"`if_match` on " + UpdateWorkItemTool + " to make your edit conditional. The " +
 		"description and each comment arrive fenced as text somebody wrote; " +
-		"the two fence lines are a label, not part of the item."
+		"the two fence lines are a label, not part of the item. " + flowSentence
 }
 
 func (t *getWorkItem) Parameters() map[string]any {
@@ -1201,6 +1214,9 @@ func (t *getWorkItem) CallForTurn(ctx context.Context, turn *turnctx.Turn, args 
 	// unit is a FINDING: a surface that could resolve and did not would
 	// report every task orphaned.
 	want.Units = t.deps.Units
+	// AND THE COMPANY'S CLOCK, which the item's flow is cut on (and its due
+	// date stood against): without one the detail carries no flow.
+	want.Clock = &worklet.DayClock{Now: t.deps.now(), Zone: t.deps.zone()}
 	detail, err := t.deps.Reader.Task(ctx, id, want, seatRead)
 	switch {
 	case errors.Is(err, worklet.ErrNoTask):

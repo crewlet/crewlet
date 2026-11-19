@@ -20,39 +20,17 @@ import (
 // about ownership. See the package doc, "Stopping a seat's running work".
 
 // StopSeat ENDS every run of a seat that is launching or running ([Stoppable]),
-// because a person paused the seat and asked for its running work to stop. by
-// is who, as the pause records it.
+// because a person paused the seat. by is who, as the pause records it.
 //
-// UNDER THE SEAT'S LEASE: a node that does not hold the seat stops nothing and
-// says so ([ErrSeatNotHeld]) — the node that does hold it reads the same pause
-// and stops the runs itself, and the store would refuse this node's decision
-// under the holder's lease besides.
-//
-// EACH RUN UNDER A NARROW LICENSE, the job it was read on in the statuses a stop
-// ends, so a run that moved on since the listing is left to whatever moved it:
-// a completion CLAIMED first is a resumed turn the turn's own fence stops at its
-// next round, and a run that parked on a question since waits behind the pause
-// for its answer. A run whose ending is already decided is that ending's. And a
-// job a collection already read — back in running because its resume was held
-// or handed back for a retry ([LaunchRecord.Collected]) — is its turn's, for the
-// reason a claimed one is: the store refuses its stop, and the turn's fence ends
-// its resume at the first round, charging the job once, as the resume it is.
-// What that resume was WAITING on is ended here, so it comes at once rather than
-// when the wait would have ended ([Coordinator.endCollectedWait]).
-//
-// IDEMPOTENT, which is what lets every way a stop can reach a seat call it — the
-// pause landing, a complete re-read of the pauses, the seat's acquisition while
-// paused: a run already stopped has no row left to list.
-//
-// WAITING ON NO JOB: the call decides each stop and closes the run's session,
-// and a run whose job started in a box — on this node's host or another's,
-// whatever `conversation_session.enabled` says — is finished by the ending's
-// own retry, armed at once, which ends the job, reads it, reclaims its box and
-// announces the stop, the seat's mail held behind it until it lands
-// ([Coordinator.oweEnding], [Coordinator.endRun]). Only a stop with no job to
-// end, a launch stopped before its command was recorded, is finished here,
-// its box reclaimed within the teardown grace. An ending that could not be
-// finished yet is kept for the same retry, and reported only in the log.
+// UNDER THE SEAT'S LEASE: a node not holding the seat stops nothing and says
+// so ([ErrSeatNotHeld]). Each run is stopped on the job it was read on, so a
+// run that moved on is left to what moved it: a CLAIMED completion, or a job a
+// collection already read ([LaunchRecord.Collected]), is a resumed turn the
+// turn's fence stops; the store refuses their stop, and what that resume
+// WAITS on is ended here ([Coordinator.endCollectedWait]). IDEMPOTENT, so
+// every way a stop reaches a seat may call it. A run with a box job is
+// finished by the ending's own retry ([Coordinator.oweEnding]); a launch
+// stopped before its command was recorded is finished here.
 func (c *Coordinator) StopSeat(ctx context.Context, handle string, by RunStop) error {
 	fence, held := c.leaseOf(handle)
 	if !held {
@@ -421,21 +399,14 @@ func (c *Coordinator) noteLaunchStop(decided PendingRun) {
 // it was still launching, reporting whether there was one: the frame launching
 // it asks when its launch or its park is refused under it.
 //
-// THE FRAME'S ANSWER CANNOT BE THE PAUSE, nor the row. The stop finishes in the
-// time a box takes to die — often less than the turn takes to unwind to its
-// park — and deletes the row as it goes, and the person may resume the seat
-// before the frame asks: read off the pause then, the stop was no stop, the
-// refused park was logged as a suspension with nowhere to go, and the turn's
-// last record was its park, so it read parked for good while its run read
-// stopped. So the decision is kept here, from the deciding write to the
-// frame's question, whatever the row and the pause say by then.
-//
-// IN THIS NODE'S MEMORY, because the two parties are this node's: a launching
-// run's stop is decided by the node holding its seat, which is the node running
-// the turn that launched it — a seat that moves takes its launching runs with it
-// as abandoned tails, never stops, and its new holder's frame launches its own.
-// Kept until the frame takes it, the turn's next launch on this node opens
-// ([Coordinator.Launch]), or the seat leaves this node ([Coordinator.ReleaseSeat]).
+// THE FRAME'S ANSWER CANNOT BE THE PAUSE, nor the row: the stop finishes in the
+// time a box takes to die, often before the turn unwinds, and deletes the row,
+// and the person may resume the seat first. Read off the pause then, the stop
+// was no stop and the turn would read parked for good while its run read
+// stopped. So the decision is kept here from the deciding write to the frame's
+// question, IN THIS NODE'S MEMORY, because both parties are this node's.
+// Kept until the frame takes it, the turn's next launch here opens
+// ([Coordinator.Launch]), or the seat leaves ([Coordinator.ReleaseSeat]).
 func (c *Coordinator) LaunchStopped(turnID string) (RunStop, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -11,58 +11,16 @@ import (
 )
 
 // TestNoLogCallHoldsTheBrokerLock fails the build if a log call is made while
-// the broker mutex is held.
+// the broker mutex is held: a blocked log write would stall every peer.
+// A source scan, not a runtime assertion: a test blocking stderr becomes the
+// thing that hangs CI. It catches a log call LEXICALLY inside a locked region,
+// not one reached through a helper or interface, so moving a log line into a
+// helper defeats it.
 //
-// A log call is a write to a handler this package does not control: it can
-// block on a full pipe, a slow file, or a contended CI stderr. The broker mutex
-// guards every subscription and every peer on the broker, so holding it across
-// that write stops the whole company — a drain, every publish, every attachment
-// change — for as long as one write takes.
-//
-// This is not hypothetical. Eleven call sites logged under the lock, including
-// the deferral path inside `invoke`, and the symptom was a goroutine parked in
-// the middle of a drain during a whole-tree test run, holding the broker for
-// peers that had done nothing wrong. It reads as a hang in the queue, which is
-// the last place anyone looks for a logger problem.
-//
-// The check is a source scan rather than a runtime assertion because the
-// failure needs a blocked writer to reproduce, and a test that blocks stderr to
-// prove a point becomes the thing that hangs CI. It is the same shape as the
-// tests that fail the build on a hand-built subject string: cheap, total, and
-// it states the rule where someone would break it.
-//
-// WHAT IT CATCHES AND WHAT IT DOES NOT, stated so the next reader does not
-// infer coverage the walk does not have. It catches a log call written
-// LEXICALLY inside a locked region, which is the form all eleven took —
-// measured, by adding one after the lock in `Start` and watching it come back
-// named by file, line and enclosing function. It does not see through a CALL: a
-// locked region that invokes a named helper which logs is invisible to it, as is
-// a log call reached through an interface. Moving a log line into a helper is
-// therefore a way to defeat this without touching it.
-//
-// That paragraph used to open "WHAT IT DOES NOT CATCH: a log call written
-// lexically inside a locked region", naming as uncovered the one form the walk
-// exists to find. Worth knowing why it survived: a sentence bounding a guard's
-// own coverage reads as modesty, and nobody re-checks a guard for claiming to do
-// LESS than it does. The bound is exactly as much a claim as the guarantee, and
-// it was the only one here never put to a test.
-//
-// Both counts below are asserted rather than logged, because a guard that
-// checks for the ABSENCE of something passes identically when the thing is
-// absent and when the guard has stopped working — and from outside those look
-// the same. If this package ever legitimately stops using a mutex, DELETE this
-// guard rather than relaxing the count: a guard kept alive past its subject is
-// how the number gets quietly lowered to zero.
-//
-// This matcher needs the STRONG form of that check — the one that counts what it
-// matched, not just what it parsed — because every name it keys on is
-// repo-local and renameable. Its subject is a field literally called `mu`.
-// Measured: renaming that one field to `lock` makes every function here read as
-// lock-free, and without the acquisition count the guard reports zero
-// violations for ever while inspecting nothing. A matcher whose subject is a
-// language construct (an *ast.GoStmt, a stdlib method name) cannot be blinded
-// that way and needs only the file count; this one is not that, so it carries
-// both.
+// Both counts are asserted: a guard for an ABSENCE passes identically when the
+// guard stopped working. Every name it keys on is renameable (a field called
+// `mu`), so it counts files scanned AND acquisitions matched. If the package
+// stops using a mutex, DELETE this guard rather than lowering the count.
 func TestNoLogCallHoldsTheBrokerLock(t *testing.T) {
 	t.Parallel()
 	sources, err := filepath.Glob(filepath.Join(packageDir(t), "*.go"))

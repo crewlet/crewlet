@@ -8916,7 +8916,11 @@ other. A `200` answers **per log**:
     {"domain": "atlas", "stream": "CREWLET_ATLAS_LOG",
      "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.atlas:node-4",
      "outcome": "applied",
-     "position": {"stream": "CREWLET_ATLAS_LOG", "generation": 0, "seq": 310}}
+     "position": {"stream": "CREWLET_ATLAS_LOG", "generation": 0, "seq": 310}},
+    {"domain": "advisor", "stream": "CREWLET_ADVISOR_LOG",
+     "op_id": "01a0cd85-735a-7294-9d3e-38998abd698c.evict-node-4.evict.advisor:node-4",
+     "outcome": "applied",
+     "position": {"stream": "CREWLET_ADVISOR_LOG", "generation": 0, "seq": 5140}}
   ]
 }
 ```
@@ -12903,7 +12907,7 @@ own `alarm_raised` log line.
       "config_boot_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41",
       "config_reported_at": "2026-09-23T08:14:02.118Z",
       "in_flight": 1, "draining": false, "started_at": "2026-09-23T08:01:57Z",
-      "posture": "serve", "appliers_ready": 13, "appliers_total": 13,
+      "posture": "serve", "appliers_ready": 14, "appliers_total": 14,
       "admin": "serve",
       "alarms": [{"kind": "backup_age", "since": "2026-09-23T08:10:02Z",
                   "title": "No recent backup", "person": "…"}]

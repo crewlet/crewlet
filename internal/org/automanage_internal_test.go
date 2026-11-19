@@ -8,38 +8,14 @@ import (
 
 // A LEAD'S MANAGED SET IS COMPUTED ONCE PER LEAD, NOT ONCE PER UNIT.
 //
-// # What this is guarding, and why it needs a gate of its own
+// A root lead's `manages` ends up near every seat, so rebuilding its resolved
+// set per unit is O(units × seats). Both paths yield the IDENTICAL tree, so no
+// correctness test catches it and a benchmark has no threshold: this counts
+// allocated BYTES, not time (noise) or allocation count (the per-unit map grows
+// in size, not count). On the fixture the paths are 1.4 MB and 30.2 MB.
 //
-// Lead inheritance makes a root seat the EFFECTIVE lead of every unit beneath
-// it, and auto-management appends to that seat's `manages` for every direct
-// member it claims — so by the end of the walk a root lead's list holds
-// something close to every seat in the company. Rebuilding its resolved set at
-// the top of each unit's iteration is therefore O(units × seats), and it
-// measured at 95% of the whole derivation's allocation: 970 MB and 1.2 seconds
-// for a fan-shaped company of twenty thousand seats, against 38 MB and 44 ms
-// with the set kept.
-//
-// The equivalence gate cannot catch a regression here, and that is exactly why
-// this exists: the slow path and the fast path produce the IDENTICAL tree, so
-// every correctness test in this repository passes either way. A benchmark is
-// not a gate — it has no threshold and nothing fails when it moves — so the
-// property is pinned by counting instead.
-//
-// # Why allocated BYTES rather than time or allocation count
-//
-// Time on a shared runner is noise. Allocation COUNT is deterministic but
-// blind to this particular fault: the recomputation builds one map per unit
-// whose SIZE grows with the lead's list, and a map of a thousand entries is a
-// handful of allocations exactly as a map of ten is. Counting them saw a
-// twenty-fold regression as no change at all — which this case established by
-// being written that way first and passing with the fix reverted.
-//
-// Bytes see it, because that is what actually grows: on the fixture below the
-// two paths are 1.4 MB and 30.2 MB, a factor of twenty-two.
-//
-// NOT PARALLEL, and it is the one case in this package that is not: the
-// measurement is of the whole process's heap, so another test's garbage would
-// land in it.
+// NOT PARALLEL, the one case here that is not: it measures the whole process's
+// heap.
 func TestALeadsManagedSetIsBuiltOncePerLeadRatherThanPerUnit(t *testing.T) {
 	// A COMPANY WHOSE ROOT LEADS EVERYTHING, which is the shape the
 	// quadratic needs: one seat that inherits the lead of every unit, and

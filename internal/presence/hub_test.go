@@ -902,12 +902,11 @@ func TestARoomsFanOutsReachItsSinksInTheOrderTheyWereTaken(t *testing.T) {
 //
 // A roster is a screen the fan-outs after it are differences from, so it has
 // to reach the joiner's socket after every fan-out it already holds and before
-// every one taken after it. Answered to the caller as a return value, it was
-// sent whenever the caller got to it: a fan-out taken after the join could
-// reach the socket first, and the roster arriving behind it put back what the
-// fan-out had moved on. Here a fan-out is held in its sink while a join is
-// asked: the joiner's hand waits for that fan-out to be handed over whole, and
-// the fan-out of the join itself reaches the sink only after the hand.
+// every one taken after it; sent whenever the caller got to it, a later
+// fan-out could arrive first and the roster would undo it. Here a fan-out is
+// held in its sink while a join is asked: the joiner's hand waits for that
+// fan-out to be handed over whole, and the join's own fan-out reaches the
+// sink only after the hand.
 //
 // Mutation: drop [Hub.delivering] from Join, and the hand runs while the held
 // fan-out is still in its sink, and the join's own fan-out can overtake it.
@@ -1011,12 +1010,11 @@ func TestAJoinTheHandDeclinesIsUndone(t *testing.T) {
 // node's sockets were last shown, and itself.
 //
 // A fan-out is the difference from what the sockets were last shown, so a
-// joiner handed the room as it presented at the join holds a screen the next
-// fan-out does not apply to: erin, who arrived after the last fan-out and left
-// before the next, was in its roster and in no fan-out's leave, and stayed on
-// its screen for good. The room here fans out only when the case says so (a
-// coalescing interval of an hour), so nothing is fanned out between erin's
-// arrival and her leave.
+// joiner handed the room as presented at the join holds a screen the next
+// fan-out does not apply to: erin, arriving after the last fan-out and leaving
+// before the next, was in its roster and in no leave, and stayed for good.
+// The room fans out only when the case says so (a one-hour coalescing
+// interval).
 //
 // Mutation: hand the joiner r.present() rather than the baseline, and the
 // joiner's screen ends showing erin.
