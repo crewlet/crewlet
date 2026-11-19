@@ -259,21 +259,10 @@
 // take is punctuation, so nothing a claim names is shown, and a second pass,
 // the marker in both readings, reads the row as the first pass's rule did.
 //
-// A STRING'S LINES ARE READ AS THE LINES THEY STAND FOR. Markup that closes
-// the key's piece of a string, an escaped break after it, ends the key's line
-// as a real break does ([readValue]), so the pieces after it are read as
-// rows that end in that closing, a blank one passed over; read with no
-// suffix, a blank row's closing was taken for the value and the value below
-// it published. And there a string's first piece is read from the quote that
-// opens the string ([stringOpening]), as every later piece is from the
-// escaped break before it, so its gutter is the row's and not what the real
-// line holds before the string: read from the line's start, a row below
-// spelled none of it, and its opening was taken for the value. A key's piece
-// no markup closes is still read from its real line's start: a key's block
-// can join a later piece to the first, and read from inside the string there,
-// the joined piece has a gutter the claims, reading the later piece, never
-// see, and the value read past it runs on across the escaped break into the
-// next key's line.
+// A STRING'S LINES ARE READ AS THE LINES THEY STAND FOR where markup closes
+// the key's piece of a string: an escaped break after the markup ends the
+// key's line as a real break does ([readValue]), and the string's first
+// piece is read from the quote that opens it ([stringOpening]).
 //
 // A BLOCK NO END CLOSES TAKES A PASSWORD'S KEY ONLY WITH ITS VALUE
 // ([claims.shortOfValues]). Ended by the lines it reads, a block read forward
@@ -1354,7 +1343,8 @@ func readValue(whole string, start, end int, prior [][2]int) aValue {
 			r.setSuffix(trimLine(text[r.from:lineEnd]))
 		case r.from > end:
 			// The markup alone ends the key's line, or its piece of a
-			// string.
+			// string: read with no suffix, a blank row below gave its
+			// closing for the value and the value under it was shown.
 			markup := strings.TrimRight(text[end:r.from], " \t")
 			r.setSuffix(outermost(trimLine(markup)))
 			r.markupOnly = true
@@ -1984,11 +1974,14 @@ func (r *valueRead) gutter(crossed bool) string {
 
 // stringOpening is where the string a key at start is written in begins on the
 // real line that starts at lo: past the last quote before the key that no
-// backslash escapes, or lo where there is none ([valueRead.gutter]). Only a
-// string's first piece holds what its line has before the string; a piece
-// after an escaped break begins inside it, and a quote there is the text's.
-// Asked only where markup closes the key's piece (the package doc's "A key's
-// block beside a password").
+// backslash escapes, or lo where there is none ([valueRead.gutter]). Read from
+// the line's start, the rows below a markup-closed key spelled none of its
+// gutter, and a row's opening was taken for the value. Only a first piece
+// holds what its line has before the string; a later one begins inside it,
+// and a quote there is the text's. ONLY WHERE MARKUP CLOSES THE KEY: a key's
+// block can join a later piece to the first, and read from the quote, that
+// piece has a gutter the claims, reading the later one, never see, and the
+// value read past it runs on into the next key's line.
 func stringOpening(text string, lo, start int) int {
 	for i := start - 1; i >= lo; i-- {
 		if text[i] == '"' && (i == lo || text[i-1] != '\\') {
