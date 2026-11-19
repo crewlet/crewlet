@@ -8,17 +8,15 @@ import (
 
 // ---- WOFF2 ---------------------------------------------------------------- //
 //
-// A FACE IS WOFF2 ALONE, CHECKED BY ITS HEADER. Its tables are Brotli
-// streams, and decoding them would bring a decompressor into the engine to
-// learn what the browser's own font sanitiser (OpenType Sanitizer in Chrome
-// and Firefox) checks again anyway; what the engine holds is what bounds the
-// work a page's reader is put to: the signature, a header length equal to the
-// file, a table count from 1 to [MaxFontTables], the size the font decodes to
-// at most [MaxFontSFNTBytes], a compressed size inside the file, a metadata
-// block (if any) inside the file, and no private data block: a font's private
-// block draws nothing and would be served as uploaded, for ever. Who may
-// push a face into every reader's browser is bounded by the adoption, which
-// is an administrator's.
+// A FACE IS WOFF2 ALONE, CHECKED BY ITS HEADER. Its tables are Brotli streams,
+// and decoding them would bring a decompressor into the engine to learn what
+// the browser's font sanitiser checks again anyway; the engine holds only what
+// bounds a reader's work: the signature, a header length equal to the file, a
+// table count from 1 to [MaxFontTables], a decoded size of at most
+// [MaxFontSFNTBytes], a compressed size and any metadata block inside the
+// file, and no private data block (it draws nothing and would be served as
+// uploaded, for ever). Who may push a face into every reader's browser is
+// bounded by the adoption, which is an administrator's.
 
 const woff2HeaderBytes = 48
 

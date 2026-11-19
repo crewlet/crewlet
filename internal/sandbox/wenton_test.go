@@ -49,25 +49,15 @@ func lostWithItsBox(t *testing.T, rig *coordRig, run PendingRun) {
 
 // AN END OF A TURN THAT ENDED ON A SAVE SAYS IT WENT ON. The turn's row names a
 // capture its job took while it still worked, and the turn went on past it: a
-// stop whose read found the box gone, a third loss of the round whose box went
-// with its host — which its turn's frame ends, since the round is not carried
-// on again — and a loss whose box went with its host that the engine ended,
-// its carry's resume broken before its turn began, take nothing more, so
-// nothing newer was attempted and the end names no capture unkept. Said
-// nowhere, the conversation's next turn would be told the session runs through
-// the turn's end; the end says the turn went on past it, which the log keeps
-// the session for and says. And it names no last word: the turn's was never
-// taken, and the save it went on past is none, so no row is read as holding
-// it.
-//
+// stop that found the box gone, a third loss of the round whose box went with
+// its host, and a loss the engine ended take nothing more, so the end names no
+// capture unkept. The end says it went on past, or the next turn would be told
+// the session runs through the turn's end; it names no last word (never taken).
 // Mutation: decide went_on by whether an unkept capture rides the end, or by
-// the kept capture's launch alone, and the end of a turn that kept its last
-// launch's capture taken as it worked says nothing of the turn going on; have
-// a loss's ending read a box its loss took with its host (capturesLoss blind
-// to the loss's cause), and the premise of the loss the engine ended goes red;
-// name the newest capture the turn's last word whether or not it is one
-// (lastWordOf blind to lastWord), and the save is named it, its row read as
-// all the turn did.
+// the kept capture's launch alone, and a turn that kept its last launch's
+// capture says nothing of going on; have a loss's ending read a box its loss
+// took with its host (capturesLoss blind to the cause), and the premise goes
+// red; name the newest capture the last word (lastWordOf blind to lastWord).
 func TestAnEndOfATurnThatEndedOnASaveSaysItWentOn(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -160,22 +150,16 @@ func TestAnEndOfATurnThatEndedOnASaveSaysItWentOn(t *testing.T) {
 
 // AN END OF A TURN WHOSE LATER LAUNCH KEPT NOTHING SAYS IT WENT ON. The turn's
 // first launch's final capture landed, and its row names it; a relaunch then
-// ran a job that kept nothing newer — its box gone when the turn ended, or its
-// own final capture refused — so the session the row names is an earlier
-// launch's, and the turn went on past it: the end says so, naming the refused
-// capture where there was one, and naming it the turn's last word, which the
-// row's place is held to. A relaunch whose job never started worked no
-// session past the first launch's, which is the turn's last word still, and
-// its end says nothing of the kind, naming no last word: that one was kept.
+// ran a job that kept nothing newer (its box gone, or its own final capture
+// refused), so the row's session is an earlier launch's and the turn went on
+// past it: the end says so, naming the refused capture where there was one as
+// the last word the row's place is held to. A relaunch whose job never started
+// worked no session past the first's, so its end says nothing of the kind.
 //
-// Mutation: decide the turn's last word on the kept capture's finality alone,
-// and both relaunches that ran say nothing of the turn going on; decide it on
-// the row's launch alone, and the relaunch that never started says the turn
-// went on past the session it ended on; name no last word, or the kept
-// capture's place for it, and the refused capture is not the last word the
-// row is held to; name it wherever the newest capture is the last word
-// (lastWordOf blind to wentOnPast), and the end of the relaunch that never
-// started names a last word beside no went_on.
+// Mutation: decide the last word on the kept capture's finality alone, or on the
+// row's launch alone; name no last word, or the kept capture's place; name it
+// wherever the newest capture is one (lastWordOf blind to wentOnPast), and a
+// relaunch's end says or names what it should not.
 func TestAnEndOfATurnWhoseLaterLaunchKeptNothingSaysItWentOn(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -263,26 +247,17 @@ func TestAnEndOfATurnWhoseLaterLaunchKeptNothingSaysItWentOn(t *testing.T) {
 }
 
 // AN END WITHOUT WENT_ON NEVER CARRIES AN UNKEPT CAPTURE NEWER THAN ITS ROW —
-// IT CARRIES NONE AT ALL. A turn whose last launch's final capture was kept is
-// a turn whose session was taken whole, and nothing of that job is taken
-// again — its collection made again, after a resume that failed, finds it taken
-// once it had ended — so its end says nothing of the turn going on and names
-// nothing unkept. A turn whose final capture was refused names it unkept, and
-// says the turn went on past whatever its row names: none, on its run's record,
-// though the log may have taken a capture the record holds refused — so it
-// names that capture the turn's last word, which a row at its place holds. So
-// no end this build writes asks the log to take a session off for an unkept
-// capture, which only an end stamped below version 4 does, and none names a
-// last word beside no went_on.
-//
-// Mutation: say the turn went on wherever it kept a capture, and the turn whose
-// final capture landed says so; name the newest capture unkept where it
-// landed, and the end names it beside the capture it kept; decide went_on on
-// what the record kept alone, and the refused capture rides an end that says
-// nothing of the turn going on; name the last word wherever the newest capture
-// is one (lastWordOf blind to wentOnPast), and the end of the turn whose final
-// capture landed names it; name none, and the refused final is no last word a
-// row could be held to.
+// IT CARRIES NONE AT ALL. A turn whose last launch's final capture was kept was
+// taken whole, so its end says nothing of going on and names nothing unkept. A
+// turn whose final capture was refused names it unkept, says the turn went on
+// past whatever its row names, and names it the last word a row at its place
+// holds. So no end this build writes asks the log to take a session off for an
+// unkept capture (only one stamped below version 4 does) or names a last word
+// beside no went_on.
+// Mutation: say the turn went on wherever it kept a capture; name the newest
+// capture unkept where it landed; decide went_on on what the record kept alone;
+// name the last word wherever the newest capture is one (lastWordOf blind to
+// wentOnPast); name none, and the refused final is no last word to hold to.
 func TestAnEndWithoutWentOnNeverCarriesAnUnkeptCaptureNewerThanItsRow(t *testing.T) {
 	t.Parallel()
 	for name, putErr := range map[string]error{"its final capture landed": nil,
@@ -344,22 +319,16 @@ func TestAnEndWithoutWentOnNeverCarriesAnUnkeptCaptureNewerThanItsRow(t *testing
 
 // A CAPTURE THE LOG TOOK AFTER A RELAUNCH SETTLED IT STAYS THE TURN'S SESSION
 // THROUGH ITS END. The first launch's final capture was taken by node-a's
-// process, which handed its record on and stopped before the log took it; the
-// relaunch's wait for the job it follows settled it refused, its taker gone,
-// and only then did the log take the record — so the turn's row names it,
-// though the run's record kept nothing. The relaunch started without it, and
-// its own final capture was refused. The end names that refused capture
-// unkept, newer than the row's place, and says the turn went on past whatever
-// its row names: the shipped applier, applying the end by the rule of the
-// version its went_on is stamped at, keeps the late capture on the row; the
-// row reads as one its turn went on past, beside the newer capture that was
-// not kept; and the conversation's next turn is handed it. DRIVEN THROUGH THE
-// SHIPPED APPLIER AND READER (executordomaintest).
-//
+// process, which stopped before the log took it; the relaunch's wait settled it
+// refused, and only then did the log take the record, so the row names it though
+// the run's record kept nothing. The relaunch started without it and its own
+// final capture was refused. The end names that capture unkept and says the turn
+// went on past the row's session: the applier, by the rule of its went_on's
+// version, keeps the late capture on the row. DRIVEN THROUGH THE SHIPPED
+// APPLIER AND READER (executordomaintest).
 // Mutation: decide went_on on what the run's record kept alone, and the end is
-// stamped below version 4 and takes the late capture off the row, the
-// conversation's next turn handed none; answer Session.WentOn off the
-// lost outcome alone, and the row reads as the turn's whole session.
+// stamped below version 4 and takes the late capture off the row; answer
+// Session.WentOn off the lost outcome alone, and the row reads as the whole turn.
 func TestACaptureTheLogTookAfterARelaunchSettledItStaysTheTurnsSession(t *testing.T) {
 	t.Parallel()
 	inBubble(t, func(t *testing.T) {
@@ -520,24 +489,17 @@ func (l *takenBeforeTheEnd) End(ctx context.Context, e EndRecord) (LogAnswer, er
 }
 
 // A LAST WORD THE LOG TOOK AFTER ITS SETTLE IS READ AS THE TURN'S LAST WORD.
-// The turn's one launch's final capture — its last word — was taken by node-a's
-// process, which handed its record on and stopped before the log took it; the
-// end's own wait settled it refused, its taker gone, so the run's record holds
-// nothing kept, and the end, decided off that record, says the turn went on.
-// The log then took the record before the end, whether before the end was
-// decided or after: so the turn's row names that last word, holding all the
-// turn did. The end names its last word, at the row's own place, and the reader
-// holds the row's place to it: the row reads as no row its turn went on past,
-// says no note of it, is shown to every reader without went_on, and is handed
-// the conversation's next turn as its head, to be led through that turn rather
-// than told what the turn did after it is not there. DRIVEN THROUGH THE
-// SHIPPED APPLIER AND READER (executordomaintest).
-//
-// Mutation: name no last word beside went_on (lastWordOf nil), or read went_on
-// off the ending alone (executordomain's endWentPast ignoring the last word),
-// or hold the row's place to it at or after it rather than past it, and the row
-// that holds the turn's last word reads, is shown and is handed on as one its
-// turn went on past.
+// The turn's one launch's final capture, its last word, was taken by node-a's
+// process, which stopped before the log took it; the end's own wait settled it
+// refused, so the run's record holds nothing kept and the end says the turn went
+// on. The log then took the record, before the end was decided or after: the
+// row names that last word and holds all the turn did. The end names it at the
+// row's own place and the reader holds the row's place to it, so the row reads
+// as none its turn went on past. DRIVEN THROUGH THE SHIPPED APPLIER AND READER
+// (executordomaintest).
+// Mutation: name no last word beside went_on (lastWordOf nil), read went_on off
+// the ending alone (executordomain's endWentPast ignoring the last word), or
+// hold the row's place to it at or after rather than past it.
 func TestALastWordTheLogTookAfterItsSettleIsReadAsTheTurnsLastWord(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {

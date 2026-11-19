@@ -52,18 +52,12 @@ func TestTheShapeTellsALiteralFromAComposite(t *testing.T) {
 // A SWITCH FOR A FRESH VALUE OVER A VALUE THE DOCUMENT OWNS IS REFUSED NAMING
 // THE SWITCH, AS ITS CALLER SPELLS IT, AND BOTH WAYS ON.
 //
-// The run this refusal reaches asked to replace a webhook secret held by the
-// document itself — a literal, or a reference inside other text — and there is
-// no variable to mint a fresh one into. The refusal it used to meet was
-// written for a slot that resolved to nothing: it said the value had not
-// resolved and to set a variable, neither true of a literal, and it never said
-// that running without the switch registers the value as it is. And like
-// every refusal of such a slot, it names the shape and never the value.
-//
-// The switch is named as the surface that set it spells it, which is the
-// command line's flag for a `crewlet … provision` run and the body field for
-// the setup route — so a caller of the route who sent `recreate_webhooks` is
-// not told to re-run with a flag that surface does not have.
+// The document itself holds the webhook secret (a literal, or a reference
+// inside other text), so there is no variable to mint a fresh one into. The
+// refusal for a slot that resolved to nothing would say the value had not
+// resolved, untrue of a literal, and omit that running without the switch
+// registers the value as it is. It names the shape, never the value, and the
+// switch as its surface spells it (the flag, or the setup route's body field).
 func TestAFreshValueOverOneTheDocumentOwnsNamesTheSwitchAndBothWaysOn(t *testing.T) {
 	t.Parallel()
 	const path = "integrations.github.webhook_secret"

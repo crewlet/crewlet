@@ -1,0 +1,3158 @@
+{
+  "2.0.32/export.json a seat's second page": {
+    "transcript": {
+      "Entries": [
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:24.333Z",
+          "tool": "shell",
+          "text": "ok-from-shell\n",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:29.387Z",
+          "tool": "read",
+          "text": "{\"path\":\"/nonexistent/missing.go\"}",
+          "bytes": 34
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:29.399Z",
+          "tool": "read",
+          "failed": true,
+          "text": "File not found: /nonexistent/missing.go",
+          "bytes": 39
+        },
+        {
+          "kind": "note",
+          "at": "2026-11-03T01:05:29.41Z",
+          "text": "## A note from ada, sent while this turn was running\nada sent this through Crewlet while the work was under way.\n\nTarget the release branch.",
+          "bytes": 140
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:29.439Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 2; echo bg-done\",\"background\":true}",
+          "bytes": 53
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:29.455Z",
+          "tool": "shell",
+          "text": "Command moved to the background (shell ID: sh_19ef09569001P7B28Q0Oi8rLUu).\nOutput is streaming to: /work/xdg/data/opencode/shell/53a9f227169abaa77c762f8a6c14c9516bba2b94/sh_19ef09569001P7B28Q0Oi8rLUu.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+          "bytes": 837
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:29.493Z",
+          "tool": "subagent",
+          "text": "{\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"}",
+          "bytes": 79
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:29.56Z",
+          "tool": "subagent",
+          "text": "\u003csubagent sessionID=\"ses_e610f6a65ffeOjQwqt6izZ1zDk\" state=\"completed\"\u003e\nThe cache map is written unlocked.\n\u003c/subagent\u003e",
+          "bytes": 118
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:29.584Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:31.483Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "summary",
+          "at": "2026-11-03T01:05:37.453Z",
+          "text": "## Objective\n- Fix the flaky cache test.\n\n## Work State\n### Completed\n- The cache takes its lock.\n\n## Next Move\n1. (none)",
+          "bytes": 121
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:37.501Z",
+          "text": "Running the tests first.",
+          "bytes": 24
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:37.522Z",
+          "tool": "shell",
+          "text": "{\"command\":\"echo ok-from-shell\"}",
+          "bytes": 32
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:37.536Z",
+          "tool": "shell",
+          "text": "ok-from-shell\n",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:42.574Z",
+          "tool": "read",
+          "text": "{\"path\":\"/nonexistent/missing.go\"}",
+          "bytes": 34
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:42.58Z",
+          "tool": "read",
+          "failed": true,
+          "text": "File not found: /nonexistent/missing.go",
+          "bytes": 39
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:42.615Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 2; echo bg-done\",\"background\":true}",
+          "bytes": 53
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:42.625Z",
+          "tool": "shell",
+          "text": "Command moved to the background (shell ID: sh_19ef0c8dc001MG47WOOvZy9DkQ).\nOutput is streaming to: /work/xdg/data/opencode/shell/53a9f227169abaa77c762f8a6c14c9516bba2b94/sh_19ef0c8dc001MG47WOOvZy9DkQ.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+          "bytes": 837
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:42.659Z",
+          "tool": "subagent",
+          "text": "{\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"}",
+          "bytes": 79
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:42.732Z",
+          "tool": "subagent",
+          "text": "\u003csubagent sessionID=\"ses_e610f36f8ffe990Up6BlAISSPP\" state=\"completed\"\u003e\nThe cache map is written unlocked.\n\u003c/subagent\u003e",
+          "bytes": 118
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:42.76Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:05:44.039Z",
+          "text": "Carry on.",
+          "bytes": 9
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:44.06Z",
+          "text": "Carried on: nothing is left to do.",
+          "bytes": 34
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:05:44.224Z",
+          "text": "Fail now.",
+          "bytes": 9
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:05:44.376Z",
+          "text": "Wait for it.",
+          "bytes": 12
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:44.404Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 30; echo woke\"}",
+          "bytes": 33
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:47.632Z",
+          "tool": "shell",
+          "failed": true,
+          "text": "Tool execution interrupted",
+          "bytes": 26
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:05:47.774Z",
+          "text": "Write slowly.",
+          "bytes": 13
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:47.798Z",
+          "tool": "write",
+          "text": "{}",
+          "bytes": 2
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:50.975Z",
+          "tool": "write",
+          "failed": true,
+          "text": "Tool execution interrupted",
+          "bytes": 26
+        }
+      ],
+      "Places": [
+        {
+          "Ordinal": 3,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 4,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 5,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 6,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 7,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 8,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 9,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 10,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 11,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 12,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 13,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 14,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 15,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 16,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 17,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 18,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 19,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 20,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 21,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 22,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 23,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 24,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 25,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 26,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 27,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 28,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 29,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 30,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 31,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 32,
+          "TextFrom": 0
+        }
+      ],
+      "From": 3,
+      "Next": 33,
+      "Cut": ""
+    }
+  },
+  "2.0.32/export.json its calls": {
+    "transcript": {
+      "Entries": [
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:24.279Z",
+          "tool": "shell",
+          "text": "{\"command\":\"echo ok-from-shell\"}",
+          "bytes": 32
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:24.333Z",
+          "tool": "shell",
+          "text": "ok-from-shell\n",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:29.387Z",
+          "tool": "read",
+          "text": "{\"path\":\"/nonexistent/missing.go\"}",
+          "bytes": 34
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:29.399Z",
+          "tool": "read",
+          "failed": true,
+          "text": "File not found: /nonexistent/missing.go",
+          "bytes": 39
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:29.439Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 2; echo bg-done\",\"background\":true}",
+          "bytes": 53
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:29.455Z",
+          "tool": "shell",
+          "text": "Command moved to the background (shell ID: sh_19ef09569001P7B28Q0Oi8rLUu).\nOutput is streaming to: /work/xdg/data/opencode/shell/53a9f227169abaa77c762f8a6c14c9516bba2b94/sh_19ef09569001P7B28Q0Oi8rLUu.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+          "bytes": 837
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:29.493Z",
+          "tool": "subagent",
+          "text": "{\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"}",
+          "bytes": 79
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:29.56Z",
+          "tool": "subagent",
+          "text": "\u003csubagent sessionID=\"ses_e610f6a65ffeOjQwqt6izZ1zDk\" state=\"completed\"\u003e\nThe cache map is written unlocked.\n\u003c/subagent\u003e",
+          "bytes": 118
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:37.522Z",
+          "tool": "shell",
+          "text": "{\"command\":\"echo ok-from-shell\"}",
+          "bytes": 32
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:37.536Z",
+          "tool": "shell",
+          "text": "ok-from-shell\n",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:42.574Z",
+          "tool": "read",
+          "text": "{\"path\":\"/nonexistent/missing.go\"}",
+          "bytes": 34
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:42.58Z",
+          "tool": "read",
+          "failed": true,
+          "text": "File not found: /nonexistent/missing.go",
+          "bytes": 39
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:42.615Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 2; echo bg-done\",\"background\":true}",
+          "bytes": 53
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:42.625Z",
+          "tool": "shell",
+          "text": "Command moved to the background (shell ID: sh_19ef0c8dc001MG47WOOvZy9DkQ).\nOutput is streaming to: /work/xdg/data/opencode/shell/53a9f227169abaa77c762f8a6c14c9516bba2b94/sh_19ef0c8dc001MG47WOOvZy9DkQ.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+          "bytes": 837
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:42.659Z",
+          "tool": "subagent",
+          "text": "{\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"}",
+          "bytes": 79
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:42.732Z",
+          "tool": "subagent",
+          "text": "\u003csubagent sessionID=\"ses_e610f36f8ffe990Up6BlAISSPP\" state=\"completed\"\u003e\nThe cache map is written unlocked.\n\u003c/subagent\u003e",
+          "bytes": 118
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:44.404Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 30; echo woke\"}",
+          "bytes": 33
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:47.632Z",
+          "tool": "shell",
+          "failed": true,
+          "text": "Tool execution interrupted",
+          "bytes": 26
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:47.798Z",
+          "tool": "write",
+          "text": "{}",
+          "bytes": 2
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:50.975Z",
+          "tool": "write",
+          "failed": true,
+          "text": "Tool execution interrupted",
+          "bytes": 26
+        }
+      ],
+      "Places": [
+        {
+          "Ordinal": 2,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 3,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 4,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 5,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 7,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 8,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 9,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 10,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 15,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 16,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 17,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 18,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 19,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 20,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 21,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 22,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 28,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 29,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 31,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 32,
+          "TextFrom": 0
+        }
+      ],
+      "From": 0,
+      "Next": 33,
+      "Cut": ""
+    }
+  },
+  "2.0.32/export.json past a 4 KiB line": {
+    "transcript": {
+      "Entries": [
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:05:24.217Z",
+          "text": "Fix the flaky test in ENG-7.",
+          "bytes": 28
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:24.24Z",
+          "text": "Running the tests first.",
+          "bytes": 24
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:24.279Z",
+          "tool": "shell",
+          "text": "{\"command\":\"echo ok-from-shell\"}",
+          "bytes": 32
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:24.333Z",
+          "tool": "shell",
+          "text": "ok-from-shell\n",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:29.387Z",
+          "tool": "read",
+          "text": "{\"path\":\"/nonexistent/missing.go\"}",
+          "bytes": 34
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:29.399Z",
+          "tool": "read",
+          "failed": true,
+          "text": "File not found: /nonexistent/missing.go",
+          "bytes": 39
+        },
+        {
+          "kind": "note",
+          "at": "2026-11-03T01:05:29.41Z",
+          "text": "## A note from ada, sent while this turn was running\nada sent this through Crewlet while the work was under way.\n\nTarget the release branch.",
+          "bytes": 140
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:29.439Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 2; echo bg-done\",\"background\":true}",
+          "bytes": 53
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:29.455Z",
+          "tool": "shell",
+          "text": "Command moved to the background (shell ID: sh_19ef09569001P7B28Q0Oi8rLUu).\nOutput is streaming to: /work/xdg/data/opencode/shell/53a9f227169abaa77c762f8a6c14c9516bba2b94/sh_19ef09569001P7B28Q0Oi8rLUu.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+          "bytes": 837
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:29.493Z",
+          "tool": "subagent",
+          "text": "{\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"}",
+          "bytes": 79
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:29.56Z",
+          "tool": "subagent",
+          "text": "\u003csubagent sessionID=\"ses_e610f6a65ffeOjQwqt6izZ1zDk\" state=\"completed\"\u003e\nThe cache map is written unlocked.\n\u003c/subagent\u003e",
+          "bytes": 118
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:29.584Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:31.483Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "summary",
+          "at": "2026-11-03T01:05:37.453Z",
+          "text": "## Objective\n- Fix the flaky cache test.\n\n## Work State\n### Completed\n- The cache takes its lock.\n\n## Next Move\n1. (none)",
+          "bytes": 121
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:37.501Z",
+          "text": "Running the tests first.",
+          "bytes": 24
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:37.522Z",
+          "tool": "shell",
+          "text": "{\"command\":\"echo ok-from-shell\"}",
+          "bytes": 32
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:37.536Z",
+          "tool": "shell",
+          "text": "ok-from-shell\n",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:42.574Z",
+          "tool": "read",
+          "text": "{\"path\":\"/nonexistent/missing.go\"}",
+          "bytes": 34
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:42.58Z",
+          "tool": "read",
+          "failed": true,
+          "text": "File not found: /nonexistent/missing.go",
+          "bytes": 39
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:42.615Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 2; echo bg-done\",\"background\":true}",
+          "bytes": 53
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:42.625Z",
+          "tool": "shell",
+          "text": "Command moved to the background (shell ID: sh_19ef0c8dc001MG47WOOvZy9DkQ).\nOutput is streaming to: /work/xdg/data/opencode/shell/53a9f227169abaa77c762f8a6c14c9516bba2b94/sh_19ef0c8dc001MG47WOOvZy9DkQ.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+          "bytes": 837
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:42.659Z",
+          "tool": "subagent",
+          "text": "{\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"}",
+          "bytes": 79
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:42.732Z",
+          "tool": "subagent",
+          "text": "\u003csubagent sessionID=\"ses_e610f36f8ffe990Up6BlAISSPP\" state=\"completed\"\u003e\nThe cache map is written unlocked.\n\u003c/subagent\u003e",
+          "bytes": 118
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:42.76Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:05:44.039Z",
+          "text": "Carry on.",
+          "bytes": 9
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:44.06Z",
+          "text": "Carried on: nothing is left to do.",
+          "bytes": 34
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:05:44.224Z",
+          "text": "Fail now.",
+          "bytes": 9
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:05:44.376Z",
+          "text": "Wait for it.",
+          "bytes": 12
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:44.404Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 30; echo woke\"}",
+          "bytes": 33
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:47.632Z",
+          "tool": "shell",
+          "failed": true,
+          "text": "Tool execution interrupted",
+          "bytes": 26
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:05:47.774Z",
+          "text": "Write slowly.",
+          "bytes": 13
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:47.798Z",
+          "tool": "write",
+          "text": "{}",
+          "bytes": 2
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:50.975Z",
+          "tool": "write",
+          "failed": true,
+          "text": "Tool execution interrupted",
+          "bytes": 26
+        }
+      ],
+      "Places": [
+        {
+          "Ordinal": 0,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 1,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 2,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 3,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 4,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 5,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 6,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 7,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 8,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 9,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 10,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 11,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 12,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 13,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 14,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 15,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 16,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 17,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 18,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 19,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 20,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 21,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 22,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 23,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 24,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 25,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 26,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 27,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 28,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 29,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 30,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 31,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 32,
+          "TextFrom": 0
+        }
+      ],
+      "From": 0,
+      "Next": 33,
+      "Cut": ""
+    }
+  },
+  "2.0.32/export.json whole": {
+    "transcript": {
+      "Entries": [
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:05:24.217Z",
+          "text": "Fix the flaky test in ENG-7.",
+          "bytes": 28
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:24.24Z",
+          "text": "Running the tests first.",
+          "bytes": 24
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:24.279Z",
+          "tool": "shell",
+          "text": "{\"command\":\"echo ok-from-shell\"}",
+          "bytes": 32
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:24.333Z",
+          "tool": "shell",
+          "text": "ok-from-shell\n",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:29.387Z",
+          "tool": "read",
+          "text": "{\"path\":\"/nonexistent/missing.go\"}",
+          "bytes": 34
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:29.399Z",
+          "tool": "read",
+          "failed": true,
+          "text": "File not found: /nonexistent/missing.go",
+          "bytes": 39
+        },
+        {
+          "kind": "note",
+          "at": "2026-11-03T01:05:29.41Z",
+          "text": "## A note from ada, sent while this turn was running\nada sent this through Crewlet while the work was under way.\n\nTarget the release branch.",
+          "bytes": 140
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:29.439Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 2; echo bg-done\",\"background\":true}",
+          "bytes": 53
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:29.455Z",
+          "tool": "shell",
+          "text": "Command moved to the background (shell ID: sh_19ef09569001P7B28Q0Oi8rLUu).\nOutput is streaming to: /work/xdg/data/opencode/shell/53a9f227169abaa77c762f8a6c14c9516bba2b94/sh_19ef09569001P7B28Q0Oi8rLUu.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+          "bytes": 837
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:29.493Z",
+          "tool": "subagent",
+          "text": "{\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"}",
+          "bytes": 79
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:29.56Z",
+          "tool": "subagent",
+          "text": "\u003csubagent sessionID=\"ses_e610f6a65ffeOjQwqt6izZ1zDk\" state=\"completed\"\u003e\nThe cache map is written unlocked.\n\u003c/subagent\u003e",
+          "bytes": 118
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:29.584Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:31.483Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "summary",
+          "at": "2026-11-03T01:05:37.453Z",
+          "text": "## Objective\n- Fix the flaky cache test.\n\n## Work State\n### Completed\n- The cache takes its lock.\n\n## Next Move\n1. (none)",
+          "bytes": 121
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:37.501Z",
+          "text": "Running the tests first.",
+          "bytes": 24
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:37.522Z",
+          "tool": "shell",
+          "text": "{\"command\":\"echo ok-from-shell\"}",
+          "bytes": 32
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:37.536Z",
+          "tool": "shell",
+          "text": "ok-from-shell\n",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:42.574Z",
+          "tool": "read",
+          "text": "{\"path\":\"/nonexistent/missing.go\"}",
+          "bytes": 34
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:42.58Z",
+          "tool": "read",
+          "failed": true,
+          "text": "File not found: /nonexistent/missing.go",
+          "bytes": 39
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:42.615Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 2; echo bg-done\",\"background\":true}",
+          "bytes": 53
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:42.625Z",
+          "tool": "shell",
+          "text": "Command moved to the background (shell ID: sh_19ef0c8dc001MG47WOOvZy9DkQ).\nOutput is streaming to: /work/xdg/data/opencode/shell/53a9f227169abaa77c762f8a6c14c9516bba2b94/sh_19ef0c8dc001MG47WOOvZy9DkQ.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+          "bytes": 837
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:42.659Z",
+          "tool": "subagent",
+          "text": "{\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"}",
+          "bytes": 79
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:42.732Z",
+          "tool": "subagent",
+          "text": "\u003csubagent sessionID=\"ses_e610f36f8ffe990Up6BlAISSPP\" state=\"completed\"\u003e\nThe cache map is written unlocked.\n\u003c/subagent\u003e",
+          "bytes": 118
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:42.76Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:05:44.039Z",
+          "text": "Carry on.",
+          "bytes": 9
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:05:44.06Z",
+          "text": "Carried on: nothing is left to do.",
+          "bytes": 34
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:05:44.224Z",
+          "text": "Fail now.",
+          "bytes": 9
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:05:44.376Z",
+          "text": "Wait for it.",
+          "bytes": 12
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:44.404Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 30; echo woke\"}",
+          "bytes": 33
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:47.632Z",
+          "tool": "shell",
+          "failed": true,
+          "text": "Tool execution interrupted",
+          "bytes": 26
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:05:47.774Z",
+          "text": "Write slowly.",
+          "bytes": 13
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:05:47.798Z",
+          "tool": "write",
+          "text": "{}",
+          "bytes": 2
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:05:50.975Z",
+          "tool": "write",
+          "failed": true,
+          "text": "Tool execution interrupted",
+          "bytes": 26
+        }
+      ],
+      "Places": [
+        {
+          "Ordinal": 0,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 1,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 2,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 3,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 4,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 5,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 6,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 7,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 8,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 9,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 10,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 11,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 12,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 13,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 14,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 15,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 16,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 17,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 18,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 19,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 20,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 21,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 22,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 23,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 24,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 25,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 26,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 27,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 28,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 29,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 30,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 31,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 32,
+          "TextFrom": 0
+        }
+      ],
+      "From": 0,
+      "Next": 33,
+      "Cut": ""
+    }
+  },
+  "2.2.5/export.json a seat's second page": {
+    "transcript": {
+      "Entries": [
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:31.518Z",
+          "tool": "shell",
+          "text": "ok-from-shell\n",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:36.557Z",
+          "tool": "read",
+          "text": "{\"path\":\"/nonexistent/missing.go\"}",
+          "bytes": 34
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:36.569Z",
+          "tool": "read",
+          "failed": true,
+          "text": "File not found: /nonexistent/missing.go\n\nThe folder /nonexistent does not exist. The nearest folder that does is /.",
+          "bytes": 115
+        },
+        {
+          "kind": "note",
+          "at": "2026-11-03T01:06:36.577Z",
+          "text": "## A note from ada, sent while this turn was running\nada sent this through Crewlet while the work was under way.\n\nTarget the release branch.",
+          "bytes": 140
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:36.6Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 2; echo bg-done\",\"background\":true}",
+          "bytes": 53
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:36.608Z",
+          "tool": "shell",
+          "text": "Command moved to the background (shell ID: sh_19ef19bbd0013XmycryzLMiHMB).\nOutput is streaming to: /work/xdg/data/opencode/shell/4b3e97d5bf91019a61aeeca0a7a238bc7dbb67eb/sh_19ef19bbd0013XmycryzLMiHMB.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+          "bytes": 837
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:36.632Z",
+          "tool": "subagent",
+          "text": "{\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"}",
+          "bytes": 79
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:36.671Z",
+          "tool": "subagent",
+          "text": "\u003csubagent sessionID=\"ses_e610e6423ffeL8py7oyYEaSaze\" state=\"completed\"\u003e\nThe cache map is written unlocked.\n\u003c/subagent\u003e",
+          "bytes": 118
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:36.683Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:38.627Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "summary",
+          "at": "2026-11-03T01:06:44.584Z",
+          "text": "## Objective\n- Fix the flaky cache test.\n\n## Work State\n### Completed\n- The cache takes its lock.\n\n## Next Move\n1. (none)",
+          "bytes": 121
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:44.629Z",
+          "text": "Running the tests first.",
+          "bytes": 24
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:44.647Z",
+          "tool": "shell",
+          "text": "{\"command\":\"echo ok-from-shell\"}",
+          "bytes": 32
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:44.66Z",
+          "tool": "shell",
+          "text": "ok-from-shell\n",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:49.698Z",
+          "tool": "read",
+          "text": "{\"path\":\"/nonexistent/missing.go\"}",
+          "bytes": 34
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:49.716Z",
+          "tool": "read",
+          "failed": true,
+          "text": "File not found: /nonexistent/missing.go\n\nThe folder /nonexistent does not exist. The nearest folder that does is /.",
+          "bytes": 115
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:49.749Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 2; echo bg-done\",\"background\":true}",
+          "bytes": 53
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:49.758Z",
+          "tool": "shell",
+          "text": "Command moved to the background (shell ID: sh_19ef1cf19001p5TeGhpbhr0KLa).\nOutput is streaming to: /work/xdg/data/opencode/shell/4b3e97d5bf91019a61aeeca0a7a238bc7dbb67eb/sh_19ef1cf19001p5TeGhpbhr0KLa.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+          "bytes": 837
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:49.784Z",
+          "tool": "subagent",
+          "text": "{\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"}",
+          "bytes": 79
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:49.828Z",
+          "tool": "subagent",
+          "text": "\u003csubagent sessionID=\"ses_e610e30c3ffepxMb4TlEUELoc0\" state=\"completed\"\u003e\nThe cache map is written unlocked.\n\u003c/subagent\u003e",
+          "bytes": 118
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:49.843Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:06:51.404Z",
+          "text": "Carry on.",
+          "bytes": 9
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:51.426Z",
+          "text": "Carried on: nothing is left to do.",
+          "bytes": 34
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:06:51.641Z",
+          "text": "Fail now.",
+          "bytes": 9
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:06:51.82Z",
+          "text": "Wait for it.",
+          "bytes": 12
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:51.847Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 30; echo woke\"}",
+          "bytes": 33
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:55.037Z",
+          "tool": "shell",
+          "failed": true,
+          "text": "Tool execution interrupted",
+          "bytes": 26
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:06:55.189Z",
+          "text": "Write slowly.",
+          "bytes": 13
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:55.211Z",
+          "tool": "write",
+          "text": "{}",
+          "bytes": 2
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:58.369Z",
+          "tool": "write",
+          "failed": true,
+          "text": "Tool execution interrupted",
+          "bytes": 26
+        }
+      ],
+      "Places": [
+        {
+          "Ordinal": 3,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 4,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 5,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 6,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 7,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 8,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 9,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 10,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 11,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 12,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 13,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 14,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 15,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 16,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 17,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 18,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 19,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 20,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 21,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 22,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 23,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 24,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 25,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 26,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 27,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 28,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 29,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 30,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 31,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 32,
+          "TextFrom": 0
+        }
+      ],
+      "From": 3,
+      "Next": 33,
+      "Cut": ""
+    }
+  },
+  "2.2.5/export.json its calls": {
+    "transcript": {
+      "Entries": [
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:31.496Z",
+          "tool": "shell",
+          "text": "{\"command\":\"echo ok-from-shell\"}",
+          "bytes": 32
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:31.518Z",
+          "tool": "shell",
+          "text": "ok-from-shell\n",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:36.557Z",
+          "tool": "read",
+          "text": "{\"path\":\"/nonexistent/missing.go\"}",
+          "bytes": 34
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:36.569Z",
+          "tool": "read",
+          "failed": true,
+          "text": "File not found: /nonexistent/missing.go\n\nThe folder /nonexistent does not exist. The nearest folder that does is /.",
+          "bytes": 115
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:36.6Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 2; echo bg-done\",\"background\":true}",
+          "bytes": 53
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:36.608Z",
+          "tool": "shell",
+          "text": "Command moved to the background (shell ID: sh_19ef19bbd0013XmycryzLMiHMB).\nOutput is streaming to: /work/xdg/data/opencode/shell/4b3e97d5bf91019a61aeeca0a7a238bc7dbb67eb/sh_19ef19bbd0013XmycryzLMiHMB.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+          "bytes": 837
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:36.632Z",
+          "tool": "subagent",
+          "text": "{\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"}",
+          "bytes": 79
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:36.671Z",
+          "tool": "subagent",
+          "text": "\u003csubagent sessionID=\"ses_e610e6423ffeL8py7oyYEaSaze\" state=\"completed\"\u003e\nThe cache map is written unlocked.\n\u003c/subagent\u003e",
+          "bytes": 118
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:44.647Z",
+          "tool": "shell",
+          "text": "{\"command\":\"echo ok-from-shell\"}",
+          "bytes": 32
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:44.66Z",
+          "tool": "shell",
+          "text": "ok-from-shell\n",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:49.698Z",
+          "tool": "read",
+          "text": "{\"path\":\"/nonexistent/missing.go\"}",
+          "bytes": 34
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:49.716Z",
+          "tool": "read",
+          "failed": true,
+          "text": "File not found: /nonexistent/missing.go\n\nThe folder /nonexistent does not exist. The nearest folder that does is /.",
+          "bytes": 115
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:49.749Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 2; echo bg-done\",\"background\":true}",
+          "bytes": 53
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:49.758Z",
+          "tool": "shell",
+          "text": "Command moved to the background (shell ID: sh_19ef1cf19001p5TeGhpbhr0KLa).\nOutput is streaming to: /work/xdg/data/opencode/shell/4b3e97d5bf91019a61aeeca0a7a238bc7dbb67eb/sh_19ef1cf19001p5TeGhpbhr0KLa.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+          "bytes": 837
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:49.784Z",
+          "tool": "subagent",
+          "text": "{\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"}",
+          "bytes": 79
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:49.828Z",
+          "tool": "subagent",
+          "text": "\u003csubagent sessionID=\"ses_e610e30c3ffepxMb4TlEUELoc0\" state=\"completed\"\u003e\nThe cache map is written unlocked.\n\u003c/subagent\u003e",
+          "bytes": 118
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:51.847Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 30; echo woke\"}",
+          "bytes": 33
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:55.037Z",
+          "tool": "shell",
+          "failed": true,
+          "text": "Tool execution interrupted",
+          "bytes": 26
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:55.211Z",
+          "tool": "write",
+          "text": "{}",
+          "bytes": 2
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:58.369Z",
+          "tool": "write",
+          "failed": true,
+          "text": "Tool execution interrupted",
+          "bytes": 26
+        }
+      ],
+      "Places": [
+        {
+          "Ordinal": 2,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 3,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 4,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 5,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 7,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 8,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 9,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 10,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 15,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 16,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 17,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 18,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 19,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 20,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 21,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 22,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 28,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 29,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 31,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 32,
+          "TextFrom": 0
+        }
+      ],
+      "From": 0,
+      "Next": 33,
+      "Cut": ""
+    }
+  },
+  "2.2.5/export.json past a 4 KiB line": {
+    "transcript": {
+      "Entries": [
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:06:31.451Z",
+          "text": "Fix the flaky test in ENG-7.",
+          "bytes": 28
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:31.465Z",
+          "text": "Running the tests first.",
+          "bytes": 24
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:31.496Z",
+          "tool": "shell",
+          "text": "{\"command\":\"echo ok-from-shell\"}",
+          "bytes": 32
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:31.518Z",
+          "tool": "shell",
+          "text": "ok-from-shell\n",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:36.557Z",
+          "tool": "read",
+          "text": "{\"path\":\"/nonexistent/missing.go\"}",
+          "bytes": 34
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:36.569Z",
+          "tool": "read",
+          "failed": true,
+          "text": "File not found: /nonexistent/missing.go\n\nThe folder /nonexistent does not exist. The nearest folder that does is /.",
+          "bytes": 115
+        },
+        {
+          "kind": "note",
+          "at": "2026-11-03T01:06:36.577Z",
+          "text": "## A note from ada, sent while this turn was running\nada sent this through Crewlet while the work was under way.\n\nTarget the release branch.",
+          "bytes": 140
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:36.6Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 2; echo bg-done\",\"background\":true}",
+          "bytes": 53
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:36.608Z",
+          "tool": "shell",
+          "text": "Command moved to the background (shell ID: sh_19ef19bbd0013XmycryzLMiHMB).\nOutput is streaming to: /work/xdg/data/opencode/shell/4b3e97d5bf91019a61aeeca0a7a238bc7dbb67eb/sh_19ef19bbd0013XmycryzLMiHMB.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+          "bytes": 837
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:36.632Z",
+          "tool": "subagent",
+          "text": "{\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"}",
+          "bytes": 79
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:36.671Z",
+          "tool": "subagent",
+          "text": "\u003csubagent sessionID=\"ses_e610e6423ffeL8py7oyYEaSaze\" state=\"completed\"\u003e\nThe cache map is written unlocked.\n\u003c/subagent\u003e",
+          "bytes": 118
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:36.683Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:38.627Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "summary",
+          "at": "2026-11-03T01:06:44.584Z",
+          "text": "## Objective\n- Fix the flaky cache test.\n\n## Work State\n### Completed\n- The cache takes its lock.\n\n## Next Move\n1. (none)",
+          "bytes": 121
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:44.629Z",
+          "text": "Running the tests first.",
+          "bytes": 24
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:44.647Z",
+          "tool": "shell",
+          "text": "{\"command\":\"echo ok-from-shell\"}",
+          "bytes": 32
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:44.66Z",
+          "tool": "shell",
+          "text": "ok-from-shell\n",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:49.698Z",
+          "tool": "read",
+          "text": "{\"path\":\"/nonexistent/missing.go\"}",
+          "bytes": 34
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:49.716Z",
+          "tool": "read",
+          "failed": true,
+          "text": "File not found: /nonexistent/missing.go\n\nThe folder /nonexistent does not exist. The nearest folder that does is /.",
+          "bytes": 115
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:49.749Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 2; echo bg-done\",\"background\":true}",
+          "bytes": 53
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:49.758Z",
+          "tool": "shell",
+          "text": "Command moved to the background (shell ID: sh_19ef1cf19001p5TeGhpbhr0KLa).\nOutput is streaming to: /work/xdg/data/opencode/shell/4b3e97d5bf91019a61aeeca0a7a238bc7dbb67eb/sh_19ef1cf19001p5TeGhpbhr0KLa.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+          "bytes": 837
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:49.784Z",
+          "tool": "subagent",
+          "text": "{\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"}",
+          "bytes": 79
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:49.828Z",
+          "tool": "subagent",
+          "text": "\u003csubagent sessionID=\"ses_e610e30c3ffepxMb4TlEUELoc0\" state=\"completed\"\u003e\nThe cache map is written unlocked.\n\u003c/subagent\u003e",
+          "bytes": 118
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:49.843Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:06:51.404Z",
+          "text": "Carry on.",
+          "bytes": 9
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:51.426Z",
+          "text": "Carried on: nothing is left to do.",
+          "bytes": 34
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:06:51.641Z",
+          "text": "Fail now.",
+          "bytes": 9
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:06:51.82Z",
+          "text": "Wait for it.",
+          "bytes": 12
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:51.847Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 30; echo woke\"}",
+          "bytes": 33
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:55.037Z",
+          "tool": "shell",
+          "failed": true,
+          "text": "Tool execution interrupted",
+          "bytes": 26
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:06:55.189Z",
+          "text": "Write slowly.",
+          "bytes": 13
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:55.211Z",
+          "tool": "write",
+          "text": "{}",
+          "bytes": 2
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:58.369Z",
+          "tool": "write",
+          "failed": true,
+          "text": "Tool execution interrupted",
+          "bytes": 26
+        }
+      ],
+      "Places": [
+        {
+          "Ordinal": 0,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 1,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 2,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 3,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 4,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 5,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 6,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 7,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 8,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 9,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 10,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 11,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 12,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 13,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 14,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 15,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 16,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 17,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 18,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 19,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 20,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 21,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 22,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 23,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 24,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 25,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 26,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 27,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 28,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 29,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 30,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 31,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 32,
+          "TextFrom": 0
+        }
+      ],
+      "From": 0,
+      "Next": 33,
+      "Cut": ""
+    }
+  },
+  "2.2.5/export.json whole": {
+    "transcript": {
+      "Entries": [
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:06:31.451Z",
+          "text": "Fix the flaky test in ENG-7.",
+          "bytes": 28
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:31.465Z",
+          "text": "Running the tests first.",
+          "bytes": 24
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:31.496Z",
+          "tool": "shell",
+          "text": "{\"command\":\"echo ok-from-shell\"}",
+          "bytes": 32
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:31.518Z",
+          "tool": "shell",
+          "text": "ok-from-shell\n",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:36.557Z",
+          "tool": "read",
+          "text": "{\"path\":\"/nonexistent/missing.go\"}",
+          "bytes": 34
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:36.569Z",
+          "tool": "read",
+          "failed": true,
+          "text": "File not found: /nonexistent/missing.go\n\nThe folder /nonexistent does not exist. The nearest folder that does is /.",
+          "bytes": 115
+        },
+        {
+          "kind": "note",
+          "at": "2026-11-03T01:06:36.577Z",
+          "text": "## A note from ada, sent while this turn was running\nada sent this through Crewlet while the work was under way.\n\nTarget the release branch.",
+          "bytes": 140
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:36.6Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 2; echo bg-done\",\"background\":true}",
+          "bytes": 53
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:36.608Z",
+          "tool": "shell",
+          "text": "Command moved to the background (shell ID: sh_19ef19bbd0013XmycryzLMiHMB).\nOutput is streaming to: /work/xdg/data/opencode/shell/4b3e97d5bf91019a61aeeca0a7a238bc7dbb67eb/sh_19ef19bbd0013XmycryzLMiHMB.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+          "bytes": 837
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:36.632Z",
+          "tool": "subagent",
+          "text": "{\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"}",
+          "bytes": 79
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:36.671Z",
+          "tool": "subagent",
+          "text": "\u003csubagent sessionID=\"ses_e610e6423ffeL8py7oyYEaSaze\" state=\"completed\"\u003e\nThe cache map is written unlocked.\n\u003c/subagent\u003e",
+          "bytes": 118
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:36.683Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:38.627Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "summary",
+          "at": "2026-11-03T01:06:44.584Z",
+          "text": "## Objective\n- Fix the flaky cache test.\n\n## Work State\n### Completed\n- The cache takes its lock.\n\n## Next Move\n1. (none)",
+          "bytes": 121
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:44.629Z",
+          "text": "Running the tests first.",
+          "bytes": 24
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:44.647Z",
+          "tool": "shell",
+          "text": "{\"command\":\"echo ok-from-shell\"}",
+          "bytes": 32
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:44.66Z",
+          "tool": "shell",
+          "text": "ok-from-shell\n",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:49.698Z",
+          "tool": "read",
+          "text": "{\"path\":\"/nonexistent/missing.go\"}",
+          "bytes": 34
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:49.716Z",
+          "tool": "read",
+          "failed": true,
+          "text": "File not found: /nonexistent/missing.go\n\nThe folder /nonexistent does not exist. The nearest folder that does is /.",
+          "bytes": 115
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:49.749Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 2; echo bg-done\",\"background\":true}",
+          "bytes": 53
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:49.758Z",
+          "tool": "shell",
+          "text": "Command moved to the background (shell ID: sh_19ef1cf19001p5TeGhpbhr0KLa).\nOutput is streaming to: /work/xdg/data/opencode/shell/4b3e97d5bf91019a61aeeca0a7a238bc7dbb67eb/sh_19ef1cf19001p5TeGhpbhr0KLa.out\nYou will be notified automatically when the command finishes. The notification will include the command's output. Unless the user explicitly asks otherwise, DO NOT poll for completion, even if you need the final result to continue. Repeatedly sleeping and reading or searching the output file is polling, not useful work. You may read the current output if it lets you do useful work now, but do not repeatedly check it while waiting for the command to finish. Keep working on anything that does not depend on the result. If you have nothing else to do, end your response; you will be resumed automatically when the command finishes.",
+          "bytes": 837
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:49.784Z",
+          "tool": "subagent",
+          "text": "{\"agent\":\"general\",\"description\":\"find the race\",\"prompt\":\"Look for the race.\"}",
+          "bytes": 79
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:49.828Z",
+          "tool": "subagent",
+          "text": "\u003csubagent sessionID=\"ses_e610e30c3ffepxMb4TlEUELoc0\" state=\"completed\"\u003e\nThe cache map is written unlocked.\n\u003c/subagent\u003e",
+          "bytes": 118
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:49.843Z",
+          "text": "Fixed: the cache takes its lock.",
+          "bytes": 32
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:06:51.404Z",
+          "text": "Carry on.",
+          "bytes": 9
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-03T01:06:51.426Z",
+          "text": "Carried on: nothing is left to do.",
+          "bytes": 34
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:06:51.641Z",
+          "text": "Fail now.",
+          "bytes": 9
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:06:51.82Z",
+          "text": "Wait for it.",
+          "bytes": 12
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:51.847Z",
+          "tool": "shell",
+          "text": "{\"command\":\"sleep 30; echo woke\"}",
+          "bytes": 33
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:55.037Z",
+          "tool": "shell",
+          "failed": true,
+          "text": "Tool execution interrupted",
+          "bytes": 26
+        },
+        {
+          "kind": "brief",
+          "at": "2026-11-03T01:06:55.189Z",
+          "text": "Write slowly.",
+          "bytes": 13
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-03T01:06:55.211Z",
+          "tool": "write",
+          "text": "{}",
+          "bytes": 2
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-03T01:06:58.369Z",
+          "tool": "write",
+          "failed": true,
+          "text": "Tool execution interrupted",
+          "bytes": 26
+        }
+      ],
+      "Places": [
+        {
+          "Ordinal": 0,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 1,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 2,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 3,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 4,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 5,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 6,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 7,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 8,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 9,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 10,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 11,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 12,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 13,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 14,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 15,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 16,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 17,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 18,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 19,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 20,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 21,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 22,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 23,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 24,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 25,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 26,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 27,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 28,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 29,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 30,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 31,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 32,
+          "TextFrom": 0
+        }
+      ],
+      "From": 0,
+      "Next": 33,
+      "Cut": ""
+    }
+  },
+  "2.3.0/text.json a seat's second page": {
+    "transcript": {
+      "Entries": [],
+      "Places": [],
+      "From": 3,
+      "Next": 3,
+      "Cut": ""
+    }
+  },
+  "2.3.0/text.json its calls": {
+    "transcript": {
+      "Entries": [],
+      "Places": [],
+      "From": 0,
+      "Next": 2,
+      "Cut": ""
+    }
+  },
+  "2.3.0/text.json past a 4 KiB line": {
+    "transcript": {
+      "Entries": [
+        {
+          "kind": "brief",
+          "at": "2026-11-17T04:42:42.472Z",
+          "text": "Job text job: answer once.\n",
+          "bytes": 27
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-17T04:42:42.49Z",
+          "text": "job text job done",
+          "bytes": 17
+        }
+      ],
+      "Places": [
+        {
+          "Ordinal": 0,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 1,
+          "TextFrom": 0
+        }
+      ],
+      "From": 0,
+      "Next": 2,
+      "Cut": ""
+    }
+  },
+  "2.3.0/text.json whole": {
+    "transcript": {
+      "Entries": [
+        {
+          "kind": "brief",
+          "at": "2026-11-17T04:42:42.472Z",
+          "text": "Job text job: answer once.\n",
+          "bytes": 27
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-17T04:42:42.49Z",
+          "text": "job text job done",
+          "bytes": 17
+        }
+      ],
+      "Places": [
+        {
+          "Ordinal": 0,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 1,
+          "TextFrom": 0
+        }
+      ],
+      "From": 0,
+      "Next": 2,
+      "Cut": ""
+    }
+  },
+  "2.3.0/tool.json a seat's second page": {
+    "transcript": {
+      "Entries": [],
+      "Places": [],
+      "From": 3,
+      "Next": 3,
+      "Cut": ""
+    }
+  },
+  "2.3.0/tool.json its calls": {
+    "transcript": {
+      "Entries": [
+        {
+          "kind": "tool_call",
+          "at": "2026-11-17T04:42:44.923Z",
+          "tool": "crewlet_echo",
+          "text": "{\"tag\":\"wbig\"}",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-17T04:42:44.935Z",
+          "tool": "crewlet_echo",
+          "text": "Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcd…",
+          "bytes": 40000,
+          "cut": true
+        }
+      ],
+      "Places": [
+        {
+          "Ordinal": 1,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 2,
+          "TextFrom": 0
+        }
+      ],
+      "From": 0,
+      "Next": 3,
+      "Cut": ""
+    }
+  },
+  "2.3.0/tool.json past a 4 KiB line": {
+    "transcript": {
+      "Entries": [
+        {
+          "kind": "brief",
+          "at": "2026-11-17T04:42:44.869Z",
+          "text": "Job tool job: call echo wbig.\n",
+          "bytes": 30
+        },
+        {
+          "kind": "unread",
+          "text": "a part of the export past 4 KiB was not read, and nothing after it could be",
+          "bytes": 75
+        }
+      ],
+      "Places": [
+        {
+          "Ordinal": 0,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 1,
+          "TextFrom": 0
+        }
+      ],
+      "From": 0,
+      "Next": 2,
+      "Cut": "read"
+    }
+  },
+  "2.3.0/tool.json whole": {
+    "transcript": {
+      "Entries": [
+        {
+          "kind": "brief",
+          "at": "2026-11-17T04:42:44.869Z",
+          "text": "Job tool job: call echo wbig.\n",
+          "bytes": 30
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-17T04:42:44.923Z",
+          "tool": "crewlet_echo",
+          "text": "{\"tag\":\"wbig\"}",
+          "bytes": 14
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-17T04:42:44.935Z",
+          "tool": "crewlet_echo",
+          "text": "Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcdefghijklmnopqrstuvwxyz0123456789 Job wbig tool result abcd…",
+          "bytes": 40000,
+          "cut": true
+        }
+      ],
+      "Places": [
+        {
+          "Ordinal": 0,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 1,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 2,
+          "TextFrom": 0
+        }
+      ],
+      "From": 0,
+      "Next": 3,
+      "Cut": ""
+    }
+  },
+  "a list that is no list": {
+    "transcript": {
+      "Entries": null,
+      "Places": null,
+      "From": 0,
+      "Next": 0,
+      "Cut": ""
+    },
+    "error": "executor: the session's archive is not one its format describes: it holds no export document of its harness's"
+  },
+  "a message that does not decode": {
+    "transcript": {
+      "Entries": null,
+      "Places": null,
+      "From": 0,
+      "Next": 0,
+      "Cut": ""
+    },
+    "error": "executor: the session's archive is not one its format describes: it holds no export document of its harness's"
+  },
+  "abandoned": {
+    "transcript": {
+      "Entries": null,
+      "Places": null,
+      "From": 0,
+      "Next": 0,
+      "Cut": ""
+    },
+    "error": "context canceled"
+  },
+  "cut short": {
+    "transcript": {
+      "Entries": null,
+      "Places": null,
+      "From": 0,
+      "Next": 0,
+      "Cut": ""
+    },
+    "error": "executor: the session's archive is not one its format describes: it ends part way through"
+  },
+  "keys around the list and odd elements": {
+    "transcript": {
+      "Entries": [
+        {
+          "kind": "brief",
+          "at": "2026-11-14T04:56:00.771Z",
+          "text": "Fix the flake.",
+          "bytes": 14
+        },
+        {
+          "kind": "unread",
+          "text": "a message of the export is not a message, and was not read",
+          "bytes": 58
+        },
+        {
+          "kind": "unread",
+          "text": "a message of the export is not a message, and was not read",
+          "bytes": 58
+        },
+        {
+          "kind": "unread",
+          "text": "a message of the export is not a message, and was not read",
+          "bytes": 58
+        },
+        {
+          "kind": "unread",
+          "text": "a message of the export of no kind this read knows was not read",
+          "bytes": 63
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-14T04:56:00.8Z",
+          "text": "Running it.",
+          "bytes": 11
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-14T04:56:00.82Z",
+          "tool": "bash",
+          "text": "{\"command\":\"go test ./...\"}",
+          "bytes": 27
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-14T04:56:00.83Z",
+          "tool": "bash",
+          "text": "ok",
+          "bytes": 2
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-14T04:56:00.8Z",
+          "tool": "crewlet_read",
+          "text": "{\"id\":1}",
+          "bytes": 8
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-14T04:56:00.8Z",
+          "tool": "crewlet_read",
+          "failed": true,
+          "text": "",
+          "bytes": 0
+        },
+        {
+          "kind": "brief",
+          "text": "second",
+          "bytes": 6
+        },
+        {
+          "kind": "unread",
+          "text": "a message of the export whose content is not a list was not read",
+          "bytes": 64
+        },
+        {
+          "kind": "summary",
+          "at": "1970-01-01T00:00:00.005Z",
+          "text": "The flake is fixed.",
+          "bytes": 19
+        }
+      ],
+      "Places": [
+        {
+          "Ordinal": 0,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 1,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 2,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 3,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 4,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 5,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 6,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 7,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 8,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 9,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 10,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 11,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 12,
+          "TextFrom": 0
+        }
+      ],
+      "From": 0,
+      "Next": 13,
+      "Cut": ""
+    }
+  },
+  "more after the document": {
+    "transcript": {
+      "Entries": [
+        {
+          "kind": "brief",
+          "at": "2026-11-14T04:56:00.771Z",
+          "text": "Fix the flake.",
+          "bytes": 14
+        },
+        {
+          "kind": "unread",
+          "text": "a message of the export is not a message, and was not read",
+          "bytes": 58
+        },
+        {
+          "kind": "unread",
+          "text": "a message of the export is not a message, and was not read",
+          "bytes": 58
+        },
+        {
+          "kind": "unread",
+          "text": "a message of the export is not a message, and was not read",
+          "bytes": 58
+        },
+        {
+          "kind": "unread",
+          "text": "a message of the export of no kind this read knows was not read",
+          "bytes": 63
+        },
+        {
+          "kind": "model",
+          "at": "2026-11-14T04:56:00.8Z",
+          "text": "Running it.",
+          "bytes": 11
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-14T04:56:00.82Z",
+          "tool": "bash",
+          "text": "{\"command\":\"go test ./...\"}",
+          "bytes": 27
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-14T04:56:00.83Z",
+          "tool": "bash",
+          "text": "ok",
+          "bytes": 2
+        },
+        {
+          "kind": "tool_call",
+          "at": "2026-11-14T04:56:00.8Z",
+          "tool": "crewlet_read",
+          "text": "{\"id\":1}",
+          "bytes": 8
+        },
+        {
+          "kind": "tool_result",
+          "at": "2026-11-14T04:56:00.8Z",
+          "tool": "crewlet_read",
+          "failed": true,
+          "text": "",
+          "bytes": 0
+        },
+        {
+          "kind": "brief",
+          "text": "second",
+          "bytes": 6
+        },
+        {
+          "kind": "unread",
+          "text": "a message of the export whose content is not a list was not read",
+          "bytes": 64
+        },
+        {
+          "kind": "summary",
+          "at": "1970-01-01T00:00:00.005Z",
+          "text": "The flake is fixed.",
+          "bytes": 19
+        }
+      ],
+      "Places": [
+        {
+          "Ordinal": 0,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 1,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 2,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 3,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 4,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 5,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 6,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 7,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 8,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 9,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 10,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 11,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 12,
+          "TextFrom": 0
+        }
+      ],
+      "From": 0,
+      "Next": 13,
+      "Cut": ""
+    }
+  },
+  "no object": {
+    "transcript": {
+      "Entries": null,
+      "Places": null,
+      "From": 0,
+      "Next": 0,
+      "Cut": ""
+    },
+    "error": "executor: the session's archive is not one its format describes: it holds no export document of its harness's"
+  },
+  "two lists": {
+    "transcript": {
+      "Entries": [
+        {
+          "kind": "brief",
+          "at": "2026-11-14T04:56:00.771Z",
+          "text": "Fix the flake.",
+          "bytes": 14
+        },
+        {
+          "kind": "summary",
+          "at": "1970-01-01T00:00:00.005Z",
+          "text": "The flake is fixed.",
+          "bytes": 19
+        }
+      ],
+      "Places": [
+        {
+          "Ordinal": 0,
+          "TextFrom": 0
+        },
+        {
+          "Ordinal": 1,
+          "TextFrom": 0
+        }
+      ],
+      "From": 0,
+      "Next": 2,
+      "Cut": ""
+    }
+  }
+}

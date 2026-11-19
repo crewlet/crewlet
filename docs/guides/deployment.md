@@ -236,11 +236,11 @@ fleet](fleet.md#watching-a-fleet) says how to read the alarm across the nodes.
 
 ### The room the stream's volume needs
 
-The engine keeps thirteen ordered logs on the stream: the tracker's mutation
+The engine keeps fourteen ordered logs on the stream: the tracker's mutation
 log, the vector changelog, the knowledge base's log, the executor log, Gitlet's
 log, the identity estate's log, the usage log, the artifacts log, the
-artifact datastore's log, Ask Crewlet's log, the chat log, the access log and
-the atlas log.
+artifact datastore's log, Ask Crewlet's log, the chat log, the access log, the
+atlas log and the advisor log.
 Each log's byte ceiling is **reserved** on the volume holding `stream.store_dir` when its stream is
 created: the embedded broker grants a ceiling in full, up front, or refuses to
 create the stream at all. Its limit is `stream.store_max_bytes` where you set
@@ -273,14 +273,15 @@ With nothing set, a node starting on an empty stream directory reserves:
 | The executor log (512 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.executor_log_max_bytes` |
 | The access log (128 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.access_log_max_bytes` |
 | The atlas log (128 MiB by default, scaled down where the broker is short) | 64 MiB | `stream.atlas_log_max_bytes` |
-| **The thirteen logs together** | **8.75 GiB** | |
-| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.92 GiB at the minimum | `store.objects.nats_max_bytes` |
+| The advisor log (a fixed default, its floor) | 64 MiB | `stream.advisor_log_max_bytes` |
+| **The fourteen logs together** | **8.81 GiB** | |
+| The object store's `nats` bucket, reserved before the logs | a quarter of the broker's limit, 2.94 GiB at the minimum | `store.objects.nats_max_bytes` |
 
-So the broker needs a limit of at least **11.67 GiB**, which an embedded
-broker sizing itself at three quarters of the volume reaches with **15.56 GiB
-free** on the volume holding `stream.store_dir` (about 16.7 GB). With the
+So the broker needs a limit of at least **11.75 GiB**, which an embedded
+broker sizing itself at three quarters of the volume reaches with **15.67 GiB
+free** on the volume holding `stream.store_dir` (about 16.8 GB). With the
 objects in S3 (`store.objects.backend: s3`) no bucket is reserved, and the
-logs' 8.75 GiB alone needs 11.67 GiB free. These are the least that **boots**:
+logs' 8.81 GiB alone needs 11.75 GiB free. These are the least that **boots**:
 the mailboxes, the coordination buckets and a joining node's snapshot reserve
 nothing and grow into whatever is left, so give a production host far more.
 
@@ -293,7 +294,7 @@ configuration reserves, split into the logs and the bucket.
 
 - `store.objects.nats_max_bytes` sets the bucket's reservation instead of a
   quarter of the broker's limit. At its smallest, 1 GiB, a fresh node needs a
-  limit of **9.75 GiB**, which three quarters of **13.00 GiB free** reaches.
+  limit of **9.81 GiB**, which three quarters of **13.08 GiB free** reaches.
   The bucket then holds at most 1 GiB of the company's files until you raise
   the setting and restart a data node, which raises the bucket's reservation
   where the broker can grant it; see
@@ -306,13 +307,13 @@ configuration reserves, split into the logs and the bucket.
 
 The fixed-default logs' fields also go lower: `stream.iam_log_max_bytes`,
 `stream.usage_log_max_bytes`, `stream.assistant_log_max_bytes`,
-`stream.executor_log_max_bytes`, `stream.access_log_max_bytes` and
-`stream.atlas_log_max_bytes` accept 64 MiB.
+`stream.executor_log_max_bytes`, `stream.access_log_max_bytes`,
+`stream.atlas_log_max_bytes` and `stream.advisor_log_max_bytes` accept 64 MiB.
 The other seven fields accept no less than 1 GiB, so setting them only moves the
 figure up.
 - **A floor is per log, not universal.** The identity estate's, the usage
-  log's, Ask Crewlet's, the executor log's, the access log's and the atlas
-  log's fields go down to 64 MiB, far
+  log's, Ask Crewlet's, the executor log's, the access log's, the atlas
+  log's and the advisor log's fields go down to 64 MiB, far
   below the others, because the identity log grows with headcount and
   sign-ins, Ask Crewlet's with how many people ask it (a month of a ten-person
   company's questions fits in 64 MiB), the executor log with the turns the
@@ -326,7 +327,8 @@ figure up.
   what seats are told and the SSH they use (about a month of the reference
   company's records fit in 64 MiB), the atlas log with what people record
   about what the company runs on (months of the reference company's edits fit
-  in 64 MiB), and the usage log
+  in 64 MiB), the advisor log with what the Advisor records (about ten days of
+  the reference company's findings and runs fit in 64 MiB), and the usage log
   is a census of node-days (about 18 MB for a ten-seat node's 181 days), and a ceiling is
   granted in full at create time, so a log at a disk-sized floor costs free
   space a node needs before it can start, for a log that will not fill it.
@@ -349,8 +351,8 @@ figure up.
   share — five eighths of what the broker's limit leaves once the `nats`
   bucket has taken its quarter of it, about 35 % of the free space on a first
   boot — which is every volume with less than about 653 GiB free (with the
-  mutation log at its 64 GiB clamp the thirteen ask for 229.4 GiB: 64 + 64 +
-  16 + 16 + 16 + 42⅔ + 1 + ½ + ½ + 8 + ½ + 0.1 + 0.1); from there up each log gets what it
+  mutation log at its 64 GiB clamp the fourteen ask for 229.5 GiB: 64 + 64 +
+  16 + 16 + 16 + 42⅔ + 1 + ½ + ½ + 8 + ½ + 0.1 + 0.1 + 0.1); from there up each log gets what it
   asked for. With the objects in S3 no bucket is reserved and the share is
   five eighths of three quarters of the broker's limit, about 47 % of the free
   space, so from about 490 GiB free.
@@ -982,11 +984,11 @@ node — the donor [dials again](retention.md) by itself.
 **The account needs more than publish and subscribe.** A node creates what it
 uses, on every start and idempotently: the eight engine streams
 (`CREWLET_AGENT`, `CREWLET_EVENTS`, `CREWLET_NOTIFICATIONS`,
-`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`, `CREWLET_FAILED`), the thirteen state-log
+`CREWLET_CONFIG`, `CREWLET_MEMORY`, `CREWLET_DLQ`, `CREWLET_CUSTODY`, `CREWLET_FAILED`), the fourteen state-log
 domain streams (`CREWLET_TRACKER_LOG`, `CREWLET_TRACKER_VECTORS`,
 `CREWLET_PAGES_LOG`, `CREWLET_IAM_LOG`, `CREWLET_USAGE_LOG`, `CREWLET_CODE_LOG`, `CREWLET_ARTIFACTS_LOG`,
 `CREWLET_ARTIFACT_DATA_LOG`, `CREWLET_ASSISTANT_LOG`, `CREWLET_CHAT_LOG`,
-`CREWLET_EXECUTOR_LOG`, `CREWLET_ACCESS_LOG`, `CREWLET_ATLAS_LOG`), a stream per extra subject namespace a company
+`CREWLET_EXECUTOR_LOG`, `CREWLET_ACCESS_LOG`, `CREWLET_ATLAS_LOG`, `CREWLET_ADVISOR_LOG`), a stream per extra subject namespace a company
 publishes under, two durable consumers per seat mailbox (the inbox and its
 priority lane, each an ordinary API call, measured at 1.7 ms), the twenty-seven `crewlet_*` KV buckets
 ([listed with what each holds](../concepts/architecture.md#5-where-state-lives)):
@@ -1720,9 +1722,7 @@ A `direct` or `container` box is a directory on the engine host, made under
 one **box root**: `providers.sandbox.local.state_dir`, else
 `$CREWLET_SANDBOX_LOCAL_HOME`, else `~/.crewlet/sandboxes` under the engine
 user's home. A relative `state_dir` is read against the directory the engine
-was started in. A seat's box is `<box root>/boxes/<id>`, and an
-[Ask Crewlet deep-work run](assistant.md#where-a-run-happens) placed on
-the engine host keeps its confined box at `<box root>/assistant/boxes/<id>`.
+was started in. A seat's box is `<box root>/boxes/<id>`.
 A box holds its run's checkout, its harness's home with a copy of the
 entry's login, its temporary files (`TMPDIR` and the harness's own temporary root
 point inside it) and whatever the run installs and builds, and it is removed
@@ -1732,8 +1732,7 @@ Size the volume under the box root for every box it holds at once: one for
 each seat whose executor is at work (a seat runs one at a time), one for each
 run parked on a person's question, which keeps its box until it resumes or its
 pause TTL passes (`role.sandbox.pause_ttl_seconds`, else
-`providers.sandbox.default_pause_ttl_seconds`, 1800 seconds unless set), and
-one for each deep-work task running or kept for a proposal.
+`providers.sandbox.default_pause_ttl_seconds`, 1800 seconds unless set).
 
 **On a read-only root filesystem, set `state_dir`.** An engine run as a
 non-root user with only a data volume, `/tmp` and its home writable, the shape
@@ -1751,8 +1750,7 @@ around it, so a command that names `/tmp`, the engine's home or a path on the
 data volume writes there, and no limit on the box root's volume counts it
 ([Security Boundaries](#security-boundaries)). A `container` box writes its
 home, the one directory mounted into it, and the container's own layer, which
-its runtime keeps. A deep-work run on the engine host writes its own box and
-nothing else.
+its runtime keeps.
 
 ### A restart and the executors on its host
 

@@ -31,7 +31,7 @@ func newReadHarness(t *testing.T) *readHarness {
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)
 	}
-	reader, err := worklet.NewReader(h.db.Reader(), log)
+	reader, err := worklet.NewReader(h.db.Reader(), log, nil)
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}

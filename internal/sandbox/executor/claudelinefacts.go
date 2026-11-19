@@ -6,20 +6,20 @@ import (
 )
 
 // A thread line's accessors ([threadLine]) read its facts ([lineFacts]), never
-// the line: each fact is filled ONCE, as the line is read, by [factsOf], so a
-// reader that asks twice pays for one reading. A fact is a small value as
-// written (its accessor holds it to its type), a value's kind ([valueKind]), a
-// frame's answers (what each reader's rule reads of a container or a text, the
-// asked takes a hook's words name among them, with the error it meets, worded
-// as its accessor words it), or a list's entries up to the first that fails and
-// that failure, handed as a walk hands them, nothing after.
+// the line: each fact is filled ONCE, in the line's one pass
+// ([threadReader.Next]), so a reader that asks twice pays for one reading. A
+// fact is a small value as written (its accessor holds it to its type), a
+// value's kind ([valueKind]), a frame's answers (what each reader's rule reads
+// of a container or a text, the asked takes a hook's words name among them,
+// with the error it meets, worded as its accessor words it), or a list's
+// entries up to the first that fails and that failure, nothing after.
 //
-// A frame its record's type does not read ([factsOf] names which) is empty,
-// its accessor answering as on a record without the key. A line's facts are
-// its own, valid while the line is held; nil facts are a line of no keys.
+// A frame its record's type does not read ([gates] names which) is empty, its
+// accessor answering as on a record without the key. A line's facts are its
+// own, valid while the line is held; nil facts are a line of no keys.
 
 // lineFacts is what a line's accessors read of it ([threadLine]), filled once
-// by [factsOf].
+// in the line's one pass.
 type lineFacts struct {
 	// The record's small values as written, nil where the key is absent.
 	uuid, version, origin, apiError, leafUUID, explicit, rewound json.RawMessage
@@ -28,6 +28,10 @@ type lineFacts struct {
 	// taskDelivery is whether the record carries `taskDelivery`, whatever it
 	// holds.
 	taskDelivery bool
+	// estimating is whether the line's reader asked for its estimate
+	// ([threadReader.Estimating]), which the estimate's accessors answer
+	// [errNotEstimated] without.
+	estimating bool
 
 	message      messageFacts
 	result       toolResultFacts
@@ -68,10 +72,15 @@ type messageFacts struct {
 	// record.
 	content    threadMessage
 	contentErr error
-	// estimate is what Claude Code estimates the record at, and estimateErr
-	// why its own estimate throws on the content ([threadLine.Estimate]),
-	// read only of a content its rule reads, so neither is filled where
-	// contentErr is.
+	// charge is its content's charge, and emptyText whether that content is
+	// the empty string, as the line's pass read them. estimate is what Claude
+	// Code estimates the record at, and estimateErr why its estimate does not
+	// read ([threadLine.Estimate]), from them and the images the record's task
+	// delivery carries once the line ends ([lineDecoder.finishEstimate]):
+	// filled only of an object whose content its rule reads, so not where
+	// contentErr is, and only for a reader that asked.
+	charge      estimateCharge
+	emptyText   bool
 	estimate    threadEstimate
 	estimateErr error
 }
@@ -122,23 +131,28 @@ type attachmentFacts struct {
 	// object or a list.
 	skillsShaped bool
 	// namesKept and namesErr are what the skill listing's rule answers of
-	// `names` ([skillNamesKept]).
+	// `names` ([lineDecoder.skillNames]).
 	namesKept bool
 	namesErr  error
 	// entriesKept is whether `entries` is a list whose every element is an
 	// entry a withheld memory keeps ([withheldKept]).
 	entriesKept bool
-	// estimate is what Claude Code estimates the record at, by what the
-	// record stores as its rendering or, of a PDF read, its pages, and
-	// estimated whether that reads ([threadLine.AttachmentEstimate]).
+	// pdf is its `reads` as a PDF read's pages, and images how many images
+	// its `taskDelivery` carries, as the line's pass read them. estimate is
+	// what Claude Code estimates the record at, by what the record stores as
+	// its rendering or, of a PDF read, its pages, and estimated whether that
+	// reads ([threadLine.AttachmentEstimate]), once the line ends
+	// ([lineDecoder.finishEstimate]); only for a reader that asked.
+	pdf       pdfPages
+	images    int64
 	estimate  threadEstimate
 	estimated bool
 }
 
 // compactFacts is a compaction boundary's `compactMetadata`
 // ([threadLine.Preserved]): its kind and decode error, `preservedMessages`'
-// kind and the list's answer ([preservedList]), and `preservedSegment` as
-// written.
+// kind and the list's answer ([lineDecoder.preservedMessages]), and
+// `preservedSegment` as written.
 type compactFacts struct {
 	kind     valueKind
 	err      error

@@ -257,17 +257,14 @@ func (r Reply) ids() []string {
 // parked on: it was posted at or after the question was asked, and none of it
 // is a reply that question already let go of.
 //
-// AT OR AFTER, with no allowance for clock skew, and the margin is human: a
-// question is announced after [PendingRun.AskedAt] is taken, so any reply to it
-// was written after somebody read it, which takes far longer than the skew
-// between two NTP-disciplined clocks. An allowance would admit only messages
-// written before the question existed.
+// AT OR AFTER, with no allowance for clock skew: a question is announced after
+// [PendingRun.AskedAt] is taken, so a reply was written after somebody read it,
+// far longer than NTP skew; an allowance would admit only messages written
+// before the question existed.
 //
-// PROVEN, never presumed: a row with no anchor, or a delivery with no instant,
-// cannot show that the reply came after the question, and does not qualify —
-// the delivery goes its ordinary way. Every park records its anchor
-// ([PendingStore.MarkAwaiting] refuses one without), and every event carries
-// its instant.
+// PROVEN, never presumed: a row with no anchor or a delivery with no instant
+// cannot show the reply came after, and does not qualify (every park records
+// its anchor, [PendingStore.MarkAwaiting] refuses one without).
 func (r Reply) qualifies(run PendingRun) bool {
 	if !r.Says {
 		return false
@@ -306,49 +303,29 @@ func (r Reply) Best(runs []PendingRun) (PendingRun, bool) {
 }
 
 // putTo reports whether run's question was put to this delivery's writer: a
-// seat of the question's audience ([PendingRun.AudienceHandles]), resolved
-// once at the park, or the run's requester ([PendingRun.Requester]), who owns
-// an executor's question on the dashboard's route too.
+// seat of its audience ([PendingRun.AudienceHandles]) or its requester
+// ([PendingRun.Requester]).
 //
-// ONE TURN WORKS FOR ONE WRITER (ADR-0109), and the answer is what the run
-// carries on with: a reply in the conversation from somebody the question was
-// never put to (a stranger, a person or seat outside the audience, a
-// credential, which holds no seat) is not the answer. It runs as the ordinary
-// message it is, its own turn bounded by its own writer, and the run stays
-// parked. A row naming neither an audience nor a requester (a question that
-// resolved to nobody) admits nobody from the conversation, never anybody: the
-// dashboard's route, decided by authority, still answers it. Whether the seat's
-// holder may act NOW is the coordinator's to ask, once a run would take the
-// reply ([AudienceResolver.MayAnswer]).
-//
-// AND ONE TURN WORKS FOR ONE WHOM: the reply must have been written for whom
-// the run works for ([Reply.writtenForTheRun]). A colleague's reply written
-// for somebody else is that somebody's work, owed a turn of its own held to
-// their apps, and never the answer to a question the run asked for another.
+// ONE TURN WORKS FOR ONE WRITER (ADR-0109): a reply from anyone else runs as
+// the ordinary message it is and the run stays parked. A row naming neither
+// admits nobody from the conversation; the dashboard's route still answers it.
+// Whether the holder may act NOW is asked once a run would take the reply
+// ([AudienceResolver.MayAnswer]). AND ONE TURN WORKS FOR ONE WHOM: the reply
+// must be written for whom the run works for ([Reply.writtenForTheRun]).
 func (r Reply) putTo(run PendingRun) bool {
 	return r.Writer != "" && (run.Requester == r.Writer || slices.Contains(run.AudienceHandles, r.Writer)) &&
 		r.writtenForTheRun(run)
 }
 
 // writtenForTheRun reports whether the reply was written for whom run works
-// for.
-//
-// NIL ALWAYS MATCHES: the writer spoke for itself. That is every vendor's
-// reply, every person's and credential's, and an agent's written for nobody
-// else, on Gitlet as on the other surfaces of the engine's. It is safe because a
-// record skips its carrier only where its decide proves no agent but the
-// writer may start a turn (ADR-0109), and a wake held back delivers nothing.
-//
-// OTHERWISE BOTH SIDES ARE READ AS THE CEILING READS THEM BEFORE IT ASKS THE
-// DIRECTORY ([runPrincipal], [carriedPrincipal]), and compared by kind and by the seat's handle or
-// the credential's login. Whether a node can place a login is left out on
-// purpose: it differs by node, so asking it here would make the answer depend
-// on which node matched it, and a stranger cannot be told from a login one
-// node could not place. Such a reply runs as its own turn and the run waits,
-// the safe direction. A credential's apps are never compared: the resumed run
-// composes its ceiling from its own row and narrows its apps again on every
-// call, so a reply's apps grant it nothing, and comparing them would refuse a
-// genuine reply whenever its writer's node had narrowed them.
+// for. NIL ALWAYS MATCHES: the writer spoke for itself, safe because a record
+// skips its carrier only where its decide proves no agent but the writer may
+// start a turn (ADR-0109). OTHERWISE both sides are read as the ceiling reads
+// them ([runPrincipal], [carriedPrincipal]) and compared by kind and the
+// seat's handle or credential's login. Whether a node can place a login is left
+// out, since it differs by node; such a reply runs as its own turn (the safe
+// direction). A credential's apps are never compared: the resumed run narrows
+// them on every call, and comparing would refuse a genuine reply.
 func (r Reply) writtenForTheRun(run PendingRun) bool {
 	if r.WorkingFor == nil {
 		return true
@@ -749,22 +726,17 @@ func (c *Coordinator) announceRefusal(ctx context.Context, run PendingRun, trigg
 }
 
 // announceRefusalLetGo publishes what became of a refusal let go of before any
-// turn told the run of it — declined after its attempts, or its seal not
-// opening: `executor_answered` with the outcome declined ([types.AnswerDeclined])
-// on the chat route, with the refusal's figures and none of the reply's words,
-// by whom the opened seal names (by is zero where the seal did not open, and
-// the record names nobody). The run waits on its question again, under the
-// anchor it was asked at, and the reply goes back to the seat as the message
-// it came in.
+// turn told the run of it (declined after its attempts, or its seal not
+// opening): `executor_answered` with outcome declined ([types.AnswerDeclined])
+// on the chat route, with the refusal's figures, none of the reply's words, and
+// by whom the opened seal names (zero where it did not open). The run waits on
+// its question again and the reply goes back to the seat as the message it
+// came in.
 //
-// SAID BECAUSE THE REFUSAL'S OWN RECORD SAID OTHERWISE: `too_large` said the
-// run would be resumed told the reply did not reach it, and left standing for a
-// run that is waiting again it tells a person their next short reply has
-// nowhere to go, when it is exactly what the question takes. A chat ANSWER let
-// go of announces nothing, because nothing announced it; a refusal is
-// announced from its record on. ONE RECORD PER RUN, QUESTION AND DELIVERY
-// ([refusalLetGoRecord]), stamped with the reply's own instant, so a let-go
-// published twice is one row.
+// ONE RECORD PER RUN, QUESTION AND DELIVERY ([refusalLetGoRecord]), stamped
+// with the reply's instant, so a let-go published twice is one row. Said
+// because the left-standing `too_large` tells a person their next short reply
+// has nowhere to go.
 func (c *Coordinator) announceRefusalLetGo(ctx context.Context, run PendingRun, refusal AnswerRefusal,
 	by answerer,
 ) {
@@ -824,46 +796,23 @@ func refusalRecord(namespace uuid.UUID, run PendingRun, refusal AnswerRefusal) r
 }
 
 // refusedReply is what becomes of the delivery a refusal on run was recorded
-// from — or a copy of it — once this node has made its attempt at the
-// refusal's resume: kept reports whether a turn of that very attempt kept the
-// refusal ([Coordinator.attemptOwed]), and the rest is DECIDED FROM THE ROW AS
-// THE ATTEMPT LEFT IT, read again here: the attempt may have let the refusal
-// go — a resume that broke before its turn ended the run, a seal that did not
-// open put it back on its question — while run, the snapshot the reply was
-// matched against, still shows it held. Decided off that snapshot, a reply
-// already back to being the ordinary message it is was deferred as kept for a
-// refusal no run held: the seat's inbox stopped until its next renew, and the
-// delivery spent one of its deliveries for nothing.
-//
-//   - SPENT ([AnswerConsumed]) once a turn keeps the refusal: the run was
-//     told, and the person is answered by what it does next. Known for
-//     certain where the turn was this node's attempt's (kept), whatever else
-//     says otherwise: the relaunch that told the run cleared the refusal from
-//     the row, an ending deleted the row, and the completion ledger the turn
-//     recorded the delivery as worked in fails open — decided off those, the
-//     seat was handed, as a new message, a reply its run had just been told
-//     never reached it. Otherwise: recorded as worked in that ledger, by the
-//     turn that took it or by the reap of a turn that died holding it
-//     ([Coordinator.spendRefused]); held on the row by a turn in flight
-//     ([RecordedAnswer.TakenAt]), whose node stopped if the delivery came
-//     round to another; or carried on from on the row — the relaunch that told
-//     the run, which only a turn that took the refusal makes, keeping the
-//     refused question for the round's review ([PendingRun.RoundRefusals]) —
-//     where another attempt's turn kept it while this one lost the claim.
-//   - KEPT ([AnswerRefused]) WHILE THE REFUSAL IS STILL THE RUN'S, untaken:
-//     handed back at the head of the seat's inbox, unspent, behind the hold
-//     the owed refusal keeps on it. The row carries none of the reply
-//     ([PendingStore.RecordRefusal]), so the delivery is the only copy of it
-//     there is.
-//   - THE ORDINARY MESSAGE IT IS ([AnswerNotMine]) once the refusal has left
-//     the run unspent — let go of after its attempts, by an ending no turn
-//     reached, or by a reap that found no turn took it: back to the seat the
-//     way it came.
-//   - KEPT WHERE THE ROW CANNOT BE READ: the delivery is the reply's only
-//     copy, and it comes round to be decided again against what the row then
-//     holds.
+// from, once this node has attempted the refusal's resume: kept reports whether
+// a turn of that attempt kept the refusal ([Coordinator.attemptOwed]), and the
+// rest is DECIDED FROM THE ROW AS THE ATTEMPT LEFT IT, read again here: the
+// attempt may have let the refusal go while run, the snapshot the reply was
+// matched against, still shows it held, and deciding off it deferred a reply
+// already back to being the ordinary message it is, stopping the seat's inbox.
+// Where the row cannot be read the reply is KEPT ([AnswerRefused]): the
+// delivery is its only copy, decided again when it comes round.
 func (c *Coordinator) refusedReply(ctx context.Context, run PendingRun, reply Reply, kept bool,
 ) AnswerDisposition {
+	// SPENT ([AnswerConsumed]) once a turn keeps the refusal: the run was told.
+	// Certain where the turn was this attempt's (kept), whatever the row says:
+	// the relaunch cleared the refusal, an ending deleted the row and the
+	// completion ledger fails open, so deciding off those would hand the seat a
+	// reply its run was told never reached it. Otherwise: worked in that ledger
+	// ([Coordinator.spendRefused]), held by a turn in flight
+	// ([RecordedAnswer.TakenAt]), or carried on from on the row below.
 	if kept || c.spentAll(ctx, run.AgentHandle, reply) {
 		return AnswerConsumed
 	}
@@ -882,11 +831,16 @@ func (c *Coordinator) refusedReply(ctx context.Context, run PendingRun, reply Re
 		if latest.Answer.Taken() {
 			return AnswerConsumed
 		}
+		// Still the run's, untaken: handed back at the head of the inbox,
+		// unspent. The row carries none of the reply
+		// ([PendingStore.RecordRefusal]), so the delivery is its only copy.
 		return AnswerRefused
 	}
 	if latest.carriedOnFromRefusal(run.LaunchID) {
 		return AnswerConsumed
 	}
+	// The refusal left the run unspent (let go, ended, reaped): back to the seat
+	// as the ordinary message it is.
 	return AnswerNotMine
 }
 
@@ -910,30 +864,17 @@ func (r Reply) amongst(ids []string) bool {
 	return slices.ContainsFunc(r.ids(), func(id string) bool { return slices.Contains(ids, id) })
 }
 
-// record records the outcome of the question a run is parked on — an answer,
-// on either route, or the refusal of a chat reply too large to be one, where
-// words carries it ([AnswerWords.Refusal], [PendingStore.RecordRefusal]) — and
-// makes the run owe the resume it drives ([StatusAnswered]).
+// record records the outcome of the question a run is parked on, an answer on
+// either route or the refusal of a chat reply too large to be one (words carry
+// it: [AnswerWords.Refusal], [PendingStore.RecordRefusal]), and makes the run
+// owe the resume it drives ([StatusAnswered]).
 //
-// SEALED HERE, onto the question the caller matched: words are bound to the
-// run's turn, the launch whose question they answer and the deliveries they
-// were made of, under this node's active key ([AnswerSeal]), and the record
-// carries them only inside that seal.
-//
-// The resume's first attempt runs INLINE, on the caller's delivery, which is
-// what keeps the ordinary case as immediate as it ever was; whatever it
-// concludes, an answer's delivery is spent — the answer is on the row, and
-// from here on the row resumes it or hands it back, never the delivery. A
-// refusal's is KEPT until the refusal leaves the run, since the row carries
-// none of it to hand back ([AnswerRefused]).
-//
-// UNDER THE SEAT'S LEASE, and never on a seat this node does not hold
-// ([ErrSeatNotHeld], before anything is written): the answer is the seat
-// holder's to record, because only the holder drives what is recorded. A
-// node that lost the seat and recorded anyway left the answer on a run its
-// successor had already recovered as awaiting — recorded, and driven by
-// nobody until the seat moved again. The store refuses a lease a newer one has
-// overtaken the same way, for a node that has not noticed yet.
+// SEALED HERE ([AnswerSeal]), bound to the turn, launch and deliveries under
+// this node's active key; the record carries the words only inside that seal.
+// The first resume attempt runs INLINE: an answer's delivery is then spent, a
+// refusal's KEPT until it leaves the run ([AnswerRefused]). UNDER THE SEAT'S
+// LEASE ([ErrSeatNotHeld] before any write): an answer recorded by a node that
+// lost the seat would sit undriven; the store refuses an overtaken lease too.
 func (c *Coordinator) record(ctx context.Context, run PendingRun, words AnswerWords, answer RecordedAnswer,
 ) (PendingRun, bool, error) {
 	fence, held := c.leaseOf(run.AgentHandle)
@@ -992,24 +933,16 @@ func (c *Coordinator) resumeOwed(ctx context.Context, run PendingRun) (kept bool
 	return c.attemptOwed(ctx, run)
 }
 
-// attemptOwed makes one attempt at an owed answer's resume, and settles what
-// the attempt leaves: done (the hold lifted), failed (another attempt
-// scheduled, or the answer declined once the bounds are spent), or the run
-// gone — and then a reply no turn took went back to the seat through the row,
-// recorded as owed BEFORE the run's record was deleted
-// ([PendingStore.OweHandBack]), so a crash between the ending and the publish
-// cannot lose it. See [Coordinator.resumeAndSettle].
+// attemptOwed makes one attempt at an owed answer's resume and settles what it
+// leaves: done (hold lifted), failed (retry scheduled, or declined once the
+// bounds are spent), or the run gone, when a reply no turn took goes back to the
+// seat through the row, owed BEFORE the record was deleted
+// ([PendingStore.OweHandBack]) so a crash cannot lose it.
 //
-// REPORTS WHETHER A TURN OF THIS ATTEMPT KEPT what the run held: took it, and
-// then ran or broke after acting, so it is never given back
-// ([Coordinator.spendRefused]). The inline attempt's caller decides the
-// delivery it holds by that ([Coordinator.refusedReply]): a refusal's delivery
-// is kept on the seat's inbox until its refusal leaves the run, and once a turn
-// of this attempt told the run of it, nothing else this node can read says so
-// for certain — the relaunch that told it cleared the refusal from the row, an
-// ending deleted the row, and the completion ledger fails open. Decided off
-// those, a delivery whose run had just been told the reply never reached it was
-// handed to the seat as a new message.
+// REPORTS WHETHER A TURN OF THIS ATTEMPT KEPT what the run held: took it, then
+// ran or broke after acting ([Coordinator.spendRefused]). The inline caller
+// decides its delivery by that ([Coordinator.refusedReply]): nothing else this
+// node can read says so for certain.
 func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) (kept bool) {
 	answer := run.Answer
 	if answer == nil {
@@ -1073,19 +1006,14 @@ func (c *Coordinator) attemptOwed(ctx context.Context, run PendingRun) (kept boo
 // [Coordinator.attemptOwed] took for it, and the settling of what they leave.
 //
 // IT TAKES THE ADMISSION, NOT A CONTEXT, and runs under the admission's own,
-// for the reason [Coordinator.resumeAndSettle] does: the claim belongs to the
-// admitted turn, so the drain's cut that ends the turn ends the claim with it,
-// and a frame handed only a context could pass the caller's, which the
-// admission never covered.
+// as [Coordinator.resumeAndSettle] does: the claim belongs to the admitted
+// turn, so the drain's cut ends it too, and a bare context could be the
+// caller's, which the admission never covered.
 //
-// A resume REFUSED after its claim, reverted with a [*TurnRefused] that names a
-// condition (every model at its limit before the turn wrote anything), waits
-// for that condition as a gate's refusal does, and is charged nothing; seen is
-// what had been signalled before the gate was asked, for the reason
-// [Coordinator.waitOwed] gives.
-//
-// Reports whether the resumed turn KEPT what the run held, as
-// [Coordinator.attemptOwed] does.
+// A resume REFUSED after its claim, reverted with a [*TurnRefused] naming a
+// condition, waits for it as a gate's refusal does and is charged nothing; seen
+// is what had been signalled before the gate was asked ([Coordinator.waitOwed]).
+// Reports whether the turn KEPT what the run held, as [Coordinator.attemptOwed].
 func (c *Coordinator) resumeOwedAdmitted(adm admitted, run PendingRun, answer *RecordedAnswer,
 	words AnswerWords, fence Fence, seen map[signal]uint64,
 ) (kept bool) {
@@ -1292,20 +1220,14 @@ func (c *Coordinator) dropUnopened(ctx context.Context, run PendingRun, cause er
 // attempt or — once [MaxAnswerAttempts] or [answerWindow] is spent — declines
 // the answer.
 //
-// # A claim the failure may have left is revived before the decline
-//
-// A failed attempt whose CLAIM reported the failure may have left that claim
-// on the row, landed and held by nothing ([Coordinator.suspectClaim]). A decline
-// made now would read the row as the answered run it no longer is: the store
-// refuses to let go of an answer from a claim, the series settles on that
-// refusal, and the run sits in the claim — the person's answer untaken on it,
-// the delivery already spent, nothing handed back, and the seat held behind it
-// on the next recount — until the seat changes hands. So a series that suspects
-// its claim is never declined here, on its last attempt or past its window any
-// more than before them: its next attempt runs at once, gives the claim back to
-// the answer if it landed ([Coordinator.retryRevival]), and then declines the
-// answered run and hands the reply back exactly once, through the same spent
-// bound every other decline takes.
+// A CLAIM THE FAILURE MAY HAVE LEFT IS REVIVED BEFORE THE DECLINE: a failed
+// claim may have landed on the row held by nothing ([Coordinator.suspectClaim]).
+// Declining then reads the row as the answered run it no longer is; the store
+// refuses to let go of an answer from a claim, and the run sits in it, answer
+// untaken, delivery spent, seat held, until the seat changes hands. So a series
+// that suspects its claim is never declined here, even past its bounds: its
+// next attempt runs at once, gives the claim back to the answer
+// ([Coordinator.retryRevival]), then declines once through the usual bound.
 func (c *Coordinator) owedFailed(ctx context.Context, run PendingRun, cause error) {
 	detail := ""
 	if cause != nil {
@@ -1583,20 +1505,13 @@ func (c *Coordinator) retryOwed(turnID string) {
 }
 
 // oweEnding keeps an ending this node decided and could not finish
-// ([Coordinator.endRecord]): the row was not deleted because the answer it lets
-// go of could not be recorded as owed, the copies it carries could not be
-// published, or the store did not take the delete. The seat's inbox is held
-// behind it, as it is behind a decline's, and a retry on the hand-back's
-// spacing finishes the ending ON THE TERMS IT WAS DECIDED ON — its box
-// included, where the ending reclaims that after the delete — or, if the seat
-// moves first, its next holder's recovery pass reaps the row and hands back
-// whatever it still owes.
-//
-// A DELETE THE STORE DID NOT TAKE IS KEPT TOO. It used to be left for the
-// seat's next recovery pass, which comes only when the seat moves — and the
-// record it left was a live row of its seat: a claim, which holds the seat's
-// inbox on every recount, so the seat took no mail at all until it changed
-// hands.
+// ([Coordinator.endRecord]): the answer could not be recorded as owed, its
+// copies could not be published, or the store did not take the delete. The
+// seat's inbox is held behind it as behind a decline's, and a retry finishes it
+// ON THE TERMS IT WAS DECIDED ON (its box included), or the seat's next
+// holder's recovery pass reaps the row and hands back what it owes. A delete
+// the store did not take is kept too: left for that pass, the live row is a
+// claim holding the seat's inbox on every recount until the seat moves.
 func (c *Coordinator) oweEnding(ctx context.Context, run PendingRun, e ending) {
 	c.oweEndingAfter(ctx, run, e, answerRetryCeiling)
 }
@@ -1660,20 +1575,14 @@ func (c *Coordinator) oweRevival(ctx context.Context, run PendingRun, fence Fenc
 }
 
 // suspectClaim marks an owed answer's series whose claim reported a failure:
-// the claim may have landed, unheld by any resume, so the series' next attempt
-// gives it back under the lease it was taken under if it did
-// ([Coordinator.giveBackClaim]) and goes on as the answered run it then is —
-// and goes on as it would have if it did not. UNCOUNTED: no node stopped, so it
-// is no lost claim ([revival]).
+// the claim may have landed unheld by any resume, so the next attempt gives it
+// back ([Coordinator.giveBackClaim]) if it did. UNCOUNTED: no node stopped, so
+// it is no lost claim ([revival]). fence is the lease the claim was made under.
 //
-// A CLAIM ONLY THE SERIES' OWN FAILURE MARKS, never any claim the retry happens
-// to find: the row reads [StatusResumed] for the length of every resume, and a
-// retry that revived whatever claim it found would revive one an inline attempt
-// on this node is driving that very moment. The store would keep the person
-// answered once — the revival and the take are exclusive — but the resume
-// in flight would fail for nothing.
-//
-// fence is the lease the claim was made under, which a give-back must carry.
+// ONLY THE SERIES' OWN FAILURE MARKS A CLAIM, never any claim a retry finds:
+// the row reads [StatusResumed] for every resume, and reviving whatever it
+// found would revive one an inline attempt is driving, failing that resume for
+// nothing (the store still answers the person once).
 func (c *Coordinator) suspectClaim(run PendingRun, fence Fence) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1746,24 +1655,16 @@ func (c *Coordinator) retryRevival(ctx context.Context, run PendingRun, launch s
 
 // giveBackClaim gives a claim the series made itself, and could not confirm,
 // back to the answer it was taken for ([PendingStore.ReviveAnswer], uncounted):
-// the claim's write reported a failure and landed, and no resume holds it. It
-// reports the row to go on with as the owed answer — given back, or whatever
-// the run has become since — or false where the series has nothing more to do
-// here.
+// the claim's write reported a failure and landed, and no resume holds it.
+// Reports the row to go on with as the owed answer, or false where the series
+// has nothing more to do.
 //
-// ONLY THE SERIES' OWN CLAIM — its job, its answer, its lease — and never
-// through [Coordinator.reapTail]: that is the seat's next holder reaping a claim
-// whose node stopped, and its two bounds and its ending ([types.ExecutorFailureAbandoned],
-// "the node that owned this seat stopped mid-run") are about a node that stopped.
-// Here none did, so nothing is counted on the row and nothing ends the run: the
-// series goes on — resuming, or declining once its own attempts are spent.
-//
-// A GIVE-BACK THE STORE DOES NOT CONFIRM is suspected again and retried on the
-// hand-back's spacing, as a revival that did not land is ([Coordinator.oweRevival]):
-// the seat's mail waits behind it either way. One the store refuses because a
-// TURN TOOK THE ANSWER is left to that turn: the take requires the claim's own
-// lease, which only a resume of this node's could have held — and that resume
-// settles the run itself.
+// ONLY THE SERIES' OWN CLAIM, never through [Coordinator.reapTail]: that reaps a
+// claim whose node stopped, with bounds and an ending
+// ([types.ExecutorFailureAbandoned]) about a node that stopped. None did here,
+// so nothing is counted and nothing ends the run. A give-back the store does not
+// confirm is suspected again and retried ([Coordinator.oweRevival]); one it
+// refuses because a TURN TOOK THE ANSWER is left to that turn, which settles it.
 func (c *Coordinator) giveBackClaim(ctx context.Context, run PendingRun, launch string, fence Fence,
 ) (PendingRun, bool) {
 	handle := run.AgentHandle
@@ -1851,51 +1752,15 @@ func (c *Coordinator) endingDone(turnID string) {
 // waitOwed parks an attempt the seat's conditions refused until what refused
 // it can have changed.
 //
-// # Why a wait and not a poll
-//
-// NOT A FAILURE, so nothing is charged: a paused seat, a refusing budget, a
-// company with no model, a node whose posture refuses work and a lease being
-// renewed are the seat's condition, and the attempts exist for a resume that
-// fails. And not a poll either, which is what this was — a re-check every 30
-// seconds for as long as the condition held, which for a person's pause or a
-// spent daily budget is hours of re-checks that can only say no. Every one of
-// those conditions changes on something DISCRETE, and the engine observes
-// each: the pause watch hears a resume, an apply brings a model, a ceiling or
-// a posture, the budget window ends at an instant the refusal names, and a
-// seat starts admitting turns when its acquisition is established or a renew
-// proves its lease again after a blip — the seat host says so at either edge
-// — with one heartbeat on the clock behind them for a renew that was merely
-// late. So
-// the refusal names what it waits on ([Refusal]): the clock it waits for is
-// armed, the event it waits for re-checks it through [Coordinator.Readmit] the
-// moment it happens, and nothing runs in between.
-//
-// # Why there is still a timer
-//
-// A signal can be missed — a path that moves one of those conditions and was
-// never wired to say so — and an answered run whose re-check never comes is a
-// person's answer stranded on a seat that could have taken it. So no wait is
-// longer than [answerWaitBackstop], and that re-check finds the condition
-// cleared or names it again.
-//
-// # A signal that raced the check is not missed
-//
-// The check and the wait are two steps, and [Coordinator.Readmit] only wakes an
-// attempt already marked waiting. A signal landing between them — the seat
-// established while its inherited answer was being refused for establishing —
-// found nothing waiting, and the wait that followed slept through it, to the
-// clock or the backstop. So the caller reads what had been signalled before it
-// checked (seen), and a wait on a condition signalled since re-checks at once.
-//
-// # An instant already past is no instant
-//
-// A refusal that names an instant the clock has already reached says the
-// condition still stands although its instant came: the clock did not lift it,
-// so only its event or the backstop can. Waited out as the instant it names, it
-// was a re-check at once, refused at once, for as long as the condition stood:
-// a provider park whose probe was out named the instant the probe had been
-// armed for, and every answer waiting on the seat re-checked thousands of times
-// a second until the probe's call came back.
+// A wait, not a failure (nothing is charged) and not a poll: each condition
+// changes on something DISCRETE, so the refusal names what it waits on
+// ([Refusal]): its clock is armed, its event re-checks via [Coordinator.Readmit].
+// No wait outlasts [answerWaitBackstop], since a missed signal would strand an
+// answer. Readmit only wakes an attempt already marked waiting, so the caller
+// reads what was signalled before checking (seen), and a condition signalled
+// since re-checks at once. An instant already past is no instant: the clock did
+// not lift the condition, and re-checking at it refuses thousands of times a
+// second.
 func (c *Coordinator) waitOwed(ctx context.Context, turnID string, refusal Refusal,
 	seen map[signal]uint64,
 ) {
@@ -2047,42 +1912,17 @@ func (c *Coordinator) signalledSinceLocked(cond Condition, handle string, seen m
 	return false
 }
 
-// declineAnswer gives up on an answer this node could not resume with, once
-// its attempts are spent: the reply goes on to the seat's ordinary route as
-// the message it looks like, and the run goes back to waiting on its question.
-//
-// # Exactly once, across a crash at any step
-//
-// Letting go is a write to the row and a publish to the broker, and it is
-// ordered so that a process stopping between any two steps neither loses the
-// reply nor delivers it twice:
-//
-//  1. THE WRITE, which is the decision ([PendingStore.DeclineAnswer]): the
-//     answer is cleared, the reply and its copies are declined for the
-//     question, and the copies — encoded, under ids derived from the
-//     originals ([declinedCopyID]) — are recorded on the row as owed to the
-//     seat ([PendingRun.HandBack]). Stopped before it lands, the answer is
-//     still recorded and owed its resume, nothing has been published, and the
-//     seat's next holder (or this node's next attempt) drives it again from
-//     the row.
-//  2. THE PUBLISH of those copies, read back off what the write stored.
-//     Stopped before it, whoever reads the row next — this node's retry, or
-//     the seat's next holder's recovery pass — finds the copies still owed
-//     and publishes them.
-//  3. THE CLEAR ([PendingStore.ClearHandBack]). Stopped before it, the copies
-//     are published AND still recorded, so the next reader publishes them
-//     again — under the same ids, which is one message to the inbox's same-id
-//     dedupe and to the completion ledger, never a second.
-//
-// It used to publish first and write second, which could not lose the reply
-// but could deliver it twice: a crash between the two left the answer
-// recorded and its copy on the inbox, and the run was then resumed with the
-// reply that had also been worked as an ordinary message.
-//
-// THE RUN IS NOT ENDED, for the reason [MaxAnswerAttempts] gives: every
-// failure that reaches here is a statement about THIS node, and the turn is
-// still resumable by a node that holds the seat with the runner and the build
-// it needs.
+// declineAnswer gives up on an answer this node could not resume with, once its
+// attempts are spent: the reply goes to the seat as an ordinary message and the
+// run goes back to its question. EXACTLY ONCE across a crash, by this order:
+// (1) THE WRITE is the decision ([PendingStore.DeclineAnswer]): the answer is
+// cleared and the copies (ids derived from the originals, [declinedCopyID])
+// are recorded as owed ([PendingRun.HandBack]). (2) THE PUBLISH of the stored
+// copies; stopped before it, the next reader finds them owed. (3) THE CLEAR
+// ([PendingStore.ClearHandBack]); stopped before it, they are republished
+// under the same ids, one message to the dedupe. Publishing first could
+// deliver twice. THE RUN IS NOT ENDED ([MaxAnswerAttempts]): a failure here is
+// about THIS node, and another holder may still resume the turn.
 func (c *Coordinator) declineAnswer(ctx context.Context, run PendingRun, cause error) {
 	answer := run.Answer
 	if answer == nil {

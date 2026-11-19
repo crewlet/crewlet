@@ -142,6 +142,7 @@ func (s *LiveState) ReconcileExecutors(records []ExecutorRecord, asOf time.Time)
 	// question for longer than this process has been up is found here.
 	before := s.states()
 	defer s.noteMoved(before, &change)
+	s.runsRead = true
 
 	listed := make(map[string]ExecutorRecord, len(records))
 	for _, rec := range records {

@@ -7,27 +7,16 @@ import (
 	"time"
 )
 
-// Outcome is what a write's caller is told, and there are exactly three
-// answers because there are exactly three facts.
+// Outcome is what a write's caller is told: exactly three answers for three
+// facts, [internal/coord]'s three-valued discipline one layer down. "Held",
+// "definitively not held" and "the store could not be reached" must not
+// collapse into a bool; here they are a PubAck, a wrong-last-sequence refusal,
+// and no answer at all.
 //
-// # Why not a bool, and why not a bool beside a string
-//
-// This is [internal/coord]'s three-valued discipline one layer down: "held",
-// "definitively not held" and "the store could not be reached" are three
-// different facts, and collapsing the last two into false is the single most
-// incident-hardened lesson in this engine. Here the same three are a PubAck, a
-// wrong-last-sequence refusal, and no answer at all.
-//
-// The boolean that used to sit beside this — saying whether the apply wait
-// SUCCEEDED — is deliberately absent, and stays absent. Durability is carried
-// by the position being set and success by the enum itself, so that field
-// could only ever disagree with one of them.
-//
-// [Result.Waited] is not it, and the distinction is exactly the one that makes
-// the removed field redundant and this one not. "The wait succeeded" is
-// derivable — it is `applied`. "A wait was attempted at all" is not, once
-// [Request.NoWait] exists: the two pendings it produces carry the same
-// outcome and mean opposite things about this node.
+// No boolean says whether the apply wait SUCCEEDED: durability is the position
+// being set and success is the enum, so it could only disagree. [Result.Waited]
+// differs: "a wait was attempted" is not derivable once [Request.NoWait]
+// exists, as its two pendings carry one outcome and mean opposite things.
 type Outcome string
 
 const (
@@ -42,16 +31,14 @@ const (
 	// OutcomePending says the record is DURABLE at its position and what
 	// it produced is unresolved HERE. Every other node will apply it.
 	//
-	// WHICH IS WHY A COPY IS JUDGED BEFORE IT IS ANSWERED PENDING. A write
-	// the broker collapsed onto another node's copy of its operation is
-	// durable at that copy, and the copy applies nowhere if its writer was
-	// evicted while it was in flight — so it is pending only where that
-	// writer still stands at the copy's position, and unknown otherwise
-	// ([Publisher.unresolved]).
+	// A COPY IS JUDGED BEFORE IT IS ANSWERED PENDING. A write the broker
+	// collapsed onto another node's copy of its operation is durable at that
+	// copy, which applies nowhere if its writer was evicted in flight — so it
+	// is pending only where that writer still stands at the copy's position,
+	// and unknown otherwise ([Publisher.unresolved]).
 	//
-	// NEVER a failure and never "applied": a caller told this has a
-	// position to resolve with later, which is a different thing to do
-	// than retry.
+	// NEVER a failure and never "applied": the caller has a position to
+	// resolve with later, which is not a retry.
 	OutcomePending Outcome = "pending"
 
 	// OutcomeUnknown says nothing can be established about this record
@@ -90,17 +77,13 @@ type Result struct {
 	// Waited says an apply wait was ATTEMPTED, which is what tells the
 	// two pendings apart.
 	//
-	// NOT "the wait succeeded" — that is derivable and is `applied`. This
-	// says whether anybody asked, and it exists because [Request.NoWait]
-	// made the question askable: a pending that was waited for says this
-	// NODE is behind, and a pending that was not says the caller declined
-	// to find out. Reported as one, a deliberate skip reads to an
-	// operator as a node falling behind under load, which is a health
-	// signal they will go and act on.
+	// NOT "the wait succeeded" (that is `applied`): it says whether anybody
+	// asked. A pending that was waited for says this NODE is behind; one
+	// that was not says the caller declined to find out ([Request.NoWait]).
+	// Reported as one, a deliberate skip reads as a node falling behind.
 	//
 	// FALSE ON EVERY OUTCOME THAT DID NOT REACH THE WAIT — a refusal, a
-	// round that lost its race — which is honest rather than absent
-	// information: no wait happened there either.
+	// round that lost its race: no wait happened there either.
 	Waited bool
 
 	// Version is the object's new version on an applied write: the
@@ -113,45 +96,28 @@ type Result struct {
 
 	// Collapsed says this call was a RETRY of an operation that had
 	// already landed under the same op id, and THIS call's decision was
-	// never stored: Position is the earlier copy's, found in this node's
-	// ledger before a decision was taken ([Snap.Held]), in the broker's
-	// duplicate acknowledgement, or in the ledger when the publish is
-	// resolved — wherever the row the ledger names cannot be proven to be
-	// this call's own record. Only an acknowledged append whose position
-	// the ledger names is; an ambiguous publish answered from the ledger
-	// is collapsed even when the record happens to be this call's, since
-	// nothing here can tell the two apart and building on another copy's
-	// answer is the failure this field exists to prevent.
-	//
-	// The outcome is still the operation's own — it did apply — and a
-	// caller that only reports it needs nothing more. A caller whose
-	// ANSWER is computed inside its decision must not build on that
-	// answer: it describes a decision nothing published, or — where the
-	// ledger answered — one that was never taken at all. A counter a
-	// create minted from is the sharp case: the number the earlier copy
-	// took is on the log, and the one this call would have taken is not.
+	// never stored: Position is the earlier copy's, found in the ledger
+	// ([Snap.Held]), the broker's duplicate acknowledgement, or the ledger
+	// when the publish is resolved. An ambiguous publish answered from the
+	// ledger is collapsed even when the record is this call's: nothing tells
+	// the two apart. A caller whose ANSWER is computed inside its decision
+	// must not build on it: it describes a decision nothing published (a
+	// counter a create minted from: the earlier copy's number is on the log,
+	// this call's is not). The outcome is still the operation's own.
 	Collapsed bool
 
 	// Unvouched says an `unknown` was answered because THIS NODE'S
 	// operation ledger cannot vouch for the operation — it was minted
 	// before the instant the ledger may have lost rows from (a retention
-	// sweep: this node's, or a donor's inherited with its ledger on an
-	// adoption) and the ledger holds no row for it — rather than because
-	// an acknowledgement was lost.
-	//
-	// # Why a caller has to be able to tell the two apart
-	//
-	// They send a retry opposite ways. A lost acknowledgement is resolved by
-	// the same operation id retried HERE: the ledger writes its row when the
-	// record applies, and the next attempt answers from it. An unvouched
-	// operation meets the same silence on this node every time — the row it
-	// needs is the one the loss took — so the same call repeated here never
-	// finishes it, and the first run may well have landed. What can answer
-	// it is another node, or one whose ledger lost nothing that far back.
-	// Told only "unknown", a walking gesture said "call again" for ever and
-	// a create said "not made" about a task its first run may have filed.
-	//
-	// Always false beside any outcome but unknown.
+	// sweep, this node's or a donor's inherited on an adoption) and holds
+	// no row for it — rather than because an acknowledgement was lost.
+	// Always false beside any other outcome. The two send a retry opposite
+	// ways: a lost acknowledgement is resolved by the same id retried HERE; an
+	// unvouched operation meets the same silence here every time (the row it
+	// needs is the one the loss took) and the first run may have landed, so
+	// only another node whose ledger lost nothing that far back can answer.
+	// Told only "unknown", a walk said "call again" for ever and a create said
+	// "not made" of a task it may have filed.
 	Unvouched bool
 }
 
@@ -170,14 +136,12 @@ func (r Result) Wrote() bool {
 //
 // # Why a call that appended several records needs it
 //
-// A tool call, a dependency sequence, a save followed by a rename: each is ONE
-// answer over several records, and that answer is read as "may I stop looking
-// at this write?". It has to be the outcome a caller can rely on for EVERY
-// record the call made — `applied` over a record the broker never confirmed
-// tells a caller it is done with a write nobody can vouch for, and the rule
-// every transport documents is that an unknown write is never reported
-// applied. Taking the first record's outcome, or the last's, breaks that the
-// moment the records disagree.
+// A tool call, a dependency sequence, a save then a rename: each is ONE answer
+// over several records, read as "may I stop looking at this write?". It has to
+// hold for EVERY record the call made — `applied` over a record the broker
+// never confirmed breaks the rule every transport documents, that an unknown
+// write is never reported applied. The first or last record's outcome breaks
+// it the moment the records disagree.
 func LessCertain(a, b Outcome) Outcome {
 	rank := func(o Outcome) int {
 		switch o {
@@ -199,18 +163,15 @@ func LessCertain(a, b Outcome) Outcome {
 // Later is the later of two positions on one stream, the zero position losing
 // to any other. It is the position a call that appended several records must
 // answer, because a caller barriers on it before its next read: the earlier
-// one is a floor BELOW a record the call made, and a read at it can come back
-// without that record.
+// one is a floor BELOW a record the call made.
 //
 // # Why it asks [Position.Before] rather than comparing packed values
 //
 // A packed value is a coordinate in ONE log's number space, and two logs'
-// spaces are unrelated: compared bare, a position on the knowledge base's log
-// would "follow" one on the tracker's for no reason but the sizes of two
-// counters, and the answer would name a log the caller never barriers on.
-// [Position.Before] is the one place that refuses the comparison, so a
-// position on ANOTHER stream never replaces the first — a caller barriers on
-// one log, and a second log's position is no floor on it.
+// spaces are unrelated: compared bare, one log's position would "follow"
+// another's for no reason but the sizes of two counters. [Position.Before]
+// refuses that comparison, so a position on ANOTHER stream never replaces the
+// first: a second log's position is no floor on the log the caller barriers on.
 func Later(a, b Position) Position {
 	switch {
 	case a.IsZero():
@@ -230,24 +191,17 @@ type Reason string
 
 const (
 	// ReasonEvicted — the record's writer has been removed from the fleet:
-	// this node, or — when [Unavailable.CopyWriter] names one — the other
-	// node whose copy of this operation this node's append was collapsed
-	// onto. Nothing an evicted node publishes is applied anywhere.
+	// this node, or — when [Unavailable.CopyWriter] names one — the node whose
+	// copy this node's append collapsed onto. Nothing an evicted node
+	// publishes is applied anywhere.
 	//
-	// THIS NODE'S OWN, there is no retry HERE: another node the fleet still
-	// counts takes the write. A refusal that names no position was made
-	// before anything was appended, and that node takes the write under the
-	// same operation id. One that names a position is a record of this
-	// node's that landed and applies nowhere, and it holds the operation id
-	// for the log's duplicate window ([StreamSpec.Duplicates]): the same id
-	// sent inside it — by any node — is collapsed onto that record and
-	// refused the same way, so the other node takes the write under a fresh
-	// id, or under this one once the window has passed. Neither can apply
-	// twice, because the record in the way applies nowhere.
-	//
-	// ANOTHER NODE'S COPY says nothing about this node, which passed its own
-	// fences before it appended: it takes the write itself, under the same
-	// operation id once the window has passed, or under a fresh one sooner.
+	// THIS NODE'S OWN: no retry HERE; another node takes the write. A refusal
+	// naming no position preceded any append, so that node reuses the id. One
+	// naming a position is a landed record that applies nowhere and holds the
+	// id for the duplicate window ([StreamSpec.Duplicates]): use a fresh id,
+	// or this one after the window. ANOTHER NODE'S COPY says nothing about
+	// this node, which passed its own fences: it takes the write itself, under
+	// a fresh id, or the same one once the window has passed.
 	ReasonEvicted Reason = "evicted"
 
 	// ReasonEvictionUnknown — this node's own eviction state could not be
@@ -338,18 +292,14 @@ const (
 	// ReasonRecordTooLarge — the record is larger than the broker takes in
 	// one message, and nothing about the log's size is involved. No node
 	// can place it and no wait changes it. The detail names which limit
-	// refused it, because each has its own remedy: the server's
-	// max_payload (an operator raises it on every server of an external
-	// cluster — a node refuses at boot a connection held to less than the
-	// transport's contract, so this is a server that holds it to less
-	// since), the
-	// stream's own max_msg_size (somebody reconfigured the stream; it is
-	// restored), or the file store's per-record limit (nothing raises it)
-	// — and splitting the change answers all three.
+	// refused it, because each has its own remedy: the server's max_payload
+	// (raised on every server of an external cluster; a node refuses at boot
+	// a connection held to less than the transport's contract), the stream's
+	// max_msg_size (reconfigured; restore it), or the file store's per-record
+	// limit (nothing raises it). Splitting the change answers all three.
 	//
-	// ITS OWN REASON RATHER THAN [ReasonLogFull], which it used to be:
-	// that one tells an operator to raise a ceiling or unblock the trim,
-	// and a record too large is refused by a log with room to spare.
+	// ITS OWN REASON RATHER THAN [ReasonLogFull], whose remedy (raise a
+	// ceiling, unblock the trim) is wrong for a log with room to spare.
 	ReasonRecordTooLarge Reason = "record_too_large"
 
 	// ReasonBrokerRefused — the broker refused to store the record, named
@@ -379,26 +329,17 @@ const (
 	ReasonLogTruncated Reason = "log_truncated"
 
 	// ReasonWrongStream — the log under this domain's name is not the
-	// one this node's rows were derived from. Each finding has its own
-	// cause a caller can recognise without switching on the reason: the
-	// log was deleted and rebuilt, so it counts from 1 again at the same
-	// generation ([ErrStreamRecreated]); this node's checkpoint is past the
-	// log's end ([ErrAheadOfLog]) — the broker was restored from a copy
-	// older than this node's rows, which keeps the stream's creation
-	// instant, so only the end shows it; the log holds, at that checkpoint,
-	// another record than the one this node consumed there
-	// ([ErrLogDiverged]) — the same restore, written past this node's rows,
-	// where the end shows nothing and the record does; or a peer
-	// re-anchored the log past this node's generation
-	// ([ErrGenerationPassed]). Every expectation this node could form is a
-	// sequence from a history the broker does not hold, and whatever it
-	// appends lands where its own applier will never apply it. Waiting
-	// does not clear it, and the remedy is an operator's re-anchor — or,
-	// for a passed generation, whichever the refusal names: this node's own
-	// adoption where a live peer holds the generation, a re-anchor where
-	// only evicted nodes do, and a re-run of this node's own reanchor where
-	// that is what opened it. The same word as the read refusal for the
-	// same facts, so a surface that meets both reads one.
+	// one this node's rows were derived from, by one of: deletion and
+	// rebuild ([ErrStreamRecreated]); a checkpoint past the log's end
+	// ([ErrAheadOfLog], a restore from an older copy, which keeps the creation
+	// instant so only the end shows it); another record at the checkpoint than
+	// the one consumed ([ErrLogDiverged], the same restore written past its
+	// rows); a peer's re-anchor past this node's generation
+	// ([ErrGenerationPassed]). Every expectation this node could form is from
+	// a history the broker does not hold, so what it appends its applier never
+	// applies. Waiting does not clear it: an operator re-anchors, or for a
+	// passed generation as the refusal names (adoption, re-anchor, or re-run
+	// of its own reanchor). Same word as the read refusal.
 	ReasonWrongStream Reason = "wrong_stream"
 
 	// ReasonSuperseded — this operation's record landed, and a later record
@@ -438,25 +379,16 @@ func Reasons() []Reason {
 func (r Reason) Valid() bool { return slices.Contains(Reasons(), r) }
 
 // Retryable reports whether this refusal clears on THIS node without anybody
-// doing anything — the write-side twin of [ReadRefusal.Retryable], and for its
-// reason: a node that is behind catches up, while an evicted node, a deleted
-// object or a full log refuses the same write however long the caller waits.
+// doing anything — the write-side twin of [ReadRefusal.Retryable].
 //
-// FIVE CLEAR ON THEIR OWN, each by its own constant's words: a node BEHIND the
-// caller's previous write applies it, a node BELOW the trim floor catches up
-// or adopts a snapshot, and a floor, an eviction state or a log's usage that
-// could not be read is read again. [ReasonDeferred] is deliberately not one of them:
-// ANOTHER node can serve the write, and this one cannot until it is upgraded —
-// so "come back here" is the wrong instruction however soon it is given. Nor
-// is any refusal whose remedy is a NEW operation or an operator's gesture —
-// abandoned, overtaken, a reused operation id, a truncated or wrong log, a
-// superseded operation — because the same request refuses the same way
-// however long the caller waits.
-//
-// A REASON SPELLED LIKE A [ReadRefusal] IS ITS TWIN AND AGREES WITH IT, which
-// [TestAWriteRefusalAndItsReadTwinAgreeOnWaiting] holds: the two describe one
-// state of one node, so a surface telling a writer to come back and a reader
-// not to — or the reverse — is contradicting itself about that node.
+// FIVE CLEAR ON THEIR OWN: a node BEHIND the caller's previous write applies
+// it, a node BELOW the trim floor catches up or adopts a snapshot, and an
+// unreadable floor, eviction state or log usage is read again.
+// [ReasonDeferred] is not one: ANOTHER node can serve the write, this one not
+// until upgraded. Nor is a refusal whose remedy is a NEW operation or an
+// operator's gesture. A reason spelled like a [ReadRefusal] AGREES WITH ITS
+// TWIN ([TestAWriteRefusalAndItsReadTwinAgreeOnWaiting]): both describe one
+// state of one node.
 func (r Reason) Retryable() bool {
 	switch r {
 	case ReasonBehind, ReasonBelowFloor, ReasonFloorUnknown, ReasonEvictionUnknown,
@@ -469,27 +401,14 @@ func (r Reason) Retryable() bool {
 // BlamesWriter reports whether a gate answering r dropped a record for what its
 // WRITER was or did — evicted, or stamped with a generation a reanchor voided
 // (abandoned, overtaken) — rather than for something every writer's record meets
-// alike: the object's permanent deletion marker (deleted). False for a reason
-// that is not a gate's.
-//
-// # What it decides
-//
-// Whose standing a refusal of ANOTHER node's copy of an operation states
-// ([Unavailable.CopyWriter]). Under a reason that blames the writer, the node
-// that refused passed its own fences before it appended and stamps its own
-// generation: the gate holds the copy and not it, so it finishes the write
-// itself once the duplicate window lets go of the operation id. Under one that
-// does not, its own record meets the same gate — a purged task stays purged
-// for every writer, for ever — and a copy's writer named there told every
-// reader the refusal was about somebody else, which a surface reads as "retry
-// here" and which is never true of it.
-//
-// A PROPERTY OF THE REASON rather than a case in the one resolution that asks
-// it, so a gate added later is classified where its reason is declared. A
-// reason this switch does not name answers false, which is why
-// [TestOnlyAGateThatHoldsAWriterBlamesIt] carries an explicit answer for every
-// value [Reasons] names: one added without a decision fails there rather than
-// quietly blaming nobody.
+// alike: the object's deletion marker (deleted). False for a non-gate reason.
+// It decides whose standing a refusal of ANOTHER node's copy states
+// ([Unavailable.CopyWriter]). Where it blames the writer, the refusing node
+// passed its own fences and finishes the write itself once the duplicate
+// window lets go. Where not, its own record meets the same gate, and naming
+// the copy's writer would read as "retry here", never true. An unnamed reason
+// answers false, so [TestOnlyAGateThatHoldsAWriterBlamesIt] holds an explicit
+// answer for every value [Reasons] names.
 func (r Reason) BlamesWriter() bool {
 	switch r {
 	case ReasonEvicted, ReasonAbandoned, ReasonOvertaken:
@@ -504,13 +423,12 @@ func (r Reason) BlamesWriter() bool {
 // counter carry. Every other reason refuses a write before or instead of an
 // append. evicted and deleted are ALSO refused before an append (this node's
 // own eviction, an object's marker read in the snapshot), and after one where
-// the record a lost answer found is another operation's, at which the gate
-// holds this node — which is why a refusal says whether a record of its own
-// landed by [Unavailable.Landed], never by its reason alone.
+// a lost answer found another operation's record, at which the gate holds this
+// node — so a refusal says whether a record of its own landed by
+// [Unavailable.Landed], never by its reason alone.
 //
-// Decided per reason beside [Reason.BlamesWriter], whose set it contains, and
-// held by the same table ([TestOnlyAGateThatHoldsAWriterBlamesIt]), so a gate
-// added later is classified where its reason is declared.
+// Declared per reason beside [Reason.BlamesWriter], whose set it contains, and
+// held by the same table ([TestOnlyAGateThatHoldsAWriterBlamesIt]).
 func (r Reason) FromGate() bool {
 	switch r {
 	case ReasonEvicted, ReasonDeleted, ReasonAbandoned, ReasonOvertaken:
@@ -538,21 +456,15 @@ func (r Reason) RefusesTheWrite() bool {
 
 // RetryAfter is how long a caller should wait before bringing the request err
 // refused back to THIS node: ZERO when waiting cannot change the answer, the
-// refusal's own derived hint where it has one, and otherwise when it is
-// retryable and derived nothing — or is not a refusal this package made at
-// all, which is the caller's to judge rather than this package's.
-//
-// ONE RULE FOR EVERY SURFACE that answers a refusal in a status code. Written
-// at each one, it drifted: a surface turned a refusal waiting cannot clear — a
-// node holding a record it cannot decode, an evicted one — into `Retry-After:
-// 2`, and the work surface did the same to every write refusal, so a client
-// polled every two seconds a node that would not answer until somebody
-// upgraded or readmitted it. And the zero is the only honest hint there is:
-// [Refused.RetryAfter] already says so for a read, and [Reason.Retryable]
-// says it for a write — whose one hint of its own is another node's copy of
-// it under a gate that blames that copy's writer ([Unavailable.RetryAfter]),
-// which the node that refused takes itself once the log's duplicate window
-// has let go of the operation.
+// refusal's own derived hint where it has one, and otherwise `otherwise` (it
+// is retryable and derived nothing, or not a refusal this package made).
+// ONE RULE FOR EVERY SURFACE that answers in a status code. Written at each it
+// drifted: a refusal waiting cannot clear (an undecodable record, an eviction)
+// became `Retry-After: 2` and a client polled a node that would not answer
+// until upgraded or readmitted. Zero is the only honest hint there
+// ([Refused.RetryAfter] for a read, [Reason.Retryable] for a write); a write's
+// one hint of its own is another node's copy under a gate that blames its
+// writer ([Unavailable.RetryAfter]), which this node takes after the window.
 func RetryAfter(err error, otherwise time.Duration) time.Duration {
 	var refused *Refused
 	if errors.As(err, &refused) {
@@ -595,18 +507,16 @@ var ErrConflict = errors.New("statelog: conflict")
 
 // Unavailable is a refusal naming what it is about.
 //
-// A REASON AND A DETAIL rather than a message, because two different readers
-// need it: a surface switches on the reason to decide whether to retry
-// elsewhere, and whoever runs the node reads the detail to find out what to
-// change.
+// A REASON AND A DETAIL rather than a message, for two readers: a surface
+// switches on the reason to retry elsewhere, and whoever runs the node reads
+// the detail to find what to change.
 //
-// THE DETAIL IS WRITTEN FOR WHOEVER RUNS THE NODE — composed by this package,
-// naming positions, versions, settings and the words a broker chose for its
-// refusal, and never an error's own text: a store's error is a driver's
-// message or a database path. It goes to the node's log, and to the gate and
-// retention tooling an operator drives; a person is told the reason in
-// [ConditionSentence]'s words instead, which carry none of it.
-// [Refused.Detail] is held to the same rule.
+// THE DETAIL IS WRITTEN FOR WHOEVER RUNS THE NODE: composed by this package,
+// naming positions, versions, settings and the broker's own words, never an
+// error's text (a store's error is a driver's message or a database path). It
+// goes to the node's log and the operator's gate and retention tooling; a
+// person gets [ConditionSentence]'s words instead. [Refused.Detail] is held
+// to the same rule.
 type Unavailable struct {
 	Reason   Reason
 	Detail   string
@@ -622,55 +532,31 @@ type Unavailable struct {
 	RetryAfter time.Duration
 
 	// CopyWriter names ANOTHER node when the record at Position is that node's
-	// copy of this operation rather than this node's own, AND the gate that
-	// dropped it blames the copy's writer ([Reason.BlamesWriter]): an eviction
-	// or a reanchor's rule. The broker collapsed this node's append onto the
-	// copy inside the log's duplicate window, or a write whose answer was lost
-	// found it newest on its subject. The reason then states THE COPY'S
-	// WRITER's standing, and not the standing of the node that refused — which
-	// passed its own fences, and takes the write itself under the same
-	// operation id once the window has let go of it.
-	//
-	// A FIELD rather than a sentence in Detail, because the remedy turns on
-	// it: read as this node's own `evicted`, the operator was told the node
-	// they ran the gesture on was evicted and sent elsewhere, although that
-	// node is counted and could finish it a minute later.
-	//
-	// EMPTY WHEN THE REFUSAL IS ABOUT THE NODE THAT MADE IT — its own
-	// record, a copy it wrote itself on an earlier attempt, or no record at
-	// all — which is every refusal but that one. And EMPTY for another
-	// node's copy under a gate that blames no writer, which is `deleted`:
-	// the marker holds every writer's record on the object for ever, this
-	// node's own included, so the refusal is as true of this node as of the
-	// copy, and a writer named here read as a retry that only meets the
-	// marker again.
-	// Detail still says whose copy the record is.
+	// copy of this operation, AND the gate that dropped it blames the copy's
+	// writer ([Reason.BlamesWriter]). The broker collapsed this node's append
+	// onto the copy inside the duplicate window, or a write whose answer was
+	// lost found it newest on its subject. The reason then states THE COPY'S
+	// WRITER's standing, not the refusing node's, which passed its own fences
+	// and takes the write itself once the window lets go. A FIELD, not Detail
+	// text, because the remedy turns on it: read as this node's own `evicted`,
+	// an operator was sent elsewhere. EMPTY WHEN THE REFUSAL IS ABOUT THE NODE
+	// THAT MADE IT, and for another node's copy under a gate blaming no writer
+	// (`deleted`: the marker holds every writer's record for ever). Detail
+	// still says whose copy the record is.
 	CopyWriter string
 
 	// Dropped says the record at Position is THIS OPERATION'S and a gate
-	// dropped it: this write's own append, or a copy of the operation the
-	// broker collapsed the append onto, or one a write whose answer was lost
-	// found newest on its subject carrying its id. So the operation's record
-	// is durable there and applies nowhere ([Unavailable.Landed]).
-	//
-	// FALSE WHEN POSITION IS ANOTHER OPERATION'S RECORD, which a gate's
-	// refusal can carry too: a write whose answer was lost found ANOTHER
-	// operation's record newest on its subject, and the gates, asked about
-	// THIS NODE there, hold it — its eviction is below that record, or the
-	// object's marker is. Position is then only where the gate was judged:
-	// the record there may be a healthy peer's that applied on every node,
-	// and whether this write's own append landed at all is not known (if it
-	// did, it lies below Position and applies nowhere, which the operation
-	// ledger's silence says). That refusal is about this node's standing,
-	// like the eviction found before an append, and read as "your record is
-	// durable at Position and applies nowhere" it told a caller something
-	// nobody here knows — and sent a write away as lost that another node
-	// could have made.
-	//
-	// A FIELD rather than a reading of Position, because a position cannot
-	// say whose record it names; set only by the resolution that read it
-	// ([Publisher.Publish]). False on every other refusal, which names no
-	// dropped record of this operation.
+	// dropped it: this write's own append, or a copy the broker collapsed it
+	// onto, or one a write whose answer was lost found newest carrying its
+	// id. So the record is durable there and applies nowhere
+	// ([Unavailable.Landed]). FALSE WHEN POSITION IS ANOTHER OPERATION'S
+	// RECORD: a lost answer found ANOTHER operation's record newest and the
+	// gates, asked about THIS NODE there, hold it. Position is then only where
+	// the gate was judged (maybe a healthy peer's record that applied
+	// everywhere), and whether this write's own append landed is unknown; read
+	// as "durable and applies nowhere" it sent away a write another node could
+	// make. A FIELD, since a position cannot say whose record it names; set by
+	// the resolution that read it ([Publisher.Publish]).
 	Dropped bool
 
 	// Cause is the error a refusal was concluded from, when there is one
@@ -694,21 +580,14 @@ func (u *Unavailable) Error() string {
 // Landed reports a refusal made AFTER an append whose record is known: a gate
 // ([Reason.FromGate]) dropped THIS OPERATION'S record, durable at Position —
 // this write's own, or a copy of it the broker collapsed the append onto
-// ([Unavailable.Dropped]) — so the operation applies nowhere, and its
-// operation id is held for the log's duplicate window.
-//
-// NEVER JUDGED BY THE POSITION ALONE. Refusals made before anything was
-// appended carry positions too, each naming something other than a record of
-// this write: the point a `behind` write needs this node to have applied, the
-// record a `deferred` node cannot decode, the last sequence a `skew` found,
-// the record an `op_reused` id already names. Read as landed, each of those
-// told a caller its write was durable and lost, when nothing was sent and
-// another node could make it. A gate's reason with NO position — this node's
-// own eviction found before the append, a deletion marker read in the
-// snapshot — is a refusal before the append too. And a gate's reason WITH a
-// position is not landed either where that position is ANOTHER operation's
-// record, at which the gate holds this node ([Unavailable.Dropped]): that is
-// a refusal about this node, whose own append may never have landed.
+// ([Unavailable.Dropped]) — so the operation applies nowhere, and its id is
+// held for the log's duplicate window. NEVER JUDGED BY THE POSITION ALONE:
+// refusals made before any append carry positions too, none a record of this
+// write (the point a `behind` write needs applied, the record a `deferred`
+// node cannot decode, a `skew`'s last sequence, the record an `op_reused` id
+// names); read as landed, each told a caller its write was durable and lost
+// when nothing was sent. A gate's reason with NO position, or WITH one that is
+// ANOTHER operation's record ([Unavailable.Dropped]), is about this node.
 func (u *Unavailable) Landed() bool {
 	return u.Dropped && u.Reason.FromGate() && !u.Position.IsZero()
 }

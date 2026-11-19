@@ -93,6 +93,134 @@
 //     hold named an attachment that has ended). An unmarked failure is
 //     none of those: the caller's own mistake, or a broker answer that
 //     waiting does not change.
+//
+// # Scatter and fan-out verbs
+//
+// Four verbs are the opposite of every other. Ask, AskEach and Serve are an
+// EPHEMERAL scatter (core request/reply on the real backend: no stream, no
+// consumer, no ack, no retention) because a query is not an event, and a
+// search fan-out on the durable verbs would write two records and an audit
+// row per keystroke. Broadcast and Listen are an ephemeral fan-out (at most
+// once, every listener hears every message, one at a time per listener and in
+// one sender's order, refused with ErrUnavailable rather than buffered into a
+// reconnect); presence travels on them because a heartbeat on a durable verb
+// would be a replicated write per cursor move.
+//
+// An answerer answers concurrently, up to the bound its registration states
+// through ONE AnswerGate both backends share, one gate per registration so a
+// request waits only behind its own registration's answers. The real
+// backend's buffer is bounded (the NATS client's 64 MiB and 500 000 messages a
+// subscription, past which a request is dropped as a slow consumer and its
+// asker hears nothing), so a registration whose requests are large and whose
+// answers wait must bound its answers below what that buffer holds at once. A
+// withdrawal waits for what is in flight: run inside the subscription
+// callback, every request waited behind the one before while the twin
+// answered in parallel and certified it clean.
+//
+// # Passes and the ack-pending budget
+//
+// A Pass is neither a failure nor a deferral: it is logged as delivery_passed,
+// never quiesces the attachment, and returns behind the waiting mail on the
+// failure path's backoff counted by the MESSAGE's deliveries (about ten
+// minutes over its 25), then is dead-lettered with its group's unhandled
+// deliveries. A passed message holds one of its group's ack-pending slots from
+// its first delivery until a node acks it or its last delivery is
+// dead-lettered; with the server's 1000 slots all held, the group stops
+// delivering new mail until slots free and loses nothing. Leaving that in
+// place is a stated decision (OutcomePass). A copy marks itself unhandled by
+// its dead-letter SUBJECT, never a header: a copy at the transport's ceiling
+// has no room for one. The mark is fleet-wide (JetStream keeps one per failed
+// message in CREWLET_FAILED, written before the message goes back; a mark it
+// could not write or read errs towards unhandled).
+//
+// # Writes and the connection's pace (JetStream)
+//
+// A publish, a keep and a state log's append with no caller deadline wait the
+// request term plus, across a link (a leaf's, an external cluster's), the time
+// their bytes take at the object store's floor, for each of the first
+// jsapi.WriteSends sends; the client's own re-sends are off and made by the
+// queue, each with its own crossing. Held to the five seconds alone, a keep at
+// the ceiling through a slow leaf link failed as ErrUnavailable while its bytes
+// crossed, and its keeper retried it for ever (crewlet/crewlet#1005). An
+// external dial gives every socket write the largest write's crossing
+// (externalWriteDeadline, the client's FlusherTimeout), because the client
+// writes a message whole under one deadline and its default minute cut a write
+// over about 2 MiB at the floor, and the connection with it. A caller's own
+// deadline is never extended, but on an external broker it is not checked
+// while its request waits for the connection's lock, so it can be held behind
+// every large write ahead of it (crewlet/crewlet#1035). Not covered: a link
+// slower than the floor or busy with other traffic (ADR-0161).
+//
+// # Broker connections and authentication
+//
+// Every connection the engine opens to its own embedded broker is in process,
+// a clustered member's too: its client listener binds 127.0.0.1 and advertises
+// nothing, since dialled over TCP it bound every interface and gossiped every
+// member's client URL. Every connection presents a key (ADR-0094): one
+// authenticator on every embedded broker admits routes, leaf links and
+// operators by keys of secrets.keys, every key of the ring accepted and the
+// active one presented, so rotation needs no broker step. An EXTERNAL server
+// is admitted only where its INFO says it authenticates clients, read off the
+// plaintext handshake by the recording dialer (nats.go parses no tls_verify)
+// after the max_payload contract; an INFO not read is a refusal. An embedded
+// member locks its store directory before the server exists (nats-server
+// accepts a second broker on one directory and both write it; the node
+// database's lock cannot stand in, since the broker starts first). A leaf
+// dials its members through an in-process HTTP CONNECT tunnel, the one
+// supported way onto a socket the server dials.
+//
+// What a node's data link carries is read at its socket (LinkMeter, nil on a
+// member), moving at 70% of the floor one way, because every counter
+// nats-server and nats.go keep moves a whole message at a time and a message
+// at the ceiling stands them all still for minutes. OpenCoordination reaches
+// the broker for the coordination store alone and builds no queue, because a
+// queue provisions the engine's streams.
+//
+// # State log watch
+//
+// DomainLog.Watch is for a reader that keeps its work in rows and only wants
+// to hear sooner which object moved: one ephemeral consumer takes each new
+// record's subject and sequence, never its body, because carrying a domain's
+// records (up to 8 MiB) to every watcher would cost each the log's whole
+// volume again. What it may have missed it says (Gap) and never repairs; the
+// caller waits for its copy to reach the position, then reads its rows, so a
+// nudge only ever shortens a wait.
+//
+// # Dead letters
+//
+// A keep is one entry for one identity its keeper derives from what it keeps
+// (LetterIdentity), so a second keep within DeadLetterWindow is answered
+// "already kept". The window is fifteen minutes, the longest a keep at the
+// ceiling across a link at the floor waits; on JetStream it is CREWLET_DLQ's
+// duplicate window, which stream.event_retention_hours must cover. DropDeadLetter
+// leaves the identity in the window on a running broker, so a keep inside it
+// keeps nothing, which is what a discard means. A listing reads headers only
+// from a replica; marks and bodies come from the leader. Across a leaf's link
+// an entry may be too large for a read's JSON reply to cross (a leaf's server
+// closes its whole link on one past the transport, crewlet/crewlet#1031), so
+// it is found from its headers and read raw.
+//
+// # Testing the contract
+//
+// The suite reads "nothing more was delivered" behind each backend's own
+// report that it has settled (Settle), never after a quiet window, which a
+// late leak passed. A handler never runs beside itself, and the suite decides
+// only what every backend can show. A linger window ends on a clock its
+// backend is handed (LingerClock), so cases move it rather than race the wall
+// clock. Test support is four packages, deliberately: jetstreamtest stands up
+// a cluster (importing it declares a solo suite), externaltest the single
+// external server, brokertest the one store size every embedded fixture
+// declares, and linktest a slow link between a node and its broker.
+//
+// A test's broker is never sized from the disk: an unset limit is three
+// quarters of the free space on a volume every package shares, so a boot
+// passed or failed on how full the runner was. A test binary refuses to start
+// an embedded broker with a store directory and no limit
+// (jetstream.ErrUndeclaredSize) or whose store lies outside a brokertest.TempDir
+// (jetstream.ErrStoreOutsideTempDir): a stopped nats-server can land a last
+// flush after Shutdown returns, which fails a t.TempDir removal
+// (crewlet/crewlet#1079). Brokertest's source gates read every Go file of the
+// module for a server built from nats-server's options that states no limit.
 package queue
 
 import (
@@ -115,89 +243,41 @@ var log = logging.Get("queue.contract")
 
 // ErrTooLarge reports that an event does not fit on the wire.
 //
-// ONE OF THE FOUR SENTINELS THE LAYERS ABOVE MAY BRANCH ON — ErrNotLive,
-// ErrUnavailable and ErrAttachmentGone are the others — since they must not
-// branch on which backend is running: each backend translates its own refusal
-// into this, and callers ask one question everywhere.
+// ONE OF THE FOUR SENTINELS THE LAYERS ABOVE MAY BRANCH ON (ErrNotLive,
+// ErrUnavailable and ErrAttachmentGone are the others): each backend
+// translates its own refusal into this.
 //
-// It exists because "too large" is the one publish failure that is PERMANENT.
-// The reasons a publish fails that trying again does answer — a broker
-// restarting, a connection dropping, a quorum briefly unavailable — are
-// ErrUnavailable, and a producer that could not tell this from them had to
-// treat every failure as transient.
-// The webhook edge did exactly that and asked the provider to retry a delivery
-// whose size guaranteed it would fail identically forever, releasing and
-// re-taking its claim on every attempt.
-//
-// Sizing a producer's own input against MaxPayloadBytes cannot replace this.
-// What a body costs on the wire is a property of its BYTES, not its length:
-// encoding/json escapes '<', '>' and '&' to six bytes each, so one JSON
-// document re-encodes at 1x and another of the same length at 6x. Any
-// up-front ratio is therefore either wrong for the second or wasteful for the
-// first — measured, and it is why this is an error from the transport rather
-// than a division at the edge.
+// "Too large" is the one PERMANENT publish failure; a producer unable to tell
+// it from ErrUnavailable must retry everything forever. Sizing input against
+// MaxPayloadBytes cannot replace it: wire cost depends on the BYTES, not the
+// length (encoding/json escapes '<', '>' and '&' to six bytes each), so any
+// up-front ratio is wrong for one document or wasteful for another.
 var ErrTooLarge = errors.New("queue: event too large for the transport")
 
 // MaxPayloadBytes is the largest single event any backend must carry.
 //
-// It is a CONTRACT number rather than a backend's own, because every backend
-// has to agree on it: the embedded broker is configured to accept exactly this
-// (see internal/queue/jetstream), an external NATS server announcing less is
-// refused when the backend opens rather than at the first message past it,
-// and the in-memory twin enforces the same ceiling, so a payload that a test
-// accepts is one production accepts.
+// A CONTRACT number every backend agrees on: the embedded broker accepts
+// exactly this (internal/queue/jetstream), an external NATS server announcing
+// less is refused when the backend opens, and the in-memory twin enforces it,
+// so a payload a test accepts is one production accepts.
 //
-// Written down because there was no number at all, and the failure had no
-// floor: the webhook edge accepted a 25 MiB delivery, verified its signature,
-// claimed it, and then could not publish it through a broker left at its own
-// 1 MiB default. The delivery was refused as unavailable, so the provider
-// retried, and every retry failed the same way forever. Nothing in that loop
-// is a transient, and nothing logged a size. Raising the ceiling is half the
-// answer; ErrTooLarge, which lets a producer tell that refusal apart from a
-// broker that is merely down, is the other half.
-//
-// 8 MiB is nats-server's own MAX_PAYLOAD_MAX_SIZE — the threshold above which
-// it warns that a payload is too large to be a good idea (server/const.go).
-// Sitting AT that boundary takes eight times the default without arguing with
-// the broker about what it was built for: a message is buffered whole, in the
-// server and again in every client that receives it, so this is memory per
-// in-flight event and not a disk number.
+// 8 MiB is nats-server's MAX_PAYLOAD_MAX_SIZE, above which it warns a payload
+// is too large to be a good idea (server/const.go). A message is buffered
+// whole in the server and every receiving client: memory per in-flight event.
 const MaxPayloadBytes = 8 << 20
 
 // ConcurrentAnswers is how many requests an [EventQueue.Serve] registration
 // answers at once when what it answers is work it does NOW.
+// SIXTY-FOUR, twice the default `node.max_concurrent`: every turn can be in a
+// tool call asking a peer, so two nodes' full turns never queue behind each
+// other. It bounds goroutines and buffered payloads, not throughput: a request
+// past it waits for a slot ([EventQueue.Serve] says how far it is buffered).
+// Four answers can fill [MaxPayloadBytes] (eventfan's scatter, memread, the
+// sandbox host's box read, estate): 512 MiB at the ceiling, never reached.
 //
-// SIXTY-FOUR, which is twice the default `node.max_concurrent`: every turn a
-// node runs can be inside one tool call that asks a peer, so a registration
-// answering one node's full complement of turns and a second node's beside it
-// never queues a request behind another. The cap bounds goroutines and
-// buffered payloads rather than throughput — a request past it waits for a
-// slot rather than failing, as far as its backend buffers it
-// ([EventQueue.Serve] says how far). What it costs in memory is sixty-four
-// of the largest answer THAT registration serves, and most answer in a few
-// kilobytes (a steer, a sandbox tail, the fleet broker's member exchange).
-// Four can fill an answer up to [MaxPayloadBytes]: the fleet turn-detail
-// scatter (internal/eventfan), the memory read (internal/learning/memread),
-// a box's read back by its host (internal/engine's sandbox host, whose result
-// is cut to the first of the carries the broker takes, and which makes at most
-// sixty-four at once whatever its registration's width) and the estate
-// router's answers (internal/estate) — whose paged usage reads are cut at a
-// quarter of the message, so one reaches the cap only by one oversized
-// record. One of those at the cap, every answer at the ceiling, is
-// 512 MiB held at once — a bound nothing here reaches in practice, because an
-// answer that large is a dashboard or a seat reading a whole window and
-// sixty-four of them in flight on one registration is sixty-four such readers
-// at the same instant. Past the cap a request waits for a slot like any
-// other, which is back-pressure on the asker rather than a failure: work done
-// now frees its slots in the time its answers take, long before a backend's
-// buffer fills.
-//
-// A REGISTRATION WHOSE ANSWERS WAIT — in a queue of their own, for as long as
-// their askers' attempts, as a push proposal waits behind its repository's
-// earlier pushes — passes the bound of that queue instead, and is a
-// registration of its own: a slot held through such a wait is one every other
-// request of its registration waits behind, so sixty-four of them on a
-// registration shared with work done now would hold every slot it has.
+// A REGISTRATION WHOSE ANSWERS WAIT (a push proposal behind its repository's
+// earlier pushes) passes its own queue's bound and is a registration of its
+// own: a slot held through the wait blocks every other request there.
 const ConcurrentAnswers = 64
 
 // MaxLingerSeconds is the hard ceiling on a batch linger window.
@@ -223,155 +303,41 @@ const (
 	// dead-letter budget.
 	//
 	// IT RETURNS BEHIND THE MAIL THAT WAS WAITING, on every backend. The
-	// shipped broker SPACES a failure — a second, doubling to thirty — and
-	// serves never-delivered messages meanwhile, so the retry comes after
-	// every message already queued when the handler failed, newer mail on
-	// the same partition key included, each in a call of its own. The
-	// in-memory twin models that backoff virtually (behind what was
-	// waiting, no timer), and queuetest's
-	// a_failure_returns_behind_waiting_mail_and_a_deferral_at_the_head
-	// holds both to it. A consumer that needs its message to keep its place
-	// does not want a Nak: it wants [OutcomeDefer], for a condition of the
-	// node, or to settle the message durably and retry the work itself. See
-	// OrderForDispatch for why the contract does not hold newer mail back.
+	// shipped broker SPACES a failure (a second, doubling to thirty) and serves
+	// never-delivered messages meanwhile, so the retry follows every message
+	// already queued, newer mail on the same partition key included. The
+	// in-memory twin models that backoff virtually; queuetest's
+	// a_failure_returns_behind_waiting_mail_and_a_deferral_at_the_head holds
+	// both. A consumer that must keep its place wants [OutcomeDefer], or settles
+	// the message durably and retries itself. See OrderForDispatch.
 	OutcomeNak
 
-	// OutcomeDefer leaves the delivery unacked AND quiesces the
-	// attachment. It is the outcome for work this process has lost the
-	// right to do — a seat whose lease moved, a node serving a stale
-	// config. Acking would claim work it will not perform.
-	//
-	// IT COSTS ONE DELIVERY, exactly as a Nak does, on every backend. No
-	// broker here has a "give this back without counting it": returning a
-	// message promptly means a Nak, and a Nak spends one of its deliveries
-	// — so the delivery budget is sized to cover handoffs as well as
-	// failures, and the backend dead-letters at the boundary rather than
-	// letting the broker's own MaxDeliver backstop discard a healthy event
-	// with nothing recorded. The alternative, letting the ack timer expire
-	// instead, parks a seat's whole mailbox for the ack window on every
-	// lease movement.
-	//
-	// THIS USED TO DIFFER BY BACKEND, and the contract said so: the
-	// in-memory twin returned the events without touching their counters,
-	// gated behind a conformance capability. That made one rule two —
-	// DeliveriesLeft's doc asserted every return spends one while the
-	// suite's own flag asserted a deferral spends nothing — and it made the
-	// twin the only backend its own handoff case was ever run against. The
-	// twin spends one now, so the sentence above is true of everything that
-	// implements this contract.
-	//
-	// WHAT EVERY BACKEND OWES IS UNCHANGED, and it is the weaker claim the
-	// capability used to protect: a deferral must not kill a HEALTHY event.
-	// That is answered by sizing the budget so handoffs cannot exhaust it,
-	// not by making the handoff free.
-	//
-	// AND AN EVENT WHOSE BUDGET HAND-BACKS DID SPEND IS STILL A HEALTHY ONE,
-	// so its copy is kept on its group's UNHANDLED subject ([RetiredTo]),
-	// never with the group's poison: a reader that can handle it now finds
-	// it there. A pass is no failure either, so a message passed until a
-	// hand-back spent its last delivery — a newer record's wake older nodes
-	// passed round during a roll, whose last delivery met a node that sheds
-	// or stops — is kept where its passes would have kept it. A hand-back
-	// judges nothing, though: a message one of whose deliveries FAILED as
-	// itself is poison, kept with the poison whichever return spent it.
-	//
-	// IT RETURNS AT THE HEAD, on every backend: a hand-back is a plain,
-	// unspaced Nak, and the broker serves a redelivery before new mail —
-	// so a deferred message keeps its place ahead of its conversation's
-	// newer mail, which a failure ([OutcomeNak]) does not. That is the
-	// outcome for a delivery that failed on a condition of the NODE or its
-	// store rather than of the message: the attachment stops, the message
-	// waits at the head, and whatever resumes the attachment (the seat
-	// host's next renew, for a seat inbox) brings it back first.
-	//
-	// When the consumer closes, the broker returns the message to
-	// whoever attaches next, in order. Never substitute a republish: that
-	// sends the event to the topic tail while its prefetched siblings
-	// replay from the head, reordering the conversation.
+	// OutcomeDefer leaves the delivery unacked AND quiesces the attachment: for
+	// work this process lost the right to do (a seat whose lease moved, a stale
+	// config). Acking would claim work it will not perform.
+	// IT COSTS ONE DELIVERY, as a Nak does, on every backend; the budget is
+	// sized to cover handoffs, and the backend dead-letters at the boundary
+	// instead of the broker's MaxDeliver discarding a healthy event unrecorded.
+	// Such an event (or one passed until a hand-back spent its last delivery) is
+	// kept on its group's UNHANDLED subject ([RetiredTo]), never with the poison,
+	// which is any message one of whose deliveries FAILED as itself.
+	// IT RETURNS AT THE HEAD: an unspaced Nak, ahead of the conversation's newer
+	// mail. Never substitute a republish: the event would go to the topic tail
+	// while prefetched siblings replay from the head, reordering it.
 	OutcomeDefer
 
-	// OutcomePass hands the delivery back to its group for a PEER and goes
-	// on consuming: this node will not handle this message and another
-	// may, and nothing is wrong with this node — only with this message
-	// here. It is the outcome for a delivery one build cannot read and
-	// another can: a record a newer build wrote, met by an older one during
-	// a roll (internal/notify's Deferral, crewlet#993). Acked, a delivery
-	// of a group every node takes from is gone for all of them.
-	//
-	// NEITHER OF THE OTHER RETURNS FITS IT. A Nak is a FAILURE, logged as
-	// one at Warn, for a delivery that failed nothing. A Defer is a
-	// condition of the NODE: it quiesces the attachment, so one message
-	// this build cannot read would stop the node taking every other; and
-	// it returns the message at the head, unspaced, so a fleet whose every
-	// node passes it would hand it round as fast as the broker delivers,
-	// spending its whole budget before the peer that reads it has started.
-	//
-	// SO IT IS SPACED AS A FAILURE IS, BY ITS DELIVERY COUNT. The shipped
-	// broker withholds the n-th delivery's pass for the failure path's n-th
-	// spacing — a second, doubling to thirty — counted off the MESSAGE
-	// rather than off the node that passes it, so a message handed from
-	// node to node ages at every hand. Like a failure it comes back BEHIND
-	// the mail that was waiting, and like every return it spends one
-	// delivery: a subscription's budget is 25 deliveries
-	// (internal/queue/jetstream's maxDeliver), so a passed message is
-	// offered to its group for about ten minutes — 1, 2, 4, 8 and 16
-	// seconds, then thirty for each of the nineteen returns after those —
-	// and is then dead-lettered with its copy on its group's UNHANDLED
-	// subject ([RetiredTo]), never circling for ever. The ack window
-	// (internal/queue/jetstream's DefaultAckWait, thirty minutes) does not
-	// delay it: a pass is a delayed Nak, not a timeout.
-	//
-	// NOTHING STEERS A PASS TO A NODE THAT CAN HANDLE IT. The broker hands
-	// each return to whichever member of the group asks next, so every one
-	// of a message's deliveries can go to nodes that pass it — early in a
-	// roll, while one node of the newer build sits among many older ones.
-	// What delivers it is the DEAD LETTER: its copy is kept on the group's
-	// unhandled subject, apart from the group's poison, and a reader that
-	// can handle it now lists that subject and handles each copy as a
-	// delivery. internal/notify's Service does that at its start, which is
-	// when what makes a copy readable — a newer build — arrives, and again
-	// whenever the subject moves while it runs.
-	//
-	// SO THE GROUP'S OWN BUDGET AND BACKOFF, AND NOT A LONGER WINDOW OF ITS
-	// OWN. A dead letter follows, not a drop, so the budget bounds only how
-	// long a passed message circles its group before it waits, kept, for a
-	// node that reads it. Ten minutes covers the
-	// ordinary case, a newer node winning one of a message's early
-	// deliveries, many times over; a longer window would hold the slot it
-	// occupies (below) longer and deliver nothing the replay does not.
-	//
-	// A PASSED MESSAGE HOLDS ONE OF THE GROUP'S ACK-PENDING SLOTS FROM ITS
-	// FIRST DELIVERY until a node that reads it acks it, or until its 25th
-	// delivery is dead-lettered and terminated — through every pass and
-	// every redelivery between. The shipped broker keeps a message pending
-	// from its first delivery until it is acked or terminated, a delayed Nak
-	// moving only when it is delivered next, and a redelivery to another
-	// member frees nothing (nats-server v2.15.2, server/consumer.go's
-	// pending set). A consumer at its limit of pending messages delivers no
-	// new one, and the shipped broker's consumers set none
-	// (internal/queue/jetstream's subscriptions leave MaxAckPending unset),
-	// so the server's default of 1000 applies; an external server's account
-	// may set less. So WHILE PASSES HOLD ALL OF THEM, THE GROUP STOPS
-	// DELIVERING NEW MAIL until slots free, and LOSES NOTHING: a slot frees
-	// when a node that reads its message acks it, or when the pass that
-	// spends its budget dead-letters it.
-	//
-	// HOW LONG ONE IS HELD IS THE GROUP'S NEWER SHARE'S, since nothing steers
-	// a delivery to a node that reads it: after a first pass, about 2 s with
-	// three quarters of the group on the newer build, 3 s with two thirds,
-	// 7 s with half, 42 s with a quarter, 3 minutes with a tenth, and the
-	// whole 601 s of the budget's spacing when no node reads it — the
-	// worst case, early in a roll, one newer node among many. About 1.7
-	// newer-record wakes a second, sustained, then fill the 1000 (1000 over
-	// 601 seconds). LEAVING THE SERVER'S 1000 IN PLACE IS A DECISION: the
-	// group fills it only at that rate of newer-record wakes, which only the
-	// newer build's own records relayed by its feeds make and only while the
-	// roll is that early, and what it costs then is the group's other mail
-	// waiting for slots, never a delivery lost.
-	//
-	// The in-memory twin redelivers it as it redelivers a Nak, behind the
-	// mail that was waiting with no timer, and spends and dead-letters it
-	// alike, on the same subject.
+	// OutcomePass hands the delivery back to its group for a PEER and goes on
+	// consuming: nothing is wrong with this node, only with this message here
+	// (a record a newer build wrote, met by an older one during a roll). A Nak
+	// would log a failure; a Defer would quiesce the attachment and, unspaced
+	// at the head, spend the budget before the reading peer started.
+	// SPACED AS A FAILURE IS, BY THE MESSAGE'S DELIVERY COUNT, behind waiting
+	// mail, one of 25 deliveries (jetstream's maxDeliver): about ten minutes,
+	// then a dead letter on the group's UNHANDLED subject ([RetiredTo]). Nothing
+	// steers a pass to a reader; that dead letter does, replayed by
+	// internal/notify's Service. A passed message holds a group ack-pending
+	// slot throughout; the server's default 1000 stays on purpose (the group
+	// then waits on new mail, losing none).
 	OutcomePass
 )
 
@@ -456,17 +422,15 @@ func Nak(err error) Result { return Result{Outcome: OutcomeNak, Err: err} }
 // NakNode negatively acknowledges a delivery that failed for a reason of THIS
 // NODE's, never of the message: a broker it could not reach ([ErrUnavailable]),
 // a queue that is not live ([ErrNotLive]), a stop that ended its handler, a
-// coordination store that did not answer. Returned exactly as a [Nak] is —
-// spaced, behind the mail that was waiting, the attachment taking mail on —
-// because the condition may clear in a moment, here or on a peer; but never
-// counted as the message's own failure ([Result.FailsMessage]), so a message
-// whose budget it spends is kept with its group's unhandled deliveries, as a
-// healthy delivery no member handled, and not with its poison ([RetiredTo]).
+// coordination store that did not answer. Returned as a [Nak] is (spaced,
+// behind waiting mail, the attachment taking mail on) because the condition
+// may clear, here or on a peer; but never counted as the message's own failure
+// ([Result.FailsMessage]), so a message whose budget it spends is kept with its
+// group's unhandled deliveries, not its poison ([RetiredTo]).
 //
-// NOT A DEFER, which is the outcome for a node that has lost the right to the
-// work: a deferral quiesces the attachment until something resumes it, and a
-// node whose broker blipped would stop taking every delivery of its group for
-// the sake of one.
+// NOT A DEFER, for a node that lost the right to the work: that quiesces the
+// attachment, and a node whose broker blipped would stop taking every delivery
+// of its group for the sake of one.
 func NakNode(err error) Result { return Result{Outcome: OutcomeNak, Err: err, NodeFault: true} }
 
 // NodeFault reports whether err, what a handler met with ctx, its delivery's
@@ -511,66 +475,31 @@ type Handler func(ctx context.Context, ev *events.Event) Result
 // BatchHandler processes one PARTITION of a drained batch.
 type BatchHandler func(ctx context.Context, evs []*events.Event) Result
 
-// ErrNotLive reports that a verb reached a queue that is not live — never
-// started, stopped, or holding a connection its broker client has closed for
-// good, which no later call reopens and which stops the node.
+// ErrNotLive reports that a verb reached a queue that is not live: never
+// started, stopped, or holding a connection its client closed for good (which
+// stops the node). ONE OF THE FOUR SENTINELS THE LAYERS MAY BRANCH ON (see
+// ErrTooLarge): each backend wraps its own error (jetstream.ErrClosed,
+// memory.ErrNotStarted) in this.
 //
-// ONE OF THE FOUR SENTINELS THE LAYERS ABOVE MAY BRANCH ON — see ErrTooLarge,
-// ErrUnavailable and ErrAttachmentGone for the others — because they must not
-// branch on which backend is running: each backend keeps its own error
-// (jetstream.ErrClosed, jetstream.ErrConnectionLost, memory.ErrNotStarted) and
-// wraps this, so errors.Is(err, queue.ErrNotLive) is one question everywhere.
-//
-// It exists because "the queue is down" is not a failure for every caller. A
-// seat release detaches the mailbox and the seat host KEEPS THE LEASE if that
-// detach cannot be proven — a seat this process may still be consuming must
-// not go to a peer. But a queue that is not live consumes nothing, so a
-// refusal there is proof of teardown rather than a failure to prove it, and
-// reading it as a failure would strand the seat for a full TTL on the one
-// path where the node is trying to hand it back.
+// "The queue is down" is not a failure for every caller. A seat release KEEPS
+// THE LEASE if its detach cannot be proven, since this process may still be
+// consuming the seat. A queue that is not live consumes nothing, so a refusal
+// there is proof of teardown; reading it as failure would strand the seat for
+// a full TTL on the path where the node is handing it back.
 var ErrNotLive = errors.New("queue: not live")
 
-// ErrUnavailable reports that a verb did not reach the broker, or reached it
-// and was not answered: this node's connection to it is down and its client is
-// reconnecting, or the broker — or the stream or the consumer the verb
-// addressed, a leader mid-election among them — did not reply within the
-// client's own time.
+// ErrUnavailable reports that a verb did not reach the broker or was not
+// answered in the client's own time. A CONDITION: a retry may succeed, so it is
+// never a fault of this node. Backends wrap the transport's error.
 //
-// A CONDITION, and the only one of the four sentinels that is: the same call
-// made again once the connection is back may succeed, so a caller answers it
-// as it answers any wait that clears — later, or with "try again shortly" —
-// and never as a fault of this node, which it is not. Each backend wraps its
-// transport's own words in it rather than replacing them (on JetStream a
-// timeout, no responders, a reconnecting or disconnected connection, a
-// reconnect buffer that filled), so a log still reads the client's message
-// and errors.Is on the client's own sentinel still answers.
-//
-// IT IS NOT ErrNotLive, and the difference is what a caller may conclude. A
-// queue that is not live consumes nothing, which a seat release reads as
-// proof of teardown. A broker that did not answer proves nothing of the kind:
-// this queue's consumers stay attached and resume when the connection does,
-// so reading this as teardown would hand a seat to a peer while this node may
-// still be consuming it.
-//
-// THE VERBS ABOUT THIS NODE'S OWN ATTACHMENTS NEVER ANSWER IT — Quiesce,
-// Unquiesce, Detach, Attachment, PauseTopic and ResumeTopic touch no broker,
-// and must not need one: a node that can no longer prove it owns a seat
-// quiesces that seat's mailbox on exactly the outage that cost it the proof,
-// when the coordination store rides the same broker. Every other verb has to
-// reach the broker and may.
-//
-// IT IS NOT A STATEMENT THAT NOTHING HAPPENED, exactly as no failed publish
-// ever was: a publish whose acknowledgement did not arrive may still have
-// been stored, so a producer that retries must tolerate a second copy.
-// "Published means durable" is a claim a success makes and a failure does not
-// unmake. Ask is the verb that refuses before anything is sent — see its
-// contract.
-//
-// A CALLER'S OWN DEADLINE OR CANCELLATION, ending a wait on a broker this
-// node is connected to, stays the context's error alone and is not marked:
-// the caller decided it, and the context says whose decision it was. One that
-// ends while the connection is down is marked, because the connection is why
-// nothing answered.
+// NOT ErrNotLive: a silent broker proves no teardown (consumers resume), so
+// reading it so would hand a seat to a peer while this node may still consume
+// it. Quiesce, Unquiesce, Detach, Attachment, PauseTopic and ResumeTopic NEVER
+// ANSWER IT: they touch no broker, and a node that lost a seat's proof quiesces
+// on the very outage that cost it. NOT "NOTHING HAPPENED": an unacknowledged
+// publish may be stored, so retries tolerate a second copy. A caller's own
+// deadline on a connected broker stays the context's error; one ending while
+// disconnected is marked.
 var ErrUnavailable = errors.New("queue: broker unavailable")
 
 // ErrAttachmentGone reports a PauseTopic for an attachment that is not the
@@ -671,16 +600,12 @@ type Unsubscribe func(ctx context.Context) error
 // BatchKeyFunc derives the PARTITION KEY an event is handled under: which
 // other events this one is drained, merged and dispatched WITH.
 //
-// NOT the conversation the event belongs to, which it was and which is a
-// different question with a different answer on at least one source. A direct
-// message is one conversation however it is threaded, so its identity is the
-// bare channel — while a reply in a thread on that line still partitions on
-// the thread, because merging it with unrelated top-level pings would hand
-// one digest a reply target that names only one of them. This layer must not
-// know that: internal/queue cannot import internal/notify, so the producer
-// stamps both values and the caller hands the partition one down (see
-// node.partitionKey, over notify.KeyOf). Prose is the only thing tying the
-// two ends together, which is exactly why it has to name the right key.
+// NOT the conversation the event belongs to: a direct message is one
+// conversation however threaded, but a reply in a thread on it still
+// partitions on the thread, since merging it with unrelated top-level pings
+// would hand one digest a reply target naming only one. internal/queue cannot
+// import internal/notify, so the producer stamps both values and the caller
+// hands the partition one down (node.partitionKey, over notify.KeyOf).
 type BatchKeyFunc func(ev *events.Event) string
 
 // PublishListener is invoked inline on every publish. Listeners run in the
@@ -761,27 +686,16 @@ type Marks struct {
 }
 
 // LetterFraming is the most a backend spends carrying one dead letter beside
-// its header's and its body's own bytes, and so what the transport's ceiling
-// is held to for a keep: [EventQueue.KeepDeadLetter] refuses an entry whose
-// header and body come within LetterFraming of [MaxPayloadBytes], with
-// [ErrTooLarge], on every backend alike.
+// its header's and body's bytes: [EventQueue.KeepDeadLetter] refuses, with
+// [ErrTooLarge], an entry within LetterFraming of [MaxPayloadBytes].
 //
-// A CONTRACT NUMBER, so the twin refuses exactly what the broker does. The
-// JetStream backend carries the header as a header of the message, so the
-// message on the wire is the body and a header block — `NATS/1.0`, the
-// expected stream the keep is checked against, the dead-letter header's own
-// name and the blank line that ends them, 70 bytes around the header's own
-// (internal/queue/jetstream holds that under this with its own test). Before
-// this bound a twin that counted the body alone kept an entry within those
-// bytes of the ceiling that the broker refused — the one direction a twin must
-// never be wrong in.
-//
-// A QUARTER KIBIBYTE, which a header name or a stream renamed by a later build
-// still fits in, and which costs a keeper nothing it needs: a wake feed's
-// largest entry leaves over three kibibytes of the transport between its
-// frame and the ceiling (internal/changefeed's deadLetterDetailBytes). The
-// identity a keep names rides in it too, at a fixed size whatever its length
-// (internal/queue/jetstream's letterID).
+// A CONTRACT NUMBER, so the twin never accepts what the broker refuses. The
+// JetStream header block (`NATS/1.0`, the expected stream, the header's name,
+// the blank line) costs 70 bytes around the header's own; its test holds that
+// under this. A QUARTER KIBIBYTE leaves room for a renamed header or stream,
+// and a wake feed's largest entry leaves over 3 KiB (internal/changefeed's
+// deadLetterDetailBytes); the keep's identity rides in it too (jetstream's
+// letterID).
 const LetterFraming = 256
 
 // LetterFits reports whether a dead letter of header and body can be kept: the
@@ -793,42 +707,16 @@ func LetterFits(header, body []byte) bool {
 }
 
 // RetiredTo is the dead-letter subject a subscription keeps its message on
-// once a return spent the message's delivery budget, by whether the message
-// FAILED AS ITSELF at any of its deliveries, failed — the one that spent the
-// budget or an earlier one ([Result.FailsMessage]). A message that did is kept
-// on the pair's dead-letter subject ([topics.DeadLetter]): poison, which an
-// operator investigates and nothing replays. Every other message is kept on
-// the pair's UNHANDLED subject ([topics.Unhandled]): one whose deliveries were
-// passed, handed back — by a handler's deferral or by the backend itself, of a
-// delivery a hold, a pause, a stop met before its handler ran — or failed
-// only for a reason of the node's own ([NakNode]). Each of those is a HEALTHY
-// delivery that no member of the group handled — [OutcomeDefer] and
-// [OutcomePass] both say so of what they return — so a reader that can handle
-// one now lists that subject and handles each copy as a delivery
-// (internal/notify), and finds no poison among them: save a message whose
-// failure the member it failed on could not mark for the rest of the group,
-// which errs that way rather than keep a healthy delivery with the poison.
-//
-// BY THE MESSAGE'S DELIVERIES, NOT BY THE RETURN THAT SPENT ITS BUDGET. Only
-// the last return decided it, and a hand-back or a node's own failure is no
-// judgment of the message: one whose deliveries had all failed, and whose last
-// a node that shed or stopped handed back, was kept with the unhandled
-// deliveries and replayed at every start, failing each time; and one whose
-// last delivery met a node that could not reach its broker was kept with the
-// poison, a wake nobody replays. So each backend remembers which of its
-// messages failed as themselves, FLEET-WIDE, since one message's deliveries go
-// to every member of its group: the twin beside its redeliveries, and the
-// JetStream backend as a mark on its broker (internal/queue/jetstream's
-// failure marks).
-//
-// THE SUBJECT SAYS WHICH, AND NEVER A HEADER. A delivery is as large as the
-// transport carries, so a copy at that ceiling has no room for a header beside
-// it, and a copy marked by its header was lost to its own reader there: kept
-// with none, read as poison and never replayed. Both are kept as the message's
-// own bytes and no keeper's header, wherever they are kept.
-//
-// THE CONTRACT'S RULE, which both backends call, so the twin keeps a copy
-// where the broker does.
+// once a return spent its delivery budget. A message that FAILED AS ITSELF at
+// any delivery ([Result.FailsMessage]) is poison on the dead-letter subject
+// ([topics.DeadLetter]); nothing replays it. Every other goes to the UNHANDLED
+// subject ([topics.Unhandled]): a HEALTHY delivery no member handled, which a
+// reader that can handle it replays (internal/notify). JUDGED BY ALL THE MESSAGE'S DELIVERIES, NOT THE LAST RETURN: a hand-back or
+// node fault judges nothing, and the last return alone replayed failing
+// messages forever or kept wakes with the poison. So each backend remembers
+// FLEET-WIDE which messages failed as themselves (jetstream's failure marks).
+// THE SUBJECT SAYS WHICH, NEVER A HEADER: a copy at the transport ceiling has
+// no room for one.
 func RetiredTo(topic, group string, failed bool) string {
 	if failed {
 		return topics.DeadLetter(topic, group)
@@ -837,33 +725,16 @@ func RetiredTo(topic, group string, failed bool) string {
 }
 
 // DeadLetterWindow is how long a backend remembers the identity a dead letter
-// was kept under ([EventQueue.KeepDeadLetter]): a keep of the same identity on
-// the same subject within it of the first keep's entry keeps nothing, and is
-// answered already kept.
+// was kept under ([EventQueue.KeepDeadLetter]): a repeat keep within it keeps
+// nothing and is answered already kept. A CONTRACT NUMBER: the JetStream
+// backend makes it `CREWLET_DLQ`'s duplicate window.
 //
-// A CONTRACT NUMBER, so the twin collapses exactly what the broker does: the
-// JetStream backend makes it the dead-letter stream's duplicate window
-// (`CREWLET_DLQ`'s), and holds it to the longest its own keep waits with a
-// test of its own.
-//
-// FIFTEEN MINUTES: THE LONGEST A KEEP MAY TAKE, AND ROOM. The window has to
-// outlast the last copy still on its way when the first one landed — a copy
-// whose keeper was handed the same thing before the first keeper's
-// acknowledgement settled it, its own keep then crossing a slow link. A keep
-// whose caller set no deadline waits, across a link, the request term and
-// the time its bytes take at the slowest pace the engine allows a link
-// (internal/objstore's MiBPace, thirty seconds a mebibyte) for each of the
-// three sends a write may make (internal/jsapi's WriteSends): at the
-// transport's eight-mebibyte ceiling, 5 s + 3 × 240 s, about twelve minutes
-// and five seconds. The rest is room for the acknowledgement that settles the
-// thing on its way back across the link. A keep that outlasts even this
-// crosses a link slower than the floor, which no budget of the engine's
-// covers and which fails the keep itself.
-//
-// AND THE DEAD LETTERS' RETENTION MUST COVER IT: a broker refuses a stream
-// whose duplicate window outlasts its age, and the JetStream backend keeps the
-// dead letters by the event stream's (`stream.event_retention_hours`), which
-// Tier A therefore refuses below this window (internal/config).
+// FIFTEEN MINUTES: THE LONGEST A KEEP MAY TAKE, AND ROOM, so it outlasts a copy
+// still on its way. A keep with no deadline waits the request term plus its
+// bytes at the slowest link pace (internal/objstore's MiBPace, 30 s/MiB) for
+// each of three sends (internal/jsapi's WriteSends): 5 s + 3 x 240 s at 8 MiB,
+// about twelve minutes. The retention must cover it (a broker refuses a longer
+// duplicate window), so Tier A refuses `stream.event_retention_hours` below it.
 const DeadLetterWindow = 15 * time.Minute
 
 // LetterIdentity reports why id cannot name a dead letter's keep, or nil when
@@ -889,14 +760,11 @@ func LetterIdentity(id string) error {
 // tilde — that neither begins nor ends with a space. An empty header is no
 // header at all, and is kept as one.
 //
-// THE CONTRACT'S RULE, SHARED BY BOTH BACKENDS, and the transport's: NATS
-// carries a header's value as one line of ASCII (its ADR-4), and the pinned
-// client writes what is not into something else — a carriage return or a line
-// feed as a space, a space at either end trimmed off (nats.go v1.55.0,
-// nats.go:1025-1037, `writeHeaderValue`). A header kept that way would be
-// listed as bytes other than the ones handed over, so a backend refuses it
-// before anything is kept, as the caller's mistake, and the twin refuses
-// exactly the same headers.
+// THE CONTRACT'S RULE, SHARED BY BOTH BACKENDS: NATS carries a header value as
+// one line of ASCII (its ADR-4), and the pinned client rewrites anything else
+// (CR or LF to a space, edge spaces trimmed; nats.go v1.55.0 `writeHeaderValue`),
+// so the listing would differ from what was handed over. Both refuse it before
+// anything is kept, as the caller's mistake.
 func LetterHeader(header []byte) error {
 	if len(header) == 0 {
 		return nil
@@ -929,23 +797,14 @@ type EventQueue interface {
 	// Publish sends an event to a topic. It must not return until the
 	// event is persisted: callers rely on "published means durable".
 	//
-	// An event marked [Prioritize] and published to a laned topic is
-	// written to the topic's priority lane ([SubjectFor]), where every
-	// subscription on the topic takes it ahead of the topic's other mail.
-	// The mark on an event published to any other topic changes nothing.
-	//
-	// It names the event's ORIGIN. An event whose Node is empty leaves
-	// carrying the node this client was built for ([WithNode]), stamped
-	// before any publish listener or consumer can see it; one that already
-	// names a node — an event this node received and is handing on — keeps
-	// it. The caller's own event is never written to: see [Options.Stamp].
-	//
-	// A nil event is REFUSED, and reaches no listener and no consumer.
-	// There is nothing to send, and the encoding of nothing is not
-	// nothing: a backend that published it delivered an event with no id
-	// and no type to every consumer on the topic, where the memory twin
-	// refused the same call — the one divergence a caller can never see
-	// from its own side of the contract.
+	// An event marked [Prioritize] on a laned topic goes to its priority lane
+	// ([SubjectFor]), taken ahead of the topic's other mail; elsewhere the mark
+	// changes nothing. An event whose Node is empty is stamped with this client's
+	// ([WithNode]) before any listener or consumer sees it; one naming a node
+	// keeps it. The caller's event is never written to ([Options.Stamp]). A nil
+	// event is REFUSED, reaching no listener or consumer: its encoding is an
+	// event with no id or type, which a backend once delivered where the twin
+	// refused.
 	Publish(ctx context.Context, topic string, ev *events.Event) error
 
 	// Subscribe attaches a competing-consumer handler to topic/group.
@@ -953,22 +812,15 @@ type EventQueue interface {
 	// the handler is handed the lane's mail before the topic's.
 	Subscribe(ctx context.Context, topic, group string, h Handler) error
 
-	// SubscribeBatch attaches with batched, key-partitioned delivery:
-	// drain what is locally available (plus a linger window), partition
-	// by the key [BatchKeyFunc] derives preserving arrival order,
-	// dispatch one handler call per partition oldest-partition-first,
-	// and ack per partition. A failing partition never blocks or replays
-	// a different one.
-	//
-	// On a laned topic a drain takes the lane's mail first and again before
-	// each partition ([JoinLane]), and a partition holding a priority event is
-	// dispatched ahead of every other ([OrderForDispatch]). The partition holds
-	// what the drain took: an event of it deeper on the topic than the drain's
-	// cap is delivered in its own turn once the topic reaches it, exactly once
-	// (the drain window is the bound of what one turn is handed; see lane.go).
-	//
-	// opts is read live on every cycle, so a config reload changes
-	// linger and batch size with no re-subscription.
+	// SubscribeBatch attaches with batched, key-partitioned delivery: drain what
+	// is locally available (plus a linger window), partition by [BatchKeyFunc]
+	// preserving arrival order, dispatch one call per partition oldest first,
+	// ack per partition. A failing partition never blocks or replays another.
+	// On a laned topic a drain takes the lane's mail first and again before each
+	// partition ([JoinLane]), and a partition holding a priority event goes
+	// first ([OrderForDispatch]). An event deeper than the drain's cap is
+	// delivered in its own turn, exactly once (see lane.go). opts is read live
+	// each cycle, so a reload changes linger and batch size without resubscribing.
 	SubscribeBatch(ctx context.Context, topic, group string, h BatchHandler, key BatchKeyFunc, opts *BatchOptions) error
 
 	// Quiesce stops taking NEW work on topic/group while staying
@@ -987,68 +839,28 @@ type EventQueue interface {
 	Unquiesce(ctx context.Context, topic, group string) (bool, error)
 
 	// Detach closes this process's consumers, leaving the subscription.
-	//
-	// NON-DESTRUCTIVE, WHICH IS A CLAIM ABOUT THE MAIL AND NOT ABOUT THE
-	// COST. The subscription, its cursor and everything it retains all
-	// survive, so nothing is lost and whoever attaches next gets the lot,
-	// including what was published while nothing was attached. That is
-	// what makes a seat handoff cheap and an unowned seat safe.
-	//
-	// WHAT THIS DOES COST is one delivery of each message the consumer
-	// had taken and not settled. Those go back the way every hand-back
-	// goes back, because no backend here has a "return this without
-	// counting it" — see DeliveriesLeft, which is the one place that rule
-	// and the blockers that trigger it are written down, a detach among
-	// them. The partitions a stopped drain never dispatched are charged
-	// on the same terms as the one that stopped it. A message under a
-	// RUNNING handler is the exception, and not because it is cheaper:
-	// the handler runs to completion and its own outcome settles it.
-	//
-	// A message a detach returns is a HAND-BACK, so it returns at the head
-	// as a deferral's does (see OutcomeDefer) — but a re-attaching
-	// consumer races whatever is published while it starts, so nothing
-	// above this package may depend on it being handled before a message
-	// published after the detach. Event timestamps restore the order of
-	// what ONE handler call carries, which is what OrderForDispatch is for
-	// — and only that: a message returned behind its conversation's newer
-	// mail is handled after it whenever the two are not drained together,
-	// and no backend owes that they are.
-	//
-	// Releases this attachment's pause holds — a hold that outlived a
-	// detach would leave a re-attaching node silently deaf.
-	//
-	// Detach does NOT wait for a running handler. It stops the
-	// subscription taking new work and returns; a handler already
-	// in-flight runs to completion and its outcome still applies.
-	//
-	// This is not a performance choice, it is the fenced-release path.
-	// A node that has LOST a seat's lease must detach FIRST and abandon
-	// whatever is in flight — the successor already owns the seat, and
-	// blocking the release until a multi-minute turn finishes would keep
-	// the seat unclaimable for exactly as long as the wrong node keeps
-	// working on it. The VOLUNTARY path gets the other behaviour by
-	// composing verbs it already has: quiesce, wait for in-flight, then
-	// detach.
+	// NON-DESTRUCTIVE FOR THE MAIL, NOT FREE: the subscription and its mail
+	// survive for whoever attaches next, but each message taken and not settled
+	// COSTS one delivery, as every hand-back does (see DeliveriesLeft); one under
+	// a RUNNING handler is settled by its outcome. Returned mail goes back at the
+	// head (OutcomeDefer), yet a re-attaching consumer races new mail, so only
+	// what ONE handler call carries is ordered (OrderForDispatch). Releases this
+	// attachment's pause holds, or a re-attaching node would be silently deaf.
+	// It does NOT wait for a running handler (the fenced-release path): a node
+	// that LOST the lease detaches FIRST and abandons in-flight work. The
+	// VOLUNTARY path composes quiesce, wait for in-flight, then detach.
 	Detach(ctx context.Context, topic, group string) (bool, error)
 
-	// EnsureSubscription creates the durable subscription if absent,
-	// with NO consumer attached, positioned at the earliest message.
-	// Creating an existing subscription is success. On a laned topic it
-	// creates the priority lane with it, and completes a [Subscription]
-	// listed as Partial.
+	// EnsureSubscription creates the durable subscription if absent, with NO
+	// consumer attached, positioned at the earliest message. An existing one is
+	// success. On a laned topic it creates the priority lane and completes a
+	// [Subscription] listed as Partial.
 	//
-	// The bool reports whether this call found it absent AND then
-	// provisioned it. That is exact on a backend with one writer, and on
-	// a fleet it is the closest thing to an answer there is: two nodes
-	// that create the same subscription in the same instant both receive
-	// it, because a broker that returns the object either way gives a
-	// client no way to tell "I made this" from "this was already here".
-	// So on a simultaneous boot more than one node can report true.
-	//
-	// Deliberately NOT a three-valued answer, and nothing in the engine
-	// branches on it: it is a count in a log line. A tri-state nobody
-	// reads would be machinery invented to describe a race the broker
-	// does not expose, rather than an answer anyone could act on.
+	// The bool reports that this call found it absent AND provisioned it. On a
+	// fleet two nodes creating at once can both report true, as a broker
+	// returning the object either way cannot tell "I made this" from "already
+	// here". Deliberately NOT three-valued: nothing branches on it (it is a log
+	// count), and a tri-state would describe a race the broker does not expose.
 	EnsureSubscription(ctx context.Context, topic, group string) (bool, error)
 
 	// DeleteSubscription destroys the subscription and its retained
@@ -1065,27 +877,16 @@ type EventQueue interface {
 	// asked to destroy.
 	DeleteSubscription(ctx context.Context, topic, group string) (bool, error)
 
-	// ListSubscriptions reports every durable subscription whose topic
-	// matches topicPattern (`*` one segment, `>` trailing segments, the
-	// grammar SubscribeStream takes), as the exact pair it was created
-	// with, in no promised order.
+	// ListSubscriptions reports every durable subscription whose topic matches
+	// topicPattern (SubscribeStream's grammar), as the pair it was created with,
+	// in no promised order. EVERY one the broker holds, not this client's,
+	// attached or not; never an ephemeral SubscribeStream one. A priority lane
+	// is not listed on its own; a laned subscription missing its lane is listed
+	// Partial. An empty pattern is refused; ">" asks for everything.
 	//
-	// EVERY one the broker holds, not this client's: one made through
-	// EnsureSubscription, Subscribe or SubscribeBatch, by any client of
-	// the broker, attached or not. A deleted subscription is not listed,
-	// and neither is an ephemeral SubscribeStream subscription, which is
-	// not a mailbox. A priority lane is part of its topic's subscription
-	// and never listed as one of its own; a laned subscription whose lane
-	// is missing is listed with Partial set. An empty pattern is refused rather than read as
-	// "everything"; ">" asks for everything.
-	//
-	// It exists because a durable subscription outlives every record of
-	// its name. A seat's mailbox is named after its handle, a removed
-	// seat's handle is gone from the org every node derives names from,
-	// and a registry written beside the broker can miss one (a write that
-	// failed, a mailbox older than the registry). Without a listing, a
-	// mailbox that escaped the registry retains its mail for the life of
-	// the deployment and nothing can ever find it.
+	// It exists because a durable subscription outlives every record of its
+	// name: a registry beside the broker can miss a removed seat's mailbox,
+	// which would retain its mail for the life of the deployment unfound.
 	ListSubscriptions(ctx context.Context, topicPattern string) ([]Subscription, error)
 
 	// Waiting reports the mail a subscription holds that no handler of THIS
@@ -1112,47 +913,17 @@ type EventQueue interface {
 	// publish.
 	AddPublishListener(l PublishListener)
 
-	// Ask scatters one request to every process serving subject and
-	// collects the replies, returning when want of them have arrived or
-	// when ctx is done, whichever comes first. want of 0 waits out the
-	// deadline, which is what a caller that does not know how many
-	// answerers exist has to do.
-	//
-	// EPHEMERAL, and that is why it is a verb of its own rather than a
-	// Publish and a Subscribe. Nothing here is retained, redelivered or
-	// recorded: no stream, no consumer group, no ack, no publish
-	// listener, no event-store row. A request nobody serves is a request
-	// that never existed, and a reply that arrives after its asker left
-	// is dropped rather than held for the next one. The durable verbs are
-	// the wrong shape for a query: a search fan-out that wrote two
-	// records and an audit row per keystroke would make the audit log a
-	// function of how often somebody typed.
-	//
-	// FEWER REPLIES THAN want IS NOT AN ERROR. A peer that is slow, gone,
-	// or simply not serving this subject is the ordinary case, and only
-	// the caller knows what a missing answer costs it — an error would
-	// force every caller to unwrap one to find out how many it got. An
-	// error means the ask could not be made at all — never a request
-	// handed to the broker whose delivery could not be confirmed, which
-	// may have reached a server: a caller reads an error as "nobody
-	// received it", and acts on that by asking again.
-	//
-	// A BROKER THIS NODE CANNOT REACH IS REFUSED BEFORE ANYTHING IS SENT,
-	// with ErrUnavailable — never written into a client's reconnect buffer
-	// to go out once the connection is back. A buffered request is a
-	// RETAINED one, which is the one thing this verb promises never to
-	// be, and it would reach its servers after its asker had been told
-	// the ask failed: a steer note delivered to a turn its sender was
-	// told nothing reached. What stays possible is the instant between
-	// that check and the send, in which a connection that drops can still
-	// carry the request out later — so a request must be safe to receive
-	// once its asker has gone, as every reply to a vanished mailbox
-	// already is.
-	//
-	// THE REPLIES ARE UNORDERED and carry no sender. What a reply means
-	// is inside its own bytes, because the transport cannot say: a
-	// scatter has no roster, so "who did not answer" is a question only
-	// the payload can answer.
+	// Ask scatters one request to every process serving subject and collects
+	// replies until want arrive or ctx is done; want of 0 waits out the deadline.
+	// EPHEMERAL, hence a verb of its own: nothing is retained, redelivered or
+	// recorded (durable verbs would make the audit log a function of typing).
+	// FEWER REPLIES THAN want IS NOT AN ERROR: a slow or absent peer is
+	// ordinary. An error means the ask could not be made, never an unconfirmed
+	// delivery: a caller reads an error as "nobody received it". A BROKER THIS NODE CANNOT REACH IS REFUSED BEFORE ANYTHING IS SENT
+	// (ErrUnavailable), never buffered for reconnect: a retained request would
+	// reach servers after its asker was told it failed, so a request must still
+	// be safe to receive after its asker left. REPLIES ARE UNORDERED and carry
+	// no sender: only the payload can say who did not answer.
 	Ask(ctx context.Context, subject string, request []byte, want int) ([][]byte, error)
 
 	// AskEach is [EventQueue.Ask] with each reply handed to each AS IT
@@ -1169,224 +940,77 @@ type EventQueue interface {
 	// no longer than each lets it.
 	AskEach(ctx context.Context, subject string, request []byte, each func(reply []byte) bool) error
 
-	// Serve makes this process one of subject's answerers.
-	//
-	// EVERY SERVER OF A SUBJECT SEES EVERY REQUEST — the opposite of
-	// Subscribe's competing consumers, and the reason this is not a
-	// consumer group: a scatter divides work by what the request NAMES,
-	// so a broker that handed each request to one member would divide it
-	// twice and cover a fraction.
-	//
-	// An answerer that returns an error answers NOTHING. Its asker sees a
-	// server that did not answer, which is the same fact as a server that
-	// was not running — see AnswerFunc.
-	//
-	// ANSWERS RUN CONCURRENTLY, up to answers of them at once, and a
-	// request beyond that waits for a slot rather than failing, as far as
-	// its backend buffers it (below). One slow answer must never hold the
-	// next request behind it: an answerer serves every asker in the fleet,
-	// and a registration that answered one at a time made each of them wait
-	// for the sum of everybody else's latency.
-	//
-	// A WAITING REQUEST IS HELD IN A BUFFER ITS BACKEND BOUNDS, and dropped
-	// past it. The real backend's NATS client holds a subscription's
-	// pending requests to 64 MiB and 500 000 messages (nats.go's defaults,
-	// which this package leaves as they are) and drops a request past them
-	// as a slow consumer: logged on the serving node, naming no subject,
-	// and heard by its asker as no answer at all, at its deadline. The
-	// in-memory twin holds every one. Work done now drains its slots long
-	// before that bound; a registration whose requests are LARGE and whose
-	// answers hold their slots through long waits does not, so it bounds
-	// its own backlog — it answers a request past what it holds AT ONCE,
-	// in its own words for "not now", and never leaves it to wait where it
-	// can be dropped unheard (internal/estate's engine writes' lane).
-	//
-	// THE BOUND IS THE REGISTRATION'S OWN, and so are its slots: a
-	// request waiting for one waits only behind its own registration's
-	// answers, never another's. Only the answerer knows what an answer
-	// waits on — [ConcurrentAnswers] for one that does its work now, the
-	// bound of its own queue for one that waits in it — and a slot held
-	// through a wait is one every other request of the registration
-	// waits behind, so work that waits and work that does not are served
-	// on registrations of their own. A bound below one is refused
-	// ([ErrAnswerBound]): a registration that may answer nothing would
-	// hold every request it is sent until its askers gave up.
-	//
-	// The returned Unsubscribe cancels the answerer's context and then
-	// WAITS for the answers in flight, bounded by the context it is given
-	// — so a caller that withdraws and then closes what the answerer
-	// reads never closes it under an answer still reading. A bound that
-	// ends first is answered with an error wrapping that context's own,
-	// never with success: the answers are still running.
-	//
-	// RETURNING MEANS THIS PROCESS'S OWN SERVER HOLDS THE REGISTRATION,
-	// and on a clustered broker no more than that: the other servers learn
-	// of it over their routes a moment later, so an asker on another server
-	// that scatters in that moment does not reach this answerer and counts
-	// it as one that did not answer — the same honest fact a scatter reports
-	// about a node that has not started. Nothing that needs every answerer
-	// may assume it from Serve's return; it asks, and reads who answered.
+	// Serve makes this process one of subject's answerers. EVERY SERVER SEES
+	// EVERY REQUEST, unlike Subscribe: a scatter divides work by what the
+	// request NAMES. An answerer's error answers NOTHING (AnswerFunc). ANSWERS
+	// RUN CONCURRENTLY, up to answers at once; one beyond waits for a slot as far
+	// as the backend buffers (NATS drops past 64 MiB/500 000 pending, heard as no
+	// answer; the twin holds all), so LARGE, slow-held requests bound their own
+	// backlog and answer past it AT ONCE with "not now" (internal/estate). The
+	// bound and slots are the registration's own ([ConcurrentAnswers] for work
+	// done now; below one is [ErrAnswerBound]). Unsubscribe WAITS for in-flight
+	// answers, bounded by its context. Returning means only THIS server holds
+	// the registration: ask and read who answered.
 	Serve(ctx context.Context, subject string, answers int, h AnswerFunc) (Unsubscribe, error)
 
-	// Broadcast hands payload to every process listening on a pattern
-	// that matches subject, and returns.
-	//
-	// EPHEMERAL, the fan-out counterpart of Ask: no stream, no consumer,
-	// no ack, no retention, no publish listener, no event-store row. A
-	// message nobody is listening for never existed, and a listener that
-	// starts a moment later never hears it. It exists for what is worth
-	// nothing once superseded, presence above all: a cursor or a
-	// heartbeat on a durable verb would be a replicated write per
-	// movement, kept for a retention window nobody reads back.
-	//
-	// AT MOST ONCE AND UNORDERED ACROSS PUBLISHERS. A listener that falls
-	// behind loses messages rather than holding the publisher, and two
-	// processes broadcasting on one subject are heard in whatever order
-	// the broker delivered them. What a message means, and whether a later
-	// one supersedes it, is inside its own bytes.
-	//
-	// ONE PUBLISHER'S ORDER IS KEPT: what one process broadcasts, each call
-	// returning before the next is made, every listener hears in the order
-	// it was sent, of what it hears at all — the source order a broker
-	// keeps per publisher, and the twin's per listener. So a later
-	// broadcast of the same sender is a FENCE: a listener that has heard
-	// it has heard everything of that sender's it ever will.
-	//
-	// A BROKER THIS NODE CANNOT REACH IS REFUSED BEFORE ANYTHING IS SENT,
-	// with ErrUnavailable, for Ask's reason: a message written into a
-	// reconnect buffer is a retained one, delivered after its moment. The
-	// subject is a LITERAL (see [LiteralSubject]): a pattern is what a
-	// listener names, and a broker refuses a publish to one.
+	// Broadcast hands payload to every process listening on a matching pattern.
+	// EPHEMERAL, Ask's fan-out counterpart: nothing is retained, acked or
+	// recorded; a later listener never hears it. For what is worth nothing once
+	// superseded (presence): a durable verb would be a replicated write per
+	// movement. AT MOST ONCE AND UNORDERED ACROSS PUBLISHERS: a lagging listener
+	// loses messages rather than holding the publisher; what a message means,
+	// and whether a later one supersedes it, is in its bytes.
+	// ONE PUBLISHER'S ORDER IS KEPT, so a later broadcast of a sender is a
+	// FENCE: a listener that heard it has heard all it will ever hear of that
+	// sender's. An unreachable broker is REFUSED BEFORE ANYTHING IS SENT
+	// (ErrUnavailable), for Ask's reason. The subject is a LITERAL
+	// ([LiteralSubject]); brokers refuse a publish to a pattern.
 	Broadcast(ctx context.Context, subject string, payload []byte) error
 
-	// Listen makes this process a listener on pattern (`*` one token,
-	// `>` the trailing tokens) until the returned Unsubscribe runs.
-	//
-	// EVERY LISTENER HEARS EVERY MATCHING MESSAGE, Serve's rule rather
-	// than Subscribe's: a broadcast is addressed to whoever is present, so
-	// a group that handed each message to one member would show each room
-	// to a fraction of the fleet.
-	//
-	// ONE MESSAGE AT A TIME PER LISTENER, in the order this process
-	// received them, on a goroutine of the backend's own: a handler never
-	// races itself, and never runs on the publisher's goroutine. A handler
-	// that panics loses that message and keeps its registration.
-	//
-	// The returned Unsubscribe stops delivery and then WAITS for a handler
-	// already running, bounded by the context it is given, so a caller
-	// that withdraws and then tears down what the handler reads never
-	// tears it down under a message still being handled. A bound that ends
-	// first is answered with an error wrapping that context's own, never
-	// with success: the handler is still running. A handler must
-	// therefore never withdraw its own registration.
-	//
-	// RETURNING MEANS THIS PROCESS'S OWN SERVER HOLDS THE REGISTRATION,
-	// and no more, exactly as for Serve.
+	// Listen makes this process a listener on pattern (`*` one token, `>` the
+	// trailing tokens) until the returned Unsubscribe runs. EVERY LISTENER HEARS
+	// EVERY MATCHING MESSAGE (Serve's rule): a group would show each room to a
+	// fraction of the fleet. ONE MESSAGE AT A TIME PER LISTENER, in arrival
+	// order, on the backend's own goroutine: a handler never races itself or
+	// runs on the publisher's; one that panics loses that message and keeps its
+	// registration. Unsubscribe stops delivery then WAITS for a running handler,
+	// bounded by its context (else an error wrapping it, never success), so a
+	// handler must never withdraw its own registration. RETURNING MEANS ONLY
+	// THIS PROCESS'S SERVER HOLDS THE REGISTRATION, as for Serve.
 	Listen(ctx context.Context, pattern string, h ListenFunc) (Unsubscribe, error)
 
-	// KeepDeadLetter keeps body on subject under header, which must be a
-	// literal subject in the dead-letter namespace (topics.DeadLetter names
-	// one; any other is refused, unmarked, as the caller's mistake), until
-	// the backend's dead-letter retention lets it go ([Kept.Expires]) or
-	// DropDeadLetter removes it — and answers whether an entry of id was
-	// ALREADY KEPT on subject, in which case it keeps nothing.
-	//
-	// FOR A READER THAT SETTLES ITS OWN DELIVERIES, never for a subscription
-	// of this contract: a subscription is dead-lettered by its backend, whose
-	// delivery budget decides it. A wake feed reads a state log's own durable
-	// consumer and decides for itself when a record has circled long enough
-	// (internal/changefeed), so what it gives up on is kept here — in the
-	// same place, under the same retention, as every other dead letter, and
-	// listed by the same verb.
-	//
-	// THE HEADER AND THE BODY ARE KEPT APART: the header is what every
-	// listing answers ([Kept.Header]) and the body what only
-	// DeadLetterFrame reads, so a keeper puts in the header what a reader
-	// decides by — a line of printable ASCII ([LetterHeader]; any other is
-	// refused, unmarked) — and in the body the bytes only a reader acting
-	// on one entry needs. Both are the caller's bytes, verbatim, never an
-	// event: no publish listener hears them and no event-store row is
-	// written for them. A KEEP THAT STORED ITS ENTRY RETURNS ONCE THE ENTRY
-	// IS DURABLE, as a Publish does — one answered already kept stored
-	// nothing (below) — and a header and body the transport cannot carry
-	// together ([LetterFraming]) are refused with ErrTooLarge, which no
-	// retry changes.
-	//
-	// ONE ENTRY FOR ONE IDENTITY. id is the entry's identity, which its
-	// keeper derives from WHAT it keeps and never from the delivery that
-	// handed it over — a wake feed names the message the broker stored for
-	// the record, its log, its position there and the broker's instant for
-	// it, which every node handed the record reads off the delivery alike,
-	// whether or not it can open the record — so that a second
-	// keep of one thing is harmless: a keep of id on subject within
-	// [DeadLetterWindow] of the first keep of it there keeps nothing and
-	// answers already kept, on every backend alike. A reader that settles
-	// its own deliveries is handed one record twice whenever its first keep
-	// outlasts the delivery's acknowledgement window — a keep crossing a slow
-	// link waits as long as its bytes take — and nothing it sends while the
-	// keep crosses reaches the broker ahead of the keep's own bytes, so it
-	// cannot hold the delivery: the second keep, its own or a peer's, is
-	// what has to come to nothing. One id on two subjects is two entries,
-	// and so are two ids on one. An empty id is refused, unmarked
-	// ([LetterIdentity]).
-	//
-	// A DROPPED ENTRY'S ID IS STILL KEPT FOR THE REST OF THE WINDOW, ON A
-	// RUNNING BROKER: a keep of it on subject inside the window keeps nothing
-	// and answers already kept, on every backend alike, which is what the
-	// discard means — no node is to read the entry ([EventQueue.DropDeadLetter]),
-	// so none keeps it again. THE CAVEAT IS THE BROKER'S: a broker that
-	// restarts, recovers its stream, resets it to replay its log, or brings a
-	// copy up from a snapshot rebuilds the window from the entries it still
-	// holds, so it forgets a dropped entry's id, and a keep of it there
-	// stores a new entry, which the listing shows again. Past the window a
-	// keep of an id stores a new entry; how soon after the window a backend
-	// lets the id go is not promised.
-	//
-	// ALREADY KEPT IS AN ANSWER, NOT A FAILURE, and it is the bool beside a
-	// nil error rather than a sentinel. It says an entry of id was stored on
-	// subject inside the window — still held, or dropped since — so what the
-	// caller asked for is done: the thing is kept, or was let go by whoever
-	// decided to, and the caller settles it exactly as after a keep that
-	// stored it. It says nothing of which keep stored the entry, nor of what
-	// that keep was answered: a keep can store its entry and still answer an
-	// error — refused or lost on its way back, as a publish's can
-	// ([ErrUnavailable]) — and the next keep of the id is then the first to
-	// be answered at all. As an error it would read as a failed keep to every
-	// caller that branches on one, which hands the thing back to be kept
-	// again: the very loop an identity ends. The contract's sentinels are
-	// failures a caller acts on, and this is none.
+	// KeepDeadLetter keeps body on subject (a literal in the dead-letter
+	// namespace, else refused) under header until the retention lets it go
+	// ([Kept.Expires]) or DropDeadLetter removes it, and answers whether id was
+	// ALREADY KEPT there (then it keeps nothing). FOR A READER THAT SETTLES ITS
+	// OWN DELIVERIES (internal/changefeed), never a subscription. The header
+	// ([Kept.Header]; [LetterHeader]) is what listings answer; the body only
+	// DeadLetterFrame reads; neither is an event; past [LetterFraming] is
+	// ErrTooLarge. A storing keep returns once durable. id derives from WHAT is
+	// kept, never the delivery, so a second keep within [DeadLetterWindow] comes
+	// to nothing; per subject; empty is refused ([LetterIdentity]). A dropped
+	// entry's id holds for the window on a running broker only. ALREADY KEPT IS A
+	// BOOL, NOT AN ERROR (which would loop the keep), and says not which keep stored.
 	KeepDeadLetter(ctx context.Context, subject, id string, header, body []byte) (bool, error)
 
-	// DeadLettersOn lists every entry subject holds, oldest first —
-	// whoever kept it, a subscription's backend or a KeepDeadLetter — each
-	// with the sequence DropDeadLetter names it by, when it was kept, when
-	// the backend lets it go and the header it was kept under: NEVER ITS
-	// BODY, which moves for no listing, however large. An empty answer
-	// with no error is a subject that holds none.
+	// DeadLettersOn lists every entry subject holds, oldest first, whoever kept
+	// it, each with its DropDeadLetter sequence, keep time, expiry and header:
+	// NEVER ITS BODY, which moves for no listing. Empty is a subject holding none.
 	//
-	// A COPY'S ANSWER, which may be BEHIND the broker's own: a broker that
-	// keeps several copies of the dead letters may list them from any one,
-	// so a listing can miss an entry kept a moment ago or still show one
-	// dropped a moment ago — though it never hides an entry the copy it
-	// read holds. A reader that has to know its listing is current holds it
-	// to DeadLetterMarks, which is the broker's own: a listing whose count
-	// of a subject is the marks' count is the subject as the broker holds it.
+	// A COPY'S ANSWER, which may be BEHIND the broker's: it can miss an entry
+	// kept a moment ago or show one just dropped, never hide one the copy holds.
+	// A reader that must know its listing is current holds it to
+	// DeadLetterMarks (the broker's own): equal counts mean the subject as the
+	// broker holds it.
 	DeadLettersOn(ctx context.Context, subject string) ([]Kept, error)
 
 	// DeadLetterFrame is the body the entry seq of subject was kept with,
-	// exactly as it was handed to KeepDeadLetter — for a wake feed's entry,
-	// the record's sealed frame — and whether subject holds the entry at
-	// all.
-	//
-	// THE ONE VERB THAT MOVES A BODY, for the one reader that needs it: the
-	// reader acting on that entry, as a feed's replay reopens one record.
-	// It reads what the broker holds now, never a copy behind it.
-	//
-	// AN ENTRY ALREADY GONE is answered as not held, with no error —
-	// dropped by a peer, or let go by the retention since it was listed.
-	// A seq holding an entry on ANOTHER subject is refused, unmarked, and
-	// answers nothing of it, as DropDeadLetter refuses it; so is a seq of
-	// zero.
+	// exactly as handed to KeepDeadLetter, and whether subject holds the entry.
+	// THE ONE VERB THAT MOVES A BODY, for the reader acting on that entry (a
+	// feed's replay); it reads what the broker holds now, never a copy behind.
+	// AN ENTRY ALREADY GONE (dropped, or retention let it go) is not held, no
+	// error. A seq holding an entry on ANOTHER subject is refused, unmarked,
+	// answering nothing of it, as DropDeadLetter refuses; so is zero.
 	DeadLetterFrame(ctx context.Context, subject string, seq uint64) ([]byte, bool, error)
 
 	// DeadLetterMarks counts what every dead-letter subject under under
@@ -1401,59 +1025,29 @@ type EventQueue interface {
 	// listing asks it on every beat and lists again only when it moved.
 	DeadLetterMarks(ctx context.Context, under string) (Marks, error)
 
-	// DropDeadLetter removes the entry seq from subject.
+	// DropDeadLetter removes the entry seq from subject. AN ENTRY ALREADY GONE
+	// IS NO ERROR, as the caller asks only that it be gone: two nodes finishing
+	// with one entry both succeed. A seq holding an entry on ANOTHER subject is
+	// refused, unmarked, removing nothing; so is zero.
 	//
-	// AN ENTRY ALREADY GONE IS NO ERROR — dropped by a peer, or let go by
-	// the retention — because what the caller asks is that it be gone: two
-	// nodes that both finished with one entry both succeed. A seq holding an
-	// entry on ANOTHER subject is refused, unmarked, and removes nothing, so
-	// a caller that names the wrong subject cannot drop somebody else's; so
-	// is a seq of zero, which names no entry on any backend.
-	//
-	// THE ENTRY GOES AND ITS ID STAYS, on a running broker: a keep of the
-	// dropped entry's id on subject inside [DeadLetterWindow] keeps nothing
-	// and answers already kept ([EventQueue.KeepDeadLetter]), which is what a
-	// drop decides — no node is to read the entry, so none keeps it again.
-	// A broker that restarts, or rebuilds its window from the entries it
-	// still holds, forgets the id, and a keep of it there stores a new entry
-	// that the listing shows again.
+	// THE ENTRY GOES AND ITS ID STAYS, on a running broker: a keep of that id
+	// inside [DeadLetterWindow] answers already kept ([EventQueue.KeepDeadLetter]),
+	// as a drop means no node is to read it. A broker that restarts or rebuilds
+	// its window from held entries forgets the id, and a keep then stores a new
+	// entry the listing shows again.
 	DropDeadLetter(ctx context.Context, subject string, seq uint64) error
 
-	// Start connects the backend and begins consuming.
-	//
-	// WHETHER A BACKEND REQUIRES IT IS ITS OWN ANSWER, and both shipped
-	// answers are legitimate: on JetStream, Open establishes the
-	// connection and the streams, so Start is a no-op and a publish
-	// before it works; on the in-memory twin, Start is what makes the
-	// client live.
-	//
-	// What a backend may NOT do is answer DIFFERENTLY PER VERB. Before
-	// Start, all twenty-two of the publish, subscription, attachment,
-	// ephemeral and dead-letter verbs must give the same answer: Publish,
-	// Subscribe, SubscribeBatch, Quiesce, Unquiesce, Detach,
-	// EnsureSubscription, DeleteSubscription, ListSubscriptions,
-	// SubscribeStream, Attachment, PauseTopic, ResumeTopic, Serve, Ask,
-	// Broadcast, Listen, KeepDeadLetter, DeadLettersOn, DeadLetterFrame,
-	// DeadLetterMarks and DropDeadLetter. Either they all refuse, or none
-	// of them require it. Capabilities.RequiresStart says which, and
-	// queuetest sends all twenty-two to hold a backend to one answer.
-	//
-	// A caller cannot reason about a lifecycle whose rules change per
-	// method, and this is not hypothetical: a twin that refused Publish
-	// and Subscribe while PauseTopic still took a hold left that hold to
-	// survive into the next life, and the restarted queue reported itself
-	// running and was silently deaf.
-	//
-	// AFTER Stop the answer is not a capability at all — see Stop, which
-	// is where the asymmetry is written up.
-	//
-	// The DRAIN protocol is exempt along with Start and Stop, because it
-	// exists to run around a stop rather than in spite of one:
-	// PauseDelivery, WaitForHandlers and InFlightCount answer on a
-	// stopped queue, and must — a drain that could not report its own
-	// in-flight count once the queue was down would have no way to say
-	// whether it finished. Backend and AddPublishListener return no error
-	// and so have nothing to refuse with.
+	// Start connects the backend and begins consuming. WHETHER A BACKEND
+	// REQUIRES IT IS ITS OWN ANSWER (JetStream's Open connects, so Start is a
+	// no-op; the twin's Start makes it live), but it may NOT answer DIFFERENTLY
+	// PER VERB: before Start, all twenty-two publish, subscription, attachment,
+	// ephemeral and dead-letter verbs either all refuse or none require it
+	// (Capabilities.RequiresStart; queuetest sends all twenty-two). A twin that
+	// refused Publish but let PauseTopic take a hold left it to survive into
+	// the next life, silently deaf. AFTER Stop it is no capability (see Stop).
+	// The DRAIN protocol (PauseDelivery, WaitForHandlers, InFlightCount) is
+	// exempt and answers on a stopped queue, or a drain could not say whether it
+	// finished; Backend and AddPublishListener have no error to refuse with.
 	Start(ctx context.Context) error
 
 	// InFlightCount reports handler invocations currently mid-flight —
@@ -1505,38 +1099,22 @@ type EventQueue interface {
 	// non-zero means the timeout expired, which is not an error — the
 	// caller owns any "too long" policy. Always PauseDelivery first.
 	//
-	// A HANDLER IS IN FLIGHT UNTIL WHAT IT RETURNED IS SETTLED, not only
-	// until it returned: settling a return that spends a message's
-	// delivery budget is its dead letter's keep, a write that can take as
-	// long as its bytes take to cross a link, and a drain that read the
-	// delivery as finished once its handler returned stopped the queue
-	// under the keep, the copy lost. AND SO IS A DELIVERY THE BACKEND HANDS
-	// BACK ITSELF — one a hold, a pause, a quiesce, a detach or a stop met
-	// between its fetch and its handler — until that hand-back is settled,
-	// though no handler runs: it spends a delivery as every return does,
-	// and the one that spends the budget keeps a dead letter as well.
+	// A HANDLER IS IN FLIGHT UNTIL WHAT IT RETURNED IS SETTLED: a return that
+	// spends the delivery budget keeps a dead letter, a write as slow as its
+	// bytes over a link, and a drain stopping the queue under it loses the copy.
+	// SO IS A DELIVERY THE BACKEND HANDS BACK ITSELF (a hold, pause, quiesce,
+	// detach or stop met between fetch and handler), though no handler runs.
 	WaitForHandlers(ctx context.Context, timeout time.Duration) (int, error)
 
-	// Stop closes the connection.
-	//
-	// AFTERWARDS EVERY ONE OF THE TWENTY-TWO VERBS REFUSES. A requirement
-	// rather than a capability, and the asymmetry with the pre-Start rule
-	// is the point: "not connected yet" is a state a backend may
-	// legitimately not have — JetStream's Open connects, so there is
-	// nothing before Start — while "closed" is a state every backend
-	// genuinely reaches, and a verb that mutates through a closed client
-	// is wrong on all of them.
-	//
-	// It is wrong in two different ways, and both were measured. On the
-	// twin, PauseTopic after Stop took a hold that outlived the client and
-	// left the next life silently deaf. On JetStream, Quiesce, Unquiesce,
-	// Detach, PauseTopic and ResumeTopic all returned success on a closed
-	// connection while Publish and Subscribe returned "nats: connection
-	// closed" — so a shutdown path could believe it had gated a
-	// subscription that no longer existed.
-	//
-	// Whether Start can revive a stopped queue is a separate question the
-	// contract does not answer; see Capabilities.Restartable.
+	// Stop closes the connection. AFTERWARDS EVERY ONE OF THE TWENTY-TWO VERBS
+	// REFUSES: a requirement, not a capability, unlike the pre-Start rule
+	// ("not connected yet" is a state JetStream's Open never has; "closed" is
+	// one every backend reaches). A verb mutating through a closed client is
+	// wrong on all of them: on the twin a PauseTopic hold outlived the client
+	// and left the next life deaf; on JetStream the attachment verbs succeeded
+	// while Publish failed, so shutdown could believe it had gated a
+	// subscription that no longer existed. Whether Start can revive a stopped
+	// queue is Capabilities.Restartable's question.
 	Stop(ctx context.Context) error
 }
 
@@ -1681,52 +1259,17 @@ func JoinLane[T any](rest []Partition[T], lane []T, key BatchKeyFunc, eventOf fu
 	return OrderForDispatch(PartitionByKey(append(items, lane...), key, eventOf), eventOf)
 }
 
-// OrderForDispatch establishes BOTH levels of ordering a drained batch
-// needs, and is the one place either is decided.
-//
-// Between partitions: a partition holding a priority event ([Prioritized])
-// first, then oldest constituent event first within each of the two classes.
-// The priority class is what a laned topic's drain exists for: the lane's
-// mail is taken first so that a person waiting on a seat is answered before
-// the seat's background work, and a drain that took both and dispatched the
-// older background partition first would hand that back. Oldest first within
-// the class is what it always was. Receive order alone
-// starves a quiet partition behind a hot one under deferral — the quiet
-// partition's requeued copies re-enter the topic AFTER whatever arrived
-// during the hot one's turn, so receive-ordered dispatch picks the hot one
-// on every drain. Timestamps carry the aging signal, so the partition that
-// has waited longest dispatches first.
-//
-// Within a partition: event timestamp, not delivery order. This is what
-// makes a partition read correctly however redeliveries interleave with fresh
-// arrivals — a hand-back (a deferral, a hold, a stop) returns at the head and
-// a FAILED or PASSED delivery is withheld for its redelivery backoff behind
-// never-delivered mail (see OutcomeNak, OutcomePass and OutcomeDefer), and a
-// drain that carries both a returned message and newer ones has them in that
-// order, not in the order they were written. Relying on the timestamps the
-// engine already trusts removes a correctness dependency on how one drain
-// happened to be assembled.
-//
-// IT ORDERS ONE HANDLER CALL, AND NOTHING ACROSS TWO. A drain is what was
-// available when it opened plus what arrived inside its linger window, so a
-// failed delivery still waiting out its backoff is not in the drain that
-// carries its conversation's newer events: on the shipped broker the backoff
-// is a second, doubling to thirty, against a default window of zero, so a
-// newer event of the same conversation that arrives meanwhile is dispatched
-// FIRST, in a call of its own, and the failed one follows in a later one.
-// No sort reaches a call that has already returned, and the contract
-// deliberately does not hold a conversation's newer mail back behind a
-// failure instead. That would stall the conversation for the whole backoff
-// schedule, hand a poison message's failures to the healthy ones held back
-// with it (a partition takes one outcome, so every failure is charged to every
-// message in it), and still not be a guarantee: the hold would be one
-// attachment's memory, gone at a seat handoff, and a group with two members
-// redelivers to either. A consumer that cares whether an event is older than
-// one it already handled has the timestamp to ask.
-//
-// Both levels are stable sorts, so ties keep arrival order, and both fall
-// back to arrival order rather than failing: ordering is a fairness and
-// readability policy, and must never block delivery.
+// OrderForDispatch is the one place BOTH levels of a drained batch's ordering
+// are decided. Between partitions: one holding a priority event
+// ([Prioritized]) first, so a person waiting on a seat is answered before
+// background work, then oldest event first (receive order alone starves a quiet
+// partition, whose requeued copies re-enter AFTER the hot one's). Within one:
+// event timestamp, not delivery order, so returned messages read correctly
+// beside newer ones. IT ORDERS ONE HANDLER CALL, NOTHING ACROSS TWO: a failed
+// delivery in its backoff misses the drain carrying newer events, and the
+// contract deliberately does not hold them back (a stall, a partition's one
+// outcome charging poison to healthy mail, no guarantee). Stable sorts that
+// fall back to arrival order: ordering must never block delivery.
 func OrderForDispatch[T any](parts []Partition[T], eventOf func(T) *events.Event) []Partition[T] {
 	out := slices.Clone(parts)
 	oldest := make(map[string]time.Time, len(out))
@@ -1796,22 +1339,14 @@ func OrderForDispatch[T any](parts []Partition[T], eventOf func(T) *events.Event
 }
 
 // LogResult emits the standard structured line for a single delivery's
-// outcome. An Ack logs nothing: the normal case is the overwhelming majority
-// of deliveries, and a line per success buries the ones that matter.
+// outcome. An Ack logs nothing: a line per success buries the ones that matter.
 //
-// A PASS IS NO FAILURE, and is never logged as one: it is a delivery this node
-// hands to a peer that can read it, a roll's ordinary minutes, and a
-// `handler_failed` at Warn for each would read as a fleet failing its mail. It
-// is logged at Info under its own name, with its reason and what the node met.
-//
+// A PASS IS NO FAILURE: a `handler_failed` at Warn for each would read as a
+// fleet failing its mail during a roll, so it logs at Info under its own name.
 // A FAILURE NAMES WHOSE IT IS (`fault`): the message's, or the node's own
-// ([NakNode]), which a reader of the line tells apart without its error's
-// words, as the backend does when it decides where the message is kept.
-//
-// UNDER ctx, because the line is correlated by the trace a context carries
-// (internal/logging), and a backend that logs under its handler's context
-// would otherwise spell the line itself to keep that: the in-memory twin did,
-// and logged a partition's deferral under a single delivery's name.
+// ([NakNode]), as the backend does when deciding where the message is kept.
+// UNDER ctx, because the trace a context carries (internal/logging) correlates
+// the line; a backend logging under its handler's context must not respell it.
 func LogResult(ctx context.Context, l *slog.Logger, topic, group string, ev *events.Event, r Result) {
 	switch r.Outcome {
 	case OutcomeNak:
@@ -1867,21 +1402,15 @@ func faultOf(r Result) string {
 
 // LogDeadLettered emits the standard line for a subscription's message whose
 // delivery budget a return spent, once its backend has kept the copy:
-// `dead_lettered`, at Error, with the event's type, how many times it was
-// delivered (deliveries, the last included), the return that spent it
-// (`returned`: nak, defer or pass) and why (`reason`, empty for a failure),
-// and the subject its copy is kept on ([RetiredTo], by whether the message
-// failed as itself at any delivery) — which says whether it is poison or a
-// delivery no member handled.
+// `dead_lettered`, at Error, with the event's type, its deliveries (the last
+// included), the return that spent it (`returned`: nak, defer or pass), why
+// (`reason`, empty for a failure) and the subject its copy is kept on
+// ([RetiredTo]), which says poison or a delivery no member handled.
 //
-// ONE LINE FOR ONE SITUATION ON EVERY BACKEND, which is why it lives in the
-// contract, for [LogBatchResult]'s reason: the twin spelled its own, as
-// `event_dead_lettered` with a count of redeliveries, where the broker logged
-// `dead_lettered` with its deliveries, so a log consumer counting the dead
-// letters of one backend missed the other's, and the two counts of one
-// message's deliveries differed by one.
-//
-// UNDER ctx, for [LogResult]'s reason.
+// ONE LINE FOR ONE SITUATION ON EVERY BACKEND, hence in the contract (for
+// [LogBatchResult]'s reason): a twin spelling its own with redeliveries counts
+// made a log consumer miss one backend's dead letters. UNDER ctx, for
+// [LogResult]'s reason.
 func LogDeadLettered(ctx context.Context, l *slog.Logger, topic, group string, ev *events.Event,
 	deliveries int, spent Outcome, reason string, failed bool) {
 
@@ -1894,34 +1423,13 @@ func LogDeadLettered(ctx context.Context, l *slog.Logger, topic, group string, e
 // panicked and was recovered, and [LogStreamHandlerPanic] the one for a
 // stream handler.
 //
-// THE PANIC IS READ HERE, not passed in, and that works because these are
-// called from inside the deferred function that recovered: a deferred call
-// runs before its frame is popped, so [panics.Recovered] still walks down
-// through runtime.gopanic into the function that actually panicked. Reading it
-// at the recover site and threading it through would be identical minus one
-// frame, and minus the chance a caller forgets.
-//
-// # Why these live in the contract
-//
-// The same reason [LogBatchResult] does, and here it is not hypothetical:
-// the backends had drifted into different spellings of one situation.
-// `memory` logged `publish_listener_failed` with the recovered value under
-// `error`; the broker-backed side logged `publish_listener_panicked` with
-// it under `panic`. The stream side was worse — it keyed the topic as
-// `subject` while `memory` keyed it as `topic` and added a `topic_pattern`
-// nobody else emitted. An operator grepping `publish_listener_panicked` saw
-// every backend but the in-memory twin, and the twin is what the tests run
-// on, so nothing caught it.
-//
-// # `panic` rather than `error`
-//
-// A recovered value is not an error. It is whatever was passed to panic(),
-// carries no Error() method in general, and the distinction is exactly what
-// tells an operator the callback CRASHED rather than returned badly — two
-// different bugs in two different places.
-//
-// Error level, not Warn: unlike a Nak there is no redelivery behind this.
-// The listener's work for this event is simply gone.
+// THE PANIC IS READ HERE, not passed in: these are called from inside the
+// deferred function that recovered, so [panics.Recovered] still walks down
+// through runtime.gopanic into the function that actually panicked. They live in the contract, as [LogBatchResult] does, so every backend spells
+// one situation alike (an operator grepping `publish_listener_panicked` must
+// see the twin too, which the tests run on). The value is logged under `panic`,
+// not `error`: it is whatever panic() was given, and says the callback CRASHED
+// rather than returned badly. Error level, not Warn: no redelivery follows.
 func LogListenerPanic(l *slog.Logger, topic string, ev *events.Event, r any) {
 	contained := panics.Recovered(panics.ScopeQueue, r)
 	l.Error("publish_listener_panicked", "topic", topic,

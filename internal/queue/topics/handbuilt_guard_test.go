@@ -20,69 +20,16 @@ import (
 
 // TestNoPackageBuildsASubjectByHand fails the build when any package outside
 // this one writes a Crewlet subject or consumer-group name as a string
-// literal.
+// literal (an *ast.BasicLit in non-test code under internal/ and cmd/): names
+// that disagree raise nothing, the publish lands where nobody reads.
 //
-// This is the reason the package exists, restated as a check. A producer and
-// a consumer that disagree about a name raise nothing: the publish succeeds
-// into a subject nobody reads, the seat never wakes, and the only symptom is
-// a company that looks idle. Formatted by hand, crewlet.agent.{handle}.inbox
-// reaches nine call sites — nine chances for a grammar change to reach some of
-// them and not the others.
-//
-// # What it walks
-//
-// Every non-test .go file under internal/ and cmd/, parsed with go/parser.
-// The subject of the match is a LANGUAGE construct — *ast.BasicLit of kind
-// STRING — not a line, not a regexp over source text. Line scanning cannot
-// see scope and has been wrong in both directions in this repo: a fixed
-// N-line window under-reports, and a brace scan runs past a closure's `}, arg)`
-// into the enclosing function and over-reports. A literal is a literal
-// wherever it sits, and a doc comment naming crewlet.agent..inbox — which
-// several files legitimately do — is not one.
-//
-// # What it looks for
-//
-// The markers are DERIVED from this package's own exported constants rather
-// than typed out again, so a new piece of grammar is covered by adding it to
-// topics.go and nothing else. A marker with a dot is matched where a subject
-// could continue ([containsSubject]): a prefix (crewlet.agent, crewlet.events,
-// crewlet.notifications, crewlet.config, dlq.) where the value goes on as a
-// subject would, a leaf suffix (.inbox, .control, .reflect) only where the
-// value ends with it, since a subject ends at its leaf and another grammar's
-// dotted name (OpenCode's session.inbox.list) may carry the same word mid-name.
-// A marker without one (agent-, -control) is matched by
-// SHAPE instead — the literal is exactly the marker, or is made only of the
-// characters a wire name may contain — because "agent-" is also ordinary
-// English hyphenation and "agent-only field set on a human seat" is a
-// sentence, not a consumer group. A word of another system's vocabulary
-// spelled in those characters (OpenCode's `agent-switched`) has a group's
-// shape all the same, and is declared in [anotherVocabulary] where it is one.
-//
-// # Coverage boundary
-//
-// It sees a subject that is WRITTEN as a literal, in a package the glob
-// covers. It does not see:
-//
-//   - a subject assembled from a variable or a fmt.Sprintf whose format
-//     string carries no marker (`domain + ".inbox"` is caught by the .inbox
-//     marker; `a + "." + b + "." + c` is not caught at all);
-//   - a subject built in the web/ tree, or in generated code
-//     outside internal/ and cmd/;
-//   - a subject fragment shorter than a marker — memory.go tests for an
-//     inbound-notification topic with strings.HasSuffix(topic, ".inbound"),
-//     and ".inbound" is not a marker because NotificationsInbound is a whole
-//     subject rather than a named suffix;
-//   - TEST code — _test.go files and the *test support packages.
-//     Deliberately, and it is the largest gap: the test tree writes hand-built
-//     names by the dozen, so bringing it in would need an allowance list an
-//     order of magnitude longer than the drift it guards, and the failure mode
-//     there is different in kind — a wrong literal in a test fails that test,
-//     where a wrong literal in the engine silently swallows live traffic.
-//
-// If the subject of this guard ever legitimately goes away — every backend
-// deriving its subjects from this package with none left to write down —
-// DELETE it rather than weakening its assertions. A guard kept alive past its
-// subject is how a count gets quietly lowered to zero.
+// Markers are DERIVED from this package's exported constants. A dotted marker
+// matches where a subject could continue ([containsSubject]); a dotless one
+// (agent-, -control) matches by SHAPE, since "agent-only field" is a sentence,
+// and another system's word of that shape goes in [anotherVocabulary]. Not
+// seen: subjects assembled from variables, web/ and generated code, short
+// fragments, and TEST code, deliberately (an allowance list would outgrow the
+// drift). DELETE the guard rather than weaken it if its subject goes away.
 func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 	t.Parallel()
 
@@ -105,7 +52,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.config", "dlq.", ".inbox", ".control", ".reflect", "agent-",
 		"crewlet.tracker.log", "crewlet.pages.log", "crewlet.iam.log",
 		"crewlet.chat.log", "crewlet.executor.log", "crewlet.code.log",
-		"crewlet.access.log", "crewlet.atlas.log", "crewlet.rooms",
+		"crewlet.access.log", "crewlet.atlas.log", "crewlet.advisor.log", "crewlet.rooms",
 	} {
 		if !markers[want] {
 			t.Errorf("marker %q was not derived from topics.go's constants; the "+
@@ -127,6 +74,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.executor.log.conversation.x", "crewlet.executor.log.%s.%s",
 		"crewlet.access.log.told.x", "crewlet.access.log.%s.%s",
 		"crewlet.atlas.log.entry.x", "crewlet.atlas.log.%s.%s",
+		"crewlet.advisor.log.finding.x", "crewlet.advisor.log.%s.%s",
 		"crewlet.rooms.artifact.0f3c", "crewlet.rooms.chat.0f3c", "crewlet.rooms.ask",
 		// A leaf suffix: the base of a concatenation, and the end of a
 		// format string a seat's subject would come from.
@@ -154,6 +102,8 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		topics.AccessLogWildcard,
 		topics.AtlasLogSubject("entry", "x"),
 		topics.AtlasLogWildcard,
+		topics.AdvisorLogSubject("finding", "x"),
+		topics.AdvisorLogWildcard,
 		topics.PresenceSubject("artifact", uuid.New()),
 		topics.PresenceSubject("chat", uuid.New()),
 		topics.PresenceAsk,
@@ -302,15 +252,9 @@ type walkResult struct {
 // collects the string literals that name a subject or a consumer group.
 //
 // Production is everything but test code: _test.go files and the *test
-// support packages (queuetest, coordtest, …), whose ordinary .go files are
-// test code too. A support package is recognised by its own directory name and
-// skipped whole, everything beneath it included, so a production package
-// nested underneath one would go unguarded. None exists; if one appears, this
-// is where it has to be taught.
-//
-// The test half used to be walked too, to log how many hand-built names it
-// carries: half the parsing this gate did, for a line nothing asserted and
-// that a passing test's output never carries into a CI log.
+// support packages (queuetest, coordtest, …), recognised by directory name and
+// skipped whole, so a production package nested under one would go unguarded.
+// None exists; if one appears, this is where it has to be taught.
 func walkForLiterals(t *testing.T, root string, markers markerSet) walkResult {
 	t.Helper()
 
@@ -420,21 +364,14 @@ func violation(markers markerSet, value string) (string, bool) {
 // continue, rather than merely as a substring.
 //
 // A subject prefix is always followed by a `.`, a `>` or the end of the
-// value: `crewlet.agent.alice.inbox`, `crewlet.agent.`, `crewlet.events.>`.
-// Plain containment also matches names that merely START the same way and
-// are not subjects at all — `crewlet.agent_handle=`, an OpenTelemetry
-// resource-attribute key, was the first — and a guard that cries wolf on
-// those is one somebody eventually silences with an allowance entry.
+// value. Plain containment also matches names that merely START the same way
+// (`crewlet.agent_handle=`, an OpenTelemetry attribute key), and a guard that
+// cries wolf is one somebody silences with an allowance entry.
 //
-// A LEAF SUFFIX ENDS ITS SUBJECT: a marker that starts with a separator
-// (`.inbox`, `.control`, `.reflect`) names a seat's subject only where the
-// value ends with it — `".inbox"` as a concatenation's base, or the end of
-// `crewlet.agent.%s.inbox`. Followed by another segment it is some other
-// grammar's dotted name; OpenCode's `session.inbox.list` API method was the
-// first.
-//
-// This NARROWS the matcher, so every literal it flagged before that really
-// is a subject is still flagged: the positives above cover each shape.
+// A LEAF SUFFIX ENDS ITS SUBJECT: a marker starting with a separator (`.inbox`,
+// `.control`, `.reflect`) names a seat's subject only where the value ends
+// with it. Followed by another segment it is some other grammar's dotted name,
+// like OpenCode's `session.inbox.list`.
 func containsSubject(value, marker string) bool {
 	if strings.HasPrefix(marker, ".") {
 		return strings.HasSuffix(value, marker)
@@ -503,20 +440,16 @@ func subjectMarkers(t *testing.T, dir string) markerSet {
 
 // markersFor reduces one constant to what to look for.
 //
-// THE WHOLE COMMITTED PREFIX, minus any trailing wildcard — not a fixed
-// two-segment truncation, which is what the first version did. Two segments
-// was right while every subject namespace was crewlet.<one word>, and it
-// stopped being right the moment a namespace went three deep: the mutation
-// log is crewlet.tracker.log, and reducing it to crewlet.tracker made every
-// metric name under crewlet.tracker.* read as a hand-built subject. A guard
-// that flags a neighbouring grammar is a guard somebody switches off.
+// THE WHOLE COMMITTED PREFIX, minus any trailing wildcard, never a fixed
+// two-segment truncation: a namespace three deep (crewlet.tracker.log) would
+// reduce to crewlet.tracker and flag every metric under crewlet.tracker.* as a
+// hand-built subject. A guard that flags a neighbouring grammar gets switched
+// off.
 //
-// A value ending in a separator ALSO yields its dotless form when that form
-// is a two-segment domain, so "crewlet.agent." still catches a bare
-// "crewlet.agent" used as the base of a concatenation. It is not added for a
-// deeper namespace, where the prefix with its separator already carries the
-// boundary, nor for a one-segment one like "dlq", where the bare word is
-// ordinary English.
+// A value ending in a separator ALSO yields its dotless form when that is a
+// two-segment domain, so "crewlet.agent." still catches a bare "crewlet.agent"
+// as a concatenation's base. Not for a deeper namespace, whose prefix already
+// carries the boundary, nor a one-segment one like "dlq", ordinary English.
 func markersFor(v string) []string {
 	if v == "" {
 		return nil

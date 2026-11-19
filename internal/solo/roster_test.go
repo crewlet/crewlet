@@ -112,20 +112,15 @@ func testImports(p pkg, path string) bool {
 // THE ROSTER. Every package that stands up a multi-member broker declares it,
 // and every package that declares it stands one up.
 //
-// This is the guard that makes the marker worth having. Without it the
-// declaration is a convention held by memory, which is the state the sign-off
-// trailer was in before scripts/check-signoff.sh existed — and the state the
-// suite partition was in until this file: internal/node and internal/statelog
-// each stood up a THREE-member cluster inside the shared runner for as long as
-// the partition was a hand-maintained `grep -v /internal/e2e`, surviving on the
-// harness's own four-attempt port-race retry rather than on being partitioned.
-// Nothing reported that, because a filter naming one package cannot say which
-// packages it should have named.
+// Without this guard the declaration is a convention held by memory, and a
+// hand-maintained filter naming some packages cannot say which it should have
+// named: three-member clusters ran inside the shared runner, surviving only on
+// the harness's port-race retry.
 //
 // It fails in BOTH directions deliberately. A missing declaration is the flake
 // this partition exists to prevent; a spurious one is a package claiming a
-// runner it does not need, which is how a marker decays into a
-// flake-suppressant nobody revisits.
+// runner it does not need, how a marker decays into a flake-suppressant
+// nobody revisits.
 func TestEveryClusterFormingPackageRunsAlone(t *testing.T) {
 	t.Parallel()
 

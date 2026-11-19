@@ -14,47 +14,16 @@ import (
 
 // TestOnlyOneClockReadsTheWallTime fails the build when any engine-side file
 // in this package tree calls time.Now() outside the package's single clock
-// function.
+// function. Every time-dependent decision is driven by an instant it was HANDED
+// (Tick takes `now`, a Run carries its FiredAt), so DST, catchup and tick-window
+// cases assert behaviour at an instant no clock moves under; a stray time.Now()
+// makes a test pass for the wrong reason, then disagree on a DST boundary.
 //
-// # Why this is a check and not a convention
-//
-// Every time-dependent decision the scheduler makes is driven by an instant
-// it was HANDED: Tick takes `now`, the cron evaluator takes both window
-// bounds, a Run carries its own FiredAt, Describe takes the reference instant.
-// That is what makes the DST cases, the catchup-window cases and the
-// tick-window cases mean anything — each of them asserts behaviour at an
-// instant no clock is going to move underneath it.
-//
-// A single stray time.Now() several frames down does not fail a test. It makes
-// one PASS for the wrong reason: the injected instant decides which fires are
-// due, the real clock decides what the fire label says, and the two agree
-// perfectly in a test that runs today and disagree on the day a schedule
-// crosses a DST boundary. That failure surfaces once a year, in production, in
-// whichever timezone an operator happened to configure.
-//
-// # Why the AST and not a grep
-//
-// The invariant is about SCOPE — which function a call sits in — and line
-// scanning cannot see scope. A fixed-window grep under-reports by stopping
-// early; a brace scan over-reports by running past a closure's `}, arg)` into
-// the enclosing function. Both have been wrong in both directions in this
-// repo. A call expression is a call expression wherever it sits, and a doc
-// comment mentioning time.Now (this one does, repeatedly) is not one.
-//
-// # Coverage boundary, stated rather than assumed
-//
-// It walks the engine-side packages: internal/schedule and its sqlledger
-// backend. It does NOT walk:
-//
-//   - _test.go files. A test computing a cutoff from the real clock is
-//     ordinary and correct.
-//   - internal/schedule/scheduletest, which is a test harness in a non-test
-//     file. Its cases legitimately read the clock to build a purge cutoff, and
-//     it never runs inside the engine.
-//   - a clock reached through a different spelling: time.Since, time.Until, a
-//     time.Now stored in a variable and called through it, or a clock behind
-//     an injected interface. The first two are worth adding if they ever
-//     appear; the last is what this rule wants anyway.
+// AST, NOT GREP: the invariant is about scope, which line scanning cannot see (a
+// window grep under-reports, a brace scan runs past a closure), and a doc
+// comment mentioning time.Now is not a call. It walks internal/schedule and its
+// sqlledger backend, NOT _test.go files, internal/schedule/scheduletest (never
+// run in the engine), or a clock spelled otherwise (time.Since, time.Until).
 func TestOnlyOneClockReadsTheWallTime(t *testing.T) {
 	t.Parallel()
 

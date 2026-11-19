@@ -364,23 +364,17 @@ func (w *Waiter) lose(ctx context.Context, manager *Manager, run PendingRun, cau
 }
 
 // sweep is a node's own waiter reclaiming the boxes on its host that no run
-// names any more: each box that records the run it was made for ([HostBox]) is
-// looked up by that run, and reclaimed where the run's row no longer names it
-// ([hostBoxFree]). With only set, the boxes of that one turn — a nudge's
-// ([NudgeReleased]); otherwise every box on the host, once per pass.
+// names any more: each box recording its run ([HostBox]) is looked up by that
+// run and reclaimed where the row no longer names it ([hostBoxFree]). With only
+// set, the boxes of that one turn ([NudgeReleased]); otherwise every box on the
+// host, once per pass.
 //
-// THE HOST IS THE ONE PARTY THAT CAN. A box here is a process tree or a
-// container no other node reaches, so a run that moved on elsewhere — ended,
-// stopped or relaunched by the node that holds its seat now — left its box
-// here with nobody else able to reclaim it ([Coordinator.reclaimBox]). And
-// because the question is asked of the box rather than of the runs this node
-// remembers, a box whose run ended while this node was stopped is reclaimed
-// by the first pass after it starts.
-//
-// RECLAIMED ONLY ON A FRESH READ of the run: the pass's listing is a moment
-// old, and a row that names the box again since — a relaunch continuing in it
-// — keeps it. A listing that cannot be made, or a row that cannot be read,
-// reclaims nothing.
+// THE HOST IS THE ONE PARTY THAT CAN: no other node reaches a box here
+// ([Coordinator.reclaimBox]). Asking of the box, not of remembered runs, also
+// reclaims one whose run ended while this node was stopped. RECLAIMED ONLY ON A
+// FRESH READ of the run: the listing is a moment old, and a row naming the box
+// again since (a relaunch continuing in it) keeps it. A listing or row that
+// cannot be read reclaims nothing.
 func (w *Waiter) sweep(ctx context.Context, manager *Manager, runs []PendingRun, only string) {
 	if only == "" {
 		w.mu.Lock()

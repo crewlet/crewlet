@@ -315,18 +315,13 @@ func AADForVar(name string) string { return "secret_values/" + name }
 // belongs to and to which field of it, so a ciphertext moved between rows
 // fails to authenticate.
 //
-// THE CREDENTIAL AND NOT THE PERSON, which is the one decision here and it is
-// not the obvious one: a person holds several credentials at once — a
-// password, a second factor, a machine token or two — and
-// binding to the person alone would let a second factor's sealed secret be
-// pasted over a first one's on the same row and still open. The field is the
-// second term for the same reason one level down: two values under one
-// credential must not be interchangeable either.
-//
-// It is here rather than in internal/iam/credential because the two callers
-// that must agree about it are the sealer and the reader, and a rule written
-// at each of them is the shape every other duplicated grammar in this tree
-// started as.
+// THE CREDENTIAL AND NOT THE PERSON: a person holds several credentials (a
+// password, a second factor, machine tokens), so binding to the person alone
+// would let a second factor's sealed secret be pasted over a first one's on the
+// same row and still open. The field is the second term for the same reason one
+// level down. It lives here rather than in internal/iam/credential because the
+// sealer and the reader must agree on it, and a rule written at each of them is
+// how duplicated grammars drift.
 func AADForCredential(credentialID, field string) string {
 	return "iam_credential/" + credentialID + "/" + field
 }

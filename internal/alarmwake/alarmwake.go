@@ -14,6 +14,14 @@
 // the notify spine's fleet-wide consumer group derives the wakes on whichever
 // node takes the delivery.
 //
+// # One shape in, one shape out
+//
+// [Encode] and [Decode] are the delivery's two ends, so they cannot disagree
+// about it. A delivery naming no id, node, alarm or change is a parse failure
+// the spine records; a change this build does not know is read and repeated,
+// a newer node's word for what its alarm did. The parser is built per epoch
+// by engine.nativeParsers on every node, whatever halves it runs.
+//
 // # Who is woken
 //
 // Every AGENT seat whose role carries `health_tools` (authz.SeatGrantHealth,
@@ -28,7 +36,7 @@
 //
 // A transition carries its own id, derived by the tracker that made it from
 // the node, the alarm, the log or configured entry it stands on, the change and
-// the instant the instance was raised (statelog.TransitionID), and each wake's id is derived
+// the instant the instance was raised (statelog.TransitionID), and each wake's id, dated by the transition, is derived
 // from that id and the seat ([WakeID]). So a republish — the outbox retrying a
 // publish the broker took but whose answer was lost, or a delivery handed to
 // a second node — routes to the same ids, and the inbox's same-id dedupe and
@@ -44,11 +52,18 @@
 //
 // # A wake is a pointer
 //
-// The delivery says what changed and when; what is firing NOW is
+// The prompt carries the alarm, the node, the log, the measurement and the
+// table's own meaning and remedy (statelog.Describe). The delivery says what
+// changed and when; what is firing NOW is
 // `fleet_health`'s to say, from every node's own heartbeat. So the prompt sends
 // its seat to look before it acts: a later transition may already have
 // cleared the alarm, and a clear lost with its node (the outbox is the node's
-// memory) is read there too. A restarted node keeps the instances it had up,
+// memory) is read there too. The read asks `fleet_health` for what is firing
+// only (`firing: true`, an argument the tool declares, held to one spelling by
+// builtin.TestAnAlarmWakeAsksFleetHealthOnlyForWhatIsFiring), so a wake's turn
+// reads an answer that stays small however large the fleet is. The prompt addresses nobody, and ONE ALARM IS ONE CONVERSATION
+// wherever it stands: a flap, or one condition every data node raises at once,
+// is one thread and one look, not a turn per node. A restarted node keeps the instances it had up,
 // so its first evaluation says only what changed while it was down.
 package alarmwake
 
@@ -285,22 +300,16 @@ func inbound(t statelog.AlarmTransition) notify.Inbound {
 	}
 }
 
-// InstanceID is the alarm instance t is a transition of, as a turn's origin
-// names it and as the alarms page names it: the alarm's kind, which is its
-// identity there, and the log a per-log alarm stands on or the entry a
-// per-entry one does — `<kind>`, `<kind>:<log>` or `<kind>:<entry>` — so a turn
-// an MCP server's alarm started is found from that server.
+// InstanceID is the alarm instance t is a transition of, as a turn's origin and
+// the alarms page name it: `<kind>`, `<kind>:<log>` or `<kind>:<entry>`, so a
+// turn an MCP server's alarm started is found from that server.
 //
-// THE INSTANCE, NEVER THE TRANSITION: a fire and the clear that ends it are
-// one alarm standing, which is what a person asking "which turns did this
-// alarm start" holds, and the origin's reason ([types.TriggerOrigin]) says
-// which of the two each turn was woken by. Not the raising instant either,
-// which nobody reading the alarm is shown: an alarm that fires again later is
-// the same alarm, and its turns are listed together. NOR THE NODE: every data
-// node evaluates its own table, so one fleet-wide condition fires on each of
-// them, and the page, the wake's conversation ([Prompt.PartitionKey]) and the
-// seat's one look at fleet_health all treat it as one alarm — the node is in
-// the wake's metadata and its prompt's first line.
+// THE INSTANCE, NEVER THE TRANSITION: a fire and its clear are one alarm
+// standing (the origin's reason, [types.TriggerOrigin], says which woke each
+// turn), and one that fires again later is the same alarm. NOR THE NODE: every
+// data node evaluates its own table, so one fleet-wide condition fires on each,
+// and the page, [Prompt.PartitionKey] and the seat's one look at fleet_health
+// treat it as one alarm; the node is in the wake's metadata and prompt line 1.
 func InstanceID(t statelog.AlarmTransition) string {
 	switch {
 	case t.Domain != "":

@@ -206,25 +206,15 @@ func TestEveryGrantIsAskedForBySomeVerb(t *testing.T) {
 
 // A REQUEST WHOSE CLEANED PATH DIFFERS FROM ITS RAW ONE IS REFUSED.
 //
-// A gate is worth exactly as much as the agreement between what it matched
-// and what a reader thinks it matched. `/worklet/items/../config` reaches
-// ServeMux as one pattern and reads to a person as another.
+// `/worklet/items/../config` reaches ServeMux as one pattern and reads to a
+// person as another. REFUSED, NOT REDIRECTED: clients follow the redirect, so
+// the request arrives again with the decision still unmade. HENCE OUTSIDE THE
+// MUX: it cleans `..`, `.` and `//` and redirects BEFORE it matches, so a guard
+// in the per-route wrapper is never entered ([authz.CanonicalPath]).
 //
-// REFUSED, NOT REDIRECTED: ServeMux's own answer is a redirect, which every
-// client follows — so the request arrives a second time with the decision
-// still unmade, and the access log shows only the clean path.
-//
-// AND THEREFORE OUTSIDE THE MUX. Written inside the per-route wrapper, beside
-// the decision it protects, every LITERAL case here came back 307: ServeMux
-// cleans `..`, `.` and `//` and redirects BEFORE it matches, so the guard
-// was never entered at all. That is what put [authz.CanonicalPath] in the
-// outer middleware.
-//
-// THE ENCODED CASE IS A DIFFERENT DISAGREEMENT. ServeMux does not redirect
-// `%2e%2e` (measured on go1.27): it matches the escaped path, so the request
-// reaches a route with a segment of `..`, while the cross-site write check's
-// exemption list and the drain gate decide on the DECODED path, which reads
-// as a traversal. The
+// THE ENCODED CASE IS A DIFFERENT DISAGREEMENT: ServeMux does not redirect
+// `%2e%2e` (go1.27) and matches the escaped path, while the cross-site write
+// check's exemption list and the drain gate decide on the DECODED path. The
 // escaped form is clean, so only the decoded check refuses it.
 func TestACleanedPathDifferingFromTheRawOneIsRefused(t *testing.T) {
 	t.Parallel()

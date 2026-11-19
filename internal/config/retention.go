@@ -262,6 +262,24 @@ const (
 	// AtlasLogMaxBytesCeiling is a typo guard.
 	AtlasLogMaxBytesCeiling int64 = 64 << 30
 
+	// DefaultAdvisorLogMaxBytes is the advisor log's ceiling when unset (the
+	// Advisor's findings, runs, reports and alarm episodes, with their history:
+	// internal/advisordomain). THE LOG GROWS WITH WHAT THE ADVISOR RECORDS, NOT
+	// THE DISK: about 2 KB a record (an episode's body and history line, a run's
+	// per-class summary), signed, and a few thousand records a day at the
+	// reference company (each class's runs, the refreshes and moves they make,
+	// people's decisions), about 6 MB a day. So 64 MiB is about ten days of a
+	// COMPLETELY BLOCKED trim against a `trim_blocked` alarm after a day, and
+	// the default is its floor: no scaling takes it lower.
+	DefaultAdvisorLogMaxBytes int64 = 64 << 20
+
+	// AdvisorLogMaxBytesFloor is 64 MiB, by the per-log rule
+	// [IamLogMaxBytesFloor] records.
+	AdvisorLogMaxBytesFloor int64 = 64 << 20
+
+	// AdvisorLogMaxBytesCeiling is a typo guard.
+	AdvisorLogMaxBytesCeiling int64 = 64 << 30
+
 	// DerivedPagesLogDivisor is how much smaller an unset PagesLogMaxBytes
 	// is than the mutation log's ceiling.
 	//
@@ -327,7 +345,7 @@ const (
 	// targets move writes up to about eight times it. A ceiling set comes off the logs' share
 	// whole, so the derived logs pay for it: at 100 GiB free a code log set at twice the
 	// mutation log beside it is 13.3 GiB, and the mutation log and the vector changelog are each
-	// created at 6.7 GiB, too small for a year-five re-embedding (docs/guides/replication.md).
+	// created at 6.6 GiB, too small for a year-five re-embedding (docs/guides/replication.md).
 	// Once the streams exist, its own ratio is the two logs' crewlet.statelog.log.bytes_per_day,
 	// domain code against domain tracker, and `crewlet retention set-capacity` moves the code
 	// log to that share of the mutation log's ceiling, since a log keeps the ceiling it was
@@ -616,7 +634,8 @@ func (s Stream) DeclaredLogCeilings() int64 {
 	return s.TrackerLogMaxBytes + s.TrackerVectorsMaxBytes + s.PagesLogMaxBytes +
 		s.IamLogMaxBytes + s.UsageLogMaxBytes + s.ArtifactsLogMaxBytes +
 		s.ArtifactDataLogMaxBytes + s.AssistantLogMaxBytes + s.ChatLogMaxBytes +
-		s.ExecutorLogMaxBytes + s.CodeLogMaxBytes + s.AccessLogMaxBytes + s.AtlasLogMaxBytes
+		s.ExecutorLogMaxBytes + s.CodeLogMaxBytes + s.AccessLogMaxBytes + s.AtlasLogMaxBytes +
+		s.AdvisorLogMaxBytes
 }
 
 // IamMaxBytes is the identity estate's log ceiling, and whether it was derived.
@@ -742,6 +761,18 @@ func (s Stream) AtlasMaxBytes() (int64, bool) {
 		return s.AtlasLogMaxBytes, false
 	}
 	return DefaultAtlasLogMaxBytes, true
+}
+
+// AdvisorMaxBytes is the advisor log's ceiling, and whether it was derived:
+// the operator's value, or the fixed default ([DefaultAdvisorLogMaxBytes]),
+// which reports `true` because a value nobody wrote is one the shared-budget
+// scaling may lower, to the floor it already is. It takes no free-space
+// argument: the log grows with what the Advisor records, not with the volume.
+func (s Stream) AdvisorMaxBytes() (int64, bool) {
+	if s.AdvisorLogMaxBytes > 0 {
+		return s.AdvisorLogMaxBytes, false
+	}
+	return DefaultAdvisorLogMaxBytes, true
 }
 
 // SnapshotDirFor is where a node keeps its snapshots, with the default

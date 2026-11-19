@@ -1,12 +1,17 @@
 package executor
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"math"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/crewlet/crewlet/internal/jsonscan"
 )
 
 // leUser is a user record whose message's content is content, raw, after its
@@ -122,12 +127,12 @@ var leMessageCases = []leMessageCase{
 func TestAThreadLineEstimatesItsContentAsClaudeCodeDoes(t *testing.T) {
 	t.Parallel()
 	for _, tc := range leMessageCases {
-		got, err := ctLine(t, tc.record).Estimate()
+		got, err := leLine(t, tc.record).Estimate()
 		if err != nil || got != tc.want {
 			t.Errorf("%s: estimated at %+v (%v), want %+v", tc.name, got, err, tc.want)
 		}
 	}
-	thrown := ctLine(t, leUser(`[{"type":"document","source":{"type":"text","data":"abcdefgh"},"title":5}]`, ""))
+	thrown := leLine(t, leUser(`[{"type":"document","source":{"type":"text","data":"abcdefgh"},"title":5}]`, ""))
 	if got, err := thrown.Estimate(); err == nil {
 		t.Errorf("a text document titled with a number is estimated at %+v, want the error the harness throws", got)
 	}
@@ -147,7 +152,7 @@ func TestAnEstimateCountsUTF16UnitsPastTheSkillNameCap(t *testing.T) {
 		"written as itself": `"` + strings.Repeat("€", 600) + strings.Repeat("😀", 600) + `"`,
 		"escaped":           `"` + strings.Repeat(`\u20ac`, 600) + strings.Repeat(`\ud83d\ude00`, 600) + `"`,
 	} {
-		if got, err := ctLine(t, leUser(content, "")).Estimate(); err != nil || got != want {
+		if got, err := leLine(t, leUser(content, "")).Estimate(); err != nil || got != want {
 			t.Errorf("a text of 600 euro signs and 600 emoji %s is estimated at %+v (%v), want %+v (1,800 units)",
 				name, got, err, want)
 		}
@@ -232,13 +237,13 @@ var leAttachmentCases = []leAttachmentCase{
 func TestAnAttachmentIsEstimatedByItsRendering(t *testing.T) {
 	t.Parallel()
 	for _, tc := range leAttachmentCases {
-		got, read, err := ctLine(t, tc.record).AttachmentEstimate()
+		got, read, err := leLine(t, tc.record).AttachmentEstimate()
 		if err != nil || got != tc.want || read != tc.read {
 			t.Errorf("%s: estimated at %+v, read %t (%v); want %+v, read %t", tc.name, got, read, err, tc.want,
 				tc.read)
 		}
 	}
-	if got, read, err := ctLine(t, leAttachment(`null`, "")).AttachmentEstimate(); err == nil {
+	if got, read, err := leLine(t, leAttachment(`null`, "")).AttachmentEstimate(); err == nil {
 		t.Errorf("an attachment that is null is estimated at %+v, read %t, want its type's error", got, read)
 	}
 }
@@ -250,6 +255,7 @@ var leProducers = []struct {
 	read func(raw []byte) (threadLine, error)
 }{
 	{"the whole line's decode", func(raw []byte) (threadLine, error) { return decodeThreadLine(1, raw, nil) }},
+	{"the line's scanner pass", leScan},
 }
 
 // EVERY PRODUCER FILLS THE ESTIMATE: what each producer of a line's facts
@@ -599,4 +605,513 @@ func leImages(delivery json.RawMessage) int64 {
 		}
 	}
 	return images
+}
+
+// leScan is raw, one line, read in the line's one scanner pass by a reader
+// that asks for its estimate ([threadReader.Estimating]).
+func leScan(raw []byte) (threadLine, error) {
+	r := newThreadReader(bytes.NewReader(append(slices.Clone(raw), '\n')), threadPlainMax)
+	r.Estimating()
+	return r.Next(context.Background())
+}
+
+// leLine is record read as the one line of a thread by a reader that asks
+// for its estimate.
+func leLine(t testing.TB, record string) threadLine {
+	t.Helper()
+	l, err := leScan([]byte(record))
+	if err != nil {
+		t.Fatalf("%.120s reads as %v; want one record", record, err)
+	}
+	return l
+}
+
+// leHardCase is a record at an edge of the estimate's reading and what both
+// producers estimate it at: a message's figure, or where fault its error; an
+// attachment's figure and whether it reads.
+type leHardCase struct {
+	name                    string
+	record                  string
+	want                    threadEstimate
+	attachment, read, fault bool
+}
+
+// leBlocks is a user record whose message's content is the list of blocks.
+func leBlocks(blocks ...string) string { return leUser(`[`+strings.Join(blocks, ",")+`]`, "") }
+
+// leResult is a tool_result block of content, raw.
+func leResult(content string) string {
+	return `{"type":"tool_result","tool_use_id":"toolu_1","content":` + content + `}`
+}
+
+// leCall is a tool_use block of name and its input's member as written, raw:
+// `"input":...`, or none.
+func leCall(name, input string) string {
+	if input != "" {
+		input = "," + input
+	}
+	return `{"type":"tool_use","id":"toolu_1","name":"` + name + `"` + input + `}`
+}
+
+// leDocument is a text document of data, raw, beside its other members.
+func leDocument(data, beside string) string {
+	return `{"type":"document","source":{"type":"text","data":` + data + `}` + beside + `}`
+}
+
+// leDelivered is a user record of ten units of content beside delivery, raw,
+// its task delivery.
+func leDelivered(delivery string) string {
+	return leUser(`"abcdefghij"`, `"taskDelivery":`+delivery+`,`)
+}
+
+// leReads is a PDF read of reads, raw.
+func leReads(reads string) string {
+	return leAttachment(`{"type":"message_pdf_reads","reads":`+reads+`}`, "")
+}
+
+// leRenderedFirst is an attachment record that writes beside before its
+// attachment.
+func leRenderedFirst(beside, attachment string) string {
+	return `{"parentUuid":null,"isSidechain":false,` + beside + `"attachment":` + attachment +
+		`,"type":"attachment","uuid":"` + ctUUID(2) + `","timestamp":"` + ctStamp + `",` + ctTail("2.1.310") + `}`
+}
+
+// leTen and leTwentyTwo are the figures of a text of 10 and of 22 units: a
+// length 10 (mod 12), at which one unit more moves the rate of three and one
+// fewer the rate of four, so a count off by one either way reads otherwise.
+var (
+	leTen        = threadEstimate{3, 3}
+	leTwentyTwo  = threadEstimate{7, 6}
+	leTenHalved  = threadEstimate{5, 5}
+	leImageAnd10 = func(images int64) threadEstimate { return leTen.plus(estimateFlat(2000 * images)) }
+)
+
+// leInputs is a call's name and its input's member as written
+// ([leCall]), of each kind an input is written as, and what the call charges.
+var leInputs = []struct {
+	kind, name, input string
+	want              threadEstimate
+}{
+	{"an object with blanks before and inside it (12 + 10)", "abcdefghijkl", `"input":   { "k": 1 }`, leTwentyTwo},
+	{"a string (2 + 8)", "ab", `"input":"abcdef"`, leTen},
+	{"a list (1 + 9)", "a", `"input":[1,2,3,4]`, leTen},
+	{"a number (2 + 8)", "ab", `"input":12345678`, leTen},
+	{"true (6 + 4)", "abcdef", `"input":true`, leTen},
+	{"false (5 + 5)", "abcde", `"input":false`, leTen},
+	{"null, as {} (8 + 2)", "abcdefgh", `"input":null`, leTen},
+	{"none, as {} (8 + 2)", "abcdefgh", "", leTen},
+}
+
+// leHardCases is every hard case, each charging a text of 10 units (22 where
+// a name and an input must both be there) unless it says otherwise.
+func leHardCases() []leHardCase {
+	pdf := func(pages int64) threadEstimate { return estimateFlat(pages * 3000) }
+	var cases []leHardCase
+	// A call as a block, nested as a result's first element (the digest's)
+	// and as an element of a content document's source, its input each kind.
+	for _, in := range leInputs {
+		call := leCall(in.name, in.input)
+		for _, at := range []struct{ where, record string }{
+			{"a block", leBlocks(call)},
+			{"a result's element", leBlocks(leResult(`[` + call + `]`))},
+			{"a source's element", leBlocks(`{"type":"document","source":{"type":"content","content":[` + call + `]}}`)},
+		} {
+			cases = append(cases, leHardCase{name: "a call as " + at.where + ", its input " + in.kind,
+				record: at.record, want: in.want})
+		}
+	}
+	return append(cases, []leHardCase{
+		{name: "a block's type last", record: leBlocks(`{"text":"abcdefghij","type":"text"}`), want: leTen},
+		{name: "a nested type escaped, past the digest", record: leBlocks(leResult(
+			`[{"type":"tool_result","content":[{"type":"\u0074ext","text":"abcdefghij"}]}]`)), want: leTen},
+		{name: "a second element's type escaped", record: leBlocks(leResult(
+			`["",{"type":"\u0074ext","text":"abcdefghij"}]`)), want: leTen},
+		{name: "a result's string element", record: leBlocks(leResult(`["abcdefghij"]`)), want: leTen},
+		{name: "a result's string element after a one-unit text, rounded to none", record: leBlocks(leResult(
+			`[{"type":"text","text":"x"},"abcdefghij"]`)), want: leTen},
+		{name: "an input escaping a character beside one written (1 + 9)", record: leBlocks(leCall("a",
+			`"input":"\u00e9é"`)), want: leTen},
+		{name: "an input holding an invalid byte (7 + 3)", record: leBlocks(leCall("abcdefg", "\"input\":\"\xff\"")),
+			want: leTen},
+		{name: "an input holding a lone surrogate (2 + 8)", record: leBlocks(leCall("ab", `"input":"\ud800"`)),
+			want: leTen},
+		{name: "an input written twice, its last (2 + 8)", record: leBlocks(leCall("ab",
+			`"input":[1],"input":12345678`)), want: leTen},
+		{name: "a text that is a number", record: leBlocks(`{"type":"text","text":12345}`)},
+		{name: "a text that is a literal", record: leBlocks(`{"type":"text","text":true}`)},
+		{name: "a text that is an object", record: leBlocks(`{"type":"text","text":{"abcdefghij":"x"}}`)},
+		{name: "a thinking that is a number", record: leBlocks(`{"type":"thinking","thinking":12345}`)},
+		{name: "a data that is an object", record: leBlocks(`{"type":"redacted_thinking","data":{"abc":1}}`)},
+		{name: "a source's data that is a literal", record: leBlocks(leDocument("false", ""))},
+		{name: "a nested call whose name is a number", record: leBlocks(leResult(
+			`[{"type":"tool_use","name":12345}]`)), fault: true},
+		{name: "a nested type turning after its content", record: leBlocks(leResult(
+			`[{"type":"text","content":"abcdefghij","type":"tool_result"}]`)), want: leTen},
+		{name: "a one-unit content, rounded to none, beside an image",
+			record: leUser(`"a"`, `"taskDelivery":{"result":{"content":[{"type":"image"}]}},`), want: estimateFlat(2000)},
+		{name: "a content's first line naming the handback, its rest past a piece unread by any automaton",
+			record: leUser(`"`+claudeToolHandback+`\n`+strings.Repeat("x", 12010-len(claudeToolHandback)-1)+`"`,
+				""), want: estimateUnits(12010)},
+		{name: "a text block past a piece, saying something in its first", record: leBlocks(
+			`{"type":"text","text":"a` + strings.Repeat("x", 12009) + `"}`), want: threadEstimate{4003, 3003}},
+		// 1 + 3,003 × 3 = 9,010 units; its 4,096th byte decoded is an emoji's first.
+		{name: "a text block past a piece, past ASCII", record: leBlocks(
+			`{"type":"text","text":"a` + strings.Repeat("é😀", 3003) + `"}`), want: threadEstimate{3003, 2253}},
+		{name: "a text block past a piece, past ASCII, escaped", record: leBlocks(
+			`{"type":"text","text":"a` + strings.Repeat(`\u00e9\ud83d\ude00`, 3003) + `"}`),
+			want: threadEstimate{3003, 2253}},
+		{name: "a source's data before its type", record: leBlocks(
+			`{"type":"document","source":{"data":"abcdefghij","type":"text"}}`), want: leTen},
+		{name: "a type turning after its source", record: leBlocks(
+			`{"type":"image","source":{"type":"text","data":"abcdefghij"},"type":"document"}`), want: leTen},
+		{name: "a type turning from a document to an image", record: leBlocks(
+			`{"type":"document","source":{"type":"text","data":"abcdefghij"},"type":"image"}`),
+			want: estimateFlat(2000)},
+		{name: "a title of an escaped JSON", record: leBlocks(leDocument(`"abcdefghij"`, `,"title":"notes.\u004aSON"`)),
+			want: leTenHalved},
+		{name: "a title of a.JSON", record: leBlocks(leDocument(`"abcdefghij"`, `,"title":"a.JSON"`)),
+			want: leTenHalved},
+		{name: "a title of a.JSON, its dot and J escaped", record: leBlocks(leDocument(`"abcdefghij"`,
+			`,"title":"a\u002e\u004aSON"`)), want: leTenHalved},
+		{name: "a title past ASCII", record: leBlocks(leDocument(`"abcdefghij"`, `,"title":"x.jsön"`)), want: leTen},
+		{name: "a title past ASCII, escaped", record: leBlocks(leDocument(`"abcdefghij"`, `,"title":"x.js\u00f6n"`)),
+			want: leTen},
+		{name: "a title of a lone surrogate's escape", record: leBlocks(leDocument(`"abcdefghij"`,
+			`,"title":"x.\ud800json"`)), want: leTen},
+		{name: "a title of an invalid byte", record: leBlocks(leDocument(`"abcdefghij"`, ",\"title\":\"x.\xffjson\"")),
+			want: leTen},
+		{name: "a title ending in a dot", record: leBlocks(leDocument(`"abcdefghij"`, `,"title":"a.json."`)),
+			want: leTen},
+		{name: "a title of six letters", record: leBlocks(leDocument(`"abcdefghij"`, `,"title":"jsonlx"`)),
+			want: leTen},
+		{name: "a title past 64 KiB ending .json", record: leBlocks(leDocument(`"abcdefghij"`,
+			`,"title":"`+strings.Repeat("x", 70000)+`.json"`)), want: leTenHalved},
+		{name: "a title that is a number", record: leBlocks(leDocument(`"abcdefghij"`, `,"title":5`)), fault: true},
+		{name: "a title of null", record: leBlocks(leDocument(`"abcdefghij"`, `,"title":null`)), want: leTen},
+		{name: "a title written twice, its last not JSON", record: leBlocks(leDocument(`"abcdefghij"`,
+			`,"title":"a.json","title":"a.txt"`)), want: leTen},
+		{name: "a title written twice, its last JSON", record: leBlocks(leDocument(`"abcdefghij"`,
+			`,"title":"a.txt","title":"a.jsonc"`)), want: leTenHalved},
+		{name: "a thinking written twice", record: leBlocks(
+			`{"type":"thinking","thinking":"abc","thinking":"abcdefghij"}`), want: leTen},
+		{name: "a data written twice", record: leBlocks(
+			`{"type":"redacted_thinking","data":"x","data":"abcdefghij"}`), want: leTen},
+		{name: "a source written twice", record: leBlocks(
+			`{"type":"document","source":{"type":"text","data":"x"},"source":{"type":"text","data":"abcdefghij"}}`),
+			want: leTen},
+		{name: "a result's content written twice", record: leBlocks(leResult(`"x","content":"abcdefghij"`)),
+			want: leTen},
+		{name: "the content an empty string, then a list beside an image",
+			record: leUser(`"","content":[{"type":"text","text":"abcdefghij"}]`,
+				`"taskDelivery":{"result":{"content":[{"type":"image"}]}},`), want: leImageAnd10(1)},
+		{name: "the content a list beside an image, then an empty string",
+			record: leUser(`[{"type":"text","text":"abcdefghij"}],"content":""`,
+				`"taskDelivery":{"result":{"content":[{"type":"image"}]}},`)},
+		{name: "the content a faulting list, then a string", record: leUser(`[`+leResult(
+			`[{"type":"tool_use","name":7}]`)+`],"content":"abcdefghij"`, ""), want: leTen},
+		{name: "a message that is a string beside an image", record: `{"parentUuid":null,"isSidechain":false,"type":"user","message":"abcdefghij",` +
+			`"taskDelivery":{"result":{"content":[{"type":"image"}]}},"uuid":"` + ctUUID(1) + `","timestamp":"` +
+			ctStamp + `",` + ctTail("2.1.322") + `}`, fault: true},
+		{name: "two faults, the first's words", record: leBlocks(leResult(`[{"type":"tool_use","name":7}]`),
+			leDocument(`"x"`, `,"title":5`)), fault: true},
+		{name: "a delivery's result twice, the last no list", record: leDelivered(
+			`{"result":{"content":[{"type":"image"}]},"result":{"content":5}}`), want: leTen},
+		{name: "a delivery's result's content twice, the last no list", record: leDelivered(
+			`{"result":{"content":[{"type":"image"}],"content":5}}`), want: leTen},
+		{name: "a snapshot object, then null: its own result", record: leDelivered(
+			`{"mcpTaskSnapshot":{"result":{"content":[{"type":"image"}]}},"mcpTaskSnapshot":null,` +
+				`"result":{"content":[{"type":"image"},{"type":"image"}]}}`), want: leImageAnd10(2)},
+		{name: "a snapshot object with no result", record: leDelivered(
+			`{"mcpTaskSnapshot":{},"result":{"content":[{"type":"image"}]}}`), want: leTen},
+		{name: "a result before its snapshot", record: leDelivered(
+			`{"result":{"content":[{"type":"image"}]},"mcpTaskSnapshot":{"result":{"content":[{"type":"image"},` +
+				`{"type":"image"}]}}}`), want: leImageAnd10(2)},
+		{name: "a snapshot twice, its last", record: leDelivered(
+			`{"mcpTaskSnapshot":{"result":{"content":[{"type":"image"}]}},"mcpTaskSnapshot":{"result":{"content":` +
+				`[{"type":"image"},{"type":"image"},{"type":"image"}]}}}`), want: leImageAnd10(3)},
+		{name: "a snapshot twice, its last of no result", record: leDelivered(
+			`{"mcpTaskSnapshot":{"result":{"content":[{"type":"image"}]}},"mcpTaskSnapshot":{}}`), want: leTen},
+		{name: "a snapshot that is no object", record: leDelivered(
+			`{"mcpTaskSnapshot":"x","result":{"content":[{"type":"image"}]}}`), want: leImageAnd10(1)},
+		{name: "a snapshot's result that is no object", record: leDelivered(
+			`{"mcpTaskSnapshot":{"result":[{"type":"image"}]},"result":{"content":[{"type":"image"}]}}`), want: leTen},
+		{name: "a delivery that is no object", record: leDelivered(`[{"result":{"content":[{"type":"image"}]}}]`),
+			want: leTen},
+		{name: "an element's type image, then text", record: leDelivered(
+			`{"result":{"content":[{"type":"image","type":"text"}]}}`), want: leTen},
+		{name: "an element's type image, escaped", record: leDelivered(
+			`{"result":{"content":[{"type":"\u0069mage"}]}}`), want: leImageAnd10(1)},
+		{name: "a rendering twice, its last", attachment: true, read: true, want: leTen,
+			record: leAttachment(`{"type":"hook_success"}`, `"rendered":[{"content":"x"}],"rendered":[{"content":`+
+				`"abcdefghij"}],`)},
+		{name: "a rendering before its attachment", attachment: true, read: true, want: leTen,
+			record: leRenderedFirst(`"rendered":[{"content":"abcdefghij"}],`, `{"type":"hook_success"}`)},
+		{name: "a rendered message's content twice", attachment: true, read: true, want: leTen,
+			record: leAttachment(`{"type":"hook_success"}`, `"rendered":[{"content":[],"content":"abcdefghij"}],`)},
+		{name: "a rendered content that is a number", attachment: true,
+			record: leAttachment(`{"type":"hook_success"}`, `"rendered":[{"content":12345}],`)},
+		{name: "a rendered text that is an object", attachment: true,
+			record: leAttachment(`{"type":"hook_success"}`, `"rendered":[{"content":[{"type":"text","text":{}}]}],`)},
+		{name: "a rendered block's type escaped", attachment: true, read: true, want: leTen,
+			record: leAttachment(`{"type":"hook_success"}`,
+				`"rendered":[{"content":[{"type":"\u0074ext","text":"abcdefghij"}]}],`)},
+		{name: "pages at 2^53 - 1", attachment: true, read: true, want: pdf(threadEstimateMax / 3000),
+			record: leReads(`[{"pages":9007199254740991}]`)},
+		{name: "pages at 2^53", attachment: true, record: leReads(`[{"pages":9007199254740992}]`)},
+		{name: "pages of 24 digits", attachment: true, record: leReads(`[{"pages":123456789012345678901234}]`)},
+		{name: "pages twice, the last no count", attachment: true,
+			record: leReads(`[{"pages":3,"pages":9007199254740992}]`)},
+		{name: "pages twice, the last a count", attachment: true, read: true, want: pdf(3),
+			record: leReads(`[{"pages":9007199254740992,"pages":3}]`)},
+		{name: "two reads past the cap", attachment: true, read: true, want: pdf(threadEstimateMax / 3000),
+			record: leReads(`[{"pages":9007199254740991},{"pages":9007199254740991}]`)},
+		{name: "no reads", attachment: true, read: true, record: leReads(`[]`)},
+		{name: "a read that is no object", attachment: true, record: leReads(`[5]`)},
+		{name: "a read's pages that are no count", attachment: true, record: leReads(`[{"pages":1.0}]`)},
+		{name: "a queued command's delivery and rendering", attachment: true, read: true, want: leImageAnd10(2),
+			record: leAttachment(`{"type":"queued_command","taskDelivery":{"result":{"content":[{"type":"image"},`+
+				`{"type":"image"}]}}}`, `"rendered":[{"content":"abcdefghij"}],`)},
+	}...)
+}
+
+// THE ESTIMATE READS EVERY KEY BY ITS DECODED NAME AND LAST OCCURRENCE, IN
+// ANY ORDER, as the harness's JSON.parse reads it, and every length as the
+// harness counts it, in both producers alike: a type written after the keys
+// it reads, escaped or turning; a call's input as written, its blanks and
+// escapes counted, each of its kinds, as a block and nested; a text block
+// past a piece; a result's string element; a text a rule reads that is no
+// string none; a title decoded before it is split; each key written twice, a
+// delivery's snapshot and result in either order; a rendering and a PDF
+// read's pages at their edges. Each figure is 10 (mod 12) units ([leTen]).
+//
+// Mutation: start a nested input without what Next took of it, set it where
+// null, or stop a text block at its first piece, and this fails naming it.
+func TestTheEstimateReadsTheHardCasesAsTheHarness(t *testing.T) {
+	t.Parallel()
+	for _, tc := range leHardCases() {
+		for _, p := range leProducers {
+			l, err := p.read([]byte(tc.record))
+			if err != nil {
+				t.Errorf("%s: %s reads it as %v", tc.name, p.name, err)
+				continue
+			}
+			if tc.attachment {
+				got, read, err := l.AttachmentEstimate()
+				if err != nil || got != tc.want || read != tc.read {
+					t.Errorf("%s: %s estimates it at %+v, read %t (%v); want %+v, read %t", tc.name, p.name, got,
+						read, err, tc.want, tc.read)
+				}
+				continue
+			}
+			if got, err := l.Estimate(); (err != nil) != tc.fault || (!tc.fault && got != tc.want) {
+				t.Errorf("%s: %s estimates it at %+v (%v); want %+v, a fault %t", tc.name, p.name, got, err,
+					tc.want, tc.fault)
+			}
+		}
+	}
+}
+
+// leChain is a message's content of one block whose element lists nest an
+// object at level levels down, the text of 10 units, each level a result's
+// content or a content document's source's, as link says: "content",
+// "source", or "both", alternating from a result.
+func leChain(levels int, link string) string {
+	element := `{"type":"text","text":"abcdefghij"}`
+	for level := levels - 1; level >= 1; level-- {
+		source := link == "source" || link == "both" && level%2 == 0
+		switch {
+		case source:
+			element = `{"type":"document","source":{"type":"content","content":[` + element + `]}}`
+		case level == 1:
+			element = leResult(`[` + element + `]`)
+		default:
+			element = `{"type":"tool_result","content":[` + element + `]}`
+		}
+	}
+	return `[` + element + `]`
+}
+
+// AN ESTIMATE NESTED PAST ITS BOUND DOES NOT READ: an object a rule charges
+// at [estimateNestMax] element lists, through results' contents, through
+// documents' sources or alternating, is charged as the unbounded walk charges
+// it; one list deeper, the estimate is the nesting fault, no figure, in both
+// producers, where the unbounded walk charges it; inside a block that
+// charges its JSON or its text the nesting is no fault and both read alike;
+// and a chain nested as deep as a line is read is read to its end, its
+// estimate the fault.
+//
+// Mutation: bound the walk one level later or earlier, raise no level
+// through a source's content, or charge a past-bound object nothing, and
+// this fails naming the chain.
+func TestAnEstimateNestedPastItsBoundDoesNotRead(t *testing.T) {
+	t.Parallel()
+	for _, link := range []string{"content", "source", "both"} {
+		for _, levels := range []int{estimateNestMax, estimateNestMax + 1} {
+			content := leChain(levels, link)
+			unbounded, err := estimateContent(json.RawMessage(content), 0)
+			if err != nil || unbounded.est != leTen || unbounded.fault.what != "" {
+				t.Fatalf("%s to %d levels: the unbounded walk charges %+v (%v), want %+v", link, levels, unbounded,
+					err, leTen)
+			}
+			for _, p := range leProducers {
+				l, err := p.read([]byte(leUser(content, "")))
+				if err != nil {
+					t.Fatalf("%s to %d levels: %s reads it as %v", link, levels, p.name, err)
+				}
+				got, err := l.Estimate()
+				switch {
+				case levels <= estimateNestMax && (err != nil || got != unbounded.est):
+					t.Errorf("%s to %d levels: %s estimates %+v (%v), want %+v as unbounded", link, levels, p.name,
+						got, err, unbounded.est)
+				case levels > estimateNestMax && (err == nil || !strings.Contains(err.Error(), "nested past")):
+					t.Errorf("%s to %d levels: %s estimates %+v (%v), want the nesting fault", link, levels, p.name,
+						got, err)
+				}
+			}
+		}
+		inner := leChain(estimateNestMax+3, link)
+		for _, block := range []string{`{"type":"mystery","content":` + inner + `}`,
+			`{"type":"text","text":"abcdefghij","content":` + inner + `}`} {
+			whole, err := decodeThreadLine(1, []byte(leBlocks(block)), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, wantErr := whole.Estimate()
+			got, err := leLine(t, leBlocks(block)).Estimate()
+			if wantErr != nil || err != nil || got != want {
+				t.Errorf("%s past the bound inside %.30s: estimated %+v (%v), whole %+v (%v)", link, block, got, err,
+					want, wantErr)
+			}
+		}
+	}
+	// As deep as a line is read: the record, its message and content, then
+	// two containers a level and the text's object.
+	deep := leChain((jsonscan.MaxDepth-2)/2, "content")
+	for _, p := range leProducers {
+		l, err := p.read([]byte(leUser(deep, "")))
+		if err != nil {
+			t.Fatalf("a chain to the depth bound: %s reads it as %v", p.name, err)
+		}
+		if got, err := l.Estimate(); err == nil || !strings.Contains(err.Error(), "nested past") {
+			t.Errorf("a chain to the depth bound: %s estimates %+v (%v), want the nesting fault", p.name, got, err)
+		}
+	}
+}
+
+// A LINE READ UNASKED ANSWERS NO ESTIMATE: a reader that did not ask
+// ([threadReader.Estimating]), or asked and was reset, answers
+// [errNotEstimated] of both accessors, which the next request reads as not
+// read; and its pass counts nothing and reads nothing for the estimate, so
+// an unasked reading never pays for one.
+//
+// Mutation: estimate whatever was asked, or answer an unasked line's
+// estimate as nothing, and this fails.
+func TestALineReadUnaskedAnswersNoEstimate(t *testing.T) {
+	t.Parallel()
+	for _, record := range []string{
+		leDelivered(`{"result":{"content":[{"type":"image"}]}}`),
+		leAttachment(`{"type":"queued_command","taskDelivery":{"result":{"content":[{"type":"image"}]}}}`, leRendered),
+		leReads(`[` + lePDFRead("2") + `]`),
+	} {
+		for _, reset := range []bool{false, true} {
+			r := newThreadReader(strings.NewReader(record+"\n"), threadPlainMax)
+			if reset {
+				r.Estimating()
+				r.Reset(strings.NewReader(record+"\n"), threadPlainMax, threadLinesMax)
+			}
+			l, err := r.Next(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, err := l.Estimate(); !errors.Is(err, errNotEstimated) {
+				t.Errorf("%.60s, reset %t: estimated at %+v (%v), want errNotEstimated", record, reset, got, err)
+			}
+			if got, read, err := l.AttachmentEstimate(); !errors.Is(err, errNotEstimated) {
+				t.Errorf("%.60s, reset %t: its attachment estimated at %+v, read %t (%v), want errNotEstimated",
+					record, reset, got, read, err)
+			}
+			if got, ok := nextCharge(l); ok {
+				t.Errorf("%.60s, reset %t: the next request charges it %+v, want it not read", record, reset, got)
+			}
+			f := l.facts()
+			if r.scan.Units() != 0 || r.dec.images != 0 || r.dec.rendered != (renderedCharge{}) || f.estimating ||
+				f.message.charge != (estimateCharge{}) || f.message.emptyText || f.attachment.pdf != (pdfPages{}) ||
+				f.attachment.images != 0 {
+				t.Errorf("%.60s, reset %t: an unasked pass counted %d units and read images %d, %d, rendered %+v, "+
+					"charge %+v, pages %+v", record, reset, r.scan.Units(), r.dec.images, f.attachment.images,
+					r.dec.rendered, f.message.charge, f.attachment.pdf)
+			}
+		}
+	}
+}
+
+// AN ESTIMATING READER ALLOCATES NOTHING AN ELEMENT: a result of nested
+// elements, a document of a content source of a text block each, read
+// estimating, allocates at four thousand elements within 16 KiB of what it
+// does at one thousand (the fewest of five readings each, so what another
+// goroutine allocates meanwhile counts against neither), so no charge, fault
+// or walk of an element is held past it.
+//
+// Mutation: hold an element's charge in a growing list, or make a fault an
+// error as it is met, and this fails.
+func TestAnEstimatingReaderAllocatesNothingAnElement(t *testing.T) {
+	element := `{"type":"document","source":{"type":"content","content":[{"type":"text","text":"ab"}]},` +
+		`"title":"a.json"}`
+	head := `{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":[` +
+		`{"type":"tool_result","tool_use_id":"toolu_1","content":`
+	tail := `}]},"uuid":"` + ctUUID(1) + `","timestamp":"` + ctStamp + `"}`
+	line := func(n int) []scanPart { return scanLine(scanLit(head), scanList(element, n), scanLit(tail)) }
+	allocated := func(parts []scanPart) uint64 {
+		defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+		fewest := uint64(math.MaxUint64)
+		for range 5 {
+			r := newThreadReader(&scanGenerated{parts: line(1)}, threadPlainMax)
+			r.Estimating()
+			if _, err := r.Next(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			r.Reset(&scanGenerated{parts: parts}, threadPlainMax, threadLinesMax)
+			r.Estimating()
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			l, err := r.Next(t.Context())
+			runtime.ReadMemStats(&after)
+			if got, estErr := l.Estimate(); err != nil || estErr != nil || got.At3 == 0 {
+				t.Fatalf("the line reads as %v, estimated at %+v (%v); want a record and its figure", err, got, estErr)
+			}
+			fewest = min(fewest, after.TotalAlloc-before.TotalAlloc)
+		}
+		return fewest
+	}
+	if few, many := allocated(line(1000)), allocated(line(4000)); many > few+16<<10 {
+		t.Errorf("an estimating reader allocates %d bytes at a thousand elements and %d at four thousand; want "+
+			"no more than 16 KiB more", few, many)
+	}
+}
+
+// scanEstimateLines is records at the estimate's edges, for the differential
+// (claudelinescan_internal_test.go): every case above; chains of element
+// lists to [estimateNestMax] and one past it, alone and inside a block that
+// charges its JSON; and a content refused, alone and after a block charged,
+// beside a delivery's image, whose message estimates nothing.
+func scanEstimateLines() [][]byte {
+	delivery := `"taskDelivery":{"result":{"content":[{"type":"image"}]}},`
+	lines := [][]byte{[]byte(leUser(`5`, delivery)),
+		[]byte(leUser(`[{"type":"text","text":"abcdefghij"},5]`, delivery))}
+	for _, tc := range leMessageCases {
+		lines = append(lines, []byte(tc.record))
+	}
+	for _, tc := range leAttachmentCases {
+		lines = append(lines, []byte(tc.record))
+	}
+	for _, tc := range leHardCases() {
+		lines = append(lines, []byte(tc.record))
+	}
+	for _, link := range []string{"content", "source", "both"} {
+		for _, levels := range []int{estimateNestMax, estimateNestMax + 1} {
+			lines = append(lines, []byte(leUser(leChain(levels, link), "")),
+				[]byte(leBlocks(`{"type":"mystery","content":`+leChain(levels, link)+`}`)))
+		}
+	}
+	return lines
 }

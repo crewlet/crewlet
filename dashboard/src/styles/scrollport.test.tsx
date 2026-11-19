@@ -207,6 +207,7 @@ function captured(root: Element): string[] {
 }
 
 const row = (id: string, over: Partial<WorkSummary> = {}): WorkSummary => ({
+  flow: null,
   id,
   key: "ENG-" + id,
   project: "ENG",

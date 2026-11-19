@@ -74,6 +74,37 @@ type Notice struct {
 	// a kind this build does not raise.
 	Title  string `json:"title,omitempty"`
 	Person string `json:"person,omitempty"`
+	// Finding is the Advisor's finding whose fix ends the notice, nil where
+	// none stands: an alarm no finding carries, or a held conversation.
+	Finding *FindingRef `json:"finding"`
+}
+
+// FindingRef names the finding a notice is ended by, as a row draws it.
+type FindingRef struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	// Fix is the finding's fix in one sentence.
+	Fix string `json:"fix"`
+}
+
+// Listed is a finding the Advisor keeps, with its id.
+type Listed struct {
+	ID      string
+	Finding advisor.Finding
+}
+
+// WithFindings is notices with each one's finding named, where a listed
+// finding has its class and subject.
+func WithFindings(notices []Notice, listed []Listed) []Notice {
+	for i := range notices {
+		for _, l := range listed {
+			if string(l.Finding.Class) == notices[i].Class && l.Finding.Subject == notices[i].Subject {
+				notices[i].Finding = &FindingRef{ID: l.ID, Title: l.Finding.Title, Fix: l.Finding.Fix.Sentence}
+				break
+			}
+		}
+	}
+	return notices
 }
 
 // key is what makes two notices one.

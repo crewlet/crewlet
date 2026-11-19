@@ -4,7 +4,7 @@ import "slices"
 
 // ProtocolVersion is the version of this vocabulary every frame and every
 // request carries. See the package doc for how it moves.
-const ProtocolVersion = 1
+const ProtocolVersion = 2
 
 // The bounds the dashboard holds a person to before anything is sent, so a
 // limit is met where somebody is typing rather than as a refusal after the
@@ -240,21 +240,16 @@ const (
 	// would narrow it, never drawn as though it held the answer (ADR-0061).
 	CardOversize CardKind = "oversize"
 
-	// --- deep work (im-deep) ---
-
-	// CardFile is the files a deep run delivered (ADR-0054).
-	CardFile CardKind = "file"
-
 	// CardBrief is a brief turn's answer ([TurnBrief]): what the page is
 	// about, and the ranked things the person has to do, each row a record
 	// the engine read and resolved for them.
 	CardBrief CardKind = "brief"
 )
 
-// CardKinds are the nine, in declaration order.
+// CardKinds are the eight, in declaration order.
 var CardKinds = []CardKind{
 	CardTable, CardEntity, CardProposal, CardOpenInApp, CardError, CardNotice, CardOversize,
-	CardFile, CardBrief,
+	CardBrief,
 }
 
 // Valid reports whether k is a kind this build knows.
@@ -674,18 +669,41 @@ var BriefActionKinds = []BriefActionKind{BriefOpen, BriefAsk}
 // Valid reports whether k is a kind this build knows.
 func (k BriefActionKind) Valid() bool { return slices.Contains(BriefActionKinds, k) }
 
+// TitleSource is who named a conversation.
+type TitleSource string
+
+const (
+	// TitleByModel is a title the engine wrote: the first question's words,
+	// then the model's summary of them.
+	TitleByModel TitleSource = "model"
+	// TitleByPerson is a title the conversation's owner set.
+	TitleByPerson TitleSource = "person"
+)
+
+// TitleSources are the two, in declaration order.
+var TitleSources = []TitleSource{TitleByModel, TitleByPerson}
+
+// Valid reports whether t is a source this build knows.
+func (t TitleSource) Valid() bool { return slices.Contains(TitleSources, t) }
+
+// TitleMaxRunes is the longest title a person may give a conversation: as much
+// as a history row shows on one line.
+const TitleMaxRunes = 60
+
+// SearchMaxRunes is the longest search a conversation listing takes.
+const SearchMaxRunes = 100
+
 // ViewerReason is why the assistant is not available to the viewer, the
 // first failing condition, so the Ask pill is drawn disabled with a reason
 // rather than hidden.
 type ViewerReason string
 
 const (
-	// ViewerDisabled is a company whose configuration leaves the assistant
-	// off.
-	ViewerDisabled ViewerReason = "disabled"
-	// ViewerNoModel is an enabled assistant whose model chain this node
-	// cannot build.
+	// ViewerNoModel is a company that assigns Ask Crewlet no model.
 	ViewerNoModel ViewerReason = "no_model"
+	// ViewerModelProblem is an assigned model no helper can run on
+	// (internal/config's HelperModelProblem).
+	ViewerModelProblem ViewerReason = "model_problem"
 	// ViewerNotAPerson is a caller that is not a person signed in through
 	// a session: a machine token, a Tier A token's session, a service
 	// account (D04).
@@ -693,10 +711,10 @@ const (
 	// ViewerNoPermission is a person the authority table refuses the
 	// assistant.
 	ViewerNoPermission ViewerReason = "no_permission"
-	// ViewerModelNotReady is a person who may ask, on a chain every model
-	// of which is known unusable right now (signed out, its plan spent, its
-	// harness unable to start), known without a call; the answer's
-	// [ViewerAssistant.Model] says which and what to do. Checked after
+	// ViewerModelNotReady is a person who may ask, on a model known
+	// unusable right now (signed out, its plan spent, its harness unable to
+	// start), known without a call; the answer's [ViewerAssistant.Notice]
+	// says which and what to do. Checked after
 	// every other reason, so only a person the assistant answers learns
 	// the state of its model.
 	ViewerModelNotReady ViewerReason = "model_not_ready"
@@ -704,7 +722,7 @@ const (
 
 // ViewerReasons are the five, in declaration order.
 var ViewerReasons = []ViewerReason{
-	ViewerDisabled, ViewerNoModel, ViewerNotAPerson, ViewerNoPermission, ViewerModelNotReady,
+	ViewerNoModel, ViewerModelProblem, ViewerNotAPerson, ViewerNoPermission, ViewerModelNotReady,
 }
 
 // Valid reports whether r is a reason this build knows.

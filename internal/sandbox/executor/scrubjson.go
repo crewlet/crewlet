@@ -387,7 +387,7 @@ type jsonRewrite struct {
 	// definitions; both nil for a document.
 	defs *definitionsReading
 	cut  *definitionCut
-	// gate is held while a name or a string past [collectionBaseLineBytes] is
+	// gate is held while a name or a string past [scrubPieceBaseBytes] is
 	// scrubbed: an export's, whose text is never one piece of its own.
 	gate pieceGate
 }
@@ -777,7 +777,7 @@ func (j *jsonRewrite) text(key *keyReading, capMax int) error {
 			_, _ = key.Write(j.buf[:read])
 		}
 		// A TEXT PAST THE BASE holds the slot before its redaction holds more.
-		if total += read; !held && j.gate.hold != nil && total > collectionBaseLineBytes {
+		if total += read; !held && j.gate.hold != nil && total > scrubPieceBaseBytes {
 			if err := j.gate.hold(); err != nil {
 				return err
 			}

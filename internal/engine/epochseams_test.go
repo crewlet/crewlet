@@ -153,6 +153,8 @@ var classified = map[string]struct {
 		"values from the asking node, which has already judged the fleet's revision"},
 	"estate.Backend.Atlas": {seamNone, "the atlas log's reader, over the copy's rows and its " +
 		"log, which reads no revision"},
+	"estate.Backend.Advisor": {seamNone, "the advisor log's reader and writer, over the copy's rows " +
+		"and its log, which read no revision"},
 	"estate.Backend.Reached": {seamNone, "the applier's position"},
 	"estate.Backend.Answers": {seamNone, "the copy's distance from its log"},
 	"estate.Backend.Admits":  {seamNone, "the copy's establishment, for a seat's admission"},

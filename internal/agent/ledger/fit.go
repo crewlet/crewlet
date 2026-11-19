@@ -26,30 +26,12 @@ const (
 //
 // # A ledger never cuts a payload; it asks for it to be fitted
 //
-// This package used to trim each of these itself — an argument to its first
-// two hundred runes, a failed call's error document likewise, a round's
-// output to its last four thousand — and the trimmed text was what the next
-// round acted on. A message body cut at two hundred runes is not a shorter
-// account of the message; it is its greeting. An error document cut there is
-// its HTTP preamble without the line naming the missing scope.
-//
-// So a render now NAMES the pieces that exceed their budget, the caller has
-// each one REWRITTEN to fit by the seat's auxiliary model
-// ([github.com/crewlet/crewlet/internal/compact]), and hands the rewrites back
-// as [Fitted]. The package still holds no model and imports nothing that
-// could reach one, because the rewriting is the caller's — this only says what
-// needs it.
-//
-// A PIECE THE CALLER DID NOT FIT RENDERS WHOLE. That is the default because
-// it is the only one that cannot lie: a missing rewrite costs prompt weight,
-// where a fallback cut would reinstate exactly the defect above. A caller
-// that cannot have a payload rewritten and must not carry it whole says so in
-// the text it hands back — see ledgerfit — rather than this package guessing.
-//
-// Limit is BYTES, the unit a rewrite is held to; a text within it is within
-// the same number of runes. Whether a payload NEEDS fitting is judged in
-// runes, so an identifier in a script with multi-byte characters — a channel
-// name, a page title — is never handed to a model to be paraphrased.
+// A cut payload is not a shorter account (a body cut short is its greeting, an
+// error its preamble without the missing scope), so a render names pieces over
+// budget and the caller has the auxiliary model (internal/compact) rewrite them into
+// [Fitted]. An unfitted piece renders whole: a fallback cut would reinstate the
+// defect. Limit is BYTES; whether a payload needs fitting is judged in runes,
+// so a multi-byte identifier is never paraphrased.
 type Piece struct {
 	Kind  PieceKind
 	Text  string
@@ -107,23 +89,16 @@ func valuePiece(value any, limit int) (Piece, bool) {
 }
 
 // ShowsWhole reports whether a call's line rendered under opts shows the
-// argument value as itself, rather than as a piece its caller fits: in place
-// of a fitted piece the line shows the caller's rewrite, or the value omitted
-// by its size and digest ([github.com/crewlet/crewlet/internal/agent/ledger/ledgerfit]),
-// and neither is the value.
+// argument value as itself, not a fitted rewrite or an omission by size and
+// digest (ledgerfit), neither of which is the value.
 //
-// IT IS THE RENDER'S OWN TEST, [valuePiece]'s answer, never a second rule
-// beside it: where its caller fits every piece [CallPieces] names, as
-// ledgerfit.Fit does, a value is shown whole exactly where [renderArgs]
-// carries it as itself, judged in runes as the budget is, and by the line's
-// own JSON for a value that is not a string. (A piece its caller leaves
-// unfitted renders whole, [Fitted], while this answers false: the safe side
-// for a caller that reads false as a value that may equal anything.) So a
-// caller that asks what a model reading the line can compare with a call it
-// holds, taking a value the line does not show whole for one that may equal
-// anything, asks the render, and the two never part: were it a rule of its
-// own and stricter, a value the line shows would be taken for one that may
-// equal anything; were it looser, a rewrite would be compared as the value.
+// It is [valuePiece]'s answer, never a second rule: where the caller fits every
+// piece [CallPieces] names (as ledgerfit.Fit does), a value is shown whole
+// exactly where [renderArgs] carries it as itself, judged in runes and, for a
+// non-string, by the line's own JSON. An unfitted piece renders whole
+// ([Fitted]) while this answers false, the safe side for a caller reading false
+// as "may equal anything". A stricter rule would take a shown value for
+// anything; a looser one would compare a rewrite as the value.
 func ShowsWhole(value any, opts FormatOptions) bool {
 	_, piece := valuePiece(value, opts.ValueLimit)
 	return !piece

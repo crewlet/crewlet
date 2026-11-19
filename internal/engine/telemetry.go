@@ -914,8 +914,9 @@ func (e *Engine) describeResume(ctx context.Context, company *Company, in resume
 	if len(in.Account.Pushed) > 0 {
 		t.written.Commit(types.CommittedCode)
 	}
-	// AND WHAT ITS CALLS COMMITTED, off its call log: they were made after
-	// the park recorded the set above, so the outcome is settled here.
+	// AND WHAT THE TURN'S CALLS COMMITTED, off the round's log, which holds the
+	// turn's so far: the round's were made after the park recorded the set
+	// above, so the outcome is settled here, a union with it.
 	for _, c := range in.Bridged.Changes() {
 		t.written.Commit(types.CommittedChange(c))
 	}

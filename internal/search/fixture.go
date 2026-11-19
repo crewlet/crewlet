@@ -5,48 +5,27 @@ import (
 	"math/rand/v2"
 )
 
-// The seeded corpus the deterministic gate runs against.
-//
-// # Why a generator and not a committed corpus
-//
-// Five thousand real vectors at the shipped width is 61 MB of opaque floats,
-// permanent in the history of a public repository — 300× the largest file of
-// any kind this tree holds. An environment-gated arm reading a real corpus is
-// worse: the one gate that catches a silent quality regression must not be
-// the one that silently does not run.
-//
-// And the engine's own fake embedder cannot be the corpus either, for a
-// measured reason rather than an aesthetic one: every component it produces
-// is non-negative, so sign-quantizing it yields a set-membership indicator
-// rather than an embedding code. A gate built on it would compare a lexical
-// first stage against a lexical ground truth, agree with itself, and be
-// incapable of failing for the reason the gate exists.
+// The seeded corpus the deterministic gate runs against, generated rather than
+// committed: five thousand real vectors at the shipped width are 61 MB of opaque
+// floats, permanent in a public repository's history, and an environment-gated
+// arm reading one is the gate that silently does not run. The engine's fake
+// embedder cannot be the corpus either: its components are all non-negative, so
+// sign-quantizing it yields a set-membership indicator rather than an embedding
+// code, and the gate would compare a lexical first stage with a lexical ground
+// truth and be incapable of failing.
 
 // FixtureMeanPairCos is the mean pairwise cosine of the seeded corpus.
 //
-// # Provenance, at the definition, because a commit message is not where it
-// goes
+// Provenance: model text-embedding-3-large, width 3072 (native), a company's
+// Doclet pages and Worklet work items, 5 000 sampled sources, fitted 2026-09
+// with `crewlet search eval --fit`.
 //
-//	model:     text-embedding-3-large
-//	width:     3072 (the model's native dimension)
-//	corpus:    a company's Doclet pages and Worklet work items
-//	documents: 5 000 sampled sources
-//	fitted:    2026-09
-//	how:       crewlet search eval --fit
-//
-// # Why this constant decides a floor rather than describing one
-//
-// A shared mean component is a PER-COORDINATE DITHER on a threshold that
-// would otherwise be zero, so an off-centre corpus is the direction that
-// makes a sign code EASIER, not harder. At a fixed spectrum, recall at the
-// shipped oversample rises 0.6360 → 0.8280 → 0.9440 → 0.9832 as this number
-// rises 0 → 0.10 → 0.25 → 0.50. A generator whose mean silently drifted would
-// therefore move the gate's own floor by a third of its range while every
-// assertion still passed.
-//
-// It is also why the corpus mean is NEVER subtracted before quantizing, which
-// some engines do: centring deletes exactly that dither and costs 0.36 of
-// recall on a corpus with a real mean component. That is not to be revisited.
+// It decides the gate's floor: a shared mean is a PER-COORDINATE DITHER on a
+// threshold that would be zero, so an off-centre corpus makes a sign code
+// EASIER (recall 0.6360 → 0.9832 as this rises 0 → 0.50), and a drifting mean
+// would move the floor by a third of its range with every assertion passing.
+// For the same reason the corpus mean is NEVER subtracted before quantizing:
+// centring deletes that dither and costs 0.36 of recall. Not to be revisited.
 const FixtureMeanPairCos = 0.50
 
 // FixtureWidth is the shipped model's native dimension, which the fixture
@@ -54,36 +33,25 @@ const FixtureMeanPairCos = 0.50
 // distribution.
 const FixtureWidth = 3072
 
-// The spectrum, and it is CHOSEN to put the fixture in the regime the recall
-// floors describe rather than in the easiest one the generator can reach.
+// The spectrum is CHOSEN to put the fixture in the regime the recall floors
+// describe, not the easiest one: a rank-32 corpus with a steep decay measures
+// recall 1.0000 at every gate size, making the floors unreachable and the
+// miss-rank assertion vacuous. These values were swept against measured recall
+// at twenty thousand rows.
 //
-// A rank-32 corpus with a steep decay measures recall 1.0000 at every gate
-// size, which makes the declared floors unreachable and the miss-rank
-// assertion vacuous — a fixture that cannot fail is worse than no fixture.
-// These values were swept against measured recall at twenty thousand rows:
-// they land the curve where the floors were declared against, so the gate has
-// something to bind on and a regression has somewhere to show.
-//
-// CONSTANTS, and never variables a test may set: every fixture constructor
-// reads them, those constructors run in parallel tests across the package,
-// and a setter writing package state under them would race every one.
+// CONSTANTS, never variables a test may set: every fixture constructor reads
+// them and they run in parallel tests, so a setter would race every one.
 const (
 	// fixtureRank is how many directions carry the corpus's structure.
 	//
-	// Real embedding spectra are heavy-tailed — most of the variance lives
-	// in a few dozen directions — and that anisotropy is exactly what a sign
-	// code exploits. Generating it as a handful of shared directions with
-	// power-law weights reproduces the property the gate is sensitive to,
-	// and does it in a form where a document's exact similarity is a dot
-	// product over THIRTY-TWO coefficients rather than over three thousand:
-	// the ground-truth scan the gate needs a hundred times becomes
-	// affordable, and the corpus fits in memory beside the race detector.
-	//
-	// Thirty-two rather than more because the gate's cost is linear in it
-	// and the recall it produces is already inside the band real corpora
-	// occupy; more directions make the corpus more isotropic, which is the
-	// direction that makes a sign code WORSE and would understate the floor
-	// further.
+	// Real embedding variance lives in a few dozen directions, which a sign
+	// code exploits; a handful of shared directions with power-law weights
+	// reproduces that, and makes a document's exact similarity a dot product
+	// over THIRTY-TWO coefficients rather than three thousand, so the ground
+	// truth scan the gate needs a hundred times is affordable beside the race
+	// detector. Not more: cost is linear in it, recall is already inside the
+	// real band, and more directions are more isotropic, which makes a sign
+	// code WORSE and understates the floor.
 	fixtureRank = 32
 
 	// fixtureAlpha is the power law the directions' weights decay by:
@@ -144,18 +112,13 @@ func NewFixture(n int, seed uint64) *Fixture {
 // family: the same basis, spectrum and fitted mean, with every document drawn
 // around one of [FixtureTopics] topic centres.
 //
-// # Why the family needs a topical member now
-//
-// The isotropic member has no structure a k-means could find — it is one
-// continuous cloud — so an inverted file over it is a partition of a cloud
-// along arbitrary boundaries, and meeting the floor takes half the lists. A
-// company's corpus is not that: its documents cluster by project, by wiki
-// space and by what they are about. A gate that measured the index only on the
-// isotropic member would certify an index that is never worth installing; one
-// that measured it only here would certify recall on a corpus friendlier than
-// the worst one it must survive. So [ADR-0028]'s gate runs both, and the
-// training's own measurement is what decides, for each corpus, which one a
-// company's corpus resembles.
+// The isotropic member is one continuous cloud, so an inverted file over it
+// partitions arbitrarily and meeting the floor takes half the lists, while a
+// company's documents cluster by project, space and subject. Measured only on
+// the isotropic member the gate would certify an index never worth installing;
+// only here, recall on a friendlier corpus than the worst it must survive. So
+// [ADR-0028]'s gate runs both, and the training's own measurement decides which
+// a company's corpus resembles.
 func NewTopicalFixture(n int, seed uint64) *Fixture {
 	basis := newBasis()
 	return newFixture(n, seed, basis, topicalGenerator(basis.weights))
@@ -266,20 +229,13 @@ func topicalGenerator(weights []float32) generator {
 // basis is the corpus's shared structure: a set of directions with power-law
 // weights, plus the axis the mean rides.
 //
-// # The directions are SPARSE AND OVERLAPPING, and that is a cost decision
-// with a correctness argument
-//
-// A dense basis costs rank × width multiplications per document, which at the
-// rank this fixture needs is forty-seven billion operations for the gate's
-// middle corpus — minutes on every pull request. Sparse directions cost rank ×
-// support instead, independent of the width.
-//
-// DISJOINT supports would be the obvious sparse choice and are wrong: with
-// each coordinate touched by exactly one direction, the sign of a coordinate
-// is the sign of one coefficient, so the whole code carries `rank` bits
-// replicated — a sign code over it is measuring the rank rather than the
-// geometry. Overlapping supports keep every coordinate a sum of a dozen or so
-// coefficients, which is the mixing a random rotation would give.
+// The directions are SPARSE AND OVERLAPPING. A dense basis costs rank × width
+// multiplications a document, forty-seven billion for the gate's middle corpus;
+// sparse costs rank × support, independent of width. DISJOINT supports are the
+// wrong sparse choice: each coordinate would be the sign of one coefficient, so
+// the code would carry `rank` bits replicated and a sign code over it would
+// measure the rank, not the geometry. Overlapping supports keep every
+// coordinate a sum of a dozen or so coefficients, as a random rotation would.
 type basis struct {
 	weights []float32
 	support [][]int32
@@ -338,49 +294,18 @@ const composeBlock = maxStackVarBytes / (FixtureWidth * 4)
 // MaxStackVarSize for a variable a function declares.
 const maxStackVarBytes = 128 << 10
 
-// composeInto composes each coefficient set in block — at most [composeBlock]
-// of them — into the full-width vector it produces, and writes that vector's
-// sign code to codes[j] and, where vectors is not nil, the vector itself to
-// vectors[j]: what TestABlockComposesExactlyWhatOneDocumentAtATimeDoes holds
-// to [basis.vector]'s, to the bit.
+// composeInto composes each coefficient set in block (at most [composeBlock])
+// into its full-width vector and writes its sign code to codes[j] and, where
+// vectors is not nil, the vector to vectors[j]. Held to [basis.vector]'s, to
+// the bit, by TestABlockComposesExactlyWhatOneDocumentAtATimeDoes.
 //
-// # Why the accumulators are local arrays, and what that buys
-//
-// A document is a sum of thirty-two sparse directions and the mean's: about
-// twenty-five thousand scattered `+=` into a width-3 072 vector. Into a heap
-// slice, every one of those is a read and a write the race detector
-// instruments — four calls into it per addition, a hundred thousand per
-// document — and measured, that was most of this package's wall clock under
-// `make test`: the 120 000-row gate corpus took about two minutes to generate
-// under `-race` against six seconds without it. The detector never instruments
-// a function's own stack, which no other goroutine can reach, so the sums are
-// accumulated in an array this function declares, and the instrumented
-// accesses left are the basis's own reads — made once for a whole block of
-// documents rather than once a document — and the sign code's reads of each
-// finished vector. Measured on one machine: 116 s to 15 s for that corpus
-// under `-race`, and 5.3 s to 6.0 s without it — the price of a block's
-// bookkeeping where the instrumentation it saves is absent.
-//
-// The accumulator is held COORDINATE-MAJOR — a coordinate's partial sums for
-// the whole block side by side — because a basis entry then touches one cache
-// line rather than one per document: document-major, the same block measured
-// half as slow again as one document at a time without the detector.
-//
-// # And why the codes are BIT-IDENTICAL to one document at a time
-//
-// Every coordinate of every document receives its contributions in the order
-// the one-document loop, [basis.vector], adds them — direction by direction,
-// each along its support, the mean last — because the documents are the
-// INNERMOST loop: a block changes which document's coordinate is written next
-// and never the order of the float32 additions into any one of them.
-//
-// A ZERO COEFFICIENT, which that loop skips, is added here as the zero
-// product it is, and that cannot move a bit either: an accumulator starts at
-// +0 and is never −0, since a sum is −0 only when both of its terms are and
-// +0 + −0 is +0; and adding either zero to +0 or to any finite non-zero sum
-// leaves it exactly as it was. So every corpus, every code and every recall
-// figure this package's comments quote is unchanged
-// (TestABlockComposesExactlyWhatOneDocumentAtATimeDoes).
+// The accumulators are local arrays: the race detector never instruments a
+// function's own stack, while the ~25 000 `+=` a document costs on a heap
+// slice made the 120 000-row corpus take 116 s under `-race` (15 s now). The
+// accumulator is COORDINATE-MAJOR so a basis entry touches one cache line.
+// Codes are BIT-IDENTICAL to one document at a time: documents are the
+// INNERMOST loop, so each coordinate takes its additions in [basis.vector]'s
+// order, and a zero coefficient it adds rather than skips cannot move a bit.
 func (b *basis) composeInto(block [][]float32, codes [][]uint64, vectors [][]float32) {
 	if len(block) > composeBlock {
 		panic("search: a fixture block larger than its accumulator")
@@ -440,19 +365,15 @@ func (b *basis) composeInto(block [][]float32, codes [][]uint64, vectors [][]flo
 }
 
 // vector is the full-width vector one coefficient set produces: THE
-// ONE-DOCUMENT LOOP, which every recall figure this package's comments quote
-// was measured on — each direction in turn along its support, the mean last,
-// a zero coefficient skipped — and which [basis.composeInto] reproduces to the
-// bit for a block.
+// ONE-DOCUMENT LOOP every recall figure quoted in this package was measured
+// on (each direction along its support, the mean last, a zero coefficient
+// skipped), which [basis.composeInto] reproduces to the bit for a block.
 //
-// ONE DOCUMENT IS NOT A BLOCK OF ONE. A block's accumulator is ten lanes and a
-// 120 KiB frame however few of them hold a document, so one document composed
-// as a block pays for ten: measured without the race detector, 236–256 µs a
-// call against 23–26 µs for this loop. Under the detector the block is the
-// cheaper, its sums uninstrumented — 0.56–0.60 ms against 0.81–0.96 ms — but
-// one document at a time is a query, composed a few hundred times a run,
-// where a benchmark writing a corpus's vectors into a store composes one for
-// every document it writes, and never under the detector.
+// ONE DOCUMENT IS NOT A BLOCK OF ONE: a block's accumulator is ten lanes and a
+// 120 KiB frame however few hold a document, so composed as a block it costs
+// ten (236–256 µs against 23–26 µs). Under the detector the block is cheaper,
+// but a query composes one document at a time, and a benchmark writing vectors
+// to a store never runs under the detector.
 func (b *basis) vector(coefficients []float32) []float32 {
 	vector := make([]float32, FixtureWidth)
 	for k, c := range coefficients[:len(b.support)] {
@@ -531,25 +452,14 @@ const fixtureSeed = 1
 // solveMeanWeight finds the shared component that makes the corpus's mean
 // pairwise cosine the fitted constant.
 //
-// # Why it is SOLVED rather than computed in closed form
-//
-// The closed form — |mean|² / (|mean|² + noise power) — is the ratio of
-// expectations, and the quantity that matters is the expectation of the
-// ratio: every document is normalised by its OWN norm, whose noise power is
-// chi-squared over the corpus's rank, so Jensen's inequality puts the
-// achieved cosine several points above the formula's answer. Measured: the
-// closed form asked for 0.50 and the corpus produced 0.53.
-//
-// Three points of mean pairwise cosine is not a rounding error here. Recall
-// at the shipped oversample moves by a third of its range across the span
-// this number covers, so a constant that is three points out is a floor that
-// is silently somewhere else — which is exactly what asserting the constant
-// back inside the test exists to catch, and what this solve makes it able to
-// assert tightly rather than within a band nobody chose.
-//
-// A bisection over a probe corpus, which is monotone in the weight and costs
-// one pass over two thousand documents' coefficients — no full-width vectors,
-// so it is a fraction of one percent of generating the corpus itself.
+// SOLVED, not closed-form: |mean|² / (|mean|² + noise power) is the ratio of
+// expectations, but each document is normalised by its OWN chi-squared norm, so
+// by Jensen's inequality the achieved cosine lands several points above it (0.53
+// for 0.50 asked). Three points matter: recall moves a third of its range across
+// this number, so the floor would silently be elsewhere, and the solve lets the
+// test assert the constant tightly. A bisection over a probe corpus, monotone in
+// the weight, one pass over two thousand documents' coefficients, no full-width
+// vectors.
 func solveMeanWeight(gen generator) float32 {
 	noisePower := 0.0
 	for _, w := range gen.weights {

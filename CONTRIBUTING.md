@@ -1130,9 +1130,18 @@ deletes nothing itself.
 - **Comments explain WHY, briefly**: the decision, and why an obvious
   alternative is wrong, within 12 lines outside a package doc. The argument
   behind it is written once, in the package doc (or an ADR when it binds
-  more than one package), and the comment points there.
-  `internal/commentgate` holds the bound, with an inventory of older code
+  more than one package), and the comment points there. A package doc
+  holds the package's decisions within 20 KB.
+  `internal/commentgate` holds both bounds, with an inventory of older code
   that only shrinks.
+- **A flag or number a client receives is sent at zero too**: `omitempty` or
+  `omitzero` drops a false or a 0, and the dashboard cannot tell it from a
+  key nobody sent. Drop the option and declare the dashboard's member
+  required, or, where a missing key and the zero are one value to every
+  reader, say why after the field:
+  `//wiregate:absent-is-false <reason>` (`absent-is-zero` on a number).
+  `internal/wiregate` holds it, and the dashboard's wire types to declaring
+  each as it is sent, with an inventory of older code that only shrinks.
 - **A field holding words somebody else wrote is declared on the field**, as a
   credential's `secret:"true"` is: a read type tags it `untrusted:"fence"`
   (words at length: a body, a comment, a message, an excerpt) or

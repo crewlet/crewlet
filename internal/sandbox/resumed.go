@@ -21,11 +21,12 @@ import "slices"
 type CountMark string
 
 const (
-	// CountUnread is a thread not read whole: no session or no file for its id,
-	// a job not over, no main thread or no regular file, an archive member named
-	// absolutely, with `..` or twice, a line the line layer refuses, a thread or
-	// line past its bound, a read or look error, the wait spent, no chained
-	// line, a newest restart whose uuid does not read, or a runner reading none.
+	// CountUnread is a thread not read whole: no session or no file for its
+	// id, a job not over, no main thread or no regular file, an archive member
+	// named absolutely, with `..` or twice, a line the line layer refuses, a
+	// thread past its bound or a line past the layer's bounds, a read or look
+	// error, the wait spent, no chained line, a newest restart whose uuid does
+	// not read, or a runner reading none.
 	CountUnread CountMark = "unread"
 	// CountRelease is a thread from a Claude Code release the count's rules were
 	// not read in: none named, or one below internal/sandbox/executor's

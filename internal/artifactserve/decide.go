@@ -19,26 +19,14 @@ import (
 // still read the artifact, and whether the version is still kept, decided from
 // rows this node can vouch for or not at all.
 //
-// # A document is decided on every request
+// A DOCUMENT IS DECIDED ON EVERY REQUEST, never from a remembered verdict: the
+// principal is re-composed from the identity rows, the artifact re-read through
+// the estate router under a staleness bound, the authority table asked again.
+// That is revocation's whole latency; a copy that cannot say it has applied a
+// withdrawal (halted, past the bound, cut off) answers 503, never serves.
 //
-// A document request never reads a remembered verdict: it re-composes the
-// principal from the identity rows, re-reads the artifact through the estate
-// router under a staleness bound, and asks the authority table again. That is
-// the whole of revocation's latency for a page: a share withdrawn, a session
-// signed out, a person suspended, an artifact trashed or moved to another
-// owner stops the next document request, on every node, as soon as that
-// node's copy has applied it, and a copy that cannot say it has (out of
-// service, past the bound, cut off from the broker) answers 503 rather than
-// serve from rows that may still hold the share.
-//
-// # A subresource may ride the document's verdict, for thirty seconds
-//
-// The files a document loads are useless without it, and there are dozens of
-// them per page, so each decision is remembered under the ticket for
-// [artifacts.SubresourceVerdictAge], and every artifact movement this node's
-// applier reports (a share, a trash, a transfer, a purge, a new asset)
-// forgets the artifact's verdicts at once. A document request decides again
-// whatever is remembered, and remembers the new decision.
+// A SUBRESOURCE MAY RIDE THE DOCUMENT'S VERDICT for
+// [artifacts.SubresourceVerdictAge]; an artifact movement forgets its verdicts.
 
 // retryUnavailable is the Retry-After a 503 carries where the cause names no
 // hint of its own: an apply loop's scale, which is what a stale or briefly
@@ -222,18 +210,15 @@ func (v *verdicts) forget(ids []artifacts.ID, all bool) {
 
 // ArtifactsMoved is what this node hears an artifacts applier say after a
 // committed batch (internal/engine's OnArtifactsMoved): its own while its copy
-// serves, and a sound peer's, relayed, while it does not — so a share withdrawn
-// on the fleet is forgotten here even when this node's applier is halted.
-// Every verdict about an artifact that moved is forgotten, and a reset — which
-// every switch between the two sources is — forgets everything.
+// serves, a sound peer's, relayed, while it does not, so a share withdrawn on
+// the fleet is forgotten here even with this node's applier halted. Every
+// verdict about a moved artifact goes, and a reset forgets everything.
 //
 // ANY MOVEMENT, NOT ONLY A NARROWING: a new asset changes what an asset route
-// may answer, and telling a narrowing from a widening here would be a second
-// reading of what the applier already decided. Over-forgetting costs one
-// decision; under-forgetting is a revoked share served for thirty seconds.
-//
-// IT NEVER BLOCKS: it runs on the apply loop's own goroutine, and takes one
-// mutex for a map deletion.
+// may answer, and telling narrowing from widening would re-read what the
+// applier decided. Over-forgetting costs one decision; under-forgetting is a
+// revoked share served for thirty seconds. IT NEVER BLOCKS: it runs on the
+// apply loop's goroutine and takes one mutex for a map deletion.
 func (h *Handler) ArtifactsMoved(moved []artifactsdomain.Moved) {
 	var ids []artifacts.ID
 	for _, m := range moved {
@@ -331,22 +316,13 @@ func (h *Handler) decide(ctx context.Context, c artifacts.TicketClaims, key stri
 //
 // # The order is the contract
 //
-// THE CREDENTIAL FIRST: a ticket whose credential ended is refused before a
-// single artifact row is read, and one whose credential now acts as another
-// record (a person moved to another seat) is refused too, since the ticket
-// was minted for the record it no longer is.
-//
-// THEN THE ARTIFACT, through the router under the staleness bound: gone,
-// purged or trashed is refused; a copy older than the ticket itself (its
-// access epoch below the one the ticket was minted at) has not applied what
-// the minting node had, so it answers 503 rather than decide from rows that
-// may predate a narrowing.
-//
-// THEN THE AUTHORITY TABLE, `get_artifact` for the re-composed principal over
-// the rows just read: owner, shares, units through the chart, the lead arm,
-// and the admin path. An unknown is a 503, never a refusal.
-//
-// LAST THE VERSION: one past retention is gone, whatever the share says.
+// THE CREDENTIAL FIRST: one that ended, or now acts as another record (a person
+// moved seat), is refused before any artifact row is read. THEN THE ARTIFACT,
+// through the router under the staleness bound: gone, purged or trashed is
+// refused; a copy older than the ticket (access epoch below its minting)
+// answers 503 rather than decide from rows that may predate a narrowing. THEN
+// THE AUTHORITY TABLE (`get_artifact`) over the rows just read; an unknown is
+// a 503, never a refusal. LAST THE VERSION: one past retention is gone.
 func (h *Handler) decideRows(ctx context.Context, c artifacts.TicketClaims) (
 	verdict, artifactsdomain.Version, *refusal) {
 

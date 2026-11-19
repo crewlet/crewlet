@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/named"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/routing"
@@ -200,17 +201,18 @@ func inboundOf(record MutationRecord, payload any, recordID string, c Concern) n
 		meta[notify.BodySourceField] = string(source)
 		meta[notify.BodyAuthorField] = r.Actor
 	}
-	subject := r.ChangeRef
+	subject := named.Words("").Name(named.Ref{Kind: named.Change, ID: r.ChangeRef, Text: r.ChangeRef})
 	if r.Title != "" {
-		subject += ": " + r.Title
+		subject = subject.Words(": " + r.Title)
 	}
 	return notify.Inbound{
-		Source:    Source,
-		EventType: string(record.Op),
-		Sender:    r.Actor,
-		Subject:   subject,
-		Body:      body,
-		Metadata:  meta,
+		Source:      Source,
+		EventType:   string(record.Op),
+		Sender:      r.Actor,
+		Subject:     subject.Text,
+		SubjectRefs: subject.Refs,
+		Body:        body,
+		Metadata:    meta,
 		// By the routing's actor, never the record's, which is the deciding
 		// node for every code record ([writerOf]).
 		Writer: writerOf(record.Op, r),

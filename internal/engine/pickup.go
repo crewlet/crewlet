@@ -212,6 +212,18 @@ func (h pickupHolder) Conditions(ctx context.Context, seat pickup.Seat) pickup.C
 	return c
 }
 
+// LaneWaiting reads whether a delivery waits on the seat's priority lane, from
+// the count the idle check reads: a display, which decides only whether to
+// derive a lane pickup now.
+func (h pickupHolder) LaneWaiting(ctx context.Context, seat pickup.Seat) (bool, error) {
+	waiting, err := h.e.backends.Queue.Waiting(ctx, topics.AgentInbox(seat.ID),
+		topics.AgentInboxGroup(seat.ID))
+	if err != nil {
+		return false, err
+	}
+	return waiting.Priority > 0, nil
+}
+
 // settleParkedRuns judges the parked runs of every held seat with a question
 // open, settling those no build will resume.
 func (e *Engine) settleParkedRuns(ctx context.Context) {

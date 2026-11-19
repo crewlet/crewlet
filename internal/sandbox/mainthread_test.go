@@ -245,8 +245,8 @@ func TestTheMainThreadIsReadBeforeTheTakeWithinItsWait(t *testing.T) {
 // share, as does a Claude Code stop's or loss's whose copy holds a hook's
 // serve, and such a read the verdict's reason and a row's crossing too. A
 // capped host may record the cap ending a job, so it is held with both, each
-// against a run naming no harness. The docs' figures are held: 20 s more than
-// a read of no thread, about 4,720 s uncapped and 5,994 s capped, composed.
+// against a run naming no harness. The docs' figures are held: 36 s more than
+// a read of no thread, about 4,736 s uncapped and 6,010 s capped, composed.
 //
 // Mutation: add the wait to every read, none, or a Claude Code collection
 // alone, ask a run naming no harness, drop the wait or the cap's record, change
@@ -279,8 +279,8 @@ func TestTheBoxReadBudgetHoldsTheMainThreadRead(t *testing.T) {
 		}
 	}
 	for _, run := range []PendingRun{claude, open} {
-		if got := BoxReadBudget(run, BoxReadCollect) - BoxReadBudget(PendingRun{}, BoxReadCollect); got != 20*time.Second {
-			t.Errorf("an uncapped %s collection waits %v more than one that reads no thread, want 20s",
+		if got := BoxReadBudget(run, BoxReadCollect) - BoxReadBudget(PendingRun{}, BoxReadCollect); got != 36*time.Second {
+			t.Errorf("an uncapped %s collection waits %v more than one that reads no thread, want 36s",
 				run.Harness, got)
 		}
 	}

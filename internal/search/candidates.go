@@ -2,23 +2,14 @@ package search
 
 // WHAT A CORPUS ANSWERS BEFORE ITS HITS ARE READ BACK.
 //
-// # Why a caller is handed the candidates rather than a cut list
-//
-// A fused answer is an ORDER, and a caller does not show every key in it: the
-// index is behind the rows by design, so a key may name a document removed
-// since it was indexed, and a knowledge search never shows a page of the
-// tool-skills container. A list cut to the caller's limit FIRST and filtered
-// after is a short list whenever the leaders included such a key — a company
-// with many skills is handed a fraction of what it asked for. So a search
-// answers its CANDIDATES — each method's top-[FuseN], WITH SCORES — and the
-// caller walks the fused order ([Candidates.Fused]) past what it cannot show
-// until its limit is filled: a hidden or removed document costs the answer
-// that document and never a place.
-//
-// The order is the one the fan-out fused the corpus by ([fuseSlices]): each
-// method merged by score across the answering slices, then reciprocal rank
-// fusion once over the two lists — so the candidates a caller walks and the
-// hits the fan-out itself answers are one ranking.
+// A caller gets the candidates, not a cut list: the index is behind the rows,
+// so a key may name a document removed since, and a knowledge search never
+// shows the tool-skills container. A list cut to the limit FIRST comes up short
+// whenever the leaders held such a key. So a search answers its CANDIDATES
+// (each method's top-[FuseN], WITH SCORES) and the caller walks
+// [Candidates.Fused] past what it cannot show: a hidden document costs that
+// document, never a place. The order is the fan-out's ([fuseSlices]): methods
+// merged by score across slices, then reciprocal rank fusion once.
 
 // Candidates is one corpus's answer to a query before its hits are read back:
 // each method's top-[FuseN], best first, with scores.

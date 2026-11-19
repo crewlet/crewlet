@@ -33,24 +33,15 @@ const defaultFetchWait = time.Second
 // drainWait is the fetch window used when collecting the tail of a batch that
 // is already locally available.
 //
-// LOAD-BEARING at the shipped default. With `notification_coalesce_window_seconds`
-// at 0 the linger deadline has already passed by the first tail fetch, so this
-// single window IS the whole busy-case coalescing mechanism: everything that
-// piled up while the previous handler ran has to come back inside it, or it
-// waits for the next drain and the seat runs a second turn.
+// Load-bearing at the shipped default: with `notification_coalesce_window_seconds`
+// at 0 the linger deadline has passed by the first tail fetch, so this window is
+// the whole busy-case coalescing mechanism; what piled up while the previous
+// handler ran must come back inside it, or the seat runs a second turn.
 //
-// 50 ms because that is what the fetch is for — collecting what the server has
-// ALREADY got, not waiting for arrivals — and it is two orders of magnitude
-// above a round trip to a broker in the same process or the same datacentre,
-// which is where this one is (embedded by default, an in-cluster NATS
-// otherwise). It is not a latency budget for a distant broker: a deployment
-// whose broker is far enough away for 50 ms to truncate a backlog should raise
-// the linger window, which is the knob for exactly that and is measured
-// against the ack budget rather than guessed at here.
-//
-// Never longer than the idle poll: an operator who shortened FetchWait wanted
-// a more responsive consumer, and a tail fetch that outlasted the poll would
-// take that back on every drain.
+// 50 ms because the fetch collects what the server already has, two orders of
+// magnitude above a round trip to a same-process or same-datacentre broker. A
+// far broker whose backlog it truncates should raise the linger window.
+// Never longer than the idle poll, which an operator shortened for responsiveness.
 const drainWait = 50 * time.Millisecond
 
 // drainFetchWait is the tail window this queue actually uses.
@@ -66,30 +57,14 @@ const defaultNakDelay = time.Second
 
 // defaultNakCeiling caps the doubling that follows.
 //
-// FLAT SPACING SPENT THE WHOLE BUDGET IN HALF A MINUTE. A message gets
-// maxDeliver attempts, and one second apart puts the last of them 25 seconds
-// after the first failure — so an LLM entry sitting out, a vendor's rate-limit
-// window or a database coming back up all dead-letter a message that would
-// have been handled on the next attempt. It is also the shape that hammers
-// whatever is already struggling: 25 requests a second apart is what a
-// provider that just answered "slow down" receives.
-//
-// Doubling from a second to this spends the budget over about ten minutes,
-// which covers the minute an LLM entry sits out after its harness reports a spent
-// plan or a rate limit (internal/providers/llm/harness, bench.go)
-// several times over while still retrying a momentary blip within a second or
-// two. A failure that outlasts
-// that window is not transient, and holding a seat's mailbox behind it is
-// worse than the dead-letter copy.
-//
-// The in-memory twin redelivers immediately and deliberately: it models
-// ordering and the delivery budget, not the clock, and a suite that waited
-// out real backoff would spend its life in timers. What that leaves out is
-// what the clock does to ORDER here: while a failure waits out its backoff
-// this consumer serves never-delivered mail, newer events of the failed
-// message's own conversation included, and they are handled first, in calls
-// of their own. The contract allows both answers and orders neither across
-// calls — see queue.OrderForDispatch.
+// Flat spacing would spend the budget in half a minute, dead-lettering what a
+// sat-out LLM entry or a recovering database would have handled. Doubling to
+// this spends it over about ten minutes, several times the minute an entry sits
+// out after a spent plan (internal/providers/llm/harness, bench.go), while a
+// blip is retried within a second or two.
+// The in-memory twin redelivers immediately, modelling the budget, not the
+// clock; so it omits that a backing-off failure lets newer mail of its
+// conversation go first. The contract orders neither (queue.OrderForDispatch).
 const defaultNakCeiling = 30 * time.Second
 
 func (q *Queue) fetchWait() time.Duration {
@@ -126,17 +101,15 @@ func (q *Queue) nakBackoff(n uint64) time.Duration {
 
 // nakSpacing is the wait the nth spaced return is spread around.
 //
-// The first waits [Queue.nakDelay] and each one after that waits twice as
-// long, up to [Queue.nakCeiling]. n counts from 1, and what it counts is the
-// caller's: for a FAILURE, how many times this message has failed HERE — see
-// [attachment.failures] for why that is not JetStream's delivery count — and
-// for a PASS, that delivery count itself — see [attachment.pass] for why it
-// is not the failures.
+// The first waits [Queue.nakDelay], each later one twice as long, up to
+// [Queue.nakCeiling]. n counts from 1 and is the caller's: for a failure, how
+// many times this message failed here ([attachment.failures]); for a pass, the
+// delivery count itself ([attachment.pass]).
 //
-// The arithmetic is [backoff.Doubling]'s, which is what keeps a count off the
-// wire from overflowing into a negative wait. The count is clamped to an int
-// before it gets there, because a uint64 past the int range would convert to
-// a negative attempt and read as the first return rather than the latest.
+// The arithmetic is [backoff.Doubling]'s, which keeps a count off the wire from
+// overflowing into a negative wait. The count is clamped to an int first: a
+// uint64 past the int range would convert to a negative attempt and read as the
+// first return rather than the latest.
 func (q *Queue) nakSpacing(n uint64) time.Duration {
 	return backoff.Doubling(int(min(n, math.MaxInt32)), q.nakDelay(), q.nakCeiling())
 }
@@ -243,42 +216,16 @@ type attachment struct {
 	// forget itself. See [Queue.loopEnded].
 	ended bool
 
-	// failures counts how many times each message has FAILED here, keyed
-	// on its stream sequence.
-	//
-	// # Why the delivery count cannot answer this
-	//
-	// The backoff doubles per failure, and it was doubling per DELIVERY —
-	// which this package documents as counting something else entirely.
-	// [budgetFor]'s own comment says the budget "covers poison, node-death
-	// AND HANDOFF — the last because a deferred delivery returns via Nak
-	// and that increments the count (measured)". Every healthy return goes
-	// through the same counter: a deferral when a lease moves, a hand-back
-	// when a hold or a pause lands between the fetch and the dispatch. So
-	// a message handed back five times for reasons that were nobody's
-	// fault met its FIRST genuine failure already five steps up the
-	// doubling curve — at the shipped values, straight at the 30 s
-	// ceiling. THE FIRST FAILURE IS STILL FAST is the other half of the
-	// backoff decision, and it was not true.
-	//
-	// # Why in memory, and what a reset costs
-	//
-	// There is nowhere else to put it: a Nak cannot carry a header, and
-	// the count is worth exactly one attachment's lifetime. A redelivery
-	// that lands on another node — or here after a re-attach — starts at
-	// one again, which is the SAFE direction: the cost is a fast retry,
-	// where the alternative was a slow first one. The budget is unchanged
-	// and still counts deliveries, because dead-lettering is about how
-	// many times a message has been handed to anybody at all.
-	//
-	// # And whether a failure here was the message's own
-	//
-	// Beside the count, which a node's own failure ([queue.NakNode]) moves
-	// as much as the message's — both are spaced — each record says whether
-	// one of the failures here was the MESSAGE's, and whether this
-	// attachment wrote its failure mark on the broker (failuremarks.go):
-	// what this attachment knows of where the message is kept should a
-	// return spend its budget, without asking the broker.
+	// failures counts how many times each message has failed here, keyed on
+	// its stream sequence. Not the delivery count: that moves on every healthy
+	// return ([budgetFor]), so a message handed back five times would meet its
+	// first genuine failure at the 30 s ceiling.
+	// In memory because a Nak cannot carry a header; a redelivery elsewhere or
+	// after a re-attach restarts at one, the safe direction (a fast retry).
+	// Each record also says whether a failure was the message's own, not a
+	// node's ([queue.NakNode]), and whether this attachment wrote its failure
+	// mark on the broker (failuremarks.go), so a return spending the budget
+	// knows where to keep the message without asking the broker.
 	failures   map[uint64]*failureRecord
 	failuresMu sync.Mutex
 }
@@ -394,20 +341,16 @@ func (a *attachment) reachedTop(blocked bool) {
 
 // close stops this consumer taking new work and returns immediately.
 //
-// It deliberately does NOT join a running handler: Detach is the
-// fenced-release path, and a node that has lost a seat must give it up now
-// rather than when the turn it should not be running finally ends.
+// It does not join a running handler: Detach is the fenced-release path, and a
+// node that has lost a seat must give it up now, not when its turn ends.
 //
-// AND IT LEAVES AN OUTSTANDING FETCH TO END ON ITS OWN, which is the
-// difference between this and [attachment.stop]. The pull request that fetch
-// sent is still open at the broker, and a message published in the moment
-// after the detach can be delivered to it. Left open, that message reaches
-// [attachment.dispatchOne], finds this consumer detached, and is handed back
-// at once for the successor. Abandoned, the client drops its subscription
-// while the broker may already be sending, and a message in flight then is
-// lost to nobody's hand-back: it waits out the whole ack window before the
-// broker offers it again — on exactly the lease movement a hand-back exists
-// to keep cheap.
+// It leaves an outstanding fetch to end on its own, unlike [attachment.stop].
+// That fetch's pull request is still open at the broker, so a message
+// published just after the detach reaches [attachment.dispatchOne], finds this
+// consumer detached, and is handed back at once for the successor. Abandoned,
+// the client drops its subscription while the broker may be sending, and the
+// message in flight waits out the whole ack window, on exactly the lease
+// movement a hand-back exists to keep cheap.
 func (a *attachment) close() {
 	a.detached.Store(true)
 	if a.cancel != nil {
@@ -433,34 +376,18 @@ func (a *attachment) stop() {
 	}
 }
 
-// fetch asks the broker for up to n messages, waiting at most wait for them,
-// and hands each to take as it arrives — the one way every consume loop here
-// fetches, so a stop reaches every outstanding fetch through
-// [attachment.fetching].
+// fetch asks the broker for up to n messages, waiting at most wait, and hands
+// each to take; the one way every loop fetches, so a stop reaches every fetch
+// through [attachment.fetching].
 //
-// # Why two context options and no expiry option
-//
-// The client's own expiry option (FetchMaxWait) is a timer and nothing else:
-// a fetch sent with it ran to the end of its window whatever became of the
-// loop that sent it, so a stop waited for it. Its context option is the
-// cancellable form, but it couples two durations the expiry option kept
-// apart. A context's deadline becomes the request's expiry with a tenth held
-// back (at most a second), and the same deadline then ENDS THE CLIENT'S WAIT —
-// so a message the broker hands over just before its expiry has a tenth of
-// the window to arrive before the client stops listening, five milliseconds
-// on a tail fetch, and one that arrives after is dropped unacknowledged and
-// sits out the whole ack window before the broker offers it again. The expiry
-// option's client waits a full second past the expiry, which is the margin
-// worth keeping.
-//
-// So the request is sent with TWO: the first carries only a deadline, which
-// the client turns into the expiry and nothing else, and the second replaces
-// it as the context the client waits under — [attachment.fetching], which has
-// no deadline, so the wait ends on the broker's own timeout, a second's grace
-// after it, or a stop. The first deadline is set past wait by exactly the share
-// the client holds back, so the expiry the broker is given is wait itself;
-// [TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce] pins both halves against
-// the vendored client.
+// Two context options, no expiry option: FetchMaxWait is a timer only, so a stop
+// waited out the window. The context option's deadline both becomes the
+// request's expiry (a tenth held back) and ends the client's wait, so a message
+// handed over just before the expiry is dropped and sits out the ack window.
+// So the first carries only a deadline, past wait by the held-back share so the
+// broker's expiry is wait itself; the second is the wait context,
+// [attachment.fetching], with no deadline, ending on the broker's timeout plus
+// grace, or a stop. [TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce] pins both.
 func (a *attachment) fetch(n int, wait time.Duration, take func(jetstream.Msg)) error {
 	if err := a.fetching.Err(); err != nil {
 		return err
@@ -621,18 +548,14 @@ func (q *Queue) PauseHolds(topic, group string) []string {
 // Quiescing reports whether this client has stopped taking work on a
 // subscription.
 //
-// Separate from a pause hold although both stop deliveries, because the two
-// are cleared by different things — a hold by the subsystem that took it, a
-// quiesce by detaching or attaching again — and because a stale quiesce is
-// invisible from outside until someone attaches, which is what let one sit
-// unnoticed long enough to strand a seat.
+// Separate from a pause hold although both stop deliveries: a hold is cleared
+// by the subsystem that took it, a quiesce by detaching or attaching again, and
+// a stale quiesce is invisible from outside until someone attaches, which can
+// strand a seat.
 //
-// Reported so the conformance suite can see it. A negative path asserts that
-// an operation which declined to act touched NOTHING, and it compares every
-// observable a backend exports; one this backend keeps to itself is one that
-// case silently stops checking. Quiescing was exactly that here — the state
-// existed and was writable, and the case written to catch a stale quiesce was
-// checking it on the twin alone.
+// Reported for the conformance suite: a negative path asserts that an operation
+// which declined to act touched nothing, comparing every observable a backend
+// exports, so one kept to itself is one that case silently stops checking.
 func (q *Queue) Quiescing(topic, group string) bool {
 	for _, a := range q.lookup(topic, group) {
 		if a.quiesced.Load() {
@@ -696,16 +619,15 @@ type Loop struct {
 // Loops reports every consume loop of this client that has not returned: each
 // attachment's, and each one Detach or Stop has let go of until its loop ends.
 //
-// Reported so the conformance suite can see it. A case asserting that nothing
-// more was delivered reads its journal once this backend has nothing left that
-// could deliver, and NOTHING ELSE THIS BACKEND EXPORTS SAYS THAT. A loop is the
-// one goroutine that dispatches for its attachment, and it dispatches only
-// between a fetch and its next loop top, so a loop that has ended, or has stood
-// at a top with its gate shut since the case's last verb, has nothing left to
-// hand a handler; the broker's own counts are snapshots, which cannot tell a
-// loop parked at its gate from one between two pulls. A loop that has been let
-// go of is still reported until it ends, because it can still be inside a
-// handler, or holding a fetch that delivers.
+// Reported for the conformance suite: a case asserting that nothing more was
+// delivered reads its journal once this backend has nothing left that could
+// deliver, and nothing else it exports says that. A loop is the one goroutine
+// that dispatches for its attachment, only between a fetch and its next loop
+// top, so a loop that has ended, or has stood at a top with its gate shut since
+// the case's last verb, has nothing left to hand a handler; the broker's counts
+// are snapshots and cannot tell a parked loop from one between two pulls. A
+// loop let go of is reported until it ends, since it can still be inside a
+// handler or holding a fetch that delivers.
 func (q *Queue) Loops() []Loop {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -733,13 +655,12 @@ func (q *Queue) Loops() []Loop {
 // ([Queue.SubscribeStream]) are still consuming: opened, and with their
 // consumption not yet over.
 //
-// Reported so the conformance suite can see it. A case asserting that an
-// unsubscribed feed receives nothing reads it once the feed has stopped, and
-// THAT IS LATER THAN ITS UNSUBSCRIBE RETURNING: the client ends the
-// consumption on a goroutine of its own, and a message already in the
-// callback's path can still be handed over meanwhile. Read off the
-// consumption's own Closed signal, taken when the feed opened, which the client
-// closes once its callback has returned for the last time.
+// Reported for the conformance suite. A case asserting that an unsubscribed
+// feed receives nothing reads it once the feed has stopped, which is later
+// than its unsubscribe returning: the client ends the consumption on its own
+// goroutine, and a message already in the callback's path can still be handed
+// over. Read off the consumption's Closed signal, which the client closes once
+// its callback has returned for the last time.
 func (q *Queue) StreamSubscriptions() int {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -773,26 +694,18 @@ func (q *Queue) attach(ctx context.Context, topic, group string, loop func(conte
 	if err != nil {
 		return err
 	}
-	// THE FIFTH SIBLING READ-BACK, and the one that kept the one-shot,
-	// unbudgeted form every other provisioning read has been given up.
+	// A provisioning read-back, budgeted like its siblings: the boot's
+	// context carries no deadline, so unbudgeted it would get nats.go's own
+	// five-second default, tighter than [jsprovision.Budget] and
+	// [jsprovision.SlowAfter], and a clustered boot would fail here with
+	// nothing logged before it.
 	//
-	// It sat on the boot's context, which carries no deadline, so nats.go
-	// applied its own five-second default — twenty-four times tighter than
-	// [jsprovision.Budget] and tighter than [jsprovision.SlowAfter], so
-	// the breadcrumb that would have named it could never fire. A
-	// clustered boot failed here as `open consumer
-	// crewlet.notifications.inbound/notify-inbound: context deadline
-	// exceeded` with nothing logged before it.
-	//
-	// TWO VERBS, because there are two hazards and one tool does not cover
-	// both. [jsprovision.ReadWith] re-issues a request the group never
-	// answered, under [jsprovision.LookupBudget] as its ceiling;
-	// [jsprovision.SettleWith]
-	// waits out the propagation window, and this read is inside one BY
-	// CONSTRUCTION — EnsureSubscription above has just created the
-	// consumer, so the member that made it can still be told it is not
-	// there. Silence and not-yet-visible are different answers with
-	// different remedies, which is why neither verb subsumes the other.
+	// Two verbs, for two hazards. [jsprovision.ReadWith] re-issues a request
+	// the group never answered, under [jsprovision.LookupBudget];
+	// [jsprovision.SettleWith] waits out the propagation window, which this
+	// read is inside by construction: EnsureSubscription has just created
+	// the consumer, so the member that made it can still be told it is not
+	// there. Silence and not-yet-visible need different remedies.
 	cons, err := q.openConsumer(ctx, stream, topic, group, consumerName(topic, group))
 	if err != nil {
 		return err
@@ -944,16 +857,14 @@ func (q *Queue) Subscribe(ctx context.Context, topic, group string, h queue.Hand
 // fetchLane takes what the priority lane holds RIGHT NOW, up to n, and hands
 // each to take; on a topic with no lane it does nothing.
 //
-// WITHOUT WAITING, because the lane is asked first on every cycle and is
-// empty on almost every one: a wait here would be added to every delivery the
-// topic makes. A priority event that lands a moment after this asked is taken
-// on the next cycle, which on an idle consumer is at most one poll away
+// Without waiting: the lane is asked first on every cycle and is almost always
+// empty, so a wait would be added to every delivery the topic makes. An event
+// landing just after is taken next cycle, at most one poll away
 // ([Queue.fetchWait]).
 //
-// NOT ON THE FETCH SCOPE ([attachment.fetching]), which only bounds a waiting
-// fetch: a no-wait request is answered at once, and at worst one second after
-// a broker that never answers it, so a stop that lands during one is held no
-// longer than that.
+// Not on the fetch scope ([attachment.fetching]), which only bounds a waiting
+// fetch: a no-wait request is answered at once, at worst one second after a
+// silent broker, so a stop is held no longer than that.
 func (a *attachment) fetchLane(n int, take func(jetstream.Msg)) error {
 	if a.lane == nil || n < 1 {
 		return nil
@@ -1049,20 +960,17 @@ func (a *attachment) runningOn(evs ...*events.Event) func() {
 	}
 }
 
-// withHeadroom states EACH message's remaining headroom on the handler's
-// context — see [queue.DeliveriesLeftFor] for the number one message
-// carries and [queue.DeliveriesLeft] for the partition's own, which the
-// contract folds from this same list so no backend decides it.
+// withHeadroom states each message's remaining headroom on the handler's
+// context: [queue.DeliveriesLeftFor] for one message, [queue.DeliveriesLeft]
+// for the partition's, which the contract folds from this same list so no
+// backend decides it.
 //
-// Off THIS message's own metadata rather than off [attachment.failures],
-// which counts something else entirely: the map is one attachment's record of
-// FAILURES and resets on every re-attach, while the budget a message is
-// spending is carried by the message and survives every handoff. Confusing
-// the two is the defect the value exists to end.
+// Off this message's own metadata, not [attachment.failures]: that map is one
+// attachment's record of failures and resets on every re-attach, while the
+// budget a message spends is carried by the message and survives every
+// handoff.
 //
-// A message whose metadata will not parse is LEFT OUT rather than guessed at,
-// for the same reason [attachment.nakOrDeadLetter] still returns it: the
-// count is unreadable, not zero.
+// A message whose metadata will not parse is left out: unreadable, not zero.
 func (a *attachment) withHeadroom(ctx context.Context, ds ...delivery) context.Context {
 	perMessage := make([]queue.Headroom, 0, len(ds))
 	for _, d := range ds {
@@ -1156,20 +1064,16 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 		a.clearMark(ctx, mark)
 
 	case queue.OutcomeDefer:
-		// Defer means: this process has lost the right to do this work.
-		// Nak returns it immediately — measured at about a millisecond,
-		// where letting the ack timer expire would park a seat's mail
-		// for the whole AckWait window on every lease movement.
+		// Defer means this process has lost the right to do this work. Nak
+		// returns it at once; letting the ack timer expire would park a
+		// seat's mail for the whole AckWait on every lease movement.
 		//
-		// It costs one delivery count, which is why the budget covers
-		// handoffs — and why it goes through the same budget check the
-		// failure path uses rather than a bare Nak. A bare one spent the
-		// budget without owning its boundary, so a healthy event whose 25
-		// deliveries went on lease movements was discarded by the broker's
-		// MaxDeliver backstop with no dead-letter copy and no log line.
-		// Never republish instead: a republished event is a NEW message,
-		// and the completion ledger's idempotency plus the batch layer's
-		// aging both key on the identity a Nak preserves.
+		// It costs one delivery count, so it goes through the budget check
+		// the failure path uses, not a bare Nak, which would let MaxDeliver
+		// discard a healthy event with no dead-letter copy or line. Never
+		// republish: a republished event is a NEW message, and the
+		// completion ledger and the batch layer's aging key on the identity
+		// a Nak preserves.
 		a.handBack(ctx, msg, ev, res.Reason)
 		// Quiescing is the other half of a deferral: continuing to fetch
 		// would hand this process more work it has equally lost the
@@ -1187,28 +1091,17 @@ func (a *attachment) apply(ctx context.Context, msg jetstream.Msg, ev *events.Ev
 }
 
 // pass returns a message this node will not handle and a peer may
-// ([queue.OutcomePass]) — through the budget boundary every return crosses,
-// so a message no node reads is dead-lettered with its copy rather than handed
-// round for ever, and spaced as a failure is, by [Queue.nakBackoff].
+// ([queue.OutcomePass]) through the budget boundary every return crosses, so a
+// message no node reads is dead-lettered rather than handed round for ever, and
+// spaced as a failure is, by [Queue.nakBackoff].
 //
-// AS NO FAILURE, should this return be the one that spends the budget: its copy
-// is kept on its group's unhandled subject, apart from the group's poison,
-// which is where a reader that can handle it finds it again — unless one of
-// its deliveries failed as itself ([queue.RetiredTo]) — and its line names
-// reason.
-//
-// BY ITS DELIVERY COUNT, NOT [attachment.failures]. A pass is no failure, so
-// counting it as one would start this node's first genuine failure of the
-// message up the curve, which is what that map exists to prevent; and the count
-// that has to grow is the one every node shares. A group's older nodes passing
-// a message from one to the next would each bring it back at their own count:
-// four of them taking it in turn wait a second four times, then two seconds
-// four times, and give it up in about four minutes rather than the ten its
-// budget spans.
-//
-// NOT QUIESCED, which is the whole difference from a deferral: nothing is
-// wrong with this node, only with this message here, so the attachment keeps
-// taking the rest of its mail while the message waits out its spacing.
+// A pass that spends the budget keeps its copy on the group's unhandled
+// subject, apart from the poison, unless a delivery failed as itself
+// ([queue.RetiredTo]); its line names reason. Spaced by delivery
+// count, not [attachment.failures]: a pass is no failure, and the count that
+// must grow is the one every node shares, or four nodes would give a message
+// up in four minutes, not the budget's ten. Not quiesced, unlike a deferral:
+// nothing is wrong with this node, only with this message.
 func (a *attachment) pass(ctx context.Context, msg jetstream.Msg, ev *events.Event, reason string) {
 	// A MESSAGE WHOSE METADATA WILL NOT PARSE is passed at the shortest
 	// spacing, for [attachment.nakOrDeadLetter]'s reason: returnMsg reads
@@ -1222,19 +1115,16 @@ func (a *attachment) pass(ctx context.Context, msg jetstream.Msg, ev *events.Eve
 }
 
 // nakOrDeadLetter redelivers a FAILED message until its budget is spent, then
-// dead-letters it. Spaced by [Queue.nakBackoff], because an immediately
-// redelivered failure spins the loop at full speed against whatever is broken
-// and a flat spacing spends every attempt before it can heal.
+// dead-letters it. Spaced by [Queue.nakBackoff]: immediate redelivery spins
+// against whatever is broken, and flat spacing spends every attempt before it
+// can heal. The decision lives here because the dead-letter subject and body
+// are known here; MaxDeliver stays as a backstop against an infinite loop.
 //
-// The decision lives here rather than relying on MaxDeliver alone because
-// this is where the dead-letter subject is known and the message body is in
-// hand. MaxDeliver stays configured as a backstop so a bug here cannot
-// produce an infinite loop.
-//
-// itself is whether the failure is the MESSAGE's own ([queue.Result.FailsMessage]),
-// rather than this node's ([queue.NakNode]): the message's own is marked on
-// the broker, once, before the message goes back ([attachment.markFailed]), so
-// whichever member retires it keeps it with the poison.
+// itself is whether the failure is the message's own
+// ([queue.Result.FailsMessage]), not this node's ([queue.NakNode]): it is
+// marked on the broker once before the message goes back
+// ([attachment.markFailed]), so whichever member retires it keeps it with the
+// poison.
 func (a *attachment) nakOrDeadLetter(ctx context.Context, msg jetstream.Msg, ev *events.Event,
 	itself bool) {
 
@@ -1300,18 +1190,16 @@ func (a *attachment) handBack(ctx context.Context, msg jetstream.Msg, ev *events
 }
 
 // returnMsg is the one place a message goes back, and the one place the
-// delivery budget is spent. delay 0 returns it immediately. ev is the event it
-// carries, for the line; spent is the return it is — a failure (Nak), a
-// hand-back (Defer) or a pass — and reason why, which its line says should
-// this return spend its budget; itself is whether this return is a failure of
-// the message's own, which with the message's earlier failures decides where
-// its dead letter is kept ([attachment.retire]).
+// delivery budget is spent. delay 0 returns it immediately. ev is the event
+// for the line; spent is the return (a failure, hand-back or pass) and reason
+// why; itself is whether this return is a failure of the message's own, which
+// with its earlier failures decides where its dead letter is kept
+// ([attachment.retire]).
 //
-// A DELIVERY AT OR PAST THE BUDGET IS RETIRED, not only the budget's own: the
+// A delivery at or past the budget is retired, not only the budget's own: the
 // broker's backstop stands [keepRetries] deliveries past it ([backstopFor]),
-// so a message whose keep failed, or whose budget's delivery a node killed or
-// stopped never settled, is delivered again — to a handler first, which may
-// handle it — and retired by whichever return meets it there.
+// so a message whose keep failed, or whose budget delivery never settled, is
+// delivered again and retired by whichever return meets it.
 func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, ev *events.Event,
 	delay time.Duration, spent queue.Outcome, reason string, itself bool) {
 
@@ -1331,44 +1219,18 @@ func (a *attachment) returnMsg(ctx context.Context, msg jetstream.Msg, ev *event
 	}
 }
 
-// retire keeps msg, the delivery md describes, as its subscription's dead
-// letter once spent — the return it was answered with — spent its budget, and
-// terminates it: on the subject the contract keeps the copy of a message that
-// did or did not fail as itself at any delivery ([queue.RetiredTo]) — with the
-// group's poison, or with its unhandled deliveries, where a reader that can
-// handle it now finds it.
-//
-// WHETHER IT FAILED IS THE MESSAGE'S, NOT THIS RETURN'S ([attachment.failedAsItself]):
-// this return a failure of its own, a failure of it here before, or the mark a
-// member it failed on wrote on the broker.
-//
-// TERMINATED ONLY ONCE THE COPY IS KEPT. A keep that fails — refused, cut by a
-// stop that closed the connection, a dead-letter stream electing its leader —
-// leaves the message to the broker, returned at the failure path's spacing,
-// and its next delivery keeps the copy: the broker's backstop stands
-// [keepRetries] deliveries past the budget for that ([backstopFor]), so the
-// delivery that spent the budget is not the broker's last. Terminated after a
-// failed keep, as it was, the message was gone with no copy, though nothing
-// was wrong with it but the moment. Only a keep that fails at the backstop's
-// own delivery, which nothing follows, loses the copy, said as such.
-//
-// KEPT UNDER THE MESSAGE'S OWN IDENTITY ([letterOf]), so a keep made again
-// after one whose answer was lost — the entry stored, the error all the
-// keeper heard — is stored as nothing and answered already kept: one entry,
-// however many keeps of it.
-//
-// KEPT WHETHER OR NOT THE LOOP IS STOPPING, under ctx's values without its
-// cancellation: a stop cancels the consume loop's context, and the copy of a
-// message whose last delivery a stop met — a hand-back of a batch taken as the
-// queue stopped, or a pass or a failure handled just before — was kept under
-// that context and lost with it, though nothing was wrong with the keep. The
-// write is bounded all the same, by its own budget ([Queue.write]); a drain
-// waits for it, since a delivery is in flight until its return is settled
-// ([attachment.dispatchOne]); and so does a stop, which closes the connection
-// only once no keep is in flight ([Queue.awaitKeeps]).
-//
-// ITS LINE IS THE CONTRACT'S ([queue.LogDeadLettered]), once the copy is kept,
-// never one spelled here, so both backends name one situation alike.
+// retire keeps msg (delivery md), whose return spent its budget, as its
+// subscription's dead letter and terminates it: with the group's poison, or its
+// unhandled deliveries if no delivery failed as itself ([queue.RetiredTo]).
+// Whether it failed is the message's ([attachment.failedAsItself]), not this
+// return's. Terminated only once the copy is kept: a failed keep leaves the
+// message to the broker, whose backstop stands [keepRetries] deliveries past
+// the budget ([backstopFor]); only a failure at the backstop's own delivery
+// loses the copy, said as such. Kept under the message's identity ([letterOf]),
+// so a repeat is answered already kept, and under ctx's values without its
+// cancellation, since a stop would lose the copy; the write is bounded
+// ([Queue.write]), and a drain and a stop wait for it ([attachment.dispatchOne],
+// [Queue.awaitKeeps]). Its line is the contract's ([queue.LogDeadLettered]).
 func (a *attachment) retire(ctx context.Context, msg jetstream.Msg, ev *events.Event,
 	md *jetstream.MsgMetadata, spent queue.Outcome, reason string, itself bool) {
 

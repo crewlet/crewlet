@@ -927,3 +927,39 @@ func TestAPropertyIsReadAsItsOwnLiteral(t *testing.T) {
 		t.Error("an array has no properties, and one was read")
 	}
 }
+
+// THE WIRE'S MODULE IS READ WHOLE: every interface declared under the named
+// directories, unregistered, with what it extends from anywhere in the tree,
+// and none declared elsewhere. A name declared twice is refused, as one
+// declaration read by name is.
+func TestInterfacesReadsEveryDeclarationUnderItsDirectories(t *testing.T) {
+	t.Parallel()
+	root := tree(t, map[string]string{
+		"protocol/types.ts": "export interface Row extends Base {\n  open: boolean;\n  key?: string\n}\n" +
+			"interface Page<T> { rows: T[]; more?: boolean }\nconst interfaceLike = 1;\n",
+		"contract/wire.ts":        "export interface Told { told: number }\n",
+		"components/base.ts":      "export interface Base { id: string; open?: boolean }\n",
+		"components/Screen.tsx":   "interface Props { shown: boolean }\n",
+		"protocol/types.test.ts":  "interface Row { quoted: true }\n",
+		"protocol/elsewhere.d.ts": "",
+	})
+	got, err := clientsource.Interfaces(root, "protocol", "contract")
+	if err != nil {
+		t.Fatalf("Interfaces: %v", err)
+	}
+	want := map[string][]clientsource.Member{
+		"Row":  {{Name: "id"}, {Name: "open"}, {Name: "key", Optional: true}},
+		"Page": {{Name: "rows"}, {Name: "more", Optional: true}},
+		"Told": {{Name: "told"}},
+	}
+	if !maps.EqualFunc(got, want, slices.Equal) {
+		t.Errorf("Interfaces = %v, want %v", got, want)
+	}
+	twice := tree(t, map[string]string{
+		"protocol/a.ts": "export interface Row { a: string }\n",
+		"protocol/b.ts": "export interface Row { b: string }\n",
+	})
+	if _, err := clientsource.Interfaces(twice, "protocol"); err == nil {
+		t.Error("two declarations of Row read as one")
+	}
+}

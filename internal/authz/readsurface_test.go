@@ -13,19 +13,14 @@ var readSurfaceDirs = []string{"internal/api/queries", "internal/api/stream"}
 
 // NO VERB THE READ SURFACE DECIDES BY ASKS A PROOF OR A PERSON.
 //
-// A question and a watch are answered over the dashboard's socket, whose
-// vocabulary has no `step_up_required` and no `token_refused` — a socket cannot
-// carry a step-up, and the dashboard replays one over REST alone — so a refusal
-// for either reaching a frame would read as a missing permission nobody could
-// grant. internal/api/queries refuses a question REGISTERED as decided by such
-// a verb, and no registration sees the verbs an answer decides by inside
-// itself (a chat question's room verb, a sandbox tail's trail, a personal
-// question's record), nor the one a watch asks. So this reads them off the code
-// — every Action constant a non-test file in those packages names ([treeScan])
-// — and holds each to asking no proof on any arm ([proofAsked]) and needing no
-// person present. A verb spelled as a conversion rather than named by its
-// constant would be invisible to it, so a conversion there fails too.
-//
+// The socket has no `step_up_required` or `token_refused` (it cannot carry a
+// step-up), so such a refusal in a frame would read as a missing permission
+// nobody could grant. internal/api/queries refuses a question REGISTERED as
+// decided by such a verb, but not the verbs an answer decides by inside
+// itself, nor a watch's. So this reads every Action constant a non-test file
+// there names ([treeScan]) and holds each to no proof on any arm
+// ([proofAsked]) and no person present. A verb spelled as a conversion would
+// be invisible, so a conversion there fails too.
 // Mutation: have the chat questions decide by authz.ActionSecretReveal and this
 // goes red naming internal/api/queries.
 func TestNoVerbTheReadSurfaceDecidesAsksAProofOrAPerson(t *testing.T) {

@@ -165,22 +165,16 @@ func TestATaskLinkedByRelationOrByItsDescriptionIsLinkedFrom(t *testing.T) {
 }
 
 // A BACKLINKED TASK OPENS THE TASK, NOT THE KEY'S CLAIMANT. Two tasks can hold
-// one key — a restored counter mints a number a task already holds — and the
-// tracker answers a key with the task that claimed it first, so a "linked
-// from" row that carried only the duplicate's key would open somebody else's
-// task. The row says so with the tracker's own `key_collision`, which the
-// applier derives and every tracker reader reads as a column; the fixture
-// writes the rows the applier leaves (the directory naming the claimant, the
-// flag on the duplicate) rather than running a second copy of that rule.
+// one key (a restored counter mints a number a task holds), and the tracker
+// answers a key with its first claimant, so a row carrying only the
+// duplicate's key would open somebody else's task. The row says so with the
+// tracker's own `key_collision`; the fixture writes the rows the applier leaves.
 //
-// The claimant is listed first, then the duplicate: one key, so the key alone
-// orders nothing, and a tie left to the batched read's row order drew the two
-// either way round. The duplicate's id sorts BEFORE the claimant's here, so an
-// order by id alone is caught too.
-//
-// Mutation: drop the flag from the read (or read the bare key) and the
-// duplicate's row opens the claimant; drop the claimant-first tie-break and
-// the order flips.
+// The claimant is listed first: one key orders nothing, and a tie left to the
+// read's row order drew either way. The duplicate's id sorts BEFORE the
+// claimant's, so an order by id alone is caught too.
+// Mutation: drop the flag and the duplicate opens the claimant; drop the
+// tie-break and the order flips.
 func TestABacklinkedTaskWhoseKeyAnotherClaimedSaysSo(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)

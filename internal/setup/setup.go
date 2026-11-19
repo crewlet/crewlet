@@ -31,6 +31,36 @@
 // being absent produces. That is what turns "what is wrong" into "what to
 // type": a row reporting `credential_missing` can offer exactly the fields
 // whose Blocks says they clear it, with no per-integration mapping anywhere.
+//
+// # The write order is the whole of writing
+//
+// A submission seals the credential, then points the config at it with a
+// ${VAR}, then advances the epoch ([Write]). Pointer first leaves a route
+// refusing every delivery; a value alone reaches no running seat, because a
+// ${VAR} resolves from a snapshot taken at apply time. A rotation changes no
+// pointer and still ends in a reload held to the revision the submission read,
+// since a reload of a document a write in between changed reaches nothing.
+// Every return after the first seal carries the names sealed ([Result.Secrets]),
+// which holds because everything that can refuse without a write runs before
+// the first seal. [SealError] is its own error, not a pointer read, because
+// the secret store fails with the coordination store's unavailability.
+//
+// # A credential is checked before it is stored
+//
+// A vendor's Probe is one read-only call within [VerifyBudget] that answers a
+// [Verdict] and writes nothing; a requirement says whether it is Checkable or,
+// as a signing-only webhook secret, how the vendor proves it (CheckNote).
+// setup/setuptest runs every probe through one suite whose meta-test hands it
+// vendors that lie, because a probe answering "works" for a refused key is the
+// failure nobody can see.
+//
+// # The words are split by job
+//
+// Never one help string per field: a requirement says a one-line Hint and an
+// optional More, a tool a [Guide], and a verdict a Summary, Facts and
+// Warnings. setuptest/copy.go holds those words to one set of rules, applied
+// to every verdict and every tool, so a wall of text cannot return one vendor
+// at a time.
 package setup
 
 import (
@@ -143,21 +173,11 @@ type Requirement struct {
 	// neither shown nor required until that field holds that value, and
 	// once it does it is both.
 	//
-	// # Why one field rather than a Shown flag beside Required
-	//
-	// The pair it exists for is GitHub's: choose "every repository in the
-	// organization" and an organization token becomes the one thing
-	// standing between that answer and its being true; choose "wherever an
-	// agent's app is installed" and the same token is a credential the
-	// company never uses. There is no honest static answer — [Required]
-	// says yes and blocks a connect that needed nothing, no says nothing
-	// and lets the API store an answer it cannot carry out.
-	//
-	// Showing and requiring are ONE decision here and not two, because a
-	// field shown under a choice that needs it is a field that needs it. A
-	// separate Shown flag would let the two drift into "visible but
-	// optional", which is a form asking a question whose answer it will
-	// ignore.
+	// GitHub is why: under "every repository in the organization" an
+	// organization token is required, under "wherever an agent's app is
+	// installed" it is never used, so no static [Required] is honest. Showing
+	// and requiring are ONE decision, as a separate Shown flag would let a
+	// form drift into asking a question whose answer it ignores.
 	//
 	// Nil is the ordinary requirement, answering to [Required] alone.
 	RequiredWhen *Gate `json:"required_when,omitempty"`
@@ -170,36 +190,24 @@ type Requirement struct {
 	// Connect marks a requirement as one of the few that ESTABLISH the
 	// connection, rather than one that configures what happens over it.
 	//
-	// The two are different questions asked at different moments, and
-	// putting them in that order matters: which seat a Datadog alert wakes
-	// is not a thing to decide while pasting an API key. So these fields
-	// LEAD the form, with a rule under them and the rest below.
+	// Which seat a Datadog alert wakes is not decided while pasting an API
+	// key, so these fields LEAD the form, with a rule under them. An
+	// ordering, not VISIBILITY: the form is the same one in both directions.
 	//
-	// It used to decide VISIBILITY — the connect form showed these alone,
-	// and the rest appeared only once the app was configured. That made an
-	// app's settings a form its operator had never seen, with fields that
-	// arrived from nowhere, so it is an ordering now and the form is the
-	// same one in both directions.
-	//
-	// It is NOT the same as Required. A connect field can be optional to
-	// the integration as a whole — Datadog routes alerts with no keys at
-	// all — and still be the thing you are being asked for when you press
-	// Connect.
+	// NOT the same as Required: a connect field can be optional to the
+	// integration (Datadog routes alerts with no keys) and still be what you
+	// are asked for when you press Connect.
 	Connect bool `json:"connect,omitempty"`
 
 	// Shared marks a value that is ONE value across every surface of its
 	// tool, so the form asks for it once and writes it to all of them.
 	//
-	// Atlassian is why: Jira and Confluence are two blocks in the config and
-	// one product family in the world. The account email, the API token, the
-	// cloud id and the link address are the same Atlassian account and the
-	// same Atlassian site, so asking for each of them twice — under two
-	// headings, in one dialog — invited an operator to enter two different
-	// answers to one question.
+	// Atlassian is why: Jira and Confluence are two config blocks but one
+	// account and site (email, API token, cloud id, link address), and asking
+	// twice invites two answers to one question.
 	//
-	// NOT the same as "has the same field name". Jira's url and Confluence's
-	// url are both `url` and are different addresses, which is exactly why
-	// this is declared rather than inferred.
+	// NOT "has the same field name": Jira's and Confluence's `url` are
+	// different addresses, which is why this is declared, not inferred.
 	Shared bool `json:"shared,omitempty"`
 
 	// Hidden marks a value the form writes without asking for it.
@@ -257,28 +265,24 @@ type Requirement struct {
 
 	// CheckWith names the other fields of the same list that a check of
 	// this credential is made with, for a vendor that proves several
-	// values in one check: Datadog's API key and application key are
-	// accepted or refused together, against the region they belong to.
+	// values in one check (Datadog's API and application keys, against
+	// their region).
 	//
-	// It is set on a [Requirement.Checkable] field only. A form offers one
-	// Test control for the group, after this field, enables it once this
-	// field and every one named here has a value, and sends them together.
-	// A credential named here is tested through this field rather than on
-	// its own, so it is not Checkable itself and its [Requirement.CheckNote]
-	// says so. Empty, the field is checked on its own, as before.
+	// Set on a [Requirement.Checkable] field only. A form offers one Test
+	// control for the group, enabled once every named field has a value.
+	// A credential named here is tested through this field, so it is not
+	// Checkable itself and its [Requirement.CheckNote] says so. Empty, the
+	// field is checked on its own.
 	CheckWith []string `json:"check_with,omitempty"`
 
 	// Shape is what a minted value has to LOOK like, for the fields where
 	// the third-party app accepts one form and no other.
 	//
 	// A MINT THAT IGNORES THIS IS A CREDENTIAL THE ENGINE'S OWN VERIFIER
-	// REJECTS, and every path that would catch it is closed by
-	// construction: the mint writes into the secret store, the document
-	// gets a `${VAR}`, and a reference is the one thing config validation
-	// cannot check the shape of, because the reference is all that layer
-	// ever sees. So GitLab was connected from the dashboard with a signing
-	// secret that could not be an HMAC key for any delivery, its route
-	// answered 503 to every one, and nothing anywhere said why.
+	// REJECTS, and nothing catches it: the mint writes into the secret store,
+	// the document gets a `${VAR}`, and config validation sees only the
+	// reference, whose shape it cannot check (a GitLab signing secret that
+	// was no HMAC key made its route answer 503 to every delivery, silently).
 	//
 	// Empty is [ShapeToken], which is every field but one.
 	Shape Shape `json:"shape,omitempty"`
@@ -349,16 +353,13 @@ type Requirement struct {
 	// Effective is what a `${VAR}` in Stored resolves to, for a field that
 	// is NOT a credential.
 	//
-	// A REFERENCE IS NOT AN ADDRESS, and a form draws links out of these
-	// values: the Atlassian API keys page is per-organization, so its link
-	// is built from the organization id, and once that id lived in the
-	// sealed store the link was built out of the literal text
-	// "${ATLASSIAN_ORG_ID}" and opened a console page for an organization
-	// of that name.
+	// A REFERENCE IS NOT AN ADDRESS, and a form builds links from these
+	// values: the per-organization Atlassian API keys link, built from the
+	// literal "${ATLASSIAN_ORG_ID}", opened a page for an organization of that
+	// name.
 	//
-	// NEVER SET FOR A CREDENTIAL. See [FillEffective], which is the only
-	// thing that writes it: a secret's resolved value has no path onto this
-	// wire, and no link in this tree is built out of one.
+	// NEVER SET FOR A CREDENTIAL. [FillEffective] is the only writer: a
+	// secret's resolved value has no path onto this wire.
 	Effective string `json:"resolved_value,omitempty"`
 }
 
@@ -405,27 +406,15 @@ func FillEffective(reqs []Requirement, resolve func(string) (string, bool)) {
 
 // MarshalJSON adds the CURRENT VALUE for everything that is not a credential.
 //
-// A form has to open showing what this company already answered, or it is not
-// an edit of a configuration: it is a blank form over one, and saving it
-// blanks the settings the operator did not retype. That is what happened —
-// the Datadog dialog offered "Choose one" over a region and a fallback seat
-// the document already held.
+// A form must open showing what the company already answered, or saving it
+// blanks settings the operator did not retype. [Requirement.Stored] is
+// `json:"-"` because it can hold a literal credential, so this emits it only
+// for plain settings, already readable through GET /config.
 //
-// [Requirement.Stored] cannot do this: it is `json:"-"` precisely because it
-// can hold a literal credential on a company that wrote one, so it is the
-// wrong thing to put on a wire. This emits it only for the kinds that are
-// plain settings — a region, a URL, a handle, a group — every one of which is
-// already readable through GET /config by anybody this route answers.
-//
-// A CREDENTIAL'S REFERENCE IS NOT THE CREDENTIAL, and it is the one thing a
-// secret field may carry back. `${JIRA_TOKEN}` is a NAME: it says which entry
-// of the sealed store this field reads, which is already visible through GET
-// /config to everybody this route answers, and it is what an operator has to
-// see to know they are editing the right pointer rather than replacing it.
-// A LITERAL in the same position is the credential itself and never leaves.
-//
-// A METHOD ON THE TYPE rather than a step in the API layer, so nothing can
-// forget it and no future caller can serialise a Requirement any other way.
+// A CREDENTIAL'S REFERENCE IS NOT THE CREDENTIAL, and is the one thing a
+// secret field may carry back: `${JIRA_TOKEN}` is a NAME, already visible
+// there. A LITERAL in the same position never leaves. A METHOD ON THE TYPE, so
+// no caller can serialise a Requirement any other way.
 func (r Requirement) MarshalJSON() ([]byte, error) {
 	// A PUBLIC VIEW HOLDING A PRIVATE KEY, or the literal a credential's
 	// field stores, is a bug in the vendor that rendered it, and failing the
@@ -508,16 +497,14 @@ type Gate struct {
 // Needed reports whether this requirement must be answered, given what the
 // rest of the list currently holds.
 //
-// ONE IMPLEMENTATION, because three readers ask it — the form deciding
-// whether to draw a required marker, [Outstanding] deciding whether a pass
-// may run, and the submission path deciding whether to store an answer — and
-// a gate honoured by two of the three is a rule the third quietly breaks. It
-// is the API's copy that matters most: a form is a courtesy and a route is
-// the boundary.
+// ONE IMPLEMENTATION, because three readers ask it (the form's required
+// marker, [Outstanding] deciding whether a pass may run, and the submission
+// path deciding whether to store an answer), and a gate honoured by two is
+// broken by the third. The route's copy matters most: a form is a courtesy,
+// a route the boundary.
 //
-// A gate naming a field that is not in the list is CLOSED. The alternative
-// reads a typo as "always required", which turns a vendor's mistake into
-// every company's blocked connect.
+// A gate naming a field not in the list is CLOSED: reading a typo as "always
+// required" would turn a vendor's mistake into every company's blocked connect.
 func (r Requirement) Needed(among []Requirement) bool {
 	if r.RequiredWhen == nil {
 		return r.Required
@@ -618,15 +605,12 @@ func PointerFor(kind integration.Kind, r Requirement, current string) (name stri
 // document: is something written down, is it usable, and what exactly is
 // written.
 //
-// Three functions rather than one with a flag, because the three cases are
-// genuinely different questions and picking the wrong one has a visible
+// Three functions, not one with a flag, as the wrong question has a visible
 // consequence. A credential is HELD: it may be a `${VAR}`, so present and
-// resolved are two facts and the gap between them is a silent outage. A plain
-// setting is PLAIN: nothing resolves an organization name, so written down is
-// the whole of it, and claiming "cannot say" would put a permanent unknown on
-// a field an operator reads straight off GET /config. A toggle is neither: it
-// is present when it is ON, because reporting `false` as written down would
-// make a paused integration look complete.
+// resolved are two facts and the gap is a silent outage. A plain setting is
+// PLAIN: nothing resolves an organization name, so written down is the whole
+// of it. A toggle is present when it is ON, as reporting `false` as written
+// down would make a paused integration look complete.
 
 // Noun is the field's value as a sentence names it: its label with the first
 // letter lowered, unless the label opens with an acronym ("API key"), or its

@@ -288,3 +288,21 @@ func TestTheDashboardNamesEveryInformSurface(t *testing.T) {
 			client, engine)
 	}
 }
+
+// THE DASHBOARD KNOWS AN ITEM'S CONVERSATION BY THE KEY THE ENGINE STAMPS.
+//
+// A hold the engine puts on a conversation names it by its key, and the
+// dashboard reads the item it is about off that key: the item page's banner
+// and the Inbox row that opens the item. A copy that drifts from
+// [worklet.ItemConversation] matches no hold, and the item says nothing.
+func TestTheDashboardKnowsAnItemsConversationByTheEnginesKey(t *testing.T) {
+	t.Parallel()
+	got, err := clientsource.Scalar(clientsource.Tree(t), "ITEM_CONVERSATION_PREFIX")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const id = "6f1c2e04-6a51-4b8a-9d0e-2c7f3b1a9e55"
+	if want := worklet.ItemConversation(id); got+id != want {
+		t.Errorf("the dashboard names item %s's conversation %q, the engine %q", id, got+id, want)
+	}
+}

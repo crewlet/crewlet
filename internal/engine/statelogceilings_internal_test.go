@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -119,6 +120,7 @@ func TestTheRetentionGuideStatesEveryLogsGateReserve(t *testing.T) {
 		executordomain.Domain{}.Name():  "executor",
 		accessdomain.Domain{}.Name():    "access",
 		atlasdomain.Domain{}.Name():     "atlas",
+		advisordomain.Domain{}.Name():   "advisor",
 	}
 	keys := streamKeys(t)
 	held := map[string]bool{}
@@ -918,13 +920,13 @@ func sizeAndProvision(t *testing.T, q *jetstream.Queue, stream config.Stream, fr
 // budget, the fixed defaults beside the ones scaled to their floors.
 //
 // THE HOST IS THE SMALLEST THE LOGS' FLOORS FIT, the figure the deployment
-// guide states: 11.67 GiB, whose broker grants three quarters of it. A log
+// guide states: 11.75 GiB, whose broker grants three quarters of it. A log
 // added later moves this figure, and the guide's, with it.
 func TestTheStateLogsFitTheBrokerTheyBootOn(t *testing.T) {
 	t.Parallel()
-	// 11.67 GiB, in hundredths so the arithmetic stays in integers: the
+	// 11.75 GiB, in hundredths so the arithmetic stays in integers: the
 	// first hundredth of a gibibyte whose three quarters hold the logs.
-	free := 1167 * gib / 100
+	free := 1175 * gib / 100
 	brokerCap := free / 4 * 3
 	q := brokerWithHeadroom(t, brokerCap)
 	if err := sizeAndProvision(t, q, config.Stream{}, free); err != nil {

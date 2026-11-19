@@ -25,7 +25,9 @@
 //   - TEXT (a tool's output, a title) keeps its opening, cut on a rune
 //     boundary, and ends with how much more of how much was not kept ([Text]).
 //     Its opening is what a person reads it by, and the marker says it is an
-//     opening.
+//     opening. A reader that compares another copy of the text with the
+//     record reads the opening back off it exactly ([Record.Opening]), so it
+//     compares all the record kept, and nothing the marker added.
 //   - A TOOL'S ARGUMENTS keep their shape: a VALUE past what the record holds
 //     is replaced by a marker naming its size and four bytes of its digest
 //     ([Args]), the way internal/compact's Omitted names a payload it could not
@@ -322,9 +324,29 @@ func (r Record) Text(s string, budget int) (kept string, whole int) {
 	return opening + textMarker(r, Size(whole-cut), Size(whole)), whole
 }
 
+// Opening is the opening [Record.Text] kept of a text of whole bytes that it
+// cut, read back off kept, the value it wrote; ok is false where kept is not
+// such a cut, a text Text kept whole (whole zero) included. Exact: the
+// marker's last opening `…\n(` is the cut, since the figure after it holds no
+// parenthesis, and the cut is checked by writing the marker again for it.
+func (r Record) Opening(kept string, whole int) (opening string, ok bool) {
+	rest, ok := strings.CutSuffix(kept, " of "+Size(whole)+" not kept on "+string(r)+")")
+	if whole <= 0 || !ok {
+		return "", false
+	}
+	at := strings.LastIndex(rest, textMarkerOpens)
+	if at < 0 || at >= whole || rest[at+len(textMarkerOpens):] != Size(whole-at) {
+		return "", false
+	}
+	return rest[:at], true
+}
+
+// textMarkerOpens is how the marker that ends a cut text opens ([textMarker]).
+const textMarkerOpens = "…\n("
+
 // textMarker is what ends a cut text: how much more of how much is not kept.
 func textMarker(r Record, left, whole string) string {
-	return "…\n(" + left + " of " + whole + " not kept on " + string(r) + ")"
+	return textMarkerOpens + left + " of " + whole + " not kept on " + string(r) + ")"
 }
 
 // runeCost is the bytes of the rune at s[i] and what it costs escaped.

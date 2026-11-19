@@ -12,34 +12,24 @@ import (
 
 // Whether a turn actually delivered, judged from the engine's own record.
 //
-// The question this file answers used to be asked of a PREDICTION: the planner
-// named the tools it expected to call, and the engine reconciled that list
-// against what ran. Both of the recorded failures came from that
-// reconciliation. Too strict and a real delivery through a tool the executor
-// discovered read as undelivered, the override fired, and the seat posted the
-// same message twice. Too loose and a turn whose named delivery tool was a
-// wrong guess -- which then called nothing but a builtin -- read as delivered,
-// so "reply hi" produced text, never called the chat tool, and completed
-// silently having acted on nothing.
-//
-// With one loop there is no prediction to reconcile. What replaces it is two
-// facts the model does not control: WHO IS WAITING, which the engine derives
-// from the trigger before the turn starts, and WHAT ACTUALLY RAN, which the
-// tool loop recorded as it happened.
+// Nothing is predicted. The verdict rests on two facts the model does not
+// control: WHO IS WAITING, which the engine derives from the trigger before the
+// turn starts, and WHAT ACTUALLY RAN, which the tool loop recorded as it
+// happened. Reconciling a named list of expected tools against what ran failed
+// both ways: too strict posted a message twice, too loose let "reply hi"
+// complete having called no chat tool.
 
 // Reply says who is waiting for this turn, how they get an answer, and WHERE
 // they are waiting for it.
 //
 // Derived at dispatch from the trigger's own type, never from anything the
-// model says: intent was the half of the old gate a model could get wrong, and
-// this is the half it cannot.
+// model says.
 //
 // A VALUE RATHER THAN AN ENUM, because the kind alone answers the wrong
-// question. "Somebody is waiting on a tool" is satisfied by any tool that
-// reaches anybody, so a seat woken by a Mattermost DM discharged it with a
-// work-item write: the founder was asked to wait, the tracker got a row, and
-// the turn closed `done` having answered nobody who was listening. The two
-// facts travel together or the gate compares one of them against nothing.
+// question: any tool that reaches anybody satisfies "somebody is waiting on a
+// tool", so a seat woken by a Mattermost DM discharged it with a work-item
+// write and closed `done` having answered nobody listening. Kind and surface
+// travel together or the gate compares one against nothing.
 type Reply struct {
 	// Kind is the shape of the obligation.
 	Kind ReplyKind
@@ -71,20 +61,14 @@ const (
 	// ReplyUnset is the zero value, and it is NOT a setting. [Run] refuses
 	// it, and that refusal is the point of naming it.
 	//
-	// Each of the three real values has a different consequence, and none
-	// of them is a safe reading of "the caller did not say": permissive
-	// exempts a turn that owes somebody an answer, strict loops every
-	// unaddressed turn to exhaustion. A field whose zero value cannot be
+	// None of the three real values is a safe reading of "the caller did not
+	// say": permissive exempts a turn that owes somebody an answer, strict
+	// loops every unaddressed turn to exhaustion. A zero value that cannot be
 	// either is one the type has to refuse.
 	//
-	// It was read as the permissive one for as long as this was an
-	// unnamed "". The ordinary dispatch path built its [Input] without a
-	// Reply — the value was computed in the same frame and handed to the
-	// runner, just never to the loop — so every gate that turns on it,
-	// [Check]'s two corrections and [OverrideDone], was inert in
-	// production while this package's own suite exercised all of them.
-	// The seat that found it filed a work item, told nobody, and closed
-	// the turn `done`.
+	// Read as permissive, it left every gate that turns on it ([Check]'s two
+	// corrections, [OverrideDone]) inert in production while this package's
+	// suite exercised all of them.
 	ReplyUnset ReplyKind = ""
 
 	// ReplyNone — nobody asked. A schedule fired, a broadcast mentioned
@@ -185,20 +169,15 @@ const (
 	OutcomeDelivered Outcome = "delivered"
 
 	// OutcomeNoAction — nobody was asking this seat to do anything, and it
-	// changed nothing outside the engine. The turn ends and nothing is
-	// posted.
+	// changed nothing outside the engine. Nothing is posted.
 	//
-	// Deliberately NOT the way to decline. A seat that was mentioned,
-	// assigned or asked and is saying no must say so where it was asked,
-	// so the requester learns the message landed rather than waiting in
-	// silence for an answer that is never coming.
+	// NOT the way to decline: a seat that was asked and says no must say so
+	// where it was asked, or the requester waits in silence.
 	//
-	// Nor the way to end a turn that ACTED outside the engine ([Acted]),
-	// though nobody asked: one that asked a colleague, reacted or published
-	// reports what it did as delivered. The runner's live submission refuses
-	// its no_action, and [Check] sends back any that reaches it. Ended as
-	// one that changed nothing, it would leave no episode and nothing
-	// reviewed, and the conversation's next turn would not know.
+	// Nor the way to end a turn that ACTED outside the engine ([Acted]): that
+	// reports delivered. The live submission refuses its no_action and
+	// [Check] sends back any that reaches it; it would leave no episode and
+	// nothing reviewed.
 	OutcomeNoAction Outcome = "no_action"
 
 	// OutcomeBlocked — the work cannot proceed and the executor says why.
@@ -219,25 +198,13 @@ const (
 // Deliverable reports whether calling this tool could deliver something to a
 // surface outside the engine.
 //
-// ONE MEMBERSHIP TEST, against a map the registry computed — see
-// [tools.Registry.Deliveries]. Two kinds of tool are in it: an MCP-served
-// tool that its own annotations do not POSITIVELY call a read (the
-// fail-closed direction, since treating unannotated as read would exempt
-// every tool a server forgot to annotate), and a first-party tool the engine
-// registered as one that reaches somebody.
+// ONE MEMBERSHIP TEST, against [tools.Registry.Deliveries]: an MCP tool its own
+// annotations do not POSITIVELY call a read (fail closed), and a first-party
+// tool the engine registered as reaching somebody (a diary write does not;
+// origin is no test, since an in-process tracker comment reaches the asker).
 //
-// WHETHER, NOT WHERE. This is the question [Acted] and the ledger need — did
-// anything irreversible happen — and it is deliberately NOT the one the
-// delivery gate asks. [DeliveredTo] is that one, and it reads the same map's
-// VALUES rather than its keys.
-//
-// The rule this replaces was an ORIGIN test — server-backed and not a known
-// read — and it was right for as long as every shared surface belonged to
-// somebody else. It stopped being right when the tracker moved in-process:
-// commenting on a Worklet work item reaches the person who asked, and a gate
-// keyed on origin judged that turn to have answered nobody and looped it to
-// failure. What has NOT changed is that a diary write still does not deliver:
-// the engine declares which of its own tools reach anybody, one at a time.
+// WHETHER, NOT WHERE: [Acted]'s and the ledger's question. The delivery gate's
+// is [DeliveredTo], which reads the same map's VALUES, not its keys.
 func Deliverable(name string, s Surface) bool {
 	_, ok := s.Deliveries[name]
 	return ok
@@ -279,29 +246,14 @@ func KnownDelivered(calls []ledger.Call, s Surface) bool {
 // DeliveredTo reports whether this turn's record shows a call that reached the
 // party who is waiting, ON THE SURFACE THEY ARE WAITING ON.
 //
-// THE QUESTION [Delivered] SHOULD HAVE BEEN ASKING. A flat "did any tool that
-// reaches anybody run" was right for as long as a seat held tools for one
-// shared surface and no more. It stopped being right when the tracker moved
-// in-process and every seat gained deliverable builtins: a turn woken by a
-// Mattermost DM then discharged its obligation by filing a work item, and the
-// founder — who had been asked to wait for a clarification — was never told
-// the task existed. Every layer passed. Nobody was answered.
+// The flat [Delivered] let a Mattermost DM's turn discharge its obligation by
+// filing a work item. NARROWED ONLY WHERE IT CAN BE; both fallbacks use the
+// flat question, so this is never stricter than the seat can satisfy:
 //
-// NARROWED ONLY WHERE IT CAN BE, and the two fallbacks are the design rather
-// than leniency:
-//
-//   - An obligation with NO surface is one the engine could not place. An
-//     assignment is the honest example: the answer may land on the tracker,
-//     in the thread, or on the ticket, and the engine has no basis to pick.
-//     Narrowing on a surface nobody chose would refuse correct turns.
-//   - A surface THIS SEAT CANNOT REACH leaves nothing to enforce. If no tool
-//     on the surface delivers there, the seat could not have answered there
-//     however many rounds it spent, and holding the turn open until it did
-//     would loop it to exhaustion over an operator's missing integration.
-//
-// In both, the flat question is the answer, which is today's behaviour — so
-// this is strictly stricter than what it replaces and never stricter than the
-// seat can satisfy.
+//   - NO surface: an assignment may be answered on the tracker, thread or
+//     ticket, and narrowing on a surface nobody chose refuses correct turns.
+//   - A surface THIS SEAT CANNOT REACH: no tool delivers there, and holding the
+//     turn open would loop it to exhaustion over a missing integration.
 func DeliveredTo(calls []ledger.Call, s Surface, reply Reply) bool {
 	want := reply.Surface
 	if want == "" || !s.Reaches(want) {
@@ -317,30 +269,12 @@ func DeliveredTo(calls []ledger.Call, s Surface, reply Reply) bool {
 
 // Answered reports whether the party waiting on this turn has its answer.
 //
-// THREE OBLIGATIONS, THREE ANSWERS, and only one of them is a question about
-// tool calls at all:
-//
-//   - [ReplyTool] — somebody is waiting on a surface the seat reaches with its
-//     own tools, so the record has to show a call that reached THEM. This is
-//     the only case [DeliveredTo] can speak to.
-//   - [ReplyEngine] — the engine returns the turn's artifact on the channel
-//     the ask opened. It is delivered by construction and no tool call will
-//     ever show it, so reading the record would report every colleague
-//     exchange as unanswered.
-//   - [ReplyNone] — nobody asked, so there is no answer anybody is missing. A
-//     turn that ends in prose has not failed to reply; it had nobody to reply
-//     to, which is the whole reason triage is cheap.
-//
-// It exists for the record of how a turn ended — the executor log's end, kept
-// on the turn's row beside its session, which the conversation's next turn is
-// told — which has to tell "the seat said this" from "the seat concluded this
-// and nobody heard it": [Result.Delivered] for a turn whose loop ended
-// it, and the engine's own reading of a run's bridged calls for one a loss or a
-// person's stop ended with no frame of it left. Asking the tool record on all
-// three filed an A2A answer and an unprompted turn's own notes as things that
-// never reached anybody — which is the same false record this was written to
-// stop, pointed the other way. (For [ReplyEngine] the record carries whether
-// the engine's own reply went, which this cannot see.)
+// Only [ReplyTool] is a question about tool calls ([DeliveredTo]).
+// [ReplyEngine] is delivered by construction (the record carries whether the
+// engine's reply went, which this cannot see) and [ReplyNone] has no answer
+// missing; asking the tool record on all three filed them as never delivered.
+// It feeds the executor log's ending: [Result.Delivered] where the loop ended
+// the turn, this over bridged calls where a loss or stop left no frame.
 func Answered(calls []ledger.Call, s Surface, reply Reply) bool {
 	if reply.Kind != ReplyTool {
 		return true
@@ -348,32 +282,17 @@ func Answered(calls []ledger.Call, s Surface, reply Reply) bool {
 	return DeliveredTo(calls, s, reply)
 }
 
-// Record is what every delivery check reads: every call this turn's
-// CLOSED rounds made, then the current round's.
+// Record is what every delivery check reads: every call this turn's CLOSED
+// rounds made, then the current round's.
 //
-// THE OBLIGATION IS THE TURN'S, NOT THE ROUND'S. Somebody waiting is answered
-// once; a round the reviewer sends back for something else does not un-answer
-// them. And the prior-work ledger tells every later round exactly that — an
-// earlier round's successful write ALREADY RAN, "do NOT issue it again" — so a
-// check reading the round alone demanded the one thing the round was forbidden
-// to do. That shipped: a seat answered a founder's comment with a comment of
-// its own, was sent back by its reviewer to re-read the item first, and then
-// had eleven submissions citing that comment refused as "nothing delivered";
-// its reviewer's `done` was overturned for the same reason, and the round
-// after that posted the same acknowledgement in a chat channel instead. Three
-// rounds, a stray post, and a turn recorded as failed for having answered in
-// its first.
+// THE OBLIGATION IS THE TURN'S, NOT THE ROUND'S: the prior-work ledger tells
+// later rounds an earlier write ALREADY RAN, so a check reading the round
+// alone refused a reply already posted and sent the turn to post it again.
+// The runner's citation check, [Check] and [OverrideDone] all read this: what
+// one refuses another must not accept. [Result.Delivered] deliberately does not.
 //
-// The runner's check of a submission's citations, [Check] and [OverrideDone]
-// all read this, and must: what one of them refuses another must not accept,
-// or a model is told one thing at submission and judged by another.
-// [Result.Delivered] deliberately does NOT — see its own doc.
-//
-// AND THE CALLS A RECORD DID NOT KEEP, by name and outcome ([ledger.Called]):
-// an earlier round's elided middle, and the current round's where the caller
-// hands it ([Work.Record]). A reply posted from the middle of a long run
-// reached its person as surely as one its record kept, and a check that read
-// the kept calls alone refuted it and sent the round back to post it again.
+// It includes the calls a record did not keep, by name and outcome
+// ([ledger.Called]): elided middles, a reply posted mid-run reached its person.
 func Record(earlier []ledger.Iteration, current []ledger.Call) []ledger.Call {
 	n := len(current)
 	for _, it := range earlier {
@@ -403,19 +322,14 @@ func (w Work) Called() []ledger.Call {
 // Remedy is the sentence a delivery refusal ends with: how to deliver where
 // the waiting party actually is.
 //
-// IT NAMES THE TOOLS, because the sentence it replaced named a MECHANISM —
-// "`list_mcp_server_tools` and `activate_tool` will find it" — and the
-// mechanism is right for only one kind of surface. A vendor's tools sit behind
-// discovery; Worklet and Doclet are answered by
-// first-party tools the executor already holds, which no discovery call
-// lists. A seat woken by a work-item comment was sent to discovery, found the
-// one MCP server it held, and posted its answer in the team's chat channel: a
-// surface that could never satisfy the check, so the turn ended on the
-// iteration cap with a stray message left behind it.
+// IT NAMES THE TOOLS, not a discovery mechanism: a vendor's tools sit behind
+// discovery, but Worklet and Doclet are answered by first-party tools the
+// executor already holds, which no discovery call lists. Sent to discovery, a
+// seat woken by a work-item comment posted in a chat channel that could never
+// satisfy the check.
 //
-// Where the asker's surface cannot be named — no surface, or one this seat
-// holds no tool for, which are [DeliveredTo]'s two fallbacks — any delivery
-// counts, and the general instruction is the honest one.
+// Where the asker's surface cannot be named ([DeliveredTo]'s two fallbacks)
+// any delivery counts, and the general instruction is the honest one.
 func Remedy(s Surface, reply Reply) string {
 	on := reply.Surface
 	if on == "" || !s.Reaches(on) {
@@ -477,50 +391,16 @@ func DeliverersFor(s Surface, reply Reply) []string {
 }
 
 // Acted reports whether this record shows the turn already reached outside
-// the engine: that re-running it would repeat something it cannot take back,
-// and that ending it as though nobody was asking would leave something that
-// happened unreported.
+// the engine: re-running it would repeat something irreversible. SUCCESSFUL
+// calls only. Read by [Abandon], [Check] and the live submission, which refuse
+// a `no_action` it answers true for ([ActedAccount]). Not [Delivered], which
+// counts only tools carrying an answer: a turn that asked a colleague ended
+// skipped, with nothing reviewed.
 //
-// ONE RULE, THREE READERS. [Abandon] spends a trigger on a true answer — a
-// redelivery that would have re-run the turn is given up instead — and [Check]
-// will not end as skipped a `no_action` this answers true for, nor will the
-// runner's live submission accept one ([ActedAccount] says what it did).
-// Check read [Delivered] instead, the other question below, so a turn nobody
-// asked for that asked a colleague, reacted or published and then said nobody
-// was asking ended skipped, with no episode and nothing reviewed.
-//
-// A DIFFERENT QUESTION FROM [Delivered], and the two must not be merged.
-// Delivered asks whether an answer could have reached somebody, so it counts
-// only the tools that can carry one: an MCP write, or a first-party tool the
-// engine registered as reaching a surface — a work-item comment does, a diary
-// write never does however much it writes. This asks whether anything
-// irreversible happened at all, so a builtin that wakes a colleague counts
-// exactly as much as a Jira comment does.
-//
-// TWO HALVES, FAILING IN OPPOSITE DIRECTIONS. A false positive costs [Abandon]
-// work that never left the process — a trigger given up that a redelivery
-// would have run cleanly — and costs Check a round sent back, or the live
-// submission a call refused, to report what the turn did, and a review; a
-// false negative merely leaves today's behaviour in place. So the half this
-// rule adds counts PROOF alone: a call whose own annotations say open-world
-// and do not say read-only, and a first-party tool nobody classified proves
-// nothing and is not counted. The other half is the delivery check's
-// ([Deliverable]): a first-party tool registered as reaching somebody, or an
-// MCP-served tool not proven read-only, which FAILS CLOSED, the rule that has
-// survived two incidents, so an MCP tool that no hint marks as a read or as a
-// write, from its server or from an operator's override, counts though nothing
-// says it wrote: [ActedAccount] names such a call apart, as one the engine
-// cannot tell from a write ([Surface.PresumedWrites]).
-//
-// A READ OF THE WORLD IS NOT AN ACT. A web search or `ssh_read` is open-world
-// — it reaches outside the process — and read-only: it changes nothing anybody
-// sees, so a retry repeats nothing and there is nothing to report. Were it
-// counted, a triage turn that searched and found nothing to do could not end
-// quietly, and one that broke after a search would be given up as one that had
-// written. The exclusion is on the open-world half alone: a delivery is always
-// an act, so nothing [Delivered] counts can read as no act here.
-//
-// SUCCESSFUL calls only, like Delivered: a post that failed did not post.
+// TWO HALVES, FAILING IN OPPOSITE DIRECTIONS: a false positive gives up a
+// trigger a redelivery would have run; a false negative leaves today's
+// behaviour. So this half counts PROOF alone (open-world, not read-only; a web
+// search is no act), and [Deliverable]'s FAILS CLOSED ([Surface.PresumedWrites]).
 func Acted(calls []ledger.Call, s Surface) bool {
 	return slices.ContainsFunc(calls, func(c ledger.Call) bool { return actsOutside(c, s) })
 }
@@ -537,24 +417,18 @@ func actsOutside(c ledger.Call, s Surface) bool {
 	}
 }
 
-// ActedWith says which tools this record acted with — the calls [Acted]
-// counts — as every correction that turns on an act names them: each tool
-// once, in name order, the first [actedNamed] by name and then how many more
-// ([words.AndMore]). Empty exactly where Acted is false.
+// ActedWith says which tools this record acted with (the calls [Acted] counts):
+// each once, in name order, the first [actedNamed] by name and then how many
+// more ([words.AndMore]). Empty exactly where Acted is false.
 //
-// TWO KINDS OF CORRECTION TURN ON AN ACT: the `no_action` correction, for any
-// act, a delivery included, which says what the turn did through
-// [ActedAccount]; and each correction that finds the turn acted but delivered
-// nothing the engine knows of ([KnownDelivered]), which names the tools
-// through this. Those say only that the turn called them, which is as true of
-// a call the engine only presumes wrote ([Surface.PresumedWrites]) as of an
-// ask.
+// Corrections that find the turn acted but delivered nothing the engine knows
+// of ([KnownDelivered]) name tools through this and say only that it called
+// them, as true of a presumed write ([Surface.PresumedWrites]) as of an ask.
+// The `no_action` one uses [ActedAccount].
 //
-// A SENTENCE THAT SAYS NOTHING WAS DONE MUST BE TRUE. "No tool that acts
-// outside the engine was called", said to a turn that asked a colleague, reads
-// as false to the model looking at its own successful call, and a correction a
-// model does not believe is one it argues with rather than acts on — the
-// reason [OverrideDone] already says so by name where a turn wrote elsewhere.
+// A SENTENCE THAT SAYS NOTHING WAS DONE MUST BE TRUE: "no tool that acts
+// outside the engine was called", said to a turn looking at its own
+// successful call, is one the model argues with.
 func ActedWith(calls []ledger.Call, s Surface) string {
 	names := actedNames(calls, s)
 	if len(names) == 0 {
@@ -619,15 +493,11 @@ func actedNames(calls []ledger.Call, s Surface) []string {
 // actedNamed is how many tools [ActedWith] names before it says how many more,
 // and [ActedAccount] in each of its two lists.
 //
-// THE NAMES POINT, THEY DO NOT RECORD. A correction is handed to the next round
-// verbatim and carried as its review notes into every later round's brief, so
-// its length must not grow with how broad a run was. And every call the names
-// stand for is already in front of the model: in its own run's transcript when
-// its submission is refused, and in the prior-work ledger, which lists the
-// round's calls, on every round after a correction. Five keep the clause to a
-// line at a tool name's usual length, and a turn that acted through more is
-// told how many, which is all it needs to find them in its own record; the
-// no_action correction's two lists come to two lines at most.
+// THE NAMES POINT, THEY DO NOT RECORD. A correction is carried as review notes
+// into every later round's brief, so its length must not grow with the run, and
+// every call it names is already in the model's transcript and the prior-work
+// ledger. Five keep the clause to a line at a usual tool name length; a turn
+// that acted through more is told how many.
 //
 // CAPPED, UNLIKE [Remedy]'s list: Remedy's names are an instruction to pick
 // from, where a cap could hide the one tool that delivers; these remind the
@@ -660,19 +530,13 @@ type Verdict struct {
 // judgement about content, which is the reviewer's.
 func Check(w Work, earlier []ledger.Iteration, reply Reply, s Surface) Verdict {
 	record := w.Record(earlier)
-	// TWO PREDICATES, TWO QUESTIONS, and they are deliberately not one
-	// variable. `acted` asks whether anything at all reached outside the
-	// engine, which is what makes ending a turn as "nobody was asking"
+	// TWO PREDICATES, TWO QUESTIONS, deliberately not one variable. `acted`
+	// ([Acted], also what decides a broken turn's redelivery) asks whether
+	// anything reached outside the engine, which makes "nobody was asking"
 	// wrong; `delivered` asks whether the party WAITING was reached, which
-	// is what makes a claim of delivery wrong. A turn can satisfy the first
-	// and fail the second — it files a ticket while a founder waits in chat
-	// — and collapsing them lets that turn pass one check under the other's
-	// name.
-	//
-	// `acted` is [Acted], the rule a broken turn's redelivery is decided by.
-	// It was [Delivered] once, which collapsed the first question into the
-	// second: a turn nobody asked for that asked a colleague or reacted, and
-	// then said nobody was asking, ended skipped.
+	// makes a claim of delivery wrong. A turn can satisfy the first and fail
+	// the second (a ticket filed while a founder waits in chat); collapsing
+	// them lets it pass one check under the other's name.
 	acted := Acted(record, s)
 	delivered := DeliveredTo(record, s, reply)
 
@@ -770,22 +634,16 @@ func Check(w Work, earlier []ledger.Iteration, reply Reply, s Surface) Verdict {
 
 // OverrideDone reports whether a reviewer's `done` has to be overturned.
 //
-// THE LAST LAYER, and it stays after [Check] because the two see different
-// things: Check reads the executor's own claim before the reviewer looks at
-// anything, while this reads the reviewer's verdict against the same record.
-// The failure it exists for is the recorded one — the reviewer's model judges
-// the produced TEXT, finds a good answer in it, and says done even though
-// nothing put that answer anywhere a person can see.
+// THE LAST LAYER: Check reads the executor's claim before the reviewer looks,
+// this reads the reviewer's verdict against the same record. A reviewer judging
+// the produced TEXT says done though nothing put the answer anywhere a person
+// can see.
 //
-// It fires only when somebody is waiting for a TOOL to have delivered.
-// Nobody waiting means a research turn that legitimately ends in prose;
-// waiting on the engine means the artifact reaches them either way.
-//
-// Judged on the TURN's record — earlier is the rounds already closed — for
-// the reason [Check] is: an answer the first round gave is still an answer
-// when the reviewer approves the third. Where the turn called something that
-// acts without delivering, the correction names it ([ActedWith]), and it says
-// the turn reached somebody only of a delivery it knows of ([KnownDelivered]).
+// It fires only when somebody is waiting for a TOOL to have delivered (a
+// research turn may end in prose; the engine returns an A2A artifact itself).
+// Judged on the TURN's record, as [Check] is. A turn that called something
+// that acts without delivering has it named ([ActedWith]), and "reached
+// somebody" is said only of a delivery known ([KnownDelivered]).
 func OverrideDone(w Work, earlier []ledger.Iteration, reply Reply, s Surface,
 ) (override bool, correction string) {
 	record := w.Record(earlier)

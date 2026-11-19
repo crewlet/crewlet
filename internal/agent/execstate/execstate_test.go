@@ -364,3 +364,30 @@ func TestAStatesVersionIsReadAloneAsDecodeReadsIt(t *testing.T) {
 		})
 	}
 }
+
+// A CLOSED ROUND'S CALL KEEPS ITS LATE MARK ACROSS THE PARK (ledger.Call.Late):
+// the collection that reviews the round after it is often another process, and
+// a mark lost here hands its reviewer an earlier run's call as the reviewed
+// run's own.
+//
+// Mutation: tag the field `json:"-"`, and the call comes back unmarked.
+func TestAClosedRoundsCallKeepsItsLateMarkAcrossThePark(t *testing.T) {
+	t.Parallel()
+	state := parked()
+	calls := []ledger.Call{
+		{Name: "slack_post", Args: map[string]any{"text": "hi"}, Result: "posted", Digest: "d1", Late: true},
+		{Name: "slack_post", Args: map[string]any{"text": "again"}, Result: "posted", Digest: "d2"},
+	}
+	state.Iterations[0].Calls = calls
+	blob, err := execstate.Encode(state)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	got, ok, err := execstate.Decode(blob)
+	if err != nil || !ok {
+		t.Fatalf("Decode = %v, %v", ok, err)
+	}
+	if !reflect.DeepEqual(got.Iterations[0].Calls, calls) {
+		t.Errorf("the closed round's calls came back as %+v, want %+v", got.Iterations[0].Calls, calls)
+	}
+}

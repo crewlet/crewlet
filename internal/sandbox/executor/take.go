@@ -44,12 +44,14 @@ var _ sandbox.SessionTaker = (*Runner)(nil)
 
 // SessionTakesAtOnce is how many takes this process scrubs at once, each
 // holding a slot of [sessionTakes] from before it asks its box for anything
-// to its scrub's and its meter's end. 27: the base tier's 326 MiB (64 reads at
-// 5.1 MiB, the package doc's "A collection's read of a thread") over a take's
-// hold at its base, 12 MiB, the most of the 11 to 12 MiB
-// BenchmarkATakeAtItsBase measures, rounded down: so the takes at their base
-// hold no more than every read of the tier did when a take held 5.1 MiB.
-const SessionTakesAtOnce = 27
+// to its scrub's and its meter's end. 26: a take at its base holds at most
+// 13 MiB, its scrub's 10 (BenchmarkATakeAtItsBase) and its meter's 3
+// (BenchmarkAMeterAtItsBase) at once, the most of nine runs each, one a
+// process, on a dedicated two-core slot; 26 times over is 338 MiB, within the
+// base tier's 341 MiB (64 reads at 5.3 MiB, the package doc's "A collection's
+// read of a thread"): so the takes at their base hold no more than every read
+// of the tier does.
+const SessionTakesAtOnce = 26
 
 // sessionTakes holds a slot for each take in flight ([SessionTakesAtOnce]).
 var sessionTakes = make(chan struct{}, SessionTakesAtOnce)

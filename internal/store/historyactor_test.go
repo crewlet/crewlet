@@ -9,14 +9,11 @@ import (
 // A HISTORY ROW NAMES ITS AUTHOR ONCE, and replicated migration 0041 is what
 // takes the second copy away.
 //
-// 0026 added `tracker_history.actor_seat` for the operator-id binding, which
-// this build does not have: a person bound to a seat is recorded as the seat
-// itself, kind `human`, beside the credential in `operator_id` — so the column
-// would be a second author nothing writes and a reader could still take as the
-// one that counts. What is asserted is the shape a fresh estate ends at, and
-// that a row written in that shape reads back exactly as written: the three
-// columns that carry the author survive the drop, and the drop took nothing
-// else with it.
+// 0026's `tracker_history.actor_seat` would be a second author nothing writes:
+// a person bound to a seat is recorded as the seat itself, kind `human`, beside
+// the credential in `operator_id`. Asserted: the shape a fresh estate ends at,
+// and that a row in that shape reads back as written, the three author columns
+// surviving the drop.
 //
 // Mutation: delete 0041's `DROP COLUMN actor_seat`, and the column is reported.
 func TestAHistoryRowCarriesNoSeatBesideItsActor(t *testing.T) {

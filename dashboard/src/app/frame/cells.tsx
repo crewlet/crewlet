@@ -30,6 +30,9 @@ import type { AgentAvatar } from "~/lib/avatar.ts";
 import { handleLabel, type SeatKind } from "~/lib/seats.ts";
 import { workItemLabel } from "~/lib/turns.ts";
 import type { WorkItemRef } from "~/protocol/index.ts";
+import { EngineLine } from "~/components/InlineToken.tsx";
+import { NamedRef } from "~/components/NamedRef.tsx";
+import { WORKLET_ITEM_BACKEND } from "~/lib/work.ts";
 
 /** A seat as a grid names it: its name, its kind and, for an agent, its face. */
 export interface SeatFace {
@@ -138,11 +141,23 @@ export function TurnWhatCell({
           ellipsis on a table row, and it lets a phone's stacked card give the
           summary a second line (`frame.css`) without a second rule. */}
       <span className="turn-what-summary clamp" title={summary || doing || undefined}>
-        {summary || (doing ? doing : <span className="muted">no summary recorded</span>)}
+        {/* AN AGENT'S OWN ACCOUNT, which the engine cannot structure: the
+            prose fallback reads what it names (`lib/inlineTokens.ts`). */}
+        {summary ? (
+          <EngineLine text={summary} refs={undefined} />
+        ) : doing ? (
+          doing
+        ) : (
+          <span className="muted">no summary recorded</span>
+        )}
       </span>
       {label && (
         <span className="mono t-caption item-key turn-what-key" title={label.title}>
-          {label.text}
+          {item?.backend === WORKLET_ITEM_BACKEND && item.key ? (
+            <NamedRef named={{ kind: "work_item", id: item.id || item.key, text: item.key }} />
+          ) : (
+            label.text
+          )}
         </span>
       )}
     </span>

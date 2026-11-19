@@ -13,23 +13,17 @@ import (
 )
 
 // EVERY DECLARED METHOD AND EVENT IS IN THE INVENTORY, and every entry is
-// declared: a walk of this package's own files (its tests aside) finds every
-// Method[…]{…} and Event[…]{…} literal, each of which must be name: "…" alone,
-// and the inventory holds exactly those, none twice. So a declaration missing
-// from the inventory fails here, rather than at its first use, where Call,
-// Send, Listen and Of refuse whatever is not an entry, however it was spelled
-// (TestAMethodTheInventoryDoesNotDeclareSendsNothing). And testOnly, which
-// lets the test files' own commands through that refusal, is named in those
-// files twice alone, by its declaration and by the one read that builds what
-// Call, Send, Listen and Of take: no file the engine is built from registers
-// a command the inventory lacks.
+// declared: a walk of this package's own files (tests aside) finds every
+// Method[…]{…} and Event[…]{…} literal, each name: "…" alone, and the
+// inventory holds exactly those, none twice. A missing entry fails here, not
+// at first use (TestAMethodTheInventoryDoesNotDeclareSendsNothing). testOnly,
+// which lets test files' commands through that refusal, is named twice alone,
+// by its declaration and the one read that builds what Call, Send, Listen and
+// Of take: no engine file registers a command the inventory lacks.
 //
-// Mutations: drop an entry from the inventory, and its declaration is found
-// outside it — red; declare a command unkeyed, Method[P, R]{[0]*P{},
-// [0]*R{}, "IO.close"}, with its entry dropped, and the walk refuses the
-// literal it cannot read — red; register a command from a file of the
-// package's own, func init() { testOnly = append(testOnly, PageClose) },
-// and testOnly is named twice more — red.
+// Mutations (each red): drop an entry; declare a command unkeyed,
+// Method[P, R]{[0]*P{}, [0]*R{}, "IO.close"}, entry dropped; register one from
+// an engine file, func init() { testOnly = append(testOnly, PageClose) }.
 func TestEveryDeclaredMethodAndEventIsInTheInventory(t *testing.T) {
 	t.Parallel()
 	entries, err := os.ReadDir(".")

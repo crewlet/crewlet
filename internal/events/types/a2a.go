@@ -6,6 +6,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/named"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
@@ -204,9 +205,9 @@ func fencedBrief(b provenance.Boundary, lead, words string, label provenance.Lab
 // Actor is the colleague who asked, not the bus that relayed it.
 func (e A2ARequest) Actor() string { return e.Requester }
 
-// Summary is the dashboard's one-liner for the ask.
-func (e A2ARequest) Summary() string {
-	return lead(e.Requester, "asked a colleague on "+e.ChannelID)
+// PhraseFor is the dashboard's one-liner for the ask.
+func (e A2ARequest) PhraseFor(string) named.Line {
+	return leadLine(e.Requester, named.Words("asked a colleague on ").Name(named.ChannelRef(e.ChannelID)))
 }
 
 // A2AMessage is the wake an answer puts on the REQUESTER's inbox.
@@ -275,9 +276,9 @@ func (e A2AMessage) lead() string {
 // Actor is the colleague who answered.
 func (e A2AMessage) Actor() string { return e.Sender }
 
-// Summary is the dashboard's one-liner for the answer.
-func (e A2AMessage) Summary() string {
-	return lead(e.Sender, "answered a colleague on "+e.ChannelID)
+// PhraseFor is the dashboard's one-liner for the answer.
+func (e A2AMessage) PhraseFor(string) named.Line {
+	return leadLine(e.Sender, named.Words("answered a colleague on ").Name(named.ChannelRef(e.ChannelID)))
 }
 
 // A2AChannelOpened marks a channel being created between two agents.
@@ -337,18 +338,18 @@ type A2AMessageSent struct {
 // which is the inbox WAKE — this is the audit record of the same message.
 func (A2AMessageSent) EventType() string { return "a2a_message_sent" }
 
-// SummaryFor prefers the message's own sender over the actor: the publisher is
+// PhraseFor prefers the message's own sender over the actor: the publisher is
 // the A2A service, not the colleague whose answer this is.
-func (e A2AMessageSent) SummaryFor(actor string) string {
+func (e A2AMessageSent) PhraseFor(actor string) named.Line {
 	who := e.Sender
 	if who == "" {
 		who = actor
 	}
-	phrase := "sent A2A message on " + e.ChannelID
+	phrase := named.Words("sent A2A message on ").Name(named.ChannelRef(e.ChannelID))
 	if e.Recipient != "" {
-		phrase += " → " + e.Recipient
+		phrase = phrase.Words(" → " + e.Recipient)
 	}
-	return lead(who, phrase)
+	return leadLine(who, phrase)
 }
 
 // A2AChannelClosed marks a channel closing — the exchange is over, and a
@@ -364,7 +365,7 @@ func (e A2AMessageSent) SummaryFor(actor string) string {
 type A2AChannelClosed struct {
 	ChannelID string `json:"channel_id"`
 	// ClosedBy is the participant whose turn closed the channel, and EMPTY
-	// for the maintenance sweep — which is what [A2AChannelClosed.Summary]
+	// for the maintenance sweep, which is what [A2AChannelClosed.PhraseFor]
 	// reads as "system". It went unset on every path until the sweep gained
 	// a producer, so the one branch that says a participant closed it was
 	// dead code and every close in the engine's history was attributed to
@@ -386,14 +387,14 @@ type A2AChannelClosed struct {
 // EventType is the "a2a_channel_closed" wire type.
 func (A2AChannelClosed) EventType() string { return "a2a_channel_closed" }
 
-// Summary names who closed the channel, falling back to the engine itself for
+// PhraseFor names who closed the channel, falling back to the engine itself for
 // the idle sweep — see the branch below.
-func (e A2AChannelClosed) Summary() string {
+func (e A2AChannelClosed) PhraseFor(string) named.Line {
 	who := e.ClosedBy
 	if who == "" {
 		// An idle-close is the maintenance sweep's doing, not a participant's.
 		who = "system"
 	}
-	return fmt.Sprintf("%s closed A2A channel %s (%d messages)",
-		who, e.ChannelID, e.MessageCount)
+	return named.Words(who + " closed A2A channel ").Name(named.ChannelRef(e.ChannelID)).
+		Words(fmt.Sprintf(" (%d messages)", e.MessageCount))
 }

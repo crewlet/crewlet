@@ -844,6 +844,7 @@ export function sourcesAnswer(over: Partial<AtlasSourcesAnswer> = {}): AtlasSour
 /** One task as a list row, open unless its status says otherwise. */
 export function taskRow(key: string, title: string, over: Partial<WorkSummary> = {}): WorkSummary {
   return {
+    flow: null,
     id: idFor(`task:${key}`),
     key,
     project: key.split("-")[0] ?? "",
@@ -869,6 +870,7 @@ export function entryWorkAnswer(
   over: Partial<AtlasEntryWorkAnswer<WorkSummary>> = {},
 ): AtlasEntryWorkAnswer<WorkSummary> {
   return {
+    flow_live: false,
     open,
     recent,
     open_total: { total: open.length },

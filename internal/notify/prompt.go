@@ -9,6 +9,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/named"
 	"github.com/crewlet/crewlet/internal/provenance"
 )
 
@@ -162,6 +163,10 @@ type Inbound struct {
 	Writer *types.NotificationWriter
 
 	Subject string
+
+	// SubjectRefs is what Subject names, set by a first-party parser that
+	// built the subject as a [named.Line] (package named).
+	SubjectRefs []named.Ref
 
 	// Body is the message as it arrived, raw. The prompt turns it into the
 	// enriched trigger and is handed it fenced ([Render]); every other

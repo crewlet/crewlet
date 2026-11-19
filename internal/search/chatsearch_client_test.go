@@ -10,14 +10,12 @@ import (
 
 // THE DASHBOARD ASKS FOR THE CHAT SEARCH PAGE THE ENGINE SERVES.
 //
-// The chat search screen and the room finder ask `chat_search` for a page
-// (`CHAT_SEARCH_PAGE`, contract/chat.ts) and the index answers at most
-// [search.MaxChatSearchLimit], clamping a larger ask without a word. They
-// asked for fifty — the transcript's page — so every full answer was forty hits
-// a screen took for fewer than it asked, and drew as everything that matched.
-// Asking for exactly the engine's page is what lets a screen say a full page
-// may have more behind it: above it, the clamp hides the truncation; below it,
-// a person is shown less than one answer holds.
+// The chat search screen and room finder ask `chat_search` for a page
+// (`CHAT_SEARCH_PAGE`, contract/chat.ts); the index answers at most
+// [search.MaxChatSearchLimit], clamping a larger ask silently. Asking for
+// exactly the engine's page is what lets a screen say a full page may have more
+// behind it: above it the clamp hides the truncation, below it a person is
+// shown less than one answer holds.
 //
 // Mutation: change CHAT_SEARCH_PAGE in contract/chat.ts, or MaxChatSearchLimit,
 // and this goes red.

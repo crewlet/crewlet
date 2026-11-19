@@ -1081,9 +1081,8 @@ type resumeInput struct {
 	// ([sandbox.ResumeRequest.Bridged]); empty on a close that judges no
 	// calls.
 	Bridged sandbox.BridgeLog
-	// BridgedRead is how many calls the log had taken at that read
-	// ([sandbox.ResumeRequest.BridgedRead]).
-	BridgedRead int
+	// BridgedRead is that read ([sandbox.ResumeRequest.BridgedRead]).
+	BridgedRead sandbox.LogRead
 	// Leads is the turn's leads as the coordinator read them for the resume
 	// ([sandbox.ResumeRequest.Leads]), or said it could not
 	// ([sandbox.TurnLeads.Unread]); zero on a close or a reopening, which
@@ -1726,9 +1725,9 @@ func runnerResume(in resumeInput, steered []steer.Read, seal *sandbox.CallSeal,
 		// when the job carried on by that answer opened: no submission
 		// made before it is the round's.
 		Answered: in.Bridged.AnsweredThrough,
-		// AND HOW MANY CALLS THE READ SAW, which a relaunch that carries the
-		// round on hands its launch: the opening marks every call the log
-		// took after it late ([sandbox.Continuation.BriefRead]).
+		// AND WHAT THE READ SAW, which every relaunch hands its launch: the
+		// opening marks late every call the log took after it, or carries it
+		// into a new round ([sandbox.LaunchRequest.BriefRead]).
 		BridgedRead: in.BridgedRead,
 		// AND A PERSON'S ANSWER, which carries the run on rather than
 		// reporting it (see [runner.Asked]), or the loss of its job with its
@@ -4073,10 +4072,9 @@ type executorRun struct {
 // the seat's config assembled ([Engine.runEnvironment]), with the integrations'
 // box settings beneath everything and their credentials over it.
 //
-// ONE CONSTRUCTION for a seat's executor run and the Dashboard Assistant's deep
-// work ([assistantDeep.Run]). THE PICKED MEMBER, never a second resolution of
-// the chain: the runner IS that member's harness, so a launch that fell back
-// past the head gets the fallback's model, env and login.
+// THE PICKED MEMBER, never a second resolution of the chain: the runner IS
+// that member's harness, so a launch that fell back past the head gets the
+// fallback's model, env and login.
 func newExecutorRun(agent *harness.Provider, seat runEnv) executorRun {
 	// THE MODEL IS HANDED IN THE HARNESS'S OWN GRAMMAR (OpenCode's
 	// `<provider>/<model>`, Claude Code's alias), as every other phase's run on

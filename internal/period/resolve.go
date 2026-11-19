@@ -26,27 +26,16 @@ type Anchor struct {
 
 // Resolve turns one relative token into an instant.
 //
-// The tokens are the ones a person types, and they come in three shapes: three
-// day names, an offset in days, and eight calendar boundaries. Anything else is
-// an RFC3339 timestamp, which is the caller's job rather than this function's;
-// so an unknown token is an ERROR here rather than a silent zero, because a
-// zero instant is 1 January year one and would match every task ever written.
+// The tokens are what a person types: day names, an offset in days, calendar
+// boundaries. Anything else is an RFC3339 timestamp, the caller's job, so an
+// unknown token is an ERROR rather than a silent zero (1 January year one,
+// which would match every task ever written).
 //
-// # The calendar is this package's
-//
-// Every day, week and month below is a window [At] cut on the
-// company's clock, so a `due=` filter and a due band agree with everything
-// else the engine cuts on that calendar about where a day or a week begins:
-// Monday, the ISO week, for all of them, and a company whose week genuinely
-// starts on Sunday writes the two dates, because there is one calendar
-// rather than a copy of it here. The copy this
-// replaced cut each boundary with time.Date and then stepped from it with
-// AddDate, and in the zones that move their clocks at midnight both steps
-// were wrong: in Santiago on 8 September 2024, "today" resolved to 23:00 on
-// the 7th, so a task due that last hour of the 7th read as due today; in
-// Amman on 29 October 2021 it resolved to the second of two midnights, an
-// hour late; and every offset or boundary stepped from either carried the
-// error with it.
+// Every day, week and month is a window [At] cut on the company's clock, so a
+// `due=` filter agrees with the rest of the engine about where a day or week
+// begins (Monday, the ISO week); there is one calendar, not a copy here.
+// time.Date plus AddDate is wrong in zones that move their clocks at midnight
+// (Santiago, Amman): "today" lands an hour off.
 func Resolve(token string, now time.Time, loc *time.Location) (Anchor, error) {
 	if loc == nil {
 		loc = time.UTC

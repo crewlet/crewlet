@@ -66,6 +66,9 @@
 // resolves to exactly one declaration in the real tree, and names a gate that
 // exists and reads it. A declaration with two gates, or a gate reading a
 // declaration under the wrong reader, fails there rather than drifting.
+// [Interfaces] is the one reader outside the table: it reads the wire's module
+// (protocol/ and the contract) whole, for a gate that pairs every declaration
+// there with the engine struct whose keys it names.
 //
 // # One home: `dashboard/src/contract/`
 //
@@ -104,6 +107,7 @@ package clientsource
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -371,16 +375,87 @@ func Interface(tree, name string) ([]Member, error) {
 	if err := registered(name, ReadInterface); err != nil {
 		return nil, err
 	}
-	return interfaceMembers(tree, name, nil)
+	return interfaceMembers(func(name string) (decl, error) {
+		return declaration(tree, headInterface, name)
+	}, name, nil)
 }
 
-func interfaceMembers(tree, name string, seen []string) ([]Member, error) {
+// Interfaces returns every interface declared in the files under tree's dirs
+// (each relative to tree, slash-separated), by name, with its members as
+// [Interface] reads them.
+//
+// The wire's own module is read whole rather than by registered name: a gate
+// that pairs each declaration with the engine struct whose keys it names holds
+// one the day it is written (internal/wiregate). A name declared twice under
+// the dirs is refused, as [Interface] refuses one. What a declaration extends
+// is the one of that name in its own file, else under the dirs, else the one
+// in the tree; a screen's own interface of a wire name is its own.
+func Interfaces(tree string, dirs ...string) (map[string][]Member, error) {
+	files, err := scan(tree)
+	if err != nil {
+		return nil, err
+	}
+	all, module := map[string][]decl{}, map[string][]decl{}
+	for _, f := range files {
+		under := slices.ContainsFunc(dirs, func(dir string) bool {
+			return strings.HasPrefix(f.rel, strings.TrimSuffix(dir, "/")+"/")
+		})
+		for _, at := range allHeads(f.toks, headInterface) {
+			name, d := f.toks[at].text(), decl{file: f, at: at}
+			all[name] = append(all[name], d)
+			if under {
+				module[name] = append(module[name], d)
+			}
+		}
+	}
+	out := map[string][]Member{}
+	for _, name := range slices.Sorted(maps.Keys(module)) {
+		if len(module[name]) != 1 {
+			return nil, module[name][1].errorf("interface %s is declared %d times in the wire's "+
+				"module, want exactly one", name, len(module[name]))
+		}
+		own := module[name][0]
+		find := func(name string) (decl, error) {
+			for _, in := range [][]decl{all[name], module[name]} {
+				for _, d := range in {
+					if d.rel == own.rel {
+						return d, nil
+					}
+				}
+			}
+			if len(module[name]) == 1 {
+				return module[name][0], nil
+			}
+			return declaration(tree, headInterface, name)
+		}
+		members, err := interfaceMembers(find, name, nil)
+		if err != nil {
+			return nil, err
+		}
+		out[name] = members
+	}
+	return out, nil
+}
+
+// allHeads is the index of the name token of every `kind` declaration in one
+// file's tokens, by [heads]' rule.
+func allHeads(toks []token, kind head) []int {
+	var out []int
+	for i := 0; i+1 < len(toks); i++ {
+		if isHead(toks, i, kind, toks[i+1].text()) {
+			out = append(out, i+1)
+		}
+	}
+	return out
+}
+
+func interfaceMembers(find func(string) (decl, error), name string, seen []string) ([]Member, error) {
 	if slices.Contains(seen, name) {
 		return nil, fmt.Errorf("clientsource: interface %s extends itself through %s",
 			name, strings.Join(seen, " → "))
 	}
 	seen = append(seen, name)
-	found, err := declaration(tree, headInterface, name)
+	found, err := find(name)
 	if err != nil {
 		return nil, err
 	}
@@ -404,7 +479,7 @@ func interfaceMembers(tree, name string, seen []string) ([]Member, error) {
 						"that leaves is not something a declaration shows", name,
 						t.text())
 				}
-				inherited, inheritErr := interfaceMembers(tree, t.text(), seen)
+				inherited, inheritErr := interfaceMembers(find, t.text(), seen)
 				if inheritErr != nil {
 					return nil, fmt.Errorf("clientsource: interface %s extends %s: %w",
 						name, t.text(), inheritErr)
@@ -932,30 +1007,32 @@ func declaration(tree string, kind head, name string) (decl, error) {
 func heads(toks []token, kind head, name string) []int {
 	var out []int
 	for i := 0; i+1 < len(toks); i++ {
-		if !toks[i].word(string(kind)) || !toks[i+1].word(name) {
-			continue
+		if isHead(toks, i, kind, name) {
+			out = append(out, i+1)
 		}
-		if i > 0 && toks[i-1].is(".", "?.") {
-			continue
-		}
-		next := token{}
-		if i+2 < len(toks) {
-			next = toks[i+2]
-		}
-		switch kind {
-		case headConst:
-		case headType:
-			if !next.is("=", "<") {
-				continue
-			}
-		case headInterface:
-			if !next.is("{", "<") && !next.word("extends") {
-				continue
-			}
-		}
-		out = append(out, i+1)
 	}
 	return out
+}
+
+// isHead reports whether toks[i] begins a `kind` declaration of `name`.
+func isHead(toks []token, i int, kind head, name string) bool {
+	if !toks[i].word(string(kind)) || !toks[i+1].word(name) {
+		return false
+	}
+	if i > 0 && toks[i-1].is(".", "?.") {
+		return false
+	}
+	next := token{}
+	if i+2 < len(toks) {
+		next = toks[i+2]
+	}
+	switch kind {
+	case headType:
+		return next.is("=", "<")
+	case headInterface:
+		return next.is("{", "<") || next.word("extends")
+	}
+	return true
 }
 
 // scan reads and lexes every source file under `tree`.

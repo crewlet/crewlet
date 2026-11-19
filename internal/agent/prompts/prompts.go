@@ -40,7 +40,27 @@
 // action is a tool call and prose performs nothing — is stated here, once.
 // Generic agent behaviour, worked examples and restated emphasis are
 // not: a second copy of a rule is two texts that drift, and a model reads
-// whichever it saw last.
+// whichever it saw last. No tool the phase already holds is listed again:
+// "## Tools to discover" names only what a phase that discovers can still
+// reach, and the executor lists none.
+//
+// Two prompts, not three: the frame that decides is the frame that acts, so
+// the identity scaffold is sent once and not twice with one thrown away
+// between.
+//
+// A section that sends a seat to a tool renders only where the seat holds
+// EVERY tool its claims rest on (the executor's code sections, gated on
+// [CodeHistoryTools], [CodeSearchTools], [CodeWriteTools] and
+// [CodeMergeTools], which internal/agent/builtin's tests hold to what it
+// registers). Code history is read on the server and not from a clone, a
+// Gitlet repository being cloned blobless, so it is for building and not for
+// answering questions. A server-keyed tool skill fires on the servers the
+// registry holds a tool of, never on the keys of mcp_env, which name
+// credentials.
+//
+// [KnowledgeAnswerSystem] ends on [provenance.StandingInstruction] inside the
+// constant, so its prefix stays byte-stable, and every source is fenced under
+// the label its backend gave it (ADR-0040).
 //
 // # Prompt text is behaviour
 //

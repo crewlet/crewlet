@@ -211,28 +211,15 @@ func topLevelTest(name string) bool {
 }
 
 // readWeights parses a weights file: one `importpath<TAB>seconds<TAB>cpu` line
-// per package — its binary's wall time and its share of the run's CPU — and
-// one `importpath<TAB>Test<TAB>seconds` line per top-level test under it.
+// per package (wall time, share of the run's CPU; finite, non-negative) and one
+// `importpath<TAB>Test<TAB>seconds` line per top-level test under it.
 //
-// STRICT, because the only producer is internal/skipgate's -timings and a line
-// it did not write is a bug somewhere upstream that would otherwise surface
-// as a mysteriously ordered run. A blank line is skipped (a file that ends
-// in one is still that file); anything else that is not a path and either a
-// top-level test's name ([topLevelTest]: a subtest is inside its parent's
-// seconds, so skipgate never writes one) and its seconds, or a package's two
-// finite, non-negative numbers of seconds, is refused naming the line, and so
-// is a package or a test named twice — one run measures each once, so two
-// entries are two runs spliced together and neither number is the
-// measurement — and a test whose package has no line of its own, since
-// skipgate times a test only under a package it timed.
-//
-// The rule can be tightened or loosened freely, because ci.yml keys the
-// measurement it keeps on a hash of this package's source and
-// internal/skipgate's. A file this code wrote that it refuses fails CI; one
-// older code wrote is offered only while this code has none, and a refusal
-// drops it for a deal by count. Keyed on anything less, a tighter rule here
-// would refuse the saved file on every later run, and no run could save one
-// it accepts, since only a run whose half passed saves at all.
+// STRICT: the only producer is internal/skipgate's -timings, so any other line
+// is an upstream bug. Blank lines are skipped; a malformed line (a subtest is
+// never written, see [topLevelTest]), a package or test named twice (two runs
+// spliced together), or a test whose package has no line is refused naming it.
+// The rule may change freely: ci.yml keys the kept measurement on a hash of this
+// package's and skipgate's source, so a tighter rule never meets a file it saved.
 //
 // Pure over a reader so the refusals can be stated directly.
 func readWeights(r io.Reader, name string) (measurement, error) {
@@ -305,16 +292,12 @@ func readWeights(r io.Reader, name string) (measurement, error) {
 // weigh gives every package of a half its weight, and says how many the
 // measurement did not name.
 //
-// A package the measurement names keeps its own seconds. One it does not — new
-// since the measured run, or renamed — weighs the MEDIAN of the half's measured
-// packages: neither the first thing started nor the last, which is the honest
+// A named package keeps its own seconds. An unnamed one (new or renamed) weighs
+// the MEDIAN of the half's measured packages: neither first nor last, the honest
 // position for a package nothing is known about. The median is of THIS half
-// only, so a file that also times the other half (internal/e2e, in
-// particular) cannot drag it. With nothing measured at all every package
-// weighs one, and the result is go list's order.
-//
-// measured == nil means no weights were asked for, and is the same answer as
-// a measurement that names nothing.
+// only, so a file that also times the other half (internal/e2e) cannot drag it.
+// With nothing measured every package weighs one, giving go list's order;
+// measured == nil (no weights asked for) is the same answer.
 func weigh(half []string, measured map[string]float64) (weights map[string]float64, unmeasured int) {
 	var known []float64
 	for _, p := range half {

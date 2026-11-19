@@ -107,15 +107,14 @@ func TestEveryRowDecidesTheAssistant(t *testing.T) {
 
 // AN ASSIST-NEVER VERB REFUSES AN ASSISTED PRINCIPAL, UNDER EITHER SCOPE.
 //
-// Walked over every verb on the human-only list, with a person holding every
-// permission and its control, the same person at their keyboard, admitted on
-// some object of the row: through the assistant the verb is refused on every
-// object, under a read grant and under an exec grant alike, naming
-// [authz.ReasonAssistRefused] and no permission (none would change it). A
-// seat-only verb is refused before the assistant's bar is reached, as the
-// person's own click is. And the bar keeps the artifact rows' concealment: a
-// person with no relation to an artifact is told it does not exist, through
-// the assistant as at their keyboard, under either scope.
+// Walked over every human-only verb, with a person holding every permission
+// and its control, the same person at their keyboard, admitted on some object
+// of the row: through the assistant the verb is refused on every object, under
+// either grant, naming [authz.ReasonAssistRefused] and no permission (none
+// would change it). A seat-only verb is refused before the bar is reached, as
+// the person's own click is. The bar keeps the artifact rows' concealment: a
+// person with no relation to an artifact is told it does not exist, as at
+// their keyboard.
 //
 // Mutation: drop the never arm from the bar and every verb here is admitted.
 func TestAnAssistNeverRowRefusesAnAssistedPrincipal(t *testing.T) {
@@ -182,16 +181,13 @@ func TestAnAssistNeverRowRefusesAnAssistedPrincipal(t *testing.T) {
 
 // A READ GRANT TAKES ONLY ASSIST-READ ROWS, AND DECIDES THEM AS THE PERSON.
 //
-// The scope half. Over every row and every object, a read grant decides an
-// assist-read row exactly as the person's own click is decided (it takes
-// nothing away there, and can never add), refuses an assist-approve row with
-// [authz.ReasonAssistScope] (the remedy is a proposal, never a permission) and
-// refuses a never row as the assistant. An exec grant decides an
-// assist-approve row as the person: the request guard binds it to the one
-// approved request, and the table only says the row is one an approval may
-// carry. A grant whose scope is missing or unknown reaches reads alone, and a
-// credential that names the assistant's class with a malformed grant id is
-// the assistant's all the same.
+// Over every row and object, a read grant decides an assist-read row as the
+// person's own click is, refuses an assist-approve row with
+// [authz.ReasonAssistScope] (the remedy is a proposal) and a never row as the
+// assistant. An exec grant decides an assist-approve row as the person (the
+// request guard binds it to one approved request). A missing or unknown scope
+// reaches reads alone, and a credential naming the assistant's class with a
+// malformed grant id is the assistant's all the same.
 //
 // Mutation: let any scope but read take an approve row and the missing scope
 // writes; key the bar on a well-formed grant id and the malformed one does.
@@ -274,16 +270,11 @@ func sameDecision(a, b authz.Decision) bool {
 // THE HUMAN-ONLY LIST IS EXACTLY THE INTENDED SET.
 //
 // ADR-0052's parity rule: the person's assistant takes every verb the person
-// may take, as a read or as the one change they approved, but for the verbs
-// on the human-only list. That list is PINNED here verb by verb, because each
-// entry is a decision a reviewer makes (a sign-in or session ceremony, a
-// credential or secret in clear, the assistant's own decisions, an effect a
-// grant would falsify or hide, an agent seat's own verb), and the walk holds both directions: a verb leaving the
-// list opens it to the assistant, and a verb joining it takes it from every
-// person's assistant, so either is a diff here. The families it is drawn from
-// are walked too, so a credential or session verb added to the table later is
-// held without anybody remembering this test, and every `assistant.` verb is
-// also a person's alone, present.
+// may, but for the human-only list. That list is PINNED here verb by verb, as
+// each entry is a reviewer's decision, in both directions: a verb leaving it
+// opens it to the assistant, one joining it takes it from every assistant. The
+// families it is drawn from are walked too, so a credential or session verb
+// added later is held, and every `assistant.` verb is also a person's alone.
 //
 // Mutation: drop `secrets.reveal` from the list, or add `config.write` to it,
 // and this goes red naming it.

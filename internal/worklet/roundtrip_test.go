@@ -208,7 +208,7 @@ func newRoundTripOn(t *testing.T, q *js.Queue, log *js.DomainLog, node *store.DB
 	if err != nil {
 		t.Fatalf("local read authority: %v", err)
 	}
-	reader, err := worklet.NewReader(db.Reader(), logReader)
+	reader, err := worklet.NewReader(db.Reader(), logReader, nil)
 	if err != nil {
 		t.Fatalf("tracker reader: %v", err)
 	}

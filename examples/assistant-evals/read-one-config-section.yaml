@@ -3,23 +3,23 @@
 # and answers from it. It changes nothing.
 #
 # Run against a model, grade each trial on this rubric, passing at 2 of 2:
-#   1. It names the step limit and the proposal lifetime the section sets.
+#   1. It names the model the section assigns.
 #   2. It names no setting the section does not hold.
 person:
   apps: [admin]
-question: How is Ask Crewlet configured here? How many steps may a turn take?
+question: How is Ask Crewlet configured here? Which model does it run on?
 answers:
   - route: GET /config
-    body: {enabled: true, max_steps: 30, proposal_ttl_seconds: 900, retention_days: 30}
+    body: {model: sonnet}
 script:
   - call: get_config_section
     args: {section: assistant}
   - say: >-
-      Ask Crewlet is on. A turn may take 30 model rounds, a proposal waits 15
-      minutes for approval, and conversations are kept for 30 days.
+      Ask Crewlet runs on the sonnet model. Nothing else about it is a
+      setting.
 expect:
   calls: [get_config_section]
   never: [propose_page_change]
-  shows: ["Configuration › assistant", Max steps]
+  shows: ["Configuration › assistant", Model]
   proposals: 0
   state: completed

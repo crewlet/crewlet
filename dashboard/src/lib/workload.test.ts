@@ -5,6 +5,8 @@ import { HeavyQueue, loadFraction, loadOf, loadRows, loadSentence, loadTone } fr
 
 function row(handle: string, extra: Partial<WorkloadRow> = {}): WorkloadRow {
   return {
+    flow: { working: 0, blocked: 0, waiting: 0, held: 0, due: 0, stuck: 0, moving: 0 },
+    load: 0,
     handle,
     open: 1,
     points: 0,

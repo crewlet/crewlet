@@ -16,49 +16,29 @@ import (
 	"github.com/crewlet/crewlet/internal/tools"
 )
 
-// The LLM-callable side of delegation.
+// The LLM-callable side of delegation: ONE shape, `tasks`; a single
+// delegation is a list of one. A spawn-or-batch `oneOf` would be flattened by
+// serialisers into a payload carrying both branches, leaving the engine to
+// guess which the model meant.
 //
-// # One shape, not two
+// # Refusals name what to write instead
 //
-// The tool this replaces had two: a single spawn (`task_prompt` +
-// `system_prompt`) and a batch (`tasks`), mutually exclusive in prose because
-// no schema could say it. Serialisers flatten a `oneOf` into a payload
-// carrying both branches, so the engine had to guess which the model meant —
-// and the two branches were separate code paths that had to classify failures
-// identically and did not.
-//
-// There is one shape now: `tasks`. A single delegation is a list of one,
-// which costs the model four extra characters and removes a whole class of
-// ambiguity.
-//
-// # Everything the model needs is named in the refusal
-//
-// Every refusal here names the task, says what is wrong, and says what to
-// write instead — the available workers, the ids in this call, the tasks that
-// form the cycle. A model given "invalid request" re-sends the same request.
+// Every refusal names the task, what is wrong and what to write instead (the
+// available workers, the call's ids, the cycle's tasks): a model given
+// "invalid request" re-sends it.
 
-// Tool is `delegate`, bound to ONE parent turn.
-//
-// Bound rather than registered globally: everything a call needs — the
-// parent's surface, its remaining budget, its trace, its visible workers — is
-// per-turn. The alternative is a global registration that reaches those
-// values by hanging a map off the tool-call context and validating its shape
-// at every call. A closure over the turn's Config makes that whole class of
-// "engine config missing or malformed" failure unrepresentable.
+// Tool is `delegate`, bound to ONE parent turn: a closure over the turn's
+// Config, because everything a call needs (the parent's surface, remaining
+// budget, trace, visible workers) is per-turn.
 //
 // # Its workers count their calls on the call's own log
 //
-// A CALL, NOT THE TOOL, owns the work it starts: the surface that runs a call
-// may admit it on a call log of its own — a fork of the run's, taken in the
-// order calls arrived (internal/tools' Surface.Admit) — and hands the turn it
-// admitted the call under to [Tool.CallForTurn]. The workers fork from THAT
-// log, so what they call is the call's own work: absorbed into the run's log
-// once the call returns, and handed on with the call's result, for a caller
-// that records the call where a later segment's call log is seeded from — a
-// bridged run's tool log, kept beside its row. Forked from the run's own log
-// instead, a bridged `delegate`'s workers counted on the run while its record
-// held nothing of them, and a run resumed from that record took a join a
-// worker's leave came between for the first join's retry.
+// A CALL, NOT THE TOOL, owns the work it starts: the surface may admit a call
+// on a call log of its own, a fork of the run's taken in arrival order
+// (internal/tools' Surface.Admit), and hands the turn it admitted the call
+// under to [Tool.CallForTurn]. The workers fork from THAT log, absorbed into
+// the run's once the call returns; forked from the run's, a bridged
+// `delegate`'s workers counted on a log its record held nothing of.
 type Tool struct{ cfg Config }
 
 var (

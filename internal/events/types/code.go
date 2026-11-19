@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/named"
 )
 
 // WHO READ A REPOSITORY A UNIT KEEPS TO ITSELF: Gitlet's fetch audit (ADR-0088).
@@ -148,27 +149,28 @@ func (e CodeFetched) Actor() string {
 	return e.Principal
 }
 
-// SummaryFor names the repository and what was read of it: a fetch or a
+// PhraseFor names the repository and what was read of it: a fetch or a
 // download by its size, a server-side read by its kind, each with how many
 // times where the record stands for more than one.
-func (e CodeFetched) SummaryFor(actor string) string {
-	what := "fetched " + e.RepoName
+func (e CodeFetched) PhraseFor(actor string) named.Line {
+	repo := named.Repo(e.RepoName)
+	what := named.Words("fetched ").Name(repo)
 	switch {
 	case e.Via == FetchedViaGit && e.Kind == FetchedRaw:
-		what = "downloaded a file of " + e.RepoName
+		what = named.Words("downloaded a file of ").Name(repo)
 	case e.Via == FetchedViaGit && e.Kind == FetchedArchive:
-		what = "downloaded " + e.RepoName + " as a ZIP"
+		what = named.Words("downloaded ").Name(repo).Words(" as a ZIP")
 	}
 	if e.Via == FetchedViaTool {
-		what = "read " + e.RepoName
+		what = named.Words("read ").Name(repo)
 		if e.Kind != "" {
-			what += "'s " + e.Kind
+			what = what.Words("'s " + e.Kind)
 		}
 	}
 	if e.Reads > 1 {
-		what += " " + strconv.FormatInt(e.Reads, 10) + " times"
+		what = what.Words(" " + strconv.FormatInt(e.Reads, 10) + " times")
 	}
-	return lead(actor, what+" ("+strconv.FormatInt(e.Bytes, 10)+" bytes)")
+	return leadLine(actor, what.Words(" ("+strconv.FormatInt(e.Bytes, 10)+" bytes)"))
 }
 
 // CodeCheckFinished records that one attempt of a check of a commit ENDED, as
@@ -257,22 +259,19 @@ func (CodeCheckFinished) EventType() string { return "code_check_finished" }
 // actor is the node that wrote it.
 func (e CodeCheckFinished) AgentID() string { return e.Agent }
 
-// SummaryFor names the check, its attempt, the commit's first twelve digits,
+// PhraseFor names the check, its attempt, the commit's first twelve digits,
 // the repository and how it ended.
-func (e CodeCheckFinished) SummaryFor(actor string) string {
-	commit := e.OID
-	if len(commit) > 12 {
-		commit = commit[:12]
-	}
-	what := "check " + e.Name + " (attempt " + strconv.Itoa(e.Attempt) + ") of " + e.RepoName + "@" + commit +
-		" " + e.State
+func (e CodeCheckFinished) PhraseFor(actor string) named.Line {
+	what := named.Words("check " + e.Name + " (attempt " + strconv.Itoa(e.Attempt) + ") of ").
+		Name(named.Repo(e.RepoName)).Words("@").Name(named.CommitOf(e.RepoName, e.OID)).
+		Words(" " + e.State)
 	if e.Reason != "" {
-		what += " (" + e.Reason + ")"
+		what = what.Words(" (" + e.Reason + ")")
 	}
 	if e.Replaces != "" {
-		what += ", replacing its " + e.Replaces + " ending"
+		what = what.Words(", replacing its " + e.Replaces + " ending")
 	}
-	return lead(actor, what)
+	return leadLine(actor, what)
 }
 
 // ChangeMerged records that a change MERGED by a merge record (internal/gitlet's
@@ -321,15 +320,15 @@ func (ChangeMerged) EventType() string { return "change_merged" }
 // landed the record, which merged nothing.
 func (e ChangeMerged) Actor() string { return e.MergedBy }
 
-// SummaryFor names the change by its reference (web!42), the branch it merged
+// PhraseFor names the change by its reference (web!42), the branch it merged
 // into and how, and a person's override where there was one.
-func (e ChangeMerged) SummaryFor(actor string) string {
-	what := "merged " + e.RepoName + "!" + strconv.FormatInt(e.Number, 10) + " into " +
-		strings.TrimPrefix(e.Target, "refs/heads/") + " (" + e.Method + ")"
+func (e ChangeMerged) PhraseFor(actor string) named.Line {
+	what := named.Words("merged ").Name(changeOf(e.RepoName, e.Number)).Words(" into " +
+		strings.TrimPrefix(e.Target, "refs/heads/") + " (" + e.Method + ")")
 	if e.Override != "" {
-		what += ", overriding its merge gate: " + e.Override
+		what = what.Words(", overriding its merge gate: " + e.Override)
 	}
-	return lead(actor, what)
+	return leadLine(actor, what)
 }
 
 // ChangeOpened records that a change was OPENED (internal/gitlet's change_open,
@@ -386,15 +385,15 @@ func (e ChangeOpened) Actor() string { return e.Owner }
 // AgentID is the owner's agent id, "" for a person.
 func (e ChangeOpened) AgentID() string { return e.Agent }
 
-// SummaryFor names the change by its reference (web!42), the branch it
+// PhraseFor names the change by its reference (web!42), the branch it
 // proposes into and its title.
-func (e ChangeOpened) SummaryFor(actor string) string {
-	what := "opened " + e.RepoName + "!" + strconv.FormatInt(e.Number, 10) + " into " +
-		strings.TrimPrefix(e.Target, "refs/heads/")
+func (e ChangeOpened) PhraseFor(actor string) named.Line {
+	what := named.Words("opened ").Name(changeOf(e.RepoName, e.Number)).Words(" into " +
+		strings.TrimPrefix(e.Target, "refs/heads/"))
 	if e.Title != "" {
-		what += ": " + e.Title
+		what = what.Words(": " + e.Title)
 	}
-	return lead(actor, what)
+	return leadLine(actor, what)
 }
 
 // ReviewSubmitted records that a REVIEW of a change was given (internal/gitlet's
@@ -450,19 +449,19 @@ func (e ReviewSubmitted) Actor() string { return e.Reviewer }
 // AgentID is the reviewer's agent id, "" for a person.
 func (e ReviewSubmitted) AgentID() string { return e.Agent }
 
-// SummaryFor names the change by its reference, the verdict, the revision it
+// PhraseFor names the change by its reference, the verdict, the revision it
 // judged and how many findings it raised.
-func (e ReviewSubmitted) SummaryFor(actor string) string {
-	what := "reviewed " + e.RepoName + "!" + strconv.FormatInt(e.Number, 10) + " (revision " +
-		strconv.FormatInt(e.Revision, 10) + "): " + strings.ReplaceAll(e.Verdict, "_", " ")
+func (e ReviewSubmitted) PhraseFor(actor string) named.Line {
+	what := named.Words("reviewed ").Name(changeOf(e.RepoName, e.Number)).Words(" (revision " +
+		strconv.FormatInt(e.Revision, 10) + "): " + strings.ReplaceAll(e.Verdict, "_", " "))
 	switch e.Findings {
 	case 0:
 	case 1:
-		what += ", 1 finding"
+		what = what.Words(", 1 finding")
 	default:
-		what += ", " + strconv.FormatInt(e.Findings, 10) + " findings"
+		what = what.Words(", " + strconv.FormatInt(e.Findings, 10) + " findings")
 	}
-	return lead(actor, what)
+	return leadLine(actor, what)
 }
 
 // CodeQueueEjected records that a merge queue put an entry OUT (internal/gitlet's
@@ -517,18 +516,18 @@ type CodeQueueEjected struct {
 // EventType is the "code_queue_ejected" wire type.
 func (CodeQueueEjected) EventType() string { return "code_queue_ejected" }
 
-// SummaryFor names the change by its reference (web!42), the branch whose
+// PhraseFor names the change by its reference (web!42), the branch whose
 // queue put it out, and why.
-func (e CodeQueueEjected) SummaryFor(actor string) string {
-	what := "ejected " + e.RepoName + "!" + strconv.FormatInt(e.Number, 10) + " from " +
-		strings.TrimPrefix(e.Target, "refs/heads/") + "'s merge queue (" + e.Reason + ")"
+func (e CodeQueueEjected) PhraseFor(actor string) named.Line {
+	what := named.Words("ejected ").Name(changeOf(e.RepoName, e.Number)).Words(" from " +
+		strings.TrimPrefix(e.Target, "refs/heads/") + "'s merge queue (" + e.Reason + ")")
 	switch {
 	case len(e.Checks) > 0:
-		what += ": " + strings.Join(e.Checks, ", ") + " failed"
+		what = what.Words(": " + strings.Join(e.Checks, ", ") + " failed")
 	case len(e.Paths) > 0:
-		what += ": " + strconv.Itoa(len(e.Paths)) + " paths conflicted"
+		what = what.Words(": " + strconv.Itoa(len(e.Paths)) + " paths conflicted")
 	}
-	return lead(actor, what)
+	return leadLine(actor, what)
 }
 
 // CodeTargetBroken records that a protected branch's tip checks found the
@@ -630,18 +629,18 @@ func (e CodeMirrorPushed) WithRefs(updated, deleted, waiting []string) CodeMirro
 // EventType is the "code_mirror_pushed" wire type.
 func (CodeMirrorPushed) EventType() string { return "code_mirror_pushed" }
 
-// SummaryFor names the repository, the other host and what moved there, by
+// PhraseFor names the repository, the other host and what moved there, by
 // the counts of the whole push.
-func (e CodeMirrorPushed) SummaryFor(actor string) string {
-	what := "pushed " + e.RepoName + " to its mirror " + e.URL + ": " + strconv.Itoa(e.UpdatedCount) +
-		" ref(s) set"
+func (e CodeMirrorPushed) PhraseFor(actor string) named.Line {
+	what := named.Words("pushed ").Name(named.Repo(e.RepoName)).Words(" to its mirror " + e.URL +
+		": " + strconv.Itoa(e.UpdatedCount) + " ref(s) set")
 	if e.DeletedCount > 0 {
-		what += ", " + strconv.Itoa(e.DeletedCount) + " deleted"
+		what = what.Words(", " + strconv.Itoa(e.DeletedCount) + " deleted")
 	}
 	if e.WaitingCount > 0 {
-		what += ", " + strconv.Itoa(e.WaitingCount) + " waiting for green"
+		what = what.Words(", " + strconv.Itoa(e.WaitingCount) + " waiting for green")
 	}
-	return lead(actor, what)
+	return leadLine(actor, what)
 }
 
 // CodeImported records that a repository's IMPORT ended (internal/gitlet/mirror,
@@ -701,29 +700,27 @@ type CodeImported struct {
 // EventType is the "code_imported" wire type.
 func (CodeImported) EventType() string { return "code_imported" }
 
-// SummaryFor names the repository, its source and what landed, and says
+// PhraseFor names the repository, its source and what landed, and says
 // where the import ended short.
-func (e CodeImported) SummaryFor(actor string) string {
-	what := "imported " + e.RepoName + " from " + e.URL + ": " + strconv.FormatInt(e.Refs, 10) + " ref(s), " +
-		strconv.FormatInt(e.Bytes, 10) + " bytes in " + strconv.FormatInt(e.Chunks, 10) + " chunk(s)"
+func (e CodeImported) PhraseFor(actor string) named.Line {
+	what := named.Words("imported ").Name(named.Repo(e.RepoName)).Words(" from " + e.URL + ": " +
+		strconv.FormatInt(e.Refs, 10) + " ref(s), " + strconv.FormatInt(e.Bytes, 10) + " bytes in " +
+		strconv.FormatInt(e.Chunks, 10) + " chunk(s)")
 	if e.Error != "" {
-		what += ", ended short of its source"
+		what = what.Words(", ended short of its source")
 	}
-	return lead(actor, what)
+	return leadLine(actor, what)
 }
 
-// SummaryFor names the branch, the landing — its change by reference
-// (web!42), or its commit — and the checks it broke.
-func (e CodeTargetBroken) SummaryFor(actor string) string {
-	landing := e.Commit
-	if len(landing) > 12 {
-		landing = landing[:12]
-	}
+// PhraseFor names the branch, the landing (its change by reference, web!42,
+// or its commit) and the checks it broke.
+func (e CodeTargetBroken) PhraseFor(actor string) named.Line {
+	landing := named.CommitOf(e.RepoName, e.Commit)
 	if e.ChangeID != "" {
-		landing = e.RepoName + "!" + strconv.FormatInt(e.Number, 10)
+		landing = changeOf(e.RepoName, e.Number)
 	}
-	return lead(actor, "found "+strings.TrimPrefix(e.Target, "refs/heads/")+" broken by "+landing+": "+
-		strings.Join(e.Checks, ", ")+" failed")
+	return leadLine(actor, named.Words("found "+strings.TrimPrefix(e.Target, "refs/heads/")+" broken by ").
+		Name(landing).Words(": "+strings.Join(e.Checks, ", ")+" failed"))
 }
 
 // CodeExpunged records that a repository's unreachable objects were dropped:
@@ -768,13 +765,23 @@ type CodeExpunged struct {
 // EventType is the "code_expunged" wire type.
 func (CodeExpunged) EventType() string { return "code_expunged" }
 
-// SummaryFor names the repository, what the commit dropped, and whether a
+// PhraseFor names the repository, what the commit dropped, and whether a
 // person's purge or the weekly schedule asked for it.
-func (e CodeExpunged) SummaryFor(actor string) string {
+func (e CodeExpunged) PhraseFor(actor string) named.Line {
 	why := "on its weekly schedule"
 	if e.Request != "" {
 		why = "serving a purge"
 	}
-	return lead(actor, "expunged "+strconv.FormatInt(e.DroppedObjects, 10)+" unreachable object(s), "+
-		strconv.FormatInt(e.DroppedBytes, 10)+" bytes, from "+e.RepoName+" "+why)
+	return leadLine(actor, named.Words("expunged "+strconv.FormatInt(e.DroppedObjects, 10)+
+		" unreachable object(s), "+strconv.FormatInt(e.DroppedBytes, 10)+" bytes, from ").
+		Name(named.Repo(e.RepoName)).Words(" "+why))
+}
+
+// changeOf names a change as its summary spells it, `<repository>!<number>`,
+// which is its words alone where the payload is missing either half.
+func changeOf(repository string, number int64) named.Ref {
+	if ref := named.ChangeRef(repository, number); ref.Valid() {
+		return ref
+	}
+	return named.Ref{Text: repository + "!" + strconv.FormatInt(number, 10)}
 }

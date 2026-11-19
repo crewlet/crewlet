@@ -543,7 +543,7 @@ func TestAFileTheDomainCannotKeepIsRefused(t *testing.T) {
 	conversation := n.conversation(ada, "")
 	for name, file := range map[string]assistantdomain.NewFile{
 		"an attached svg": {MediaType: "image/svg+xml", Name: "a.svg", Origin: wire.FileAttached},
-		"html":            {MediaType: "text/html", Name: "a.html", Origin: wire.FileDelivered},
+		"html":            {MediaType: "text/html", Name: "a.html", Origin: wire.FileAttached},
 		"a quoted name":   {MediaType: "image/png", Name: `a".png`, Origin: wire.FileAttached},
 		"a path":          {MediaType: "image/png", Name: "../a.png", Origin: wire.FileAttached},
 		"no origin":       {MediaType: "image/png", Name: "a.png"},

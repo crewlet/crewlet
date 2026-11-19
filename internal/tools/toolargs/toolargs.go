@@ -9,7 +9,9 @@
 // internal/tools rather than in that package, because the tool session a
 // harness's calls arrive through sits below internal/tools: the tools import the
 // tool loop, which imports the session, so a decode kept beside the tools
-// could not serve the session, which kept a copy of its own. This package
+// could not serve the session, which kept a copy of its own that took the
+// first of two values and dropped the second ([Decode] says what it reads and
+// refuses). This package
 // imports no transport, nor anything that imports one, which is what lets
 // every one of them import it.
 //
@@ -40,6 +42,16 @@
 //
 // [Args] is a distinct type, made only by [Of], so a step that requires it
 // cannot be handed the arguments as the model sent them by mistake.
+//
+// ARGUMENTS ARE COMPARED BY THE TEXT A RUN'S LOG KEEPS OF THEM ([Key]): the
+// log writes a bridged call's arguments as [Decode] read them, through
+// internal/tools.RecordArgs (keys sorted, no whitespace, every number as the
+// digits it was sent as), so a reader that asks whether another record of a
+// call is the logged one keys both by that one rule. Key order, whitespace and
+// a string's escapes are spellings and key equal; `1.0` and `1` are two texts
+// and key apart; a key written twice reads its last value, as [Decode] does.
+// Never the canonical form [Of] makes: the log keeps the arguments as sent, and
+// a reader outside the tool's schema cannot rebuild that form.
 package toolargs
 
 import (

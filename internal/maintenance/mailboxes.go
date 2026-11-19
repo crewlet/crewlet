@@ -23,12 +23,11 @@ import (
 // ADR-0013). A registry record per seat, written BEFORE its subscription,
 // carries the absence stamp, retirement mark and CAS; the broker backstops
 // mailboxes with no record, found by seat ID (the handle is only a label).
-// Absence is observed, never inferred; unknown (unreadable roster, unapplied
-// activation) is never absent; every write is a CAS. A retirement marks first
-// (a dead sweep resumes), holds the seat's lease (a seat host claims without
-// reading the record), ends runs ([SeatRunRetirer]) then sessions
-// ([SeatSessionRetirer]) before deleting any subscription, and is undone and
-// retried if it cannot. Memory is not retired: its rows are reachable by no seat.
+// Absence is observed, never inferred; unknown is never absent; every write is
+// a CAS. A retirement marks first (a dead sweep resumes), holds the seat's
+// lease, re-homes its work ([SeatWorkRehomer]), ends runs ([SeatRunRetirer])
+// then sessions ([SeatSessionRetirer]) before deleting any subscription, and
+// is undone and retried if it cannot. Memory is not retired.
 
 // MailboxRetirementGrace is how long a seat must have been absent from the
 // active revision before its mailbox is deleted.
@@ -45,13 +44,14 @@ const MailboxRetirementGrace = 24 * time.Hour
 // mailboxRetireBudget bounds the work of one retirement, from before its mark
 // to the delete of its record. Thirty seconds: a lease claim, two deletes and
 // two conditional writes (each bounded by the client's five-second API
-// timeout), plus a box kill and record delete per left-behind run and the
-// session removal's publish. A retirement that outruns it is undone and resumes
-// next tick. A registering node that finds a retirement in flight waits twice
-// this long before taking the record over, so the retiring sweep can no longer
-// delete a subscription the node is about to create. Capped at half the seat
-// lease TTL when shorter, since its deletes are excluded from a claiming node
-// only while the lease is live; see [Mailboxes.workLimit].
+// timeout), plus a box kill and record delete per left-behind run, the session
+// removal's publish and a tracker write per open item. A retirement that
+// outruns it is undone and resumes next tick, where the items it re-homed are
+// no longer the seat's, so a long backlog is re-homed over several ticks. A
+// registering node that finds a retirement in flight waits twice this long
+// before taking the record over, so the retiring sweep can no longer delete a
+// subscription the node is about to create. Capped at half the seat lease TTL
+// when shorter; see [Mailboxes.workLimit].
 const mailboxRetireBudget = 30 * time.Second
 
 // mailboxRetireStale is how old a retirement mark must be before a later sweep
@@ -186,6 +186,19 @@ func (w SeatRunsWaiting) waiting() bool { return len(w.Calls) > 0 }
 // them, rather than hold a mailbox as long as the log is unhealthy.
 type SeatSessionRetirer func(ctx context.Context, seat uuid.UUID, handle string, retiring time.Time) error
 
+// SeatWorkRehomer re-homes the open work a seat whose mailbox is being retired
+// still holds, while the retirement holds the seat's lease (ADR-0162).
+// retiring is the instant this attempt marked the retirement, which each write
+// derives its operation from, for [SeatSessionRetirer]'s reason. THE SEAT'S ID
+// names the seat; handle is a label, empty for a mailbox only the broker's
+// listing found.
+//
+// BEFORE THE RUNS ARE ENDED, so a run of the seat on an item is still a fact
+// the rule can read, and a retried retirement decides from the same facts. An
+// error means some item was not re-homed: the retirement is undone and
+// retried, since a seat whose mailbox is gone is one no later sweep retires.
+type SeatWorkRehomer func(ctx context.Context, seat uuid.UUID, handle string, retiring time.Time) error
+
 // SeatRoster reads the agent seats of the company the fleet is running: the
 // revision the activation pointer names.
 //
@@ -233,6 +246,11 @@ type MailboxOptions struct {
 	// Roster reads the active revision's agent seats. Required.
 	Roster SeatRoster
 
+	// Work re-homes a retired seat's open work before its runs are ended.
+	// Required, for Runs' reason: whether a removed seat left work assigned
+	// is a fact about the replicated estate, not about this node.
+	Work SeatWorkRehomer
+
 	// Runs ends a retired seat's executors before its subscriptions are
 	// deleted. Required, because there is no value that could mean "this
 	// node has nothing to end": whether a removed seat left runs behind is
@@ -266,6 +284,7 @@ type Mailboxes struct {
 	owner    string
 	leaseTTL time.Duration
 	roster   SeatRoster
+	work     SeatWorkRehomer
 	runs     SeatRunRetirer
 	sessions SeatSessionRetirer
 	budget   time.Duration
@@ -296,6 +315,9 @@ func NewMailboxes(opts MailboxOptions) (*Mailboxes, error) {
 	if opts.Roster == nil {
 		missing = append(missing, errors.New("maintenance: MailboxOptions.Roster is required"))
 	}
+	if opts.Work == nil {
+		missing = append(missing, errors.New("maintenance: MailboxOptions.Work is required"))
+	}
 	if opts.Runs == nil {
 		missing = append(missing, errors.New("maintenance: MailboxOptions.Runs is required"))
 	}
@@ -308,7 +330,7 @@ func NewMailboxes(opts MailboxOptions) (*Mailboxes, error) {
 	m := &Mailboxes{
 		records: opts.Records, queue: opts.Queue, leases: opts.Leases,
 		owner: opts.Owner, leaseTTL: opts.LeaseTTL, roster: opts.Roster,
-		runs: opts.Runs, sessions: opts.Sessions,
+		work: opts.Work, runs: opts.Runs, sessions: opts.Sessions,
 		budget: opts.RetireBudget, poll: opts.RegisterPoll,
 	}
 	if m.budget <= 0 {
@@ -696,6 +718,13 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 		return false, nil
 	}
 
+	// THE SEAT'S WORK FIRST, under the lease, while its runs are still facts
+	// ([SeatWorkRehomer]): once the record is deleted nothing re-homes it.
+	if workErr := m.work(work, rec.Seat, rec.Handle, marked.RetiringSince); workErr != nil {
+		m.unmark(ctx, marked)
+		return false, fmt.Errorf("re-home the work of retired seat %q: %w", handle, workErr)
+	}
+
 	// THE RUNS BEFORE THE SUBSCRIPTIONS, under the same lease and budget: a
 	// run left behind once its control topic and inbox are gone is one no
 	// completion, answer or resume can ever reach again. A run left WAITING on
@@ -737,8 +766,8 @@ func (m *Mailboxes) retire(ctx context.Context, rec coord.MailboxRecord, clock s
 	}
 	log.InfoContext(ctx, "seat_mailbox_retired", "handle", handle, "absent_since", rec.AbsentSince,
 		"detail", "the seat has been absent from the active revision for longer than the grace "+
-			"period; its mailbox, the mail it held and its executor sessions are deleted, "+
-			"and its memory is kept")
+			"period; its open work is re-homed, its mailbox, the mail it held and its executor "+
+			"sessions are deleted, and its memory is kept")
 
 	// A SEAT ADDED AGAIN WHILE THIS RAN. The roster this sweep started from
 	// may be older than the revision now active, and a node that applied it

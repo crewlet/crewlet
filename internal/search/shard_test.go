@@ -428,17 +428,12 @@ func TestAQueryNamingNoRankerIsRefused(t *testing.T) {
 
 // THE SCAN IS BUCKET-LIMITED AND THE STATISTICS ARE GLOBAL.
 //
-// This is the sentence the whole fan-out rests on. BM25 weights a term by how
-// rare it is across the corpus and normalises a document by the corpus's
-// average length — and both of those would be a function of the SLICE if each
-// participant computed them from the buckets it scanned. A term common in the
-// corpus but rare in one node's range would be weighted as rare there, so the
-// same document would score differently depending on how the fleet happened to
-// be divided, and no merge across the slices could put it back.
-//
-// It costs nothing to hold, and that is the point: every data node holds the
-// whole corpus, so the statistics come off its complete tables whatever range
-// the scan read. A design that divided STORAGE could not borrow this.
+// The fan-out rests on this. BM25 weights a term by corpus rarity and
+// normalises by the corpus's average length; computed from the scanned buckets,
+// the same document would score differently depending on how the fleet was
+// divided, and no merge could put it back. Every data node holds the whole
+// corpus, so the statistics come off its complete tables whatever range the
+// scan read.
 func TestTheLexicalStatisticsAreGlobalWhateverWasScanned(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)

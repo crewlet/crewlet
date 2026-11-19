@@ -109,7 +109,7 @@ func TestAnOpenCodeJobThatConfirmedALateCallIsNotToldItByItsCopy(t *testing.T) {
 			resumed.Launch.HarnessEnd = end
 			collectedFarBelow(&resumed.Launch)
 			brief := relaunchedInPlace(t, asking, runnerResume(resumeInput{Run: resumed, Bridged: logged,
-				BridgedRead: logged.Appends(), State: execstate.State{Version: execstate.Version, Round: 1},
+				BridgedRead: logged.Read(), State: execstate.State{Version: execstate.Version, Round: 1},
 				Asked: &sandbox.AskedRun{Question: "which branch?", Answer: "use main", By: "founder",
 					SessionID: "sess-ask", BoxKept: true}}, nil, nil, nil))
 			if told := strings.Contains(brief, "- delegate("); told != (end == sandbox.HarnessEndCutOff) {

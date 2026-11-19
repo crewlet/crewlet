@@ -56,35 +56,18 @@ func (t Tool) trusted(args Args, answer any) (provenance.Trust, provenance.Sourc
 	return got.Trust, got.Source
 }
 
-// Shape is a read's answer as the person and the model receive it, in this
-// order, each step before the next:
+// Shape is a read's answer as the person and the model receive it, in order:
 //
-//  1. A refusal is an error card in the engine's own words, the tool's phrase
-//     beside the refusal's sentence, and the model reads the refusal.
-//  2. An answer past what a step reads (exec.Response.Truncated) is never
-//     carded as though whole. The person is shown an oversize card naming
-//     what it read, the screen that shows all of it and what would narrow
-//     it; the model is told, in the engine's words alone, that none of it
-//     reached it, which tool and route it read, the bound and what the tool
-//     documents as narrowing it ([oversize], ADR-0061). Not one byte of the
-//     cut answer reaches the model, not even a field's name.
-//  3. Every string in the answer passes redact.Secrets, so no credential the
-//     answer carried reaches a card, the log or the model.
-//  4. The card is built by the tool's spec, capped with a notice when cut.
-//     AN ANSWER THAT HOLDS NOTHING DRAWS NO CARD (cards.Built.Empty): the
-//     step already records the read, so an empty table under every search
-//     that found nothing is noise and two download buttons over no rows.
-//     The model is handed the call's own arguments, that nothing matched
-//     and the answer's own reason where it gave one ([cards.EmptySummary]).
-//     THE ONE PLACE this is decided, for every read the catalogue holds.
-//     THE CARD'S TITLE CARRIES THE CALL'S SCOPE ([Tool.Scope]), so two reads
-//     of one tool with different arguments are two different cards to the
-//     person and to the model, and a seat column is drawn by the seat's
-//     name where o says it ([cards.Options]).
-//  5. The model's summary is the card's, every row or item whole, and is
-//     fenced under the turn's boundary when the tool reads text a person or
-//     an agent wrote (ADR-0040), or has every fence marker in it defused
-//     when it does not, so no field of any answer can open or close a fence.
+//  1. A refusal is an error card in the engine's words; the model reads it.
+//  2. A truncated answer is never carded as whole: the person gets an oversize
+//     card, the model only the engine's words, none of it ([oversize], ADR-0061).
+//  3. Every string passes redact.Secrets before a card, the log or the model.
+//  4. The card is built by the tool's spec; AN EMPTY ANSWER DRAWS NO CARD
+//     (cards.Built.Empty, [cards.EmptySummary]). The title carries the call's
+//     scope ([Tool.Scope]), so reads differing in arguments differ.
+//  5. The model's summary is the card's, fenced under the turn's boundary when
+//     the tool reads text others wrote (ADR-0040), else with fence markers
+//     defused, so no answer can open or close a fence.
 func Shape(t Tool, args Args, resp exec.Response, b provenance.Boundary, now time.Time,
 	o cards.Options) (Result, error) {
 	if !cards.Permitted(resp.Status) {

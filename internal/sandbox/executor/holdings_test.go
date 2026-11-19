@@ -250,7 +250,7 @@ func TestAReadingWhoseCallerLeftAsItOpenedEndsWithItsCallersError(t *testing.T) 
 // 2.1.300, which the carry accepts), none recorded, one that is no release, or
 // one whose number overflows an int though its digits read as at or past the
 // floor (a person's read and the carry take such a release for a current one);
-// nor by a runner whose harness has no reading, OpenCode's.
+// nor by OpenCode's runner asked for this ask's resumer, outside its set.
 //
 // Mutation: hold the writer to the carry's floor, or read an unreadable
 // release as a current one, and a refused writer's session is read.
@@ -273,7 +273,7 @@ func TestAReadingIsOnlyOfAWriterItsRulesWereMeasuredOn(t *testing.T) {
 			false},
 		"a later writer whose number no int holds": {executor.NewClaudeCode(),
 			rhSession("2.1.99999999999999999999"), false},
-		"OpenCode's runner": {executor.NewOpenCode(), sandbox.SessionArchive{Harness: executor.OpenCodeName,
+		"OpenCode's runner, asked for a resumer outside its set": {executor.NewOpenCode(), sandbox.SessionArchive{Harness: executor.OpenCodeName,
 			SessionID: "ses_s", Format: executor.OpenCodeArchiveFormat, Version: "2.2.5"}, false},
 	} {
 		t.Run(name, func(t *testing.T) {

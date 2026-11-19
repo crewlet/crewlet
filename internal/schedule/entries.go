@@ -97,23 +97,16 @@ func CountSchedules(o *org.Organization) int { return len(Entries(o)) }
 
 // Runners resolves the handle(s) that should run this entry.
 //
-// A ROLE schedule always runs as that role; its target is ignored, because a
-// schedule on a seat already names the seat. A UNIT schedule resolves from its
-// target:
+// A ROLE schedule always runs as that role; its target is ignored. A UNIT
+// schedule resolves from its target: lead, the unit's EFFECTIVE lead (inherited
+// included), so a leadership change touches no config; each (the default),
+// every DIRECT member, never a descendant, which would wake the whole company.
 //
-//   - lead — the unit's EFFECTIVE lead, inherited ones included. Kept because
-//     it is dynamic: the schedule follows whoever leads the unit, so a
-//     leadership change does not have to touch config.
-//   - each (the default) — every DIRECT member, never a descendant. A standup
-//     that fanned out to every descendant of a division would wake the whole
-//     company.
-//
-// Human seats never appear. They are addressable but run no turns, so a fire
-// addressed to one would sit in an inbox nothing consumes. The company
-// document is refused for either human combination ([org.ErrUnrunnableSchedule]);
-// what it admits — a `lead` schedule on a unit nothing leads — this filter keeps
-// from firing, and the tick's `schedule_no_runners` warning says so when one is
-// due.
+// Human seats never appear: they run no turns, so a fire would sit in an inbox
+// nothing consumes. The company document is refused for either human
+// combination ([org.ErrUnrunnableSchedule]); a `lead` schedule on a unit nothing
+// leads is admitted and kept from firing here, and the tick's
+// `schedule_no_runners` warning says so.
 func (e Entry) Runners(o *org.Organization) []string {
 	if o == nil {
 		return nil

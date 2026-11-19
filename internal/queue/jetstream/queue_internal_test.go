@@ -190,16 +190,12 @@ func TestASettledMessageIsForgotten(t *testing.T) {
 // AND A BATCH THAT ACKS AFTER FAILING IS FORGOTTEN TOO, or the map grows for
 // the life of the attachment on the path every seat inbox actually runs.
 //
-// [attachment.apply] settles in its ack branch for exactly this reason, and
-// the batch path did not — so a partition that failed once and succeeded on
-// its redelivery left its sequence behind for ever. It is ordinary operation
-// rather than a rarity: an answer to a parked executor that this node could
-// not hand over is NAKed and acked on a later pass, which is precisely the
-// NAK-then-ack shape, so every seat that ever hands an answer back leaked one
-// entry per delivery.
-//
-// Driven through a real partition rather than asserted on the verbs, because
-// the verbs were already right: what was missing was the CALL.
+// [attachment.apply] settles in its ack branch for this reason and the batch
+// path did not, so a partition that failed once and succeeded on its
+// redelivery left its sequence behind for ever. That is ordinary operation:
+// an answer to a parked executor this node could not hand over is NAKed
+// and acked on a later pass. Driven through a real partition, because the
+// verbs were already right: what was missing was the CALL.
 func TestABatchThatAcksAfterFailingIsForgotten(t *testing.T) {
 	t.Parallel()
 	q := openForTest(t, Config{})
@@ -266,34 +262,18 @@ func failureEntries(q *Queue, topic, group string) int {
 	return total
 }
 
-// A FETCH EXPIRES AFTER ITS WAIT, AND A STOP ENDS IT AT ONCE — the two halves
-// of [attachment.fetch], each of which a client upgrade could move without a
-// word.
+// A FETCH EXPIRES AFTER ITS WAIT, AND A STOP ENDS IT AT ONCE: the two halves
+// of [attachment.fetch], which a client upgrade could move silently.
 //
-// The first: a fetch on a consumer with nothing for it ends when the broker
-// expires the request, and that must be the wait asked for — not a tenth early,
-// which is what the client makes of a context's deadline unadjusted, and not
-// the client's thirty-second default, which is what a context with no deadline
-// would leave the request at. The second: a stop does not wait for an idle
-// fetch to run out. It used to — a loop parked in a fetch noticed its
-// cancellation only when the fetch ended, so every stop of a queue holding an
-// idle attachment spent the whole stop grace and then closed the connection
-// under the loop anyway.
-//
-// NEITHER IS DECIDED ON THE MACHINE'S CLOCK. The broker ends an idle request at
-// the expiry the request carries, by its own timer, so the first half is that
-// expiry, read where the vendored client writes it; it was a measured fetch
-// held to a second past its wait, which a runner that lost a second failed,
-// and which a fetch never sent at all passed. The second half needs the loop
-// in its fetch before the stop lands, and waits for the fetch's request to
-// reach the broker; it slept a tenth of a second for that, and a loop
-// scheduled later than the stop's grace failed a healthy build while one
-// scheduled after the stop passed with the stop reaching no fetch at all.
+// An idle fetch ends at the expiry the request carries, read off the
+// vendored client, never the machine's clock (a measured fetch failed on a
+// slow runner and passed one never sent). A stop must not spend the grace
+// on an idle fetch, so the test waits for the request to reach the broker.
 //
 // Mutation: drop expiryHeldBack's share from the deadline and the request
-// expires a tenth early; drop the first FetchContext and it expires at the
-// client's thirty seconds; let a stop leave the fetch alone (no abandon) and
-// the loop is still in it when Stop returns.
+// expires a tenth early; drop the first FetchContext and it expires at
+// thirty seconds; let a stop leave the fetch alone and the loop is still
+// in it when Stop returns.
 func TestAFetchExpiresAfterItsWaitAndAStopEndsItAtOnce(t *testing.T) {
 	t.Parallel()
 

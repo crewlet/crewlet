@@ -37,19 +37,16 @@ type Metrics interface {
 	Set(name string, v float64, attrs metrics.Attrs)
 }
 
-// Objectives is the node's service objective meter, as the hub records into
-// it: presence's two best-effort indicators, measured where only the hub can
-// see them.
+// Objectives is the node's service objective meter: presence's two
+// best-effort indicators, measured where only the hub can see them.
 //
 //   - PRESENCE JOIN, one event per room a node starts listening on: from the
-//     room's first socket on the node to its peers' members shown — the last
-//     answer to the node's ask applied, or the ask sent where nobody answers,
-//     which is when the room is whole. A join into a room the node already
-//     listens on is shown everybody at once, and is no event.
+//     room's first socket to its peers' members shown (the last answer applied,
+//     or the ask sent where nobody answers). A join into a room already
+//     listened on is shown everybody at once, and is no event.
 //   - PRESENCE CURSOR, one event per member a peer's frame says moved: from
-//     the move, by the instant the peer stamped it, to the frame heard here.
-//     A full roster (a rebroadcast, an answer to an ask) restates members
-//     rather than moving them, and is no event.
+//     the move, by the peer's stamp, to the frame heard here. A full roster
+//     restates members rather than moving them, and is no event.
 //
 // Satisfied by [*objectives.Meter]; nil records nothing.
 type Objectives interface {
@@ -351,22 +348,14 @@ func (h *Hub) Stop(ctx context.Context) {
 
 // Join puts one socket in a room and HANDS the joiner its session and the room
 // as this node's sockets were last shown it, the socket's own member included
-// ([room.rosterFor]): every fan-out after it is the difference from that, so
-// the socket's screen is right from the first. The caller has decided the
-// socket may be in the room (for an artifact's, that it may read the
-// artifact); the hub decides nothing about who may be in a room.
+// ([room.rosterFor]): every fan-out after it is the difference from that. The
+// caller decides who may be in the room; the hub decides nothing about that.
 //
 // THE ROSTER IS HANDED IN THE ROOM'S DELIVERY ORDER, under [Hub.delivering]:
 // every fan-out handed to the sinks before hand runs is one the roster
-// already holds, and every one taken after the join is handed over after hand
-// returns, by which time hand has put the socket where the caller's sink
-// finds it. Answered as a return value instead, the roster reached the socket
-// after the lock, whenever its caller got to it: a fan-out taken after the
-// join could reach the socket first, and the roster behind it put back what
-// the fan-out had moved on — or, sent before the caller had placed the socket,
-// reached nobody, and the screen showed that member as they were until they
-// moved again. Every surface that joins a room took the same care for itself
-// or did not; here it is one rule, and no caller can have a roster outside it.
+// already holds, and every later one is handed over after hand returns, by
+// which time hand has placed the socket. Returned instead, a later fan-out
+// could arrive first and be undone by it, or reach nobody.
 //
 // A hand that declines undoes the join and answers [ErrDeclined].
 func (h *Hub) Join(id Room, who Local, hand Hand) (string, error) {

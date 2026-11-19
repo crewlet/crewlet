@@ -21,42 +21,14 @@ import (
 
 // Backing this file up ONLINE, and why it is VACUUM INTO.
 //
-// The engine owns its file exclusively for the life of the process (see
-// lock.go), so an outside backup agent cannot open it — and the driver does
-// not support multi-process access to a database file at all, which rules out
-// every SQLite-ecosystem tool that works by being a second opener: sqlite3
-// .backup, Litestream, sqlite3_rsync. Copying the file underneath a running
-// engine is worse still: committed data lives in the database file AND its
-// -wal, so a copy of either alone, or of both at different instants, is torn.
-//
-// The one sanctioned online copy is therefore one the ENGINE takes of its own
-// database, from inside the process that holds the lock. Of the three ways
-// SQLite offers, exactly one is reachable here: the backup API
-// (sqlite3_backup_*) is stubbed in this driver, plain VACUUM is behind an
-// experimental flag, and VACUUM INTO works.
-//
-// What it costs, measured against the pinned driver on a database under
-// continuous writes: the copy runs to completion and a concurrent writer
-// commits throughout with zero failures. Crucially the copy is
-// SELF-CONTAINED — it lands with no -wal beside it — so restoring a node's
-// store is moving one file into place rather than a set that has to travel
-// together.
-//
-// The copy is ONE MOMENT, the one it began at: it holds every commit that
-// returned before [DB.Backup] was called, and nothing a writer commits while
-// it runs. That is this package's doing and not the driver's: its VACUUM INTO
-// holds no view of its own, and it copied either an older view or a torn one
-// until [DB.vacuumInto] held one for it. Every caller leans on it. A donor
-// offers its snapshot at the checkpoint the copy holds, having judged before
-// the copy that nothing was deferred; and a fleet backup pins the log at the
-// position its node stood at just before its copy began, so a copy older than
-// that position would leave the records between the two pinned by nothing.
-//
-// Nothing here pauses the engine: a write made while the copy runs commits as
-// usual and lands after the copy's moment. That is the correct trade for this
-// store: it is the node's own memory and audit index, its cross-node truth
-// lives in the coordination store, and a backup that stopped a company to
-// take itself would not be taken.
+// The engine owns its file exclusively (lock.go) and the driver has no
+// multi-process access, so no second opener (sqlite3 .backup, Litestream,
+// sqlite3_rsync) works, and copying the file under a running engine tears:
+// data lives in the database AND its -wal. The engine copies its own database
+// from inside the lock holder; of SQLite's three ways only VACUUM INTO is
+// reachable (the backup API is stubbed, plain VACUUM is experimental). The
+// copy is SELF-CONTAINED, with no -wal beside it, and a concurrent writer
+// commits throughout with zero failures.
 
 // backupPartSuffix names the in-progress copy.
 //
@@ -117,12 +89,15 @@ var ErrBadBackupPath = errors.New("store: unusable backup destination")
 // Backup writes a verified point-in-time copy of this database to dest.
 //
 // dest must not exist. The copy is written beside it, verified, and only then
-// renamed into place — so a path that exists after this returns is a copy that
+// renamed into place, so a path that exists after this returns is a copy that
 // opened, passed an integrity check, and carries the schema this binary
 // applied.
 //
-// It does not stop the engine; see the file doc for what the resulting
-// snapshot is a snapshot OF.
+// The copy is ONE MOMENT, the one it began at ([DB.vacuumInto]): every commit
+// returned before the call and nothing committed while it runs. A donor offers
+// its snapshot at the copy's checkpoint, and a fleet backup pins the log just
+// before the copy began, so an older copy would leave records pinned by
+// nothing. Nothing pauses the engine.
 func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	if !d.isOpen() {
 		return BackupInfo{}, fmt.Errorf("store: backup: %w", ErrNoEstate)
@@ -130,21 +105,16 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 	if dest == "" {
 		return BackupInfo{}, errors.New("store: backup: no destination path")
 	}
-	// AN APOSTROPHE IN THE PATH IS REFUSED, and this is a driver defect
-	// rather than a quoting one. The literal below is correctly escaped —
-	// a mis-escaped path is a parse error, and this is not one — but the
-	// driver mishandles the path internally after parsing it. Measured at
-	// v0.8.0-pre.7, and the two failures are different:
+	// AN APOSTROPHE IN THE PATH IS REFUSED: a driver defect, not a quoting one
+	// (the literal below is escaped correctly). Measured at v0.8.0-pre.7, the
+	// driver fails differently by place:
 	//
 	//   a directory:  I/O error ("statfs shared WAL coordination path")
 	//   a filename:   VACUUM INTO REPORTS SUCCESS AND WRITES NO FILE
 	//
-	// The second is why this is a refusal up front rather than an error
-	// left to the driver. A backup command whose happy path can return
-	// success having produced nothing is worse than one that does not run:
-	// the operator is told they have a copy. The size check after the
-	// vacuum catches it too, and this catches it with a sentence naming
-	// the fix.
+	// The second is why this refuses up front: a backup that can succeed
+	// having produced nothing tells the operator they have a copy. The size
+	// check after the vacuum catches it too; this names the fix.
 	if strings.Contains(dest, "'") {
 		return BackupInfo{}, fmt.Errorf("%w: %s contains an "+
 			"apostrophe, which the database engine mishandles in a VACUUM INTO path "+
@@ -309,14 +279,11 @@ func (d *DB) Backup(ctx context.Context, dest string) (BackupInfo, error) {
 // carries.
 //
 // A COPY NOBODY OPENED IS NOT A BACKUP. This is the only place the restore
-// path is ever exercised before it is needed: it reads the copy through the
-// same driver, the same session pragmas and the same schema accessor a
-// restored node would, so a copy that cannot be opened is a failed backup
-// rather than a surprise on the worst day of the deployment's life.
+// path is exercised before it is needed: it reads the copy through the same
+// driver, session pragmas and schema accessor a restored node would.
 //
-// It goes through openPrepared rather than [OpenEstate] deliberately, for two
-// reasons that both matter: an open MIGRATES, which would mutate the artifact
-// being verified, and it takes the exclusive lock, which is a claim on a file
+// It uses openPrepared, not [OpenEstate]: an open MIGRATES, which would mutate
+// the artifact being verified, and takes the exclusive lock, a claim on a file
 // this process is about to rename.
 func verifyBackup(ctx context.Context, path string, want []string) ([]string, error) {
 	pool, err := openPrepared(ctx, path, Options{MaxOpenConns: 1})
@@ -433,82 +400,23 @@ func remove(path string) error {
 	return nil
 }
 
-// vacuumInto writes the copy to part as ONE POINT IN TIME that holds every
-// commit which returned before it began.
+// vacuumInto writes the copy to part as ONE POINT IN TIME holding every commit
+// that returned before it began.
+// The driver's VACUUM INTO holds no view: its read transaction is a DEFERRED
+// `BEGIN`, which takes no snapshot (tursogo v0.8.3, op_vacuum_into).
+// Measured under a writer, a copy MISSED earlier commits (a pooled connection's
+// older view: 143 of 300) or was TORN (a checkpoint backfilling under it: 6 of
+// 150); a fresh read cured only the first.
 //
-// # The driver's VACUUM INTO holds no view of its own
-//
-// Its "implicit read transaction" is a DEFERRED `BEGIN`, which takes no
-// snapshot, and every read of the source after it is a nested statement,
-// which never begins one (tursogo v0.8.3, whose database engine is Turso
-// v0.8.3: op_vacuum_into in core/vdbe/execute.rs, where Turso's own test finds
-// the source pager holding no read lock after that BEGIN). So the copy is read
-// at whatever view the connection's PREVIOUS read transaction left behind, and
-// nothing holds that view while the copy runs. Two failures follow, both
-// measured against the pinned driver on the replicated estate, with a writer
-// committing on its pinned connection throughout:
-//
-//   - A copy MISSED commits that returned before it began. A pooled
-//     connection last used for a read taken before a commit carried that
-//     view into the copy: with four readers cycling the pool, 143 of 300
-//     copies held a view older than a commit that had returned before they
-//     began — each the view its connection's previous read had taken — while
-//     0 of 300 657 reads on the same pool did. That is the restored-reanchor
-//     case's "the copy's checkpoint is at 1, want the write's own 2", caught
-//     under load with the node's runner unmoved and its live checkpoint at 2
-//     across the copy; a donor's snapshot or a fleet backup taken just after a
-//     write misses it the same way.
-//   - A copy was TORN. With nothing holding the view, a checkpoint is free
-//     to backfill newer frames into the database file, or to restart the log,
-//     under it, and a page the view has no frame for is read as the file holds
-//     it now: with a TRUNCATE checkpoint forced every 20 ms, 6 of 150 copies
-//     held two tables written in ONE transaction at different values — a state
-//     the database never held, which a donor would have offered as its rows
-//     and its checkpoint. A read on the copying connection first, giving the
-//     copy a fresh view, cured the first failure and not this one: 0 of 150
-//     stale, 6 torn.
-//
-// # Hold, then take, then copy
-//
-// A read transaction is begun on a connection of its own and held until the
-// copy has returned: its read mark is what stops a checkpoint backfilling past
-// it or restarting the log, so a page the copy reads from the file is one that
-// no frame of its view supersedes. Only then is the copying connection's view
-// taken, so that view is the held one or newer and every frame it reads past
-// the held mark stays in the log for the whole copy ([DB.holdViewFor] does
-// both, in that order). Measured the same way: 0 of 150 copies stale, 0 torn.
-// THE ORDER IS THE RULE: a view taken before the hold may be older than the
-// held mark, and a checkpoint may then backfill the frames between the two
-// under it — which is why one function takes both steps rather than its
-// caller.
-//
-// THE HOLD IS OUTSIDE THE POOL ([DB.connector]), on a connection opened for it
-// and closed after it. Drawn from the pool beside the copying connection, one
-// copy would need two of the readers at once: on a node configured with one
-// it would wait for ever on its own hold, and two copies at once on the
-// replicated estate's floor of two would each hold one and wait for the other
-// — for ever in earnest, since the hold begins under [context.WithoutCancel].
-// TestACopyTakesOneConnectionFromItsPool stands both at their VACUUM INTO at
-// once.
-//
-// IT COSTS THE LOG ITS CHECKPOINTS for the copy's run: nothing past the held
-// mark is backfilled while it stands, so the write-ahead log grows by what the
-// writers commit during the copy and is folded in by the first checkpoint
-// after it. That is the price of any online copy that is one point in time;
-// mainline SQLite's own VACUUM INTO pays it the same way. So the copy is
-// LISTED while it holds the log ([DB.Copies]) and MEASURES how far the log grew
-// under it, before the hold ends ([DB.CopyHoldsBack]), which it answers as
-// held: copies.go says who reads each, and why.
-//
-// # Through one connection drawn from this handle
-//
-// The copy runs on ONE CONNECTION DRAWN FROM THIS HANDLE ([DB.conn]) rather
-// than through the pool, so a close that lands after [DB.Backup]'s guard — an
-// adoption closing the replicated estate a snapshot is being taken of —
-// answers [ErrNoEstate], the state every caller branches on, rather than
-// database/sql's "database is closed", which none does. It is drawn before
-// the hold, so a handle already closed opens nothing.
+// Hold, then take, then copy ([DB.holdViewFor] does both in that order): the
+// hold's read mark stops backfill past it, then the copying connection's view
+// is taken, held or newer. The hold costs the log its checkpoints, so the copy
+// is LISTED ([DB.Copies]) and its growth MEASURED.
 func (d *DB) vacuumInto(ctx context.Context, part string) (held int64, err error) {
+	// ONE CONNECTION DRAWN FROM THIS HANDLE ([DB.conn]), not through the pool,
+	// so a close after [DB.Backup]'s guard (an adoption closing the replicated
+	// estate) answers [ErrNoEstate], not database/sql's "database is closed".
+	// It is drawn before the hold, so a closed handle opens nothing.
 	conn, err := d.conn(ctx)
 	if err != nil {
 		return 0, err
@@ -527,20 +435,17 @@ func (d *DB) vacuumInto(ctx context.Context, part string) (held int64, err error
 }
 
 // holdViewFor holds a view for a copy conn is about to take, and returns what
-// ends the hold: a read transaction begun on a connection opened for it,
-// outside this handle's pool, and THEN conn's own view taken under it — see
-// [DB.vacuumInto] for what each step is for, why in this order, and why the
-// hold is outside the pool.
+// ends the hold: a read transaction on a connection opened OUTSIDE this
+// handle's pool, THEN conn's own view taken under it (order: [DB.vacuumInto]).
 //
-// The hold answers once its view is ESTABLISHED rather than merely begun: a
-// deferred BEGIN takes no snapshot, so the transaction reads once
-// ([takeView]), and its read mark stands from that read.
-//
-// THE TRANSACTION OUTLIVES ctx's CANCELLATION, for the reason a teardown takes
-// [context.WithoutCancel]: database/sql rolls a transaction back the moment
-// its context ends, and a hold ended while the copy it guards is still reading
-// leaves that copy reading under nothing, which is the torn copy the hold
-// exists to prevent. The release ends it, once the copy has returned.
+// Outside the pool because one copy would otherwise need two readers: with one
+// configured it waits for ever on its own hold, and two copies at the
+// replicated estate's floor of two each hold one and wait for the other
+// (TestACopyTakesOneConnectionFromItsPool). It answers once its view is
+// ESTABLISHED: a deferred BEGIN takes no snapshot, so it reads once
+// ([takeView]). It OUTLIVES ctx's cancellation ([context.WithoutCancel]):
+// database/sql rolls back when its context ends, and a hold ended mid-copy is
+// the torn copy. The release ends it once the copy has returned.
 func (d *DB) holdViewFor(ctx context.Context, conn *sql.Conn) (release func(), err error) {
 	side := sql.OpenDB(d.connector)
 	side.SetMaxOpenConns(1)
@@ -581,21 +486,14 @@ func takeView(ctx context.Context, q interface {
 // tempDirRefused reports a VACUUM INTO that failed because the driver could
 // not make a directory for its temporary files.
 //
-// THE ONE STATEMENT HERE THAT STILL NEEDS ONE, and two things run it: a
-// backup, and the state-log snapshot every data node takes for its peers.
-// Every connection this package opens keeps its temporary storage in memory
-// (see [openPool]), but VACUUM INTO builds the copy on a connection the driver
-// opens for itself, which no session pragma reaches: it keeps a temporary
-// database in a fresh directory under TURSO_TMPDIR, then SQLITE_TMPDIR, then
-// TMPDIR (/tmp unset), and sorts past its buffer into another under TMPDIR,
-// removing both when the copy ends. Measured at the pinned driver, a temporary
-// directory that does not exist fails every copy, a one-table copy included.
-//
-// MATCHED ON THE MESSAGE, because the driver gives an I/O failure no status of
-// its own: it arrives as the generic error carrying `I/O error (tempdir)`,
-// the label upstream gives both of those directories. Matched, the refusal
-// names the variables to change and the directories they hold
-// ([temporaryDirectories]), where the driver's own words name neither.
+// This package's connections keep temporary storage in memory ([openPool]),
+// but VACUUM INTO builds the copy on one the driver opens itself, which no
+// session pragma reaches: a temporary database in a fresh directory under
+// TURSO_TMPDIR, then SQLITE_TMPDIR, then TMPDIR, and a sort spill under
+// TMPDIR. A missing directory fails every copy, peers' snapshots included.
+// MATCHED ON THE MESSAGE: the driver gives the failure no status, only the
+// generic error carrying `I/O error (tempdir)`; the refusal then names the
+// variables and directories ([temporaryDirectories]).
 func tempDirRefused(err error) bool {
 	return errors.Is(err, turso.ErrTursoGeneric) && strings.Contains(err.Error(), "(tempdir)")
 }
@@ -664,18 +562,14 @@ func sameFile(a, b string) bool {
 // FileDigest is the SHA-256 of a file, streamed rather than read whole.
 //
 // EXPORTED because a snapshot's manifest carries one and a joiner compares it
-// with the digest its transfer took of the bytes as it wrote them (statelog's
-// FetchArtefact), and the two must be the same digest over the same bytes — a
-// second implementation is how one comes to hash the file and the other its
-// path, which is why statelog's TestAnArtefactArrivesByteForByte holds the
-// transfer's digest to this one.
+// with its transfer's digest over the same bytes (statelog's FetchArtefact); a
+// second implementation is how one hashes the file and the other its path.
+// statelog's TestAnArtefactArrivesByteForByte holds the two to this one.
 //
-// IT ENDS WHEN ITS CALLER GIVES UP, between one read and the next. The files
-// it hashes are a whole estate — a backup's copy, a donor's snapshot — and a
-// read of tens of gigabytes takes as long as the disk takes: with no context,
-// a snapshot loop asked to stop by a node's drain went on reading until the
-// end of the file, and the stop waited for it, and a backup whose request had
-// gone away finished a checksum nobody would read.
+// IT ENDS WHEN ITS CALLER GIVES UP, between reads. The files are whole
+// estates, tens of gigabytes: with no context, a drain's stop waited for a
+// snapshot loop to finish reading, and a backup whose request had gone away
+// finished a checksum nobody would read.
 func FileDigest(ctx context.Context, path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {

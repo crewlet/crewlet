@@ -84,6 +84,18 @@ type Call struct {
 	// turn's closed rounds carry it, and draws and counts the call as it
 	// always did, as one with no arguments.
 	ArgsUnread bool `json:"ArgsUnread,omitempty"`
+
+	// Late is a call of an earlier run of the work: an executor run's log took
+	// it after the job that made it was replaced (internal/sandbox's
+	// BridgeCall.Late). The round's record carries it, so the round's reviewer
+	// reads the call's line ending in words that say an earlier run made it
+	// (internal/agent/prompts' ReviewLateCall, a [FormatOptions.Notes] note; no
+	// line this package draws marks it), while the submission's citations and
+	// every delivery check count it as the turn's, as they count a closed
+	// round's: what one of them refuses another must not accept
+	// (internal/agent/turn's Record). ADDITIVE ON THE WIRE, as ArgsUnread is:
+	// a build before it drops the key and reads the call unmarked.
+	Late bool `json:"Late,omitempty"`
 }
 
 // FormatOptions controls how a run of calls renders.

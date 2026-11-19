@@ -17,25 +17,16 @@ import (
 
 // A TOKEN CEILING, CHANGED THE WAY BUDGETS CHANGES ONE.
 //
-// ONE WINDOW, ONE SCOPE, ONE WRITE PATH. A seat's ceilings are the seat's own
-// `token_budget`, written by `PUT /config/roles/{handle}` with the seat as it
-// was read and only that window changed; the company's are the document's,
-// written by `PATCH /config` with a merge patch of that one window. Those are
-// exactly the requests Company › Budgets sends (the dashboard's
-// `lib/useCeilingWrite.ts`), decided by the same verb (`config.org.write`, a
-// lead's for the seats they lead, an administrator's for the company), with
-// the same step-up and the same conditional write, so an approved change is
-// the person's own Save under the same rules. Before this tool, the model
-// either opened the editor for the person to save (the page's prefill) or
-// replaced a whole seat through the generic change, showing every field of it.
+// ONE WINDOW, ONE WRITE PATH. A seat's ceilings are its `token_budget`, set by
+// `PUT /config/roles/{handle}` with only that window changed; the company's
+// by `PATCH /config` with a merge patch of it. These are the requests
+// Company › Budgets sends (`lib/useCeilingWrite.ts`), under the same verb
+// (`config.org.write`), step-up and conditional write: an approval is the
+// person's own Save.
 //
-// THE CARD SHOWS THE ONE WINDOW. The preview reads the scope as it is now,
-// through the turn's grant, and draws one row (the window's ceiling from what
-// it is to what it would be); the history line the revision records is the
-// card's; and the warnings are the route's own check of the change, read by
-// the one function every write preview reads them with ([checked]), so the
-// rule that keeps a warning the company already carried off the card is the
-// same for this card as for every other.
+// THE CARD SHOWS THE ONE WINDOW: one row (the ceiling, now to proposed), the
+// revision's history line, and the route's own warnings read by [checked] like
+// every write preview, so a warning the company already carried stays off.
 
 // The two scopes' routes.
 const (

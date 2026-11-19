@@ -104,7 +104,7 @@ func lineMarksOf(b *threadBytes) countMarks {
 // handed every whole line in file order, it keeps the harness's anchor and what
 // lies after its place, and answers the bound or the mark ([resumedReading.count]).
 // What it keeps is fixed whatever a line holds: never a string the thread chose
-// the length of (an id or a uuid runs to [threadLineMax], threefold where the
+// the length of (an id or a uuid runs to [threadValueMax], threefold where the
 // decode reads U+FFFD), which kept across the walk beside every other reading
 // ([threadChain]) would pass the most a read of one thread holds.
 type resumedReading struct {

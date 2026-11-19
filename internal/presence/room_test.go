@@ -13,15 +13,13 @@ import (
 
 // A LATE FULL FRAME FILLS IN AND NEVER UNDOES.
 //
-// The join-time answer is sealed when the peer answers and applied once the
-// ask has waited out its budget, after the peer's broadcasts have already said
-// what changed since. Here the room hears node-a's answer only after node-a's
-// newer frames: members that joined, and one that joined and left. The answer
-// must not delete a member a newer frame added, must not set a member back to
-// what it was before a newer frame, must not bring back the one a newer frame
-// said left, and must still fill in a member the room had never heard of and
-// update one whose last frame was older. A rebroadcast newer than everything
-// then replaces node-a's members as before.
+// The join-time answer is sealed when the peer answers and applied after the
+// ask's budget, once the peer's newer broadcasts have said what changed. Here
+// the room hears node-a's answer only after node-a's newer frames. It must not
+// delete a member a newer frame added, set one back to what it was, or bring
+// back one a newer frame said left, and must still fill in a member the room
+// never heard of and update one whose last frame was older. A rebroadcast
+// newer than everything then replaces node-a's members as before.
 //
 // Mutation: apply every frame whatever instant it carries, and ida vanishes
 // until node-a's next rebroadcast (fifteen seconds; S6 measured it).

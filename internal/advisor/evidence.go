@@ -490,7 +490,7 @@ func approvalRubberStamp(ev Evidence, _ func(string) SeatKind) []Finding {
 				people, asker, s.recommended, s.decided),
 			Evidence: []Fact{{Key: "decided", Value: int64(s.decided)},
 				{Key: "recommended", Value: int64(s.recommended)}},
-			Fix: Fix{Kind: FixDraftWithAssistant, Options: []Option{},
+			Fix: Fix{Kind: FixAskCrewlet, Options: []Option{},
 				Sentence:  "Draft a policy with Ask Crewlet, and review it before it is saved.",
 				Unchanged: "Nothing changes until you approve the policy Ask Crewlet drafts.",
 				Prompt: fmt.Sprintf("In the last 7 days %s chose %s's recommended option in %d of "+
@@ -557,6 +557,7 @@ func reviewIdle(ev Evidence, _ func(string) SeatKind) []Finding {
 			words.Count(len(keys), "item in review", "items in review"),
 			[]Fact{{Key: "idle", Value: int64(len(keys))}}, recordsOf(RecordItem, keys))
 		f.Title, f.Why = reviewWords[w.how].title, reviewWords[w.how].why
+		f.Focus = w.how
 		out = append(out, f)
 	}
 	return out

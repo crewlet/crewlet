@@ -63,28 +63,18 @@ func Unacked(c net.Conn) (int, error) {
 	return n, err
 }
 
-// Acked is how many bytes the far end of c's socket has acknowledged, in the
-// kernel's reckoning, written being how many bytes have been written to c
-// (beneath any TLS, so the count of the socket's own bytes).
+// Acked is how many bytes the far end of c's socket has acknowledged, written
+// being the bytes written to c (beneath any TLS: the socket's own bytes).
 //
-// A COUNT FROM A BASELINE, NEVER FROM ZERO: Linux counts the sequence space
-// the far end acknowledged, and a connection this end OPENED had its SYN
-// acknowledged too, one more than its bytes, while one it accepted did not
-// (measured: 2,633,836 acknowledged of 2,633,835 written on a dialled
-// socket). So a reader takes a reading before it writes anything and counts
-// from it.
+// A COUNT FROM A BASELINE, NEVER FROM ZERO: a connection this end OPENED had
+// its SYN acknowledged too, one more than its bytes (measured: 2,633,836 of
+// 2,633,835 written), an accepted one not. Read before writing.
 //
-// LINUX COUNTS IT ITSELF: TCP_INFO's tcpi_bytes_acked, the kernel's
-// cumulative count, read in one call, so it never steps back and written is
-// not read. darwin keeps no such count, so there it is written less what the
-// send buffer holds (`SO_NWRITE`): two readings at two instants, which can
-// step back by what a write added between them — a caller that holds the
-// count over time keeps the largest it has read. And it lags by every byte of
-// a Write still in the socket: the send buffer holds them before the Write
-// returns, and a caller counts them into written only once it has, so a
-// caller that hands its socket one Write of megabytes reads nothing
-// acknowledged until that Write ends — it writes in chunks it counts as each
-// returns, and lags by one chunk at most.
+// LINUX reads tcpi_bytes_acked in one call: it never steps back, and written
+// is not read. darwin is written less the send buffer (`SO_NWRITE`), two
+// readings that can step back, so keep the largest. It lags by every byte of a
+// Write in progress, so write in chunks counted as each returns, lagging by
+// one chunk at most.
 func Acked(c net.Conn, written uint64) (uint64, error) {
 	var n uint64
 	err := control(c, func(fd uintptr) (err error) {

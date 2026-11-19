@@ -84,15 +84,13 @@ func TestScheduleValidation(t *testing.T) {
 }
 
 // A SCHEDULE'S NAME IS BOUNDED AS ITS CONVERSATION'S KEY SPELLS IT, and
-// refused at its field past the bound. Every fire is filed on its runner
-// seat's executor log under a key that spells the raw name escaped as a URL
-// path segment is, and the log refuses a key past its own bound — so the name
-// is measured that way, never as it reads, as a query would escape it, or
-// trimmed: sixty-seven accented letters read short and escape past the bound,
-// a space is three bytes in a path and one in a query while a colon is one and
-// three, and a name padded with spaces keeps them in its key. And a Kubernetes
-// object name at its longest is admitted whatever the bound is set to:
-// crewlet-operator names a Schedule by its object and bounds it no tighter.
+// refused at its field past the bound. The executor log refuses a key past its
+// bound, and the key spells the name escaped as a URL path segment, so the
+// name is measured that way, never as it reads, as a query would escape it, or
+// trimmed: accented letters read short and escape long, a space is three bytes
+// in a path and one in a query, and padding spaces stay in the key. A
+// Kubernetes object name at its longest is admitted whatever the bound is:
+// crewlet-operator bounds a Schedule no tighter.
 //
 // Mutation: measure the name as it reads, as url.QueryEscape spells it, or
 // trimmed; report the refusal at another field; or lower ScheduleNameMaxBytes

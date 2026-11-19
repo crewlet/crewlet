@@ -1175,6 +1175,12 @@ type Project struct {
 	// chart apply carries it through untouched.
 	TargetDate string `json:"target_date,omitempty"`
 
+	// StuckAfterHours is how long an item in progress in this project may
+	// go unchanged before it reads stuck ([FlowStuck]): [MinStuckAfterHours]
+	// to [MaxStuckAfterHours], zero for [DefaultStuckAfterHours]. Lead-owned,
+	// as the target date is.
+	StuckAfterHours int `json:"stuck_after_hours,omitempty"`
+
 	// PolicyVersion moves on a fields edit — NOT on tags.
 	PolicyVersion int `json:"policy_version,omitempty"`
 

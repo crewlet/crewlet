@@ -17,35 +17,18 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree"
 )
 
-// THE CORS LISTS ARE THE HEADERS THE ROUTES READ AND SET, and a header a route
-// starts reading cannot be forgotten in them.
+// THE CORS LISTS ARE THE HEADERS THE ROUTES READ AND SET. A permitted origin's
+// browser refuses the request at the preflight on a header [corsHeaders] does
+// not name and hides any response header [corsExposed] does not; the engine
+// sees neither.
 //
-// A permitted origin's browser refuses the whole request at the preflight when
-// it carries a header [corsHeaders] does not name, and hides from the page's
-// script every response header [corsExposed] does not name — and the engine
-// sees neither, because the browser fails after the answer arrives. The lists
-// were three request headers and no exposed ones while `/config` read
-// `If-Match`, `If-None-Match` and `X-Summary` and answered an `ETag` and a
-// `Retry-After` a client writes back: a page on an allowed origin could not
-// write `/config` at all, nor read the tag its next write needed.
-//
-// So this walks every handler's source under internal/api for the request
-// headers it reads (`r.Header.Get`, `.Values`, and the same on an http.Header
-// parameter) and the response headers it sets (`w.Header().Set`, `.Add`, and
-// the same on a header bound from `w.Header()` or passed as an http.Header),
-// and holds each one to a list: offered to a permitted origin, or withheld
-// below for a stated reason. It runs BOTH WAYS — an entry on any list that no
-// route reads or sets any more is stale and fails too.
-//
-// What it cannot see is what a library sets on a route's behalf —
-// http.ServeContent's range headers on the dashboard's own files, the MCP
-// transport's session headers on `/operator/mcp` and `/mcp/` — and the
-// webhook package is skipped whole: every header read there is a vendor
-// server's, on routes no page is ever offered.
-//
-// Mutation: drop a header from corsHeaders or corsExposed, or add one no route
-// reads, and this fails naming it; respell a constant a route reads its header
-// by and it fails on the new name.
+// So this walks every handler under internal/api for the request headers it
+// reads (`r.Header.Get`, `.Values`, on an http.Header parameter too) and the
+// response headers it sets (`w.Header().Set`, `.Add`, on a bound or passed
+// header too) and holds each to a list: offered, or withheld below with a
+// reason. BOTH WAYS: a stale entry fails. Blind to library-set headers
+// (http.ServeContent, MCP session); the webhook package is skipped (a vendor's
+// headers). Mutation: drop or add a header, or respell a constant a route reads.
 func TestTheCORSListsAreTheHeadersTheRoutesReadAndSet(t *testing.T) {
 	t.Parallel()
 	root := sourcetree.Root(t)
@@ -435,23 +418,15 @@ func TestTheCORSListsNameEachHeaderOnce(t *testing.T) {
 
 // A PERMITTED ORIGIN MAY SEND EVERY METHOD A ROUTE SERVES, AND NO OTHER.
 //
-// Only GET, HEAD and POST leave a browser without asking; every other method a
-// script sends is preflighted, and a preflight that does not name it refuses
-// the whole request in the browser, where the engine never sees it. The set
-// was written down beside the routes rather than read off them, and it left
-// `OPTIONS` out while `OPTIONS /config` answers the `Allow` and `Accept-Patch`
-// [corsExposed] offers: a page on an allowed origin was offered both headers
-// and could never make the request that carries them.
+// Only GET, HEAD and POST leave a browser without asking; any other method is
+// preflighted, and one not named refuses the request in the browser, where the
+// engine never sees it.
 //
-// So this reads the method of every route pattern this API's handler source
-// registers — a pattern is a string that opens with its method and a space,
-// whole or as the head of a concatenation — and holds [corsMethods] to that
-// set in both directions. A GET pattern serves HEAD too, as the mux does, and
-// a pattern with no method constrains none, so it adds nothing. The webhook
-// package is skipped for the reason the header walk skips it.
-//
-// Mutation: drop OPTIONS from corsMethods and this fails naming it; add a
-// method no route serves and it fails naming that.
+// So this reads the method of every route pattern the handler source registers
+// (a string opening with its method and a space, whole or as the head of a
+// concatenation) and holds [corsMethods] to that set both ways. A GET pattern
+// serves HEAD too, as the mux does; one with no method adds nothing. The webhook
+// package is skipped. Mutation: drop OPTIONS, or add a method no route serves.
 func TestTheCORSMethodsAreTheMethodsTheRoutesServe(t *testing.T) {
 	t.Parallel()
 	served := routeMethods(t, sourcetree.Root(t))

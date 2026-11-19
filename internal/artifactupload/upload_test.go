@@ -292,14 +292,12 @@ func TestARefusedPublishLeavesNothingBehind(t *testing.T) {
 
 // A TRANSFER THE STORE HAS NO ROOM FOR IS REFUSED AS FULL: the store refuses
 // the same file the same way until an operator makes room, so the transfer
-// answers a [artifactupload.StoreFull] — a refusal naming the file and the
-// room the store named, its surface's 507, counted
-// `store_full` — never a failure a client retries at once. Nothing was stored,
-// so the file's claim is given back and the same file transfers on the same
-// upload once room is made. The store's own words name its bucket and stay
-// out of the sentence. Over the fleet's own bucket's twin, and over S3 whose
-// provider has no room (MinIO's drives at their floor), through the
-// production backend.
+// answers a [artifactupload.StoreFull] (naming the file and the room the store
+// named, its surface's 507, counted `store_full`), never a failure a client
+// retries at once. Nothing was stored, so the claim is given back and the same
+// file transfers on the same upload once room is made. The store's own words
+// name its bucket and stay out of the sentence. Over the bucket twin and over
+// S3 (production backend).
 //
 // Mutation: answer ErrFull as any other failed put (transfer.go's case
 // removed) and this fails on the refusal, its reason and its sentence; drop
@@ -361,13 +359,12 @@ var fullArms = []struct {
 
 // A PUBLISH THE STORE HAS NO ROOM FOR IS REFUSED AS FULL, AND GIVES BACK WHAT
 // IT STAGED: a file the pipeline produced (an inline file here) is put under
-// the publish's own reservation, and a full bucket refuses it — a refusal, so
-// the publish deletes what it stored and releases its reservation as every
-// refusal does, rather than hold them for a retry that would meet the same
-// full bucket. Counted `store_full`, and the same publish lands once room is
-// made. (Judged a bad publish_success event, the deployment's refusal and
-// never the client's: TestEveryPublishIsOneObjectiveEvent.) Over the fleet's
-// own bucket's twin, and over S3 whose provider has no room.
+// the publish's own reservation, and a full bucket refuses it, so the publish
+// deletes what it stored and releases its reservation as every refusal does,
+// not holding them for a retry meeting the same full bucket. Counted
+// `store_full`; the same publish lands once room is made. (A bad
+// publish_success event, the deployment's refusal, never the client's:
+// TestEveryPublishIsOneObjectiveEvent.) Over the bucket twin and over S3.
 //
 // Mutation: answer ErrFull as any other failed put (stage.go's case removed)
 // and this fails on the refusal, its reason and the bytes still held; drop

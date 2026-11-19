@@ -258,38 +258,16 @@ func TestASubjectSurvivesTheRoundTrip(t *testing.T) {
 
 // A MINTED TOKEN IS REDACTED, whoever minted it and wherever a box prints it.
 //
-// No node that collects an executor holds the tokens its launch minted — the
-// run's row carries none — so what a box hands back cannot be redacted of them
-// by their values. internal/redact knows them by their SHAPE instead: the
-// version literal this package opens every token with, as it knows a GitHub
-// token by its ghp_, then a tag, a subject, an expiry and a signature. The two
-// packages spell that literal apart, since redact imports nothing of the
-// engine, and this is the test that holds them to one spelling — a token of
-// every domain the tree mints, each over a subject of its issuer's own shape,
-// printed every way a box prints one, comes out as the marker and nothing else.
-//
-// THE TICKET'S SUBJECT SPELLS A VENDOR'S KEY: an artifact view ticket's
-// subject is base64url of its claims, which spells `sk-` and twenty characters
-// more by chance — any three of its characters are `sk-` once in 262 144, and
-// a ticket's subject runs to thousands of them — and the token is still taken
-// whole, the vendor's piece with it, rather than cut where that piece was and
-// the rest of it, its signature among it, left in the text.
-//
-// AND A SUBJECT WHOSE TOKEN WOULD NOT BE IS NEVER MINTED: the two hold each
-// other in both directions. A subject holding any one byte Mint takes is
-// minted and its token redacted whole, and one holding a byte it refuses is
-// refused, a token's shape over it published as written; a subject of
-// redact.MaxReach bytes is minted and redacted, and one a byte longer refused
-// and published. Mint spells the rule apart from redaction's pattern, so this
-// is what keeps the two one rule.
-//
-// Mutation: drop the run-token rule from redact's table, or open a token with
-// the bare `v2` this one replaced, and every row fails; take the run token
-// after the vendors' rules, and the ticket's rows do; require a subject of at
-// least one character, and the empty subject's do; let Mint take a backslash,
-// a dot or a subject past redact.MaxReach, and its row is minted and
-// published; let it refuse a vertical tab, which redaction reads as a
-// subject's, and that row is refused and redacted.
+// No collecting node holds the tokens its launch minted, so redaction knows
+// them by SHAPE (this package's version literal, tag, subject, expiry,
+// signature). redact spells the literal apart; this holds them to one
+// spelling over a token of every domain, printed every way a box prints one.
+// THE TICKET'S SUBJECT SPELLS A VENDOR'S KEY (base64url holds `sk-`), and the
+// token is still taken whole. AND A SUBJECT WHOSE TOKEN WOULD NOT BE REDACTED IS NEVER MINTED: any byte
+// Mint takes, up to redact.MaxReach bytes, is minted and redacted; any other is
+// refused. Mutation: drop the run-token rule, open with bare `v2`, reorder the
+// rules, require a non-empty subject, or let Mint take or refuse a byte
+// wrongly, and a row fails.
 func TestAMintedTokenIsRedacted(t *testing.T) {
 	t.Parallel()
 	marker := redact.Marker + "run-token]"

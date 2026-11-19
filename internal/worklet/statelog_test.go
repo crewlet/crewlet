@@ -323,6 +323,36 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		record.Actor, record.ActorKind = "dev", worklet.AuthorAgent
 		record.WorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
 		record.Notify = &worklet.Notify{Kind: worklet.ChangeCreated}
+	case "Project.StuckAfterHours":
+		// A PROJECT WHOSE LEAD SAID HOW LONG ITS WORK MAY GO UNCHANGED.
+		project, err := json.Marshal(worklet.Project{
+			V: worklet.DocumentVersion, Key: "carrying", Name: "Suite carrying",
+			StuckAfterHours: 24, CreatedAt: at, UpdatedAt: at,
+		})
+		if err != nil {
+			return nil, err
+		}
+		record.Mutation = project
+	case "Subject.Kind flow", "Snapshot.Flow":
+		// AN ITEM'S FLOW RECORDED, and a notice of it to its lead, which a
+		// build that knows no flow would file under no table.
+		at := at
+		flow := worklet.FlowRecord{ID: "carrying-flow", Task: "carrying",
+			State: worklet.FlowStuck, Since: &at, Seat: "ada"}
+		if field.Name == "Snapshot.Flow" {
+			flow.Notice, flow.Told = worklet.FlowToldLead, "lead"
+			record.Notify = &worklet.Notify{Kind: worklet.ChangeFlow,
+				Snapshot: worklet.Snapshot{Key: "CARRYING-1", Task: "carrying",
+					Flow: &worklet.FlowNotice{ID: flow.ID, Told: "lead",
+						Role: worklet.FlowToldLead, State: worklet.FlowStuck, Since: &at}}}
+		}
+		body, err := json.Marshal(flow)
+		if err != nil {
+			return nil, err
+		}
+		record.Op, record.Mutation = worklet.OpFlow, body
+		record.Subject = worklet.FlowSubject("carrying")
+		record.Scope = worklet.ScopeSet{Subject: true, Container: "CARRYING"}
 	case "TaskPatch.ClearStart", "TaskPatch.ClearDue":
 		// A TASK PATCH TAKING A DATE OFF by its flag, which a build that
 		// decodes no flag would apply as a patch naming no date.

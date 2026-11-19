@@ -114,13 +114,7 @@ func (st seatState) stoppedReason() *StoppedReason {
 //
 // Called under s.mu.
 func (s *LiveState) stateOf(agentID string, agent *agentLive) seatState {
-	// A SEAT PARKED ON ITS MODELS' LIMIT IS NOT WORKING, even through the
-	// probe the engine runs when the park's alarm lifts it: until a call
-	// answers, the seat is waiting, and drawing each probe as work is the
-	// blink this state exists to stop. A person's pause still outranks it,
-	// below, as every stop's reason is ranked.
-	limitParked := agent != nil && agent.providerLimit != nil && agent.providerLimit.Parked
-	if agent != nil && agent.turn != nil && agent.turn.Stage != StageParked && !limitParked {
+	if turnWorks(agent) {
 		return seatState{activity: ActivityWorking}
 	}
 	running, waiting := s.runsOf(agentID)
@@ -136,21 +130,46 @@ func (s *LiveState) stateOf(agentID string, agent *agentLive) seatState {
 	case waiting:
 		return seatState{activity: ActivityNeeds}
 	}
-	stopped := func(r StoppedReason) seatState {
-		return seatState{activity: ActivityStopped, reason: r}
-	}
-	switch {
-	case agent != nil && agent.paused != nil:
-		return stopped(StoppedPaused)
-	case s.unplaced(agentID):
-		return stopped(StoppedUnplaced)
-	case agent != nil && agent.budget != nil && refusing(agent.budget.Windows, s.clock()),
-		s.budget != nil && refusing(s.budget.Org.Windows, s.clock()):
-		return stopped(StoppedBudget)
-	case limitParked:
-		return stopped(StoppedProvider)
+	if reason, stopped := s.stopOf(agentID, agent); stopped {
+		return seatState{activity: ActivityStopped, reason: reason}
 	}
 	return seatState{activity: ActivityIdle}
+}
+
+// turnWorks reports a turn the seat is working on now: one not parked on its
+// run, whose work is the run's.
+//
+// A SEAT PARKED ON ITS MODELS' LIMIT IS NOT WORKING, even through the probe the
+// engine runs when the park's alarm lifts it: until a call answers, the seat is
+// waiting, and drawing each probe as work is the blink this state exists to
+// stop. A person's pause still outranks it, as every stop's reason is ranked.
+func turnWorks(agent *agentLive) bool {
+	return agent != nil && agent.turn != nil && agent.turn.Stage != StageParked &&
+		!limitParked(agent)
+}
+
+func limitParked(agent *agentLive) bool {
+	return agent != nil && agent.providerLimit != nil && agent.providerLimit.Parked
+}
+
+// stopOf is why the seat cannot take a turn: the first of [StoppedReasons] that
+// holds, whatever the seat is doing now. The one ranking the seat's state and
+// an item's flow both read (posture.go).
+//
+// Called under s.mu.
+func (s *LiveState) stopOf(agentID string, agent *agentLive) (StoppedReason, bool) {
+	switch {
+	case agent != nil && agent.paused != nil:
+		return StoppedPaused, true
+	case s.unplaced(agentID):
+		return StoppedUnplaced, true
+	case agent != nil && agent.budget != nil && refusing(agent.budget.Windows, s.clock()),
+		s.budget != nil && refusing(s.budget.Org.Windows, s.clock()):
+		return StoppedBudget, true
+	case limitParked(agent):
+		return StoppedProvider, true
+	}
+	return "", false
 }
 
 // unplaced reports whether the last placement read LISTED the seat and found no

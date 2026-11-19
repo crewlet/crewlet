@@ -135,7 +135,7 @@ func TestEveryAppendedCallIsNumberedInItsRound(t *testing.T) {
 			At: time.Date(2026, 11, 7, 9, 0, 0, 0, time.UTC)}
 		read := log.withHeld(PendingRun{Round: "r1", HeldCall: &HeldCall{ID: "held-1", MadeAt: approved.At,
 			Call: &approved}})
-		opening := log.opened("job-2", logOpening{round: "r1", owed: &OwedCall{Round: "r1", Call: approved}})
+		opening, _ := log.opened("job-2", logOpening{round: "r1", owed: &OwedCall{Round: "r1", Call: approved}})
 		inRead, _ := ordinalOf(read.Calls, approved.Name)
 		inOpening, _ := ordinalOf(opening.Calls, approved.Name)
 		if want := log.Appends() + 1; inRead != want || inOpening != want {

@@ -84,6 +84,11 @@ var trustDoors = map[string]trustDoor{
 	"internal/events/types/a2a.go:colleagueLabel": {hosted, []string{
 		"internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords",
 	}},
+	// A due item's wait, in the words of whoever set it on the item.
+	"internal/events/types/task.go:waitLabel": {hosted, []string{
+		"internal/engine.TestEveryWakeTypeFencesSomebodyElsesWords",
+		"internal/pickup.TestADueItemIsHandedToABusySeatOnItsLane",
+	}},
 	// The page text a comment's wake quotes, an artifact's file nobody named.
 	"internal/artifactsdomain/prompt.go:Build": {hosted, []string{
 		"internal/engine.TestEveryWakeSurfaceFencesWhatSomebodyWrote",
@@ -214,11 +219,6 @@ var trustDoors = map[string]trustDoor{
 	}},
 	"internal/assistant/resume.go:pageReport": {scripted, []string{
 		"internal/assistant.TestAResumedTurnRunsOnTheScreenTheDecisionWasMadeFrom",
-	}},
-	"internal/assistant/deep.go:deepReport": {vendor, []string{
-		// A deep-work run's report: a harness's words after it read the
-		// open web, which nobody in the company wrote (ADR-0054).
-		"internal/assistant.TestADeepRunReachesCrewletOnlyThroughTheTurnsSurface",
 	}},
 	// HOW A CONVERSATION'S EARLIER TURNS ENDED, as the engine recorded each
 	// on the executor log and the next turn's brief tells it: what the turn

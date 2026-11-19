@@ -326,14 +326,13 @@ func TestTheOpenDraftReachesTheModelFencedAndRedacted(t *testing.T) {
 // The person applies the turn's draft change, the page reports it with the
 // screen as it is now, and the turn resumes: its model reads the draft the
 // change left, and a second change to the same draft is proposed, not refused
-// as an action the screen does not accept. A decision that carries no screen
-// resumes on the one the turn parked on, which still accepts the action. What
-// the page reported of the change is the page's own word, which the engine
-// cannot verify: the model reads it fenced at the page's trust (ADR-0040).
-// Mutation: resume with no page and the second change is refused
+// as an action the screen does not accept. A decision carrying no screen
+// resumes on the parked one, which still accepts the action. The page's report
+// is its own word, unverifiable: the model reads it fenced at the page's trust
+// (ADR-0040). Mutation: resume with no page and the second change is refused
 // "the screen does not accept that page action"; resume on the parked page
-// alone and the model never reads the applied value; fence the page's report
-// at any other trust and its label fails.
+// alone and the model never reads the applied value; fence the report at any
+// other trust and its label fails.
 func TestAResumedTurnRunsOnTheScreenTheDecisionWasMadeFrom(t *testing.T) {
 	t.Parallel()
 	for _, carried := range []bool{true, false} {

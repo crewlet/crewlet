@@ -20,7 +20,11 @@
 // text, or a [Number]'s literal as written, is read with [Scanner.Read] like any io.Reader, a piece at a
 // time, never ending a read inside a UTF-8 sequence; what is not read, the next Next passes over.
 // [Scanner.InvalidUTF8] says whether the text Read handed held a byte that begins no UTF-8 character, which
-// the decoded text, U+FFFD there as for a U+FFFD written or escaped, cannot say.
+// the decoded text, U+FFFD there as for a U+FFFD written or escaped, cannot say. [Scanner.CountUnits] counts,
+// from where a reader turns it on, JavaScript's length of what the scan passes, read or passed over: in UTF-16
+// code units as written ([Scanner.Units], whose difference across a value is the value's length as written)
+// and of the current Name's or String's decoded text ([Scanner.TextUnits], zero at every other token), so a
+// reader charges a value of any length by its length (the thread layer's estimate) without holding it.
 // [Scanner.Skip] passes over a whole value and [Scanner.Capture] answers a value's bytes as written up to a
 // bound its caller names, passing over a longer one: a reader that hands a short value out raw holds it, at
 // that bound, and passes media over unheld. [Scanner.Depth] and [Scanner.Offset] say where a token sits, for
@@ -80,4 +84,11 @@
 // where jsontext reads it at about 0.8 GB/s holding it whole, and read a transcript line dense with escapes
 // at about 0.5 GB/s: the scrub's two readings of a 256 MiB session cost about a second of scanning, against
 // its two-minute budget.
+//
+// COUNTING costs a pass over a text a character at a time where it leaves ASCII. On a dedicated two-core
+// slot of the build machine, three runs each: the base64 string passed over at 2.0 to 2.4 GB/s, and at 1.6 to
+// 1.9 counting; the transcript-like line at 0.76 to 0.90, and at 0.48 to 0.50 counting; and 16 MiB of CJK and
+// emoji (BenchmarkALongTextPastASCII) at 2.2 to 2.4, at 0.34 to 0.35 counting, still faster than reading it,
+// 0.20 to 0.21. Off, counting costs a branch a run. The count's five fields fit the struct's size class, so
+// the figure above stands, and counting allocates nothing.
 package jsonscan

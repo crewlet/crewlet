@@ -505,20 +505,14 @@ func TestANodeOnAnExternalBrokerBacksUpItsStoreAlone(t *testing.T) {
 // A STORE, WHAT IT HOLDS, BOTH FLEET REGISTERS AND A NODE ID ARE REQUIRED, and
 // a missing one is refused by name.
 //
-// The engine beside every API holds all three registers, and a backup that did
-// less around a nil would be either missing the node's own estate or invisible
-// to the trim. Without the node's holding it could only copy what happens to
-// be open, which is how a data node whose company ran no state log backed up
-// without its replicated estate — and the holding's ZERO value is refused for
-// that reason, rather than read as a node holding its own file alone. A blank
-// node id is the subtler one: it keys the hold
-// and the announced point, so every node that named itself through
-// CREWLET_NODE_ID would share one hold and announce a point the register
-// refuses. And a node holding the replicated estate needs the KEYRING its
-// logs' records are signed under, or the first file written while a backup
-// runs is a record it cannot read — refused at New, not at that record. Such a
-// node needs the build's REGISTER of logs too, or its manifest names only the
-// logs that happen to hold a checkpoint.
+// A backup that did less around a nil would miss the node's own estate or be
+// invisible to the trim. Without the holding it could only copy what happens to
+// be open, so its ZERO value is refused rather than read as a node holding its
+// own file alone. A blank node id keys the hold and the announced point, so
+// nodes named through CREWLET_NODE_ID would share one hold and announce a point
+// the register refuses. A node holding the replicated estate needs the KEYRING
+// its records are signed under (refused at New, not at a record) and the
+// build's REGISTER of logs, or its manifest names only logs holding a checkpoint.
 func TestNewRefusesAMissingStoreOrRegister(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)

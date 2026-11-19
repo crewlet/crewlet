@@ -10,43 +10,17 @@ import (
 	"strings"
 )
 
-// Backlinks is which pages and tasks link to one page — a page's "linked
-// from".
+// Backlinks is which pages and tasks link to one page: a page's "linked from".
+// The links are rows of THIS NODE's index (`page_links`, node migration 0036)
+// that [Indexer.Upsert] writes through `doclet.Links`' grammar, so they lag by
+// a lap like a search. Until the first lap over both corpora finishes,
+// [Indexer.LinkedFrom] refuses with [ErrIndexBuilding]: an empty list there
+// means the linking body is unread, not that nothing links here.
 //
-// # Derived here, read here
-//
-// The links are rows of THIS NODE's index (`page_links`, node migration 0036),
-// written by [Indexer.Upsert] from exactly the bodies it tokenises, through the
-// grammar `doclet.Links` owns. So what a page lists is what this node's index
-// holds: a body saved a moment ago lists its links once the indexer's next lap
-// has read it, which is the same staleness a search over the same index has —
-// and a node still building its index says so through the searcher's own
-// readiness: [Indexer.LinkedFrom] refuses with [ErrIndexBuilding] until the
-// index's first lap over both corpora has finished, because on a node still
-// building an empty list is the index not having read the linking body yet —
-// the opposite fact from nothing linking here.
-//
-// # A task links a page two ways
-//
-// Its DESCRIPTION can carry the address, which is the index's to find; and it
-// can name the page as a LINKED PAGE (`update_work_item{linked_pages}`), a
-// relation the tracker records as a row of its own (`tracker_relations`, kind
-// `page`). Both are a task pointing at this page, and a list that knew only
-// one would tell a reader nothing links here about a page a task was filed
-// against. The relation is read from the replicated rows in the same
-// transaction the names are, and a task linked both ways is listed once with
-// both ways named.
-//
-// # Named from the source rows, never from the index
-//
-// The index keeps a title for ranking and never re-reads it for a rename, so a
-// backlink's title and a task's key, status and whether that key is its own
-// ([TaskLink.KeyCollision]) are read from the REPLICATED rows in a second
-// transaction: the one read in this package that crosses the estate boundary,
-// which is why it is a batch from each side rather than a join. A source the
-// index still lists and the rows no longer publish (a page trashed a moment
-// ago, a task removed) is dropped — the orphan pass will drop its links
-// shortly, and listing it meanwhile would be a link to nothing.
+// Titles, keys and statuses are NAMED from the replicated rows, never the
+// index, which never re-reads a title for a rename: a second transaction, the
+// one read here crossing the estate boundary, hence a batch from each side, not
+// a join. A source the rows no longer publish (trashed, removed) is dropped.
 type Backlinks struct {
 	Pages []PageLink `json:"pages"`
 	Tasks []TaskLink `json:"tasks"`
@@ -66,24 +40,24 @@ type PageLink struct {
 	Title     string `json:"title"`
 }
 
-// TaskLink is one work item that links here.
+// TaskLink is one work item that links here, by one of two ways: its
+// DESCRIPTION carries the address (the index finds it), or it names the page as
+// a LINKED PAGE (`update_work_item{linked_pages}`, a `tracker_relations` row of
+// kind `page`, read in the transaction that reads the names). A list knowing
+// only one way would say nothing links here about a page a task was filed
+// against. A task linked both ways is listed once, both named.
 type TaskLink struct {
 	ID  string `json:"id"`
 	Key string `json:"key"`
 
 	// KeyCollision marks a task holding a key ANOTHER task claimed first. The
-	// tracker answers a key with the task that claimed it, so a link built
-	// from [TaskLink.Key] would open the claimant rather than the task that
-	// links here; a reader reaches this one by [TaskLink.ID] instead (the
-	// tracker's `ItemAddress` rule, which the dashboard's `itemAddress`
-	// mirrors).
+	// tracker answers a key with the claimant, so a link built from
+	// [TaskLink.Key] would open the wrong task; a reader uses [TaskLink.ID]
+	// (the tracker's `ItemAddress` rule, mirrored by the dashboard).
 	//
-	// THE TRACKER'S OWN COLUMN, read rather than re-derived, exactly as every
-	// tracker reader reads it: the applier derives `key_collision` from the
-	// key directory on every apply, so it is the same on every node and
-	// follows the claim wherever a purge hands it. Deriving it again here
-	// from `tracker_task_keys` would be a second copy of that rule, free to
-	// drift from the first.
+	// THE TRACKER'S OWN COLUMN, read, not re-derived: the applier derives
+	// `key_collision` on every apply, so it is the same on every node. Deriving
+	// it from `tracker_task_keys` here would be a second copy free to drift.
 	KeyCollision bool `json:"key_collision,omitempty"`
 
 	Title  string `json:"title"`

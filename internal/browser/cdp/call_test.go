@@ -37,14 +37,12 @@ func TestADeclaredCommandOrEventCannotBeRetyped(t *testing.T) {
 
 // A METHOD THE INVENTORY DOES NOT DECLARE SENDS NOTHING, HOWEVER IT WAS BUILT:
 // Call and Send refuse, before anything reaches the browser, a Method that is
-// not an entry of the inventory with the types it is declared with there —
-// the zero Method, the only one another package can build, and every spelling
-// by which this package could build one outside its inventory, none of which
-// the walk of TestEveryDeclaredMethodAndEventIsInTheInventory reads: a type
-// alias of Method, a name set on a zero one, a struct of its shape converted,
-// and a declared command under another parameter or result type. Each refusal
-// names what was built, and the browser's first frame is the declared call
-// made after them all.
+// not an inventory entry with its declared types: the zero Method and every
+// spelling the walk of TestEveryDeclaredMethodAndEventIsInTheInventory cannot
+// read (a type alias of Method, a name set on a zero one, a struct of its shape
+// converted, a declared command under other parameter or result types). Each
+// refusal names what was built, and the browser's first frame is the declared
+// call made after them all.
 //
 // Mutations: drop the inventory lookup, refusing only a Method that names
 // nothing, and the browser reads Page.close first — red; match the name
@@ -131,19 +129,14 @@ func TestAMethodTheInventoryDoesNotDeclareSendsNothing(t *testing.T) {
 
 // AN EVENT THE INVENTORY DOES NOT DECLARE IS READ BY NOBODY, HOWEVER IT WAS
 // BUILT: Listen refuses an Event that is not an entry of the inventory with the
-// type it is declared with there — the zero Event, the only one another
-// package can build, nil, an event off the inventory, a struct of its shape
-// converted, and a declared event read as another type — and the listener it
-// hands back answers why at once, even under a context that has ended, rather
-// than wait for ever on a name nothing is delivered under, or panic. Of
-// answers the same refusal and decodes nothing, a message of that very event
-// included. The session goes on, a declared listener beside the refused ones
-// taking its events.
-//
-// Mutations: drop Listen's refusal, keeping listenedFor's name and passing
-// over its error, and each refused Event's listener answers the context's end
-// — red; drop the inventory lookup, or match the name alone, and the retyped
-// event is listened for and decoded — red.
+// type it is declared with there (the zero Event, nil, an event off the
+// inventory, a struct of its shape converted, a declared event read as another
+// type), and the listener it hands back answers why at once, even under an
+// ended context, rather than wait for ever or panic. Of answers the same
+// refusal and decodes nothing. The session goes on, a declared listener beside
+// the refused ones taking its events. Mutations: drop Listen's refusal, and
+// each refused listener answers the context's end; drop the inventory lookup,
+// or match the name alone, and the retyped event is decoded — red.
 func TestAnEventTheInventoryDoesNotDeclareIsReadByNobody(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)

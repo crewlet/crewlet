@@ -60,6 +60,7 @@ const ORG = {
 const NOW = Date.parse("2031-04-16T12:00:00Z");
 
 const row = (key: string, over: Partial<WorkSummary> = {}): WorkSummary => ({
+  flow: null,
   id: key.toLowerCase(),
   key,
   project: "ENG",

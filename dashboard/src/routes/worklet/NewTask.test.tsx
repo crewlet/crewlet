@@ -79,6 +79,8 @@ const row = (key: string, name: string): WorkProjectRow =>
   }) as WorkProjectRow;
 
 const ENG: WorkProjectDetail = {
+  stuck_after_hours: 8,
+  stuck_after_hours_set: false,
   ...row("ENG", "Core platform"),
   statuses: [],
   types: [

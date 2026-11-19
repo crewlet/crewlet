@@ -1,6 +1,7 @@
 package worklet
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"fmt"
@@ -603,6 +604,12 @@ type ProjectDetail struct {
 	// the names their values are kept under.
 	OwnFields []FieldDef `json:"own_fields"`
 
+	// StuckAfterHours is the window an item in progress here may go
+	// unchanged before it reads stuck, the default where the lead set none
+	// ([Project.StuckAfterHours]); StuckAfterHoursSet says the lead set it.
+	StuckAfterHours    int  `json:"stuck_after_hours"`
+	StuckAfterHoursSet bool `json:"stuck_after_hours_set"`
+
 	Tags []Tag `json:"tags,omitempty"`
 
 	// ArchivedTags are the labels that take no new work, which [Tags]
@@ -727,6 +734,8 @@ func readProjectDetail(ctx context.Context, tx *sql.Tx, key string,
 	out.Purpose = project.Purpose
 	out.DefaultAssignee = project.DefaultAssignee
 	out.TargetDate = project.TargetDate
+	out.StuckAfterHours = cmp.Or(project.StuckAfterHours, DefaultStuckAfterHours)
+	out.StuckAfterHoursSet = project.StuckAfterHours != 0
 	out.Archived = project.Archived
 	out.Version = project.Version
 	out.Unit, out.Lead = resolveUnit(q.Units, project.Unit)

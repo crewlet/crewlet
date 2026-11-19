@@ -11,13 +11,12 @@ import (
 
 // WHAT A COMMITTED BATCH MOVED, said after the commit.
 //
-// Every data node applies every record, and every node that serves a socket is
-// a data node, so each node's applier is what tells that node's sockets about
-// a document that changed: built from the rows the apply wrote rather than
-// re-read, handed to the engine after the commit ([Engine.OnArtifactDataMoved]
-// in internal/engine), and shaped per reader by whoever pushes it, since a
-// document in an `own_rows`, `editors` or `private` collection reaches only the
-// readers its rule admits.
+// Every node that serves a socket is a data node applying every record, so each
+// applier tells its own sockets about a changed document: built from the rows
+// the apply wrote rather than re-read, handed to the engine after the commit
+// ([Engine.OnArtifactDataMoved] in internal/engine), and shaped per reader by
+// whoever pushes it, since a document in an `own_rows`, `editors` or `private`
+// collection reaches only the readers its rule admits.
 //
 // OVER-REPORTING IS THE SAFE DIRECTION: a listener told twice re-reads once
 // more. A batch that retained a record this build cannot read moves everything

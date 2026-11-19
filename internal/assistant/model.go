@@ -60,7 +60,7 @@ func modelProblemOf(err error, admin bool) (modelProblem, bool) {
 	case failure.Kind == llm.KindRateLimit:
 		hint := "It is tried again once the limit resets."
 		if admin {
-			hint += " To keep Ask Crewlet answering through a limit, add another model to assistant.llm."
+			hint += " To keep Ask Crewlet answering through a limit, assign it another model."
 		}
 		return modelProblem{Code: wire.ErrorModelBusy,
 			Message: wire.ErrorModelBusy.Sentence(), Hint: hint,
@@ -152,18 +152,16 @@ func (e *ModelNotReady) Unwrap() []error { return []error{ErrUnavailable, e.Caus
 // assistant's chain is known unusable now, or nil when none is known to be.
 // Read from what the node already holds ([Models.Unready]): no model is called.
 func (s *Service) ModelNotice(ctx context.Context, p iam.Principal) *wire.ModelNotice {
-	if problem, _ := s.modelUnready(ctx, p, Quick); problem != nil {
+	if problem, _ := s.modelUnready(ctx, p); problem != nil {
 		return problem.notice()
 	}
 	return nil
 }
 
-// modelUnready is the known problem of the chain strength names for p and
-// the failure it reads, or nil for none.
-func (s *Service) modelUnready(ctx context.Context, p iam.Principal,
-	strength Strength) (*modelProblem, error) {
-
-	err := s.models.Unready(ctx, strength)
+// modelUnready is the known problem of the model for p and the failure it
+// reads, or nil for none.
+func (s *Service) modelUnready(ctx context.Context, p iam.Principal) (*modelProblem, error) {
+	err := s.models.Unready(ctx)
 	if err == nil {
 		return nil, nil
 	}
@@ -178,10 +176,10 @@ func (s *Service) modelUnready(ctx context.Context, p iam.Principal,
 	return &problem, err
 }
 
-// modelRefusal is the refusal of a question asked while the chain it runs on
+// modelRefusal is the refusal of a question asked while the model it runs on
 // is known unusable, or nil.
-func (s *Service) modelRefusal(ctx context.Context, p iam.Principal, strength Strength) error {
-	problem, cause := s.modelUnready(ctx, p, strength)
+func (s *Service) modelRefusal(ctx context.Context, p iam.Principal) error {
+	problem, cause := s.modelUnready(ctx, p)
 	if problem == nil {
 		return nil
 	}

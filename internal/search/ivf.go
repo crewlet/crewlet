@@ -14,94 +14,46 @@ import (
 	"sync"
 )
 
-// THE SEMANTIC FIRST STAGE AS AN INDEX — ADR-0028 — and this file is its
-// arithmetic: an inverted file (IVF) over the 1-bit sign codes the full scan
-// already reads, trained by k-means in HAMMING space with a majority-bit
-// centroid update.
-//
-// # Why an index at all, when the package doc spent years saying there was none
-//
-// The full scan was the right answer while the corpus one node held fitted the
-// interactive budget, and it no longer does. Its cost is N × c_row over the
-// narrow table — 2.90 µs a source at p95 with one reader and 7.34 µs with
-// eight (BenchmarkSemanticIVFUnderLoad's scan arm) — so one node holds
-// ≈ 345 000 sources idle and ≈ 136 000 under load inside
-// [SemanticScanBudget], and a company at a thousand seats measures ≈ 2.4 s
-// under load in its first year. An inverted file makes the first stage read
-// the lists nearest the query instead of every row: the cost becomes
-// (probed / lists) × N plus a rerank that does not grow, and the exact f32
-// rerank above it is UNCHANGED, so the index decides which documents are
-// looked at and never how they are ordered.
-//
-// # Why IVF and not a graph, and why over the SIGN CODES
-//
-// No new dependency and no new file format: the lists are a column on the
-// narrow table the scan already reads, the centroids are a record on the
-// vector log every node already applies, and the whole index travels inside
-// the snapshot that already carries the table. A graph index (HNSW, DiskANN)
-// is a second structure with its own persistence, its own concurrent-update
-// story and a build that is not a pure function of the records — every node
-// would build a different one. And the training is over the codes rather than
-// the f32 vectors because the codes are what every node already holds in the
-// narrow table, 8× smaller, and because HAMMING arithmetic is integer: two
-// CPUs agree on it to the bit, where a float k-means disagrees in the last
-// place across architectures and two nodes would file one document in two
-// lists. A float in anything every node must compute alike is a value two
-// architectures can disagree on, and an index is exactly such a thing.
-//
-// # What it costs, and what it loses — measured, never assumed
-//
-// A document is found only if its list is probed, so recall now depends on
-// the probe count as well as on the oversample. How much depends on the
-// corpus, and the fixtures disagree with each other at every size:
+// THE SEMANTIC FIRST STAGE AS AN INDEX (ADR-0028): an inverted file (IVF) over
+// the 1-bit sign codes the full scan reads, trained by k-means in HAMMING space
+// with a majority-bit centroid update. The scan costs N × c_row (2.90 µs a
+// source at p95 with one reader, 7.34 with eight), so one node holds ≈ 345 000
+// sources idle and ≈ 136 000 under load inside [SemanticScanBudget]; the index
+// reads only the lists nearest the query, and the exact f32 rerank above it is
+// UNCHANGED, so it decides which documents are looked at, never their order.
+// Why IVF over the codes, not a graph or f32: the lists are a column on the
+// narrow table and the centroids a record on the vector log, both already
+// replicated, while a graph's build is not a pure function of the records, and
+// a float k-means disagrees in the last place across architectures, filing one
+// document in two lists. Hamming arithmetic is integer and agrees to the bit.
+
+// Recall depends on the probe count, and the fixtures disagree at every size:
 //
 //	sources   isotropic (no topics)        topical
 //	 20 000   every list — declined        half
 //	120 000   half (0.966)                 an eighth (0.985)
 //	500 000   every list — declined        half (0.993)
 //
-// So the probe count is never a constant: every training MEASURES recall
-// against the exact scan on held-out documents — sampled from the corpus,
-// kept out of the k-means sample, and never counted as their own answer — and
-// records the smallest probe count that meets the floor curve with no head
-// miss in EVERY SHAPE a search is issued in ([QueryShape], [ChooseProbes]).
-// An index that would have to read more than [IVFProbeCeiling] of its lists
-// to do so is not installed at all, because it would read nearly the whole
-// table through an index for the scan's own answer. The embedding duty
-// re-measures an installed index every [IVFMeasureInterval], and `crewlet
-// search eval` whenever an operator asks.
-//
-// # A narrowed search reads more lists, or scans
-//
-// A search narrowed to one source or to some containers keeps only the rows
-// its filter matches, so the lists an unfiltered search would read hold too
-// few of its answers: its true top 150 are the unfiltered top 150/s, for a
-// filter keeping a share s of the corpus, and they are spread over lists no
-// unfiltered probe reaches. Measured on the topical fixture at 20 000
-// sources, an index trained on unfiltered queries alone installed at half its
-// lists, and a search reading those same lists recalled 0.949 with three head
-// misses when narrowed to the tenth of the corpus that is pages, and 0.68 to
-// 0.74 when narrowed to one container (a sixty-fourth of it, clustered as a
-// project is) — where the full scan it replaced recalled 1.000 for both. So a
-// narrowed search reads lists, nearest first, until it
-// has seen as many MATCHING rows as the unfiltered probe reads rows at all
-// ([ProbeCount]) — the same neighbourhood, measured in the rows the answer can
-// come from — and when that would take more than the ceiling it runs the full
-// scan instead, which reads every matching row. The training measures every
-// shape through that same rule, so the recall it records is the recall
-// narrowed searches get.
-//
-// The no-head-miss half of that criterion is the binding one at scale. At
-// 500 000 topical sources aggregate recall meets the 0.88 floor at 8 of
-// 2 048 lists, and one head miss on twenty-five held-out queries persists to
-// 512 — so the index installs at half, where it saves about a third of the
-// scan rather than most of it. It is kept because it is the evaluation's own
-// definition of passing ([EvalReport.Passed]): an index chosen by a weaker
+// So every training MEASURES recall against the exact scan on held-out
+// documents (out of the k-means sample, never their own answer) and records the
+// smallest probe count meeting the floor curve with no head miss in EVERY SHAPE
+// a search takes ([QueryShape], [ChooseProbes]). An index needing more than
+// [IVFProbeCeiling] of its lists is not installed; [IVFMeasureInterval] re-measures.
+
+// A narrowed search (one source, some containers) keeps only matching rows, so
+// the lists an unfiltered probe reads hold too few of its answers: they are the
+// unfiltered top 150/s for a filter keeping share s, spread over lists no
+// unfiltered probe reaches. Reading the unfiltered lists recalled 0.949 with
+// three head misses at a tenth of the corpus and 0.68-0.74 at one container
+// (topical, 20 000 sources), where the full scan recalled 1.000. So it reads
+// lists, nearest first, until it has seen as many MATCHING rows as the
+// unfiltered probe reads rows ([ProbeCount]), and past the ceiling runs the
+// full scan. Training measures every shape through that same rule.
+
+// The no-head-miss half binds at scale: at 500 000 topical sources aggregate
+// recall meets 0.88 at 8 of 2 048 lists but a head miss persists to 512, so the
+// index installs at half. It is [EvalReport.Passed]'s own definition; a weaker
 // rule would be a first stage `crewlet search eval` reports as failing.
-// What an installed index buys is therefore bounded below by the ceiling —
-// at half the lists, 73 ms p95 against the scan's 116 at 40 000 sources with
-// one reader and 219 against 294 with eight — and a corpus with real topics
-// buys more.
 
 const (
 	// IVFMinListRows is the list size below which a centroid is noise.
@@ -117,30 +69,18 @@ const (
 	// is not worth a column on every row.
 	IVFMinLists = 16
 
-	// IVFMaxLists is the most: 2 048, the most whose TRAINING costs the
-	// node holding the duty minutes of its cores rather than a quarter of an
-	// hour at the corpus sizes an index serves.
+	// IVFMaxLists is the most: 2 048, the most whose TRAINING costs the duty's
+	// node minutes of its cores rather than a quarter of an hour.
 	//
-	// The k-means costs sample × lists × rounds Hamming distances and its
-	// sample is [IVFTrainPointsPerList] a list, so it grows with the SQUARE
-	// of the list count. Measured at 500 000 topical sources on four shared
-	// cores: 33 s of k-means and 19 s filing every code at 2 048 lists,
-	// against 126 s and 39 s at 4 096 — which FAISS's rule ([IVFLists])
-	// would have chosen from about 524 000 sources. At 2 048 the same
-	// training is about two minutes on every core, a little over three on
-	// the half of them a training runs on ([ivfCoreShare]), and on a node
-	// allowed one core, shared with two searchers, already 237–282 s of
-	// k-means and 139–172 s of filing (BenchmarkIVFTrainingShare -cpu 1); at
-	// 4 096 that k-means alone would be four times as long. NOTHING ELSE BOUNDS IT: the
-	// tick's budget measures progress, and arithmetic that cannot wedge runs
-	// exempt from it ([Budget]), so the training's own size is what decides
-	// how long the duty's node gives its cores to it — and this cap is that
-	// size.
-	// The rule reaches 2 048 at about 131 000 sources, and at ≈ 545 000 — the
-	// most one node searches inside [SemanticScanBudget] through an index at
-	// its probe ceiling — the mean list still holds ≈ 266 rows, four times
-	// the [IVFMinListRows] a centroid needs, so the cap costs resolution only
-	// on corpora past what a node serves anyway.
+	// The k-means costs sample × lists × rounds Hamming distances, so it grows
+	// with the SQUARE of the list count. At 500 000 topical sources on four
+	// shared cores: 33 s of k-means and 19 s filing at 2 048 lists, against 126 s
+	// and 39 s at 4 096 (FAISS's rule, [IVFLists], from about 524 000 sources);
+	// on one core shared with two searchers 237–282 s and 139–172 s at 2 048
+	// (BenchmarkIVFTrainingShare -cpu 1). NOTHING ELSE BOUNDS IT: the tick's
+	// budget measures progress and this arithmetic runs exempt from it
+	// ([Budget]). At ≈ 545 000 sources, the most one node searches inside
+	// [SemanticScanBudget], the mean list still holds ≈ 266 rows.
 	IVFMaxLists = 2048
 
 	// IVFMinCorpus is the smallest corpus that gets an index: sixteen
@@ -174,16 +114,12 @@ const (
 	// still be worth having, as a divisor: an index whose recall needs more
 	// than 1/IVFProbeCeiling of its lists is NOT INSTALLED.
 	//
-	// TWO, measured at the ceiling itself: at 40 000 topical sources an index
-	// probing half its lists answered at 73 ms p95 against the full scan's
-	// 116 with one reader, and 219 against 294 with eight
-	// (BenchmarkSemanticIVFUnderLoad). A row read through the covering index
-	// costs about 1.3× a row of the scan's sequential read, so at half the
-	// lists the index has already spent two thirds of what the scan costs
-	// idle and three quarters under load — and a stale rollout (see
-	// [Stage1]) adds a materialised union on top. Past half it would be
-	// bookkeeping on every embed and every node for a first stage that is no
-	// faster; the scan is chosen instead.
+	// TWO, measured at the ceiling: at 40 000 topical sources an index probing
+	// half its lists answered at 73 ms p95 against the scan's 116 with one
+	// reader, 219 against 294 with eight (BenchmarkSemanticIVFUnderLoad). A row
+	// through the covering index costs about 1.3× a scan row, and a stale
+	// rollout (see [Stage1]) adds a materialised union, so past half it would be
+	// bookkeeping on every embed and node for a first stage no faster.
 	IVFProbeCeiling = 2
 
 	// IVFRetrainFactor is how far the corpus may move before the index is
@@ -313,16 +249,13 @@ func (x IVF) Centroid(j int) []uint64 { return x.centroids[j*x.words : (j+1)*x.w
 // Nearest is the list a code is filed in: the centroid at the smallest Hamming
 // distance, THE LOWEST LIST WINNING A TIE.
 //
-// The tie break is not cosmetic, for the reason it is not in [CandidatePool]:
-// Hamming distance over a 3 072-bit code takes at most 3 073 values, so a code
-// equidistant from two centroids is an ordinary event, and a node that broke
-// the tie the other way would file the document in a list nobody else probes
-// for it.
+// The tie break is not cosmetic: Hamming distance over a 3 072-bit code takes
+// at most 3 073 values, so a tie is ordinary, and a node breaking it the other
+// way would file the document in a list nobody else probes for it.
 //
-// INTEGER ARITHMETIC ONLY. A float distance here — the cosine of the f32
-// vector against a ±1 centroid, say — ranks nearly the same and is not
-// bit-reproducible across architectures, so two copies of the estate
-// would disagree about where a document lives: see ADR-0028.
+// INTEGER ARITHMETIC ONLY: a float distance (the cosine of the f32 vector
+// against a ±1 centroid) is not bit-reproducible across architectures, so two
+// copies of the estate would disagree about where a document lives (ADR-0028).
 func (x IVF) Nearest(code []uint64) int {
 	best, list := math.MaxInt, 0
 	for j := range x.Lists() {
@@ -362,11 +295,9 @@ func (x IVF) ProbeOrder(code []uint64) []int {
 // order they finished.
 //
 // It stops within a stride ([ivfStride]) of ctx ending and answers ctx's
-// error, never a partial filing: at the largest corpus an index serves the
-// filing is the longest step a training takes without returning — tens of
-// seconds on its share of the cores — and a duty tick cut off, by a lease it
-// could not renew or an engine stopping, must not go on spending those cores
-// on a result it will discard.
+// error, never a partial filing: at the largest corpus this is tens of seconds
+// of cores, and a duty tick cut off by a lost lease or a stopping engine must
+// not go on spending them on a result it will discard.
 func (x IVF) Assign(ctx context.Context, codes Codes) ([]int32, error) {
 	return x.assign(ctx, codes, ivfWorkers())
 }
@@ -457,36 +388,14 @@ const ivfStream = 0x1CEB00DA
 // TrainIVF runs k-means over codes in Hamming space and returns lists
 // centroids.
 //
-// # Deterministic, on every node, to the bit
-//
-// The sample is a seeded partial shuffle (PCG, integer), the assignment is
-// [IVF.Nearest] (integer, lowest list on a tie), the update is a per-bit
-// MAJORITY of each list's members with a tie keeping the centroid's previous
-// bit, and a list left empty is re-seeded with the sampled row farthest from
-// its own centroid (lowest row on a tie). Nothing in it is a float and nothing
-// depends on how many workers ran, so the same codes and the same seed give
-// the same centroids everywhere — TestEveryHolderBuildsTheSameIndex.
-//
-// # Why the majority and not a mean
-//
-// A mean of sign codes is a vector of fractions, and ranking a query code
-// against fractions is float arithmetic again. The majority is the Hamming
-// median — the code minimising the summed Hamming distance to the list's
-// members — which is exactly the quantity k-means in this metric minimises.
-//
-// # Held-out rows are never trained on
-//
-// heldOut are the rows the training will measure recall FROM, ascending, and
-// no centroid is drawn from them: a query document that shaped the centroid of
-// the list it is filed in is a query the index was fitted to answer, and the
-// recall it measured would describe that fit rather than a search.
-//
-// It stops within a stride ([ivfStride]) of ctx ending — a training runs
-// inside a duty tick whose lease is bounded, and one that would outlive it
-// must publish nothing ([Embedder.Tick]), so the cores it holds are released
-// as soon as that is known rather than at the end of the round. The caller
-// chooses lists ([IVFLists]); codes must hold at least that many rows outside
-// heldOut. It runs on [ivfWorkers] of the cores.
+// Deterministic on every node, to the bit: seeded partial-shuffle sample,
+// [IVF.Nearest] assignment, a per-bit MAJORITY update (a tie keeps the previous
+// bit; the Hamming median, where a mean would be float) and an empty list
+// re-seeded with the farthest sampled row: TestEveryHolderBuildsTheSameIndex.
+// heldOut (ascending) are the rows recall is measured FROM, never a centroid
+// source. It stops within a stride ([ivfStride]) of ctx ending: a training
+// outliving its tick's lease must publish nothing ([Embedder.Tick]). The caller
+// chooses lists ([IVFLists]); codes holds that many rows outside heldOut.
 func TrainIVF(ctx context.Context, codes Codes, lists int, seed uint64, heldOut []int) (IVF, error) {
 	return trainIVF(ctx, codes, lists, seed, heldOut, ivfWorkers())
 }
@@ -678,73 +587,28 @@ func sampleRows(n, k int, seed uint64, skip []int) []int {
 // steps — the k-means and filing every code — run on, as a divisor: HALF, and
 // never fewer than [ivfMinWorkers] workers where the node has that many cores.
 //
-// # Why not every core
-//
-// The training runs on whichever node holds the embedding duty, and that node
-// is also running seats and answering searches — the first stage of every
-// semantic search is itself a CPU-bound scan. On every core, a training at the
-// largest corpus an index serves took the whole node for over a minute.
-// Measured at 500 000 topical sources and 2 048 lists on this repository's
-// four-core container, shared with two other test runs, with two searchers
-// scanning 40 000 codes throughout (BenchmarkIVFTrainingShare): on every core
-// the k-means took 48 s and the filing 31 s while the searchers' p95 went from
-// 7.1 ms idle to 26.4 ms; on half, 72 s and 42 s, and 13.9 ms. Without the
-// searchers the same pair was 30 s and 17 s against 42 s and 27 s. So half
-// the cores costs the training about 1.45 times as long and halves what it
-// adds to every search's latency meanwhile.
-//
-// # How long it holds the node
-//
-// The training runs inside the duty's tick ([Embedder.Tick]), with the lease
-// renewed four times a lease by a goroutine the training does not starve —
-// it leaves the other half of the cores — and exempt from the tick's budget,
-// which measures progress and which arithmetic that cannot wedge would only
-// ever have cut off unfinished ([Budget]). At the ≈ 545 000 sources a node
-// searches through an index, the reading at about 120 µs a source is ≈ 65 s,
-// and the k-means and filing on half of four busy cores ≈ 125 s: a little
-// over three minutes in the worst case measured. That holds on every node the
-// share gives two workers or more, which is every node with two cores or more
-// ([ivfMinWorkers] says why a two- or three-core node is not halved), and the
-// k-means stops growing once the list count reaches [IVFMaxLists] — its sample
-// is a fixed number of rows a list — so past that the filing and the reading
-// are the only terms a larger corpus lengthens.
-//
-// A node allowed ONE core trains on it, as every build has, and no share can
-// leave its searches anything. With the same two searchers on that one core
-// the training measured 237 s of k-means and 139 s of filing at 500 000
-// sources (BenchmarkIVFTrainingShare -cpu 1), and 282 s and 172 s again
-// pinned to one CPU of a host whose other three were busy; its reading
-// measured 394 µs a source (BenchmarkIndexTraining -cpu 1, pinned the same
-// way), ≈ 215 s at the largest corpus. That is about eleven minutes in all,
-// which a single core with two searches always in flight — already past the
-// load its corpus table is measured at — spends ONCE, because the tick is
-// bounded by its progress rather than by its length.
-//
-// # Why a constant
-//
-// It scales with the cores already — [ivfWorkers] reads GOMAXPROCS, which
-// follows a container's CPU limit — and there is no deployment for which a
-// different share is the honest answer: a node with cores to spare finishes a
-// rare training sooner, and one without them needs the other half for its
-// seats. An operator who wants the whole engine on fewer cores sets GOMAXPROCS.
+// The duty's node also runs seats and searches. At 500 000 topical sources on
+// four shared cores with two searchers (BenchmarkIVFTrainingShare), every core
+// took 48 s of k-means and 31 s of filing while the searchers' p95 went from
+// 7.1 ms to 26.4 ms; half took 72 s and 42 s and 13.9 ms: 1.45 times as long
+// for half the added latency. It runs in the duty's tick ([Embedder.Tick]),
+// exempt from the tick's budget ([Budget]); one core takes about eleven
+// minutes, spent ONCE. [ivfWorkers] reads GOMAXPROCS, so the share is a
+// constant: an operator wanting fewer cores sets that.
 const ivfCoreShare = 2
 
 // ivfMinWorkers is the fewest workers a training runs on wherever the node has
 // that many cores: TWO, so the share halves only a node with four or more.
 //
-// Half of two cores is one worker, and on two cores that bought the searches
-// nothing while it nearly doubled the training. Measured at GOMAXPROCS 2 over
-// the same fixture with the same two searchers (BenchmarkIVFTrainingShare
-// -cpu 2), once on an otherwise idle host and once on this container shared
-// with other runs: one worker took 149 s of k-means and 90 s of filing (135 s
-// and 81 s shared), two took 78 s and 52 s (77 s and 47 s), and the searchers'
-// p95 was 23.0 ms against 24.8 ms (22.9 against 24.7), from 4.4 ms with no
-// training. Two searches always in flight on two cores already queue for each
-// other's time slices, so one training worker more or less moves their tail
-// by a scheduler quantum rather than by a core — while one worker makes the
-// training half as long again: at the ≈ 545 000 sources an index serves it
-// projects to 290–310 s with the reading, against about 195 s on two. A three-core node takes two workers for the same reason,
-// where half would have been one.
+// Half of two cores is one worker, which bought the searches nothing while it
+// nearly doubled the training. At GOMAXPROCS 2 with two searchers
+// (BenchmarkIVFTrainingShare -cpu 2): one worker took 149 s of k-means and 90 s
+// of filing, two took 78 s and 52 s, and the searchers' p95 was 23.0 ms against
+// 24.8 ms (4.4 ms with no training). Two searches in flight on two cores
+// already queue for each other, so one worker more moves their tail by a
+// scheduler quantum, not a core. At ≈ 545 000 sources one worker projects to
+// 290–310 s with the reading, against about 195 s. A three-core node takes two
+// workers for the same reason.
 const ivfMinWorkers = 2
 
 // ivfWorkers is how many goroutines a training runs its k-means and its filing
@@ -867,21 +731,10 @@ func LargestList(byList [][]int32) int {
 // is more). False means no count within that meets it, and the search runs
 // the full scan instead.
 //
-// # Why "as many matching rows as the unfiltered probe reads rows"
-//
-// A filter keeping a share s of the corpus makes a query's true top 150 the
-// unfiltered top 150/s — a neighbourhood 1/s times the size, so 1/s times the
-// rows to hold it, of which the filter keeps s: the same number of MATCHING
-// rows as the unfiltered probe reads rows. A filter that matches everything
-// meets it at probes exactly, so an unfiltered search and one narrowed to
-// every source read the same lists; a filter whose matches cluster near the
-// query meets it early; one that matches few rows anywhere never does, and is
-// the full scan's to answer — the scan reads every matching row, which is
-// what such a search needed.
-//
-// total and matching count list's filed rows, of every source and of the
-// filter's; nil matching is an unnarrowed search. matching may fail — the SQL
-// path counts some lists as it goes — and the error is returned.
+// Why as many MATCHING rows as the unfiltered probe reads rows: a filter keeping
+// share s makes the true top 150 the unfiltered top 150/s, 1/s times the rows to
+// hold it, of which the filter keeps s. total and matching count a list's filed
+// rows; nil matching is an unnarrowed search; matching's error is returned.
 func ProbeCount(order []int, probes, ceiling int, total func(list int) int, matching func(list int) (int, error)) (int, bool, error) {
 	probes = min(probes, len(order))
 	if matching == nil {
@@ -1045,18 +898,11 @@ type ShapeResult struct {
 // from any trial's top ten — the same judgement [EvalReport.Passed] makes, so
 // an index installed by this is one an evaluation passes.
 //
-// Each trial runs as the SQL first stage would run it: its lists chosen by
-// [ProbeCount], or the full scan over its filter when that says so.
-//
-// # Why the recall is read off the candidate pool
-//
-// The rerank above the first stage is EXACT, so a document of the true top K
-// that reaches the pool is in the answer: fewer than K documents in the whole
-// corpus beat it, so fewer than K in the pool can. The recall of the answer is
-// therefore the share of the true top K the pool holds, and no rerank is run
-// to measure it.
-//
-// It stops between probe counts when ctx ends, for [TrainIVF]'s reason.
+// Each trial runs as the SQL first stage would: lists chosen by [ProbeCount],
+// or the full scan over its filter. Recall is read off the candidate pool,
+// since the rerank is EXACT: a true top-K document that reaches the pool is in
+// the answer, so no rerank is run to measure it. It stops between probe counts
+// when ctx ends, for [TrainIVF]'s reason.
 func ChooseProbes(ctx context.Context, c *TrainingCorpus, byList [][]int32, x IVF, trials []IVFTrial) (ProbeChoice, error) {
 	lists := x.Lists()
 	orders := make([][]int, len(trials))

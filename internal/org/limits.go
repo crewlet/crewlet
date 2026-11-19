@@ -7,32 +7,15 @@ import (
 
 // WHAT A TEAM'S LEAD HOLDS AN MCP SERVER TO, for the agent seats beneath them.
 //
-// An administrator grants a server on its `mcp_servers` entry (its `access`)
-// and sets the level each of its tools runs at there (its `tools`). A seat or
-// a unit narrows that with `mcp_limits`, keyed by the server's name:
-// `enabled: false` turns the server off for the seat, or for every agent seat
-// beneath the unit at any depth, and `tools` holds one tool at `approve` (each
-// call waits for a person's answer) or at `blocked` (never offered). Nothing
-// written here can widen anything: `enabled: true` is refused where a document
-// is written (internal/config), and the block has no word for a grant or for
-// `allow`.
+// A seat or unit narrows a server's grant with `mcp_limits`, keyed by server
+// name: `enabled: false` turns it off for the seat or every agent seat beneath
+// the unit, `tools` holds one tool at `approve` or `blocked`. Nothing widens:
+// `enabled: true` is refused where a document is written (internal/config).
 //
-// `enabled`, THE ENTRY'S OWN WORD, and not `off`: a YAML 1.1 reader (and a
-// company document is read by more than this engine) takes the key `off` for
-// the boolean false, so `off: true` would reach it as `false: true`.
-//
-// THE STRICTEST WINS. A seat is held to its own block and to the block of
-// every unit it sits in, outward to the top, combined: a server any of them
-// turns off is off, and a tool runs at the strictest level any of them names
-// ([Role.Limits]), so a team's lead cannot loosen what a lead above them set,
-// and neither can a seat's own block. Resolved once, here, as the
-// organization is built ([Organization.Normalize]), and combined with the
-// server's own entry by the config layer, which every surface that offers,
-// starts or reports a server reads.
-//
-// WRITTEN BY A LEAD as part of their own seats and units (`config.org.write`,
-// a subtree write), which the write's admission holds to narrowing: a change
-// that lifts or loosens a limit any agent seat is held to is an
+// `enabled`, not `off`: a YAML 1.1 reader takes `off` for the boolean false.
+// THE STRICTEST WINS: a seat is held to its own block and every enclosing
+// unit's ([Role.Limits]), resolved in [Organization.Normalize]. A lead's
+// subtree write (`config.org.write`) may only narrow; loosening is an
 // administrator's (internal/config, [config.DiffOrg]'s Widened).
 
 // MCPLimits is a seat's or a unit's limits on MCP servers, keyed by the
@@ -151,14 +134,11 @@ func (r *Role) LimitOn(name string) ServerLimit {
 // resolveMCPLimits records on every agent seat what its own `mcp_limits` and
 // each enclosing unit's hold it to ([Role.Limits]); a human seat holds none.
 //
-// EVERY DEPTH, unlike a unit's `mcp_env`: a value is one team's own and stops
-// at its members, while a limit is what a lead holds everybody beneath them
-// to, so a division's lead turning a server off turns it off for every team in
-// the division.
+// EVERY DEPTH, unlike a unit's `mcp_env`: a value stops at its team, while a
+// limit binds everybody beneath the lead.
 //
-// THE NEAREST BLOCK NAMES IT, among those that agree: a seat's own block
-// before its unit's, and a unit's before the one enclosing it, so a reader is
-// told the most particular place to look.
+// THE NEAREST BLOCK NAMES IT, among those that agree (seat, then unit, then
+// the enclosing one), so a reader is told the most particular place to look.
 //
 // Recomputed whole on every pass, so a second pass lands on the same answer.
 func (o *Organization) resolveMCPLimits() {

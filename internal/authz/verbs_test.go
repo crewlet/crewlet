@@ -12,39 +12,16 @@ import (
 
 // SEAT-ONLY, HUMAN-ONLY AND SEATED ARE CHECKED BEFORE THE CLASS.
 //
-// All three are facts about the VERB, so the refusal has to say what it is before
-// any class weighs a permission: a seat holding nothing takes a seat-only verb
-// (an ask — the role's registry decides who is offered it), a
-// person holding admin is refused one as [authz.ReasonSeatOnly] naming no
-// permission (none would change it), and a seat is refused a human-only one as
-// [authz.ReasonSeatRefused], again naming none — a seat holding admin, and a
-// seat holding nothing whom the class would refuse. Each value has to be
-// stated by some row, or this certifies nothing about it.
+// All three are facts about the VERB: an admin person is refused a seat-only
+// verb as [authz.ReasonSeatOnly], a seat a human-only one as
+// [authz.ReasonSeatRefused], and a principal acting as no seat a seated one as
+// [authz.ReasonUnseated], each naming no permission, before any class weighs one.
 //
-// THE HUMAN-ONLY ORDER IS PROVED BY THE SEAT THE CLASS REFUSES: decided after
-// the class, it is refused naming a permission (no_grant, not_self, not_lead)
-// instead of as a seat. Mutation: check humanOnly after the class and every
-// human-only row goes red on that seat. A seat holding admin alone could not
-// tell the two orders apart, since every human-only class admits it.
-//
-// THE SEAT-ONLY ORDER CANNOT BE OBSERVED on a seat-only row that is
-// [authz.ClassEverybody] naming no app (`a2a_ask`): that class admits
-// everybody, so the bar refuses the same principal the same way on either side
-// of it. On one that is [authz.ClassSelf] naming no app (a seat's own
-// executor sessions) it is observed by the person holding admin: the object
-// is the seat's own record, which that class, with no admin path, refuses
-// anybody else not_self — so a bar checked after the class goes red there.
-// A seat-only row of any other class FAILS this walk, naming the case it
-// needs — a person the class refuses, who must still be told seat_only — so
-// the order is proved the moment it becomes observable rather than assumed.
-//
-// A SEATED ROW refuses a principal acting as no seat as [authz.ReasonUnseated]
-// naming nothing — one holding admin, and one holding nothing whom the class
-// would refuse naming a permission, which is what proves the order — and is
-// never refused that way to a principal acting as a seat: a person bound to
-// their seat, or an agent. Mutation: check seated after the class and the
-// principal holding nothing goes red on every seated row; drop the check and
-// the admin holder does.
+// THE HUMAN-ONLY ORDER IS PROVED BY THE SEAT THE CLASS REFUSES (no_grant,
+// not_self, not_lead if decided after it); a seat holding admin alone could not
+// tell. The SEAT-ONLY ORDER is observable only on a [authz.ClassSelf] row naming
+// no app, by the admin person; any other class FAILS this walk.
+// Mutation: check humanOnly or seated after the class and the rows go red.
 func TestSeatOnlyHumanOnlyAndSeatedAreCheckedBeforeTheClass(t *testing.T) {
 	t.Parallel()
 	var seatOnly, humanOnly, seatedRows int
@@ -203,16 +180,12 @@ func TestNoRowIsBothSeatOnlyAndHumanOnly(t *testing.T) {
 
 // EVERY DOTTED VERB IS ASKED BY A CALL SITE THAT IS NOT A TEST.
 //
-// A verb named after a tool is held to the tools this build registers by a
-// walk in internal/agent/builtin; a DOTTED verb has no tool, so nothing but
-// this holds it to anything. A dotted row nothing asks is a rule that decides
-// nothing — `pages.container` sat in the table, asked by no surface, for as
-// long as nobody happened to read it — and it reads to a reviewer as a gesture
-// the engine gates. So the walk — [treeScan], the one every gate over which
-// code names which verb shares — reads this package's own rules.go for the
-// wire name of every `Action…` constant, then every non-test Go file in the
-// tree outside this package for a selector naming one, under whatever name the
-// file imports the package as, and this fails on a dotted verb none names.
+// A verb named after a tool is held to the registered tools by a walk in
+// internal/agent/builtin; a DOTTED verb has no tool, so only this holds it. A
+// dotted row nothing asks decides nothing, yet reads as a gated gesture. The
+// walk ([treeScan]) reads rules.go for every `Action…` constant's wire name,
+// then every non-test Go file outside this package for a selector naming one,
+// and fails on a dotted verb none names.
 //
 // Mutation: delete `work.thread`'s one call site in internal/api/workapi and
 // this goes red naming it.

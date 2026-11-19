@@ -54,25 +54,16 @@ type Config struct {
 
 	// StoreMaxBytes is how much of StoreDir's volume an EMBEDDED server
 	// may hold. Zero lets it size itself from that volume's free space
-	// when its JetStream comes up, which is nats-server's own derivation.
+	// when its JetStream comes up, as nats-server derives it.
 	//
-	// IT IS THE NUMBER EVERY STREAM CEILING IS COMPARED AGAINST, which is
-	// why [Queue.StreamBudget] READS IT BACK — declared or derived,
-	// whichever is in force — rather than modelling it. It is the lever
-	// for the one shape that arithmetic cannot reach: the volume's free
-	// space bounds the SUM of every engine sharing it and not each of
-	// them, so two nodes on one filesystem each sizing from what they can
-	// see over-commit it, and the broker's refusal names whichever stream
-	// happened to be provisioned last rather than the disk. An operator
-	// running N engines against one filesystem divides it between them.
+	// EVERY STREAM CEILING IS COMPARED AGAINST IT, so [Queue.StreamBudget]
+	// READS IT BACK, declared or derived. Free space bounds the SUM of the
+	// engines sharing a filesystem, so each sizing from what it sees
+	// over-commits it: an operator running N engines divides it.
 	//
-	// Read by the embedded branch only. An external cluster's account
-	// limits belong to its own operator, and Tier A refuses this field
-	// against one. It is also IGNORED without a StoreDir: that server's
-	// streams are memory-backed, so a file-store limit would bound none of
-	// them — Tier A warns on that pair rather than refusing it, because it
-	// is a test's shape rather than a node serving a company, which
-	// provisions the streams its company lives on whatever else it does.
+	// Embedded only, and IGNORED without a StoreDir (memory-backed
+	// streams): Tier A refuses it against an external cluster, and warns
+	// on the StoreDir-less pair, a test's shape.
 	StoreMaxBytes int64
 
 	// ClusterName, ClusterURLs and ClusterPort configure an embedded
@@ -84,33 +75,23 @@ type Config struct {
 
 	// ClusterHost is the interface this member's route listener binds.
 	//
-	// Empty binds EVERY interface, which is right for a node with one
-	// address and wrong twice over otherwise. On a multi-homed host it is
-	// a security setting: the route port admits only a member presenting a
-	// route credential of [Config.FleetAuth]'s ring, and that credential
-	// crosses the network in clear once per connection, as does every byte
-	// of the cluster's traffic after it — so a member that binds it on a
-	// public interface offers both to anyone who can reach the machine. On
-	// a host whose peers are on a private network it is also the only way
-	// to say which address that is.
-	//
-	// It says nothing about what peers are TOLD to dial — that is
-	// ClusterAdvertise below, and the two differ precisely when they have
-	// to.
+	// Empty binds EVERY interface, which is wrong on a multi-homed host,
+	// where it is a security setting: the route port admits only a member
+	// presenting a route credential of [Config.FleetAuth]'s ring, and that
+	// credential and every byte of the cluster's traffic cross the network
+	// in clear, so a member binding a public interface offers both to
+	// anyone who can reach it. On a private network it also says which
+	// address that is. What peers are TOLD to dial is ClusterAdvertise.
 	ClusterHost string
 
 	// ClusterAdvertise is the address peers should dial to reach this
 	// member, when that is not the address it binds.
 	//
-	// A member's route address travels between peers: when member A
-	// accepts a route from member B it tells every peer it already has
-	// where B can be found, and each of them dials that address itself.
-	// With this unset the address is derived from the CONNECTION'S REMOTE
-	// ADDRESS — which is correct on a flat network and wrong wherever the
-	// address B is seen from is not an address anyone else can use: a
-	// container with a mapped port, a NAT, a member behind a load
-	// balancer. There the derived address is either unreachable or, worse,
-	// somebody else's.
+	// A member's route address travels between peers: when A accepts a
+	// route from B it tells every peer it has where to dial B. Unset, the
+	// address is derived from the CONNECTION'S REMOTE ADDRESS, which is
+	// right on a flat network and wrong behind a mapped port, a NAT or a
+	// load balancer: there it is unreachable or somebody else's.
 	//
 	// Host and port both, or a bare host to keep this member's own route
 	// port: "nats-1.internal:6222", "203.0.113.9".
@@ -179,20 +160,15 @@ type Config struct {
 	// SyncAlways makes the embedded server fsync every write before
 	// acknowledging it, at every replica count.
 	//
-	// DECIDED BY THE OPERATOR rather than inferred from Replicas, and the
-	// inference it replaces was wrong in the case that matters. "The
-	// quorum IS the durability" holds for a majority that survives, and
-	// the five failure classes are not one: a single host losing power
-	// (quorum survives, nothing lost), a rack or a zone losing power
-	// (a majority can go together), an orderly shutdown, a kernel panic
-	// (page cache lost, disk intact), and a correlated power loss across
-	// every member — which is the one an fsync-per-write is the only
-	// defence against, and the one a same-rack three-node fleet is
-	// exposed to by construction.
+	// DECIDED BY THE OPERATOR, not inferred from Replicas: "the quorum IS
+	// the durability" holds only for a majority that survives. A single
+	// host losing power, an orderly shutdown and a kernel panic leave one;
+	// a rack or zone losing power, and a power loss across every member,
+	// may not, and only an fsync per write defends against the latter,
+	// which a same-rack three-node fleet is exposed to by construction.
 	//
-	// It is also a claim about what Publish RETURNING means. A caller that
-	// treats an ack as durable is right under this setting and optimistic
-	// without it.
+	// It also says what Publish RETURNING means: an ack is durable under
+	// this setting and optimistic without it.
 	SyncAlways bool
 
 	// SyncInterval is how often the file store flushes when SyncAlways is
@@ -235,23 +211,14 @@ type Config struct {
 	// Debug hands nats-server its own debug flag, which is what unlocks
 	// the broker's internal `Debugf` population.
 	//
-	// SEPARATE FROM THE ENGINE'S LOG LEVEL, and that separation is the
-	// whole field. It used to be derived from the level this package's
-	// logger was at, so `-debug` — which an operator asks for to watch
-	// turns, prompts and tool calls — also subscribed them to a per
-	// internal-client lifecycle trace of a broker they deliberately never
-	// deployed. The engine's own coordination reads manufacture those: a
-	// KV `ListKeys` is an ordered ephemeral consumer created and deleted,
-	// and deleting a consumer closes the two internal JetStream clients it
-	// was built on, so every key listing writes two "JetStream connection
-	// closed: Client Closed" lines. Two of the node's 15-second duty loops
-	// list keys on every tick.
+	// SEPARATE FROM THE ENGINE'S LOG LEVEL, and that is the whole field:
+	// `-debug`, asked for to watch turns, prompts and tool calls, must not
+	// also subscribe the operator to a lifecycle trace of a broker they
+	// never deployed. The engine's KV `ListKeys` calls make it: each writes
+	// two "JetStream connection closed" lines, on two 15-second loops.
 	//
-	// It says nothing about WARNINGS AND ERRORS, which nats-server emits
-	// through a path this flag does not gate (server/log.go) and which the
-	// bridge keeps at their own severity — the half that was actually
-	// missing before it existed. Embedded only: an external cluster logs
-	// wherever its operator configured it to.
+	// It does not gate WARNINGS AND ERRORS (server/log.go), which the
+	// bridge keeps at their own severity. Embedded only.
 	Debug bool
 
 	// Credentials authenticates against an external server.
@@ -404,21 +371,16 @@ type Queue struct {
 
 	// timing is every duration this client's provisioning calls wait on,
 	// and the ZERO VALUE IS PRODUCTION: [Queue.provisioning] answers
-	// [jsprovision.Clustered.Timing] for this queue's topology whenever it
-	// is unset, which is always outside this package's own tests.
+	// [jsprovision.Clustered.Timing] whenever it is unset.
 	//
-	// UNEXPORTED, AND THE ONE SEAM, because the branches it reaches are
-	// the ones only an EXHAUSTED budget reaches — a create the server held
-	// past its whole budget and then read back, a probe nobody answered
-	// for its whole ceiling — and at the production numbers a case proving
-	// one waits out two minutes. It replaced an exported lookup-ceiling
-	// field on [Config] that nothing in the engine set, while the other
-	// numbers had no seam at all. Unexported because an operator has no
-	// reason to argue with the server's own timing, which is where every
+	// UNEXPORTED, AND THE ONE SEAM: the branches it reaches are the ones
+	// only an EXHAUSTED budget reaches (a create held past its whole
+	// budget, a probe unanswered for its whole ceiling), and at the
+	// production numbers a case proving one waits two minutes. An operator
+	// has no reason to argue with the server's own timing, where every
 	// one of them comes from.
 	//
-	// Set only while nothing else is using the queue: nothing reads it
-	// under the lock.
+	// Set only while the queue is idle: nothing reads it under the lock.
 	timing jsprovision.Timing
 }
 
@@ -584,37 +546,24 @@ func (q *Queue) ensureStreams(ctx context.Context) error {
 // forming.
 //
 // RETRIED ON PLACEMENT ONLY. "No suitable peers" means the metadata group
-// has not yet seen enough members to place a replicated stream — a
-// transient, self-clearing condition during cluster formation, and the one
-// remaining boot hazard after awaitClusterReady: that check answers for THIS
-// member's own catch-up, while placement needs the OTHER members to have
-// joined, and a follower cannot observe the peer list at all
-// (JetStreamClusterPeers answers only on the leader). So the placement
-// attempt is the signal.
+// has not yet seen enough members to place a replicated stream: transient
+// during cluster formation, and the one boot hazard left after
+// awaitClusterReady, which answers only for THIS member's catch-up (a
+// follower cannot observe the peer list). So the attempt is the signal.
 //
-// Every other error is returned at once. A bad subject, a conflicting
-// retention, an auth failure — none of them clears by waiting, and retrying
-// would turn a config mistake into a thirty-second hang with the same
-// message at the end.
+// Every other error returns at once: a bad subject, a conflicting
+// retention or an auth failure does not clear by waiting, and a retry would
+// turn a config mistake into a thirty-second hang.
 func (q *Queue) createStream(ctx context.Context, config jetstream.StreamConfig) error {
 	return q.provisioning().Place(ctx, func(ctx context.Context) error {
-		// CREATE, NOT CreateOrUpdate, and the difference is the whole
-		// race guard above rather than a preference.
-		//
-		// CreateOrUpdate never returns [jetstream.ErrStreamNameAlreadyInUse]
-		// — it UPDATES instead — so the caller's "a peer won the race,
-		// read what it made" branch was unreachable and the losers of a
-		// simultaneous boot each rewrote a configuration they already
-		// agreed with. Measured on three engines starting together: the
-		// update request never returns, and the boot fails after its
-		// whole provisioning deadline naming a stream rather than a
-		// cluster.
-		//
-		// It is also the honest ownership rule, and [Queue.observeStream]
-		// states it: a running stream's configuration is not something a
-		// booting node writes — "one node writing a shared stream's
-		// configuration at boot is how a ceiling an operator raised gets
-		// silently lowered".
+		// CREATE, NOT CreateOrUpdate: CreateOrUpdate never returns
+		// [jetstream.ErrStreamNameAlreadyInUse], it UPDATES, so the "a peer
+		// won the race, read what it made" branch is unreachable and the
+		// losers of a simultaneous boot each rewrite a configuration they
+		// agree with; with three engines starting together the update never
+		// returns and the boot fails naming a stream, not a cluster. It is
+		// also the ownership rule [Queue.observeStream] states: a booting
+		// node does not write a running stream's configuration.
 		_, err := q.js.CreateStream(ctx, config)
 		if jsprovision.OutOfCapacity(err) {
 			// NAMED, because the broker's own words name no number: see
@@ -645,21 +594,15 @@ func (q *Queue) provisioning() jsprovision.Timing {
 // Clustered is whether this queue's broker has peers, which is the fact every
 // provisioning budget branches on.
 //
-// THE NAME IS WHAT DECIDES IT, because the name is what [embeddedOptions]
-// gates the whole cluster block on: without it the route port and the peer
-// list are dropped and the server starts solo, so a predicate that counted
-// either of them would promise a clustered budget to a broker that never
-// clusters. Tier A refuses that shape outright (stream.cluster.name is
-// required once a port or peers is set), which is what makes one field
-// sufficient here.
+// THE NAME IS WHAT DECIDES IT: [embeddedOptions] gates the whole cluster
+// block on it, dropping the route port and peer list without it, so a
+// predicate counting either would promise a clustered budget to a broker
+// that never clusters. Tier A refuses that shape.
 //
 // A URL is the other half: somebody else's broker, whose metadata group is
-// remote, so a create on it is never the local file-store setup the solo
-// budget is sized for.
-//
-// Read off the TOPOLOGY rather than off Replicas, which is a proxy that
-// reports a single-replica clustered member as solo — see
-// [jsprovision.Clustered].
+// remote, so the local file-store solo budget does not fit. Read off the
+// TOPOLOGY, not Replicas, which reports a single-replica clustered member
+// as solo; see [jsprovision.Clustered].
 func (q *Queue) Clustered() jsprovision.Clustered {
 	return q.cfg.Clustered()
 }
@@ -700,27 +643,16 @@ func (q *Queue) ensureStream(ctx context.Context, spec streamSpec) error {
 	}
 
 	config := provisionedConfig(spec, q.storage(), q.cfg.Replicas, time.Now())
-	// CREATE IF ABSENT, OBSERVE IF PRESENT.
+	// CREATE IF ABSENT, OBSERVE IF PRESENT. A running stream's configuration
+	// has ONE writer and a booting node is not it: applying each node's own
+	// spec at boot let N nodes write one shared configuration from N
+	// possibly-different Tier A files, so a late node with a smaller ceiling
+	// silently lowered one an operator had raised. The writer is removed,
+	// not guarded; observeStream says what each difference does.
 	//
-	// A running stream's configuration has ONE writer and a booting node is
-	// not it. This used to apply this node's own spec on every boot, which
-	// is N nodes writing one shared configuration from N possibly-different
-	// Tier A files, resolved by boot order: a node that came up late with a
-	// smaller ceiling silently lowered one an operator had just raised, and
-	// it did so with Tier A UNCHANGED, because max(M, M) is M.
-	//
-	// So the writer is removed rather than guarded, and what remains is a
-	// comparison. See observeStream for what each class of difference does.
-	// A BREADCRUMB, for [jsprovision.WhenSlow]'s reason: this step is
-	// otherwise silent until its budget expires, and the one progress line
-	// below it covers only the placement-retry path — not the case that
-	// actually hangs, where the API request itself never returns.
-	//
-	// On the BOOT's context, which is this function's, so the watch spans
-	// the read-back that follows a lost create as well as the create — the
-	// one stretch where a stalled member says nothing is exactly the one
-	// that outlived the per-create deadline. The deferred stop is what
-	// ends it either way.
+	// The breadcrumb below is [jsprovision.WhenSlow]'s: the step is silent
+	// until its budget expires. It runs on the BOOT's context so it spans
+	// the read-back after a lost create; the deferred stop ends it.
 	stop := jsprovision.WhenSlow(ctx, func(after time.Duration) {
 		q.log.WarnContext(ctx, "jetstream_stream_slow", "stream", spec.name,
 			"replicas", config.Replicas, "waited", after,
@@ -829,10 +761,9 @@ func EngineStreams(cfg Config, at time.Time) []jetstream.StreamConfig {
 // createOrObserveStream creates the stream when it is absent and COMPARES when
 // it is present, writing nothing either way to a stream that already exists.
 //
-// The create races: two nodes booting together both find nothing and both
-// create. That is fine and deliberate — the loser gets "stream name already in
-// use", which is not an error here but the other node having won, so it falls
-// through to the same comparison the observe path makes.
+// The create races: two nodes booting together both create, and the loser
+// gets "stream name already in use", which is the other node having won, so
+// it falls through to the observe path's comparison.
 //
 // ctx IS THE BOOT'S and the per-create deadline is derived below rather than
 // by the caller, because the read-back at the end runs precisely when that
@@ -842,28 +773,17 @@ func EngineStreams(cfg Config, at time.Time) []jetstream.StreamConfig {
 func (q *Queue) createOrObserveStream(
 	ctx context.Context, spec streamSpec, config jetstream.StreamConfig,
 ) error {
-	// THE LOOKUP AND THE CREATE GET SEPARATE DEADLINES, because they are
-	// separate operations and only one of them is a raft round trip.
-	//
-	// Both had their own deadline before this — the client's default is
-	// five seconds for a context that carries none, and an engine boot's
-	// carries none — but they shared ONE, sized for the create. So a
-	// lookup that went unanswered spent the whole clustered budget and
-	// left nothing of it for the create it exists to inform. See
-	// [jsprovision.LookupBudget] for why a metadata read is sized by the
-	// server's own hold window instead.
-	//
-	// WithTimeout only ever shortens against the parent, so a caller with
-	// a tighter deadline of its own still wins — which is also what makes
-	// the sequence ceiling [Queue.ensureStreams] applies effective, and
-	// what keeps two deadlines from costing more than the one they
-	// replaced.
+	// THE LOOKUP AND THE CREATE GET SEPARATE DEADLINES: only one is a raft
+	// round trip, and sharing one sized for the create let an unanswered
+	// lookup spend the whole clustered budget, leaving none for the create
+	// it informs. [jsprovision.LookupBudget] says why a metadata read is
+	// sized by the server's own hold window. WithTimeout only shortens, so
+	// a caller's tighter deadline still wins, which keeps the sequence
+	// ceiling [Queue.ensureStreams] applies effective.
 	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.provisioning().Lookup)
-	// A BREADCRUMB ON THE LOOKUP TOO, and it is the one that was missing:
-	// this is the FIRST call to reach the metadata group for this stream,
-	// so a member stalled against a group that has not settled waits here
-	// — while the watcher around the create could not fire, because the
-	// create had not started.
+	// A BREADCRUMB ON THE LOOKUP TOO: it is the FIRST call to reach the
+	// metadata group, so a stalled member waits here, before the create's
+	// own watcher could fire.
 	stopLookup := jsprovision.WhenSlow(lookupCtx, func(after time.Duration) {
 		q.log.WarnContext(ctx, "jetstream_stream_lookup_slow", "stream", spec.name,
 			"waited", after,
@@ -871,11 +791,10 @@ func (q *Queue) createOrObserveStream(
 				"fleet that is a metadata group that has not settled, and the "+
 				"create has not been attempted yet")
 	})
-	// THROUGH [jsprovision.ReadWith], so a request the group never
-	// answered is re-issued inside the ceiling above rather than being the
-	// whole of it — a second after it was sent, because a read is answered
-	// when the server processes it or never ([jsprovision.ReadTerm]) — and
-	// is still listened for, since one behind a backlog is answered late.
+	// THROUGH [jsprovision.ReadWith], so a request the group never answered
+	// is re-issued inside the ceiling above, a second after it was sent (a
+	// read is answered when processed or never, [jsprovision.ReadTerm]),
+	// and is still listened for, since one behind a backlog answers late.
 	info, err := jsprovision.ReadWith(lookupCtx, q.provisioning(),
 		func(ctx context.Context) (jetstream.Stream, error) {
 			return q.js.Stream(ctx, spec.name)
@@ -921,48 +840,28 @@ func (q *Queue) createOrObserveStream(
 			jsprovision.NoApplicableLimitDetail(q.cfg.Replicas))
 	}
 	if jsprovision.Refused(createErr) {
-		// NOTHING WAS PLACED, so there is nothing to become visible:
-		// the broker refused this create on the request alone — still
-		// unplaceable after createStream waited the whole budget out, a
-		// reservation the limit has no room for, subjects another stream
-		// already holds — for a reason no peer creating the same stream
-		// can have produced. See [jsprovision.Refused] for which, and why
-		// a list.
-		//
-		// Read back, each of them spent the whole read-back window
-		// asking after a stream nobody made, then reported the refusal
-		// wrapped in "(and it is not there: stream not found)" — a
-		// not-found an operator reads as the cause. A publish to a
-		// subject whose derived stream overlapped the engine's own paid
-		// that on every call, because a stream is remembered only once
-		// it exists.
+		// NOTHING WAS PLACED: the broker refused this create on the request
+		// alone (still unplaceable after the whole budget, a reservation
+		// with no room, subjects another stream holds), for a reason no peer
+		// creating the same stream can have produced; see
+		// [jsprovision.Refused]. Read back, each spent the whole read-back
+		// window asking after a stream nobody made, then reported the
+		// refusal wrapped in a "not found" an operator reads as the cause,
+		// on every publish to a subject whose derived stream overlapped.
 		return fmt.Errorf("ensure stream %s: %w%s", spec.name, createErr, q.windowCause(spec, createErr))
 	}
-	// A PEER MAY HAVE WON THE RACE, and it announces that in two shapes
-	// rather than one.
+	// A PEER MAY HAVE WON THE RACE, in two shapes. The tidy one is
+	// [jetstream.ErrStreamNameAlreadyInUse]. The other is a TIMEOUT, which
+	// a fleet booting together actually produces: the server commits one
+	// create and holds the other while the metadata group settles, past the
+	// caller's deadline, though the stream exists. Reported as a failure,
+	// that is a node refusing to boot because a peer beat it.
 	//
-	// The tidy shape is [jetstream.ErrStreamNameAlreadyInUse]: this
-	// node's create arrived after the winner's had committed.
-	//
-	// The other shape is a TIMEOUT, and it is the one a fleet booting
-	// together actually produces. Two members create the same stream in
-	// the same instant; the server commits one and holds the other while
-	// the metadata group settles, and the held request outlives the
-	// caller's deadline. The stream is there — the loser simply never
-	// heard so. Reported as a failure, that is a node refusing to boot
-	// because a peer beat it, on a cluster where everything worked.
-	//
-	// So the question is re-asked rather than assumed either way: does
-	// the stream exist now? A read-back is one round trip, it answers
-	// exactly that, and it holds whatever it finds to the same comparison
-	// a stream this node found on the first look gets.
-	//
-	// RE-ASKED rather than answered once: the winner's create is visible
-	// to this member only on its next metadata update, so a single lookup
-	// inside that window reports not-found for a stream that exists and
-	// fails the boot before [Queue.DomainLog]'s own retry could help. ON
-	// ctx AND NOT createCtx, because createCtx is the deadline that just
-	// expired — [jsprovision.SettleWith] owns this read's own short window.
+	// So the question is re-asked: does the stream exist now? The winner's
+	// create is visible here only on the next metadata update, so a single
+	// lookup would report not-found and fail the boot. ON ctx, NOT
+	// createCtx, which just expired; [jsprovision.SettleWith] owns this
+	// read's own short window.
 	info, err = jsprovision.SettleWith(ctx, q.provisioning(),
 		func(ctx context.Context) (jetstream.Stream, error) {
 			return q.js.Stream(ctx, spec.name)
@@ -983,23 +882,18 @@ func (q *Queue) createOrObserveStream(
 	return q.observeStream(spec, config, info)
 }
 
-// windowCause is what a create the broker refused as an invalid configuration
-// most likely means, for a stream that declares a duplicate window on a broker
-// the operator runs — and nothing for any other refusal, or on a broker the
-// engine embeds.
+// windowCause is what a create refused as an invalid configuration most
+// likely means, for a stream declaring a duplicate window on an operator's
+// broker, and nothing otherwise.
 //
-// AN OPERATOR'S SERVER MAY CAP THE WINDOW: nats-server refuses a stream whose
-// duplicate window is above its own `jetstream { limits { duplicate_window } }`
-// (v2.15.2, server/stream.go's checkStreamCfg), where it clamps the default
-// window of a stream that declares none, and on `stream.type: nats` the
-// setting is the operator's. The dead letters declare fifteen minutes
-// ([queue.DeadLetterWindow]), and refused on the broker's words alone the boot
-// named neither that window nor where the limit is set. A LIKELY CAUSE, NEVER A
-// CERTAINTY: the broker answers every invalid configuration with one code
-// ([jsprovision.InvalidConfig]), its words are no contract to match, and no
-// client can read the server's limit to compare, so the sentence names the
-// cause as likely and the broker's own error stays beside it. An embedded
-// broker sets no such limit, so a refusal there is the engine's own.
+// AN OPERATOR'S SERVER MAY CAP THE WINDOW: nats-server refuses a stream
+// whose duplicate window is above its own `jetstream { limits {
+// duplicate_window } }` (v2.15.2, checkStreamCfg), and the dead letters
+// declare fifteen minutes ([queue.DeadLetterWindow]). A LIKELY CAUSE,
+// NEVER A CERTAINTY: every invalid configuration gets one code
+// ([jsprovision.InvalidConfig]) and no client can read the server's
+// limit, so the broker's error stays beside it. An embedded broker sets
+// none.
 func (q *Queue) windowCause(spec streamSpec, err error) string {
 	if q.cfg.URL == "" || spec.duplicates <= 0 || !jsprovision.InvalidConfig(err) {
 		return ""
@@ -1120,19 +1014,13 @@ func (q *Queue) EnsureDomainStream(ctx context.Context, spec DomainStream) error
 // streamFor resolves the stream carrying a subject, provisioning it when the
 // subject belongs to a namespace the engine does not itself define.
 func (q *Queue) streamFor(ctx context.Context, subject string) (string, error) {
-	// CHECKED HERE, at the one door every broker-touching verb goes
-	// through, and BEFORE the stream cache below. Without it a closed
-	// client surfaces "nats: connection closed" from wherever the
-	// transport happened to give up — a message that names neither this
-	// queue nor its lifecycle, and that a caller above internal/queue
-	// cannot match against without knowing which backend is running.
-	//
-	// Before the cache, because ensureStream remembers what it has already
-	// provisioned: a verb whose stream was cached never reached the
-	// transport at all, so whether a stopped queue refused depended on
-	// what some other caller had ensured earlier in the process. That is
-	// the worst shape a lifecycle answer can have — correct most of the
-	// time, and a function of unrelated history.
+	// CHECKED HERE, at the one door every broker-touching verb goes through,
+	// and BEFORE the stream cache. Otherwise a closed client surfaces "nats:
+	// connection closed" from wherever the transport gave up, naming
+	// neither this queue nor its lifecycle. Before the cache because
+	// ensureStream remembers what it provisioned: a cached verb never
+	// reached the transport, so whether a stopped queue refused depended on
+	// what another caller had ensured earlier in the process.
 	if q.isClosed() {
 		return "", ErrClosed
 	}
@@ -1193,34 +1081,15 @@ func (q *Queue) JetStream() jetstream.JetStream { return q.js }
 // DialOwned opens a SECOND connection to the same broker, which the caller
 // owns and closes.
 //
-// # Why a caller would want its own rather than [Queue.Conn]
+// Some subsystems close what they are given, like the snapshot DONOR when
+// it stops; handed the queue's own, that takes the ENGINE's broker with it.
+// Callers on the shared connection take [Queue.Conn] and must not close
+// it; callers with their own lifetime take this and must.
 //
-// Because some subsystems close what they are given, and they are right to:
-// the state log's snapshot DONOR serves for the life of a node and shuts its
-// connection down when it stops, which is the honest lifetime for a
-// long-running server of a request/reply subject.
-//
-// Handed the queue's own connection, that close takes the ENGINE's broker
-// with it — every publish, every consumer and the coordination store, all
-// through one `nc.Close()` in a subsystem that thought it owned what it had.
-// Worse where the queue was BORROWED: a caller that lent a broker to an
-// engine gets it back closed.
-//
-// So the ownership is in the name. Callers that ride the shared connection
-// take [Queue.Conn] and must not close it; callers with their own lifetime
-// take this and must.
-//
-// # And so is the LOSS
-//
-// NATS can close this connection for good under its owner, as it can every
-// connection — see [connectionLoss] — and here that is the OWNER's to notice,
-// never this node's to stop for: [Queue.Lost] does not report it. Its caller is
-// a subsystem with a lifetime of its own, the donor, which serves PEERS — a node
-// whose donor is down still serves its own company, as a donor that cannot be
-// armed at all does not gate the boot — so a donor's connection closing must
-// cost the fleet one donor until it dials again (the engine's donor loop), and
-// never this node its seats. A connection whose loss IS the node's is
-// [Queue.DialWatched]'s.
+// NATS can close it for good (see [connectionLoss]); noticing is the
+// OWNER's, and [Queue.Lost] does not report it: the donor serves PEERS, so
+// its loss costs the fleet one donor until it redials, never this node
+// its seats. A loss that IS the node's is [Queue.DialWatched]'s.
 func (q *Queue) DialOwned() (*nats.Conn, error) {
 	return q.dialSecond(watched{})
 }
@@ -1229,18 +1098,14 @@ func (q *Queue) DialOwned() (*nats.Conn, error) {
 // owns and closes like [Queue.DialOwned]'s — and whose close for good this queue
 // reports as its OWN loss ([Queue.Lost]).
 //
-// For a subsystem the node cannot run without that has a connection of its own
-// rather than [Queue.Conn]: the coordination store on an embedded broker, which
-// holds every lease this node renews. Dialled unwatched, NATS closing it left a
-// node consuming work over the queue's connection while every renewal failed —
-// the "alive to its peers, deaf to its work" split from the other side, and
-// reported by nothing.
+// For a subsystem the node cannot run without, on its own connection: the
+// coordination store on an embedded broker, which holds every lease this
+// node renews. Dialled unwatched, its loss left the node consuming work
+// while every renewal failed, reported by nothing.
 //
-// It does NOT close [Queue.AcksLost]: no delivery this queue made is settled
-// over it, so a node that lost only this one still acknowledges every turn it
-// finishes. And a failed start's owner closes it only AFTER asking
-// [Queue.LostDuring], which reads a closed watched connection as one whose
-// handler is still to run.
+// It does NOT close [Queue.AcksLost]: no delivery is settled over it. A
+// failed start's owner closes it only AFTER asking [Queue.LostDuring],
+// which reads a closed watched connection as one still awaiting its handler.
 func (q *Queue) DialWatched() (*nats.Conn, error) {
 	return q.dialSecond(watched{loss: q.lost})
 }
@@ -1279,17 +1144,15 @@ func (q *Queue) LostCause() error { return q.lost.lostCause() }
 // LostDuring is err, from a start that failed over this queue, carrying the
 // [Queue.LostCause] beside it — and err unchanged where nothing was lost.
 //
-// For the step that fails BECAUSE a connection was closed for good: in its own
-// words it says the connection is closed and nothing an operator can act on,
-// while the sentence naming why and what to change is recorded here. It waits
-// for that record where the client has already closed a connection and its
-// handler has not yet run ([connectionLoss.settle]), so ask it BEFORE the
-// start's own cleanup closes this queue or a connection [Queue.DialWatched]
-// handed out: one its owner closed reads as closed too, and no handler is
-// coming for it.
+// For the step that fails BECAUSE a connection was closed for good: its own
+// words say only that it is closed, while the sentence naming why and what
+// to change is recorded here. It waits for that record where the client
+// has closed a connection and its handler has not yet run
+// ([connectionLoss.settle]), so ask it BEFORE the start's own cleanup
+// closes this queue or a connection [Queue.DialWatched] handed out: one its
+// owner closed reads as closed too, and no handler is coming for it.
 //
-// A STOPPED queue closed its own connection, so it is answered from what is
-// recorded and never waited on.
+// A STOPPED queue is answered from what is recorded, never waited on.
 func (q *Queue) LostDuring(err error) error {
 	if q.isClosed() {
 		return q.lost.recorded(err)
@@ -1300,39 +1163,29 @@ func (q *Queue) LostDuring(err error) error {
 // AcksLost is closed once NATS has closed THIS QUEUE'S OWN connection for good:
 // the one every delivery it made is acknowledged, nacked and deferred over.
 //
-// From then on no handler still running can have its outcome recorded, so the
-// broker hands what it is running to a successor once the ack window elapses,
-// and whatever the handler does from here on is done twice. That is what a
-// drain asks this for: a turn it would otherwise wait for is now only work to
-// be duplicated, so it is cancelled rather than waited for.
+// From then on no handler still running can have its outcome recorded, so
+// the broker hands its work to a successor once the ack window elapses and
+// the handler's work is done twice: a drain cancels it rather than wait.
 //
 // [Queue.Lost] is the wider fact: a second connection [Queue.DialWatched]
-// opened closing for good closes Lost and NOT this, because deliveries never
-// settle over it. Where the queue's own connection is the close Lost records,
-// this one is closed FIRST, so a caller woken by Lost reads which loss it was
-// without waiting for it. On this backend and not the contract, for
-// [Queue.Lost]'s reason.
+// opened closing for good closes Lost and NOT this, since deliveries never
+// settle over it. Where the queue's own connection is the loss, this one
+// closes FIRST, so a caller woken by Lost reads which loss it was. On this
+// backend and not the contract, for [Queue.Lost]'s reason.
 func (q *Queue) AcksLost() <-chan struct{} { return q.lost.acks }
 
 // Link reports whether this client reaches the fleet's broker right now: nil
 // while it does, and an error naming what is down while it does not.
 //
-// # What "the broker" is depends on the node, and the client knows which
+// A MEMBER's broker is in this process and cannot drop; what it shares with
+// the fleet is raft's concern, answered by the state log's health. A LEAF
+// runs no JetStream: every stream, consumer and bucket it uses is a member's,
+// across its leaf link, so a leaf whose link is down can neither receive nor
+// publish while its own connection reads as healthy. A node that DIALLED an
+// external cluster uses one client connection, unusable while it reconnects.
 //
-// A MEMBER's broker is in this process, so its connection is an in-memory pipe
-// or a loopback socket that cannot drop while the process runs; what it shares
-// with the rest of the fleet is raft's concern, answered by the state log's
-// own health. A LEAF's broker is in this process too, but runs no JetStream:
-// every stream, consumer and bucket it uses is a member's, across its leaf
-// link, so a leaf whose link is down is a node whose seats can neither receive
-// nor publish anything while its own connection reads as healthy. And a node
-// that DIALLED an external cluster reaches it over its one client connection,
-// which reconnects on its own and is unusable while it does.
-//
-// So both are asked: the client connection always, and the leaf link where
-// there is one. Neither is a network round trip — the connection's state and
-// the server's link count are what the NATS libraries already track — which is
-// what lets a readiness probe ask on every call.
+// So both are asked: the client connection, and the leaf link if any.
+// Neither is a round trip, so a readiness probe may ask on every call.
 func (q *Queue) Link() error {
 	if q.isClosed() {
 		return ErrClosed
@@ -1460,19 +1313,15 @@ func (q *Queue) AddPublishListener(l queue.PublishListener) {
 // EnsureSubscription creates the durable consumer with NO consumer attached,
 // positioned at the earliest message.
 //
-// This is the operation a seat's mailbox is built on, and on JetStream it is
-// an ordinary API call taking about a millisecond — no admin endpoint, no
-// risk of stealing a live peer's traffic. It must run before anything
-// publishes to the subject: the agent and notification streams use interest
-// retention, so a message published to a subject no consumer covers is
-// dropped, which is the contract's stated behaviour rather than a surprise.
+// This is the operation a seat's mailbox is built on: an ordinary API call
+// of about a millisecond, with no admin endpoint and no risk of stealing a
+// live peer's traffic. It must run before anything publishes to the
+// subject: interest retention drops what no consumer covers.
 //
-// A MAILBOX THAT EXISTS COSTS A LOOKUP AND NOTHING ELSE. The create is a
-// proposal through the metadata Raft group whatever it would find there, so a
-// caller ensuring N seats whose mailboxes are all already there used to spend
-// N replicated writes to learn nothing — every boot, and every config apply.
-// It now spends N lookups, which are reads. Counted by
-// [Queue.ConsumerProposals].
+// A MAILBOX THAT EXISTS COSTS A LOOKUP AND NOTHING ELSE. A create is a
+// metadata-Raft proposal whatever it finds, so N seats already provisioned
+// cost N replicated writes to learn nothing, every boot and config apply;
+// now N reads. Counted by [Queue.ConsumerProposals].
 func (q *Queue) EnsureSubscription(ctx context.Context, topic, group string) (bool, error) {
 	if group == "" {
 		return false, fmt.Errorf("%w: empty group", ErrSubject)
@@ -1504,30 +1353,21 @@ func (q *Queue) ensureMailbox(ctx context.Context, stream, filter, name string,
 	meta map[string]string) (bool, error) {
 
 	// Reporting whether THIS call created it is part of the contract, so
-	// look first rather than inferring from an upsert. The lookup also
-	// DECIDES the call: a consumer the broker says it holds is returned
-	// from here, unproposed. See the switch below.
+	// look first rather than infer from an upsert. The lookup also DECIDES
+	// the call: a consumer the broker says it holds is returned unproposed.
 	//
-	// ITS OWN DEADLINE, and it is a LOOKUP's rather than a create's — see
-	// [jsprovision.LookupBudget]. With no deadline of its own (an engine
-	// boot's context has none) this reached nats.go under the client's
-	// five-second default, so on a clustered boot the lookup expired
-	// before the create it precedes ever ran.
-	//
-	// THE BUDGET WAS NEVER THE WHOLE FIX, and saying it was is what left
-	// this path broken after it: a [context.DeadlineExceeded] is not
-	// [jetstream.ErrConsumerNotFound], so a longer deadline only bought a
-	// longer wait before the same `inspect consumer …: context deadline
-	// exceeded` failed the same boot. What removes the shape is reading an
-	// unanswered lookup as the third value it is and falling through to
-	// the create below.
+	// ITS OWN DEADLINE, a LOOKUP's not a create's ([jsprovision.LookupBudget]):
+	// an engine boot's context has none, so nats.go's five-second default
+	// applied and a clustered lookup expired before the create it precedes.
+	// The budget was never the whole fix: [context.DeadlineExceeded] is not
+	// [jetstream.ErrConsumerNotFound], so a longer deadline only delayed the
+	// same boot failure. What removes it is reading an unanswered lookup as
+	// the third value it is and falling through to the create below.
 	lookupCtx, cancelLookup := context.WithTimeout(ctx, q.provisioning().Lookup)
 	defer cancelLookup()
-	// AND ITS BREADCRUMB, because a budget without one just moves where
-	// the silence is. This is the FIRST call to reach the metadata group
-	// on this path, so a member stalled against a group that has not
-	// settled now waits here — and said nothing, while the watcher around
-	// the create below could not fire because the create had not started.
+	// AND ITS BREADCRUMB: this is the FIRST call to reach the metadata
+	// group on this path, so a stalled member waits here, silent, before
+	// the create's own watcher could fire.
 	stopLookup := jsprovision.WhenSlow(lookupCtx, func(after time.Duration) {
 		q.log.WarnContext(ctx, "jetstream_consumer_lookup_slow", "stream", stream,
 			"consumer", name, "waited", after,
@@ -1540,22 +1380,16 @@ func (q *Queue) ensureMailbox(ctx context.Context, stream, filter, name string,
 			return q.js.Consumer(ctx, stream, name)
 		}, nil)
 	stopLookup()
-	// THE THREE ANSWERS, and only the FIRST of them ends the call here.
+	// THE THREE ANSWERS, and only the FIRST ends the call here. A create is
+	// a metadata-Raft PROPOSAL whatever it finds, so one for a mailbox the
+	// broker just said it holds spends a replicated write per seat on every
+	// boot and config apply (docs/concepts/scaling.md has the numbers).
 	//
-	// A create is a PROPOSAL through the metadata Raft group, whatever it
-	// finds when it gets there — so issuing one for a mailbox the broker
-	// has just said it holds spends a replicated write per seat, on every
-	// boot and on every config apply, for a company whose mailboxes all
-	// already exist. That is the whole cost this early return removes; see
-	// docs/concepts/scaling.md for the measured numbers.
-	//
-	// WHY ONLY THE POSITIVE ARM. "Told it is not there" and "did not
-	// answer" are different facts, and a return on the second would be the
-	// single most expensive bug this file can carry: a durable subscription
-	// IS a seat's mailbox, so a node that skipped the create because it
-	// could not tell would leave that seat's mail being dropped silently,
-	// with no error anywhere. Both of those arms fall through to the create
-	// below, exactly as before.
+	// WHY ONLY THE POSITIVE ARM: "told it is not there" and "did not
+	// answer" are different facts, and returning on the second would be the
+	// most expensive bug this file can carry. A durable subscription IS a
+	// seat's mailbox, so skipping the create for want of an answer would
+	// drop that seat's mail silently. Both arms fall through to the create.
 	switch {
 	case getErr == nil:
 		// TOLD IT IS THERE. Nothing to create, nothing to report: the
@@ -1595,44 +1429,31 @@ func (q *Queue) ensureMailbox(ctx context.Context, stream, filter, name string,
 	if err != nil {
 		return false, fmt.Errorf("ensure consumer %s: %w", name, q.brokerFailed(ctx, err))
 	}
-	// WON IS THE WHOLE ANSWER, because the lookup half is already spent:
-	// the only way to reach here is a lookup that said "not there" or said
-	// nothing at all, so "this node did not already see it" is true by
-	// construction and `!existed` was a constant. What is left is the
-	// question only the create can answer — whether THIS node's create is
-	// what put the consumer there. Without it, a consumer recovered by the
-	// read-back (a peer's, or this node's from an earlier boot) was
-	// reported as created by this call, so on a fleet booting together
-	// every member claimed to have made every mailbox.
+	// WON IS THE WHOLE ANSWER: reaching here means the lookup said "not
+	// there" or nothing, so "this node did not already see it" is true by
+	// construction. What only the create can answer is whether THIS node's
+	// create put the consumer there; without it, a consumer recovered by the
+	// read-back was reported as created by this call, and every member of a
+	// fleet booting together claimed every mailbox.
 	//
-	// One ambiguity is the broker's and cannot be closed here: a create
-	// whose configuration exactly matches an existing consumer returns
-	// that consumer with no error, and is indistinguishable from having
-	// made it. It costs a log line rather than a decision — nothing in the
-	// engine branches on this bool.
+	// One ambiguity is the broker's: a create matching an existing consumer
+	// exactly returns it with no error, indistinguishable from making it.
+	// Nothing in the engine branches on this bool.
 	return won, nil
 }
 
 // ensureDurableConsumer creates a durable consumer, tolerating a PEER having
 // created the same one at the same moment.
 //
-// # Why a durable consumer needs this and an ephemeral one does not
-//
 // A durable consumer is named, and every node of a fleet ensures the SAME
-// names at boot: a seat's mailbox, the notification feed, a change feed. So on
-// a fleet starting together N members issue one call for one name, and the
-// server commits one while holding the rest — and a held request outlives the
-// caller's deadline. The consumer is there; the losers never heard so, and a
-// node that reported that as a failure would refuse to boot because a peer
-// beat it.
+// names at boot (a seat's mailbox, the notification feed, a change feed),
+// so N members issue one call for one name and the server commits one
+// while holding the rest, past the caller's deadline. The consumer is
+// there; a loser reporting failure would refuse to boot because a peer beat
+// it. An ephemeral consumer is nobody else's and does not come here.
 //
-// An ephemeral consumer is nobody else's, so none of this applies and the
-// callers that make one do not come through here.
-//
-// A read-back is one round trip and answers exactly the question — does the
-// consumer exist now — so the timeout is re-asked rather than assumed either
-// way. It gets its OWN context, because the caller's may be the deadline that
-// just expired.
+// The timeout is re-asked by a read-back (does it exist now), on its OWN
+// context, because the caller's may be the deadline that just expired.
 func (q *Queue) ensureDurableConsumer(ctx context.Context, stream string,
 	cfg jetstream.ConsumerConfig) (jetstream.Consumer, bool, error) {
 
@@ -1816,38 +1637,15 @@ func carriesSubscriptions(stream string) bool {
 // ListSubscriptions reports every durable consumer on this backend's streams
 // whose topic matches topicPattern, as the pair it was created for.
 //
-// EVERY SUBJECT STREAM, ENUMERATED, for the reason the backup takes the same
-// shape: a namespace stream exists only once something published to it, so a
-// list of known streams would miss exactly the mailboxes nobody remembers. A
-// pattern is not mapped onto one stream either, because a pattern like
-// "crewlet.>" spans several. What is enumerated is bounded by
-// carriesSubscriptions, because the same broker also carries streams that are
-// no subject space at all.
+// EVERY SUBJECT STREAM, ENUMERATED, as the backup does: a namespace stream
+// exists only once something published to it, and a pattern spans several.
+// An ephemeral consumer is skipped; a durable one is listed under the pair
+// its metadata records (see pairOf), and one without is logged and left out.
 //
-// An ephemeral consumer (a stream subscription, a peek, a memory replay) is not
-// a subscription and is skipped. A durable consumer is listed under the pair
-// its metadata records when that pair derives its name (see pairOf); one whose
-// metadata carries no such pair (something other than this backend made or
-// rewrote it), or that the broker holds offline and so answers with no
-// configuration at all, is logged and left out rather than listed under a
-// guessed pair.
-//
-// EVERY PAGE OF BOTH LISTINGS IS ITS OWN READ ([jsapi.Meta]): only the
-// metadata leader answers either, so a member that still believes in a leader
-// the group has just lost drops a page without a word, and the client's
-// listers asked each page once and held it for the client's five-second
-// default. A stream names page is presumed lost after the read term and asked
-// again two seconds after it was sent, for every caller. A consumers page is
-// not presumed lost until the four seconds the metadata leader waits for the
-// consumers' own leaders have passed beside the read term — five seconds, the
-// client's whole default — so it is asked again only for a caller whose
-// deadline outlasts that and a re-ask. A caller that sets none asks each
-// consumers page ONCE, as the client did: the mailbox sweep, which runs on the
-// maintenance worker's lifetime, still fails its tick over a consumers page a
-// member drops, and lists again at its next. And a consumer the metadata
-// leader could not get an answer about fails the listing rather than being
-// left out of it, so a mailbox is never judged absent because its leader was
-// slow ([jsapi.UnreadError]).
+// EVERY PAGE IS ITS OWN READ ([jsapi.Meta] holds the re-ask terms): only
+// the metadata leader answers, so a consumer it could not answer about
+// fails the listing, and a mailbox is never judged absent because its
+// leader was slow ([jsapi.UnreadError]).
 func (q *Queue) ListSubscriptions(ctx context.Context, topicPattern string) ([]queue.Subscription, error) {
 	if q.isClosed() {
 		return nil, ErrClosed
@@ -1997,18 +1795,15 @@ func (q *Queue) noteConsumerProposal() { q.consumerProposals.Add(1) }
 // ConsumerProposals reports how many consumer creates and updates THIS client
 // has asked the broker for since it was opened.
 //
-// Every one of them goes through the metadata Raft group, which is what makes
-// the number worth having: a consumer create is not a local write, and a node
-// that issues one per seat on every apply is replicating a decision the
-// cluster already took. It counts attempts rather than commits, and it counts
-// creates that turned out to be no-ops, because both are proposals the group
-// had to order.
+// Each goes through the metadata Raft group, so a node issuing one per seat
+// on every apply replicates a decision the cluster already took. It counts
+// attempts, including creates that turned out to be no-ops, because both
+// are proposals the group had to order.
 //
-// DIAGNOSTIC, and deliberately not on [queue.EventQueue]: nothing in the
-// engine branches on it, it means nothing on a backend with no consensus
-// layer, and the contract has no business promising a number that is an
-// artefact of how one broker replicates. The conformance suite reads it
-// through a capability, which is where a backend-specific observable belongs.
+// DIAGNOSTIC, and not on [queue.EventQueue]: nothing in the engine branches
+// on it, it means nothing without a consensus layer, and the contract has
+// no business promising an artefact of how one broker replicates. The
+// conformance suite reads it through a capability.
 func (q *Queue) ConsumerProposals() int { return int(q.consumerProposals.Load()) }
 
 // InFlightCount reports handler invocations currently mid-flight, each until
@@ -2040,17 +1835,14 @@ func (q *Queue) WaitForHandlers(ctx context.Context, timeout time.Duration) (int
 
 // stopGrace bounds how long Stop waits for one consume loop to exit.
 //
-// Short on purpose. It covers a loop NOTICING its cancellation, not a
-// handler finishing: WaitForHandlers is the API for that, and a graceful
-// drain calls it first. Waiting on handlers here would make Stop hang for as
-// long as the longest turn — on a path whose whole job is to let go.
-//
-// AN IDLE LOOP DOES NOT SPEND IT: Stop ends every outstanding fetch (see
-// [attachment.stop]), so a loop parked in one exits at once. What it bounds
-// is a loop inside a handler that ignores its context.
-//
-// NOR DOES A LOOP KEEPING A DEAD LETTER, which is no handler: Stop waits for
-// every keep in flight once the loops have had their grace ([Queue.awaitKeeps]).
+// Short on purpose: it covers a loop NOTICING its cancellation, not a
+// handler finishing (WaitForHandlers is that, and a graceful drain calls it
+// first); waiting on handlers here would make Stop hang as long as the
+// longest turn. AN IDLE LOOP DOES NOT SPEND IT: Stop ends every
+// outstanding fetch ([attachment.stop]). What it bounds is a loop inside a
+// handler that ignores its context. NOR DOES A LOOP KEEPING A DEAD LETTER:
+// Stop waits for every keep once the loops have had their grace
+// ([Queue.awaitKeeps]).
 const stopGrace = 250 * time.Millisecond
 
 // Stop closes every attachment and the connection, and shuts down the
@@ -2136,35 +1928,17 @@ func (q *Queue) attachmentsLocked() []*attachment {
 	return out
 }
 
-// deadLetter publishes data, a message the delivery budget has exhausted, to
-// subject, one of its pair's two dead-letter subjects ([queue.RetiredTo]) —
-// outside the crewlet.* space, so the dashboard's crewlet.events.> stream
-// cannot resurface poison as live traffic — under id, the message's own
-// identity ([letterOf]), and answers why it could not, which its caller acts
-// on ([attachment.retire]).
+// deadLetter publishes data, an exhausted message, to subject, one of its
+// pair's dead-letter subjects ([queue.RetiredTo]), under id ([letterOf]),
+// and answers why it could not ([attachment.retire]). Outside crewlet.*, so
+// crewlet.events.> cannot resurface poison.
 //
-// AS THE MESSAGE'S OWN BYTES, with no keeper's header beside them, as it
-// always was: the subject, and never a header, says whether a copy is poison
-// or a delivery its group never handled, so no copy is too large to be found
-// as what it is.
+// AS THE MESSAGE'S OWN BYTES: the subject says whether it is poison. ONE
+// ENTRY PER MESSAGE, by `Nats-Msg-Id` ([letterMsg]); a copy with no room for
+// it ([queue.LetterFits]) goes without, so a repeat stores two, never none.
 //
-// ONE ENTRY FOR ONE MESSAGE, by id carried as the message's `Nats-Msg-Id`
-// ([letterMsg]), as every keep through the contract is ([Queue.KeepDeadLetter]):
-// a message whose keep failed is kept again by its next delivery
-// ([attachment.retire]), and a keep that stored its entry and lost its answer
-// failed as far as its keeper heard, so the next keep of the message is stored
-// as nothing, inside the stream's duplicate window. A copy within the framing
-// of the transport's ceiling has no room for that header beside it
-// ([queue.LetterFits]) and is kept with none: a keep of it made again after a
-// lost answer is stored twice — two copies of one delivery, which its reader
-// collapses as it collapses any second delivery, and never none.
-//
-// WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS ([Queue.write]), as every
-// write of this queue's whose caller set no deadline is: the consume loop's
-// context carries none, and the message may be as large as the transport
-// carries. Held to the request term alone, a large one dead-lettered across a
-// slow link was reported as failed while its bytes were still crossing to
-// land: a `dead_letter_failed` line for a message the stream went on to keep.
+// WAITED FOR AS LONG AS ITS BYTES TAKE TO CROSS ([Queue.write]): the request
+// term alone reported a large letter on a slow link failed while landing.
 func (q *Queue) deadLetter(ctx context.Context, subject, id string, data []byte) error {
 	stream, err := q.streamFor(ctx, subject)
 	if err != nil {

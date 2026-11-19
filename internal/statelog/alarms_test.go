@@ -429,24 +429,15 @@ func TestAZeroReadingRaisesNothing(t *testing.T) {
 
 // EVERY PERCENTILE ALARM IS DECIDED AT A HISTOGRAM BOUNDARY.
 //
-// A percentile in the reading is read off a histogram (the engine's
-// retention.observed), and a histogram's quantile is the upper boundary of the
-// bucket the percentile falls in ([metrics.Snapshot.Quantile]) — a boundary
-// and nothing else. So an alarm that fires on a percentile past its budget is
-// exact only where the budget is a boundary: "the percentile is past the
-// budget" and "the boundary above it is" are then one statement. A budget
-// between two boundaries is decided at the one above it — under twenty-one
-// powers of two, `prefetch_slow`'s 500 ms fired for any p95 past 256 ms and
-// said the p95 was 512 ms.
+// A histogram quantile is the upper boundary of the bucket it falls in
+// ([metrics.Snapshot.Quantile]), so a percentile alarm is exact only where its
+// budget is a boundary: `prefetch_slow`'s 500 ms fired for any p95 past 256 ms
+// and said 512 ms. The budgets are FOUND, not listed: each duration field
+// named for a percentile (…P95) is set alone and the largest duration raising
+// nothing is bisected out, so a new or retuned alarm is held without a line here.
 //
-// The budgets are FOUND rather than listed: each duration field named for a
-// percentile (…P95) is set alone, and the largest duration at which the table
-// raises nothing is bisected out of the table itself — so a percentile alarm
-// added later, or a budget retuned, is held without a line here, and a
-// percentile no alarm reads fails as one.
-//
-// Mutation: set a budget between two boundaries — PoolWaitAlarm to 150 ms —
-// or take a budget's boundary out of the millisecond scale, and this fails.
+// Mutation: set a budget between two boundaries (PoolWaitAlarm to 150 ms), or
+// take one out of the millisecond scale, and this fails.
 func TestEveryPercentileAlarmIsDecidedAtABoundary(t *testing.T) {
 	t.Parallel()
 	bounds, ok := metrics.Bounds(metrics.UnitMilliseconds)
@@ -502,17 +493,13 @@ func TestEveryPercentileAlarmIsDecidedAtABoundary(t *testing.T) {
 // pointer, not a zero.
 //
 // `log_ceiling_short` compares a log's ceiling against `min_age` of its own
-// measured intake. Every node boots having measured nothing: its trim has not
-// ticked, or the log is younger than the day the measurement spans, or the
-// log is compacted and has no rate that means anything. Each of those is "no
-// idea", and the rule must be silent on all of them — on every boot, on every
-// node, for as long as it takes.
+// measured intake. A node that has not measured (trim not ticked, log younger
+// than the measured day, or compacted with no meaningful rate) means "no
+// idea", and the rule must stay silent on all of them.
 //
-// The zero is the other half, and it is why the field is a pointer rather
-// than a plain number: a log that took in NOTHING yesterday is a
-// measurement, the most benign one there is, and it must survive as a value
-// rather than collapse into "not measured". What cannot be allowed is either
-// meaning borrowing the other's representation.
+// The zero is the other half, and why the field is a pointer: a log that took
+// in NOTHING yesterday is a measurement and must survive as a value, not
+// collapse into "not measured".
 func TestANodeThatHasNeverMeasuredItsRateDoesNotAlarm(t *testing.T) {
 	t.Parallel()
 	const ceiling = 1 << 30
@@ -761,22 +748,17 @@ func TestTheMergeRateAlarmFiresAtTheQueuesCapacity(t *testing.T) {
 }
 
 // THE BUSY ALARM FIRES AT THE COMMITTER'S BOUNDS, never at a number of its
-// own: every proposal the reading counts was refused busy by the committer at
-// a repository's queue — its count, its bytes or the time a proposal may wait
-// in it — or the node's whole bound (gitlet.CommitterInbox, CommitterInboxBytes,
-// CommitterNodeBytes, its asker's attempt less gitlet.CommitBudget and
-// ReplyMargin — a package this framework does not import), so one is the
-// alarm. A repository, a node's share and the proposals that waited out their
-// time are figures for the detail — a repository named with nothing counted
-// is no backlog — and the window the detail names is the trim's tick, the
-// constant the committer borrows (gitlet.CommitBusyWindow), never a copy.
+// own: every counted proposal was refused busy by the committer at a
+// repository's queue or the node's whole bound (gitlet.CommitterInbox,
+// CommitterInboxBytes, CommitterNodeBytes; gitlet is not imported here), so
+// one is the alarm. A repository, a node's share and the proposals that waited
+// out their time are detail only, and the window is the trim's tick, borrowed
+// from gitlet.CommitBusyWindow, never a copy.
 //
-// Mutations: fire past a count of the rule's own (ten, say), and the single
-// refusal raises nothing; fire on a named repository, and the reading that
-// counts nothing raises it; name another span in the detail (the evaluation's
-// AlarmInterval), and it misstates the window the committer counts over; name
-// the node's share where the detail says how many waited, and the proposals
-// that waited out their time are misstated.
+// Mutations: fire past a count of the rule's own, and the single refusal
+// raises nothing; fire on a named repository, and a reading counting nothing
+// raises it; name another span (AlarmInterval), or the node's share where the
+// detail says how many waited, and the detail misstates it.
 func TestCodeCommitBusyFiresAtTheCommittersBounds(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct {
@@ -862,22 +844,14 @@ func TestCodeRefsNearLimitFiresAtTheBound(t *testing.T) {
 // WHICH CLOCK — this node's own, or the broker member's leading the position
 // register — and one inside it, or measured against no bound, does not.
 //
-// The bound is the one the deletions were sized against —
-// objstore.AssumedClockSkew, which the node hands in with its measure, since
-// this framework imports neither the object store nor Gitlet — so the
-// alarm fires exactly where a clock stops being one the collector's grace and
-// the retired-pack sweep hold on, and is silent AT it, as every rule here is
-// silent at its threshold. A node that measured nothing hands in none of the
-// numbers, and a skew with no bound is a measure nothing judges.
-//
-// THE DETAIL NAMES THE CLOCK, because that is the machine an operator has to
-// fix: how far it runs, which way, and against the median of how many data
-// nodes' clocks — with one, that node's own — and never the other clock when
-// only one is past the bound.
-//
-// Mutation: fire at the bound, or on any skew without comparing it, or on a
-// skew past a zero bound, or on one clock while naming the other, or read a
-// clock behind as ahead, and a case below fails.
+// The bound is the one the deletions were sized against,
+// objstore.AssumedClockSkew, handed in with the node's measure (this framework
+// imports neither the object store nor Gitlet): the alarm fires
+// exactly where a clock stops being one the collector's grace and the
+// retired-pack sweep hold on, and is silent AT it. THE DETAIL NAMES THE CLOCK
+// to fix: how far, which way, against the median of how many data nodes.
+// Mutation: fire at the bound or past a zero bound, or name the wrong clock or
+// direction, and a case below fails.
 func TestAClockOffTheFleetsRaisesClockSkew(t *testing.T) {
 	t.Parallel()
 	const bound = time.Hour
@@ -1232,19 +1206,14 @@ func TestAnEntryNamingSeveralLogsIsALinePairPerLog(t *testing.T) {
 // ONE KIND ON TWO LOGS IS ONE ALARM AND TWO PAIRS OF LOG LINES: each log is
 // logged when it comes to stand under the kind and when it leaves it.
 //
-// Seven conditions are evaluated once per log, and the report lists every log a
-// kind stands on under its one alarm, so one `trim_blocked` can stand on the
-// tracker's log and the knowledge base's. Keyed on the kind alone, the tracker
-// folded the second log into the first: it raised no line of its own, the
-// tracker's clearing while the knowledge base's stood said nothing, and the one
-// `alarm_cleared` that finally came carried the knowledge base's detail against
-// the tracker's start. The gauge stays one series per kind, up while either is.
+// Seven conditions are evaluated once per log and the report lists every log a
+// kind stands on under its one alarm. Keyed on the kind alone, the second log
+// folded into the first: no line of its own, a silent clearing, and an
+// `alarm_cleared` with the wrong log's detail. The gauge stays one series per
+// kind, up while either is. A NODE-WIDE KIND IS ONE PAIR OF LINES naming no log.
 //
-// AND A NODE-WIDE KIND IS ONE PAIR OF LINES naming no log, beside them.
-//
-// Mutation: key the instances on the kind alone, or report a kind's age from
-// whichever of its logs the map hands back last rather than the longest, and
-// this fails.
+// Mutation: key the instances on the kind alone, or take a kind's age from
+// whichever log the map hands back last rather than the longest, and this fails.
 func TestOneKindOnTwoLogsIsOneAlarmWithALinePairPerLog(t *testing.T) {
 	t.Parallel()
 	rec, err := metrics.New()
@@ -1371,22 +1340,14 @@ func TestOneKindOnTwoLogsIsOneAlarmWithALinePairPerLog(t *testing.T) {
 // THE STANDING ALARMS ARE THE LATEST EVALUATION'S, ONE PER KIND, THE OLDEST
 // FIRST, and "not evaluated" is not "none firing".
 //
-// This is what every node's health envelope counts and names, so it has to
-// be exactly what the gauge and the log were just told: an alarm that cleared
-// is gone from it at once, and the name a health card shows is the condition
-// that has gone unanswered longest rather than whichever the table happens to
-// list first. Before any evaluation it says it cannot say, because an empty
-// list would render a node that has not looked as a node with nothing wrong.
-//
-// AND A KIND ON TWO LOGS STANDS ONCE: the count is how many problems an
-// operator has to look at, and one cause standing on several logs counted once
-// per log read as that many problems on the health card while the gauge said
-// one. It has stood since its OLDEST log's instance was raised, and a log
-// leaving it moves that to the oldest log still standing.
-//
-// Mutation: return the table's order rather than the age order, report
-// (nil, true) before an evaluation, count a kind once per log, or date a kind
-// by its newest log, and this fails.
+// Every node's health envelope counts and names these, so they must match what
+// the gauge and the log were just told: a cleared alarm is gone at once, and
+// the name shown is the condition unanswered longest, not the table's first.
+// Before any evaluation it says it cannot say: an empty list would render a
+// node that has not looked as one with nothing wrong. A KIND ON TWO LOGS STANDS
+// ONCE (per-log counting overstates the gauge's one), dated from its OLDEST log.
+// Mutation: return the table's order, report (nil, true) before an evaluation,
+// count a kind once per log, or date it by its newest log, and this fails.
 func TestTheStandingAlarmsAreTheLatestEvaluationsOldestFirst(t *testing.T) {
 	t.Parallel()
 	clock := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
@@ -1445,18 +1406,14 @@ func TestTheStandingAlarmsAreTheLatestEvaluationsOldestFirst(t *testing.T) {
 
 // A FIRING ALARM IS MARKED SINCE IT WAS RAISED, and the marks are the standing
 // alarms: the same kinds in the same order, so the presence heartbeat every
-// peer reads can never name a different set, or a different longest-standing
-// alarm, from the node's own health card.
+// peer reads never names a different set, or longest-standing alarm, from the
+// node's own health card. A kind on several logs is dated by its OLDEST log (a
+// later log joining does not move it); a kind that stays up keeps its start
+// however its detail changes; before any evaluation there is nothing to mark,
+// which is not a node with nothing firing.
 //
-// A kind standing on several logs is dated by its OLDEST log, which a later log
-// joining it does not move and which moves to the oldest log still standing
-// when that one leaves; a kind that stays up keeps its start however its detail
-// changes; and before any evaluation there is nothing to mark, which is not a
-// node with nothing firing.
-//
-// Mutation: date a kind by its newest log, re-date it on every evaluation, mark
-// in the table's order, or answer (nil, true) before an evaluation, and this
-// fails.
+// Mutation: date a kind by its newest log, re-date it every evaluation, mark in
+// the table's order, or answer (nil, true) before an evaluation, and this fails.
 func TestAFiringAlarmIsMarkedSinceItWasRaised(t *testing.T) {
 	t.Parallel()
 	t0 := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
@@ -1602,20 +1559,14 @@ func TestTheTableIsEvaluatedOnThePositionHeartbeat(t *testing.T) {
 // A LOG'S CENSUS IS PER SEAT, NEVER ZERO — AND PLUS WHAT THE ENGINE READS ON
 // ITS OWN.
 //
-// The reference company — 100 seats, one tracker log — is the 12 500 the
-// sizing was derived from, so that is what its log is expected to take. A
-// company twice the size doing the same work per seat takes twice it, which
-// the fixed figure read as drift. A company with no agent seat is still one
-// seat's worth, since its operators read too and an expectation of zero on a
-// log they read fires on the first read. The engine's own periodic reads are
-// added to it, since each of them is a barrier on every log it reads: without
-// them a one-seat company on one data node reading exactly its census put 293
-// barriers a day on a log expected to take 125.
-//
-// AND THE RATE IS THE DOMAIN'S DECLARATION ([statelog.ReadModel]): a log no
-// read takes a barrier on declares none, and is expected to take none
-// however many seats the company has — plus the engine's own reads, which are
-// the engine's and not the seats'.
+// The reference company (100 seats, one tracker log) is the 12 500 the sizing
+// was derived from; twice the seats takes twice it, which a fixed figure read
+// as drift. No agent seat is still one seat's worth, since operators read too
+// and an expectation of zero fires on the first read. The engine's own periodic
+// reads are added, each a barrier on every log it reads: without them a
+// one-seat company put 293 barriers a day on a log expected to take 125. THE
+// RATE IS THE DOMAIN'S DECLARATION ([statelog.ReadModel]): a log no read takes
+// a barrier on declares none, plus the engine's own reads.
 func TestALogsCensusIsPerSeat(t *testing.T) {
 	t.Parallel()
 	read := statelog.ReadModel{PerSeatDay: statelog.LinearizableReadsPerSeatDay}
@@ -1681,14 +1632,12 @@ func TestTheCensusCountsALogsClients(t *testing.T) {
 
 // THE HISTORY ALARM BORROWS THE READ BUDGET (ADR-0015).
 //
-// What makes a fleet history answer partial is a node that did not answer
-// inside the fleet read budget — so that budget IS the threshold, and the
-// alarm names the one the reads waited on, which the node that counted them
-// states in its reading ([statelog.Reading.HistoryReadBudget]). A second
-// number here would be a second opinion about one event, and the two would
-// drift: an operator told "every node had 5s" by a node that waited two would
-// go looking for a slowness that is not there. A reading that states no
-// budget names none, rather than a zero budget nobody waited on.
+// A partial fleet history answer means a node did not answer inside the fleet
+// read budget, so that budget IS the threshold, and the alarm names the one the
+// reads waited on, stated by the counting node ([statelog.Reading.HistoryReadBudget]).
+// A second number would drift: an operator told "every node had 5s" by a node
+// that waited two would hunt a slowness that is not there. A reading that
+// states no budget names none, not a zero budget nobody waited on.
 //
 // Mutation: spell a budget as a literal in the detail, or print the zero
 // budget, and this fails.

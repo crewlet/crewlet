@@ -258,7 +258,10 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"agent": "everybody", "live_call": "everybody", "tokens": "everybody",
 		"token_series": "everybody", "seat_activity": "everybody", "turn_outcomes": "everybody",
 		"viewer": "everybody", "schedule_runs": "everybody",
-		"budgets": "everybody", "schedules": "everybody",
+		// WHAT A PAGE'S LINES NAME: each reference is decided by the
+		// question its own page asks, so the ask itself grants nothing.
+		"references": "everybody",
+		"budgets":    "everybody", "schedules": "everybody",
 		"knowledge": "everybody", "colleague": "everybody",
 		// Hosts alone, so a reader can link a reference; never the repositories.
 		"link_hosts": "everybody",
@@ -278,7 +281,7 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 
 		"events": "admin", "event_series": "admin", "event": "admin",
 		"trace": "admin", "turn": "admin", "fleet": "admin",
-		"backups": "admin", "fleet_broker": "admin", "issue_reports": "admin", "advisor": "admin", "advisor_analysis": "admin", "advisor_access": "admin", "go_live_review": "admin",
+		"backups": "admin", "fleet_broker": "admin", "issue_reports": "admin", "advisor_findings": "admin", "advisor_finding": "admin", "advisor_run": "admin", "advisor_notices": "admin", "advisor_reports": "admin", "advisor_report": "admin", "advisor_access": "admin", "go_live_review": "admin",
 		"diagnostics_insights": "admin",
 		"integrations":         "admin", "retention": "admin", "a2a_channels": "admin",
 		"config": "admin", "config_audit": "admin", "config_diff": "admin",

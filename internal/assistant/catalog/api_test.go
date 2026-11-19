@@ -170,17 +170,15 @@ func rows(p proposal.Preview) map[string]wire.Change {
 // A GENERIC CHANGE IS PREVIEWED FROM THE RESOURCE AS IT IS NOW.
 //
 // A PATCH is merged onto the representation its path reads (RFC 7396, `null`
-// deleting), and only the fields that move are rows; a list of records is
-// matched by the identity each carries, so one added seat is one added
-// member and the seat beside it is no row; the request and its body, redacted,
-// are the card's technical details for an administrator, never a row. A strong
-// entity tag binds the change and becomes its
-// If-Match; a representation with no tag but a version field binds the change
-// to that field, which the approval re-reads. A DELETE shows what it removes,
-// a POST what it creates, and a change that moves nothing is refused. The
-// verb's step-up is on the card. Mutation: diff the body instead of the
-// merged document, match lists by position, or drop the revision, and a case
-// here fails.
+// deleting), and only the fields that move are rows; records in a list are
+// matched by their identity, so one added seat is one added member. The
+// request and its redacted body are the card's technical details, never a
+// row. A strong entity tag becomes the If-Match; with no tag, a version field
+// binds the change, which the approval re-reads. A DELETE shows what it
+// removes, a POST what it creates, a change that moves nothing is refused,
+// and the verb's step-up is on the card. Mutation: diff the body instead of
+// the merged document, match lists by position, or drop the revision, and a
+// case here fails.
 func TestAGenericChangeIsPreviewedFromTheResource(t *testing.T) {
 	t.Parallel()
 	_, _, change := generic(t, admin)
@@ -295,19 +293,14 @@ func TestAGenericChangeIsPreviewedFromTheResource(t *testing.T) {
 // A CALL ON THE ACT ROUTE IS TITLED BY ITS TOOL, AND ONE A CURATED WRITE
 // MAKES IS THAT WRITE'S.
 //
-// The act route runs one operator tool, which alone decides what changes, so
-// the generic card is the call: titled by the tool, said as a person writes it
-// (an initialism in it included), approved by the tool's verb, and its
-// arguments shown as sent, each by its own name, never as values a create
-// adds. The step it is prepared in names it the same way, and a call sending
-// nothing still has a row saying so. A call a curated write makes, every
-// argument one that write takes, is refused naming the write, whose preview
-// reads what the tool changes; a call sending an argument no curated write
-// takes stays the generic change's, so nothing the person may do is lost to
-// the assistant; and a body the route would refuse once approved is refused
-// before any card. Mutation: title the act route as a create, draw its
-// arguments as added or label them by the `args` they travel in, spell DM as
-// a word, or let the generic change propose a room's whole membership, and a
+// The act route's tool alone decides what changes, so the generic card is the
+// call: titled by the tool as a person writes it (initialisms kept), approved
+// by its verb, arguments shown as sent, never as a create's added values. A
+// call a curated write makes is refused naming the write; one sending an
+// argument no curated write takes stays the generic change's; a body the
+// route would refuse is refused before any card. Mutation: title the act
+// route as a create, draw arguments as added or label them by `args`, spell
+// DM as a word, or let the generic change propose a room's membership, and a
 // case here fails.
 func TestACallOnTheActRouteIsTitledByItsTool(t *testing.T) {
 	t.Parallel()
@@ -385,19 +378,15 @@ func TestACallOnTheActRouteIsTitledByItsTool(t *testing.T) {
 
 // A POST IS NAMED FOR WHAT ITS ROUTE DECLARES IT DOES.
 //
-// A POST's method says nothing of what it does, so its route says
-// (authz.Policy.Effect) and the card says it after it: a destruction is titled
-// by its action and what it acts on, destructive, its summary saying what goes
-// and its note that the assistant cannot undo it; a rewrite by its action,
-// with its body and its query as sent and, sending neither, what it acts on;
-// a question says it changes nothing; a create is titled by what it creates,
-// its body drawn as added. What a POST acts on is named by a read of it where
-// the table serves one, and never by an opaque id its path carries. A POST
-// that declares nothing is never a card at all, since nothing could say
-// truthfully what it does. Mutation: title every POST a create, rate a
-// destruction by its method, draw a rewrite's body as added, drop its query,
-// name a record by its id, or draw a card for an undeclared POST, and a case
-// here fails.
+// A POST's route says what it does (authz.Policy.Effect) and the card
+// follows: a destruction is titled by action and target, destructive, saying
+// what goes and that it cannot be undone; a rewrite by action, body and query
+// as sent; a question says it changes nothing; a create is titled by what it
+// creates, body drawn as added. A target is named by a read where the table
+// serves one, never by a path id; an undeclared POST is never a card.
+// Mutation: title every POST a create, rate a destruction by its method, draw
+// a rewrite's body as added, drop its query, name a record by its id, or draw
+// a card for an undeclared POST, and a case here fails.
 func TestAPostIsNamedForWhatItsRouteDeclares(t *testing.T) {
 	t.Parallel()
 	table, err := catalog.NewRouteTable([]catalog.Route{
@@ -484,19 +473,16 @@ func TestAPostIsNamedForWhatItsRouteDeclares(t *testing.T) {
 
 // A CHAT DESTRUCTION SAYS WHAT GOES, AND FROM WHICH ROOM.
 //
-// Erasing messages, pruning a room and setting its horizon are verbs nothing
-// undoes (authz.IrreversibleOf), so each card is destructive, leads with what
-// goes and says the assistant cannot undo it, all read from what the change
-// sends: an erase counts the messages its body names, each once; a prune says
-// the instant its query cuts at, its query shown as sent; a horizon says how
-// long the room keeps what it holds, or that it goes back to the company's
-// setting; one kept for ever takes nothing and is no destruction, and one
-// that states no number of days says only that it changes the horizon. The
-// room is named by a read of it through the person's grant ("#general"), in
-// neutral words where that read is refused, and never by its id. Mutation:
-// title a chat destruction by its path, rate one by its method, count a
-// repeated message twice, drop the prune's query, or name the room by its id,
-// and a case here fails.
+// Erase, prune and horizon are verbs nothing undoes (authz.IrreversibleOf),
+// so each card is destructive and leads with what goes: an erase counts the
+// messages named, each once; a prune says the instant its query cuts at; a
+// horizon says how long the room keeps what it holds or that it reverts to the
+// company's; one kept for ever is no destruction, and one with no number of
+// days says only that it changes the horizon. The room is named by a read
+// through the person's grant ("#general"), in neutral words if refused, never
+// by id. Mutation: title a chat destruction by its path, rate one by its
+// method, count a repeated message twice, drop the prune's query, or name the
+// room by its id, and a case here fails.
 func TestAChatDestructionSaysWhatGoesAndFromWhichRoom(t *testing.T) {
 	t.Parallel()
 	table, err := catalog.NewRouteTable([]catalog.Route{

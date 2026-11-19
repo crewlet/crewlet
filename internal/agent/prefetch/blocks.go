@@ -120,23 +120,18 @@ func (f *Fetcher) episodeRecall(ctx context.Context, r Request, vector turnVecto
 		if whole == "" {
 			return ""
 		}
-		// THE SUMMARY IS OPTIONAL AND ITS FAILURE IS FREE: the raw
-		// bullets are a usable block, so a model that is slow or
-		// unreachable costs verbosity rather than the block.
+		// The summary is optional and its failure free: the raw bullets are
+		// a usable block, so a slow or unreachable model costs verbosity.
 		//
-		// JUDGED AGAINST WHAT THE TURN WAS ASKED ([Request.Ask]), for the
-		// memory filter's reason: the summary keeps "what bears on doing
-		// similar work again", and an integration's triage scaffolding
-		// is the same on every turn of its surface, so it bears on
-		// nothing.
+		// Judged against the turn's ask ([Request.Ask]), as the memory
+		// filter is: an integration's triage scaffolding is the same every
+		// turn, so it bears on nothing.
 		//
-		// THE TASK AND THE PAST ASKS ARRIVE FENCED, under the call's token
-		// ([Ask], [learning.RenderPastTurn]): the briefing is written into
-		// the seat's system prompt with nothing around it, so words that
-		// address the summary — today's or a month-old stranger's — must
-		// read as somebody's words, and what the summary writes is
-		// neutralised under the turn's token, so nothing it echoes can pass
-		// for a fence's line there.
+		// The task and past asks arrive fenced under the call's token ([Ask],
+		// [learning.RenderPastTurn]): the briefing lands in the seat's system
+		// prompt bare, so words addressing the summary must read as somebody's
+		// words, and the summary's output is neutralised under the turn's
+		// token so nothing it echoes passes for a fence line.
 		summary, ok := f.auxCall(ctx, r, types.AuxEpisodeSummary, recallSummarySystemPrompt,
 			"Current task:\n"+r.Ask.For(token)+
 				"\n\nPast turns by this agent:\n"+whole+

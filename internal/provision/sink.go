@@ -28,22 +28,15 @@ import (
 
 // TokenSink records the credentials a provisioning run mints.
 //
-// # Every method is async, and that is not decoration
+// Every method takes a context because a sink may persist REMOTELY (the
+// encrypted secret store is a database write). Buffering and flushing at the
+// end opens a window where a credential exists at the third-party app and
+// nowhere else: a process dying there leaves a live, unrecorded token nobody
+// knows to revoke. Write-through closes it.
 //
-// A sink may persist REMOTELY — the encrypted secret store is a database
-// write. Buffering in memory and flushing at the end opens a window where a
-// credential exists at the third-party app and nowhere else: if the process
-// dies there, the token is live, unrecorded, and nobody knows to revoke it.
-// Write-through closes that window, and a write-through sink needs a context.
-//
-// # Discard is the other half, and the one that is easy to leave out
-//
-// A run that mints three tokens and cannot persist the third has to revoke
-// all three — a credential that exists and is not recorded is one nobody can
-// use and nobody will remember to remove. But revoking them is not enough:
-// the two that WERE recorded must be removed from the sink as well, because
-// a dead token reads exactly like a live one, and an operator debugging the
-// resulting 401s has no way to tell which of their credentials is real.
+// Discard is the other half: a run that mints three tokens and cannot persist
+// the third must revoke all three and remove the two that WERE recorded, since
+// a dead token reads exactly like a live one.
 type TokenSink interface {
 	// Record persists one minted credential under the variable that
 	// references it. It returns only after the value is durable.
@@ -59,28 +52,15 @@ type TokenSink interface {
 	// Forget removes values this run did NOT write, because the accounts
 	// they belonged to have been removed.
 	//
-	// # Why this is separate from Discard
+	// Discard is a ROLLBACK of this run's own writes; here a teardown deleted
+	// the accounts, and their sealed credentials read like live ones. Not
+	// best effort: a failure must fail the teardown, so the block stays, the
+	// surface holds in PhaseDisconnecting and the next attempt retries; a
+	// swallowed one drops the block with the credentials still sealed.
 	//
-	// Discard is a ROLLBACK and is scoped to this run's own writes: it
-	// undoes what a failed provisioning pass did. This is the other
-	// direction — a teardown deleted the accounts, and the credentials
-	// sealed for them are now dead values that read exactly like live ones.
-	// Nothing could express that, so no teardown or decommission path
-	// anywhere deleted a single secret.
-	//
-	// # It is not best effort
-	//
-	// Where Discard reports what it could not remove and carries on —
-	// because the problem it is cleaning up after is already worse — a
-	// failure here must fail the teardown. The block stays, the surface
-	// holds in PhaseDisconnecting, and the next attempt tries again. A
-	// swallowed failure drops the block with the credentials still sealed,
-	// and the retry that would have caught it never runs.
-	//
-	// ONLY WHAT A TEARDOWN NAMED. A caller passes the names off a
-	// [Removed], which holds a seat's OWN credentials and never a
-	// company-level one: an admin token or a webhook secret survives a
-	// disconnect by design and may be shared with another deployment.
+	// ONLY WHAT A TEARDOWN NAMED: the names off a [Removed], a seat's OWN
+	// credentials, never a company-level one, which survives a disconnect by
+	// design and may be shared with another deployment.
 	Forget(ctx context.Context, names ...string) error
 
 	// Flush completes the run. A sink that batches finishes here; a
@@ -89,26 +69,14 @@ type TokenSink interface {
 
 	// Value reads back what this sink carries for a variable.
 	//
-	// # It is what makes a re-run safe to run
+	// It makes a re-run safe: apps serve a credential once, so without it the
+	// only option is minting fresh every run, an outage, since the engine
+	// runs with the OLD value and rotating it revokes what every agent uses.
 	//
-	// A third-party app that serves a credential once (which is all of them)
-	// gives a provisioner no way to check that the value it recorded last
-	// time still matches. Without this the only option is to mint fresh
-	// every run, and that is an outage: the engine is running with the
-	// OLD value, and rotating it revokes the credential every agent is
-	// currently authenticating with. An operator adding one seat would
-	// take the other nine down.
-	//
-	// It returns the VALUE rather than a yes/no because the honest test
-	// is using the credential. "There is a value here and the account has
-	// some token" reads as provisioned in exactly the case that matters:
-	// an operator who restored an older env file has a stale value beside
-	// a live token that is not it, and the seat then authenticates with
-	// nothing.
-	//
-	// A sink that persists nothing answers not-held, which is correct
-	// rather than a degradation: nothing was kept, so the operator needs
-	// the value again.
+	// It returns the VALUE, not a yes/no, because the honest test is using
+	// the credential: "a value here and the account has some token" reads as
+	// provisioned when an older env file was restored beside a live token.
+	// A sink that persists nothing answers not-held: nothing was kept.
 	Value(ctx context.Context, name string) (string, bool, error)
 
 	// Describe names where the values went, for the run's report. It is
@@ -149,24 +117,14 @@ func ReferencedVars(value string) []string {
 // Shape says what is wrong with a value [SoleVar] refused, WITHOUT REPEATING
 // IT.
 //
-// The value here is a credential or a string holding one, and what is done
-// with this sentence is the whole reason the rule exists: it goes into an
-// operator's report pasted into a ticket, and — since the reconcile loop —
-// into `State.LastError`, which is written to the fleet's coordination store
-// and served on the integrations query, a read that is anonymous unless the
-// deployment turned that off. A `%q` of the value there publishes the
-// credential to anyone who can reach the port.
+// The value is a credential or holds one, and this sentence goes into an
+// operator's report and `State.LastError`, written to the coordination store
+// and served on the integrations query, anonymous unless turned off. A `%q`
+// of the value there publishes the credential.
 //
-// The two cases are kept apart because their fixes differ — a literal needs a
-// variable, a composite needs the variable to be the whole value — so
-// collapsing them into "not a reference" would leave an operator to work out
-// which. And a slot holding nothing is said to be EMPTY rather than either:
-// read as "a literal", an unset field — a Confluence Cloud webhook_token, a
-// seat's bot_token — sent its operator looking for a value that is not there.
-//
-// ONE IMPLEMENTATION: this was two byte-identical copies, in mattermost and
-// gitlab, and the two provisioners added since had neither and quoted the
-// value instead.
+// A literal and a composite are kept apart because their fixes differ (a
+// variable, or the variable as the whole value). An empty slot is said to be
+// EMPTY, not "a literal", which sent operators looking for a value not there.
 func Shape(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return "empty"
@@ -178,55 +136,33 @@ func Shape(value string) string {
 }
 
 // FreshSwitch is a run's ask for a fresh value where it would otherwise keep
-// the one the company document resolves — a webhook secret minted again over
-// one that works, the only recovery for a secret that was lost — spelled as
-// the surface that asked spells its switch: `-recreate-webhooks` on
-// `crewlet github provision`, `-recreate-webhook` on `crewlet jira provision`,
-// `recreate_webhooks` in the body of
-// `POST /setup/integrations/{kind}/provision`. The zero value is not asked.
+// the one the company document resolves (a webhook secret minted again, the
+// only recovery for a lost one), spelled as its surface spells the switch:
+// `-recreate-webhooks` on `crewlet github provision`, `-recreate-webhook` on
+// jira's, `recreate_webhooks` in the body of the setup route. The zero value
+// is not asked.
 //
-// # The CALLER's spelling, carried with the switch
-//
-// A pass is the vendor's, and every surface that runs one runs the same code,
-// so the only thing a pass can say about the switch that it cannot work out
-// for itself is how the person who set it spells it — and that is what a
-// refusal of the switch has to name ([RefuseFresh]). A pass that spelled the
-// switch itself could spell only one surface's, so a caller of the setup route
-// who sent `recreate_webhooks` would be told to re-run with a flag that
-// surface does not have.
-//
-// ONE VALUE rather than a switch and a spelling beside it, so nothing can set
-// the one without the other: whoever turns the switch on spells it, and a
-// pair would hold "asked, spelled nothing", which a refusal would render as a
-// blank where the remedy belongs.
+// The CALLER's spelling travels with the switch, since every surface runs the
+// same vendor pass and a refusal must name it ([RefuseFresh]). ONE VALUE, not
+// a switch and a spelling beside it: a pair would hold "asked, spelled
+// nothing", a blank where the remedy belongs.
 type FreshSwitch string
 
 // Asked reports whether the run asked for a fresh value.
 func (f FreshSwitch) Asked() bool { return f != "" }
 
 // RefuseFresh is the refusal for a run that asked for a fresh value (fresh,
-// as the surface that asked spells its switch) over the config value ref at
-// path, where ref holds a value the company document owns rather than a whole
-// ${VAR} reference: a literal, or a reference embedded in other text. It is
-// nil where there is nothing of the kind to refuse — the run did not ask, ref
-// IS a whole reference, which the fresh value is minted into, or ref is empty,
-// which no switch changes and the caller's own refusal covers.
+// as its surface spells the switch) over the config value ref at path, where
+// ref is a literal or a reference embedded in other text. It is nil when the
+// run did not ask, ref IS a whole reference (the fresh value is minted into
+// it), or ref is empty (the caller's own refusal covers it).
 //
-// # Why the switch gets a refusal of its own
-//
-// Without the switch, a value the document holds resolves (to itself, for a
-// literal) and the pass registers it as it is; with it, the pass skips that
-// and goes straight to [SoleVar] for a variable to mint into. The refusal
-// each pass wrote for a slot that resolved to nothing told that run the value
-// had not resolved and to set a variable — neither is true of a literal,
-// which resolves to itself and names no variable — and kept quiet about the
-// remedy that works without touching the document: running without the
-// switch, which registers the value as it is. So the switch is named, and so
-// are both ways on.
-//
-// THE SHAPE, NEVER THE VALUE ([Shape]): this sentence becomes a pass's
-// State.LastError as well as a line in an operator's terminal, and the value
-// it would quote is the credential.
+// Without the switch such a value resolves and the pass registers it as it
+// is; with it, the pass goes to [SoleVar] for a variable to mint into. The
+// refusal for a slot that resolved to nothing is untrue of a literal and
+// omits the remedy needing no document change, so the switch is named, and
+// both ways on. THE SHAPE, NEVER THE VALUE ([Shape]): this sentence becomes
+// State.LastError.
 func RefuseFresh(path string, fresh FreshSwitch, ref string) error {
 	if !fresh.Asked() {
 		return nil
@@ -245,18 +181,14 @@ func RefuseFresh(path string, fresh FreshSwitch, ref string) error {
 //
 // # Exactly one, and the WHOLE value
 //
-// This is the capture contract: a provisioner mints a credential and writes
-// it into the variable the config points at. That only works if the config
-// value IS the reference. Two cases it must refuse:
+// This is the capture contract: a provisioner writes a minted credential into
+// the variable the config points at, so the config value must BE the
+// reference. Two cases are refused and reported, not guessed at:
 //
-//   - a LITERAL (`token: glpat-abc`) — there is no variable to write into,
-//     and overwriting the literal would edit the company config from a
-//     provisioning run, which is not this command's job;
-//   - a COMPOSITE (`url: https://${HOST}/api`) — the variable holds a
+//   - a LITERAL (`token: glpat-abc`): no variable to write into, and
+//     overwriting it would edit the company config from a provisioning run;
+//   - a COMPOSITE (`url: https://${HOST}/api`): the variable holds a
 //     fragment, so minting a token into it would replace a hostname.
-//
-// Both are configuration mistakes with a clear fix, so they are reported
-// rather than guessed at.
 func SoleVar(value string) (string, bool) {
 	return envref.Whole(strings.TrimSpace(value))
 }

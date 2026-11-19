@@ -71,17 +71,14 @@ var fold = map[Reason]foldClass{
 // barOrder is the order [Decide] asks its bars in, and last the requester's
 // ceiling, which [DecideWithin] asks only once Decide has admitted the agent.
 //
-// THE DASHBOARD ASSISTANT'S TWO sit after a machine token's, where Decide
-// asks them ([assistBar]), a verb it never takes before one its grant's
-// scope does not reach: the person's approval lifts the second and only
-// their own gesture lifts the first, so a gesture meeting both is told the
-// one no approval would clear.
+// THE DASHBOARD ASSISTANT'S TWO sit after a machine token's ([assistBar]), a
+// verb it never takes before one its grant's scope does not reach: approval
+// lifts the second and only the person's own gesture lifts the first, so a
+// gesture meeting both is told the one no approval would clear.
 //
-// AN AGENT'S ROLE GRANT sits after them, where Decide asks it: in place of
-// the class, once every bar has passed ([decideSeatGrant]). No permission
-// and no proof lifts it — the remedy is the role's, in the company document
-// — so it is a bar rather than a refusal on authority, and it comes before
-// the ceiling, which DecideWithin asks only of an agent Decide admitted.
+// AN AGENT'S ROLE GRANT sits after them, once every bar has passed
+// ([decideSeatGrant]). No permission or proof lifts it (the remedy is the
+// role's, in the company document), so it is a bar, not a refusal on authority.
 var barOrder = []Reason{
 	ReasonStage, ReasonUnknownAction, ReasonSeatRefused, ReasonSeatOnly,
 	ReasonUnseated, ReasonTokenRefused, ReasonAssistRefused, ReasonAssistScope,
@@ -106,42 +103,11 @@ func (r Reason) Admits() bool { return fold[r] == foldAdmission }
 func (r Reason) Authority() bool { return fold[r] == foldAuthority }
 
 // Combine is the decision for a gesture that needs every one of ds, answered
-// in the order [Decide] asks its own checks in.
-//
-//   - A BAR ON THE CALLER FIRST — a stage, a verb this build has no rule for,
-//     a seat on a person's verb or a person on a seat's, a credential acting
-//     as no seat, a machine token where a person must be present, the
-//     Dashboard Assistant on a verb it never takes or one its grant's scope
-//     does not reach, an agent whose role does not carry the row's grant
-//     ([decideSeatGrant]), an agent whose requester could not ([DecideWithin]) —
-//     the one [Decide] would have reported first, unchanged. It is about who
-//     is asking rather than any part, and no permission and no proof lifts it.
-//   - THEN THE REFUSALS ON AUTHORITY, whose answer is the permission that
-//     admits EVERY such part: a gesture opens only when all of it does, so a
-//     permission one part names and another does not is no remedy. The grants
-//     are the smallest such permissions in [Decision.Grants]'s own sense —
-//     any one of them, added to what the caller holds, admits every part, and
-//     one that covers another through [iam.Expand] is left out — so a write
-//     refused for a tracker setting and a knowledge one names admin, which
-//     admits both. The reason is the parts' own where they agree and
-//     [ReasonNoGrant] where they do not: there is no one relation to name.
-//     And a part no permission lifts at all — somebody else's record with no
-//     admin path, its grants empty — is the answer as it stands, since naming
-//     a permission for the rest would promise what nothing can deliver.
-//   - THEN AN UNKNOWN: this node could not decide some part. Asked only once
-//     nothing refused, because no answer that part could get would admit a
-//     gesture another part already shuts — the rule [Decide] itself keeps,
-//     refusing a lead short of a row's app whatever the chart says.
-//   - THE PROOF LAST, because every earlier answer is one a fresher proof
-//     would not change: the parts refused only for a stale proof are a
-//     [ReasonStepUp] naming the window — the strictest any part asks — and
-//     the grants the rules admitted the caller on.
-//   - Otherwise every part admits, and the gesture is the first part's
-//     admission; a gesture of no parts asks nothing of anybody, which is
-//     [ReasonEverybody]'s admission.
-//
-// ONE DECISION IS ITSELF, so a surface that folds one part answers exactly what
-// [Decide] did.
+// in the order [Decide] asks its own checks in: a bar on the caller, the
+// refusals on authority, an unknown, then a stale proof; otherwise the first
+// part's admission, and [ReasonEverybody]'s for a gesture of no parts. The
+// switch at the end says why each comes where it does. ONE DECISION IS ITSELF,
+// so a surface that folds one part answers exactly what [Decide] did.
 func Combine(ds ...Decision) Decision {
 	if len(ds) == 1 {
 		return ds[0]
@@ -176,6 +142,14 @@ func Combine(ds ...Decision) Decision {
 			authority = append(authority, d)
 		}
 	}
+	// A BAR FIRST: it is about who is asking, not any part, and no permission
+	// or proof lifts it; it is the one [Decide] would have reported first.
+	// AUTHORITY NEXT, as one permission admitting every part. AN UNKNOWN only
+	// once nothing refused: no answer that part could get would admit a gesture
+	// another part already shuts, the rule [Decide] keeps (a lead short of a
+	// row's app is refused whatever the chart says). THE PROOF LAST: no earlier
+	// answer is one a fresher proof would change; the parts refused only for a
+	// stale proof are a [ReasonStepUp] naming the strictest window.
 	switch {
 	case bar != nil:
 		return *bar
@@ -202,6 +176,12 @@ func barRank(r Reason) int {
 
 // foldAuthorityRefusals is [Combine]'s answer for its refusals on authority.
 func foldAuthorityRefusals(parts []Decision) Decision {
+	// A gesture opens only when all of it does, so a permission one part names
+	// and another does not is no remedy: the grants are the smallest that admit
+	// every part ([Decision.Grants]'s sense), so a tracker and a knowledge
+	// refusal name admin. A part no permission lifts (grants empty) is the
+	// answer as it stands: naming one for the rest promises what nothing can
+	// deliver. The reason is the parts' own where they agree, else ReasonNoGrant.
 	for _, d := range parts {
 		if len(d.Grants) == 0 {
 			return d

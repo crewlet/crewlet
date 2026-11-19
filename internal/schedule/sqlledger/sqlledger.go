@@ -62,18 +62,14 @@ ON CONFLICT (scope_type, scope_id, schedule_name, fire_label, target_handle) DO 
 
 // Claim atomically records a fire, reporting whether this call wrote the row.
 //
-// The whole at-most-once guarantee is these two lines of SQL: a composite
-// PRIMARY KEY over the identity, and DO NOTHING on conflict. The conflict
-// target is named rather than left bare so the statement says WHICH constraint
-// it expects to lose to — a bare DO NOTHING would also swallow a future
-// constraint on this table, and swallowing an unexpected violation is how a
-// row silently stops being written.
+// The at-most-once guarantee is a composite PRIMARY KEY over the identity and
+// DO NOTHING on conflict. The conflict target is named so the statement says
+// WHICH constraint it expects to lose to: a bare DO NOTHING would also swallow
+// a future constraint, and a row would silently stop being written.
 //
-// Reporting rests on RowsAffected rather than on RETURNING. That began as a
-// dialect-intersection rule for two drivers, and the second driver is gone;
-// it stays because RowsAffected is what this statement needs and is the answer
-// database/sql gives whatever the driver does, so the ledger's tri-state does
-// not depend on a newer SQLite feature reaching the one that is pinned.
+// Reporting rests on RowsAffected, not RETURNING: database/sql gives it
+// whatever the driver does, so the tri-state does not depend on a newer SQLite
+// feature reaching the pinned one.
 func (l *Ledger) Claim(ctx context.Context, run schedule.Run) (bool, error) {
 	if l == nil || l.db == nil {
 		return false, ErrNoDB

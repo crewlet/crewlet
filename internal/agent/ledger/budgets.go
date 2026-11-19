@@ -5,29 +5,14 @@ import "strconv"
 // Payload budgets, applied ONLY to the cross-round ledger — never to Review's
 // single-iteration evidence log, which stays verbatim by contract.
 //
-// ONE principle decides every number: BUDGET PAYLOADS, NEVER STRUCTURE. A
-// payload (a message body, page HTML, a diff, an error document) is
-// unbounded, re-authored from scratch next round, and unable to answer the
-// ledger's question on its own — so carrying it whole only buries the two
-// lines that can.
-//
-// Structure is everything else: the round's own account of what it set out to
-// do, the draft under review, the reviewer's correction, the trigger, the
-// reply that was sent. That is exactly what the next round has to act on, and
-// it is carried VERBATIM. It used not to be: six further limits sat here
-// cutting each of those at 400 to 2000 runes. A reviewer's correction trimmed
-// mid-instruction loses the engine-critical part of the only carrier it has,
-// and the ledger is not re-readable from anywhere: unlike a chat message or an
-// issue comment, there is no surface to go back to.
-//
-// A PAYLOAD PAST ITS BUDGET IS REWRITTEN, NEVER CUT. These numbers used to be
-// where a payload was cut, and what survived was its opening — a message
-// body's greeting, an error document's preamble — read by the next round as
-// though it were the call. They are now the size a payload is REWRITTEN to by
-// the seat's auxiliary model (see [Piece]), so what survives is what the
-// payload said rather than where it started. Prompt caching keys on the
-// system+tools prefix, which the ledger never touches, so a larger block costs
-// little; a rewrite costs one cheap call, once per payload per turn.
+// BUDGET PAYLOADS, NEVER STRUCTURE. A payload (a body, page HTML, a diff, an
+// error document) is unbounded and buries the lines that answer the ledger's
+// question. Structure (the round's account, the draft, the reviewer's
+// correction, the trigger, the reply) is carried VERBATIM: a correction cut
+// mid-instruction loses the engine-critical part, with no surface to go back to.
+// A payload past its budget is REWRITTEN, NEVER CUT, since a cut keeps its
+// opening, which the next round reads as the call: these are the sizes the
+// seat's auxiliary model rewrites to (see [Piece]), one cheap call each.
 const (
 	// ValueLimit is the budget for an argument VALUE and for a failed call's
 	// error. Identifiers are what say WHICH delivery fired — channel names,
@@ -55,16 +40,12 @@ const (
 	// keeps it whole; this is a render bound.
 	//
 	// It needs one because Execution.Text is every assistant message of that
-	// round's tool loop concatenated — so its size is the round cap times
-	// what one round can write, PER ITERATION, and the block
-	// accumulates one of those per self_iterate and is re-sent on every round
-	// of both phases that follow, the executor and the reviewer. That product,
-	// not the single value, is what a bound has to answer.
+	// round's tool loop concatenated: the round cap times what one round can
+	// write, per iteration, accumulated per self_iterate and re-sent on every
+	// round of the executor and reviewer. That product is what a bound answers.
 	//
 	// 4000 holds a full draft. Past it the text is rewritten with its
-	// deliverable kept in full and the reasoning before it compressed
-	// hardest — which is what the old tail cut was approximating, without
-	// the risk of cutting the deliverable's own opening away.
+	// deliverable kept in full and the reasoning before it compressed hardest.
 	RenderedArtifactLimit = 4000
 )
 

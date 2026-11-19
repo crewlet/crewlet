@@ -30,8 +30,9 @@ func (r *chainReading) refused(fault *threadLineError) {
 
 func (r *chainReading) end(bool, error) {}
 
-// records is how many records the chain filed ([recordKeeper]).
-func (r *chainReading) records() int { return r.c.handles }
+// records is how many items the chain holds ([recordKeeper]), its call ids
+// among them: a few records may carry a thread's calls.
+func (r *chainReading) records() int { return r.c.items() }
 
 // hookEvent is the event of a hook's firing a take is asked at: the zero
 // value is neither, which no take is held at.
@@ -84,7 +85,7 @@ type hookReading struct {
 	err, askErr              error
 }
 
-var _ takeAsker = (*hookReading)(nil)
+var _ lineAsker = (*hookReading)(nil)
 
 // unreadTakes is why no walk is made for ask's takes, "" where one is: none
 // can be held off a release whose resume was not read, and so none absent;

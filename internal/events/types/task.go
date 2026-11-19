@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/named"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
@@ -31,7 +33,7 @@ type TaskAssigned struct {
 	// TaskID is the fire's run id — scope, schedule, instant and runner —
 	// kept for telemetry and the feed's detail. It names one FIRE and no
 	// tracker item, so nothing a seat reads leads with it ([Brief],
-	// [SummaryFor]).
+	// [TaskAssigned.PhraseFor]).
 	TaskID   string `json:"task_id"`
 	Agent    string `json:"agent_id"`
 	RoleName string `json:"role"`
@@ -45,8 +47,8 @@ type TaskAssigned struct {
 	Description string `json:"description,omitempty"`
 	// Schedule names the schedule that fired this. It is what tells a seat
 	// a recurring duty came round, which changes how it reads "do this
-	// again", and it is what the fire's label names ([SummaryFor]), so two
-	// fires of one schedule read alike.
+	// again", and it is what the fire's label names
+	// ([TaskAssigned.PhraseFor]), so two fires of one schedule read alike.
 	Schedule string `json:"schedule,omitempty"`
 	// ScopeType and ScopeID are the scope that owns [TaskAssigned.Schedule]:
 	// with the name, the schedule's identity as the dispatch ledger keys a
@@ -127,6 +129,11 @@ type WorkPickup struct {
 	// DeadWaits is the changes nothing moves that the item waits on
 	// ([PickupDeadWait]), in reference order.
 	DeadWaits []DeadChange `json:"dead_waits,omitempty"`
+	// Waited is the start a due item waited until ([PickupDue]), and
+	// WaitReason the wait's words as WaitBy, their writer, set them.
+	Waited     *time.Time         `json:"waited,omitempty"`
+	WaitReason string             `json:"wait_reason,omitempty" untrusted:"name"`
+	WaitBy     *provenance.Author `json:"wait_by,omitempty"`
 }
 
 // DeadChange is a change (a pull request) a work item waits on that nothing
@@ -168,6 +175,10 @@ const (
 	// PickupInProgress is an item the seat already started, which comes
 	// before any it has not that is not urgent.
 	PickupInProgress PickupWhy = "in_progress"
+	// PickupDue is an item in progress whose start passed with nothing of
+	// the seat's on it since (ADR-0162): it comes after urgent work and
+	// before every other item, and a busy seat is handed it on its lane.
+	PickupDue PickupWhy = "due"
 	// PickupReview is an item in review that somebody else moved there and
 	// the seat holds: its review, which comes before work it has not started
 	// that is not urgent.
@@ -194,8 +205,8 @@ const (
 // Valid reports whether a reason off the wire is one this build knows.
 func (w PickupWhy) Valid() bool {
 	switch w {
-	case PickupUrgent, PickupInProgress, PickupReview, PickupUnreviewed, PickupWaitsOnPerson,
-		PickupDeadWait, PickupPriorityList, PickupQueue:
+	case PickupUrgent, PickupInProgress, PickupDue, PickupReview, PickupUnreviewed,
+		PickupWaitsOnPerson, PickupDeadWait, PickupPriorityList, PickupQueue:
 		return true
 	}
 	return false
@@ -209,6 +220,10 @@ func (w PickupWhy) sentence() string {
 	case PickupInProgress:
 		return "It is in progress and nothing is working on it now, so it comes before work you have not " +
 			"started, unless that work is urgent."
+	case PickupDue:
+		return "It is in progress and was set aside until a date that has passed with nothing of " +
+			"yours on it since, so it comes before every item that is not urgent, work you " +
+			"already started included."
 	case PickupReview:
 		return "It is in review and yours to review: somebody else asked for it, so it comes before work " +
 			"you have not started, unless that work is urgent."
@@ -322,7 +337,7 @@ func (e TaskAssigned) missedLine() string {
 		"each missed fire."
 }
 
-// SummaryFor names the SCHEDULE a fire came from, never the fire's id.
+// PhraseFor names the SCHEDULE a fire came from, never the fire's id.
 //
 // The summary is not only a feed line: it is the trigger's label
 // ([Trigger.Summary]), so it becomes the turn's task_summary and the recalled
@@ -333,11 +348,12 @@ func (e TaskAssigned) missedLine() string {
 // a tracker key and names no item, and every fire of one schedule was unalike
 // to a similarity search by the one part that differs on every fire. The id
 // stays on the payload, where telemetry and the feed's detail read it.
-func (e TaskAssigned) SummaryFor(actor string) string {
+func (e TaskAssigned) PhraseFor(actor string) named.Line {
 	if e.Schedule != "" {
-		return lead(actor, "was assigned scheduled work "+e.Schedule)
+		schedule := named.ScheduleRef(string(e.ScopeType), e.ScopeID, e.Schedule, e.Schedule)
+		return leadLine(actor, named.Words("was assigned scheduled work ").Name(schedule))
 	}
-	return lead(actor, "was assigned a task")
+	return leadLine(actor, named.Words("was assigned a task"))
 }
 
 // PickupReason is the origin reason a pickup's turn is started under, beside
@@ -368,20 +384,60 @@ func (p WorkPickup) TriggerOrigin() TriggerOrigin {
 	return TriggerOrigin{Kind: OriginWorkItem, ID: p.Key, Reason: PickupReason}
 }
 
-// SummaryFor names the item handed over.
-func (p WorkPickup) SummaryFor(actor string) string {
+// PhraseFor names the item handed over.
+func (p WorkPickup) PhraseFor(actor string) named.Line {
+	item := named.Item(p.Item, p.Key)
 	if p.Why == PickupDeadWait {
-		return lead(actor, "was handed back "+p.Key+", whose wait on a pull request nothing moves")
+		return leadLine(actor, named.Words("was handed back ").Name(item).
+			Words(", whose wait on a pull request nothing moves"))
 	}
-	return lead(actor, "was handed its next ready work item "+p.Key)
+	return leadLine(actor, named.Words("was handed its next ready work item ").Name(item))
 }
 
 // Brief is the pickup's ask: which item, why, and the five typed answers, each
 // a record on the item the engine can act on, because a promise in words
-// changes nothing (ADR-0122).
+// changes nothing (ADR-0122). A due item's wait closes it, in its own words.
 func (p WorkPickup) Brief() string {
+	lead, words, _ := p.Quoted()
+	if words == "" {
+		return lead
+	}
+	return lead + "\n\n" + words
+}
+
+// FencedBrief is [WorkPickup.Brief] with a due item's wait reason inside a
+// fence of b under its writer (ADR-0040), and the engine's own words before
+// it neutralised.
+func (p WorkPickup) FencedBrief(b provenance.Boundary) string {
+	lead, words, label := p.Quoted()
+	return fencedBrief(b, lead, words, label)
+}
+
+// Quoted is the brief as its parts: the engine's own words, a due item's
+// wait reason, and the label that reason is fenced under.
+func (p WorkPickup) Quoted() (lead, words string, label provenance.Label) {
+	lead = p.brief()
+	if p.WaitReason == "" {
+		return lead, "", label
+	}
+	return lead + "\n\nIt waited for this reason, in the words of whoever set the wait:",
+		p.WaitReason, p.waitLabel()
+}
+
+// waitLabel is the wait's words as a fence names them: a note on the item by
+// the writer its history row names, on a surface the engine hosts.
+func (p WorkPickup) waitLabel() provenance.Label {
+	var writers []provenance.Author
+	if p.WaitBy != nil {
+		writers = []provenance.Author{*p.WaitBy}
+	}
+	return provenance.LabelForHosted("", provenance.SourceChangeNote, writers, p.WaitBy != nil)
+}
+
+// brief is the engine's own words of the brief.
+func (p WorkPickup) brief() string {
 	var b strings.Builder
-	b.WriteString("Work pickup: you are idle and hold assigned work that is ready. ")
+	b.WriteString("Work pickup: you hold assigned work that is ready. ")
 	b.WriteString("Your next item is " + p.Key + " (" + p.Status + ").")
 	if why := p.Why.sentence(); why != "" {
 		b.WriteString(" " + why)
@@ -398,6 +454,9 @@ func (p WorkPickup) Brief() string {
 			lines = append(lines, d.line())
 		}
 		b.WriteString(" It waits on " + strings.Join(lines, "; ") + ".")
+	}
+	if p.Waited != nil {
+		b.WriteString(" It waited until " + p.Waited.UTC().Format(time.RFC3339) + ".")
 	}
 	switch {
 	case p.ReadyCapped:
