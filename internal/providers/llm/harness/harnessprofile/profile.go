@@ -440,6 +440,15 @@ func (p *Profile) SearchProblem() string {
 	return (&ToolsOff{Args: w.Args, Refuses: w.Refuses}).problemIn(w.CompleteArgs)
 }
 
+// SearchRun is the profile as its search-only run uses it, or false where it
+// has no measured one: what Load gives the entry with web_tools set to search.
+func (p Profile) SearchRun() (Profile, bool) {
+	if !p.CanSearchWeb() {
+		return Profile{}, false
+	}
+	return p.withWebSearch(), true
+}
+
 // withWebSearch is the profile as its search run uses it: the stance set, the
 // search argv in place of complete_args, and no mcp block or tool record,
 // since a search run is handed no tool.

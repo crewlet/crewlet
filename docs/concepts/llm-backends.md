@@ -4385,6 +4385,19 @@ is a problem naming the denial that did not take effect:
 web           : denied by entry (WebFetch and WebSearch on --disallowedTools; measured refused on Claude Code 2.1.310); probe: refused
 ```
 
+Where the profile declares `web_search` (Claude Code does), the `web` line
+also measures Ask Crewlet's search-only run, on the entry's login and state:
+three more calls on that run's argv, its search, which must answer at least
+one result from the profile's search tool, and the fetch and shell probes,
+which it must refuse. A run that answers no result, fetches or runs a shell is
+a problem on the same line naming `overrides.web_search` and the release its
+`note` was measured on. A profile without `web_search` runs no search probe,
+and Ask Crewlet offers no search on it:
+
+```
+web           : allowed; ok: fetched https://www.cloudflare.com/cdn-cgi/trace; search run ok: 5 results, fetch and shell refused
+```
+
 On an `api-key` entry the `sign-in` line names the key instead —
 `API key in ANTHROPIC_API_KEY (auth.mode api-key)` — and on a Codex entry,
 whose harness mints no headless token, `token env` says so.

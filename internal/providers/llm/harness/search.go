@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
@@ -155,4 +156,69 @@ func withLineObserver(ctx context.Context, observe func(string)) context.Context
 func lineObserverOf(ctx context.Context) func(string) {
 	observe, _ := ctx.Value(lineObserverKey{}).(func(string))
 	return observe
+}
+
+// searchRun is Ask Crewlet's search run of this entry, or nil where its
+// profile has none: on the entry's workspace (its login, state and seeds), auth
+// and sign-in record, with slots of its own.
+func (p *Provider) searchRun() *Provider {
+	profile, ok := p.profile.SearchRun()
+	if !ok {
+		return nil
+	}
+	return &Provider{key: p.key, model: p.model, effort: p.effort, harness: p.harness,
+		profile: profile, ws: p.ws, env: p.env, auth: p.auth, bundle: p.bundle,
+		bundleConfigured: p.bundleConfigured, timeout: p.timeout, termGrace: p.termGrace,
+		slots: make(chan struct{}, cap(p.slots)), plans: p.plans, zone: p.zone,
+		hooks: p.hooks, now: p.now}
+}
+
+// searchProbeQuery is what the doctor's search probe asks: public, and naming
+// nothing of the company.
+const searchProbeQuery = "Go programming language release notes"
+
+// searchProbe measures the entry's search-only run as Ask Crewlet makes it: its
+// search answers results from the search tool, and it refuses a fetch and a
+// shell. An empty problem is a pass; kind is as [Provider.webProbe]'s.
+func (p *Provider) searchProbe(ctx context.Context) (verdict, problem, kind string) {
+	run := p.searchRun()
+	if run == nil {
+		return "no search-only run", "", ""
+	}
+	who := fmt.Sprintf("the %q harness's search-only run", p.harness)
+	check := fmt.Sprintf("check overrides.web_search against the installed version (%s)",
+		orNone(run.profile.WebSearch.Note))
+	hits, _, err := run.Search(ctx, searchProbeQuery)
+	switch {
+	case err != nil:
+		problem = fmt.Sprintf("%s failed: %v. Where the entry's own calls answer, %s", who, err, check)
+		return "search run failed: " + err.Error(), problem, llm.KindOf(err).String()
+	case len(hits) == 0:
+		problem = fmt.Sprintf("%s answered no result from its %s tool, so Ask Crewlet's searches "+
+			"would find nothing: %s", who, run.profile.WebSearch.Tool, check)
+		return "search run: no results", problem, CheckKindConfig
+	}
+	for _, probe := range []struct{ name, prompt, ran, did string }{
+		{"fetch", webProbePrompt, "FETCHED " + webProbeURL, "fetched " + webProbeURL + " with its own tool"},
+		{"shell", shellProbePrompt, "SHELL RAN", "ran a shell command on the engine host"},
+	} {
+		comp, err := run.Complete(ctx, probeRequest(probe.prompt))
+		switch {
+		case err != nil:
+			problem = fmt.Sprintf("%s failed the %s probe, so whether it refuses one is unproven: "+
+				"%v. Where the entry's own calls answer, %s", who, probe.name, err, check)
+			return "search run: " + probe.name + " probe failed: " + err.Error(), problem,
+				llm.KindOf(err).String()
+		case reportsCurrentClock(comp.Content, time.Now()):
+			problem = fmt.Sprintf("%s %s, so Ask Crewlet's search run is not its search alone: %s",
+				who, probe.did, check)
+			return "search run: " + probe.ran, problem, CheckKindConfig
+		case strings.TrimSpace(comp.Content) == "":
+			// NO ANSWER IS NO REFUSAL, as on the web probe of a denied entry.
+			problem = fmt.Sprintf("%s answered the %s probe with nothing, so whether it refuses "+
+				"one is unproven: %s", who, probe.name, check)
+			return "search run: " + probe.name + " probe inconclusive", problem, CheckKindConfig
+		}
+	}
+	return fmt.Sprintf("search run ok: %d results, fetch and shell refused", len(hits)), "", ""
 }
