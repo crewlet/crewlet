@@ -1162,12 +1162,30 @@
 // what that provider reported, and a continuation on another provider's
 // model is not held to it.
 //
-// ONE WALK of the export, on the scanner (internal/jsonscan), which never
-// holds a string: each message's small values are captured at
-// [exportValueMaxBytes], its content is walked for the spans of its tool
-// results and the files it names, and every other value is passed over, its
-// bytes checked and none held. The floor's last-request figure
-// ([measuredPrompt]) is read in the same walk.
+// ONE WALK of the export ([scanExport]), on the scanner (internal/jsonscan),
+// which never holds a string. It owns the export's grammar, its names and its
+// frames, and hands each member to its visitor by the means the visitor asks
+// for it, fixed per visitor: passed, read as a word into a fixed buffer,
+// captured within [exportValueMaxBytes], or walked as a frame; a value past
+// its word or its capture is there, of its kind, and past. The meter is its
+// visitor ([exportMeter]) and asks what the walk it read by before read, which
+// is its oracle (TestTheMeterReadsAnExportAsItsWalkDid, whole and in pieces of
+// 17 bytes): each message's small values captured, its content walked for the
+// spans of its tool results and the files it names, and every other value
+// passed over, its bytes checked and none held. The floor's last-request
+// figure ([measuredPrompt]) is read in the same walk.
+//
+// ITS PACE: the take's pipe waits on the meter, so the walk keeps up with the
+// one it replaced (BenchmarkTheMeterAtItsBounds, one case a process on a
+// dedicated two-core slot, three runs, 255 MiB of plaintext, against that
+// walk): `{}` messages in 7.8 to 8.2 s (0.09 µs a message) against 27.9 to
+// 31.3, a message that captured nothing counted with no decode; `{"type":
+// "idle"}` messages in 14.3 to 16.6 s (0.85 to 0.99 µs) against 14.7 to 17.4;
+// ordinary steps, each a call answered with a kibibyte, in 1.51 to 1.62 s (8
+// µs a step) against 1.40 to 1.64 (1.51 against 1.61 s over five reads in
+// one process); steps whose tokens are captured at the bound in 0.52 to 0.62
+// s against 0.67 to 0.84. It holds at most 2 MiB live (GOGC=10), its heap at
+// most 5 MiB at the default.
 //
 // # The OpenCode releases the count reads
 //

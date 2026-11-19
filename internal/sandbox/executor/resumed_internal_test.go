@@ -1133,22 +1133,29 @@ func benchLines(plain int) []byte {
 // main thread for the floor's figure, the count and the next request's
 // estimate) against the take's scrub of the same archive, at a 32 MiB
 // archive's plaintext (about 118 MiB): fed by the take's pipe, the meter must
-// take no longer than the scrub. Of ordinary lines, and as _text_blocks of
-// results of text blocks, each an element the estimate walks.
+// take no longer than the scrub. Of ordinary lines, and of
+// results of text blocks, each an element the estimate walks; and an OpenCode
+// export's meter against the walk it kept before ([benchExportMeter]). Each
+// case builds its archive inside its own run, so a run of one holds no other.
 func BenchmarkTheMeterAtItsBounds(b *testing.B) {
-	benchMeterAndScrub(b, "", benchLines(118<<20))
-	blocks := `[{"type":"tool_result","tool_use_id":"toolu_1","content":[` +
-		strings.Repeat(`{"type":"text","text":"a few words of a tool's output"},`, 2000) + `""]}]`
-	var body bytes.Buffer
-	for n := 0; body.Len() < 118<<20; n += 2 {
-		body.WriteString(cntUser(fmt.Sprintf("u%d", n), fmt.Sprintf("u%d", n+1), blocks) + "\n")
-	}
-	benchMeterAndScrub(b, "_text_blocks", body.Bytes())
+	b.Run("claude_code", func(b *testing.B) {
+		benchMeterAndScrub(b, benchLines(118<<20))
+	})
+	b.Run("claude_code_text_blocks", func(b *testing.B) {
+		blocks := `[{"type":"tool_result","tool_use_id":"toolu_1","content":[` +
+			strings.Repeat(`{"type":"text","text":"a few words of a tool's output"},`, 2000) + `""]}]`
+		var body bytes.Buffer
+		for n := 0; body.Len() < 118<<20; n += 2 {
+			body.WriteString(cntUser(fmt.Sprintf("u%d", n), fmt.Sprintf("u%d", n+1), blocks) + "\n")
+		}
+		benchMeterAndScrub(b, body.Bytes())
+	})
+	b.Run("opencode", benchExportMeter)
 }
 
 // benchMeterAndScrub measures the meter and the scrub of an archive of body,
-// the main thread, each named with suffix.
-func benchMeterAndScrub(b *testing.B, suffix string, body []byte) {
+// the main thread.
+func benchMeterAndScrub(b *testing.B, body []byte) {
 	thread, _ := claudeMainThread(ctSession)
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
@@ -1168,7 +1175,7 @@ func benchMeterAndScrub(b *testing.B, suffix string, body []byte) {
 	}
 	archive := buf.Bytes()
 	b.Logf("an archive of %d bytes, %d of plaintext", len(archive), len(body))
-	b.Run("meter"+suffix, func(b *testing.B) {
+	b.Run("meter", func(b *testing.B) {
 		for b.Loop() {
 			if _, count, _, err := meterArchive(b.Context(), bytes.NewReader(archive), ctSession,
 				"2.1.322", testPass(b)); err != nil || count == nil {
@@ -1176,7 +1183,7 @@ func benchMeterAndScrub(b *testing.B, suffix string, body []byte) {
 			}
 		}
 	})
-	b.Run("scrub"+suffix, func(b *testing.B) {
+	b.Run("scrub", func(b *testing.B) {
 		for b.Loop() {
 			reopen := func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(archive)), nil }
 			if err := scrubArchive(archiveTar, bytes.NewReader(archive), reopen, io.Discard,

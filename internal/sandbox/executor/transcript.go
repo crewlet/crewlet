@@ -1486,15 +1486,24 @@ type openCodeKeys struct {
 // it is none of them.
 func (k *openCodeKeys) see(names map[string]int, name []byte) int {
 	i, ok := names[string(name)]
+	if !ok {
+		i = -1
+	}
+	k.note(i)
+	return i
+}
+
+// note notes a name by its index in the decode's set, -1 where it is none of
+// them: the export walk's facts ([scanExport]) and the decode's alike.
+func (k *openCodeKeys) note(i int) {
 	switch {
-	case !ok:
+	case i < 0:
 		k.other = true
-		return -1
+		return
 	case k.seen&(1<<i) != 0:
 		k.twice = true
 	}
 	k.seen |= 1 << i
-	return i
 }
 
 // has reports whether the decode met the name of index i.
@@ -1838,7 +1847,7 @@ func decodeOpenCodeMessage(raw json.RawMessage) openCodeMessageWire {
 // field's zero value, a time that is no object as none, and the rest of the
 // message as written. Its tokens, its error and when a step settled are left
 // as none: a person's transcript reads none of them, and the context a session
-// carries reads them off the export itself ([exportMessageAt]).
+// carries reads them off the export itself ([exportMeter]).
 func (w openCodeMessageWire) message() openCodeMessage {
 	m := openCodeMessage{Type: openCodeKind(looseString(w.Type)), Text: looseString(w.Text), Content: w.Content,
 		Status: looseString(w.Status), Summary: looseString(w.Summary)}

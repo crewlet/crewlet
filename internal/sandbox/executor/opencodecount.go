@@ -4,7 +4,6 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 
@@ -53,7 +52,7 @@ func meterExport(ctx context.Context, r io.Reader, release string) (exportReadin
 	if !openCodeCountRead(release) {
 		callers = callers.with(sandbox.CountRelease)
 	}
-	figure, err := walkExport(ctx, r, &count)
+	figure, err := countExport(ctx, r, &count)
 	if err != nil {
 		return exportReading{count: count.count(callers.with(sandbox.CountUnread))}, err
 	}
@@ -238,16 +237,6 @@ func exportString(raw json.RawMessage) (string, bool) {
 	return s, true
 }
 
-// exportNameBytes is the most of a name the walk reads: one byte past the
-// longest it looks for (`messages`), so a longer name reads as none of them,
-// and at least a rune's bytes, the least the scanner reads a text into.
-const exportNameBytes = len("messages") + 1
-
-// exportWordBytes is the most of a content item's kind or a file's media type
-// the walk reads: one past the longest it compares (`application/pdf`), so a
-// longer one is none of them.
-const exportWordBytes = len("application/pdf") + 1
-
 // exportValueMaxBytes is the most of one of a message's small values the walk
 // holds: the scanner's own read buffer, 64 KiB, so a value within it is
 // captured from the buffer it is already in. A message's kind, status and id
@@ -260,411 +249,240 @@ const exportValueMaxBytes = 64 << 10
 // null, so the step ended on an error, which is all a reader reads of one.
 var errorPastBound = json.RawMessage("true")
 
-// walkExport reads r, an OpenCode export gzipped, once on the scanner, within
-// ctx, asked before each message: each message to count in order, and the
-// floor's figure, its last message that measured a prompt ([measuredPrompt]).
-// An error where the export is no export, or does not read to its end.
-func walkExport(ctx context.Context, r io.Reader, count *openCodeCountReading) (int64, error) {
+// countExport reads r, an OpenCode export gzipped, once on the export walk
+// ([scanExport]), within ctx: each message to count in order, and the floor's
+// figure, its last message that measured a prompt ([measuredPrompt]). An
+// error where the export is no export, or does not read to its end.
+func countExport(ctx context.Context, r io.Reader, count *openCodeCountReading) (int64, error) {
 	zr, err := gzip.NewReader(r)
 	if err != nil {
 		return 0, err
 	}
-	sc := jsonscan.New(zr)
-	if err = expectKind(sc, jsonscan.ObjectStart); err != nil {
+	m := &exportMeter{count: count}
+	if err = scanExport(ctx, zr, m); err != nil {
 		return 0, err
 	}
-	var (
-		last  int64
-		lists int
-		name  [exportNameBytes]byte
-	)
-	for {
-		k, err := sc.Next()
-		switch {
-		case err != nil:
-			return 0, err
-		case k == jsonscan.ObjectEnd:
-			return last, nil
-		}
-		key, err := shortName(sc, name[:])
-		if err != nil {
-			return 0, err
-		}
-		if key != "messages" {
-			if err = skipNext(sc); err != nil {
-				return 0, err
-			}
-			continue
-		}
-		// A LIST GIVEN TWICE: the figure reads both, as it always has, and the
-		// count reads neither, since which a reader keeps is the reader's.
-		if lists++; lists > 1 {
-			count.unread = true
-		}
-		if err = expectKind(sc, jsonscan.ArrayStart); err != nil {
-			return 0, err
-		}
-		for {
-			k, err := sc.Next()
-			if err != nil {
-				return 0, err
-			}
-			if k == jsonscan.ArrayEnd {
-				break
-			}
-			if err = ctx.Err(); err != nil {
-				return 0, err
-			}
-			m, err := exportMessageAt(sc, k)
-			if err != nil {
-				return 0, err
-			}
-			msg, _, err := m.wire.message()
-			if err != nil {
-				return 0, err
-			}
-			if n, measured := measuredPrompt(msg); measured {
-				last = n
-			}
-			count.message(m, msg.Type)
-		}
-	}
+	return m.last, nil
 }
 
-// exportMessageAt reads one message of an export, its first token of kind
-// first: its small values by their exact names, captured at
-// [exportValueMaxBytes] and decoded by [openCodeMeasuredWire]'s one rule; its
-// content and its files walked; everything else passed over.
+// meterAsks is what the meter reads of an export: a message's small values,
+// captured, its content's tool calls and its files.
+var meterAsks = exportAsksOf(map[exportFrame]map[int]exportMeans{
+	frameMessage: {msgID: meansCapture, msgType: meansCapture, msgTime: meansCapture, msgTokens: meansCapture,
+		msgError: meansCapture, msgStatus: meansCapture, msgModel: meansCapture, msgContent: meansFrame,
+		msgFiles: meansFrame},
+	frameItem:       {itemType: meansWord, itemState: meansFrame},
+	frameState:      {stateContent: meansFrame, stateError: meansFrame},
+	frameAnswerPart: {partType: meansWord, partMime: meansWord},
+	frameFile:       {fileType: meansWord, fileMime: meansWord},
+})
+
+// exportMeter is the meter as the export walk's visitor: each message's small
+// values by their exact names, captured at [exportValueMaxBytes] and decoded
+// by [openCodeMeasuredWire]'s one rule; of each tool call the spans of its
+// answer and its failure, and the files its answer holds; a person's files.
 //
 // HELD TO [exportValueMaxBytes]: an error past it is one (it is no null), an
 // id, a status or a model past it does not read, and a kind, a time or tokens
-// past it is no message OpenCode writes, which the walk reads as an export it
+// past it is no message OpenCode writes, which the meter reads as an export it
 // cannot read, rather than hold whatever a box wrote there.
-func exportMessageAt(sc *jsonscan.Scanner, first jsonscan.Kind) (exportMessage, error) {
-	var m exportMessage
-	if first != jsonscan.ObjectStart {
-		return m, fmt.Errorf("%w: it holds %s where a message belongs", errNotExport, first)
-	}
-	start := sc.Offset()
-	var name [exportNameBytes]byte
-	for {
-		k, err := sc.Next()
-		switch {
-		case err != nil:
-			return m, err
-		case k == jsonscan.ObjectEnd:
-			m.span = sc.Offset() + 1 - start
-			return m, nil
-		}
-		key, err := shortName(sc, name[:])
-		if err != nil {
-			return m, err
-		}
-		var to *json.RawMessage
-		switch key {
-		case "id":
-			to = &m.id
-		case "type":
-			to = &m.wire.Type
-		case "time":
-			to = &m.wire.Time
-		case "tokens":
-			to = &m.wire.Tokens
-		case "error":
-			to = &m.wire.Error
-		case "status":
-			to = &m.status
-		case "model":
-			to = &m.model
-		case "content":
-			if err = m.content(sc); err != nil {
-				return m, err
-			}
-			continue
-		case "files":
-			if err = m.filesOf(sc); err != nil {
-				return m, err
-			}
-			continue
-		default:
-			if err = skipNext(sc); err != nil {
-				return m, err
-			}
-			continue
-		}
-		if _, err = sc.Next(); err != nil {
-			return m, err
-		}
-		raw, whole, err := sc.Capture(exportValueMaxBytes)
-		switch {
-		case err != nil:
-			return m, err
-		case whole:
-			*to = append(json.RawMessage(nil), raw...)
-		case key == "error":
-			*to = errorPastBound
-		case key == "id" || key == "status" || key == "model":
-			// No string, so it reads as none, and the count that needs it
-			// is unread.
-			*to = errorPastBound
-		default:
-			return m, fmt.Errorf("%w: a message's %s runs past %d bytes", errNotExport, key,
-				exportValueMaxBytes)
-		}
-	}
+type exportMeter struct {
+	count *openCodeCountReading
+	// last is the floor's figure; lists how many `messages` lists were met.
+	last  int64
+	lists int
+	// m is the message being read, its captures in held, a buffer each,
+	// reused message to message; captured says m holds one.
+	m        exportMessage
+	held     [exportMembersMax][]byte
+	captured bool
+	// The item, its tool call's state and the answer's part or file being
+	// read: the item a tool's, its results, files and oddity; the state's
+	// charge, files and oddity; the part's kind text and its type a PDF.
+	tool                  bool
+	results, charge       int64
+	itemFiles, stateFiles countMarks
+	itemOdd, stateOdd     bool
+	partText, partPDF     bool
 }
 
-// content walks a message's content, the list of an assistant step's items: of
-// each tool call, the spans of its answer and its failure, and the files its
-// answer holds. Content of another shape is odd (null is none).
-func (m *exportMessage) content(sc *jsonscan.Scanner) error {
-	k, err := sc.Next()
-	if err != nil {
-		return err
+func (*exportMeter) asks() *exportAsks { return meterAsks }
+
+// open starts what a frame's members fold into.
+func (e *exportMeter) open(f exportFrame) error {
+	switch f {
+	case frameMessages:
+		// A LIST GIVEN TWICE: the figure reads both, as it always has, and the
+		// count reads neither, since which a reader keeps is the reader's.
+		if e.lists++; e.lists > 1 {
+			e.count.unread = true
+		}
+	case frameMessage:
+		// A MESSAGE THAT CAPTURED NOTHING LEAVES NOTHING TO CLEAR, so a list of
+		// empty messages costs no clearing of one.
+		if e.captured {
+			e.m, e.captured = exportMessage{}, false
+		} else {
+			e.m.span, e.m.results, e.m.files, e.m.odd = 0, 0, 0, false
+		}
+	case frameItem:
+		e.tool, e.results, e.itemFiles, e.itemOdd = false, 0, 0, false
+	case frameState:
+		e.charge, e.stateFiles, e.stateOdd = 0, 0, false
+	case frameAnswerPart, frameFile:
+		e.partText, e.partPDF = false, false
 	}
-	switch k {
-	case jsonscan.Null:
+	return nil
+}
+
+// member folds one member, a key written twice as the meter always has: a
+// capture and a word by its last, a list's marks and charges by every one.
+func (e *exportMeter) member(f exportFrame, i int, v exportValue) error {
+	switch f {
+	case frameMessage:
+		return e.message(i, v)
+	case frameItem:
+		switch {
+		case i == itemType:
+			e.tool = v.is("tool")
+		case v.kind == jsonscan.ObjectStart:
+			e.results, e.itemFiles, e.itemOdd = e.charge, e.stateFiles, e.stateOdd
+		default:
+			// A STATE OF NO OBJECT: OpenCode writes an object, so another value
+			// is odd (null is none).
+			e.results, e.itemFiles, e.itemOdd = 0, 0, v.kind != jsonscan.Null
+		}
+	case frameState:
+		// AN ANSWER OR A FAILURE IS CHARGED AT A QUARTER OF ITS SPAN, a
+		// container's, and one that is neither a container nor null is odd.
+		switch v.kind {
+		case jsonscan.Null:
+		case jsonscan.ArrayStart, jsonscan.ObjectStart:
+			e.charge += quarter(v.span)
+		default:
+			e.stateOdd = true
+		}
+	case frameAnswerPart:
+		switch i {
+		case partType:
+			e.partText = v.is("text")
+		case partMime:
+			e.partPDF = v.is("application/pdf")
+		}
+	case frameFile:
+		if i == fileMime {
+			e.partPDF = v.is("application/pdf")
+		}
+	}
+	return nil
+}
+
+// message folds one member of a message: content and files that are no list
+// are odd and an unknown file (null is none); every other is a capture.
+func (e *exportMeter) message(i int, v exportValue) error {
+	var to *json.RawMessage
+	switch i {
+	case msgContent:
+		e.m.odd = e.m.odd || v.kind != jsonscan.Null && v.kind != jsonscan.ArrayStart
 		return nil
-	case jsonscan.ArrayStart:
+	case msgFiles:
+		if v.kind != jsonscan.Null && v.kind != jsonscan.ArrayStart {
+			e.m.files = e.m.files.with(sandbox.CountMedia)
+		}
+		return nil
+	case msgID:
+		to = &e.m.id
+	case msgType:
+		to = &e.m.wire.Type
+	case msgTime:
+		to = &e.m.wire.Time
+	case msgTokens:
+		to = &e.m.wire.Tokens
+	case msgError:
+		to = &e.m.wire.Error
+	case msgStatus:
+		to = &e.m.status
+	case msgModel:
+		to = &e.m.model
+	}
+	e.captured = true
+	switch {
+	case !v.past:
+		e.held[i] = append(e.held[i][:0], v.text...)
+		*to = e.held[i]
+	case i == msgError, i == msgID, i == msgStatus, i == msgModel:
+		// An error past the bound is one; an id, a status or a model past it
+		// is no string, so it reads as none, and the count that needs it is
+		// unread.
+		*to = errorPastBound
 	default:
-		m.odd = true
-		return sc.Skip()
+		return fmt.Errorf("%w: a message's %s runs past %d bytes", errNotExport, exportMessagePast[i],
+			exportValueMaxBytes)
 	}
-	for {
-		k, err := sc.Next()
-		switch {
-		case err != nil:
-			return err
-		case k == jsonscan.ArrayEnd:
-			return nil
-		case k != jsonscan.ObjectStart:
-			if err = sc.Skip(); err != nil {
-				return err
-			}
-			continue
-		}
-		var (
-			kind    string
-			results int64
-			files   countMarks
-			odd     bool
-			name    [exportNameBytes]byte
-			word    [exportWordBytes]byte
-		)
-		for {
-			k, err := sc.Next()
-			if err != nil {
-				return err
-			}
-			if k == jsonscan.ObjectEnd {
-				break
-			}
-			key, err := shortName(sc, name[:])
-			if err != nil {
-				return err
-			}
-			switch key {
-			case "type":
-				if kind, err = shortString(sc, word[:]); err != nil {
-					return err
-				}
-			case "state":
-				if results, files, odd, err = toolState(sc); err != nil {
-					return err
-				}
-			default:
-				if err = skipNext(sc); err != nil {
-					return err
-				}
-			}
-		}
-		if kind == "tool" {
-			m.results += results
-			m.files |= files
-			m.odd = m.odd || odd
-		}
-	}
+	return nil
 }
 
-// toolState walks a tool call's state: the charge of its answer (`content`)
-// and its failure (`error`), each a quarter of its span rounded up, and the
-// files its answer holds. An answer or a failure that is neither a container
-// nor null is odd: OpenCode writes a list and an object, and the walk reads
-// no span of a scalar.
-func toolState(sc *jsonscan.Scanner) (int64, countMarks, bool, error) {
-	k, err := sc.Next()
-	if err != nil {
-		return 0, 0, false, err
+// exportMessagePast names the members of a message past whose bound the meter
+// reads no export.
+var exportMessagePast = map[int]string{msgType: "type", msgTime: "time", msgTokens: "tokens"}
+
+// element folds an element of a list that is no object: a file in an answer
+// or a person's files, an unknown one; a message, no export.
+func (e *exportMeter) element(f exportFrame, k jsonscan.Kind) error {
+	switch f {
+	case frameMessages:
+		return fmt.Errorf("%w: it holds %s where a message belongs", errNotExport, k)
+	case frameAnswer:
+		e.stateFiles = e.stateFiles.with(sandbox.CountMedia)
+	case frameFiles:
+		e.m.files = e.m.files.with(sandbox.CountMedia)
 	}
-	if k != jsonscan.ObjectStart {
-		return 0, 0, k != jsonscan.Null, sc.Skip()
-	}
-	var (
-		charge int64
-		files  countMarks
-		odd    bool
-		name   [exportNameBytes]byte
-	)
-	for {
-		k, err := sc.Next()
-		if err != nil {
-			return 0, 0, false, err
-		}
-		if k == jsonscan.ObjectEnd {
-			return charge, files, odd, nil
-		}
-		key, err := shortName(sc, name[:])
-		if err != nil {
-			return 0, 0, false, err
-		}
-		if key != "content" && key != "error" {
-			if err = skipNext(sc); err != nil {
-				return 0, 0, false, err
+	return nil
+}
+
+// close ends a frame: a message counted, an item's tool call charged to it, a
+// part or file marked.
+func (e *exportMeter) close(f exportFrame, v exportValue) error {
+	switch f {
+	case frameMessage:
+		e.m.span = v.span
+		// A MESSAGE THAT CAPTURED NOTHING decodes to no kind and no measure, so
+		// it is counted with no decode: an empty message costs no allocation.
+		var msg openCodeMessage
+		if e.captured {
+			var err error
+			if msg, _, err = e.m.wire.message(); err != nil {
+				return err
 			}
-			continue
 		}
-		k, err = sc.Next()
-		if err != nil {
-			return 0, 0, false, err
+		if n, measured := measuredPrompt(msg); measured {
+			e.last = n
 		}
-		start := sc.Offset()
+		e.count.message(e.m, msg.Type)
+	case frameItem:
+		if e.tool {
+			e.m.results += e.results
+			e.m.files |= e.itemFiles
+			e.m.odd = e.m.odd || e.itemOdd
+		}
+	case frameAnswerPart:
+		// IN A TOOL'S ANSWER a text part is no file; every other is one, a PDF
+		// where its type says so.
 		switch {
-		case k == jsonscan.Null:
-			continue
-		case key == "content" && k == jsonscan.ArrayStart:
-			marks, itemsErr := fileItems(sc, false)
-			if itemsErr != nil {
-				return 0, 0, false, itemsErr
-			}
-			files |= marks
-		case k == jsonscan.ArrayStart || k == jsonscan.ObjectStart:
-			if err = sc.Skip(); err != nil {
-				return 0, 0, false, err
-			}
+		case e.partText:
+		case e.partPDF:
+			e.stateFiles = e.stateFiles.with(sandbox.CountPDF)
 		default:
-			odd = true
-			if err = sc.Skip(); err != nil {
-				return 0, 0, false, err
-			}
-			continue
+			e.stateFiles = e.stateFiles.with(sandbox.CountMedia)
 		}
-		// THE CONTAINER'S CLOSING TOKEN IS CURRENT: its span ends past it.
-		charge += quarter(sc.Offset() + 1 - start)
-	}
-}
-
-// filesOf walks a person's message's files: every file is a mark, a PDF's
-// [sandbox.CountPDF] and any other's [sandbox.CountMedia]; files that are no
-// list are read as an unknown file (null is none).
-func (m *exportMessage) filesOf(sc *jsonscan.Scanner) error {
-	k, err := sc.Next()
-	if err != nil {
-		return err
-	}
-	switch k {
-	case jsonscan.Null:
-		return nil
-	case jsonscan.ArrayStart:
-		marks, err := fileItems(sc, true)
-		m.files |= marks
-		return err
-	}
-	m.files = m.files.with(sandbox.CountMedia)
-	return sc.Skip()
-}
-
-// fileItems walks a list whose ArrayStart is current, to its ArrayEnd: the
-// marks of the files it holds. In a tool's answer (all false) an item whose
-// `type` is `text` is text and no file; every other item, and in a person's
-// files (all true) every item, is a file, a PDF where its `mime` says so.
-func fileItems(sc *jsonscan.Scanner, all bool) (countMarks, error) {
-	var marks countMarks
-	for {
-		k, err := sc.Next()
-		switch {
-		case err != nil:
-			return 0, err
-		case k == jsonscan.ArrayEnd:
-			return marks, nil
-		case k != jsonscan.ObjectStart:
-			marks = marks.with(sandbox.CountMedia)
-			if err = sc.Skip(); err != nil {
-				return 0, err
-			}
-			continue
-		}
-		var (
-			kind, mime string
-			name       [exportNameBytes]byte
-			word       [exportWordBytes]byte
-		)
-		for {
-			k, err := sc.Next()
-			if err != nil {
-				return 0, err
-			}
-			if k == jsonscan.ObjectEnd {
-				break
-			}
-			key, err := shortName(sc, name[:])
-			if err != nil {
-				return 0, err
-			}
-			switch key {
-			case "type":
-				kind, err = shortString(sc, word[:])
-			case "mime":
-				mime, err = shortString(sc, word[:])
-			default:
-				err = skipNext(sc)
-			}
-			if err != nil {
-				return 0, err
-			}
-		}
-		switch {
-		case !all && kind == "text":
-		case mime == "application/pdf":
-			marks = marks.with(sandbox.CountPDF)
-		default:
-			marks = marks.with(sandbox.CountMedia)
+	case frameFile:
+		if e.partPDF {
+			e.m.files = e.m.files.with(sandbox.CountPDF)
+		} else {
+			e.m.files = e.m.files.with(sandbox.CountMedia)
 		}
 	}
-}
-
-// shortName is the current name's or string's decoded text where it fits in
-// buf less a byte, and "" where it is longer, its rest passed over by the next
-// Next.
-func shortName(sc *jsonscan.Scanner, buf []byte) (string, error) {
-	read := 0
-	for read < len(buf) {
-		n, err := sc.Read(buf[read:])
-		read += n
-		if errors.Is(err, io.EOF) {
-			return string(buf[:read]), nil
-		}
-		if errors.Is(err, io.ErrShortBuffer) {
-			return "", nil
-		}
-		if err != nil {
-			return "", err
-		}
-	}
-	return "", nil
-}
-
-// shortString reads the value after a name: its text where it is a string that
-// fits in buf less a byte, and "" for a longer one or a value of another kind,
-// passed over.
-func shortString(sc *jsonscan.Scanner, buf []byte) (string, error) {
-	k, err := sc.Next()
-	if err != nil {
-		return "", err
-	}
-	if k != jsonscan.String {
-		return "", sc.Skip()
-	}
-	return shortName(sc, buf)
+	return nil
 }
 
 // expectKind reads the next token, an error where it is not of kind want.
@@ -677,12 +495,4 @@ func expectKind(sc *jsonscan.Scanner, want jsonscan.Kind) error {
 		return fmt.Errorf("%w: it holds %s where %s belongs", errNotExport, k, want)
 	}
 	return nil
-}
-
-// skipNext passes over the value after a name.
-func skipNext(sc *jsonscan.Scanner) error {
-	if _, err := sc.Next(); err != nil {
-		return err
-	}
-	return sc.Skip()
 }
