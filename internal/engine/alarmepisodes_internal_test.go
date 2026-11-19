@@ -73,7 +73,7 @@ func TestEveryAlarmTransitionIsKeptAsAnEpisode(t *testing.T) {
 	// A BOUND ON THE WAIT, never its verdict: the loop writes both at once.
 	select {
 	case <-log.done:
-	case <-time.After(time.Minute):
+	case <-time.After(time.Minute): //fixedwait:liveness
 		t.Fatal("the clear was never written")
 	}
 	log.mu.Lock()

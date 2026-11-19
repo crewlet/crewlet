@@ -48,9 +48,10 @@ test("the dashboard's shipped sentences carry no em dash", () => {
  * "Color", so adding a seat and setting the brand spelled one word two ways.
  * Only prose is judged (a text with a space, or one that starts with a
  * capital): a CSS property, a data key and a dotted path are the platform's
- * names, as is a font family's own name.
+ * names, as is a font family's own name, and so is a property a stylesheet's
+ * text declares (`color:`), which a page's own runtime ships as one string.
  */
-const COLOR = /(?<![-.\w])colou?r(?:s|ed|ing)?(?![-.\w])/gi;
+const COLOR = /(?<![-.\w])colou?r(?:s|ed|ing)?(?![-.\w])(?!\s*:)/gi;
 const FONT_NAMES = /\b(?:Apple|Noto|Segoe UI) Color Emoji\b/g;
 
 test("the dashboard's shipped prose spells colour one way", () => {
