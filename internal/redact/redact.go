@@ -5116,10 +5116,15 @@ func (c *claims) endingApart(s [2]int, out [][2]int) ([2]int, [][2]int) {
 // readsAValue reports whether the claims read a value under the key of p, a
 // password's claim, or its read stopped on a line holding the password's
 // marker: a second pass reads there the value the first redacted, and cuts
-// the block the first cut ([claims.apart]).
+// the block the first cut ([claims.apart]). A window places the start of a
+// value it holds none of, and of a word that names none, one past its end
+// ([keyStage.claimsIn]), where it has no line to read.
 func (c *claims) readsAValue(p [7]int) bool {
 	if p[3] > p[2] {
 		return true
+	}
+	if p[2] > len(c.text) {
+		return false
 	}
 	at := max(p[2], 0)
 	end, _ := lineAt(c.text, at)
