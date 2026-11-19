@@ -406,28 +406,15 @@ var ErrMCPDetailUnavailable = errors.New("queries: this node keeps no copy of th
 
 // MCPServer answers one server, whole: `GET /mcp-servers/{name}`.
 //
-// A ROUTE AND NOT A QUESTION, until a screen watches it: the question registry
-// is for answers a room keeps current, and refuses one no room asks for.
-//
-// THE FLEET'S LISTINGS, not this node's bridges: a per-agent server's children
-// run only on the nodes holding its seats, so this node may run none of them.
-// Each live node's current listing counts, and only that
-// ([coord.LiveMCPListings]): a node that died, drained or restarted stops
-// counting with its presence, before any sweep removes its record.
-//
-// ITS INSTANCES ARE READ WHERE THEY LIVE: every node whose last beat reports
-// an instance of it, or that carried no report, is asked at query time
-// ([Sources.MCPInstances]), and each is named with whether it answered.
-//
-// THE ADMIN'S READING, WHOLE: the row names the launch command and the first
-// line of each failure, the dependants each block and secret naming the
-// server, and the resolved facts the headers or variables a credential goes
-// in. A route answers a member [MemberMCPServer] of it ([MCPReading]), as
-// `mcp_servers_status` answers a member its own reading. [ErrBadParams] for an
-// empty name, [ErrNotFound] for a server no
-// node configures, reports or lists, [ErrMCPDetailUnavailable] on a node with
-// no copy, and any other error is a store that could not be read or a read of
-// the instances this node could not make.
+// A ROUTE, NOT A QUESTION, until a screen watches it (the registry refuses an
+// answer no room asks for). THE FLEET'S LISTINGS, not this node's bridges: a
+// per-agent server's children run only where its seats are; only each live
+// node's listing counts ([coord.LiveMCPListings]). INSTANCES ARE READ WHERE
+// THEY LIVE ([Sources.MCPInstances]), each named with whether it answered. THE
+// ADMIN'S READING, WHOLE; a member gets [MemberMCPServer] ([MCPReading]).
+// [ErrBadParams] for an empty name, [ErrNotFound] for a server no node
+// configures, reports or lists, [ErrMCPDetailUnavailable] on a node with no
+// copy; any other error is a failed store or instance read.
 func (s Sources) MCPServer(ctx context.Context, name string) (MCPServerAnswer, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {

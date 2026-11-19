@@ -483,9 +483,9 @@ const packReleaseFloor = 5 * time.Second
 // its staging directory gone, and every other save's archive as it was. EVERY
 // SAVE IN A STAGING DIRECTORY OF ITS OWN ([Paths.SessionSaveStaging]), named
 // here for that save alone, as a pack on demand's is: two saves of one taker
-// at once never clear each other's lists or archive. A save packed and never
-// taken stays in the box until the clear before its next run, which removes
-// every save's files.
+// at once never clear each other's lists or archive. A save never taken is
+// removed by its release ([Runner.ReleaseSave]), or else by the clear before
+// its next run, which removes every save's files.
 //
 // A zero description where there is nothing to save: a harness whose session
 // the engine packs none of beside its run (OpenCode's, [saver]), a run whose
@@ -519,6 +519,50 @@ func (r *Runner) PackSave(ctx context.Context, box sandbox.Sandbox, taker string
 		return sandbox.SessionArchive{}, err
 	}
 	return *described, nil
+}
+
+// Saves reports whether this runner packs saves of a session its run still
+// works in ([Runner.PackSave]): only a runner of a harness that is a [saver],
+// Claude Code's. Asked before anything else of a save, so a run on a harness
+// that packs none (OpenCode's) costs its node no slot, no box call and no read
+// of the store.
+func (r *Runner) Saves() bool {
+	_, ok := r.harness.(saver)
+	return ok
+}
+
+// Streamed is how far the event stream of the job in box has run, in bytes:
+// the size of the file the wrapper redirects the harness's stdout into
+// ([Output.Stdout]), Claude Code's stream-json and OpenCode's event log, read
+// by its size alone, as [Runner.archiveAt] reads an archive's. That stream,
+// and not the session's transcript, because it is the one file every step of
+// the run moves: a subagent's calls and results are printed on it too, where
+// they reach no line of the main thread's transcript, so a session whose only
+// work is a subagent's still reads as moved. Zero where the job has written
+// none, a missing file reading as empty.
+func (r *Runner) Streamed(ctx context.Context, box sandbox.Sandbox) (int64, error) {
+	tail, err := box.ReadTail(ctx, r.harness.Output(PathsFor(box)).Stdout, 0)
+	if err != nil {
+		return 0, fmt.Errorf("executor: reading how far %s's event stream has run: %w", r.harness.Name(), err)
+	}
+	return tail.Size, nil
+}
+
+// ReleaseSave removes the save at path ([Runner.PackSave]) from box, for a
+// save no take will read: one its saver gave up on between its pack and its
+// take, which no take's release removes. Within the bound a take's release has
+// ([Runner.dropPack]), past ctx's cancellation, which is often what gave the
+// save up; a box that does not answer it leaves the file to the clear before
+// its next run, said in the log. A path that is no save of the box's
+// ([savePath]) is refused and nothing is removed: a release removes one save's
+// archive, never another file of the box.
+func (r *Runner) ReleaseSave(ctx context.Context, box sandbox.Sandbox, path string) error {
+	if !savePath(PathsFor(box), path) {
+		return fmt.Errorf("executor: %q is no save a runner packed in the box, and a release removes a save "+
+			"and nothing else", path)
+	}
+	r.dropPack(ctx, box, path)
+	return nil
 }
 
 // openSave streams the save at path ([Runner.PackSave], [Paths.SessionSave]),

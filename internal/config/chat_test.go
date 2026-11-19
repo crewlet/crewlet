@@ -18,19 +18,18 @@ import (
 const mattermostBlock = "integrations:\n  mattermost:\n    enabled: true\n" +
 	"    url: https://chat.example.com\n    team: acme\n"
 
-// THE THIRD AXIS DERIVES FROM THE VENDOR IT WOULD DUPLICATE, exactly as the
-// tracker and the knowledge base do.
+// THE THIRD AXIS DERIVES FROM THE VENDOR IT WOULD DUPLICATE, as the tracker
+// and the knowledge base do.
 //
 // The signal is the BLOCK'S PRESENCE and nothing inside it, because every
-// setting a chat block carries has a default: a company that wrote
-// `mattermost: {}` has said where its people are, and a company that wrote
-// nothing at all has said its seats need somewhere to talk.
+// setting a chat block carries has a default: `mattermost: {}` says where a
+// company's people are, and writing nothing says its seats need somewhere to
+// talk.
 //
-// AND THE FIELD'S DESCRIPTION NAMES EVERY SOURCE. It is what an editor shows
-// beside `chat.backend`, and it once left out the org-level Slack block, so a
-// company whose only Slack declaration was that block derived `vendor` with
-// nothing on the field saying why. Each vendor row carries the words the
-// description must contain for it.
+// AND THE FIELD'S DESCRIPTION NAMES EVERY SOURCE: an editor shows it beside
+// `chat.backend`, so a company whose only Slack declaration was the org-level
+// block would derive `vendor` with nothing saying why. Each vendor row carries
+// the words the description must contain.
 func TestTheChatBackendDerivesFromTheVendorPresent(t *testing.T) {
 	t.Parallel()
 	backend, ok := reflect.TypeFor[Chat]().FieldByName("Backend")

@@ -19,17 +19,15 @@ import (
 
 // HealthInterval is how often the shared tick broadcasts.
 //
-// ONE timer for the whole service, not one per connection. What it keeps
-// honest — the in-flight pill, the drain state, the live dot — is the same
-// answer for every tab, so a timer per client would multiply identical work by
-// the number of tabs open and make the load depend on how many people happened
-// to be watching.
+// ONE timer for the whole service, not one per connection: what it keeps
+// honest (the in-flight pill, the drain state, the live dot) is the same
+// answer for every tab, so a timer per client would make the load depend on
+// how many tabs are open.
 //
-// Five seconds: fast enough that a drain or a stall shows up while an operator
-// is still looking at it, slow enough that an idle company is not sending a
-// frame a second to every tab. It is also the interval a dashboard's staleness
-// rule is sized against — a live dot that has not been refreshed in two ticks
-// is a socket that is gone, not a company that is quiet.
+// Five seconds: fast enough that a drain or a stall shows while an operator
+// is looking, slow enough that an idle company sends no frame a second. The
+// dashboard's staleness rule is sized against it: a live dot not refreshed in
+// two ticks is a gone socket, not a quiet company.
 const HealthInterval = 5 * time.Second
 
 // Health is what the shared tick carries and the snapshot opens with: this
@@ -56,16 +54,14 @@ type HealthFunc func() Health
 // PostureFunc maps this node's own health onto the posture its sockets are
 // served in.
 //
-// IT TAKES THE HEALTH IT IS DECIDED FROM rather than reading the node again:
-// the health read reaches the coordination plane, the tick already does one
-// per interval, and a second read would describe a different instant — so a
-// tab could be told "shed" in its health frame while its pushes kept arriving
-// as though the node were serving.
+// It takes the health it is decided from rather than reading the node again:
+// the read reaches the coordination plane, and a second one would describe a
+// different instant, so a tab could be told "shed" in its health frame while
+// its pushes kept arriving as though the node were serving.
 //
-// The MAPPING lives with the caller (internal/api), not here, because the set
-// of node postures that take a node out of service is already declared there
-// and read by /ready. Two declarations of one set is how the probe and the
-// socket come to disagree about whether this node is serving.
+// The mapping lives with the caller (internal/api) because the set of postures
+// that take a node out of service is declared there and read by /ready; two
+// declarations of one set let the probe and the socket disagree.
 type PostureFunc func(Health) FramePosture
 
 // Service turns the engine's event stream into the pushes a dashboard mirrors.
@@ -181,26 +177,15 @@ type Options struct {
 	// is worse than no link.
 	Seats SeatsFunc
 
-	// Roster, Org and Tools are the three surfaces the dashboard renders
-	// from CONFIGURATION rather than from anything that has happened.
+	// Roster, Org and Tools are the surfaces the dashboard renders from
+	// CONFIGURATION: the projection holds what a seat is DOING, not that it
+	// exists. Functions, not values, as Seats is: an apply replaces the
+	// company, and a roster captured at boot would show a deleted role.
 	//
-	// The projection cannot answer any of them: it holds what a seat is
-	// DOING, so it can say a seat is mid-phase and not that the seat
-	// exists. Snapshot used to ask it for the agent list anyway, merging
-	// the live overlay onto a static roster of nil — an empty list, every
-	// connect, for ever on a company whose model was not answering.
-	//
-	// Functions, not values, for the same reason Seats is one: an apply
-	// replaces the company, and a roster captured at boot would keep
-	// showing a role a revision deleted.
-	//
-	// Org answers `any` because its shape is an explicit public type owned
-	// by package api (the anonymous org projection), and api imports this
-	// package, so naming the type here would be an import cycle. Tools
-	// answers `any` too: its row is internal/api/queries' (the shape
-	// `mcp_servers_status` sends as well), and that package reaches the
-	// engine, which a transport has no reason to build against. This
-	// service only carries either value to the wire and never reads into it.
+	// Org and Tools answer `any` because their shapes are owned by package
+	// api and internal/api/queries, and naming them here would be an import
+	// cycle (api imports this package) or tie a transport to the engine.
+	// This service only carries either value to the wire.
 	Roster    func() []map[string]any
 	Org       func() any
 	Tools     func() any
@@ -438,28 +423,14 @@ func (s *Service) SeedPauses(pauses []livestate.SeedPause) {
 
 // pushAgents sends the rows of the seats a change moved, named by agent id.
 //
-// A LIVE CALL'S HEAVY FIELDS GO ONLY WHEN THEY MOVED. A running phase moves
-// its seat's row five times a second while a round streams, and the prompt,
-// the committed rounds' narration, the tool calls and the rounds' timing move
-// once a round or once a call at most — so each push carries those only when
-// their version moved since the last push for the same call, and names every
-// version always (see livestate's detail.go for why a version and not a
-// delta: the hub drops a slow client's oldest envelope, and a tab must know
-// from the next push that it missed one).
-//
-// ONE PUSH AT A TIME, under pushMu, from reading the rows to queueing the
-// frame: what is left out is decided against what the previous push said,
-// so two pushes built side by side could each leave out a field the other
-// was the one to carry. Broadcast never blocks, so nothing waits long here.
-//
-// LEFT OUT ONCE, THEN MASKED PER AUDIENCE. What a push leaves out is decided
-// once per broadcast and shared by every reader, because the bookkeeping it
-// is decided against is per SEAT; the rows then travel as [AgentRows], which
-// the hub masks for each audience variant ([livestate.MaskRow]) — a reader
-// the seat's trail is not open to receives its status and no body, whichever
-// heavy fields this push carried. Masked first, each variant would need its
-// own bookkeeping, and two variants would each leave out a field the other
-// was the one to carry.
+// A live call's heavy fields (prompt, narration, tool calls, timing) go only
+// when their version moved since the last push for the call; every version is
+// always named (livestate's detail.go: the hub drops a slow client's oldest
+// envelope, and a tab must learn it missed one). One push at a time, under pushMu, from reading the rows to queueing the
+// frame: what is left out is decided against the previous push, so two
+// concurrent pushes could each leave out a field the other was to carry.
+// Leaving out is decided once per broadcast (bookkeeping is per SEAT); the hub
+// then masks the [AgentRows] per audience ([livestate.MaskRow]).
 func (s *Service) pushAgents(change livestate.Change, now time.Time) {
 	if len(change.Agents) == 0 {
 		return
@@ -531,20 +502,13 @@ func (s *Service) RefreshPlacement() {
 
 // Snapshot is the state a client receives the instant it connects.
 //
-// Built entirely from the in-memory projection — no database round trip on
-// connect. That is the whole reason the projection exists: a dashboard that
-// rebuilt agent history from the store on every reconnect would take a
-// thirty-day scan per tab, and would lose any call mid-flight while it did.
+// Built from the in-memory projection with no database round trip: a store
+// rebuild per reconnect would be a thirty-day scan per tab.
 //
-// It is the snapshot FOR ONE AUDIENCE, and carries only the keys whose push
-// that audience may receive (see [needs]), each SHAPED for it exactly as its
-// push is ([Shaped]): the seats' live calls masked to their status where the
-// audience may not read their trail, the executors likewise, and the org
-// tree in the variant the audience reads.
-//
-// The one read it makes is the seat leases ([Service.RefreshPlacement]),
-// because no event says which seats a node holds and a connecting tab must not
-// be handed a placement up to a tick old.
+// For one audience: only the keys whose push it may receive (see [needs]),
+// each [Shaped] as its push is. Its one read is the seat leases
+// ([Service.RefreshPlacement]): no event says which seats a node holds, and
+// a tab must not get a placement a tick old.
 func (s *Service) Snapshot(audience Audience) map[string]any {
 	s.RefreshPlacement()
 	full := map[string]any{
@@ -600,23 +564,16 @@ var snapshotKinds = map[string]Kind{
 }
 
 // Roster is the company's seat list as the `seats` push carries it: [Shaped],
-// so each reader is handed it masked to their reach over each seat — through
-// the hub on a push, through [ShapeFor] on its REST mirror.
+// so each reader is handed it masked to their reach, through the hub on a
+// push and through [ShapeFor] on its REST mirror. Exported because a config apply has to re-send it: a client merge cannot
+// express a deletion, so a removed role would keep its card until reload.
 //
-// Exported because a config apply has to re-send it: the client's own doc
-// says a merge cannot express a deletion, so a revision that removed a role
-// would leave its card on screen until someone reloaded the page.
-//
-// EACH SEAT'S STATUS AND NOT ITS CALL IN FLIGHT ([livestate.LiveState.MergeRoster]),
-// so the read grows with the seats and not with what they are doing: a call
-// carries its prompt, its rounds and its tool executions, and `GET /agents`
-// that carried every seat's was refused to the assistant (whose step reads 64
-// KiB) exactly while the company was busy. The call stays where a live view
-// reads it: the handshake snapshot ([Service.Snapshot]), the `agents` pushes,
-// and its own question, `live_call{agent_id}`. The `seats` push loses nothing
-// by it either: the client merges it over the row it holds, so a key it does
-// not carry keeps the call the pushes delivered, where a whole call on every
-// config apply overwrote it.
+// Each seat's status and not its call in flight
+// ([livestate.LiveState.MergeRoster]): the read grows with the seats, not
+// with what they do, and `GET /agents` stays under the assistant's 64 KiB
+// step read while busy. Calls stay in the snapshot, the `agents` pushes and
+// `live_call{agent_id}`; the client merges `seats` over its row, so a key not
+// carried keeps the call.
 func (s *Service) Roster() AgentRows {
 	s.RefreshPlacement()
 	return AgentRows(s.state.MergeRoster(s.currentRoster()))
@@ -696,26 +653,16 @@ func (s *Service) currentSchedules() any { return s.schedules() }
 func (s *Service) currentTools() any { return s.tools() }
 
 // CompanyPublished re-sends every push a published company changes — the
-// roster, the org tree, the tool catalogue and the schedules — to every client
-// whose audience receives it.
+// roster, org tree, tool catalogue and schedules — to every client whose
+// audience receives it. Whole payloads, each replacing its predecessor: no event corrects them and
+// an overlay merge cannot express a deletion, so a lost delta would render a
+// removed seat until reload. Runs on every published company, at boot as well
+// as on every apply ([engine.Engine.SetOnCompanyPublished]).
 //
-// WHOLE PAYLOADS, each replacing its predecessor: none of these is ever
-// corrected by an event, and an overlay merge cannot express a deletion, so a
-// screen that got a delta and lost it to backpressure would render a removed
-// seat until it reloaded.
-//
-// ON EVERY PUBLISHED COMPANY, at boot as well as on every apply
-// ([engine.Engine.SetOnCompanyPublished]).
-//
-// ONE METHOD NAMING ITS OWN KINDS, where there could be an exported
-// Broadcast(kind, data) and a caller in another package spelling each kind:
-// the payload each kind carries is this service's to build, and a caller that
-// paired a kind with the wrong payload would compile cleanly.
-//
-// AND EVERY OPEN SOCKET IS DECIDED AGAIN, after the re-sends, in memory
-// against the company just published: the seat its principal acts as may be
-// gone, and a lead may have moved off the team whose inbox the socket watches.
-// See lifetime.go.
+// One method naming its own kinds, not an exported Broadcast(kind, data): a
+// caller pairing a kind with the wrong payload would compile cleanly. Every open socket is then decided again, in memory against the company just
+// published: its seat may be gone, or a lead moved off the team whose inbox it
+// watches. See lifetime.go.
 func (s *Service) CompanyPublished() {
 	now := s.now()
 	for _, push := range []struct {
@@ -737,17 +684,13 @@ func (s *Service) CompanyPublished() {
 // ToolsChanged re-sends the tool catalogue alone, to every client whose
 // audience receives it.
 //
-// FOR A CATALOGUE THAT MOVED WITHOUT A PUBLISHED COMPANY. The catalogue is the
-// current epoch's registry, and an epoch is published whole but for its shared
-// MCP servers' tools, which the engine refiles when a server comes back with a
-// different list or a retried start brings one up
-// ([engine.Engine.SetOnCatalogueChanged]). No event corrects this push either,
-// so without a re-send an open dashboard listed the tools the server had when
-// the company was published until somebody reloaded.
+// For a catalogue that moved without a published company: a shared MCP
+// server's tools are refiled when it returns a different list or a retried
+// start brings one up ([engine.Engine.SetOnCatalogueChanged]). No event
+// corrects this push, so without a re-send a dashboard keeps the stale list.
 //
-// THE CATALOGUE ALONE: nothing else [Service.CompanyPublished] re-sends has
-// moved, and deciding every socket again against an unchanged company is work
-// with no new answer.
+// The catalogue alone: nothing else [Service.CompanyPublished] re-sends has
+// moved, and deciding every socket again would find no new answer.
 func (s *Service) ToolsChanged() {
 	s.hub.Broadcast(Push(KindTools, s.Tools(), s.now()))
 }
@@ -756,17 +699,14 @@ func (s *Service) ToolsChanged() {
 // of whose inbox moved, by how many notices, and the subject and reason of the
 // newest — the engine's inbox.Movement, field for field.
 //
-// IDENTIFIERS AND A COUNT, NEVER CONTENT. The frame reaches whoever watches
-// the seat, and what it is for is telling that screen to re-read the inbox
-// through the inbox question — the same question, decided by the same
-// authority, as the poll it makes immediate. An excerpt here would be the
-// inbox's content read around that authority. The count is a HINT: the rows
-// are the truth, and a screen re-reads them rather than adding these up.
+// Identifiers and a count, never content: the frame tells whoever watches the
+// seat to re-read the inbox through the inbox question, decided by the same
+// authority as the poll it speeds up; an excerpt would read content around
+// that authority. The count is a hint; the rows are the truth.
 //
-// THE DASHBOARD READS IT AS DECLARED IN ITS CONTRACT (`contract/wire.ts`'s
-// `InboxChange`), field for field: a key this sends that the screen does not
-// declare is one nothing on it can tell apart, and a key it declares that
-// this never sends is one it reads as undefined.
+// The dashboard declares it field for field (`contract/wire.ts`'s
+// `InboxChange`): a key sent but undeclared is invisible there, and one
+// declared but never sent reads as undefined.
 type InboxChange struct {
 	// Source is the domain whose half of the inbox moved — the state log's
 	// name, `tracker` or `code` — on a movement and on a re-read alike: a gap is one
@@ -800,16 +740,13 @@ type InboxChange struct {
 // ForReader is the movement as one watcher of the seat may receive it: whole
 // to a reader [InboxChange.App] admits, and nothing to anybody else.
 //
-// EACH HALF UNDER ITS OWN APP, as the inbox question reads each half: a
-// watcher without Gitlet is listed no code notice (ADR-0110), and without
-// Worklet no work notice, so a frame naming a change, a task or a count of
-// either would tell them what the list withholds. The watch itself was
-// decided as a read of the person's inbox ([watching]), which no app decides,
-// since the halves are several apps' news.
+// Each half under its own app, as the inbox question reads it: a watcher
+// without Gitlet is listed no code notice (ADR-0110), without Worklet no work
+// notice, so a frame naming either would reveal what the list withholds. The
+// watch itself is decided as a read of the person's inbox ([watching]).
 //
-// A MOVEMENT NAMING NO APP REACHES NOBODY, unless its half is relational
-// ([InboxChange.Relational]), which reaches every watcher with no subject: a
-// domain that keeps an inbox names one or the other where it is pushed.
+// A movement naming no app reaches nobody unless relational
+// ([InboxChange.Relational]), which reaches every watcher with no subject.
 func (c InboxChange) ForReader(r Reader) (string, any, bool) {
 	if c.Relational {
 		c.Subject = ""

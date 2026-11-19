@@ -702,9 +702,9 @@ func Open(ctx context.Context, cfg Config) (*Backend, error) {
 	return open(ctx, cfg, fullJitter{}, systemClock)
 }
 
-// clock is the time the client's [gate] keeps: the instant it measures its
-// quiet minute from ([throttleQuiet]), and the timer that lifts it when the
-// minute ends.
+// clock is the time the client keeps: the instant its [gate] measures its
+// quiet minute from ([throttleQuiet]) and its watches date movements on
+// ([watchedClient]), and the timer that lifts the gate when the minute ends.
 type clock struct {
 	now   func() time.Time
 	after func(d time.Duration, f func())
@@ -755,7 +755,7 @@ func open(ctx context.Context, cfg Config, backoff retry.BackoffDelayer, c clock
 	// would ask again.
 	retryer := newRetryer(backoff)
 	b.judge = &judge{now: c.now, retryer: retryer, stall: &b.stall, count: count}
-	b.watched = watching(httpClient, &b.stall)
+	b.watched = watching(httpClient, &b.stall, c.now)
 	b.client = s3.NewFromConfig(base, func(o *s3.Options) {
 		// THE BUCKET IS REACHED THROUGH THE ENGINE'S OWN TRANSPORT
 		// (internal/httpx), never a pool of the SDK's — every attempt

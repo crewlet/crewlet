@@ -42,26 +42,14 @@ import (
 // TestEveryReadCardReadsItsRoutesOwnAnswer: EVERY PATH A READ'S CARD READS IS
 // A KEY OF THE ANSWER ITS ROUTE GIVES.
 //
-// The model reads a tool's result from its card (cards.Summary), so a card
-// that reads its rows from a key the answer does not hold is a tool that
-// answers "nothing found" whatever the company holds: list_artifacts read
-// `items` from a listing whose rows are `contents`, and told people they had
-// no artifacts. A card spec is a set of strings the compiler cannot hold to
-// anything, and many answers are maps a handler builds by hand, which no type
-// walk could see. So every read tool's every card variant is ASKED, through
-// the App's own handler as an administrator, over a company whose sources
-// answer a value with every field set (assistanttest.Filled), and each path
-// its spec reads must be in the real answer (assistanttest.HoldCard).
-//
-// What this fixture cannot fill (the spend and turn estates, which only a
-// running fleet writes, and what only a live seat reports) is held to the Go
-// type the handler encodes there instead ([answerTypes]): only a value's type
-// is declared, every key above it is the answer's. A declaration the walk no
-// longer needs fails, so the list only shrinks. GET /iam/seats, a surface
-// this App does not stand up, is held by internal/api/iamapi's own suite
-// (TestTheSeatsCardReadsTheSeatsAnswer). Mutation: point list_artifacts' rows
-// back at `items`, or list_decisions' task at `ask.task_key`, and this
-// names the tool, the variant and the path.
+// A card reading rows from a key the answer lacks says "nothing found"
+// whatever the company holds, and no type walk sees hand-built answer maps. So
+// every card variant is ASKED through the App's handler as an administrator,
+// over sources with every field set (assistanttest.Filled), and each path must
+// be in the real answer (assistanttest.HoldCard). What the fixture cannot fill
+// is held to the handler's Go type ([answerTypes]), a list that only shrinks.
+// GET /iam/seats: internal/api/iamapi's suite. Mutation: point list_artifacts'
+// rows back at `items`, or list_decisions' task at `ask.task_key`.
 func TestEveryReadCardReadsItsRoutesOwnAnswer(t *testing.T) {
 	t.Parallel()
 	world := filledWorld(t)

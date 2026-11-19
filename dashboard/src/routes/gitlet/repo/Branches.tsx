@@ -44,6 +44,7 @@ import { zone } from "~/lib/prefs.ts";
 import { dayStartIn } from "~/lib/range.ts";
 import { codeRest, useCodeQuery } from "~/lib/useCodeQuery.ts";
 import { usePaged } from "~/lib/usePaged.ts";
+import { contentHeld } from "~/lib/repoWrites.ts";
 import {
   QueryError,
   type CodeCommitMark,
@@ -61,8 +62,10 @@ import { moverOf } from "../movers.ts";
 import { commitHref, compareHref, repoHref } from "../paths.ts";
 import { BranchChip, CheckRollupMark, Face, useWhoName } from "../ui.tsx";
 import { DeleteBranchButton, NewBranchButton } from "./BranchWrites.tsx";
+import { DeleteTagButton, NewTagButton } from "./TagWrites.tsx";
 import { useCommitMarks } from "./marks.ts";
 import { ProtectButton } from "./Protect.tsx";
+import { GoneContent } from "./RepoLife.tsx";
 import "~/styles/gitlet.css";
 
 /** A branch moved in the last 90 days is active; the rest are stale. */
@@ -124,11 +127,15 @@ export function Branches({ repo }: { repo: CodeRepoDetail }) {
         />
         <span className="spacer" />
         {view !== "tags" && <FindBranch q={q} onQ={setQ} />}
-        <NewBranchButton repo={repo} />
+        {view === "tags" ? <NewTagButton repo={repo} /> : <NewBranchButton repo={repo} />}
       </PageToolbar>
       <div className="code-refs-boxes">
         {view === "tags" ? (
-          <TagsView repo={repo} />
+          contentHeld(repo) ? (
+            <GoneContent repo={repo} what="tags" />
+          ) : (
+            <TagsView repo={repo} />
+          )
         ) : view === "overview" && !q ? (
           <Overview repo={repo} since={since} />
         ) : (
@@ -206,7 +213,7 @@ function Overview({ repo, since }: { repo: CodeRepoDetail; since: string | undef
       <FactsNote facts={facts} repo={repo} />
       <DefaultBox repo={repo} found={found} facts={facts} />
       <ActiveBox repo={repo} active={active} facts={facts} />
-      <TagsBox repo={repo} />
+      {!contentHeld(repo) && <TagsBox repo={repo} />}
     </>
   );
 }
@@ -976,7 +983,7 @@ function TagDate({ tag, now }: { tag: CodeTagRow; now: number }) {
   return <span title={TAG_UNDATED_TITLE}>{TAG_UNDATED}</span>;
 }
 
-/** One tag: its name opening its files at its whole ref, the commit it names and when, and its controls. */
+/** One tag: its name opening its files at its whole ref, the commit it names and when, and its controls, Delete among them. */
 function TagRow({
   repo,
   tag,
@@ -1047,6 +1054,7 @@ function TagRow({
           >
             Compare
           </ButtonLink>
+          <DeleteTagButton repo={repo} tag={tag} />
         </span>
       </td>
     </tr>

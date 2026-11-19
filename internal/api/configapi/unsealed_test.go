@@ -80,20 +80,15 @@ var restoredDoc = strings.Replace(companyDoc, "name: Acme", "name: Acme Restored
 // A WHOLE DOCUMENT REPLACES AN UNSEALED ACTIVE REVISION, as the offline import
 // does, from this node's own copy and from the fleet's pointer alike.
 //
-// The refusal of an unsealed revision names PUT /config, and the write it
-// named was refused in the same words, because a write opened the active
-// revision before anything else: the remedy was a loop. A whole document reads
-// nothing from the revision it replaces, so it lands, SEALED, built on it: its
-// If-Match is judged against it as against any active revision, and the
-// activation is conditioned on it. A DRY RUN of it is answered and stores
-// nothing, and an IMPORT lands as an import. Its row names the unsealed
-// revision as its parent where this node holds it, and KEEPS NOTHING where it
-// arrived only on the pointer: the reconciler refuses to keep a body from
-// outside the fleet, and a write replacing one is no reason to.
+// The refusal names PUT /config, which refused in the same words: a loop. A
+// whole document reads nothing from the revision it replaces, so it lands
+// SEALED, built on it (If-Match judged against it). The row names the unsealed
+// revision as parent where this node holds it, and KEEPS NOTHING where it
+// arrived only on the pointer: the reconciler refuses a body from outside the
+// fleet.
 //
 // Mutation: drop the unsealed arm from prepare and every write is the 409
-// again; keep the fleet's body as the parent and it enters this node's
-// history.
+// again; keep the fleet's body as the parent and it enters this node's history.
 func TestAWholeDocumentReplacesAnUnsealedRevision(t *testing.T) {
 	t.Parallel()
 	for _, origin := range unsealedOrigins {
@@ -278,17 +273,11 @@ func TestARevisionSealedUnderAMissingKeyIsNotReplaced(t *testing.T) {
 }
 
 // A REVISION SEALED IN A FORM THIS BUILD DOES NOT READ IS NOT UNSEALED, so no
-// write replaces it: not a whole document, not an import, and a dry run says
-// so too.
-//
-// A newer build's seal is wrapped as this build's is, and the reader took
-// every seal it could not parse for no seal at all: GET /config called it a
-// body stored without a seal, and PUT /config, which replaces an unsealed
-// revision reading nothing from it, replaced the newer build's document with
-// whatever the admin typed, losing every field and credential they did not.
-// It is somebody's sealed document, refused under its own code with the build
-// that sealed it as the remedy, from this node's own copy (a node taken back
-// from a newer build) and from the fleet's pointer (a newer peer) alike.
+// write replaces it (whole document, import, dry run). The reader took every
+// unparseable seal for none, so PUT /config replaced a newer build's document,
+// losing every field and credential the admin did not retype. It is refused
+// under its own code with the sealing build as the remedy, from this node's
+// copy and the fleet's pointer alike.
 //
 // Mutation: answer a seal secrets cannot parse as unsealed, and the
 // replacement lands; give it the unsealed code or hint, and the refusal sends
@@ -349,14 +338,11 @@ func TestARevisionSealedInAFormThisBuildDoesNotReadIsNotReplaced(t *testing.T) {
 // the field and saying to write the value itself.
 //
 // A mask is restored from the revision a write replaces, and an unsealed one
-// is read by nothing. Left to the validator, the marker was refused in words
-// about a member that is new or renamed, sending whoever sent it looking for a
-// rename they never made; what they need is the value.
+// is read by nothing. Left to the validator, the marker was refused as a new
+// or renamed member, sending the sender looking for a rename they never made.
 //
 // AND EVERY OTHER FAULT IS REPORTED BESIDE IT, as over a revision that opens:
-// the mask refusal used to answer alone, so a document with a masked key and a
-// blank name was told only about the key, under a hint saying the whole
-// document is validated.
+// a document with a masked key and a blank name must hear about both.
 //
 // Mutation: drop the check and the validator's words come back; answer the
 // mask refusal before the rules, and the blank name goes unreported.
@@ -412,17 +398,11 @@ func TestAMaskOverAnUnsealedRevisionIsRefusedNamingTheField(t *testing.T) {
 }
 
 // EVERY HELD SEAT IS KEPT, though nothing says which seats the replaced
-// revision had.
-//
-// A write is refused for taking a human seat away while somebody holds it,
-// and what it takes away is read off the revision it replaces. One read by
-// nothing answered "nothing leaves", so a replacement could drop every seat a
-// colleague, a service account or an open invitation held. Instead it asks the
-// directory about every seat its own document does not keep as a human seat,
-// and refuses any held one, a seat no document of this company names any more
-// included. The CONTROL keeps every held seat and lands, having asked about
-// exactly the seats it does not keep; and a directory it cannot read refuses it
-// naming no seats, since it can list none.
+// revision had. A prior read by nothing answered "nothing leaves", so a
+// replacement could drop every held seat; instead it asks the directory about
+// every seat its document does not keep as human, and refuses any held one.
+// The CONTROL keeps every held seat and lands, having asked about exactly the
+// seats it does not keep; an unreadable directory refuses it naming no seats.
 //
 // Mutation: judge against the missing prior and every arm but the control
 // lands; ask about the seats the document keeps and the control is refused.

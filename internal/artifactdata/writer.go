@@ -86,6 +86,7 @@ type Metrics interface {
 // objective meter ([objectives.Meter]), which judges each against its bound.
 type Objectives interface {
 	Record(n objectives.Name, elapsed time.Duration, answered bool)
+	Abandon(n objectives.Name, elapsed time.Duration)
 }
 
 // WriterDeps is what a writer is built from.
@@ -283,7 +284,7 @@ func request(id artifacts.ID, opID string, pattern statelog.Pattern,
 func (w *Writer) Write(ctx context.Context, c Call, id artifacts.ID, in artifacts.DataWrite) (WriteResult, error) {
 	started := time.Now()
 	res, err := w.write(ctx, c, id, in)
-	w.record(started, res, err)
+	w.record(ctx, started, res, err)
 	return res, err
 }
 
@@ -545,11 +546,17 @@ func (w *Writer) current(ctx context.Context, c Call, id artifacts.ID, refs []do
 }
 
 // record reports one write's outcome and how long it took: into the
-// instruments, and as one event of each datastore objective.
-func (w *Writer) record(started time.Time, res WriteResult, err error) {
+// instruments, and as one event of each datastore objective. A write with no
+// verdict because its caller went away ([objectives.Abandoned]) is abandoned
+// to the meter rather than counted as the verdict the writer failed to give.
+func (w *Writer) record(ctx context.Context, started time.Time, res WriteResult, err error) {
 	elapsed := time.Since(started)
-	if w.judged != nil {
-		answered := decided(res, err)
+	switch answered := decided(res, err); {
+	case w.judged == nil:
+	case !answered && objectives.Abandoned(ctx):
+		w.judged.Abandon(objectives.DataRoundTrip, elapsed)
+		w.judged.Abandon(objectives.DataResolved, elapsed)
+	default:
 		w.judged.Record(objectives.DataRoundTrip, elapsed, answered)
 		w.judged.Record(objectives.DataResolved, elapsed, answered)
 	}
@@ -594,7 +601,7 @@ func decided(res WriteResult, err error) bool {
 func (w *Writer) Undo(ctx context.Context, c Call, id artifacts.ID, seq int64) (WriteResult, error) {
 	started := time.Now()
 	res, err := w.undo(ctx, c, id, seq)
-	w.record(started, res, err)
+	w.record(ctx, started, res, err)
 	return res, err
 }
 

@@ -11,26 +11,18 @@ import (
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 )
 
-// SignInID names which account an entry's calls are made as, without saying
-// it: an HMAC, under the key its [Plans] holds, of the harness, the auth mode and
-// every credential the harness is handed, or of the login its files hold.
+// SignInID names which account an entry's calls are made as, without saying it:
+// an HMAC, under its [Plans]' key, of the harness, auth mode and credentials
+// handed it, or of the login its files hold.
 //
 //	HMAC-SHA256(k, agent 0 mode 0 sorted(name=value 0 ...) 0 login)
 //
-// KEYED BY A SECRET THE FLEET SHARES, not hashed and not keyed per process. An
-// id has to be comparable across nodes and restarts, so that the sign-in a run
-// launched with can be stamped on its row and compared after a move, and that
-// rules out a per-process key. A plain hash of a credential could be tested
-// against a guessed or leaked one by anyone who reads the id; the engine's
-// keyring-derived key ([SignInKeyInfo]) cannot be guessed. A keyring rotation
-// changes every id, so every sit-out starts clean once: bounded, and recorded
-// in ADR-0069.
-//
-// NEVER LOGGED AND NEVER PUBLISHED WHOLE. A heartbeat may carry [SignInID.Short]
-// so a page can say that two entries share one sign-in.
-//
-// Empty is "nothing signs the entry in": no credential reaches the harness and no
-// login is kept for it. Such an entry shares its [Plan] with nobody.
+// KEYED BY A SECRET THE FLEET SHARES, not hashed, not per process: an id must
+// compare across nodes and restarts. A plain hash could be tested against a
+// guessed or leaked credential; the keyring-derived key ([SignInKeyInfo])
+// cannot. Rotation changes every id, so every sit-out starts clean once
+// (ADR-0069). NEVER LOGGED AND NEVER PUBLISHED WHOLE ([SignInID.Short] may be).
+// Empty means nothing signs the entry in: it shares its [Plan] with nobody.
 type SignInID string
 
 // Short is the id's first twelve hex characters: enough to tell the sign-ins

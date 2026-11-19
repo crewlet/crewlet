@@ -14,28 +14,12 @@ import (
 // EVERY READER OF THIS FAKE PAIRS ITS SLICES BY INDEX, so a call must append
 // to all of them or to none.
 //
-// # The failure this protects against
-//
 // [executorPrompt] finds "execute" in calls and reads systems at the SAME
-// position. That holds only if one request appends to both without another
-// getting in between — and it did not: serve appended the prompt, the offered
-// tools and the body before its switch (it must, since the phase is not known
-// until the request is read), released the lock, and saw appended the phase
-// after. Two requests in flight — two seats, or a seat and one of the
-// prefetch's auxiliary passes, which is the ordinary case — interleave between
-// those sections, and from then on calls[i] describes one call while
-// systems[i] describes another.
-//
-// It cost an intermittent end-to-end failure in which the skills case read a
-// prompt with no "## Tool skills" section and failed on a section that was
-// present all along, having been handed an auxiliary pass's prompt where it
-// asked for the executor's. Invisible under -race, because both halves were
-// correctly locked: it is a pairing bug, not a data race.
-//
-// The invariant is checked under CONCURRENCY because that is the only
-// condition it ever broke under, and with each request carrying a marker only
-// its own prompt has, so a misalignment is detected rather than inferred from
-// lengths that happen to match.
+// position, so one request must append to both without another between. serve
+// appends the prompt, tools and body before its switch (the phase is unknown
+// until read) and the phase after; concurrent requests interleave there. It is
+// a pairing bug, not a data race, so -race cannot see it. Checked under
+// CONCURRENCY, with a marker in each request's own prompt.
 func TestEveryModelCallRecordsOneAlignedEntry(t *testing.T) {
 	t.Parallel()
 	m := &scriptedModel{}

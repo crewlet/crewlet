@@ -167,12 +167,17 @@ func walkLedBy(q ReadQuery, repoID string) changeWalk {
 // change a page of it served: what a caller keeping fewer of a page's changes
 // than it was served hands back. It is spelled by the walk the page was read
 // by ([walkOf]) — a need of a fix's owner walk, or the half of what waits on
-// the asker the page came from, the second behind [fixHalf].
+// the asker the row came from ([ChangeSummary.WaitsFor]), the second behind
+// [fixHalf].
 func (q ReadQuery) ChangesCursor(s ChangeSummary) string {
 	q = q.readying()
 	prefix := ""
 	switch q.Needs {
 	case NeedMe:
+		// A ROW OF THE FIX HALF on a page the review half began resumes in the fix half.
+		if s.WaitsFor == NeedFix && !strings.HasPrefix(q.Cursor, fixHalf) {
+			q.Cursor = fixHalf
+		}
 		half, fixes := q.halfOfMe()
 		if fixes {
 			prefix = fixHalf
@@ -392,14 +397,25 @@ func (r *Reader) changes(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Ros
 	case NeedFix:
 		q = q.fixing()
 	}
-	return r.listChanges(ctx, tx, q, chart, cp, out, "")
+	return r.listChanges(ctx, tx, q, chart, cp, out, "", "")
 }
 
-// listChanges is [Reader.changes] over one walk. Where asked names a reviewer,
-// a walk of changes awaiting a fix leaves out those whose ask of asked stands:
-// the first half of what waits on asked lists them.
+// changesPage is the page a listing of changes q asks fills: its rows and the
+// bytes past which it is cut, counting in served, the rows an earlier walk of
+// the same page answered (needs=me's first half).
+func (r *Reader) changesPage(q ReadQuery, served []ChangeSummary) page {
+	pg := page{maxRows: min(limitOr(q.Limit, defaultChangeLimit), r.pageRows), maxB: r.pageBytes}
+	for _, s := range served {
+		pg.add(s.encodedBytes())
+	}
+	return pg
+}
+
+// listChanges is [Reader.changes] over one walk, filling what is left of out's page. Where asked
+// names a reviewer, a fix walk leaves out changes whose ask of asked stands (needs=me's review
+// half lists them). waits is the needs=me half each row names ([ChangeSummary.WaitsFor]), or "".
 func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster, cp statelog.Position,
-	out *ReadAnswer, asked string) error {
+	out *ReadAnswer, asked string, waits Need) error {
 
 	repos := map[string]listedRepo{}
 	var repoID string
@@ -417,8 +433,8 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 	}
 	walk := walkOf(q, repoID, since)
 	walk.scan = r.spokenScanned
-	limit := min(limitOr(q.Limit, defaultChangeLimit), r.pageRows)
-	scanned, next, err := walk.read(ctx, tx, q.Cursor, limit)
+	pg := r.changesPage(q, out.Changes)
+	scanned, next, err := walk.read(ctx, tx, q.Cursor, pg.left())
 	if err != nil {
 		return err
 	}
@@ -466,10 +482,9 @@ func (r *Reader) listChanges(ctx context.Context, tx *sql.Tx, q ReadQuery, chart
 			return err
 		}
 	}
-	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for _, row := range listed {
 		s := repos[row.repoID].summary(row)
-		s.Readiness, s.Card = readiness[row.id], cards[row.id]
+		s.Readiness, s.Card, s.WaitsFor = readiness[row.id], cards[row.id], waits
 		out.Changes = append(out.Changes, s)
 		if pg.add(s.encodedBytes()) {
 			out.Next = walk.cursor(row)
@@ -572,6 +587,28 @@ func listedReposAmong(ctx context.Context, tx *sql.Tx, ids []string, asker Princ
 	return listed, rows.Err()
 }
 
+// revertedByIn is the latest change opened to revert row, nil for none and for
+// a change not merged, which nothing reverts.
+func revertedByIn(ctx context.Context, tx *sql.Tx, repoName string, row changeRow) (*ChangeName, error) {
+	if row.state != ChangeStateMerged {
+		return nil, nil
+	}
+	var (
+		number int64
+		by     ChangeName
+		state  string
+	)
+	err := tx.QueryRowContext(ctx, revertedBySQL, row.repoID, row.number).Scan(&number, &by.Title, &state)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, nil
+	case err != nil:
+		return nil, fmt.Errorf("gitlet: read what reverts %s: %w", ChangeRef(repoName, row.number), err)
+	}
+	by.Repo, by.Ref, by.State = repoName, ChangeRef(repoName, number), ChangeState(state)
+	return &by, nil
+}
+
 // change serves one change by its number (the file's doc): a page of its
 // revisions, its detail beside the first; its detail alone
 // ([ReadQuery.DetailOnly]); its row alone in place of the detail
@@ -608,6 +645,10 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		return r.changeFindings(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
 	case PartStanding:
 		return r.changeStanding(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
+	case PartMoves:
+		return r.changeMoves(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
+	case PartQueue:
+		return r.changeQueue(ctx, tx, q, ChangeRef(repo.ref.Name, row.number), row.id, out)
 	}
 	limit := min(limitOr(q.Limit, defaultRevisionLimit), r.pageRows)
 	var rows *sql.Rows
@@ -644,6 +685,11 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if participantsErr != nil {
 			return participantsErr
 		}
+		tip, _, tipErr := liveRefIn(ctx, tx, row.repoID, row.target)
+		if tipErr != nil {
+			return fmt.Errorf("gitlet: read %s's target %s: %w", ChangeRef(repo.ref.Name, row.number), row.target,
+				tipErr)
+		}
 		// From the conversation row just read: the detail is a change's most
 		// re-read question, so it pays no second statement to [withConversations].
 		row.moved = max(row.updatedAt, spoken)
@@ -655,8 +701,13 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 		if readinessErr != nil {
 			return readinessErr
 		}
+		revertedBy, revertedErr := revertedByIn(ctx, tx, repo.ref.Name, row)
+		if revertedErr != nil {
+			return revertedErr
+		}
 		out.Change = &ChangeDetail{ChangeSummary: repo.summary(row), Body: body, Authors: authors,
-			Conversation: conversation, Mergeability: merge, Participants: participants}
+			Conversation: conversation, Mergeability: merge, TargetTip: tip.OID, Participants: participants,
+			RevertedBy: revertedBy}
 		out.Change.Readiness = readiness[row.id]
 		if q.DetailOnly {
 			// No revision is read, encoded or shipped ([ReadQuery.DetailOnly]).
@@ -677,17 +728,18 @@ func (r *Reader) change(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Rost
 	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for rows.Next() {
 		var (
-			rev      RevisionRow
-			kind     string
-			position int64
-			at       int64
-			facts    factsScan
+			rev       RevisionRow
+			kind, via string
+			position  int64
+			at        int64
+			facts     factsScan
 		)
-		if scanErr := rows.Scan(append([]any{&rev.N, &rev.Head, &rev.Pusher, &kind, &rev.PushID, &position, &at},
-			facts.targets()...)...); scanErr != nil {
+		if scanErr := rows.Scan(append([]any{&rev.N, &rev.Head, &rev.Pusher, &kind, &rev.PushID, &position, &at,
+			&via, &rev.Forced}, facts.targets()...)...); scanErr != nil {
 			return fmt.Errorf("gitlet: read the revisions of %s: %w", ChangeRef(repo.ref.Name, row.number), scanErr)
 		}
-		rev.PusherKind, rev.Position, rev.At = PartyKind(kind), unpacked(position), store.DecodeTime(at)
+		rev.PusherKind, rev.Position, rev.At, rev.Via = PartyKind(kind), unpacked(position), store.DecodeTime(at),
+			PushVia(via)
 		if rev.Facts, err = facts.row(); err != nil {
 			return fmt.Errorf("gitlet: read revision %d of %s's facts: %w", rev.N, ChangeRef(repo.ref.Name,
 				row.number), err)
@@ -748,7 +800,7 @@ func (r changeRow) wire() ChangeRow {
 		SourceRef: r.source, TargetRef: r.target, Head: r.head, Revision: r.revision, Owner: r.owner,
 		OwnerKind: r.ownerKind, OwnerOperatorID: r.operator, CreatedTurn: r.turn, CreatedRun: r.run,
 		OpenedAt: store.DecodeTime(r.openedAt), OpenedPosition: unpacked(r.opened), CloseReason: r.closeReason,
-		MergedVia: r.mergedVia, MergeOID: r.mergeOID, MergedBy: r.mergedBy, MergedByKind: r.mergedByKind,
+		ClosedBy: r.closedBy, ClosedByKind: r.closedByKind, MergedVia: r.mergedVia, MergeOID: r.mergeOID, MergedBy: r.mergedBy, MergedByKind: r.mergedByKind,
 		MergedOperatorID: r.mergedOperator, OverrideReason: r.overrideReason, BodyBytes: r.bodyBytes,
 		Version: r.version, Position: unpacked(r.position)}
 	if r.work.ID != "" {
@@ -827,7 +879,7 @@ func (s *factsScan) row() (*RevisionFactsRow, error) {
 // is in a live state and names whom it waits on or is the asker seat's own; a
 // bucket ([ReadQuery.Readiness]) is of the open state, empty read as open.
 func (q ReadQuery) validateChanges() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
 	case q.Repo == "" && q.Work == "" && q.State == "" && q.Reviewer == "" && q.Needs == "" && q.Window == "" &&
 		q.Readiness == "" && q.Text == "":
@@ -957,15 +1009,20 @@ const (
 		ORDER BY opened_position DESC, id DESC LIMIT ?`
 	changeByNumberSQL = `SELECT ` + changeColumns + ` FROM code_changes INDEXED BY ` + changesNumberKey + `
 		WHERE repo_id = ? AND number = ?`
+	// revertedBySQL is the latest change opened to revert a change, one seek of
+	// code_changes_reverts_idx, its predicate spelled as the index declares it.
+	revertedBySQL = `SELECT number, title, state FROM code_changes INDEXED BY ` + changesRevertsKey + `
+		WHERE repo_id = ? AND reverts = ? AND reverts > 0 ORDER BY number DESC LIMIT 1`
 	changeAuthorsSQL = `SELECT author, author_kind, first_revision, position FROM code_change_authors
 		WHERE change_id = ? ORDER BY author`
 	// Revisions with their facts, joined by key (a revision of none reads
 	// NULLs), newest first in the revisions' key order.
-	revisionsSQL = `SELECT r.n, r.head_oid, r.pusher, r.pusher_kind, r.push_id, r.position, r.at, ` +
+	revisionsSQL = `SELECT r.n, r.head_oid, r.pusher, r.pusher_kind, r.push_id, r.position, r.at, r.via, r.forced, ` +
 		revisionFactsColumns + ` FROM code_revisions AS r LEFT JOIN code_revision_facts AS f
 			ON f.change_id = r.change_id AND f.n = r.n
 		WHERE r.change_id = ? ORDER BY r.n DESC LIMIT ?`
-	revisionsAfterSQL = `SELECT r.n, r.head_oid, r.pusher, r.pusher_kind, r.push_id, r.position, r.at, ` +
+	revisionsAfterSQL = `SELECT r.n, r.head_oid, r.pusher, r.pusher_kind, r.push_id, r.position, r.at, r.via,
+		r.forced, ` +
 		revisionFactsColumns + ` FROM code_revisions AS r LEFT JOIN code_revision_facts AS f
 			ON f.change_id = r.change_id AND f.n = r.n
 		WHERE r.change_id = ? AND r.n < ? ORDER BY r.n DESC LIMIT ?`

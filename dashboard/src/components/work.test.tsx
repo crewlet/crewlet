@@ -332,6 +332,22 @@ test("a blocked row names the pull request nobody is reviewing", () => {
   expect(blockedBy(row({ waiting_on: [{ id: pull, open: true }] }))).toBe("Blocked");
 });
 
+// A FINISHED BLOCKER IS NEVER NAMED: a row held up by one open blocker and
+// one finished one names the open one alone, whichever sorts first.
+test("a blocked row names only the blockers still open", () => {
+  expect(
+    blockedBy(
+      row({
+        blocked: true,
+        waiting_on: [
+          { id: "t-1", key: "ENG-1", open: false },
+          { id: "t-2", key: "ENG-2", open: true },
+        ],
+      }),
+    ),
+  ).toBe("Blocked · ENG-2");
+});
+
 // A BLOCKER IN ANOTHER PROJECT IS NAMED: the edge carries its key, so a list
 // that holds no row for it (a project's own list) says which task holds this
 // one up, as All tasks, which held the row, already did.

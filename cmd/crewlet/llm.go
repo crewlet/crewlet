@@ -22,35 +22,17 @@ import (
 )
 
 // `crewlet llm` — the operator's window onto the harnesses every model runs
-// through.
+// through. A providers.llm entry is a LOGIN (browser OAuth with PKCE, often behind
+// SSO and MFA) held by a vendor's own tool in a directory on disk, unless it runs
+// on an API key. No password grant can be scripted and a headless browser breaks
+// on the vendor's next redesign, so Crewlet controls only WHERE the credential
+// lands: the provider's own isolated directory, apart from the operator's login.
 //
-// # Why these commands exist at all
-//
-// A providers.llm entry is a LOGIN — browser OAuth with PKCE, often behind
-// SSO and MFA — held by a vendor's own command-line tool in a directory on
-// disk, unless it runs on an API key. There is no password grant to script, and driving a
-// headless browser through a vendor's login page breaks on their next
-// redesign. So Crewlet does not re-implement any of it. What it controls is
-// WHERE the credential lands: inside the provider's own isolated directory,
-// separate from the operator's personal login on the same machine.
-//
-// # Why doctor is the command that matters
-//
-// An entry can be configured perfectly and still not work: the
-// binary can be missing from the engine host, the profile's flags can have
-// drifted from the installed version, the login can be present but expired,
-// and — the one nothing else catches — the harness can fail to reach the seat's
-// tools at all (the `crewlet` MCP server it is handed) and answer in prose with
-// nothing called, which ends every phase without its submission. Only a real
-// run calling a real tool proves the last one, so `doctor` runs one.
-//
-// Two of the profile's claims are measured the same way, because a flag that
-// stopped working is silent in both directions. The shell probe asks the harness
-// to run a command on the engine host and reports whether it did — a profile
-// that denies local tools and a harness that ran one is a hole where the isolation
-// was assumed. The web probe asks it to fetch a URL, because web is the one
-// local tool every profile keeps ON and a vendor's sandbox flag can cut it
-// without saying so.
+// `doctor` is the command that matters: a configured entry can fail silently
+// (binary missing, flags drifted, login expired, or the harness unable to reach
+// the seat's `crewlet` MCP tools and answering in prose, ending every phase with
+// no submission). Only a real run calling a real tool proves that, so it runs one;
+// its shell and web probes measure two profile claims the same way.
 const llmUsage = `crewlet llm: the harnesses every model runs through, their logins,
 health and tokens
 
@@ -274,25 +256,17 @@ type harnessProvider struct {
 	provider *harness.Provider
 }
 
-// loadLLMConfig reads the company document, the entries a subcommand
-// addresses ([llmEntries]), and the resolver their references go through.
+// loadLLMConfig reads the company document, the entries a subcommand addresses
+// ([llmEntries]), and the resolver their references go through.
 //
-// The SAME resolver the provisioning CLIs use — store first, then the
-// environment, read through the run's own route ([companyStore]) — because a
-// token rotated into the secret store must win over a stale `.env` exported
-// into this shell months ago. A command that resolved from the environment
-// alone would report a provider as having no token while the running engine
-// used one. Beside a running engine it reads the company's stored values
-// through that engine, which is where they are while it runs: these commands
-// are made to run beside the seats, under the lock beside the credentials
-// directory that both take. And the store a login or an export writes into
-// is the one this read went through.
-//
-// THE ADDRESSED ENTRIES ALONE are resolved, because beside a running engine
-// each stored value comes back through a reveal logged by name: `crewlet llm
-// login work` reveals what the `work` entry reads — its token, its key or
-// its bundle, and the ${VAR}s its model and env name — and none of another
-// entry's credentials.
+// The SAME resolver the provisioning CLIs use (store first, then the environment,
+// through the run's own route, [companyStore]), because a token rotated into the
+// secret store must win over a stale `.env`, and a command resolving from the
+// environment alone would report no token while the engine used one. Beside a
+// running engine it reads stored values through that engine, under the lock beside
+// the credentials directory both take. THE ADDRESSED ENTRIES ALONE are resolved,
+// since each stored value comes back through a reveal logged by name: `crewlet llm
+// login work` reveals what `work` reads, and none of another entry's credentials.
 func loadLLMConfig(ctx context.Context, companyPath string, companySecrets *companyStore,
 	sub, key string, notes io.Writer) (*config.Company, []string, *config.Resolver, error) {
 
@@ -338,19 +312,16 @@ func llmEntries(company *config.Company, sub, key, companyPath string) ([]string
 }
 
 // llmEntryReads is every stored value these entries read, each once, sorted:
-// building one resolves every ${VAR} it names, and the variables it signs in
-// from without naming them ([config.Company.LLMEntryReads]) — the names a
-// running node is asked to reveal, where it lists them
-// ([companyStore.resolver]).
+// every ${VAR} an entry names, and the variables it signs in from without naming
+// them ([config.Company.LLMEntryReads]), the names a running node is asked to
+// reveal ([companyStore.resolver]).
 //
-// LESS ANY NAME NO STORE CAN HOLD. An overrides.token_env or api_key_env
-// outside the reference grammar — MY-TOKEN — is a variable the entry signs in
-// from, and one this command, which loads its file only to run, still meets:
-// every write of the document refuses it, but that is an admission rule. No
-// store can hold the name, so it is no stored value: the run's batch never
-// asks for it — a node refuses a whole request over one such name, and the
-// fleet's store reached directly a read naming one. The engine reads it, if
-// at all, from its own environment, which the resolver still consults.
+// LESS ANY NAME NO STORE CAN HOLD. An overrides.token_env or api_key_env outside
+// the reference grammar (MY-TOKEN) is a variable the entry signs in from, and one
+// this command, which loads its file only to run, still meets (document writes
+// refuse it as an admission rule). It is no stored value, so the batch never asks
+// for it: a node refuses a whole request over one such name. The engine reads it
+// from its own environment, which the resolver still consults.
 func llmEntryReads(company *config.Company, keys []string) []string {
 	var names []string
 	for _, key := range keys {
@@ -796,52 +767,32 @@ func loginLLM(ctx context.Context, req loginRequest, stdout, stderr io.Writer) e
 	}
 }
 
-// refuseUnreadToken refuses `-capture-token` and `-token-stdin` for an entry
-// that would never read the token, BEFORE one is minted, read or stored.
+// refuseUnreadToken refuses `-capture-token` and `-token-stdin` for an entry that
+// would never read the token, BEFORE one is minted, read or stored.
 //
-// THE MODE DECIDES WHAT THE ENTRY READS, and the command used to ask only the
-// harness. Under api-key the token variable is removed from the harness's environment
-// and given no fallback, so a token reaches nothing wherever it is put; under
-// inherit-env the variable is forwarded from the engine's own process
-// environment and the secret store is never read, so a STORED token reaches
-// nothing, while one written to stdout with -print-token does, once exported
-// there. Each was minted and stored all the same, and the `auth.token` snippet
-// printed after it is one validation refuses under either mode — so an
-// operator who followed it was refused, and one who did not was signed in to
-// nothing, which a remote run's refusal and the doctor then reported again.
-//
-// The error says what the mode reads instead, in the words the doctor and the
-// run's refusal use ([harness.Provider.ModeSignIn]).
-//
-// NO TOKEN VARIABLE, OR ONE NO STORE CAN HOLD, is refused before anything
-// else but api-key, whatever the mode and -print-token, since a token reaches
-// the harness only through that variable. A harness whose profile names none — every
-// built-in one but claude-code — takes no headless token at all, and it was
-// refused only once the token was in hand: after -token-stdin had read it, or
-// after a minting command a custom profile declared had run. A name outside
-// the reference grammar, which only overrides.token_env can give, is refused
-// by the store, so a token minted for it was lost at the write, after the
-// vendor had issued it; and -print-token's next step, a ${VAR} or an export,
-// cannot spell it either. Every write of the company document refuses such an
-// override, but that is an admission rule and this command loads its file
-// only to run, so the name reaches here.
-//
-// API-KEY IS JUDGED FIRST, because the mode decides what the entry reads before
-// the harness does ([harness.Provider.ModeSignIn]): an api-key entry reads its key
-// and no token under any variable, so it is told its key, as the doctor tells
-// it, whatever the profile names. Judged after them, an api-key codex entry
-// would be told to sign in with a login, which api-key does not sign in with,
-// or to name a token variable the mode would remove; and an api-key MY-TOKEN
-// entry to name the variable its harness reads, as if a token would then reach
-// it. Its refusal offers subscription as the mode that reads a stored token
-// only under a variable a token can be stored in, and names the field where the
-// name is outside the grammar.
+// THE MODE DECIDES WHAT THE ENTRY READS, not only the harness. Under api-key the
+// token variable is removed from the harness's environment, so a token reaches
+// nothing; under inherit-env the variable is forwarded from the engine's own
+// environment and the store is never read, so a STORED token reaches nothing.
+// Minted anyway, the `auth.token` snippet printed after it is one validation
+// refuses under either mode. The error says what the mode reads instead, in the
+// doctor's words ([harness.Provider.ModeSignIn]). Order of the checks below:
+// api-key first, then no usable token variable, then inherit-env.
 func refuseUnreadToken(p *harness.Provider, key string, req loginRequest) error {
 	tokenVar := p.Profile().TokenEnv
 	sign, fromEnv := p.ModeSignIn()
+	// API-KEY IS JUDGED FIRST: an api-key entry reads its key and no token, so
+	// it is told its key, as the doctor tells it. Judged after the cases below,
+	// an api-key codex entry would be told to sign in with a login, and an
+	// api-key MY-TOKEN entry to name the variable its harness reads.
 	if fromEnv && sign.Mode == harness.AuthAPIKey {
 		return refuseAPIKeyToken(p, key, sign)
 	}
+	// NO TOKEN VARIABLE, OR ONE NO STORE CAN HOLD: a token reaches the harness
+	// only through that variable. A profile naming none (every built-in but
+	// claude-code) takes no headless token, and a name outside the reference
+	// grammar (only overrides.token_env can give one) would be lost at the
+	// store's write, after the vendor issued the token.
 	switch {
 	case tokenVar == "":
 		return fmt.Errorf(
@@ -1035,33 +986,18 @@ func storeLLMSecret(ctx context.Context, companySecrets *companyStore, name, val
 	return target, written, nil
 }
 
-// importLLM restores an exported credential bundle onto this host.
+// importLLM restores an exported credential bundle onto this host: the other
+// half of `crewlet llm export KEY` (`-secret-store` reaches a second host only
+// within one company). FROM STDIN, never a path argument: a bundle on argv shows
+// in `ps` and shell history, and `export k | ssh host crewlet llm import k` is a
+// pipe anyway.
 //
-// # The other half of export
-//
-// `crewlet llm export KEY` writes a blob to stdout and, without this, nothing
-// read it back: the documented way to "move a login onto another host" ended
-// at a string in a terminal. The `-secret-store` half reaches a second host
-// wherever the two are nodes of one company — the store is the fleet's — and
-// not where they are two unrelated laptops.
-//
-// FROM STDIN, never from a path argument: a credential bundle on argv is
-// visible in `ps` and lands in shell history, and the natural spelling —
-// `crewlet llm export k | ssh host crewlet llm import k` — is a pipe anyway.
-//
-// It REFUSES TO OVERWRITE an existing login, which is
-// [harness.Provider.ImportBundle]'s rule whatever the bundle's install record
-// says: a host that has been running holds the fresher refresh token, and an
-// operator replacing it says so with `crewlet llm logout` first. That is reported
-// here rather than swallowed, because "nothing happened" and "restored" look
-// identical from the outside and only one of them means the host is ready —
-// asked before stdin is read, so a refusal costs nothing, and answered again by
-// [harness.Provider.ImportBundle] under the lock its write takes, because a
-// login landing between the two was otherwise reported as a bundle restored.
-//
-// companyPath is the company document the entry was read from and
-// companySecrets the run's store, which say how the doctor that checks the
-// restored login can be run ([verifyWithDoctor]).
+// It REFUSES TO OVERWRITE an existing login ([harness.Provider.ImportBundle]'s
+// rule): a running host holds the fresher refresh token, so replacing it takes
+// `crewlet llm logout` first. Reported, not swallowed ("nothing happened" and
+// "restored" look alike); asked before stdin is read so a refusal costs nothing,
+// and again under the write's lock, since a login may land between. companyPath
+// and companySecrets say how the doctor that checks it runs ([verifyWithDoctor]).
 func importLLM(ctx context.Context, providers []harnessProvider, key, companyPath string,
 	companySecrets *companyStore, stdin io.Reader, stdout io.Writer) error {
 	p, err := oneProvider(providers, key)

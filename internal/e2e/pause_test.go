@@ -15,23 +15,15 @@ import (
 
 // A PAUSE AND A RESUME, THROUGH THE ROUTE A PERSON PRESSES THEM ON.
 //
-// `pause_seat` and `resume_seat` reach a node three ways — the dashboard's act
-// route, `crewlet seats`, and an operator's assistant over MCP — and all three
-// are one dispatch. This drives the act route as `crewlet seats` does, under
-// the deployment's Tier A token with an operation key in `Idempotency-Key`,
-// and reads back what each half of the engine recorded:
-//
-//   - the answer names the author as [iam.ActorFor] does — the token's own
-//     login, of the operator kind, through itself — because nobody is bound
-//     to it;
-//   - the coordination record is keyed by the seat's agent id, derived from
-//     its handle (ADR-0013), which is what every node reads a pause by;
-//   - the live projection puts the seat in `stopped`, for `paused`, and a
-//     resume takes it out again.
+// The act route, `crewlet seats` and MCP are one dispatch. This drives the act
+// route under the Tier A token with an `Idempotency-Key`, and reads back the
+// author as [iam.ActorFor] names it (the token's own login, operator kind:
+// nobody is bound to it), the coordination record keyed by the seat's agent id
+// (ADR-0013), and the projection: `stopped` for `paused`, cleared by a resume.
 //
 // Mutations: key the record by handle and the identity read finds nothing;
-// record the author as the bound seat's name and the receipt names the wrong
-// party; drop the projection's pause fold and the seat is never drawn stopped.
+// record the bound seat's name as author and the receipt names the wrong party;
+// drop the projection's pause fold and the seat is never drawn stopped.
 func TestASeatIsPausedAndResumedThroughTheActRoute(t *testing.T) {
 	n := start(t)
 	waitForSeat(t, n, "ceo")

@@ -39,26 +39,16 @@ import (
 
 // A FLEET, end to end: n engines, each embedding its own broker, clustered.
 //
-// # Why this is a second constructor and not a replacement for start
+// A second constructor, not a replacement for [start], the shape a quickstart
+// runs (one node, no quorum): making it a degenerate cluster would put a route
+// mesh, a metadata group and a replica count under sixty tests whose subject is
+// none of them. A fleet adds replication, quorum, leader election, placement,
+// seat handover, and a node too far behind adopting a peer's snapshot.
 //
-// [start] is the shape almost every case here wants, and it is the shape a
-// quickstart runs: one node, one broker, no quorum. Making it a degenerate
-// cluster would put a route mesh, a metadata group and a replica count under
-// every case in this package — three more things that can be slow or wrong,
-// under sixty tests whose subject is none of them.
-//
-// What this adds is the mechanisms a solo node never touches: replication,
-// quorum, leader election, placement, seat handover, and the state log's own
-// fleet behaviour — a record one node publishes appearing in another node's
-// rows, and a node too far behind adopting a peer's snapshot.
-//
-// # Every route runs through a relay
-//
-// The members' routes go through per-ordered-pair relays this process owns, so
-// a case can cut one member off and put it back. That costs n(n-1) listeners
-// and a copy of every route byte, which is why [start] does not pay it — and
-// it is the only way to exercise a partition, because stopping a listener
-// alone leaves NATS's established routes working indefinitely.
+// Every route runs through a per-ordered-pair relay this process owns, so a
+// case can cut one member off and restore it. That costs n(n-1) listeners and a
+// copy of every route byte, and is the only way to exercise a partition:
+// stopping a listener leaves NATS's established routes working indefinitely.
 type cluster struct {
 	nodes  []*node
 	relays *jetstreamtest.Relays
@@ -103,19 +93,16 @@ func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstr
 
 	t.Helper()
 	logs.attribute(t)
-	// BOUNDED IN WALL CLOCK AS WELL AS IN TRIES — see
-	// [jetstreamtest.ClusterStartBudget]. Three attempts at an unbounded
-	// cost each is a product nobody declared, and on this package it was
-	// measured at 1077 seconds across three cases, 64% of the whole run,
-	// against a package timeout it came within 115 seconds of firing.
+	// BOUNDED IN WALL CLOCK AS WELL AS IN TRIES, see
+	// [jetstreamtest.ClusterStartBudget]: attempts at an unbounded cost each
+	// were measured at 1077 seconds across three cases, 64% of the run.
 	//
-	// AND THE DEADLINE IS HANDED TO THE ATTEMPT rather than only consulted
-	// after it. Checked between attempts alone it bounded how MANY were
-	// made and nothing about how long one took: buildMember reaches
-	// engine.New on the test's own context, whose bring-up may spend
-	// [jsprovision.SequenceBudget], so one attempt could outlast this whole
-	// ceiling before the loop looked at it. A budget the work cannot
-	// observe is a comment rather than a bound.
+	// AND THE DEADLINE IS HANDED TO THE ATTEMPT, not only consulted after
+	// it: checked between attempts it bounds how MANY, not how long one
+	// takes, and buildMember reaches engine.New on the test's own context,
+	// whose bring-up may spend [jsprovision.SequenceBudget], so one attempt
+	// could outlast the ceiling. A budget the work cannot observe is a
+	// comment rather than a bound.
 	deadline := time.Now().Add(jetstreamtest.ClusterStartBudget)
 	// THE HOOK'S ARGV IS THE SAME FOR EVERY MEMBER OF EVERY ATTEMPT, and
 	// finding this test binary can fail the test — which only this
@@ -125,19 +112,14 @@ func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstr
 	hook := gitlettest.HookCommand(t)
 	gittest.RequireNode(t)
 	for attempt := 1; attempt <= clusterStartAttempts; attempt++ {
-		// THE MESH IS BUILT INSIDE THE ATTEMPT, because reserving its
-		// ports and starting its relays is part of what the ceiling
-		// bounds. Built before the context existed it was counted
-		// against the budget and bounded by none of it, and
-		// [jetstreamtest.StartRelays] carried a second budget of its
-		// own: relay setup could spend the whole ceiling and leave the
-		// member start an already-expired context, so the loop reported
-		// "no cluster came up" having never started a member.
-		// THE SOONER OF THE CEILING AND THIS ATTEMPT'S OWN TERM, which is
-		// [jetstreamtest.StartAttemptEnd]'s and not a second copy: handed the
-		// whole remaining budget, attempt one could spend all of it and the
-		// other three never ran — measured, on this case, at 181s of a 180s
-		// ceiling with "1 of 4 attempts" in the failure.
+		// THE MESH IS BUILT INSIDE THE ATTEMPT: reserving ports and starting
+		// relays is part of what the ceiling bounds, and
+		// [jetstreamtest.StartRelays] has no budget of its own that could
+		// leave the member start an expired context.
+		// THE SOONER OF THE CEILING AND THIS ATTEMPT'S OWN TERM, from
+		// [jetstreamtest.StartAttemptEnd]: handed the whole remaining
+		// budget, attempt one could spend all of it (181s of a 180s ceiling,
+		// "1 of 4 attempts" in the failure).
 		attemptCtx, cancelAttempt := context.WithDeadline(t.Context(),
 			jetstreamtest.StartAttemptEnd(time.Now(), deadline))
 		relays := mesh(attemptCtx, t, n)
@@ -151,27 +133,16 @@ func startMesh(t *testing.T, mesh func(context.Context, *testing.T, int) *jetstr
 		// ports, and the next attempt is about to ask for a fresh set.
 		relays.Stop()
 
-		// RETRY BY DEFAULT, AND NAME WHAT ACTUALLY FAILED.
-		//
-		// The default is the safe direction for this harness. Standing
-		// up n brokers on a shared machine fails for timing far more
-		// often than for anything else — a member that could not form
-		// its cluster inside the budget, a lost port, a metadata group
-		// that was still electing — and every one of those is what the
-		// attempts exist to absorb. Only a failure that is KNOWN to
-		// repeat identically is worth ending the test on, because for
-		// anything else the cost of guessing wrong is a case that would
-		// have passed.
-		//
-		// Measured by getting it backwards: gating the retry on a lost
-		// port alone ended three cluster cases on their first attempt,
-		// each on an `ensure stream ...: context deadline exceeded` that
-		// a second attempt had always absorbed.
-		//
-		// What the log must not do is call all of them a port race. That
-		// was the other half of the same defect: every attempt reported
-		// "lost a race" whatever had happened, so the one diagnostic a
-		// reader gets named a cause the run had no evidence for.
+		// RETRY BY DEFAULT, AND NAME WHAT ACTUALLY FAILED. Standing up n
+		// brokers on a shared machine fails for timing far more often than
+		// anything else (a member that could not form its cluster in the
+		// budget, a lost port, a metadata group still electing), which is
+		// what the attempts absorb. Only a failure KNOWN to repeat
+		// identically ends the test: guessing wrong costs a case that
+		// would have passed (gating on a lost port alone ended three cases
+		// on an `ensure stream ...: context deadline exceeded` a second
+		// attempt always absorbed). Nor may the log call every failure a
+		// port race, naming a cause the run had no evidence for.
 		if errors.Is(err, errNotRetryable) {
 			t.Fatalf("cluster attempt %d/%d failed for a reason retrying "+
 				"cannot fix: %v (relays: %s)",
@@ -266,21 +237,17 @@ func startMeshOnce(ctx context.Context, t *testing.T, relays *jetstreamtest.Rela
 		return c, nil
 	}
 
-	// EVERY MEMBER THIS ATTEMPT STARTED IS STOPPED BEFORE THE NEXT ONE,
-	// and it is the difference between a retry and a pile-up.
+	// EVERY MEMBER THIS ATTEMPT STARTED IS STOPPED BEFORE THE NEXT ONE:
+	// the difference between a retry and a pile-up.
 	//
-	// A member left running is one whose engine is still applying, still
-	// heartbeating and still competing for the same cores as the attempt
-	// that replaces it — and whose broker is still gossiping under the
-	// cluster name the next attempt's members will use, so any member that
-	// does come up forms a cluster with the ghost. The observed shape was
-	// attempt 1 timing out on one member, attempt 2 failing to become ready
-	// at all, and attempt 3 failing worse: not slowness, but each attempt
-	// racing everything the last one left.
+	// A member left running still applies, heartbeats and competes for the
+	// replacement's cores, and its broker still gossips under the cluster
+	// name the next attempt's members use, so any that comes up forms a
+	// cluster with the ghost: attempt 1 timing out on one member, attempt 2
+	// never ready, attempt 3 worse.
 	//
-	// t.Cleanup cannot do this. It runs when the TEST ends, which is after
-	// every attempt — so registering teardown there is registering it for
-	// the wrong moment.
+	// t.Cleanup cannot do this: it runs when the TEST ends, after every
+	// attempt.
 	stopAll(stops)
 	// THE ERROR GOES BACK rather than being judged here: whether it is
 	// worth another attempt is the caller's question, and it is the only
@@ -299,26 +266,16 @@ type teardown struct {
 
 // stopAll takes a fleet down, one phase at a time and each phase on every
 // member AT ONCE: every API, then every engine, then every broker and store.
-// It returns when all of it is down.
 //
 // THE BROKERS GO LAST, AFTER EVERY ENGINE HAS STOPPED, which is why a member's
-// backends are opened by the harness and lent to its engine rather than owned
-// by it ([engine.Options.Backends]). An engine's stop takes coordination steps
-// — the stop event, the presence release, the seat and duty releases — that
-// need a quorum of the fleet's brokers. Stopped one member after another, the
-// last always stopped alone, its peers' brokers already gone, and spent its
-// whole stop allowance on steps that could not succeed: measured, 10 to 25 s
-// per teardown. Stopped together but each closing its own broker on the way
-// out, whichever finished first still took its broker with it, and a slower
-// peer was stranded the same way in about half the runs (a case's teardown
-// took 1 s or 16 s). With every broker up until every engine is down, each
-// stop takes its steps against a fleet that can answer them.
-//
-// EVERY API BEFORE ANY ENGINE, so nothing serves a request into an engine that
-// is stopping. Within a member, each phase runs in REVERSE, because that is
-// the order the pieces were built in and each one's stop assumes the ones
-// after it are still there: the projector reads the queue the engine owns,
-// and the server serves the app.
+// backends are opened by the harness and lent to its engine
+// ([engine.Options.Backends]): an engine's stop takes coordination steps that
+// need a quorum of the fleet's brokers. Stopped one after another, the last
+// spent its whole allowance on steps that could not succeed (10 to 25 s);
+// stopped together but each closing its own broker, a slower peer was
+// stranded the same way in about half the runs. EVERY API BEFORE ANY ENGINE.
+// Within a member each phase runs in REVERSE of build order: the projector
+// reads the queue the engine owns, and the server serves the app.
 func stopAll(members []teardown) {
 	phase := func(of func(teardown) []func()) {
 		var wg sync.WaitGroup
@@ -339,17 +296,11 @@ func stopAll(members []teardown) {
 // clusterStartAttempts is how many times a fleet is stood up before the case
 // gives up.
 //
-// [jetstreamtest.ClusterStartAttempts] ITSELF, not a second number applying
-// its reasoning. This used to restate that constant's argument as its own
-// while carrying three where the constant carried four — one decision, two
-// spellings, each comment asserting it matched the other. That is the shape textcut, whsec and jsprovision were each written to
-// remove, and the fix is the same one: read the constant rather than restate
-// the argument.
-//
-// The reasoning it now simply defers to: the collision is with work this
-// process does not coordinate with, so a wider window does not help and
-// noticing does — and each attempt reserves its own mesh, which is the half
-// that makes "trying again" mean something. See [startMesh].
+// [jetstreamtest.ClusterStartAttempts] ITSELF, not a second spelling of its
+// argument: restating it once drifted (three against four). The collision is
+// with work this process does not coordinate with, so a wider window does not
+// help and noticing does, and each attempt reserves its own mesh, which is
+// what makes "trying again" mean something. See [startMesh].
 const clusterStartAttempts = jetstreamtest.ClusterStartAttempts
 
 // clusterHost is the interface every member of a test mesh binds its route
@@ -410,19 +361,14 @@ func memberBootstrap(t *testing.T, relays *jetstreamtest.Relays, i, n int,
 	// one replica a publish is durable on the member that took it, and a
 	// case asserting a peer sees it would be asserting timing.
 	boot.Stream.Replicas = n
-	// ONE LEASE STORE FOR THE FLEET, which is what makes it a fleet rather
-	// than n nodes that happen to share a log. The default, `local`, keeps
-	// every lease in this process — Tier A refuses it on a clustered stream
-	// for exactly that reason — and under it each member claimed every seat
-	// and every duty for itself and saw no peer's presence at all — every
-	// fleet singleton ran once per member, and every membership read counted
-	// one node.
-	//
-	// It went unnoticed because nothing between this struct and the broker
-	// held it to Tier A: the loader validates a FILE, and this bootstrap is
-	// built in code. engine.New validates what it is given now, so this
-	// harness can only stand up a fleet an operator could run — which is
-	// also why [fleetSize] is three.
+	// ONE LEASE STORE FOR THE FLEET, which makes it a fleet rather than n
+	// nodes sharing a log. The default, `local`, keeps every lease in this
+	// process (Tier A refuses it on a clustered stream), so each member
+	// claimed every seat and duty itself, every fleet singleton ran once
+	// per member, and every membership read counted one node. It went
+	// unnoticed because the loader validates a FILE and this bootstrap is
+	// built in code; engine.New validates it now, which is also why
+	// [fleetSize] is three.
 	boot.Coordination.Type = config.CoordinationEmbeddedKV
 	// AND A PERSON'S TOKEN: a git push is a person's own, under a token the
 	// identity directory binds to their human seat ([bindDev] binds this
@@ -487,18 +433,16 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 		return fail(fmt.Errorf("%w: bootstrap: %w", errNotRetryable, err))
 	}
 
-	// PROBED IMMEDIATELY BEFORE THE BROKER BINDS IT, which is the guard
+	// PROBED IMMEDIATELY BEFORE THE BROKER BINDS IT, the guard
 	// [jetstreamtest.Cluster.start] has and this path did not.
 	//
-	// It cannot close the race — nothing can, short of never letting the
-	// port go — but it shortens the window from however long a broker
-	// takes to get there down to microseconds, and it names the CAUSE. Its
-	// partner is the broker's own refusal of a bind that fails inside that
-	// window — a Fatalf in nats-server, which the start reports at once as
-	// [jetstream.ErrRoutePortTaken] — and together they turn a lost port
+	// It cannot close the race, but it shrinks the window to microseconds
+	// and names the CAUSE. Its partner is the broker's own refusal of a
+	// bind lost inside that window (a nats-server Fatalf, reported at once
+	// as [jetstream.ErrRoutePortTaken]); together they turn a lost port
 	// into an immediate, named retry.
 	//
-	// THE SAME HOST THE MEMBER BINDS, set by [memberBootstrap] — a probe
+	// THE SAME HOST THE MEMBER BINDS, set by [memberBootstrap]: a probe
 	// against a different address answers about a port the server never
 	// asks for.
 	port := boot.Stream.Cluster.Port
@@ -576,19 +520,13 @@ func buildMember(ctx context.Context, t *testing.T, boot *config.Bootstrap, i in
 	// THROUGH wireAPI, NOT serveAPI: this runs off the test's goroutine,
 	// where t.Fatalf would end only this goroutine, and the API's teardown
 	// belongs in this member's own, in the phase [stopAll] runs before the
-	// engines', so a failed attempt stops the listener, the projector and
-	// the app before the engine they read from, and before the next
-	// attempt starts.
+	// engines', so a failed attempt stops it before the engine it reads from.
 	//
 	// THE SUPPRESSION BELOW: the context handed over is deliberately NOT
-	// this attempt's. `ctx` is cancelled the moment the bring-up ends, and
-	// what wireAPI starts under it — the app's push ticks and the live
-	// projector — serves for the whole case. The test's own context is
-	// that lifetime exactly: longer than the attempt, and still ended when
-	// the case is over, which [context.WithoutCancel] would not be.
-	//
-	// AT THE PRODUCTION TICK, not the single-node cases' 25 ms — see
-	// [tickInterval] for what that costs a fleet.
+	// this attempt's. `ctx` is cancelled when the bring-up ends, and what
+	// wireAPI starts under it serves the whole case. The test's context is
+	// that lifetime exactly; [context.WithoutCancel] would outlive the case.
+	// AT THE PRODUCTION TICK: see [tickInterval].
 	app, srv, apiStops, err := wireAPI(t.Context(), e, boot, chatLive.Hub(), ln, //nolint:contextcheck // see above
 		func(opts *api.Options) { opts.HealthInterval = stream.HealthInterval })
 	stops.api = append(stops.api, apiStops...)
@@ -668,24 +606,17 @@ func (c *cluster) hydrated(t *testing.T) {
 }
 
 // noParallel is what a cluster case calls INSTEAD of [testing.T.Parallel], and
-// the omission is deliberate rather than an oversight.
+// the omission is deliberate.
 //
-// A three-member cluster in this package is three embedded NATS servers, three
-// pairs of SQLite databases and better than twenty raft groups, all on one
-// machine. Two of them at once is twice that competing for one disk and one
-// scheduler, and what gives way first is raft: measured here, each case passes
-// alone in under forty seconds and both fail together — a member's metadata
-// read timing out after thirty, reported as a boot failure naming a stream.
+// A three-member cluster is three embedded NATS servers, three pairs of SQLite
+// databases and over twenty raft groups on one machine. Two at once compete for
+// one disk and scheduler and raft gives way first: each case passes alone in
+// under forty seconds and both fail together, as a boot failure naming a stream.
 //
-// AND NOT BESIDE THE SINGLE-ENGINE CASES EITHER, which do run in parallel:
-// `go test` starts a parallel top-level test only once every sequential one
-// has returned, so every fleet here stands up, runs and comes down before the
-// first of them starts. A fleet's start budget is spent against a quiet
-// runner, and the single-engine cases share it only with each other.
-//
-// A function rather than a bare comment because the absence of a call is not
-// something a reader notices, and "why is this one not parallel" is exactly
-// the question a later edit answers by adding it back.
+// NOR BESIDE THE SINGLE-ENGINE CASES: `go test` starts a parallel top-level
+// test only once every sequential one has returned, so every fleet runs and
+// comes down first, against a quiet runner. A function so a later edit does
+// not answer "why is this one not parallel" by adding it back.
 func noParallel(t *testing.T) {
 	t.Helper()
 	t.Setenv("CREWLET_CLUSTER_CASE", "1") // Setenv also forbids t.Parallel.
@@ -693,35 +624,16 @@ func noParallel(t *testing.T) {
 
 // fleetSize is how many members a cluster case stands up.
 //
-// THREE, because that is the smallest fleet Tier A will run. Two embedded
-// members on the embedded KV are refused by name (`stream.cluster.peers`, in
-// [config.Bootstrap.Validate]): two have no coordination quorum without each
-// other, so the fleet stops serving the moment either restarts, and a rolling
-// upgrade restarts them one at a time. That rule is right for production, and
-// engine.New now holds every bootstrap to it — so a harness of two was a
-// harness running a fleet no operator could, which is what this had been twice
-// over: first on local coordination, where every member leased every seat to
-// itself, and then on the KV at a size Tier A refuses.
+// THREE, the smallest fleet Tier A will run: two embedded members on the
+// embedded KV are refused (`stream.cluster.peers`, in
+// [config.Bootstrap.Validate]) because two have no coordination quorum without
+// each other, so a rolling upgrade, restarting them one at a time, stops the
+// fleet. engine.New holds every bootstrap to it.
 //
-// IT WAS TWO FOR COST, measured when this package shared a runner with the
-// rest of the tree: three embedded brokers with better than twenty raft groups
-// each starved each other, each case passing alone and every one timing out
-// under `go test ./...`. That contention is gone rather than paid for here —
-// this is a solo package ([solo.Run], in logsink_test.go), run at -p 1 with no
-// other package beside it, and no two of its cluster cases ever run at once
-// ([noParallel]). What the third member costs now, measured on a four-core
-// machine under -race, the ten cluster cases run alone and in sequence: 494 s
-// at three members in each of two runs against 476 s at two, about 4% — the
-// fixed cost of a case is standing a fleet up and tearing it down, and the
-// extra member stands up beside the others rather than after them. A third
-// run took 584 s, all of the difference one cluster start that timed out and
-// was retried, which is what [clusterStartAttempts] is for. (The search case
-// got cheaper, 60 s to 34–50 s, because it now writes the handful of pages
-// that cover the table rather than two dozen.)
-//
-// WHAT IT BUYS beyond being runnable is a MAJORITY: the partition case cuts one
-// member off while the other two keep their quorum, so the scatter has to tell
-// an absent peer from a present one rather than from nobody at all.
+// Cost no longer argues for two: this solo package ([solo.Run]) runs at -p 1
+// with no two cluster cases at once ([noParallel]), and measured under -race
+// three members cost 494 s against 476 s at two (about 4%). The third buys a
+// MAJORITY: the partition case cuts one off while two keep quorum.
 const fleetSize = 3
 
 // clusterSettle is how long a fleet assertion waits for a record one member
@@ -759,28 +671,17 @@ func (c *cluster) whole(t *testing.T, n *node) func() bool {
 }
 
 // fleetClaims are the claims [TestAFleetOfThree] makes of one fleet, in the
-// order it makes them, each a subtest named for the claim it makes. A claim
-// that was once a case of its own, standing up a fleet of its own, keeps the
-// name it had then; the chat claim joined as a claim.
+// order it makes them, each a subtest named for its claim.
 //
 // THE ORDER IS PART OF THE CLAIMS, which is what sharing a fleet costs:
-//   - the snapshots claim is FIRST, because what it holds is a snapshot taken
-//     AT BOOT, and on a fleet several claims old an artefact on disk could be
-//     one any of them caused;
-//   - the agreement claim is LAST, because it compares every replicated row
-//     of every member, and placed last that is every row every claim before
-//     it wrote — tasks, keys minted three ways at once, pages, a file, a
-//     repository's pushes — rather than only its own (which is why it waits
-//     on every log's end: [cluster.digestsAtOneEnd]);
-//   - the code claim is the one before it, because it is the one claim that
-//     WRITES THE COMPANY'S CONFIGURATION — it archives its repository through
-//     PUT /config and gives the document back — so every claim it could
-//     disturb has run, and the one after it compares rows and runs no turn;
-//   - the rest read only what they wrote, under op ids, titles, paths and a
-//     repository no other claim uses, so another claim's rows only add to
-//     what they read: the search's coverage is computed from its own pages
-//     and every match another page adds is still a match, and the chat claim
-//     reads and prunes the one room it made.
+//   - snapshots FIRST: it holds a snapshot taken AT BOOT, and later an
+//     artefact could be one any claim caused;
+//   - agreement LAST: it compares every replicated row of every member
+//     ([cluster.digestsAtOneEnd]), so every row each earlier claim wrote;
+//   - code just before it: it WRITES THE COMPANY'S CONFIGURATION (PUT /config),
+//     so every claim it could disturb has run, and the last runs no turn;
+//   - the rest read only what they wrote, under their own ids and paths, so
+//     another claim's rows only add to what they read.
 var fleetClaims = []struct {
 	name string
 	run  func(*testing.T, *cluster)
@@ -797,43 +698,18 @@ var fleetClaims = []struct {
 	{"AFleetAgreesAboutOneCompany", claimAFleetAgreesAboutOneCompany},
 }
 
-// A FLEET OF THREE, AND WHAT ONLY A FLEET CAN SHOW — on ONE fleet.
-//
-// Every claim here but the chat one stood up a fleet of its own: three members
-// over the same company and the same bootstrap, a boot and a teardown apiece
-// around a body that was often the shorter part. The claims are about a
-// running fleet, not about its boot, so they share one — which is why the
-// chat claim was written as one of them rather than as a case.
-//
-// WHAT THAT COSTS, and what pays for each:
-//   - the claims are ordered — see [fleetClaims] for why each sits where it
-//     does;
-//   - one fleet that cannot be stood up fails every claim at once, where it
-//     failed one; [startMesh] retries it on fresh ports as it always has;
-//   - a claim that leaves the fleet unhealthy would fail every claim after
-//     it, each on its own budget. So every claim starts on a fleet whose
-//     members have all hydrated — the state each case started from — and
-//     each count the whole fleet live ([cluster.whole]); when they do not
-//     after a claim, the case stops there naming that claim, rather than
-//     spending a budget per claim reporting it again;
-//   - a run boots one fleet rather than one per claim, so a defect in
-//     booting one shows once a run rather than once per claim — boot is
-//     still exercised by every case in this package and by the partition
-//     case's own fleet.
-//
-// ONE MEMBER RUNS NO SEATS ([chatWriterNode], [withoutSeats]). The chat claim
-// posts a message on a member the seat it wakes can never be on, which only a
-// member without [placement.RoleSeats] makes a fact rather than a timing; and
-// no other claim runs a turn, so every other claim reads a fleet whose members
-// all hold the estate, serve the API and take duties, exactly as before. It is
-// also a fleet shape deployments run — an ingress member that takes no seats
-// beside two that do.
+// A FLEET OF THREE, AND WHAT ONLY A FLEET CAN SHOW — on ONE fleet, since the
+// claims are about a running fleet, not its boot. The claims are ordered
+// ([fleetClaims]); a fleet that cannot be stood up fails every claim at once
+// ([startMesh] retries on fresh ports); each claim starts on a hydrated fleet
+// counting every member live ([cluster.whole]), else the case stops naming it.
+// ONE MEMBER RUNS NO SEATS ([chatWriterNode], [withoutSeats]): the chat claim
+// posts on a member the seat it wakes can never be on, which only a member
+// without [placement.RoleSeats] makes a fact rather than a timing.
 //
 // THE PARTITION CLAIM KEEPS A FLEET OF ITS OWN
-// ([TestAPartitionedMemberIsSilentRatherThanSlow]): it needs every route to
-// run through a relay this process can cut, which is cost and risk under
-// every claim that never cuts one ([jetstreamtest.StartDirectMesh] says
-// why), and it is the one claim that breaks its fleet on purpose.
+// ([TestAPartitionedMemberIsSilentRatherThanSlow]): its relays are costly
+// ([jetstreamtest.StartDirectMesh]) and it breaks its fleet on purpose.
 func TestAFleetOfThree(t *testing.T) {
 	noParallel(t)
 	c := startCluster(t, fleetSize, withoutSeats(chatWriterNode))
@@ -931,17 +807,12 @@ func claimARecordOneNodeWritesReachesEveryNodesRows(t *testing.T, c *cluster) {
 
 // EVERY NODE MINTS INTO ONE KEY SPACE, and no two tasks share a key.
 //
-// # Why this is the case a fleet has and a solo node does not
-//
-// A key is what people paste into chat, so two tasks sharing one is a person
-// opening the wrong record from somebody's link. The counter that mints them
-// is arbitrated on the PROJECT's own subject: three nodes minting at once
-// contend at the broker and exactly one wins each round, and the losers read
-// the value that won and take the next.
-//
-// On one node that arbitration is untested — there is nobody to lose to. Here
-// all three file into one project simultaneously, which is exactly the shape
-// that produced two ENG-1s in the design this replaced.
+// A key is what people paste into chat, so a shared one opens the wrong record
+// from somebody's link. The counter is arbitrated on the PROJECT's own subject:
+// three nodes minting at once contend at the broker, one wins each round, and
+// the losers read the winner's value and take the next. On one node that
+// arbitration is untested; here all three file into one project at once, the
+// shape that produced two ENG-1s in the design this replaced.
 func claimEveryNodeMintsIntoOneKeySpace(t *testing.T, c *cluster) {
 	type filed struct {
 		key string
@@ -991,23 +862,16 @@ func claimEveryNodeMintsIntoOneKeySpace(t *testing.T, c *cluster) {
 	}
 }
 
-// A NODE TAKES SNAPSHOTS AND SERVES THEM, which is the half of the recovery
-// path a recipient cannot supply for itself.
+// A NODE TAKES SNAPSHOTS AND SERVES THEM, the half of the recovery path a
+// recipient cannot supply for itself.
 //
-// # Why this is asserted as a product fact rather than a unit
-//
-// [statelog] certifies the snapshot loop and the transfer against fakes. What
-// it cannot certify is that a running ENGINE arms them — and half-wired is the
-// worst state this mechanism has, because the wired half reports itself
-// working: a node below the log's floor asks the fleet, nothing answers, and
-// it comes up on the history it has for ever with one line in its log.
-//
-// So the assertion is on the artefact: a member of a running fleet has one on
-// disk, its manifest names every registered domain, and a peer asking the
-// fleet is offered it. Nothing here forces a node below the floor — that needs
-// a trim, which needs a backup, which is [internal/backup]'s own suite. What
-// this establishes is that if one ever did fall behind, there would be
-// something to adopt.
+// [statelog] certifies the snapshot loop and transfer against fakes, not that a
+// running ENGINE arms them. Half-wired is the worst state: a node below the
+// log's floor asks the fleet, nothing answers, and it stays on the history it
+// has with one log line. So the assertion is on the artefact: a member has one
+// on disk, its manifest names every registered domain, and a peer asking the
+// fleet is offered it. Forcing a node below the floor needs a trim and so a
+// backup, which is [internal/backup]'s suite.
 func claimAFleetTakesAndOffersSnapshots(t *testing.T, c *cluster) {
 	// A SNAPSHOT IS TAKEN AT BOOT, not only on the interval — the
 	// interval is measured against the newest artefact on DISK, so a node
@@ -1215,30 +1079,16 @@ func (c *cluster) nodeIDs() []string {
 
 // THE FLEET ANSWERS ONE SEARCH BETWEEN ITS MEMBERS.
 //
-// # What this adds over the coordinator's own suite
+// [internal/search]'s cases prove the merge, coverage arithmetic and wire format
+// over fixtures. Only here are REAL engines (own broker, store, index) answering
+// each other's slice requests, the arm a single-node suite passes vacuously.
 //
-// [internal/search]'s cases drive the fan-out over fixtures: they prove the
-// merge, the coverage arithmetic and the wire format. What none of them proves
-// is that REAL engines — each with its own broker, its own store, its own
-// index and its own registration — answer each other's slice requests. This is
-// the only place the subject, the answerer, the assignment table and
-// independently built indexes are all live at once, and it is exactly the arm
-// a single-node suite passes vacuously.
+// The assertion is on COVERAGE, not only hits: every member holds the whole
+// corpus, so a fan-out that fell back to the local scan returns the same
+// documents; the buckets each answer came from tell them apart.
 //
-// # Why the assertion is on the COVERAGE and not only on the hits
-//
-// Every member holds the whole corpus, so none NEEDS another to answer. A
-// fan-out that silently fell back to the local scan would return the same
-// documents in the same order — what separates the two is which buckets each
-// answer came from, which is what this reads.
-//
-// # And why the table is explicit rather than derived from the corpus size
-//
-// A search below [search.FanOutFloor] is answered by the asking node alone, by
-// design, and writing ten thousand pages through the real write path to cross
-// that floor would measure the applier rather than the fan-out. The floor's own
-// decision is [search]'s to test; what a fleet can see is the network, so this
-// case hands out the table the floor would have produced.
+// The table is explicit because a search below [search.FanOutFloor] is answered
+// by the asking node alone, and crossing the floor would measure the applier.
 func claimTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T, c *cluster) {
 	table := search.Divide(c.nodeIDs())
 	if len(table) != fleetSize {
@@ -1391,23 +1241,16 @@ func claimTheFleetAnswersOneSearchBetweenItsMembers(t *testing.T, c *cluster) {
 
 // WHAT A FLEET GUARANTEES A READER, AND THAT ITS MEMBERS AGREE.
 //
-// Three things only a fleet can show, in one claim because they are about the
-// same writes every member must see alike, and the arms do not interfere. It
-// is the LAST claim [TestAFleetOfThree] makes, so the twins arm compares every
-// row the claims before it wrote as well as its own.
+// Three things only a fleet can show, on the same writes. The LAST claim
+// [TestAFleetOfThree] makes, so the twins arm compares every earlier row too.
 //
-//  1. A LINEARIZABLE READ ON ANOTHER MEMBER SEES AN ACKNOWLEDGED WRITE, with
-//     no wait loop. That is what the barrier append buys and the one thing
-//     [claimARecordOneNodeWritesReachesEveryNodesRows] deliberately does not
-//     assert — it polls at session level, because its subject is that the
-//     record arrives at all rather than when.
-//  2. THE MEMBERS ARE TWINS. Every domain is N identical SQL copies, so two
-//     members answering differently about one company is the failure the whole
-//     framework exists to make impossible — and from either screen it looks
-//     exactly like the other node being idle.
-//  3. THE KNOWLEDGE BASE IS ONE OF THOSE DOMAINS TOO. Pages arrived on the log
-//     later than the tracker did, and the arm that would have caught a
-//     half-adopted domain is this one.
+//  1. A linearizable read on another member sees an acknowledged write with no
+//     wait loop (the barrier append; [claimARecordOneNodeWritesReachesEveryNodesRows]
+//     polls past it).
+//  2. The members are twins: N identical SQL copies per domain, since two
+//     answering differently looks from a screen like the other node being idle.
+//  3. The knowledge base is one of those domains: pages reached the log after
+//     the tracker, and this arm catches a half-adopted domain.
 func claimAFleetAgreesAboutOneCompany(t *testing.T, c *cluster) {
 	written, err := operator(t, c.nodes[0]).CreateTask(t.Context(),
 		"fleet-agrees-1", newTask("ENG", "the linearizable one"), nil)
@@ -1512,18 +1355,15 @@ func claimAFleetAgreesAboutOneCompany(t *testing.T, c *cluster) {
 	}
 
 	// (4) AND THE MEMBERS ARE TWINS, ROW FOR ROW — LAST, because it can
-	// only mean anything once every member has applied everything above,
-	// and on EVERY domain's log rather than the two this case wrote to
-	// ([cluster.digestsAtOneEnd]). The board listing was one query's
-	// answer; this is every REPLICATED table of every registered domain,
-	// compared as a digest.
+	// only mean something once every member has applied everything above,
+	// on EVERY domain's log ([cluster.digestsAtOneEnd]), compared as a
+	// digest of every REPLICATED table.
 	//
-	// The class is what makes the comparison meaningful rather than
-	// merely strict: `Divergent` tables are written by an apply and still
-	// legitimately differ (a node records what IT deferred), and `Local`
-	// ones are this node's own — so comparing every table would fail on a
-	// healthy fleet, and comparing only the board would pass on one whose
-	// domains had quietly diverged underneath it.
+	// The class makes it meaningful: `Divergent` tables are written by an
+	// apply and legitimately differ (a node records what IT deferred), and
+	// `Local` ones are this node's own, so comparing every table would fail
+	// a healthy fleet, and only the board would pass one whose domains had
+	// quietly diverged.
 	digests := c.digestsAtOneEnd(t)
 	twins := map[string]string{}
 	for i, digest := range digests {
@@ -1554,21 +1394,15 @@ func claimAFleetAgreesAboutOneCompany(t *testing.T, c *cluster) {
 }
 
 // digestsAtOneEnd is every member's [replicatedDigest], taken once every member
-// has applied every registered domain's log to the same end — and taken again
-// should any log have grown while they were read.
+// has applied every registered domain's log to the same end, and again if any
+// log grew while they were read.
 //
-// EVERY DOMAIN, NOT THE ONES A CASE WROTE TO. The digest covers every
-// replicated table of every domain the engine registers, and a member that
-// had not yet applied a record on a log the case never wrote — a node's usage
-// day, published at boot and whenever a fingerprint moves; an embedding the
-// duty filed — would differ from its peers for a reason that is timing rather
-// than divergence. The domain list is the engine's ([engine.Engine.Domains]),
-// for the reason [replicatedDigest] reads it there.
-//
-// AT ONE END, which is what makes the comparison a property of the rows: a
-// log that grew between the first member's read and the last's could hand two
-// healthy members different rows. So the ends are read before and after, and
-// the digests count only when nothing was appended in between.
+// It covers every domain the engine registers ([engine.Engine.Domains], as
+// [replicatedDigest] reads it), not the ones a case wrote to: a member that had
+// not yet applied a record on an unwritten log (a usage day, an embedding)
+// would differ from its peers by timing, not divergence. The ends are read
+// before and after, and the digests count only when nothing was appended in
+// between, so the comparison is a property of the rows.
 func (c *cluster) digestsAtOneEnd(t *testing.T) []map[string]string {
 	t.Helper()
 	var digests []map[string]string
@@ -1709,37 +1543,15 @@ func digestRows(rendered []string) string {
 // A MEMBER THAT CANNOT BE REACHED FALLS SILENT WITHIN THE BUDGET, AND COMES
 // BACK WHEN THE NETWORK DOES.
 //
-// # Why this needs a real partition
+// `internal/search` pins [search]'s partial-answer arithmetic against a fake
+// peer returning nothing; only a downed route shows whether it can hang a
+// search. The only case on [startPartitionableCluster]:
+//  1. The scatter returns rather than waiting out the caller: blocking on an
+//     absent member would stop every search on every node.
+//  2. The silence is the partition: the same scatter is full BEFORE the cut.
+//  3. And only the partition: the member the cut did not touch still answers.
 //
-// [search]'s partial answer — `buckets_answered`, `buckets_missing` and the
-// nodes it names in `Absent` — is arithmetic over which peers replied, and
-// `internal/search`'s own cases pin that arithmetic against a fake peer that
-// returns nothing. What they cannot show is the thing that makes a peer return
-// nothing in production: a route that is down. A fake that answers instantly
-// with an empty slice and a member that is unreachable are the same value and
-// completely different failures, and only one of them can hang a search.
-//
-// So this is the network half, and the only case in this package that takes
-// [startPartitionableCluster]. Three claims, in the one order that can prove
-// them:
-//
-//  1. THE SCATTER RETURNS RATHER THAN WAITING OUT THE CALLER. A search whose
-//     coordinator blocks on an absent member is worse than a partial answer —
-//     it is a fleet where losing one node stops every search on every node,
-//     which is precisely what holding the whole corpus on each member is meant
-//     to prevent.
-//  2. THE SILENCE IS THE PARTITION. The same scatter is run BEFORE the cut and
-//     must come back full, or a missing answer afterwards would prove only that
-//     nobody was ever listening.
-//  3. AND ONLY THE PARTITION. The member the cut did not touch answers through
-//     it, so what falls silent is the one member that is unreachable and not
-//     the asker's whole view of the fleet — which from the answer alone would
-//     read as the same partial result, with every peer named absent.
-//
-// The scatter rides core NATS request/reply — no stream, no consumer, no ack,
-// per [queue]'s `Ask`/`Serve` — so cutting a member's routes is exactly what
-// makes it unreachable. The other two keep their quorum across the cut, but
-// quorum is not what this measures.
+// The scatter rides core NATS request/reply (`Ask`/`Serve` in [queue]).
 func TestAPartitionedMemberIsSilentRatherThanSlow(t *testing.T) {
 	noParallel(t)
 	c := startPartitionableCluster(t, fleetSize)

@@ -79,13 +79,11 @@ var ErrLabelValue = errors.New("not a node label value")
 // separator does not), or with whitespace around it. The empty string is a
 // value.
 //
-// ONE GRAMMAR, for [CheckLabelKey]'s reason: a value is matched EXACTLY
-// between node.labels and a role's placement selector, so a value one side
-// accepts and the other refuses is a label nothing can match. Whitespace
-// AROUND a value is refused rather than trimmed for the same reason a key's
-// is: " eu" and "eu" look identical in a file. Tier A trims every string as it
-// loads, so a node's own values never carry any; a selector, written in Tier
-// B, keeps what its author wrote.
+// ONE GRAMMAR, for [CheckLabelKey]'s reason: a value is matched EXACTLY between
+// node.labels and a role's placement selector, so one side accepting what the
+// other refuses is a label nothing can match. Surrounding whitespace is refused
+// rather than trimmed (" eu" and "eu" look identical in a file). Tier A trims on
+// load; a Tier B selector keeps what its author wrote.
 func CheckLabelValue(value string) error {
 	switch {
 	case len(value) > MaxLabelValueBytes:

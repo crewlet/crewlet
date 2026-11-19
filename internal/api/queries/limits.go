@@ -69,17 +69,13 @@ var LimitUnits = []LimitUnit{LimitCount, LimitSeconds, LimitFraction, LimitPerSe
 // engine enforces, and the engine's default for it.
 //
 // THE VALUE IS THE ENFORCED ONE. A company document is decoded over
-// [config.DefaultCompany], so a cap the document leaves out is the default in
-// the applied company, and every caller of these settings reads the applied
-// company. A screen therefore draws `value` and never re-derives a default:
-// the dashboard keeping its own copy of [config.DefaultTurnEngine] is the
-// drift this answer exists to prevent.
+// [config.DefaultCompany], so a cap it leaves out is the default in the applied
+// company. A screen draws `value` and never re-derives a default: a dashboard
+// copy of [config.DefaultTurnEngine] is the drift this answer prevents.
 //
-// THE DEFAULT IS BESIDE IT, never a "set" flag: the applied company does not
-// remember whether a value was written or defaulted, and a document that
-// writes the default value is indistinguishable from one that writes nothing.
-// What a screen can say truthfully is whether the value differs from the
-// engine's default.
+// THE DEFAULT IS BESIDE IT, never a "set" flag: a document writing the default
+// is indistinguishable from one writing nothing, so a screen can only say
+// whether the value differs from the engine's default.
 type LimitRow struct {
 	// Key is the setting's path in the company document, as
 	// `crewlet validate` and `PATCH /config` name it.

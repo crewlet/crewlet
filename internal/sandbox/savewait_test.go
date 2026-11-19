@@ -73,8 +73,16 @@ func comeOut(take SessionCapture, state CaptureState) SessionCapture {
 // must take it.
 func stampOut(t *testing.T, rig *coordRig, turnID string, take SessionCapture, state CaptureState) SessionCapture {
 	t.Helper()
+	return stampOutIn(t.Context(), t, rig, turnID, take, state)
+}
+
+// stampOutIn is stampOut from inside a call the coordinator made, under ctx.
+func stampOutIn(ctx context.Context, t *testing.T, rig *coordRig, turnID string, take SessionCapture,
+	state CaptureState) SessionCapture {
+
+	t.Helper()
 	out := comeOut(take, state)
-	if took, err := rig.pending.StampCapture(t.Context(), turnID, out); err != nil || !took {
+	if took, err := rig.pending.StampCapture(ctx, turnID, out); err != nil || !took {
 		t.Fatalf("stamping (%d, %d) %s = %v, %v; want it taken", out.LaunchSeq, out.CaptureSeq, state, took, err)
 	}
 	return out

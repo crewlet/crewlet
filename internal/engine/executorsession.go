@@ -201,6 +201,17 @@ func (k executorKeep) Keeps() bool {
 	return c.Config.TurnEngine.ConversationSession.KeepsSessions()
 }
 
+// SaveInterval is `turn_engine.conversation_session.save_interval_seconds` as
+// the revision this node runs states it, the default for none
+// ([sandbox.SessionKeep.SaveInterval]).
+func (k executorKeep) SaveInterval() time.Duration {
+	c := k.engine.Company()
+	if c == nil || c.Config == nil {
+		return config.DefaultSaveInterval
+	}
+	return c.Config.TurnEngine.ConversationSession.SaveInterval()
+}
+
 // executorPolicy is `turn_engine.conversation_session`'s switch and per-seat
 // budget, as the revision the fleet's activation pointer names states them
 // ([Engine.servedFleetRevision]), or why this node cannot know them.

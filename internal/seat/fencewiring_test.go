@@ -18,16 +18,10 @@ import (
 // carriers are the configuration types the seat fence travels through, from
 // the engine down to the loop that checks it, keyed as `package.Type`.
 //
-// Every one of them is a plain struct literal with an optional func field, so
-// a caller that leaves the field out compiles, runs, and silently disarms the
-// check for whatever it built. That is not a hypothetical: the loop has
-// checked a fence at the top of every round since it was written, the field
-// was on its config from the same commit, and for the whole life of this
-// engine the ONLY assignment in the tree was in the loop's own test. Three
-// documents described the protection; nothing ran it.
-//
-// The rule is therefore not "the fence exists" — it did — but "every literal
-// that can carry it, does". A test cannot assert that a value is correct, but
+// Every one is a plain struct literal with an optional func field, so a caller
+// that leaves the field out compiles, runs, and silently disarms the check for
+// whatever it built. The rule is not "the fence exists" but "every literal
+// that can carry it, does": a test cannot assert that a value is correct, but
 // it can assert that nobody quietly dropped the wire.
 var carriers = map[string]string{
 	"engine.RunnerInput":    "the engine's per-turn runner input",
@@ -38,20 +32,17 @@ var carriers = map[string]string{
 }
 
 // The executor's RUN, once it is running, is the one thing a turn starts that
-// no fence here reaches, and that is a decision rather than an omission. Every
-// executor is its harness's own run, and that run is DETACHED: the phase
-// suspends the moment it starts, the turn ends, and the run outlives it —
-// deliberately, since its placement is on its own row and the process that
-// collects it is often not the one that launched it. Fencing it while it runs
-// would kill an hour of an executor's work on an ordinary rebalance and
-// lose its output, to guard against writes the bridge's own run-scoped,
-// expiring credential already bounds. What IS fenced is either end: the
-// launch — runner.Config's fence when the phase opens, the engine's launcher
-// by a direct call before it opens anything, and sandbox.LaunchRequest's once
-// the run's row exists — and the resume, which runs under the grant the
-// collecting node holds. A person's stop ENDS a running run, but through the
-// coordinator (sandbox.Coordinator.StopSeat), never through this fence. See
-// [seat.Host.Fence].
+// no fence here reaches, and that is a decision rather than an omission. The
+// run is DETACHED: the phase suspends the moment it starts and the run
+// outlives the turn, since its placement is on its own row and the process
+// that collects it is often not the one that launched it. Fencing it while it
+// runs would kill an hour of work on an ordinary rebalance and lose its
+// output, to guard against writes the bridge's run-scoped, expiring
+// credential already bounds. What IS fenced is either end: the launch
+// (runner.Config's fence, the engine's launcher, sandbox.LaunchRequest's once
+// the run's row exists) and the resume, under the collecting node's grant. A
+// person's stop ENDS a run through sandbox.Coordinator.StopSeat, never this
+// fence. See [seat.Host.Fence].
 
 type literal struct {
 	Type string

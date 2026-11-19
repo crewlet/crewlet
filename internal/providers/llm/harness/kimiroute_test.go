@@ -183,24 +183,16 @@ func (k *kimiRecorder) end(script fakeScript, _ fakeUsage, _ string) int {
 
 // KIMI CODE'S RUN IS READ FROM THE WIRE LOG IT KEEPS FOR IT IN THE SEAT'S HOME,
 // AND THE HOME STARTS NO SERVER OF ITS OWN. The crewlet server is the call's
-// own .kimi-code/mcp.json, which the harness reads only in a trusted workspace; the
-// home's mcp.json and its plugin list, whose servers the harness starts on every
-// call, are the profile's own, empty, whatever was there; and the agent file
-// allows the server's tools. Each step of the run is a request: its usage —
-// the prompt less its cached part — read as soon as the harness records it, its
-// prose and calls, its end. The log lives in a directory named after the call's
-// working directory, beside every other call's of the seat, so the run's own
-// is the one whose profile.bind names its directory. The harness sends no id with
-// a call, so a call is joined by name and arguments; the host is told the harness
-// waits the profile's 600 seconds for a call, does not re-read the list, and
-// makes a response's calls one after another.
-//
-// Mutation: drop KIMI_CODE_TRUST_WORKSPACE, or mcp__crewlet__* from the agent
-// file, and the harness never reaches the seat's tools; drop the mcp.json or the
-// installed.json seed, and the planted server starts (the fake fails the run);
-// drop the owner rule's match, and another call's log is taken for this one;
-// read inputOther as the whole prompt, and the run is charged 100 tokens less
-// than it spent.
+// own .kimi-code/mcp.json (read only in a trusted workspace); the home's
+// mcp.json and plugin list are the profile's own and empty. Each step's usage
+// is the prompt less its cached part. The log sits in a directory named after
+// the call's working directory, so the run's own is the one profile.bind
+// names. Calls carry no id (joined by name and arguments); the host is told
+// it waits 600 seconds, re-reads no list, calls one by one.
+// Mutation: drop KIMI_CODE_TRUST_WORKSPACE or mcp__crewlet__* from the agent
+// file, the seat's tools are unreachable; drop the mcp.json or installed.json
+// seed, the planted server starts; drop the owner rule's match, another call's
+// log is taken; read inputOther as the whole prompt, 100 go unbilled.
 func TestKimiCodesRunIsReadFromTheWireLogItKeepsForIt(t *testing.T) {
 	t.Parallel()
 	p := fakeAs(t, "kimi-code", routeCase, func(c *Config) { c.Auth = Auth{Mode: AuthSubscription} })

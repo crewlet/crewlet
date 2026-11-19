@@ -13,16 +13,12 @@ import (
 // TestInstanceSeparatorHasOneDefinition fails the build on a hand-built
 // per-role instance name.
 //
-// The queue's topic grammar carries the same guard for the same reason: a
-// producer and a consumer that disagree about a name never raise. The lookup
-// simply misses, and a server the prompt advertises answers "not configured
-// for this role" — which reads as a config problem and is not one.
+// A producer and a consumer that disagree about a name never raise: the
+// lookup misses and an advertised server answers "not configured for this
+// role", which reads as a config problem and is not one.
 //
-// SCOPE, stated because a guard whose reach is assumed is worse than none:
-// this walks THIS PACKAGE ONLY, source and tests. When the engine grows a
-// caller that builds instance names — the seat cascade will — this test must
-// be widened to that package or the same drift becomes possible one directory
-// away.
+// SCOPE: THIS PACKAGE ONLY, source and tests. A caller elsewhere that builds
+// instance names (the seat cascade will) needs this widened to its package.
 func TestInstanceSeparatorHasOneDefinition(t *testing.T) {
 	t.Parallel()
 	// Two files may spell the separator: the grammar, and the grammar's own

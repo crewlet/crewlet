@@ -17,20 +17,14 @@ import (
 
 // Slack's half of per-seat access ([seataccess.Vendor]).
 //
-// # No roles, and no scope per seat
+// Each agent is its own app holding [BotScopes], and what it reaches is
+// decided per channel by who invites it, so a seat is on or off and the scopes
+// are shown, never chosen. The ledger's account is the app id, "there" once an
+// install has given it a bot token.
 //
-// Each agent is its own app holding the bot scopes in [BotScopes], and what
-// it reaches is decided per channel by who invites it. So a seat is on or
-// off, and the scopes are shown, never chosen. The account the ledger records
-// is the app (its id), and it is "there" once a workspace install has given
-// it a bot token.
-//
-// # Drift is the manifest's
-//
-// The manifest is this engine's, not the document's, so drift is a change
-// somebody made to the app in Slack's console. It is observed as a sentence in
-// [seataccess.Observed.Level] (empty when the app matches), which the plan
-// restores like any other drift (D2); there is no vendor setting to keep.
+// Drift is a change made in Slack's console to the engine's manifest. It is
+// observed as a sentence in [seataccess.Observed.Level] (empty when the app
+// matches) and the plan restores it like any other drift (D2).
 
 func init() { seataccess.Register(vendor{}) }
 

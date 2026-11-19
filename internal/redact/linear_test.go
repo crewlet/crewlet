@@ -7,38 +7,16 @@ import (
 )
 
 // A LINE OF MANY ARMOURS COSTS WHAT ITS BYTES COST, however long the line:
-// reading the key blocks of armours on lines past the bound costs what reading
-// the same armours on short lines does. Every armour used to scan the rest of
-// its line — a BEGIN forward, for its line's end and the armour after it; an
-// END back, for its line's start — so a line of flattened key material (a
-// harness's one-line env dump, a `cat`ted key store) cost the armour count
-// times the line: two megabytes, nearly two minutes. Bounding each scan at
-// [MaxKeyBlockBytes] only made it the armour count times the bound, and two
-// megabytes still took thirty seconds under the race detector. Each scan now
-// stops at the armour before or after it.
+// key blocks of armours on lines past the bound costs what short lines do. Every
+// armour used to scan the rest of its line (a BEGIN forward, an END back), so a
+// one-line env dump cost armours times line: two megabytes, two minutes. Each
+// scan now stops at the adjacent armour, not at [MaxKeyBlockBytes].
 //
-// A COMPARISON, NOT A CLOCK: the same armours in the same number of bytes, on
-// lines of four KiB and on lines twice the bound, compared by [withinFactor]
-// (the fastest of interleaved reads, measured again before it fails), so a
-// runner busy for a moment slows both or neither and no absolute duration has
-// to hold on a loaded machine. The clock this
-// replaced, thirty seconds for two megabytes, failed two runs in three beside
-// other packages under the race detector. Read linearly the two cost the same,
-// the long lines a little less (measured 0.85 to 1.1 times, with and without
-// the race detector); a scan per armour to its line's end costs thirteen to
-// twenty-two times as much on the long lines, and one to the bound six to
-// thirteen. Three times is allowed: room by a factor of two or more on either
-// side. Timed on [keyBlocks] alone, an internal test for that reason: the
-// rules' passes over the text cost the same on both and would only dilute the
-// difference.
-//
-// The same holds for a key on one line a cut wrote into, its body read up to
-// the cut's mark and back from it ([lineBack]), and for a body a window kept
-// before an END on its line.
-//
-// Mutation: look for a BEGIN line's break as far as the bound before the armour
-// after it (six times), or for an END line's start back to the bound rather
-// than to the key armour before it (nine times), and this fails.
+// A COMPARISON, NOT A CLOCK: the same bytes on lines of 4 KiB and twice the
+// bound, by [withinFactor], so a busy runner slows both. A scan per armour
+// costs 13 to 22 times as much, one to the bound 6 to 13; three allowed. Timed
+// on [keyBlocks] alone; holds for cut keys ([lineBack]) too. Mutation: scan a
+// BEGIN line's break to the bound, or an END line's start back to it.
 func TestALineOfManyArmoursIsLinear(t *testing.T) {
 	t.Parallel()
 	lines := func(group string, lineBytes int) string {
@@ -103,32 +81,15 @@ func TestALineAWrappingsPrefixRunsAcrossIsLinear(t *testing.T) {
 }
 
 // A LINE OF MANY PASSWORD KEYS COSTS WHAT ITS BYTES COST, however long the line
-// goes on after them or before them: reading where each one's value is
-// ([readValue]) on a line that goes on for 256 KiB costs what it does on one
-// that goes on for 2 KiB. A
-// key whose first word is punctuation asks what the rest of its line is — the
-// wrapping's suffix, if no key follows on the line — and asked as the line's
-// end and then whether a key lies before it, every key on the line scanned the
-// rest of the line: its keys times its length. So the scan stops at the next
-// key ([lineEndUnnamed]), and only the line's last key, which the scan leaves at
-// the line's end, reads its gutter and the lines after. Timed as the tests
-// above are ([withinFactor]), through [Secrets] and
-// [Settled] both, since each reads every key's value. The keys share their
-// line with filler rather than with more keys, because under the race detector
-// a key costs what scanning some 25 KiB does, and a line of keys alone would
-// have to run for megabytes before the scans showed. Read linearly the two
-// cost the same (measured 0.75 to 1.6 times); a scan per key to its line's end
-// costs 26 to 29 times as much on the long line, and five times under the race
-// detector. Every key reads back over its label for the markup its line
-// opened before it ([pastMarkup]), no further than the value before it; read
-// back to the line's start, every key read the line before it again: on a
-// line that opens with 256 KiB, 43 to 58 times what the keys cost after 2 KiB,
-// and 37 to 52 times under the race detector.
-//
-// Mutation: read a key's suffix as the rest of its line and only then ask it
-// for another key, and this fails; read a key's label back to the line's
-// start, past the values before it, and every group fails, with the race
-// detector and without.
+// goes on before or after them: reading each value ([readValue]) on a 256 KiB
+// line costs what it does on a 2 KiB one. A key opening with punctuation asks
+// what the rest of its line is (the wrapping's suffix, if no key follows);
+// asked to the line's end, every key scanned the rest of it. So the scan stops
+// at the next key ([lineEndUnnamed]) and only the last key reads the gutter.
+// Timed as above ([withinFactor]); filler, not more keys, shares the line, as
+// under race a key costs what scanning 25 KiB does. A scan per key costs 26 to
+// 29 times as much; reading back to the line's start, not past the markup
+// ([pastMarkup]), 43 to 58. Mutation: either, and a group fails.
 func TestALineOfManyPasswordKeysIsLinear(t *testing.T) {
 	t.Parallel()
 	read := func(text string) {
@@ -178,25 +139,17 @@ func keysAfter(group string, lineBytes int) string {
 }
 
 // A VALUE OF MANY ESCAPED BREAKS COSTS WHAT ITS BYTES COST, however long it
-// runs without a space: a password's value written in pieces between escaped
-// breaks, in one run of 128 KiB, costs what the same pieces cost in runs of
-// 1 KiB. Whether a value runs on across a break turns on whether a letter or a
-// digit follows the break before the next space ([wordAfter]), and that was
-// answered by reading to the space at every break, so a run cost its breaks
-// times its length: 64 KiB took 0.7 s and every doubling four times as long,
-// days for the 32 MiB a box's file is read whole up to — a launch's report, or
-// the session record its reason for starting anew is read from. A key after
-// every break, `pwd=x\npwd=x\n…`, cost the same, every key's value reading to
-// the run's end. Read up to its first letter or digit, a break's read never
-// passes the next break's `n`, and the run is read once.
+// runs without a space: a password's value in one run of 128 KiB costs what
+// the same pieces cost in runs of 1 KiB. Whether a value runs on across a break
+// turns on whether a letter or digit follows before the next space
+// ([wordAfter]); reading to the space at every break cost breaks times length
+// (days for the 32 MiB a box's file is read whole up to), as did a key after
+// every break. Read up to its first letter or digit, a break's read never
+// passes the next break's `n`.
 //
-// Timed as the tests above are ([withinFactor]), through [Secrets] and
-// [Settled] both, the text ending in a line break so Settled reads its values.
-// Read once, the one run costs what the runs do, or less, since each run
-// opens with a key the one run has once; read to the space at every break, it
-// costs fifty to a hundred and twenty times as much. Three times is allowed.
-//
-// Mutation: read to the next space at every break, and every group fails.
+// Timed as above ([withinFactor]), the text ending in a line break so Settled
+// reads its values: reading to the space at every break costs 50 to 120 times
+// as much; three allowed. Mutation: do that, and every group fails.
 func TestAValueOfManyEscapedBreaksIsLinear(t *testing.T) {
 	t.Parallel()
 	read := func(text string) {
@@ -235,31 +188,16 @@ func runsOf(key, piece string, runBytes int) string {
 }
 
 // A LIVE VIEW OF MANY PASSWORD KEYS COSTS ONE READ OF THEM: [Settled] over
-// lines of password keys, each line's last decided by the line after it,
-// costs what its bytes cost. Read again in each prefix a hold cut the text at,
-// that key was pending there, so the hold moved up a line, made the key above
-// pending in its turn, and Settled read the text once a line: its lines times
-// its length, 47 to 75 times what [Secrets] costs over 32 KiB in lines of 256
-// bytes. So the whole text is read once ([valueHolds]).
+// lines of password keys, each line's last decided by the next, costs what its
+// bytes cost. Read again in each prefix a hold cut the text at, the hold moved
+// up a line and Settled read the text once a line (47 to 75 times [Secrets]
+// over 32 KiB in lines of 256 bytes). So the text is read once ([valueHolds]).
 //
-// COUNTED, NOT TIMED: the bytes Settled hands its readers ([settle]). The
-// keys', the back hold's and the password's rule's each read the text once,
-// and the holds read what the rule hands them, so these groups cost four
-// reads of the text, and six where the keys were read beside the values
-// ([claims]): at least three, so a count that stopped counting fails too, and
-// at most six.
-// This was timed, Settled against [Secrets] over the same text and then
-// against itself over a text eight times smaller ([withinFactor]), and both
-// ratios moved with how busy the runner was: the second read 449ms over 32 KiB
-// against 11ms over 4 KiB in CI's race job, more than the twenty-four times
-// allowed, on a change that touched no Go code (#1346). A count is the same on
-// every runner, with the race detector and without.
-//
-// Mutation: read the holds again in every prefix a line of the text ends, or
-// hand the password's rule the text again there, and every group reads some
-// sixty times its text over 32 KiB in lines of 256 bytes, where Settled as it
-// is reads it four times, and this fails; add nothing to the count, and every
-// group fails as read by nobody.
+// COUNTED, NOT TIMED: the bytes Settled hands its readers ([settle]), four
+// reads of the text, six where keys were read beside values ([claims]); at
+// least three, so a count that stopped counting fails too. Timed ratios moved
+// with runner load ([withinFactor]). Mutation: reread in every prefix a line
+// ends, and groups read some sixty times; count nothing, and every group fails.
 func TestALiveViewOfManyPasswordKeysCostsOneRead(t *testing.T) {
 	t.Parallel()
 	for name, group := range passwordKeyGroups {
@@ -339,28 +277,16 @@ func withinFactor(read func(string), short, long string, factor int) (bool, time
 
 // judge is [withinFactor] over timed.
 //
-// EVERY SAMPLE IS AT LEAST [judgeFloor] LONG. A sample is reps reads of a
-// text, reps grown, doubling, until the short text's sample reaches twice the
-// floor (and again, should a measurement's fastest still fall under it), and
-// the long text's taken at the same reps, so the ratio is the
-// reads' own. The noise a loaded runner adds to a sample is a preemption's
-// overshoot, milliseconds whatever the sample, so on a sample of two it is
-// most of it: a 2ms read measured 5.73ms under the race detector in CI. And a
-// read that costs a millisecond without the race detector, as most here do,
-// is no smaller a ratio for being read several times. A text that cannot
-// reach the floor in [maxReps] reads fails as too cheap to judge: a ratio of
-// two reads that cost nothing passes any factor, which asserts nothing.
+// EVERY SAMPLE IS AT LEAST [judgeFloor] LONG: reps doubled until the short
+// text's sample reaches twice the floor, the long text taken at the same reps.
+// A loaded runner's noise is a preemption's overshoot, milliseconds whatever
+// the sample, so on a short one it is most of it. A text that cannot reach the
+// floor in [maxReps] reads fails as too cheap to judge.
 //
 // EACH MEASUREMENT IS THE FASTEST OF [interleavedReads] SAMPLES OF EACH, taken
-// in turn after one warm-up sample of each, so a runner busy for a moment
-// slows both or neither. AND A COMPARISON THAT FAILS IS MEASURED AGAIN, up to
-// [measureRounds] times, and fails only if every measurement does: a burst of
-// load from the packages beside this one can outlast every sample of one
-// measurement (the live view's 32 KiB read 264ms against 4ms in CI, with
-// nothing quadratic in it), but not of every one. That only ever turns a
-// failure into a pass, so the regressions these tests guard have to fail by
-// far more than the factor on every measurement, as they do (six to eighty
-// times it).
+// in turn after a warm-up, so a busy runner slows both or neither. A FAILING
+// COMPARISON IS MEASURED AGAIN, up to [measureRounds] times, and fails only if
+// every one does; guarded regressions fail by six to eighty times the factor.
 func judge(timed timer, short, long string, factor int) (bool, time.Duration, time.Duration) {
 	// TWICE THE FLOOR, so that the fastest of a measurement's samples, which
 	// can come in under the one that calibrated, still clears it.
@@ -412,14 +338,10 @@ func judge(timed timer, short, long string, factor int) (bool, time.Duration, ti
 // arithmetic, so the rounds, the calibration, the floor and the factor are
 // held exactly, on any runner, in no time.
 //
-// It used to spin the CPU for each read, and that is the flake it fixed and
-// the flake that followed it: a spin's noise is a preemption's overshoot,
-// added, milliseconds on a sample of two, so a square cost whose short read
-// was 2ms passed against a factor its long read should have failed by 2.7
-// times, and one checked again with every short read three times as slow had
-// a real margin of 1.33 times, not four. The comparison over the wall clock
-// is held by the four tests above, each a regression's mutation away from
-// failing.
+// A spin of the CPU per read would not do: its noise is a preemption's
+// overshoot, milliseconds on a sample of two, which let a square cost pass
+// against a factor it should have failed by 2.7 times. The comparison over the
+// wall clock is held by the four tests above.
 //
 // Mutation: drop the calibration, the floor, the re-measure, its failing only
 // when every round does, or a round's stop at a long sample past the factor,

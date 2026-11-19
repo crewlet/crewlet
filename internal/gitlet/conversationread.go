@@ -38,9 +38,9 @@ import (
 // open_findings counter is set ([needingFixIn]). A pushed revision answers
 // neither; an answered standing blocker waits on its raiser (S40).
 
-// needs=me is needs=review, then needs=fix, each its own index's walk, a page
-// reading one, the fix half's cursor prefixed with [fixHalf]; a change in
-// both (a person may be asked to review their own) is listed by the first.
+// needs=me is needs=review, then needs=fix, each its own index's walk, the fix half's cursor
+// prefixed with [fixHalf], a change in both listed by the first; a page the review walk ends on
+// fills from the fix walk, each row naming its half ([ChangeSummary.WaitsFor]) for its cursor.
 //
 // needs=person walks code_mergeability_waits_idx (replicated 0106), the
 // STORED readiness (mergeability.go), and keeps those the read's own judgment
@@ -125,11 +125,20 @@ const (
 	// refuses it as an unknown part rather than answer another set; it is an
 	// estate request's word, no record's, so it takes no versionedFields row.
 	PartStanding ChangePart = "standing"
+	// PartMoves is the moves of the change's lifecycle, oldest first
+	// ([ChangeMove]): who closed, reopened, drafted, readied, edited or
+	// retargeted it. An older build refuses it as an unknown part.
+	PartMoves ChangePart = "moves"
+	// PartQueue is the change's queue entries, in queue order
+	// ([ChangeQueueEntry]): who added it to its target's queue and how each
+	// entry ended. An older build refuses it as an unknown part.
+	PartQueue ChangePart = "queue"
 )
 
 // ChangeParts is the closed set, in this order.
 func ChangeParts() []ChangePart {
-	return []ChangePart{PartRevisions, PartReviewers, PartComments, PartReviews, PartFindings, PartStanding}
+	return []ChangePart{PartRevisions, PartReviewers, PartComments, PartReviews, PartFindings, PartStanding,
+		PartMoves, PartQueue}
 }
 
 // Valid reports a part this build knows.
@@ -150,6 +159,10 @@ func (p ChangePart) maxPerPage() int {
 		return MaxReviewsPerPage
 	case PartFindings, PartStanding:
 		return MaxFindingsPerPage
+	case PartMoves:
+		return MaxMovesPerPage
+	case PartQueue:
+		return MaxQueueEntriesPerPage
 	}
 	return MaxRevisionsPerPage
 }
@@ -165,6 +178,16 @@ const (
 	MaxReviewsPerPage    = 200
 	defaultFindingLimit  = 50
 	MaxFindingsPerPage   = 200
+	// A change makes a handful of moves, each about 150 bytes encoded: a
+	// first page of 100 is a change's whole timeline but a pathological one's,
+	// and 500, some 75 KB, is under a page's bytes.
+	defaultMoveLimit = 100
+	MaxMovesPerPage  = 500
+	// A change is enqueued a few times at most, each entry a few hundred
+	// bytes (a conflict's paths, at most MaxEjectedPaths, its widest): 50 is
+	// a change's whole history in the queue, 200 a page's bytes.
+	defaultQueueEntryLimit = 50
+	MaxQueueEntriesPerPage = 200
 )
 
 // waitedOn is the handle a listing of what its changes wait on names: for
@@ -195,26 +218,34 @@ func (q ReadQuery) fixing() ReadQuery {
 
 // changesWaitingOnMe serves a page of needs=me: the needs=review half until
 // its walk ends, then the needs=fix half after [fixHalf]. Each half walks its
-// own index, so a page reads one half and the one ending the first may be
-// short; a change in both is listed by the first alone.
+// own index; a page whose review walk ends goes on into the fix walk with
+// what is left of its rows and bytes, so it is short only where the fix walk
+// is too. A change in both is listed by the first alone.
 func (r *Reader) changesWaitingOnMe(ctx context.Context, tx *sql.Tx, q ReadQuery, chart Roster,
 	cp statelog.Position, out *ReadAnswer) error {
 
 	half, fixes := q.halfOfMe()
-	if fixes {
-		if err := r.listChanges(ctx, tx, half, chart, cp, out, q.waitedOn()); err != nil {
+	if !fixes {
+		if err := r.listChanges(ctx, tx, half, chart, cp, out, "", NeedReview); err != nil {
 			return err
 		}
 		if out.Next != "" {
-			out.Next = fixHalf + out.Next
+			return nil
 		}
-		return nil
+		// THE REVIEW WALK ENDED on this page: the fix walk, from its start, takes what is left.
+		if pg := r.changesPage(q, out.Changes); pg.full() {
+			out.Next = fixHalf
+			return nil
+		}
+		next := q
+		next.Cursor = fixHalf
+		half, _ = next.halfOfMe()
 	}
-	if err := r.listChanges(ctx, tx, half, chart, cp, out, ""); err != nil {
+	if err := r.listChanges(ctx, tx, half, chart, cp, out, q.waitedOn(), NeedFix); err != nil {
 		return err
 	}
-	if out.Next == "" {
-		out.Next = fixHalf
+	if out.Next != "" {
+		out.Next = fixHalf + out.Next
 	}
 	return nil
 }
@@ -472,17 +503,24 @@ func (r *Reader) changeComments(ctx context.Context, tx *sql.Tx, q ReadQuery, na
 	pg := page{maxRows: limit, maxB: r.pageBytes}
 	for rows.Next() {
 		var (
-			c            CommentRow
-			kind, byKind string
-			anchor       string
-			position, at int64
+			c                          CommentRow
+			kind, byKind, deletedKind  string
+			anchor                     string
+			position, at, edited, gone int64
 		)
 		if err := rows.Scan(&c.ID, &c.ThreadID, &c.ParentID, &c.Author, &kind, &c.AuthorOperatorID, &anchor,
-			&c.Resolved, &c.ResolvedBy, &byKind, &c.TurnID, &position, &at, &c.Body, &c.FindingID); err != nil {
+			&c.Resolved, &c.ResolvedBy, &byKind, &c.TurnID, &position, &at, &c.Body, &c.FindingID, &edited, &gone,
+			&c.DeletedBy, &deletedKind); err != nil {
 			return fmt.Errorf("gitlet: read the comments of %s: %w", named, err)
 		}
-		c.AuthorKind, c.ResolvedByKind = PartyKind(kind), PartyKind(byKind)
+		c.AuthorKind, c.ResolvedByKind, c.DeletedByKind = PartyKind(kind), PartyKind(byKind), PartyKind(deletedKind)
 		c.Position, c.At = unpacked(position), store.DecodeTime(at)
+		if edited != 0 {
+			c.EditedAt = store.DecodeTime(edited)
+		}
+		if gone != 0 {
+			c.DeletedAt = store.DecodeTime(gone)
+		}
 		if anchor != "" {
 			c.Anchor = &CommentAnchor{}
 			if err := json.Unmarshal([]byte(anchor), c.Anchor); err != nil {
@@ -564,7 +602,7 @@ func ValidFindingID(id string) bool {
 // findings' ids, each a UUIDv7 in its canonical spelling, each once.
 func validateFindingIDs(ids []string) error {
 	if len(ids) > MaxFindingsPerReview {
-		return fmt.Errorf("%w: finding_ids: %d findings, past the %d one read names (MaxFindingsPerReview)",
+		return refusedf("%w: finding_ids: %d findings, past the %d one read names (MaxFindingsPerReview)",
 			ErrInvalid, len(ids), MaxFindingsPerReview)
 	}
 	for i, id := range ids {
@@ -811,10 +849,12 @@ const (
 		FROM code_reviewers INDEXED BY ` + reviewersKey + ` WHERE change_id = ? AND reviewer > ?
 		ORDER BY reviewer LIMIT ?`
 	commentsOfSQL = `SELECT id, thread_id, parent_id, author, author_kind, author_operator_id, anchor, resolved,
-			resolved_by, resolved_by_kind, turn_id, position, at, body, finding_id
+			resolved_by, resolved_by_kind, turn_id, position, at, body, finding_id, edited_at, deleted_at,
+			deleted_by, deleted_by_kind
 		FROM code_comments WHERE change_id = ? ORDER BY thread_id, position LIMIT ?`
 	commentsOfAfterSQL = `SELECT id, thread_id, parent_id, author, author_kind, author_operator_id, anchor,
-			resolved, resolved_by, resolved_by_kind, turn_id, position, at, body, finding_id
+			resolved, resolved_by, resolved_by_kind, turn_id, position, at, body, finding_id, edited_at, deleted_at,
+			deleted_by, deleted_by_kind
 		FROM code_comments WHERE change_id = ? AND thread_id >= ? AND (thread_id > ? OR position > ?)
 		ORDER BY thread_id, position LIMIT ?`
 	reviewsOfSQL = `SELECT id, revision, reviewer, reviewer_kind, operator_id, verdict, findings, turn_id, model,
@@ -945,10 +985,10 @@ func (r *Reader) reviewsGiven(ctx context.Context, tx *sql.Tx, q ReadQuery, char
 func (q ReadQuery) validateReviews() error {
 	switch {
 	case q.Reviewer == "":
-		return fmt.Errorf("%w: reviewer: a listing of reviews lists one reviewer's, by the seat's handle or "+
+		return refusedf("%w: reviewer: a listing of reviews lists one reviewer's, by the seat's handle or "+
 			"the human seat a person holds", ErrInvalid)
 	case !org.ValidHandle(q.Reviewer):
-		return fmt.Errorf("%w: reviewer: %q is not a seat's handle: a reviewer is a seat, or the human seat a "+
+		return refusedf("%w: reviewer: %q is not a seat's handle: a reviewer is a seat, or the human seat a "+
 			"person holds", ErrInvalid, q.Reviewer)
 	}
 	return nil

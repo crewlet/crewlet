@@ -277,14 +277,12 @@ func TestTheLimitsAreAnAdministratorsAndNeedACompany(t *testing.T) {
 
 // EVERY CAP A SCREEN CHANGES REPORTS THE RANGE THE VALIDATOR HOLDS IT TO.
 //
-// Settings › Limits checks a typed value against the row's range before it
-// sends anything, so a range missing from a settable row is a cap whose editor
-// sends 0 or -2 for the engine to refuse, and a range that differs from the
-// validator's is an editor that refuses what the engine runs or sends what it
-// refuses. Each settable row's range is therefore tried against the validator
-// itself: the value just outside each bound is refused at the row's key,
-// carrying that same range for the screen to word, and a value inside it is
-// admitted.
+// Settings › Limits checks a typed value against the row's range before
+// sending, so a missing range sends 0 or -2 for the engine to refuse, and a
+// differing one refuses what the engine runs or sends what it refuses. Each
+// settable row's range is tried against the validator itself: the value just
+// outside each bound is refused at the row's key, carrying that same range,
+// and a value inside it is admitted.
 //
 // Mutation: drop a key from config's settingRanges, or tighten a validator
 // past its declared range, and a row here fails.

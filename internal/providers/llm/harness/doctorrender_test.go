@@ -20,22 +20,15 @@ type renderCase struct {
 }
 
 // THE TEXT REPORT IS WHAT IT WAS BEFORE THE CHECKS EXISTED. `crewlet llm doctor`
-// prints from [Diagnosis.Checks] now, the structure the API answers with, and
-// an operator's deploy script and their eyes read the text: the move from
-// fields to checks had to leave every line, its label, its order and its
-// words as they were, and every problem's wording. The golden files under
-// testdata/doctor-render were rendered by the field-based report before the
-// checks existed, over the cases the doctor's own tests build, with this run's
-// directories and the profile's written_for as placeholders.
+// prints from [Diagnosis.Checks], the structure the API answers with, while
+// deploy scripts and eyes read the text: the move from fields to checks left
+// every line, label, order and problem wording as it was. The goldens under
+// testdata/doctor-render came from the field-based report, with this run's
+// directories and written_for as placeholders.
 //
-// ONE CHANGE, ON PURPOSE: the problems are listed in the order of the checks
-// that raise them, which is the order of the report's lines. The field-based
-// report listed the executor's first and "no sign-in" last, in the order its
-// code happened to reach them; a person reading "no sign-in" after the smoke
-// failure it causes reads the effect before the cause. The goldens of the six
-// cases that moved differ from the old report by that order alone, which was
-// checked item by item when they were written.
-//
+// ONE CHANGE, ON PURPOSE: problems are listed in the order of the checks that
+// raise them, so "no sign-in" is not read after the smoke failure it causes;
+// the six goldens that moved differ by that order alone.
 // Mutation: print the web line before the local tools line, list a check's
 // problems out of check order, or drop one from Problems, and a case goes red.
 func TestTheStructuredChecksRenderTheReportOperatorsAlreadyRead(t *testing.T) {

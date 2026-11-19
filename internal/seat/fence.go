@@ -17,85 +17,15 @@ var ErrSeatMoved = errors.New("seat: the seat moved to another node")
 
 // Fence is the per-round ownership check for work starting now on handle.
 //
-// It answers the question [Host.MayStart] deliberately does not. Admission
-// proves the seat was held when the work STARTED, and a turn outlives its
-// admission by minutes: it calls models, fires tools, posts to chat and
-// writes to a tracker long after the one moment anything asked whether this
-// node still owns the seat. Nothing else closes that window — the queue
-// contract states in one paragraph both that [internal/queue.Broker.Detach]
-// "does NOT wait for a running handler" and that a node which has lost a
-// lease "must detach FIRST and abandon whatever is in flight". Detaching was
-// implemented; abandoning was not, and this is that half.
-//
-// The common case is not even a lost lease. The placement sweep hands a seat
-// back VOLUNTARILY when the fleet grows (`ReasonPlacement`), with turns still
-// running on it: the detach returns, the lease is released, a peer claims the
-// seat within a sweep interval, and the loser goes on being that seat until
-// its turn happens to end.
-//
-// # Why the epoch and not just membership
-//
-// A renew that fails and a sweep that re-claims are milliseconds apart —
-// [Host.dropLostSeat] re-checks the epoch under the lock for exactly that
-// reason. So "is this seat in the held set" is not the question: work
-// admitted at epoch 7 can find this node holding epoch 9, which is a
-// different grant, taken back after a peer was entitled to the seat and
-// possibly after that peer ran the very trigger this turn is still working
-// on. The fence therefore closes on the epoch it was BUILT with, which is
-// the fencing token the admission handed out, and a re-claim closes it.
-//
-// # Why an undead seat is still a grant
-//
-// A seat whose teardown could not be PROVEN leaves the held set but keeps
-// its lease, renewed every heartbeat, precisely so no peer can take a seat
-// this process may still be consuming — see [undeadSeat]. The grant has
-// therefore not moved, and closing the fence over it would abandon work that
-// is racing nobody. A missing map entry is not the predicate; a moved grant
-// is.
-//
-// # Why it never fires on a drain
-//
-// A drain quiesces, waits for in-flight handlers and only then releases, so
-// the seat leaves the held set after the work the fence would stop has
-// already finished. An UNREACHABLE store is not a firing either: the
-// heartbeat KEEPS a seat whose renew merely failed to answer and drops it
-// only past the TTL, so a closed fence means definitively lost, never
-// unknown. That is ADR-0005's three-valued rule paying for itself here — a
-// fence built on a two-valued "is it held" would tear a healthy company's
-// turns down over a two-second store blip.
-//
-// # What it deliberately does not cover
-//
-// A RUNNING executor run — every agent seat's executor is its harness's
-// own detached run — is not fenced, and that is the design rather than a gap.
-// Such a run outlives its turn on purpose: its placement is on its own row,
-// and the process that collects it is often not the one that launched it, so
-// closing a fence over it would kill an hour of work on an ordinary rebalance
-// and lose its output, to guard writes the bridge's own run-scoped, expiring
-// credential already bounds. What is fenced is either end of it: the LAUNCH,
-// which asks this fence immediately before it opens a bridge session or a box
-// and again once its row exists (the engine's seatFence, carried on the
-// launch request), so a seat that moved while its turn built the prompt
-// starts nothing; and the RESUME — the turn that comes back to collect the
-// run runs under the grant the collecting node holds. Between the two, each
-// CALL the running box makes over its tool bridge is asked of the fence of
-// the node serving the run's session — the launch's grant, or the grant of
-// the node that recovered the seat and opened the session again
-// (internal/api/mcpbridge) — so a seat that moved has its run's calls
-// refused until its new holder serves them, and the run itself is still not
-// killed.
-//
-// A PERSON'S STOP IS NOT THIS FENCE, and must never be built on it. A pause
-// that asks for the seat's running work to stop ENDS its running run — the
-// node holding the seat calls sandbox.Coordinator.StopSeat, which decides a
-// stopped ending on the run's row and reclaims its box — because a stop is a
-// decision about the work. Ending runs here instead would end them on every
-// rebalance as well, which is exactly what the paragraph above rules out.
-//
-// A nil Host returns nil, and so does a handle no grant covers at all: with
-// no grant to compare against there is nothing to fence, which is the
-// single-node case and every test that runs a turn without a fleet. A nil
-// fence is an open one.
+// Admission ([Host.MayStart]) proves the seat was held when work STARTED, but
+// a turn outlives it by minutes and detaching a queue stops no running
+// handler: the fence is the abandoning half. Its common firing is the
+// placement sweep handing a seat back (`ReasonPlacement`) with turns running.
+// A RUNNING executor run is deliberately not fenced (an ordinary rebalance
+// would kill an hour of work); its LAUNCH (the engine's seatFence), RESUME and
+// each tool-bridge call (internal/api/mcpbridge) are, and a person's stop ends
+// it through sandbox.Coordinator.StopSeat, never this fence. A nil Host, or a
+// handle no grant covers (the single-node case), returns a nil, open fence.
 func (h *Host) Fence(handle string) func() error {
 	if h == nil {
 		return nil
@@ -104,6 +34,14 @@ func (h *Host) Fence(handle string) func() error {
 	if !ok {
 		return nil
 	}
+	// The fence closes on the epoch it was BUILT with, not on membership of
+	// the held set: a renew failure and a re-claim are milliseconds apart, so
+	// work admitted at epoch 7 can find this node holding epoch 9, a
+	// different grant. An undead seat ([undeadSeat]) keeps its lease, so its
+	// grant has not moved and the fence stays open. It never fires on a drain
+	// (in-flight work finishes before release) nor on an unreachable store
+	// (the heartbeat keeps a seat past a failed renew): closed means
+	// definitively lost (ADR-0005).
 	return func() error {
 		now, still := h.grantEpoch(handle)
 		switch {

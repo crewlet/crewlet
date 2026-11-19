@@ -280,17 +280,14 @@ func TestAnEditStopsAtAStepNobodyCanConfirm(t *testing.T) {
 // AN ESTATE THAT COULD NOT DECIDE IS A 503 THAT SAYS WHEN TO COME BACK, AND
 // WHICH OPERATION TO COME BACK WITH.
 //
-// A refusal the framework raises — this node is behind, below the trim floor,
-// holding a record it cannot decode — answered a bare 503 with no Retry-After
-// and no op id, which a client cannot tell from a node gone for good, and
-// which leaves the retry the docs promise with nothing to retry under.
+// A framework refusal (node behind, below the trim floor, an undecodable
+// record) is a 503 with Retry-After and the op id, so a client can tell it from
+// a node gone for good and retry under the same key.
 //
-// AND WHEN IS THE REFUSAL'S OWN ANSWER. A write the log refused for good — a
-// record too large for the broker, a full log, a refusal the broker named, an
-// evicted node — carried the identity hint too, telling a client to come back
-// in two seconds for a write that could never land here, where the same
-// refusal on /worklet carries none. A node that is behind is the
-// control, and keeps the hint.
+// AND WHEN IS THE REFUSAL'S OWN ANSWER: a write the log refused for good (record
+// too large, full log, a broker refusal, an evicted node) carries no
+// Retry-After, as on /worklet, since it could never land here. A node that is
+// behind is the control, and keeps the hint.
 func TestARefusedWriteSaysWhenAndWhatToRetry(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -348,18 +345,13 @@ func TestADirectoryWriteThatFaultedKeepsItsWordsInTheLog(t *testing.T) {
 
 // THE STATE LOG'S REFUSALS ARE TOLD IN WORDS FOR A PERSON.
 //
-// Each is the state log's refusal, and its error names the subject it met: the
-// directory answered a lost race with "statelog: conflict:
-// crewlet.iam.directory kept changing under this write", and a person removed
-// under the route, or a key whose operation already names another write, with
-// the framework's whole refusal, as the `detail` an administrator reads. A lost
-// race and a reused key are told in the words every surface tells them in
-// ([statelog.Sentence], [opkey.Reused]), and a removal as the removal it is —
-// the framework's own words for it say "deleted", which nobody does to a
-// person here — each under the status it always had. So is a CONDITION of the
-// node, in the state log's sentence for its code
-// ([statelog.ConditionSentence]): it was "statelog: unavailable (behind): "
-// and the position the write needed.
+// The refusal's own error names its subject ("statelog: conflict:
+// crewlet.iam.directory kept changing ..."), which must not become the
+// `detail` an administrator reads. A lost race and a reused key are told in the
+// words every surface uses ([statelog.Sentence], [opkey.Reused]), a removal as
+// a removal (the framework says "deleted", which nobody does to a person), each
+// under its usual status. So is a CONDITION of the node, in the state log's
+// sentence for its code ([statelog.ConditionSentence]).
 //
 // Mutation: answer any arm's `detail` with the error's own text again and its
 // row goes red.
@@ -607,19 +599,15 @@ func TestAReusedKeyIsAnsweredAsEverySurfaceTakingAKeyAnswersIt(t *testing.T) {
 	}
 }
 
-// A CREATE THAT LANDED AND CANNOT BE READ BACK HERE IS TOLD AS LANDED — a
-// person's, and an invitation's.
+// A CREATE THAT LANDED AND CANNOT BE READ BACK HERE IS TOLD AS LANDED.
 //
-// The retry of a create, on a node that has not applied it, finds the person
-// (or the invitation) it made absent here: the link it carried cannot be
-// handed back until the rows arrive. It was a bare state-log sentinel behind a
-// sentence, which this surface told as a condition of the node ("couldn't do
-// this right now"), so an administrator read that a create that had landed
-// had not; and a client that replaces its key after anything but an unknown
-// outcome sent its retry under a new key, refused by the address and the seat
-// the first attempt now held — the link lost. It says what landed, carries the
-// write's own outcome, never `unknown`, beside the op id the same request is
-// sent again under, and names the person it made.
+// A retry on a node that has not applied the create finds the person (or
+// invitation) absent, so the link cannot be handed back until the rows arrive.
+// Told as a condition of the node, it reads as a create that did not land, and
+// a client replacing its key on anything but an unknown outcome retries under a
+// new key, refused by the address and seat the first attempt holds: the link
+// is lost. So it says what landed, carries the write's own outcome (never
+// `unknown`) beside the op id to resend under, and names the person made.
 //
 // Mutation: drop the NotReadBack arm from answer, and both rows answer the
 // condition's sentence with no outcome.

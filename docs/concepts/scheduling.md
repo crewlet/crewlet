@@ -681,10 +681,11 @@ the last word anybody said about that item.
   that must hold on two passes in a row, so the writes of the turn that just
   ended are on the node's copy first: a seat is handed its next item within
   about two minutes of going idle. **Urgent work does not wait for idle:** a
-  seat whose first ready item is urgent is handed it while a turn runs, while
-  mail waits in its inbox or before its settle, on the inbox's priority lane,
-  so its next turn takes it ahead of the background wakes queued before it;
-  every other condition still holds it back. The same pass ends a parked run nobody can
+  seat whose first ready item is urgent is handed it while a turn or its
+  executor's run is in flight, while mail waits in its inbox or before its
+  settle, on the inbox's priority lane, so its next turn takes it ahead of the
+  background wakes queued before it; every other condition still holds it
+  back, a run waiting on a person's answer among them. The same pass ends a parked run nobody can
   continue any more: one whose Worklet item was finished or removed while it
   waited (`executor_failed`, reason `item_finished`) and one whose saved state
   no live build reads (`state_retired`); its question is withdrawn and a reply

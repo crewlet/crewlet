@@ -748,14 +748,12 @@ func TestAFailureIsStampedOnTheFrameAndOnTheFeedRow(t *testing.T) {
 // WHO A PARKED QUESTION IS PUT TO ARRIVES WITH THE RECORD, AND STAYS THE
 // PROJECTION'S.
 //
-// The audience is kept on the durable run record and nowhere else, and it is
-// what shows a parked question to the people it is put to whatever their reach
-// to the seat that asked — so a reconcile whose only news is the audience is
-// news, and pushes the run set: unpushed, the person asked would go on being
-// shown that the run's body was withheld from them. An empty audience is the
-// same as none, so a record read twice does not push twice. And the set handed
-// out is a copy: a reader masking or editing what it was handed must never
-// change who the projection shows the question to next.
+// The audience is kept on the durable run record only, and shows a parked
+// question to the people it is put to whatever their reach to the seat: a
+// reconcile whose only news is the audience pushes the run set, or the person
+// asked would go on seeing the body withheld. An empty audience is the same as
+// none, so a record read twice does not push twice. The set handed out is a
+// copy: a reader editing it must not change who is shown the question next.
 //
 // Mutation: compare entries without their audience, count an empty audience as
 // a change, or hand out the projection's own slice, and this fails.

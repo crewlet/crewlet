@@ -199,9 +199,10 @@ type Dispatcher struct {
 	// ([Engine.readDelegatedRequests]). Nil reads nothing.
 	DelegatedRequests func(ctx context.Context, handle string, evs []*events.Event) []*events.Event
 
-	// StaleAssignments drops each assignment wake whose item was finished,
-	// removed or handed on since ([Engine.dropStaleAssignments]). Nil drops none.
-	StaleAssignments func(ctx context.Context, handle string, evs []*events.Event) []*events.Event
+	// StaleWakes drops each wake about work the seat holds whose item was
+	// finished, removed or handed on since ([Engine.dropStaleWakes]). Nil
+	// drops none.
+	StaleWakes func(ctx context.Context, handle string, evs []*events.Event) []*events.Event
 
 	// Observe publishes an engine-side observability event.
 	//
@@ -650,8 +651,8 @@ func (d *Dispatcher) dispatch(ctx context.Context, handle string, evs []*events.
 		}
 		held.events = surviving
 	}
-	if d.StaleAssignments != nil {
-		if surviving = d.StaleAssignments(ctx, handle, surviving); len(surviving) == 0 {
+	if d.StaleWakes != nil {
+		if surviving = d.StaleWakes(ctx, handle, surviving); len(surviving) == 0 {
 			return queue.Ack()
 		}
 		held.events = surviving

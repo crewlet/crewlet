@@ -16,25 +16,16 @@ const minTestFiles = 2000
 
 // NO FIXED WAIT DECIDES A TEST'S CLAIM unless the inventory still holds it,
 // AND NO MEASURED ELAPSED TIME DOES EITHER. Every reference in test code to
-// time.Sleep, time.After, time.AfterFunc, time.NewTimer, time.NewTicker or
-// time.Tick, to time.Since or time.Until, and to a time.Time's Sub, Before,
-// After or Compare, is inside a synctest bubble, inside a verified
-// bubble-only helper, under a marker that says what it is for, or counted by
-// an entry of allowed.go that names the piece of the series removing it.
-// Every marker marks a reference of its shape, every bubble declaration is
-// on a function every caller bubbles, and every entry holds exactly the
-// waits and the readings it records, each shape to its own count, so the
-// inventory only shrinks. The package doc has the class, the house patterns
-// and the markers.
+// time.Sleep, After, AfterFunc, NewTimer, NewTicker or Tick, to time.Since or
+// Until, and to a time.Time's Sub, Before, After or Compare, is inside a
+// synctest bubble or verified bubble-only helper, under a marker saying what
+// it is for, or counted by an entry of allowed.go; each shape to its own
+// count, so the inventory only shrinks (the package doc has the class).
 //
-// THE LISTING: every reference no entry covers is one line of this test's
-// failure, `path:line: function: time.X` (time.Sleep, time.Since,
-// time.Time.Sub, time.Time.Before and the rest), all of them — the line the
-// inventory is generated from. An over-full function's references follow its
-// finding in the same form, every one of them, since the gate cannot say
-// which is new: so a reference of a new shape in a function the inventory
-// already holds for its waits (an elapsed reading beside an old sleep) is
-// listed too.
+// THE LISTING: every uncovered reference is one failure line,
+// `path:line: function: time.X`, which the inventory is generated from. An
+// over-full function's references all follow its finding, since the gate
+// cannot say which is new.
 func TestNoFixedWaitDecidesATestClaimOutsideTheInventory(t *testing.T) {
 	t.Parallel()
 	tree, err := Scan(sourcetree.Root(t))

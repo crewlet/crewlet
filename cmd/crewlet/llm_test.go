@@ -86,18 +86,15 @@ func TestALoginBundleRoundTripsThroughTheCLI(t *testing.T) {
 
 // A STORED CREDENTIAL SAYS WHICH STORE TOOK IT AND WHAT THAT STORE DOES NEXT.
 //
-// `crewlet llm login -token-stdin` and `llm export -secret-store` write into
-// the secret store through the node -api names, as `crewlet secrets set` does,
-// and the two ways in look alike afterwards: a value written through a running
-// node is read at the fleet's next configuration apply, and one written
-// directly with this node's engine stopped is read by that engine when it
-// starts, and by a node already running on the store at its next apply. So
-// each write names the store and says what it does next, in the words
-// `secrets set` uses.
-// Both are driven here end to end, the token read from the stdin the command
-// was handed. Mutation: drop either write's -api and it reaches no node; read
-// the token from os.Stdin again and the login reads nothing; drop the next
-// step from either line and its case is red.
+// `crewlet llm login -token-stdin` and `llm export -secret-store` write into the
+// secret store through the node -api names, as `crewlet secrets set` does. A value
+// written through a running node is read at the fleet's next apply; one written
+// directly with the engine stopped is read when it starts, and by a running node
+// at its next apply. So each write names the store and says what happens next, in
+// `secrets set`'s words. Both are driven end to end, the token read from the
+// stdin the command was handed. Mutation: drop either write's -api and it reaches
+// no node; read os.Stdin again and the login reads nothing; drop the next step
+// and its case is red.
 func TestAStoredLLMCredentialSaysWhereItWentAndWhatHappensNext(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -467,19 +464,16 @@ func TestTheLLMDoctorReportsARefusedBridgeURL(t *testing.T) {
 }
 
 // A BOX URL THE ENGINE REFUSES ITS BOOT ON FAILS THE DOCTOR, WHATEVER THE
-// COMPANY'S ENTRIES SERVE. The doctor read the bridge's URL only for an entry
-// an executor launches on and the receiver's never, so a company whose entries
-// serve only this host's phases — this one — got a clean report and a zero
-// exit beside a value the next boot refuses, and a deploy script gating on
-// doctor passed a node that then ran no seat at all. Every URL a box dials back to the engine — the receiver's, the
-// bridge's and Gitlet's — is the NODE's, so the refusal is reported as
-// the node's, ahead of the entries, and never repeats the value.
+// COMPANY'S ENTRIES SERVE. Reading the bridge's URL only for an entry an executor
+// launches on (and the receiver's never) gave a company serving only this host's
+// phases a clean report and zero exit beside a value the next boot refuses. Every
+// URL a box dials back (receiver, bridge, Gitlet) is the NODE's, so the refusal is
+// reported as the node's, ahead of the entries, and never repeats the value. The
+// variables travel in the environment the invocation is HANDED, where the doctor
+// reads them, as the engine reads its own.
 //
 // Mutation: the doctor reading the box URLs other than through
 // engine.ReadBoxURLs → Gitlet's row passes, red.
-//
-// The variables travel in the environment the invocation is HANDED, which is
-// where the doctor reads them, as the engine reads its own.
 func TestTheLLMDoctorRefusesABoxURLTheBootRefuses(t *testing.T) {
 	t.Parallel()
 	for _, variable := range []string{sandbox.OtelReceiverURLVar, mcpbridge.BaseURLVar, sandbox.BoxGitURLVar} {
@@ -560,14 +554,12 @@ func tokenLoginProvider(t *testing.T, mode harness.AuthMode) []harnessProvider {
 
 // A HEADLESS TOKEN IS STORED ONLY WHERE THE ENTRY'S AUTH MODE READS ONE. Under
 // api-key the token variable is removed from the harness's environment, and under
-// inherit-env it is forwarded from the engine's own environment, never the
-// secret store — yet `-capture-token` and `-token-stdin` minted and stored one
-// under both, and printed an auth.token snippet that validation refuses under
-// either. Each is now refused before anything is minted, read or stored,
-// naming what the mode reads; inherit-env keeps -print-token, whose token
-// reaches the harness once exported in the engine's environment. Subscription is
-// the control: it stores, so "nothing stored" below is a refusal and not a
-// store the harness could not reach.
+// inherit-env it is forwarded from the engine's own environment, never the secret
+// store, so `-capture-token` and `-token-stdin` are refused before anything is
+// minted, read or stored, naming what the mode reads. inherit-env keeps
+// -print-token, whose token reaches the harness once exported. Subscription is the
+// control: it stores, so "nothing stored" below is a refusal, not an unreachable
+// store.
 //
 // Mutation: drop the refusal, and every api-key and inherit-env case stores a
 // token (or prints one under api-key) and goes red.
@@ -690,29 +682,18 @@ func TestATokenIsStoredOnlyWhereTheEntrysAuthModeReadsIt(t *testing.T) {
 	}
 }
 
-// A TOKEN VARIABLE NO STORE CAN HOLD MINTS NOTHING. overrides.token_env can
-// name a variable outside the reference grammar — MY-TOKEN — and `crewlet llm`
-// loads its document only to run, so the admission rule that refuses one on
-// every write never sees this file. The token was minted all the same, and
-// then lost: the store refused the name after the vendor had issued it, and
-// -print-token's next step, a ${MY-TOKEN} or an export of it, cannot be
-// written; -token-stdin read the token and failed at the same write. Each is
-// now refused before the mint or the read, naming the field; the capture
-// script leaves a marker and the token's stdin records a read, so either is
-// seen whatever became of the token. -from-host no longer recommends
-// -capture-token for such an entry, since that is the refusal, and `llm
-// doctor` names the field (which routes it then offers is harness's suite)
-// and exits non-zero. And no store can hold the name, so no run treats it as a
-// stored value: through a running node the run's batch never asks for it — the
-// node refuses a whole request over one such name, which would fail the doctor
-// on a value that cannot exist — and with the engine stopped the fleet's store,
-// which refuses a read naming one the same way, is never asked for it either.
-//
-// Mutation: move the check after the mint, and the marker appears and stdin
-// is read; drop it, and every case is accepted or fails at the store instead;
-// stop leaving such a name out of the command's reads, and they name it; send
-// it to a node that lists it — a stand-in, since no store can hold one — and
-// the node refuses the doctor's read, which fails on it instead of the field.
+// A TOKEN VARIABLE NO STORE CAN HOLD MINTS NOTHING. overrides.token_env can name
+// a variable outside the reference grammar (MY-TOKEN), and `crewlet llm` loads its
+// document only to run, so the admission rule never sees it. The token would be
+// lost at the store after the vendor issued it, and -print-token's next step
+// cannot be written. Each path is refused before the mint or the read, naming the
+// field (the capture script leaves a marker and the token's stdin records a
+// read); -from-host no longer recommends -capture-token for it, and `llm doctor`
+// names the field and exits non-zero. No run treats the name as a stored value:
+// through a node the batch never asks for it (the node would refuse the whole
+// request), nor does the engine-stopped fleet store. Mutation: check after the
+// mint, marker and stdin read; drop it, cases fail at the store; keep the name in
+// the reads, they name it; send it to a node that lists it, the doctor fails.
 func TestATokenVariableNoStoreCanHoldMintsNothing(t *testing.T) {
 	t.Parallel()
 	company := func(t *testing.T, marker string) string {
@@ -981,18 +962,15 @@ func TestATokenForAHarnessThatTakesNoneIsNeitherMintedNorRead(t *testing.T) {
 
 // AN API-KEY ENTRY IS TOLD ITS KEY BEFORE ANYTHING ABOUT ITS TOKEN VARIABLE.
 // The mode removes the token variable from the harness's environment, so a token
-// reaches nothing under any variable — yet the refusal of a harness that names
-// none told api-key codex to sign in with a login or to name a token
-// variable, and that of a name outside the grammar told api-key MY-TOKEN to
-// name the variable its harness reads, as if a token would then reach it. Both
-// are now the api-key refusal, naming the key the mode reads, and offer no
-// subscription where no token could be read under it; MY-TOKEN's names the
-// field as well. inherit-env is judged as before: the refusal of a harness that
-// names no token variable, which a login signs in under that mode too.
+// reaches nothing under any variable: api-key codex must not be told to sign in
+// with a login or name a token variable, nor api-key MY-TOKEN to name the variable
+// its harness reads. Both get the api-key refusal naming the key the mode reads,
+// with no subscription offer where no token could be read under it (MY-TOKEN's
+// names the field too). inherit-env is judged as before.
 //
-// Mutation: judge the token variable before the mode, and the api-key cases
-// are told a login or the variable alone; offer subscription whatever the
-// profile names, and they are told it.
+// Mutation: judge the token variable before the mode, and the api-key cases are
+// told a login or the variable alone; offer subscription whatever the profile
+// names, and they are told it.
 func TestAnAPIKeyEntryIsToldItsKeyBeforeItsTokenVariable(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -1310,20 +1288,18 @@ func TestATokenPipedToLoginIsBoundedBeforeItIsStored(t *testing.T) {
 	}
 }
 
-// A CREDENTIAL BUNDLE NO STORE KEEPS IS REFUSED BEFORE IT IS WRITTEN, NAMING
-// THE ROUTES THAT DO CARRY ONE.
+// A CREDENTIAL BUNDLE NO STORE KEEPS IS REFUSED BEFORE IT IS WRITTEN, NAMING THE
+// ROUTES THAT DO CARRY ONE.
 //
-// Every store holds a value to [secrets.MaxValueBytes], and its refusal says
-// a credential is a few kilobytes, so the input is most likely the wrong one.
-// A bundle is not a pasted credential but the entry's whole credentials
-// directory, packed as it is, so an operator told to find the right input
-// had none to find. `crewlet llm export -secret-store` now refuses it itself,
-// on either route, naming what carries a bundle that size — stdout into the
-// operator's own secret manager and `crewlet llm import` on each host, or a
-// login on each host — and stores nothing.
+// Every store holds a value to [secrets.MaxValueBytes], and its refusal calls the
+// input probably the wrong one; a bundle is the entry's whole credentials
+// directory, so an operator told that had no right input to find. `crewlet llm
+// export -secret-store` refuses it itself, on either route, naming what carries a
+// bundle that size (stdout into the operator's own secret manager and `llm
+// import` on each host, or a login on each host), and stores nothing.
 //
-// Mutation: drop the export's own check, and the store's refusal names none
-// of those routes.
+// Mutation: drop the export's own check, and the store's refusal names none of
+// those routes.
 func TestABundleNoStoreKeepsIsRefusedInABundlesWords(t *testing.T) {
 	t.Parallel()
 	const name = "CREWLET_LLM_CLI_SUB_CREDENTIALS"

@@ -184,25 +184,18 @@ func TestAStreamAnswersItsWritersErrorAndRefusesAWriteOnceClosed(t *testing.T) {
 	}
 }
 
-// BenchmarkStreamAtThePlaintextBound streams 256 MiB of text through a
-// [redact.Stream] in 64 KiB writes, the most the take's scrub reads of an
-// archive at once: the plaintext bound of one reading (internal/sandbox/
-// executor's scrubExpansion times the archive's), which internal/sandbox's
-// SessionScrubWait reads twice within its two minutes. Two texts: what a kept
-// session holds (prose and tool output in JSON lines, a credential now and
-// then, and base64 images), and a key's armour and then 200-byte tokens back
-// to back, which the first rules collapse into markers, so every claims stage
-// after them steps at the markers it holds.
-//
-// Recorded on two cores of a runner shared with other work, 2026-11-16: the
-// kept session at 19.0 MB/s, 14.1 s a reading at the bound, under a quarter
-// of the minute each of the scrub's two readings has (19.7 MB/s on
-// 2026-11-15, before a claims stage stepped at markers); the dense tokens at
-// 10.0 MB/s, 26.8 s a reading, under half of it, every claims stage after the
-// first rules writing a window's copy a piece to step at the markers they
-// hold. Over 64 MiB of the kept session, Secrets, which reads it whole, ran at
-// about 95 MB/s, and the stages with no key's armour to read (fed a whole text
-// that holds none) at about 43.
+// BenchmarkStreamAtThePlaintextBound streams 256 MiB through a [redact.Stream]
+// in 64 KiB writes, the most the take's scrub reads of an archive at once: the
+// plaintext bound of one reading (internal/sandbox/executor's scrubExpansion
+// times the archive's), which SessionScrubWait reads twice within its two
+// minutes. Two texts: a kept session (JSON lines, credentials, base64 images),
+// and a key's armour then 200-byte tokens, collapsed into markers the later
+// claims stages step at. Recorded on two shared cores, 2026-11-16: the kept
+// session at 19.0 MB/s,
+// 14.1 s a reading, under a quarter of the minute each of the scrub's two
+// readings has; the dense tokens at 10.0 MB/s, 26.8 s, under half of it.
+// Secrets, which reads a text whole, ran at about 95 MB/s, the stages with no
+// armour to read at about 43.
 func BenchmarkStreamAtThePlaintextBound(b *testing.B) {
 	for _, c := range []struct {
 		name string
@@ -273,19 +266,17 @@ func keptSession(n int) []byte {
 }
 
 // AN ORDINARY TEXT NEVER DECIDES EARLY at the stream's own hold: no window of
-// the package's keys in every wrapping set among texts of every shape a
-// stage carries ([redact.StreamText]), of such texts alone, keys' armours
-// among such texts, or tokens back to back after an armour, each longer than
-// the least text in which a window can be decided early at that hold
-// ([redact.EarlyReach]), or of what a kept session holds is decided before
-// the claims over it are known ([redact.EarlyWindows]), so the early path runs
-// only on texts built against the password's rule, an AWS secret's quoted key
-// or a Google token's dots, and only those can be refused.
+// the package's keys in every wrapping set is decided before the claims over
+// it are known ([redact.EarlyWindows]), among texts of every shape a stage
+// carries ([redact.StreamText]), keys' armours among them, tokens back to
+// back after an armour (each longer than [redact.EarlyReach], the least text
+// in which a window can be decided early), or a kept session. So the early
+// path runs only on texts built against the password's rule, an AWS secret's
+// quoted key or a Google token's dots, and only those can be refused.
 //
 // Mutation: hold less than the claims' lag ([holdBytes]), or decide a window
-// with an armour in it early whenever the text has run the hold past it,
-// whatever its claims' frontier says ([keyStage.step]), and a window of a
-// text here past the least text is decided early.
+// with an armour in it early once the text has run the hold past it, whatever
+// the claims' frontier says ([keyStage.step]).
 func TestAnOrdinaryTextNeverDecidesEarly(t *testing.T) {
 	t.Parallel()
 	r := rand.New(rand.NewPCG(1170, 5))

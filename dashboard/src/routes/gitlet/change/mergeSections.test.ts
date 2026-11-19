@@ -8,6 +8,8 @@ import { describe, expect, test } from "vitest";
 import type { CodePrecondition, CodeReadiness } from "~/protocol/index.ts";
 import {
   boxTone,
+  fastForwardHeld,
+  measuredBeforeMove,
   mergeSections,
   reRequestable,
   reviewerStandings,
@@ -115,8 +117,65 @@ describe("the merge box's sections", () => {
       { handle: "dev", kind: "agent", verdict: "comment", revision: 2 },
     ];
     const asked = [{ reviewer: "sre", state: "requested" }] as never[];
-    expect(
-      reRequestable({ revision: 2, authors: [{ author: "dev" }] as never[] }, standings, asked),
-    ).toEqual(["cto"]);
+    const head = { revision: 2, authors: [{ author: "dev" }] as never[] };
+    expect(reRequestable(head, standings, asked, "jane")).toEqual(["cto"]);
+    // NEVER THE READER: a reviewer is not offered to ask their own review again.
+    // Mutation: drop the reader's filter, and cto re-requests cto.
+    expect(reRequestable(head, standings, asked, "cto")).toEqual([]);
+  });
+});
+
+describe("a merge measured against its target", () => {
+  const TIP = "c".repeat(40);
+  const OLD = "a".repeat(40);
+  const BASE = "b".repeat(40);
+  const HEAD = "d".repeat(40);
+  const merge = (target_oid: string) => ({
+    revision: 2,
+    target_ref: "refs/heads/main",
+    target_oid,
+    state: "clean",
+    node: "git-1",
+    at: "2026-11-18T10:00:00Z",
+  });
+  const change = { target_ref: "refs/heads/main", head: HEAD, revision: 2, target_tip: TIP };
+
+  // Mutation: compare the measured tip with the head, and a moved target reads current.
+  test("a measurement of a tip the target has moved past says so", () => {
+    expect(measuredBeforeMove({ ...change, mergeability: merge(OLD) })).toBe(true);
+    expect(measuredBeforeMove({ ...change, mergeability: merge(TIP) })).toBe(false);
+    expect(measuredBeforeMove({ target_ref: "refs/heads/main", mergeability: merge(OLD) })).toBe(
+      false,
+    );
+  });
+
+  const facts = (target_oid: string, base_oid: string) => [
+    {
+      n: 2,
+      facts: {
+        target_ref: "refs/heads/main",
+        target_oid,
+        target_position: { stream: "CREWLET_CODE_LOG", generation: 1, seq: 1 },
+        base_oid,
+        base_tree: "",
+        head_tree: "",
+        touched: [],
+        node: "git-1",
+        owners_digest: "",
+        position: { stream: "CREWLET_CODE_LOG", generation: 1, seq: 2 },
+      },
+    },
+  ];
+
+  // Mutation: offer Fast-forward wherever the facts name the tip, and a branch behind it is offered.
+  test("Fast-forward is held where the target moved past the branch, and only there", () => {
+    expect(fastForwardHeld(change, facts(TIP, BASE))).toBe(
+      "main has moved past this branch, so main cannot move to its head. Rebase it first, or merge it another way.",
+    );
+    expect(fastForwardHeld(change, facts(TIP, TIP))).toBeUndefined();
+    // FACTS OF AN EARLIER TIP say nothing of this one: the build answers.
+    expect(fastForwardHeld(change, facts(OLD, BASE))).toBeUndefined();
+    expect(fastForwardHeld(change, [])).toBeUndefined();
+    expect(fastForwardHeld({ ...change, target_tip: undefined }, facts(TIP, BASE))).toBeUndefined();
   });
 });

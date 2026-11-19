@@ -705,18 +705,15 @@ func nextFrame(t *testing.T, c *Client, kind Kind) *Frame {
 
 // THE APPLIER IS NEVER BLOCKED BY THE FAN-OUT, AND WHAT IT DROPS IS REPAIRED.
 //
-// [ChatHub.Applied] runs on the applier's own goroutine, between one batch's
-// commit and the next batch's transaction. An implementation that waited for
-// a slow fan-out would be a node whose LOG applies slowly — and past the
-// deferral grace, one that sheds its seats. So a full buffer drops, says so as
-// it happens, and owes every screen the re-read that covers the hole: the last
-// messages said before a quiet spell would otherwise be missing until
-// somebody reloaded, since only a later message reveals a gap in a room's
-// sequence.
+// [ChatHub.Applied] runs on the applier's goroutine between batches; waiting
+// on a slow fan-out would make the node's LOG apply slowly and, past the
+// deferral grace, shed its seats. So a full buffer drops, says so, and owes
+// every screen the covering re-read: the last messages before a quiet spell
+// would otherwise be missing until a reload, since only a later message
+// reveals a gap in a room's sequence.
 //
-// This case HANGS rather than fails if the drop is ever turned into a wait,
-// which is the honest shape for it: there is no bound to assert against a
-// deadlock.
+// This case HANGS rather than fails if the drop becomes a wait: there is no
+// bound to assert against a deadlock.
 func TestTheApplierIsNeverBlockedAndADropIsRepaired(t *testing.T) {
 	t.Parallel()
 	h := hubOver(t, twoRooms())
@@ -1027,16 +1024,14 @@ func TestAPresenceFrameJoinsTheRoomItNamesAndATabIsInOneRoom(t *testing.T) {
 //
 // A membership replaced, a room made private: whoever the record took out, or
 // may no longer read the room at the batch's position, leaves its presence at
-// once — told so with a roster naming nobody, and gone from what the room's
-// remaining members see — as an artifact's room withdraws a share. A presence
-// decided only at the join would show a removed person in the room, and the
-// room to them, until their tab moved.
+// once, told so with a roster naming nobody and gone from what the others see,
+// as an artifact's room withdraws a share. A presence decided only at the join
+// would show a removed person the room until their tab moved.
 //
 // Mutation: drop the re-decision from the fan, and alice stays in the room;
 // send a fan-out outside the lock it chooses its sockets under, with a pause
-// between the two (the window a slow hand-off opens), and carol's typing,
-// chosen for alice before she was taken out, reaches her after the roster that
-// emptied the room.
+// between (the window a slow hand-off opens), and carol's typing, chosen for
+// alice before she was taken out, reaches her after the emptying roster.
 func TestARecordThatNarrowsARoomTakesWhoeverItShutsOutOfItsPresence(t *testing.T) {
 	t.Parallel()
 	rooms := twoRooms()
@@ -1080,14 +1075,12 @@ func TestARecordThatNarrowsARoomTakesWhoeverItShutsOutOfItsPresence(t *testing.T
 // A GAP DECIDES AGAIN WHO MAY STAY IN A ROOM'S PRESENCE, AND KEEPS WHAT IT
 // CANNOT DECIDE.
 //
-// A gap may have held the record that took somebody out of a room — the hub
-// dropped its batch, or the engine's source switched past it — and that record
-// is what takes them out of the room's presence. So every socket in a room is
-// decided again: one the room no longer admits is taken out, with a roster
-// naming nobody, and one it still admits stays. A read that cannot be decided
-// keeps the socket where it is: a gap is the possibility of a change, not
-// evidence of one, and failing closed would empty every room on the node over
-// a store blip.
+// A gap may have held the record that took somebody out of a room, which is
+// what takes them out of its presence. So every socket is decided again: one
+// the room no longer admits is taken out with a roster naming nobody, one it
+// admits stays. An undecidable read keeps the socket: a gap is the
+// possibility of a change, not evidence, and failing closed would empty every
+// room on the node over a store blip.
 //
 // Mutation: drop the re-decision from the gap, and alice stays in the room;
 // fail it closed, and carol is taken out by the blip.

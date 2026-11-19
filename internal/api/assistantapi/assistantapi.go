@@ -1,7 +1,7 @@
 // Package assistantapi is the Dashboard Assistant's HTTP surface: a person's
 // conversations, the turns they ask in them, each turn's live stream, Stop,
 // the export of a table a turn showed, and the files a conversation keeps
-// (ADR-0050, ADR-0053).
+// (ADR-0050, ADR-0051, ADR-0053).
 //
 // # A PERSON'S, ON A GRANT THEY CARRY
 //
@@ -27,6 +27,28 @@
 // API's own handler. The assistant holds the grant's handle and never its
 // token, and the grant dies with the turn, its session, or five minutes,
 // whichever is first.
+//
+// # A FILE IS TYPED BY ITS BYTES
+//
+// An upload is the raw body, its declared type never what it is kept as: the
+// bytes are sniffed against the attachable image types, so HTML named `.png`
+// is `415 assistant_file_refused`, and the body is bounded at
+// wire.FileMaxBytes, refused by its declared length before it is read whole.
+// Every download is an attachment of the sniffed type with `nosniff`,
+// `Content-Security-Policy: sandbox` and `private, no-store`, so a kept file is
+// never rendered as a page of this origin. An administrator's compliance
+// download is recorded and audited exactly as the transcript's compliance read
+// is.
+//
+// # A CONDITION OF THE NODE IS TOLD AS ONE
+//
+// A condition ([operator.AnswerCondition]) is `503 unavailable` in a person's
+// words, and anything no condition claims is `500 internal_error`. A write
+// whose outcome is unknown answers `outcome: unknown` with its key; a read
+// whose own write nobody can confirm is `503 unavailable` under a wait, since
+// asking again settles it. `assistant_unavailable` is the assistant's own
+// reasons and carries no Retry-After. A transcript read re-checks its cards
+// against the apps the reader holds now.
 //
 // # THE STREAM
 //

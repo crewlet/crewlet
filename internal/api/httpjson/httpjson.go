@@ -26,7 +26,11 @@
 //     the detail rather than rewording the sentence. A code covering refusals
 //     with different remedies chooses among its sentences by the facts its
 //     detail carries — never by who wrote it — which is how `unauthorized`
-//     says the authority table's own reason ([messageFor]).
+//     says the authority table's own reason ([messageFor]). Its per-reason
+//     sentences hold EXACTLY the reasons `authz.RefusalFields` answers under
+//     that code (a completeness test derives the set from the mapping): a
+//     step-up, a machine token refused and an artifact not shared have codes
+//     of their own, and a row for one was a sentence no refusal could reach.
 //   - the [Detail] — the machine-readable facts about THIS refusal, as typed
 //     JSON: `{"missing_grant": "secrets.reveal"}`, `{"retry_after_ms": 4000}`,
 //     `{"relation": "leads", "subject": "sarah-chen"}`. Its `detail` and
@@ -56,6 +60,60 @@
 // so as a field (`outcome: "unknown"`) beside the operation id, because a
 // client has to tell it from a refusal that wrote nothing without reading a
 // sentence — and the same walk refuses an `unvouched` spelled anywhere else.
+// A route whose writes carry no operation id sends NO key (an empty `op_id`
+// would be sent back; the config surface names the stored revision and the
+// node holding it instead), and an unvouched one sets no `Retry-After`.
+//
+// A state-log refusal takes its seconds from `statelog.RetryAfter` through
+// [RetrySeconds] (rounded UP) on every surface, and zero where waiting cannot
+// clear it (an evicted node, a record this node cannot decode, a full log):
+// two surfaces had each turned those into `Retry-After: 2`, and a client
+// polled a node that would answer nothing until somebody readmitted it.
+//
+// # A 429 says how long
+//
+// A 429 is written by [Throttled] or [ThrottledWith] and nothing else. The wait
+// goes out as a `Retry-After` rounded UP and never below a second: an answer
+// with no header made a client retry at once into the same refusal, and a
+// person read a lockout where there was a wait of seconds. A walk over
+// `internal/api` refuses the status or the code spelled anywhere else.
+//
+// # A stale version is answered by where the request stated it
+//
+// A version named in an `If-Match` header and false is `412` (RFC 9110
+// 13.1.1), `version_moved` or `revision_advanced`. A version stated in a body
+// or a tool argument is the domain's `409`. `configapi.RacedError.Status` holds
+// the rule for the config surface, and
+// `TestEveryIfMatchReaderIsAReviewedPrecondition` holds every reader of the
+// header under `internal/api` to it.
+//
+// # A strict body is read one way
+//
+// [DeclaresJSON] (the media type a cross-site form cannot send without a
+// preflight) and [DecodeStrict] (one value, no undeclared field, nothing after
+// it) are how the act route and the assistant's routes both read a body.
+//
+// # An answer that never changes
+//
+// [Immutable] is for an answer whose BYTES what the request named determine:
+// whole object ids and arguments, never what the read stamps (a copy's
+// position, a memo, an index's coverage, a page cut to the room it leaves).
+// `queries.Immutable` states it. The entity tag is STRONG and of the encoded
+// bytes, never a name for the request, so another build's other field is a new
+// tag and a `304` never confirms a body the caller was not sent. `If-None-Match`
+// is PARSED (a list, `*`, weak comparison), not split on commas, which an
+// entity tag may hold. `Vary` is `Authorization, X-Crewlet-Reader` ([ReaderHeader],
+// here because the guard and this both read it) and NEVER `Cookie`: a served
+// session's cookie is re-issued every five minutes, so a key holding it missed
+// every kept answer. Nor is the key kept apart by `Clear-Site-Data` on sign-in
+// change: the guard's use of it made Chrome scan its whole cache.
+//
+// # Every answer says it is the engine's
+//
+// [EngineHeader] is set once around everything a socket serves
+// (`api.servedOn`), because a body cannot say whose answer it is: a proxy can
+// answer JSON with an `error` field. The dashboard requires it before reading
+// an answer as the engine's (`dashboard/src/contract/engine.ts`).
 //
 // # And the answers no handler writes
 //
@@ -305,21 +363,14 @@ const (
 	CodeNotProvisionable Code = "not_provisionable"
 
 	// CodeNoExternalURL is a gesture that has to hand somebody this
-	// deployment's own address — a writing pass registering a webhook, an
-	// invitation link — on a node that has none. Refused by name rather than
-	// run to register nothing, or to mint a link nobody can follow, and
-	// report success.
+	// deployment's own address (a webhook registration, an invitation link)
+	// on a node that has none: refused by name rather than registering
+	// nothing or minting a link nobody can follow.
 	//
 	// ITS MESSAGE NAMES NEITHER GESTURE, because both surfaces answer with
-	// it and the message is what a person is shown: worded for the webhook
-	// pass, it told somebody sending an invitation to "run the pass again".
-	// What each surface needed the address for is its own `detail`.
-	//
-	// It names the Tier A setting rather than the retired Tier B one, and
-	// the two differ in what an operator has to do: the old field was
-	// edited live through the dashboard, this one is a file on the node
-	// and a restart. A code that still named the company document's key
-	// would send somebody to a key the loader now refuses by name.
+	// it; what each needed the address for is its own `detail`. It names the
+	// Tier A setting (a file and a restart), since the company document's key
+	// is refused by the loader.
 	CodeNoExternalURL Code = "no_external_url"
 
 	// CodeRequirementsOutstanding is a pass asked for against a
@@ -565,16 +616,14 @@ const (
 	// longer than it will hold a request open for. It is a 429 carrying
 	// the time left in `Retry-After`, and [Throttled] is its one writer.
 	//
-	// THE ONE SPECIFIC REFUSAL ON A SIGN-IN SURFACE, and it is safe
-	// precisely because the curve a stranger can reach is keyed on the
-	// SOURCE and on what was TYPED, never on what it resolved to: they learn
-	// they have failed recently from where they are, which they already
-	// knew, and a name nobody holds is throttled exactly as a real one is.
-	// Keyed on a resolved login it would be an oracle — "this account
-	// exists". The one curve that IS keyed on the resolved person, a second
-	// factor's, is reached only past the password, so it tells its caller
-	// nothing the password did not — and its sentence cannot say "from
-	// here", because it counts every address.
+	// THE ONE SPECIFIC REFUSAL ON A SIGN-IN SURFACE, safe because the curve a
+	// stranger can reach is keyed on the SOURCE and what was TYPED, never on
+	// what it resolved to: a name nobody holds is throttled exactly as a real
+	// one, whereas a resolved login would be an oracle ("this account
+	// exists"). The one curve keyed on the resolved person, a second factor's,
+	// is reached only past the password, so it tells nothing the password did
+	// not; its sentence cannot say "from here", because it counts every
+	// address.
 	CodeThrottled Code = "throttled"
 
 	// CodeSecondFactorRequired is a first factor that checked out where a
@@ -643,17 +692,15 @@ const (
 	// CodeSeatUnavailable is somebody whose session validated perfectly
 	// and whose SEAT the org chart no longer holds.
 	//
-	// A 403 AND NEVER A 401, which is why it is not folded into
-	// [CodeSessionRevoked]: the bearer is live and signing in again
-	// changes nothing, so a browser told to discard its cookie would
-	// loop through the sign-in page for ever. The detail beside it NAMES
-	// the seat, because the person locked out and whoever removed it both
-	// need to know which one.
+	// A 403 AND NEVER A 401, so not folded into [CodeSessionRevoked]: the
+	// bearer is live and signing in again changes nothing, so a browser told
+	// to discard its cookie would loop through the sign-in page for ever. The
+	// detail NAMES the seat, which the person locked out and whoever removed
+	// it both need.
 	//
-	// The wire value is internal/iam/session's own `CodeNoSeat`; the two
-	// are held equal by a test in internal/api/auth, since this package
-	// imports no engine machinery — only the vocabularies its sentences
-	// name, iam's permissions and configplane's interval — and that one is.
+	// The wire value is internal/iam/session's `CodeNoSeat`, held equal by a
+	// test in internal/api/auth because this package imports no engine
+	// machinery beyond the vocabularies its sentences name.
 	CodeSeatUnavailable Code = "seat_unavailable"
 
 	// CodeReaderChanged is a request that names the principal it was made
@@ -847,19 +894,16 @@ const (
 	// CodeConfirmRequired is a destructive gesture whose confirmation did
 	// not repeat what it acts on. The detail says what to repeat.
 	CodeConfirmRequired Code = "confirm_required"
-	// CodeOpIDInvalid is a write sent under an operation id this engine
-	// would not have minted ([statelog.CheckCallerOpID]): no mint instant,
-	// or bytes the broker would carry as a different id — or, where a route
-	// derives what it creates from the id, one carrying more than the bare
-	// uuid7 it needs. 400, with nothing judged or written, because an id
-	// carrying no instant reads as older than every loss the ledger has had
-	// — a write answered `unknown` without being published, on the first
-	// attempt as on every retry.
+	// CodeOpIDInvalid is a write sent under an operation id this engine would
+	// not have minted ([statelog.CheckCallerOpID]): no mint instant, bytes the
+	// broker would carry as a different id, or, where a route derives what it
+	// creates from the id, more than the bare uuid7. 400, nothing judged or
+	// written: an id with no instant reads as older than every loss the ledger
+	// has had, so the write was answered `unknown` unpublished, on every retry.
 	//
 	// ONE CODE WHEREVER THE ID ARRIVED (the node gate's `?op_id=` and every
-	// surface's `Idempotency-Key`: `/worklet`, `/doclet/pages`, `/iam`), so a
-	// client branches on one spelling for one mistake. A
-	// refusal of a header also carries `field`, naming it.
+	// surface's `Idempotency-Key`). A refusal of a header also carries
+	// `field`, naming it.
 	CodeOpIDInvalid Code = "op_id_invalid"
 	// CodeInvalidGate is an eviction or readmission naming a node id no
 	// node could run under. 400: nothing was judged or written, and the
@@ -1075,14 +1119,12 @@ const (
 	// the store's own or the company's), or a cap on what one datastore
 	// holds (its collections and documents, a collection's rows, one
 	// participant's rows). 409, the code of the tools' `quota_exceeded`
-	// refusal class, because it is the state of what is held that the write
-	// collided with and no larger or smaller request changes it. ITS
-	// SENTENCE STANDS ALONE, because what is beside it differs by route: the
-	// artifacts routes answer the limit, the usage and the Tier A key an
-	// operator raises; a datastore's routes answer the applier's reason,
-	// which names the limit, as the detail; and the act route answers the
-	// refusal in a person's words where the tool gave it some, and no
-	// detail otherwise (ADR-0060).
+	// refusal class: the write collided with the state of what is held, which
+	// no request size changes. ITS SENTENCE STANDS ALONE, because what is
+	// beside it differs by route: artifacts answer the limit, the usage and
+	// the Tier A key to raise; a datastore answers the applier's reason as
+	// the detail; the act route answers the tool's words, else no detail
+	// (ADR-0060).
 	CodeQuotaExceeded Code = "quota_exceeded"
 	// CodeCarriedObjectGone is a publish carrying files the artifact no
 	// longer holds the bytes of. 409, the detail naming the paths to upload
@@ -2022,20 +2064,15 @@ var proseKeys = [...]string{keyDetail, keyHint}
 // Sentence is text as a person reads it on its own: its first letter
 // capitalised and a full stop after it.
 //
-// ONE PLACE, AT THE BOUNDARY. A Go error stays lowercase with no full stop,
-// because errors are wrapped ("apply the config: seat x is held") and a
-// capital or a full stop in the middle of a chain reads wrong in every log.
-// The OUTERMOST text is different: once a refusal puts it in `detail` or
-// `hint`, nothing wraps it again, and a person reads it as a line of its own.
-// [Envelope] calls this on both keys, so a handler passes err.Error() as it is
-// and never formats copy for the screen itself.
+// ONE PLACE, AT THE BOUNDARY: a Go error stays lowercase with no full stop
+// because errors wrap, but the OUTERMOST text, once in `detail` or `hint`, is
+// never wrapped again. [Envelope] calls this on both keys, so a handler passes
+// err.Error() as it is.
 //
-// AN IDENTIFIER KEEPS ITS SPELLING. Only a plain lowercase word is
-// capitalised: text that opens with a field name (`expires_in_days`), a flag
-// (`-dev-principal`), a path, an address, a quoted value or a Go package
-// prefix ("statelog: ", see [goPackages]) opens exactly as it was written,
-// because capitalising it would name something that does not exist. Text that already ends in a full stop, a question mark or an
-// exclamation mark keeps its ending, so calling this twice changes nothing.
+// AN IDENTIFIER KEEPS ITS SPELLING: only a plain lowercase word is
+// capitalised, not a field name, flag, path, address, quoted value or Go
+// package prefix ([goPackages]). Text already ending in `.`, `?` or `!` keeps
+// it, so calling this twice changes nothing.
 func Sentence(text string) string {
 	s := strings.TrimSpace(text)
 	if s == "" {
@@ -2074,25 +2111,16 @@ func plainWord(s string) bool {
 
 // BodyReadTimeout bounds how long a client may take to deliver its body.
 //
-// A size cap is not a time bound, and the two failures are different: the size
-// cap stops a client sending 25 MiB, and this stops one sending 25 bytes a
-// minute apart. Without it a request that dribbles holds a handler goroutine
-// and a connection slot for as long as the client cares to keep dribbling —
-// the cheapest denial there is against a listener, and the listener is the one
-// surface an unauthenticated caller can reach.
+// A size cap does not stop a client sending 25 bytes a minute apart, which
+// would hold a handler and a connection slot against a surface an
+// unauthenticated caller reaches. It is NOT the server's ReadTimeout (unset):
+// that covers the exchange from the first header byte, so one big enough for a
+// 25 MiB webhook on a slow link bounds nothing on a small one. A deadline
+// taken HERE starts when the handler asks for the body.
 //
-// It is NOT the server's ReadTimeout, which is why that field is still unset:
-// ReadTimeout covers the whole exchange from the first header byte, so any
-// value large enough for a 25 MiB webhook on a slow link is also large enough
-// to be no bound at all on a small one. A deadline taken HERE starts when the
-// handler asks for the body, so it bounds the body alone.
-//
-// THIRTY SECONDS, from the largest thing this reads: webhooks.MaxBodyBytes is
-// 25 MiB, which needs roughly 7 Mbit/s sustained to arrive inside the bound —
-// far below what any CI runner, forge or operator workstation delivers, and
-// far above the trickle this exists to cut off. The server's own
-// ReadHeaderTimeout (10 s) and IdleTimeout (60 s) bound the other two phases;
-// this is the third.
+// THIRTY SECONDS: webhooks.MaxBodyBytes is 25 MiB, about 7 Mbit/s sustained,
+// far below any CI runner or forge and far above the trickle cut off.
+// ReadHeaderTimeout (10 s) and IdleTimeout (60 s) bound the other phases.
 const BodyReadTimeout = 30 * time.Second
 
 // ReadBody reads at most max bytes of a request body, within
@@ -2145,13 +2173,11 @@ func Refuse(w http.ResponseWriter, err error) {
 // and 405, the canonical-path refusal and the boot surface's `503 starting`
 // alike.
 //
-// IT SAYS WHOSE ANSWER AN ANSWER IS. A client reads an answer the engine wrote
-// as what the engine did, and one it did not write as saying nothing about
-// it: a proxy's 504 page, a gateway's 403, a cache's 413. The error envelope
-// alone could not tell them apart, since anything in front of the engine can
-// answer JSON with an `error` field; a header no proxy sets can. The
-// dashboard requires it (dashboard/src/contract/engine.ts, held to these two
-// values by `TestTheDashboardKnowsTheEnginesOwnAnswers`).
+// IT SAYS WHOSE ANSWER AN ANSWER IS: a proxy's 504, a gateway's 403 or a
+// cache's 413 says nothing about what the engine did, and the error envelope
+// cannot tell them apart since anything in front can answer JSON with an
+// `error` field. The dashboard requires it (dashboard/src/contract/engine.ts,
+// held to these two values by `TestTheDashboardKnowsTheEnginesOwnAnswers`).
 const EngineHeader = "X-Crewlet-Engine"
 
 // EngineHeaderValue is [EngineHeader]'s one value.
@@ -2209,18 +2235,11 @@ func NoActiveRevision(w http.ResponseWriter, detail Detail) {
 // operator's act and MCP surfaces, and the work, page, chat and search
 // questions on both transports.
 //
-// ONE SENTENCE, for [NoActiveRevision]'s reason: it was written out at each of
-// the four places that answer it, and a client showing a person why a screen
-// is empty reads it from whichever of them it asked. It NAMES ALL THREE
-// HALVES, because each is the answer for every one of them: written while it
-// named Worklet and Doclet alone, a Chatlet verb on such a node (`crewlet chatlet`
-// prints the node's own words for it) was told that two halves it never asked
-// for were not running, and nothing about the one it had.
-//
-// IN A PERSON'S WORDS: it said the node "has not been handed a company" and
-// that the halves "come up with its first revision", which is how the engine
-// describes its own bring-up and nothing a person reading an empty screen acts
-// on.
+// ONE SENTENCE, for [NoActiveRevision]'s reason: a client shows it from
+// whichever of the four places it asked. It NAMES ALL THREE HALVES, since each
+// is the answer for every one: naming Worklet and Doclet alone told a Chatlet
+// verb that two halves it never asked for were down, and nothing about its
+// own. IN A PERSON'S WORDS, not the engine's bring-up vocabulary.
 const NativeHalvesNotUp = "this node isn't running a company yet, so " +
 	"Worklet, Doclet and Chatlet aren't up here. The ones the company uses " +
 	"start as soon as it's set up, with no restart"
@@ -2243,19 +2262,11 @@ func NeedsRestart(half string) string {
 // Unavailable writes a 503 carrying a Retry-After, which is the pair a client
 // needs to tell "come back" from "do not come back".
 //
-// ONE WRITER, because the header and the envelope have to agree: a 503 with no
-// Retry-After is indistinguishable to a client from a node that is down for
-// good, and a Retry-After on a refusal that is not retryable teaches a client
-// to hammer one that never will be. Seconds rather than a duration, because
-// that is what the header carries and converting at each call site is how two
-// of them come to round differently.
-//
-// It is NOT a second Fail: the body is [FailWithFields]'s, so the envelope's
-// three parts are assembled in exactly one place however a refusal is reached.
-//
-// ZERO MEANS NOT RETRYABLE and writes no header: a node missing the
-// configuration a route needs will not have it after any wait, and saying
-// "come back" to a client is how it learns to hammer that node.
+// ONE WRITER, because header and envelope must agree: a 503 with no
+// Retry-After reads as a node down for good, and one on a non-retryable
+// refusal teaches clients to hammer it. Seconds, as the header carries them.
+// The body is [FailWithFields]'s. ZERO MEANS NOT RETRYABLE and writes no
+// header: missing configuration will not appear after any wait.
 func Unavailable(w http.ResponseWriter, code Code, retryAfterSeconds int) {
 	UnavailableWith(w, code, retryAfterSeconds, nil)
 }
@@ -2301,15 +2312,12 @@ func ThrottledWith(w http.ResponseWriter, code Code, retryAfter time.Duration, d
 // the operation id a retry must reuse, the setting to change.
 //
 // THE ONLY OTHER WAY a 503 is written, so a route with something to say beside
-// the code cannot reach for [FailWithFields] and drop the header — which is how
-// a dozen of them came to answer "come back" without saying when.
+// the code cannot reach for [FailWithFields] and drop the header.
 //
-// AND THE MESSAGE FOLLOWS THE HINT: a code whose own sentence invites a wait
-// reads its [waitless] sentence under no Retry-After, because the header and
-// the sentence beside it are one answer to "should I come back". A full log, a
-// full file store and an evicted node went out with no Retry-After and the
-// message "Try again in a moment", so a client that read the message rather
-// than the header sent the same request into the same refusal.
+// THE MESSAGE FOLLOWS THE HINT: a code whose own sentence invites a wait reads
+// its [waitless] sentence under no Retry-After, since header and sentence are
+// one answer to "should I come back"; "Try again in a moment" with no header
+// sent clients reading the message into the same refusal.
 func UnavailableWith(w http.ResponseWriter, code Code, retryAfterSeconds int, detail Detail) {
 	if retryAfterSeconds > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds))
@@ -2360,33 +2368,14 @@ const (
 // establish: `outcome: "unknown"` and the `op_id` a retry must send back, and
 // `unvouched: true` where this node's operation ledger cannot vouch for it.
 //
-// A route whose writes carry no operation id passes none, and the key is left
-// out rather than written empty, since an empty op_id is one a client would
-// send back. The config surface is that route: its writes are compare-and-sets
-// on the revision they were built on, and its detail names the revision the
-// write stored, which is what a client looks for to learn whether it landed,
-// and the node whose history alone holds it, which is where a client that
-// finds it did not land sends the revert.
-//
-// # Why it is not [UnavailableWith] with a map a route fills in
-//
-// A write that MAY HAVE LANDED and a write the node REFUSED are both 503s, and
-// they send a client opposite ways: the first is retried under the same
-// operation and never under a fresh one, which would make a second change if
-// the first landed; the second wrote nothing. Every surface wrote the unknown
-// for itself, and they had drifted (`/iam` said it only in a sentence,
-// `/worklet` said it on some routes because the tool's receipt happened
-// to carry an `outcome` and not on others), so `crewlet worklet purge`, which
-// branches on the field, told an operator whose purge may have destroyed the
-// item that the attempt "wrote nothing". One writer, and the three keys are
-// its and always win over a route's detail.
-//
-// # And why the unvouched rule is here too
-//
-// An unvouched unknown was not published at all: asked on this node again it
-// answers the same way until the change reaches this node, so it carries NO
-// Retry-After whatever the caller passed — a header saying "come back" would
-// send a client to poll the one node that cannot answer.
+// A route with no operation id passes none and the key is left out: an empty
+// op_id would be sent back (the config surface; its detail names the stored
+// revision and the node holding it). Not [UnavailableWith] plus a map: a write
+// that MAY HAVE LANDED is retried under the same operation, a REFUSED one
+// wrote nothing, and per-surface writers drifted (`/iam` said it only in
+// prose). The three keys win over a detail. An unvouched unknown was not
+// published, so it carries NO Retry-After: clients would poll the one node
+// that cannot answer.
 func UnknownOutcome(w http.ResponseWriter, retryAfterSeconds int, opID string,
 	unvouched bool, detail Detail) {
 

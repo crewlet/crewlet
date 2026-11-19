@@ -151,18 +151,12 @@ func TestGeminisRunIsReadFromItsOwnChat(t *testing.T) {
 
 // A GEMINI REQUEST IS TOLD ONCE ITS CALLS HAVE RUN, AND CHARGED BEFORE. The
 // chat shows a response's calls only in the entry it writes again once they
-// have run, so the host is told the request when the record has moved past it
-// — told on its first writing, it would hold the call it is running for a
-// request it was told asked for none — while the request's counts are charged
-// the moment they are read.
-//
-// The record and the call race by a poll, so the call waits for the charge,
-// woken by each report rather than by a clock. A request charged only once it
-// is told is never charged while its call runs, since it is told once the call
-// has returned, so the wait's bound only sets how long that build takes to go
-// red. Whether the host was told the request before its call showed is read
-// off everything it was told, once the run is over: a reader the runner holds
-// up can neither fail a healthy run nor let the early telling through.
+// have run, so the host is told the request when the record has moved past
+// it (told on its first writing, it would hold the running call for a request
+// it was told asked for none), while its counts are charged the moment they
+// are read. The call waits for the charge, woken by each report rather than a
+// clock; the bound only sets how long a build charging at telling takes to go
+// red. Early telling is read off everything the host was told, after the run.
 //
 // Mutation: drop late_calls from the profile, and the host is told the first
 // request with no calls; charge a request only once it is told, and its call

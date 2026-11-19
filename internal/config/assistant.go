@@ -19,52 +19,26 @@ import (
 // runs for this company, which models it runs on, and the bounds of one turn.
 //
 //	assistant:
-//	  enabled: true                 # absent means off
-//	  llm: [assistant]              # providers.llm keys, a fallback chain
-//	  max_steps: 30                 # 1..40
-//	  turn_timeout_seconds: 900     # 30..1200
-//	  proposal_ttl_seconds: 900     # 60..3600
-//	  retention_days: 30            # 1..365
-//	  token_budget: { day: 200000 } # per person, optional
-//	  deep_work:                    # optional; absent means quick mode only
-//	    llm: assistant-deep         # a Claude Code providers.llm key
-//	    timeout_seconds: 1200       # 60..1200
-//	    max_steps: 150              # 10..400
-//	    max_tokens: 3000000         # 10000..20000000
+//	  enabled: true       # absent means off
+//	  llm: [assistant]    # providers.llm keys, a fallback chain
 //
-// # Off unless a person turns it on
-//
-// Enabled is a pointer because its zero value must be meaningful, and the
-// meaningful zero here is OFF: a company that never mentions the assistant
-// does not run one, and a company that wrote `enabled: false` reads the same.
-// A model reading the company's data for a person is something somebody
-// chooses, never something an upgrade switches on.
-//
-// # Every numeric zero is its default
-//
-// Zero lies outside every range below, so a zero can only mean "not set" and
-// reads as the default without a pointer. A value outside its range is refused
-// at admission and, on a revision stored before the rule (or written by a peer
-// that relaxed it), clamped to the nearest bound by its accessor, so a running
-// node never acts on a turn bound nobody could have meant.
-//
-// # Only a model that can reach nothing else
-//
-// Every member of `llm` must be an entry whose profile denies the harness's own
-// local tools AND its own web tools, so the one tool source its run on the
-// engine host has is the engine's `crewlet` server, serving the person's own
-// requests (ADR-0049). The assistant's guarantee (ADR-0050) is that it reads
-// only what the person's own requests return; a shell reads whatever the
-// engine user can, and a web fetch is both text no authority decision ever
-// saw and a way out for whatever the person's data put in the prompt.
-// [Company.AssistantChain] is the one place the chain is handed out, and it
-// refuses a chain that breaks this, so a stored revision carrying one leaves
-// the assistant unavailable rather than unsafe.
+// Enabled is a pointer because its meaningful zero is OFF: an upgrade never
+// switches on a model reading the company's data. Every numeric zero lies
+// outside its range, so it reads as the default without a pointer; an
+// out-of-range value is refused at admission and, on a stored revision,
+// clamped by its accessor.
 type Assistant struct {
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty" desc:"Run Ask Crewlet for this company. Absent or false: off."`
 
 	// LLM is the assistant's provider chain, the first key tried first, in
-	// the shape a seat's llm_auxiliary takes.
+	// the shape a seat's llm_auxiliary takes. Every member must be an entry
+	// whose profile denies the harness's local tools AND its web tools, so its
+	// only tool source on the engine host is the engine's `crewlet` server,
+	// serving the person's own requests (ADR-0049, ADR-0050): a shell reads
+	// whatever the engine user can, and a web fetch is text no authority
+	// decision saw and a way out for whatever the data put in the prompt.
+	// [Company.AssistantChain] hands the chain out and refuses one that breaks
+	// this, leaving the assistant unavailable rather than unsafe.
 	LLM ProviderKeys `yaml:"llm,omitempty" json:"llm,omitzero" desc:"providers.llm keys Ask Crewlet runs on, a fallback chain. Required when enabled. Each must be an entry whose harness's local tools are denied and, through overrides.web_tools, its web tools."`
 
 	MaxSteps           int `yaml:"max_steps,omitempty" json:"max_steps,omitempty" js:"min=0;max=40" desc:"Most model rounds one Ask Crewlet turn may take before its answer, each calling any number of tools, 1..40. Absent: 30."`
@@ -240,22 +214,15 @@ func (t AssistantTools) Denies(f AssistantToolFamily) bool { return slices.Conta
 
 // AssistantDeepWork is the `assistant.deep_work` block.
 //
-// # A harness with its own tools, never on the engine unconfined
-//
 // The entry it names runs as its harness's own run in a box, as a seat's
-// executor does: the harness's shell, files, web search and image reading are the
-// point. Its one way into Crewlet is the person's
-// own assistant tools, bridged, so every read is still the person's request
-// and every write still a proposal they approve. Where it runs is the entry's
-// own `run_in`, else the first of e2b and container this company configures,
-// else the engine host under OS confinement, which a host that cannot enforce
-// one refuses rather than run open (internal/sandbox's confinement).
+// executor does: the harness's shell, files, web search and image reading are
+// the point. Its one way into Crewlet is the person's own assistant tools,
+// bridged, so every read is still the person's request and every write a
+// proposal they approve. It runs where the entry's `run_in` says, else the
+// first of e2b and container configured, else the host under OS confinement,
+// which a host that cannot enforce one refuses (internal/sandbox).
 //
-// # Every numeric zero is its default
-//
-// As in the block around it: zero lies outside every range, so it reads as
-// the default without a pointer, and a stored value out of range is clamped
-// by its accessor.
+// Numeric zeros read as their defaults, as in [Assistant].
 type AssistantDeepWork struct {
 	LLM            string `yaml:"llm,omitempty" json:"llm,omitempty" desc:"providers.llm key deep work runs on: an entry driving claude-code. Required."`
 	TimeoutSeconds int    `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty" js:"min=0;max=1200" desc:"Longest one deep-work run may take, 60..1200 seconds. Absent: 1200."`
@@ -271,47 +238,35 @@ type assistantBound struct {
 	unit     string
 }
 
-// The four bounds, each anchored where it is consumed:
-//
-//   - max_steps: a step is one tool call and one model round. Thirty lets a
-//     turn look a route up, read the resource and the records around it,
-//     correct a refused call and propose the change, which is what a question
-//     about the person's whole API takes (a seat added to the org reads the
-//     route's documentation, the unit and its seats before it proposes). Forty
-//     is the ceiling because every step's result stays in the conversation the
-//     model re-reads: forty of internal/assistant's sixteen kibibyte results
-//     are about 160,000 tokens, which with the prompt still fits a 200,000
-//     token context, where sixty would not. The budget meters, the person's
-//     and the company's, still stop a turn at its spend whatever its count.
-//   - turn_timeout_seconds: every round is a harness launch of fifteen to
-//     twenty-five seconds, so thirty rounds need up to twelve and a half
-//     minutes: fifteen is the default, and twenty minutes carries the forty
-//     step ceiling at the same latency. Thirty seconds is one slow round.
-//   - proposal_ttl_seconds: long enough to read a diff and step up, short
-//     enough that what was previewed is still what the write meets.
-//   - retention_days: a month of history by default, a year at most, because
-//     a transcript holds whatever the person's reads returned.
-//
-// And deep work's three, anchored the same way:
+// Deep work's bounds, each anchored where it is consumed:
 //
 //   - timeout_seconds: a run lives inside one turn segment, whose read grant
-//     lives at most [AssistantTurnTimeoutCeiling], so twenty minutes is both
-//     the default and the ceiling: a run past it would call out on a grant
-//     that has ended. A run that needs longer parks on a proposal and is
-//     continued on the fresh grant its approval derives. One minute is a run
-//     that installs the harness and reads one page.
+//     lasts at most [AssistantTurnTimeoutCeiling], so twenty minutes is both
+//     default and ceiling; a longer run parks on a proposal and continues on
+//     the fresh grant its approval derives. One minute reads one page.
 //   - max_steps: a redesign that reads a brand, writes assets, renders and
-//     checks them takes a hundred-odd agentic rounds; four hundred is the
-//     most a twenty-minute run can make at the harness's three-second round.
-//   - max_tokens: a hundred and fifty rounds re-reading a growing context
-//     are about three million tokens, most of them cache reads; twenty
-//     million bounds a run nobody meant.
+//     checks them takes a hundred-odd rounds; four hundred is the most a
+//     twenty-minute run makes at the harness's three-second round.
+//   - max_tokens: 150 rounds re-reading a growing context are about three
+//     million tokens, mostly cache reads; twenty million bounds a run nobody meant.
 var (
 	deepTimeout = assistantBound{key: "timeout_seconds", min: 60, max: AssistantTurnTimeoutCeiling, def: AssistantTurnTimeoutCeiling, unit: "seconds"}
 	deepSteps   = assistantBound{key: "max_steps", min: 10, max: 400, def: 150, unit: "steps"}
 	deepTokens  = assistantBound{key: "max_tokens", min: 10_000, max: 20_000_000, def: 3_000_000, unit: "tokens"}
 )
 
+// The four bounds, each anchored where it is consumed:
+//
+//   - max_steps: a step is one tool call and one model round. Thirty lets a
+//     turn look a route up, read the records around it, correct a refused call
+//     and propose. Forty is the ceiling: every result stays in the context the
+//     model re-reads, and forty of internal/assistant's 16 KiB results (~160,000
+//     tokens) fit a 200,000 token context where sixty would not.
+//   - turn_timeout_seconds: a round is a harness launch of 15 to 25 seconds, so
+//     thirty rounds need up to 12.5 minutes (default fifteen) and twenty carries
+//     the forty-step ceiling. Thirty seconds is one slow round.
+//   - proposal_ttl_seconds: long enough to read a diff, short enough that what was previewed is what the write meets.
+//   - retention_days: a transcript holds whatever the person's reads returned.
 var (
 	assistantSteps     = assistantBound{key: "max_steps", min: 1, max: 40, def: 30, unit: "steps"}
 	assistantTimeout   = assistantBound{key: "turn_timeout_seconds", min: 30, max: AssistantTurnTimeoutCeiling, def: 900, unit: "seconds"}

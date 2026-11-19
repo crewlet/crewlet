@@ -1347,6 +1347,8 @@ func holdingCall(name string) (map[string]any, bool) {
 			"commit": featureOID},
 		builtin.CodeCreateBranchTool:  {"repo": repo, "branch": "fix", "at": mainOID},
 		builtin.CodeDeleteBranchTool:  {"repo": repo, "branch": "fix", "expected_head": mainOID},
+		builtin.CodeCreateTagTool:     {"repo": repo, "tag": "v1", "at": mainOID},
+		builtin.CodeDeleteTagTool:     {"repo": repo, "tag": "v1", "expected_target": mainOID},
 		builtin.CodeCreateRepoTool:    {"name": "agent-cto.lab2"},
 		builtin.CodeUpdateRepoTool:    {"repo": repo, "description": "the lab"},
 		builtin.CodeDeleteRepoTool:    {"repo": repo},
@@ -1359,6 +1361,7 @@ func holdingCall(name string) (map[string]any, bool) {
 		builtin.CodeRequestReviewTool:   {"repo": repo, "change": 7.0, "reviewers": []any{"agent-ceo"}},
 		builtin.CodeReviewChangeTool:    {"repo": repo, "change": 7.0, "verdict": "approve"},
 		builtin.CodeCommentOnChangeTool: {"repo": repo, "change": 7.0, "body": "Looks right."},
+		builtin.CodeDeleteCommentTool:   {"repo": repo, "change": 7.0, "comment": standingFinding},
 		builtin.CodeResolveFindingTool: {"repo": repo, "change": 7.0, "findings": []any{standingFinding},
 			"resolution": "dismissed"},
 		builtin.CodeApplySuggestionsTool: {"repo": repo, "change": 7.0, "findings": []any{suggestedA},
@@ -1724,5 +1727,25 @@ func TestTheCodeWriteGuidanceNamesTheCodeWrites(t *testing.T) {
 		if !slices.Contains(builtin.CodeWrites(), name) {
 			t.Errorf("the executor's code write guidance is gated on %s, which is no code write", name)
 		}
+	}
+}
+
+// A CODE TOOL'S ARGUMENT REFUSAL NAMES THE ARGUMENT AS A VALUE beside its class, so the act route
+// answers which was refused without the model's sentence (ADR-0060): a malformed owner is refused
+// invalid, naming `owner`, and nothing is sent. Mutation: refuse it with failed; no field named.
+func TestACodeToolsArgumentRefusalNamesTheArgument(t *testing.T) {
+	t.Parallel()
+	writer := &codeWrites{}
+	reg := codeRegistry(t, writeDeps(newGitletHost(), writer))
+	got := callWrite(everyGrant(), t, reg, writerTurn(t), builtin.CodeCreateRepoTool,
+		map[string]any{"name": "lab", "owner": "eng"})
+	var named interface{ RefusedField() string }
+	if !got.Failed || tools.RefusalOf(got) != tools.RefusalInvalid || !errors.As(got.Cause, &named) ||
+		named.RefusedField() != "owner" {
+		t.Fatalf("an owner in no shape answered %q as %s (cause %v), want invalid naming owner", got.Output,
+			tools.RefusalOf(got), got.Cause)
+	}
+	if _, sent := writer.asked(); len(sent) != 0 {
+		t.Fatalf("a refused owner sent %+v, want nothing", sent)
 	}
 }

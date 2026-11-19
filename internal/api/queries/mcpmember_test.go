@@ -283,14 +283,13 @@ func TestAMembersReadingNamesNoLaunchLineHeaderVariableAccountOrCallDetail(t *te
 
 // A MEMBER'S READING CARRIES EXACTLY THE KEYS ITS ALLOW-LIST NAMES.
 //
-// Each admin answer is filled whole, every field of every struct it holds set
-// by reflection (so a field somebody adds is set too), read as a member, and
-// every key of the JSON a member is sent is walked against the allow-list: a
-// key it does not name fails here, so a field added to a type both readings
-// share cannot reach a member by default, and a key it names that the reading
-// does not carry fails too, so the list never claims what is not sent. The
-// built-in groups are everybody's on `GET /tools` and a tool's schemas are the
-// server's own, so neither is walked.
+// Each admin answer is filled whole by reflection (so an added field is set
+// too), read as a member, and every key of the JSON sent is walked against the
+// allow-list: an unnamed key fails, so a field added to a type both readings
+// share cannot reach a member by default, and a named key the reading does not
+// carry fails too, so the list never claims what is not sent. The built-in
+// groups are everybody's on `GET /tools` and a tool's schemas are the server's
+// own, so neither is walked.
 //
 // Mutation: copy `wait` onto a member's node cell, add a field to
 // MCPStatusNode, or drop `count` from a node asked, and this is red.

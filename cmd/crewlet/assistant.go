@@ -25,14 +25,13 @@ import (
 // mountAssistant builds the Dashboard Assistant over this node's engine and
 // hands its routes, its grants and their dispatcher to opts. It runs after
 // [api.HumanSurfaces.Mount], because the writes a person may propose are the
-// operator surface's verdict ([operator.Server.Acts]) and that surface is
-// handed over there.
+// operator surface's verdict ([operator.Server.Acts]), handed over there.
 //
 // BUILT ON EVERY NODE THAT SERVES THE API, whether or not the company turns
 // the assistant on: the service reads the company per turn, so an apply that
 // turns it on is the next question's, and `/viewer` says why it is off.
 //
-// The service is returned, with this node's half of its fleet stream, so the
+// The service is returned with this node's half of its fleet stream so the
 // caller closes both before its listeners shut down: an open stream is a
 // request a listener's grace would otherwise wait out whole.
 func mountAssistant(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,

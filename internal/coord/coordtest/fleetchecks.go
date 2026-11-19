@@ -10,55 +10,30 @@ import (
 	"github.com/crewlet/crewlet/internal/coord"
 )
 
-// The checks in this file are the fleet cases that have to be PROVABLY able to
-// fail.
+// These checks must be PROVABLY able to fail, which a case reporting through a
+// *testing.T cannot show, so each RETURNS what it found and this package's
+// own test hands them twins built to get it wrong (the shape of
+// [internal/statelog/statelogtest]):
 //
-// Every other case here reports through a *testing.T, which means nothing in
-// this package can demonstrate that it fails — a case that quietly stopped
-// asserting reads exactly like a case that passes. For most of them that is
-// an acceptable trade, because a mutation run against the backends answers the
-// question offline. For these three it is not, and the reason is their
-// history:
-//
-//   - A claim's lapse is the invariant a ttl PARAMETER hid for the whole life
-//     of both backends. The twin honoured the argument, the KV validated it
-//     and let its bucket decide, and no case ever travelled past a deadline —
-//     so the suite certified the divergence clean every time it ran. A check
-//     nobody can hand a lying backend is how that happens again.
-//   - The refusal of an unnamed record is the tri-state at its narrowest: the
-//     difference between "an error" and "false" is invisible in a passing
-//     suite and is a dropped delivery in production.
+//   - A claim's lapse is the invariant a ttl PARAMETER hid: the twin honoured
+//     it, the KV let its bucket decide, and no case travelled past a deadline.
+//   - The refusal of an unnamed record is the tri-state at its narrowest: "an
+//     error" versus "false" is a dropped delivery in production.
 //   - A create racing others over a record just REMOVED is the tri-state from
-//     the other side — a lost race answered as an outage — and it is
-//     invisible on every substrate but a replicated one, so the check has to
-//     be carried to a cluster rather than only run where [RunFleet] runs.
-//
-// So each one RETURNS what it found. [RunFleet] reports it through t like any
-// other case, and this package's own test hands them twins built to get it
-// wrong and asserts they are caught. The shape is [internal/statelog/statelogtest]'s,
-// for the same reason it has it.
+//     the other side (a lost race answered as an outage), visible only on a
+//     replicated substrate, so it must be carried to a cluster.
 
 // CheckClaimLapsesAtItsOwnTTL verifies that a delivery claim lapses at the
 // deadline its own record carries — the `now` it was made at plus the ttl it
 // asked for — and that a lapsed claim is taken over by exactly one caller.
 //
-// TWO CLAIMS OF DIFFERENT LENGTHS IN ONE STORE, because that is the shape the
-// store serves: a webhook claims for [coord.ClaimTTL] and the chat socket for
-// up to [coord.MaxClaimTTL]. A backend that held every claim for its bucket's
-// age swallows a webhook replay for the socket's window, and one that held
-// every claim for the shortest horizon it was asked for lets a reconnecting
-// seat deliver a post twice; each is caught by a different step below.
-//
-// THE LENGTHS ARE A MINUTE AND THREE, well inside any ceiling a backend
-// certified by the suite is built with: a backend may refuse a claim longer
-// than its own claims bucket keeps ([coord.Claims]), and a check that asked
-// for the contract's ceiling would be certifying that configuration rather
-// than the lapse.
-//
-// It TRAVELS THE CLOCK it passes and never waits: the deadline is the
-// record's, judged against the `now` the next caller passes, so a backend
-// that reaped a claim on a clock of its own rather than on its deadline could
-// not pass it — and the check costs nothing on a real broker.
+// TWO LENGTHS IN ONE STORE: a webhook claims for [coord.ClaimTTL], the chat
+// socket up to [coord.MaxClaimTTL]. Holding every claim for the bucket's age
+// swallows a webhook replay for the socket's window; for the shortest horizon,
+// a reconnecting seat delivers twice. A MINUTE AND THREE stay inside any
+// ceiling ([coord.Claims] may refuse longer). It TRAVELS THE CLOCK it passes
+// and never waits: the deadline is the record's, judged against the next
+// caller's `now`, so a backend reaping on its own clock could not pass.
 func CheckClaimLapsesAtItsOwnTTL(ctx context.Context, f coord.Fleet, at time.Time) []error {
 	const (
 		short = "gitlab|lapsing"
@@ -156,29 +131,17 @@ const (
 )
 
 // CheckCreatesOverARemovedRecordAreRaces verifies that callers racing to write
-// a record somebody has just REMOVED are each told what happened — every charge
-// landed, and one creator first with the rest told they lost — and none of
-// them that the store is down.
+// a record just REMOVED are each told what happened (every charge landed, one
+// creator first, the rest told they lost), none that the store is down.
 //
 // A removal on a KV bucket leaves a MARKER, and a create over one is a
-// compare-and-set on the marker's revision, so every loser of that race is a
-// caller a first writer beat. On a replicated stream the broker answered a
-// share of those losers with a refusal the client wrapped in neither of its
-// sentinels, and every create that matched a sentinel read it as an outage: a
-// delivery claim racing another to one just released answered "unknown" and
-// was processed twice, a charge to a counter just cleared failed. That refusal
-// turned out to be the leader saying a write to the record was still IN
-// PROCESS, which decides nothing — read instead as a lost race, it refused a
-// removal at the version its caller had just read and left the race after it
-// with no winner. So each race's set-up is held to having landed ([landed]),
-// and the backend is held to waiting that answer out.
-//
-// EVERY VERB WHOSE RECORD CAN BE REMOVED, because the refusal is the
-// broker's and not any one verb's: the fix is one classifier every create
-// asks, and a verb left out of the check is the one that stops asking it. And
-// the token counters beside them, which have no removal at all — see
-// [raceBudgets] — but whose losers are refused by the same broker answer, on
-// the hottest key a company writes.
+// compare-and-set on its revision. On a replicated stream the broker answered
+// some losers with a refusal in neither client sentinel, which every create
+// read as an outage (a delivery claim ran twice): the leader saying a write is
+// still IN PROCESS, which decides nothing. So each race's set-up is held to
+// having landed ([landed]), and the backend to waiting that answer out. EVERY
+// VERB WHOSE RECORD CAN BE REMOVED is raced (one classifier serves all), and
+// the token counters ([raceBudgets]), whose losers get the same.
 func CheckCreatesOverARemovedRecordAreRaces(ctx context.Context, f coord.Fleet,
 	at time.Time) []error {
 

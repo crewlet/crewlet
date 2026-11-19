@@ -11,23 +11,13 @@ import (
 // Confluence's half of cross-agent skill promotion: create the draft page a
 // unit lead reviews, or hand back the one already there.
 //
-// # Why the dedup lives here
-//
-// The promotion pass re-clusters the same persisted skills every tick, so
-// without cross-tick dedup one converging team would yield one draft a day
-// forever. Confluence already answers the question — a page title is unique
-// within a space — so the honest place for the check is here, where that fact
-// is known, rather than in a ledger the engine would have to keep in step.
-//
-// # Why the parent is created rather than required
-//
-// The Auto-Drafted Skills parent is what hides a draft from every agent: the
-// turn-start knowledge search excludes its subtree. A promotion that landed
-// at the space root because the parent did not exist would be reachable by
-// every seat in the company, unreviewed — which is the one outcome the whole
-// review step exists to prevent. So a missing parent is created, and a
-// promotion whose parent could not be created is REFUSED rather than filed
-// somewhere visible.
+// The pass re-clusters the same skills every tick, so without dedup one team
+// yields a draft a day forever; a page title is unique within a space, so the
+// check lives here, not in a ledger. The Auto-Drafted Skills parent hides a
+// draft from every agent (the knowledge search excludes its subtree), so a
+// missing parent is created and a promotion whose parent cannot be created is
+// REFUSED, never filed at the space root where every seat could read it
+// unreviewed.
 
 // PromotionWriter drafts promoted skills into a Confluence space.
 type PromotionWriter struct{ client *Client }

@@ -19,21 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/logging"
 )
 
-// YOUR OWN TOKEN, MINTED AGAINST A REAL NODE — the founder's first run of
+// YOUR OWN TOKEN, MINTED AGAINST A REAL NODE: the founder's first run of
 // `crewlet iam token -login`, end to end.
 //
-// [TestYourOwnTokenIsMintedFromYourOwnSession] holds the command's own half
-// against a hand-written node that treats the cookie as live the instant it is
-// issued, which no node does: a sign-in answers BEFORE the node applies the
-// session it opened, so the mint that follows it in the same breath arrives at
-// a node a few hundred milliseconds short of the session's start. The guard
-// used to refuse that write 503 on every real run, and only a real node — its
-// own identity log, its own applier, its own guard in front of its own routes
-// — could show it. So this is the whole path: the founder is invited under
-// the deployment's Tier A token and redeems the link, the command signs in as
-// them with the password on standard input, mints, and signs out; the token it
-// printed then works, and the session it opened is over. Mutation: drop the guard's wait for the
-// bearer's start and the mint answers 503.
+// [TestYourOwnTokenIsMintedFromYourOwnSession] holds the command's half against
+// a hand-written node that treats the cookie as live the instant it is issued;
+// no node does: a sign-in answers BEFORE the node applies the session, so the
+// mint that follows arrives a few hundred milliseconds short of the session's
+// start, which the guard refused 503. Only a real node (its own log, applier and
+// guard) shows it. So: the founder is invited under Tier A's token and redeems
+// the link, the command signs in with the password on stdin, mints, and signs
+// out; the printed token works and the session is over. Mutation: drop the
+// guard's wait for the bearer's start and the mint answers 503.
 func TestYourOwnTokenMintsOnARealNode(t *testing.T) {
 	t.Parallel()
 	port := reservePort(t)

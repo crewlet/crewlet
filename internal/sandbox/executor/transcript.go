@@ -55,6 +55,13 @@ const (
 	// handed notes over, saying whose reached the run.
 	EntryNote EntryKind = "note"
 
+	// EntryLateCall is a call of this work that finished after the run that
+	// made it had stopped waiting for it, as the engine handed it to the run
+	// while it worked: the engine's heading, its words, the call's outcome and
+	// the call ([lateCallHead]); or the line the run's own hook printed as it
+	// handed only such calls over ([hookLineKind]).
+	EntryLateCall EntryKind = "late_call"
+
 	// EntryModel is what the model wrote.
 	EntryModel EntryKind = "model"
 
@@ -78,7 +85,8 @@ const (
 
 // EntryKinds are every kind an entry can be.
 var EntryKinds = []EntryKind{
-	EntryBrief, EntryNote, EntryModel, EntryToolCall, EntryToolResult, EntrySummary, EntryUnread,
+	EntryBrief, EntryNote, EntryLateCall, EntryModel, EntryToolCall, EntryToolResult, EntrySummary,
+	EntryUnread,
 }
 
 // Valid reports whether a kind off the wire is one this build writes.
@@ -93,8 +101,9 @@ func (k EntryKind) Valid() bool { return slices.Contains(EntryKinds, k) }
 // RAISED BY ANY CHANGE THAT MOVES AN ORDINAL: a kind added, a record read that
 // was not, one read as more entries or fewer, one no longer read. At 2 an
 // OpenCode export's messages are read as OpenCode 2's kinds; at 3 every key is
-// read exactly as written, as the harnesses' own JSON.parse reads it.
-const TranscriptVersion = 3
+// read exactly as written, as the harnesses' own JSON.parse reads it; at 4 a
+// late call the engine hands a running job is an entry of its own.
+const TranscriptVersion = 4
 
 // TranscriptEntry is one entry of a session's transcript, as a read surface
 // sends it.
@@ -885,29 +894,29 @@ func windowAround(shown string, at, bound int) (string, int, bool) {
 }
 
 // prose adds one entry of words — a brief, the model's, a summary — unless it
-// holds none. A brief that is a note — its words open with a note's heading,
-// inside nothing but what a harness wraps one in — is the note, or the notes,
-// it carries.
+// holds none. A brief that is a note or a late call — its words open with
+// either's heading, inside nothing but what a harness wraps one in — is what
+// it carries, each by its kind ([opensWithHeading]).
 func (b *transcriptBuilder) prose(ctx context.Context, kind EntryKind, at time.Time, text string) error {
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
-	if kind == EntryBrief && opensWithNote(text) {
-		return b.notes(ctx, at, text)
+	if kind == EntryBrief && opensWithHeading(text) {
+		return b.headed(ctx, at, text)
 	}
 	return b.add(TranscriptEntry{Kind: kind, At: at, Thread: b.thread}, text)
 }
 
-// notes adds an entry for every note text carries ([notesIn]), as it finds
-// each: a page that holds all it hands out stops the search there, and so
-// does a caller that left — one text can carry a note on every line of the
-// mebibytes a line may run to.
-func (b *transcriptBuilder) notes(ctx context.Context, at time.Time, text string) error {
-	for note := range notesIn(text) {
+// headed adds an entry for every note and late call text carries
+// ([headedIn]), as it finds each: a page that holds all it hands out stops the
+// search there, and so does a caller that left — one text can carry a heading
+// on every line of the mebibytes a line may run to.
+func (b *transcriptBuilder) headed(ctx context.Context, at time.Time, text string) error {
+	for kind, words := range headedIn(text) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := b.add(TranscriptEntry{Kind: EntryNote, At: at, Thread: b.thread}, note); err != nil {
+		if err := b.add(TranscriptEntry{Kind: kind, At: at, Thread: b.thread}, words); err != nil {
 			return err
 		}
 	}
@@ -939,73 +948,92 @@ func (b *transcriptBuilder) answered(id string) string {
 	return tool
 }
 
-// ---- notes --------------------------------------------------------------- //
+// ---- notes and late calls ----------------------------------------------- //
 
-// noteAt is where the first note heading in text at or after from opens, and
-// where its line ends, and false where there is none: the heading's opening, a
-// sender's name, and the rest closing its line ([noteHeadOpen],
-// [noteHeadClose]). Every note opens with it wherever a harness filed it, so a
-// note is found by it, never by a record shape a release can move.
+// headingOpen opens both headings the engine hands a running job words under:
+// a person's note's ([noteHeadOpen]) and a late call's ([lateCallHead]).
+const headingOpen = "## A "
+
+// headingAt is where the first heading in text at or after from opens, where
+// its line ends and which kind it heads, and false where there is none: a
+// note's (its opening, a sender's name, [noteHeadClose] closing the line) or a
+// late call's ([lateCallHead], the whole line). Every one opens so wherever a
+// harness filed it, so it is found by its heading, never by a record shape a
+// release can move. from is a line's start, or the line break before one.
 //
-// EACH LINE IS READ ONCE: whether an opening is a heading depends on how its
-// line ends, so a line whose first opening is none holds none, and a line
-// holds one heading at most. Re-scanning from every opening made a line of
-// [maxLineBytes] openings cost tens of core-minutes.
-func noteAt(text string, from int) (at, end int, ok bool) {
+// A HEADING STARTS ITS LINE, or follows nothing on it but a harness's framing
+// ([headingFraming]), so words a tool wrote into a line (an error the engine
+// quotes in a late call's) never head an entry. EACH LINE IS READ ONCE, at its
+// first opening: re-scanning from every opening made a line of [maxLineBytes]
+// openings cost tens of core-minutes.
+func headingAt(text string, from int) (at, end int, kind EntryKind, ok bool) {
 	for from < len(text) {
-		i := strings.Index(text[from:], noteHeadOpen)
+		i := strings.Index(text[from:], headingOpen)
 		if i < 0 {
-			return 0, 0, false
+			return 0, 0, "", false
 		}
 		at = from + i
+		start := from + strings.LastIndexByte(text[from:at], '\n') + 1
 		end = len(text)
 		if n := strings.IndexByte(text[at:], '\n'); n >= 0 {
 			end = at + n
 		}
-		if line := text[at:end]; len(line) > len(noteHeadOpen)+len(noteHeadClose) &&
-			strings.HasSuffix(line, noteHeadClose) {
-			return at, end, true
+		if kind, ok = headingKind(text[at:end]); ok && headingFraming.MatchString(text[start:at]) {
+			return at, end, kind, true
 		}
 		from = end + 1
 	}
-	return 0, 0, false
+	return 0, 0, "", false
 }
 
-// notesIn is every note text carries, each from its heading to the next one's
-// or to text's end — a hook's answer joins the notes of one step in one text
-// (ClaudeHookAnswer) — trimmed of the system reminder a harness closes them
-// in, in order and one at a time, so a reader that stops reads no further.
-func notesIn(text string) iter.Seq[string] {
-	return func(yield func(string) bool) {
-		at, end, ok := noteAt(text, 0)
+// headingKind is the kind of entry line heads, and false for no heading.
+func headingKind(line string) (EntryKind, bool) {
+	switch {
+	case line == lateCallHead:
+		return EntryLateCall, true
+	case len(line) > len(noteHeadOpen)+len(noteHeadClose) && strings.HasPrefix(line, noteHeadOpen) &&
+		strings.HasSuffix(line, noteHeadClose):
+		return EntryNote, true
+	}
+	return "", false
+}
+
+// headedIn is every note and late call text carries, by kind, each from its
+// heading to the next one's or to text's end — a hook's answer joins what one
+// step is handed in one text (ClaudeHookAnswer) — trimmed of the system
+// reminder a harness closes them in, in order and one at a time, so a reader
+// that stops reads no further.
+func headedIn(text string) iter.Seq2[EntryKind, string] {
+	return func(yield func(EntryKind, string) bool) {
+		at, end, kind, ok := headingAt(text, 0)
 		for ok {
-			next, nextEnd, more := noteAt(text, end)
+			next, nextEnd, nextKind, more := headingAt(text, end)
 			stop := len(text)
 			if more {
 				stop = next
 			}
-			note := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(text[at:stop]), "</system-reminder>"))
-			if !yield(note) {
+			words := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(text[at:stop]), "</system-reminder>"))
+			if !yield(kind, words) {
 				return
 			}
-			at, end, ok = next, nextEnd, more
+			at, end, kind, ok = next, nextEnd, nextKind, more
 		}
 	}
 }
 
-// noteFraming is all a harness puts before a note it hands its model: a
-// system reminder's opening tag, and Claude Code's `<event> hook additional
+// headingFraming is all a harness puts before a heading it hands its model:
+// a system reminder's opening tag, and Claude Code's `<event> hook additional
 // context:` ([claudeHookContext]).
-var noteFraming = regexp.MustCompile(`^\s*(?:<system-reminder>\s*)?(?:\w+` +
+var headingFraming = regexp.MustCompile(`^\s*(?:<system-reminder>\s*)?(?:\w+` +
 	regexp.QuoteMeta(claudeHookContext) + `\s*)?$`)
 
-// opensWithNote reports text that is a note — its first note heading has
-// nothing before it but what a harness frames one with — as against a brief
-// that carries a note further down, as a launch's brief does with the notes
-// that arrived before it.
-func opensWithNote(text string) bool {
-	at, _, ok := noteAt(text, 0)
-	return ok && noteFraming.MatchString(text[:at])
+// opensWithHeading reports text that is a note or a late call — its first
+// heading has nothing before it but what a harness frames one with — as
+// against a brief that carries a note further down, as a launch's brief does
+// with the notes that arrived before it.
+func opensWithHeading(text string) bool {
+	at, _, _, ok := headingAt(text, 0)
+	return ok && headingFraming.MatchString(text[:at])
 }
 
 // ---- Claude Code ------------------------------------------------------- //
@@ -1022,7 +1050,7 @@ func (ClaudeCode) transcript(ctx context.Context, b *transcriptBuilder, archive 
 // harness wrote for itself (`isMeta`) or a compaction summary, and its message
 // — an object whose content is a string or a list of blocks. A system
 // record's subtype and content are its own, read for the one line the run's
-// own hook prints as it hands the model a note ([claudeSteerSaid]).
+// own hook prints as it hands the model notes or late calls ([claudeSteerSaid]).
 type claudeRecord struct {
 	Type             json.RawMessage `json:"type"`
 	Subtype          json.RawMessage `json:"subtype"`
@@ -1105,7 +1133,7 @@ func (b *transcriptBuilder) claudeLinePastBound(n int64) error {
 // claudeLine reads one record: a person's turn (the brief, a note, a
 // compaction summary, or the results of the model's calls) or the model's
 // own. Every other record is the harness's own, an entry only for the notes
-// it carries ([transcriptBuilder.claudeNotes]).
+// and late calls it carries ([transcriptBuilder.claudeNotes]).
 //
 // A LINE THAT IS NO OBJECT IS NO RECORD, rather than decoding to nothing and
 // vanishing. A record is decoded loosely, as the stream is
@@ -1139,21 +1167,35 @@ func (b *transcriptBuilder) claudeLine(ctx context.Context, line []byte) error {
 		}
 		return b.claudeMessage(ctx, rec.Message, kind, at)
 	case record == "system":
-		// THE LINE THE RUN'S OWN HOOK PRINTS as it hands the model a note (the
-		// live `[steer]`) is a note entry: a release that keeps no hook context
-		// leaves it the note's one trace. Its own line as recorded, never the live
-		// view's rendering, which is cut and counts lines in words the harness
-		// never wrote.
+		// THE LINE THE RUN'S OWN HOOK PRINTS as it hands the model a note or a
+		// late call (the live `[steer]`) is an entry of its kind: a release that
+		// keeps no hook context leaves it their one trace. Its own line as
+		// recorded, never the live view's rendering, which is cut and counts
+		// lines in words the harness never wrote.
 		if said, ok := claudeSteerSaid(looseString(rec.Subtype), rec.Content); ok {
 			hookLine, _, _ := strings.Cut(strings.TrimSpace(said), "\n")
 			if hookLine = strings.TrimSpace(hookLine); hookLine != "" {
-				if err := b.add(TranscriptEntry{Kind: EntryNote, At: at, Thread: b.thread}, hookLine); err != nil {
+				entry := TranscriptEntry{Kind: hookLineKind(hookLine), At: at, Thread: b.thread}
+				if err := b.add(entry, hookLine); err != nil {
 					return err
 				}
 			}
 		}
 	}
 	return b.claudeNotes(ctx, line, at)
+}
+
+// hookLineKind is the kind of entry the line the run's own hook printed is:
+// a late call where it names such calls alone ([hookCallOne], a count and
+// [hookCallsMany]), and a note otherwise, as every line naming a note opens
+// with it.
+func hookLineKind(line string) EntryKind {
+	count, rest, _ := strings.Cut(line, " ")
+	if strings.HasPrefix(line, hookCallOne) ||
+		(count != "" && strings.Trim(count, "0123456789") == "" && strings.HasPrefix(rest, hookCallsMany)) {
+		return EntryLateCall
+	}
+	return EntryNote
 }
 
 // notARecord says a line of the record, n bytes long, that is no record.
@@ -1168,13 +1210,13 @@ func (b *transcriptBuilder) unshaped() error {
 		"and was not read")
 }
 
-// claudeNotes adds an entry for every note a record the harness wrote for
-// itself carries, wherever in it: which record and field keep a hook's
-// additional context moves between releases, while the heading is the
-// engine's. Read in the record's order, so every read counts its notes alike,
+// claudeNotes adds an entry for every note and late call a record the harness
+// wrote for itself carries, wherever in it: which record and field keep a
+// hook's additional context moves between releases, while the headings are
+// the engine's. Read in the record's order, so every read counts them alike,
 // and a value at a time, checking ctx: a line can hold millions of values.
 func (b *transcriptBuilder) claudeNotes(ctx context.Context, line []byte, at time.Time) error {
-	if !bytes.Contains(line, []byte(noteHeadOpen)) {
+	if !bytes.Contains(line, []byte(noteHeadOpen)) && !bytes.Contains(line, []byte(lateCallHead)) {
 		return nil
 	}
 	dec := json.NewDecoder(bytes.NewReader(line))
@@ -1188,7 +1230,7 @@ func (b *transcriptBuilder) claudeNotes(ctx context.Context, line []byte, at tim
 		if !ok {
 			continue
 		}
-		if notesErr := b.notes(ctx, at, text); notesErr != nil {
+		if notesErr := b.headed(ctx, at, text); notesErr != nil {
 			return notesErr
 		}
 	}
@@ -1644,8 +1686,8 @@ func (b *transcriptBuilder) pastHeld(held *heldValue, err error) error {
 	return errTranscriptPage
 }
 
-// openCodeMessage reads one message by its kind: a person's is the brief or a
-// note (the run's plugin admits a note as one), by its text alone; an
+// openCodeMessage reads one message by its kind: a person's is the brief, a
+// note or a late call (the run's plugin admits both as one), by its text; an
 // assistant's step is the model's words and calls
 // ([transcriptBuilder.openCodeStep]); a completed compaction is its summary.
 //

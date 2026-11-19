@@ -59,22 +59,12 @@ type ProviderReference struct {
 // satellites, at any depth, then `assistant.llm` and
 // `assistant.deep_work.llm`.
 //
-// THE WRITTEN FIELDS, NOT THE RESOLVED CHAINS. A satellite written flat wins
-// over the same phase inside the `llm` mapping, so the mapping's chain never
-// runs; it is still in the document, still what a removal has to edit, and
-// still a typo [Company.validateProviderKeys] reports where it was written.
-// Which entry a job RUNS on is resolution's question, answered once by
-// phase.ResolveWithSource over the organization this document builds. A field
-// is reported whether or not the assistant is enabled: a removal that left a
-// disabled assistant naming a missing entry would leave the next person who
-// turns it on a refusal they did not cause.
-//
-// THE MAPPING'S default IS WRITTEN AS `llm` when it is the mapping's only
-// phase, and as `llm.default` beside another: the document is stored in that
-// form ([PhaseLLM.MarshalYAML]), so that is the field an edit finds.
-//
-// ONE IMPLEMENTATION with every reader: [Company.validateProviderKeys], the
-// removal of an entry, and the account of which seats use one.
+// It reports the WRITTEN fields, not resolved chains: a flat satellite beats
+// the same phase in the `llm` mapping, but the shadowed field is still what a
+// removal must edit (phase.ResolveWithSource says what a job runs on). A
+// disabled assistant's fields count, so a removal never leaves one naming a
+// missing entry. The mapping's default is `llm` when alone and `llm.default`
+// beside another, the stored form ([PhaseLLM.MarshalYAML]).
 func (c *Company) ProviderReferences(key string) []ProviderReference {
 	var out []ProviderReference
 	for _, ref := range c.providerReferences() {

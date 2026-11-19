@@ -26,63 +26,44 @@ const (
 // MCPTransports is the closed set.
 var MCPTransports = []MCPTransport{TransportStdio, TransportHTTP}
 
-// ToolServerName is the name a seat's harness sees the seat's own tools
-// under, wherever the harness runs: the MCP server a phase on this host dials
-// through `crewlet mcp-relay`, and the tool bridge the seat's executor — its
-// harness's own run in a box — dials over HTTP. One name, so a seat's tools are
-// spelled one way in every phase — the prefix its model sees
-// (`mcp__crewlet__reply`) is the same for the reviewer on this host and the
-// executor in its box — and the built-in harness profiles, which write it into
-// each harness's own configuration grammar, are held to it by a test in harness.
+// ToolServerName is the name a seat's harness sees the seat's own tools under,
+// wherever it runs: the MCP server a phase on this host dials through `crewlet
+// mcp-relay`, and the tool bridge an executor's box dials over HTTP. One name,
+// so the prefix the model sees (`mcp__crewlet__reply`) is the same in every
+// phase; a test in harness holds the built-in profiles to it.
 //
 // RESERVED: an `mcp_servers` entry may not take it. The engine writes the
 // bridge into every executor box's server list under this key, so a company
-// server of the same name would be overwritten there — its tools gone from
-// the run with no validation error and no log line saying why. Named here
-// rather than beside either server because this is where the reservation is
-// enforced, and every reader takes the one value.
+// server of the same name would be overwritten, its tools gone with no error.
 //
-// "crewlet" rather than the seat's handle because it reaches the harness's own
-// prompt: a tool called `mcp__swe__reply` reads as somebody else's tool, where
-// `mcp__crewlet__reply` reads as the agent's own.
+// "crewlet" rather than the seat's handle because it reaches the harness's
+// prompt: `mcp__swe__reply` reads as somebody else's tool.
 const ToolServerName = "crewlet"
 
 // claudeContainerServer is the MCP server name Claude Code takes for its own
-// container's tools. The clearing of old tool results it has the API make to a
-// long session's requests (the server-side clear_tool_uses edit) clears a call
-// to `mcp__container__` followed by one of its built-in tools' names (`Read`,
-// `Bash`, `Grep` and the rest) as that built-in's own: the only use either
-// measured release, 2.1.310 or 2.1.322, makes of the prefix.
+// container's tools. The server-side clear_tool_uses edit it has the API make
+// to a long session's requests clears a call to `mcp__container__<built-in
+// name>` (`Read`, `Bash`, ...) as that built-in's own (measured on 2.1.310 and
+// 2.1.322).
 //
-// RESERVED as [ToolServerName] is: an `mcp_servers` entry may not take it. A
-// box names each seat server by its configured name, so a company server called
-// `container` serving a tool named like a built-in would have its calls'
-// results cleared from what a session that continues is sent, while the engine
-// counts the session as holding them and tells them to no run again. Refused
-// at the name rather than handled at the session, since no reading of a kept
-// session can see a clearing the API makes at the continuation's own request.
+// RESERVED as [ToolServerName] is. A company server called `container` serving
+// a tool named like a built-in would have its results cleared from what a
+// continued session is sent while the engine counts the session as holding
+// them. Refused at the name, since no reading of a kept session can see a
+// clearing the API makes at the continuation's own request.
 const claudeContainerServer = "container"
 
-// MCPServer is one tool server.
-//
-// ALL tool servers are declared here — including the ones an integration
-// block also mentions. The integration sections carry non-tool config
-// (admin credentials, webhook secrets) and the engine never derives an MCP
-// server from one.
+// MCPServer is one tool server. ALL are declared here, including ones an
+// integration block also mentions: integration sections carry non-tool config
+// and the engine never derives an MCP server from one.
 //
 // # Shared or per-seat
 //
-// Shared (the default) launches ONE instance whose tools the agent seats the
-// server is granted to can call. Setting it false makes this entry a
-// TEMPLATE: no global instance is launched, and instead every agent seat the
-// server is granted to ([MCPServer.Grants]) gets its own instance, with that
-// seat's role.mcp_env values for it applied: environment variables for stdio,
-// HTTP headers for http.
-//
-// That is what makes each agent act as a distinct identity: its own tracker
-// token, its own chat bot token, its own code-host authorization header. An
-// http server with shared: false is therefore how an identity-bound remote
-// server gets a per-agent token.
+// Shared (the default) launches ONE instance for every seat granted the
+// server. Setting it false makes the entry a TEMPLATE: no global instance, and
+// every seat granted it ([MCPServer.Grants]) gets its own, with that seat's
+// role.mcp_env applied (environment for stdio, headers for http), so each agent
+// acts under its own tokens.
 type MCPServer struct {
 	// Name identifies the server everywhere: the client name, the tool
 	// prefix in prompts, and the key seats declare credentials under.
@@ -154,36 +135,18 @@ type MCPServer struct {
 	// recognition says ([catalogue.SeatKeysFor]); see toolbinding.go.
 	SeatCredentials []SeatCredential `yaml:"seat_credentials,omitempty" json:"seat_credentials,omitempty" desc:"Per-seat credentials this server reads: integration, field, and the variable or header it reads each under. Absent for a server the engine recognises."`
 
-	// OptionalKeys names the keys whose value may resolve to nothing: of
-	// this server's env or headers, and of a seat's or unit's mcp_env block
-	// for it, which lands in the same environment or the same headers.
+	// OptionalKeys names the keys (of this server's env or headers, or a seat's
+	// or unit's mcp_env for it) whose value may resolve to nothing.
 	//
-	// EVERY OTHER REFERENCE MUST RESOLVE before the server is started — on
-	// the engine host or in a harness's box — because a credential that
-	// arrives empty either fails the server or lets it act as nobody
-	// (internal/engine, toolcredentials.go). What that rule cannot tell on
-	// its own is a host setting passed through by name, like a private
-	// registry's NPM_CONFIG_REGISTRY, which most hosts never set. Such a key
-	// is listed here, and when any reference in its value resolves to
-	// nothing the key is LEFT OUT, whole: the child is started without the
-	// variable or the request without the header, as Kubernetes starts a
-	// container without an `optional` secret reference. Never half a value
-	// — "Bearer ${TOKEN}" with TOKEN unset would be "Bearer ", a credential
-	// that looks set — and never an empty one.
-	//
-	// BY KEY AND NOT BY VARIABLE, because a key is what the server reads:
-	// seats point one key at variables of their own (${ALICE_X},
-	// ${BOB_X}), and one variable can sit under a key that may go without it
-	// and another that may not. And not as shell syntax (`${VAR:-}`): the
-	// reference grammar deliberately leaves that alone, so a setup step's
-	// script survives resolution untouched (internal/envref).
-	//
-	// A VARIABLE A PROVISIONING PASS MINTS for the seat is waited for
-	// whatever this list says: the declaration is for a value nothing will
-	// supply, and that one is coming. Started without it, the seat's child
-	// would act as nobody until the seal — the failure the rule exists to
-	// stop. The url has no key and is never optional: a server is dialled
-	// at it.
+	// EVERY OTHER REFERENCE MUST RESOLVE before the server starts, since an empty
+	// credential fails it or lets it act as nobody (internal/engine,
+	// toolcredentials.go). That cannot tell a host setting passed through by
+	// name, like NPM_CONFIG_REGISTRY. A key listed here is LEFT OUT whole when
+	// any reference in its value resolves to nothing, never half a value
+	// ("Bearer ") nor an empty one. BY KEY, NOT VARIABLE: one variable can sit
+	// under a key that may go without it and another that may not. Not shell
+	// `${VAR:-}` (internal/envref). A VARIABLE A PROVISIONING PASS MINTS is
+	// waited for regardless; the url is never optional.
 	OptionalKeys []string `yaml:"optional_keys,omitempty" json:"optional_keys,omitempty" desc:"Keys of env, headers or a seat's mcp_env block for this server whose value may resolve to nothing; such a key is left out rather than holding the server back."`
 
 	// ToolAnnotations corrects behavioural hints per TOOL, keyed by bare
@@ -256,25 +219,16 @@ const MaxMCPDescription = 200
 
 // Grants reports whether seat's turns are offered this server's tools: the
 // server is on ([MCPServer.IsEnabled]), its grant reaches the seat
-// ([MCPServer.Reach]), and no limit on the way down to the seat turns it off
-// ([org.Role.LimitOn]). For a shared server that is whether the seat's surface
-// holds its one instance's tools; for a per-agent server, whether the seat gets
-// a child of its own. A seat's `mcp_env` block plays no part: it holds values.
+// ([MCPServer.Reach]), and no limit on the way down turns it off
+// ([org.Role.LimitOn]). A seat's `mcp_env` block plays no part: it holds values.
 //
 // A LIMIT IS NOT A GRANT, so it is read here and not in Reach: a server a
-// team's lead turns off for the team keeps its grant, and every value and
-// listing written for a seat it reaches, for the day the limit is lifted, as a
-// server turned off on its entry does.
+// team's lead turns off keeps its grant and every value and listing written for
+// its seats, for the day the limit is lifted.
 //
-// It takes the seat AS THE ENGINE RUNS IT ([org.Organization] as the
-// configuration built it), which carries where the seat sits and the lanes it
-// is on at, rather than the authored role. A human seat runs no tools at all.
-//
-// THE ONE RULE, read by the engine when it builds a seat's surface and starts
-// its children, by an executor's box, and by the org projection when it tells a
-// reader which servers a seat can reach, so none of them can answer
-// differently. What it describes is the GRANT: whether the server actually
-// started is the node status record's report, not this.
+// It takes the seat AS THE ENGINE RUNS IT ([org.Organization] as built); a human
+// seat runs no tools. THE ONE RULE for the engine, an executor's box and the org
+// projection; it describes the GRANT, not whether the server started.
 func (m *MCPServer) Grants(seat *org.Role) bool {
 	if !m.IsEnabled() {
 		return false

@@ -19,64 +19,46 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// THE CHARTER: the company's mission, vision and standing policies, read and
-// written as one resource (`GET` and `PUT /config/charter`), which is what
-// Company › Principles edits in place.
-//
+// THE CHARTER: the company's mission, vision and standing policies, one
+// resource (`GET` and `PUT /config/charter`) that Company › Principles edits.
+// The write is a merge patch of the three fields through [Service.prepare] and
+// [Service.commit], the one pipeline every write takes.
+
 // # Why a route of its own rather than PATCH /config
 //
-// The write itself is not new: it is a merge patch of the three fields
-// through [Service.prepare] and [Service.commit], the one pipeline every
-// write here takes, so the managed-document check, the whole-document
-// validation, the sealed revision, the fleet's compare-and-set and the
-// activation event are the same code. What the route adds is the three
-// things an editor of three fields needs and PATCH /config cannot give it:
-//
-//   - A PRECONDITION ON THE CHARTER, not on the document. PATCH /config's
-//     If-Match is the whole revision, so a draft of the mission would be
-//     refused because somebody connected an integration meanwhile, which is
-//     a conflict about nothing the person wrote. The entity-tag here is a
-//     digest of the charter's own content ([charterTag]), and a revision that
-//     moved for any other reason is merged onto ([charterAttempts]).
-//   - A CONFLICT THAT CARRIES THE CHARTER NOW. A refused draft has to be shown
-//     beside what replaced it, and PATCH /config's refusal names a revision
-//     id, which would send the editor to read the whole company document,
-//     every credential name in it, for three fields.
-//   - A SUMMARY OF ITS OWN, derived from what changed ([charterSummary]),
-//     because the person pressing Save on a card has already said what they
-//     changed by changing it.
-//
-// # Admin's, as the whole document is, on verbs of its own
+//   - A PRECONDITION ON THE CHARTER, not the document: PATCH /config's
+//     If-Match is the whole revision, so a draft would be refused because
+//     somebody connected an integration meanwhile. The entity-tag digests the
+//     charter's own content ([charterTag]); a revision that moved for another
+//     reason is merged onto ([charterAttempts]).
+//   - A CONFLICT THAT CARRIES THE CHARTER NOW, shown beside the refused draft,
+//     not a revision id sending the editor to the whole company document.
+//   - A SUMMARY OF ITS OWN, derived from what changed ([charterSummary]).
+
+// # Admin's, on verbs of its own
 //
 // Reads are `config.principles.read` and writes `config.principles.write`,
-// decided exactly as `config.read` and `config.write` decide the whole
-// document: admin's, the write asking a recent proof as every write of the
-// company document does. The charter is not a lead's: it is the company's
-// root, which is nobody's subtree (admission.go), and PATCH /config refuses a
-// lead's change to it for the same reason.
+// decided as `config.read` and `config.write` are: admin's, the write asking a
+// recent proof. The charter is not a lead's: it is the company's root, nobody's
+// subtree (admission.go).
 //
-// THE VERBS ARE THEIR OWN so the authority table can say one thing about the
-// charter it says about no other part of the document: the Dashboard
-// Assistant may read it as the person, and may write it only as the one
-// request its owner approved from a before-and-after the engine rendered,
-// at the same step-up window (ADR-0052's exception, ADR-0051). This route is
-// that one write path for people and the assistant alike: the assistant's
-// approved change is a PUT here with the If-Match its preview read, and
-// nothing else of the document is reachable through it.
+// THE VERBS ARE THEIR OWN so the authority table can say what it says of no
+// other part of the document: the Dashboard Assistant reads it as the person
+// and writes it only as the one request its owner approved from a rendered
+// before-and-after, at the same step-up window (ADR-0052, ADR-0051). This route
+// is that write path for both (a PUT with the If-Match its preview read).
 
 // charterAttempts is how many times a write is tried when the company document
 // moves under it for a reason that is not the charter.
 //
 // THE PRECONDITION IS THE CHARTER'S, so a revision activated between this
-// write's read and its compare-and-set by another writer (a reconcile pass
-// sealing a credential, an administrator adding a seat) is not a conflict the
-// person can resolve: their draft still applies to the charter as it stands.
+// write's read and its compare-and-set by another writer (a reconcile pass, an
+// added seat) is no conflict the person can resolve: their draft still applies.
 // Each attempt re-reads the active revision and judges the precondition again,
 // so a charter that DID move is refused naming it. Three, because each lost
-// attempt is a whole write landing in the moments a save takes, and a fourth in
-// a row means the document is under a writer that will not let up, which is
-// for the person to hear about (409 revision_advanced) rather than for a loop
-// to keep losing to.
+// attempt is a whole write landing within one save, and a fourth in a row
+// means a writer that will not let up, for the person to hear about (409
+// revision_advanced) rather than a loop to keep losing to.
 const charterAttempts = 3
 
 // charterTag is the strong entity-tag of a charter: a digest of what it says.

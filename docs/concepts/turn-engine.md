@@ -798,11 +798,16 @@ yet:
   [coordination store](coordination.md), which every node reads. The node
   that takes the request files the note there itself and asks nobody — the
   turn may move to another node with its seat, or resume on one after a
-  restart, and the note is on the record whichever node that is. Every note on
-  a record is **sealed** under the fleet keyring by the node that files it, and
-  the record carries a sealed anchor naming the seat the run serves, which a
-  person's authority is decided on; a reader opens both before using either
+  restart, and the note is on the record whichever node that is. Every
+  person's note on a record is **sealed** under the fleet keyring by the node
+  that files it, and the record carries a sealed anchor naming the seat the run
+  serves, which a person's authority is decided on; a reader opens both before
+  using either
   ([ADR-0067](https://github.com/crewlet/crewlet/blob/main/adr/0067-a-note-to-an-executor-waits-sealed-on-its-record.md)).
+  The one other entry, an item handing a late call to the job working on its
+  round, is the tool log's own account, unsealed, and is never handed as
+  anybody's note ([A relaunch continues the turn's
+  session](code-sandbox.md#a-relaunch-continues-the-turns-session)).
 
 The launch **hands the box over in the write that creates the record**: the
 box stops taking notes just before that write, and every note it held that the
@@ -964,8 +969,10 @@ sequenceDiagram
   like none.
 - **Only a note the fleet signed reaches a turn.** The scatter and every answer
   to it are signed under the fleet keyring and bound to one request — an id and
-  a deadline inside the signature, the answer naming the id — and every note on
-  a run's record is sealed under the same keyring, by the same rule every
+  a deadline inside the signature, the answer naming the id — and every
+  person's note on a run's record is sealed under the same keyring (a late
+  call's item, the log's own account, is not, and speaks for nobody), by the
+  same rule every
   state-log record and every estate request is held to
   ([ADR-0031](https://github.com/crewlet/crewlet/blob/main/adr/0031-every-state-log-record-is-signed.md)).
   A note whose seal does not open is never handed to a model, carried or

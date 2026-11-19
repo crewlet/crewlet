@@ -46,18 +46,13 @@ type PlanLine struct {
 // PlanTree is the planner's account of one statement, a line per step with
 // each line's place in the plan's tree.
 //
-// PLANNED AS A DEPLOYMENT PLANS IT: nothing in the engine runs ANALYZE, so a
-// plan is taken over the fallback row estimates whatever the fixture holds. A
-// WRITE IS PLANNED IN A WRITE TRANSACTION, because the read path runs
-// query_only, which refuses even the EXPLAIN of one. Nothing is executed either
-// way.
+// PLANNED AS A DEPLOYMENT PLANS IT: nothing runs ANALYZE, so the fallback row
+// estimates apply. A WRITE IS PLANNED IN A WRITE TRANSACTION, since the read
+// path runs query_only, which refuses even its EXPLAIN. Nothing is executed.
 //
-// A PLAN THAT SAYS NOTHING FAILS, because a gate that passes on an empty plan
-// certified nothing — with one exception, an INSERT: an insert of values reads
-// no table, its conflict probe included, and the planner says nothing about
-// one, so a gate registering a write that must stay that way reads it as the
-// empty plan it is. An insert that reads a table plans that read like any
-// other statement.
+// A PLAN THAT SAYS NOTHING FAILS, since a gate passing on an empty plan
+// certified nothing; except an INSERT of values, which reads no table (its
+// conflict probe included). An insert that reads a table plans that read.
 func PlanTree(t testing.TB, db Handle, statement string, args []any) []PlanLine {
 
 	t.Helper()
@@ -274,24 +269,17 @@ type SourceLiteral struct {
 }
 
 // StatementLiterals is every fragment of the module's non-test Go source that
-// reads one of tables — names it after FROM, JOIN or UPDATE — so a gate can
-// hold its registered statements COMPLETE: a reader it does not plan is a
-// reader whose index, or whose heap scan, nobody checked. own is the package
-// the gate belongs to, relative to the module's root; the walk fails rather
-// than passes when it read no file outside it, because then it holds that
-// package's readers alone. It reads this tree through [sourcetree.Walk], so a
-// nested checkout's copy of a file is never read as this tree's.
+// reads one of tables (names it after FROM, JOIN or UPDATE), so a gate can hold
+// its registered statements COMPLETE: an unplanned reader's index or heap scan
+// is unchecked. own is the gate's package, relative to the module root; the
+// walk fails when it read no file outside it. It uses [sourcetree.Walk], so a
+// nested checkout's copy of a file is never read.
 //
-// A FRAGMENT IS A RUN OF ADJACENT LITERALS, folded: `"… FROM " +
-// "pages_heads p …"` is one fragment, because a statement written across two
-// literals reads the table exactly as one written in one does, and matched
-// literal by literal neither half names it. A run ends wherever the expression
-// stops being literal (a placeholder list, a compiled clause, a named
-// constant), and a gate matches the fragment WHOLE against its registered
-// statements, so a statement assembled from several runs is held by each of
-// them. A table name spelled in no literal — a statement over a table the code
-// chooses at run time — is invisible here, which is why every such builder is
-// registered by hand. An INSERT finds no rows, which is why it is no reader.
+// A FRAGMENT IS A RUN OF ADJACENT LITERALS, folded: `"… FROM " + "pages_heads
+// p …"` is one, since neither half names the table alone. A run ends where the
+// expression stops being literal, and a gate matches it WHOLE. A table name in
+// no literal (chosen at run time) is invisible, so every such builder is
+// registered by hand. An INSERT is no reader.
 func StatementLiterals(t testing.TB, own string, tables ...string) []SourceLiteral {
 	t.Helper()
 	names := make([]string, len(tables))
@@ -454,50 +442,18 @@ func literalRunsAt(file *ast.File) []literalRun {
 	return out
 }
 
-// Decorrelated reports the first line of a plan at which this engine's planner
-// has UNNESTED a correlated scalar subquery — turned a per-row aggregate into
-// one grouped read of the whole child table, joined back to the outer rows —
-// and whether there is one.
+// Decorrelated reports the first plan line where the planner UNNESTED a
+// correlated scalar subquery into one grouped read of the whole child table.
 //
-// # The rule, stated once
-//
-// A correlated scalar subquery reads, for each outer row, the child rows its
-// equality names: `(SELECT COUNT(*) FROM child c WHERE c.parent = p.id)` is a
-// seek of an index on `parent` per row of `p`, and its cost is the rows the
-// statement answers. The pinned driver (tursogo v0.8.1, whose rule is
-// core/translate/optimizer/unnest.rs in turso's source) may rewrite one such
-// subquery as a LEFT JOIN against the child table GROUPED BY its correlation
-// columns, materialised and searched through an ephemeral index — which reads
-// EVERY row of the child table, whatever the outer rows are. It is eligible
-// when the subquery selects ONE aggregate (avg, count, max, min, total), has
-// no GROUP BY, ORDER BY, OFFSET or DISTINCT, takes no LIMIT but the literal 1,
-// and is correlated only by equalities on ONE outer table; and the planner
-// plans both forms and keeps the rewrite whenever its cost is no higher. That
-// cost is reckoned over the fallback row estimates of a database nobody has
-// ANALYZEd, which is every database this engine opens — so whether a
-// statement reads one child row per answer or the whole child table is a
-// property of no line of its code, and an added index or a driver bump can
-// flip it. Measured: the unfiltered `MIN` below is rewritten, the same `MIN`
-// over a key-bound outer is not, and `ORDER BY … LIMIT 1` never is.
-//
-// So a gate does not ask whether a statement LOOKS correlated; it asks the
-// plan, through this one predicate, and a site it fires on is rewritten in a
-// form the rule cannot reach: a minimum or maximum as `ORDER BY … LIMIT 1`, a
-// count or a sum read for the batch of rows already in hand, in one
-// `… WHERE parent IN (…) GROUP BY parent` over their keys.
-//
-// # What it matches
-//
-// The rewrite's own operand: the subquery becomes a table the driver names
-// `scalar_subquery_<n>`, read (as measured, `SEARCH scalar_subquery_t2 USING
-// INDEX ephemeral_subquery_t2 (correlation_key_0=?) LEFT-JOIN`) beside the
-// outer table. NOT the ephemeral index alone: a subquery written in a FROM
-// clause and joined is materialised and searched through an
-// `ephemeral_subquery_<n>` index too, and that is a statement saying what it
-// reads, not a planner deciding it. [TestTheDecorrelationCheckSeesTheDriverUnnest]
-// holds the predicate to the driver in both directions, so a bump that renames
-// the rewrite or stops making it fails there rather than leaving every gate
-// that asks this blind.
+// The pinned driver (tursogo v0.8.1; turso's optimizer/unnest.rs) may rewrite
+// `(SELECT COUNT(*) FROM child c WHERE c.parent = p.id)`, a per-row seek, as a
+// LEFT JOIN over the child GROUPED BY its correlation columns, reading EVERY
+// child row: for ONE aggregate, no GROUP BY, ORDER BY, OFFSET, DISTINCT or
+// LIMIT but 1, equalities on ONE outer table, when its cost is no higher over
+// a never-ANALYZEd database's fallback estimates. The form is a property of no
+// line of the statement and a bump can flip it, so a gate asks here and
+// rewrites a hit as `ORDER BY … LIMIT 1` (min, max) or one `WHERE parent IN
+// (…) GROUP BY parent` over the batch in hand (count, sum).
 func Decorrelated(plan []string) (string, bool) {
 	for _, line := range plan {
 		if strings.Contains(line, decorrelatedOperand) {
@@ -508,5 +464,10 @@ func Decorrelated(plan []string) (string, bool) {
 }
 
 // decorrelatedOperand is the name the driver gives a scalar subquery it has
-// rewritten into a join operand.
+// rewritten into a join operand, as in `SEARCH scalar_subquery_t2 USING INDEX
+// ephemeral_subquery_t2 (correlation_key_0=?) LEFT-JOIN`. NOT the ephemeral
+// index alone: a subquery written in a FROM clause is searched through one too,
+// and that is a statement saying what it reads.
+// [TestTheDecorrelationCheckSeesTheDriverUnnest] holds it to the driver in both
+// directions, so a bump fails there rather than blinding every gate.
 const decorrelatedOperand = "scalar_subquery_"

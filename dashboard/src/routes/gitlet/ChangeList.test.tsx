@@ -158,6 +158,31 @@ test("a work item's listing names the item and no state, asks its cards and draw
   expect(ask.searchParams.get("cards")).toBe("true");
 });
 
+// A CHANGE THE QUEUE PUT OUT FOR CHECKS NO CHECKS FILE DEFINES is never said to have
+// failed them: nothing ran. Mutation: word checks_undefined as check_failed, red.
+test("a row put out of its queue for undefined checks says no checks file defines them", async () => {
+  const out = {
+    ...change("web", 13),
+    card: {
+      comments: 0,
+      reviews: 0,
+      changes_requested: 0,
+      ejected: { reason: "checks_undefined", at: "2026-10-28T09:40:00Z", checks: ["lint", "unit"] },
+    },
+  };
+  stubFetch((url) =>
+    url.pathname === "/query/code_changes"
+      ? { changes: [out], position: POSITION, level: "session" }
+      : undefined,
+  );
+  mount(<ChangeList params={{ repo: "web" }} omit={[]} empty={{ title: "None", hint: "" }} />);
+  const list = await screen.findByRole("list", { name: "Changes" });
+  const tag = within(list).getByText("Taken out of the queue").closest("[title]")!;
+  expect(tag.getAttribute("title")).toMatch(
+    /^Taken out of main's queue .*: lint and unit defined by no checks file on main$/,
+  );
+});
+
 // A REVIEW ROW NAMES THE CHANGE IT JUDGED AND OPENS ITS PAGE, the verdict in
 // words. Mutation: drop the change's reference, or link the row anywhere but
 // the change's page, and this fails.
@@ -406,9 +431,9 @@ const ACTIVITY = {
 // company's), draw the counters for a person, or read them from anything but `seat_activity`.
 test("an agent seat's Code tab lists its open changes as Gitlet's rows, its reviews and its code counters", async () => {
   const asked = stubFetch((url) =>
-    url.pathname === "/query/code_changes"
+    url.pathname === "/query/code_changes" && url.searchParams.has("owner")
       ? { changes: [change("web", 42)], position: POSITION, level: "session" }
-      : url.pathname === "/query/code_reviews"
+      : url.pathname.startsWith("/query/code_")
         ? { position: POSITION, level: "session" }
         : undefined,
   );
@@ -428,6 +453,33 @@ test("an agent seat's Code tab lists its open changes as Gitlet's rows, its revi
   expect(screen.getByRole("list", { name: "Changes" })).toBeTruthy();
   expect(codeAsks(asked, "code_reviews")[0]!.searchParams.get("reviewer")).toBe("dev");
   expect(onSocket.some((q) => q.what === "seat_activity")).toBe(true);
+});
+
+// THE REVIEWS ASKED OF A SEAT ARE ITS CODE WORK TOO: the live changes whose ask
+// of it stands, Gitlet's rows, and the way to Changes waiting on it. Mutation:
+// drop the list, or ask it without needs=review, and this fails.
+test("a seat's Code tab lists the changes asking its review", async () => {
+  const asked = stubFetch((url) =>
+    url.pathname === "/query/code_changes" && url.searchParams.get("needs") === "review"
+      ? { changes: [change("web", 7)], position: POSITION, level: "session" }
+      : url.pathname.startsWith("/query/code_")
+        ? { position: POSITION, level: "session" }
+        : undefined,
+  );
+  mount(<SeatCode seat={seat("dev")} human={false} />, ADMIN_VIEWER, { seat_activity: ACTIVITY });
+
+  const list = await screen.findByRole("list", { name: "Reviews asked" });
+  expect(within(list).getByRole("link", { name: "Change 7 of web" })).toBeTruthy();
+  const ask = codeAsks(asked, "code_changes").find((u) => u.searchParams.has("needs"))!;
+  expect(ask.searchParams.get("reviewer")).toBe("dev");
+  expect(ask.searchParams.has("state")).toBe(false);
+  const card = screen.getByRole("heading", { name: "Reviews asked" }).closest(".crewlet-card");
+  expect(
+    within(card as HTMLElement)
+      .getByRole("link", { name: "Open in Gitlet" })
+      .getAttribute("href"),
+  ).toBe("#/gitlet?needs=review&reviewer=dev");
+  expect(screen.getByText("No open change")).toBeTruthy();
 });
 
 // A SEAT'S LISTING IS FILLED PAST A PAGE THAT KEPT NOTHING before it says none.

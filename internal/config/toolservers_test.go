@@ -23,24 +23,18 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The tool servers the docs, the examples and the curated MCP catalogue hand
-// an operator are held here, because each way they go wrong is SILENT: the
-// server starts, reports itself healthy, and the company it serves quietly
-// loses something. A floating version is a build nobody can name afterwards,
-// and a release that renames a tool disarms every skill triggered on the old
-// name without a sound. And slack-mcp-server answers no post unless its entry
-// asks it to, so a seat built from a page that forgot reads every message and
-// answers none. Running a server cannot catch either, since the engine is
-// tool-agnostic in how it runs one, so each place a launch is written is
-// checked where it is written.
+// The tool servers the docs, examples and curated MCP catalogue hand an
+// operator are held here because each failure is SILENT: the server starts and
+// reports healthy while the company loses something. A floating version is a
+// build nobody can name afterwards; a renamed tool disarms every skill
+// triggered on the old name; slack-mcp-server answers no post unless its entry
+// asks, so a seat built from a page that forgot reads everything and answers
+// none. Running a server catches neither, so each launch is checked where written.
 //
-// A PAGE PINS AND AN EXAMPLE DOES NOT. A page states what one release does:
-// its tools, its variables, what it takes to post. So it names that release.
-// A shipped example is a company somebody copies and runs long after it was
-// written, and nothing moves a pin in it, so it fetches the newest of
-// everything, except the server a bundled tool skill triggers on by tool name:
-// there a renamed tool would disarm the skill without a sound. The curated
-// catalogue is a page in this sense: what it offers is one release, read.
+// A PAGE PINS AND AN EXAMPLE DOES NOT. A page states what one release does. A
+// shipped example is run long after it was written and nothing moves a pin in
+// it, so it fetches the newest, except the server a bundled tool skill triggers
+// on by tool name. The curated catalogue is a page in this sense.
 
 // pin is one package a launch fetches, at the release what is said about it
 // was read against.
@@ -871,20 +865,14 @@ func documentedCommands(t *testing.T) []documentedCommand {
 // EVERY PACKAGE A PAGE FETCHES BY NAME IS AN EXACT RELEASE, AND EVERY SERVER A
 // DOCUMENT LAUNCHES IS ONE WHOSE CLAIMS WERE READ.
 //
-// Every launch a configuration spells — an mcp_servers entry in any fenced
-// block of a page or a skill, or an API answer that reports one, and every
-// command it runs through `env` or a shell's -c string — and every runner
-// command spelled anywhere (a troubleshooting step, a setup string, a shell
-// block) names each package it fetches at an exact release, an editable
-// install from a URL included: a page says what one release does, and
-// `@latest` or a bare name runs one nobody read. The shipped examples are held
-// the other way round, by [TestTheShippedExamplesRunTheNewestRelease]. And the
-// server a launch runs — its last command — is one of [pinnedToolServers]
-// wherever it is launched, an example included, so what the documents say
-// about it is tied to the release it was read at.
+// Every launch a configuration spells (an mcp_servers entry in a page or
+// skill, an API answer reporting one, a command run through `env` or a shell's
+// -c string) and every runner command anywhere names each package at an exact
+// release, an editable URL install included: `@latest` runs one nobody read.
+// Examples are held the other way, by [TestTheShippedExamplesRunTheNewestRelease].
+// A launch's last command is one of [pinnedToolServers] wherever launched.
 //
-// Not held: `go install …@latest` of Crewlet itself, whose version is its tag
-// and which nothing in this tree records (RELEASING.md).
+// Not held: `go install …@latest` of Crewlet itself (RELEASING.md).
 func TestEveryDocumentedLaunchNamesAnExactRelease(t *testing.T) {
 	t.Parallel()
 	exact := func(spec string) bool {
@@ -1127,23 +1115,14 @@ func skillGate(s MCPServer, tools map[string]string) (skill, tool string) {
 // THE SHIPPED EXAMPLES RUN THE NEWEST RELEASE OF EVERYTHING THEY FETCH, BUT A
 // SERVER A BUNDLED SKILL TRIGGERS ON BY TOOL NAME.
 //
-// An example is a company somebody copies and runs long after it was written,
-// and a pin in it is a release nothing moves — no manifest holds it, so no
-// pull request ever proposes the next one — handing every new reader a
-// release that only gets older. So every package an example fetches by name,
-// through a launch or a command it tells somebody to run, names no release
-// (`@latest` at most) and runs the newest on the day it is copied.
-//
-// The exception is the one way a newer release fails there without a sound: a
-// bundled tool skill (examples/tool-skills/) triggering on a tool the server
-// serves, which a release renaming that tool disarms. Such a server's entry
-// names the exact release the skill was read against, and only while a skill
-// still names one of its tools. WHICH SERVERS THOSE ARE IS DERIVED, never
-// listed here: every tool any bundled skill's trigger names
-// ([bundledSkillTools]), matched to the server whose launch serves it
-// ([skillGate]) — a list kept in this comment had already drifted, naming two
-// of the four skills that trigger on one server's tools. Which release that
-// is, is [TestThePinnedToolServersRunOneReleaseEverywhere]'s.
+// An example is copied and run long after it was written, and a pin in it is a
+// release nothing moves, so every package it fetches names no release
+// (`@latest` at most). The exception: a server whose renamed tool would
+// silently disarm a bundled tool skill (examples/tool-skills/) names the exact
+// release the skill was read against, only while a skill still names one of
+// its tools. WHICH SERVERS THOSE ARE IS DERIVED, never listed: every tool a
+// bundled skill's trigger names ([bundledSkillTools]), matched to its launch
+// ([skillGate]). Which release is [TestThePinnedToolServersRunOneReleaseEverywhere]'s.
 func TestTheShippedExamplesRunTheNewestRelease(t *testing.T) {
 	t.Parallel()
 	tools := bundledSkillTools(t)
@@ -1250,27 +1229,16 @@ const slackSeatChannel = "C0SEATCHANNEL"
 
 // slackRefusal is why slack-mcp-server, started from an entry with this env
 // and these arguments, would NOT carry out tool in the channel a seat was
-// addressed in — or "" when it would. The server decides it in two places,
-// and both must say yes:
+// addressed in, or "" when it would. Both places it decides must say yes:
+//   - REGISTRATION (pkg/server/server.go shouldAddTool): the enabled tools list
+//     (`-e` / `--enabled-tools`, else SLACK_MCP_ENABLED_TOOLS) decides alone
+//     when it names anything; with none, the gate variable must be set.
+//   - THE CALL (pkg/handler/conversations.go): the ENVIRONMENT ALONE, the gate
+//     read as a channel policy (isChannelAllowedForConfig).
 //
-//   - REGISTRATION, in pkg/server/server.go (shouldAddTool), from the enabled
-//     tools list — `-e` / `--enabled-tools` on its command line, else
-//     SLACK_MCP_ENABLED_TOOLS — which decides alone when it names anything;
-//     with no list, the tool exists only when its gate variable is set at all.
-//   - THE CALL, in pkg/handler/conversations.go (parseParamsToolAddMessage,
-//     parseParamsToolReaction), from the ENVIRONMENT ALONE: the gate, or with
-//     no gate SLACK_MCP_ENABLED_TOOLS naming the tool, and then the gate read
-//     as a channel policy (isChannelAllowedForConfig).
-//
-// So a list given only on the command line registers a tool that refuses
-// every call, and a gate of "false" is a one-channel allowlist naming a
-// channel that does not exist: both list the tool and post nothing, which is
-// the failure this models. A configuration the server refuses to START with —
-// a tool name it does not know, a gate mixing listed and excluded channels —
-// ends the child at once, the engine reports it failed, and it is left to
-// that; the flags are parsed here only because the list they carry decides
-// registration, by the flag package the server parses them with, so a command
-// line it would refuse is refused here too.
+// So a list only on the command line registers a tool that refuses every call,
+// and a gate of "false" allowlists a channel that does not exist. A config the
+// server refuses to START with is the engine's to report.
 func slackRefusal(env map[string]string, argv []string, tool slackWriteTool) string {
 	flags := flag.NewFlagSet("slack-mcp-server", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)

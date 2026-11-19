@@ -970,6 +970,12 @@ type CoordinatorOptions struct {
 	// sealed object — see restore.go. Nil continues no kept session: every
 	// relaunch then continues at most the session its own box holds.
 	Restore SessionRestore
+
+	// Saves is the fleet's ledger of each seat's saves, which a save of a
+	// running job is charged against before its stamp (saveledger.go): the
+	// engine's coordination store. Nil takes no save.
+	Saves SaveLedgers
+
 	// SpoolDir is the directory this node spools sealed sessions in: a
 	// capture's, between its take and its keep ([Coordinator.spool]), and a
 	// relaunch's, the kept session it fetched to carry into its box, between
@@ -1101,6 +1107,10 @@ type Coordinator struct {
 	endPoll time.Duration
 	now     func() time.Time
 
+	// saves is this node's part in saving its runs' sessions as they work
+	// (save.go).
+	saves saveState
+
 	// mainThreadWait bounds the read of a job's main thread at its collection
 	// ([MainThreadReadWait], [Coordinator.readMainThread]), a test's its own;
 	// verdictWait and verdictRetry are a hook verdict's reason and spacing
@@ -1196,11 +1206,10 @@ type Coordinator struct {
 	// signal's lift of the job's hold and a seat's recovery start none beside
 	// them ([Coordinator.carriedLocked]). Under mu.
 	refiring map[string]int
-	// liftedDuring is, by turn id, the condition of a signal's lift of a
-	// job's hold that landed while a re-fire of the job was on its way, for
-	// the last of those re-fires to take up as it returns ([Coordinator.refired]).
-	// Under mu.
-	liftedDuring map[string]Condition
+	// liftedDuring is, by turn id, the hold a signal's lift cleared while a
+	// re-fire of the job was on its way, for the last of those re-fires to
+	// take up as it returns ([Coordinator.refired]). Under mu.
+	liftedDuring map[string]rowHold
 	// blocked are the completions whose last resume here failed on a
 	// condition only an operator clears, by turn id ([blockedResume]).
 	// Under mu.
@@ -1368,10 +1377,12 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		sessions:           opts.Sessions,
 		keep:               opts.Keep,
 		restore:            opts.Restore,
-		relaunchWait:       relaunchCaptureWait,
-		holdingsWait:       holdingsReadWait,
-		endWait:            JobEndWait,
-		endPoll:            jobEndPoll,
+		saves: saveState{ledger: opts.Saves, slots: make(chan struct{}, maxConcurrentSaves),
+			memos: map[string]*saveMemo{}},
+		relaunchWait: relaunchCaptureWait,
+		holdingsWait: holdingsReadWait,
+		endWait:      JobEndWait,
+		endPoll:      jobEndPoll,
 
 		// THE ONE WAIT every reading of a job's main thread shares.
 		mainThreadWait: MainThreadReadWait,
@@ -1395,7 +1406,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		republish:    map[string]*refirePublish{},
 		refused:      map[string]refusedCompletion{},
 		refiring:     map[string]int{},
-		liftedDuring: map[string]Condition{},
+		liftedDuring: map[string]rowHold{},
 		blocked:      map[string]blockedResume{},
 		owed:         map[string]map[string]struct{}{},
 		held:         map[string]bool{},
@@ -4361,7 +4372,9 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 			// a re-fire of its own at the hold's instant and for the
 			// signal that lifts it: the poll reads the row through its
 			// host's store, whose silence has no bound.
-			c.keepHeldOnRow(run, trigger, hold, seen, false)
+			// The release numbered its hold next after the claimed row's: no
+			// other write holds a claimed row ([CoordStore.ReleaseClaim]).
+			c.keepHeldOnRow(run, trigger, hold, run.Holds+1, seen, false)
 			return AnswerConsumed, nil
 		}
 		// Un-claim so a retry can win the flip again; otherwise the redelivered
@@ -6257,7 +6270,8 @@ func (c *Coordinator) rearmOwed(ctx context.Context, runs []PendingRun) {
 func (c *Coordinator) keepHeldRows(ctx context.Context, runs []PendingRun, seen map[signal]uint64) {
 	var kept []PendingRun
 	for _, run := range runs {
-		if c.keepHeldOnRow(run, nil, Refusal{Condition: run.HeldFor, Until: run.HeldUntil}, seen, true) {
+		if c.keepHeldOnRow(run, nil, Refusal{Condition: run.HeldFor, Until: run.HeldUntil}, run.Holds, seen,
+			true) {
 			kept = append(kept, run)
 		}
 	}

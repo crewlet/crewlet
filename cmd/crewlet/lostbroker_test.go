@@ -21,27 +21,16 @@ import (
 
 // A NODE WHOSE BROKER CONNECTION IS CLOSED FOR GOOD STOPS, AND SAYS WHY.
 //
-// `crewlet run` itself, as a supervisor sees it: a real process, pointed at an
-// operator's NATS server, which then stops accepting it — restarted with its
-// credentials rotated, so the node's reconnect is refused, refused again on the
-// attempt after it, and the connection closed by the client for good. That
-// connection is the node's only one: on an external broker the coordination
-// store rides it too.
-//
-// Nothing noticed that. The process stayed up with nothing to publish,
-// consume or renew a lease over until a person restarted it. It must stop now
-// by the one shutdown a signal takes — the drain, then the teardown — and
-// EXIT NON-ZERO through main, printing the sentence that names the cause and
-// the setting to change, so whatever supervises it restarts it and whoever
-// reads the log knows what to fix first.
-//
-// In a CHILD, for the reason the drain probe is: the exit status is main's,
-// and main exits the process.
-//
-// Mutation: wait on the signal context alone in runEngine and the node never
-// exits; return nil after the shutdown and the exit status is the probe's own;
-// skip the shutdown and the order row goes red; have Engine.AcksLost answer
-// nothing and the engine_draining row does.
+// `crewlet run` as a supervisor sees it: a real process pointed at an operator's
+// NATS server that then refuses it (credentials rotated), so the client closes
+// the connection for good. It is the node's only one; on an external broker the
+// coordination store rides it too. The process used to stay up with nothing to
+// do. It must stop by a signal's shutdown (drain, then teardown) and EXIT
+// NON-ZERO through main, naming the cause and the setting to change. In a CHILD,
+// as the drain probe: main exits the process. Mutation: wait on the signal
+// context alone in runEngine and it never exits; return nil after the shutdown
+// and the status is the probe's own; skip the shutdown, the order row is red;
+// make Engine.AcksLost answer nothing, the engine_draining row is.
 func TestANodeWhoseBrokerConnectionIsClosedForGoodExitsNamingIt(t *testing.T) {
 	// Not parallel, for the drain probe's reason: a whole node in a second
 	// process.

@@ -13,46 +13,18 @@ import (
 	"github.com/crewlet/crewlet/internal/testbinary"
 )
 
-// TempDir is t.TempDir for a directory a test's broker keeps its store in,
-// at the directory itself or anywhere under it: a fresh, empty directory,
-// which t removes, with everything under it, once it ends. A fixture keeps
-// the rest of a node beside the store there too (its database, its Tier A),
-// as it would in t.TempDir.
+// TempDir is t.TempDir for a directory a test's broker keeps its store in:
+// fresh, removed by t AFTER EVERY BROKER STARTED IN IT HAS STOPPED. The removal
+// is registered before any broker can start, and cleanups run last-first.
 //
-// ONCE IT ENDS, AFTER EVERY BROKER STARTED IN IT HAS STOPPED: the removal is
-// registered when the directory is made, before a broker can start in it, and
-// a test's cleanups run last-registered first, so the stop a fixture registers
-// once its broker has started runs before the removal.
-//
-// NOT t.TempDir ITSELF, whose removal tries once and fails the test on any
-// error, while a stopped nats-server can still write its store. Every
-// file-backed consumer flushes its state from a goroutine nats-server starts
-// beside the consumer's store (consumerFileStore.flushLoop), which neither
-// Shutdown nor WaitForShutdown joins: a consumer's stop waits for a flush in
-// flight only by polling for 100 ms (waitOnFlusher), and on a loaded runner
-// the write — the state file's temporary, renamed over the state file under
-// obs/<consumer> — lands after both have returned. A removal that read that
-// directory before the write landed finds it not empty at the end, and a case
-// failed on a file it never wrote (crewlet/crewlet#1079; internal/queue/
-// jetstream's shutdownAndClean measures the race).
-//
-// So the removal is TRIED AGAIN WHEN, AND ONLY WHILE, IT FAILS WITH ENOTEMPTY.
-// Each such failure means a file landed after the attempt read its directory,
-// and the next attempt removes it; and once a consumer's directory is gone, a
-// write that comes later lands nowhere, since nats-server writes the state
-// file into that directory and never makes it. Nothing is waited for between
-// attempts: this is a retry on the event, not a pause. The attempts are
-// bounded ([storeRetries]); a directory still not empty after them is being
-// written by something that has not stopped, and the test fails naming the
-// directory and what remained in it. Any other failure fails it at once, as
-// t.TempDir's would.
-//
-// The retry, and this note, go once the pinned nats-server joins a consumer's
-// flush loop in its stop rather than polling for it, which takes the late
-// writes to none (shutdownAndClean has the measurement): a test's store can
-// then live in t.TempDir like any other file, and the two that hold every
-// broker test to this directory go with it — jetstream.ErrStoreOutsideTempDir
-// and TestEveryNATSServerATestBuildsKeepsItsStoreInATempDir.
+// NOT t.TempDir ITSELF, whose single removal fails while a stopped nats-server
+// can still write: a consumer's flush goroutine (consumerFileStore.flushLoop) is
+// joined by neither Shutdown nor WaitForShutdown, only polled 100 ms
+// (waitOnFlusher), so its write can land after the removal read the directory
+// (crewlet/crewlet#1079; jetstream's shutdownAndClean). So the removal is TRIED
+// AGAIN WHEN, AND ONLY WHILE, IT FAILS WITH ENOTEMPTY, up to [storeRetries]; any
+// other failure fails at once. Once nats-server joins the flush loop, t.TempDir
+// serves, with jetstream.ErrStoreOutsideTempDir and its gate test.
 func TempDir(t testing.TB) string {
 	t.Helper()
 	return tempDir(t, os.RemoveAll)
@@ -92,17 +64,14 @@ func tempDir(t testing.TB, removeAll func(string) error) string {
 // late write interrupted it, before the test fails.
 //
 // AN ATTEMPT FAILS ONLY WHEN A WRITE LANDS INSIDE IT, between its reading a
-// directory and its removing that directory, and one late write can fail two
-// attempts at most: one that meets its temporary file, and one that meets the
-// rename of that file over the state file. The attempt after them removes the
-// directory, and the write has nowhere left to land. A consumer makes one such
-// write at most, since a stopped consumer refuses every write but the one it
-// found in flight (nats-server v2.15.1 on). So sixteen retries outlast eight
-// consumers caught mid-write by one stop, where the worst measured was a write
-// still in flight at 3 stops of 1,528 (shutdownAndClean). A directory still not
-// empty after them is being written by something that never stopped (a broker
-// the case did not shut down), which no number of attempts outlasts. Nothing
-// is waited for between them, so the bound costs nothing until it is reached.
+// directory and removing it, and one late write fails two attempts at most:
+// one meeting its temporary file, one meeting its rename over the state file.
+// The next removes the directory. A consumer makes one such write at most (a
+// stopped consumer refuses all but the one in flight, nats-server v2.15.1 on),
+// so sixteen retries outlast eight consumers caught mid-write by one stop; the
+// worst measured was a write in flight at 3 stops of 1,528 (shutdownAndClean).
+// A directory still not empty after them is written by something never stopped,
+// which no number of attempts outlasts. Nothing is waited for between them.
 const storeRetries = 16
 
 // removeStore removes dir with removeAll, trying again when, and only while,

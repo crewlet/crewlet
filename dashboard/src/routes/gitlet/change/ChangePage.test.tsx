@@ -985,10 +985,11 @@ test("the Checks tab counts the latest checks and marks a failure or a full pass
   ];
   stubEngine(detail(), () => json({}));
   mount();
-  // THE DANGER COUNT REPLACES THE FIGURE: two failed of three, the label said to a screen reader.
+  // THE DANGER COUNT REPLACES THE FIGURE: two not passed of three, the label said to a screen
+  // reader, an errored check named apart from a failed one since it measured nothing.
   const failed = await tab();
-  expect(failed.textContent).toBe("Checks22 checks failed");
-  expect(within(failed).getByText("2 checks failed")).toBeTruthy();
+  expect(failed.textContent).toBe("Checks21 check failed and 1 errored");
+  expect(within(failed).getByText("1 check failed and 1 errored")).toBeTruthy();
   cleanup();
 
   LATEST = [check(), check({ name: "lint", state: "skipped", required: false })];
@@ -1068,6 +1069,31 @@ test("More holds where the change came from and whom it notified, and an old key
   const sections = await screen.findByRole("tablist", { name: "The change's sections" });
   const selected = await within(sections).findByRole("tab", { selected: true });
   expect(selected.textContent).toMatch(/^Conversation/);
+});
+
+// WHERE IT CAME FROM SAYS A CREDENTIAL BY ITS KIND AND AN INSTANT AS A RELATIVE TIME, the
+// token's id behind the copy control and the exact instant in the title.
+// Mutation: draw owner_operator_id as written, or the instant by fmtDateTime, and this fails.
+test("More says the credential a change was opened through by its kind, and when as a relative time", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-28T12:00:00Z"));
+  const id = "01a1ef63-0000-7000-8000-000000000001";
+  stubEngine(detail({ owner: "jane", owner_kind: "person", owner_operator_id: `pat:${id}` }), () =>
+    json({}),
+  );
+  mount("#/gitlet/repos/web/changes/42?tab=more");
+  const card = await waitFor(() => {
+    const found = document.querySelector<HTMLElement>(".code-provenance");
+    expect(found?.textContent).toContain("through a personal access token");
+    return found!;
+  });
+  expect(card.textContent).not.toContain("pat:");
+  expect(
+    within(card).getByRole("button", { name: `Copy the personal access token's id, ${id}` }),
+  ).toBeDefined();
+  const opened = card.querySelector("time");
+  expect(opened?.textContent).toBe("1d ago");
+  expect(opened?.getAttribute("title")).toBe(fmtDateTime("2026-10-27T10:00:00Z"));
 });
 
 // THE COUNTS' FILES READ IS FILES CHANGED'S OWN FIRST QUESTION.
@@ -1379,6 +1405,104 @@ test("the timeline starts with the description and draws every record in the ord
   expect(words[3]).toMatch(/commented/);
   expect(words[4]).toMatch(/pushed revision 2/);
   expect(words[5]).toMatch(/asked .*sre for a review/);
+});
+
+// THE LIFECYCLE'S MOVES STAND IN THE TIMELINE where their records landed, each naming who made
+// it; a close by a branch's deletion says so rather than its code.
+// Mutation: leave the moves part out of the timeline, or word a source's deletion as its reason.
+test("the timeline draws each move of the change's lifecycle, by whom, where it landed", async () => {
+  const move = (seq: number, kind: string, extra = {}) => ({
+    kind,
+    by: "cto",
+    by_kind: "agent",
+    position: at(seq),
+    at: "2026-10-27T11:00:00Z",
+    ...extra,
+  });
+  stubEngine(detail(), () => json({}), {
+    "": page({ change: detail(), revisions: [revisionRow(1, 10)] }),
+    moves: page({
+      moves: [
+        move(20, "retitled"),
+        move(21, "work_item", { became: "ENG-7" }),
+        move(22, "drafted"),
+        move(23, "readied"),
+        move(24, "retargeted", { was: "refs/heads/main", became: "refs/heads/release" }),
+        move(25, "closed", { reason: "Superseded by web!43." }),
+        move(26, "reopened", { by: "dev" }),
+        move(27, "closed", { by: undefined, by_kind: undefined, reason: "source_deleted" }),
+      ],
+    }),
+  });
+  mount();
+  await waitFor(() => expect(timelineWords()).toHaveLength(10));
+  const words = timelineWords();
+  expect(words[1]).toMatch(/pushed revision 1/);
+  expect(words.slice(2)).toEqual([
+    expect.stringMatching(/^CTO edited its title/),
+    expect.stringMatching(/^CTO linked it to ENG-7/),
+    expect.stringMatching(/^CTO marked it as a draft/),
+    expect.stringMatching(/^CTO marked it ready for review/),
+    expect.stringMatching(/^CTO changed its target from main to release/),
+    expect.stringMatching(/^CTO closed it .*Superseded by web!43\.$/),
+    expect.stringMatching(/^Engineer reopened it/),
+    expect.stringMatching(/^Gitlet closed it by deleting its branch/),
+  ]);
+});
+
+// THE QUEUE'S ENTRIES STAND IN THE TIMELINE: who queued the change and how each entry ended,
+// and a revision the engine's rebase made says it was rebased.
+// Mutation: leave the queue part out, word every revision as pushed, or drop an ejection's checks.
+test("the timeline draws the change's queue entries and says which revisions were rebased", async () => {
+  const queued = (id: string, enq: number, extra = {}) => ({
+    entry_id: id,
+    target_ref: "refs/heads/main",
+    head_oid: HEAD,
+    method: "merge",
+    enqueued_by: { handle: "cto", kind: "agent" },
+    state: "waiting",
+    enqueued_position: at(enq),
+    enqueued_at: "2026-10-27T11:00:00Z",
+    ...extra,
+  });
+  const ended = (seq: number) => ({ ended_position: at(seq), ended_at: "2026-10-27T11:30:00Z" });
+  stubEngine(detail(), () => json({}), {
+    "": page({
+      change: detail(),
+      revisions: [
+        { ...revisionRow(3, 70), via: "engine", forced: true },
+        { ...revisionRow(2, 40), via: "git", forced: true },
+        { ...revisionRow(1, 10), via: "git" },
+      ],
+    }),
+    queue: page({
+      queue_entries: [
+        queued("e1", 20, {
+          state: "ejected",
+          reason: "checks_undefined",
+          checks: ["lint", "unit"],
+          ...ended(30),
+        }),
+        queued("e2", 50, { state: "dequeued", reason: "asked", ...ended(60) }),
+        queued("e3", 80, { state: "landed", commit_oid: HEAD, ...ended(90) }),
+      ],
+    }),
+  });
+  mount();
+  await waitFor(() => expect(timelineWords()).toHaveLength(10));
+  expect(timelineWords().slice(1)).toEqual([
+    expect.stringMatching(/^Engineer pushed revision 1/),
+    expect.stringMatching(/^CTO added it to the queue for main/),
+    expect.stringMatching(
+      /^Gitlet took it out of the queue: its branch's checks file defines a required check in no form that runs: lint and unit/,
+    ),
+    expect.stringMatching(/^Engineer force-pushed revision 2/),
+    expect.stringMatching(/^CTO added it to the queue for main/),
+    expect.stringMatching(/^It was taken out of the queue/),
+    expect.stringMatching(/^Engineer rebased revision 3 onto main/),
+    expect.stringMatching(/^CTO added it to the queue for main/),
+    expect.stringMatching(/^Gitlet landed it on main through the queue/),
+  ]);
 });
 
 // A REVIEW'S DISC WEARS ITS VERDICT'S TONE, the verdict said in words beside
@@ -1897,6 +2021,84 @@ test("a merged change offers no review, no ask and no close, only its revert", a
   }
 });
 
+// A CLOSED CHANGE NAMES WHO CLOSED IT in its header and merge box, never its owner for another's
+// close; where no closer is known (a push deleted its branch) the reason is worded.
+// Mutation: name the owner as every closed change's actor, or draw the reason's code.
+test("a closed change's header and merge box name who closed it, not its owner", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-27T13:00:00Z"));
+  stubEngine(
+    detail({
+      state: "closed",
+      readiness: undefined,
+      closed_at: "2026-10-27T12:00:00Z",
+      closed_by: "cto",
+      closed_by_kind: "agent",
+      close_reason: "Superseded by web!43.",
+    }),
+    () => json({}),
+  );
+  mount();
+  const line = await waitFor(() => {
+    const said = document.querySelector<HTMLElement>(".code-change-byline");
+    expect(said?.textContent).toMatch(/1 hour ago/);
+    return said!;
+  });
+  expect(line.textContent).toMatch(
+    /^ClosedCTO\s*closed the proposal of retry\s*into main\s*·?1 hour ago$/,
+  );
+  const box = await screen.findByRole("article", { name: "Closed without being merged" });
+  expect(box.textContent).toMatch(
+    /CTO\s*closed it\s*1 hour ago\.\s*Superseded by web!43\. Reopen it from the page bar\.$/,
+  );
+});
+
+// A REASON WRITTEN WITHOUT ITS STOP is ended as a sentence, so "Reopen it" reads apart.
+// Mutation: say the reason as written, and it runs into the next sentence.
+test("a close's reason without a closing stop is ended before the next sentence", async () => {
+  stubEngine(
+    detail({
+      state: "closed",
+      readiness: undefined,
+      closed_at: "2026-10-27T12:00:00Z",
+      closed_by: "cto",
+      closed_by_kind: "agent",
+      close_reason: "Closed by mistake",
+    }),
+    () => json({}),
+  );
+  mount();
+  const box = await screen.findByRole("article", { name: "Closed without being merged" });
+  expect(box.textContent).toMatch(/Closed by mistake\. Reopen it from the page bar\.$/);
+});
+
+test("a change a push closed by deleting its branch names no closer, and says why in words", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-27T13:00:00Z"));
+  stubEngine(
+    detail({
+      state: "closed",
+      readiness: undefined,
+      closed_at: "2026-10-27T12:00:00Z",
+      close_reason: "source_deleted",
+    }),
+    () => json({}),
+  );
+  mount();
+  const line = await waitFor(() => {
+    const said = document.querySelector<HTMLElement>(".code-change-byline");
+    expect(said?.textContent).toMatch(/1 hour ago/);
+    return said!;
+  });
+  expect(line.textContent).toMatch(
+    /^ClosedEngineer\s*proposed retry\s*into main\s*, closed\s*·?1 hour ago$/,
+  );
+  const box = await screen.findByRole("article", { name: "Closed without being merged" });
+  expect(box.textContent).toBe(
+    "Closed without being mergedIts branch was deleted. Reopen it from the page bar.",
+  );
+});
+
 test("a closed change offers its reopen alone", async () => {
   const acted = stubEngine(detail({ state: "closed", readiness: undefined }), () =>
     json({ outcome: "applied" }),
@@ -1954,6 +2156,7 @@ test("a finding drafted on a line is the tab's until a review, and an outdated o
 
   expect(await screen.findByText("1 outdated on this file")).toBeTruthy();
   fireEvent.click(await screen.findByRole("button", { name: "Line 2: pick it" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Finding for the review" }));
   const form = await screen.findByRole("form", { name: "A finding on line 2" });
   fireEvent.change(within(form).getByRole("textbox", { name: "Title" }), {
     target: { value: "Name it" },
@@ -2050,6 +2253,11 @@ test("More names each recipient with why they heard, in the third person", async
   const list = await screen.findByRole("list", { name: "Whom it notified" });
   expect(within(list).getByText(/asked to review/)).toBeTruthy();
   expect(within(list).queryByText(/your review/)).toBeNull();
+  // WHEN AS A RELATIVE TIME, as the rest of Gitlet says it, the instant in its title:
+  // never a clock to the second. Mutation: print the instant, and this fails.
+  const when = list.querySelector("time");
+  expect(when?.textContent).toMatch(/ago|now/);
+  expect(when?.getAttribute("title")).toMatch(/\d{4}/);
 });
 
 // EVERY WRITE IS DRAWN FOR EVERY READER, held with the reason it cannot act:
@@ -2327,6 +2535,16 @@ test.each([
     409,
     /It still waits for an approval of its latest revision\. @cto can move it forward\./,
   ],
+  [
+    "not_fast_forward",
+    {
+      error: "invalid",
+      refusal: "not_fast_forward",
+      detail: "code_merge_change: the head does not hold the target's tip.",
+    },
+    422,
+    /Its target has moved past its head, so a fast-forward cannot land it: rebase it first/,
+  ],
 ])("a %s refusal is drawn in its own words", async (_word, body, status, said) => {
   stubEngine(detail(ready()), () => json(body, status));
   mount();
@@ -2409,6 +2627,27 @@ test("Re-run failed checks runs every failed check of the change's head again", 
     tool: "code_rerun_checks",
     args: { change: "web!42", all_failed: true },
   });
+});
+
+// A REFUSED RE-RUN IS DRAWN UNDER THE SECTION'S WORDS, on a row of its own, never in the end
+// cell beside Re-run, where it squeezes the title.
+// Mutation: drop the section's refusal place, and the refusal is drawn inside the end cell.
+test("a refused Re-run is drawn on its own row under the checks section's words", async () => {
+  LATEST = [check({ name: "e2e", state: "failed" }), check()];
+  stubEngine(detail(), () =>
+    json({ error: "invalid", detail: "the re-run was refused for this test" }, 422),
+  );
+  mount();
+  const box = await screen.findByRole("region", { name: "Merge" });
+  const section = await within(box).findByRole("article", { name: "1 of 2 checks failed" });
+  fireEvent.click(within(section).getByRole("button", { name: "Re-run failed checks" }));
+  const place = await waitFor(() => {
+    const found = section.querySelector(".code-merge-box__refusal");
+    expect(found?.textContent).toMatch(/refused/i);
+    return found!;
+  });
+  expect(place.closest(".code-merge-box__end")).toBeNull();
+  expect(section.querySelector(".code-merge-box__end")?.textContent).not.toMatch(/refused/i);
 });
 
 /** The reader, served the change's later writes as well. */
@@ -4304,6 +4543,20 @@ test("checks past their horizon say so, and a refused read says why", async () =
   expect(tab.textContent).toBe("Checks");
 });
 
+// AN ANSWER WITHOUT `checks` IS A HEAD NO CHECK RAN ON: the engine leaves an
+// empty list out, so the box and the rail say so as soon as it answers, never
+// "Reading its checks" for good. Mutation: read an absent list as not answered.
+test("a checks answer that names no list says no check has run", async () => {
+  latest = () => json({ position: POSITION, level: "session" });
+  const { box } = await mountStory();
+  expect(
+    await within(box).findByRole("article", { name: "No check has run on its head" }),
+  ).toBeTruthy();
+  const rail = screen.getByRole("region", { name: "Checks" });
+  expect(await within(rail).findByText("No check has run on its head.")).toBeTruthy();
+  expect(screen.queryByText("Reading its checks…")).toBeNull();
+});
+
 // THE FINDINGS SECTION COUNTS THE OPEN ONES BY WEIGHT, and a standing blocker
 // turns it. Mutation: call a major a blocker, and this fails.
 test("the findings section weighs the open findings, and a blocker turns it", async () => {
@@ -4420,6 +4673,75 @@ test("the details line says what the press will do", async () => {
   expect(note()).toBe(
     "main moves to its head, 0123456, and no commit is written. Its branch is deleted. ENG-415 closes once it merges.",
   );
+});
+
+// FAST-FORWARD IS HELD WHERE THE TARGET MOVED PAST THE BRANCH (the head's facts name another
+// merge base than the tip): the option says why and cannot be chosen.
+// Mutation: offer it whatever the facts say, and it is chosen.
+test("Fast-forward is held, saying why, where its target has moved past the branch", async () => {
+  const behind = () => ({
+    ...storyParts(() => story({ target_tip: C71 })),
+    "": () =>
+      json({
+        position: POSITION,
+        level: "session",
+        change: story({ target_tip: C71 }),
+        revisions: [
+          {
+            n: 3,
+            head: HEAD,
+            pusher: "dev",
+            pusher_kind: "agent",
+            position: POSITION,
+            at: "2026-10-27T09:37:00Z",
+            facts: {
+              target_ref: "refs/heads/main",
+              target_oid: C71,
+              base_oid: "b".repeat(40),
+              touched: ["a.go"],
+              node: "n1",
+              measured_at: "2026-10-27T09:38:10Z",
+            },
+          },
+        ],
+      }),
+  });
+  vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+  vi.setSystemTime(new Date(STORY_NOW));
+  stubEngine(
+    () => story({ target_tip: C71 }),
+    () => json({ outcome: "applied" }),
+    behind(),
+  );
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+  const box = await screen.findByRole("region", { name: "Merge" });
+  const ff = await within(box).findByRole("radio", { name: "Fast-forward" });
+  await waitFor(() => expect(ff.getAttribute("aria-disabled")).toBe("true"));
+  const why = document.getElementById(ff.getAttribute("aria-describedby") ?? "");
+  expect(why?.textContent).toBe(
+    "Fast-forward is held: main has moved past this branch, so main cannot move to its head. Rebase it first, or merge it another way.",
+  );
+  fireEvent.click(ff);
+  expect(
+    within(box).getByRole("radio", { name: "Merge commit" }).getAttribute("aria-checked"),
+  ).toBe("true");
+});
+
+// A MEASUREMENT OF A TIP THE TARGET HAS MOVED PAST SAYS SO, rather than "Merges
+// cleanly ... ready" until the home measures again. Mutation: ignore target_tip.
+test("a merge measured before its target moved says the target moved since", async () => {
+  const { box } = await mountStory(() => story({ target_tip: "e".repeat(40) }));
+  const section = await within(box).findByRole("article", {
+    name: "Merged cleanly into main before it moved",
+  });
+  expect(section.textContent).toContain("Measured against main at c71d0e9, 10 minutes ago.");
+  expect(section.textContent).toContain("main has moved since, to eeeeeee");
+  expect(within(section).getByRole("button", { name: "Rebase" })).toBeTruthy();
+  cleanup();
+  const { box: current } = await mountStory(() => story({ target_tip: C71 }));
+  expect(
+    await within(current).findByRole("article", { name: "Merges cleanly into main" }),
+  ).toBeTruthy();
 });
 
 // RE-REQUEST ASKS AGAIN, IN ONE ASK, everyone whose verdict is not an approval
@@ -4659,6 +4981,9 @@ test.each([
     "Rebase",
     "Request",
     "Ask CTO to review again",
+    "Convert to draft",
+    "Change the branch web!42 merges into",
+    "Change the work item of web!42",
   ]);
   cleanup();
   const direct = await mountStory(() => story(ready()), true, viewer);
@@ -4667,4 +4992,334 @@ test.each([
   const queued = await mountStory(() => story(QUEUED), true, viewer);
   await pressAll(["Take web!42 out of the queue"]);
   expect([...story1.acted, ...direct.acted, ...queued.acted]).toEqual([]);
+});
+
+// ---- a live change's edits beside what it says ------------------------------ //
+
+/** The reader, served the edits a merged change's rail offers too. */
+const BRANCHER = { ...STEWARD, acts: [...STEWARD.acts, "code_create_branch"] };
+
+// BACK TO A DRAFT, A TARGET AND A WORK ITEM, each one update against the version
+// on screen, as the engine takes one edit a call. Mutation: drop the rail's
+// controls, send `draft: false`, or send an empty work item instead of `none`.
+test("the rail converts an open change to a draft, retargets it and sets its work item", async () => {
+  const acted = stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount();
+  const reviewers = await screen.findByRole("region", { name: "Reviewers" });
+  const toDraft = within(reviewers).getByRole("button", { name: "Convert to draft" });
+  await waitFor(() => expect(toDraft.getAttribute("title")).toBeNull());
+  fireEvent.click(toDraft);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_update_change",
+    args: { change: "web!42", expected_version: 5, draft: true },
+  });
+
+  fireEvent.click(screen.getByRole("button", { name: "Change the branch web!42 merges into" }));
+  let dialog = await screen.findByRole("dialog", { name: "Merge web!42 into another branch" });
+  const field = within(dialog).getByRole("textbox", { name: "Target branch" });
+  const save = within(dialog).getByRole("button", { name: "Save" });
+  expect(save.getAttribute("title")).toBe("It merges into main already.");
+  fireEvent.change(field, { target: { value: "retry" } });
+  expect(save.getAttribute("title")).toBe(
+    "retry is what the change proposes: it merges into another branch.",
+  );
+  fireEvent.change(field, { target: { value: "release" } });
+  fireEvent.click(save);
+  await waitFor(() => expect(acted).toHaveLength(2));
+  expect(acted[1]).toEqual({
+    tool: "code_update_change",
+    args: { change: "web!42", expected_version: 5, target: "release" },
+  });
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+  fireEvent.click(screen.getByRole("button", { name: "Change the work item of web!42" }));
+  dialog = await screen.findByRole("dialog", { name: "The work item of web!42" });
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Work item" }), {
+    target: { value: "ENG-42" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(acted).toHaveLength(3));
+  expect(acted[2]!.args).toEqual({ change: "web!42", expected_version: 5, work_item: "ENG-42" });
+  cleanup();
+
+  // A WORK ITEM EMPTIED IS TAKEN OFF: the engine's `none`.
+  const off = stubEngine(
+    detail({ work_item: { backend: "worklet", id: "w-1", key: "ENG-42", project: "ENG" } }),
+    () => json({ outcome: "applied" }),
+  );
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Change the work item of web!42" }));
+  dialog = await screen.findByRole("dialog", { name: "The work item of web!42" });
+  const item = within(dialog).getByRole("textbox", { name: "Work item" }) as HTMLInputElement;
+  expect(item.value).toBe("ENG-42");
+  fireEvent.change(item, { target: { value: "" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(off).toHaveLength(1));
+  expect(off[0]!.args).toEqual({ change: "web!42", expected_version: 5, work_item: "none" });
+});
+
+// ONLY AN OPEN CHANGE GOES BACK TO A DRAFT, and a finished one takes no edit.
+// Mutation: draw Convert to draft on a draft, or the edits on a merged change.
+test("a draft offers no Convert to draft, and a merged change no edit", async () => {
+  stubEngine(detail({ state: "draft" }), () => json({ outcome: "applied" }));
+  mount();
+  await screen.findByRole("button", { name: "Ready for review" });
+  expect(screen.queryByRole("button", { name: "Convert to draft" })).toBeNull();
+  cleanup();
+  stubEngine(detail({ state: "merged", readiness: undefined }), () => json({}));
+  mount();
+  await screen.findByRole("region", { name: "Branches" });
+  expect(screen.queryByRole("button", { name: "Change the branch web!42 merges into" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Change the work item of web!42" })).toBeNull();
+});
+
+// A FINISHED CHANGE WHOSE BRANCH IS GONE OFFERS IT BACK at its head, and one
+// whose branch stands offers nothing. Mutation: restore at the target's head,
+// or offer it while the branch is listed.
+test("a merged change whose source branch is gone restores it at its head", async () => {
+  const acted = stubEngine(detail({ state: "merged", readiness: undefined }), () =>
+    json({ outcome: "applied" }),
+  );
+  mount("#/gitlet/repos/web/changes/42", BRANCHER);
+  const rail = await screen.findByRole("region", { name: "Branches" });
+  const restore = await within(rail).findByRole("button", { name: "Restore branch" });
+  await waitFor(() => expect(restore.getAttribute("title")).toBeNull());
+  fireEvent.click(restore);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_create_branch",
+    args: { repo: "web", branch: "retry", at: HEAD },
+  });
+  expect(refsAsked.some((u) => u.searchParams.get("contains") === "retry")).toBe(true);
+  cleanup();
+
+  refs = () =>
+    json({
+      refs_detail: [MAIN_REF, { ...MAIN_REF, ref: "refs/heads/retry", protection: undefined }],
+      position: POSITION,
+      level: "session",
+    });
+  stubEngine(detail({ state: "merged", readiness: undefined }), () => json({}));
+  mount("#/gitlet/repos/web/changes/42", BRANCHER);
+  await waitFor(() =>
+    expect(refsAsked.some((u) => u.searchParams.get("contains") === "retry")).toBe(true),
+  );
+  await settled(() => refsAsked.length);
+  expect(screen.queryByRole("button", { name: "Restore branch" })).toBeNull();
+  cleanup();
+
+  // A LIVE CHANGE'S SOURCE IS NOT LOOKED FOR.
+  refsAsked.length = 0;
+  stubEngine(detail(), () => json({}));
+  mount();
+  await screen.findByRole("region", { name: "Branches" });
+  await settled(() => refsAsked.length);
+  expect(refsAsked.some((u) => u.searchParams.get("contains") === "retry")).toBe(false);
+});
+
+// A PLAIN COMMENT ON A LINE is one code_comment_on_change anchored at the
+// pick's last line on the head, sent at once; a finding stays a draft for the
+// review. Mutation: send no anchor, or open on Finding with no draft.
+test("a line picked takes a comment at once, anchored on the head, or a finding for the review", async () => {
+  const acted = stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount("#/gitlet/repos/web/changes/42?tab=files&file=app.go");
+  fireEvent.click(await screen.findByRole("button", { name: "Line 2: pick it" }));
+  const kind = await screen.findByRole("radiogroup", { name: "What to leave on line 2" });
+  expect(within(kind).getByRole("radio", { name: "Comment" }).getAttribute("aria-checked")).toBe(
+    "true",
+  );
+  const form = await screen.findByRole("form", { name: "A comment on line 2" });
+  const send = within(form).getByRole("button", { name: "Comment" });
+  expect(send.getAttribute("title")).toBe("Write the comment first.");
+  fireEvent.change(within(form).getByRole("textbox", { name: "Comment" }), {
+    target: { value: "Why `new`?" },
+  });
+  fireEvent.click(send);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_comment_on_change",
+    args: {
+      change: "web!42",
+      body: "Why `new`?",
+      anchor: { path: "app.go", line: 2, side: "new", revision: 2 },
+    },
+  });
+  await waitFor(() =>
+    expect(screen.queryByRole("form", { name: "A comment on line 2" })).toBeNull(),
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Line 2: pick it" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Finding for the review" }));
+  expect(await screen.findByRole("form", { name: "A finding on line 2" })).toBeTruthy();
+});
+
+// APPLY SUGGESTION IS CONFIRMED, naming the branch and the head, with its
+// commit message prefilled and sent. Mutation: apply on the press, or send
+// no message.
+test("Apply suggestion opens a dialog naming the branch, its message prefilled and sent", async () => {
+  const acted = stubFindings([F1], page({ excerpts: EXCERPTS }), { revision: 1 });
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+  const card = await screen.findByRole("article", { name: `Finding: ${F1.title}` });
+  const apply = await within(card).findByRole("button", { name: "Apply suggestion" });
+  await waitFor(() => expect(apply.getAttribute("title")).toBeNull());
+  fireEvent.click(apply);
+  const dialog = await screen.findByRole("dialog", { name: "Apply the suggestion" });
+  expect(acted).toHaveLength(0);
+  expect(dialog.textContent).toMatch(/one commit on retry, on top of 0123456/);
+  const message = within(dialog).getByRole("textbox", { name: "Commit message" });
+  expect((message as HTMLTextAreaElement).value).toBe(`Apply suggestion: ${F1.title}`);
+  fireEvent.change(message, { target: { value: "Set the nonce before the shell flushes" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Commit suggestion" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]).toEqual({
+    tool: "code_apply_suggestions",
+    args: {
+      change: "web!42",
+      findings: ["f-1"],
+      expected_head: HEAD,
+      message: "Set the nonce before the shell flushes",
+    },
+  });
+});
+
+// ANSWERING IS THE CARD'S WHOLE FOOT: Reply and Resolve go while the form is
+// open and come back on Cancel, the focus on Answer. Mutation: keep the foot
+// drawn beside the form.
+test("while a finding is answered its card shows the answer form alone", async () => {
+  stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount("#/gitlet/repos/web/changes/42?tab=files&file=app.go", STEWARD);
+  fireEvent.click(await screen.findByText("1 outdated on this file"));
+  const card = await screen.findByRole("article", { name: `Finding: ${MINE.title}` });
+  const open = within(card).getByRole("button", { name: /Answer the finding/ });
+  await waitFor(() => expect(open.getAttribute("title")).toBeNull());
+  expect(within(card).getByRole("button", { name: "Reply" })).toBeTruthy();
+  fireEvent.click(open);
+  const form = await within(card).findByRole("form", { name: /Answer the finding/ });
+  for (const name of ["Reply", "Resolve"]) {
+    expect(within(card).queryByRole("button", { name }), name).toBeNull();
+  }
+  fireEvent.click(within(form).getByRole("button", { name: "Cancel" }));
+  const back = await within(card).findByRole("button", { name: /Answer the finding/ });
+  expect(within(card).getByRole("button", { name: "Reply" })).toBeTruthy();
+  await waitFor(() => expect(document.activeElement).toBe(back));
+});
+
+// A REVIEW THAT SAYS NOTHING IS HELD: changes asked for, or a comment, with no
+// summary and no finding. An approval may be bare. Mutation: hold only on the
+// standing read, and the empty request goes.
+test("Request changes is held until it says what to change", async () => {
+  const acted = stubEngine(detail(), () => json({ outcome: "applied" }), {
+    standing: () => json({ position: POSITION, level: "session", findings: [] }),
+  });
+  mount();
+  await review("Request changes");
+  const dialog = await screen.findByRole("dialog");
+  const send = within(dialog).getByRole("button", { name: "Request changes" });
+  await waitFor(() =>
+    expect(send.getAttribute("title")).toBe(
+      "Say what to change: write a summary, or draft a finding on its lines.",
+    ),
+  );
+  fireEvent.click(send);
+  expect(acted).toHaveLength(0);
+  fireEvent.change(within(dialog).getByRole("textbox", { name: "Summary" }), {
+    target: { value: "Retry with a backoff." },
+  });
+  await waitFor(() => expect(send.getAttribute("title")).toBeNull());
+  fireEvent.click(send);
+  await waitFor(() => expect(acted).toHaveLength(1));
+  expect(acted[0]!.args).toMatchObject({
+    verdict: "request_changes",
+    summary: "Retry with a backoff.",
+  });
+});
+
+// THE CLOSE REASON HAS A LABEL, as every Gitlet dialog's field does.
+// Mutation: name the field by its placeholder alone.
+test("the close dialog's reason is a labelled field", async () => {
+  stubEngine(detail(), () => json({ outcome: "applied" }));
+  mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Close change" }));
+  const dialog = await screen.findByRole("dialog", { name: "Close web!42" });
+  const label = [...dialog.querySelectorAll("label")].find((l) =>
+    /Reason/.test(l.textContent ?? ""),
+  );
+  expect(label).toBeTruthy();
+  expect(within(dialog).getByRole("textbox", { name: /Reason/ }).id).toBe(label!.htmlFor);
+});
+
+// THE DESCRIPTION IS EDITED IN THE COMPOSER'S EDITOR, previewed, and a refused
+// save says why on a line of its own, under the row. Mutation: draw a bare
+// textarea, or draw the refusal inside the row.
+test("the description is edited in the markdown editor, and a refused save is said under its row", async () => {
+  const acted = stubEngine(described(), () =>
+    json({ error: "stale_version", detail: "It changed since you loaded it." }, 409),
+  );
+  mount();
+  const form = await edit();
+  fireEvent.change(within(form).getByRole("textbox", { name: "Description" }), {
+    target: { value: "Three **tries**." },
+  });
+  fireEvent.click(within(form).getByRole("tab", { name: "Preview" }));
+  await waitFor(() => expect(form.querySelector(".prose strong")?.textContent).toBe("tries"));
+  fireEvent.click(within(form).getByRole("tab", { name: "Write" }));
+  fireEvent.click(within(form).getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  const said = await within(form).findByText(/changed since you loaded it/i);
+  const row = form.querySelector(".code-description__actions")!;
+  expect(row.contains(said)).toBe(false);
+  expect(said.closest(".code-description__refusal")).not.toBeNull();
+});
+
+// A REVERT OPENED IS LINKED IN REVERT'S PLACE while it stands, from the
+// change's read; a closed one gives Revert back. Mutation: draw Revert beside
+// an open revert, or drop the link.
+test("a merged change links the change that reverts it in place of Revert", async () => {
+  stubEngine(
+    detail({
+      state: "merged",
+      readiness: undefined,
+      reverted_by: { repo: "web", ref: "web!57", title: "Revert web!42", state: "open" },
+    }),
+    () => json({}),
+  );
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+  const box = await screen.findByRole("region", { name: "Revert" });
+  const link = await within(box).findByRole("link", { name: "web!57" });
+  expect(link.getAttribute("href")).toBe("#/gitlet/repos/web/changes/57");
+  expect(box.textContent).toMatch(/Reverted by web!57, still open\./);
+  expect(within(box).queryByRole("button", { name: "Revert" })).toBeNull();
+  cleanup();
+
+  stubEngine(
+    detail({
+      state: "merged",
+      readiness: undefined,
+      reverted_by: { repo: "web", ref: "web!57", title: "Revert web!42", state: "closed" },
+    }),
+    () => json({}),
+  );
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+  const again = await screen.findByRole("region", { name: "Revert" });
+  expect(await within(again).findByRole("button", { name: "Revert" })).toBeTruthy();
+  expect(again.textContent).toMatch(/Its revert web!57 was closed\./);
+});
+
+// THE REVERT'S OWN ANSWER NAMES ITS CHANGE, linked at once, before the
+// change's read does. Mutation: ignore the receipt's `opened`.
+test("a revert just opened is linked from its answer", async () => {
+  const acted = stubEngine(detail({ state: "merged", readiness: undefined }), () =>
+    json({ outcome: "applied", receipt: { reverts: "web!42", opened: "web!57" } }),
+  );
+  mount("#/gitlet/repos/web/changes/42", STEWARD);
+  const revert = await screen.findByRole("button", { name: "Revert" });
+  await waitFor(() => expect(revert.getAttribute("title")).toBeNull());
+  fireEvent.click(revert);
+  const dialog = await screen.findByRole("dialog", { name: "Revert web!42?" });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Open the revert" }));
+  await waitFor(() => expect(acted).toHaveLength(1));
+  const box = await screen.findByRole("region", { name: "Revert" });
+  expect(await within(box).findByRole("link", { name: "web!57" })).toBeTruthy();
+  expect(within(box).queryByRole("button", { name: "Revert" })).toBeNull();
 });

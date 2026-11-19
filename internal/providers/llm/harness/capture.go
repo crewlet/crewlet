@@ -26,53 +26,23 @@ import (
 // commands ([Provider.runInCredentialHome]), whose output is the CLI's own
 // stdout and stderr, which the engine reads none of.
 //
-// A pipe is where a harness's answer was lost. Node documents that a write to a
-// pipe is asynchronous on linux and darwin and may be "not written at all if
-// process.exit() is called before an asynchronous write completes", while a
-// write to a file is synchronous; OpenCode 2.0.32 and 2.1.4 (Bun) were
-// measured cutting a run's answer at the pipe's 64 KiB, and whole into a file
-// every time. No runtime a harness ships on decides its buffering by pipe
-// against file (only by "is it a terminal"), so a file loses nothing a pipe
-// carried, and measured on every shipped harness the probe could run, a line
-// reaches a file no later than it reaches a pipe.
-//
-// So each stream is a [capture]: a regular file, made 0600 with O_EXCL in a
-// directory only the engine writes, opened a second time read-write for the
-// engine, given [maxOutput] of room on its volume, PINNED ([flock.Pin]) on the
-// description the child is handed, and UNLINKED before the child starts — so
-// nothing can open it by name, no later call can find it, and a crash leaves
-// no file behind. A child handed or printing a credential captures into an
-// anonymous file in memory instead on linux (memfd_create), so a minted token
-// or a server's password never reaches a disk ([childSpec.credential]).
-//
-// Two goroutines per child: a READER that follows the files and hands each
-// complete line to whoever reads it live, and a WATCHER that measures them on
-// its own tick and enforces their bound, which never waits on a line's
-// callback, so a slow callback cannot let a runaway writer past the bound. The
-// watcher runs until the end has stopped the reader, a cut or not: past the
-// first cut it goes on giving back and keeping room, since a writer the kill
-// did not reach writes on until the end.
-//
-// The END is three conditions: the harness exited, its process group has no
-// living member, and no process still holds either file's write description
-// (the pin): exactly when a pipe would have reached its end, and its group
-// besides. Within the grace, as before; then each file is read to the size it
-// had at that instant and never again, and a capture something still holds
-// goes to the provider's [janitor].
+// A pipe is where a harness's answer was lost: Node's pipe writes are
+// asynchronous and may be "not written at all if process.exit() is called
+// before an asynchronous write completes", while a file write is synchronous
+// (OpenCode on Bun cut an answer at the pipe's 64 KiB, never into a file). No
+// harness runtime buffers by pipe against file, so a file loses nothing a pipe
+// carried and a line reaches it no later. Each stream is a [capture].
 
 // endPoll is how often the end is asked once the harness has exited and
 // something of its group, or a holder of its output, remains.
 //
-// The figure and the reason are the sandbox's teardown poll, which asks the
-// same question (internal/sandbox's exitPollInterval): the answer is usually
-// yes at the first ask, and the caller is holding a turn open. Measured on
-// every harness the probe ran (twenty text functions and twenty runs with
-// tools each, half of them ended in flight), nothing of a group was alive at
-// the harness's reap but for Claude Code on Node, whose relay lingered 1 to
-// 22 ms: one or two asks. Once the leader is reaped, an ask is a signal-0
-// probe of the group and, while the group exists, a scan of the pid
-// namespace's stat records, so asking faster would buy a few milliseconds
-// with a scan of every process each time.
+// The figure and the reason are the sandbox's teardown poll (internal/sandbox's
+// exitPollInterval): the answer is usually yes at the first ask, and the
+// caller is holding a turn open. Only Claude Code on Node left a group alive
+// at the harness's reap (its relay, 1 to 22 ms). Once the leader is reaped, an
+// ask is a signal-0 probe and, while the group exists, a scan of the pid
+// namespace's stat records, so asking faster buys milliseconds at the price of
+// a scan of every process each time.
 const endPoll = 20 * time.Millisecond
 
 // readChunk is the most the reader reads of one capture in one call before
@@ -253,6 +223,13 @@ func (h *captureHooks) after(at time.Time) <-chan time.Time {
 
 // capture is one stream of one child: the engine's read-write description of
 // the file the child writes, and where the reader and the watcher are in it.
+//
+// The file is 0600 O_EXCL in a directory only the engine writes, given
+// [maxOutput] of room, PINNED ([flock.Pin]) on the description the child gets,
+// and UNLINKED before the child starts, so nothing can open it by name and a
+// crash leaves none behind. A child handed or printing a credential captures
+// into a memfd on linux instead, so a token never reaches a disk
+// ([childSpec.credential]).
 type capture struct {
 	stream string
 	r      *os.File
@@ -553,6 +530,11 @@ type childSpec struct {
 var orphanJanitor janitor
 
 // childRun is one started child and its captures.
+//
+// Its END is three conditions: the harness exited, its group has no living
+// member, and nothing holds either file's write description (the pin). Within
+// the grace each file is then read to its size at that instant; a capture
+// something still holds goes to the provider's [janitor].
 type childRun struct {
 	// logCtx is what its log lines are told: the caller's, never its
 	// cancellation, which often is what ended the child.

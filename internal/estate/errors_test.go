@@ -606,3 +606,20 @@ func declaredErrors(t *testing.T, dir string) (vars, types []string) {
 	slices.Sort(types)
 	return slices.Compact(vars), slices.Compact(types)
 }
+
+// A GITLET REFUSAL CROSSES NAMING ITS FIELD as a value: a write refused on a data node still names
+// its field on the asking node (ADR-0060) and stays ErrInvalid with its sentence.
+// Mutation: drop gitlet.FieldRefused's typed row and errors.As finds nothing.
+func TestAGitletRefusalCrossesNamingItsField(t *testing.T) {
+	t.Parallel()
+	original := &gitlet.FieldRefused{Field: "close.reason",
+		Err: fmt.Errorf("%w: close.reason: 5000 bytes: at most 2048", gitlet.ErrInvalid)}
+	got := throughWire(t, fmt.Errorf("propose: %w", original))
+	var refused *gitlet.FieldRefused
+	if !errors.As(got, &refused) || refused.Field != "close.reason" {
+		t.Fatalf("the refusal crossed as %v (%+v), want one naming close.reason", got, refused)
+	}
+	if !errors.Is(got, gitlet.ErrInvalid) || got.Error() != "propose: "+original.Error() {
+		t.Errorf("the refusal crossed as %q, want ErrInvalid saying %q", got, "propose: "+original.Error())
+	}
+}

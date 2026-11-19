@@ -29,14 +29,9 @@ func fieldsOf(reason authz.Reason, grants ...iam.Grant) httpjson.Detail {
 // A REFUSAL SAYS THE RULE THAT REFUSED, AND NAMES A PERMISSION ONLY WHERE ONE
 // IS A WAY PAST IT.
 //
-// `unauthorized` is every refusal the authority table makes, and its one
-// sentence named the four permissions for all of them: a credential acting as
-// no seat, an agent taking a person's verb, an account that is not active and
-// an admin whose proof had gone stale were each told to ask an admin for
-// access — which, holding admin, some of them had — while the `reason` beside
-// the sentence said something else. Each reason is asked here twice where the
-// grants matter: with a permission named beside it, which a relation's
-// sentence offers and every other reason's ignores, and with none.
+// One sentence naming the permissions told every caller to ask an admin,
+// contradicting the `reason` beside it. Each reason is asked twice: with a
+// permission named (a relation's sentence offers it, others ignore it), and not.
 //
 // Mutation: answer every reason the code's own sentence (drop the situated row)
 // and every case but the bare no-grant one fails; drop a reason's row and its
@@ -142,15 +137,12 @@ func TestUnauthorizedSaysTheRuleThatRefused(t *testing.T) {
 // EVERY REASON THE AUTHORITY TABLE ANSWERS `unauthorized` HAS A SENTENCE, AND
 // NO OTHER.
 //
-// The two lists are two packages' — the reasons are authz's, and the words are
-// this package's, which imports no engine machinery — so nothing but this
-// holds them together: a reason authz grows would be told the code's own
-// sentence (every permission, for a rule that may ask none), and a sentence
-// for a reason nothing reports is what a rename leaves behind. Which reasons
-// are answered `unauthorized` at all is the mapping's own answer
-// ([authz.RefusalFields]): a stale proof, a token's refusal and no relation
-// are answered under codes of their own, so a sentence kept for one is words
-// no refusal is told. Mutation: delete a row from the table and the first
+// The reasons are authz's and the words this package's (which imports no
+// engine machinery), so only this holds them together: a reason authz grows
+// would get the code's own sentence, and a sentence for a reason nothing
+// reports is what a rename leaves behind. [authz.RefusalFields] decides which
+// reasons are `unauthorized` at all: a stale proof, a token's refusal and no
+// relation have codes of their own. Mutation: delete a row from the table and the first
 // loop fails; add one for `step_up` and the never-unauthorized arm does; add
 // one keyed on a word no rule reports and the last does.
 func TestEveryRefusalReasonHasASentence(t *testing.T) {

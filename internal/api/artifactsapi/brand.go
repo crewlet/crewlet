@@ -22,23 +22,17 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
-// THE COMPANY'S BRAND ON THE API ORIGIN (ADR-0048): the adopted brand, which
-// everybody reads (`get_company_brand`), its files, and the administrator's
-// adoption and clear (`artifacts.brand.adopt`, `.clear`: an administrator, a
-// person, at a recent proof of identity, decided by each route's policy).
+// THE COMPANY'S BRAND ON THE API ORIGIN (ADR-0048): the adopted brand everybody
+// reads (`get_company_brand`), its files, and the administrator's adoption and
+// clear (`artifacts.brand.adopt`, `.clear`, a recent proof of identity).
 //
-// THE ADOPTED BRAND IS THE COMPANY'S PUBLIC FACE, so its answer is the same for
-// every reader but one field: whether a kit version newer than the adopted one
-// exists, and who published it, is answered only to a reader who may open the
-// kit (by a relation, or as an administrator), since a draft is not the public
-// face. Telling an administrator reads the kit's head and no content, so it
-// leaves no elevated-read record.
-//
-// ITS FILES ARE SERVED HERE AS EVERY ARTIFACT FILE IS (ADR-0035's second rule):
-// an attachment, a drawing as `text/plain`, under the API's own policy, so a
-// logo opened from the dashboard can never run on the credential-bearing
-// origin. Artifact pages read the same files from the public brand route on
-// the artifact origin, by their hash.
+// It is the company's public face, so its answer is the same for every reader
+// but one field: whether a newer kit version exists, and who published it, goes
+// only to a reader who may open the kit (a draft is not public), reading no
+// content, so leaving no elevated-read record. Its files are served as every
+// artifact file is (ADR-0035's second rule), an attachment, a drawing as
+// `text/plain`, so a logo never runs on the credential-bearing origin; artifact
+// pages read them from the public brand route on the artifact origin.
 
 // BrandReads is the adopted brand as the brand routes and the `brand` question
 // read it: the estate router's.

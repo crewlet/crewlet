@@ -55,42 +55,24 @@ func (memorySandbox) Get(context.Context, string) (sandbox.PendingRun, bool, err
 }
 
 // roomQueries is every query kind a room asks for, mapped to the files that
-// ask — found in the rooms' own source, never a list kept here: a
-// hand-maintained one is exactly what drifts, and it would drift towards
+// ask, found in the rooms' own source: a hand-maintained list drifts towards
 // claiming the server answers more than it does.
 //
-// EVERY CALL SHAPE: the `useQuery` hook a screen renders from, the
-// `useSearchQuery` hook every ranked search is asked through (it applies the
-// search bound before `useQuery`), the `useCodeQuery` hook every code question
-// is asked through over REST (lib/useCodeQuery.ts: never the socket's
-// in-flight slots), and the direct `query` a pager or an action uses — the
-// socket's, or the code questions' REST one for an older page. Read by
-// [clientsource.Calls], so a
-// call a formatter wrapped across lines, one with type arguments and one
-// inside markup are the calls they are. The sweep this replaced was a regular
-// expression whose name class once could not match `a2a_channels` and whose
-// paren once could not be followed by a line break — a sweep whose whole job
-// is to notice a missing name, twice silently narrowed by the shape of a
-// pattern — and it keyed each hit on the file's BASE name, so two rooms named
-// alike collapsed into one.
+// Every call shape counts: `useQuery`, `useSearchQuery`, `useCodeQuery` (REST,
+// never the socket's in-flight slots) and the direct `query` a pager or an
+// action uses. [clientsource.Calls] reads them by syntax; each hit is keyed by
+// path, not base name.
 //
-// A kind handed over in anything but a string literal is invisible here —
-// [clientsource.Calls] can read nothing else — and that is safe only because
-// the dashboard refuses one: `app/source.test.ts`'s "every read names its
-// question" requires a literal at every `useQuery(`, `useSearchQuery(`,
-// `useCodeQuery(` and `query(` call, bare or as a method, which is every call
-// Calls is asked for below.
+// A kind not given as a string literal is invisible here, which is safe only
+// because the dashboard's `app/source.test.ts` ("every read names its
+// question") requires a literal at every such call.
 func roomQueries(t *testing.T) map[string][]string {
 	t.Helper()
 	calls, err := clientsource.Calls(clientsource.Tree(t), "useQuery", "useSearchQuery", "useCodeQuery",
 		"query")
 	if err != nil {
-		// FAILS rather than skips. The dashboard source is committed, so it
-		// is always in a checkout — and a skip here is indistinguishable
-		// from a pass, which is how this gate went quiet the last time the
-		// tree moved: it pointed at `static/dashboard/js`, the hand-written
-		// bundle the React rewrite deleted, and certified nothing for the
-		// whole of that rewrite.
+		// FAILS rather than skips: the dashboard source is always in a
+		// checkout, and a skip is indistinguishable from a pass.
 		t.Fatal(err)
 	}
 	if len(calls) == 0 {
@@ -109,9 +91,8 @@ func (noModels) Deps(context.Context, *config.Company) (analyst.Deps, error) {
 // everySeam is a Sources with every seam present, which is what makes the
 // registry list everything this build can answer.
 //
-// The seams are only tested for nil by Register, so zero values are enough
-// and nothing here is called — this sweep is about WHICH NAMES exist, not
-// what they answer. The per-kind tests in this package cover the answers.
+// Register only tests the seams for nil, so zero values are enough: this
+// sweep is about WHICH NAMES exist, not what they answer.
 func everySeam(t *testing.T) queries.Sources {
 	t.Helper()
 	surface, _ := configSurface(t, companyDoc)
@@ -429,17 +410,11 @@ func (fakeChannels) AllChannels(context.Context) ([]coord.Channel, error)  { ret
 
 // EVERY QUERY A ROOM MAKES IS A QUERY THIS SERVER ANSWERS.
 //
-// Nothing linked the two, and the cost was a whole feature: the Config
-// room's entity editor listed a collection with query("config_entities"),
-// opened one with {kind, id}, and no answer was ever registered under that
-// name — so every list came back unknown_query and the editor was dead from
-// the day it shipped. Both sides' tests passed, because each was written
-// against its own idea of the other.
-//
-// This is the cheap half of the gate internal/e2e gives the push protocol,
-// and it is deliberately about NAMES rather than fields: a name is checkable
-// without standing up a node, and a name that nothing answers is the failure
-// that renders as an empty room with no error anywhere.
+// Each side's tests pass against its own idea of the other, so a name no
+// answer is registered under comes back unknown_query and renders as an empty
+// room with no error anywhere. This is the cheap half of the gate
+// internal/e2e gives the push protocol: it checks NAMES, not fields, so it
+// needs no node.
 func TestEveryQueryARoomMakesIsAnswered(t *testing.T) {
 	t.Parallel()
 	answered := registeredKinds(t)
@@ -455,9 +430,7 @@ func TestEveryQueryARoomMakesIsAnswered(t *testing.T) {
 // every seam present.
 //
 // The NAMES only: Register gates each kind on its seam being non-nil, so
-// this is the complete surface — and nothing here is invoked, because the
-// question is which names exist rather than what they answer. The per-kind
-// tests in this package cover the answers.
+// this is the complete surface, and nothing is invoked.
 func registeredKinds(t *testing.T) []string {
 	t.Helper()
 	r := queries.NewRegistry()
@@ -472,20 +445,13 @@ func registeredKinds(t *testing.T) []string {
 
 // AND EVERY QUERY THIS SERVER ANSWERS IS ONE SOMETHING ASKS FOR.
 //
-// The other direction, and the one that goes quiet rather than breaking: an
-// answer nobody calls is code with tests, no readers, and no way to notice
-// it stopped being right.
+// The direction that goes quiet rather than breaking: an answer nobody calls
+// is code with tests and no way to notice it stopped being right.
 //
-// NO SILENT EXCEPTIONS. This carried a map of kinds "read by name from
-// somewhere that is not a room" — `stream` through a header poll in a file the
-// React rewrite deleted, `config_entities` through a guide — and both had long
-// since gained a room that reads them, so the map was consulted for nothing and
-// excused nothing. An exemption nobody reaches is how the next unread answer
-// gets waved through with a reason that stopped being true; a kind that
-// genuinely has no room reader is a decision this gate should make someone
-// take in the open. Those decisions are [readOutsideTheDashboard], held both
-// ways here so none outlives its reason: a kind it names that a room reads is
-// red until its line goes, and so is one this build no longer answers.
+// NO SILENT EXCEPTIONS. A kind with no room reader is a decision made in the
+// open, in [readOutsideTheDashboard], held both ways so none outlives its
+// reason: a kind it names that a room reads is red until its line goes, and so
+// is one this build no longer answers.
 func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 	t.Parallel()
 	asked := roomQueries(t)
@@ -513,60 +479,30 @@ func TestEveryQueryThisServerAnswersHasAReader(t *testing.T) {
 
 // readOutsideTheDashboard are the questions no room reads and something
 // outside the dashboard does, over their REST paths, each beside what reads
-// it: who read a unit's repository, an admin's script — the request the Gitlet
-// guide prints (docs/guides/gitlet.md, "Who read a unit's repository") — whose
-// assistant asks the operator tool `code_repo_readers` for the same answer
-// (builtin.ReadersOf). The decision [TestEveryQueryThisServerAnswersHasAReader]
-// asks to be taken in the open, and held both ways there: the first room that
-// reads one of these deletes its line, as the Gitlet workspace's Repositories
-// and Pushes deleted the lines of `code_repos` and `code_pushes`, Gitlet ›
-// Changes and its peek those of `code_changes` and `code_change`, a change's
-// page its routing's, `code_change_routing`, a repository's own page those of
-// `code_repo` (which `crewlet gitlet status -repo` reads too) and of its
-// content, `code_refs`, `code_tree`, `code_blob`, `code_log`, `code_blame`,
-// `code_tree_commits` and `code_find`, and its tabs' `code_counts`, and a
-// commit's page and a comparison those of `code_commit`, `code_diff` and
-// `code_compare`, a seat's Code tab and My work's Reviews
-// that of `code_reviews`, and Gitlet › Queue, Gitlet › Checks and the checks
-// tabs those of a repository's merge queues and its checks, `code_queue`,
-// `code_checks`, `code_check` and `code_check_log`. And the tracker's own
-// inbox, `work_inbox`, which the Inbox reads composed with Gitlet's
-// through `inbox` and a script and a seat's tool read alone. And Gitlet ›
-// Search and ⌘K's Code scope deleted the line of a search of the
-// repositories' lines, `code_search`, which a script read alone on the
-// path api-endpoints.md prints ("GET /gitlet/search"). And Company › Atlas,
-// its map, list, peek and entry page, deleted the lines of the atlas's five
-// questions, which a script holding the atlas permission reads over REST too;
-// its band, catalogue and timeline then deleted those of the atlas's own log,
-// `atlas_log` and `atlas_activity`.
+// it: `code_repo_readers` is an admin's script (docs/guides/gitlet.md, "Who
+// read a unit's repository"), and an assistant asks the operator tool of the
+// same name (builtin.ReadersOf). Held both ways by
+// [TestEveryQueryThisServerAnswersHasAReader]: the first room that reads one
+// of these deletes its line.
 var readOutsideTheDashboard = map[string]string{
 	"research_page":     "Ask Crewlet's fetch_web_page, over GET /research/page (ADR-0151)",
 	"research_search":   "Ask Crewlet's search_web, over GET /research/search (ADR-0151)",
 	"code_repo_readers": "an admin's script: GET /gitlet/repos/{name}/readers, as docs/guides/gitlet.md prints it",
-	// THE TRACKER'S OWN INBOX, which the dashboard's Inbox reads composed
-	// with Gitlet's through `inbox` since that question landed: it
-	// stays the tracker's question and its tool's (`work_inbox`, a seat's and
-	// a person's assistant's), read by a script on the path the reference
-	// prints.
+	// THE TRACKER'S OWN INBOX: the dashboard reads it composed with Gitlet's
+	// through `inbox`; this stays the tracker's question and its tool's
+	// (`work_inbox`), read by a script on the path the reference prints.
 	"work_inbox": "a script: GET /worklet/inbox, as docs/reference/api-endpoints.md prints it, and Worklet's " +
 		"own tool work_inbox",
 }
 
 // AND THE SWEEP ITSELF CANNOT GO QUIET.
 //
-// Both gates above are only as wide as [everySeam]: Register tests each seam
-// for nil, so a seam the helper does not set registers nothing, and every name
-// behind it disappears from `registeredKinds` without either direction saying
-// a word. That is not hypothetical — it is how the chat family arrived, gated
-// on three seams this helper did not set, and it was caught only because six
-// rooms happened to ask for those names. An operator-only family, or one read
-// over REST from the docs, would have gone in silently and this sweep would
-// have reported a pass over a surface it could not see.
+// Both gates above are only as wide as [everySeam]: a seam the helper does not
+// set registers nothing, and its names vanish from `registeredKinds` without
+// either direction noticing.
 //
 // So the gating conditions are READ FROM Register ITSELF rather than restated
-// here, on the reasoning the reader gate above takes when it reads the
-// dashboard's own calls through clientsource: a list of seams kept by hand
-// beside the one that matters is the second copy that drifts.
+// here: a hand-kept list of seams is a second copy that drifts.
 func TestEverySeamThatGatesAQuestionIsInTheSweep(t *testing.T) {
 	t.Parallel()
 	source, err := os.ReadFile("answers.go")
@@ -605,11 +541,10 @@ func TestEverySeamThatGatesAQuestionIsInTheSweep(t *testing.T) {
 
 // registerBody is Register's own body, which is where a gate on a seam lives.
 //
-// BOUNDED AT THE NEXT TOP-LEVEL DECLARATION rather than read to the end of the
-// file, because the answers below it test their seams for a different reason:
-// a nil `Events` behind a seat's phase history is an empty list rather than an
-// absent question, and reading those as gates would demand seams this sweep
-// has no use for.
+// BOUNDED AT THE NEXT TOP-LEVEL DECLARATION: the answers below it test their
+// seams for a different reason (a nil `Events` behind a seat's phase history is
+// an empty list, not an absent question), and reading those as gates would
+// demand seams this sweep has no use for.
 func registerBody(t *testing.T, source string) string {
 	t.Helper()
 	const decl = "\nfunc Register(r *Registry, s Sources) {"
@@ -627,17 +562,15 @@ func registerBody(t *testing.T, source string) string {
 
 // AND EVERY WAKE REASON HAS ENGLISH ON THE OTHER SIDE.
 //
-// The applier records, per change and per recipient, the ONE reason of eighteen
-// under which that person heard about it — the fact no commercial tracker
-// keeps. It reaches a screen through `work_inbox`, and a reason the client has
-// no phrase for renders as its own snake_case value: a log line where a
-// sentence belongs, on the surface a person reads first.
+// The applier records, per change and per recipient, the ONE reason of
+// eighteen under which that person heard about it. It reaches a screen through
+// `work_inbox`, and a reason the client has no phrase for renders as its own
+// snake_case value on the surface a person reads first.
 //
-// This is the `rooms` idiom one level down: the client's table is read from
-// ITS OWN SOURCE rather than restated here, so the gate cannot drift towards
-// claiming the pair agree. A phrase the client carries for a reason nothing
-// writes is checked too — that is how a renamed reason leaves a dead entry
-// behind and a live one missing.
+// The client's table is read from ITS OWN SOURCE rather than restated, so the
+// gate cannot drift towards claiming the pair agree. A phrase for a reason
+// nothing writes is checked too: a renamed reason leaves a dead entry behind
+// and a live one missing.
 func TestEveryWakeReasonReadsAsEnglishOnTheClient(t *testing.T) {
 	t.Parallel()
 	// FOUND RATHER THAN ADDRESSED, and read by its syntax: the table's KEYS
@@ -678,27 +611,20 @@ func TestEveryWakeReasonReadsAsEnglishOnTheClient(t *testing.T) {
 
 // AND EVERY DIMENSION THE COST AXIS OFFERS IS ONE THE ENGINE ACCEPTS.
 //
-// `token_series` refuses an unknown `group` naming what it takes, which is the
-// right refusal — and it turns a control offering a seventh value into a chart
-// that never loads rather than one drawn on the wrong dimension. The screen's
-// list and [tokens.Groups] are therefore one closed set written twice, and
-// this is the gate that says so.
+// `token_series` refuses an unknown `group`, so a control offering a seventh
+// value is a chart that never loads rather than one drawn on the wrong
+// dimension. The screen's list and [tokens.Groups] are one closed set written
+// twice, and this gate says so, in both directions (a renamed group otherwise
+// leaves a dead control behind).
 //
-// The client's table is read from ITS OWN SOURCE rather than restated here,
-// the `rooms` idiom: a gate carrying its own copy of the list drifts towards
-// claiming the pair agree. A value the client offers and the engine dropped is
-// checked too — that is how a renamed group leaves a dead control behind.
+// The client's table is read from ITS OWN SOURCE rather than restated here:
+// a gate carrying its own copy drifts towards claiming the pair agree.
 func TestEveryCostDimensionTheScreenOffersIsOneTheEngineAccepts(t *testing.T) {
 	t.Parallel()
 	// THE `GROUPS` TABLE ITSELF, not every `{value, label}` pair on the
-	// screen: the compare control is the same shape one line away, and a
-	// sweep over the whole file read its "previous" as a seventh dimension.
-	//
-	// FOUND RATHER THAN ADDRESSED. This read the screen at
-	// `routes/Spend.tsx` and went red the day the screens were grouped by
-	// workspace, reporting a drift between two lists that had not changed.
-	// A gate over a constant is a gate over the constant, and the file it
-	// happens to sit in is not the subject.
+	// screen: the compare control is the same shape, and its "previous" would
+	// read as a seventh dimension. FOUND RATHER THAN ADDRESSED by file path:
+	// the constant is the subject, not the file it happens to sit in.
 	block, err := clientsource.Literal(clientsource.Tree(t), "GROUPS")
 	if err != nil {
 		t.Fatal(err)

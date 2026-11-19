@@ -133,32 +133,15 @@ func (s *Service) GetPerson(w http.ResponseWriter, r *http.Request) {
 
 // personBody is what a create accepts.
 //
-// NO CREDENTIALS FIELD, deliberately. A create that accepted a password would
-// be an administrator choosing somebody else's, which every one of them then
-// keeps. A PERSON's create is answered instead with a one-time FIRST PASSWORD
-// LINK, issued by the same record ([iamdomain.Writer.Create]), through which
-// the person types their own password — the administrator hands the link on
-// and never knows the password; a person invited instead types theirs while
-// redeeming the invitation. A service account gets a token from
-// `POST /iam/credentials`, which shows its value once.
-//
-// # The seat, and the login
-//
-// `seat` is REQUIRED for a person: a person holds a human seat for as long as
-// they are here (ADR-0032), so they are created onto one — a human seat
-// nobody holds and no open invitation holds. A service account's is optional.
-//
-// `login` is OPTIONAL for a person, whose address finds them: left out, it is
-// proposed from the address by [iam.LoginFromAddress] — the one proposal, the
-// one an invitation's screen offers its redeemer — and the answer says which
-// login was taken. A service account has no address to propose from, so its
-// login is required.
-//
-// # The grants, always stated
-//
-// `grants` is REQUIRED, for a person and a service account alike, and `[]` is
-// the overview alone — see [requireGrants] for why an omission is refused
-// rather than read as a default.
+// NO CREDENTIALS FIELD: accepting a password would let an administrator choose
+// and keep somebody else's. A person's create is answered with a one-time FIRST
+// PASSWORD LINK ([iamdomain.Writer.Create]); a service account gets a token
+// from `POST /iam/credentials`. `seat` is REQUIRED for a person, who holds a
+// human seat while they exist (ADR-0032), one nobody holds; optional for a
+// service account. `login` is optional for a person ([iam.LoginFromAddress]
+// proposes it and the answer says which was taken), required for a service
+// account, which has no address. `grants` is REQUIRED for both and `[]` is the
+// overview alone ([requireGrants] says why an omission is refused).
 type personBody struct {
 	Kind   string       `json:"kind"`
 	Login  string       `json:"login"`
@@ -172,30 +155,15 @@ type personBody struct {
 // PostPeople is `POST /iam/people`: a person or a service account, created
 // whole in ONE record, answered `201`.
 //
-// # A person is created onto a seat, and handed a way in
-//
-// A person's create names the human seat they will hold — refused `400
-// seat_required` before anything is minted where it names none, because the
-// remedy is the caller's to type — and what they may do, in `grants`, which
-// every create states ([requireGrants]); it is answered with their FIRST
-// PASSWORD LINK, `<api.external_url>/dashboard#/reset/<credential>.<secret>`,
-// which sets the password they sign in with once and signs nobody in. It is
-// spent through the reset path every reset link is (internal/api/authapi), lives
-// [credential.EnrolmentLinkLifetime] — an invitation's week, since it is the
-// same person's position — and is shown here and nowhere else: what the
-// estate holds is its verifier. So the gesture needs `api.external_url`, and
-// a node with none refuses a person's create naming the setting.
-//
-// # Its retry hands back the same link
-//
-// The person is derived from the operation's key and the link from the person
-// under the company's key, so the retry an unknown answer asks for — the same
-// request under the key it handed back — answers the link its first attempt
-// issued, with the expiry that attempt stored. A link that no longer opens by
-// then (spent, revoked, aged out) is not handed back: the answer says so, and
-// the remedy is a password reset link. Neither a retry nor an outcome nobody
-// can confirm is announced — the first link's issue is announced once, by the
-// call whose record carried it ([ownLanding]).
+// A person's create names their human seat (`400 seat_required` before anything
+// is minted) and `grants` ([requireGrants]), and is answered with their FIRST
+// PASSWORD LINK `<api.external_url>/dashboard#/reset/<credential>.<secret>`: it
+// sets a password, signs nobody in, lives [credential.EnrolmentLinkLifetime] and
+// is shown only here. A node with no `api.external_url` refuses naming it.
+// The person derives from the op key and the link from the person, so a retry
+// gets the link its first attempt issued, unless it no longer opens (the remedy
+// is a reset link). Only the call whose record carried it announces it
+// ([ownLanding]).
 func (s *Service) PostPeople(w http.ResponseWriter, r *http.Request) {
 	in, ok := readBody[personBody](w, r)
 	if !ok {
@@ -378,22 +346,15 @@ func refuseSeatless(w http.ResponseWriter, detail string) {
 
 // patchBody is what an edit accepts.
 //
-// EVERY FIELD IS A POINTER, which is the difference between "set this to
-// nothing" and "do not touch this". A plain slice cannot express the first —
-// an administrator stripping somebody's last grant would send an empty list
-// that reads exactly like a body that never mentioned grants, and the strip
-// would silently not happen.
+// EVERY FIELD IS A POINTER: it separates "set to nothing" from "do not touch".
+// A plain slice cannot, since an empty list reads like grants never mentioned.
 //
-// GRANTS ARE THE WHOLE SET OR A CHANGE TO IT, never both. `grants` replaces
-// what the person holds, which is what somebody stating it outright means
-// (`crewlet iam grant`). `add_grants` and `remove_grants` are applied to what
-// they hold when the record is DECIDED, which is what an editor working from
-// an earlier read means: sent as a whole set, the grants that editor never
-// touched are the ones their read held, so a grant another administrator took
-// away meanwhile is handed back and one they gave is taken away again — and
-// nothing refuses it, since only an addition needs the caller to hold the
-// grant. The tracker's set-valued arguments take the same two shapes for the
-// same reason.
+// GRANTS ARE THE WHOLE SET OR A CHANGE TO IT, never both. `grants` replaces what
+// the person holds. `add_grants` and `remove_grants` apply to what they hold
+// when the record is DECIDED, which an editor working from an earlier read
+// means: sent as a whole set, that read would undo another administrator's
+// meanwhile changes, and nothing refuses it. The tracker's set-valued
+// arguments take the same two shapes.
 type patchBody struct {
 	Name         *string      `json:"name"`
 	Login        *string      `json:"login"`
@@ -490,42 +451,16 @@ func (b patchBody) refusal() string {
 
 // PatchPerson is `PATCH /iam/people/{id}`.
 //
-// # Up to three records, and the one other people's values can refuse goes first
-//
-// A person's LOGIN and SEAT are the directory's — values two writers can race
-// for — and they move in ONE identity record, decided in its own snapshot
-// against everybody else's ([iamdomain.Writer.SetIdentity]); their STAGE and
-// their DOCUMENT (name, grants) are their own subject's. So one PATCH is up to
-// three records, and the identity record goes FIRST: it is the one a value
-// somebody else holds can refuse, and refused first it is refused with
-// nothing landed.
-//
-// # Nothing is published until what can be judged early has been
-//
-// A stage this build cannot name, a login being cleared, a permission this
-// build does not know being ADDED and a grant the caller may not confer are
-// refused before the first record ([patchBody.refusal], [refuseUnknown],
-// [iamdomain.Writer.MayConfer]) — each used to be met only at its own record,
-// after a seat or a login ahead of it had already moved. A name this build
-// does not know that the row already carries is kept, and `remove_grants` may
-// take it off.
-//
-// # A person's seat is moved, never cleared
-//
-// `seat` names the human seat to MOVE somebody to — trimmed, as a create's is,
-// and so is `login` ([patchBody.trim]).
-// A PERSON holds one for as long as they are here (ADR-0032), so `seat: ""`
-// about a person is the identity record's refusal, `400 seat_required` with
-// nothing landed, since that record goes first; a SERVICE ACCOUNT may be
-// unbound with it. A seat somebody holds, or an open invitation holds, is
-// `409` naming which. To free a person's seat, move them to another or remove
-// them.
-//
-// # What only a later record can decide is answered with what landed
-//
-// A stage or a document refused after the identity record landed cannot
-// un-land it, so the refusal names the steps that did (`landed`), rather than
-// reading as an edit that changed nothing.
+// One PATCH is up to three records. LOGIN and SEAT are the directory's (two
+// writers can race) and move in ONE identity record ([iamdomain.Writer.SetIdentity]),
+// which goes FIRST: a value somebody else holds can refuse it, with nothing
+// landed. STAGE and DOCUMENT are the person's own. Refused before any record:
+// an unnameable stage, a cleared login, an unknown permission being ADDED, a
+// grant the caller may not confer ([patchBody.refusal], [refuseUnknown],
+// [iamdomain.Writer.MayConfer]); an unknown name the row carries is kept.
+// `seat: ""` for a PERSON is `400 seat_required` (ADR-0032); a held seat is
+// `409` naming which. A later step refused after the identity record landed
+// names the steps that did (`landed`).
 func (s *Service) PatchPerson(w http.ResponseWriter, r *http.Request) {
 	in, ok := readBody[patchBody](w, r)
 	if !ok {

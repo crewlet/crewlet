@@ -19,44 +19,18 @@ import (
 	"github.com/crewlet/crewlet/internal/presence"
 )
 
-// The close codes this socket ends a connection with, on top of the ones the
-// WebSocket standard already defines.
+// The close codes this socket ends a connection with, beyond the standard's.
 //
-// # Why a close code at all, when the handshake already answers 401
+// A close code rides a close FRAME, so a handshake refused before the upgrade
+// has none (see [Handler]: 401, and the browser reports 1006). These are for
+// an OPEN socket whose credential stopped answering (lifetime.go).
 //
-// It cannot. A close code rides a close FRAME, so a handshake that never
-// completed has none — see [Handler], where a refused credential is answered
-// 401 BEFORE the upgrade and the browser reports 1006. These two are for the
-// opposite case: a socket that is OPEN, whose credential stopped answering
-// while it was — which the record that ended it, or the credential's own end,
-// decides (lifetime.go). A handshake decision alone would leave a revoked
-// session's tab receiving the company's state for as long as it stayed open.
-//
-// TWO CODES RATHER THAN ONE, because they call for different repairs and the
-// dashboard's own recovery branches on exactly that difference: 4401 means
-// "this credential names nobody now" (re-dial with the cookie the browser
-// holds, and sign in if that is refused too), 4403 means "it names somebody
-// whose seat is gone" (stop — signing in again reaches the same person).
-// Collapsed into one, a tab whose cookie merely expired and a person who was
-// offboarded get the same dead end.
-//
-// In the 4000–4999 range, which the standard reserves for an application and
-// which no intermediary rewrites. They deliberately ECHO the HTTP statuses
-// they mean, so an operator reading a close code and an operator reading a
-// REST refusal are reading one number.
-//
-// THE DASHBOARD HOLDS THE SAME TWO NUMBERS, as `CLOSE_UNAUTHENTICATED` and
-// `CLOSE_FORBIDDEN` in its socket module, and a gate in this package's suite
-// reads them from its source: each must equal the constant here, and every
-// application close code declared here must have one there. They were two
-// literals with nothing between them, and renumbering one side would have left
-// the dashboard reconnecting for ever against a seat it no longer holds.
-//
-// ONE MORE CLOSE IS NOT THE APPLICATION'S: [CloseUndecided], the standard's
-// "try again later", for a credential this node will not vouch for now and
-// leaves to the reconnect's handshake — see lifetime.go. Nothing else closes
-// this socket for a fault: a node that cannot serve keeps its socket open and
-// degrades it instead — see [FrameDegraded].
+// Two codes because the dashboard's recovery differs: 4401 "names nobody now"
+// (re-dial with the cookie, sign in if refused), 4403 "names somebody whose
+// seat is gone" (stop). They echo HTTP statuses in the 4000-4999 application
+// range. The dashboard's `CLOSE_UNAUTHENTICATED` and `CLOSE_FORBIDDEN` must
+// equal them; a gate in this suite reads its source. A node that cannot serve
+// degrades its socket ([FrameDegraded]) rather than closing it.
 const (
 	// CloseUnauthenticated ends a socket whose credential no longer
 	// resolves to anybody: its session ended, expired or was revoked, or
@@ -70,25 +44,15 @@ const (
 	CloseUnauthorized websocket.StatusCode = 4403
 )
 
-// The error codes a query answer can carry — THE SOCKET'S SUBSET OF
-// [httpjson.Code], which is the engine's one refusal vocabulary.
+// The error codes a query answer can carry: THE SOCKET'S SUBSET OF
+// [httpjson.Code], the engine's one refusal vocabulary.
+// TestTheSocketAndRestShareOneTable holds each to an entry on that table.
 //
-// Each value is an entry on that table, and TestTheSocketAndRestShareOneTable
-// walks this package's own source to hold it there: a code declared here with
-// no entry over there is a refusal the socket calls one thing and REST another,
-// which is precisely what the dashboard's `QueryErrorCode` union drifted into
-// before anything pinned it.
+// Untyped, because the REST twin answers the same six codes as strings.
 //
-// UNTYPED, because the same six codes are answered over plain HTTP by the
-// query surface's REST twin, which writes them as strings. Typing them here
-// would say nothing the walk does not, and would make the twin's answer a
-// conversion at every call site.
-//
-// CODES, not prose: the client switches on the value, and a frame carrying a
-// sentence would make every rewording a case nobody handles. The sentence
-// belongs to the code rather than to the occurrence — [httpjson.Code.Message]
-// holds one per code, which is what a REST refusal of the same question
-// answers with and what the dashboard's own per-code line is keyed on.
+// Codes, not prose: a sentence in the frame would make every rewording a case
+// the client does not handle. The sentence belongs to the code
+// ([httpjson.Code.Message]), which REST answers with.
 const (
 	CodeUnknownQuery = "unknown_query"
 	CodeUnauthorized = "unauthorized"
@@ -100,42 +64,29 @@ const (
 	// and "the query failed" is a retry.
 	CodeNotFound = "not_found"
 
-	// CodeBadParams is a question this node understood and REFUSED: a
-	// parameter missing, malformed, or outside the set the field accepts.
+	// CodeBadParams is a question this node understood and REFUSED: a parameter
+	// missing, malformed, or outside the accepted set.
 	//
-	// DISTINCT FROM query_failed because the fault is the caller's, and
-	// the two are acted on in opposite directions — a query_failed is
-	// retried, a bad_params never succeeds however many times it is sent.
-	// Collapsed into query_failed it was a client bug rendered to a person
-	// as an engine fault, retried on every poll, and logged as a WARNING
-	// by the node being asked wrong.
+	// Distinct from query_failed because the fault is the caller's: a
+	// query_failed is retried, a bad_params never succeeds however often sent,
+	// and collapsed it was a client bug shown as an engine fault, retried on
+	// every poll and logged as a WARNING.
 	//
-	// The reason still does not travel — this envelope carries codes and
-	// not prose, for the reason stated above — so the refusal's own
-	// message, which names the field and the values it would have
-	// accepted, is logged at DEBUG instead: available to whoever is
-	// debugging the screen, absent from the operator's log when nobody is.
-	// What the client renders is its own line for the code; the
-	// engine's sentence for that same code is what the REST surface
-	// answers with, and both are keyed on the one vocabulary.
+	// The reason does not travel (codes, not prose, as above); the refusal's own
+	// message, naming the field and the accepted values, is logged at DEBUG.
 	CodeBadParams = "bad_params"
 
-	// CodeUnavailable is a question this node understood and cannot answer
-	// HERE: a projection still catching up, a coordination store that could
-	// not be reached, or a refusal by its state log — a node behind its log,
-	// and also one holding a record it cannot decode or whose log is full,
-	// which no wait clears. WHETHER WAITING HELPS is not this code's to say:
-	// the frame's `retry_after` carries it ([Unavailable], by
-	// [statelog.RetryAfter]'s rule), and its zero sends a client to another
-	// node or an operator rather than back here. A surface this process does
-	// not have at all is CodeUnknownQuery instead: that is this node's
-	// configuration rather than its state, and no wait changes it.
+	// CodeUnavailable is a question this node understood and cannot answer HERE:
+	// a projection catching up, a coordination store not reached, or a state log
+	// refusal (a node behind its log, or holding a record it cannot decode or
+	// whose log is full, which no wait clears). Whether waiting helps is the
+	// frame's `retry_after` to say ([Unavailable], by [statelog.RetryAfter]'s
+	// rule); its zero sends a client to another node or an operator. A surface
+	// this process lacks is CodeUnknownQuery: configuration, not state.
 	//
-	// It is the code that must never be flattened into an empty result.
-	// "This company has no work" is an answer a person acts on: they file
-	// the duplicate, they conclude the migration failed. A node whose
-	// boot reconcile is still running has to be able to say "ask me in a
-	// moment" rather than "there is nothing".
+	// It must never be flattened into an empty result: "this company has no work"
+	// is an answer a person acts on, so a node still reconciling must say "ask me
+	// in a moment" rather than "there is nothing".
 	CodeUnavailable = "unavailable"
 
 	// CodeArtifactTrashed is a question about an artifact's CONTENT — its
@@ -210,33 +161,18 @@ func (e *RefusedError) Unwrap() error { return ErrUnauthorized }
 // with a field, this socket's vocabulary does not have — see [RefusedFor].
 var errUnspokenRefusal = errors.New("stream: a refusal this socket cannot say")
 
-// RefusedFor is how one refusal the authority table made is answered over this
-// socket, a question's and a watch's alike: the code and the fields the
-// table's ONE MAPPING ([authz.RefusalFields]) gives it, exactly as the REST
-// twin and every other surface answer it. The frames used to spell
-// `unauthorized` beside the decision's reason and grants for themselves, which
-// agreed with the mapping only for as long as nothing refused here was
-// refused any other way.
+// RefusedFor answers one refusal the authority table made, for a question or
+// a watch alike: the code and fields of its ONE MAPPING
+// ([authz.RefusalFields]), as the REST twin does.
 //
-//   - `unauthorized` is a [RefusedError] carrying the rule's reason, the
-//     grants that would have admitted the caller and, for a role below the
-//     verb's on an artifact, the role it needs.
-//   - `not_found` — a caller with NO RELATION to an artifact — is
-//     [ErrNotFound] and carries nothing, byte for byte the frame for an id
-//     nothing holds, as the mapping makes it everywhere else.
+//   - `unauthorized` is a [RefusedError] with the rule's reason, the grants
+//     that would admit the caller and, below the verb's artifact role, the
+//     role it needs.
+//   - `not_found` (NO RELATION to an artifact) is [ErrNotFound], byte for byte
+//     the frame for an id nothing holds.
 //
-// A CODE OR A FIELD THIS SOCKET DOES NOT SPEAK IS A FAULT, never a frame. The
-// mapping answers a stale proof `step_up_required` and a machine token on a
-// verb that needs a person present `token_refused`, and neither is in this
-// vocabulary — a socket cannot carry a step-up, the dashboard replays one over
-// REST alone, and the frames' codes are held against the dashboard's in both
-// directions. No question may be decided by a verb that asks either
-// (internal/api/queries refuses the registration, and a walk in internal/authz
-// holds the verbs an answer or a watch decides by inside itself), so this is
-// unreachable; reached, it is this build's mistake, answered as one —
-// `query_failed`, its words in the log — rather than as a refusal a reader
-// would take for a permission they lack. A field the mapping gains that the
-// frame has no key for is the same mistake, caught here rather than dropped.
+// A code or field this socket lacks (`step_up_required`, `token_refused`) is a
+// fault, never a frame: reaching one is this build's mistake, `query_failed`.
 func RefusedFor(what string, d authz.Decision) error {
 	_, code, detail := authz.RefusalFields(d)
 	switch code {
@@ -378,31 +314,16 @@ type request struct {
 
 // Handler serves the dashboard's live socket.
 //
-// The credential is the session cookie a signed-in browser sends on its own —
-// a browser cannot set a header on a WebSocket constructor, so the cookie is
-// the whole of what the dashboard presents — or an Authorization bearer from
-// any other client. No credential is read off the URL: a query string is
-// written into every proxy's access log ([auth.Guard.Credential]). What the
-// dashboard's handshake does put there is the tab's READER, which is no
+// The credential is the session cookie (a browser cannot set a header on a
+// WebSocket constructor) or an Authorization bearer. None is read off the URL,
+// which proxies log ([auth.Guard.Credential]); the tab's READER is no
 // credential, and the guard has refused a handshake made for anybody else
-// before this handler runs ([auth.ReaderParam]).
+// ([auth.ReaderParam]). Who is calling is the GUARD's answer, read once from
+// the context.
 //
-// # Who is calling is the GUARD's answer, read once
-//
-// It used to be a second answer: this handler re-read the credential through
-// the guard's Tier A arm alone, so a person signed in with a session cookie —
-// which is every browser once `/auth` exists — was refused here while every
-// REST route beside it served them. The guard resolves both shapes, the
-// middleware has already run it for this path, and the handler reads the
-// result from the context like every other surface does.
-//
-// # The company's own chat rides the same socket
-//
-// chat is the arm that pushes it ([ChatHub]), and a NIL ONE IS A NODE THAT
-// SERVES NO CHATLET: every method on it is a no-op, so the socket needs no
-// branch. A parameter rather than something the service builds, because the
-// hub is the process's — the engine is attached to it on every node, whether
-// or not that node serves this socket — and this handler is one of its users.
+// chat pushes the company's own chat ([ChatHub]); a NIL ONE IS A NODE THAT
+// SERVES NO CHATLET and every method is a no-op, so the socket needs no
+// branch. A parameter because the hub is the process's, not this socket's.
 func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query,
 	chat *ChatHub) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -430,47 +351,29 @@ func Handler(guard *auth.Guard, origins CrossSite, svc *Service, query Query,
 			return
 		}
 		if how != iam.Resolved {
-			// REFUSED BEFORE THE UPGRADE. Accepting a credential this
-			// node rejects, purely to close it politely a moment later,
-			// would let anyone open a socket here.
+			// REFUSED BEFORE THE UPGRADE: accepting a credential this node rejects, only
+			// to close it a moment later, would let anyone open a socket here.
 			//
-			// It is NOT "close(1008) before accept", which is what this
-			// comment used to claim and what the dashboard was written
-			// against. A close code rides a close FRAME, so a handshake
-			// that never completed cannot carry one: the browser reports
-			// 1006 — indistinguishable from a stopped engine — and hides
-			// the status, so a page cannot port-scan with a socket.
+			// A close code rides a close FRAME, so a handshake that never completed
+			// cannot carry one: the browser reports 1006 (like a stopped engine) and hides
+			// the status. The client re-asks over plain HTTP, where this route answers a
+			// GET without an Upgrade header 401 (refused) or 426 (accepted); the
+			// dashboard's token gate relies on that pairing (`probeRefusal` in
+			// dashboard/src/protocol/socket.ts).
 			//
-			// The client therefore cannot learn this from the socket at
-			// all. It re-asks over plain HTTP, where the status is
-			// visible, and this route answers a GET without an Upgrade
-			// header 401 (refused) or 426 (accepted, wrong protocol).
-			// That pairing is load-bearing for the dashboard's token
-			// gate — see `probeRefusal` in dashboard/src/protocol/socket.ts.
-			// Real JSON, not http.Error: that sets text/plain AND
-			// nosniff, so a JSON literal handed to it is the one
-			// combination guaranteed to stop a strict client parsing
-			// the body it is being sent. The refusal envelope is the
-			// same one every REST route answers with, which is what
-			// lets the dashboard's HTTP re-ask read one shape.
+			// Real JSON, not http.Error: that sets text/plain AND nosniff, which stops a
+			// strict client parsing the body. The envelope is every REST route's.
 			httpjson.Fail(w, http.StatusUnauthorized, httpjson.CodeInvalidToken)
 			return
 		}
-		// EVERY RESOLVED PRINCIPAL WHOSE STAGE MAY ACT OPENS THE SOCKET
-		// (ADR-0033): what it carries is the overview, which is
-		// everybody's, and what of it a reader may not read (a seat's
-		// body, the audit trail, an inbox without Worklet) is withheld
-		// per kind and per payload by the audience the client is built with
-		// below, never by refusing the socket. It used to refuse a caller
-		// without the board's read grant, which left a person invited with
-		// no app staring at a dashboard that could not connect.
+		// EVERY RESOLVED PRINCIPAL WHOSE STAGE MAY ACT OPENS THE SOCKET (ADR-0033):
+		// what it carries is the overview, everybody's; what a reader may not read (a
+		// seat's body, the audit trail, an inbox without Worklet) is withheld per kind
+		// and payload by the audience built below, never by refusing the socket.
 		//
-		// THE STAGE IS THE AUTHORITY TABLE'S FIRST CHECK, and the query
-		// registry's: every credential this guard resolves is already
-		// refused for a stage that may not act, so this holds the socket
-		// to the rule every other surface states rather than to whatever
-		// the guard happens to do. Refused before the upgrade, where the
-		// status is visible to the page's HTTP re-ask.
+		// The STAGE is the authority table's first check and the query registry's:
+		// this holds the socket to the rule every other surface states. Refused
+		// before the upgrade, where the page's HTTP re-ask can see the status.
 		if !principal.Stage.MayAct() {
 			authz.EnvelopeRefusal(w, r, authz.Policy{},
 				authz.Decision{Reason: authz.ReasonStage})
@@ -702,21 +605,13 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, client *Client) {
 			// the envelope again for itself, so one push on a company
 			// with N tabs open cost N encodes of identical JSON.
 			raw := frame.Raw()
-			// A DEADLINE PER WRITE. A TCP peer that has vanished
-			// without a FIN — a laptop lid closed, a NAT entry
-			// dropped, a mobile network handing off — leaves this
-			// Write blocked until the kernel gives up, which is
-			// minutes with default keepalives. Until then the
-			// goroutine, the client's queue and the hub registration
-			// all stay live, so a page nobody is reading holds a slot
-			// on every broadcast.
+			// A DEADLINE PER WRITE. A peer that vanished without a FIN (lid closed, NAT
+			// entry dropped, network handoff) leaves Write blocked for minutes, holding
+			// the goroutine, the queue and the hub slot on every broadcast.
 			//
-			// THIRTY SECONDS, not a few: QueueDepth above decides
-			// deliberately that a slow tab must not be disconnected
-			// ("a visible failure for a reader who did nothing
-			// wrong"), so this deadline is here to tell GONE from
-			// SLOW and nothing else. A tighter one would sever a
-			// mobile tab mid-snapshot and contradict that decision.
+			// THIRTY SECONDS, not a few: QueueDepth above decides a slow tab must not be
+			// disconnected, so this tells GONE from SLOW and nothing else; a tighter one
+			// would sever a mobile tab mid-snapshot and contradict that.
 			writeCtx, cancelWrite := context.WithTimeout(ctx, writeTimeout)
 			err := conn.Write(writeCtx, websocket.MessageText, raw)
 			cancelWrite()
@@ -784,21 +679,16 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 				rooms.queue(ctx, req)
 			}
 		case "query":
-			// A DEGRADED NODE REFUSES rather than answers. Its copy of
-			// the company is wrong rather than behind, and an answer
-			// out of it — "there is no such work item" — is something a
-			// person acts on. The refusal is a DIRECT frame, so it
-			// reaches the client whatever the posture.
+			// A DEGRADED NODE REFUSES rather than answers: its copy of the company is
+			// wrong rather than behind, and "there is no such work item" out of it is
+			// something a person acts on. The refusal is a DIRECT frame, so it reaches
+			// the client whatever the posture.
 			//
-			// AND IT SAYS WHEN TO ASK AGAIN, like every other
-			// `unavailable` frame: `retry_after` is never omitted,
-			// because a frame without it is what a node too old to say
-			// sends. The posture is re-derived on the shared health
-			// tick — a node shedding or stuck on a configuration — so
-			// one tick is the soonest this node could answer
-			// differently, and the health frame the tab keeps
-			// receiving says why. No state-log refusal is behind it,
-			// so none is named.
+			// `retry_after` is never omitted, as on every `unavailable` frame (a frame
+			// without it is what a node too old to say sends). The posture is re-derived
+			// on the shared health tick, so one tick is the soonest this node could
+			// answer differently; the health frame says why. No state-log refusal is
+			// behind it, so none is named.
 			if !client.Posture().ServesQueries() {
 				env := queryError(req, CodeUnavailable)
 				env.unavailable(Unavailable{
@@ -834,57 +724,17 @@ func readLoop(ctx context.Context, conn *websocket.Conn,
 }
 
 // watching is one socket's subscription to a seat's frames, and the authority
-// that decides it.
+// that decides it. A watch installs a routing row in the hub and is a READ of
+// somebody's inbox, so it is decided as the `inbox` question is,
+// [authz.ActionInbox], WITH NO APP: a frame announces Gitlet's notices too.
 //
-// # A subscription is a WRITE, and it is a READ of somebody's inbox
-//
-// A watch installs a row in the hub's routing index, on this node, on behalf of
-// a caller, and it stays there until the socket goes away. What it buys is the
-// `inbox_changed` frames for that seat — which say whose inbox moved, in which
-// domain, when and under which reason — so it is decided exactly as the
-// composed `inbox` question about that seat is: [authz.ActionInbox], which
-// admits the seat's own holder, whoever leads it through the chart, and an
-// admin, WITH NO APP — a frame announces Gitlet's notices as well as
-// the tracker's, and a person who uses no tracker has an inbox all the same.
-// Decided as the tracker's person record, a reader without Tracker was never
-// told their code notices moved. Any resolved caller could watch any seat
-// before, which made the routing index a way to follow somebody else's inbox
-// that the question itself refused.
-//
-// THREE ANSWERS, and none of them closes the socket:
-//
-//   - ALLOWED: the watch is installed.
-//   - REFUSED: nothing is installed, the socket watches NOTHING, and a
-//     `unauthorized` error frame says so. Not a 4403 close, which is what the
-//     dashboard reads as "this browser may not have the live channel at all"
-//     — it stops reconnecting and says access was withdrawn — when all that
-//     was refused is one seat's frames on a socket that is otherwise fine.
-//   - UNDECIDABLE (the chart could not be read): nothing is installed either,
-//     and an `unavailable` error frame says when to try again — its
-//     `retry_after`, zero where waiting will not change the answer
-//     ([watchAnswer.frame]). It is the only answer that is not a guess:
-//     installing would hand a seat's frames to somebody this node could not
-//     show was allowed them, and a refusal would tell a lead they lead nobody
-//     because this node is behind — the mistake authz's three-valued chart
-//     exists to make unrepresentable.
-//
-// WHY THE PREVIOUS WATCH IS DROPPED on a refused or undecidable one: a watch
-// is a screen saying where it now is ([Hub.Watch] keeps one seat per socket
-// for that reason), so the seat it asked to leave is not one it still wants.
-//
-// # The name is RESOLVED, by the one owner function
-//
-// `inbox_changed` is pushed to the name a person's notices are KEPT under —
-// their seat when the identity directory binds them to one — so a watch is
-// resolved through [iam.OwnerOf], exactly as the `work_inbox` question about
-// the same name is, and installed on what it resolved to. Decided and routed
-// on the name as sent, a lead watching their report by login was refused as
-// leading nobody called that, and an administrator's watch of a bound person's
-// login was installed on the login, where no frame is ever pushed. And the
-// directory is asked only once the watch has been decided as far as it can be
-// without the record ([watching.mayLook]): a caller who leads nobody is
-// refused before anything is looked up, so what the directory says about a
-// login is never theirs to learn.
+// Three answers, none closing the socket: ALLOWED installs it; REFUSED
+// installs nothing and sends `unauthorized` (not a 4403, which the dashboard
+// reads as "no live channel at all"); UNDECIDABLE (chart unread) installs
+// nothing and sends `unavailable` ([watchAnswer.frame]): installing would
+// hand frames to somebody not shown to be allowed. Either drops the previous
+// watch ([Hub.Watch]). The name is resolved by [iam.OwnerOf], as `work_inbox`
+// is, after [watching.mayLook], so no directory read for a caller who leads nobody.
 type watching struct {
 	hub     *Hub
 	client  *Client
@@ -1043,28 +893,16 @@ func (a *watchAnswer) Error() string { return "stream: watch refused: " + string
 
 // frame is the error frame the answer is sent as.
 //
-// AN `unavailable` ONE SAYS WHEN TO ASK AGAIN, like every other `unavailable`
-// frame on this socket: a `retry_after` over what could not be read —
-// [HealthInterval] where nothing better is known — and ZERO where waiting will
-// not change it, a chart or a directory whose log is full or holds a record
-// this node cannot decode. It went out bare, which is the frame a node too old
-// to say sends, so the dashboard re-asked at its own fixed interval a watch
-// this node would refuse until an operator acted, for as long as the tab
-// stayed open.
+// An `unavailable` one says when to ask again, like every other: a
+// `retry_after` ([HealthInterval] where nothing better is known), ZERO where
+// waiting will not help (a log full or a record this node cannot decode). Sent
+// bare it made the dashboard re-ask at its own interval a watch refused until
+// an operator acted.
 //
-// THE HINT IS [UnavailableOf]'s, taken whole rather than worked out here from
-// the same two calls. That reading is the one every query's `unavailable`
-// takes on both transports, and its own doc says no surface decides the hint
-// for itself: a copy of its arithmetic here would agree with it only until
-// the reading learned a case of its own — as it did for a node with no
-// company — and then a watch and a query refused over one cause would tell
-// the same tab two different times to come back.
-//
-// THE HINT ALONE, never the refusal's code or words. A client does one thing
-// with a watch's `unavailable` — decides when to send the watch again — and the
-// hint is the whole of that; the words behind it stay in the log
-// ([watching.resolve]), because what the directory says about a login names
-// the seat it is bound to.
+// The hint is [UnavailableOf]'s, taken whole: it is the one reading every
+// query's `unavailable` takes, and a copy of its arithmetic would drift. Only
+// the hint, never the code or words: they stay in the log ([watching.resolve])
+// because what the directory says about a login names the seat bound to it.
 func (a *watchAnswer) frame(id int64) Envelope {
 	env := Envelope{Kind: KindError, ID: id, What: watchWhat, Error: a.code,
 		Refused: a.refused}
@@ -1096,23 +934,17 @@ func (w *watching) decide(ctx context.Context, principal iam.Principal,
 }
 
 // recheck re-decides the seat this socket watches, as whoever the latest
-// decision of its credential resolved — the watch's own half of lifetime.go's
-// argument: a decision taken once and kept for the life of the socket would
-// let a lead moved off a team go on following a former report's inbox. It runs
-// whenever the guard decides the credential again, and whenever a company is
-// published — the one moment a lead can move.
+// decision of its credential resolved: lifetime.go's argument, as a decision
+// kept for the life of the socket would let a lead moved off a team keep
+// following a former report's inbox. It runs when the guard decides the
+// credential again and when a company is published. A REFUSAL withdraws the
+// watch. AN UNDECIDABLE ANSWER KEEPS IT, unlike a new
+// watch: nothing was learned against the earlier decision, and a chart blip
+// that unsubscribed every lead would be an outage.
 //
-// A REFUSAL withdraws the watch and says so. AN UNDECIDABLE ANSWER KEEPS IT,
-// which is the opposite of what a new watch gets and deliberately so: nothing
-// has been learned against a decision this node already made, and a chart
-// blip that silently unsubscribed every lead's screen would be a notification
-// outage caused by the node being behind.
-//
-// WITHDRAWN ONLY IF IT IS STILL THE WATCH THAT WAS DECIDED. This runs on the
-// decision's goroutine and the read loop installs watches on its own, so a
-// refusal of the seat read here must not clear one the read loop allowed in
-// the meantime — see [Hub.UnwatchIf]. A watch that moved is the read loop's
-// to decide, and the next decision decides it again.
+// Withdrawn only if still the watch decided: this runs on the decision's
+// goroutine while the read loop installs its own, so see [Hub.UnwatchIf]; a
+// watch that moved is the read loop's to decide.
 func (w *watching) recheck(ctx context.Context) {
 	seat, watch := w.hub.Watching(w.client)
 	if seat == "" {

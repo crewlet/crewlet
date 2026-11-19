@@ -9,21 +9,16 @@ import (
 
 // The skill-page wire format.
 //
-// A skill page leads with a code block holding the YAML frontmatter,
-// followed by the markdown body. Confluence writes a code block TWO ways and
-// both have to decode, because which one a page carries depends on how it
-// was authored:
+// A skill page leads with a code block holding the YAML frontmatter, then the
+// markdown body. Confluence writes a code block TWO ways and both must decode:
 //
 //  1. `<ac:structured-macro ac:name="code">` with an `<ac:plain-text-body>`
-//     CDATA section — what the editor produces, and what a page written by a
-//     person will hold.
-//  2. A plain `<pre><code>` block — valid storage format, and what an
-//     importer or an API writer produces.
+//     CDATA section, from the editor.
+//  2. A plain `<pre><code>` block, from an importer or an API writer.
 //
-// A decoder that knew one would silently fail to recognise every page
-// authored the other way, and an unrecognised skill page is indistinguishable
-// from an ordinary page: the registry just does not have it, and every seat
-// runs without that guidance.
+// A decoder that knew one would silently miss every page authored the other
+// way, indistinguishable from an ordinary page: seats run without that
+// guidance.
 
 // The two shapes of a code block, each compiled at first use: a hook the
 // engine's binary runs for every push reads no page, and a pattern compiled

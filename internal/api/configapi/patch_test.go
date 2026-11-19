@@ -654,16 +654,12 @@ func TestAStalePreconditionIsStillRefused(t *testing.T) {
 
 // A DOCUMENT ITS ACTIVATION CANNOT CARRY IS REFUSED BEFORE ANYTHING IS STORED.
 //
-// The company document reaches every node sealed inside the activation
-// pointer, one value of the coordination store, which holds a key to
-// coord.MaxValueBytes. A body is held to MaxBodyBytes, but a patch is merged
-// onto the active document and grows it by up to a body each time, and the
-// seal writes it a third larger: a document past what the pointer carries was
-// stored as history no node could ever be pointed at, and its activation
-// answered as a store outage. Here a peer-extended document of two and a half
-// mebibytes is patched past six, each body inside its bound: the write is
-// refused as too large, naming the document's size and the pointer's, and no
-// revision is stored.
+// The document reaches every node sealed inside the activation pointer, one
+// coordination value held to coord.MaxValueBytes. A patch grows the active
+// document by up to a body each time and the seal adds a third, so one past
+// the pointer's bound was stored as history no node could activate. Here a
+// 2.5 MiB document is patched past six, each body inside its bound: the write
+// is refused as too large, naming both sizes, and no revision is stored.
 //
 // Mutation: hold the document to the pointer's bound only after the revision
 // is stored, or not at all, and a revision is kept that nothing can activate.

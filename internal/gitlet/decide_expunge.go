@@ -103,7 +103,7 @@ func (p ExpungeProposal) measure() (int, error) {
 		return 0, fmt.Errorf("%w: %s: encode it: %w", ErrInvalidProposal, op, err)
 	}
 	if len(encoded) > EntryRoom {
-		return 0, fmt.Errorf("%w: %s: %d bytes, past the %d one proposal may take of its record",
+		return 0, refusedf("%w: %s: %d bytes, past the %d one proposal may take of its record",
 			ErrInvalidProposal, op, len(encoded), EntryRoom)
 	}
 	return len(encoded), nil
@@ -223,7 +223,7 @@ func (s ExpungeScan) validFields() error {
 // badField is a field of an expunge proposal refused: [ErrInvalidProposal], the
 // field, and why.
 func badField(field, format string, args ...any) error {
-	return fmt.Errorf("%w: %s: %s", ErrInvalidProposal, field, fmt.Sprintf(format, args...))
+	return refusedf("%w: %s: %s", ErrInvalidProposal, field, fmt.Sprintf(format, args...))
 }
 
 // validFields holds a request to [ExpungeProposal.Validate]'s rules.
@@ -543,7 +543,7 @@ func decideBegin(ctx context.Context, tx *sql.Tx, b ExpungeBegin, repo pushRepo,
 		return d, nil
 	}
 	if made > held {
-		return expungeDecision{}, fmt.Errorf("%w: add: the kept and dropping packs hold %d objects and the "+
+		return expungeDecision{}, refusedf("%w: add: the kept and dropping packs hold %d objects and the "+
 			"%d packs they replace %d — an expunge's begin writes no object its inputs did not hold",
 			ErrInvalidProposal, made, len(b.Retire), held)
 	}
@@ -600,7 +600,7 @@ func decideCommit(ctx context.Context, tx *sql.Tx, c ExpungeCommit, repo pushRep
 		return d, nil
 	}
 	if made > held {
-		return expungeDecision{}, fmt.Errorf("%w: add: the rescue holds %d objects and the %d dropping packs "+
+		return expungeDecision{}, refusedf("%w: add: the rescue holds %d objects and the %d dropping packs "+
 			"it is cut from %d — a rescue writes no object its dropping packs did not hold",
 			ErrInvalidProposal, made, len(ids), held)
 	}

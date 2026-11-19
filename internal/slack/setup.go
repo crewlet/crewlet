@@ -14,48 +14,33 @@ import (
 //
 // # One app per agent, and the credentials are per seat
 //
-// Every other third-party app here has one company-wide credential and, at most, a
-// per-seat account behind it. Slack is the other way round: each agent has its
-// OWN Slack app, so the two values that matter, the bot token and the signing
-// secret, live on the seat rather than on the company. The company-wide block
-// carries only the working-indicator settings.
-//
-// # Where the apps come from
-//
-// With an app-configuration token on the company block, the reconcile loop
-// creates and keeps every agent's app itself (D11), and a person only
-// approves each install from the Agents tab. Without one, a company creates
-// each app by hand from the manifest this surface shows, and these fields take
-// the two values Slack shows on the app's own page, as credentials handed in
-// from outside (D4b).
-//
-// The webhook URL is not a field for the same reason it is not one anywhere
-// else: it is `<webhook base>/webhooks/slack/<handle>`, built on the Tier A
-// address a vendor reaches this deployment at ([config.API.WebhookBase] —
-// `api.public.external_url` behind a public listener, `api.external_url`
-// otherwise), which the surface shows to copy rather than inviting somebody to
-// type a different one.
+// Other third-party apps have one company-wide credential. Slack is the other
+// way round: each agent has its OWN app, so the bot token and signing secret
+// live on the seat, and the company block carries only the working-indicator
+// settings.
 
 // Requirements says what one SEAT still needs for Slack.
 //
-// Per seat, because that is where the credentials live. A caller asks for the
-// seats it wants and submits one at a time, which is also what keeps each
-// write addressed by a handle rather than by a position in a list.
+// With an app-configuration token on the company block, the reconcile loop
+// creates and keeps every app itself (D11) and a person only approves each
+// install; without one, a company creates each app by hand from the manifest
+// this surface shows, and these fields take the two values Slack shows on the
+// app's page (D4b). The webhook URL is not a field: it is
+// `<webhook base>/webhooks/slack/<handle>` ([config.API.WebhookBase]), shown
+// to copy rather than typed.
+//
+// Per seat, where the credentials live, so each write is addressed by a
+// handle rather than a list position.
 func Requirements(handle string, seat *org.Role, resolve func(string) (string, bool)) []setup.Requirement {
 	var botToken, signingSecret string
 	if seat != nil {
 		botToken, signingSecret = seat.Slack.BotToken, seat.Slack.SigningSecret
 	}
 
-	// TWO BOXES, AND THERE WAS A THIRD. A "Default channel" sat here while
-	// the transport had a `Send` whose empty-channel fallback was the seat's
-	// configured one — and that send had no caller in the tree. Every message
-	// an agent posts is the Slack MCP server's call on this same token, and
-	// it names its own channel, so the field this form asked for was read by
-	// nothing: an operator typed a channel id and the agent went on posting
-	// wherever it was addressed. A form that collects a value nothing reads is
-	// worse than one that does not ask, because the answer LOOKS like
-	// configuration. Where a seat's room genuinely belongs is `units[].channel`
+	// TWO BOXES, no default channel: every message an agent posts is the Slack
+	// MCP server's call, which names its own channel, so nothing would read
+	// the value, and a form collecting an unread value is worse than none
+	// because it LOOKS like configuration. A seat's room is `units[].channel`
 	// on the org chart, which the executor prompt renders as the team channel.
 	reqs := []setup.Requirement{
 		{

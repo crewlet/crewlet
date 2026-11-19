@@ -98,6 +98,9 @@ const (
 	// is itself a reply — a thread is answered at its root — and a reply to
 	// a finding the change does not hold.
 	ConversationRefusalThreadGone ConversationRefusal = "thread_gone"
+	// ConversationRefusalCommentGone is an edit or a delete of a comment the
+	// change does not hold, or an edit of one already deleted.
+	ConversationRefusalCommentGone ConversationRefusal = "comment_gone"
 	// ConversationRefusalNotAuthor is a finding resolved, marked won't fix
 	// or disputed by one who did not write the change: answering a finding
 	// is its authors'.
@@ -142,7 +145,8 @@ func ConversationRefusals() []ConversationRefusal {
 		ConversationRefusalNotPermitted, ConversationRefusalOwnChange, ConversationRefusalNoReviewer,
 		ConversationRefusalTooManyReviewers,
 		ConversationRefusalUnknownRevision, ConversationRefusalChangeClosed, ConversationRefusalChangeMerged,
-		ConversationRefusalThreadGone, ConversationRefusalNotAuthor, ConversationRefusalNotRaiser,
+		ConversationRefusalThreadGone, ConversationRefusalCommentGone, ConversationRefusalNotAuthor,
+		ConversationRefusalNotRaiser,
 		ConversationRefusalFindingGone, ConversationRefusalTooManyFindings, ConversationRefusalSuperseded,
 		ConversationRefusalBusy, ConversationRefusalNotApplied, ConversationRefusalUnavailable,
 	}
@@ -320,6 +324,32 @@ type ThreadResolve struct {
 	// Routing is whom the record concerns ([ChangeRouting]), STAMPED BY THE
 	// WRITER.
 	Routing *ChangeRouting `json:"routing,omitempty"`
+}
+
+// CommentEdit replaces the words of one of a change's comments. Only its
+// author edits it, and the row keeps when ([CommentRow.EditedAt]); the edit
+// tells nobody, so it carries no routing.
+type CommentEdit struct {
+	RepoID   string `json:"repo_id"`
+	ChangeID string `json:"change_id"`
+	// CommentID is the comment edited: a thread's root, a reply or a reply to
+	// a finding.
+	CommentID string `json:"comment_id"`
+	// By is who edited it, its author. STAMPED BY THE WRITER.
+	By Principal `json:"by,omitzero"`
+	// Body is its new words, 1 to [MaxCommentBytes] bytes.
+	Body string `json:"body" untrusted:"fence"`
+}
+
+// CommentDelete deletes one of a change's comments, by its author, a principal
+// that maintains the repository or a person. A TOMBSTONE: the row keeps its
+// place, thread and author, its words cleared, so every reply stays readable.
+type CommentDelete struct {
+	RepoID    string `json:"repo_id"`
+	ChangeID  string `json:"change_id"`
+	CommentID string `json:"comment_id"`
+	// By is who deleted it. STAMPED BY THE WRITER.
+	By Principal `json:"by,omitzero"`
 }
 
 // Verdict is what a review says of the revision it judges.

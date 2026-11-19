@@ -39,33 +39,18 @@ import (
 	"github.com/crewlet/crewlet/internal/toolsession"
 )
 
-// THE SCRIPTED MODEL'S HARNESS: this test binary, re-executed, being to the engine
-// what Claude Code is.
+// THE SCRIPTED MODEL'S HARNESS: this test binary, re-executed, being to the
+// engine what Claude Code is.
 //
-// Every model call the engine makes goes through a harness
-// (internal/providers/llm/harness), so the golden company's model entry is a
-// real one whose harness is this binary ([scriptedEntry]). Re-executed with
-// [scriptedHarnessEnv] set, the binary does what Claude Code does in print mode:
-// it reads the transcript on stdin and the system prompt from the file its
-// channel names; on a call that offers tools it starts the `crewlet` MCP server
-// the configuration file on `--mcp-config` names — `crewlet mcp-relay
-// <socket>`, which under `go test` is this binary again ([TestMain] dispatches
-// the relay first) — lists the seat's tools, and drives its own loop: ask the
-// model, make the calls it asks for, ask again with their results, until a
-// response calls nothing. Everything it does it prints as Claude Code's
-// stream-json record, partial messages included, which is what the engine's
-// request reader reads each model request and its cost off.
-//
-// The MODEL is the [scriptedModel]'s, asked over loopback once per model
-// request, because the script — which phase this is, which tool the executor
-// calls next — is state in the test process, and a child launched per harness run
-// keeps nothing between runs. What the child holds is one run's conversation,
-// which a real harness holds too.
-//
-// What the two halves agree on is everything in this file: the entry that
-// launches the child, the one request it posts per model request, how the
-// model reads the transcript the backend rendered, and the record the backend
-// reads back.
+// The golden company's model entry is a real one whose harness is this binary
+// ([scriptedEntry]). Re-executed with [scriptedHarnessEnv] set, it does what
+// Claude Code does in print mode: reads the transcript on stdin and the system
+// prompt from its channel's file; on a call offering tools starts the MCP
+// server `--mcp-config` names (`crewlet mcp-relay <socket>`: [TestMain]
+// dispatches it first), lists the tools and loops until a response calls
+// nothing, printing Claude Code's stream-json record. The MODEL is the
+// [scriptedModel]'s, asked over loopback per request: the script is state in
+// the test process, which a child launched per run does not keep.
 
 // scriptedHarnessEnv makes a re-execution of this binary the scripted harness rather
 // than the suite, and its value is the address of the model that answers.
@@ -129,22 +114,17 @@ var scriptedHarnessBinary string
 var scriptedShape map[string]any
 
 // claudeCodeFields are the claude-code profile's fields that shape a run and
-// how its record is read — the model and the system prompt on their flags, the
-// transcript on stdin, the tool route, the record's requests, its answer, its
-// counts and its cap — which the scripted entry takes WHOLE from the shipped
-// profile.
+// how its record is read (flags, stdin, tool route, requests, answer, counts,
+// cap), which the scripted entry takes WHOLE from the shipped profile.
 //
-// TAKEN, NOT RESTATED: a copy written here would go on describing the record
-// Claude Code printed when it was copied, and the suite would pass against a
-// profile no operator runs. Taken from the table, a change to how the engine
-// reads Claude Code reaches every case here, and the scripted harness either
-// prints what the changed profile reads or the round trip below fails.
+// TAKEN, NOT RESTATED: a copy would go stale and the suite would pass against
+// a profile no operator runs. Taken from the table, a change to how the engine
+// reads Claude Code reaches every case, and the scripted harness either prints
+// what the changed profile reads or the round trip below fails.
 //
-// What is NOT taken is everything about a real Claude Code that a scripted one
-// has none of: its sign-in, its configuration directory and the switches that
-// confine it, its spent-plan sentinels, its complete_args — whose flags the
-// scripted harness has no use for, and in whose place the entry passes the
-// fork-bomb guard ([scriptedEntry]).
+// NOT taken: what a scripted harness has none of: sign-in, configuration
+// directory and confining switches, spent-plan sentinels, and complete_args
+// (the entry passes the fork-bomb guard instead, [scriptedEntry]).
 var claudeCodeFields = []string{
 	"model_args", "system_prompt", "append_system_prompt", "prompt_mode",
 	"output", "event_type_path", "text_events", "text_paths", "error_paths", "usage",
@@ -192,30 +172,17 @@ func claudeCodeRun(binary string) (map[string]any, error) {
 	return run, nil
 }
 
-// scriptedEntry is the providers.llm entry, under key, whose harness is this binary
-// answering from the model at endpoint and keeping its homes under stateDir —
+// scriptedEntry is the providers.llm entry, under key, whose harness is this
+// binary answering from the model at endpoint with homes under stateDir,
 // indented to sit under `providers: llm:`.
 //
-// `custom` RATHER THAN claude-code WITH ITS BINARY SWAPPED, because `custom`
-// ships nothing: every field the scripted harness is driven by is handed it here,
-// and nothing else a vendor's profile carries — its sign-in, its spent-plan
-// sentinels, its configuration directory — stands between the engine and a harness
-// that has none of them. What it is handed is Claude Code's own run
-// ([claudeCodeRun]), so the backend reads this harness on the paths the default
-// agent's are read on, and the usage it charges is the figure each response
-// names ([replyUsage]), never an estimate a budget case could not reason about.
-//
+// `custom` RATHER THAN claude-code WITH ITS BINARY SWAPPED: `custom` ships no
+// vendor sign-in, spent-plan sentinels or configuration directory. It is handed
+// Claude Code's own run ([claudeCodeRun]), so the backend reads it on the
+// default agent's paths and charges each response's own usage ([replyUsage]).
 // GORACE is [procgrouptest.StandInRaceOptions]: a race-built child that exits 0
-// otherwise sleeps a second on its way out, which every model call of every
-// case would pay — the relay the child starts included, which inherits it.
-//
-// max_concurrent and timeout_seconds are NOT set: a node here runs its model
-// calls under the caps a deployment gets by default, and no case is about
-// either.
-//
-// Every scalar is written with %q: a Go-quoted string is a YAML double-quoted
-// scalar, every escape strconv.Quote writes being one YAML reads. The overrides
-// are YAML's own encoding of [scriptedShape], indented into place.
+// otherwise sleeps a second per model call. max_concurrent and timeout_seconds
+// are NOT set: no case is about the caps. Scalars use %q (a YAML string).
 func scriptedEntry(key, endpoint, stateDir string) string {
 	var b bytes.Buffer
 	enc := yaml.NewEncoder(&b)
@@ -445,18 +412,16 @@ func (c *harnessRun) loop(req modelRequest, config string) int {
 
 // handleStop makes the engine's stop end the run AT A REQUEST'S EDGE.
 //
-// The backend stops a run it is done with by signalling the harness's group, and a
-// real Claude Code goes at once. What a real one cannot do is be asked by its
-// vendor for a response it never prints, because the vendor's answer and its
-// record are one stream. Here they are two steps — the post to the model, then
-// the printing — and a stop landing between them would leave a request the
-// model answered and the engine never read, which every case that holds the
+// The backend stops a run by signalling the harness's group. A real vendor's
+// answer and record are one stream; here they are two steps (the post to the
+// model, then the printing), and a stop between them would leave a request the
+// model answered and the engine never read, which every case holding the
 // counter to the model's log ("every completion the model answered is on the
 // counter, once") would wait on for ever.
 //
-// So the stop waits for a request in flight to be printed, and no request is
-// posted once it has come. Everywhere else — a call the engine is holding its
-// answer to, above all — it ends the run at once.
+// So the stop waits for a request in flight to be printed, and none is posted
+// once it has come. Elsewhere, a call the engine holds its answer to above all,
+// it ends the run at once.
 func (c *harnessRun) handleStop() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
@@ -924,17 +889,14 @@ func (h renderOnly) Pending() []llm.Message { return h.pending }
 
 // THE SCRIPTED HARNESS ANSWERS THE BACKEND THE GOLDEN COMPANY BUILDS — built from
 // the document as every node here builds it ([engine.BuildHarness]) and driven
-// as a phase and an auxiliary pass drive it. Every case in this package stands
-// on this round trip, and a break in it — the marker not reaching the child,
-// the relay not starting, the seat's tools not listed, a call not reaching the
-// phase, the system prompt off its channel, a request or a count the backend no
-// longer reads — reaches them only as a turn that never ends, so it is held
-// here, where it can say which.
+// as a phase and an auxiliary pass drive it. Every case stands on this round
+// trip, and a break in it (marker, relay, tool listing, call delivery, system
+// prompt channel, a request or count the backend no longer reads) reaches them
+// only as a turn that never ends, so it is held here, where it can say which.
 //
-// THE PHASE RUNS THROUGH THE REAL LOOP AND THE REAL SESSION (toolloop over a
-// toolsession host), because that is the only way a harness reaches a phase's
-// tools now: the relay this binary starts, the socket, the listing, the call
-// joined to the request the record shows.
+// THE PHASE RUNS THROUGH THE REAL LOOP AND SESSION (toolloop over a toolsession
+// host), the only way a harness reaches a phase's tools: the relay, the socket,
+// the listing, the call joined to the request the record shows.
 func TestTheScriptedHarnessAnswersTheBackendTheCompanyBuilds(t *testing.T) {
 	t.Parallel()
 	// WHAT THE HARNESS DOES IS WHAT THE PROFILE READS: the name it shows its
