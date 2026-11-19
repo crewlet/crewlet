@@ -172,7 +172,7 @@
 | `assistant` | The Dashboard Assistant's orchestrator: a person's question answered by a model through `agent/toolloop`, every read made as that person and every write a proposal they approve; not a seat (ADR-0050). |
 | `assistant/wire` | The Dashboard Assistant's protocol vocabulary, a leaf: event kinds, closed sets, frames, cards and route bodies, and the stream's one encoding, held to the dashboard's TypeScript contract both ways |
 | `assistant/catalog` | The Dashboard Assistant's tool catalogue: curated tools with their own schema, card and preview, and the generic API tools that reach any route the person may use, each call a proposal or read. |
-| `research` | The web pages Ask Crewlet reads (ADR-0151): `https` on the hosts `assistant.research` lists, `GET` with no credentials, redirects only to listed hosts, 2 MiB in 15 s through the guarded dial, text in 12 KiB parts, cached ten minutes per node. |
+| `research` | The web pages Ask Crewlet reads: any public `https` page, `GET` with no credentials, redirects only to public `https` addresses, 2 MiB in 15 s through the guarded dial, text in 12 KiB parts, cached ten minutes per node. |
 | `assistant/exec` | The ordinary request an assistant tool call becomes: `Request`, `Response`, and the `Dispatcher` and `Grant` seams, a leaf `api/auth` implements |
 | `enginedocs` | The engine's own `docs/` and `adr/` pages, embedded (the module root's `Docs`), searched with `textindex`'s BM25 and read by section; `Anchor` is the one GitHub-slug rule the docs gate also uses. |
 | `assistant/cards` | Turns a tool's answer into the engine-built cards the Dashboard Assistant shows (table, entity, open in app, error, notice), never authored by the model |

@@ -28,6 +28,18 @@ func (l LLMProvider) HelperOverrides() map[string]any {
 	return out
 }
 
+// SearchOverrides is the entry's overrides as Ask Crewlet's search run takes
+// them: its own, with `web_tools` set to search, the harness's web search and
+// no other tool.
+func (l LLMProvider) SearchOverrides() map[string]any {
+	out := maps.Clone(l.Overrides)
+	if out == nil {
+		out = map[string]any{}
+	}
+	out["web_tools"] = string(harnessprofile.WebToolsSearch)
+	return out
+}
+
 // HelperModelProblem says why the providers.llm entry key cannot run a helper,
 // or nil: an entry the document does not hold, or one whose harness cannot be
 // run with no tool of its own. The one rule both helpers' models are held to,

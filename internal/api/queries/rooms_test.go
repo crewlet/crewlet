@@ -779,7 +779,7 @@ func (emptyVerdicts) OpenVerdict(accessdomain.VerdictRow) (string, string, []str
 // noResearch reads no page, for the sweep that only needs the seat filled.
 type noResearch struct{}
 
-func (noResearch) Read(context.Context, []string, string, int) (research.Page, error) {
+func (noResearch) Read(context.Context, string, int) (research.Page, error) {
 	return research.Page{}, nil
 }
 

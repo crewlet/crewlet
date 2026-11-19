@@ -154,10 +154,15 @@ type Models struct {
 	Err      error
 	// Images is whether the model takes images.
 	Images bool
+	// Search is whether the model's harness has a search-only run.
+	Search bool
 }
 
 // ReadsImages implements [assistant.Models].
 func (m Models) ReadsImages() bool { return m.Images && m.Err == nil }
+
+// Searches implements [assistant.Models].
+func (m Models) Searches() bool { return m.Search && m.Err == nil }
 
 // Model implements [assistant.Models].
 func (m Models) Model(context.Context, iam.Principal, auxspend.Use) (llm.Provider, string, error) {

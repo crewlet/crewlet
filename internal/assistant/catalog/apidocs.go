@@ -406,6 +406,9 @@ func (g generic) listed(route Route) bool {
 // and the person could be admitted to ([generic.mayUse]). A FILTER on what is
 // listed, never authority: the route's own guard decides every call.
 func (g generic) mayRead(route Route) bool {
+	if _, owned := webRoutes[route.Pattern]; owned {
+		return false
+	}
 	if route.Action == "" {
 		return true
 	}

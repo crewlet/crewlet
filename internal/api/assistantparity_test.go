@@ -237,7 +237,7 @@ func everyAssistantRead(t *testing.T, fx *assistApp) []map[string]any {
 	var out []map[string]any
 	for _, r := range table.Routes() {
 		method, path, _ := strings.Cut(r.Pattern, " ")
-		if method != http.MethodGet {
+		if method != http.MethodGet || catalog.OwnedByWebTool(r.Pattern) {
 			continue
 		}
 		values := map[string]any{}

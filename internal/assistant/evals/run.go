@@ -98,9 +98,6 @@ func RunSuite(ctx context.Context, cases []Case, o Options) ([]Result, error) {
 func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 	person := Person("eval", "eval", c.Person.Apps...)
 	company, err := Company(true, person.Seat)
-	if len(c.Research) > 0 {
-		company, err = ResearchCompany(c.Research, c.Search, person.Seat)
-	}
 	if err != nil {
 		return Trial{}, err
 	}
@@ -125,7 +122,7 @@ func runCase(ctx context.Context, c Case, o Options) (Trial, error) {
 		return Trial{}, err
 	}
 	rig, err := Assemble(RigOptions{Person: &person, Company: company,
-		Models: &Models{Provider: meter, Key: meter.key}, Catalogue: tools,
+		Models: &Models{Provider: meter, Key: meter.key, Search: c.Search}, Catalogue: tools,
 		Acts: c.Person.Acts, Handler: handler})
 	if err != nil {
 		return Trial{}, err

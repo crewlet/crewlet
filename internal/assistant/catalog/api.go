@@ -456,6 +456,10 @@ func genericLabel(doing string) func(map[string]any) string {
 func (g generic) request(args Args, reading bool) (exec.Request, Route, error) {
 	pattern := args.String("route")
 	route, ok := g.table.Lookup(pattern)
+	if tool, owned := webRoutes[pattern]; owned {
+		return exec.Request{}, Route{}, fmt.Errorf("%s is read with %s, which holds the "+
+			"web's rules", pattern, tool)
+	}
 	if verb, kept := g.table.kept[pattern]; kept {
 		return exec.Request{}, Route{}, fmt.Errorf("%s stays with the person: %s", pattern,
 			authz.AssistNeverSentence(verb))
@@ -781,6 +785,19 @@ var outsideRoutes = []string{
 // a row's `run`, among the decisions waiting on a person (/worklet/decisions)
 // and the ones they answered (/worklet/decisions/answered) alike.
 const decisionRows, runAskField = "items", "run.question"
+
+// webRoutes are the routes the web tools own, by their tool: a page is read
+// only at an address the turn saw, which the generic read does not check.
+var webRoutes = map[string]string{
+	"GET /research/page":   FetchWebPageToolName,
+	"GET /research/search": SearchWebToolName,
+}
+
+// OwnedByWebTool reports a route only a web tool reads ([webRoutes]).
+func OwnedByWebTool(pattern string) bool {
+	_, owned := webRoutes[pattern]
+	return owned
+}
 
 // knowledgeQuestion is the question a knowledge search is asked as.
 const knowledgeQuestion = "knowledge"
