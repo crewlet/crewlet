@@ -395,11 +395,11 @@ type unliftedHolds struct {
 	silent atomic.Bool
 }
 
-func (s *unliftedHolds) LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error) {
+func (s *unliftedHolds) LiftHold(ctx context.Context, turnID string, cond Condition, hold uint64) (bool, error) {
 	if s.silent.Load() {
 		return false, fmt.Errorf("sandbox: lift the hold of run %s: %w", turnID, errStoreUnanswered)
 	}
-	return s.PendingStore.LiftHold(ctx, turnID, cond)
+	return s.PendingStore.LiftHold(ctx, turnID, cond, hold)
 }
 
 // signalledOnRecovery is a run store that runs signal once, as soon as a
@@ -448,7 +448,9 @@ func (s liftedOnRefusal) ClaimForResume(ctx context.Context, turnID string, tail
 ) (PendingRun, bool, error) {
 	run, won, err := s.PendingStore.ClaimForResume(ctx, turnID, tail, fence)
 	if err == nil && !won {
-		_, _ = s.PendingStore.LiftHold(ctx, turnID, "budget")
+		if held, found, err := s.Get(ctx, turnID); err == nil && found {
+			_, _ = s.PendingStore.LiftHold(ctx, turnID, "budget", held.Holds)
+		}
 	}
 	return run, won, err
 }
@@ -582,7 +584,7 @@ func (s *liftAfterRecovery) ListActive(ctx context.Context) ([]PendingRun, error
 	return s.PendingStore.ListActive(ctx)
 }
 
-func (s *liftAfterRecovery) LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error) {
+func (s *liftAfterRecovery) LiftHold(ctx context.Context, turnID string, cond Condition, hold uint64) (bool, error) {
 	n := s.lifts.Add(1)
 	if n == 1 {
 		select {
@@ -590,7 +592,7 @@ func (s *liftAfterRecovery) LiftHold(ctx context.Context, turnID string, cond Co
 		case <-ctx.Done():
 		}
 	}
-	lifted, err := s.PendingStore.LiftHold(ctx, turnID, cond)
+	lifted, err := s.PendingStore.LiftHold(ctx, turnID, cond, hold)
 	if n == 2 {
 		close(s.second)
 	}
@@ -664,42 +666,66 @@ func (s *liftedWhileRead) ListActive(ctx context.Context) ([]PendingRun, error) 
 	return append(runs, runs...), err
 }
 
-func (s *liftedWhileRead) LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error) {
+func (s *liftedWhileRead) LiftHold(ctx context.Context, turnID string, cond Condition, hold uint64) (bool, error) {
 	if s.lifts.Add(1) == 2 {
 		close(s.lifted)
 	}
-	return s.PendingStore.LiftHold(ctx, turnID, cond)
+	return s.PendingStore.LiftHold(ctx, turnID, cond, hold)
+}
+
+// reheld is a run store that closes held once a release has written a hold
+// ([Release.Hold]): a resume held again. It answers every call as the store
+// beneath it does.
+type reheld struct {
+	PendingStore
+	held chan struct{}
+	once sync.Once
+}
+
+func (s *reheld) ReleaseClaim(ctx context.Context, turnID string, release Release) (bool, error) {
+	released, err := s.PendingStore.ReleaseClaim(ctx, turnID, release)
+	if release.Hold != nil {
+		s.once.Do(func() { close(s.held) })
+	}
+	return released, err
+}
+
+// closedOrDone returns once ch is closed or ctx has ended.
+func closedOrDone(ctx context.Context, ch <-chan struct{}) {
+	select {
+	case <-ch:
+	case <-ctx.Done():
+	}
 }
 
 // liftedUnderKeep is a run store that lands a signal's lift of a hold while
-// the lift of a node's keep of it is on its way: the first lift of a hold it
-// is asked for (the keep's, which the signal starts before its listing) is
-// made only once a third has been asked, and the signal's listing of the runs
-// waits for that first one and lists every run twice, so the third, which
-// lifts nothing, is asked once the signal's own lift has landed and its
-// re-fire was asked for. It answers every call as the store beneath it does.
+// the lift of a node's keep of it is on its way: the first lift (the keep's,
+// which the signal starts before its listing) is made only once a third has
+// been asked, and the signal's listing waits for that first one and lists
+// every run twice. The third, the listing's stale copy, is made only once the
+// keep's re-fire has claimed the job and its resume, held again, wrote a newer
+// hold. It answers every call as the store beneath it does.
 type liftedUnderKeep struct {
-	PendingStore
+	*reheld
 	first, third chan struct{}
 	lifts        atomic.Int64
 }
 
 func newLiftedUnderKeep(store PendingStore) *liftedUnderKeep {
-	return &liftedUnderKeep{PendingStore: store, first: make(chan struct{}), third: make(chan struct{})}
+	return &liftedUnderKeep{reheld: &reheld{PendingStore: store, held: make(chan struct{})},
+		first: make(chan struct{}), third: make(chan struct{})}
 }
 
-func (s *liftedUnderKeep) LiftHold(ctx context.Context, turnID string, cond Condition) (bool, error) {
+func (s *liftedUnderKeep) LiftHold(ctx context.Context, turnID string, cond Condition, hold uint64) (bool, error) {
 	switch s.lifts.Add(1) {
 	case 1:
 		close(s.first)
-		select {
-		case <-s.third:
-		case <-ctx.Done():
-		}
+		closedOrDone(ctx, s.third)
 	case 3:
 		close(s.third)
+		closedOrDone(ctx, s.held)
 	}
-	return s.PendingStore.LiftHold(ctx, turnID, cond)
+	return s.PendingStore.LiftHold(ctx, turnID, cond, hold)
 }
 
 func (s *liftedUnderKeep) ListActive(ctx context.Context) ([]PendingRun, error) {
@@ -710,6 +736,46 @@ func (s *liftedUnderKeep) ListActive(ctx context.Context) ([]PendingRun, error) 
 	}
 	runs, err := s.PendingStore.ListActive(ctx)
 	return append(runs, runs...), err
+}
+
+// liftedBeforeKeep is a run store that lands a signal's lift of a hold before
+// the lift of a node's keep of it, and answers the signal's lift only once the
+// keep's re-fire has claimed the job and its resume, held again, wrote a newer
+// hold: the signal's listing waits for the keep's lift to be asked, which is
+// made once the signal's has landed. It answers every call as the store
+// beneath it does.
+type liftedBeforeKeep struct {
+	*reheld
+	asked, landed chan struct{}
+	lifts         atomic.Int64
+}
+
+func newLiftedBeforeKeep(store PendingStore) *liftedBeforeKeep {
+	return &liftedBeforeKeep{reheld: &reheld{PendingStore: store, held: make(chan struct{})},
+		asked: make(chan struct{}), landed: make(chan struct{})}
+}
+
+func (s *liftedBeforeKeep) LiftHold(ctx context.Context, turnID string, cond Condition, hold uint64) (bool, error) {
+	switch s.lifts.Add(1) {
+	case 1:
+		close(s.asked)
+		closedOrDone(ctx, s.landed)
+	case 2:
+		lifted, err := s.PendingStore.LiftHold(ctx, turnID, cond, hold)
+		close(s.landed)
+		closedOrDone(ctx, s.held)
+		return lifted, err
+	}
+	return s.PendingStore.LiftHold(ctx, turnID, cond, hold)
+}
+
+func (s *liftedBeforeKeep) ListActive(ctx context.Context) ([]PendingRun, error) {
+	select {
+	case <-s.asked:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return s.PendingStore.ListActive(ctx)
 }
 
 // budgetHeldOnRow is a rig whose swe run finished and whose resume its seat's
@@ -755,7 +821,7 @@ func budgetHeldOnRow(t *testing.T, rig *coordRig, until time.Time) {
 // claim; keep nothing from the row on a refused claim; keep under another's
 // lease; leave a lift to the waiter; skip a held row in a recovery; read seen
 // late; write the hold owing nothing; re-fire a carried job twice; leave a keep
-// the lift cleared waiting for the instant.
+// the lift cleared waiting for the instant; lift or re-fire for a newer hold.
 func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 	t.Parallel()
 
@@ -837,7 +903,7 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 		budgetHeldOnRow(t, rig, rig.now.Add(time.Hour))
 		// THE HOLD LIFTED BY A WRITE THAT LANDED WITH ITS ANSWER LOST: the
 		// keep stands, its re-fire armed for the instant still.
-		if _, err := rig.pending.LiftHold(live, "t1", "budget"); err != nil {
+		if _, err := rig.pending.LiftHold(live, "t1", "budget", rig.get("t1").Holds); err != nil {
 			t.Fatalf("lifting the hold: %v", err)
 		}
 		payload, ev := rig.completion("t1")
@@ -1060,7 +1126,7 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 		// THE HOLD LIFTED, and the node restarts before any re-fire of the
 		// job claimed it: the row holds the job no longer, and nothing of
 		// this node's memory survives.
-		if lifted, err := rig.pending.LiftHold(live, "t1", "budget"); err != nil || !lifted {
+		if lifted, err := rig.pending.LiftHold(live, "t1", "budget", rig.get("t1").Holds); err != nil || !lifted {
 			t.Fatalf("the premise: LiftHold = %v, %v", lifted, err)
 		}
 		rig.restart(t, rig.queue, "", rigLease, nil)
@@ -1364,18 +1430,27 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 		}
 	})
 
-	t.Run("re-fired once where the signal's lift lands under its keep's own lift and the resume is held again",
-		func(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		store func(PendingStore) PendingStore
+	}{
+		// The listing's stale copy of the hold is lifted after the re-hold.
+		{"re-fired once where the signal's lift lands under its keep's own lift and the resume is held again",
+			func(s PendingStore) PendingStore { return newLiftedUnderKeep(s) }},
+		// The signal's lift lands first, and its re-fire is asked after the re-hold.
+		{"re-fired once where the signal's lift lands before its keep's own lift and the resume is held again",
+			func(s PendingStore) PendingStore { return newLiftedBeforeKeep(s) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			rig := newCoordRig(t)
 			budgetHeldOnRow(t, rig, rig.now.Add(24*time.Hour))
-			// THE BUDGET STILL REFUSES, and the signal's own lift lands while
-			// the keep's lift is on its way: the keep's re-fire claims the job
-			// after that lift, and its resume, held again, keeps the job for a
-			// hold no lift has cleared.
+			// THE BUDGET STILL REFUSES: the keep's re-fire claims the job and
+			// its resume, held again, writes a newer hold, which the signal's
+			// lift of the hold it read neither clears nor re-fires for.
 			rig.resumer.failWith(budgetHeld(rig.now.Add(24 * time.Hour)))
 			counted := &countedCalls{PendingStore: rig.coordinator.pending}
-			rig.coordinator.pending = newLiftedUnderKeep(counted)
+			rig.coordinator.pending = tc.store(counted)
 			rig.coordinator.Readmit("budget", "swe")
 			rig.coordinator.inflight.Wait()
 			if claims := counted.claims.Load(); claims != 1 {
@@ -1386,6 +1461,7 @@ func TestACompletionTheBudgetHeldOnItsRowIsKeptForTheHold(t *testing.T) {
 				t.Fatalf("the premise: the row is held for %q; want the resume held again", got.HeldFor)
 			}
 		})
+	}
 
 	t.Run("re-fired on a signal during the seat's recovery whose listing is not answered", func(t *testing.T) {
 		t.Parallel()

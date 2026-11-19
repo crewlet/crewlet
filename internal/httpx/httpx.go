@@ -160,24 +160,15 @@ func Client(timeout time.Duration) *http.Client {
 // Customized is a client on a CLONE of [Transport] with opts applied — the one
 // way to build an outbound client whose transport differs from the shared one.
 //
-// IT EXISTS FOR A CLIENT WHOSE TLS, PROTOCOL OR DIALER GENUINELY DIFFERS, and
-// for nothing else: the S3 bucket's, which speaks HTTP/1.1 alone so a socket
-// is one request's to watch for a write the bucket stopped taking, and which
-// adds an operator's private certificate authority (`AWS_CA_BUNDLE`) to its
-// roots where one is set; and [Guarded]'s, whose dialer refuses every address
-// that is not public. Each is a property of a transport and cannot ride the
-// shared one without changing every other client's protocol or trust, or
-// refusing the operator's own private addresses. The clone keeps the proxy
-// and pool settings the shared transport has, and is a pool of its own — the
-// cost [Transport]'s doc counts against a per-client clone, paid only where
-// the transport genuinely differs.
+// IT EXISTS FOR A CLIENT WHOSE TLS, PROTOCOL OR DIALER GENUINELY DIFFERS: the
+// S3 bucket's (HTTP/1.1 alone, plus an operator's `AWS_CA_BUNDLE` root) and
+// [Guarded]'s. Neither can ride the shared transport without changing every
+// other client's protocol or trust. The clone keeps the proxy and pool
+// settings and is a pool of its own, the cost [Transport]'s doc counts.
 //
-// WHERE THE PROCESS'S DEFAULT TRANSPORT IS NOT ONE THIS CAN CLONE — a test
-// harness or an instrumented build, never the engine's own run — the client
-// is the shared one, opts unapplied, as [Transport] answers the default
-// itself there: the caller's difference is then not in force, which the
-// bucket's client documents for its own, and which [Guarded] answers by
-// refusing every request ([ErrUnguarded]) rather than dialling unguarded.
+// WHERE THE DEFAULT TRANSPORT CANNOT BE CLONED (a test harness) the client is
+// the shared one with opts unapplied; [Guarded] refuses every request
+// ([ErrUnguarded]) rather than dial unguarded.
 func Customized(timeout time.Duration, opts ...func(*http.Transport)) *http.Client {
 	base, ok := Transport().(*http.Transport)
 	if !ok {

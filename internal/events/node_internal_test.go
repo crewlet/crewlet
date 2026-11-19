@@ -36,17 +36,14 @@ func init() { Register[nodeProbe]() }
 
 // A SUCCESSOR'S ENVELOPE KEY SURVIVES A ROUND TRIP THROUGH THIS BUILD.
 //
-// For the length of a rolling upgrade this build decodes events a successor
-// published — and re-publishes some of them, a parked delivery handed back to
-// the broker being the ordinary case. This build has no field to decode a
-// successor's new envelope key into, so the only thing standing between that
-// field and oblivion is the rule that a key nobody owns is kept verbatim in
-// Extra and written back out. `node` is the key this build owns that a
-// successor must get back the same way, so the case carries both.
+// During a rolling upgrade this build decodes and re-publishes events a
+// successor published (a parked delivery handed back, ordinarily). A key this
+// build does not own survives only because it is kept verbatim in Extra and
+// written back out; `node` is owned here and must come back the same way, so
+// the case carries both.
 //
-// And the no-origin half: an event published through a queue client built with
-// no node — which only a test harness builds — names no node, and passing
-// through this build must not grow the key.
+// And the no-origin half: an event from a queue client built with no node
+// names none, and passing through this build must not grow the key.
 func TestASuccessorsEnvelopeKeyRoundTripsThroughThisBuild(t *testing.T) {
 	const published = `{"id":"6f1c3d2e-0000-4000-8000-000000000003","type":"test_node_probe",` +
 		`"timestamp":"2026-09-24T09:00:00Z","source":"engine","trace_id":"","span_id":"",` +

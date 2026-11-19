@@ -242,19 +242,15 @@ func (p *pagedSource) Notices(_ context.Context, q inbox.SourceQuery) (inbox.Sou
 	return page, nil
 }
 
-// A SOURCE'S PAGE OF NONE STILL MOVES ITS CURSOR: Gitlet scanned
-// founder's newest code notices and left every one out — each on a repository
-// deleted and not yet purged — so its first page holds no notice and its own
-// cursor past what it scanned; the next page asks it below that cursor and
-// reaches a notice on a repository founder still reads, and the inbox then
-// ends. Likewise a page whose last rows the source left out resumes below
-// them, never at its last notice.
+// A SOURCE'S PAGE OF NONE STILL MOVES ITS CURSOR: Gitlet scanned the newest
+// code notices and left every one out (each on a deleted, unpurged repository),
+// so its first page holds none and its cursor is past what it scanned; the next
+// page asks below it. Likewise a page whose last rows the source left out
+// resumes below them, never at its last notice.
 //
-// Mutation: keep the cursor a source was asked with where the page took none
-// of its notices — every page asks Gitlet its first page again, the
-// composed cursor never moves and the notices below are never read, red;
-// resume a page taken whole at its last notice — the left-out rows are asked
-// for again, red.
+// Mutation: keep the cursor the source was asked with where the page took none
+// of its notices, or resume a page taken whole at its last notice, and the
+// composed cursor never moves or left-out rows are asked again: red.
 func TestASourcesPageOfNoneStillMovesItsCursor(t *testing.T) {
 	t.Parallel()
 	const (

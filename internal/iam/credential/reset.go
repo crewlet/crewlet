@@ -7,24 +7,17 @@ import (
 	"time"
 )
 
-// PASSWORD RESET LINKS: what an administrator hands somebody who cannot sign
-// in, and what is stored for it — and the same credential in its other use, the
-// FIRST PASSWORD LINK an administrator's create issues the person it creates,
-// which sets the password they never had through the same spend.
+// PASSWORD RESET LINKS, and the FIRST PASSWORD LINK a create issues.
 //
-// A link is `<id>.<secret>` in the fragment of the dashboard's reset screen —
-// the invitation link's shape, for the invitation link's reasons: the id is
-// the credential's own and in the clear, so checking one is a keyed read of
-// one row, and the SECRET is the half that authenticates, 32 bytes — of
-// crypto/rand for a reset, of a MAC under the company's key for a first
-// password link, whose create's retry has to hand back the same one — that
-// never reach a path or a query string.
+// A link is `<id>.<secret>` in the fragment of the reset screen: the id is the
+// credential's own, in the clear (a keyed read of one row); the SECRET
+// authenticates, 32 bytes of crypto/rand, or for a first password link a MAC
+// under the company's key, since the create's retry must hand back the same one.
 //
-// SHA-256 AT REST, for the machine token's reason ([TokenVerifier]): a value
-// this engine minted has no dictionary to grind, so a memory-hard digest would
-// buy nothing. The id and a prefix of its own are inside the digest, so a
-// verifier copied onto another row verifies nothing there, and no machine
-// token's value could ever verify against a reset's.
+// SHA-256 AT REST, for the machine token's reason ([TokenVerifier]): a minted
+// value has no dictionary to grind. The id and a prefix of its own are inside
+// the digest, so a verifier copied onto another row verifies nothing there, and
+// no machine token's value verifies against a reset's.
 
 // ResetLinkLifetime is how long a reset link stays good: TWENTY-FOUR HOURS.
 //
@@ -37,21 +30,14 @@ import (
 const ResetLinkLifetime = 24 * time.Hour
 
 // EnrolmentLinkLifetime is how long a link that brings somebody INTO the
-// company stays good — an invitation, and a created person's first password
-// link: ONE WEEK.
+// company stays good (an invitation, a created person's first password link):
+// ONE WEEK.
 //
-// A HUNDRED AND SIXTY-EIGHT HOURS, and the number is the SECURITY HORIZON
-// rather than a convenience: the link — its secret — is a bearer credential
-// sitting in somebody's mailbox, so the window is how long a compromised
-// mailbox yields an account. A week survives somebody being away — a
-// newcomer is sent the link before their first day, and may not read it until
-// then — without making the link a standing way in, and an administrator
-// whose link aged out issues another in one call.
-//
-// ONE CONSTANT FOR BOTH, because the two are the same person's position: an
-// invitee who chooses their own login, and a person an administrator created
-// who chooses only their password. It was the invitation surface's own, and
-// the first link would have had to restate it.
+// The SECURITY HORIZON, not a convenience: the link is a bearer credential in
+// somebody's mailbox, so the window is how long a compromised mailbox yields an
+// account. A week survives a newcomer reading it on their first day without
+// making it a standing way in; an expired link is reissued in one call. ONE
+// CONSTANT FOR BOTH: they are the same person's position.
 const EnrolmentLinkLifetime = 168 * time.Hour
 
 // resetPrefix separates a reset's verifier from a machine token's, which is

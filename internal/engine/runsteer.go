@@ -78,19 +78,12 @@ const steerPublishBudget = 5 * time.Second
 // unsettled (steer_take_unsettled) and goes on asking, and a review stops
 // holding its rounds open for one ([rowSource.Waiting]).
 //
-// THIRTY SECONDS. The take a settle follows failed on a store that did not
-// answer in time — a hook's take within its five seconds — which is a store
-// mid leader election (four seconds at nats-server's raft default, nine at
-// worst) or reconnecting, and its answer comes once that is over. Thirty
-// seconds outlasts it with room, as a capture's record does (internal/sandbox's
-// sessionRecordBudget); a store silent past it is an outage its own alarms
-// name.
-//
-// SAID ONCE AN ATTEMPT HAS FAILED, never while one is still asking: an attempt
-// is given its ten seconds and the time the run's row takes to cross to the
-// store ([steerSettleAttempt]), so the line comes at thirty seconds on a
-// member, and across a link at the slowest pace allowed when the first attempt
-// fails, up to about thirteen minutes and ten seconds in.
+// THIRTY SECONDS outlasts a store mid leader election (four seconds at
+// nats-server's raft default, nine at worst) or reconnecting; a store silent
+// past it is an outage its own alarms name. SAID ONCE AN ATTEMPT HAS FAILED,
+// never while one is still asking: an attempt gets its ten seconds plus the
+// row's crossing ([steerSettleAttempt]), so on the slowest allowed link the
+// line can come about thirteen minutes in.
 const steerSettlePatience = 30 * time.Second
 
 // steerSettleAttempt is the reason one attempt at a settle is bounded by,
@@ -114,40 +107,17 @@ const (
 )
 
 // steerSettleStopBudget is the window a stopping node's last attempts at the
-// settles it holds are made in ([runSteers.settleRun]): every one of them, of
-// every run, together, from the moment the node's teardown begins — so the
-// teardown's wait for them ([runSteers.waitSettles]) is over within it too.
+// settles it holds are made in ([runSteers.settleRun]), all runs together from
+// the start of teardown, so the wait ([runSteers.waitSettles]) ends within it.
 //
-// A WINDOW OF ITS OWN, BESIDE THE GIVE-BACKS, AND NEVER A STEP OF THE STOP'S
-// ALLOWANCE (internal/seat's StopBudget, "Only what lapses"): a settle that runs
-// out leaves a take unsettled, which the stop says, where a give-back that runs
-// out leaves a lease lapsing on its TTL. And the run records are a bucket of
-// their own, a stream that can lose its quorum alone — which is when settles
-// are held — so settles made on the allowance, charged for every moment they
-// asked with no give-back beside them, spent what the give-backs made later in
-// the stop are owed — the presence given back after the flushes, and every seat
-// the node's own stop releases once the settles are waited out — and those
-// leases lapsed on their TTL instead of being given back.
-//
-// FIVE SECONDS: the bound the JetStream client gives one request with no
-// deadline of its own, as each lifecycle event and the admission's share have —
-// a store answering at all answers a settle well inside it. And the length of
-// the ledgers' last flush, which the teardown makes after the window opens and
-// before it waits the settles out ([Engine.stopLedgers], [ledgerStopBudget]):
-// where that flush spends its bound — a member that has lost its event stream
-// — the window is over before the wait, so the stop's longest case, which the
-// deployment guide sizes a pod's grace by, is unchanged; and where it does not,
-// the stop is that much shorter than its longest case. A member that has lost
-// its coordination store alone stops up to this much later than its allowance.
-//
-// NO CROSSING OF THE ROW BESIDE IT, though each attempt writes the run's row
-// whole and is given that crossing outside a stop ([steerSettleAttempt]): the
-// window is a step of the stop's longest case, and a crossing of minutes in it
-// would hold the stop past the grace a pod is given, which ends the node
-// before it closes its store. A last attempt the window cuts leaves its take
-// unsettled, which the stop says — as the sandbox coordinator's stop holds the
-// writes of the row it still makes to their reason alone
-// (internal/sandbox's Coordinator.rowContext).
+// A WINDOW OF ITS OWN, NEVER A STEP OF THE STOP'S ALLOWANCE (internal/seat's
+// StopBudget, "Only what lapses"): charged to it, settles held by a stream that
+// lost quorum would spend what later give-backs are owed, and those leases
+// would lapse on their TTL. FIVE SECONDS: the JetStream client's bound for a
+// request with no deadline, and the ledgers' last-flush bound
+// ([ledgerStopBudget]), so the stop's longest case is unchanged. NO CROSSING OF
+// THE ROW beside it ([steerSettleAttempt]): minutes would outlast a pod's grace.
+// A last attempt the window cuts leaves its take unsettled, which the stop says.
 const steerSettleStopBudget = 5 * time.Second
 
 // runSteers is this node's half of a turn's notes on its run's record: it seals
@@ -364,11 +334,9 @@ func (s *runSteers) anchor(turnID, agentID, handle string) []byte {
 // (ADR-0060).
 //
 // AN ANCHOR UNDER A KEY THIS NODE DOES NOT HOLD IS THE OPERATOR'S TO FIX, a
-// condition of the fleet no wait clears ([steer.ErrSeatKeyUnknown]), so the
-// keys this node holds and the advice go to its log, where whoever administers
-// the keyring reads them, and nothing anybody steering reads names them: they
-// were ids nobody steering chose, beside a file only that administrator
-// changes.
+// condition no wait clears ([steer.ErrSeatKeyUnknown]): the keys held and the
+// advice go to the log, where the keyring's administrator reads them, and
+// nothing a steerer reads names them.
 func (s *runSteers) openSeat(run sandbox.PendingRun) builtin.RunSeat {
 	if len(run.Steer.Seat) == 0 {
 		return builtin.RunSeat{Unverified: steer.ErrSeatUnnamed}
@@ -1083,18 +1051,14 @@ func (s *runSteers) publish(ctx context.Context, ident runIdentity, note steer.N
 
 // ended records what became of every note on run's record that no step
 // reported reading, as the record knows it ([sandbox.PendingRun.EndedNotes]):
-// delivered, at the brief of a started job that told it again; unconfirmed, at
-// the job whose harness it was handed to; missed, at the step whose take
-// recorded it read and lost its answer, where no started job's brief told it
-// again; expired, the ones still waiting and the ones the brief of a job that
-// never started was the first to read. The step a
-// run's ending takes before it deletes the record
+// delivered (a started job's brief told it again), unconfirmed (handed to a
+// harness), missed (a take read it and lost its answer) or expired (still
+// waiting, or first read by a never-started job's brief). The step a run's
+// ending takes before it deletes the record
 // ([sandbox.CoordinatorOptions.SteersEnded]), under ids derived from the turn,
-// the ending and the note, at the ending's own instant, so a repeat of the
-// ending publishes the same records. THE ONE PUBLISHER of these for a note that
-// reached a record: no step that took, told again or was handed one reports
-// it, so no note is reported twice. A note that does not open gets no record:
-// nothing can attribute it.
+// the ending and the note, at the ending's own instant, so a repeat publishes
+// the same records. THE ONE PUBLISHER of these for a note that reached a
+// record, so none is reported twice. A note that does not open gets no record.
 func (s *runSteers) ended(ctx context.Context, run sandbox.PendingRun) error {
 	if run.Ending == nil {
 		return nil
@@ -1164,27 +1128,18 @@ func servedAt(s sandbox.HookServed) steer.Reading {
 
 // --- a resumed segment's notes: the run's record ---------------------------
 
-// rowSource is the turn's notes as a segment that resumes it from its executor
-// reads them: off the run's record, taken under the segment's claim
-// ([runner.SteerSource]).
+// rowSource is the turn's notes as a segment that resumes it reads them, off
+// the run's record under the segment's claim ([runner.SteerSource]).
 //
 // # A take whose answer was lost is the segment's own to settle
 //
-// A take whose call answered an error may have landed, and what it recorded is
-// read by the record's word, so no later take hands it over. Where its settle
-// answers on the take's own path, what it recorded is handed over there and
-// then; where the store does not answer that either, the take is LOST and kept
-// here, by name: settled again on the segment's own path, in answer mode, at
-// each later round's take and at a relaunch's brief, and handed over by the
-// first that the store answers — the review reads it, or the relaunch's run
-// does. Until then a lost take stands for a note waiting ([rowSource.Waiting]),
-// so a round of the review asking for tools ends and the next one opens with
-// the note, for as long as [steerSettlePatience] takes a silent store for a
-// blip. A take still lost when the segment ends is marked unanswered where it
-// recorded anything ([rowSource.Close]), in the segment's path where the store
-// answers there and off it where it does not ([runSteers.settleUnanswered]):
-// nothing of the segment reads it any more, and a launch that continues the
-// run's session tells it again.
+// A take that answered an error may have landed. If its settle does not answer
+// on the take's own path either, the take is LOST and kept here by name, settled
+// again at each later take and at a relaunch's brief, and handed over by the
+// first the store answers. Meanwhile it stands for a note waiting
+// ([rowSource.Waiting]) for [steerSettlePatience]. One still lost when the
+// segment ends is marked unanswered ([rowSource.Close],
+// [runSteers.settleUnanswered]).
 type rowSource struct {
 	steers *runSteers
 	run    sandbox.PendingRun
@@ -1593,17 +1548,14 @@ func (r *rowSource) Waiting() bool {
 // lost unanswered where it recorded anything: nothing of the segment reads it
 // any more. Safe twice: the takes are marked or handed off once.
 //
-// MARKED IN THE SEGMENT'S PATH FIRST, one attempt ([runSteers.settleOnce]),
-// before the segment returns: a segment that ends the turn is followed at once
-// by the run's ending, which reads the record and reports what no step
-// reported reading ([runSteers.ended]) — and a note a lost take recorded is
-// read on the record, unmarked, until the mark lands, which the ending reads
-// as a step's report. Handed off the path ([runSteers.settleUnanswered]), the
-// mark could land after that read, or find the record deleted, and no node
-// would report the note at all. The first take the store does not answer is
-// handed off with every take after it, rather than each asked in the path of a
-// segment a silent store would hold for an attempt apiece. Under ctx stripped
-// of its ending, which the settle takes, as a teardown does.
+// MARKED IN THE SEGMENT'S PATH FIRST, one attempt ([runSteers.settleOnce]):
+// a segment that ends the turn is followed at once by the run's ending, which
+// reports what no step reported reading ([runSteers.ended]), and an unmarked
+// note a lost take recorded reads as a step's report. Handed off the path
+// ([runSteers.settleUnanswered]), the mark could land after that read or find
+// the record deleted, and no node would report the note. The first take the
+// store does not answer is handed off with every take after it, not each asked
+// in the path. Under ctx stripped of its ending, as a teardown does.
 func (r *rowSource) Close(ctx context.Context) {
 	if r == nil {
 		return
@@ -2302,17 +2254,14 @@ func waitsUntaken(run sandbox.PendingRun, candidates []openedNote) bool {
 // publishes delivered what it recorded ([runInbox.Read]).
 //
 // A TAKE THAT ANSWERED AN ERROR IS SETTLED HERE, in answer mode: its write may
-// have landed with its answer lost, and the read it recorded is true — the
-// harness confirmed the note delivered — so it is never marked, and what the
-// settle finds recorded is published delivered now. Under a bound of its own
-// ([runSteers.settleOnce]), never the request's: the plugin gives up on a
-// confirmation at ten seconds, and a settle made under the request it gave up
-// on would fail at once, the note reported by no node unless the plugin
-// confirms again, which it does not once its run is over. A settle that finds
-// nothing recorded leaves the notes waiting, the take unable to land after it,
-// and answers the take's error, so the plugin confirms them again; one the
-// store does not answer either answers it too, and the confirmation the plugin
-// makes again finds what the take recorded ([runInbox.confirmedBefore]).
+// have landed, and the read it recorded is true, so it is never marked, and
+// what the settle finds recorded is published delivered now. Under a bound of
+// its own ([runSteers.settleOnce]), never the request's: the plugin gives up at
+// ten seconds, a settle under that request would fail at once, and no node
+// would report the note once the run is over. A settle that finds nothing
+// recorded leaves the notes waiting and answers the take's error, so the plugin
+// confirms again; so does one the store does not answer, and that confirmation
+// finds what the take recorded ([runInbox.confirmedBefore]).
 func (i *runInbox) confirm(ctx context.Context, launch string, candidates []openedNote) ([]sandbox.RunNote,
 	error) {
 	if len(candidates) == 0 {

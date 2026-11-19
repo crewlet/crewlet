@@ -14,34 +14,17 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// What happened to the company's pages, and what one revision actually said.
+// What happened to the company's pages, and what one revision said.
 //
-// # The rows were always here
+// The feed reads `pages_history` (one row per change: kind, actor, quiet flag,
+// excerpt, turn) in LOG order: the company's history through
+// `pages_history_version_idx`, one page's through `pages_history_page_idx`.
 //
-// `pages_history` has one row per change since the domain landed — the kind,
-// who made it, whether it was quiet, an excerpt, and the TURN that made it —
-// and the schema shipped two indexes naming readers that were never written:
-// "one page's activity" and "the company-wide digest". Nothing read a single
-// row through either. A wiki that recorded every edit, replicated it,
-// snapshotted it, and offered no way to ask what had changed. The feed below
-// is both readers, and it reads in LOG order: the company's history through
-// `pages_history_version_idx`, one page's through `pages_history_page_idx`
-// (replicated 0063), while the digest's index on `created_at` went at
-// replicated 0064 with nothing ever having read it.
-//
-// # And a revision list without bodies is not a history
-//
-// The page detail carries revision SUMMARIES — a version, an author, a message
-// and an instant — which says that a page was edited eleven times and not what
-// any of those edits did. The bodies are in `pages_revisions` and were
-// reachable only by reading the page at its head. So "what changed in version
-// 7" had no answer, and neither did the diff every wiki is expected to show.
-//
-// # Why they are two reads and not one
-//
-// A body is the largest column this domain has, and an activity feed is a
-// LIST. Returning bodies with the feed would ship every revision of every page
-// somebody scrolled past; returning one on demand is a primary-key seek.
+// The page detail carries revision SUMMARIES only; the bodies in
+// `pages_revisions` answer "what changed in version 7" and feed a diff. They
+// are a second read, not part of the feed: a body is this domain's largest
+// column and a feed is a LIST, so bodies with it would ship every revision of
+// every page scrolled past, where one on demand is a primary-key seek.
 
 // PageChange is one thing that happened to a page.
 type PageChange struct {
@@ -313,25 +296,16 @@ func compilePageActivity(q PageActivityQuery) pageActivityPredicate {
 }
 
 // pageActivityStatement is the feed's one statement over a predicate, reading
-// `rows` changes, and its arguments — named so the plan test explains exactly
-// what the reader issues.
+// `rows` changes, and its arguments, named for the plan test.
 //
-// THE JOIN IS LEFT, for the reason the tracker's inbox gives about the same
-// shape: a history entry outlives the page it names — a purge destroys the
-// head and the entries are what say it ever existed — and a feed that dropped
-// those rows would lose exactly the changes somebody is looking for.
+// THE JOIN IS LEFT: an entry outlives its page (a purge destroys the head).
 //
-// # The audit is ONE ARM PER AUTHOR KIND, merged
-//
-// `pages_history_actor_kind_version_idx` is `(actor_kind, version DESC)`, the
-// feed's own order, so ONE kind is a range on it that a LIMIT stops after a
-// page. A set of kinds written `actor_kind IN (…)` is not: this engine seeks
-// each value and sorts everything the seeks found, which for the audit screen's
-// `operator,human` was every page change any person or token had ever made, on
-// every load, and a one-value IN plans the same way. So each kind is its own
-// arm, sought in order and limited to a page, and the arms are merged under the
-// page's own order and limit — the one sort is over at most one page per kind.
-// Each arm carries the join too, because the container is a term of the head.
+// ONE ARM PER AUTHOR KIND, merged: `pages_history_actor_kind_version_idx` is
+// `(actor_kind, version DESC)`, the feed's order, so ONE kind is a range a
+// LIMIT stops after a page. `actor_kind IN (…)`, even of one value, is seeked
+// per value and sorted whole (every change any person or token ever made). The
+// arms merge under the page's order and limit, each carrying the join because
+// the container is a term of the head.
 func pageActivityStatement(p pageActivityPredicate, rows int) (string, []any) {
 	arm := func(extra ...string) string {
 		where := append(append([]string{"1 = 1"}, p.where...), extra...)
@@ -378,27 +352,18 @@ const pageChangeColumns = `h.id, h.page_id, h.kind, h.actor, h.actor_kind, h.ope
 		       COALESCE(p.container, '') AS container,
 		       COALESCE(p.status, '') AS status`
 
-// Revision answers one saved version of one page, body included.
+// Revision answers one saved version of one page, body included (the page
+// detail carries summaries only).
 //
-// THE BODY IS THE POINT. The page detail already carries revision SUMMARIES —
-// a version, an author, a message, an instant — which says a page was edited
-// eleven times and not what any of those edits did. The bodies were reachable
-// only by reading the page at its head, so "what changed in version 7" had no
-// answer and neither did the diff a wiki is expected to show.
+// REVISION N IS THE BODY AT VERSION N, including the newest (this package's
+// doc); the other reading, what was replaced, collides on the first save.
 //
-// REVISION N IS THE BODY AT VERSION N, including the newest — see this
-// package's own doc. The other reading, that a revision holds what was
-// replaced, collides with itself on the first save.
+// THREE-VALUED: the revision, "no such version", or the read failed. A page
+// keeps [RevisionsKept] versions, so an older one is an ORDINARY absence, to be
+// told from a page that never existed.
 //
-// THREE-VALUED, in this tree's own shape for the question: the revision, or
-// "no such version", or the read failed. A page keeps [RevisionsKept]
-// versions, so an older one is an ORDINARY absence rather than a fault — and
-// a caller has to be able to tell it from a page that never existed.
-//
-// [Revision.ID] and [Revision.V] are empty here, and deliberately: the row is
-// COLUMNS rather than a stored document, so what this answers is what the
-// applier wrote into them. A revision has no other identity than its page and
-// its number.
+// [Revision.ID] and [Revision.V] stay empty: the row is COLUMNS, not a stored
+// document, and a revision has no identity but its page and number.
 func (r *Reader) Revision(ctx context.Context, pageID string, version int,
 	fresh statelog.Freshness) (Revision, bool, error) {
 

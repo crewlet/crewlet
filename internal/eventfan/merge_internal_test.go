@@ -35,14 +35,12 @@ func pageOf(rows []store.EventRecord, before *store.EventRecord, limit int) list
 
 // A MERGED LISTING IS EXACT FOR DISJOINT STORES, page after page.
 //
-// The property the fleet's event log rests on: walking the merged pages with
-// their own cursors visits every row of every node exactly once, in the order
-// one store holding all of them would have — whatever the page size, however
-// unevenly the rows are spread, with timestamps that collide, and with some
-// nodes' replies CUT to fit the transport. That last is what the obvious k-way
-// merge cut at the page size fails: a node that sent fewer rows than the page
-// holds rows between its last one and the merged page's last one, and the next
-// cursor is already past them.
+// Walking the merged pages with their own cursors visits every row of every
+// node exactly once, in one store's order, whatever the page size or row
+// spread, with colliding timestamps and replies CUT to fit the transport. The
+// last is what a plain k-way merge cut at the page size fails: a node that
+// sent fewer rows than the page holds rows between its last and the merged
+// page's last, and the next cursor is already past them.
 //
 // Mutation: cut at the limit without the horizon and this fails within the
 // first few seeds.
@@ -509,14 +507,10 @@ func TestAMergedTurnsOpeningStopsWhereANodesUnsentRowsBegin(t *testing.T) {
 
 // EVERY OUTCOME ROW IS COUNTED ONCE, whichever data nodes hold it.
 //
-// A node counts the rows it keeps and names the rows of a custody batch it has
-// written and not settled; the same batch can sit on a second data node, kept
-// or not yet settled either. So the merge sums the counts and adds every named
-// row once — unless a node that keeps it and did not name it counted it
-// already, which is the batch's keeper having settled first. A node that named
-// a row and keeps it by the second question settled between the two, and
-// counted it in neither, so the row is still added. And a row is its instant
-// and its id together: the same id at another instant is another row.
+// The merge sums the counts and adds every named row once, unless a node that
+// keeps it and did not name it counted it already (the keeper, settled first).
+// A node that named it and keeps it by the second question settled between the
+// two and counted it in neither, so it is added. A row is its instant and id.
 //
 // Mutation: add every named row whatever the second question answered, and the
 // row its keeper counted is counted twice; add each once per node naming it,

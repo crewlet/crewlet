@@ -32,25 +32,17 @@ func custodyTurn(at time.Time) store.CustodyBatch {
 }
 
 // EVERY COUNT HOLDS A CUSTODY ROW TWO DATA NODES HOLD ONCE, at every step of
-// its settling — the axis's bars, totals, failed share and facets, a trace's
-// and a turn's total, a page of turns' sums and the spend window's records.
+// its settling: bars, totals, facets, turn sums and the spend window.
 //
-// A node without `data` hands its events to the data nodes in custody batches,
-// and a batch whose claim failed is written by a second keeper before the first
-// has learned it is not its own: until the first settles it, both logs hold the
-// same rows. Added up as two parts, every one of those counts held each such
-// row once per node holding it. So each node counts what it keeps and names
-// what it holds unsettled, and the asker asks every data node which named rows
-// it keeps and counts each once — while both copies are unsettled, once the
-// keeper has settled and the other has not, and once both have — asked from
-// either node. Each node also holds rows of its own, of the same trace and
-// turn, which are counted once each by being written once.
+// A claim-failed custody batch is written by a second keeper before the first
+// learns it, so both logs hold the same rows until the first settles. Each node
+// counts what it keeps and names its unsettled rows; the asker asks which each
+// data node keeps and counts each once, from either node.
 //
-// Mutation: count a node's unsettled rows in its own counts as well as naming
-// them ([store.EventHistogram.Count] at +0, the store's -1 dropped), or skip
-// the second question in the fleet's settle, and each count is one batch too
-// many in some state; add a named row once per node naming it, and the state
-// with both copies unsettled counts it twice.
+// Mutation: count unsettled rows in a node's own counts as well as naming them
+// ([store.EventHistogram.Count] at +0, the store's -1 dropped), or skip the
+// second question in the fleet's settle, and a count is a batch too many; add a
+// named row once per node naming it, and both-unsettled counts it twice.
 func TestEveryCountHoldsACustodyRowTwoDataNodesHoldOnce(t *testing.T) {
 	t.Parallel()
 	broker := memory.NewBroker()

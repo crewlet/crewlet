@@ -70,6 +70,30 @@
 // nothing at all for the rest, so their cases waited the numbers out. The
 // numbers themselves are pinned where they are decided, here, by tests that
 // read them rather than wait for them.
+//
+// # A read is asked again with every request still out, a write is not
+//
+// A READ (does this stream, consumer or bucket exist) is answered when a
+// worker takes it from the server's API queue, or never. [ReadWith] therefore
+// presumes a request lost after [Timing.ReadTerm] and asks again after
+// [Timing.ReAsk] WITH EVERY REQUEST STILL OUTSTANDING, taking the first answer:
+// a request behind a backed-up queue is answered late rather than never, and
+// one thrown away at its term turns a slow leader into a cliff. This holds for
+// every read only a leader answers, because a member that still believes in a
+// lost leader stays silent. A WRITE's reply is held until the object has a
+// leader and its repeat is a second fact, so [Timing.Ask] waits [Timing.AskTerm]
+// and abandons the one request before asking again. A read is never asked past
+// [LookupBudget], and nothing is asked again once its deadline has passed,
+// whether or not its context says so yet: a timer runs late on a stalled
+// process, and a request re-sent past the bound is one its caller gave up on.
+// A hedged state read opens a stream handle of its own per request: the
+// client's handle caches its info with no lock, and two requests may be out.
+// Hedging costs the server a request per re-ask, so a leader slower than the
+// first re-ask meets more of them.
+//
+// [Settle] owns its read-back window and takes the context that bounds the
+// BOOT: a read-back often exists because the create's deadline expired, so one
+// gated on that deadline would be dead code on the path it was written for.
 package jsprovision
 
 import (
@@ -90,16 +114,12 @@ const (
 	// clusterBudget bounds one create that is a raft round trip against a
 	// metadata group whose members may still be booting.
 	//
-	// TWO MINUTES, which is not a new number: it is what a clustered
-	// member's start was given for the same contention — peers booting on
-	// one host, competing for its disk and its scheduler — and this call
-	// sits downstream of that start and the sixty-second readiness wait.
-	// The asymmetry decides it: failing here fails the whole boot, so a
-	// budget that is too short turns a busy host into a node that refuses
-	// to start and then works on the retry, while one that is too long only
-	// reports a genuinely wedged cluster later — and the wait is
-	// cancellable, so an operator who has seen enough gets their prompt
-	// back immediately.
+	// TWO MINUTES: what a clustered member's start gets for the same
+	// contention (peers booting on one host), and this call sits downstream
+	// of that start and the sixty-second readiness wait. Failing here fails
+	// the whole boot, so too short turns a busy host into a node that
+	// refuses to start and works on retry, while too long only reports a
+	// wedged cluster later, and the wait is cancellable.
 	clusterBudget = 2 * time.Minute
 )
 
@@ -114,30 +134,21 @@ func Budget(clustered bool) time.Duration {
 const (
 	// soloSequenceBudget bounds a whole bring-up with no peers.
 	//
-	// TWO MINUTES rather than something tighter, although every create in
-	// it is local file-store setup measured in milliseconds and a solo
-	// node has no readiness wait to sit behind at all. The asymmetry is
-	// the one the whole package turns on: there was no aggregate ceiling
-	// before this, so the only way a number here can do harm is by being
-	// too SMALL — it would fail a boot that used to work, which is the
-	// exact bug this change exists to fix, reintroduced on the path that
-	// never had it. Two minutes is still a real bound (a fraction of what
-	// the per-create budgets alone would allow over a boot's creates) and
-	// leaves roughly a thousandfold headroom over what the creates actually
-	// cost.
+	// TWO MINUTES rather than tighter, although every create is local
+	// file-store setup measured in milliseconds. A number here can only do
+	// harm by being too SMALL (it would fail a boot that works), so it
+	// leaves roughly a thousandfold headroom while staying a real bound,
+	// a fraction of what the per-create budgets alone would allow.
 	soloSequenceBudget = 2 * time.Minute
 
 	// clusterSequenceBudget bounds a whole clustered bring-up.
 	//
-	// FIVE MINUTES, sized so that one genuinely slow create can spend its
-	// whole two-minute budget and the rest of the sequence still has room
-	// — by then the metadata group has proven it works, so the others are
-	// fast. Anchored above the ninety seconds of BOUNDED waiting a clustered
-	// boot already tolerates before it provisions anything at all (the
-	// broker's thirty-second listener budget and its sixty-second readiness
-	// wait — its store recovery before them is waited out, not bounded), and
-	// below the point where a wedged cluster stops being reported inside the
-	// patience of whatever is watching the node come up.
+	// FIVE MINUTES: one slow create can spend its whole two-minute budget
+	// and the rest still have room (the group has proven itself by then).
+	// Above the ninety seconds of bounded waiting a clustered boot already
+	// tolerates (thirty-second listener budget plus sixty-second readiness
+	// wait), and below where a wedged cluster outlasts whatever watches
+	// the node come up.
 	clusterSequenceBudget = 5 * time.Minute
 )
 
@@ -149,59 +160,16 @@ func SequenceBudget(clustered bool) time.Duration {
 	return soloSequenceBudget
 }
 
-// LookupBudget is the CEILING over one existence probe — the "does this object
-// already exist" read that decides create-versus-observe, including however
-// many times [Read] has to re-issue it — and over every other read this
-// package hedges ([ReadWith], [ReadBoundedWith]), for the reason below: it is
-// the longest silence the server keeps, whoever is asking.
-//
-// # Why a read is not sized like a create
-//
-// [Budget] sizes a raft round trip against a metadata group that may still be
-// forming, and the provisioning paths handed that same number to the LOOKUP
-// that precedes the create, because both went through one context. They are
-// not the same operation. A create has to be agreed by a quorum; a lookup is a
-// metadata READ, and the only reason it is ever slow is that the group cannot
-// answer it yet.
-//
-// # THIRTY SECONDS: THE LONGEST SILENCE THE SERVER KEEPS, ASKED ACROSS
-//
-// A ceiling rather than one request's deadline, because a read the server did
-// not answer is one it never will — it decides a read when it processes it
-// ([ReadTerm]) — so what the ceiling bounds is not how long one request may
-// take but how long the REASON for the silence may last, re-asked every
-// [ReadTerm] and [ReAsk] throughout.
-//
-// The vendored server bounds that reason itself. An election runs to
-// maxElectionTimeout (9s, server/raft.go); a leader cut off from its quorum
-// notices after lostQuorumInterval (10s), checked every
-// lostQuorumCheckInterval (10s), and steps down; and a group left with no
-// leader past that ANSWERS a read with JSClusterNotAvailError rather than
-// dropping it. Past their sum, twenty-nine seconds, a read is answered
-// whatever state the group is in, so thirty spans the longest silence there
-// is, asked into every two seconds. A longer ceiling would ask only a group
-// that has already started answering, and a read still unanswered at thirty
-// loses nothing by stopping: the create after it decides ([Unanswered]).
-//
-// The ceiling does not branch on topology, which is why this is one constant
-// where [Budget] and [SequenceBudget] are two. A solo member's lookup is a
-// read of its own memory, answered in microseconds, with no raft, no election
-// and nothing to drop it — so for it thirty seconds is pure hang detection.
-//
-// # What it buys
-//
-// A lookup that used to spend the whole two-minute clustered [Budget] on ONE
-// unanswered request and then fail the boot now asks again every two seconds
-// for at most thirty, and if it is still told nothing it falls through to the
-// create, which covers every outcome the lookup could have reported (see
-// [Unanswered]).
-//
-// Both of the numbers this replaced were measured failing. The client's
-// undeclared five-second default on this call failed a three-member cluster
-// under load about one boot in six, reported as a bare "context deadline
-// exceeded" with nothing to say which deadline; the two-minute budget that
-// replaced it then failed an end-to-end cluster case on three attempts
-// running, at ~120s each, on a different object every time.
+// LookupBudget is the CEILING over one existence probe (the read that decides
+// create-versus-observe, re-issued by [Read]) and over every other read this
+// package hedges ([ReadWith], [ReadBoundedWith]): the longest silence the
+// server keeps, unlike a create's [Budget] (slow only while the group cannot
+// answer). An unanswered read never will be, so it bounds how long the REASON
+// lasts, re-asked every [ReadTerm]/[ReAsk]: election maxElectionTimeout (9s)
+// plus lostQuorumInterval and lostQuorumCheckInterval (10s each), after which
+// a leaderless group ANSWERS with JSClusterNotAvailError. Past that sum, 29s,
+// any state answers; a read unanswered at thirty loses nothing, the create
+// decides ([Unanswered]). One constant: a solo lookup is hang detection.
 const LookupBudget = 30 * time.Second
 
 // Lookup asks one, a metadata read of an object that should exist (a bucket's,
@@ -209,23 +177,10 @@ const LookupBudget = 30 * time.Second
 // re-asked while nobody answers, for at most [LookupBudget] of ctx, and it
 // returns the value of the request that answered.
 //
-// ONE FUNCTION FOR EVERY CALLER, because a single request is the defect this
-// budget's own doc records: on a cluster only an object's leader answers its
-// info, every other member drops the request, and while the group elects
-// (a raft election timeout is four to nine seconds) nobody answers at all, so
-// one request on the client's five-second default fails a lookup of an
-// object that is there. That held for the cluster tests too, which bound
-// their buckets with one bare request and failed the same way under CI load.
-//
-// THE ANSWER COMES BACK THROUGH THE READ, never through a variable one
-// assigns. A read keeps a request it has presumed lost outstanding while it
-// asks the next, and when one is answered it cancels the rest and hears each
-// of them end ([ReadWith]). So a request presumed lost, cut off by that
-// cancellation, ends AFTER the one that answered. A one that stored its
-// result in a variable it shared with every request would let that late
-// request write its nil over the answer. That handed observeBucket a nil
-// bucket on a partitioned cluster, and its first call on the bucket was a
-// nil dereference that stopped the whole test binary.
+// One request fails a lookup of an object that is there (only its leader
+// answers, and nobody does during an election). THE ANSWER COMES BACK THROUGH
+// THE READ, never a shared variable: a cancelled request ends AFTER the one
+// that answered ([ReadWith]) and would write its nil over the answer.
 func Lookup[T any](ctx context.Context, one func(context.Context) (T, error)) (T, error) {
 	return lookupWith(ctx, Clustered(false).Timing(), one)
 }
@@ -289,27 +244,16 @@ func leaderAnswered(name string, info *jetstream.StreamInfo) error {
 
 // Timing is every duration a provisioning call waits on, for one topology.
 //
-// [Clustered.Timing] is the production value; nothing else in the engine
-// builds one. A test builds its own to run [SettleWith], [ReadWith],
-// [Timing.Ask] and [Timing.Place] — and the callers that sit on them — at a scale it can afford,
-// keeping the relations between the fields that the production numbers keep
-// (this package's tests hold both to the same ones).
+// [Clustered.Timing] is the production value; a test builds its own at a
+// scale it can afford, keeping the relations between fields.
 //
-// THE ZERO VALUE IS REFUSED rather than read as anything: a window of zero is
-// a read-back that never asks, a cadence of zero is a loop that never waits,
-// and a bound of zero is a deadline already past — none of them a setting
-// anybody chose. EVERY METHOD REFUSES A TIMING WITH ANY FIELD UNSET, naming
-// the first, before it asks anything — Budget, Sequence and Lookup included,
-// which no method reads itself. A caller derives a context from those and
-// hands it to a method, so a timing that left one out is refused there by
-// name, where checking only the fields each method reads let it run on a
-// deadline that had expired before it began and report that as the broker's
-// answer.
-//
-// THE ONE FIELD WHOSE ZERO IS A SETTING is Progress: nil is a read whose
-// ceilings run on time alone, which is every read but one that crosses a
-// link its caller meters ([Timing.Following]); Beyond is refused unset only
-// beside a Progress, the one thing it is read with.
+// THE ZERO VALUE IS REFUSED: zero is a read-back that never asks, a loop that
+// never waits, a deadline already past. EVERY METHOD REFUSES ANY UNSET FIELD,
+// naming the first, Budget, Sequence and Lookup included (a caller derives
+// contexts from them; a missing one ran on an expired deadline reported as
+// the broker's answer). Progress's zero is a setting: nil is a read whose
+// ceilings run on time alone ([Timing.Following]); Beyond is refused unset
+// only beside a Progress.
 type Timing struct {
 	// Budget bounds one create — see [Budget].
 	Budget time.Duration
@@ -380,39 +324,16 @@ func (t Timing) unset() error {
 }
 
 // Arriving is t for a read whose answer takes arrival to reach its reader
-// whole once the broker has taken the request: a stream leader's reply that
-// carries a message of megabytes, which the leader builds, a link may carry
-// slowly, and the reader decodes, none of it heard until its last byte is in
-// (internal/jsapi's Arrival). Each request is presumed lost only once that
-// arrival has passed beyond the read term, and the read is asked for no
-// longer than the longest silence the broker keeps AND that arrival — the
-// one rule for such a read, whoever makes it (internal/jsapi's Leader, a
-// state log's read of a record by its position).
-//
-// # A reply still arriving is not silence
-//
-// [LookupBudget] bounds how long the broker may say NOTHING: past it, a group
-// in any state answers a read. A reply on its way is the broker having
-// answered, and held to the ceiling alone, a read whose reply takes longer
-// than the ceiling to arrive failed at every ask — a run's record of six
-// megabytes, read across a link at the slowest pace the engine allows one to
-// be, takes four minutes to arrive, so it could not be read at all, nor
-// written by the read-decide-write every change of it is
-// (crewlet/crewlet#1149).
-//
-// # And a reply still being built is not lost
-//
-// Presumed lost at the bare read term and asked again, a read whose reply
-// takes longer than the term to build and decode made the leader build
-// another whole reply beside the first, each one more work queued behind the
-// work that made the first one late — a member's own read of a dead letter at
-// the transport's ceiling, under load, ran out its bound with none of its
-// three replies answered (crewlet/crewlet#1153), and across a link each
-// re-ask put another whole reply on the link the first was still crossing.
-// Given its arrival, a read asks once while its reply can still be on its
-// way, and a request a member dropped across an election costs it that
-// arrival before it is asked again, rather than two seconds: the price of
-// never building, nor carrying, one reply twice.
+// whole once the broker has the request: a leader's reply of megabytes, built,
+// carried slowly and decoded, none of it heard until its last byte is in
+// (internal/jsapi's Arrival). A request is presumed lost only once arrival has
+// passed beyond the read term, and the read runs no longer than the longest
+// silence AND that arrival. A reply still arriving is not silence
+// ([LookupBudget] bounds only NOTHING said; six megabytes on the slowest link
+// takes four minutes), and one still being built is not lost: re-asking made
+// the leader build, and the link carry, a second whole reply beside the first.
+// So a read asks once while its reply can still be on its way: never build,
+// nor carry, one reply twice (crewlet/crewlet#1149, #1153).
 func (t Timing) Arriving(arrival time.Duration) Timing {
 	t.ReadTerm += arrival
 	t.Lookup += arrival
@@ -452,76 +373,15 @@ func Settle[T any](ctx context.Context, ask func(context.Context) (T, error)) (T
 // SettleWith re-runs ask while it answers [NotYetVisible], for up to
 // [ReadBack], at t's cadences.
 //
-// # Why every read-back on this path needs it
-//
-// A clustered create is committed by the metadata leader and becomes visible
-// to each member on its own next metadata update, so there is a window in
-// which the member that just made an object is told it does not exist. Every
-// read-back on the provisioning path runs inside that window BY CONSTRUCTION —
-// each one is asking "did my create, or a peer's, actually land?" — and a
-// single lookup answers the question at one arbitrary instant inside it.
-//
-// It was written out once, for the state log's own stream lookup, and the
-// three sibling read-backs kept the one-shot form: the bucket create's, the
-// lease bucket's status read, and the stream create's peer-race read. All four
-// fail a clustered boot the same way and for the same reason, so the re-asking
-// is here rather than in any of them — which is the argument this whole
-// package exists for.
-//
-// # ctx IS THE BOOT'S, NEVER THE CREATE'S
-//
-// Two of these read-backs run because a create's own deadline EXPIRED — that
-// is what the timeout half of the peer-race looks like — so handing this
-// function that deadline is handing it a context that is already done. It
-// would ask once, find the select below already closed, and return the
-// not-found it exists to wait out; the retry would be dead code on exactly the
-// paths it was written for, and only the two read-backs whose caller had a
-// live context would ever re-ask at all. So a caller derives its per-create
-// deadline into a SEPARATE variable and passes the one that bounds the boot.
-//
-// # And the window is this function's, not the caller's
-//
-// It owns the [ReadBack] deadline, which bounds the WHOLE read-back and not
-// one attempt of it: what is being waited out is a single propagation delay
-// and not N independent requests, so a window per attempt would multiply the
-// time a genuinely absent object takes to be reported by however many times it
-// was re-asked. A window the caller built separately would still be running
-// when a lookup blocked past it, and a lookup with no deadline of its own
-// would outlive the window entirely and hang until the boot's context expired.
-//
-// # An attempt nobody answered is not an answer, and gets its own cadence
-//
-// Inside that window each question is asked as every read is ([ReadWith]):
-// a request is presumed lost after [ReadTerm], for [Ask]'s reason arriving on
-// the read-back path — a request put to a group that has no leader yet is
-// DROPPED rather than refused, so handing one request the whole window spends
-// all of it waiting for a reply nobody is going to send, and returning what
-// that produced reports "the object is not there" on the strength of having
-// heard nothing, which is the collapse [Unanswered] exists to prevent.
-// Measured on three members creating one stream at three ceilings: the loser
-// of each race read back once, was never answered, and failed its boot over a
-// stream that existed a moment later. And a request presumed lost is kept
-// OUTSTANDING while the next is sent ([hedge]), because one behind a backed-up
-// API queue is answered late rather than never, and a read-back that threw
-// each away at its term heard nothing for as long as the queue stayed slower
-// than the term.
-//
-// So this loop now serves TWO conditions, and they keep the two cadences
-// [ReAsk] states rather than sharing one. A not-yet-visible is an ANSWER, and
-// it clears on this member's next metadata update: [PlacementRetry], four
-// times a second, each a question of its own. A request nobody replied to was
-// DESTROYED, and what has to change is which member holds the group: [ReAsk].
-// Merging them is not academic — `nats.ErrNoResponders` comes back in
-// microseconds, so at the placement cadence a broker whose JetStream is not
-// serving yet is asked four times a second, for every object a boot
-// provisions, which is the load ReAsk exists to remove.
-//
-// The ERROR IT RETURNS IS THE ASK'S OWN, never a deadline of this function's:
-// "stream not found" names the object and "deadline exceeded" does not. That
-// holds for the last attempt too — the one the window interrupts — so the
-// answer a caller wraps is what the object said, not what this function's
-// patience did. And no question is asked again once the window's deadline
-// has passed, whether or not the window says so yet ([pause]).
+// A create is visible to a member only on its next metadata update, so every
+// read-back runs in a not-found window. ctx IS THE BOOT'S, NEVER THE
+// CREATE'S: a read-back often runs because the create's deadline EXPIRED. The
+// [ReadBack] window is this function's, over the WHOLE read-back. Questions go
+// as every read ([ReadWith], [hedge]); an unanswered one is not "not there"
+// ([Unanswered]). Not-yet-visible is an ANSWER, re-asked at [PlacementRetry];
+// a DESTROYED request needs another member to hold the group, at [ReAsk]
+// (merged, `nats.ErrNoResponders` is asked four times a second per object).
+// Returns the ASK'S OWN error and asks nothing past the window ([pause]).
 func SettleWith[T any](ctx context.Context, t Timing, ask func(context.Context) (T, error)) (T, error) {
 	var zero T
 	if err := t.unset(); err != nil {
@@ -598,86 +458,30 @@ func heard(absent, unanswered error) error {
 }
 
 // ReadTerm is how long ONE metadata READ — a stream's or a consumer's info —
-// waits for a reply before it is presumed dropped and the next request is sent:
-// each request of [SettleWith]'s, and each of [ReadWith]'s. Presumed, not
-// abandoned: the request stays outstanding and its reply is taken if it comes
-// ([hedge]).
-//
-// # A READ IS ANSWERED WHEN IT IS PROCESSED OR NEVER
-//
-// Which is what separates it from the writes [AskTerm] is sized for. The
-// vendored server decides an info request when it PROCESSES it
-// (server/jetstream_api.go, jsStreamInfoRequest and jsConsumerInfoRequest): it
-// replies, or it returns without replying, and nothing keeps the request to be
-// answered later. It processes it when a worker takes it from the API queue
-// every routed request waits in — at once while that queue is idle, and late
-// behind a backlog — which is why a request past its term is presumed lost and
-// never thrown away. And a whole fleet returns without replying in an ordinary
-// moment of every clustered boot. An object another node has just asked for is
-// IN FLIGHT — assigned by the metadata leader, not yet applied by the member
-// preferred to lead it — and a group with no leader yet may be answered for
-// only by that member, so until it has applied the assignment every other
-// member, the metadata leader included, bails without a word. A read sent into
-// that window is gone the moment it is processed, and a term spanning an
-// election waits for a reply that does not exist: a three-member fleet's boot
-// was measured spending a whole [AskTerm] and a [ReAsk] — sixteen seconds —
-// on one stream lookup dropped that way, with its metadata leader answering
-// throughout.
-//
-// # ONE SECOND
-//
-// The vendored server's hbInterval (server/raft.go) and [ReAsk]'s own anchor:
-// the shortest interval over which a group's state can have changed, so a read
-// re-sent sooner meets the state that dropped it and is dropped again. A read
-// that IS answered comes back in a round trip, far inside it. One slower than
-// that — queued behind a backlog — is still listened for while the next is
-// asked, and what a read nobody answered leaves open is decided elsewhere — a
-// lookup's create covers it ([Unanswered]), and a read-back reports the
-// silence when its window closes.
-//
-// WHAT IT BUYS IS THAT ONE DROPPED READ COSTS A SECOND AND A [ReAsk], NOT AN
-// ELECTION — and that one hung ask is not a whole read-back. A hung ask costs
-// this term and then waits [ReAsk], so two of them complete inside [ReadBack]
-// and a third begins — stated as the relation rather than as a count, because
-// all three constants are tuned against the server and a count restated here
-// is the thing that goes stale. The test holds the relation, not the number.
-//
-// It does not branch on topology, unlike [AskTerm]. A solo broker drops no
-// read, so one it has not answered in a second is a broker that is not
-// answering at all; asking it again every two seconds is one more request per
-// two seconds to a server already not serving, and reaches the same fallthrough
-// a single long attempt would. A solo WRITE is different — it is file-store
-// setup a busy disk can make slow — which is why its term is its budget.
+// waits before it is presumed dropped and the next is sent ([SettleWith],
+// [ReadWith]); the request stays outstanding ([hedge]). A read is answered
+// when the server PROCESSES it or never (jsStreamInfoRequest,
+// jsConsumerInfoRequest), and an object in flight during a boot is answered
+// by no member but the one preferred to lead it, so a term spanning an
+// election waits for a reply that does not exist. ONE SECOND is the server's
+// hbInterval (server/raft.go), the shortest interval over which a group's
+// state can change: a sooner re-send is dropped again, and a dropped read
+// costs a second and a [ReAsk], not an election. No topology branch, unlike
+// [AskTerm]: a solo broker drops no read. The test holds that two hung asks
+// fit inside [ReadBack], not a count.
 const ReadTerm = time.Second
 
 // Place runs create until the cluster stops refusing to place the object, for
 // as long as ctx allows.
 //
-// # Why this is not each caller's own loop
-//
-// Because three of the four had one and the fourth did not, which is this
-// package's founding argument arriving a second time. A replicated stream and a
-// replicated KV bucket each retried [Unplaceable] at [PlacementRetry] until
-// their budget ran out; a durable consumer — placed by the same metadata group,
-// on the same stream, at the same moment of the same boot — returned on the
-// first refusal. So the clustered budget bought the consumer creates nothing at
-// all: the one condition the budget exists to wait out was the one condition
-// they did not wait on, and a node could fail its boot on "no suitable peers"
-// while the group it was asking was still forming.
-//
-// awaiting is called ONCE, before the first wait, and is where a caller says
-// which object is being waited for. Once rather than per attempt for
-// [WhenSlow]'s reason: the useful facts are that this started and whether it
-// ended, and a line per poll answers the first question hundreds of times.
-//
-// THE ERROR IT RETURNS IS THE CREATE'S OWN, never the context's: "no suitable
-// peers" says what is wrong and names the condition to go and look at, and
-// "deadline exceeded" says neither.
-//
-// Each attempt is [Timing.Ask]'d at t.AskTerm, and an answered refusal asked
-// again every t.PlacementRetry — never once ctx's deadline has passed, whether
-// or not ctx says so yet ([pause]): a create sent then is one its caller has
-// given up on, and the error it comes back with can take the refusal's place.
+// One loop for every caller: a consumer create that returned on the first
+// [Unplaceable] refusal, while streams and buckets retried at
+// [PlacementRetry], failed a boot on "no suitable peers" while the group was
+// still forming. awaiting is called ONCE, before the first wait, to name the
+// object ([WhenSlow]'s reason: not a line per poll). THE ERROR IT RETURNS IS
+// THE CREATE'S OWN, never the context's. Each attempt is [Timing.Ask]'d at
+// t.AskTerm, a refusal re-asked every t.PlacementRetry, and never once ctx's
+// deadline has passed ([pause]): that create's caller has given up.
 func (t Timing) Place(ctx context.Context, create func(context.Context) error, awaiting func()) error {
 	if err := t.unset(); err != nil {
 		return err
@@ -712,54 +516,17 @@ func Place(ctx context.Context, term time.Duration,
 }
 
 // Ask runs one idempotent metadata request, RE-ISSUING it while the broker
-// does not answer, for as long as ctx allows.
-//
-// # Why re-asking is the remedy and waiting is not
-//
-// Because the reply does not exist rather than being late. nats-server drops
-// a routed metadata request outright in more than one place, and both are
-// ordinary during a bring-up. A member that is not the metadata leader and has
-// no assignment for the object RETURNS WITHOUT REPLYING unless the group is
-// already leaderless (server/jetstream_api.go, the `sa == nil` arm of
-// jsStreamInfoRequest — the leaderless branch sends a delayed error, the other
-// branch sends nothing at all). And apiDispatch DRAINS its whole routed queue
-// when it reaches JSDefaultRequestQueueLimit, discarding every request pending
-// on it with an advisory and no replies.
-//
-// So the caller is waiting on a reply nobody is going to send, and a longer
-// deadline buys strictly nothing: it was measured buying exactly nothing, at
-// two minutes a time, on a different object every attempt. What gets an answer
-// is ASKING AGAIN — at a leader that now exists, or past a queue that has
-// drained.
-//
-// # Why every attempt gets its own context
-//
-// The premise is that the outstanding request is dead. An attempt handed the
-// previous one's spent deadline would be dead on arrival, which is the same
-// defect [Settle]'s doc records for read-backs handed the create's expired
-// context: the retry would be dead code on precisely the path it was written
-// for.
-//
-// # Any answer ends it, including a bad one
-//
-// [Unanswered] is the only condition re-asked. An answer — the object, a
-// not-found, a placement refusal, an auth failure — is returned at once, so
-// this never turns a configuration mistake into a loop, and [Place] can still
-// see the refusal it exists to wait out.
-//
-// again, when non-nil, is called before each re-ask with the number of
-// requests already sent, so a caller can say which object is not being
-// answered. The error returned is the last attempt's own, never this
-// function's patience.
-//
-// Each request waits t.AskTerm, and the next is sent t.ReAsk after it. That is
-// a WRITE's term, sized for a reply the server holds until the object it made
-// has a leader ([AskTerm]) — and the one request is abandoned before the next
-// is sent, since a second create while the first is held is a second write. A
-// read is never held, is answered when it is processed, and asks through
-// [ReadWith] at the read term instead, keeping every request outstanding. No
-// request is sent again once ctx's deadline has passed, whether or not ctx
-// says so yet ([pause]).
+// does not answer, for as long as ctx allows. The reply does not exist, not
+// late: nats-server drops a routed request when
+// a member that is not the metadata leader has no assignment for the object
+// (the `sa == nil` arm of jsStreamInfoRequest), and apiDispatch DRAINS its
+// queue at JSDefaultRequestQueueLimit. ASKING AGAIN helps, a longer deadline
+// does not; each attempt gets its own context (a spent one is dead on
+// arrival). Only [Unanswered] is re-asked: any answer returns at once, so a
+// configuration mistake never loops and [Place] sees its refusal. again, if
+// non-nil, gets the requests sent. A request waits t.AskTerm (a WRITE's term,
+// [AskTerm]) and is abandoned before the next, a second create being a second
+// write. None is sent once ctx's deadline has passed ([pause]).
 func (t Timing) Ask(ctx context.Context, one func(context.Context) error, again func(asks int)) error {
 	if err := t.unset(); err != nil {
 		return err
@@ -787,38 +554,17 @@ func Ask(ctx context.Context, term time.Duration,
 	return withTerm(term).Ask(ctx, one, again)
 }
 
-// AskTerm is how long ONE metadata WRITE — a create, a delete — waits before it
-// is presumed destroyed and re-issued by [Ask].
-//
-// # THE CLUSTERED TERM IS FIFTEEN SECONDS, BECAUSE A WRITE'S REPLY IS HELD
-//
-// The vendored server answers a create when the object it made has a LEADER:
-// the reply is kept on the assignment and sent from the new group's first
-// leader change (server/jetstream_cluster.go, processStreamLeaderChange), so a
-// write the metadata group accepted is answered an election later, never on
-// arrival. An attempt has to be long enough that a reply which is coming has
-// come, and no longer — because past that point the request is gone and the
-// time is spent waiting for nothing. maxElectionTimeout is 9s (server/raft.go),
-// so the term has to span the metadata commit and a complete election after
-// it; shorter, and an accepted create is abandoned just before its leader
-// answers and asked again into the same wait. Fifteen covers both with room,
-// and it is an eighth of the clustered [Budget] that used to be one attempt —
-// so a create now asks eight times inside the budget that once bought a single
-// unanswered request.
-//
-// A READ IS NOT HELD — the server answers it when it processes it or never —
-// so a read waits [ReadTerm] instead, through [ReadWith]. Sized by this
-// term, one dropped stream lookup was measured costing a fleet's boot sixteen
-// idle seconds.
-//
-// # AND THE SOLO TERM IS THE SOLO BUDGET, BECAUSE THERE IS NOTHING TO RE-ASK
-//
-// A solo broker has no metadata group, no election and no leader that can
-// change, so none of the drop paths above exists: a request that has not been
-// answered is one the local file store is still working on, and asking a
-// second time adds load rather than a leader. Stating it as one attempt at the
-// full budget keeps that a decision rather than an accident of sharing the
-// clustered number.
+// AskTerm is how long ONE metadata WRITE waits before it is presumed destroyed
+// and re-issued by [Ask]. CLUSTERED, FIFTEEN SECONDS: a write's reply is HELD
+// until the object it made has a LEADER (server/jetstream_cluster.go,
+// processStreamLeaderChange), so the term spans the metadata commit and a full
+// election (maxElectionTimeout 9s, server/raft.go). Shorter abandons an
+// accepted create just before its leader answers; longer waits for a request
+// already gone. An eighth of the clustered [Budget]. A READ is not held and
+// waits [ReadTerm] ([ReadWith]); sized by this term, one dropped lookup cost
+// sixteen idle seconds. SOLO, THE SOLO BUDGET: no metadata group or election,
+// so an unanswered request is the file store still working and a second ask
+// adds load, not a leader.
 func AskTerm(clustered bool) time.Duration {
 	if clustered {
 		return clusterAskTerm
@@ -833,18 +579,13 @@ const clusterAskTerm = 15 * time.Second
 
 // ReAsk is how long [Ask] waits before re-issuing a request nobody answered.
 //
-// ONE SECOND, which is the vendored server's hbInterval (server/raft.go) — the
-// shortest interval over which the metadata group's leadership can have
-// changed. Re-asking sooner puts the same question to a group in the same
-// state and answers it the same way, so it spends requests on a queue that may
-// itself be draining.
-//
-// Deliberately NOT [PlacementRetry], although both are "try again in a
-// moment". That one re-asks a refusal the server ANSWERED, which clears the
-// instant a peer joins and is worth polling for four times a second; this one
-// re-sends a request that was destroyed, where the thing that has to change is
-// which member holds the group. Two conditions, two cadences, and merging them
-// would tie each to the other's evidence.
+// ONE SECOND, the vendored server's hbInterval (server/raft.go): the shortest
+// interval over which the metadata group's leadership can have changed;
+// sooner asks the same group in the same state and spends requests on a queue
+// that may be draining. Deliberately NOT [PlacementRetry]: that re-asks a
+// refusal the server ANSWERED, which clears when a peer joins and is worth
+// polling four times a second; this re-sends a DESTROYED request, where what
+// must change is which member holds the group. Two conditions, two cadences.
 const ReAsk = time.Second
 
 // pause waits d before a request is asked again, and reports whether it may
@@ -868,32 +609,16 @@ func pause(ctx context.Context, d time.Duration) bool {
 
 // overdue reports whether ctx's deadline has passed, WHETHER OR NOT CTX SAYS
 // SO YET. Every loop here that asks again decides it with this, never with
-// ctx.Done alone.
-//
-// # Why ctx.Done is not enough
-//
-// Because a context is ended at its deadline by a timer of its own, whose
-// function ([time.AfterFunc]) the runtime runs in a goroutine of its own once
-// it gets to that timer, and until then ctx.Err() is nil and ctx.Done() open.
-// On a process the machine has not run for a while it gets there late, and a
-// loop that pauses on a timer of its own then finds both timers due: its own
-// channel ready and ctx's still open, or both ready and select choosing
-// between them at random. Either way it went on as though its caller were
-// still waiting. Where ctx was still open the request went out, since nats.go
-// refuses one only on a context whose Err is set: a read nobody would hear
-// the answer to, put to a leader already not answering — the load [hedge]
-// counts per request — or a write the broker may still carry out after its
-// caller gave up on it. And a write's or a placement's next attempt, sent or
-// refused, can come back with the deadline in place of what its caller was
-// owed: the silence the write was told, the refusal the placement waits out.
-// natsobj's unanswered stream info showed it on a loaded CI runner: three
-// requests inside a 3.9-second bound whose third was due at four. With the
-// test's process stopped from just before the bound to past four seconds, the
-// unchanged hedge sent that third request in four runs of eight, a few
-// hundred milliseconds after the bound.
-//
-// A deadline AT this instant has passed: a request sent at its caller's
-// deadline has no time left to be answered in.
+// ctx.Done alone. A context ends at its deadline via a timer whose function
+// ([time.AfterFunc]) the runtime runs in its own goroutine once it reaches
+// that timer; until then ctx.Err() is nil. On a process the machine has not
+// run for a while a
+// loop's own timer and ctx's are both due, with select choosing at random, so
+// it went on as though its caller still waited. nats.go refuses a request
+// only on a context whose Err is set, so one went out anyway: a read nobody
+// would hear (the load [hedge] counts), or a write the broker may carry out
+// after its caller gave up. A deadline AT this instant has passed: a request
+// then has no time left to be answered in.
 func overdue(ctx context.Context) bool {
 	deadline, ok := ctx.Deadline()
 	return ok && !time.Now().Before(deadline)
@@ -902,16 +627,11 @@ func overdue(ctx context.Context) bool {
 // Clustered is whether this node's broker has peers, which is what decides
 // every budget above.
 //
-// A TOPOLOGY FACT, and deliberately not a replica count. Inferring it from
-// replicas was wrong on a configuration this repository permits: a member that
-// names peers, or an external NATS cluster, with `stream.replicas: 1`. Only
-// `replicas > 1` with no peers is refused (see config.Bootstrap.Validate), so
-// a single-replica clustered broker is a real deployment — and every create on
-// it still waits on the same metadata group, while the replica proxy handed it
-// the solo budget and the solo sequence ceiling.
-//
-// It is a named type rather than a bare bool so a caller cannot pass one of
-// the several other booleans in scope at these call sites by accident.
+// A TOPOLOGY FACT, not a replica count: a member that names peers, or an
+// external NATS cluster, with `stream.replicas: 1` is a real deployment (only
+// `replicas > 1` with no peers is refused, config.Bootstrap.Validate), and
+// every create on it waits on the same metadata group. A named type so a
+// caller cannot pass one of the other booleans in scope by accident.
 type Clustered bool
 
 // Budget is how long ONE replicated create gets.
@@ -934,26 +654,13 @@ const SlowAfter = 10 * time.Second
 // WhenSlow calls report once if the work outlives [SlowAfter], and returns the
 // function that ends the watch.
 //
-// # Why a provisioning call needs this at all
-//
-// Because a stalled one is COMPLETELY SILENT, and that is what made a failed
-// boot undiagnosable. A node opens every bucket of its two coordination
-// stores, and several streams, in a row; if one of them hangs, nothing is
-// logged between the line before it and the failure a budget later — so the
-// log cannot say which object it was on,
-// how many it had already done, or whether it was moving slowly or not moving
-// at all. In one CI run a member emitted nothing whatsoever for 28 seconds and
-// then failed, and the only way to learn which bucket it died on was the error
-// text at the end.
-//
-// One line PER OBJECT is deliberately all this gives. It is enough to answer
-// both questions a person actually has: which object, and — by whether more
-// lines follow — wedged or merely slow. A repeating tick would answer the same
-// question eleven times per hung create.
-//
-// The returned stop WAITS for the watcher, so report never fires after it has
-// returned: a caller that logs into a test's sink must not have a line arrive
-// after the case it belonged to finished.
+// A stalled provisioning call is COMPLETELY SILENT: a node opens many buckets
+// and streams in a row, and a hang logs nothing until the failure a budget
+// later, so the log cannot say which object it was on or whether it was slow
+// or wedged. One line PER OBJECT answers both (more lines follow or not); a
+// repeating tick would repeat the question. The returned stop WAITS for the
+// watcher, so report never fires after it returns: a test's sink must not get
+// a line after its case finished.
 func WhenSlow(ctx context.Context, report func(after time.Duration)) (stop func()) {
 	return whenSlowAfter(ctx, SlowAfter, report)
 }
@@ -1017,26 +724,14 @@ const errCodeNoPeers jetstream.ErrorCode = 10005
 // Unplaceable reports the transient "the cluster is still forming" error, and
 // it is the ONLY one worth waiting out.
 //
-// Every other create failure — a bad TTL, a conflicting replica count, an auth
-// failure — clears by nobody waiting, so retrying it would turn a
-// configuration mistake into a two-minute hang ending in the same message.
-//
-// A STORAGE CLAUSE INSIDE THIS CODE IS STILL WAITED OUT, which is what keeps
-// it disjoint from [OutOfCapacity] rather than overlapping it. A clustered
-// create that no member can place reports this one code with every reason its
-// peer selection accumulated flattened into the description, and the room it
-// weighed is somebody else's disk — a figure this node cannot read and so
-// cannot name in a terminal message.
-//
-// AND THE REASONS ARE THE GROUP'S CURRENT MEMBERS' ONLY. selectPeerGroup walks
-// the metadata group's peers, sets one shared flag for each member it discards
-// for want of room, and never sees a member that has not joined at all — so
-// during a bring-up, which is the one moment this whole package exists to be
-// patient through, a refusal whose every reason is storage can be the verdict
-// of the single member that has come up so far. Waiting is right for that, and
-// for a peer an operator is about to give room to; the cost is that a cluster
-// which really has no room says so when the budget runs out rather than at
-// once.
+// Every other create failure clears by nobody waiting; retrying would turn a
+// configuration mistake into a two-minute hang. A STORAGE CLAUSE INSIDE THIS
+// CODE IS STILL WAITED OUT, keeping it disjoint from [OutOfCapacity]: the room
+// weighed is other members' disks, which this node cannot read. The reasons
+// cover the group's CURRENT members only (selectPeerGroup never sees one not
+// yet joined), so mid bring-up an all-storage refusal can be the verdict of
+// the one member up so far. A cluster really out of room says so when the
+// budget runs out rather than at once.
 func Unplaceable(err error) bool {
 	apiErr, ok := apiError(err)
 	return ok && apiErr.ErrorCode == errCodeNoPeers
@@ -1071,71 +766,28 @@ const (
 const errCodeNoLimits jetstream.ErrorCode = 10120
 
 // NoApplicableLimit reports a create the broker refused because NO LIMIT IN
-// THE ACCOUNT APPLIES TO IT AT ALL.
-//
-// # Why it needs a predicate of its own, beside [OutOfCapacity]
-//
-// Because it is terminal in the same way and remedied in a different one, and
-// a caller that cannot tell them apart sends an operator to the wrong lever.
-// OutOfCapacity means the ceiling asked for does not fit inside a limit that
-// exists: what moves is the limit, or what is already reserved against it.
-// This means the account states no limit that COULD be fitted into — its
-// limits are tiered and it carries none for the replica class this node's
-// objects land in — so nothing here fits by being made smaller. What moves is
-// `stream.replicas`, or the account's own tier declarations.
-//
-// Folded in as a third arm of OutOfCapacity it would have inherited that
-// refusal's sentence, which names a limit, a usage and
-// `stream.store_max_bytes`: three numbers and a field that do not exist on
-// this account, offered as the thing to change.
-//
-// # And unclassified it was reported as an object that is not there
-//
-// Which is what it was. Neither OutOfCapacity nor [Unplaceable] matched, so
-// every create path fell through to its read-back, spent [ReadBack] asking
-// after an object the broker had refused to make, and appended `(and it is not
-// there: stream not found)` to the one sentence that said what was actually
-// wrong. An operator reading that goes looking for a missing stream on a
-// cluster whose account never carried a limit for it.
-//
-// TERMINAL, and never waited out: no member arriving changes a limit table, so
-// unlike [Unplaceable] there is nothing here for the placement retry to wait
-// for.
+// THE ACCOUNT APPLIES TO IT AT ALL. Beside [OutOfCapacity]: terminal alike,
+// remedied differently. There the ceiling does not fit a limit that exists;
+// here the account is tiered and carries none for this node's replica class,
+// so nothing fits by being smaller: what moves is `stream.replicas` or the
+// tier declarations. As an arm of OutOfCapacity it would inherit a sentence
+// naming limits that do not exist here. TERMINAL, never waited out: no member
+// arriving changes a limit table, unlike [Unplaceable].
 func NoApplicableLimit(err error) bool {
 	apiErr, ok := apiError(err)
 	return ok && apiErr.ErrorCode == errCodeNoLimits
 }
 
 // NoApplicableLimitDetail is the clause a caller attaches to that refusal, in
-// the shape [Unplaceable]'s and [OutOfCapacity]'s callers already use: a
-// leading-space sentence appended to the broker's own words.
-//
-// ONE WORDING FOR FIVE CALLERS — the stream create, the coordination bucket
-// create, the object store's bucket create and the two consumer creates —
-// because the remedy is the same at each and the server makes no distinction
-// between them either. Written per caller it would drift the way every other
-// pair in this tree has — and asked for at only four of them, it did: the
-// object store's create reported the broker's bare text, naming neither the
-// class nor the field.
-//
-// IT NAMES THE CLASS RATHER THAN THE OBJECT, because the class is the whole
-// fact: the account's limits are per replica class and this node's number is
-// `stream.replicas`. replicas is normalised the way the server normalises it
-// (server/jetstream.go, tierName reads 0 as 1), so the class named here is the
-// class the refusal was decided against.
-//
-// It states that the account IS tiered rather than guessing: selectLimits can
-// only answer not-ok when there is no default limit, and an account with no
-// limits at all is not a shape the server permits — EnableJetStream installs
-// defaultJSAccountTiers for one. It also says an embedded broker never answers
-// this, because that is the first thing a reader will wonder and the answer
-// saves them looking at Tier A for a field that is not the lever.
-//
-// A TIER THAT IS THERE AND CARRIES NO LIMIT reaches this same refusal, which
-// is why the sentence says "carries none for" rather than "declares no tier
-// for": the account's report lists every class it holds objects in, and
-// [internal/queue/jetstream]'s budget tells the two apart for the operator who
-// reads it there.
+// the shape of [Unplaceable]'s and [OutOfCapacity]'s: a leading-space sentence
+// appended to the broker's own words. ONE WORDING FOR ALL FIVE CALLERS: the
+// remedy is the same at each, and per-caller wording drifted. IT NAMES THE
+// CLASS, NOT THE OBJECT: limits are per replica class and this node's number
+// is `stream.replicas`, normalised as the server does (tierName reads 0 as 1).
+// The account IS tiered (selectLimits answers not-ok only without a default
+// limit, and EnableJetStream installs tiers). A tier present with no limit
+// reaches the same refusal, hence "carries none for". It says an embedded
+// broker never answers this, so no one looks at Tier A.
 func NoApplicableLimitDetail(replicas int) string {
 	if replicas < 1 {
 		replicas = 1
@@ -1154,33 +806,15 @@ func NoApplicableLimitDetail(replicas int) string {
 // OutOfCapacity reports a create the broker refused because the byte ceiling
 // asked for does not fit inside the storage limit in force.
 //
-// # Why this is named here rather than beside either caller
-//
-// Two subsystems provision replicated objects and both meet this refusal —
-// [internal/queue/jetstream] creating streams and [internal/coord/kv] creating
-// buckets, a bucket BEING a stream — which is the same reason [Unplaceable],
-// [Budget] and [ReadBack] live here. Written twice the two spellings drift,
-// exactly as this package's own doc records for every other rule it holds.
-//
-// # Why PLACEMENT is deliberately not one of these codes
-//
-// A clustered create that no member can place reports [errCodeNoPeers], whose
-// code is shared by every placement failure and whose storage clause is prose
-// accumulated across the peers the metadata group HAS. What it weighed is
-// another member's disk, which this node cannot read — so a message calling it
-// terminal could only quote a budget that is not the one that refused. And the
-// accumulation is over the group's CURRENT membership rather than over the
-// fleet, so during a bring-up that verdict can be the single member that has
-// come up so far speaking for peers still starting: read as terminal it would
-// refuse a boot on a cluster where nothing is wrong. It stays [Unplaceable]. `insufficient resources` (10023) is excluded for the
-// opposite reason: the server answers a publish, a catch-up or a consumer's
-// placement with it, never a stream's create, so naming it here would read
-// some other failure as a ceiling nobody reserved.
-//
-// Like [Unplaceable] it is TERMINAL — nothing frees a limit by being waited
-// for — and, like Unplaceable, a caller must not read back afterwards: nothing
-// was placed, and a not-found appended to the message only obscures what is
-// actually wrong.
+// Named here because [internal/queue/jetstream] and [internal/coord/kv] (a
+// bucket BEING a stream) both meet it. PLACEMENT is deliberately not one of
+// these codes: [errCodeNoPeers]'s storage clause covers the group's CURRENT
+// members and disks this node cannot read, so read as terminal it would
+// refuse a boot where nothing is wrong. It stays [Unplaceable].
+// `insufficient resources` (10023) is excluded the other way: the server
+// answers a publish, catch-up or consumer placement with it, never a stream
+// create. Like Unplaceable it is TERMINAL, and a caller must not read back
+// afterwards: nothing was placed.
 func OutOfCapacity(err error) bool {
 	apiErr, ok := apiError(err)
 	if !ok {
@@ -1193,28 +827,17 @@ func OutOfCapacity(err error) bool {
 	return false
 }
 
-// The broker's codes for a create it refused ON THE REQUEST ALONE — before it
-// looked for an assignment of the same name, or with that name left out of
-// what it counted — so no peer creating the same object can have produced
-// one. NUMBERS for [errCodeNoPeers]'s reason; nats.go names only the last.
-//
-// Each was read in the pinned nats-server, on the path a create takes there
-// (server/jetstream_cluster.go, jsClusteredStreamRequest and
-// jsClusteredConsumerRequest):
-//
-//   - INVALID CONFIGURATION is checkStreamCfg's answer, and the sealed-create
-//     refusal after it: a function of the configuration sent, run before the
-//     handler asks whether the name is assigned. A peer sending the same
-//     configuration was refused the same way and made nothing either.
-//   - SUBJECTS OVERLAPPING another stream's is decided after the handler has
-//     answered a same-name stream with a DIFFERENT configuration as "name
-//     already in use", and with the same-name assignment excluded from the
-//     comparison when the configuration is the same. So the stream it
-//     overlaps is never the one this create was racing to make.
-//   - THE MAXIMUM NUMBER OF STREAMS, and of CONSUMERS, are counted without
-//     the name being created (tieredStreamAndReservationCount skips it, and
-//     the consumer count is not taken at all once the name is assigned), so a
-//     peer's object of the same name is not what reached the limit.
+// The broker's codes for a create refused ON THE REQUEST ALONE (before it
+// looked for a same-name assignment, or with that name not counted), so no
+// peer creating the same object can have produced one. NUMBERS for
+// [errCodeNoPeers]'s reason; nats.go names only the last. In the pinned
+// nats-server (jsClusteredStreamRequest, jsClusteredConsumerRequest):
+//   - INVALID CONFIGURATION (checkStreamCfg, the sealed-create refusal) depends
+//     on the configuration sent, run before the name-assigned check.
+//   - SUBJECTS OVERLAPPING is decided after a same-name stream is answered
+//     "name already in use" or excluded from the comparison.
+//   - THE MAXIMUM NUMBER OF STREAMS, and of CONSUMERS, are counted without the
+//     name being created (tieredStreamAndReservationCount skips it).
 const (
 	errCodeInvalidConfig  jetstream.ErrorCode = 10052
 	errCodeSubjectOverlap jetstream.ErrorCode = 10065
@@ -1223,37 +846,17 @@ const (
 )
 
 // Refused reports a create the broker ANSWERED BY PLACING NOTHING, for a
-// reason no peer racing the same create can have produced — so a read-back
-// after it would be asking after an object nobody made.
-//
-// # Why one predicate rather than an arm at each create site
-//
-// Because every create site needs the same decision and each had written its
-// own: the stream create and the bucket create gated their read-backs on
-// three refusals each, spelled differently, and both consumer creates on two
-// — the drift this package exists to stop. Every refusal a
-// site did not list fell through to the read-back, which spent [ReadBack]
-// polling for an object the broker had refused to make and then appended
-// `(and it is not there: stream not found)` to the one sentence that said what
-// was wrong. Each refusal reached the list the same way, by being found doing
-// exactly that: [OutOfCapacity] first, then [NoApplicableLimit]; a publish to a
-// subject whose derived stream overlapped the engine's own was spending five
-// seconds a call there when this was written.
-//
-// # Why a list rather than "everything but a race's shapes"
-//
-// Because the unknown direction is the dangerous one. A code wrongly listed
-// here turns a peer that won the race into a node that refuses to boot; a code
-// wrongly left out costs a read-back and a misleading suffix. So the list
-// holds only codes proven not to be a race's — see the constants above — and
-// everything else is still read back: a name already in use, a create that
-// was never answered, a group that is not available, and the server's generic
-// consumer-create failure, which a create can answer with the consumer placed
-// all the same.
-//
-// It includes the three predicates beside it: [Unplaceable] once [Place] has
-// waited it out, [OutOfCapacity] and [NoApplicableLimit]. A caller that words
-// one of those differently asks for it first.
+// reason no peer racing the same create can have produced, so a read-back
+// would ask after an object nobody made. One predicate for every create site:
+// an unlisted refusal fell through to a [ReadBack] poll and appended `(and it
+// is not there: stream not found)`. A LIST, not
+// "everything but a race's shapes": a code wrongly listed turns a peer that
+// won the race into a node refusing to boot; one wrongly left out costs a
+// read-back and a misleading suffix. So only codes proven not a race's, and
+// still read back: a name in use, an unanswered create, an unavailable group,
+// the generic consumer-create failure (the consumer may be placed). Includes
+// [Unplaceable] once [Place] has waited it out, [OutOfCapacity] and
+// [NoApplicableLimit]; a caller wording one differently asks for it first.
 func Refused(err error) bool {
 	if Unplaceable(err) || OutOfCapacity(err) || NoApplicableLimit(err) {
 		return true
@@ -1297,87 +900,31 @@ func apiError(err error) (*jetstream.APIError, bool) {
 // NotYetVisible reports a create that landed at the metadata layer but is not
 // yet readable by the member that made it.
 //
-// # Why this is not the same question as Unplaceable
-//
-// "No suitable peers" is the metadata leader REFUSING to place an object,
-// answered by waiting for more members. This is the opposite: the object was
-// placed, the create returned no error, and the immediately following lookup
-// on the same member still says not found because the metadata update has not
-// reached it. Waiting is the answer to both, but the errors do not overlap and
-// a lookup that waited out a placement failure would be waiting for something
-// nobody is going to do.
-//
-// It is bounded by [ReadBack] rather than [Budget] wherever it is used: a
-// create that has already returned successfully makes this a propagation
-// delay, not a provisioning one. Treating a not-found as terminal here is what
-// turned one CI run's clustered boot into `open the log
-// "CREWLET_TRACKER_VECTORS": stream not found` immediately after the create of
-// that same stream had succeeded.
+// Not [Unplaceable]'s question: there the leader REFUSED to place, and more
+// members fix it. Here the object was placed and the create returned no
+// error, but the next lookup on the same member says not found because the
+// metadata update has not reached it. Waiting answers both, but the errors do
+// not overlap. Bounded by [ReadBack], not [Budget]: after a successful create
+// it is a propagation delay, and a terminal not-found failed a boot right
+// after that same stream's create succeeded.
 func NotYetVisible(err error) bool {
 	return errors.Is(err, jetstream.ErrStreamNotFound) ||
 		errors.Is(err, jetstream.ErrBucketNotFound) ||
 		errors.Is(err, jetstream.ErrConsumerNotFound)
 }
 
-// Unanswered reports a request the broker never replied to — the THIRD value
-// an existence probe can return, beside "it is there" and "it is not".
-//
-// # Why this is a value and not a failure
-//
-// [internal/coord]'s lesson, in the provisioning path: "held", "definitively
-// not held" and "the store could not be reached" are three different facts,
-// and collapsing the last two is the most expensive mistake this engine has
-// made. An existence probe has exactly the same three answers. A lookup that
-// returned [jetstream.ErrStreamNotFound] has been TOLD the object is absent; a
-// lookup whose deadline expired has been told NOTHING, and the difference is
-// the whole of this function.
-//
-// Every provisioning path here read the second and third as one. The switch
-// was `case err == nil: observe` / `case errors.Is(err, ErrNotFound): create`
-// / `default: fail the boot` — so a metadata group that was merely slow to
-// answer produced `ensure stream CREWLET_CONFIG: context deadline exceeded`
-// and a node that refused to start, on a cluster where nothing was wrong with
-// the stream, the config or the peer. That is a node declining to boot because
-// it could not hear, reported as though it had heard "no".
-//
-// # Why falling through to the create is the answer
-//
-// Because the create already covers both of the things the lookup failed to
-// say. If the object is absent the create makes it; if it exists the create
-// returns "already in use", which these paths have ALWAYS treated as a peer
-// having won the race, read back through [Settle] and compared exactly as a
-// lookup's own hit would be. So the lookup is an optimisation — it saves one
-// round trip when it answers — and a failed optimisation is not a failed boot.
-// Nothing downstream needs a distinction the probe could not supply.
-//
-// # What counts
-//
-// [context.DeadlineExceeded] is the budget above expiring while the request
-// was in flight; nats.go's [nats.ErrTimeout] is the same event on its own
-// non-context path; [nats.ErrNoResponders] is the request reaching a server
-// whose JetStream is not serving yet, which on a boot means "ask again in a
-// moment" rather than "there is no such object".
-//
-// [context.Canceled] is deliberately NOT here. A cancelled context is the
-// caller giving up — a shutdown, an operator's Ctrl-C — and falling through to
-// a create on it would spend a second doomed round trip arguing with a
-// decision that has already been made.
-//
-// # Why it takes the PARENT and not the error alone
-//
-// Because [context.DeadlineExceeded] arrives from two deadlines that mean
-// opposite things, and the value is identical. From a term THIS package set,
-// it means the request is gone and the NEXT one will be answered — the
-// condition this predicate exists to name. From the CALLER's own deadline —
-// the boot's sequence ceiling, an operator's Ctrl-C deadline — it means time
-// is up and nobody is waiting for the answer any more. Reading the second as
-// the first sends a doomed second request on a context that is already done,
-// and reports whatever that produces instead of the ceiling that actually
-// expired.
-//
-// nats.go's own two are unconditional: neither [nats.ErrTimeout] nor
-// [nats.ErrNoResponders] can be produced by a caller's deadline, so for them
-// the parent has nothing to say.
+// Unanswered reports a request the broker never replied to: the THIRD value
+// of an existence probe, beside "there" and "not" ([internal/coord]'s three
+// facts). A [jetstream.ErrStreamNotFound] TOLD the object is absent; an
+// expired deadline told NOTHING, and read as one a slow group failed boots on
+// a healthy cluster. Falling through to the create is the answer: it makes an
+// absent object, and "already in use" means a peer won the race, read back
+// through [Settle]. Counts: [context.DeadlineExceeded], [nats.ErrTimeout] and
+// [nats.ErrNoResponders] (JetStream not serving yet); NOT [context.Canceled],
+// the caller giving up. It takes the PARENT because DeadlineExceeded comes
+// from a term THIS package set (the request is gone, the next is answered) or
+// the CALLER's deadline (nobody waits; a request would be doomed and hide the
+// ceiling). nats.go's two cannot come from a caller's deadline.
 func Unanswered(parent context.Context, err error) bool {
 	if errors.Is(err, nats.ErrTimeout) || errors.Is(err, nats.ErrNoResponders) {
 		return true

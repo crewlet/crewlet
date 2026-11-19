@@ -14,71 +14,17 @@ import (
 )
 
 // ONE INBOX FROM EVERY NATIVE DOMAIN: a person's notices from the tracker and
-// from Gitlet, in one list, newest first.
+// from Gitlet, newest first. Each domain files notices and marks on its own log
+// and filters its page in its own scan ([Classifier]), so a composed inbox is a
+// page from each [Source] (one the caller may not read is not listed),
+// INTERLEAVED, never one table.
 //
-// # Each domain keeps its own, and is read on its own terms
-//
-// A domain files its notices on its own log, keeps the person's marks over
-// them there, and reads a page of them filtered in its own scan by those
-// marks ([Classifier]). So a composed inbox is never one table and never one
-// read: it is a page from each [Source], each asked the same narrowing and
-// each held to its own permission by whoever builds the list of sources —
-// a source the caller may not read is not in it — then INTERLEAVED.
-//
-// # Interleaved by when each happened, each source a prefix
-//
-// The pages are merged by the AUTHORED instant (a notice's [Notice.At]), then
-// the source's name, then the record id — so two notices of one instant
-// always come in one order. It is a MERGE OF HEADS, never a sort of the union:
-// each source's page is in that source's own order (its log's, newest first),
-// and the merge takes the newer of the sources' next notices one at a time, so
-// what it takes of each source is always a PREFIX of that source's page. That
-// is what lets the composed cursor carry ONE POSITION PER SOURCE — the last
-// notice of that source the page took — and a next page resume each source
-// exactly where it stopped: a sort of the union could take a source's third
-// notice and leave its second, and no single position of that source would
-// then say what was shown. Each source is asked for the whole page's limit.
-//
-// # A source's page may end past its last notice
-//
-// A source may scan rows it does not answer: Gitlet leaves out a
-// notice its asker may not read — every notice on a repository deleted and
-// not yet purged among them — and its own cursor is still the last row it
-// scanned ([SourcePage.Next]). So where the page took EVERY notice a source
-// answered, that source resumes at its own cursor, never at its last notice:
-// a page the source answered empty, or one whose last rows it left out,
-// resumed at the last notice taken (or at the cursor it was asked with,
-// where it answered none) would be asked for the same rows again on every
-// page, and the inbox would never reach what lies below them. Such a short
-// page is the one place the merge runs past what a source has yet to show:
-// its next notices, below what it scanned, may come on a later page after an
-// older notice of another source — but every notice still comes, and once.
-//
-// # A page closes between two positions of a source
-//
-// A source's cursor is a position on its log, and a source may hold SEVERAL
-// notices at one position: Gitlet's record that tells one person about
-// two changes — a batched push, a landing of several entries — is one record,
-// one position, and a notice each change. A cursor that resumed below a
-// position the page took only part of would never show the rest. So a
-// source's page never ends inside a position (its contract, [Source]), and
-// the merge, having taken a notice, takes every notice of the same source at
-// the same position with it — a page may run past its limit by them, and by
-// no more, since a record's notices to one person are bounded where the
-// record is written.
-//
-// # Cards are read after the cut, and only where they are drawn
-//
-// A notice carries what a row of a list and a count are drawn from. What its
-// CARD draws beyond that — Gitlet's judgment of where a change's merge
-// stands, its description, its open findings — costs a source a read of its
-// own, and most reads of an inbox draw no card: a count of what waits, a
-// widget's few rows. So a query asks for cards ([Query.Cards]), the zero
-// value asking none, and a source whose cards draw more than its notices
-// carry is asked for them only AFTER THE MERGE, for the notices of it the
-// page took ([Carded]): each source is asked the page's whole limit, and a
-// card read before the cut would be judged for every notice another source's
-// newer ones then push off the page.
+// The merge is of HEADS, never a sort of the union, ordered by [Notice.At],
+// then source name, then record id. What it takes of each source is always a
+// PREFIX of that source's page, so the cursor carries ONE POSITION PER SOURCE
+// and a next page resumes each exactly: a sort of the union could take a
+// source's third notice and leave its second. Each source is asked the whole
+// page's limit. See [Source.Notices]; cards are read after the cut.
 
 // Source is one native domain's inbox, as the composition reads it.
 type Source interface {
@@ -87,14 +33,24 @@ type Source interface {
 	Name() string
 
 	// Notices is one page of the person's notices from this source, newest
-	// first in the source's own order, below the source's own cursor — never
-	// ending inside one position, so a page holds every notice at its last
-	// one (this file's head).
+	// first in the source's own order, below its own cursor, never ending
+	// inside one position: a record may hold several notices at one (a batched
+	// push), and a cursor below a position taken in part would never show the
+	// rest. The merge takes every notice of that source and position with the
+	// one it took, so a page may run past its limit by them and no more.
+	//
+	// A source may scan rows it does not answer (a notice its asker may not
+	// read), its cursor still the last row scanned ([SourcePage.Next]). Where
+	// the page took EVERY notice it answered, it resumes at that cursor, never
+	// at its last notice, or the same rows are asked for on every page.
 	Notices(ctx context.Context, q SourceQuery) (SourcePage, error)
 }
 
-// Carded is a source whose cards draw more than its notices carry (this
-// file's head).
+// Carded is a source whose cards draw more than its notices carry (Gitlet's
+// merge judgment, description, findings), each a read of its own. Most inbox
+// reads draw no card, so a query asks for them ([Query.Cards]) and they are
+// read only AFTER THE MERGE, for the notices the page took: a card read before
+// the cut would be judged for notices another source's newer ones push off.
 type Carded interface {
 	Source
 

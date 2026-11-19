@@ -33,6 +33,11 @@
 // replicated `usage` domain (ADR-0020); this package is only the detail, and
 // only the detail a node still holds.
 //
+// The scatter ends when every node the roster NAMES has answered, never at a
+// count of replies: every node serves, including one the roster does not hold
+// (a draining node gives its presence back first and serves until it stops), so
+// a count would end on an answer from outside the roster and drop a named one.
+//
 // # A gone node's detail is gone
 //
 // This is the cost the decision accepts, and it is stated on every answer

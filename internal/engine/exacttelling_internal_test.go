@@ -186,23 +186,18 @@ type readRefused struct{ why string }
 
 func (r *readRefused) Error() string { return r.why }
 
-// A READING IS LOGGED WITH WHAT IT HELD AND TOLD. The line a reading says
-// counts the calls the relaunch asked about, never one it did not: how many
-// the session holds, how many the telling tells (the rest of the asked), how
-// many distinct subagents a told call is under, and the release the reading
-// was read for; and beside it one line per such subagent, never one per call,
-// saying why the session does not hold its report. Its outcome says what
-// follows: the brief told by the reading, or a line saying why not, where the
-// reading holds or moves a call; and that the relaunch is told every call
-// after its save point where it does neither, since no brief is then told by
-// it and no line follows.
-//
+// A READING IS LOGGED WITH WHAT IT HELD AND TOLD. Its line counts the calls the
+// relaunch asked about, never one it did not: how many the session holds, how
+// many the telling tells, how many distinct subagents a told call is under, and
+// the release it was read for; beside it one line per such subagent, never per
+// call, says why the session does not hold its report. Its outcome says the
+// brief told by the reading, or why not, where it holds or moves a call; else
+// the relaunch is told every call after its save point and no line follows.
 // NOT PARALLEL: it swaps the process-wide logger.
 //
-// Mutation: count told as asked, count a call nobody asked about, say a line
-// per call under a subagent, name the subagents by anything but what a told
-// call is under, or promise the brief told by a reading that holds and moves
-// nothing, and this goes red.
+// Mutation: count told as asked or a call nobody asked about, say a line per
+// call under a subagent, name subagents by anything but what a told call is
+// under, or promise a brief for a reading that holds and moves nothing: red.
 func TestAReadingIsLoggedWithWhatItHeldAndTold(t *testing.T) {
 	logs := captureLogs(t)
 	k := newKeptLaunch(t, 40000, 0, 0)
@@ -353,22 +348,17 @@ func TestTheBriefToldByAReadingReachesTheSandboxBesideTheOtherTwo(t *testing.T) 
 }
 
 // A BRIEF TOLD BY A READING THE FLOOR CANNOT CARRY IS DROPPED ALONE. A kept
-// capture's floor counts the briefs told by a reading of what it holds, since
-// its box may be handed them: where theirs is the floor no window can leave
-// room for and the session's own briefs' is not, the launch still offers the
-// session, without them, on a copy (the runner still holds the caller's), held
-// to its own briefs' floor, and one line says why they were not used; where
-// the session's own floor cannot be carried either, the session is dropped
-// whole, its line naming its own briefs' floor, never the larger one with the
-// reading's, and no line says the reading's briefs were dropped alone; and
-// where nothing caps the seat, the launch is held to their floor, the longest.
-//
-// NOT PARALLEL: it swaps the process-wide logger.
-//
-// Mutation: leave the briefs told by a reading out of the floor, drop the whole
-// session where only their floor fails, drop them on the caller's session, log
-// nothing, or name the floor with the reading's briefs where both fail, and a
-// case goes red.
+// capture's floor counts the briefs a reading tells, since its box may be handed
+// them. Where theirs is a floor no window can leave room for and the session's
+// own briefs' is not, the launch offers the session without them, on a copy
+// (the runner still holds the caller's), with a line saying why. Where the
+// session's own floor cannot be carried either, it is dropped whole, its line
+// naming its own briefs' floor, never the larger, and no line says the
+// reading's briefs were dropped alone. Where nothing caps the seat, the launch
+// is held to their floor, the longest. NOT PARALLEL: it swaps the process logger.
+// Mutation: leave a reading's briefs out of the floor, drop the whole session
+// where only their floor fails, drop them on the caller's session, log nothing,
+// or name the larger floor where both fail: red.
 func TestABriefToldByAReadingTheFloorCannotCarryIsDroppedAlone(t *testing.T) {
 	logs := captureLogs(t)
 	// ABOUT 70,000 TOKENS OF BRIEF, beside a 40,000-token session: 110,000,

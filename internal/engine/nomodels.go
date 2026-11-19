@@ -17,38 +17,18 @@ import (
 	"github.com/crewlet/crewlet/internal/queue/topics"
 )
 
-// A COMPANY WITH NO MODELS RUNS, AND ITS SEATS' WORK WAITS FOR ONE.
-//
-// An empty providers.llm is a valid company: an org chart written before its
-// credentials exist, which is also what a company created from the dashboard
-// is until somebody adds a provider. It is applied like any other. The epoch
-// carries no model registry ([Company.Models] is nil), its seats are placed,
-// and their mailboxes attach and keep what arrives. What no seat can do is
-// think, so the inbox screening parks every delivery ([inbox.Screen], stage
-// 4): the seat's inbox is paused first, then the partition is requeued and
-// acked, and the work waits on the broker.
-//
-// PARKED RATHER THAN FAILED. A turn that could not build its runner proves
-// nothing reached outside the engine, so the dispatcher NAKs it, and a
-// condition that holds until an operator edits the configuration would spend
-// the broker's whole delivery budget on each event and then lose it. The one
-// failure an operator is told about is the one that says what to change: each
-// node logs `company_has_no_models` when it installs such an epoch, and
-// `seat_inbox_paused` for every seat whose work it holds, both naming
-// providers.llm.
-//
-// SCHEDULED WORK IS NOT HELD, because it is not sent: the scheduler stays
-// disarmed while the company has no model ([Engine.schedulerRuns]). A fire
-// parked behind the pause is a standup that runs days late, and a week of
-// them would all run the moment a provider arrived.
-//
-// THE PAUSE IS RELEASED WHEN THE CONDITION CLEARS, and that half is what used
-// to be missing: nothing lifted the hold, so a seat paused here stayed deaf
-// until the process restarted, however long ago its provider had been added.
-// The condition clears in exactly one place, an apply that installs an epoch
-// with a model, and that apply releases every inbox this client paused. Boot
-// needs no release: holds live in the queue client, and a new process has
-// none.
+// A company with no models runs, and its seats' work waits for one. An empty
+// providers.llm is valid (an org chart before its credentials exist): the
+// epoch carries no model registry ([Company.Models] is nil) and mailboxes keep
+// what arrives. No seat can think, so inbox screening parks every delivery
+// ([inbox.Screen], stage 4): the inbox is paused, then the partition requeued
+// and acked, and the work waits on the broker. Parked rather than failed: a
+// condition lasting until an operator edits the configuration would spend the
+// broker's whole delivery budget on each event and lose it. Each node logs
+// `company_has_no_models` and `seat_inbox_paused`, naming providers.llm.
+// Scheduled work is not held but not sent ([Engine.schedulerRuns]), else a
+// week of fires would run the moment a provider arrived. An apply installing an
+// epoch with a model is the one place the pause is released; boot needs none.
 
 // pauseReasonNoTurnEngine is the hold name the no-model park takes on a seat's
 // inbox.

@@ -21,36 +21,14 @@ const SynthesizerSource = "skill_synthesizer"
 
 // Synthesizer drafts a reusable skill from a turn that did real work.
 //
-// # Why this file had to exist
+// What earns a skill: a turn with enough tools to have a shape worth naming
+// (`min_tool_calls`; one call is not a procedure). Below it a turn still feeds
+// the clustered path, which looks for a pattern ACROSS turns.
 //
-// Everything downstream of a synthesized skill shipped and nothing produced
-// one. `Skills.Insert` had no caller outside its own tests, so
-// `synthesized_skills` was permanently empty and every reader of it —
-// `use_skill`, the turn-start "Synthesized skills you've learned" block,
-// `refine_skill`, the curator's ageing pass, the health rollup — ran
-// correctly over nothing. The config block (`learning.skill_synthesis`)
-// validated, shipped in the example company, and had no reader outside
-// internal/config; `Skills.ToolSequences` was written FOR this worker's
-// duplicate check and never called; `types.SkillSynthesized` was registered
-// and never constructed.
-//
-// # What earns a skill
-//
-// A turn that used enough tools to have a shape worth naming. One tool call
-// is not a procedure, and the threshold is the operator's
-// (`min_tool_calls`). Below it a turn still feeds the clustered path, which
-// looks for a pattern ACROSS turns rather than within one.
-//
-// # What stops one
-//
-// Three gates, and each exists because the failure it prevents is quiet. The
-// per-seat cap (`max_skills_per_agent`) stops a catalogue growing past what a
-// prompt can carry. The duplicate check compares the draft's tool sequence
-// against the seat's existing ones by Jaccard similarity — the same seat
-// doing the same job every week would otherwise accumulate a dozen
-// paraphrases of one skill, and the prefetch would spend its budget showing
-// the model the same procedure repeatedly. And a draft the model returns
-// empty is dropped rather than written as a skill with no body.
+// Three gates stop one, each against a quiet failure: the per-seat cap
+// (`max_skills_per_agent`) keeps the catalogue within a prompt; the duplicate
+// check compares tool sequences by Jaccard similarity, else a weekly job
+// accumulates paraphrases of one skill; an empty draft is dropped, not written.
 type Synthesizer struct {
 	models Models
 	skills *Skills

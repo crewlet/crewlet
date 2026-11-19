@@ -147,16 +147,11 @@ func TestAStreamInfoNamingNoLeaderIsAskedAgain(t *testing.T) {
 // A READ WHOSE ANSWER IS STILL ARRIVING IS NEITHER ASKED AGAIN NOR CUT OFF AT
 // THE CEILING.
 //
-// A stream leader's reply that carries a value of megabytes is built by the
-// leader, crosses whatever link stands between, and is decoded, none of it
-// heard until its last byte is in. Presumed lost at the bare read term, such a
-// read was asked again while its first reply was still on its way — each
-// re-ask another whole reply built and sent — and held to the bare ceiling,
-// one whose reply takes longer than the ceiling to arrive was never taken
-// (crewlet/crewlet#1149, crewlet/crewlet#1153). Given its arrival, the read is
-// asked once and takes the reply that lands past the bare ceiling, inside the
-// arrival; the control, given none, is asked again at the term and cut off at
-// the ceiling. Exact, in a bubble.
+// A leader's reply of megabytes is heard only at its last byte. Given its
+// arrival, the read is asked once and takes a reply landing past the bare
+// ceiling, inside the arrival; the control, given none, is asked again at the
+// term (each re-ask another whole reply) and cut off at the ceiling. Exact, in
+// a bubble.
 //
 // Mutation: grow the term alone, or the ceiling alone, by the arrival, and the
 // read is cut off at the bare ceiling, or asked again while its reply is still

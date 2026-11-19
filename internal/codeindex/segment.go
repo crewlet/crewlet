@@ -16,56 +16,23 @@ import (
 	"github.com/crewlet/crewlet/internal/regexlit"
 )
 
-// A SEGMENT: one immutable file of a repository's index — a run of blobs, by
-// object id, and the trigrams of each. Big-endian throughout:
+// A SEGMENT: an immutable run of blobs and their trigrams. Big-endian:
 //
 //	header    "CRCX" | version u8 (1) | oid bytes u8 (20) | reserved u16 | blobs u32 | reserved u32 |
 //	          unicode [16]                                                             (32 bytes)
 //	blobs     blobs × (oid [20] | flags u8)          ascending by oid, no oid twice
 //	postings  each trigram's blobs, in the trigram table's order: their ordinals in the blob
-//	          table, ascending — the first as a uvarint, each after it as a uvarint of its
+//	          table, ascending, the first as a uvarint, each after it as a uvarint of its
 //	          distance from the one before
 //	trigrams  trigrams × (trigram [3] | offset u40)  ascending by trigram; where its postings
 //	          begin in the postings section, each list running to the next one's offset
 //	footer    trigrams u32 | reserved u32 | posting bytes u64                      (16 bytes)
 //	trailer   SHA-256 of every byte before it [32]
-//
-// A blob's flags: 1, it holds an ESCAPE (regexlit.HasEscape), so a clause
-// holding a folded literal admits it whatever its trigrams say; 2, it is
-// SKIPPED (Skip) — recorded so its next tip does not read it again, never in
-// a posting, and never a candidate. Any other bit is a file this build did
-// not write.
-//
-// unicode is the version of the Unicode tables the blobs' trigrams and
-// escapes were taken with: unicode.Version as Go spells it ("17.0.0"), its
-// unused bytes zero. THE TABLES ARE STAMPED because both are derived from
-// them — a trigram is of the blob's lowering (bytes.ToLower), an escape is
-// what the tables fold with an ASCII letter and lower apart from it — and
-// they move with the Go toolchain, each Unicode version giving letters a case
-// they lacked: a blob holding one of Unicode 16's Garay capitals was filed by
-// a build on 15.0 under the capital's own bytes, which a newer build's plan,
-// lowering the searched text first, no longer looks it up by, so even a
-// case-sensitive search of text it holds would rule it out. And a segment
-// outlives the build that wrote it: kept across restarts, carried across
-// incarnations by hard link, and never read again for a blob it holds. So a
-// segment stamped with other tables is refused as one this build did not
-// write (ErrMalformed), which drops it and builds the index again. A tip map
-// holds nothing the tables decide, and is not stamped.
-//
-// THE TABLE FOLLOWS THE POSTINGS because a merge streams its postings and
-// learns each list's offset only as it writes it: the table, and the counts
-// that place it, come after (the footer), and the trailer is still one hash
-// over everything before it — the cache's run-trailer check, written as the
-// file streams, with nothing held but the table.
-//
-// AN OFFSET IS FIVE BYTES: a segment's postings are a byte or two for each
-// distinct trigram of each blob it holds, so even a merge of a repository's
-// every segment is far below the tebibyte five bytes name — and a writer that
-// would pass it is refused rather than wrapped — while a table entry of eight
-// bytes rather than twelve is a third less of every segment's table held
-// mapped.
 
-// The format's fixed parts.
+// The format's fixed parts. THE TABLE FOLLOWS THE POSTINGS because a merge
+// streams its postings and learns each list's offset only as it writes it: the
+// table and the counts that place it (the footer) come after, and the trailer
+// is still one hash over everything before it, checked as the file streams.
 const (
 	segmentMagic      = "CRCX"
 	segmentVersion    = 1
@@ -74,7 +41,10 @@ const (
 	blobEntryBytes    = oidBytes + 1
 	trigramEntryBytes = 8
 	trailerBytes      = sha256.Size
-	// maxPostingBytes is what a five-byte offset can name.
+	// maxPostingBytes is what a five-byte offset can name. Postings are a byte
+	// or two per distinct trigram per blob, so even a merge of every segment is
+	// far below it; a writer that would pass it is refused, not wrapped. Eight
+	// bytes a table entry rather than twelve is a third less table held mapped.
 	maxPostingBytes = 1 << 40
 	// unicodeStampAt is where the header's naming of the Unicode tables
 	// begins; it runs to the header's end.
@@ -82,7 +52,16 @@ const (
 )
 
 // unicodeStamp is the header's naming of the tables this build lowers with
-// and finds escapes by.
+// and finds escapes by: unicode.Version as Go spells it ("17.0.0"), unused
+// bytes zero. THE TABLES ARE STAMPED because a trigram (of bytes.ToLower) and
+// an escape (what the tables fold with an ASCII letter) derive from them, and
+// they move with the Go toolchain, each version giving letters a case they
+// lacked: a blob with a Unicode 16 Garay capital, filed by a 15.0 build under
+// the capital's own bytes, is not found by a newer plan, which lowers the
+// searched text first. A segment outlives its build (restarts, hard links
+// across incarnations), so one stamped with other tables is refused
+// (ErrMalformed), dropped, and the index built again. A tip map holds nothing
+// the tables decide and is not stamped.
 var unicodeStamp = func() (s [segmentHeader - unicodeStampAt]byte) {
 	copy(s[:], unicode.Version)
 	return s
@@ -93,7 +72,10 @@ var unicodeStamp = func() (s [segmentHeader - unicodeStampAt]byte) {
 // stamp cut short that another version could share.
 var _ [segmentHeader - unicodeStampAt - len(unicode.Version)]struct{}
 
-// A blob's flags.
+// A blob's flags: 1, it holds an ESCAPE (regexlit.HasEscape), so a clause
+// holding a folded literal admits it whatever its trigrams say; 2, it is
+// SKIPPED (Skip), recorded so its next tip does not read it again, never in a
+// posting, never a candidate. Any other bit is a file this build did not write.
 const (
 	flagEscape  = 1 << 0
 	flagSkipped = 1 << 1
@@ -107,26 +89,15 @@ var ErrMalformed = errors.New("codeindex: a file this build does not write; drop
 
 // SegmentSourceBytes is the most source one segment is built from: a
 // builder takes blobs until it has read this much (Builder.SourceBytes) and
-// the segment is written then. A build holds one segment's postings at a time
-// — a byte or two for each distinct trigram of each blob, in lists grown by
-// doubling, and a table entry and a list header for each distinct trigram of
-// the segment — and its writing; then each merge's tables; and beside them,
-// for its whole length, the tip's listing. Every segment it has written it
-// reads back through a MAPPING of its file and holds none of (the cache's
-// build, internal/gitlet/cache), the segment itself streamed to its file
-// (WriteSegment's writer buffers 64 KiB): the bound is the WHOLE build's
-// peak, at most 256 MiB (M6's sizing).
-//
-// BenchmarkCodeIndex measured that peak (build-peak-MiB) at 106.7 MiB for
-// segments of 512 MiB and 187.4 MiB for segments of 1 GiB, a tip's listing
-// beside it at 30.7 MiB, about 260 bytes a file. 512 MiB is the largest power
-// of two within the bound with the measurement's own tenth on top and room
-// for a tip of twice the sizing's files, whose listing doubles: 106.7·1.1 +
-// 2·30.7 = 179 MiB; 1 GiB is 268 MiB so, past it. Re-derived from 256 MiB,
-// which was sized by one segment's builder beside the segment it had written
-// (120 MiB) while every segment a build placed stayed in its heap — the
-// peak this bound did not hold — by a run over a tip of 120k files, 1.96 GiB
-// of this repository's own tree, on two E-cores of a Core Ultra 7 265U.
+// the segment is written then. A build holds one segment's postings, then each
+// merge's tables, and beside them the tip's listing; written segments are read
+// back through a MAPPING and not held (internal/gitlet/cache). The bound is the
+// WHOLE build's peak, at most 256 MiB (M6's sizing).
+// BenchmarkCodeIndex measured it (build-peak-MiB) at 106.7 MiB for 512 MiB
+// segments and 187.4 MiB for 1 GiB, a tip's listing at 30.7 MiB. 512 MiB is
+// the largest power of two within the bound with the measurement's tenth on
+// top and room for a tip of twice the files: 106.7·1.1 + 2·30.7 = 179 MiB; 1
+// GiB is 268 MiB, past it.
 const SegmentSourceBytes = 512 << 20
 
 // MaxSegments is the most segments one repository's index keeps: past it the
@@ -135,13 +106,12 @@ const SegmentSourceBytes = 512 << 20
 // index gives back what its branch no longer holds. Merged GEOMETRICALLY —
 // the newest segments while each is at least half the one before it — so a
 // blob is rewritten a logarithmic number of times over the index's life
-// rather than at every tip. Merged so, an index of I bytes keeps at most
-// log2(I / its smallest segment) + 1 — BenchmarkCodeIndex's 120k files index
-// in 0.29 GiB (0.146 bytes a source byte), and a segment of one small blob is
-// about half a kilobyte, so at most 20 — and 32, the next power of two, binds
-// only on an index four thousand times larger, while its lookups cost
-// nothing a search notices (p50 16 ms and p99 432 ms over the whole search,
-// confirmation included). Re-derived, and kept, by that run (M3-O6).
+// rather than at every tip. An index of I bytes keeps at most
+// log2(I / its smallest segment) + 1: BenchmarkCodeIndex's 120k files index
+// in 0.29 GiB and a segment of one small blob is about half a kilobyte, so at
+// most 20. 32, the next power of two, binds only on an index four thousand
+// times larger, and its lookups cost nothing a search notices (p50 16 ms, p99
+// 432 ms over the whole search, confirmation included) (M3-O6).
 const MaxSegments = 32
 
 // MergeNewest says whether the two newest segments of an index are to be
@@ -150,15 +120,12 @@ const MaxSegments = 32
 // least half what the one before it does. A writer asks it again after each
 // merge, and AFTER EACH SEGMENT IT APPENDS — never once over a batch of
 // them. Asked as each is appended, every segment stays more than twice the
-// one after it, so an index of k segments' worth of source keeps at most
-// 2·log2(k) segments, and a merge grows the segment a blob is in by at
-// least half, so each blob is written at most log base 1.5 of k times.
-// Asked once over a batch of equal segments, the merged one is always the
-// newest and always at least half the one before it, so the batch folds
-// into one segment from its end, rewriting what it merged at every step:
-// k²/2 segments' worth of writes for k segments' source — 189 for a
-// repository of nineteen segments, where asking as each is appended writes
-// 62 and keeps three.
+// one after it, so k segments' worth of source keeps at most 2·log2(k)
+// segments and writes each blob at most log base 1.5 of k times. Asked once
+// over a batch of equal segments, the merged one is always the newest and at
+// least half the one before it, so the batch folds into one from its end:
+// k²/2 segments' worth of writes (189 for nineteen, where asking as each is
+// appended writes 62 and keeps three).
 func MergeNewest(sizes []int64) bool {
 	n := len(sizes)
 	return n >= 2 && (n > MaxSegments || 2*sizes[n-1] >= sizes[n-2])
@@ -544,29 +511,16 @@ func (s *Segment) lookup(t Trigram) ([]byte, bool) {
 }
 
 // ordinals reads one posting list of s in order, holding each ordinal to s's
-// blob table as it is read — above the one before it, and below the table's
-// count — so a list that is not the format's is refused by the read that
-// meets it and never followed past the table. The ONE reader of a list:
-// decoding one, narrowing a set by one and keeping one decoded as far as a
-// lookup has needed it (lookup.go) all read through it, as
+// blob table as it is read (above the one before it, below the table's count)
+// so a list that is not the format's is refused by the read that meets it and
+// never followed past the table. The ONE reader of a list: decoding, narrowing
+// a set and keeping one decoded (lookup.go) all read through it, as
 //
 //	for o.delta() || o.next() { ... o.at ... }
 //
-// A read that stops part way has neither checked nor answered what lies
-// past where it stopped.
-//
-// TWO STEPS, because the read is the loop every posting a merge or a lookup
-// reads goes through. next is the whole step, out of line: a list's first
-// ordinal, a delta of any length, the end, and every refusal — whose errors,
-// built where they are met, cost it 412 against the compiler's inlining
-// budget of 80. delta is only the commonest step, taken inline: a delta of
-// one byte, 1 to 127, landing within the table — every step between two of
-// a list's blobs fewer than 128 apart, and so nearly every step of a list
-// naming much of its segment, the longest a lookup reads. With next alone a
-// step was a call, and decoding a list of 65 536 ordinals took half again as
-// long as the loop over its bytes the reader replaced: 334 µs against 220,
-// and 137 with delta inline (BenchmarkLookup, whose bound lookup.go's head
-// names).
+// A read that stops part way has neither checked nor answered what lies past
+// where it stopped. It is TWO STEPS, delta and next, for the inlining budget
+// delta's comment gives.
 type ordinals struct {
 	list  []byte
 	count uint64
@@ -585,8 +539,14 @@ func (s *Segment) ordinals(list []byte) ordinals {
 // delta reads the list's next ordinal into at where it is a one-byte delta
 // from the last that stays within the table, and otherwise reports false and
 // reads nothing, for next to read. It takes only a step next would take from
-// the same place, so after next refuses one — leaving at and the list where
-// they were — delta refuses it too, and a read stays refused.
+// the same place, so after next refuses one, delta refuses it too and a read
+// stays refused.
+//
+// It is the commonest step (a one-byte delta, 1 to 127, within the table),
+// kept small enough to inline: next's refusal errors cost it 412 against the
+// inlining budget of 80. With next alone every step was a call, and decoding
+// 65 536 ordinals took 334 µs against 220 for the loop it replaced, and 137
+// with delta inline (BenchmarkLookup, whose bound lookup.go's head names).
 func (o *ordinals) delta() bool {
 	if len(o.list) == 0 || !o.began {
 		return false
@@ -798,22 +758,16 @@ func (u *union) end() {
 func (u *union) merged() []uint32 {
 	for len(u.ends) > 1 {
 		if cap(u.spare) < len(u.buf) {
-			// Made afresh, never grown: nothing it holds is read again, and
-			// growing it copies what an earlier round merged into it — and,
-			// built with the race detector, which does not elide the append
-			// of a make that slices.Grow is, allocates the growth twice.
-			// As long as what this round merges, never as buf can hold: a
-			// lookup decodes a literal's least list straight into buf and
-			// narrows it there (reading.admitted), so buf can hold a few
-			// blobs in the capacity of the longest list a literal decoded,
-			// and a spare that long was that list's decode again for every
-			// clause merging two literals or more. Exactly that long, and
-			// still made a logarithmic number of times as the unions a merge
-			// keeps it for grow from one trigram to the next: once merged
-			// into, it becomes buf, which append grows a factor at a time,
-			// and the spare it is swapped for is a buf append grew — so it
-			// is made only once a union outgrows what append last made
-			// room for (TestAUnionKeptFromMergeToMergeMakesItsBuffersFewTimes).
+			// Made afresh, never grown: nothing it holds is read again, growing
+			// copies it, and under the race detector slices.Grow's append is not
+			// elided and allocates twice. Exactly as long as buf's length, not
+			// its capacity: a lookup decodes a literal's least list into buf and
+			// narrows it there (reading.admitted), so buf can hold few blobs in
+			// a long list's capacity, and a spare that long would redo that
+			// decode for every clause merging two literals or more. Still made
+			// only a logarithmic number of times, as buf grows by append's
+			// factor and each swap hands back a buf append grew
+			// (TestAUnionKeptFromMergeToMergeMakesItsBuffersFewTimes).
 			u.spare = make([]uint32, 0, len(u.buf))
 		}
 		u.spare, u.spareEnds = u.spare[:0], u.spareEnds[:0]

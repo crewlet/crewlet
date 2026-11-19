@@ -1,7 +1,13 @@
-/** A picture of part of a drawing via an SVG foreignObject, styles inlined; null where it fails. */
+/**
+ * A picture of part of a drawing via an SVG foreignObject: a copy of what
+ * crosses the part's rows, styles inline and files drawn in (cropcopy.ts,
+ * cropmedia.ts), drawn at the size the picture needs; null where it fails.
+ */
 
 import { isCropImage } from "./bridge.ts";
 import { ARTIFACT_COMMENT_CROP_MAX_SIDE } from "../contract/artifactsworkspace.ts";
+import { copyRegion } from "./cropcopy.ts";
+import { drawIn, startReading } from "./cropmedia.ts";
 
 /** A rectangle in the drawing's own CSS pixels. */
 export interface CropRegion {
@@ -9,6 +15,12 @@ export interface CropRegion {
   y: number;
   w: number;
   h: number;
+}
+
+/** A position or a shift, in CSS pixels. */
+export interface Point {
+  x: number;
+  y: number;
 }
 
 /** How much room a picture of an element keeps around it, so it reads in its place. */
@@ -44,64 +56,62 @@ export function pointRegion(point: Point, size: { w: number; h: number }): CropR
   return windowAround({ x: point.x * size.w, y: point.y * size.h }, size);
 }
 
-/** A position or a shift, in CSS pixels. */
-export interface Point {
-  x: number;
-  y: number;
+/**
+ * Canvas pixels per drawing pixel: as sharp as the reader's screen
+ * (`density`), with the long side at most [ARTIFACT_COMMENT_CROP_MAX_SIDE].
+ */
+export function cropScale(region: CropRegion, density = 1): number {
+  return Math.min(
+    Math.max(1, density),
+    ARTIFACT_COMMENT_CROP_MAX_SIDE / Math.max(region.w, region.h, 1),
+  );
 }
 
-/** How a scrolled element's copy is displayed: a box that clips, around a wrapper laying out its children. */
-export function scrollerDisplays(display: string): { outer: string; inner: string } {
-  const inner = display.endsWith("flex")
-    ? "flex"
-    : display.endsWith("grid")
-      ? "grid"
-      : display.endsWith("box")
-        ? "-webkit-box"
-        : "flow-root";
-  if (inner === "flow-root") return { outer: display, inner };
-  const inline = display.startsWith("inline-") || display === "-webkit-inline-box";
-  return { outer: inline ? "inline-block" : "block", inner };
-}
-
-/** Where a box fixed at `at` in the viewport goes in a copy whose box holding it has its corner at `holder`. */
-export function fixedAt(at: Point, holder: Point, scale = 1): Point {
-  return { x: (at.x - holder.x) / scale, y: (at.y - holder.y) / scale };
-}
-
-/** How far a sticky box is shifted from where it flows, less what a sticky box around it shifts it. */
-export function stuckBy(shown: Point, flows: Point, around: Point = { x: 0, y: 0 }): Point {
-  return { x: shown.x - flows.x - around.x, y: shown.y - flows.y - around.y };
-}
-
-/** The scale a region is drawn at: its long side at most [ARTIFACT_COMMENT_CROP_MAX_SIDE]. */
-export function cropScale(region: CropRegion): number {
-  return Math.min(1, ARTIFACT_COMMENT_CROP_MAX_SIDE / Math.max(region.w, region.h, 1));
+/**
+ * An SVG as a data URL, escaping only what a URL would change: `%` and `#`,
+ * and the tab and line breaks its parser drops. Far quicker than base64.
+ */
+export function svgDataUrl(svg: string): string {
+  return `data:image/svg+xml;charset=utf-8,${svg.replace(/[%#\t\n\r]/g, (c) => `%${c.charCodeAt(0).toString(16).padStart(2, "0")}`)}`;
 }
 
 /** The qualities and shrinks tried in turn until the picture fits the engine's bound. */
 const QUALITIES = [0.8, 0.6, 0.4] as const;
 const SHRINKS = [1, 0.7, 0.5, 0.35] as const;
 
-/** Draws `region` of `root` (untransformed px, of `size` overall) as a WebP data URL, or null. */
+/**
+ * Draws `region` of `root` (untransformed px, of `size` overall) as a WebP
+ * data URL, at `density` canvas pixels per CSS pixel where the bound allows,
+ * or null.
+ */
 export async function drawRegion(
   root: Element,
   size: { w: number; h: number },
   region: CropRegion,
   background = "#ffffff",
+  density = root.ownerDocument.defaultView?.devicePixelRatio ?? 1,
 ): Promise<string | null> {
   try {
-    const image = await imageOf(root, size, region);
-    const base = cropScale(region);
+    const scale = cropScale(region, density);
+    const image = await imageOf(root, size, region, scale);
+    const w = Math.max(1, Math.round(region.w * scale));
+    const h = Math.max(1, Math.round(region.h * scale));
+    const drawn = document.createElement("canvas");
+    drawn.width = w;
+    drawn.height = h;
+    const ctx = drawn.getContext("2d");
+    if (!ctx) return null;
+    ctx.fillStyle = background;
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(image, 0, 0, w, h);
     for (const shrink of SHRINKS) {
-      const canvas = document.createElement("canvas");
-      canvas.width = Math.max(1, Math.round(region.w * base * shrink));
-      canvas.height = Math.max(1, Math.round(region.h * base * shrink));
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return null;
-      ctx.fillStyle = background;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      let canvas = drawn;
+      if (shrink !== 1) {
+        canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(w * shrink));
+        canvas.height = Math.max(1, Math.round(h * shrink));
+        canvas.getContext("2d")?.drawImage(drawn, 0, 0, canvas.width, canvas.height);
+      }
       for (const quality of QUALITIES) {
         const url = canvas.toDataURL("image/webp", quality);
         if (isCropImage(url)) return url;
@@ -113,200 +123,29 @@ export async function drawRegion(
   }
 }
 
-/** A scrolled element's properties that lay out its children, which the wrapper in its copy takes over. */
-const LAYS_OUT = [
-  "flex-direction",
-  "flex-wrap",
-  "justify-content",
-  "justify-items",
-  "align-items",
-  "align-content",
-  "row-gap",
-  "column-gap",
-  "grid-template-columns",
-  "grid-template-rows",
-  "grid-template-areas",
-  "grid-auto-columns",
-  "grid-auto-rows",
-  "grid-auto-flow",
-  "column-count",
-  "column-width",
-  "column-fill",
-  "column-rule-width",
-  "column-rule-style",
-  "column-rule-color",
-  "-webkit-box-orient",
-  "-webkit-line-clamp",
-  "padding-top",
-  "padding-right",
-  "padding-bottom",
-  "padding-left",
-] as const;
-
-/** Controls that scroll their own text, which no wrapper can hold. */
-const UNWRAPPED = new Set(["textarea", "select", "input"]);
-
-/**
- * `root` copied with its computed styles inline, as the reader sees it: a
- * clone keeps no scroll, so each scrolled element, fixed box and sticky box is
- * put back where the reader's scroll has it.
- */
-function copyOf(root: Element): Element {
-  const doc = root.ownerDocument;
-  const win = doc.defaultView ?? window;
-  const copy = root.cloneNode(true) as Element;
-  const from = [root, ...root.querySelectorAll("*")];
-  const to = [copy, ...copy.querySelectorAll("*")];
-  const twin = new Map<Element, HTMLElement>();
-  const scrolled: { el: HTMLElement; style: CSSStyleDeclaration }[] = [];
-  const placed: { el: HTMLElement; viewport: Point | null }[] = [];
-  const sticky: HTMLElement[] = [];
-  from.forEach((el, i) => {
-    const out = to[i] as (Element & ElementCSSInlineStyle) | undefined;
-    if (!out?.style) return;
-    const style = win.getComputedStyle(el);
-    for (const p of style) out.style.setProperty(p, style.getPropertyValue(p));
-    twin.set(el, out as HTMLElement);
-    if (el === root || !(el instanceof win.HTMLElement)) return;
-    if (style.position === "sticky") sticky.push(el);
-    else if (style.position === "fixed" || style.position === "absolute") {
-      // FIXED TO THE VIEWPORT when no ancestor holds it, which offsetParent says.
-      const viewport = style.position === "fixed" && el.offsetParent === null;
-      placed.push({
-        el,
-        viewport: viewport ? { x: parseFloat(style.left), y: parseFloat(style.top) } : null,
-      });
-    }
-    if (
-      (el.scrollTop !== 0 || el.scrollLeft !== 0) &&
-      el !== doc.scrollingElement &&
-      !UNWRAPPED.has(el.localName)
-    ) {
-      scrolled.push({ el, style });
-    }
-  });
-  const bounds = root.getBoundingClientRect();
-  const scale =
-    root === doc.documentElement || !(root instanceof win.HTMLElement) || !root.offsetWidth
-      ? 1
-      : bounds.width / root.offsetWidth;
-  const corner =
-    root === doc.documentElement
-      ? { x: -win.scrollX, y: -win.scrollY }
-      : { x: bounds.left, y: bounds.top };
-  const wrapped = new Set<Element>(scrolled.map((s) => s.el));
-  const scrollerAround = (el: Element): HTMLElement | null => {
-    for (let at = el.parentElement; at && at !== root; at = at.parentElement) {
-      if (wrapped.has(at)) return at;
-    }
-    return null;
-  };
-
-  for (const [el, shift] of stickShifts(sticky, win)) {
-    const out = twin.get(el)!;
-    out.style.setProperty("position", "relative");
-    out.style.setProperty("top", `${shift.y / scale}px`);
-    out.style.setProperty("left", `${shift.x / scale}px`);
-    out.style.setProperty("bottom", "auto");
-    out.style.setProperty("right", "auto");
-  }
-  // A POSITIONED BOX THAT ITS SCROLLER DOES NOT CARRY leaves the wrapper that
-  // stands for the scroll, for the box that holds it on the page.
-  for (const { el, viewport } of placed) {
-    const out = twin.get(el)!;
-    const around = scrollerAround(el);
-    if (viewport) {
-      const at = fixedAt(viewport, corner, scale);
-      out.style.setProperty("top", `${at.y}px`);
-      out.style.setProperty("left", `${at.x}px`);
-      out.style.setProperty("bottom", "auto");
-      out.style.setProperty("right", "auto");
-      if (around) copy.append(out);
-      continue;
-    }
-    const holder = el.offsetParent;
-    if (around && (!holder || !around.contains(holder))) {
-      (holder ? (twin.get(holder) ?? copy) : copy).append(out);
-    }
-  }
-  for (const { el, style } of scrolled) wrapScroll(el, style, twin.get(el)!);
-  return copy;
-}
-
-/** Each sticky box's shift from where it flows, measured with every stick let go for a moment. */
-function stickShifts(
-  sticky: HTMLElement[],
-  win: Window & typeof globalThis,
-): Map<HTMLElement, Point> {
-  const shifts = new Map<HTMLElement, Point>();
-  if (sticky.length === 0) return shifts;
-  const shown = sticky.map((el) => el.getBoundingClientRect());
-  const kept = sticky.map((el) => el.getAttribute("style"));
-  // NO FRAME IS DRAWN between letting go and putting back: the reader never sees it.
-  for (const el of sticky) {
-    el.style.setProperty("position", "relative", "important");
-    el.style.setProperty("inset", "auto", "important");
-  }
-  const flows = sticky.map((el) => el.getBoundingClientRect());
-  sticky.forEach((el, i) => {
-    const style = kept[i];
-    if (style === null || style === undefined) el.removeAttribute("style");
-    else el.setAttribute("style", style);
-  });
-  const total = new Map<HTMLElement, Point>();
-  sticky.forEach((el, i) => {
-    total.set(
-      el,
-      stuckBy({ x: shown[i]!.left, y: shown[i]!.top }, { x: flows[i]!.left, y: flows[i]!.top }),
-    );
-  });
-  for (const el of sticky) {
-    let around: Point | undefined;
-    for (let at = el.parentElement; at && !around; at = at.parentElement) {
-      around = at instanceof win.HTMLElement ? total.get(at) : undefined;
-    }
-    const own = total.get(el)!;
-    shifts.set(el, around ? stuckBy(own, { x: 0, y: 0 }, around) : own);
-  }
-  return shifts;
-}
-
-/** A scrolled element's copy: its children in a wrapper that lays them out as it did, moved by its scroll. */
-function wrapScroll(el: HTMLElement, style: CSSStyleDeclaration, out: HTMLElement): void {
-  const { outer, inner } = scrollerDisplays(style.display);
-  const wrap = out.ownerDocument.createElementNS(
-    "http://www.w3.org/1999/xhtml",
-    "div",
-  ) as HTMLElement;
-  for (const p of LAYS_OUT) wrap.style.setProperty(p, style.getPropertyValue(p));
-  // OVER THE PADDING BOX: its padding is the element's, so its children sit where they did.
-  for (const side of ["top", "right", "bottom", "left"]) {
-    wrap.style.setProperty(`margin-${side}`, `-${style.getPropertyValue(`padding-${side}`)}`);
-  }
-  wrap.style.setProperty("display", inner);
-  wrap.style.setProperty("box-sizing", "border-box");
-  wrap.style.setProperty("width", `${el.clientWidth}px`);
-  wrap.style.setProperty("height", `${el.clientHeight}px`);
-  wrap.style.setProperty("transform", `translate(${-el.scrollLeft}px, ${-el.scrollTop}px)`);
-  wrap.append(...out.childNodes);
-  out.append(wrap);
-  out.style.setProperty("display", outer);
-  out.style.setProperty("overflow", "hidden");
-  out.style.setProperty("column-count", "auto");
-  out.style.setProperty("column-width", "auto");
-  out.style.setProperty("align-content", "normal");
-}
-
-/** The copy of `root` drawn as an image of `region`. */
+/** The copy of `root` around `region` drawn as an image of it, at `scale` pixels per drawing pixel. */
 async function imageOf(
   root: Element,
   size: { w: number; h: number },
   region: CropRegion,
+  scale: number,
 ): Promise<HTMLImageElement> {
-  const copy = copyOf(root);
-  // NOTHING THAT RUNS OR LOADS: a script in an image never runs, and a
-  // stylesheet's rules are already inline.
-  for (const el of copy.querySelectorAll("script, link, iframe, object, embed")) el.remove();
+  // THE FILES DECODE OFF THE PAGE'S THREAD while it makes the copy.
+  const reader = startReading(root, region);
+  let copied;
+  try {
+    copied = copyRegion(root, region);
+  } catch (err) {
+    reader.close();
+    throw err;
+  }
+  const sheet = await drawIn(copied, reader, root.ownerDocument, region, scale);
+  const copy = copied.copy;
+  if (sheet) {
+    const style = copy.ownerDocument.createElementNS("http://www.w3.org/1999/xhtml", "style");
+    style.textContent = sheet;
+    copy.prepend(style);
+  }
   if ("style" in copy) {
     const own = (copy as Element & ElementCSSInlineStyle).style;
     own.transform = "none";
@@ -314,23 +153,18 @@ async function imageOf(
   }
   const xhtml = new XMLSerializer().serializeToString(copy);
   const body = copy.namespaceURI === "http://www.w3.org/1999/xhtml" && copy.localName === "html";
+  const w = Math.max(1, Math.round(region.w * scale));
+  const h = Math.max(1, Math.round(region.h * scale));
+  // DRAWN AT THE PICTURE'S OWN SIZE: the view box scales the copy, so nothing is drawn large and shrunk.
   const svg =
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${region.w}" height="${region.h}">` +
-    `<foreignObject x="${-region.x}" y="${-region.y}" width="${size.w}" height="${size.h}">` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" ` +
+    `viewBox="${region.x} ${region.y} ${region.w} ${region.h}" preserveAspectRatio="none">` +
+    `<foreignObject x="0" y="0" width="${size.w}" height="${size.h}">` +
     (body ? xhtml : `<div xmlns="http://www.w3.org/1999/xhtml">${xhtml}</div>`) +
     `</foreignObject></svg>`;
   const img = new Image();
-  img.src = `data:image/svg+xml;base64,${base64Of(svg)}`;
+  // A DATA URL: Chromium taints a canvas that draws a foreignObject from a blob URL.
+  img.src = svgDataUrl(svg);
   await img.decode();
   return img;
-}
-
-/** Text as base64 of its UTF-8 bytes, in chunks so a long document never overflows the stack. */
-function base64Of(text: string): string {
-  const bytes = new TextEncoder().encode(text);
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  }
-  return btoa(binary);
 }

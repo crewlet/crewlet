@@ -49,17 +49,11 @@ const verdictPruneBatch = 64
 // can write one is the record at it, whose verdict is a pure function of the
 // record and the rows — so a conflict is the same row, never another.
 //
-// # The prune says how far it reached
-//
-// A PRUNED VERDICT AND A DROPPED RECORD LEAVE THE SAME ABSENCE, and a reader
-// told one when it was the other answers a month-old post as one every node's
-// gate dropped. So the prune records the highest position it removed
-// (`chat_verdicts_lost`, replicated migration 0070) in the statement list that
-// removes it — read first, over the very rows the delete then takes, inside
-// one transaction — and [verdictIn] answers an absent verdict at or below it
-// as one nothing here can vouch for. The framework's ledger keeps its own
-// watermark the same way and for the same reason ([statelog.Rows.LostBefore]).
-// It moves only forward: the largest of what the row held and this prune.
+// A PRUNED VERDICT AND A DROPPED RECORD LEAVE THE SAME ABSENCE, so the prune
+// records the highest position it removed (`chat_verdicts_lost`, migration
+// 0070), read first over the very rows the delete takes, and [verdictIn]
+// answers an absent verdict at or below it as one nothing here can vouch for (as
+// [statelog.Rows.LostBefore] does). It only moves forward.
 func writeVerdict(ctx context.Context, tx *sql.Tx, at applyContext, channelID string,
 	v Verdict) (int, error) {
 
