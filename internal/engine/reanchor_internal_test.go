@@ -1458,7 +1458,10 @@ func notReanchored(t *testing.T, e *Engine, domain string, before cursorRow, dur
 			stats.CreatedAt, during)
 	}
 	for seq := before.at.Seq + 1; seq <= got.at.Seq; seq++ {
-		subject, payload, _, ok, err := running.log.At(t.Context(), seq)
+		// A RECORD IS READ AS ITS APPLIER READS IT, through the fleet's seal: the
+		// log holds each one framed, and only its verified body is an envelope.
+		subject, payload, _, ok, err := statelog.VerifiedLog{Log: running.log,
+			Verifier: running.verifier}.At(t.Context(), seq)
 		if err != nil || !ok {
 			t.Errorf("%s's record %d, applied since the checkpoint was read, cannot be "+
 				"read back (found %v): %v", domain, seq, ok, err)
