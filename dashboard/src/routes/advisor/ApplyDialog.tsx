@@ -389,8 +389,9 @@ function Standing({ finding }: { finding: AdvisorKeptFinding }) {
     : STATE_WORDS[finding.state];
   return (
     <Callout variant="neutral" title="Nothing was sent from here">
-      {reason}
-      {finding.closed_at ? `, ${ago(finding.closed_at, now)}.` : "."} It moves to History.
+      {finding.closed_at
+        ? `${reason}. It closed ${ago(finding.closed_at, now)} and moves to History.`
+        : `${reason}. It moves to History.`}
     </Callout>
   );
 }
