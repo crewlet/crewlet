@@ -166,6 +166,9 @@
 // leaves at most one part. So a held class's parts are its own calls' parts,
 // content-equal to the log's, but for a refusal in OpenCode's own words equal
 // to a logged output, which is the text-equality standard ADR-0073 states.
+// That holds of the export OpenCode wrote; ADR-0073 lists what a box editing
+// it can make of a reading, among them two messages given one id, of which the
+// import keeps one, since no message's id is read but the start's.
 //
 // THE BOUNDS: the plaintext at the scrub's meter ([boundedPlain]), a value at
 // [maxLineBytes] (a message past it is no reading, every call told), the ask at

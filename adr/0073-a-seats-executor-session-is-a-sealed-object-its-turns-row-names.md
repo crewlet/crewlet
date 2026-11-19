@@ -4680,8 +4680,10 @@ earlier job's call of the round, since no record states where the cut-off
 job's brief read the log. Toward a false hold, each on the text-equality
 standard: a refusal in OpenCode's own words equal to a logged failure alike in
 tool and arguments; a box that rewrites the engine's record of where the run
-began; a tool whose schema goes from open to closed between two jobs of the
-round; a truncating server or the overflow route past the buffer; and a plugin
-loaded in the writer's box that registers a tool named `crewlet_<tool>` and
-answers a call of it with the very output a logged call returned, since nothing
-records the plugins the writer's box loaded.
+began, or gives two messages of the export one id, the import keeping one of
+them, since the reading reads no message's id but the start's; a tool whose
+schema goes from open to closed between two jobs of the round; a truncating
+server or the overflow route past the buffer; and a plugin loaded in the
+writer's box that registers a tool named `crewlet_<tool>` and answers a call of
+it with the very output a logged call returned, since nothing records the
+plugins the writer's box loaded.

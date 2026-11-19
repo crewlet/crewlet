@@ -32,9 +32,22 @@ const ohSession = "ses_0a1b2c3d4e5f60718293a4b5c6d7e8f9"
 // ohUser is the brief the run's session opens with.
 const ohUser = `{"id":"msg_user","type":"user","text":"the brief","time":{"created":1}}`
 
-// ohDoc is an export of ohSession holding messages.
+// ohDoc is an export of ohSession holding messages, each step and compaction
+// given an id of its own, as the import keys a message by its id.
 func ohDoc(messages ...string) string {
-	return `{"info":{"id":"` + ohSession + `","title":"a run"},"messages":[` + strings.Join(messages, ",") + `]}`
+	doc := `{"info":{"id":"` + ohSession + `","title":"a run"},"messages":[` + strings.Join(messages, ",") + `]}`
+	for _, id := range []string{"msg_step", "msg_c"} {
+		pieces := strings.Split(doc, `"id":"`+id+`"`)
+		var b strings.Builder
+		for i, piece := range pieces {
+			if i > 0 {
+				b.WriteString(`"id":"` + id + strconv.Itoa(i) + `"`)
+			}
+			b.WriteString(piece)
+		}
+		doc = b.String()
+	}
+	return doc
 }
 
 // ohStepOpen and ohStepClose are a settled assistant step around its items,
