@@ -103,8 +103,8 @@ type Source interface {
 }
 
 // Termed is a [Source] whose items keep a term of their own rather than the
-// reaper's: the assistant's conversations, kept `assistant.retention_days` after
-// they were last used, beside a trash every other source keeps thirty days.
+// reaper's: access history, kept the `access_history.retention_days` of the
+// fleet's revision, beside a trash every other source keeps thirty days.
 //
 // OPTIONAL, and asked at every pass rather than once, because the term is
 // company configuration that an apply may change while the duty runs. A term

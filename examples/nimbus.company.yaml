@@ -241,18 +241,6 @@ providers:
                                     #   stray ANTHROPIC_API_KEY would bill
                                     #   the metered account while you
                                     #   believed you were on a flat rate.
-    # Ask Crewlet's own entry, for the assistant block below.
-    # Its own slots keep a person in the drawer from queueing behind a
-    # seat's long call, its timeout is sized for one interactive round, and
-    # it turns the harness's web tools off, which Ask Crewlet requires (seats
-    # keep theirs).  Prove the denial with `crewlet llm doctor assistant`.
-    # assistant:
-    #   harness: claude-code
-    #   model: sonnet
-    #   auth: { mode: api-key }
-    #   timeout_seconds: 90
-    #   max_concurrent: 4
-    #   overrides: { web_tools: denied }
   embeddings:
     type: openai
     # The model decides the width — 3072 here — so `dimensions` is left
@@ -390,20 +378,15 @@ providers:
           brief names: each has one owning seat, and work in another
           seat's repository goes to its owner as a change.
 
-# Ask Crewlet: a drawer in the dashboard that answers questions
-# and prepares changes for approval, acting only as the signed-in person.
-# Off unless enabled.  Every model in its chain must be an entry whose
-# harness's local and web tools are denied (the `assistant` entry above);
-# anything else is refused.  The four bounds below are their defaults, and
-# token_budget caps each person on top of the company's own budget.  See
-# docs/getting-started/configuration.md#ask-crewlet.
+# Ask Crewlet: a chat in the dashboard that answers questions and
+# prepares changes for approval, acting only as the signed-in person.
+# Off until it is assigned a model: any providers.llm entry on a harness a
+# helper can run (claude-code or pi), here the seats' default.  It runs the
+# entry with the harness's own web tools off and no tool of its own, while
+# the seats keep theirs.  token_budget caps each person on top of the
+# company's own budget.  See docs/getting-started/configuration.md#ask-crewlet.
 # assistant:
-#   enabled: true
-#   llm: [assistant]
-#   max_steps: 30
-#   turn_timeout_seconds: 900
-#   proposal_ttl_seconds: 900
-#   retention_days: 30
+#   model: default
 #   token_budget: { day: 200000 }
 
 # Turn engine — executor/reviewer settings.  Includes the round-cap
