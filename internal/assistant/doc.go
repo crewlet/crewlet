@@ -102,6 +102,16 @@
 // error, never an interrupted the record does not say. Everything a resume can
 // fail on is read before its resume record lands.
 //
+// # One model, the API as its read surface, no deep work (ADR-0163)
+//
+// Ask Crewlet runs on the one entry `assistant.model` names, under bounds that
+// are constants, with the harness's own web and local tools turned off when
+// the engine builds the run, whatever the entry says. It reads through the
+// generic read of the API's own routes, hands a task too large for a turn to
+// an agent as a work item, and reads the web only through the engine, at
+// addresses the conversation was given. ADR-0163 supersedes the deep work and
+// listed hosts described below (ADR-0054, ADR-0151).
+//
 // # A write is a proposal
 //
 // A write tool's call is never sent by the turn. It becomes a proposal

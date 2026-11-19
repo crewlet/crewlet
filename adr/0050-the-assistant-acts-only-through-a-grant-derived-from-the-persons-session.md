@@ -79,6 +79,8 @@ into Crewlet is this turn's own surface, bridged, so every read it makes is
 still a request of the person's under this grant and every write a proposal.
 Quick mode, the turn's own model, keeps no tool of its own.
 
+**Amended by ADR-0163.** Deep work is gone with ADR-0054, which it supersedes, and the entry the assistant runs on may be any entry whose harness the engine can run with no tool of its own: the engine turns the harness's web and local tools off when it builds the run, rather than requiring the entry to say so.
+
 ## Why the obvious alternatives are wrong
 
 **A seat, or the sandbox bridge, as the assistant's identity.** A seat holds
