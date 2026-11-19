@@ -261,15 +261,17 @@
 // message it is in counts; never a message, an item or a text. It reads in a
 // slot of its own ([HoldingsReadsAtOnce]). MEASURED
 // (BenchmarkAnOpenCodeReadingAtItsBounds, one case a process on a dedicated
-// two-core slot, three runs; held the largest live heap at GOGC=10, a peak
-// the largest heap at the default): every case holds at most 2 MiB, peaking
-// at 5 MiB; one answer of 32 MiB reads in 82 to 89 ms and of 64 MiB in 139 to
-// 153 ms, past the 32 MiB the decode walk held a message to; 64 MiB of
-// minimal items in 1.06 to 1.10 s; 255 MiB of ordinary steps in 3.0 to 3.4 s
-// and of idle messages in 3.8 s; the largest export a release's own runs kept
-// in 36 to 52 ms. Beside a person's read of the 64 MiB export, which still
-// reads by the decode walk and holds 97 MiB to its 32 MiB bound, the two hold
-// 97 to 98 MiB, against 161 to 193 MiB on that walk.
+// two-core slot, three runs; held the largest live heap at GOGC=10, a peak the
+// largest heap at the default): every case holds at most 2 MiB, peaking at
+// 5 MiB; one answer of 32 MiB reads in 82 to 89 ms and of 64 MiB in 139 to
+// 153 ms, past the 32 MiB the decode walk held a message to; 64 MiB of minimal
+// items in 1.06 to 1.10 s; 255 MiB of ordinary steps in 3.0 to 3.4 s and of
+// `{"type":"idle"}` messages in 4.8 to 4.9 s; the slowest, one step of 255 MiB
+// of `0` items, read to its end and refused, in 8.5 to 9.0 s; the largest
+// export a release's own runs kept in 36 to 52 ms. Beside a person's read of
+// the 64 MiB export, which still reads by the decode walk and holds 97 MiB to
+// its 32 MiB bound, the two hold 97 to 98 MiB, against 161 to 193 MiB on that
+// walk.
 //
 // TO ADD A RELEASE to [openCodeHoldingsReleases], it must first be one the
 // count reads ([openCodeCountReleases]); then drive the engine's own bridge

@@ -4754,14 +4754,15 @@ as a pure function of the walk's facts and the ask.
 the scanner, as the take's meter is: it holds no message or value whole, reads
 each member it asks for once, as a word, a capture of at most 64 KiB, a frame
 with its key facts, or a text's digest (its size, its sum and the sums of the
-openings a cut class keeps), and decides each item and message at its end, so
-a step whose type follows its content reads as one written type first. No
-message is past a bound but the plaintext's. Measured on two dedicated cores
+openings a cut class keeps), and decides each item and message at its end, so a
+step whose type follows its content reads as one written type first. No message
+is past a bound but the plaintext's. Measured on two dedicated cores
 (`BenchmarkAnOpenCodeReadingAtItsBounds`, three runs): every case holds at most
 2 MiB live; one answer of 64 MiB reads in 139 to 153 ms; 255 MiB of ordinary
-steps in 3.0 to 3.4 s and of idle messages in 3.8 s, inside the 30 s wait;
-beside a person's read of a 64 MiB export, which holds 97 MiB, the two hold 97
-to 98 MiB.
+steps in 3.0 to 3.4 s, of `{"type":"idle"}` messages in 4.8 to 4.9 s and of one
+step's `0` items, the slowest, in 8.5 to 9.0 s, inside the 30 s wait; beside a
+person's read of a 64 MiB export, which holds 97 MiB, the two hold 97 to
+98 MiB.
 
 **The releases.** A session is read only where OpenCode 2.0.32, 2.1.4, 2.2.7
 or 2.3.0 wrote it (`openCodeHoldingsReleases`, a set and never a range,

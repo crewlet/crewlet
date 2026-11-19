@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -20,12 +21,13 @@ import (
 // BenchmarkAnOpenCodeReadingAtItsBounds measures an OpenCode holdings
 // reading's time and memory at its bounds, which set internal/sandbox's
 // holdingsReadWait and [HoldingsReadsAtOnce]: the largest export a release's
-// own runs kept, 255 MiB of ordinary steps and of idle messages, one message
-// holding one answer the reading digests at 32 and at 64 MiB, one of minimal
-// items at 64 MiB, and 200 classes over 4,096 parts. `_pair` runs the reading
-// and a person's read of the export at once, `_person` the person's alone.
-// Run one case at a time, reading GODEBUG=gctrace=1 between its stderr lines:
-// held at most is the largest live heap at GOGC=10.
+// own runs kept, 255 MiB of ordinary steps, of idle messages and of one step's
+// shortest items, one message holding one answer the reading digests at 32 and
+// at 64 MiB, one of minimal items at 64 MiB, and 200 classes over 4,096 parts.
+// `_pair` runs the reading and a person's read of the export at once,
+// `_person` the person's alone. Run one case at a time, reading
+// GODEBUG=gctrace=1 between its stderr lines: held at most is the largest live
+// heap at GOGC=10.
 //
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAnOpenCodeReadingAtItsBounds$/^<case>$' -benchtime 1x -benchmem
 func BenchmarkAnOpenCodeReadingAtItsBounds(b *testing.B) {
@@ -33,16 +35,20 @@ func BenchmarkAnOpenCodeReadingAtItsBounds(b *testing.B) {
 		name            string
 		write           func(*testing.B, io.Writer) []sandbox.LoggedCall
 		reading, person bool
+		// refused is a reading that reads the export to its end and then
+		// answers it is no export.
+		refused bool
 	}{
-		{"measured", benchMeasured, true, false},
-		{"ordinary", benchOrdinary, true, false},
-		{"idle", benchIdle, true, false},
-		{"answer_32", benchAnswer(32 << 20), true, false},
-		{"answer_64", benchAnswer(64 << 20), true, false},
-		{"answer_64_person", benchAnswer(64 << 20), false, true},
-		{"answer_64_pair", benchAnswer(64 << 20), true, true},
-		{"minimal_items", benchMinimalItems, true, false},
-		{"classes", benchClasses, true, false},
+		{"measured", benchMeasured, true, false, false},
+		{"ordinary", benchOrdinary, true, false, false},
+		{"idle", benchIdle, true, false, false},
+		{"shortest_items", benchShortestItems, true, false, true},
+		{"answer_32", benchAnswer(32 << 20), true, false, false},
+		{"answer_64", benchAnswer(64 << 20), true, false, false},
+		{"answer_64_person", benchAnswer(64 << 20), false, true, false},
+		{"answer_64_pair", benchAnswer(64 << 20), true, true, false},
+		{"minimal_items", benchMinimalItems, true, false, false},
+		{"classes", benchClasses, true, false, false},
 	} {
 		b.Run(bc.name, func(b *testing.B) {
 			file := filepath.Join(b.TempDir(), "export.json.gz")
@@ -56,7 +62,7 @@ func BenchmarkAnOpenCodeReadingAtItsBounds(b *testing.B) {
 				if bc.reading {
 					wg.Go(func() {
 						got, err := NewOpenCode().ReadHoldings(b.Context(), ohArchive("2.2.7"), open, ask)
-						if err != nil || !got.Read {
+						if bc.refused && !errors.Is(err, errOpenCodeMalformed) || !bc.refused && (err != nil || !got.Read) {
 							b.Errorf("the reading = %+v, %v", got, err)
 						}
 					})
@@ -156,15 +162,34 @@ func benchOrdinary(b *testing.B, w io.Writer) []sandbox.LoggedCall {
 	return calls
 }
 
-// benchIdle is about 255 MiB of idle messages, a step of one call after them.
+// benchIdle is about 255 MiB of `{"type":"idle"}` messages, the shortest a
+// reading reads past, a step of one call after them.
 func benchIdle(b *testing.B, w io.Writer) []sandbox.LoggedCall {
 	b.Helper()
 	_, _ = io.WriteString(w, benchHead)
-	for n := 0; n < 255<<20; n += len(ocIdle) + 1 {
-		_, _ = io.WriteString(w, ","+ocIdle)
-	}
+	benchRepeat(w, `,{"type":"idle"}`)
 	_, _ = io.WriteString(w, ","+ohStep(ohDone("echo", `{"t":1}`, "done"))+benchTail)
 	return []sandbox.LoggedCall{ohCall(1, "echo", `{"t":1}`, "done")}
+}
+
+// benchShortestItems is one step of about 255 MiB of the shortest item a
+// content list holds, `0`: the slowest export a reading was measured on
+// (the empty object, the empty list, an answer's empty parts and a time's
+// empty names each read faster), refused at the step's end.
+func benchShortestItems(b *testing.B, w io.Writer) []sandbox.LoggedCall {
+	b.Helper()
+	_, _ = io.WriteString(w, benchHead+","+ohStepOpen)
+	benchRepeat(w, `0,`)
+	_, _ = io.WriteString(w, ohDone("echo", `{"t":1}`, "done")+ohStepClose+benchTail)
+	return []sandbox.LoggedCall{ohCall(1, "echo", `{"t":1}`, "done")}
+}
+
+// benchRepeat writes element to w over and over, about 255 MiB of it.
+func benchRepeat(w io.Writer, element string) {
+	run := strings.Repeat(element, (64<<10)/len(element))
+	for n := 0; n < 255<<20; n += len(run) {
+		_, _ = io.WriteString(w, run)
+	}
 }
 
 // benchAnswer is one step of size bytes holding one answer the reading
