@@ -40,6 +40,7 @@ vi.mock("~/app/Shell.tsx", async () => ({
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   location.hash = "";
@@ -455,8 +456,11 @@ test("a commit's changes wear their state pill, and the refs it moved a branch c
 
 // A DIRECT MERGE'S LANDING IS SAID WITH ITS GATE: the merge commit, the merger,
 // approvals, checks and when, titled with the date. Mutation: name the merge
-// commit's author as the merger.
+// commit's author as the merger. The clock is pinned a day after the landing,
+// so its relative time is the same whatever day the suite runs.
 test("a direct merge's landing is said in sentences with its gate", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-21T12:00:00Z"));
   stubEngine({ commitAnswer: commit({ revisions: [{ change: landing(), n: 1 }] }) });
   mount(<CommitPage repo="web" sha={SHA} />, `#/gitlet/repos/web/commits/${SHA}`);
 
