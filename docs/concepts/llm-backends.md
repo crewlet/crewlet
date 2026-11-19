@@ -519,7 +519,7 @@ than on anything the profile says.
 it. Absent, the engine passes nothing and the harness runs at its own default,
 which is how every entry ran before the field existed. Set, it reaches every run
 on the entry: the phases on this host (the reviewer, workers, onboarding, side
-passes, Ask Crewlet's questions and its Think harder chain, a model check) and an
+passes, Ask Crewlet's questions, a model check) and an
 executor run in a box, Ask Crewlet's deep work included.
 
 The levels are each harness's own rather than one vocabulary of the engine's,
@@ -2311,11 +2311,12 @@ of an unrecorded read, accepted. A seat on a harness with no web tool of its own
 reaches the web the way it reaches everything external, through the MCP servers
 you configure.
 
-**An entry can turn the web off, and Ask Crewlet requires it.**
-Web stays on for every seat unless its entry says otherwise. An entry whose
-model must read nothing the engine's own guard did not hand it
-([Ask Crewlet's](../getting-started/configuration.md#ask-crewlet)) sets `overrides: {web_tools: denied}`, and the profile's `web_denial` says
-what that harness runs with instead:
+**The web can be turned off, and a helper's run always is.**
+Web stays on for every seat unless its entry sets `overrides: {web_tools: denied}`.
+A helper's run of an entry ([Ask Crewlet's](../getting-started/configuration.md#ask-crewlet))
+is built with it denied whatever the entry says, so its model reads nothing the
+engine's own guard did not hand it while a seat on the same entry keeps its web.
+The profile's `web_denial` says what that harness runs with instead:
 
 | Profile | How web is turned off | Measured |
 |---|---|---|
@@ -2328,9 +2329,9 @@ Every other profile has no `web_denial`, says why in `web_tools_note`, and
 refuses `web_tools: denied`, so it cannot serve Ask Crewlet until one is
 measured and added (an operator may supply their own `web_denial` in
 `overrides`, and owns that claim). Whichever profile it is, `crewlet llm
-doctor` runs its web probe on a denied entry and reports a fetch that
-succeeded as a problem, exactly as it reports a shell that ran on a profile
-denying local tools; run it before Ask Crewlet goes live.
+doctor` runs its web probe on a denied entry, and on the helper's run of an
+entry a helper is assigned, and reports a fetch that succeeded as a problem,
+exactly as it reports a shell that ran on a profile denying local tools.
 
 **Ask Crewlet needs more than a denial: no tool of its own, by
 construction.** Its tools are the person's own requests, served to its harness as
@@ -2341,10 +2342,9 @@ seats' deny list still left thirteen tools on offer, Workflow, SendMessage and
 EnterWorktree among them. So a profile Ask Crewlet runs on declares
 `tools_off`: the argument runs that leave the harness with no built-in tool and no
 server but the ones its `mcp` block names, and the flags that would bring one
-back. Ask Crewlet's chain admits an entry only when the argv its calls run
-(web denied) carries each run once and none of those flags, and its `mcp`
-allow list names the engine's tools alone, which an override cannot quietly
-undo:
+back. A helper runs on an entry only when the argv its calls run (web
+denied) carries each run once and none of those flags, and its `mcp` allow
+list names the engine's tools alone, which an override cannot quietly undo:
 
 | Profile | No tool by construction | Ask Crewlet |
 |---|---|---|
@@ -4374,9 +4374,10 @@ are each named as what they are. On a profile with no `mcp` block the smoke test
 fails naming `overrides.mcp`, after asking plainly whether the harness is signed in.
 
 The `web` line leads with the entry's stance. On an entry with
-`overrides: {web_tools: denied}` (the one Ask Crewlet runs on) the probe's
-expectation is reversed: a refusal is the healthy answer, and a fetch is a
-problem naming the denial that did not take effect:
+`overrides: {web_tools: denied}`, and on the helper's run of an entry a helper
+is assigned (reported after the entry's own, headed "as a helper runs it"), the
+probe's expectation is reversed: a refusal is the healthy answer, and a fetch
+is a problem naming the denial that did not take effect:
 
 ```
 web           : denied by entry (WebFetch and WebSearch on --disallowedTools; measured refused on Claude Code 2.1.310); probe: refused
