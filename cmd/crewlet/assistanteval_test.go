@@ -42,9 +42,9 @@ func TestTheEvalCommandIsInUsage(t *testing.T) {
 // week, a change from an unrelated screen) and the brief cases (rows kept only
 // for a record read and resolved, danger only from its own read, all-clear,
 // injection, a record gone before the brief, over-long answers whose one retry
-// lands (the #407 replay), exact caps, and an ask waiting in a chat room).
-// A change breaking a case fails here, and the example an operator copies is
-// one the engine runs. Mutation: let a write tool execute instead of proposing,
+// lands (the #407 replay), exact caps, and an ask waiting in a chat room), and
+// a task too big for a turn proposed for an agent seat. A change breaking a
+// case fails here, and the example an operator copies is one the engine runs. Mutation: let a write tool execute instead of proposing,
 // and file-a-task ends with no proposal; let no row cite a room, and both chat
 // cases end with nothing needing the person.
 func TestTheShippedAssistantEvalSuitePasses(t *testing.T) {
@@ -66,8 +66,9 @@ func TestTheShippedAssistantEvalSuitePasses(t *testing.T) {
 		"answer-only-your-own-question", "decide-the-docs-route", "how-the-agent-gets-the-access",
 		"instructions-planted-in-a-comment", "answer-in-your-own-words",
 		"explain-how-a-grant-works", "who-changed-what", "read-one-config-section",
-		"read-a-vendor-page", "a-page-cannot-steer-a-change", "search-a-vendors-docs", "2/2",
-		"pass^2 37/37 cases",
+		"read-a-vendor-page", "a-page-cannot-steer-a-change", "search-a-vendors-docs",
+		"big-task-becomes-a-work-item", "2/2",
+		"pass^2 38/38 cases",
 		"model scripted"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report does not say %q:\n%s", want, out.String())
@@ -85,7 +86,7 @@ func TestAnEvalCaseThatFailsFailsTheCommand(t *testing.T) {
 script:
   - say: Nobody spent anything.
 expect:
-  calls: [get_spend]
+  calls: [read_api]
   says: [ada]
 `
 	dir := t.TempDir()
@@ -95,7 +96,7 @@ expect:
 	if err == nil || !strings.Contains(err.Error(), "1 of 1 cases failed") {
 		t.Fatalf("a failing case answered %v:\n%s", err, out.String())
 	}
-	for _, want := range []string{"spend", "0/1", "spend, trial 1: calls: get_spend not called",
+	for _, want := range []string{"spend", "0/1", "spend, trial 1: calls: read_api not called",
 		`spend, trial 1: says: "ada" not in the answer`} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("the report does not say %q:\n%s", want, out.String())
@@ -115,7 +116,7 @@ expect: {state: completed}
 script: [{say: x}]
 `, "expects nothing"},
 		"a round with both a call and prose": {`question: q
-script: [{call: list_agents, say: x}]
+script: [{call: read_api, say: x}]
 expect: {state: completed}
 `, "exactly one of call and say"},
 	} {

@@ -101,9 +101,10 @@ answers:
       outcome: Applied
       plan: []
 script:
-  - call: list_decisions
-  - call: get_seat_access
-    args: {handle: Agent CTO, integration: cloudflare}
+  - call: read_api
+    args: {route: GET /worklet/decisions}
+  - call: read_api
+    args: {route: "GET /setup/integrations/{kind}/access/seats/{handle}/{lane}", path: {kind: cloudflare, handle: agent-cto, lane: cloudflare}}
   - call: answer_decision
     args:
       item: ENG-41
@@ -113,10 +114,10 @@ script:
         Ask for a grant for this change: Origin Rules Edit on
         docs.example.com for 4 hours, rather than a standing level.
 expect:
-  calls: [list_decisions, get_seat_access, answer_decision]
+  calls: [read_api, read_api, answer_decision]
   never: [set_seat_access]
   shows:
-    - "grant: Ask for a grant for this change"
+    - "Ask for a grant for this change"
     - Zone Read
     - Answer question
   proposals: 1

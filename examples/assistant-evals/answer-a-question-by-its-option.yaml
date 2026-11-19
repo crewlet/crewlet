@@ -1,6 +1,7 @@
-# A question with three options waits on the founder; the decisions read lists
-# it with its options by id, the recommendation and what it cites, and the
-# answer is proposed by the option chosen, sent only once approved.
+# A question with three options waits on the founder; the decisions read
+# answers it with its options by id, the recommendation and what it cites, and
+# the answer is proposed by the option chosen, sent only once approved. The
+# proposal's card names the question and the option chosen.
 person:
   apps: [worklet]
   acts: [comment_on_work_item]
@@ -66,7 +67,8 @@ answers:
             recommended: origin-rule
             role: approver
 script:
-  - call: list_decisions
+  - call: read_api
+    args: {route: GET /worklet/decisions}
   - call: answer_decision
     args:
       item: ENG-41
@@ -74,13 +76,12 @@ script:
       choice: worker
       body: Use a Worker route on the free tier, matching the exact path only.
 expect:
-  calls: [list_decisions, answer_decision]
+  calls: [read_api, answer_decision]
   never: [comment_on_task]
   shows:
-    - "origin-rule: Origin rule with a Host override (Needs a plan upgrade)"
-    - "worker: A Worker route on the free tier"
-    - "One rule to maintain"
-    - "url: https://docs.example.com/rules/origin (Origin rules)"
+    - Worklet decisions
+    - "Which way should the edge route versioned docs pages?"
+    - "A Worker route on the free tier"
     - "c-12"
     - Answer question
   proposals: 1
