@@ -136,7 +136,9 @@ function Page({ conversation, deleted }: { conversation: string | undefined; del
   // the read is the store's to say (`turn.ts`'s `Opening`).
   useEffect(() => {
     const held = conversationNow();
-    if (!conversation || held.id === conversation || held.opening?.id === conversation) return;
+    const opening = held.opening;
+    const reading = opening !== null && opening.id === conversation && opening.state === "reading";
+    if (!conversation || held.id === conversation || reading) return;
     openConversation(conversation).catch(() => {});
   }, [conversation]);
 

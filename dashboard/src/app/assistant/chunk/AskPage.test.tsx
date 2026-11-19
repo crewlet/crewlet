@@ -580,3 +580,17 @@ test("a question sent into a conversation deleted elsewhere is told it was delet
   expect(document.body.textContent).not.toContain("There is no such record here.");
   await screen.findAllByText("This conversation was deleted");
 });
+
+// A READ THAT FAILED IS NOT KEPT AS THE ANSWER: coming back to the page reads
+// the conversation again. Mutation: skip the read whenever the store holds an
+// opening for the address, whatever came of it.
+test("coming back to a conversation whose read failed reads it again", async () => {
+  engine([summary(PAYROLL, "Payroll", 60_000)], undefined, { status: 500 });
+  const first = mount(`#/ask/${PAYROLL}`);
+  await screen.findByText("This conversation could not be read");
+  first.unmount();
+  vi.unstubAllGlobals();
+  engine([summary(PAYROLL, "Payroll", 60_000)]);
+  mount(`#/ask/${PAYROLL}`);
+  await screen.findByText("About Payroll");
+});
