@@ -886,12 +886,12 @@ func New(opts Options) (*App, error) {
 	}
 	// THE ADVISOR, where this node reaches its log: its questions read it,
 	// its routes write a person's decisions to it, and its duty runs here
-	// while this node holds the duty's lease.
-	if r, ok := opts.Runtime.(advisorRuntime); ok {
-		if reads, writes, ok := r.AdvisorLog(); ok {
+	// while this node holds the duty's lease (built below, once every
+	// source the duty reads is set).
+	advisorRT, _ := opts.Runtime.(advisorRuntime)
+	if advisorRT != nil {
+		if reads, writes, ok := advisorRT.AdvisorLog(); ok {
 			sources.Advisor, a.advisor = reads, advisorLog{reads, writes}
-			a.advisorDuty = sources.AdvisorDuty(duty.LogOf(reads, writes, time.Now), r.AdvisorClaim())
-			a.advisorFinding = sources.AdvisorFindingOf
 		}
 	}
 	// And each server's OAuth grant, which every node reads from the
@@ -970,6 +970,12 @@ func New(opts Options) (*App, error) {
 	// source beside it: one surface, so a clone and a listing asked of one
 	// node cannot disagree about whether it hosts code.
 	sources.Code = codeQuestions{surface: opts.Code}
+	// THE ADVISOR'S DUTY AND ITS FINDING READS take sources by value, so
+	// they are built from the sources as complete as the questions are.
+	if a.advisor != nil {
+		a.advisorDuty = sources.AdvisorDuty(duty.LogOf(a.advisor, a.advisor, time.Now), advisorRT.AdvisorClaim())
+		a.advisorFinding = sources.AdvisorFindingOf
+	}
 	a.queries = queries.NewRegistry()
 	queries.Register(a.queries, sources)
 	a.backup, a.audit = opts.Backup, opts.Audit

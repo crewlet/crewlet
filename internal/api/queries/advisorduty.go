@@ -72,6 +72,9 @@ type setupSignature struct {
 // Signature is a digest of the company's revision, each integration's last
 // reconcile and every paused seat: a change to any is a change to the setup.
 func (o advisorObserver) Signature(ctx context.Context) (string, error) {
+	if o.s.Config == nil {
+		return "", nil
+	}
 	_, revision, err := o.s.Config.FleetCompany(ctx)
 	if err != nil {
 		return "", err
