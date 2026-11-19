@@ -22,10 +22,6 @@ import type { Remedy } from "./remedies.ts";
 
 /** The protocol version every frame and every request carries. */
 export const ASSISTANT_PROTOCOL_VERSION = 2;
-/** The longest title a person may give a conversation. */
-export const ASSISTANT_TITLE_MAX_RUNES = 60;
-/** The longest search a conversation listing takes. */
-export const ASSISTANT_SEARCH_MAX_RUNES = 100;
 /** The longest question a turn takes, in characters (Unicode code points). */
 export const ASSISTANT_INPUT_MAX_RUNES = 4000;
 /** The most a turn's page context may encode to, in bytes. */
@@ -882,7 +878,7 @@ export interface AssistantConversationSummary {
 }
 
 /** Who named a conversation. */
-export type AssistantTitleSource = "model" | "person";
+type AssistantTitleSource = "model" | "person";
 
 /** A person's title for their conversation: `PATCH /assistant/conversations/{id}`. */
 export interface AssistantConversationRename {

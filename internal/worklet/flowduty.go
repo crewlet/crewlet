@@ -59,6 +59,9 @@ type FlowDutyDeps struct {
 	NodeID string
 	// Logger is where the duty reports; nil is the package's own.
 	Logger *slog.Logger
+	// Past is where the backfill reads the seats' retained events; nil
+	// reads none, and every change it derives says so.
+	Past SeatPast
 }
 
 // FlowDuty is the duty over its deps, and the position of its own last
@@ -69,6 +72,9 @@ type FlowDutyDeps struct {
 type FlowDuty struct {
 	deps  FlowDutyDeps
 	wrote statelog.Position
+
+	// fill is the backfill's place in its walk ([FlowDuty.Backfill]).
+	fill flowFill
 }
 
 // NewFlowDuty is the duty, refusing deps it cannot run without.
@@ -303,17 +309,19 @@ func (it flowItem) toldAs(role FlowRole) bool {
 	return false
 }
 
-// flowLastChange is an item's latest recorded change of state, packed, and
-// flowToldSince the roles told since it, each one seek of
-// tracker_flow_task_idx per item.
+// flowLastChange is an item's latest change of state the duty recorded,
+// packed, and flowToldSince the roles told since it, each one seek of
+// tracker_flow_task_idx per item. A backfilled change is never the latest:
+// published after the duty's own, it would read as the item's newest change
+// by log position and the duty would record and tell the present again.
 const (
 	flowLastChange = `SELECT json_array(fl.id, fl.state, fl.cause, fl.since, fl.recorded_at)
-		FROM tracker_flow fl WHERE fl.task_id = t.id AND fl.notice = ''
+		FROM tracker_flow fl WHERE fl.task_id = t.id AND fl.notice = '' AND fl.backfilled = 0
 		ORDER BY fl.log_seq DESC LIMIT 1`
 	flowToldSince = `SELECT group_concat(fn.notice, ',') FROM tracker_flow fn
 		WHERE fn.task_id = t.id AND fn.notice <> '' AND fn.log_seq > COALESCE(
 			(SELECT fc.log_seq FROM tracker_flow fc WHERE fc.task_id = t.id AND fc.notice = ''
-			 ORDER BY fc.log_seq DESC LIMIT 1), 0)`
+			 AND fc.backfilled = 0 ORDER BY fc.log_seq DESC LIMIT 1), 0)`
 )
 
 // flowPageStatement is the duty's one statement per page, named for the plan

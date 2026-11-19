@@ -17,7 +17,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Announcer, ToastProvider } from "@crewlethq/ui";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 
 import { Router } from "~/app/router.tsx";
 import { SessionReading } from "~/lib/frameSession.ts";
@@ -38,11 +38,6 @@ import { forgetTreeChoice } from "./FileView.tsx";
 import { forgetTrees } from "./tree.ts";
 import { sinceOf } from "../when.ts";
 import { RepositoryPage } from "./RepositoryPage.tsx";
-
-beforeEach(() => {
-  // jsdom implements no scrolling, and a history row the keys or Load more reach scrolls into view.
-  Element.prototype.scrollIntoView = () => {};
-});
 
 // EVERY GRAMMAR FETCH COUNTED, the registry's own load passed through.
 vi.mock("~/lib/syntax/index.ts", async (real) => {
@@ -1496,6 +1491,11 @@ test("the blame's when column is as wide as its longest time", async () => {
   );
 });
 
+// THE SETUP'S NO-OP (src/test/setup.ts), which a watching case replaces and every case
+// gets back: never deleted, since a focus effect a Load more press left pending may still
+// run after its case ends, before cleanup unmounts the page.
+const noScroll = Element.prototype.scrollIntoView;
+
 /** Watch what is scrolled into view: jsdom lays nothing out, and has no scrollIntoView. */
 function watchScrolls(): Element[] {
   const scrolled: Element[] = [];
@@ -1506,7 +1506,7 @@ function watchScrolls(): Element[] {
 }
 
 afterEach(() => {
-  delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  Element.prototype.scrollIntoView = noScroll;
 });
 
 /** The `start_line` of every read of the big file a kind of read asked, in order: null where it named none. */
