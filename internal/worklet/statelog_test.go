@@ -323,6 +323,16 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 		record.Actor, record.ActorKind = "dev", worklet.AuthorAgent
 		record.WorkingFor = &types.WorkingFor{Kind: types.WorkingForSeat, Seat: "ada"}
 		record.Notify = &worklet.Notify{Kind: worklet.ChangeCreated}
+	case "Project.StuckAfterHours":
+		// A PROJECT WHOSE LEAD SAID HOW LONG ITS WORK MAY GO UNCHANGED.
+		project, err := json.Marshal(worklet.Project{
+			V: worklet.DocumentVersion, Key: "carrying", Name: "Suite carrying",
+			StuckAfterHours: 24, CreatedAt: at, UpdatedAt: at,
+		})
+		if err != nil {
+			return nil, err
+		}
+		record.Mutation = project
 	case "TaskPatch.ClearStart", "TaskPatch.ClearDue":
 		// A TASK PATCH TAKING A DATE OFF by its flag, which a build that
 		// decodes no flag would apply as a patch naming no date.
