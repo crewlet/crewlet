@@ -129,10 +129,25 @@ func (f *follower) readEvents(ctx context.Context, box sandbox.Sandbox, path str
 	}
 	// A bytes.Reader cannot fail, so neither can this.
 	_ = eachLine(bytes.NewReader(lines), f.dec, f.lineBound)
-	for _, entry := range f.dec.Entries() {
-		f.transcript.add(entry + "\n")
-		f.spoke = true
+	entries := f.dec.Entries()
+	if len(entries) == 0 {
+		return nil
 	}
+	// ADDED ONCE, each entry a line: an add appends to the pending text, so an
+	// add per entry would copy that text once per entry, quadratic in a read of
+	// many short events. Adding the read's text in one piece settles the same.
+	size := len(entries)
+	for _, entry := range entries {
+		size += len(entry)
+	}
+	var text strings.Builder
+	text.Grow(size)
+	for _, entry := range entries {
+		text.WriteString(entry)
+		text.WriteByte('\n')
+	}
+	f.transcript.add(text.String())
+	f.spoke = true
 	return nil
 }
 
