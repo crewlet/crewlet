@@ -27,14 +27,16 @@
 //
 // # Text that is still being written
 //
-// A live view shows what a running process has written so far, and every
-// rule here was written for text that is whole. [Settled] is the other half:
-// how much of a growing text has a redaction that nothing written after it
-// can change, so a reader is never shown a key's body that its END line,
-// arriving a moment later, would have redacted. It lives beside the rules
-// because it is a property OF them — a rule added here that can reach across a
-// line break is a rule [Settled] has to learn about, and its test feeds every
-// shape here through text that arrives a line at a time.
+// Every rule here was written for text that is whole, and a live view shows
+// text still being written. [Settled] is how much of a growing text has a
+// redaction nothing written after it can change, so a reader is never shown
+// a key's body that its END line, arriving a moment later, would have
+// redacted. A rule added here that can reach across a line break is a rule
+// Settled has to learn about; its test feeds every shape here through text
+// that arrives a line at a time. A stream from [NewLiveStream] hands its
+// stages only what Settled settles, and [Stream.Flush] decides each stage to
+// there as at the text's end: where it is flushed changes nothing it writes,
+// and it refuses only where a [NewStream] does.
 //
 // # How far a rule reads
 //
@@ -95,9 +97,8 @@
 // of that at the last marker it holds (below), and by exactly that window
 // however much more it holds. The stages are handed the text a piece at a
 // time at its own offsets, so what each holds when it steps is the text's
-// alone, and how the text is cut into writes changes nothing. Secrets itself
-// reads its text whole at any length: its caller holds the text already, and
-// read by the stages, a text that needs none of their windows paid for them.
+// alone, and how the text is cut into writes changes nothing. Secrets
+// reads its text whole at any length, since its caller holds it already.
 //
 // A stage decides with the whole-text code over its window ([rule.decide],
 // [keyReading]) and trusts a decision only where the window holds all it read.

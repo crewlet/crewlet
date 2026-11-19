@@ -80,6 +80,22 @@ const (
 // every stage at once, with no window held.
 const wholeBytes = stageStep
 
+// settleEvery is how much text a live stream takes past the last place it
+// asked [Settled] before it asks again on a write ([Stream.settleIn]): four
+// reaches, so Settled reads each byte about once more, plus what it held
+// back, and a reader that writes megabytes between two flushes holds no more
+// of them unsettled than a flush would.
+const settleEvery = 4 * MaxReach
+
+// unsettledBytes is the most text a live stream holds unsettled. Past it the
+// stream hands that text to its stages and settles no more for the rest of
+// its life, trailing its text as a [NewStream] does: its stages keep no map
+// back to the text as written, so the settled point cannot be found again.
+// Settled holds back at most about 66 KiB of complete lines (a key's block
+// and a reach), so only a line longer than this, unfinished or held whole by
+// Settled, gets here.
+const unsettledBytes = 1 << 20
+
 // ErrDecidedEarly is what a [Stream] answers, wrapped with the first byte of
 // the text from which what it wrote may differ from [Secrets], once it finds
 // it decided a window of its text before what the rules claim
@@ -106,10 +122,10 @@ var errStreamClosed = errors.New("redact: write to a closed stream")
 
 // Stream redacts a text written to it in pieces, writing the redacted text to
 // the writer it was made with, in one pass and bounded memory, or refuses it.
-// However the text is cut into writes, it holds no more than its stages'
-// windows (output trails them; nothing is written before [wholeBytes]), whether
-// it refuses depends on the text alone, and where Close answers nil it wrote
-// exactly [Secrets] of the text. Writes to its writer cut at any byte.
+// However the text is cut into writes, it holds its stages' windows (and a
+// live stream what is not settled, [unsettledBytes] at most), whether it
+// refuses depends on the text alone (a flush can only spare it), and where
+// Close answers nil it wrote exactly [Secrets]. Its writes cut at any byte.
 //
 // A refusal is [ErrDecidedEarly], from Close and every later write: the keys'
 // stage decided a window before the rules' claims there were known. What was
@@ -133,11 +149,42 @@ type Stream struct {
 	// hold is how far the keys' stage lets the text run past a window
 	// before it decides it ([holdBytes]).
 	hold int
+	// live is a live stream's ([NewLiveStream]), nil in any other. final
+	// and held are what Flush answered last, kept for after the stream
+	// stops.
+	live  *live
+	final int64
+	held  int
+}
+
+// live is what a live stream keeps beside its stages: the text past the
+// settled point, which its stages have not been handed.
+type live struct {
+	// settled is the settled point in head while the text is held whole,
+	// and pre how much Flush wrote of head's redaction up to it.
+	settled int
+	pre     int64
+	// raw is the text past the settled point once the stages run, and due
+	// the length at which a write asks [Settled] again ([settleEvery]).
+	raw []byte
+	due int
+	// stopped is whether raw ran past [unsettledBytes], after which the
+	// stream settles nothing.
+	stopped bool
 }
 
 // NewStream is a Stream that writes what it redacts to w.
 func NewStream(w io.Writer) *Stream {
 	return newStreamHolding(w, holdBytes())
+}
+
+// NewLiveStream is a Stream whose Flush writes the text's redaction as far as
+// [Settled] settles it: its stages are handed only settled text, held back up
+// to [unsettledBytes].
+func NewLiveStream(w io.Writer) *Stream {
+	s := NewStream(w)
+	s.live = &live{due: settleEvery}
+	return s
 }
 
 // newStreamHolding is a Stream whose keys' stage decides a window once the
@@ -156,6 +203,9 @@ func (s *Stream) Write(p []byte) (int, error) {
 		return 0, errStreamClosed
 	case s.err != nil:
 		return 0, s.err
+	case s.p != nil && s.live != nil && !s.live.stopped:
+		s.settleIn(p)
+		return len(p), s.err
 	case s.p != nil:
 		s.p.feed(p)
 		s.endErr()
@@ -174,6 +224,16 @@ func (s *Stream) Write(p []byte) (int, error) {
 		for _, f := range s.p.feeds() {
 			f.poison = s.poison
 		}
+		if l := s.live; l != nil {
+			// What Flush wrote of the head is the start of what the
+			// stages write ([Settled]), so the end drops it.
+			s.end.skip = l.pre
+			s.p.feed(s.head[:l.settled])
+			l.raw = append(l.raw, s.head[l.settled:]...)
+			s.head = nil
+			s.settleIn(p[n:])
+			return len(p), s.err
+		}
 		s.p.feed(s.head)
 		s.head = nil
 		s.p.feed(p[n:])
@@ -181,6 +241,113 @@ func (s *Stream) Write(p []byte) (int, error) {
 		s.stopOnMiss()
 	}
 	return len(p), s.err
+}
+
+// settleIn takes p as the next of a live stream's text: held unsettled, the
+// stages handed what [Settled] settles each time [settleEvery] more of it has
+// arrived, and all of it once it runs past [unsettledBytes].
+func (s *Stream) settleIn(p []byte) {
+	l := s.live
+	for s.p != nil && !l.stopped {
+		k := min(len(p), l.due-len(l.raw))
+		l.raw = append(l.raw, p[:k]...)
+		p = p[k:]
+		if len(l.raw) < l.due {
+			break
+		}
+		s.settle()
+	}
+	if s.p != nil && len(p) > 0 {
+		s.p.feed(p)
+	}
+	s.endErr()
+	s.stopOnMiss()
+}
+
+// settle hands a live stream's stages the text [Settled] settles past the
+// settled point, or, past [unsettledBytes], all of it, settling no more.
+func (s *Stream) settle() {
+	l := s.live
+	n := Settled(string(l.raw))
+	s.p.feed(l.raw[:n])
+	l.raw = l.raw[:copy(l.raw, l.raw[n:])]
+	if len(l.raw) > unsettledBytes {
+		s.p.feed(l.raw)
+		l.raw, l.stopped = nil, true
+	}
+	l.due = min(len(l.raw)+settleEvery, unsettledBytes+1)
+	s.endErr()
+	s.stopOnMiss()
+}
+
+// Flush writes the redaction of the text as far as it is settled, and answers
+// how many bytes of all the stream has written are final (a prefix of Secrets
+// of the text whatever is written after it or the stream answers later) and
+// how many bytes of the text are not yet in what it wrote. On a Stream from
+// NewStream it writes nothing and counts only what no window decided early
+// waits on, and held is a lower bound, as it is once a live stream settles no
+// more ([unsettledBytes]). After an error it answers the counts it last had.
+//
+// Each stage is handed only settled text, and decides all it holds as it does
+// at the text's end ([pipeline.decideHeld]): the redaction composes there.
+func (s *Stream) Flush() (final int64, held int, err error) {
+	l := s.live
+	switch {
+	case s.err != nil:
+		return s.final, s.held, s.err
+	case s.closed:
+		return s.written(), 0, nil
+	case s.p == nil && l != nil:
+		if n := Settled(string(s.head[l.settled:])); n > 0 {
+			text := Secrets(string(s.head[l.settled : l.settled+n]))
+			s.emit(text)
+			l.pre += int64(len(text))
+			l.settled += n
+		}
+	case s.p != nil && l != nil && !l.stopped:
+		s.settle()
+		if s.p != nil {
+			s.p.decideHeld()
+			s.endErr()
+			s.stopOnMiss()
+		}
+	}
+	if s.err != nil {
+		return s.final, s.held, s.err
+	}
+	s.final, s.held = s.counts()
+	return s.final, s.held, nil
+}
+
+// counts is what Flush answers of a stream that has not stopped.
+func (s *Stream) counts() (final int64, held int) {
+	l := s.live
+	switch {
+	case s.p == nil && l != nil:
+		return l.pre, len(s.head) - l.settled
+	case s.p == nil:
+		return 0, len(s.head)
+	case l != nil && !l.stopped:
+		return s.written(), len(l.raw)
+	}
+	return s.pre() + s.p.keys.finalWritten(), s.p.keys.arrived + len(s.p.carry) - s.p.lent - s.p.keys.pos
+}
+
+// pre is how many bytes a live stream's Flush wrote of its head's redaction.
+func (s *Stream) pre() int64 {
+	if s.live == nil {
+		return 0
+	}
+	return s.live.pre
+}
+
+// written is how many bytes the stream has written.
+func (s *Stream) written() int64 {
+	n := s.pre()
+	if s.end != nil {
+		n += s.end.n
+	}
+	return n
 }
 
 // stopOnMiss stops the stream where its keys' stage found a window it decided
@@ -193,6 +360,7 @@ func (s *Stream) stopOnMiss() {
 		if s.err == nil {
 			s.err = s.p.keys.missed
 		}
+		s.final = s.pre() + s.p.keys.finalWritten()
 		s.p = nil
 	}
 }
@@ -210,9 +378,17 @@ func (s *Stream) Close() error {
 		return s.err
 	}
 	if s.p == nil {
-		s.emit(Secrets(string(s.head)))
+		from := 0
+		if s.live != nil {
+			from = s.live.settled
+		}
+		s.emit(Secrets(string(s.head[from:])))
 		s.head = nil
 		return s.err
+	}
+	if l := s.live; l != nil && !l.stopped {
+		s.p.feed(l.raw)
+		l.raw = nil
 	}
 	s.p.close()
 	s.endErr()
@@ -249,8 +425,10 @@ type pipeline struct {
 	rules sink
 	// carry is the text written past the last offset that is a multiple of
 	// [pieceBytes], held until the next multiple is written or the text
-	// ends ([pipeline.feed]).
+	// ends ([pipeline.feed]), and lent how much of it a flush handed the
+	// stages already ([pipeline.decideHeld]).
 	carry []byte
+	lent  int
 }
 
 // newPipeline is the stages, writing what they redact to out: the rules alone
@@ -293,7 +471,7 @@ func newPipeline(out *endSink, keys bool, hold int) *pipeline {
 		claims = stage
 		p.claims = stage
 	}
-	p.keys = &keyStage{to: next, sources: p.sources, hold: hold}
+	p.keys = &keyStage{to: next, sources: p.sources, hold: hold, out: out}
 	p.keys.in.bound, p.keys.in.grow = keysBytes+hold, keysBytes
 	for _, src := range p.sources {
 		src.keys = p.keys
@@ -367,8 +545,8 @@ func (p *pipeline) feed(b []byte) {
 		if len(p.carry) < pieceBytes {
 			return
 		}
-		p.write(p.carry)
-		p.carry = p.carry[:0]
+		p.write(p.carry[p.lent:])
+		p.carry, p.lent = p.carry[:0], 0
 	}
 	for len(b) >= pieceBytes && !p.missed() {
 		p.write(b[:pieceBytes])
@@ -410,10 +588,10 @@ func (p *pipeline) missed() bool {
 
 // close ends the text, handing the stages what it carried first.
 func (p *pipeline) close() {
-	if len(p.carry) > 0 {
-		p.write(p.carry)
-		p.carry = nil
+	if len(p.carry) > p.lent {
+		p.write(p.carry[p.lent:])
 	}
+	p.carry, p.lent = nil, 0
 	if p.keys == nil {
 		p.rules.close()
 		return
@@ -426,6 +604,34 @@ func (p *pipeline) close() {
 		return
 	}
 	p.keys.close()
+}
+
+// decideHeld hands the stages what it carried, and has each decide all it
+// holds as at the text's end, in order, staying open for what follows: what a
+// live stream's flush does once its stages hold only settled text. The rest
+// of the carried piece is handed once the text reaches the piece's end, so
+// every later piece ends at the text's own offset ([pipeline.feed]).
+//
+// Settled's promise is that the redaction composes at the settled point: cut
+// there, the text redacts as the two parts do apart. So no stage's decision
+// crosses it, and deciding each stage there as at an end decides what the
+// whole text does, and no claim decided there changes later.
+func (p *pipeline) decideHeld() {
+	if len(p.carry) > p.lent {
+		p.write(p.carry[p.lent:])
+		p.lent = len(p.carry)
+	}
+	if p.missed() {
+		return
+	}
+	if p.keys == nil {
+		p.rules.decideHeld()
+		return
+	}
+	p.claims.decideHeld()
+	if !p.missed() {
+		p.keys.decideHeld()
+	}
 }
 
 // sink is what a stage writes to: the next stage, or the end.
@@ -447,25 +653,37 @@ type sink interface {
 	// closeEdit says where in the text as written the last edit handed ends,
 	// where it was handed with its end to come ([edit]).
 	closeEdit(rawEnd int)
-	// close ends the input.
+	// close ends the input, and decideHeld decides all of it as at the
+	// input's end, keeping it open ([pipeline.decideHeld]).
 	close()
+	decideHeld()
 }
 
 // endSink is the end: what the last stage writes, written straight to w,
-// and the first error w gave, after which it writes nothing. It keeps no
-// output: w keeps none of a view it is handed (io.Writer's contract), and a
-// string (a marker, a value's escaped break) is copied through scratch rather
-// than handed to io.WriteString, which copies it to the heap for a writer
-// that has no WriteString of its own.
+// less the first skip bytes, n how many it wrote, and the first error w gave,
+// after which it writes nothing. It keeps no output: w keeps none of a view
+// it is handed (io.Writer's contract), and a string (a marker, a value's
+// escaped break) is copied through scratch rather than handed to
+// io.WriteString, which copies it to the heap for a writer that has no
+// WriteString of its own.
 type endSink struct {
 	w       io.Writer
 	err     error
+	n       int64
+	skip    int64
 	scratch [512]byte
 }
 
 func (e *endSink) put(b []byte) {
+	if e.skip > 0 {
+		k := min(e.skip, int64(len(b)))
+		e.skip -= k
+		b = b[k:]
+	}
 	if e.err == nil && len(b) > 0 {
-		_, e.err = e.w.Write(b)
+		var n int
+		n, e.err = e.w.Write(b)
+		e.n += int64(n)
 	}
 }
 
@@ -491,6 +709,7 @@ func (e *endSink) putRepeat(c byte, n int) {
 func (e *endSink) took([]edit)   {}
 func (e *endSink) closeEdit(int) {}
 func (e *endSink) close()        {}
+func (e *endSink) decideHeld()   {}
 
 // fanout hands its input to several readers.
 type fanout []sink
@@ -528,6 +747,12 @@ func (f fanout) closeEdit(rawEnd int) {
 func (f fanout) close() {
 	for _, r := range f {
 		r.close()
+	}
+}
+
+func (f fanout) decideHeld() {
+	for _, r := range f {
+		r.decideHeld()
 	}
 }
 
@@ -871,6 +1096,21 @@ func (s *ruleStage) close() {
 	s.in.drop()
 	if s.to != nil {
 		s.to.close()
+	}
+}
+
+// decideHeld decides all the stage holds as at its input's end, then stays
+// open: its claims are known to where it decided, not past it.
+func (s *ruleStage) decideHeld() {
+	s.in.eof = true
+	for s.step() {
+	}
+	s.in.eof, s.done = false, false
+	if s.raw != nil {
+		s.src.frontier = s.raw.at(s.pos)
+	}
+	if s.to != nil {
+		s.to.decideHeld()
 	}
 }
 
@@ -1715,6 +1955,11 @@ type keyStage struct {
 	// ([keyStage.handed]).
 	hold  int
 	early [][4]int
+	// decided is every window decided early whose claims are still to be
+	// known, footprint or none: its end and what the end had written when
+	// it was decided ([keyStage.finalWritten]); out is the end.
+	decided []earlyWrite
+	out     *endSink
 	// beginsEarly are the windows decided early whose answers read where
 	// claims begin, each its start and end and the hull of where it asked
 	// ([claims.askedBegins]): a claim handed late that begins there is a
@@ -1843,6 +2088,38 @@ func (k *keyStage) miss(at int) {
 	k.missed = &decidedEarly{at: at}
 }
 
+// earlyWrite is a window decided early: its end in the text, and how many
+// bytes the end had written when it was decided.
+type earlyWrite struct {
+	end     int
+	written int64
+}
+
+// decide keeps w until the claims over its window are known: the oldest two
+// merged, keeping the earlier write, where [earlyWindows] wait already.
+func (k *keyStage) decide(w earlyWrite) {
+	if len(k.decided) == earlyWindows {
+		a, b := k.decided[0], k.decided[1]
+		k.decided[1] = earlyWrite{max(a.end, b.end), min(a.written, b.written)}
+		k.decided = slices.Delete(k.decided, 0, 1)
+	}
+	k.decided = append(k.decided, w)
+}
+
+// finalWritten is how many bytes of what the end wrote are final whatever
+// the claims still to come say: those it had written when the first window
+// still waiting on its claims was decided, since what it wrote before then
+// came from text the stages wrote before that window. Every window counts,
+// not only one that asked of the claims: a late word can change a block it
+// read forward and let go ([keyStage.handed]).
+func (k *keyStage) finalWritten() int64 {
+	n := k.out.n
+	for _, w := range k.decided {
+		n = min(n, w.written)
+	}
+	return n
+}
+
 // wait keeps a window decided early, w, until the claims over it are known:
 // the oldest two merged where [earlyWindows] wait already.
 func (k *keyStage) wait(w [4]int) {
@@ -1865,6 +2142,7 @@ func (k *keyStage) settle() {
 	f := k.frontier()
 	k.early = slices.DeleteFunc(k.early, func(w [4]int) bool { return w[1] < f })
 	k.beginsEarly = slices.DeleteFunc(k.beginsEarly, func(w [4]int) bool { return w[1] < f })
+	k.decided = slices.DeleteFunc(k.decided, func(w earlyWrite) bool { return w.end < f })
 }
 
 // take hands the stage the next stretch of the text.
@@ -1883,6 +2161,19 @@ func (k *keyStage) close() {
 	k.in.drop()
 	if k.missed == nil {
 		k.to.close()
+	}
+}
+
+// decideHeld decides all the stage holds as at the text's end, its claims
+// decided to there, and stays open ([pipeline.decideHeld]).
+func (k *keyStage) decideHeld() {
+	k.in.eof = true
+	for k.step() {
+	}
+	k.in.eof, k.done = false, false
+	k.settle()
+	if k.missed == nil {
+		k.to.decideHeld()
 	}
 }
 
@@ -1926,7 +2217,9 @@ func (k *keyStage) step() bool {
 	early := false
 	foot, starts := [2]int{len(text) + 1, -1}, [2]int{len(text) + 1, -1}
 	if _, n := k.final(writeTo); armour || n > 0 {
-		early = k.frontier() <= hi
+		// At the input's end every claims stage has decided all it holds,
+		// at a flush as at Close ([keyStage.decideHeld]).
+		early = !k.in.eof && k.frontier() <= hi
 		if early && k.arrived-k.hold <= hi {
 			return false
 		}
@@ -1936,6 +2229,7 @@ func (k *keyStage) step() bool {
 		str := string(text)
 		c = k.claimsIn(str, lo)
 		if early {
+			k.decide(earlyWrite{lo + len(text), k.out.n})
 			c.footprint, c.begins = &foot, &starts
 			if o := k.observe; o != nil && o.decided != nil {
 				o.decided(lo, lo+len(text))
