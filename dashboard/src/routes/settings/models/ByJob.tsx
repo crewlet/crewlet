@@ -47,7 +47,15 @@ import type { ModelHealth } from "~/contract/models.ts";
 import type { ModelsData, ModelView } from "./data.ts";
 import { JobName } from "./JobGlyph.tsx";
 import { HealthLine, type OnFlow } from "./parts.tsx";
-import { ASSISTANT_USE, CATEGORY_WORDS, FAST_NOTE, HEALTH, isFastModel } from "./words.ts";
+import {
+  ADVISOR_USE,
+  ASSISTANT_USE,
+  CATEGORY_WORDS,
+  FAST_NOTE,
+  HEALTH,
+  isFastModel,
+} from "./words.ts";
+import { HelperModel, type HelperChoice } from "~/components/HelperModel.tsx";
 
 /**
  * One engine job by name, for a category the document split: "Reviews on
@@ -163,7 +171,8 @@ export function ByJob({ data, onFlow }: { data: ModelsData; onFlow: OnFlow }) {
         </Callout>
       ) : null}
 
-      <AssistantLine data={data} byKey={byKey} onFlow={onFlow} />
+      <HelperLine helper="assistant" data={data} byKey={byKey} />
+      <HelperLine helper="advisor" data={data} byKey={byKey} />
 
       <Card padding="none">
         <Card.Header>
@@ -245,55 +254,43 @@ export function ByJob({ data, onFlow }: { data: ModelsData; onFlow: OnFlow }) {
 }
 
 /**
- * Ask Crewlet's one line: the model it runs on, and, for an admin, a picker of
- * the models a helper can run on, as the engine says of each
- * (`helper_problem`).
+ * A helper's one line, Ask Crewlet's or the Advisor's: the model it runs on
+ * and, for an admin, the helpers' own picker (`components/HelperModel.tsx`),
+ * which writes the one key in a step (a dry run, then the write under the
+ * revision it read) and says where the helper runs now. Every model is listed,
+ * and one the engine says no helper can run on (`helper_problem`) is disabled
+ * beside its reason. Choosing a model here never opens the model wizard: the
+ * helper is company-wide, so it has nothing else to set.
  */
-function AssistantLine({
+function HelperLine({
+  helper,
   data,
   byKey,
-  onFlow,
 }: {
+  helper: "assistant" | "advisor";
   data: ModelsData;
   byKey: ReadonlyMap<string, ModelView>;
-  onFlow: OnFlow;
 }) {
-  const key = data.assistant.key ?? "";
+  const key = data[helper].key ?? "";
   const model = byKey.get(key);
   const describe = useId();
-  // ONLY A MODEL A HELPER CAN RUN ON is offered: the engine refuses any other.
-  const eligible = data.models.filter((m) => m.admin !== null && m.admin.helper_problem === null);
+  const words = helper === "assistant" ? ASSISTANT_USE : ADVISOR_USE;
+  const choices: HelperChoice[] = data.models.flatMap((m) =>
+    m.admin ? [{ key: m.key, model: m.model, problem: m.admin.helper_problem }] : [],
+  );
   return (
     <Card>
       <Card.Body>
         <span className="models-roles__assistant">
-          <JobName job="assistant" />
+          <JobName job={helper} />
           {data.admin ? (
-            <span className="models-roles__picker models-byjob__picker">
-              <Select
-                className="models-byjob__select"
-                width="auto"
-                ariaLabel="Model Ask Crewlet runs on"
-                aria-describedby={describe}
-                size="sm"
-                value={key || undefined}
-                placeholder="Not set"
-                options={eligible.map((m) => ({
-                  value: m.key,
-                  label: m.key,
-                  text: m.key,
-                  description: <span className="mono">{m.model}</span>,
-                  hint: (
-                    <StatusDot tone={HEALTH[m.entry.health].tone}>
-                      {HEALTH[m.entry.health].label}
-                    </StatusDot>
-                  ),
-                }))}
-                emptyMessage="No model a helper can run on yet"
-                onChange={(v) =>
-                  String(v) !== key &&
-                  onFlow("edit", String(v), { step: "assign", add: [{ job: "assistant" }] })
-                }
+            <span className="models-roles__picker models-byjob__picker" aria-describedby={describe}>
+              <HelperModel
+                helper={helper}
+                current={key || null}
+                choices={choices}
+                canAssign
+                onApplied={data.reload}
               />
             </span>
           ) : (
@@ -303,8 +300,7 @@ function AssistantLine({
           )}
           {model && ALARMING.has(model.entry.health) ? <HealthLine model={model} compact /> : null}
           <Text as="span" variant="caption" tone="secondary" id={describe}>
-            {ASSISTANT_USE.hint} Company-wide, so it has no seats.{" "}
-            {data.admin ? ASSISTANT_USE.rule : null}
+            {words.hint} Company-wide, so it has no seats. {data.admin ? words.rule : null}
           </Text>
         </span>
       </Card.Body>

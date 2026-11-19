@@ -382,8 +382,8 @@ export interface RenderOptions {
    * `lib/inlineTokens.ts`). For words written by an agent or a model that may
    * have read anything: the Dashboard Assistant's answers, the Inbox and a
    * an executor's question. Any other address is drawn inert, its label and
-   * then the host it names, in the quiet link ink, readable and copyable and
-   * never a control.
+   * then the address it names with that address's mark, in the text's own
+   * ink as a bare address is, readable and copyable and never a control.
    */
   links?: LinkMode;
   /**

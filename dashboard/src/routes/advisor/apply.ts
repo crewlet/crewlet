@@ -50,11 +50,52 @@ export type ApplyState =
   | { kind: "sending"; check: AdvisorRecheck }
   /** The change was sent and the engine took it: its effect is being checked. */
   | { kind: "applied"; finding: AdvisorKeptFinding }
-  /** The re-check, the send or the report failed in a way a re-check does not answer. */
-  | { kind: "failed"; message: string; check: AdvisorRecheck | null };
+  /**
+   * The finding is no longer open: applied from another window, or closed,
+   * since this page read it. Nothing was sent from here.
+   */
+  | { kind: "moved"; finding: AdvisorKeptFinding }
+  /**
+   * The re-check, the send or the report failed in a way a re-check does not
+   * answer. `saved` where the change itself landed and only the report did not.
+   */
+  | { kind: "failed"; message: string; check: AdvisorRecheck | null; saved: boolean };
 
-/** Ask the engine whether the finding still holds, now, with its fix's `option` built again. */
+/** What a re-check came to: the engine's answer, or the finding as it now stands where it is open no more. */
+export type Rechecked =
+  { kind: "checked"; check: AdvisorRecheck } | { kind: "moved"; finding: AdvisorKeptFinding };
+
+/** Reads the finding as the engine holds it now (the `advisor_finding` question). */
+export type ReadFinding = (id: string) => Promise<AdvisorKeptFinding>;
+
+/**
+ * Ask the engine whether the finding still holds, now, with its fix's `option`
+ * built again.
+ *
+ * A RE-CHECK REFUSED AS A CONFLICT (409) is a finding that moved since this
+ * page read it: applied from another window, closed by a run, dismissed. The
+ * finding is read once and, where it is no longer open, answered as it now
+ * stands, so the person is told where it is in words and never the engine's
+ * refusal of a move. One still open was revised between two reads, and is
+ * re-checked once more.
+ */
 export async function recheck(
+  id: string,
+  option: number,
+  read: ReadFinding,
+  signal?: AbortSignal,
+): Promise<Rechecked> {
+  try {
+    return { kind: "checked", check: await askRecheck(id, option, signal) };
+  } catch (err) {
+    if (!(err instanceof RestError) || err.status !== 409) throw err;
+  }
+  const finding = await read(id);
+  if (finding.state !== "open") return { kind: "moved", finding };
+  return { kind: "checked", check: await askRecheck(id, option, signal) };
+}
+
+async function askRecheck(
   id: string,
   option: number,
   signal?: AbortSignal,
@@ -145,6 +186,12 @@ export function failureWords(err: unknown): string {
   ) {
     return err.message;
   }
+  // A CONFLICT LEFT AFTER THE ONE RE-CHECK IT EARNS ([recheck]) is a finding
+  // still moving under the page: said in words, never as the engine's refusal
+  // of a move ("a finding that is applied is not applied").
+  if (err instanceof RestError && err.status === 409) {
+    return "The finding moved while it was being checked. Close this and press Apply again.";
+  }
   if (err instanceof RestError) {
     return err.detail || err.sentence || err.hint || "The engine refused the change.";
   }
@@ -159,7 +206,8 @@ export function failureWords(err: unknown): string {
  * A STALE ANSWER IS ASKED AGAIN, and sent only where the engine answers the
  * same change (its digest) again. A target that moved since the re-check
  * (412), or an engine that holds a newer revision of the finding (409), is
- * re-checked once and that answer shown: the person always decides on what is
+ * re-checked once and that answer shown, or the finding as it now stands
+ * where it is open no more ([recheck]): the person always decides on what is
  * true now, and is never sent a change they were not shown.
  */
 export async function applyFrom(
@@ -167,29 +215,26 @@ export async function applyFrom(
   option: number,
   pressed: AdvisorRecheck,
   now: () => number,
+  read: ReadFinding,
   signal?: AbortSignal,
-): Promise<
-  { kind: "applied"; finding: AdvisorKeptFinding } | { kind: "rechecked"; check: AdvisorRecheck }
-> {
+): Promise<{ kind: "applied"; finding: AdvisorKeptFinding } | Rechecked> {
   let check = pressed;
   if (!fresh(check, now())) {
-    const again = await recheck(id, option, signal);
-    if (again.digest !== pressed.digest || !sendable(again))
-      return { kind: "rechecked", check: again };
-    check = again;
+    const again = await recheck(id, option, read, signal);
+    if (again.kind === "moved") return again;
+    if (again.check.digest !== pressed.digest || !sendable(again.check)) return again;
+    check = again.check;
   }
   try {
     await sendFix(check.send!, signal);
   } catch (err) {
-    if (err instanceof MovedSinceRecheck)
-      return { kind: "rechecked", check: await recheck(id, option, signal) };
+    if (err instanceof MovedSinceRecheck) return recheck(id, option, read, signal);
     throw err;
   }
   try {
     return { kind: "applied", finding: await reportApplied(id, check.digest, signal) };
   } catch (err) {
-    if (err instanceof RecheckFirst)
-      return { kind: "rechecked", check: await recheck(id, option, signal) };
+    if (err instanceof RecheckFirst) return recheck(id, option, read, signal);
     throw new SentUntold();
   }
 }

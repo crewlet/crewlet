@@ -19,125 +19,115 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// Gitlet's limits that both tiers and the domain read: config VALIDATES
-// a document against them and internal/gitlet DECIDES a push with them, and gitlet
-// imports config, so they are defined here once. internal/gitlet names each of
-// them again as a constant of its own, which is the same value rather than a
-// copy — a Go constant alias cannot drift.
+// Gitlet's limits that both tiers and the domain read: config validates a
+// document against them, internal/gitlet decides a push with them, and gitlet
+// imports config, so they are defined here once. internal/gitlet names each as
+// a constant of its own, which is the same value, so it cannot drift.
 const (
-	// CodeMaxPushBytesCeiling is the largest pack one push may send,
-	// whatever code.limits.max_push_bytes says — equal to
-	// worklet.MaxFileBytes, the engine's one "largest object". What a
-	// push STORES may be larger (internal/gitlet.MaxPackBytes: a thin pack
-	// completed against the repository, with its indexes), and
-	// internal/objstore/references pins that larger figure against the
-	// collector's write bound.
+	// CodeMaxPushBytesCeiling is the largest pack one push may send, whatever
+	// code.limits.max_push_bytes says: worklet.MaxFileBytes, the engine's one
+	// "largest object". What a push STORES may be larger (internal/gitlet.MaxPackBytes:
+	// a thin pack completed against the repository, with its indexes);
+	// internal/objstore/references pins that figure against the collector's write bound.
 	CodeMaxPushBytesCeiling int64 = 1 << 30
 
 	// DefaultCodeMaxPushBytes is an unset code.limits.max_push_bytes: the
-	// ceiling itself, because a person's first push of an existing project
-	// is its whole history.
+	// ceiling, because a first push of an existing project is its whole history.
 	DefaultCodeMaxPushBytes int64 = 1 << 30
 
-	// DefaultCodeMaxBlobBytes is an unset code.limits.max_blob_bytes:
-	// 50 MiB. A larger binary belongs in Worklet's files, and the bound is
-	// what sizes pack-objects' window memory on a Gitlet node.
+	// DefaultCodeMaxBlobBytes is an unset code.limits.max_blob_bytes: 50 MiB. A
+	// larger binary belongs in Worklet's files; the bound sizes pack-objects'
+	// window memory on a Gitlet node.
 	DefaultCodeMaxBlobBytes int64 = 50 << 20
 
-	// DefaultCodeRepoMaxBytes is an unset code.limits.repo_max_bytes: 20 GiB, the large reference
-	// model's 12 GB monorepo with two thirds of headroom. Every Gitlet node serving a repository
-	// caches it whole, so this is also what one repository may take of each such node's disk. Memory
-	// holds too: the fleet's one bitmap is written by the first node whose background budget holds
-	// it (internal/gitlet/cache's PublishBytesPerObject, 840 bytes an object on the node pin), some
-	// 50 GB at 60 million objects, which the large node of docs/guides/deployment.md holds. A fleet
-	// without such a node serves the repository without a bitmap.
+	// DefaultCodeRepoMaxBytes is an unset code.limits.repo_max_bytes: 20 GiB, the
+	// large reference model's 12 GB monorepo with two thirds of headroom. Every
+	// Gitlet node serving a repository caches it whole, so this is also what one
+	// repository may take of each such node's disk. Memory holds too: the fleet's
+	// one bitmap is written by the first node whose background budget holds it
+	// (internal/gitlet/cache's PublishBytesPerObject, 840 bytes an object), some
+	// 50 GB at 60 million objects, which the large node of
+	// docs/guides/deployment.md holds. Without such a node a repository is served
+	// without a bitmap.
 	DefaultCodeRepoMaxBytes int64 = 20 << 30
 
-	// DefaultCodeDeletedRetentionDays is an unset
-	// code.deleted_retention_days: 7, the trim's default min_age, so a
-	// deletion is undone from the same window the log can replay.
+	// DefaultCodeDeletedRetentionDays is an unset code.deleted_retention_days: 7,
+	// the trim's default min_age, so a deletion is undone from the window the log
+	// can replay.
 	DefaultCodeDeletedRetentionDays = 7
 
-	// CodeMaxProtections is the most protection rules one repository
-	// carries: every matching rule is evaluated per command inside the push
-	// decide, and 64 is the scope-term cap of the other domains.
+	// CodeMaxProtections is the most protection rules one repository carries:
+	// every matching rule is evaluated per command inside the push decide, and 64
+	// is the other domains' scope-term cap.
 	CodeMaxProtections = 64
 
-	// CodeMaxPathOwners is the most PATH OWNERS one repository names — units
-	// and seats, each owning the paths its globs match: as many as it carries
-	// protection rules ([CodeMaxProtections]). A path owner is whom a change
-	// touching its paths asks for a review, so this is also the most review
-	// requests one change's paths can make; sixty-four teams or seats is past
-	// any company's on one repository.
+	// CodeMaxPathOwners is the most path owners (units and seats) one repository
+	// names: as many as it has protection rules ([CodeMaxProtections]), and so the
+	// most review requests one change's paths can make; past any company's.
 	CodeMaxPathOwners = 64
 
-	// CodeMaxPathOwnerPaths is the most globs one path owner names: a team's
-	// part of a tree is a handful of directories, each one glob (dir/**), and
-	// thirty-two is past what one team owns of one repository. With
-	// [CodeMaxPathOwners] it bounds what a change's paths are matched against
-	// — 2 048 globs.
+	// CodeMaxPathOwnerPaths is the most globs one path owner names: a team's part
+	// of a tree is a handful of directories, one glob each (dir/**). With
+	// [CodeMaxPathOwners] it bounds what a change's paths are matched against, 2 048 globs.
 	CodeMaxPathOwnerPaths = 32
 
-	// CodeMaxPathOwnersBytes is the most a repository's path owners may weigh as the code log
-	// records them: their JSON, each owner by what the chart resolves it to, a unit by its key. 256
-	// KiB, because every create, settings change and restore carries them whole and the record is
-	// held to the code domain's MaxRecordBytes (1 044 480 bytes): sixty-four rules with their merge
-	// gates, description and default branch make 631 780 bytes, so path owners at this bound make
-	// 893 939, leaving 150 KB for later fields (internal/gitlet's
-	// TestTheLargestSettingsFitTheirRecordAndTheDetail holds the sum). The counts alone would not
-	// fit: 2 048 globs of gitref's 128 bytes, each byte JSON spells as six (`&`, `<`, `>`), weigh 1
-	// 565 505 bytes. Generous for written ownership (2 048 plain 100-byte globs are about 214 KB):
-	// it refuses long globs at the count bounds, or globs JSON spells long.
+	// CodeMaxPathOwnersBytes is the most a repository's path owners may weigh as
+	// the code log records them: their JSON, each owner by what the chart resolves
+	// it to, a unit by its key. 256 KiB, because every create, settings change and
+	// restore carries them whole and the record is held to the code domain's
+	// MaxRecordBytes (1 044 480): sixty-four rules with merge gates, description
+	// and default branch make 631 780, path owners at this bound 893 939, leaving
+	// 150 KB for later fields (internal/gitlet's
+	// TestTheLargestSettingsFitTheirRecordAndTheDetail holds the sum). The counts
+	// alone would not fit: 2 048 globs of gitref's 128 bytes, each byte JSON
+	// spells as six (`&`, `<`, `>`), weigh 1 565 505. It refuses long globs at the
+	// count bounds, or globs JSON spells long.
 	CodeMaxPathOwnersBytes = 256 << 10
 
-	// CodeMaxHumanPaths is the most HUMAN PATHS one protection rule's merge
-	// gate names: the parts of a repository's tree a change touching which
-	// waits for a person's approval — `deploy/**`, `migrations/**`; a rule
-	// requiring checks holds `.crewlet/**` beside them without naming it
-	// (gitlet.ChecksDirGlob), so it costs no entry. A JUDGMENT: a gate keeps a
-	// person in front of a few directories, and thirty-two is past any
-	// rule's; it is one of the two lists a gate's bytes grow with
+	// CodeMaxHumanPaths is the most human paths one protection rule's merge gate
+	// names: parts of the tree (`deploy/**`) a change touching which waits for a
+	// person's approval. A rule requiring checks holds `.crewlet/**` beside them
+	// without naming it (gitlet.ChecksDirGlob), so it costs no entry. A judgment:
+	// thirty-two is past any rule's. One of the two lists a gate's bytes grow with
 	// ([CodeMaxGateBytes]).
 	CodeMaxHumanPaths = 32
 
-	// CodeMaxRequiredChecks is the most checks one rule's merge gate
-	// requires, by name: a target's checks are its tests split a few ways —
-	// unit, lint, integration, a build a platform — and thirty-two is past any
-	// CI's required set. A JUDGMENT, as [CodeMaxHumanPaths] is, and the other
-	// list a gate's bytes grow with.
+	// CodeMaxRequiredChecks is the most checks one rule's merge gate requires, by
+	// name: a target's tests split a few ways (unit, lint, integration, a build a
+	// platform); thirty-two is past any CI's required set. A judgment, and the
+	// other list a gate's bytes grow with.
 	CodeMaxRequiredChecks = 32
 
-	// CodeMaxGateBytes is the most one rule's merge gate may weigh as the code log records it: its
-	// canonical JSON. 8 KiB, because a repository carries up to [CodeMaxProtections] rules and every
-	// create, settings change and restore carries them whole: sixty-four gates at the bound are 512
-	// KiB, beside path owners at theirs ([CodeMaxPathOwnersBytes]), under the code domain's
-	// MaxRecordBytes (about 1 MB), and of the repository row every read, sync and cache state
-	// carries. Each count alone stays under it (thirty-two human paths of 128-byte globs with both
-	// `unless` classes are about 6 KB, thirty-two checks at their longest names about 2 KB), so it
-	// refuses a gate at both counts' bounds at once, or one whose globs JSON spells long (`&`, `<`
-	// and `>` are six bytes each).
+	// CodeMaxGateBytes is the most one rule's merge gate may weigh as the code log
+	// records it: its canonical JSON. 8 KiB, because a repository carries up to
+	// [CodeMaxProtections] rules and every create, settings change and restore
+	// carries them whole: sixty-four gates at the bound are 512 KiB, beside path
+	// owners at theirs ([CodeMaxPathOwnersBytes]), under the code domain's
+	// MaxRecordBytes (about 1 MB). Each count alone stays under it (thirty-two
+	// human paths of 128-byte globs with both `unless` classes about 6 KB,
+	// thirty-two checks at their longest names about 2 KB), so it refuses a gate
+	// at both counts' bounds at once, or one whose globs JSON spells long.
 	CodeMaxGateBytes = 8 << 10
 
-	// CodeMaxQueueDepth is the most candidates a gated target's speculative
-	// queue tests at once — each the target's tip with the next waiting
-	// changes merged on it. EIGHT: at a 5 % chance that a change's checks
-	// fail, a round of eight lands whole under two times in three
-	// (0.95⁸ = 66 %), and past it the candidates a red one rebuilds cost
-	// more than the round lands.
+	// CodeMaxQueueDepth is the most candidates a gated target's speculative queue
+	// tests at once, each the target's tip with the next waiting changes merged on
+	// it. EIGHT: at a 5 % chance a change's checks fail, a round of eight lands
+	// whole 66 % of the time (0.95⁸), and past it the candidates a red one
+	// rebuilds cost more than the round lands.
 	CodeMaxQueueDepth = 8
 
-	// CodeDefaultQueueDepth is an unset landing.depth: FOUR candidates at
-	// once, a round of which lands whole 81 % of the time at the same 5 %
-	// (0.95⁴) — the rate the queue is sized by.
+	// CodeDefaultQueueDepth is an unset landing.depth: FOUR candidates, a round of
+	// which lands whole 81 % of the time at the same 5 % (0.95⁴).
 	CodeDefaultQueueDepth = 4
 
-	// CodeMaxQueueBatch is the most waiting changes one candidate takes (a
-	// red batch is bisected): eight, so a round at both bounds is sixty-four
-	// changes — the most one candidate's record names.
+	// CodeMaxQueueBatch is the most waiting changes one candidate takes (a red
+	// batch is bisected): eight, so a round at both bounds is sixty-four changes,
+	// the most one candidate's record names.
 	CodeMaxQueueBatch = 8
 
-	// CodeDefaultQueueBatch is an unset landing.batch: TWO, the batch that lands soonest at p99
-	// (internal/gitlet/home's BenchmarkQueueThroughput, held by a test; 5 % red, default depth, saturating):
+	// CodeDefaultQueueBatch is an unset landing.batch: TWO, the batch landing
+	// soonest at p99 (internal/gitlet/home's BenchmarkQueueThroughput, held by a
+	// test; 5 % red, default depth, saturating):
 	//
 	//	batch  p99 rounds from arrival  check runs a landed change
 	//	1      148, growing unbounded   1.14
@@ -145,259 +135,219 @@ const (
 	//	4      9                        0.95
 	//	8      12                       0.94
 	//
-	// One never catches up: a red candidate costs a round a saturated queue lacks. Past two, a red batch
-	// stalls those behind it while bisected, so p99 outgrows the checks saved; eight, the bound, is for
-	// a company that prices checks above latency.
+	// One never catches up. Past two, a red batch stalls those behind it while
+	// bisected; eight is for a company pricing checks above latency.
 	CodeDefaultQueueBatch = 2
 
-	// CodeMaxCheckNameBytes is the longest name a check takes: sixty-four
-	// bytes of [ValidCodeCheckName]'s alphabet, a CI job's name rather than a
-	// sentence — and a key in every check row and a component of the token a
-	// check's box fetches with, each of which carries it whole.
+	// CodeMaxCheckNameBytes is the longest name a check takes: sixty-four bytes of
+	// [ValidCodeCheckName]'s alphabet, a CI job's name. It is a key in every check
+	// row and a component of the token a check's box fetches with.
 	CodeMaxCheckNameBytes = 64
 
 	// CodeMaxCheckEnvNameBytes is the longest name a check's secret takes
-	// ([ValidCodeCheckEnvName]): 128 bytes, four times the longest a common
-	// tool reads (GOOGLE_APPLICATION_CREDENTIALS is 30), so a check's list of
-	// the secrets it is given — at most 32 names — stays a few KiB on every
-	// record that carries its definition.
+	// ([ValidCodeCheckEnvName]): 128 bytes, four times the longest a common tool
+	// reads (GOOGLE_APPLICATION_CREDENTIALS is 30), so a check's list of at most
+	// 32 secret names stays a few KiB on every record carrying its definition.
 	CodeMaxCheckEnvNameBytes = 128
 
-	// CodeCheckTimeoutCeiling is the longest a check may run: six hours,
-	// GitHub Actions' own per-job ceiling — the bound the CI a company
-	// already runs holds its longest job to, so no pipeline moved here has to
-	// be cut. A repository's checks file is held to it, and so is what a
-	// company lets its checks run (code.checks.max_timeout_seconds).
+	// CodeCheckTimeoutCeiling is the longest a check may run: six hours, GitHub
+	// Actions' per-job ceiling, so no pipeline moved here has to be cut. A
+	// repository's checks file is held to it, and so is code.checks.max_timeout_seconds.
 	CodeCheckTimeoutCeiling = 6 * time.Hour
 
 	// CodeDefaultCheckMaxTimeout is an unset code.checks.max_timeout_seconds:
 	// FIFTY MINUTES. A remote box on E2B's smallest plan lives an hour, and a
-	// check's box is given ten minutes past its timeout for its setup — its
-	// git's check and its checkout, each a setup step under the sandbox's ten
-	// minutes (internal/gitlet's CheckBoxGrace, which a test there holds this
-	// sum to) — so a check at the default fits the shortest session a
-	// company's remote cell may have. A company on a larger plan, or running
-	// its checks in containers alone, raises it to what its longest job takes.
+	// check's box gets ten minutes past its timeout for setup (git's check and the
+	// checkout; internal/gitlet's CheckBoxGrace, which a test holds this sum to),
+	// so a check at the default fits the shortest remote session. A company on a
+	// larger plan, or running checks in containers alone, raises it.
 	CodeDefaultCheckMaxTimeout = 50 * time.Minute
 
-	// CodeMinCheckMaxTimeout is the least code.checks.max_timeout_seconds
-	// takes: a MINUTE, under which no build of a repository finishes its own
-	// setup — so a smaller value is a typo, and a company that means to run
-	// no check requires none on its branches.
+	// CodeMinCheckMaxTimeout is the least code.checks.max_timeout_seconds takes: a
+	// MINUTE, under which no build finishes its own setup, so a smaller value is a
+	// typo; a company that means to run no check requires none on its branches.
 	CodeMinCheckMaxTimeout = time.Minute
 
 	// CodeDefaultRemoteMaxRunning is an unset code.checks.remote.max_running:
-	// SIXTEEN remote (e2b) check boxes at once, company-wide. PROVISIONAL
-	// (U45 a), derived rather than measured: a full round of a merge queue at
-	// its depth of four candidates, each running two required checks, is
-	// eight boxes, doubled for the head checks of the changes waiting beside
-	// it — sixteen, inside the twenty sandboxes E2B's Hobby plan runs at once,
-	// so the company's own cap refuses a box before the provider does and a
-	// check waits queued rather than failing to get one. A company on a larger
-	// plan raises it to that plan's limit.
+	// SIXTEEN remote (e2b) check boxes at once, company-wide. PROVISIONAL (U45 a),
+	// derived rather than measured: a full merge-queue round of four candidates
+	// with two required checks each is eight boxes, doubled for the head checks of
+	// waiting changes, inside the twenty sandboxes E2B's Hobby plan runs, so the
+	// company's cap refuses a box before the provider does and a check waits
+	// queued instead of failing. A larger plan raises it.
 	CodeDefaultRemoteMaxRunning = 16
 
-	// CodeMaxRemoteMaxRunning is the most code.checks.remote.max_running
-	// takes: 1 024 boxes at once, the bound gitlet.max_checks holds a node's
-	// container cells to — past any provider's concurrency a company buys,
-	// and each one a lease the runner scans for a free one among.
+	// CodeMaxRemoteMaxRunning is the most code.checks.remote.max_running takes:
+	// 1 024, the bound gitlet.max_checks holds a node's container cells to; past
+	// any provider's concurrency, and each one a lease the runner scans.
 	CodeMaxRemoteMaxRunning = 1_024
 
-	// CodeDefaultRemoteBoxHoursPerDay is an unset
-	// code.checks.remote.box_hours_per_day: 192 hours of remote (e2b) box
-	// time a UTC day, company-wide. PROVISIONAL (U45 a), derived: one
-	// protected branch's queue saturated all day at ten-minute checks is 144
-	// rounds a day, each four candidates running two checks for a sixth of
-	// an hour — 144 × 4 × 2 × ⅙ = 192 box-hours. What a company pays for a
-	// day it cannot exceed by more than the boxes already running when the
-	// cap is reached run on to their own ends.
+	// CodeDefaultRemoteBoxHoursPerDay is an unset code.checks.remote.box_hours_per_day:
+	// 192 hours of remote (e2b) box time a UTC day, company-wide. PROVISIONAL
+	// (U45 a), derived: one protected branch's queue saturated all day at
+	// ten-minute checks is 144 rounds, each four candidates running two checks for
+	// a sixth of an hour, 144 × 4 × 2 × ⅙ = 192. Boxes running when the cap is
+	// reached run on to their own ends.
 	CodeDefaultRemoteBoxHoursPerDay = 192
 
-	// CodeMaxRemoteBoxHoursPerDay is the most
-	// code.checks.remote.box_hours_per_day takes: 100 000 hours, the most
-	// boxes CodeMaxRemoteMaxRunning can run in a day (24 576 hours) four
-	// times over — a bound on a typo, never on a company.
+	// CodeMaxRemoteBoxHoursPerDay is the most code.checks.remote.box_hours_per_day
+	// takes: 100 000, four times what CodeMaxRemoteMaxRunning boxes can run in a
+	// day (24 576); a bound on a typo, never on a company.
 	CodeMaxRemoteBoxHoursPerDay = 100_000
 
-	// CodeMaxDescriptionBytes bounds a repository description: one
-	// paragraph, which rides every settings record and every listing row.
+	// CodeMaxDescriptionBytes bounds a repository description: one paragraph,
+	// which rides every settings record and listing row.
 	CodeMaxDescriptionBytes = 1_024
 
-	// CodeMaxRemoteURLBytes is the longest URL a repository's mirror or its
-	// import names: ONE KIBIBYTE, the bound a description is held to
-	// ([CodeMaxDescriptionBytes]), because every create, settings change and
-	// restore carries a repository's mirrors whole as it carries its
-	// description — and far past any forge's repository URL, a host and an
-	// owner/name path a few dozen bytes long.
+	// CodeMaxRemoteURLBytes is the longest URL a mirror or import names: ONE
+	// KIBIBYTE, as a description is, because every create, settings change and
+	// restore carries the mirrors whole; far past any forge's repository URL.
 	CodeMaxRemoteURLBytes = 1_024
 
-	// CodeMaxCredentialRefBytes is the longest credential a mirror or an
-	// import names — the whole ${NAME} reference, which is all a record ever
-	// carries of one: 128 bytes, twice the longest seat handle
-	// (iam.MaxLogin, 64) a provisioner's variable is named after beside its
-	// vendor's prefix. A JUDGMENT, which bounds what a settings record carries
-	// rather than any name a person writes.
+	// CodeMaxCredentialRefBytes is the longest credential a mirror or import
+	// names, the whole ${NAME} reference (all a record carries of one): 128 bytes,
+	// twice the longest seat handle (iam.MaxLogin, 64) a provisioner's variable is
+	// named after, beside its vendor's prefix. A judgment.
 	CodeMaxCredentialRefBytes = 128
 
-	// CodeMaxMirrorRefs is the most ref patterns a push mirror names: as many
-	// as its repository carries protection rules ([CodeMaxProtections]), so
-	// a mirror may name every protected pattern of its repository — the
-	// "protected branches only" a forge's own mirror offers — and, like a
-	// rule, every pattern is asked about every ref a round of the mirror
+	// CodeMaxMirrorRefs is the most ref patterns a push mirror names: as many as
+	// its repository has protection rules ([CodeMaxProtections]), so a mirror may
+	// name every protected pattern. Every pattern is asked about every ref a round
 	// compares.
 	CodeMaxMirrorRefs = 64
 
-	// CodeMaxRepos is the most repositories one document may declare: a typo guard on code.repos,
-	// two orders of magnitude past the reference company's sixty, so a longer list is a generated
-	// document somebody should hear about. An ADMISSION RULE ([Code.validateAdmission]): the
-	// reconcile decides any number of declarations; at this bound an activation that creates,
-	// deletes or restores every one takes 16–19 s on one node (internal/gitlet's doc.go), beside the
-	// apply rather than inside it.
+	// CodeMaxRepos is the most repositories one document may declare: a typo guard
+	// on code.repos, two orders of magnitude past the reference company's sixty,
+	// so a longer list is a generated document somebody should hear about. An
+	// ADMISSION RULE ([Code.validateAdmission]): the reconcile decides any number;
+	// at this bound an activation that creates, deletes or restores every one takes
+	// 16–19 s on one node (internal/gitlet's doc.go), beside the apply.
 	//
-	// It is also the RUNTIME BOUND on the project repositories a tool's create may bring the code
-	// log to: every status short of purged, declared ones included, so a create past it is refused
-	// repo_limit (internal/gitlet's lifecycle). One bound for both: a company whose declarations
-	// reach it has no room a tool could fill. A seat's scratch repositories are held by
-	// code.scratch.max_per_seat and never count.
+	// It is also the RUNTIME BOUND on the project repositories a tool's create may
+	// bring the code log to: every status short of purged, declared ones included,
+	// so a create past it is refused repo_limit (internal/gitlet's lifecycle). A
+	// seat's scratch repositories are held by code.scratch.max_per_seat and never count.
 	CodeMaxRepos = 10_000
 
-	// CodeMaxDeletedRetentionDays is the longest code.deleted_retention_days:
-	// a year. A deleted repository keeps its rows on every data node and its
-	// packs in the object store until it is purged, and every backup carries
-	// them, so past a year a retention is an archive nobody restores rather
-	// than an undo of a removal — and an export is the archive's form. AN
-	// ADMISSION RULE ([Code.validateAdmission]): the retention duty purges by
-	// any retention a duration can hold ([codeMaxHeldRetentionDays], the
-	// runnable bound), so nothing about running depends on it.
+	// CodeMaxDeletedRetentionDays is the longest code.deleted_retention_days: a
+	// year. A deleted repository keeps its rows on every data node and its packs
+	// in the object store until purged, and every backup carries them; past a year
+	// it is an archive nobody restores, and export is the archive's form. AN
+	// ADMISSION RULE ([Code.validateAdmission]): the retention duty purges by any
+	// retention a duration holds ([codeMaxHeldRetentionDays]), so running depends
+	// not on it.
 	CodeMaxDeletedRetentionDays = 365
 )
 
-// codeMaxHeldRetentionDays is the longest code.deleted_retention_days a
-// duration can hold — 106 751 days, about 292 years — and the RUNNABLE bound
-// on it: one day more and [Code.DeletedRetention] overflows to a negative
-// duration, a retention that has passed for every deleted repository, which
-// would purge them all at the next pass. A purge has no undo, so a revision
-// carrying one is refused to run however it was admitted.
+// codeMaxHeldRetentionDays is the longest code.deleted_retention_days a duration
+// can hold (106 751 days) and the RUNNABLE bound on it: one more and
+// [Code.DeletedRetention] overflows negative, a retention that has passed for
+// every deleted repository, purging them all at the next pass. A purge has no
+// undo, so a revision carrying one is refused however it was admitted.
 const codeMaxHeldRetentionDays = int(math.MaxInt64 / int64(24*time.Hour))
 
 // The bounds code.limits takes beside the ceiling above, named once so the
 // schema's js tags and the validator cannot drift
 // (TestTheCodeLimitsAreTheSchemasBounds).
 const (
-	// CodeMinPushBytes, CodeMinBlobBytes and CodeMinRepoBytes are the
-	// smallest values code.limits takes: a mebibyte pack, a kibibyte file
-	// and a mebibyte repository. Below them a person's first commit is
-	// refused, which is a typo rather than a policy.
+	// CodeMinPushBytes, CodeMinBlobBytes and CodeMinRepoBytes are the smallest
+	// values code.limits takes: a mebibyte pack, a kibibyte file, a mebibyte
+	// repository. Below them a first commit is refused: a typo, not a policy.
 	CodeMinPushBytes int64 = 1 << 20
 	CodeMinBlobBytes int64 = 1 << 10
 	CodeMinRepoBytes int64 = 1 << 20
 
-	// CodeMaxRepoBytesCeiling is the most code.limits.repo_max_bytes may
-	// say: 1 TiB, a typo guard two orders of magnitude past the large
-	// reference model's 12 GB monorepo. Every Gitlet node serving a repository
-	// caches it whole, so a ceiling past any one node's volume is not a
-	// setting anybody can run.
+	// CodeMaxRepoBytesCeiling is the most code.limits.repo_max_bytes may say: 1
+	// TiB, a typo guard. Every Gitlet node serving a repository caches it whole,
+	// so a ceiling past any node's volume is not runnable.
 	CodeMaxRepoBytesCeiling int64 = 1 << 40
 
-	// DefaultCodePushesPerSeatDay is an unset code.limits.pushes_per_seat_day:
-	// a THOUSAND pushes one seat may land in one company day, every
-	// repository together — a RUNAWAY bound, never a budget: the reference
-	// company's seats push about thirty times a day each, so a thousand is
-	// some thirty-three times that, which no seat working as intended meets,
-	// and it caps what a seat pushing in a loop costs the code log at a
-	// thousand push records a day — a seat's push alone in its record is
-	// at most 1 667 bytes, from its coding box (internal/gitlet's
-	// BenchmarkPushLogBytes, its push=box arm; 1 528 where the engine builds
-	// it for a tool), so about 1.7 MB a day — rather than without bound.
+	// DefaultCodePushesPerSeatDay is an unset code.limits.pushes_per_seat_day: a
+	// THOUSAND pushes one seat may land in a company day, every repository
+	// together. A RUNAWAY bound, never a budget: the reference company's seats
+	// push about thirty a day, so no seat working as intended meets it, and it
+	// caps what a looping seat costs the code log: a push record is at most 1 667
+	// bytes (internal/gitlet's BenchmarkPushLogBytes, push=box; 1 528 where the
+	// engine builds it for a tool), about 1.7 MB a day.
 	DefaultCodePushesPerSeatDay = 1_000
 
 	// CodeMinPushesPerSeatDay and CodePushesPerSeatDayCeiling bound
-	// code.limits.pushes_per_seat_day: at least one push, since a quota of
-	// none would make a seat a reader everywhere, which its role.code.access
-	// says rather than a limit; and at most a hundred thousand, a typo guard
-	// a hundred times the default — past it the count bounds nothing a
-	// seat's own tool calls and token budget do not already bound.
+	// code.limits.pushes_per_seat_day: at least one, since a quota of none would
+	// make a seat a reader everywhere, which role.code.access says rather than a
+	// limit; at most a hundred thousand, a typo guard past which the count bounds
+	// nothing a seat's tool calls and token budget do not.
 	CodeMinPushesPerSeatDay     = 1
 	CodePushesPerSeatDayCeiling = 100_000
 
-	// DefaultCodeScratchIdleDays is an unset code.scratch.idle_days: a
-	// seat's scratch repository with no push, rename or settings change for
-	// SEVEN days is deleted — the trim's default min_age and
-	// code.deleted_retention_days' default, so an experiment nobody returned
-	// to for a week leaves as a deleted repository does, restorable for the
-	// retention after. A product decision the approved design states.
+	// DefaultCodeScratchIdleDays is an unset code.scratch.idle_days: a scratch
+	// repository with no push, rename or settings change for SEVEN days is
+	// deleted, matching the trim's min_age and code.deleted_retention_days'
+	// default, restorable for that retention after. A product decision the
+	// approved design states.
 	DefaultCodeScratchIdleDays = 7
 
 	// CodeScratchIdleDaysFloor and CodeScratchIdleDaysCeiling bound
-	// code.scratch.idle_days. A DAY AT LEAST: a turn holding a scratch
-	// repository idle gitlet.HoldRecordAfter (22 h) records its hold on the
-	// repository's subject, and that threshold is this floor less the two
-	// hours two nodes' clocks may disagree by (references'
-	// TestAHoldRecordCoversEveryPassInFlight holds the arithmetic), so a
-	// shorter idle time would let an expiry race a hold it cannot see. A YEAR
-	// AT MOST, code.deleted_retention_days' ceiling: past it an experiment is
-	// a project, and a project repository is what keeps one.
+	// code.scratch.idle_days. A DAY AT LEAST: a turn holding a scratch repository
+	// idle gitlet.HoldRecordAfter (22 h) records its hold on the repository's
+	// subject, and that threshold is this floor less the two hours two nodes'
+	// clocks may disagree by (references' TestAHoldRecordCoversEveryPassInFlight
+	// holds the arithmetic), so a shorter idle time would let an expiry race a
+	// hold it cannot see. A YEAR AT MOST, code.deleted_retention_days' ceiling:
+	// past it an experiment is a project.
 	CodeScratchIdleDaysFloor   = 1
 	CodeScratchIdleDaysCeiling = 365
 
-	// DefaultCodeScratchMaxPerSeat is an unset code.scratch.max_per_seat:
-	// FIFTY scratch repositories one seat may hold, every one it owns short
-	// of purged — a deleted one counting until its purge frees its room, so
-	// a create-and-delete loop cannot hold rows, names and packs past it. A
-	// product decision the approved design states.
+	// DefaultCodeScratchMaxPerSeat is an unset code.scratch.max_per_seat: FIFTY
+	// scratch repositories one seat may hold, every one it owns short of purged (a
+	// deleted one counts until its purge), so a create-and-delete loop cannot hold
+	// rows, names and packs past it. A product decision the approved design states.
 	DefaultCodeScratchMaxPerSeat = 50
 
-	// CodeScratchMaxPerSeatCeiling bounds code.scratch.max_per_seat: a
-	// THOUSAND, a typo guard twenty times the default. A turn holds every
-	// scratch repository it names on its run row (internal/agent/turnctx's
-	// MaxHolds, 1 024, kept above this), so a seat working through all of
-	// them is never refused a hold for their number.
+	// CodeScratchMaxPerSeatCeiling bounds code.scratch.max_per_seat: a THOUSAND,
+	// a typo guard. A turn holds every scratch repository it names on its run row
+	// (internal/agent/turnctx's MaxHolds, 1 024, kept above this), so a seat is
+	// never refused a hold for their number.
 	CodeScratchMaxPerSeatCeiling = 1_000
 
-	// DefaultCodeIdentityDomain is an unset code.identity_domain:
-	// seats.invalid, under RFC 2606's reserved `.invalid`, so an address a
-	// commit the engine builds names belongs to nobody who could receive
-	// mail at it — or claim it.
+	// DefaultCodeIdentityDomain is an unset code.identity_domain: seats.invalid,
+	// under RFC 2606's reserved `.invalid`, so no commit address the engine builds
+	// can be received or claimed.
 	DefaultCodeIdentityDomain = "seats.invalid"
 
-	// CodeMaxIdentityDomainBytes bounds code.identity_domain: 189 bytes,
-	// the most that leaves every address spelled in it — a seat's
-	// `<handle>@<domain>`, a handle being at most iam.MaxLogin's 64 bytes —
-	// within the 254 bytes RFC 5321 lets an address be. Stricter than the
-	// 253 a DNS name may be, which would let an address no mail system
-	// takes into every commit.
+	// CodeMaxIdentityDomainBytes bounds code.identity_domain: 189 bytes, the most
+	// that keeps every `<handle>@<domain>` (a handle at most iam.MaxLogin's 64)
+	// within the 254 bytes RFC 5321 lets an address be. Stricter than DNS's 253,
+	// which would put an address no mail system takes into every commit.
 	CodeMaxIdentityDomainBytes = 254 - len("@") - iam.MaxLogin
 )
 
-// Code is the company's code: which git host it runs (Gitlet, the engine's own, or none) and on Gitlet its push
-// limits and declared repositories (docs/concepts/gitlet.md).
+// Code is the company's code: which git host it runs (Gitlet or none) and on
+// Gitlet its push limits and declared repositories (docs/concepts/gitlet.md).
 //
-// THE BACKEND IS PART OF A NODE'S NATIVE RUNTIME, like tracker.backend: built once per process from the first
-// company the node runs. A node that has run none starts it at the activation that hands it a company on Gitlet;
-// elsewhere a move between gitlet and none takes effect at restart (native_backend_needs_restart). The LIMITS are
-// the epoch's, read at every decision, so a revision holds them from its activation; one that turns Gitlet off
-// leaves a serving node the last hosting limits until restart.
+// THE BACKEND IS PART OF A NODE'S NATIVE RUNTIME, like tracker.backend: built
+// once per process from the first company the node runs; a move between gitlet
+// and none takes effect at restart (native_backend_needs_restart) unless the node
+// has run no company. The LIMITS are the epoch's, read at every decision; turning
+// Gitlet off leaves a serving node the last limits until restart.
 //
-// THE REPOSITORIES ARE THE EPOCH'S TOO: every data node reconciles code.repos at every activation and boot: a
-// declared name is created or settled, an undeclared configuration-managed one deleted (restorable for
-// deleted_retention_days, then purged). Turning Gitlet off deletes nothing.
+// THE REPOSITORIES ARE THE EPOCH'S TOO: every data node reconciles code.repos at
+// each activation and boot, creating or settling a declared name and deleting an
+// undeclared managed one (restorable for deleted_retention_days).
 type Code struct {
 	Backend              CodeBackend `yaml:"backend,omitempty" json:"backend,omitempty" js:"enum=gitlet|none" desc:"Which git host the company runs: gitlet, the engine's own, which hosts its repositories on the engine's own state log, every data node committing their pushes; or none. Empty is none. A node that has run no company yet starts Gitlet at the activation that hands it a company on it; on every other node, whatever backends its first company named, a move between the two takes effect at the node's restart, which the node says (native_backend_needs_restart)."`
 	DeletedRetentionDays int         `yaml:"deleted_retention_days,omitempty" json:"deleted_retention_days,omitempty" js:"min=0;max=365" desc:"How long a repository removed from code.repos stays restorable by declaring it again under its name, before it is purged and its name is free: 1..365 days; unset (or 0) is 7."`
 	IdentityDomain       string      `yaml:"identity_domain,omitempty" json:"identity_domain,omitempty" js:"pattern=^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?([.][a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$;maxlen=189" desc:"The domain a commit the engine builds through a tool spells its addresses in: its committer's, engine@<domain>, and its author's, <handle>@<domain>, for a seat whose role states no email address. A lowercase DNS name of at most 189 bytes, so every such address is at most 254; unset is seats.invalid, a name nobody can own."`
 	Limits               CodeLimits  `yaml:"limits,omitempty" json:"limits,omitzero"`
 	Scratch              CodeScratch `yaml:"scratch,omitempty" json:"scratch,omitzero"`
-	// Checks is how the company runs the checks its repositories define:
-	// where, with which of its secrets, and for how long at most.
+	// Checks is how the company runs the checks its repositories define.
 	Checks CodeChecks `yaml:"checks,omitempty" json:"checks,omitzero"`
 	// MergeByFloor is the least authority a merge into ANY protected branch
-	// needs, whatever its rules say: a merge is held to the stricter of it
-	// and the merge_by of every rule matching its branch. The EPOCH'S, read at
-	// every decision as the limits are (internal/gitlet.Limits.MergeByFloor).
+	// needs: a merge is held to the stricter of it and the merge_by of every
+	// matching rule. The epoch's, as the limits are (internal/gitlet.Limits.MergeByFloor).
 	MergeByFloor CodeMergeBy `yaml:"merge_by_floor,omitempty" json:"merge_by_floor,omitempty" js:"enum=writers|maintainers|persons" desc:"The least a merge into any protected branch needs, whatever its rules say: writers (unset) — anybody who may write to the repository — maintainers, or persons, a person and never a seat. A merge is held to the stricter of this and the merge_by of every rule matching its branch; a rule with no merge gate reads as writers."`
-	// RemoteCredentials are the variables a repository's mirror or import may
-	// name for its credential, each with the hosts its value may be sent to
-	// (coderemotes.go). The EPOCH'S, read at every decide and every dial.
+	// RemoteCredentials are the variables a mirror or import may name for its
+	// credential, each with the hosts its value may be sent to (coderemotes.go).
+	// The epoch's, read at every decide and dial.
 	RemoteCredentials CodeRemoteCredentials `yaml:"remote_credentials,omitempty" json:"remote_credentials,omitempty" desc:"The variables a repository's mirror or import may name for its credential, by the variable's name, each with the hosts its value may be sent to: a mirror's or an import's credential — in code.repos, or one a person asks for — is refused unless it is the ${NAME} of a variable declared here for its URL's host, and Gitlet dials no other. At most 64. The value is the secret store's or the environment's, as ever: this table holds names and hosts, never a token."`
 	Repos             []CodeRepo            `yaml:"repos,omitempty" json:"repos,omitempty" desc:"The company's repositories, at most 10000. Each activation creates the ones declared and settles their settings; removing one deletes it, restorable for deleted_retention_days by declaring it again."`
 }
@@ -407,33 +357,27 @@ type CodeBackend string
 
 // The git hosts.
 const (
-	// CodeGitlet is Gitlet, the engine's own git host: the company's
-	// repositories hosted on the engine's own code log, every data node
-	// committing their pushes, and served over git by the nodes with the
-	// `gitlet` role. See internal/gitlet.
+	// CodeGitlet is Gitlet, the engine's own git host, served over git by the
+	// nodes with the `gitlet` role. See internal/gitlet.
 	CodeGitlet CodeBackend = "gitlet"
 
-	// CodeNone is a company that hosts no repositories in the engine: what
-	// unset reads as. Its seats may still work on a GitHub or GitLab they
-	// are connected to; those are integrations the seats call, never a host
-	// the engine runs in Gitlet's place, so this axis names no vendor.
+	// CodeNone hosts no repositories in the engine: what unset reads as. Seats may
+	// still use a GitHub or GitLab integration, never a host the engine runs in
+	// Gitlet's place, so this axis names no vendor.
 	CodeNone CodeBackend = "none"
 )
 
 // CodeBackends is the closed set, read by the validator, the schema generator
-// and the org projection's `services`, so an editor's enum, the engine's
-// refusal and the dashboard's copy cannot drift apart.
+// and the org projection's `services`, so they cannot drift apart.
 var CodeBackends = []CodeBackend{CodeGitlet, CodeNone}
 
 // Valid reports whether b is a git host this build serves. Unset is not a
-// member: [Company.CodeBackendFor] resolves it to none before anything reads
-// it, and the validator lets it through as the default.
+// member: [Company.CodeBackendFor] resolves it to none first.
 func (b CodeBackend) Valid() bool { return slices.Contains(CodeBackends, b) }
 
 // CodeBackendFor resolves the git host: the backend the document names, else
-// none. Nothing derives Gitlet from another block, unlike the tracker, the
-// knowledge base and chat, whose vendors' blocks name their backend: a GitHub
-// or GitLab integration is not a host the engine runs.
+// none. Unlike the tracker, knowledge base and chat, no other block's vendor
+// implies Gitlet: a GitHub or GitLab integration is not a host the engine runs.
 func (c *Company) CodeBackendFor() CodeBackend {
 	if c.Code.Backend != "" {
 		return c.Code.Backend
@@ -442,33 +386,27 @@ func (c *Company) CodeBackendFor() CodeBackend {
 }
 
 // CodeScratch is the policy for seats' SCRATCH repositories: the ones a seat's
-// own tool creates for its experiments, each named <handle>.<slug> after the
-// seat that owns it (internal/gitlet's lifecycle requests). An unset field takes
-// its default ([CodeScratch.Resolved]).
+// own tool creates, named <handle>.<slug> (internal/gitlet's lifecycle requests).
+// An unset field takes its default ([CodeScratch.Resolved]).
 //
-// THE EPOCH'S, read where it is used: the create's cap at the create's decide,
-// the idle time at every pass of the code-retention duty — so a revision that
-// moves either holds from its activation, with no restart.
+// THE EPOCH'S, read where used (the create's cap at its decide, the idle time at
+// every code-retention pass), so a revision holds from activation, no restart.
 type CodeScratch struct {
-	// IdleDays is how many days a scratch repository may go with no push,
-	// rename, settings change or restore before the code-retention pass
-	// deletes it — restorable for code.deleted_retention_days like any
-	// deleted repository. A read is not activity, and neither is a turn's
-	// hold: a live turn's hold keeps the repository while the turn lasts and
-	// moves no clock. 0 is unset, the default ([DefaultCodeScratchIdleDays]).
+	// IdleDays is how many days a scratch repository may go with no push, rename,
+	// settings change or restore before the code-retention pass deletes it
+	// (restorable for code.deleted_retention_days). A read is not activity, nor is
+	// a turn's hold: it keeps the repository while the turn lasts and moves no
+	// clock. 0 is unset ([DefaultCodeScratchIdleDays]).
 	IdleDays *int `yaml:"idle_days,omitempty" json:"idle_days,omitempty" js:"min=1;max=365" desc:"How many days a seat's scratch repository may go with no push, rename, settings change or restore before it is deleted — restorable for deleted_retention_days, like any deleted repository. A repository a live turn has named is never deleted while the turn lasts. 1..365; unset is 7, and a written 0 is refused."`
-	// MaxPerSeat is how many scratch repositories one seat may hold — every
-	// one it owns short of purged, a deleted one counting until its purge
-	// frees its room. A POINTER because 0 is a setting — no seat may create
-	// one — and unset is the default ([DefaultCodeScratchMaxPerSeat]): a
-	// zero value that is a valid setting needs one.
+	// MaxPerSeat is how many scratch repositories one seat may hold, every one it
+	// owns short of purged. A POINTER because 0 is a setting (no seat may create
+	// one); unset is [DefaultCodeScratchMaxPerSeat].
 	MaxPerSeat *int `yaml:"max_per_seat,omitempty" json:"max_per_seat,omitempty" js:"min=0;max=1000" desc:"How many scratch repositories one seat may hold, every one it owns short of purged — a deleted one counts until its purge frees its room. 0 lets no seat create one; 0..1000; unset is 50."`
 }
 
-// Resolved is the scratch policy with its defaults applied — THE ONE PLACE
-// they are applied, read by the code domain's own conversion
-// (internal/gitlet.ScratchOf), so what `crewlet validate` judges and what a
-// create and an expiry are held to are one reading of the document.
+// Resolved is the scratch policy with its defaults applied, THE ONE PLACE they
+// are applied (also read by internal/gitlet.ScratchOf), so `crewlet validate`
+// and the create and expiry read the document alike.
 func (s CodeScratch) Resolved() (idleDays, maxPerSeat int) {
 	idleDays, maxPerSeat = DefaultCodeScratchIdleDays, DefaultCodeScratchMaxPerSeat
 	if s.IdleDays != nil {
@@ -486,8 +424,7 @@ func (s CodeScratch) zero() bool { return s.IdleDays == nil && s.MaxPerSeat == n
 // validate holds code.scratch's rules at path: each field inside its bounds.
 func (s CodeScratch) validate(scratch Path) error {
 	var p problems
-	// POINTERS, so a written value is held to its range (settingRanges) and
-	// only an absent one is the default.
+	// Pointers: a written value is held to its range (settingRanges).
 	if d := s.IdleDays; d != nil {
 		p.within(at(scratch, "idle_days"), float64(*d), fmt.Sprintf("unset is the default %d; a day at "+
 			"least, because a live turn's hold on an idle repository is ordered against the expiry by a "+
@@ -502,73 +439,60 @@ func (s CodeScratch) validate(scratch Path) error {
 }
 
 // CodeChecks is how the company runs the CHECKS its repositories define in
-// their `.crewlet/checks.yaml` (internal/gitlet's ParseChecks): which cells a
-// check runs in, which of the company's secrets a check may name, and how
-// long the company lets one run. The file names; this block decides
+// `.crewlet/checks.yaml` (internal/gitlet's ParseChecks): the cells, the secrets
+// a check may name, and how long one may run. The file names; this block decides
 // (docs/concepts/gitlet.md, "Checks"). Every field unset is a valid block.
 //
-// THE EPOCH'S, read where each is used — the cell and the timeout when a
-// check's box is made, the secrets when its environment is — so a revision
-// moving any of them holds from its activation, with no restart.
+// THE EPOCH'S, read where used (cell and timeout when a check's box is made,
+// secrets when its environment is), so a revision holds from activation.
 type CodeChecks struct {
-	// RunIn is the cell a check whose file names none runs in: one of
-	// [CodeCheckCells]. Unset is providers.sandbox's own default where that is
-	// one of them, else no cell ([Company.CheckRunIn]).
+	// RunIn is the cell a check whose file names none runs in, one of
+	// [CodeCheckCells]. Unset is providers.sandbox's default where that is one of
+	// them, else no cell ([Company.CheckRunIn]).
 	RunIn Placement `yaml:"run_in,omitempty" json:"run_in,omitempty" js:"enum=container|e2b" desc:"The cell a check whose checks file names none runs in: container — a container on a Gitlet node — or e2b, a remote box. Unset is providers.sandbox.default_run_in where that is one of the two, else no cell. direct is refused: a check runs a change's own code, which direct would run as the engine's own user on the engine host."`
 
-	// AllowRunIn are the cells a repository's checks file may name in a
-	// check's own run_in. Unset is the one RunIn resolves to; set, it holds
-	// that one, so a file naming the cell a check naming none runs in is
-	// never refused where the check would have run anyway.
+	// AllowRunIn are the cells a checks file may name in a check's run_in. Unset
+	// is the one RunIn resolves to; set, it holds that one, so a file is never
+	// refused for naming where the check would have run anyway.
 	AllowRunIn []Placement `yaml:"allow_run_in,omitempty" json:"allow_run_in,omitempty" js:"enum=container|e2b" desc:"The cells a repository's checks file may name in a check's run_in, each once: container or e2b. Unset is the one run_in resolves to; set, it holds that one."`
 
-	// Env are the secrets a check may be given, by variable name: a check
-	// is given exactly the entries its file's `env` names, and none it does
-	// not. A credential field, as role.sandbox.env is: what is declared here
-	// is a registry token, a cloud key, a test database's URL — resolved
-	// when a check's box is made, never stored resolved.
+	// Env are the secrets a check may be given, by variable name: exactly the
+	// entries its file's `env` names. A credential field, as role.sandbox.env is,
+	// resolved when a check's box is made, never stored resolved.
 	Env map[string]string `secret:"true" yaml:"env,omitempty" json:"env,omitempty" desc:"The secrets a check may be given: a check is given exactly the entries its checks file names in its env. Each key a variable name — a letter or an underscore, then letters, digits and underscores, at most 128 bytes — and none the engine sets in a box itself. ${VAR} supported, resolved when a check's box is made."`
 
-	// MaxTimeoutSeconds is how long the company lets a check run, whatever
-	// its file's timeout_seconds says: 0 is unset, the default
-	// ([CodeDefaultCheckMaxTimeout]); else [CodeMinCheckMaxTimeout] to
-	// [CodeCheckTimeoutCeiling], in seconds.
+	// MaxTimeoutSeconds is how long the company lets a check run, whatever its
+	// file says: 0 is [CodeDefaultCheckMaxTimeout]; else [CodeMinCheckMaxTimeout]
+	// to [CodeCheckTimeoutCeiling].
 	MaxTimeoutSeconds int `yaml:"max_timeout_seconds,omitempty" json:"max_timeout_seconds,omitempty" js:"min=60;max=21600" desc:"How long the company lets a check run, whatever its checks file's timeout_seconds: 60..21600 seconds; unset is 3000 — an e2b box on the smallest plan's one-hour session, with ten minutes of it for the box's setup."`
 
-	// Remote caps the checks the company runs in REMOTE (e2b) cells, whose
-	// boxes run on a provider's machines and are billed by the company's
-	// account there — company-wide, however many Gitlet nodes run checks.
-	// Container cells are each Gitlet node's own, bounded by its Tier A
-	// gitlet.max_checks instead.
+	// Remote caps the checks run in REMOTE (e2b) cells, billed to the company's
+	// provider account: company-wide, however many Gitlet nodes run checks.
+	// Container cells are each node's own, bounded by Tier A gitlet.max_checks.
 	Remote CodeChecksRemote `yaml:"remote,omitempty" json:"remote,omitzero"`
 }
 
-// CodeChecksRemote is code.checks.remote: how many remote (e2b) check boxes
-// the company runs at once, and how many hours of them it starts in a UTC day
-// (internal/gitlet/checkrun's RemoteSlots). A check either would take past its
-// cap waits QUEUED — claimed by no node — until a box ends or the day turns
-// over, and then runs. Every field unset is a valid block, its defaults
-// PROVISIONAL (U45 a).
+// CodeChecksRemote is code.checks.remote: how many remote (e2b) check boxes run
+// at once, and how many hours of them start in a UTC day
+// (internal/gitlet/checkrun's RemoteSlots). A check past either cap waits
+// QUEUED, claimed by no node, until a box ends or the day turns. Every field
+// unset is valid; the defaults are PROVISIONAL (U45 a).
 //
-// THE EPOCH'S, read at every walk of a runner's queue, so a revision moving
-// either cap holds from its activation.
+// THE EPOCH'S, read at every walk of a runner's queue.
 type CodeChecksRemote struct {
-	// MaxRunning is how many remote check boxes run at once, company-wide.
-	// A POINTER because 0 is a setting — no check runs remotely, each one
-	// naming e2b waiting queued — and unset is the default
-	// ([CodeDefaultRemoteMaxRunning]).
+	// MaxRunning is how many remote check boxes run at once, company-wide. A
+	// POINTER because 0 is a setting (no check runs remotely); unset is
+	// [CodeDefaultRemoteMaxRunning].
 	MaxRunning *int `yaml:"max_running,omitempty" json:"max_running,omitempty" js:"min=0;max=1024" desc:"How many remote (e2b) check boxes the company runs at once, whichever Gitlet node starts them: 0..1024; 0 starts none. A check past it waits queued until a box ends. Unset is 16 (provisional): a merge queue's full round of four candidates with two checks each, doubled for the head checks beside it, inside E2B's 20-sandbox Hobby limit."`
 
-	// BoxHoursPerDay is how many hours of remote box time the company starts
-	// in a UTC day, each box charged a minute at a time from its start to
-	// its end. A POINTER for MaxRunning's reason: 0 starts none, and unset
-	// is the default ([CodeDefaultRemoteBoxHoursPerDay]).
+	// BoxHoursPerDay is how many hours of remote box time start in a UTC day, each
+	// box charged by the minute. A POINTER for MaxRunning's reason; unset is
+	// [CodeDefaultRemoteBoxHoursPerDay].
 	BoxHoursPerDay *int `yaml:"box_hours_per_day,omitempty" json:"box_hours_per_day,omitempty" js:"min=0;max=100000" desc:"How many hours of remote (e2b) box time the company spends on checks in a UTC day, each box charged a minute at a time while it runs: 0..100000; 0 starts none. Once the day's hours are spent, a new remote check waits queued until the next UTC midnight; a box already running runs to its own end. Unset is 192 (provisional): one merge queue saturated all day at ten-minute checks."`
 }
 
-// Resolved is code.checks.remote with its defaults applied — THE ONE PLACE
-// they are applied, read by a check runner at every walk: the boxes the
-// company runs at once and the box-minutes it starts in a UTC day.
+// Resolved is code.checks.remote with its defaults applied, THE ONE PLACE they
+// are applied: boxes at once and box-minutes a UTC day.
 func (r CodeChecksRemote) Resolved() (maxRunning, minutesPerDay int) {
 	maxRunning, hours := CodeDefaultRemoteMaxRunning, CodeDefaultRemoteBoxHoursPerDay
 	if r.MaxRunning != nil {
@@ -583,8 +507,7 @@ func (r CodeChecksRemote) Resolved() (maxRunning, minutesPerDay int) {
 // zero is a block that sets nothing.
 func (r CodeChecksRemote) zero() bool { return r.MaxRunning == nil && r.BoxHoursPerDay == nil }
 
-// validate holds code.checks.remote's rules at path: each cap inside its
-// bounds.
+// validate holds code.checks.remote's caps inside their bounds.
 func (r CodeChecksRemote) validate(path Path) error {
 	var p problems
 	if n := r.MaxRunning; n != nil && (*n < 0 || *n > CodeMaxRemoteMaxRunning) {
@@ -600,9 +523,8 @@ func (r CodeChecksRemote) validate(path Path) error {
 	return p.err()
 }
 
-// MaxTimeout is code.checks.max_timeout_seconds as a duration, its default
-// applied where it is unset — THE ONE PLACE the default is applied: a check's
-// box runs for the lesser of this and its own file's timeout.
+// MaxTimeout is code.checks.max_timeout_seconds as a duration, THE ONE PLACE its
+// default is applied: a check's box runs for the lesser of this and its file's timeout.
 func (k CodeChecks) MaxTimeout() time.Duration {
 	if k.MaxTimeoutSeconds == 0 {
 		return CodeDefaultCheckMaxTimeout
@@ -616,14 +538,13 @@ func (k CodeChecks) zero() bool {
 		k.Remote.zero()
 }
 
-// validate holds code.checks' own rules at path: each cell one a check runs in
-// ([CodeCheckCells]) — `direct` refused by name with why
-// ([CodeCheckCellRefusal]) — and each allowed once; each secret's key a name a
-// check can name ([ValidCodeCheckEnvName]); and the timeout inside its bounds.
-// Whether a cell it names is configured, and whether the cells it allows hold
-// the one a check naming none runs in, turn on providers.sandbox:
-// [Company.validateSandboxPlacement] holds those. A key the engine sets in a
-// box itself is an admission rule's ([Company.validateReservedSandboxEnv]).
+// validate holds code.checks' own rules: each cell one a check runs in
+// ([CodeCheckCells]), `direct` refused with why ([CodeCheckCellRefusal]), each
+// allowed once; each secret key a name ([ValidCodeCheckEnvName]); the timeout in
+// bounds. Whether a cell is configured, and whether the allowed cells hold the
+// default one, turn on providers.sandbox ([Company.validateSandboxPlacement]). A
+// key the engine sets in a box itself is an admission rule's
+// ([Company.validateReservedSandboxEnv]).
 func (k CodeChecks) validate(path Path) error {
 	var p problems
 	cell := func(at Path, cell Placement) {
@@ -667,17 +588,13 @@ func (k CodeChecks) validate(path Path) error {
 	return p.err()
 }
 
-// NeedsRole reports whether the company needs a node role at all: every role
-// but gitlet always, and gitlet exactly where the company runs Gitlet
-// (code.backend: gitlet) — a Gitlet node serves nothing for a company that does
-// not. Nil-safe: no company needs every role but gitlet.
+// NeedsRole reports whether the company needs a node role: every role but gitlet
+// always, gitlet exactly where the company runs Gitlet. Nil-safe: no company
+// needs every role but gitlet.
 //
-// THE ONE STATEMENT OF THE RULE, read by the fleet's unmanned-role check on
-// every node (the engine's seat.Config.RoleNeeded) and by the fleet view's
-// unmanned_roles, so a warning in one node's log and the screen an operator
-// reads can never disagree about whether the fleet is missing a role. Each
-// held its own copy once, and the screen's — a role nobody declared — named
-// gitlet missing on every fleet that hosts no code and lists its nodes' roles.
+// THE ONE STATEMENT OF THE RULE, read by the unmanned-role check on every node
+// (seat.Config.RoleNeeded) and the fleet view's unmanned_roles, so a node's log
+// and the operator's screen cannot disagree about a missing role.
 func (c *Company) NeedsRole(role placement.NodeRole) bool {
 	if role != placement.RoleGitlet {
 		return true
@@ -685,9 +602,8 @@ func (c *Company) NeedsRole(role placement.NodeRole) bool {
 	return c != nil && c.CodeBackendFor() == CodeGitlet
 }
 
-// DeletedRetention is code.deleted_retention_days as a duration, its default
-// applied where it is unset — THE ONE PLACE the default is applied, read by the
-// engine's code-retention duty at every pass.
+// DeletedRetention is code.deleted_retention_days as a duration, THE ONE PLACE
+// its default is applied, read by the code-retention duty.
 func (c Code) DeletedRetention() time.Duration {
 	days := c.DeletedRetentionDays
 	if days <= 0 {
@@ -696,11 +612,9 @@ func (c Code) DeletedRetention() time.Duration {
 	return time.Duration(days) * 24 * time.Hour
 }
 
-// IdentityDomainResolved is code.identity_domain, its default applied where
-// it is unset — THE ONE PLACE the default is applied: the domain the engine's
-// signer spells an engine-built commit's committer in (`engine@<domain>`),
-// and its author in for a seat whose role states no email address
-// (`<handle>@<domain>`).
+// IdentityDomainResolved is code.identity_domain, THE ONE PLACE its default is
+// applied: the domain of an engine-built commit's committer (`engine@<domain>`)
+// and of the author for a seat whose role states no email (`<handle>@<domain>`).
 func (c Code) IdentityDomainResolved() string {
 	if c.IdentityDomain == "" {
 		return DefaultCodeIdentityDomain
@@ -708,12 +622,10 @@ func (c Code) IdentityDomainResolved() string {
 	return c.IdentityDomain
 }
 
-// validDomainName reports a lowercase DNS name: labels of ASCII letters,
-// digits and hyphens, none empty or past 63 bytes and none beginning or
-// ending with a hyphen, joined by dots — no trailing dot, since an address
-// spells none — at most CodeMaxIdentityDomainBytes in all. Lowercase because
-// a commit records the address as written, and two spellings of one domain
-// would be two committers.
+// validDomainName reports a lowercase DNS name: labels of ASCII letters, digits
+// and hyphens, none empty, past 63 bytes or hyphen-bounded, joined by dots with
+// no trailing dot, at most CodeMaxIdentityDomainBytes. Lowercase because a commit
+// records the address as written, and two spellings would be two committers.
 func validDomainName(s string) bool {
 	if s == "" || len(s) > CodeMaxIdentityDomainBytes {
 		return false
@@ -733,18 +645,18 @@ func validDomainName(s string) bool {
 	return true
 }
 
-// ValidCodeCheckName reports a name a check may have: ^[a-z0-9][a-z0-9._-]{0,63}$, at most
-// [CodeMaxCheckNameBytes]. THE ONE RULE a check is named by, read wherever a name is written: a
-// repository's `.crewlet/checks.yaml`, its attempts' rows, and a protection rule's required
-// checks here and in the code domain's merge gate record. One rule, so a rule cannot require a
-// check no repository can define, which would keep a gate shut for good. It lives here because
-// config cannot import the domain.
+// ValidCodeCheckName reports a name a check may have: ^[a-z0-9][a-z0-9._-]{0,63}$.
+// THE ONE RULE a check is named by, read wherever a name is written: a
+// repository's `.crewlet/checks.yaml`, attempts' rows, and required checks here
+// and in the domain's merge gate record. One rule, so a gate cannot require a
+// check no repository can define, which would keep it shut for good. It lives
+// here because config cannot import the domain.
 //
-// LOWERCASE, NO SPACE, because a name is matched exactly and typed on command lines. Nothing any
-// URL encoder escapes (a `~` among them: Java's URLEncoder writes `%7E`), since a name rides a
-// route as spelled. A check box's token carries the name base64url-encoded
-// (internal/gitlet/host's CheckTokens), so a `.`, which this rule admits, never collides with
-// the token's own separator.
+// LOWERCASE, NO SPACE, because a name is matched exactly and typed on command
+// lines. Nothing any URL encoder escapes (a `~`: Java's URLEncoder writes
+// `%7E`), since a name rides a route as spelled. A check box's token carries the
+// name base64url-encoded (internal/gitlet/host's CheckTokens), so a `.` never
+// collides with the token's separator.
 func ValidCodeCheckName(name string) bool {
 	if name == "" || len(name) > CodeMaxCheckNameBytes {
 		return false
@@ -761,12 +673,10 @@ func ValidCodeCheckName(name string) bool {
 }
 
 // ValidCodeCheckEnvName reports a name a check's secret may have: a letter or
-// an underscore, then letters, digits and underscores — a variable any shell
-// exports — at most [CodeMaxCheckEnvNameBytes]. THE ONE RULE, for the same
-// reason as [ValidCodeCheckName]: a key of the company's code.checks.env here
-// and a name a repository's checks file lists in a check's `env` in the code
-// domain are held to it alike, so a file never names a secret the company
-// could not define, nor the company one no file could name.
+// underscore, then letters, digits and underscores (a variable any shell
+// exports), at most [CodeMaxCheckEnvNameBytes]. THE ONE RULE, as
+// [ValidCodeCheckName] is: code.checks.env's keys and a checks file's `env`
+// names are held to it alike, so neither names a secret the other cannot.
 func ValidCodeCheckEnvName(name string) bool {
 	if name == "" || len(name) > CodeMaxCheckEnvNameBytes {
 		return false
@@ -782,22 +692,19 @@ func ValidCodeCheckEnvName(name string) bool {
 	return true
 }
 
-// CodeCheckCells are the cells a check runs in, in this order: TWO OF THE
-// SANDBOX'S THREE PLACEMENTS ([Placements]) — a container on a Gitlet node, which
-// holds the repository's copy beside it, or a remote e2b box, which fetches
-// the one commit it checks. A check runs a change's own code — its build, its
-// tests, whatever its author put there — so it never runs where that code
-// reaches the engine ([CodeCheckCellRefusal]). THE ONE LIST, for the reason
-// [ValidCodeCheckName] is one rule: the company's code.checks here and a
-// repository's checks file in the code domain name their cells from it.
+// CodeCheckCells are the cells a check runs in, in this order: two of the
+// sandbox's three placements ([Placements]), a container on a Gitlet node (which
+// holds the repository's copy) or a remote e2b box (which fetches the one commit
+// it checks). A check runs a change's own code, so it never runs where that code
+// reaches the engine ([CodeCheckCellRefusal]). THE ONE LIST, as [ValidCodeCheckName]
+// is one rule: code.checks and a repository's checks file name cells from it.
 var CodeCheckCells = []Placement{PlacementContainer, PlacementE2B}
 
 // CodeCheckCellRefusal is why a check never runs in p, "" for a cell of
-// [CodeCheckCells] and for a value no placement has — which its reader
-// refuses as unknown. BY NAME (M3 decision U1 a): `direct`, the one placement
-// a check is refused, runs a box as the engine's own user on the engine host,
-// where a change's code would read what the engine reads — the keyring that
-// signs every run's token among it.
+// [CodeCheckCells] and for a value no placement has (its reader refuses that as
+// unknown). BY NAME (M3 decision U1 a): `direct` runs a box as the engine's own
+// user on the engine host, where a change's code would read what the engine
+// reads, the keyring that signs every run's token among it.
 func CodeCheckCellRefusal(p Placement) string {
 	if p == PlacementDirect {
 		return "direct runs a box as the engine's own user on the engine host, and a check runs a change's " +
@@ -816,27 +723,22 @@ type CodeRepo struct {
 	Description   string           `yaml:"description,omitempty" json:"description,omitempty" desc:"One paragraph, at most 1024 bytes."`
 	Archived      bool             `yaml:"archived,omitempty" json:"archived,omitempty" desc:"Read-only: still fetched and cloned, and takes no push."`
 	Protect       []CodeProtection `yaml:"protect,omitempty" json:"protect,omitempty" desc:"The rules a push to the refs they match is held to, at most 64. A ref no rule matches may be force-pushed or deleted by anybody who may push."`
-	// PathOwners are who owns which of the repository's paths: whom a change
-	// touching them asks for a review. They GRANT NOTHING — who may read and
-	// push is the chart's and the tier's, whatever a path owner names.
+	// PathOwners are who owns which paths: whom a change touching them asks for a
+	// review. They GRANT NOTHING; who may read and push is the chart's and the tier's.
 	PathOwners []CodePathOwner `yaml:"path_owners,omitempty" json:"path_owners,omitempty" desc:"Who owns which of the repository's paths, at most 64 owners and 256 KiB as the code log records them: a change touching an owner's paths asks it for a review. A path owner is asked, never granted: it reads and pushes what the chart lets it, as before."`
-	// MirrorFrom makes the repository a PULL MIRROR of a repository at
-	// another host, MirrorTo a PUSH MIRROR to one, and Import fills it from
-	// one when it is created. Only a person or this document sets any of the
-	// three (U49): a pull mirror and an import dial another host, and a push
-	// mirror sends the company's code to one. Each credential is a ${VAR}
-	// reference and nothing else, recorded as the reference and resolved
-	// only when the remote is dialed.
+	// MirrorFrom makes the repository a PULL MIRROR, MirrorTo a PUSH MIRROR, and
+	// Import fills it from another host at creation. Only a person or this
+	// document sets any (U49): a pull mirror and an import dial another host, a
+	// push mirror sends the company's code to one. Each credential is a ${VAR}
+	// reference, recorded as such and resolved only when the remote is dialed.
 	MirrorFrom *CodeMirrorSource `yaml:"mirror_from,omitempty" json:"mirror_from,omitempty" desc:"Makes it a pull mirror of a repository at another host: it is imported from there first — when it is created, and when an existing repository is given one or moved to another url — then moves only by Gitlet's syncs from it, and takes no push and no change of its own."`
 	MirrorTo   *CodeMirrorTarget `yaml:"mirror_to,omitempty" json:"mirror_to,omitempty" desc:"Makes it a push mirror: Gitlet pushes the refs it names to a repository at another host, as the seat named by as."`
 	Import     *CodeImportSource `yaml:"import,omitempty" json:"import,omitempty" desc:"Fills it, when it is created, from a repository at another host: it takes no push until its import is done. Read only by its create: a repository that exists already ignores it."`
 }
 
-// IdentityKey is the repository's name, which code.repos holds unique: what a
-// redaction's restore matches a repository's credentials by, since a mirror's
-// or an import's credential is masked wherever a read surface finds one that
-// is not a reference — and restored by position, a reordered code.repos would
-// hand one repository's credential to another.
+// IdentityKey is the repository's name, unique in code.repos: what a redaction's
+// restore matches credentials by, since restoring by position would hand a
+// reordered code.repos' credential to another repository.
 func (r CodeRepo) IdentityKey() string { return r.Name }
 
 // CodeMirrorSource is the repository a pull mirror follows ([CodeRepo.MirrorFrom]).
@@ -861,19 +763,17 @@ type CodeImportSource struct {
 	Credential string `secret:"true" yaml:"credential,omitempty" json:"credential,omitempty" desc:"What Gitlet fetches with: one whole ${VAR} reference to a token — a variable code.remote_credentials declares for this url's host — resolved from the secret store and then the environment when it dials, never a literal. Unset fetches anonymously."`
 }
 
-// CodePathOwner is one owner of a repository's paths: exactly one of a unit or
-// a seat, and the globs over the repository's tree it owns
-// (gitref.ParsePathGlob). An owner is named once in a repository's list, so
-// everything one owner owns is one entry.
+// CodePathOwner is one owner of a repository's paths: exactly one of a unit or a
+// seat, and the globs it owns (gitref.ParsePathGlob). An owner is named once per
+// repository.
 type CodePathOwner struct {
 	Paths []string `yaml:"paths" json:"paths" desc:"The paths it owns: 1 to 32 globs over the repository's tree, each relative to its root, at most 128 bytes. A component of * matches one component and * within one any run of characters but /; ** matches whole components (zero or more, one or more as the last), so docs/** is everything inside docs and **/*.go every Go file; a glob holding a * has at most eight components, and a glob with no * matches only that path. ?, [, \\ and a leading ! are refused: * is the one metacharacter. Each glob once."`
 	Unit  string   `yaml:"unit,omitempty" json:"unit,omitempty" desc:"A unit of the chart: its id, or its name where it has none — its effective lead is whom a review is asked of. Exactly one of unit and seat."`
 	Seat  string   `yaml:"seat,omitempty" json:"seat,omitempty" desc:"A seat, by its handle. Exactly one of unit and seat."`
 }
 
-// ResolvedDefaultBranch is the repository's default branch with its default
-// applied — read by the unprotected-branch warning and by the engine's
-// reconcile alike, so the branch warned about is the branch recorded.
+// ResolvedDefaultBranch is the default branch with its default applied, read by
+// the unprotected-branch warning and the reconcile alike.
 func (r CodeRepo) ResolvedDefaultBranch() string {
 	if r.DefaultBranch == "" {
 		return DefaultCodeBranch
@@ -881,38 +781,33 @@ func (r CodeRepo) ResolvedDefaultBranch() string {
 	return r.DefaultBranch
 }
 
-// DefaultCodeBranch is a declared repository's default branch where it sets
-// none.
+// DefaultCodeBranch is a declared repository's default branch where it sets none.
 const DefaultCodeBranch = "main"
 
-// CodeVisibility is who among the SEATS may read a repository. A person — a
-// bound or unbound API token — reads every repository whatever it says
-// (ADR-0088): visibility narrows the seats an AI company runs, never the
-// people who run it.
+// CodeVisibility is who among the SEATS may read a repository. A person reads
+// every repository whatever it says (ADR-0088): visibility narrows the seats,
+// never the people who run the company.
 type CodeVisibility string
 
 const (
-	// CodeVisibilityCompany lets every seat read it — what unset reads as.
+	// CodeVisibilityCompany lets every seat read it; what unset reads as.
 	CodeVisibilityCompany CodeVisibility = "company"
-	// CodeVisibilityUnit lets only the seats the chart relates to its owner
-	// read it: the owning unit's members, the leads above them, and the
-	// owning seat.
+	// CodeVisibilityUnit lets only the owning unit's members, the leads above
+	// them, and the owning seat read it.
 	CodeVisibilityUnit CodeVisibility = "unit"
 )
 
-// CodeVisibilities is the closed set: the one list the validator and the
-// schema read. The code domain's own set is held to it in both directions by
-// the engine's TestEveryDeclaredVisibilityIsOneTheDomainRecords, because
-// config cannot import the domain that imports it.
+// CodeVisibilities is the closed set read by the validator and the schema. The
+// domain's own set is held to it both ways by the engine's
+// TestEveryDeclaredVisibilityIsOneTheDomainRecords, since config cannot import
+// the domain.
 var CodeVisibilities = []CodeVisibility{CodeVisibilityCompany, CodeVisibilityUnit}
 
-// Valid reports a value this build knows. Unset is valid: it reads as company
-// ([CodeVisibility.Resolved]).
+// Valid reports a value this build knows. Unset is valid: it reads as company.
 func (v CodeVisibility) Valid() bool { return v == "" || slices.Contains(CodeVisibilities, v) }
 
-// Resolved is the value with its default applied: unset is company — THE ONE
-// PLACE the default is applied, read by the warnings and by the engine's
-// reconcile alike, so the visibility warned about is the visibility recorded.
+// Resolved is the value with its default applied (unset is company), THE ONE
+// PLACE it is applied, read by the warnings and the reconcile alike.
 func (v CodeVisibility) Resolved() CodeVisibility {
 	if v == "" {
 		return CodeVisibilityCompany
@@ -922,33 +817,29 @@ func (v CodeVisibility) Resolved() CodeVisibility {
 
 // CodeSearchMode is how code search reads a declared repository: from an index
 // of its default branch, or with git grep only when a search names it. UNSET IS
-// INDEXED for a repository this document declares — a project the company
-// named is the code its seats work in, so it is what a search across the
-// company's repositories reads — while a repository a tool makes starts at grep
-// (the code domain's rule, internal/gitlet's SearchMode).
+// INDEXED for a declared repository (a named project is the code seats work in,
+// so a company-wide search reads it), while a repository a tool makes starts at
+// grep (internal/gitlet's SearchMode).
 type CodeSearchMode string
 
 const (
-	// CodeSearchIndexed reads it from an index of its default branch — what
-	// unset reads as.
+	// CodeSearchIndexed reads it from an index of its default branch; what unset
+	// reads as.
 	CodeSearchIndexed CodeSearchMode = "indexed"
 	// CodeSearchGrep reads it with git grep, only by a search naming it.
 	CodeSearchGrep CodeSearchMode = "grep"
 )
 
-// CodeSearchModes is the closed set: the one list the validator and the schema
-// read. The code domain's own set is held to it in both directions by the
-// engine's TestEveryDeclaredSearchModeIsOneTheDomainRecords, because config
-// cannot import the domain that imports it.
+// CodeSearchModes is the closed set read by the validator and the schema; the
+// domain's set is held to it both ways by the engine's
+// TestEveryDeclaredSearchModeIsOneTheDomainRecords.
 var CodeSearchModes = []CodeSearchMode{CodeSearchIndexed, CodeSearchGrep}
 
-// Valid reports a value this build knows. Unset is valid: it reads as indexed
-// ([CodeSearchMode.Resolved]).
+// Valid reports a value this build knows. Unset is valid: it reads as indexed.
 func (m CodeSearchMode) Valid() bool { return m == "" || slices.Contains(CodeSearchModes, m) }
 
-// Resolved is the value with its default applied: unset is indexed — THE ONE
-// PLACE the default is applied, read by the engine's reconcile, so a
-// declaration that says nothing is recorded as indexed on every node.
+// Resolved is the value with its default applied (unset is indexed), THE ONE
+// PLACE it is applied, so a silent declaration is recorded as indexed on every node.
 func (m CodeSearchMode) Resolved() CodeSearchMode {
 	if m == "" {
 		return CodeSearchIndexed
@@ -962,10 +853,9 @@ type CodeOwner struct {
 	Seat string `yaml:"seat,omitempty" json:"seat,omitempty" desc:"A seat, by its handle. Exactly one of unit and seat."`
 }
 
-// CodeProtection is one protection rule: the branches or the tags it matches,
-// what a push to one of them may do, and — on a branch rule — what a merge
-// into one needs, its MERGE GATE: any of the gate's fields set forms one, every
-// field it leaves unset taking its default ([CodeProtection.Gate]).
+// CodeProtection is one protection rule: the branches or tags it matches, what a
+// push to one may do, and on a branch rule what a merge needs, its MERGE GATE:
+// any gate field set forms one, the rest taking defaults ([CodeProtection.Gate]).
 type CodeProtection struct {
 	Branch      string         `yaml:"branch,omitempty" json:"branch,omitempty" desc:"A branch name or glob: * matches one path component, ** any number, and a name with no * matches only itself. Exactly one of branch and tag."`
 	Tag         string         `yaml:"tag,omitempty" json:"tag,omitempty" desc:"A tag name or glob, as for branch. Exactly one of branch and tag."`
@@ -986,25 +876,22 @@ type CodeProtection struct {
 	AgentsEditChecks bool              `yaml:"agents_edit_checks,omitempty" json:"agents_edit_checks,omitempty" desc:"Let a seat's approval stand for a change to .crewlet/** — where a repository's checks are defined — which, on a rule requiring checks, otherwise waits for a person's."`
 }
 
-// CodeHumanPath is one glob of a repository's tree a change touching which
-// waits for a person's approval, unless every path of the change the glob
-// matched is of a class Unless lists.
+// CodeHumanPath is one glob a change touching which waits for a person's
+// approval, unless every path it matched is of a class Unless lists.
 type CodeHumanPath struct {
 	Glob   string            `yaml:"glob" json:"glob" desc:"A glob over the repository's tree, from its root, as a path owner's paths are written: * within one component, ** whole components, at most 128 bytes."`
 	Unless []CodeChangeClass `yaml:"unless,omitempty" json:"unless,omitempty" js:"enum=whitespace_only|comment_only" desc:"The path classes — whitespace_only, comment_only — that let a change through without the person's approval when every path this glob matched is of one. Each once."`
 }
 
-// CodeLanding is how a gated branch's queue lands a change: the queue tests
-// each change merged on the branch before it lands, and these two fields are
-// its throughput. An unset field takes its default ([CodeLanding.Resolved]);
-// the queue lands only where the rule requires checks.
+// CodeLanding is how a gated branch's queue lands a change; these two fields are
+// its throughput. An unset field takes its default ([CodeLanding.Resolved]); the
+// queue lands only where the rule requires checks.
 type CodeLanding struct {
 	Depth int `yaml:"depth,omitempty" json:"depth,omitempty" js:"min=1;max=8" desc:"How many candidates the queue tests at once: 1..8; unset is 4."`
 	Batch int `yaml:"batch,omitempty" json:"batch,omitempty" js:"min=1;max=8" desc:"How many waiting changes one candidate takes: 1..8; unset is 2."`
 }
 
-// Resolved is the landing with its defaults applied — THE ONE PLACE they are
-// applied ([CodeProtection.Gate] reads it).
+// Resolved is the landing with its defaults applied, THE ONE PLACE they are.
 func (l CodeLanding) Resolved() CodeLanding {
 	if l.Depth == 0 {
 		l.Depth = CodeDefaultQueueDepth
@@ -1015,17 +902,18 @@ func (l CodeLanding) Resolved() CodeLanding {
 	return l
 }
 
-// LandingCapacity is the most changes a merge queue lands over a span: ⌊depth × batch × over / round⌋ (M5-D28).
-// Each round tests depth candidates of at most batch waiting changes and lands its green prefix, so a queue asked
-// for more in a span falls behind: entries wait rounds longer for every round's worth ahead.
+// LandingCapacity is the most changes a merge queue lands over a span:
+// ⌊depth × batch × over / round⌋ (M5-D28). Each round lands the green prefix of
+// depth candidates of at most batch changes.
 //
-// THE ONE FORMULA both judgments of a queue's rate read: `crewlet validate`'s advisory (at
-// code.checks.max_timeout_seconds, over a day) and code_merge_rate_over_capacity (at the observed round, over
-// internal/gitlet's MergeRateWindow), so the alarm's threshold is the queue's own capacity, never a number of its
-// own (ADR-0015).
+// THE ONE FORMULA both judgments of a queue's rate read: `crewlet validate`'s
+// advisory (at code.checks.max_timeout_seconds, over a day) and
+// code_merge_rate_over_capacity (at the observed round, over internal/gitlet's
+// MergeRateWindow), so the alarm's threshold is the queue's own capacity (ADR-0015).
 //
-// Exact in integers: depth × batch × over is a 128-bit product before the division. A round of zero or less lands
-// without bound, a product past the int range answers its top, and a depth, batch or span under one lands nothing.
+// Exact in integers (a 128-bit product before the division). A round of zero or
+// less lands without bound, a product past int answers its top, a depth, batch or
+// span under one lands nothing.
 func LandingCapacity(depth, batch int, round, over time.Duration) int {
 	if depth < 1 || batch < 1 || over <= 0 {
 		return 0
@@ -1044,13 +932,11 @@ func LandingCapacity(depth, batch int, round, over time.Duration) int {
 	return int(q)
 }
 
-// CodeGate is a protection rule's merge gate RESOLVED — every field its value
-// or its default — in the shape the code domain records it: gitlet.MergeGate's
-// keys, in its order and with its omissions, so its encoding is as long as
-// the record's ([CodeGate.EncodedBytes]; the engine's
-// TestADeclaredGateWeighsWhatTheDomainRecords holds the two). Its lists are in
-// the document's order: the reconcile records them in the domain's one order,
-// which changes no length.
+// CodeGate is a protection rule's merge gate RESOLVED in the shape the code
+// domain records it: gitlet.MergeGate's keys, order and omissions, so its
+// encoding is as long as the record's ([CodeGate.EncodedBytes]; the engine's
+// TestADeclaredGateWeighsWhatTheDomainRecords holds the two). Lists keep the
+// document's order; the reconcile's reordering changes no length.
 type CodeGate struct {
 	MergeBy          CodeMergeBy       `json:"merge_by"`
 	Approvals        CodeApprovals     `json:"approvals"`
@@ -1063,20 +949,17 @@ type CodeGate struct {
 	AgentsEditChecks bool              `json:"agents_edit_checks,omitempty"`
 }
 
-// EncodedBytes is what the gate weighs as the code log records it — the
-// length of its JSON — which [CodeMaxGateBytes] bounds.
+// EncodedBytes is the length of the gate's JSON, which [CodeMaxGateBytes] bounds.
 func (g CodeGate) EncodedBytes() int {
-	// IT CANNOT FAIL: strings, whole numbers, booleans and lists of them are
-	// every value a gate holds, and json.Marshal encodes each of them.
+	// Cannot fail: a gate holds only strings, integers, booleans and lists of them.
 	b, _ := json.Marshal(g)
 	return len(b)
 }
 
-// Gate is the rule's merge gate RESOLVED: nil where the rule sets none of its
-// fields, and otherwise every field its value or its default — writers, none,
-// a queue at depth 4 and batch 2, seats. THE ONE PLACE those defaults are
-// applied, read by the engine's reconcile, which records it, and by the
-// gate's bound here, so the gate validated is the gate recorded.
+// Gate is the rule's merge gate RESOLVED: nil where the rule sets no gate field,
+// else every field its value or default. THE ONE PLACE those defaults are
+// applied, read by the reconcile and by the bound here, so the gate validated is
+// the gate recorded.
 func (rule CodeProtection) Gate() *CodeGate {
 	if len(rule.gateFields()) == 0 {
 		return nil
@@ -1089,9 +972,8 @@ func (rule CodeProtection) Gate() *CodeGate {
 	}
 }
 
-// gateFields is every field of a merge gate the rule sets, by its name in the
-// document and in the document's order: what a gate is formed from, and what
-// a tag rule is refused for.
+// gateFields is every merge gate field the rule sets, by document name and order:
+// what forms a gate, and what a tag rule is refused for.
 func (rule CodeProtection) gateFields() []string {
 	var set []string
 	for _, f := range []struct {
@@ -1111,11 +993,10 @@ func (rule CodeProtection) gateFields() []string {
 	return set
 }
 
-// Pattern is the rule as the domain records it: the namespaced protection
-// pattern, refs/heads/<branch> or refs/tags/<tag>, or "" where the rule sets
-// neither or both. THE ONE SPELLING, read by the validator's uniqueness rule
-// and by the engine's reconcile alike, so `crewlet validate` cannot call two
-// rules distinct that the domain then refuses as one.
+// Pattern is the rule as the domain records it: refs/heads/<branch> or
+// refs/tags/<tag>, or "" where the rule sets neither or both. THE ONE SPELLING,
+// read by the validator's uniqueness rule and the reconcile, so `crewlet
+// validate` cannot call distinct two rules the domain refuses as one.
 func (rule CodeProtection) Pattern() string {
 	switch {
 	case rule.Branch != "" && rule.Tag == "":
@@ -1130,22 +1011,19 @@ func (rule CodeProtection) Pattern() string {
 type CodeDirectPush string
 
 const (
-	// CodeDirectPersons lets a person push to it, and nobody else: a seat's
-	// push is refused protected_direct, so a seat's work reaches the ref when
-	// a person pushes it — what unset reads as.
+	// CodeDirectPersons lets only a person push to it: a seat's push is refused
+	// protected_direct. What unset reads as.
 	CodeDirectPersons CodeDirectPush = "persons"
 	// CodeDirectNone lets nobody push to it: the ref is frozen.
 	CodeDirectNone CodeDirectPush = "none"
 )
 
-// CodeDirectPushes is the closed set: the one list the validator and the
-// schema read. The code domain's own set is held to it in both directions by
-// the engine's TestEveryDeclaredDirectPushIsOneTheDomainRecords, because
-// config cannot import the domain that imports it.
+// CodeDirectPushes is the closed set read by the validator and the schema; the
+// domain's set is held to it both ways by the engine's
+// TestEveryDeclaredDirectPushIsOneTheDomainRecords.
 var CodeDirectPushes = []CodeDirectPush{CodeDirectPersons, CodeDirectNone}
 
-// Valid reports a value this build knows. Unset is valid: it reads as
-// persons ([CodeDirectPush.Resolved]).
+// Valid reports a value this build knows. Unset is valid: it reads as persons.
 func (d CodeDirectPush) Valid() bool { return d == "" || slices.Contains(CodeDirectPushes, d) }
 
 // Resolved is the value with its default applied: unset is persons.
@@ -1161,25 +1039,21 @@ func (d CodeDirectPush) Resolved() CodeDirectPush {
 type CodeMergeBy string
 
 const (
-	// CodeMergeByWriters lets anybody who may write to the repository merge —
-	// what unset reads as.
+	// CodeMergeByWriters lets anybody who may write to the repository merge; what
+	// unset reads as.
 	CodeMergeByWriters CodeMergeBy = "writers"
-	// CodeMergeByMaintainers lets only those who maintain the repository
-	// merge.
+	// CodeMergeByMaintainers lets only its maintainers merge.
 	CodeMergeByMaintainers CodeMergeBy = "maintainers"
 	// CodeMergeByPersons lets only a person merge, never a seat.
 	CodeMergeByPersons CodeMergeBy = "persons"
 )
 
-// CodeMergeBys is the closed set, loosest first: the one list the validator
-// and the schema read. The code domain's own set is held to it in both
-// directions by the engine's TestEveryDeclaredMergeByIsOneTheDomainRecords,
-// because config cannot import the domain that imports it — and so is each of
-// the merge gate's closed sets below.
+// CodeMergeBys is the closed set, loosest first, read by the validator and the
+// schema. The domain's set is held to it both ways by the engine's
+// TestEveryDeclaredMergeByIsOneTheDomainRecords, as is each merge gate set below.
 var CodeMergeBys = []CodeMergeBy{CodeMergeByWriters, CodeMergeByMaintainers, CodeMergeByPersons}
 
-// Valid reports a value this build knows. Unset is valid: it reads as writers
-// ([CodeMergeBy.Resolved]).
+// Valid reports a value this build knows. Unset is valid: it reads as writers.
 func (m CodeMergeBy) Valid() bool { return m == "" || slices.Contains(CodeMergeBys, m) }
 
 // Resolved is the value with its default applied: unset is writers.
@@ -1218,8 +1092,8 @@ func (a CodeApprovals) Resolved() CodeApprovals {
 type CodeDeleteSource string
 
 const (
-	// CodeDeleteSeats deletes a source branch in a seat's own namespace, in
-	// the record that merges it — what unset reads as.
+	// CodeDeleteSeats deletes a source branch in a seat's own namespace in the
+	// merging record; what unset reads as.
 	CodeDeleteSeats CodeDeleteSource = "seats"
 	// CodeDeleteNone keeps every source branch.
 	CodeDeleteNone CodeDeleteSource = "none"
@@ -1244,14 +1118,13 @@ func (d CodeDeleteSource) Resolved() CodeDeleteSource {
 type CodeChangeClass string
 
 const (
-	// CodeChangeClassNoCodeChange is a revision that moved nothing — a
-	// revision's class and never a path's, so no list here takes it.
+	// CodeChangeClassNoCodeChange is a revision that moved nothing: a revision's
+	// class, never a path's, so no list here takes it.
 	CodeChangeClassNoCodeChange CodeChangeClass = "no_code_change"
-	// CodeChangeClassWhitespaceOnly is a path whose only change is the space
-	// between its tokens.
+	// CodeChangeClassWhitespaceOnly is a path whose only change is whitespace.
 	CodeChangeClassWhitespaceOnly CodeChangeClass = "whitespace_only"
-	// CodeChangeClassCommentOnly is a path whose only change is in its
-	// comments, none of them a directive.
+	// CodeChangeClassCommentOnly is a path whose only change is in comments, none
+	// a directive.
 	CodeChangeClassCommentOnly CodeChangeClass = "comment_only"
 )
 
@@ -1259,8 +1132,8 @@ const (
 var CodeChangeClasses = []CodeChangeClass{CodeChangeClassNoCodeChange, CodeChangeClassWhitespaceOnly,
 	CodeChangeClassCommentOnly}
 
-// CodePathClasses is the classes a PATH has, narrowest first: the ones a
-// gate's approvals_unless and a human path's unless take.
+// CodePathClasses is the classes a PATH has, narrowest first: those approvals_unless
+// and a human path's unless take.
 var CodePathClasses = []CodeChangeClass{CodeChangeClassWhitespaceOnly, CodeChangeClassCommentOnly}
 
 // Valid reports a class this build knows. There is no unset class: a list
@@ -1273,16 +1146,15 @@ type CodeLimits struct {
 	MaxPushBytes int64 `yaml:"max_push_bytes,omitempty" json:"max_push_bytes,omitempty" js:"min=1048576;max=1073741824" desc:"The largest pack one push may send; unset is 1 GiB, the most it may be."`
 	MaxBlobBytes int64 `yaml:"max_blob_bytes,omitempty" json:"max_blob_bytes,omitempty" js:"min=1024;max=1073741824" desc:"The largest file (blob) a push may carry, at most max_push_bytes; unset is 50 MiB. A larger binary belongs in Worklet's files."`
 	RepoMaxBytes int64 `yaml:"repo_max_bytes,omitempty" json:"repo_max_bytes,omitempty" js:"min=1048576;max=1099511627776" desc:"The most packed bytes one repository may hold, at least max_push_bytes; unset is 20 GiB. Every Gitlet node serving a repository caches it whole."`
-	// PushesPerSeatDay is how many pushes one seat may land in one company
-	// day, every repository together; 0 is unset, the default
-	// ([DefaultCodePushesPerSeatDay]). Persons are never counted.
+	// PushesPerSeatDay is how many pushes one seat may land in a company day,
+	// every repository together; 0 is [DefaultCodePushesPerSeatDay]. Persons are
+	// never counted.
 	PushesPerSeatDay int `yaml:"pushes_per_seat_day,omitempty" json:"pushes_per_seat_day,omitempty" js:"min=1;max=100000" desc:"How many pushes one seat may land in one day on the company's calendar, every repository together: 1..100000; unset is 1000. A runaway bound on what a seat pushing in a loop costs the code log, not a budget; a person's pushes are never counted."`
 }
 
-// Resolved is the limits with their defaults applied — THE ONE PLACE they are
-// applied: config's own order rules below and the code domain's
-// (internal/gitlet.LimitsOf) both read it, so what `crewlet validate` judges and
-// what a push is held to are one reading of the document.
+// Resolved is the limits with defaults applied, THE ONE PLACE they are: the order
+// rules below and internal/gitlet.LimitsOf both read it, so `crewlet validate`
+// and a push read the document alike.
 func (l CodeLimits) Resolved() CodeLimits {
 	if l.MaxPushBytes == 0 {
 		l.MaxPushBytes = DefaultCodeMaxPushBytes
@@ -1302,23 +1174,22 @@ func (l CodeLimits) Resolved() CodeLimits {
 // zero is a block that sets no limit.
 func (l CodeLimits) zero() bool { return l == CodeLimits{} }
 
-// validate holds Gitlet's RUNNABLE rules against the chart o of the same document: nothing of
-// the block but native where nothing hosts code; a retention a duration can hold; the limits
-// ([CodeLimits.validate]); and every declared repository ([CodeRepo.validate]), each name
-// declared once.
+// validate holds Gitlet's RUNNABLE rules against the chart o of the same
+// document: nothing but native where nothing hosts code; a retention a duration
+// can hold; the limits ([CodeLimits.validate]); every declared repository
+// ([CodeRepo.validate]), each name once.
 //
-// RUNNABLE because a revision that breaks one cannot run as written: the reconcile cannot record
-// a repository from an owner the chart does not resolve or from two rules on one pattern, the
-// limits bind every push, and a retention no duration holds purges every deleted repository at
-// once. So it is refused before apply, like the tracker's and the knowledge base's. The two
-// POLICY bounds (repository count, deletion retention) are admission rules
-// ([Code.validateAdmission]): running depends on neither.
+// RUNNABLE because a revision breaking one cannot run as written: the reconcile
+// cannot record a repository from an unresolved owner or two rules on one
+// pattern, the limits bind every push, and a retention no duration holds purges
+// every deleted repository at once. So it is refused before apply. The two
+// POLICY bounds (repository count, retention) are admission rules
+// ([Code.validateAdmission]).
 func (c Code) validate(path Path, o *org.Organization) error {
 	var p problems
-	// AN UNKNOWN BACKEND IS THE ONE THING SAID about the rest of the block:
-	// whether the settings below have a host to configure turns on a value
-	// nobody can read yet, and seven refusals naming a backend the author
-	// misspelled bury the one line that fixes them all.
+	// An unknown backend is the one thing said about the rest of the block:
+	// whether the settings have a host turns on a value nobody can read, and
+	// seven refusals would bury the one line that fixes them all.
 	known := c.Backend == "" || c.Backend.Valid()
 	if !known {
 		p.add(at(path, "backend"), ErrUnknownValue, "%q (want %s, or unset for %s)",
@@ -1326,9 +1197,7 @@ func (c Code) validate(path Path, o *org.Organization) error {
 	}
 	unhosted := known && c.Backend != CodeGitlet
 	if unhosted {
-		// NOTHING HOSTS ANY OF IT, so each would read as live and do
-		// nothing: limits holding no push, a retention purging nothing,
-		// repositories nobody creates.
+		// Nothing hosts any of it, so each would read as live and do nothing.
 		if !c.Limits.zero() {
 			p.add(at(path, "limits"), ErrConflict,
 				"nothing hosts code on this company: set code.backend: gitlet, or remove code.limits")
@@ -1395,15 +1264,15 @@ func (c Code) validate(path Path, o *org.Organization) error {
 	return p.err()
 }
 
-// validateAdmission holds Gitlet's ADMISSION rules at path: at most [CodeMaxRepos] repositories,
-// a retention of at most [CodeMaxDeletedRetentionDays], and code.remote_credentials' two bounds
-// ([CodeRemoteCredentials.validateAdmission]).
+// validateAdmission holds Gitlet's ADMISSION rules: at most [CodeMaxRepos]
+// repositories, a retention of at most [CodeMaxDeletedRetentionDays], and
+// code.remote_credentials' two bounds ([CodeRemoteCredentials.validateAdmission]).
 //
-// POLICY, which a later build is free to change: a revision past any of them still runs, and
-// holding them on APPLY would let a build that raised one have its revisions refused by this one
-// during a rolling upgrade, splitting the fleet's epoch. A submitted document is refused for
-// them; an applied revision that breaks them is warned about. A retention past what a duration
-// holds is the runnable rule's, and is not reported twice.
+// POLICY, which a later build may change: a revision past any still runs, and
+// holding them on APPLY would let a rolling upgrade's older build refuse a newer
+// build's revisions, splitting the fleet's epoch. A submitted document is
+// refused; an applied revision that breaks them is warned about. A retention
+// past what a duration holds is the runnable rule's, not reported twice.
 func (c Code) validateAdmission(path Path) error {
 	var p problems
 	if d := c.DeletedRetentionDays; d > CodeMaxDeletedRetentionDays && d <= codeMaxHeldRetentionDays {
@@ -1423,17 +1292,14 @@ func (c Code) validateAdmission(path Path) error {
 	return p.err()
 }
 
-// validate holds code.limits' rules at path: each limit inside its bounds, and
-// the three sizes in the order a push meets them — a file inside a push, a
-// push inside a repository.
+// validate holds code.limits' rules: each limit in bounds, and the sizes in the
+// order a push meets them (a file inside a push, a push inside a repository).
 //
-// THE ORDER IS OF THE RESOLVED LIMITS, because that is what a push is held to:
-// a push limit set alone below the default file limit admits no push carrying
-// a file the default allows. Each such problem is reported AT THE FIELD THE
-// DOCUMENT SETS — the line its author can find — naming the default it met.
-// And only once every size is in range: a value outside its bounds is one
-// mistake, and an order problem beside it would be the same mistake twice. The
-// seat's daily quota is a count no order rule reads, judged on its own.
+// THE ORDER IS OF THE RESOLVED LIMITS, because that is what a push is held to: a
+// push limit set alone below the default file limit admits no push carrying a
+// file the default allows. Each problem is reported AT THE FIELD THE DOCUMENT
+// SETS, naming the default it met, and only once every size is in range, so one
+// mistake is not reported twice. The daily quota is judged on its own.
 func (l CodeLimits) validate(limits Path) error {
 	var p problems
 	if n := l.PushesPerSeatDay; n != 0 && (n < CodeMinPushesPerSeatDay || n > CodePushesPerSeatDayCeiling) {
@@ -1474,9 +1340,8 @@ func (l CodeLimits) validate(limits Path) error {
 	return p.err()
 }
 
-// limitNamed is one limit as an order problem names it: its value, and that
-// it is the default where the document left it unset — the half of the
-// problem its author did not write.
+// limitNamed is one limit as an order problem names it: its value, marked as the
+// default where the document left it unset.
 func limitNamed(name string, set, resolved int64) string {
 	if set == 0 {
 		return fmt.Sprintf("%s (unset: its default, %d)", name, resolved)
@@ -1484,16 +1349,13 @@ func limitNamed(name string, set, resolved int64) string {
 	return fmt.Sprintf("%s (%d)", name, resolved)
 }
 
-// validateCodeRepos holds code.repos at path: each entry valid, and each name
-// declared once. (How many entries is an admission rule:
-// [Code.validateAdmission].)
+// validateCodeRepos holds code.repos: each entry valid, each name once (the
+// count is an admission rule, [Code.validateAdmission]).
 //
-// A DUPLICATE IS REPORTED AT THE LATER ENTRY, which is the one an author
-// added: one name is one repository — the address it is cloned by, and the
-// subject a create arbitrates on — so a second declaration would settle the
-// first's settings to its own at every activation. Only among names that are
-// names: one that is not is already refused, and calling it a duplicate too
-// would report one mistake twice.
+// A DUPLICATE IS REPORTED AT THE LATER ENTRY, the one an author added: one name
+// is one repository (its clone address and create subject), so a second
+// declaration would settle the first's settings at every activation. Only among
+// valid names: an invalid one is already refused.
 func validateCodeRepos(path Path, repos []CodeRepo, o *org.Organization, remotes CodeRemoteCredentials) error {
 	var p problems
 	owners := newCodeOwners(o)
@@ -1516,12 +1378,11 @@ func validateCodeRepos(path Path, repos []CodeRepo, o *org.Organization, remotes
 	return p.err()
 }
 
-// validate holds one declared repository at path, against the document's
-// chart: its name, its one owner resolving on the chart, its visibility, its
-// search mode, its default branch, its description, its protection rules — at most
-// [CodeMaxProtections], each naming exactly one of a branch or a tag pattern
-// in gitref's grammar, each pattern protected once, no force on a tag, and
-// each one's merge gate ([CodeProtection.validateGate]) — and its path owners
+// validate holds one declared repository against the document's chart: name,
+// one owner resolving on the chart, visibility, search mode, default branch,
+// description, protection rules (at most [CodeMaxProtections], each exactly one
+// of a branch or tag pattern in gitref's grammar, each pattern once, no force on
+// a tag, each merge gate [CodeProtection.validateGate]) and path owners
 // ([validatePathOwners]).
 func (r CodeRepo) validate(path Path, owners *codeOwners, remotes CodeRemoteCredentials) error {
 	var p problems
@@ -1530,9 +1391,8 @@ func (r CodeRepo) validate(path Path, owners *codeOwners, remotes CodeRemoteCred
 		p.add(at(path, "name"), ErrMissing,
 			"a repository needs a name: it is the address the repository is cloned by")
 	case !gitref.ValidProjectName(r.Name):
-		// A NAME WITH A DOT IS A SEAT'S OWN SCRATCH REPOSITORY (gitref's
-		// <handle>.<slug>), which only that seat's tool creates: declared, it
-		// would read as the seat's and squat the name its create would take.
+		// A dotted name is a seat's scratch repository (gitref's
+		// <handle>.<slug>): declared, it would squat the name its create takes.
 		why := ""
 		if _, scratch := gitref.ScratchName(r.Name); scratch {
 			why = " (a name with a dot is a seat's own scratch repository, which only that seat's " +
@@ -1559,8 +1419,7 @@ func (r CodeRepo) validate(path Path, owners *codeOwners, remotes CodeRemoteCred
 			"%q is not a branch name git would take (git check-ref-format): unset it for %s, "+
 				"or name a branch", r.DefaultBranch, DefaultCodeBranch)
 	case gitref.ReservedSeatBranch(r.DefaultBranch):
-		// A shape the rest of the grammar takes, conflicting with Gitlet's
-		// own use of the name: no push may ever create it.
+		// Valid in the grammar but Gitlet's own: no push may create it.
 		p.add(at(path, "default_branch"), ErrConflict,
 			"%q is reserved: seats/ holds only each seat's own namespace, seats/<handle>/, "+
 				"and no push may create seats or seats/<one name> as a branch; unset it for %s, "+
@@ -1602,17 +1461,17 @@ func (r CodeRepo) validate(path Path, owners *codeOwners, remotes CodeRemoteCred
 	return p.err()
 }
 
-// validateRemotes holds the repository's mirrors and import at path into p: each URL one the dial reads
-// ([gitref.ParseRemoteURL]) and at most [CodeMaxRemoteURLBytes]; each credential one whole ${VAR} reference to a
-// variable code.remote_credentials declares for the URL's host ([validateCodeRemote]), required on a push mirror;
-// a push mirror's seat one of the chart's that reads the repository ([CodeRepo.validateMirrorSeat]) and its refs
-// ([validateMirrorRefs]); and none of the combinations that do nothing: an import beside a pull mirror (imported
-// from its own source at creation), and either beside archived, which takes neither a sync nor an import.
+// validateRemotes holds the repository's mirrors and import into p: each URL
+// readable ([validateCodeRemote]), each credential a declared reference (required
+// on a push mirror), a push mirror's seat one that reads the repository
+// ([CodeRepo.validateMirrorSeat]) and its refs ([validateMirrorRefs]); and no
+// combination that does nothing: an import beside a pull mirror (imported from
+// its source at creation), or either beside archived, which takes neither.
 //
-// RUNNABLE, as an owner's rules are: the code domain refuses a URL no dial reads or a credential that is no
-// reference, so the reconcile could not record one; a dial sends no credential undeclared for its host, so such a
-// mirror never authenticates; and a push mirror whose seat the chart lacks, or that cannot read what it would
-// publish, has nobody to push as.
+// RUNNABLE, as an owner's rules are: the domain refuses an unreadable URL or a
+// non-reference credential; a dial sends no credential undeclared for its host;
+// a push mirror whose seat the chart lacks or that cannot read what it publishes
+// has nobody to push as.
 func (r CodeRepo) validateRemotes(p *problems, path Path, owners *codeOwners, remotes CodeRemoteCredentials) {
 	if m := r.MirrorFrom; m != nil {
 		from := at(path, "mirror_from")
@@ -1645,18 +1504,18 @@ func (r CodeRepo) validateRemotes(p *problems, path Path, owners *codeOwners, re
 	}
 }
 
-// validateCodeRemote holds one remote at path into p: its URL present, at most [CodeMaxRemoteURLBytes] and one the
-// dial reads ([gitref.ParseRemoteURL]), and its credential, required where needed, ONE WHOLE ${VAR} REFERENCE of
-// at most [CodeMaxCredentialRefBytes] and nothing else.
+// validateCodeRemote holds one remote into p: its URL present, within
+// [CodeMaxRemoteURLBytes] and readable ([gitref.ParseRemoteURL]), and its
+// credential, required where needed, ONE WHOLE ${VAR} REFERENCE within
+// [CodeMaxCredentialRefBytes].
 //
-// A REFERENCE, NEVER A TOKEN: the code domain records the credential as written on every record of the
-// repository's settings, which every data node keeps and every backup carries, so a token here would be a secret
-// at rest in the code log. The reference is resolved only at dial, from the secret store then the environment. The
-// refusal never quotes the value: a literal is a token.
+// A REFERENCE, NEVER A TOKEN: the domain records the credential as written on
+// every settings record (data nodes and backups carry it), so a token would be a
+// secret at rest. Resolved only at dial. The refusal never quotes the value.
 //
-// AND ONE code.remote_credentials DECLARES FOR THE URL'S HOST ([CodeRemoteCredentials.Refusal]), judged once the
-// URL is a remote's and the credential a reference: the dial sends no other, so an undeclared variable, or a
-// declared one toward another host, would be a mirror that never authenticates.
+// AND ONE code.remote_credentials DECLARES FOR THE URL'S HOST
+// ([CodeRemoteCredentials.Refusal]), judged once the URL and reference are valid:
+// the dial sends no other.
 func validateCodeRemote(p *problems, path Path, url, credential string, needCredential bool,
 	remotes CodeRemoteCredentials) {
 	urlRead := false
@@ -1694,8 +1553,8 @@ func validateCodeRemote(p *problems, path Path, url, credential string, needCred
 	}
 }
 
-// validateMirrorSeat holds a push mirror's seat at path into p: a seat of the
-// chart, by its handle, that reads the repository ([CodeRepo.mirrorSeatReads]).
+// validateMirrorSeat holds a push mirror's seat: a chart seat, by handle, that
+// reads the repository ([CodeRepo.mirrorSeatReads]).
 func (r CodeRepo) validateMirrorSeat(p *problems, path Path, as string, owners *codeOwners) {
 	handle := strings.TrimSpace(as)
 	seat := owners.index.SeatByHandle(handle)
@@ -1715,17 +1574,18 @@ func (r CodeRepo) validateMirrorSeat(p *problems, path Path, as string, owners *
 	}
 }
 
-// mirrorSeatReads reports whether seat reads the repository r, as the code domain grants a read (internal/gitlet's
-// GrantOf, ADR-0088). A PERSON'S seat reads every repository as far as the chart goes; whether its holder uses
-// Gitlet (ADR-0110) is the identity directory's to say, which no configuration reads, so a push mirror asks it at
-// a person's create and settings change and before every push. An agent's seat reads every one visible to the
-// company (every tier this document can spell reads, none narrows it) and one visible to its owner's unit alone
-// where the chart relates the seat to the owner: a seat in the owning unit or below, a lead over it (effective
-// lead of it or of a unit above), or, for a seat-owned repository, that seat or a lead over the unit holding it.
+// mirrorSeatReads reports whether seat reads the repository r, as the domain
+// grants a read (internal/gitlet's GrantOf, ADR-0088). A PERSON'S seat reads
+// every repository as far as the chart goes; whether its holder uses Gitlet
+// (ADR-0110) is the identity directory's, which no configuration reads, so a push
+// mirror asks it at a person's create and settings change and before every push.
+// An agent's seat reads every company-visible one and a unit-visible one only
+// where the chart relates it to the owner: in the owning unit or below, a lead
+// over it, or for a seat-owned repository that seat or a lead over its unit.
 //
-// THE DOMAIN'S RULE IN THE DOCUMENT'S TERMS, because config cannot import the domain that imports it: the engine's
-// TestADeclaredMirrorSeatReadsWhatTheDomainGrantsIt holds the two to one verdict over every relation a chart can
-// give.
+// THE DOMAIN'S RULE IN THE DOCUMENT'S TERMS, since config cannot import the
+// domain: the engine's TestADeclaredMirrorSeatReadsWhatTheDomainGrantsIt holds the
+// two to one verdict over every relation a chart can give.
 func (r CodeRepo) mirrorSeatReads(x *org.Index, seat *org.Role) bool {
 	if seat.IsHuman() || r.Visibility.Resolved() == CodeVisibilityCompany {
 		return true
@@ -1757,16 +1617,14 @@ func (r CodeRepo) mirrorSeatReads(x *org.Index, seat *org.Role) bool {
 	return false
 }
 
-// validateMirrorRefs holds a push mirror's refs at path into p: at most
-// [CodeMaxMirrorRefs], each a protection pattern of gitref's grammar — under
-// refs/heads/ or refs/tags/ — that reaches no seat's own namespace
-// ([gitref.PatternReachesSeats]), and each once.
+// validateMirrorRefs holds a push mirror's refs: at most [CodeMaxMirrorRefs],
+// each a protection pattern under refs/heads/ or refs/tags/ that reaches no
+// seat's namespace ([gitref.PatternReachesSeats]), each once.
 //
 // NO SEAT'S BRANCHES LEAVE: refs/heads/seats/<handle>/ is where a seat's work
-// waits for a person, its experiments among it, and a mirror publishes what
-// the company merged, never what a seat has not yet offered — so a pattern
-// that could match one ref there is refused, refs/heads/** among them, while
-// refs/heads/*, which matches only top-level branches, is not.
+// waits for a person, and a mirror publishes what the company merged, never what
+// a seat has not yet offered, so a pattern that could match a ref there is
+// refused (refs/heads/** among them; refs/heads/* matches only top-level).
 func validateMirrorRefs(p *problems, path Path, refs []string) {
 	if len(refs) > CodeMaxMirrorRefs {
 		p.add(path, ErrOutOfRange, "%d patterns, past the %d one push mirror may name", len(refs),
@@ -1791,17 +1649,16 @@ func validateMirrorRefs(p *problems, path Path, refs []string) {
 	}
 }
 
-// validatePathOwners holds a repository's path owners at path into p: at most
-// [CodeMaxPathOwners], each naming exactly one of a unit or a seat the chart resolves and 1 to
-// [CodeMaxPathOwnerPaths] globs in gitref's path grammar, each once; each OWNER once by what the
-// chart resolves it to (a unit named by key and by name is one owner twice); and the whole at
-// most [CodeMaxPathOwnersBytes] as the code log records it, judged last and only of a list
-// nothing else is refused in.
+// validatePathOwners holds a repository's path owners: at most
+// [CodeMaxPathOwners], each exactly one of a unit or seat the chart resolves and 1
+// to [CodeMaxPathOwnerPaths] globs in gitref's grammar, each once; each OWNER once
+// by what the chart resolves it to (a unit named by key and by name is one owner
+// twice); the whole within [CodeMaxPathOwnersBytes] as recorded, judged last and
+// only of a list nothing else is refused in.
 //
-// RUNNABLE, as an owner's rules are: the reconcile records a unit by the key the chart resolves,
-// so an unresolved one has none to record, and the code domain refuses settings past these
-// bounds, a glob its grammar does not read and an owner listed twice, the one form a record
-// carries.
+// RUNNABLE, as an owner's rules are: the reconcile records a unit by its resolved
+// key, so an unresolved one has none, and the domain refuses settings past these
+// bounds, an unreadable glob and an owner listed twice.
 func validatePathOwners(p *problems, path Path, list []CodePathOwner, owners *codeOwners) {
 	before := len(*p)
 	if len(list) > CodeMaxPathOwners {
@@ -1836,21 +1693,18 @@ func validatePathOwners(p *problems, path Path, list []CodePathOwner, owners *co
 	}
 }
 
-// PathOwnersBytes is what the repository's path owners weigh as the code log
-// records them — the length of their JSON, each owner by what the chart index
-// o resolves it to — which [CodeMaxPathOwnersBytes] bounds; false where an
-// owner does not resolve, and so has no recorded form to weigh.
+// PathOwnersBytes is the length of the path owners' JSON as the code log records
+// them (each owner by what chart index o resolves it to), which
+// [CodeMaxPathOwnersBytes] bounds; false where an owner does not resolve.
 func (r CodeRepo) PathOwnersBytes(o *org.Index) (int, bool) {
 	return codePathOwnersBytes(o, r.PathOwners)
 }
 
 // codePathOwnersBytes is [CodeRepo.PathOwnersBytes] over list.
 //
-// IN THE SHAPE THE CODE DOMAIN RECORDS THEM ([codeRecordedPathOwner]), so its
-// figure is the record's: the engine's
-// TestDeclaredPathOwnersWeighWhatTheDomainRecords holds the two, or `crewlet
-// validate` passes path owners every node's reconcile refuses, or refuses ones
-// the domain would record.
+// IN THE SHAPE THE DOMAIN RECORDS ([codeRecordedPathOwner]), so its figure is the
+// record's: the engine's TestDeclaredPathOwnersWeighWhatTheDomainRecords holds
+// the two, or `crewlet validate` would disagree with every node's reconcile.
 func codePathOwnersBytes(o *org.Index, list []CodePathOwner) (int, bool) {
 	recorded := make([]codeRecordedPathOwner, len(list))
 	for i, po := range list {
@@ -1860,32 +1714,30 @@ func codePathOwnersBytes(o *org.Index, list []CodePathOwner) (int, bool) {
 		}
 		recorded[i] = codeRecordedPathOwner{Owner: who, Paths: po.Paths}
 	}
-	// IT CANNOT FAIL: strings and lists of them are every value it holds, and
-	// json.Marshal encodes each of them.
+	// Cannot fail: only strings and lists of them.
 	b, _ := json.Marshal(recorded)
 	return len(b), true
 }
 
-// codeRecordedPathOwner is a path owner in the shape the code domain records
-// it: gitlet.PathOwner's keys, the owner by what the chart resolves it to, and
-// its globs as the document lists them, whose canonical order the record
-// sorts them into changes no length.
+// codeRecordedPathOwner is a path owner in the shape the domain records:
+// gitlet.PathOwner's keys, globs in document order (the record's sort changes no
+// length).
 type codeRecordedPathOwner struct {
 	Owner codeRecordedOwner `json:"owner"`
 	Paths []string          `json:"paths"`
 }
 
-// codeRecordedOwner is a path owner's owner as the code domain records it,
-// gitlet.Owner's keys: a unit by its key, a seat by its handle.
+// codeRecordedOwner is an owner as the domain records it (gitlet.Owner's keys): a
+// unit by key, a seat by handle.
 type codeRecordedOwner struct {
 	Kind string `json:"kind"`
 	Ref  string `json:"ref"`
 }
 
-// recordedOwner is who the entry names as the code domain records it, resolved
-// on the chart index o as the reconcile resolves it — a unit by its key,
-// whichever spelling the entry used, or a seat by its handle — and false for
-// an entry naming neither or both, or an owner o does not hold.
+// recordedOwner is who the entry names as the domain records it, resolved on chart
+// index o as the reconcile does (a unit by key, whichever spelling the entry
+// used, or a seat by handle); false for an entry naming neither or both, or an
+// owner o does not hold.
 func (po CodePathOwner) recordedOwner(o *org.Index) (codeRecordedOwner, bool) {
 	switch unit, seat := strings.TrimSpace(po.Unit), strings.TrimSpace(po.Seat); {
 	case unit != "" && seat == "":
@@ -1900,8 +1752,8 @@ func (po CodePathOwner) recordedOwner(o *org.Index) (codeRecordedOwner, bool) {
 	return codeRecordedOwner{}, false
 }
 
-// validate holds one path owner at path into p, and answers who it resolves
-// to ([CodePathOwner.recordedOwner]) where it resolves at all.
+// validate holds one path owner and answers who it resolves to
+// ([CodePathOwner.recordedOwner]) where it does.
 func (po CodePathOwner) validate(p *problems, path Path, owners *codeOwners) (codeRecordedOwner, bool) {
 	paths := at(path, "paths")
 	switch n := len(po.Paths); {
@@ -1947,17 +1799,15 @@ func (po CodePathOwner) validate(p *problems, path Path, owners *codeOwners) (co
 	return codeRecordedOwner{}, false
 }
 
-// codeOwners is the document's chart as code.repos' owners are resolved
-// against it: an [org.Index] built once for the whole list, and the two lists
-// a refusal names, each joined once at the first refusal that needs it.
+// codeOwners is the chart as code.repos' owners resolve against it: an
+// [org.Index] built once, and the two lists a refusal names, each joined once at
+// the first refusal needing it.
 //
-// ONCE A DOCUMENT, because the list is up to [CodeMaxRepos] long: resolved
-// through the chart's one-off lookups, every owner walked every unit or every
-// seat, deriving each seat's handle, and every owner the chart did not have
-// walked it again to list it in its message — at every apply on every node,
-// since these are runnable rules. Ten thousand owners on a chart of 300 units
-// and 900 seats cost ValidateRunnable 1.92 s that way and 95–101 ms through
-// the index (BenchmarkValidatingTheMostRepositories).
+// ONCE A DOCUMENT, because the list is up to [CodeMaxRepos] long and these are
+// runnable rules, run at every apply on every node: the chart's one-off lookups
+// walk every unit or seat per owner. Ten thousand owners on 300 units and 900
+// seats cost 1.92 s that way, 95–101 ms through the index
+// (BenchmarkValidatingTheMostRepositories).
 type codeOwners struct {
 	index        *org.Index
 	units, seats func() string
@@ -1973,16 +1823,15 @@ func newCodeOwners(o *org.Organization) *codeOwners {
 	}
 }
 
-// unitRefs is every unit's key in x, in walk order, as a refusal of an owner's unit names it:
-// the key an owner references it by, with the name of the unit that key resolves to beside it
-// where the two differ — "engineering (Engineering)".
+// unitRefs is every unit's key in x, in walk order, as a refusal names it, with
+// the name beside it where the two differ: "engineering (Engineering)".
 //
-// THE KEY AND THE NAME, because a write mints each unit's key from its name ([MintIdentities]):
-// by key alone, a unit everybody knows as Engineering reads as "engineering" and the typist
-// cannot tell which key it is; by name alone, nothing says what the chart holds it under. A unit
-// with no key is keyed on its name and listed once. The name is looked up BY THE KEY
-// ([org.Index.UnitByRef]), so a key two units of an unadmitted chart share is listed with the
-// unit an owner naming it would get.
+// THE KEY AND THE NAME, because a write mints each key from the name
+// ([MintIdentities]): by key alone a typist cannot tell which unit it is; by name
+// alone nothing says what the chart holds it under. A unit with no key is keyed
+// on its name and listed once. The name is looked up BY THE KEY
+// ([org.Index.UnitByRef]), so a key two units of an unadmitted chart share lists
+// the unit an owner naming it would get.
 func unitRefs(x *org.Index) []string {
 	refs := x.UnitKeys()
 	for i, key := range refs {
@@ -1997,8 +1846,7 @@ func unitRefs(x *org.Index) []string {
 	return refs
 }
 
-// validate holds an owner at path into p: exactly one of a unit or a seat,
-// resolving on the document's chart.
+// validate holds an owner: exactly one of a unit or seat, resolving on the chart.
 func (w CodeOwner) validate(p *problems, path Path, owners *codeOwners) {
 	switch unit, seat := strings.TrimSpace(w.Unit), strings.TrimSpace(w.Seat); {
 	case unit == "" && seat == "":
@@ -2019,8 +1867,8 @@ func (w CodeOwner) validate(p *problems, path Path, owners *codeOwners) {
 	}
 }
 
-// validate holds one protection rule at path into p, and reports whether it
-// names one valid pattern — the rules a caller's uniqueness check reads.
+// validate holds one protection rule and reports whether it names one valid
+// pattern, which the caller's uniqueness check needs.
 func (rule CodeProtection) validate(p *problems, path Path) bool {
 	ok := true
 	switch {
@@ -2058,23 +1906,21 @@ func (rule CodeProtection) validate(p *problems, path Path) bool {
 	return ok
 }
 
-// validateGate holds the rule's merge gate at path — the rule's own path, its
-// fields beneath it — into p, RUNNABLE as its pattern is: the code domain
-// refuses a gate on a tag rule, a value of no closed set, a landing outside its
-// bounds, a list past its bound or naming a value twice, a glob gitref does not
-// read, a check no repository can name, no_code_change as a class that
-// exempts, and a gate past [CodeMaxGateBytes] — and the reconcile cannot
-// record a declaration the domain refuses. The bytes are judged last and only
-// of a gate whose every field passed: a field refused is the one mistake to
-// name. Whether the gate does anything is a warning's ([Company.codeWarnings]).
+// validateGate holds the rule's merge gate (at the rule's path, fields beneath),
+// RUNNABLE as its pattern is: the domain refuses a gate on a tag rule, a value of
+// no closed set, a landing outside its bounds, a list past its bound or naming a
+// value twice, an unreadable glob, an unnameable check, no_code_change as an
+// exempting class, and a gate past [CodeMaxGateBytes], and the reconcile cannot
+// record what the domain refuses. The bytes are judged last and only of a gate
+// whose every field passed, so one mistake is named once. Whether the gate does
+// anything is a warning's ([Company.codeWarnings]).
 func (rule CodeProtection) validateGate(p *problems, path Path) {
 	set := rule.gateFields()
 	if len(set) == 0 {
 		return
 	}
 	if rule.Tag != "" {
-		// AT THE FIRST FIELD THE RULE SETS, naming every one: a tag never
-		// moves, so the gate as a whole has nothing to hold — one mistake.
+		// At the first field set, naming every one: the gate as a whole is one mistake.
 		p.add(at(path, set[0]), ErrConflict,
 			"a tag never moves, so no merge reaches one: %s gate merges, which only a branch rule has: "+
 				"move them to a rule over the branches they are for", words.And(set))
@@ -2154,10 +2000,9 @@ func (rule CodeProtection) validateGate(p *problems, path Path) {
 	}
 }
 
-// validateGateClasses holds a list of the classes that exempt a change, the
-// field name at path, into p: each a PATH class, each once. no_code_change is
-// refused for why it is no path's: an approval already carries across a
-// revision that changed nothing, so it has nothing to exempt.
+// validateGateClasses holds a list of exempting classes (field name): each a PATH
+// class, each once. no_code_change is refused: an approval already carries across
+// a revision that changed nothing, so it has nothing to exempt.
 func validateGateClasses(p *problems, path Path, name string, list []CodeChangeClass) {
 	seen := make(map[CodeChangeClass]int, len(list))
 	for k, c := range list {
@@ -2176,32 +2021,30 @@ func validateGateClasses(p *problems, path Path, name string, list []CodeChangeC
 	}
 }
 
-// codeWarnings is what is valid about the company's code and still worth knowing, against its own chart: every
-// seat's code access tier that grants nothing ([Company.roleCodeWarnings]); where the engine hosts code, every
-// cell that places a seat's box in `direct` ([Company.directBoxWarnings]); and every declared repository that
+// codeWarnings is what is valid about the company's code and still worth knowing:
+// seat code access tiers that grant nothing ([Company.roleCodeWarnings]); where
+// the engine hosts code, cells placing a seat's box in `direct`
+// ([Company.directBoxWarnings]); and every declared repository that
 //
-//   - is `visibility: unit` and owned by a unit with no lead (effective, so inherited counts): only persons and
-//     the unit's members read it. Located at the visibility;
-//   - has a default branch no rule protects: a person who may push to it may force-push or delete it, and no merge
-//     gate holds what merges into it. Matched by gitref's matcher, the one a push's decide asks, so `release/*`
-//     warns about main and `**` does not. Located at the field to ADD, protect;
-//   - has a merge gate field that does nothing as the rule stands ([idleGateFields]), located at that field;
-//   - has a merge queue that cannot land one change a day for every seat that may merge into it
-//     ([Company.mergeRateWarnings]), located at the rule's landing.
+//   - is `visibility: unit` and owned by a unit with no effective lead;
+//   - has a default branch no rule protects (matched by the matcher a push's
+//     decide asks, so `release/*` warns about main and `**` does not), at the
+//     field to ADD, protect;
+//   - has a merge gate field that does nothing ([idleGateFields]), at that field;
+//   - has a merge queue that cannot land one change a day per seat that may merge
+//     ([Company.mergeRateWarnings]), at the rule's landing.
 func (c *Company) codeWarnings() []Warning {
 	out := c.roleCodeWarnings()
 	if c.CodeBackendFor() != CodeGitlet {
 		return out
 	}
 	out = append(out, c.directBoxWarnings()...)
-	// THE CHART IS BUILT HERE, only for a company that hosts code: no other advisory reads one, and
-	// a company with no repositories would pay a normalised chart at every validate and apply for
-	// nothing.
+	// The chart is built only for a company that hosts code: no other advisory
+	// reads one.
 	o, _ := c.organization()
 	units := o.Index()
-	// EVERY HUMAN SEAT IS A PERSON WHO MAY MERGE: a person maintains every
-	// repository (ADR-0085), so the merge-rate advisory counts them on every
-	// queue — once, here, rather than once a rule.
+	// Every human seat is a person who may merge (a person maintains every
+	// repository, ADR-0085), counted once here rather than per rule.
 	persons := 0
 	for s := range o.AllRoles() {
 		if s.IsHuman() {
@@ -2212,9 +2055,8 @@ func (c *Company) codeWarnings() []Warning {
 		if w, ok := unitWithNoLead(units, i, r); ok {
 			out = append(out, w)
 		}
-		// NOT A PULL MIRROR'S BRANCH: it takes no push and no change of its own (mirror_from), so its
-		// default branch moves only by Gitlet's syncs. Its protect list is warned instead: every rule
-		// there holds nothing. Its visibility still warns, a mirror being read.
+		// Not a pull mirror's branch: it moves only by Gitlet's syncs. Its protect
+		// list is warned instead, every rule there holding nothing.
 		if r.MirrorFrom != nil {
 			if len(r.Protect) > 0 {
 				w := mirrorProtectAdvice.raise(at(idx(field("code.repos"), i), "protect"), fmt.Sprintf(
@@ -2228,9 +2070,8 @@ func (c *Company) codeWarnings() []Warning {
 			continue
 		}
 		out = append(out, idleGateFields(i, r)...)
-		// NOT AN ARCHIVED REPOSITORY'S BRANCH: it takes no push (the decide refuses the whole push), so
-		// nobody can force-push or delete its branch and a warning would be false. Unarchiving one that
-		// still has no rule brings the warning back with that revision. Its visibility still warns.
+		// Not an archived repository's branch: it takes no push, so a warning
+		// would be false.
 		if r.Archived {
 			continue
 		}
@@ -2238,8 +2079,7 @@ func (c *Company) codeWarnings() []Warning {
 		branch := r.ResolvedDefaultBranch()
 		ref := "refs/heads/" + branch
 		if !gitref.ValidBranch(branch) || gitref.ReservedSeatBranch(branch) {
-			// Refused by validation, which is the line to read first: a
-			// branch no push can create is no branch anybody force-pushes.
+			// Validation refuses it, the line to read first.
 			continue
 		}
 		if slices.ContainsFunc(r.Protect, func(rule CodeProtection) bool {
@@ -2257,8 +2097,7 @@ func (c *Company) codeWarnings() []Warning {
 	return out
 }
 
-// The words of [Company.codeWarnings]' own two: a mirror's protect list, and
-// a default branch no rule protects.
+// The words of [Company.codeWarnings]' own two.
 var (
 	mirrorProtectAdvice = says("Branch rules on a mirrored repository",
 		"This repository copies another and takes no pushes, so its branch rules do nothing. "+
@@ -2273,18 +2112,18 @@ func branchItem(repo, branch string) string {
 	return repo + " (" + branch + ")"
 }
 
-// directBoxWarnings is one warning for every place a company hosting code puts a seat's box in the `direct` cell:
-// at the `run_in` of the providers.llm entry an executor's box is launched on (once an entry), or once at
-// `providers.sandbox.default_run_in` for every box inheriting it, each as [Company.SeatBoxes] places it.
+// directBoxWarnings is one warning per place a company hosting code puts a seat's
+// box in `direct`: an executor entry's `run_in`, or once at
+// `providers.sandbox.default_run_in` for every box inheriting it ([Company.SeatBoxes]).
 //
-// WHAT IT SAYS IS WHAT THE CELL IS: a `direct` box runs as the engine's own user, so it reads every repository a
-// Gitlet node's cache holds and, on ANY node, the Tier A keyring every run token's key derives from, so it can
-// mint any live executor run's token and push as that seat. Neither `visibility: unit` nor a run's grants bind it.
-// Said whatever the visibility: impersonation holds even when every repository is `company`.
+// A `direct` box runs as the engine's own user, so it reads every repository a
+// Gitlet node's cache holds and, on ANY node, the Tier A keyring every run token
+// derives from: it can mint any live executor run's token and push as that seat,
+// whatever `visibility: unit` or a run's grants say.
 //
-// A WARNING, NOT A REFUSAL (M3-decisions U1 a): refusing would close none of those reads (the cache and keyring
-// are the engine user's files, on every node) while taking every single-node deployment its `direct` cell. The
-// boundary is the cell (docs/concepts/code-sandbox.md's security model). Not for the double (`fake: true`).
+// A WARNING, NOT A REFUSAL (M3-decisions U1 a): refusing would close none of those
+// reads while taking every single-node deployment its `direct` cell; the boundary
+// is the cell (docs/concepts/code-sandbox.md). Not for the double (`fake: true`).
 func (c *Company) directBoxWarnings() []Warning {
 	catalogue := c.Providers.Sandbox
 	if !catalogue.Enabled() || catalogue.Fake {
@@ -2295,8 +2134,7 @@ func (c *Company) directBoxWarnings() []Warning {
 		"ANY live executor run and push as that run's seat, and a repository's `visibility: unit` and a " +
 		"run's grants do not bind "
 	const remedy = "; run it in `container` or `e2b` to hold it to them"
-	// ONE WORDING FOR BOTH PLACES, the entry's own cell and the default
-	// ([directBoxAdvice]), each named apart as the warning's Item.
+	// One wording for both places ([directBoxAdvice]), told apart by Item.
 	var out []Warning
 	inherited := false
 	entries := map[string]bool{}
@@ -2304,9 +2142,7 @@ func (c *Company) directBoxWarnings() []Warning {
 		if box.Cell != PlacementDirect {
 			continue
 		}
-		// AN ENTRY'S OWN run_in, or the default it inherits: on every
-		// executor the launching entry places the box, and a seat names no
-		// cell of its own.
+		// An entry's own run_in, or the default it inherits: a seat names no cell.
 		if box.Executor == "" || c.Providers.LLM[box.Executor].RunIn == "" {
 			inherited = true
 			continue
@@ -2329,18 +2165,16 @@ func (c *Company) directBoxWarnings() []Warning {
 	return out
 }
 
-// idleGateFields is a warning for every merge gate field of code.repos[i], r, that does nothing
-// as the rule stands (valid, and a sign the rule says less than its author meant), each at the
-// field to remove or the one beside it to set:
+// idleGateFields is a warning for every merge gate field of code.repos[i], r, that
+// does nothing as the rule stands (valid, but the rule says less than its author
+// meant), at the field to remove or the one beside it to set:
 //
-//   - owners_approve on a repository that names no path owners: no change touches an owned path,
-//     so it waits for nobody;
-//   - landing on a rule that requires no checks: only a branch whose merges wait for checks has
-//     a queue, so every merge into this one lands directly;
-//   - approvals_unless beside approvals: none, which exempts changes from approvals the rule
-//     never asks.
+//   - owners_approve on a repository naming no path owners: it waits for nobody;
+//   - landing on a rule requiring no checks: only a branch whose merges wait for
+//     checks has a queue;
+//   - approvals_unless beside approvals: none, exempting from approvals never asked.
 //
-// A tag rule is skipped: any gate on one is validation's refusal, the line to read.
+// A tag rule is skipped: any gate on one is validation's refusal.
 func idleGateFields(i int, r CodeRepo) []Warning {
 	var out []Warning
 	for k, rule := range r.Protect {
@@ -2385,24 +2219,23 @@ var (
 			"does nothing. Require an approval or remove it.")
 )
 
-// codeMergeRateDay is the span `crewlet validate` prices a queue's capacity
-// over: a DAY, at one landing a seat — a seat that may merge and lands one
-// change a day is a quiet writer, so a queue that cannot keep up even with
-// that falls behind on an ordinary day (M5-D28).
+// codeMergeRateDay is the span `crewlet validate` prices a queue's capacity over:
+// a DAY at one landing a seat; a queue that cannot keep up with a quiet writer
+// falls behind on an ordinary day (M5-D28).
 const codeMergeRateDay = 24 * time.Hour
 
-// mergeRateWarnings is a warning for every rule of code.repos[i], r, whose branch has a merge
-// queue (a merge gate requiring a check) that lands fewer changes a day than the seats that may
-// merge into it, at one a day each (M5-D28): [LandingCapacity] at the rule's depth and batch, a
-// round as long as code.checks.max_timeout_seconds (the slowest round the company allows), over
-// [codeMergeRateDay]. Located at the rule's landing, whose depth and batch raise it.
+// mergeRateWarnings is a warning for every rule of code.repos[i], r, whose branch
+// has a merge queue (a gate requiring a check) landing fewer changes a day than
+// the seats that may merge into it at one a day each (M5-D28): [LandingCapacity]
+// at the rule's depth and batch, a round as long as code.checks.max_timeout_seconds
+// (the slowest the company allows), over [codeMergeRateDay]. At the rule's landing.
 //
-// `crewlet validate` CANNOT OBSERVE A RATE: it warns from what is configured;
-// code_merge_rate_over_capacity, raised by the repository's home from the enqueues it counts and
-// the rounds it times, is the observed half.
+// `crewlet validate` CANNOT OBSERVE A RATE: it warns from configuration;
+// code_merge_rate_over_capacity, raised by the repository's home from observed
+// enqueues and rounds, is the other half.
 //
-// WHO MAY MERGE is counted through the chart's index ([seatsThatMayMerge]), under the stricter
-// of the rule's merge_by and code.merge_by_floor (M5-D2).
+// WHO MAY MERGE is counted through the chart's index ([seatsThatMayMerge]), under
+// the stricter of merge_by and code.merge_by_floor (M5-D2).
 func (c *Company) mergeRateWarnings(units *org.Index, persons, i int, r CodeRepo) []Warning {
 	var out []Warning
 	floor := c.Code.MergeByFloor.Resolved()
@@ -2443,17 +2276,18 @@ var mergeRateAdvice = says("Merge queues too slow for their team",
 	"This merge queue lands fewer changes a day than the people and agents allowed to merge, "+
 		"so it falls behind. Let it land more each round.")
 
-// seatsThatMayMerge is how many seats may merge into a branch of a repository owned by owner
-// under merge authority by (M5-D2), counted through the chart's index as Gitlet's grant rules
-// relate a seat to a repository:
+// seatsThatMayMerge is how many seats may merge into a branch of a repository
+// owned by owner under merge authority by (M5-D2), counted as Gitlet's grant
+// rules relate a seat to a repository:
 //
-//   - every HUMAN seat, persons: a person maintains every repository;
-//   - under writers, every agent seat that WRITES the repository (owned by a unit: its effective
-//     lead and every seat of its subtree; by a seat: that seat); under maintainers, the one that
-//     MAINTAINS it (the unit's effective lead or the owning seat); under persons, none;
+//   - every HUMAN seat: a person maintains every repository;
+//   - under writers, every agent seat that WRITES it (unit-owned: its effective
+//     lead and every seat of its subtree; seat-owned: that seat); under
+//     maintainers, the one that MAINTAINS it (effective lead or owning seat);
+//     under persons, none;
 //
-// each agent seat only at code.access full_access, the tier where any seat's grant is capped. An
-// owner the chart does not resolve is validation's refusal and relates no seat here.
+// each agent seat only at code.access full_access, where any grant is capped. An
+// unresolved owner is validation's refusal and relates no seat here.
 func seatsThatMayMerge(units *org.Index, persons int, owner CodeOwner, by CodeMergeBy) int {
 	n := persons
 	if by == CodeMergeByPersons {
@@ -2486,16 +2320,15 @@ func seatsThatMayMerge(units *org.Index, persons int, owner CodeOwner, by CodeMe
 	return n
 }
 
-// unitWithNoLead is the warning about code.repos[i], r, when it is `visibility: unit` and owned
-// by a unit with no effective lead, the unit and lead both found through units, the chart's
-// index. An owner the chart does not resolve is validation's refusal, not warned twice.
+// unitWithNoLead is the warning about code.repos[i], r, when it is `visibility:
+// unit` and owned by a unit with no effective lead, both found through the chart's
+// index. An unresolved owner is validation's refusal, not warned twice.
 //
-// THE LEAD THROUGH THE INDEX, never [org.Organization.EffectiveLead]: a team's lead is usually
-// inherited from its division, which the chart's method finds by searching the team's subtree
-// then walking every seat, so asked of every repository's owner the warnings cost repositories ×
-// seats. BenchmarkWarningAboutTheMostUnitRepositories (ten thousand unit repositories, 930
-// seats): 166–184 ms and 3.4 million allocations through the chart, 16–18 ms and 6.9 MB through
-// the index.
+// THE LEAD THROUGH THE INDEX, never [org.Organization.EffectiveLead]: a team's lead
+// is usually inherited, which the chart's method finds by searching the subtree
+// then walking every seat, costing repositories × seats.
+// BenchmarkWarningAboutTheMostUnitRepositories (10 000 repositories, 930 seats):
+// 166–184 ms through the chart, 16–18 ms through the index.
 func unitWithNoLead(units *org.Index, i int, r CodeRepo) (Warning, bool) {
 	ref := strings.TrimSpace(r.Owner.Unit)
 	if r.Visibility.Resolved() != CodeVisibilityUnit || ref == "" {
@@ -2517,18 +2350,18 @@ var unitRepoNoLeadAdvice = says("Team repositories whose team has no lead",
 	"Only people and the team's members can read this repository, because its team has no "+
 		"lead. Give the team a lead, or the repository another owner.")
 
-// roleCodeWarnings is every agent seat whose `code.access` nothing reads: the company hosts no
-// code (`code.backend` is not gitlet), and Gitlet is the only thing a tier caps. Valid, since a
-// company may write tiers before turning Gitlet on, and worth knowing because the line reads as
-// a grant. Located at the seat's code.access.
+// roleCodeWarnings is every agent seat whose `code.access` nothing reads: the
+// company hosts no code and Gitlet is the only thing a tier caps. Valid, since
+// tiers may be written before Gitlet is on, but the line reads as a grant. At the
+// seat's code.access.
 //
-// A SEAT'S GITHUB APP DOES NOT READ IT: an App's access is its own permissions in GitHub's terms
-// (`integrations.github.permissions`), so a seat with an App still holds nothing by this line;
-// the warning says so rather than pointing at GitHub as a second place the tier counts.
+// A SEAT'S GITHUB APP DOES NOT READ IT: an App's access is its own
+// (`integrations.github.permissions`), so the warning says so rather than point
+// at GitHub as a second place the tier counts.
 //
-// EVERY TIER, NOT ONLY full_access: read_only and review read as grants as much. NOT A HUMAN
-// SEAT: a tier there is an admission refusal of its own ([Company.validateHumanSeatCode]), as is
-// a tier validation refuses.
+// EVERY TIER, NOT ONLY full_access: read_only and review read as grants too. NOT A
+// HUMAN SEAT: a tier there is its own admission refusal
+// ([Company.validateHumanSeatCode]), as is a tier validation refuses.
 func (c *Company) roleCodeWarnings() []Warning {
 	backend := c.CodeBackendFor()
 	if backend == CodeGitlet {

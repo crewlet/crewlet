@@ -9,9 +9,15 @@
  * agent told something different was the one a reader had to find. The
  * entries are grouped by the words drawn, in the answer's order, and an entry
  * is headed by every name it holds.
+ *
+ * FOLDED, AFTER WHAT TO CHANGE. Open, its two blocks of three lines for seven
+ * agents stood between the go-live check and the findings, and pushed the
+ * first finding below the fold on a laptop's screen: the page's main content
+ * came third. It is a reading the owner opens when they want it, so it is
+ * asked for only then (`lazy`).
  */
 
-import { Card, DescriptionList, Text, type DescriptionListEntry } from "@crewlethq/ui";
+import { DescriptionList, Disclosure, Text, type DescriptionListEntry } from "@crewlethq/ui";
 import { QueryState } from "~/components/common.tsx";
 import { boxWords, integrationWords, toolServerWords } from "~/lib/agentAccess.ts";
 import { listed } from "~/lib/format.ts";
@@ -60,36 +66,40 @@ export function alikeAgents(agents: GoLiveReviewAnswer["agents"]): AlikeAgents[]
 }
 
 export function GoLiveReview() {
+  return (
+    <Disclosure title="Review what each agent can do" lazy>
+      <Review />
+    </Disclosure>
+  );
+}
+
+/** What each agent can do, read when the section is opened. */
+function Review() {
   const { data, error, refusal, detail, loading } = useQuery("go_live_review");
   return (
-    <Card padding="none">
-      <Card.Header count={data?.agents.length}>
-        <Card.Title>Review what each agent can do</Card.Title>
-      </Card.Header>
-      <Card.Body padding="md" className="col gap-3">
-        <Text as="p" tone="secondary">
-          Each agent is told this at the start of every turn. Check it against what you want each
-          one to do, for example who can merge or operate a server, and whether a sandbox has the
-          browser your work needs.
-        </Text>
-        <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
-          {alikeAgents(data?.agents ?? []).map((group) => {
-            const who = listed(group.names);
-            return (
-              <section
-                key={group.seats.join(" ")}
-                className="col gap-1"
-                aria-label={`What ${who} can do`}
-              >
-                <Text as="h3" variant="label">
-                  {who}
-                </Text>
-                <DescriptionList dense termWidth="5rem" items={group.entries} />
-              </section>
-            );
-          })}
-        </QueryState>
-      </Card.Body>
-    </Card>
+    <div className="col gap-3">
+      <Text as="p" tone="secondary">
+        Each agent is told this at the start of every turn. Check it against what you want each one
+        to do, for example who can merge or operate a server, and whether a sandbox has the browser
+        your work needs.
+      </Text>
+      <QueryState error={error} refusal={refusal} detail={detail} loading={loading && !data}>
+        {alikeAgents(data?.agents ?? []).map((group) => {
+          const who = listed(group.names);
+          return (
+            <section
+              key={group.seats.join(" ")}
+              className="col gap-1"
+              aria-label={`What ${who} can do`}
+            >
+              <Text as="h3" variant="label">
+                {who}
+              </Text>
+              <DescriptionList dense termWidth="5rem" items={group.entries} />
+            </section>
+          );
+        })}
+      </QueryState>
+    </div>
   );
 }

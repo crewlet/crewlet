@@ -26,6 +26,8 @@ import {
 import type { ModelsData } from "../data.ts";
 import type { WizardAt } from "../parts.tsx";
 import { ModelWizard } from "./ModelWizard.tsx";
+import { seatChangesOf } from "./steps/UseItFor.tsx";
+import { noUses } from "~/lib/modelUses.ts";
 
 const calls: string[] = [];
 
@@ -988,4 +990,44 @@ test("Finish and save is busy while it runs and is never sent twice", async () =
   fireEvent.click(button);
   expect(checkModel).toHaveBeenCalledTimes(1);
   await act(async () => answer(checked([{ check: "smoke", ok: true, detail: "It answers." }])));
+});
+
+// THE ADVISOR IS A CHOICE LIKE ASK CREWLET: right under it, company-wide with
+// no seats to pick, tagged In use on the model it explains with, and every
+// move it makes said on Review before anything is written.
+test("the Advisor is a choice right under Ask Crewlet, in use on its model, with no seats to pick", () => {
+  const d: ModelsData = { ...data(), advisor: { key: "sonnet" } };
+  render(
+    <Router>
+      <ModelWizard
+        data={d}
+        editing={d.models.find((m) => m.key === "sonnet")!}
+        target={{ step: "assign" }}
+        onClose={() => {}}
+        onDevice={() => {}}
+      />
+    </Router>,
+  );
+  expect(heading()).toBe("Use it for");
+  const radios = screen.getAllByRole("radio");
+  const at = (name: RegExp) =>
+    radios.findIndex((r) =>
+      name.test(r.getAttribute("aria-label") ?? r.closest("label")?.textContent ?? ""),
+    );
+  const ask = at(/^Ask Crewlet/);
+  expect(ask).toBeGreaterThan(-1);
+  expect(at(/^Advisor/)).toBe(ask + 1);
+  expect(at(/^Not yet/)).toBe(ask + 2);
+  const advisor = screen.getByRole("radio", { name: /^Advisor/ }) as HTMLInputElement;
+  expect(advisor.closest("label")?.textContent).toContain("In use");
+  fireEvent.click(advisor);
+  expect(advisor.checked).toBe(true);
+  expect(screen.queryByText("For which seats?")).toBeNull();
+
+  expect(seatChangesOf(d, "fast", noUses(), { ...noUses(), advisor: true })).toEqual([
+    "Advisor: sonnet → fast",
+  ]);
+  expect(seatChangesOf(d, "sonnet", { ...noUses(), advisor: true }, noUses())).toEqual([
+    "Advisor: no longer on sonnet, its checks run with no model",
+  ]);
 });

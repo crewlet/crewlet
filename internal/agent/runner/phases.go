@@ -43,14 +43,9 @@ var log = logging.Get("agent.runner")
 
 // Caps are the round-cap extension's switch and step, for the one phase it can
 // reach: onboarding, the only engine-driven phase with a ceiling above its
-// budget ([Onboarding.Ceiling]).
-//
-// The executor has no round knob here at all: it is its harness's own run,
-// bounded by the run's own turn cap where its seat or company sets one
-// (role.sandbox.max_turns, else providers.sandbox.default_max_turns) rather
-// than by rounds of an engine loop. The reviewer has none either: it holds
-// one submission tool, so its budget is one round plus the tool loop's own
-// corrective retries — a structural fact rather than an operator preference.
+// budget ([Onboarding.Ceiling]). The executor is bounded by its run's turn cap
+// (role.sandbox.max_turns, else providers.sandbox.default_max_turns), not
+// rounds; the reviewer holds one submission tool, so its budget is structural.
 type Caps struct {
 	ExtensionStep int
 	ExtensionOn   bool
@@ -58,13 +53,8 @@ type Caps struct {
 
 // reviewRounds is the reviewer's whole budget: one submission, the tool loop's
 // two finishing correctives when a model answers without calling it, and one
-// spare.
-//
-// The correctives are armed by the submission the reviewer names as its
-// terminator, as they are for every phase that finishes by a call, and they
-// are what a reviewer that thought and stopped gets INSTEAD of the rescue —
-// which sends the whole turn back for another executor round over the one
-// failure a model fixes when it is simply asked again.
+// spare. The correctives are what a reviewer that stopped gets INSTEAD of the
+// rescue, which would send the whole turn back for another executor round.
 const reviewRounds = 4
 
 // Config is everything a runner needs that does not change between rounds.
@@ -74,170 +64,124 @@ type Config struct {
 	Models   *phase.Registry
 	Caps     Caps
 
-	// Withheld are the first-party tools of Registry this seat is not
-	// offered on any surface of the turn — its executor's, which its harness
-	// reaches over the bridge, a resumed one's, its workers', its
-	// reviewer's and its onboarding pass's ([Runner.seatSnapshot]): the ones
-	// the authority table refuses the seat before any object is named, which
-	// the engine asks per turn (internal/agent/builtin's Withheld) — a tool
-	// whose row names a role grant this seat's role does not carry — and
-	// the code writes where the seat's code tier writes no repository at all
-	// (builtin's CodeWritesWithheld) — every one but the change conversation
-	// writes the tier reaches — every call of which its grant would refuse.
+	// Withheld are the first-party tools of Registry this seat is not offered on
+	// any surface of the turn ([Runner.seatSnapshot]): those the authority table
+	// refuses the seat before any object is named (internal/agent/builtin's
+	// Withheld, a row naming a role grant its role lacks) and the code writes where
+	// its code tier writes no repository (builtin's CodeWritesWithheld).
 	//
-	// THE REGISTRY IS THE EPOCH'S, shared by every seat, so a tool only some
-	// seats may call is registered for all of them and left off the surfaces
-	// of the rest here; offered and refused at every call, it is a tool a
-	// model reaches for round after round. Nil withholds nothing.
+	// THE REGISTRY IS THE EPOCH'S, shared by every seat, so a tool only some seats
+	// may call is registered for all and left off the rest's surfaces here;
+	// offered and refused at every call, a model would reach for it round after
+	// round. Nil withholds nothing.
 	Withheld []string
 
 	// Judge decides round-cap extensions. Nil means every exhaustion goes
 	// straight to the rescue path.
 	Judge extension.Judge
 
-	// Compact rewrites a payload past its budget with the seat's own
-	// auxiliary model: a prior round's argument values, failed calls'
-	// errors and produced text, as the prior-work ledger renders them. The
-	// zero value rewrites nothing, and the ledger then renders a draft
-	// whole and omits a payload by its size — never a cut. See
-	// internal/agent/ledger/ledgerfit for which is which.
+	// Compact rewrites a payload past its budget with the seat's auxiliary model
+	// (prior rounds' argument values, failed calls' errors and text). The zero
+	// value rewrites nothing: the ledger renders a draft whole and omits a payload
+	// by size, never a cut (internal/agent/ledger/ledgerfit).
 	Compact compact.Bound
 
-	// Subagent is what this turn needs to spawn sub-agents: the company's
-	// caps and a way to read the seat's remaining allowance. Nil leaves
-	// spawn_subagent off every surface, which is the honest shape for a
-	// build with no budget source — and was the shape of every build,
-	// because nothing imported internal/agent/subagent at all.
+	// Subagent is what this turn needs to spawn sub-agents: the company's caps and
+	// a way to read the seat's remaining allowance. Nil leaves spawn_subagent off
+	// every surface.
 	Subagent *SubagentConfig
 
 	// Budget is the shared token counter a turn charges. Nil disables the
-	// per-round charge, which is the embedded single-node case where no
-	// counter is shared with anyone.
+	// per-round charge (embedded single-node).
 	Budget toolloop.BudgetMeter
 
-	// Metrics is the node's recorder, which every surface of the turn
-	// counts into: its refusal-loop decisions
-	// ([metrics.ToolPolicyRefusalLoops]) and the calls answered outside
-	// their schema ([metrics.ToolArgsOutsideSchema]), the executor run's
-	// bridged calls included, since its surface is built here like every
-	// other phase's. Nil counts nothing.
+	// Metrics is the node's recorder every surface of the turn counts into
+	// ([metrics.ToolPolicyRefusalLoops], [metrics.ToolArgsOutsideSchema]), the
+	// executor's bridged calls included. Nil counts nothing.
 	Metrics *metrics.Recorder
 
-	// Sessions is where every phase the engine drives serves its tools to
-	// its harness — this process's one [toolsession.Host], whose directory is
-	// what admits a harness's relay. Required: a phase that offers tools reaches
-	// its harness through nothing else. The executor's run is the one exception,
-	// reaching the seat's tools over the tool bridge from its box.
+	// Sessions is where every engine-driven phase serves its tools to its
+	// harness: this process's one [toolsession.Host], whose directory admits a
+	// harness's relay. Required; the executor's run alone reaches the seat's tools
+	// over the bridge instead.
 	Sessions *toolsession.Host
 
-	// Fence stops a turn whose seat this node no longer holds, or one a
-	// person stopped: checked before the executor's run is launched, and at
-	// the top of every round of every phase the engine drives, before any
-	// tokens are spent.
+	// Fence stops a turn whose seat this node no longer holds, or one a person
+	// stopped: checked before the executor's launch and at the top of every round
+	// of every phase, before tokens are spent.
 	//
-	// It answers the question [internal/seat.Host.MayStart] deliberately
-	// does not: admission proves the seat was held when the turn STARTED,
-	// and a turn outlives its admission. A node that loses a seat mid-turn
-	// keeps calling models, keeps calling tools and keeps publishing
-	// records for a seat a peer is now running.
-	//
-	// Nil disables it, which is the single-node case and every test that
-	// has no seat host — and it is why this was dead for so long: the
-	// field existed on the loop, the loop checked it, and nothing ever
-	// supplied one.
+	// Admission ([internal/seat.Host.MayStart]) proves only that the seat was held
+	// when the turn STARTED; a node losing a seat mid-turn would keep calling
+	// models and tools and publishing records for a seat a peer now runs. Nil
+	// disables it (single node, tests with no seat host).
 	Fence func() error
 
-	// Task is the ask, and Endings how the conversation's earlier turns
-	// ended (internal/agent/prompts' BuildConversationEndings), rendered at
-	// the turn's dispatch. Both are fixed for the turn — Endings as
-	// [Config.Context] is, frozen on every park and thawed from it, and
-	// empty with [Config.Resume] for the same reason.
+	// Task is the ask, and Endings how the conversation's earlier turns ended
+	// (internal/agent/prompts' BuildConversationEndings), rendered at dispatch.
+	// Both are fixed for the turn, Endings as [Config.Context] is (frozen on park,
+	// thawed from it) and empty with [Config.Resume].
 	Task    string
 	Endings string
 
 	// Access is the seat's "## Your access" section and CapabilityChanges what
-	// changed since it was last told (internal/capability), rendered at the
-	// turn's dispatch and frozen with Endings: every launch carries the same
-	// bytes, and both are empty with [Config.Resume].
+	// changed since it was last told (internal/capability), rendered at dispatch
+	// and frozen with Endings; both empty with [Config.Resume].
 	Access            string
 	CapabilityChanges string
 
-	// Reply says who is waiting for this turn, so the executor's own
-	// submission can be checked against a fact the model does not control.
-	// See [turn.Reply].
+	// Reply says who is waiting for this turn, so the executor's submission can be
+	// checked against a fact the model does not control ([turn.Reply]).
 	Reply turn.Reply
 
-	// PickupAnswer reads, off the tracker's rows, how this turn has left
-	// the item a work pickup handed it ([turn.Reply.Item], ADR-0122).
-	// Required where Reply names an item, and read by the submission check
-	// and after every phase.
+	// PickupAnswer reads off the tracker's rows how this turn left the item a work
+	// pickup handed it ([turn.Reply.Item], ADR-0122). Required where Reply names an
+	// item; read by the submission check and after every phase.
 	PickupAnswer func(ctx context.Context) (types.PickupAnswer, error)
 
-	// Context is what this seat remembers, what its company has written
-	// down, what it has done before, and who it is talking to — rendered
-	// by the caller BEFORE the turn.
+	// Context is what this seat remembers, its company has written down, it has
+	// done before, and who it is talking to, rendered by the caller BEFORE the turn.
 	//
-	// Strings rather than a seam the runner could pull on, and that is the
-	// freeze: the executor is launched again on a self_iterate loop, and a
-	// runner able to re-fetch would produce a different system prompt on
-	// each launch. A provider caches on an exact prefix, so a prompt that
-	// moves costs the whole prompt again every iteration — and the executor
-	// would see its own context change underneath work it is mid-way
-	// through.
-	// There is nowhere here for a second fetch to happen; a turn that wants
-	// fresher knowledge asks for it with search_knowledge.
+	// Strings rather than a seam, and that is the freeze: the executor is launched
+	// again on a self_iterate loop, and a runner able to re-fetch would build a
+	// different system prompt each launch, costing the whole cached prefix and
+	// changing context under mid-way work. A turn wanting fresher knowledge uses
+	// search_knowledge.
 	//
-	// EMPTY WITH [Config.Resume]: a collected turn's context is the one its
-	// park froze ([execstate.State.Context]), so a later launch in the
-	// collecting segment is built from what the turn started with rather
-	// than from a second fetch — [New] refuses a resume handed both.
+	// EMPTY WITH [Config.Resume]: a collected turn's context is the one its park
+	// froze ([execstate.State.Context]); [New] refuses a resume handed both.
 	Context prefetch.Blocks
 
-	// Skills is the company's tool-skill registry. Nil is a company that
-	// has published none, and it disarms the required-skill guard too —
-	// which is right: with no skills there is nothing to enforce.
+	// Skills is the company's tool-skill registry. Nil (none published) disarms the
+	// required-skill guard too: nothing to enforce.
 	Skills *skills.Registry
 
 	// SkipNames are the meta-tools the ledger filters out.
 	SkipNames []string
 
-	// Publisher receives the phase telemetry — see telemetry.go. Nil
-	// publishes nothing, which is the right answer for a runner driven
-	// directly by a test and for a sub-agent, whose host phase is already
-	// the visible one.
-	//
-	// This is the ONLY source of every agent_* event in the company: no
-	// publisher means a seat that renders as idle for the whole of a turn
-	// and leaves no durable record it ran.
+	// Publisher receives the phase telemetry (telemetry.go), the ONLY source of
+	// every agent_* event: without it a seat renders idle for the whole turn and
+	// leaves no durable record it ran. Nil publishes nothing (direct tests, and
+	// sub-agents, whose host phase is the visible one).
 	Publisher queue.Publisher
 
 	// Turn identifies the turn these events belong to.
 	Turn Turn
 
-	// OnPhase is called as each phase OPENS, with the phase that is about to
-	// run. Nil is the ordinary case for anything driving a runner directly.
+	// OnPhase is called SYNCHRONOUSLY as each phase OPENS, immediately before its
+	// first provider call, so a blocking implementation delays the turn (the
+	// engine's only writes state and wakes a goroutine,
+	// [notify.StatusSession.Phase]). Nil for anything driving a runner directly.
 	//
-	// It exists for the working indicator, which has to say which phase a
-	// seat is in and had no way to learn it: the engine owns the turn's
-	// lifetime but not its phases, and a turn's own indicator must not
-	// depend on a broker round trip to find out what it is doing.
-	//
-	// ONE SEAM, wired where agent_phase_started is published (see
-	// [emitter.started]) rather than at each phase's own call site, so the
-	// name a reader sees and the name every dashboard reads cannot drift:
-	// both are the same argument to the same call. It fires whether or not
-	// anything is listening on the stream, because an indicator is not
-	// telemetry — a node with no publisher still has a person waiting.
-	//
-	// Called SYNCHRONOUSLY, immediately before the phase's first provider
-	// call, so an implementation that blocks delays the turn. The one in the
-	// engine only writes state and wakes a goroutine: see
-	// [notify.StatusSession.Phase].
+	// It feeds the working indicator, which must not depend on a broker round trip
+	// to learn the phase. ONE SEAM, wired where agent_phase_started is published
+	// ([emitter.started]), so the name an indicator shows and the one dashboards
+	// read cannot drift; it fires with no publisher too, since a person is still
+	// waiting.
 	OnPhase func(phase.Phase)
 
-	// Onboarding wires the dedicated first-turn pass. Zero disables it,
-	// which is what a node with no marker store has — a pass that could
-	// never be marked would run every turn forever.
+	// Onboarding wires the dedicated first-turn pass. Zero disables it, as a node
+	// with no marker store has: a pass that could never be marked would run every
+	// turn.
 	Onboarding Onboarding
 
 	// Resume collects the executor run the turn parked on. Non-nil makes
@@ -245,51 +189,37 @@ type Config struct {
 	// did rather than launching one. See [Runner.Resume].
 	Resume *Resume
 
-	// Launcher starts the executor: every seat's executor is its coding
-	// harness's own agentic run, detached in a box. REQUIRED — [New] refuses a
-	// runner without one, because there is no other way to run the
-	// executor and a runner that found out at its first Execute would fail
-	// a turn on an assembly mistake. See agentrun.go.
+	// Launcher starts the executor: every seat's executor is its coding harness's
+	// own run, detached in a box. REQUIRED: [New] refuses a runner without one
+	// rather than fail a turn at its first Execute (agentrun.go).
 	Launcher AgentLauncher
 
-	// Ask is the tool the executor's run asks a person through and parks
-	// on (`ask_and_wait`, ADR-0068), offered on that run's surface beside
-	// `submit_work`: the two ways the run ends. Nil offers none, which is a
-	// runner built outside an engine.
+	// Ask is the tool the executor's run asks a person through and parks on
+	// (`ask_and_wait`, ADR-0068), offered beside `submit_work`, the run's two ends.
+	// Nil offers none.
 	Ask RunAsk
 
-	// Checkout is the tool the executor's run checks a repository of
-	// Gitlet out through (`code_checkout`, ADR-0093),
-	// offered on that run's surface beside the ask: it grants a repository
-	// to the running job's row, which no other phase has. Nil offers none —
-	// a company that hosts no code, or a runner built outside an engine.
+	// Checkout is the tool the executor's run checks a Gitlet repository out
+	// through (`code_checkout`, ADR-0093), offered beside the ask: it grants a
+	// repository to the running job's row, as no other phase does. Nil offers none.
 	Checkout tools.Callable
 
-	// Hold is what records a call the executor's run makes to a tool at
-	// Needs approval as the question it parks on (internal/agent/builtin's
-	// CallHold, ADR-0077), installed on that run's surface alone. Nil holds
-	// none, and the surface refuses every such call, which is what every
-	// other phase's surface does.
+	// Hold records a call the executor's run makes to a tool at Needs approval as
+	// the question it parks on (internal/agent/builtin's CallHold, ADR-0077),
+	// installed on that run's surface alone. Nil holds none and the surface
+	// refuses every such call, as every other phase's does.
 	Hold tools.Holder
 
-	// Steer is where the turn's notes from a person wait
-	// (internal/agent/steer): taken at the opening of every run of the
-	// REVIEWER — the turn's own conversation the engine drives — and by the
-	// brief of every launch of the turn's executor. Never a worker's (a leaf
-	// its parent directs), the onboarding pass's (orientation, not the work)
-	// or the extension judge's (a question about the phase, not part of it):
-	// a note waiting while one of those runs is read by the next step of the
-	// turn's own.
+	// Steer is where the turn's notes from a person wait (internal/agent/steer):
+	// taken at the opening of every run of the REVIEWER and by the brief of every
+	// launch of the executor. Never a worker's (a leaf its parent directs), the
+	// onboarding pass's (orientation) or the extension judge's (a question about
+	// the phase): a note waiting while one of those runs is read by the next step
+	// of the turn's own.
 	//
-	// A note read once is carried into every later phase of the turn, as
-	// the same message — into the brief of every later run the turn
-	// launches, and the opening of every later review — so a correction
-	// binds the work done after it and the reviewer that judges that work.
-	// See [Runner.steered].
-	//
-	// Nil is a turn nobody can steer, which is every test and every runner
-	// driven directly. The engine hands a turn's first segment its box, and
-	// a segment that resumes the turn its run's record.
+	// A note read once is carried into every later phase of the turn as the same
+	// message, so a correction binds later work and the reviewer judging it
+	// ([Runner.steered]). Nil is a turn nobody can steer (tests, direct runners).
 	Steer SteerSource
 }
 
@@ -297,31 +227,28 @@ type Config struct {
 // them: the first segment's box ([steer.Box]), or the record of the executor
 // a resumed segment collects. Declared here, by the consumer.
 type SteerSource interface {
-	// Take takes every note waiting, recording it read where at says, and
-	// answers what it took — what a run of the engine's loop opens with.
+	// Take takes every note waiting, recording it read where at says, and answers
+	// what it took.
 	Take(ctx context.Context, at steer.Reading) []steer.Note
 
-	// Brief is the notes a launch's brief takes, oldest first, and every note
-	// the turn has read whose read its record marks unanswered as the brief
-	// read it ([steer.Briefing]). The notes are the launch's from here:
-	// recorded read by the write that opens the run's job, or handed back with
-	// [SteerSource.Return] where the launch fails before that write.
+	// Brief is the notes a launch's brief takes, oldest first, and every note the
+	// turn has read whose read its record marks unanswered as the brief read it
+	// ([steer.Briefing]). They are the launch's from here: recorded read by the
+	// write opening the run's job, or handed back by [SteerSource.Return] where the
+	// launch fails first.
 	Brief(ctx context.Context) steer.Briefing
 
-	// Return hands back notes [SteerSource.Brief] gave a launch that failed
-	// BEFORE IT WROTE ITS RUN'S RECORD ([Launched.LaunchID] empty): they
-	// reached nobody, and are the source's again — a box keeps them, at its
-	// front, for its next reader or reports them expired when it closes; a
-	// run's record, which a brief only peeks, still holds them waiting. A
-	// launch that failed after the write is never handed back: the record
-	// holds its brief's notes read by a job that never ran, and its ending is
-	// the one party that reports them, once.
+	// Return hands back notes [SteerSource.Brief] gave a launch that failed BEFORE
+	// IT WROTE ITS RUN'S RECORD ([Launched.LaunchID] empty): they reached nobody. A
+	// box keeps them at its front or reports them expired when it closes; a run's
+	// record, which a brief only peeks, still holds them waiting. A launch failing
+	// after the write is never handed back: the record holds the notes read by a
+	// job that never ran, and its ending reports them once.
 	Return(ctx context.Context, notes []steer.Note)
 
-	// Waiting reports a note waiting, WITHOUT TAKING IT and without
-	// blocking: the tool loop asks it under its dispatcher's lock, to end a
-	// run once the calls in flight are answered so the next run opens with
-	// the note.
+	// Waiting reports a note waiting WITHOUT TAKING IT or blocking: the tool loop
+	// asks it under its dispatcher's lock, to end a run once the calls in flight
+	// are answered so the next run opens with the note.
 	Waiting() bool
 }
 
@@ -329,20 +256,18 @@ type SteerSource interface {
 // (`ask_and_wait`, ADR-0068), as the runner offers it.
 //
 // Gate is the run's submission as its surface offers it beside the ask: a job
-// that asked is parked on the answer, and its harness is told so if it submits
-// rather than ending. The collection holds the same line on its own
-// ([Resume.Answered]), so a submission the gate let through in a race with
-// the ask is still not the round's.
+// that asked is parked, and its harness is told so if it submits rather than
+// ends. The collection holds the same line ([Resume.Answered]), so a
+// submission let through in a race with the ask is still not the round's.
 type RunAsk interface {
 	tools.Callable
 	Gate(submit tools.Callable) tools.Callable
 }
 
 // Telling is one late call of the round a job's session is known to hold
-// ([Resume.Tellings]): its place in the round's log
-// ([BridgedCall.Appended]), and the place among the turn's reads of the write
-// that recorded it, which a capture's note cursor is read against
-// ([SessionBasis.NoteCursor]).
+// ([Resume.Tellings]): its place in the round's log ([BridgedCall.Appended])
+// and among the turn's reads of the write that recorded it, which a capture's
+// note cursor is read against ([SessionBasis.NoteCursor]).
 type Telling struct {
 	Appended, Place int
 
@@ -356,242 +281,198 @@ type Telling struct {
 type Resume struct {
 	State execstate.State
 
-	// Continued says the box of the job State parked said it took up the
-	// session its launch continued, by the bridge token its harness dialled
-	// (sandbox.LaunchRecord.SessionStart): the one word on which session the
-	// job ran in that its model could not forge. False where it started a
-	// session of its own in that one's place, where its launch continued none,
-	// and where it said nothing — which every rebuild of the run's skill guard
-	// from State takes for a session of its own ([Resume.parked]).
+	// Continued says the box of the job State parked said it took up the session
+	// its launch continued, by the bridge token its harness dialled
+	// (sandbox.LaunchRecord.SessionStart): the one word on which session the job ran
+	// in that its model could not forge. False where it started a session of its
+	// own, continued none, or said nothing; every rebuild of the run's skill guard
+	// takes that for a session of its own ([Resume.parked]).
 	Continued bool
 
-	// HarnessEnd is how the harness of the job State parked ended, as the read
-	// that collected the job recorded it (sandbox.LaunchRecord's HarnessEnd):
-	// its own run — the job over, its harness gone cleanly by itself, its
-	// script packing it — whose copy of the session in its box has every call
-	// the job made, every note it read and every load; cut off — killed,
-	// crashed, told to stop, ended on an error, its job ended before its
-	// harness started; or nothing, a job an older build collected or a record
-	// the coordination store did not take. ANYTHING BUT AN OWN RUN
-	// ([sandbox.HarnessEnd.EndedOwnRun]) may lack calls its harness made and
-	// had answered without writing them, and is not known to hold the job's
-	// brief, so a relaunch carrying the round on in the job's box tells the
-	// session there that it was cut off — that it may have been, where
-	// nothing was recorded — every call of the round and every note the turn
-	// has read, and arms none of the job's own loads ([Runner.inPlaceAfter],
-	// [Runner.inPlaceNotes], [Runner.sessionDecided]): the safe direction for a
-	// word that never came.
-	// An own run's copy is told the calls the round's log took late alone,
-	// which it is not known to hold, and the reads its job's brief counted
-	// without listing them (Owed), and its guard counts none of their loads;
-	// and it is told first that a successful submission among the calls it
-	// does hold is none of the round's ([Runner.calledAfter]).
+	// HarnessEnd is how the parked job's harness ended (sandbox.LaunchRecord's
+	// HarnessEnd): its own run (job over, whose box copy holds every call, note
+	// and load); cut off (killed, crashed, stopped, errored, or ended before its
+	// harness started); or nothing (record not taken). ANYTHING BUT AN OWN RUN
+	// ([sandbox.HarnessEnd.EndedOwnRun]) may lack calls its harness made and had
+	// answered unwritten, and is not known to hold the brief, so a relaunch
+	// continuing in the box tells that session it was cut off, of every call and
+	// note read, and arms none of the job's own loads ([Runner.inPlaceAfter],
+	// [Runner.inPlaceNotes], [Runner.sessionDecided]): the safe direction. An own
+	// run's copy is told only the late calls and the reads its brief counted
+	// unlisted (Owed), and first that a submission among them is not the
+	// round's ([Runner.calledAfter]).
 	HarnessEnd sandbox.HarnessEnd
 
-	// Owed is the reads of the round the brief the job State parked was
-	// handed counted without listing them, its read cap spent, by their places
-	// in the round's log: the set the job's record keeps of the brief its run
-	// read (sandbox.LaunchRecord.OmittedCalls). The copy of the job's session
-	// in its box holds them only as that count, so a relaunch carrying the
-	// round on in that box tells them, first, under words of their own, where
-	// the job's harness ended its own run ([Runner.inPlaceAfter]), and its
-	// guard counts none of their loads ([heldAt]). Nil where the brief left
-	// none out, or where the record names none, as an older build's does: the
-	// copy is then read as holding every call of the round its brief was to
-	// tell.
+	// Owed is the reads of the round the job's brief counted without listing them,
+	// its read cap spent, by place in the round's log
+	// (sandbox.LaunchRecord.OmittedCalls). The box's session copy holds them only
+	// as that count, so a relaunch carrying the round on there tells them first, in
+	// words of their own, where the harness ended its own run
+	// ([Runner.inPlaceAfter]), and its guard counts none of their loads ([heldAt]).
+	// Nil where none were left out or the record names none: the copy is then read
+	// as holding every call its brief was to tell.
 	Owed []int
 
-	// LateOwed is the late calls that same brief counted without listing them
-	// (sandbox.LaunchRecord.LateOmittedCalls), apart from Owed: every brief
-	// tells them again, and the copy, holding only that count of each, is
-	// credited no telling of one ([heldByTelling]).
+	// LateOwed is the late calls that same brief counted without listing
+	// (sandbox.LaunchRecord.LateOmittedCalls), apart from Owed: every brief tells
+	// them again, and the copy is credited no telling of one ([heldByTelling]).
 	LateOwed []int
 
-	// Tellings are the late calls of the round's log a job's own session is
-	// known to hold, each at the place among the turn's reads of the write
-	// that recorded it (sandbox.RunSteer.Tellings, those of the log's round
-	// alone): a continuation of a session that holds one is not told the call
-	// again ([heldByTelling]). Nil where none is.
+	// Tellings are the late calls of the round's log a job's own session is known
+	// to hold, each at the place among the turn's reads of the write that recorded
+	// it (sandbox.RunSteer.Tellings, the log's round alone): a continuation of that
+	// session is not told the call again ([heldByTelling]). Nil where none.
 	Tellings []Telling
 
-	// ContextTokens is what the session the box of the job State parked holds
-	// carried at its newest request the engine measured, as the job's record
-	// keeps it (sandbox.LaunchRecord.Context): the request the read that
-	// collected the job found its run made last, or the figure carried along
-	// the copy's lineage where the job made none. A relaunch that carries the
-	// round on in the job's box sends that copy's whole context again before
-	// its brief, so its floor is held to the larger of this and the job's
-	// newest capture's measure ([Continuation.ContextTokens]). Zero where the
-	// record holds none.
+	// ContextTokens is what the session of the parked job's box carried at its
+	// newest request the engine measured (sandbox.LaunchRecord.Context), or the
+	// figure carried along the copy's lineage where the job made none. A relaunch
+	// continuing the round in that box sends the copy's whole context again before
+	// its brief, so its floor is the larger of this and the newest capture's
+	// measure ([Continuation.ContextTokens]). Zero where the record holds none.
 	ContextTokens int64
 
-	// NextRequest is the harness's own estimate of the next request of that
-	// copy, as the read that collected the job found it
-	// (sandbox.LaunchRecord.NextRequest): what a relaunch that carries the
-	// round on in the job's box is held to with its brief where it holds a
-	// figure ([Continuation.NextRequest]). Zero where the record holds none.
+	// NextRequest is the harness's own estimate of the copy's next request
+	// (sandbox.LaunchRecord.NextRequest), which a relaunch continuing in that box
+	// is held to with its brief ([Continuation.NextRequest]). Zero where none.
 	NextRequest sandbox.NextRequest
 
-	// Count is what the copy's harness counts the copy the box of the job
-	// State parked holds at before its next request, as the read that
-	// collected the job found it (sandbox.LaunchRecord.ResumedCount): what a
-	// relaunch that carries the round on in that box judges its first request
-	// by, and, where it continues a kept capture of the job taken whole in the
-	// same box, the count the capture's own is held beside ([keptCount]). Nil
-	// where nothing read the copy, which reads as a copy that may compact.
-	// CountProvider is the provider of the reply an OpenCode count is
+	// Count is what the copy's harness counts the parked job's box's session at
+	// before its next request (sandbox.LaunchRecord.ResumedCount): what a
+	// continuing relaunch judges its first request by, and, where it continues a
+	// kept capture taken whole in the same box, the count the capture's own is held
+	// beside ([keptCount]). Nil where nothing read the copy, read as a copy that
+	// may compact. CountProvider is the provider of the reply an OpenCode count is
 	// anchored on (sandbox.LaunchRecord.CountProvider), "" for any other.
 	Count         *sandbox.ResumedCount
 	CountProvider string
 
-	// BasisRestart is the newest restart of the session the job State parked
-	// took up, as its launch knew it (sandbox.LaunchRecord.RestartBasis): ""
-	// for a session that restarted nowhere, nil where it is not known. What
-	// the job's copy, as its collection read it, and a capture of the job, as
-	// its take read it, are compared with, to know whether the job restarted
-	// its session after its brief (sandbox.RestartedSince).
+	// BasisRestart is the newest restart of the session the parked job took up, as
+	// its launch knew it (sandbox.LaunchRecord.RestartBasis): "" for none, nil
+	// where unknown. The job's copy and a capture of the job are compared with it
+	// to know whether the job restarted its session after its brief
+	// (sandbox.RestartedSince).
 	BasisRestart *string
 
-	// Leads is the turn's leads as the run keeps them beside its record,
-	// opened, oldest first ([ResumeLead], sandbox.PendingStore.Leads): what
-	// carried each session of the work on. Those the brief the job's run read
-	// told are marked ([ResumeLead.Told], sandbox.LaunchRecord.ToldLeads), and
-	// told again to a continuation of the job's session that may lack that
+	// Leads is the turn's leads as the run keeps them beside its record, opened,
+	// oldest first ([ResumeLead], sandbox.PendingStore.Leads): what carried each
+	// session of the work on. Those the job's brief told are marked
+	// ([ResumeLead.Told]) and told again to a continuation that may lack that
 	// brief ([Runner.keptSession], [Runner.inPlaceAfter]); LeadsCut is how many
-	// earlier leads of the turn are not kept, past the bound or because the
-	// store could not give them back, said beside them.
+	// earlier leads are not kept (past the bound, or the store could not give them
+	// back), said beside them.
 	Leads    []ResumeLead
 	LeadsCut int
 
-	// LeadsUnread is the leads the brief the job's run read told where the
-	// store could not give the turn's leads back at all, by their numbers in
-	// the run's leads part (sandbox.LaunchRecord.ToldLeads,
-	// sandbox.TurnLeads.Unread): none of them is in Leads, and LeadsCut counts
-	// them with every other lead of the turn. A continuation of the job's
-	// session that may lack that brief says them among the leads not kept,
-	// and hands them on all the same, beside the ones it told again
-	// (sandbox.BriefTold.ToldUnread), so the job its launch opens marks them
-	// and a continuation of that job's session that reads them tells them.
-	// Nil where the leads were read.
+	// LeadsUnread is the leads the job's brief told where the store could not give
+	// the turn's leads back at all, by number in the run's leads part
+	// (sandbox.LaunchRecord.ToldLeads, sandbox.TurnLeads.Unread): none is in Leads,
+	// and LeadsCut counts them. A continuation of that session says them among the
+	// leads not kept and hands them on (sandbox.BriefTold.ToldUnread), so the job
+	// its launch opens marks them. Nil where the leads were read.
 	LeadsUnread []int
 
-	// Base is the session the turn's conversation's last turn left, as the
-	// turn's row froze it (sandbox.PendingRun.Base): where the turn began,
-	// which a task lead told again says ([prompts.NextTurnAgain]). Nil where
-	// the turn continues none.
+	// Base is the session the conversation's last turn left, as the turn's row
+	// froze it (sandbox.PendingRun.Base), which a task lead told again says
+	// ([prompts.NextTurnAgain]). Nil where the turn continues none.
 	Base *BaseBasis
 
-	// Answer is the run's closing text: what its harness said last, which the
-	// phase reports as its prose and the reviewer reads as what the agent
-	// produced.
+	// Answer is the run's closing text: the phase's prose, read by the reviewer as
+	// what the agent produced.
 	Answer string
 
-	// Bridged is what the run called over the MCP bridge, read from the
-	// run's own durable log, kept beside its row, in the order the log holds
-	// them — each carries its place in the order the bridge admitted them
-	// ([BridgedCall.Seq]), which is the order the resume records them in — and
-	// no round, which is this package's to state ([runRound]).
+	// Bridged is what the run called over the MCP bridge, from the run's own
+	// durable log kept beside its row, in log order; each carries its place in the
+	// order the bridge admitted it ([BridgedCall.Seq]), the order the resume
+	// records them in. No round, which is this package's to state ([runRound]).
 	//
-	// It is the whole record of the phase, and it has to come from the log
-	// rather than from memory: the process resuming may not be the one that
-	// launched, so its surface is fresh and has executed nothing.
+	// It is the whole record of the phase and must come from the log: the process
+	// resuming may not be the one that launched, so its surface has executed nothing.
 	Bridged []BridgedCall
 
-	// Unfinished is the round's calls the log held IN FLIGHT when it was read
-	// (sandbox.BridgeLog.InFlight): begun, their identity on the record, and
-	// not finished as the collection stopped waiting for them — still running
-	// past their bound or the turn's cap, their process gone, or their update
-	// refused by the store — each a call whose outcome is unknown
-	// ([ledger.Call.Unfinished], [UnfinishedNote]), its identity alone. Seeded
-	// into the turn's call log by that identity ([seedCalls]), listed in the
-	// round's record after its calls, for the reviewer and the turn's tool
-	// log, and told to a run that carries the round on beside its late calls
+	// Unfinished is the round's calls the log held IN FLIGHT when read
+	// (sandbox.BridgeLog.InFlight): begun, identity on the record, not finished
+	// when the collection stopped waiting (past their bound or the turn's cap,
+	// process gone, or update refused), so outcome unknown
+	// ([ledger.Call.Unfinished], [UnfinishedNote]). Seeded into the turn's call log
+	// by identity ([seedCalls]), listed after the round's calls for the reviewer
+	// and tool log, told to a run carrying the round on beside its late calls
 	// ([Runner.calledAfter]); never a submission, a delivery or a load.
 	Unfinished []BridgedCall
 
 	// Elided is the round's calls the log does not list, by identity
-	// (sandbox.BridgeLog.Unlisted): a long run's dropped middle. Calls of the
-	// round all the same, which the turn's call log is seeded with beside
-	// Bridged ([seedCalls]), the delivery checks count, and the round's record
-	// carries on ([turn.Work.Elided]).
+	// (sandbox.BridgeLog.Unlisted): a long run's dropped middle. Still calls of the
+	// round: seeded into the call log ([seedCalls]), counted by the delivery checks
+	// and carried on in the record ([turn.Work.Elided]).
 	Elided []ledger.Elided
 
-	// Absorbed is the calls the run's call log took in from the round's own
-	// calls' work — a delegated worker's under a bridged `delegate` — by
-	// identity (sandbox.BridgeLog.Absorbed): seeded into the turn's call log
-	// beside the round's calls ([seedCalls]) and carried on by the round's
-	// record ([turn.Work.Absorbed]), and read by nothing else.
+	// Absorbed is the calls the run's call log took from the round's calls' work (a
+	// delegated worker's under a bridged `delegate`), by identity
+	// (sandbox.BridgeLog.Absorbed): seeded beside the round's calls ([seedCalls])
+	// and carried on in the record ([turn.Work.Absorbed]), read by nothing else.
 	Absorbed []ledger.Elided
 
 	// LateElided is how many of Elided's calls the log took late
 	// (sandbox.BridgeLog.LateElided): dropped, they keep no mark, so every
-	// relaunch that continues the round's session is told how many there
-	// were, under the late calls' own words, whatever its save point
-	// ([Runner.calledAfter], prompts.AfterSave.LateDropped), since no save
-	// point holds a late call.
+	// relaunch continuing the round's session is told how many, in the late calls'
+	// words, whatever its save point ([Runner.calledAfter],
+	// prompts.AfterSave.LateDropped): no save point holds a late call.
 	LateElided int
 
-	// Answered is the place ([BridgedCall.Seq]) of the last call the round
-	// made before a person's answer carried it on, and zero where no answer
-	// has: off the run's log (sandbox.BridgeLog.AnsweredThrough). Only a
-	// submission made after it is the round's ([sinceAnswer]).
+	// Answered is the place ([BridgedCall.Seq]) of the last call before a person's
+	// answer carried the round on, zero where none has
+	// (sandbox.BridgeLog.AnsweredThrough). Only a submission after it is the
+	// round's ([sinceAnswer]).
 	Answered int
 
 	// BridgedRead is the read of the round's log Bridged is
-	// (sandbox.ResumeRequest.BridgedRead): every call a brief built from
-	// Bridged can tell. Every relaunch hands it to its launch
-	// ([AgentRunRequest.BriefRead]), whose opening marks late every call the
-	// log took after it ([ledger.Call.Late]), or carries it into a new round.
+	// (sandbox.ResumeRequest.BridgedRead): every call a brief built from Bridged
+	// can tell. Every relaunch hands it to its launch ([AgentRunRequest.BriefRead]),
+	// whose opening marks late each call the log took after it ([ledger.Call.Late]).
 	BridgedRead sandbox.LogRead
 
 	// Run describes the detached run this resume is collecting.
 	Run RunRecord
 
-	// Asked is set when a person's answer, not the run's completion, drives
-	// this resume: the run parked on a question, and the turn CARRIES IT ON
-	// with the answer rather than collecting it — see [Asked]. Answer is
-	// then empty, and Bridged holds the calls the run made before it asked.
+	// Asked is set when a person's answer, not the run's completion, drives this
+	// resume: the turn CARRIES THE RUN ON with it ([Asked]). Answer is then empty
+	// and Bridged holds the calls made before it asked.
 	Asked *Asked
 
-	// Lost is set when the run's job was LOST with the host it ran on rather
-	// than ended: the turn carries the round on rather than collecting it —
-	// see [Lost] — unless the round's calls already hold its submission.
-	// Answer is then the job's own account of itself, marked cut off, and
-	// Bridged holds the round's calls so far.
+	// Lost is set when the run's job was LOST with its host rather than ended: the
+	// turn carries the round on ([Lost]) unless its calls already hold the
+	// submission. Answer is the job's own account, marked cut off.
 	Lost *Lost
 
-	// Rotated is set when the run's job ended refused by its vendor on a
-	// sign-in that was replaced while it ran: the turn carries the round on
-	// once, with the new sign-in, rather than collecting the refusal (see
-	// [Rotated]), unless the round's calls already hold its submission.
+	// Rotated is set when the job ended refused by its vendor on a sign-in
+	// replaced while it ran: the turn carries the round on once with the new
+	// sign-in ([Rotated]), unless its calls already hold the submission.
 	Rotated *Rotated
 
-	// Refused is set when the run's job ended on a request its provider
-	// refused, in a session the job continued: the turn carries the round on
-	// once, in a fresh session, rather than collecting the refusal (see
-	// [Refused]), unless the round's calls already hold its submission.
+	// Refused is set when the job ended on a request its provider refused in a
+	// session it continued: the turn carries the round on once in a fresh session
+	// ([Refused]), unless its calls already hold the submission.
 	Refused *Refused
 
-	// RequestRefused is the provider's message where the job this resume
-	// COLLECTS ended on a request its provider refused: in a session it
-	// started, or after the round was already carried on once. The round then
-	// ends the turn with it ([turn.Work.RequestRefused]). Empty otherwise.
+	// RequestRefused is the provider's message where the job this resume COLLECTS
+	// ended on a request refused in a session it started or after the round was
+	// carried on once: the round ends the turn with it
+	// ([turn.Work.RequestRefused]). Empty otherwise.
 	RequestRefused string
 
-	// Steered is every note the turn had read when the run was collected,
-	// and where, in the order read — off the run's record, which every read
-	// is written on: a brief's, the run's own and a reviewer's. The
-	// resumed turn opens every phase with them ([Runner.steered]), and the
-	// collected run's own reads are its record's ([Runner.resumeAgentRun]).
+	// Steered is every note the turn had read when the run was collected, and
+	// where, in order read, off the run's record (a brief's, the run's own, a
+	// reviewer's). The resumed turn opens every phase with them
+	// ([Runner.steered]); the collected run's own reads are its record's
+	// ([Runner.resumeAgentRun]).
 	Steered []steer.Read
 
 	// Served is every note, by id, the run's record says its bridge served a
-	// harness while it waited (sandbox.RunNote.Served), read since or waiting
-	// still: a harness polling for its notes is answered one only once it is
-	// recorded served, and records it read only once it confirms delivering
-	// it, so a session continued from a job served one may hold it whatever
-	// the record says of its read — and is told it as a note it may already
-	// show ([Runner.toldNotes]). A fresh run is told it as every note.
+	// harness while it waited (sandbox.RunNote.Served): a polling harness is
+	// answered a note only once it is recorded served and records it read only on
+	// confirming delivery, so a session continued from a job served one may hold it
+	// whatever the record says of its read ([Runner.toldNotes]). A fresh run is
+	// told it as every note.
 	Served []string
 }
 
@@ -606,25 +487,21 @@ type ResumeLead struct {
 	// (sandbox.LaunchRecord.ToldLeads).
 	Told bool
 
-	// Result is what a held lead's call returned, opened from the seal its
-	// row put on it (sandbox.CallSeal.OpenKept); nil for every other lead, and
-	// for one whose result did not open here, told as a call made whose
-	// result cannot be read on this node.
+	// Result is what a held lead's call returned, opened from the seal its row put
+	// on it (sandbox.CallSeal.OpenKept); nil for every other lead and for one that
+	// did not open here, told as a call whose result cannot be read on this node.
 	Result *sandbox.HeldResult
 }
 
 // parked is the job's parked state as the session it ran in holds it: State,
-// whose skills — those its launch armed the guard of the session it chose with
-// ([execstate.State.LoadedSkills]) — are that session's only where its box said
-// it took the session up ([Resume.Continued]). Where the box started one of its
-// own, or said nothing, the session read none of them, and every guard rebuilt
-// for it — the collection's, a relaunch carrying the round on, a send-back that
-// continues the job's session — holds only what the job itself loaded, replayed
-// off its calls ([Runner.rebuiltSurface]).
+// whose skills ([execstate.State.LoadedSkills]) are that session's only where
+// its box said it took the session up ([Resume.Continued]). Otherwise the
+// session read none of them, and every guard rebuilt for it holds only what the
+// job itself loaded, replayed off its calls ([Runner.rebuiltSurface]).
 //
-// THE SAFE DIRECTION FOR A WORD THAT NEVER CAME: a guard short of a skill
-// refuses a call and asks the run to load the skill again; one holding a skill
-// its session never read lets through a call the skill exists to hold back.
+// THE SAFE DIRECTION FOR A WORD THAT NEVER CAME: a guard short of a skill asks
+// the run to load it again; one holding a skill its session never read lets
+// through a call the skill exists to hold back.
 func (r Resume) parked() execstate.State {
 	state := r.State
 	if !r.Continued {
@@ -635,57 +512,48 @@ func (r Resume) parked() execstate.State {
 
 // BridgedCall is one call an executor run made over the MCP bridge, as the
 // run's durable log recorded it: the call the turn's record reads, and when it
-// ran, for how long and who answered — what the phase record's execution for
-// it states.
+// ran, how long, and who answered.
 //
-// ITS OWN TYPE rather than a [ledger.Call], which is the delivery check's and
-// the ledger's view of a call and has nowhere to put a call's place or its
-// timing: carried as one, a resumed run's phase record stated every call the
-// run made as untimed, unattributed and in the order the calls happened to
-// finish.
+// ITS OWN TYPE rather than a [ledger.Call], the delivery check's view, which
+// has nowhere for a call's place or timing: carried as one, a resumed run's
+// record stated every call as untimed, unattributed and in finish order.
 type BridgedCall struct {
-	// Call is what the call did. A late one ([ledger.Call.Late]) is HELD BY
-	// NO SAVE POINT ([heldAt]): a continuation built after it landed is told it
-	// under words of its own but where a telling credits it ([heldByTelling]),
-	// no rebuilt guard counts a load it made, and it is never the round's
-	// submission ([sinceAnswer]).
+	// Call is what the call did. A late one ([ledger.Call.Late]) is HELD BY NO
+	// SAVE POINT ([heldAt]): a continuation built after it landed is told it in
+	// words of its own unless a telling credits it ([heldByTelling]), no rebuilt
+	// guard counts a load it made, and it is never the round's submission
+	// ([sinceAnswer]).
 	ledger.Call
 
-	// Seq is the call's place in the order the bridge admitted the run's
-	// calls, from 1 — the order the harness made them in, which is not the order
-	// they finished in when it made several at once. One order for the
-	// round: a job opened again after a recovery, and a job carrying on one
-	// that asked a person ([Asked]), number theirs after the calls before
-	// them (sandbox.BridgeLog.LastSeq).
+	// Seq is the call's place in the order the bridge admitted the run's calls,
+	// from 1: the order the harness made them, not the order they finished. One
+	// order for the round: a job opened after a recovery, or carrying on one that
+	// asked a person ([Asked]), numbers after the calls before it
+	// (sandbox.BridgeLog.LastSeq).
 	Seq int
 
-	// Appended is the call's place in the order the round's log TOOK its
-	// calls, from 1 (sandbox.BridgeCall.Appended): what a continued session's
-	// save point is read against ([SessionBasis.Through]), since a call the
-	// log took after the read that placed the save is one the session may not
-	// have been answered, whatever its place in the order above. Zero on a
-	// call an older build appended, which every save point reads as after it.
+	// Appended is the call's place in the order the round's log TOOK its calls,
+	// from 1 (sandbox.BridgeCall.Appended): what a continued session's save point
+	// is read against ([SessionBasis.Through]), since a call the log took after the
+	// read that placed the save may be unanswered in the session whatever its Seq.
+	// Zero is read by every save point as after it.
 	Appended int
 
 	// Abandoned is a call nobody waited for by the time it returned
-	// (sandbox.BridgeCall.Abandoned): its harness had cancelled it — Claude
-	// Code and OpenCode cancel a call at its server's timeout and discard a
-	// late answer — or hung up on the response the bridge kept its answer
-	// going on, or its job's session on the bridge ended while it ran and
-	// answered it as still running. It ran and its effect happened, while the
-	// session of the job that made it shows it with no outcome, a failed one
-	// or that "still running". HELD BY NO SAVE POINT, as a late call is
-	// ([heldAt]): told as a late call is ([heldByTelling]), under the late
-	// calls' words, and no rebuilt guard counts a load it made. Unlike a late
-	// call it may be the round's submission
-	// ([sinceAnswer]): its job, which was never replaced, made it.
+	// (sandbox.BridgeCall.Abandoned): its harness cancelled it (Claude Code and
+	// OpenCode cancel at the server's timeout and discard a late answer) or hung up
+	// on the response, or its job's bridge session ended while it ran. It ran and
+	// its effect happened, while the job's session shows it with no outcome, failed
+	// or "still running". HELD BY NO SAVE POINT, as a late call is ([heldAt],
+	// [heldByTelling]), and no rebuilt guard counts a load it made. Unlike a late
+	// call it may be the round's submission ([sinceAnswer]): its job, never
+	// replaced, made it.
 	Abandoned bool
 
-	// StartedAt is when the call was handed to the seat's surface, and
-	// Duration how long the surface took to answer — measured at the bridge,
-	// since the call ran inside the harness's own loop. Both zero on a call
-	// answered without running — arguments that did not parse — and zero
-	// means "not measured", never "instant".
+	// StartedAt is when the call was handed to the seat's surface and Duration how
+	// long it took to answer, measured at the bridge since the call ran inside the
+	// harness's loop. Both zero on a call answered without running; zero means
+	// "not measured", never "instant".
 	StartedAt time.Time
 	Duration  time.Duration
 
@@ -700,56 +568,45 @@ type BridgedCall struct {
 	Source  string
 	Refusal mcp.Refusal
 
-	// ArgsBytes and OutputBytes are the size of the call's whole arguments
-	// and whole output where the run's record kept less than them
-	// (sandbox.BridgeCall.ArgsBytes), and zero where it kept them whole. What
-	// a reader that ACTS on a payload decides by: the collection never
-	// replays a submission its record did not keep whole
-	// ([replaySubmission]). A reader that only shows the payload reads the
-	// marker in its text.
+	// ArgsBytes and OutputBytes are the size of the call's whole arguments and
+	// output where the record kept less (sandbox.BridgeCall.ArgsBytes), zero where
+	// whole. A reader that ACTS on a payload decides by them: the collection never
+	// replays a submission its record did not keep whole ([replaySubmission]).
 	ArgsBytes, OutputBytes int
 
-	// Held is a call the run held for a person's approval, recorded failed
-	// though nothing failed — it is the run's question for a person — and
-	// Approved the call they let be made (sandbox.BridgeCall): the two calls
-	// whose arguments every record withholds ([ledger.Call.Withheld]), which
-	// the execute phase's record says in place of them.
+	// Held is a call held for a person's approval, recorded failed though nothing
+	// failed (it is the run's question), and Approved the call they let be made
+	// (sandbox.BridgeCall): the two whose arguments every record withholds
+	// ([ledger.Call.Withheld]), which the execute phase's record says in place.
 	Held, Approved bool
 
 	// HeldID names the held call an Approved call was made for
-	// (sandbox.BridgeCall.HeldID), "" on every other call: what tells the
-	// call a person approved for the answer a relaunch carries the round on
-	// with, whose outcome that relaunch's lead tells ([Asked.Held]), from one
-	// an earlier answer of the round approved, which no lead of the relaunch
-	// tells. So the brief tells the first once, in its lead, and the second
-	// among the round's calls as any call is ([Runner.calledAfter]).
+	// (sandbox.BridgeCall.HeldID), "" on every other call: it tells the call a
+	// person approved for the answer a relaunch carries the round on with, whose
+	// outcome that relaunch's lead tells ([Asked.Held]), from one an earlier answer
+	// approved, which the brief tells among the round's calls ([Runner.calledAfter]).
 	HeldID string
 
-	// CallID is the id the call's harness gave it, as its box sent it
-	// (sandbox.BridgeCall.CallID): for Claude Code the model's tool_use id,
-	// which the session's transcript files the call's use and its result
-	// under. Carried for a call still in flight as for a finished one. Empty
-	// where the harness sent none (OpenCode), on a call an older build
-	// recorded, on a skill load its harness's hook reported, and on the call
-	// a person approved, which the engine host made where no harness named it.
+	// CallID is the id the call's harness gave it (sandbox.BridgeCall.CallID):
+	// for Claude Code the model's tool_use id, which the session's transcript
+	// files the call under. Carried for an in-flight call too. Empty where the
+	// harness sent none (OpenCode), on a skill load a hook reported, and on a
+	// call a person approved.
 	//
 	// THE BOX'S WORD, AND NO PART OF THE CALL'S IDENTITY: nothing finds,
-	// compares or deduplicates a call by it, and two calls under one id are
-	// two calls. It is read only to ask a reading of which calls a cut-off
-	// kept session holds (sandbox.HoldingsAsk), both sides of whose match are
-	// the box's own. So it is carried HERE and NOT ON [ledger.Call], which
-	// the turn's record persists and the telling compares whole ([leftOut]):
-	// a word no line of a brief shows, and no record needs, has no place in
-	// either.
+	// compares or deduplicates by it. It is read only to ask which calls a
+	// cut-off kept session holds (sandbox.HoldingsAsk). Carried HERE, NOT ON
+	// [ledger.Call], which the record persists and the telling compares whole
+	// ([leftOut]): no brief line shows it.
 	CallID string
 
 	// ArgsText is the call's arguments as its log keeps their text
-	// (sandbox.BridgeCall.Args), unchanged: "" where it keeps none, and a
-	// marker's text where it cut them ([BridgedCall.ArgsBytes]). Read only to
-	// key an OpenCode call's arguments for a reading of what a cut-off session
-	// holds ([Runner.holdingsAsk]), by the log's own rule on both sides
-	// (internal/tools/toolargs' Key), never rebuilt from Args, which reads ""
-	// and unreadable text alike as none.
+	// (sandbox.BridgeCall.Args), unchanged: "" where none is kept, a marker's text
+	// where cut ([BridgedCall.ArgsBytes]). Read only to key an OpenCode call's
+	// arguments for a reading of what a cut-off session holds
+	// ([Runner.holdingsAsk]), by the log's own rule on both sides
+	// (internal/tools/toolargs' Key), never rebuilt from Args, which reads "" and
+	// unreadable text alike as none.
 	ArgsText string
 }
 
@@ -763,32 +620,27 @@ func bridgedLedger(bridged []BridgedCall) []ledger.Call {
 	return out
 }
 
-// RunRecord is what a phase event says about the run an executor was, and the
+// RunRecord is what a phase event says about the run an executor was and the
 // box it ran in.
 //
-// It is what lets the executor's record name the harness that did the work, the
-// box it ran in and what it delivered — `harness`, `sandbox_id` and
-// `delivered_refs`, which the harnesses report and nothing else on the
-// resuming side knows. What the run itself cost is NOT here: that is each
-// launch's own fact, on the `executor_collected` record its collection
-// publishes, which a launch that parked on a question also gets.
+// It lets the executor's record name the harness, box and deliveries
+// (`harness`, `sandbox_id`, `delivered_refs`), which only the harnesses report.
+// What the run cost is NOT here: it is each launch's own fact, on the
+// `executor_collected` record its collection publishes.
 //
-// Carried rather than re-derived, for the same reason the run's placement is:
-// the resume may be another process on another node, days later, under a
-// company configuration that has been applied again since — and the member
-// of the seat's executor chain that took the launch is the launch's own
-// answer, not the chain's head.
+// Carried rather than re-derived, as the run's placement is: the resume may be
+// another process on another node, days later, under a re-applied company
+// configuration, and the member of the seat's executor chain that took the
+// launch is the launch's own answer, not the chain's head.
 type RunRecord struct {
 	// Harness is the harness that did the work; SandboxID the box it ran in.
 	Harness   string
 	SandboxID string
 
-	// ProviderKey is the providers.llm entry the run was launched on, and
-	// Model the model it ran — the member of the seat's executor chain that
-	// took the launch. The Execute record names them as the entry and model
-	// that served the phase, so spend by provider and a turn's
-	// `execute_model` are charged to the member that actually ran rather
-	// than to nobody.
+	// ProviderKey is the providers.llm entry the run was launched on and Model the
+	// model it ran: the member of the seat's executor chain that took the launch.
+	// The Execute record names them as what served the phase, so spend by provider
+	// and a turn's `execute_model` are charged to the member that ran.
 	ProviderKey string
 	Model       string
 
@@ -799,24 +651,22 @@ type RunRecord struct {
 	// which the coordinator bounds — said on the record rather than dropped.
 	RefsElided int
 
-	// Pushed is what the run's push record says it moved on
-	// Gitlet, PushedElided how many more refs that record names than
-	// Pushed lists, and PushedUnread why it could not be read — the
-	// engine's account beside the run's own refs above
+	// Pushed is what the run's push record says it moved on Gitlet, PushedElided
+	// how many more refs it names than Pushed lists, and PushedUnread why it could
+	// not be read: the engine's account beside the run's own refs
 	// ([types.AgentPhaseCompleted.PushedRefs]).
 	Pushed       []types.PushedRefRecord
 	PushedElided int
 	PushedUnread string
 
-	// LaunchID is the job this resume collected — the pending-run row's
-	// [sandbox.PendingRun.LaunchID] when the claim took it. A turn can launch
-	// more than once, so it is what tells one collected run's record from
-	// the next.
+	// LaunchID is the job this resume collected ([sandbox.PendingRun.LaunchID]
+	// when the claim took it): it tells one collected run's record from the next,
+	// as a turn can launch more than once.
 	LaunchID string
 
-	// RefusedReplies are the replies the round's questions got that the
-	// engine refused as too large to hand the run ([turn.Work.RefusedReplies],
-	// sandbox.PendingRun.RoundRefusals), carried to the round's reviewer.
+	// RefusedReplies are the replies the engine refused as too large to hand the
+	// run ([turn.Work.RefusedReplies], sandbox.PendingRun.RoundRefusals), carried
+	// to the round's reviewer.
 	RefusedReplies []turn.RefusedReply
 }
 
@@ -825,10 +675,8 @@ type RunRecord struct {
 // opened one.
 func (r RunRecord) Sandboxed() bool { return r.Harness != "" || r.SandboxID != "" }
 
-// Runner implements [turn.Phases] against real models and real tools.
-//
-// One per turn — see [Company.RunnerFor] on the engine side. That is what
-// makes the spend tally below a per-turn fact rather than state to reset.
+// Runner implements [turn.Phases] against real models and real tools. One per
+// turn ([Company.RunnerFor]), which makes the spend tally a per-turn fact.
 type Runner struct {
 	cfg   Config
 	spend Spend
@@ -839,72 +687,57 @@ type Runner struct {
 	mu         sync.Mutex
 	suspension *Suspension
 
-	// guard is the required-skill gate of the phase currently being built
-	// or run, or nil where this turn arms none.
+	// guard is the required-skill gate of the phase being built or run, or nil.
 	//
-	// A field rather than a return value because only ONE caller wants it —
-	// a park, which persists the keys the run's surface had loaded so the
-	// collection's surface is armed the same way. Threading it through every
-	// phase's signature to serve that one caller would put it in four places
-	// that ignore it. One phase runs at a time on a runner, so the field is
-	// that phase's.
+	// A field, not a return value, because only ONE caller wants it: a park, which
+	// persists the keys the run's surface had loaded so the collection's surface
+	// is armed alike. One phase runs at a time on a runner.
 	guard *skills.Guard
 
-	// steered is every person's note this turn has read, and where, in the
-	// order it was read — opened into every LATER phase's conversation
-	// after its opening messages, and into every later run's brief, each
-	// rendered as the message the model read ([prompts.SteerMessage]).
+	// steered is every note this turn has read, and where, in read order, opened
+	// into every LATER phase's conversation after its opening messages and into
+	// every later run's brief, each as the message the model read
+	// ([prompts.SteerMessage]).
 	//
-	// A phase is a fresh conversation, so a note read in one phase is gone
-	// from the next unless it is carried: a later reviewer would judge the
-	// work against the task the person corrected. Carried as the SAME
-	// message rather than summarised, because the note's words are the
-	// person's and a paraphrase is the engine's. A turn that resumes from
-	// its executor starts from the reads its run's record holds
-	// ([Resume.Steered]), which is every note the turn read before it — the
-	// record is where every read is written. Guarded by mu.
+	// A phase is a fresh conversation, so a note read in one is gone from the next
+	// unless carried: a later reviewer would judge against the uncorrected task.
+	// Carried as the SAME message, not summarised: the words are the person's and
+	// a paraphrase the engine's. A resuming turn starts from the reads its run's
+	// record holds ([Resume.Steered]). Guarded by mu.
 	steered []steer.Read
 
 	// placed is the place among the run's record's reads of every note this
-	// segment's source handed over, and of every note the launch's brief
-	// carries whose place the record holds already, read already or placed by
-	// a hook's serve, by id: what the last brief's source said
-	// ([steer.Briefing.Orders]), nil where it keeps no record. A brief tells
-	// the reads in that order ([Runner.inReadOrder]). Guarded by mu.
+	// segment's source handed over and of every note the brief carries whose place
+	// the record holds, by id ([steer.Briefing.Orders]); nil where no record. A
+	// brief tells reads in that order ([Runner.inReadOrder]). Guarded by mu.
 	placed map[string]int
 
-	// sent is every record this runner publishes off the path of the request
-	// that occasioned it — the frame stating the fresh brief a run whose box
-	// started a session of its own read ([Runner.sessionStarted]) — each
-	// bounded by its own budget: the runner's goroutines, which [Runner.Sent]
-	// waits for.
+	// sent is every record this runner publishes off its request's path (the frame
+	// stating the fresh brief a run whose box started its own session read,
+	// [Runner.sessionStarted]), each bounded by its own budget: the runner's
+	// goroutines, which [Runner.Sent] waits for.
 	sent sync.WaitGroup
 }
 
 // Sent waits until every record this runner publishes off a request's path has
-// gone out, or given up within its budget ([startedFrameBudget]): the
-// goroutines are the runner's own, each ended by its budget, and Sent is how a
-// caller that reads what they publish knows they are done — a test, which
-// would otherwise race them.
+// gone out or given up within its budget ([startedFrameBudget]), so a caller
+// reading what they publish (a test) does not race them.
 //
-// NOTHING ON THE ENGINE'S PATH WAITS HERE, and nothing orders such a record
-// after the round's later ones: the round is closed by its collection, a later
-// segment's runner on whichever node claims the run, which cannot wait on this
-// one. So a frame published while the broker is slow can land after the
-// round's completion, as the record of what the run was handed in the
-// continuation's place; one past its budget is dropped, and the collection
-// still says the run started a session of its own.
+// NOTHING ON THE ENGINE'S PATH WAITS HERE and nothing orders such a record
+// after the round's later ones: the round is closed by a later segment's
+// runner on whichever node claims the run, which cannot wait on this one. A
+// frame published while the broker is slow can land after the round's
+// completion; one past its budget is dropped, and the collection still says
+// the run started a session of its own.
 func (r *Runner) Sent() { r.sent.Wait() }
 
 var _ turn.Phases = (*Runner)(nil)
 
 // New builds a runner.
 //
-// A runner with no session host is refused here rather than at its first
-// phase: every turn runs a phase that offers tools — the reviewer, at the
-// least — and a phase reaches its harness through nothing else, so the turn would
-// fail after its run was launched and its prefetch spent, naming a toolloop
-// field instead of this one.
+// A runner with no session host is refused here, not at its first phase: every
+// turn runs a phase that offers tools (the reviewer at least), so it would fail
+// after the run launched and prefetch was spent, naming a toolloop field.
 func New(cfg Config) (_ *Runner, err error) {
 	defer origin.Stamp(&err)
 	switch {
@@ -916,18 +749,14 @@ func New(cfg Config) (_ *Runner, err error) {
 		return nil, fmt.Errorf("runner: no tool session host (Config.Sessions) — " +
 			"every phase serves its tools to its harness on this process's one host")
 	case cfg.Launcher == nil:
-		// AN ASSEMBLY MISTAKE, named where it is made. Every executor is
-		// a launched run, so a runner without a launcher cannot run the
-		// one phase every turn has.
+		// AN ASSEMBLY MISTAKE, named where it is made: every executor is a launched run.
 		return nil, fmt.Errorf("runner: no executor launcher (Config.Launcher) — " +
 			"every seat's executor is its harness's own run, and the " +
 			"assembler must supply what launches it")
 	case cfg.Resume != nil && frozen(cfg.Context, cfg.dispatched()) != (execstate.Frozen{}):
-		// TWO SOURCES FOR ONE FROZEN THING, and no honest way to pick: the
-		// parked state is what the turn's first launch was built from, and
-		// a context fetched again for the resume is a second answer to the
-		// same question. Refused where it is assembled rather than one of
-		// them silently dropped.
+		// TWO SOURCES FOR ONE FROZEN THING, no honest way to pick: the parked state is
+		// what the first launch was built from, and a context fetched again would be a
+		// second answer to the same question. Refused where assembled.
 		return nil, fmt.Errorf("runner: a resumed turn's context is the one its parked " +
 			"state froze at the turn's start — leave Config.Context and " +
 			"Config.Endings, Config.Access and Config.CapabilityChanges empty with Config.Resume")
@@ -940,36 +769,18 @@ func New(cfg Config) (_ *Runner, err error) {
 	return &Runner{cfg: cfg}, nil
 }
 
-// Execute is the executor: one agentic pass that decides what to do and does
-// it — launched as the seat's harness's own run, detached in its box, and
-// collected later through [Runner.Resume].
-//
-// It is given every tool its seat holds — the first-party ones and every MCP
-// server's, but those of a server that runs in its box ([executorActive]) —
-// none of them in its prompt: each reaches its harness over the bridge under
-// the server it comes from, and the harness keeps a large server's tools out of
-// the requests that do not need them by its own deferral, as it does for a
-// person (internal/api/mcpbridge, servers.go).
-//
-// One phase rather than two is the whole redesign. Planning in one
-// conversation and acting in another cost the actor everything the planner
-// learned, and made the planner NAME its tools in advance against a catalogue
-// it was never shown — so it guessed, and the engine spent a whole subsystem
-// reconciling those guesses with reality.
-//
-// TWO GATES BEFORE ANYTHING IS BUILT, each of which would otherwise let a run
-// start that must not:
-//
-//   - A REFUSAL ALREADY CERTAIN launches nothing. The run makes its model
-//     calls in a box, post-charged when it is collected, so the meter is asked
-//     here — or a run would be paid for whole on a window already past its
-//     ceiling — and again once its brief is built, since building it can be
-//     what fills the window ([Runner.executeAsAgentRun]).
-//   - THE SEAT FENCE. A run outlives the turn segment that launched it and is
-//     not fenced once it runs — a seat that moves leaves it running, and a
-//     person's stop ends it through the coordinator rather than the fence —
-//     so the launch is the last moment a seat that moved, or one a person
-//     stopped, can be kept from starting one.
+// Execute is the executor: one agentic pass, launched as the seat's harness's
+// own run detached in its box and collected through [Runner.Resume]. It is
+// given every tool its seat holds but those of a server running in its box
+// ([executorActive]), none in its prompt: each reaches its harness over the
+// bridge, which defers a large server's tools itself (internal/api/mcpbridge,
+// servers.go). One phase, not two: a separate planner NAMED tools against a
+// catalogue it was never shown. TWO GATES BEFORE ANYTHING IS BUILT: A REFUSAL
+// ALREADY CERTAIN launches nothing (the run is post-charged at collection, so
+// the meter is asked here and again once the brief is built,
+// [Runner.executeAsAgentRun]); THE SEAT FENCE, because a run outlives its
+// segment and is not fenced once running, so the launch is the last moment a
+// moved or stopped seat can be kept from starting one.
 func (r *Runner) Execute(ctx context.Context, round int, notes string, history []ledger.Iteration) (_ turn.Work, _ turn.Surface, err error) {
 	defer origin.Stamp(&err)
 	if err := toolloop.Refusal(ctx, r.cfg.Budget); err != nil {
@@ -988,10 +799,10 @@ func (r *Runner) Execute(ctx context.Context, round int, notes string, history [
 }
 
 // pickupAnswer reads how the turn has left the item its reply names
-// (ADR-0122). A read that fails answers [types.PickupUnread], LOGGED, which the
+// (ADR-0122). A failed read answers [types.PickupUnread], LOGGED, which the
 // checks accept: the turn falls back to the delivery every turn owes rather
-// than loop on a store it cannot reach, and an item left in words comes back
-// on its recheck. An item that left the seat is said once it is read so.
+// than loop on an unreachable store, and an item left in words comes back on
+// its recheck.
 func (r *Runner) pickupAnswer(ctx context.Context) types.PickupAnswer {
 	if r.cfg.PickupAnswer == nil {
 		return types.PickupUnread
@@ -1015,18 +826,14 @@ func (r *Runner) pickupAnswer(ctx context.Context) types.PickupAnswer {
 }
 
 // executorPrompt is the executor's opening: its system prompt and the turn's
-// own ask, which its harness is handed as an appended system prompt and
-// the prompt it runs ([AgentRunRequest]).
+// ask, handed to its harness as an appended system prompt and the prompt it
+// runs ([AgentRunRequest]).
 //
-// THE BUILT SURFACE, not the snapshot it was built from: it also holds what
-// [Runner.surfaceWith] adds to its own copy — submit_work and `delegate` — so
-// every section gated on a tool being offered reads built's names. Read off
-// the snapshot, they never saw `delegate`, and `## Your workers` was rendered
-// for no seat at all. No tool the surface holds is listed: each one's
-// definition reaches the run over the bridge, under the server it comes from,
-// which also says what the server is for. And NO TOOL SKILL IS LISTED either:
-// they are its harness's own, which lists them to its model itself
-// ([Runner.handSkills]).
+// THE BUILT SURFACE, not the snapshot: it also holds what [Runner.surfaceWith]
+// adds (submit_work, `delegate`), so every section gated on a tool being
+// offered reads built's names; from the snapshot `## Your workers` was rendered
+// for no seat. No tool is listed (definitions reach the run over the bridge)
+// and NO TOOL SKILL either: they are the harness's own ([Runner.handSkills]).
 func (r *Runner) executorPrompt(ctx context.Context, notes string,
 	history []ledger.Iteration, built *tools.Surface, fresh []steer.Note,
 ) (system, user prompts.Prompt) {
@@ -1060,20 +867,16 @@ func (r *Runner) executorBrief(ctx context.Context, notes string, history []ledg
 	return prompts.BuildPhaseUserMessage(prompts.UserMessage{
 		TaskDescription: r.taskFor(notes),
 		PriorWork:       r.priorWork(ctx, history),
-		// HOW THE CONVERSATION'S EARLIER TURNS ENDED, as the turn froze it
-		// at its dispatch: every brief of the turn, fresh or reseeded, on
-		// whatever segment, tells the same account.
+		// HOW THE CONVERSATION'S EARLIER TURNS ENDED, as frozen at dispatch: every
+		// brief tells the same account.
 		Endings: r.cfg.Endings,
-		// AND WHAT CHANGED IN THE SEAT'S ACCESS since it was last told, frozen
-		// at the dispatch beside the endings.
+		// AND WHAT CHANGED IN THE SEAT'S ACCESS, frozen beside the endings.
 		CapabilityChanges: r.cfg.CapabilityChanges,
-		// EVERY NOTE THE TURN HAS READ, so a run launched after a person
-		// corrected the turn starts from the turn as corrected — and then
-		// the notes this brief is the first to read. The run is a fresh
-		// session with no conversation of the engine's to carry them in,
-		// so its brief does. See [Runner.steered]. IN THE ORDER THE RECORD
-		// READ THEM, a note a lost take recorded that this brief hands over,
-		// and one a hook's serve placed, among them ([Runner.inReadOrder]).
+		// EVERY NOTE THE TURN HAS READ, so a run launched after a correction starts
+		// from the turn as corrected, then the notes this brief is first to read: the
+		// run is a fresh session, so its brief carries them ([Runner.steered]). IN
+		// THE ORDER THE RECORD READ THEM, including a lost take's note and a hook's
+		// served one ([Runner.inReadOrder]).
 		Steered: r.readFirst(fresh),
 	})
 }
@@ -1102,11 +905,10 @@ func renderedNotes(notes []steer.Note) []string {
 // priorWork renders the turn's earlier rounds, every payload past its budget
 // rewritten by the seat's auxiliary model first.
 //
-// Rewritten here, at render, and not when the round closed: the record keeps
-// every payload whole, so the bound is a property of what this prompt can
-// carry rather than of what happened. The compactor caches by content, so the
-// block re-rendered for the executor and again for the reviewer pays for each
-// payload once.
+// Rewritten at render, not when the round closed: the record keeps payloads
+// whole, so the bound is a property of what this prompt can carry. The
+// compactor caches by content, so the block re-rendered for the reviewer pays
+// once per payload.
 func (r *Runner) priorWork(ctx context.Context, history []ledger.Iteration) string {
 	fitted := ledgerfit.Fit(ctx, r.cfg.Compact, ledger.IterationPieces(history, r.cfg.SkipNames))
 	return ledger.RenderIterations(history, r.cfg.SkipNames, fitted)
@@ -1127,32 +929,24 @@ type work struct {
 func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.Work, turn.Surface) {
 	payload, submitted := w.submit.Value()
 	if !submitted {
-		// THE RESCUE PATH. A run that ended without calling submit_work —
-		// its harness stopped, hit its turn cap, or answered only in prose —
-		// has produced text and no account of itself. Discarding the turn
-		// wastes everything it did; calling it delivered puts words in its
-		// mouth on the one question that matters.
+		// THE RESCUE PATH. A run that ended without submit_work (harness stopped, hit
+		// its turn cap, or answered in prose) has text and no account of itself.
+		// Discarding wastes what it did; calling it delivered puts words in its mouth.
 		//
-		// So the outcome is INCOMPLETE and the work is marked rescued.
-		// Both are load-bearing: the engine wrote this word, so no fast
-		// path may act on it and the reviewer judges the record instead.
+		// So the outcome is INCOMPLETE and the work marked rescued: the engine wrote
+		// this word, so no fast path may act on it and the reviewer judges the record.
 		//
-		// AND NO SUMMARY. The executor gave no account of itself, and the
-		// engine must not write one for it: Summary is the INTENT line —
-		// rendered whole, as "set out to", to every later round and to the
-		// reviewer — where its prose is already carried as Text,
-		// tail-elided at render and sized for what a transcript is.
-		// Copying the transcript into the intent line put a whole run's
-		// output into the one slot nothing bounds, twice per round, and
-		// under a heading that called it the executor's own account.
+		// AND NO SUMMARY: Summary is the INTENT line, rendered whole as "set out to" to
+		// every later round and the reviewer; copying the transcript into it put a
+		// whole run's output into the one unbounded slot, twice per round, under a
+		// heading calling it the executor's own account. Its prose is already Text.
 		log.WarnContext(phaseCtx, "work_never_submitted", "round", round)
 		payload = workPayload{Outcome: string(turn.OutcomeIncomplete)}
 	}
 
-	// NO PROMPT ON THE RECORD: the prompt went out on the launch's own
-	// started record, and this one collects a run rather than opening a
-	// conversation — publishing the opening again would show a reader a
-	// prompt that was not sent this time.
+	// NO PROMPT ON THE RECORD: it went out on the launch's started record, and
+	// this one collects a run; publishing it again would show a prompt not sent
+	// this time.
 	r.emitter().completed(phaseCtx, phaseRecord{
 		Phase: phase.Execute, Iteration: round,
 		Result: w.res.Result, Elapsed: w.res.Elapsed,
@@ -1161,10 +955,9 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 		Run:       w.run,
 		RunSteers: w.res.RunSteers,
 		RunElided: w.res.RunElided,
-		// EVERYTHING IT HELD, and no catalogue beside it: an executor holds
-		// every tool it can reach from its launch, so nothing was left for
-		// it to discover. Its MCP servers that run in its box are not on the
-		// list — they are the box's, reached there.
+		// EVERYTHING IT HELD, no catalogue beside it: an executor holds every tool it
+		// can reach from launch, so nothing was left to discover. Its in-box MCP
+		// servers are the box's, not on the list.
 		Available: w.surface.Active(),
 	})
 
@@ -1178,8 +971,8 @@ func (r *Runner) finishWork(phaseCtx context.Context, round int, w work) (turn.W
 		Calls:         calls(w.surface),
 		Refs:          w.run.DeliveredRefs,
 		RefsElided:    w.run.RefsElided,
-		// AND WHAT THE RUN WAS NEVER GIVEN, for its reviewer: a reply
-		// refused as too large is in no call of the round's.
+		// AND WHAT THE RUN WAS NEVER GIVEN, for its reviewer: a reply refused as too
+		// large is in no call.
 		RefusedReplies: w.run.RefusedReplies,
 		Rescued:        !submitted,
 	}, describe(w.surface)
@@ -1197,15 +990,15 @@ func discoverable(s *tools.Surface) []string {
 
 // Review judges the round.
 //
-// It is given the tool LOG as evidence and told the narration is not. A
-// reviewer shown only what the executor said about itself grades the prose.
-// The log is the run's BRIDGED calls only — its harness's own shell, edit and test
-// work happened in its box and is in no log — so the reviewer is also handed
-// the branches and pull requests the run reported delivering, and its rules
-// say what the log cannot hold ([prompts.ReviewHeader]).
+// It is given the tool LOG as evidence and told the narration is not: shown
+// only what the executor said, a reviewer grades prose. The log is the run's
+// BRIDGED calls only (its harness's shell, edit and test work is in no log), so
+// the reviewer is also handed the branches and pull requests the run reported
+// delivering, and its rules say what the log cannot hold
+// ([prompts.ReviewHeader]).
 //
-// The rule that holds for some seats only is gated on the seat's surface:
-// `a2a_ask` named where the registry carries it at all.
+// A rule for some seats only is gated on the seat's surface: `a2a_ask`, named
+// where the registry carries it.
 func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []ledger.Iteration) (_ turn.Review, err error) {
 	defer origin.Stamp(&err)
 	snapshot := r.seatSnapshot()
@@ -1216,9 +1009,9 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		return turn.Review{}, err
 	}
 
-	// VERBATIM. Review's evidence log takes no FormatOptions budget: the
-	// budgets belong to the cross-round ledger, and a reviewer judging an
-	// elided log is judging a summary and calling it evidence.
+	// VERBATIM. Review's evidence log takes no FormatOptions budget: those belong
+	// to the cross-round ledger, and a reviewer judging an elided log judges a
+	// summary.
 	offer := r.cfg.Skills.Offer()
 	system := prompts.BuildReview(r.cfg.Seat, prompts.ReviewInput{
 		Intent:            w.Summary,
@@ -1232,13 +1025,10 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 		Delivered:         prompts.DeliveredRefs(w.Refs, w.RefsElided),
 		EarlierIterations: r.priorWork(ctx, history),
 		OffersA2A:         offersA2A,
-		// THE SKILLS AN OPERATOR SCOPED TO REVIEW, which the prompt, the
-		// parser and the docs all supported and nothing ever passed: a
-		// skill authored with `phases: [review]` reached no reviewer.
+		// THE SKILLS AN OPERATOR SCOPED TO REVIEW (`phases: [review]`).
 		Skills: offer.Catalogue(),
-		// The servers the seat's registry holds, not the reviewer's own
-		// surface, which holds its submission alone: a review skill is
-		// keyed on what the work under review could reach.
+		// The servers the seat's registry holds, not the reviewer's own surface (its
+		// submission alone): a review skill keys on what the work could reach.
 		MCPServers: snapshot.MCPServers(),
 	})
 	r.emitter().skillsInjected(ctx, phase.Review, offer.Drain())
@@ -1247,32 +1037,26 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 	phaseCtx, res, err := r.runPhase(ctx, phaseRun{
 		phase: phase.Review, surface: surface, system: system, user: user,
 		rounds: reviewRounds, iteration: round,
-		// NEVER FORCED, like every phase — a request has no way to force
-		// a call. The reviewer's only tool is its submission, so a forced
-		// choice once looked free here — but several current models
-		// answer one with a 400, which is fatal to the whole turn rather
-		// than one round, and the
-		// submission named here is what makes a round of prose get asked
-		// again (toolloop.Config.TerminateAfter).
+		// NEVER FORCED, like every phase: a request cannot force a call, and several
+		// current models answer a forced choice with a 400, fatal to the turn. The
+		// submission named here is what makes a round of prose get asked again
+		// (toolloop.Config.TerminateAfter).
 		terminateAfter: []string{SubmitReviewTool},
 		steerable:      true,
 	})
 	if err != nil {
-		// Nothing to salvage here, and nothing lost: a reviewer's surface
-		// carries its submission tool and no catalogue at all, so its
-		// record can never prove an outward write. What the EXECUTOR did
-		// before it is already in the caller's hands — [turn.Run] reads it
-		// off the Work this Review was handed.
+		// Nothing to salvage and nothing lost: the reviewer's surface has its
+		// submission tool and no catalogue, so its record proves no outward write.
+		// What the EXECUTOR did is in the caller's hands ([turn.Run] reads it off the
+		// Work).
 		return turn.Review{}, err
 	}
 
 	payload, submitted := submit.Value()
 	if !submitted {
-		// A reviewer that never decided must not silently pass the turn.
-		// Defaulting to `done` here is the difference between "the work
-		// was judged good" and "nothing judged it", and those look
-		// identical downstream. Loop back instead — the delivery gate and
-		// the stall guard bound how long that can go on.
+		// A reviewer that never decided must not silently pass the turn: defaulting to
+		// `done` makes "judged good" and "nothing judged it" identical downstream.
+		// Loop back; the delivery gate and stall guard bound it.
 		log.WarnContext(ctx, "review_never_submitted", "round", round, "rounds_used", res.Rounds)
 		rescue := turn.Review{
 			Decision: phase.SelfIterate,
@@ -1294,28 +1078,18 @@ func (r *Runner) Review(ctx context.Context, round int, w turn.Work, history []l
 	}, nil
 }
 
-// reviewTask frames the trigger for the reviewer.
+// reviewTask frames the trigger for the reviewer. THE SAME BYTES MEAN
+// DIFFERENT THINGS TO THE TWO PHASES: the executor is HANDED this text as the
+// thing to do, but a reviewer asked about a turn already underway reads it
+// bare as a request just arrived: beside an `## Earlier rounds` block showing a
+// clarifying question it concluded the sender asked again, and built its
+// correction on a message nobody sent. So it reaches the reviewer as labelled
+// evidence.
 //
-// THE SAME BYTES MEAN DIFFERENT THINGS TO THE TWO PHASES. The executor is
-// HANDED this text as the thing to do, so it reaches that phase bare. The
-// reviewer is asked about a turn that is already underway, and handed the
-// same bytes bare it reads them as a request that has just arrived.
-//
-// Not hypothetical. On a turn whose first round had already posted a
-// clarifying question, reviewers read the unchanged trigger next to an
-// `## Earlier rounds` block showing that question, and the only account that
-// fits both is that the sender asked again — "the founder ... has now
-// re-posted the same vague request". Two consecutive rounds said it, and the
-// second built its correction on it, instructing the next round to act on a
-// message nobody had sent. So the trigger reaches the reviewer as evidence,
-// labelled, rather than as an instruction.
-//
-// The label is CONSTANT, unlike [Runner.taskFor]'s correction: the review
-// phase re-sends this every round, and a per-round frame would move bytes the
-// provider's prefix cache is keyed on.
-//
-// Two sections in its outline: the label, and the trigger whole — whatever
-// headings a vendor's body carries are the trigger's, not the reviewer's.
+// The label is CONSTANT, unlike [Runner.taskFor]'s correction: this is re-sent
+// every round, and a per-round frame would move bytes the prefix cache is keyed
+// on. Two sections: the label, and the trigger whole (a vendor body's headings
+// are the trigger's).
 func reviewTask(task string) prompts.Prompt {
 	b := prompts.NewBuilder("")
 	b.Lead("reference", "For reference", "The trigger this turn is answering, for "+
@@ -1326,11 +1100,9 @@ func reviewTask(task string) prompts.Prompt {
 	return b.Build()
 }
 
-// reviewRecord builds Review's completed record.
-//
-// A function because Review reports from TWO places — its decoded payload and
-// its rescue — and the two must describe the same phase. Written out twice,
-// the rescue path is the one that quietly loses a field.
+// reviewRecord builds Review's completed record: a function because Review
+// reports from TWO places (its payload and its rescue), which must describe the
+// same phase; written twice, the rescue is the one that loses a field.
 func reviewRecord(round int, system, user prompts.Prompt, res phaseResult,
 	decision, notes string, rescued bool, surface *tools.Surface,
 ) phaseRecord {
@@ -1347,18 +1119,13 @@ func reviewRecord(round int, system, user prompts.Prompt, res phaseResult,
 // the reviewer and the onboarding pass. Never the executor, which is its
 // harness's own run.
 //
-// The extension loop lives here rather than in the extension package because
-// only the caller knows what FINISHING looks like for its phase — the
-// reviewer exits through its submission tool, onboarding through
-// mark_onboarded — and a generic loop would have to be told, which is the
-// same thing said twice.
+// The extension loop lives here, not in the extension package, because only the
+// caller knows what FINISHING looks like for its phase (the reviewer's
+// submission, onboarding's mark_onboarded).
 //
-// phaseRun is one phase's inputs.
-//
-// A struct rather than nine positional parameters, which is what it was: three
-// adjacent ints (rounds, ceiling, iteration) and two adjacent strings (system,
-// user) is a signature where a transposition compiles and produces a phase
-// that silently runs with the wrong budget.
+// phaseRun is one phase's inputs: a struct, since three adjacent ints (rounds,
+// ceiling, iteration) and two strings make a signature where a transposition
+// compiles and runs the phase with the wrong budget.
 type phaseRun struct {
 	phase   phase.Phase
 	surface *tools.Surface
@@ -1372,18 +1139,14 @@ type phaseRun struct {
 	iteration int
 
 	// terminateAfter names tools that end the loop once they have run
-	// SUCCESSFULLY — and, by naming them, declares that the phase finishes
-	// by one: a round that ends in prose is re-prompted with a corrective
-	// naming them rather than accepted as the phase's end.
+	// SUCCESSFULLY, and by naming them declares the phase finishes by one: a round
+	// ending in prose is re-prompted with a corrective naming them.
 	//
-	// THAT is what makes a phase end in its submission, and there is
-	// nothing beside it: a request has no way to force a call
-	// ([llm.Request.Tools]), so the model decides on every round. A forced
-	// choice was a request some endpoints ignore and several current
-	// models refuse with a 400 (Claude Opus 5.5, Sonnet 5.5, Fable 5.1,
-	// Mythos 5.1) — and a 400 is not retried down the chain, so on those
-	// models it failed every review and every onboarding pass before the
-	// corrective that actually enforces the call could run.
+	// That is what makes a phase end in its submission: a request cannot force a
+	// call ([llm.Request.Tools]), and a forced choice is ignored by some endpoints
+	// and refused with a 400 by several current models, which is not retried down
+	// the chain and failed every review and onboarding pass before the corrective
+	// could run.
 	terminateAfter []string
 
 	// steerable is whether a person's notes are drained into this phase's
@@ -1391,104 +1154,77 @@ type phaseRun struct {
 	steerable bool
 }
 
-// runPhase returns the PHASE'S CONTEXT as well as its result.
+// runPhase returns the PHASE'S CONTEXT as well as its result: the caller
+// publishes agent_phase_completed under this phase's span, not the turn's, so
+// the dashboard's trace tree is trigger -> turn -> {execute, review}. The span
+// has ENDED by then, which is fine: a span id is a label, not a lifetime.
 //
-// The caller needs it to publish agent_phase_completed under this phase's span
-// rather than the turn's, which is what turns the dashboard's trace tree from
-// a flat list under one turn node into trigger -> turn -> {execute, review}.
-// The span has ENDED by then, and that is fine: an event recording a
-// phase belongs to that phase's span, and a span id is a label rather than a
-// lifetime.
-//
-// It is returned under its own name rather than shadowing the caller's ctx on
-// purpose — work the caller does AFTER the phase must not be attributed to a
-// span that is closed.
+// Returned under its own name, not shadowing the caller's ctx: work the caller
+// does AFTER the phase must not be attributed to a closed span.
 func (r *Runner) runPhase(ctx context.Context, in phaseRun) (_ context.Context, _ phaseResult, err error) {
 	defer origin.Stamp(&err)
 	ph, surface := in.phase, in.surface
-	// ONE SPAN PER PHASE, wrapping the WHOLE extension loop below rather
-	// than each toolloop.Run inside it: an extended phase is one phase that
-	// ran longer, and a span per invocation would report it as two phases
-	// and split its rounds across them.
+	// ONE SPAN PER PHASE, wrapping the WHOLE extension loop, not each
+	// toolloop.Run: an extended phase is one phase that ran longer.
 	//
-	// The attributes are deliberately thin. Everything a reader wants about
-	// what a phase DID — prompts and response verbatim, every tool call's
-	// arguments and result, tokens, the decision — is already on
-	// agent_phase_completed, and duplicating it onto a span would
-	// send whole prompts to a collector that is not the event store. What
-	// no event records is DURATION, per phase and per round, and that is
-	// exactly what a span adds.
+	// The attributes are thin: everything about what a phase DID is on
+	// agent_phase_completed, and duplicating it would send whole prompts to a
+	// collector that is not the event store. What no event records is DURATION.
 	ctx, span := tracing.Start(ctx, "agent.runner", "agent.turn."+string(ph),
 		attribute.String("crewlet.phase", string(ph)),
 		attribute.Int("crewlet.iteration", in.iteration))
 	defer span.End()
-	// THE SAME BRACKET AS THE SPAN, and deliberately so: a span is a
-	// collector's view of how long this phase took and agent_phase_completed
-	// is the event store's, and the two disagreeing about one phase is worse
-	// than either being absent. A monotonic reading, so a clock correction
-	// mid-phase cannot report a negative duration.
+	// THE SAME BRACKET AS THE SPAN: the span and agent_phase_completed disagreeing
+	// about one phase's duration is worse than either absent. Monotonic, so a clock
+	// correction cannot report a negative duration.
 	began := time.Now()
 	segment := began.UTC()
 	system, user := in.system, in.user
 	iteration, ceiling := in.iteration, in.ceiling
 	terminateAfter := in.terminateAfter
-	// The phase's own record of what it managed, so the FAILURE path has
-	// something to report. A phase that dies returns no Result at all, and
-	// without this the only trace of it is the started event — a dashboard
-	// left showing an in-flight call with no response and no reason.
+	// The phase's own record of what it managed, so the FAILURE path has something
+	// to report: a phase that dies returns no Result, leaving a dashboard with an
+	// in-flight call and no reason.
 	emit := r.emitter()
 	progress := &toolloop.Progress{}
-	// The PHASE's record, accumulated across every invocation of the tool
-	// loop. Declared up here because the failure path below reports it too.
+	// The PHASE's record, accumulated across every tool-loop invocation; the
+	// failure path reports it too.
 	var out phaseResult
-	// The extension policy, up here because every record this phase
-	// publishes — the failure record included — states the ceiling it set.
+	// The extension policy: every record this phase publishes states its ceiling.
 	policy := extension.Policy{
 		Enabled: r.cfg.Caps.ExtensionOn, RoundStep: r.cfg.Caps.ExtensionStep, Ceiling: ceiling,
 	}
-	// The phase's own wall clock, stamped onto the record on the way out.
-	// A closure rather than a line at each `return`, because there are two
-	// success returns inside the loop below and a measurement that is
-	// written at one of them and not the other is the harder bug: the
-	// record still publishes, and only the EXTENDED phases — the long ones
-	// somebody is timing — come back without a duration.
+	// The phase's own wall clock, stamped on the way out. A closure, not a line per
+	// `return`: a measurement written at one of the two success returns and not the
+	// other leaves only the EXTENDED phases without a duration.
 	done := func() (context.Context, phaseResult, error) {
 		out.Elapsed = time.Since(began)
 		out.StartedAt = segment
 		out.Caps = capsOf(policy, out.Result.MaxRounds)
 		return ctx, out, nil
 	}
-	// Returns the phase context too, so `return fail(err)` stays a single
-	// line now that runPhase hands its context back.
+	// Returns the phase context too, so `return fail(err)` stays one line.
 	fail := func(err error) (context.Context, phaseResult, error) {
-		// The span carries the failure too. The event below is the record
-		// of WHAT broke; the span is what makes the broken phase findable
-		// in a trace beside the calls that led to it.
+		// The span carries the failure too: the event records WHAT broke, the span
+		// makes it findable in a trace.
 		tracing.Fail(span, err)
 		emit.completed(ctx, phaseRecord{
 			Phase: ph, Iteration: iteration, System: system, User: user,
-			// FOLDED onto what the phase already had, exactly as the success
-			// path folds it. `progress` is one object reused across every
-			// invocation of the loop and `record` REPLACES rather than
-			// appends, so it holds only the invocation that died: a phase
-			// that ran twenty rounds, was extended and then failed on
-			// extension round 2 published a record claiming two rounds,
-			// numbered 1 and 2, with the tokens of those two — on precisely
-			// the card an operator opens to see what led up to the failure.
-			// `out` is read here, not captured: the closure sees whatever
-			// the loop has accumulated by the time it fails.
+			// FOLDED onto what the phase already had, as the success path folds it.
+			// `progress` is reused across invocations and `record` REPLACES, so it holds
+			// only the invocation that died: a phase that ran twenty rounds, was extended
+			// and failed on extension round 2 published a record of two rounds with only
+			// their tokens. `out` is read here, not captured: the closure sees what the
+			// loop has accumulated when it fails.
 			Result: foldOnto(out, progress.Snapshot()), Available: surface.Active(),
-			// A PHASE THAT DIED STILL TOOK TIME, and on a timeout it is
-			// the number that says so: a phase whose provider hung for
-			// four minutes and one refused in fifty milliseconds are the
-			// same record without it.
+			// A PHASE THAT DIED STILL TOOK TIME, and on a timeout it says so: a provider
+			// hanging four minutes and one refusing in fifty milliseconds are otherwise the
+			// same record.
 			Elapsed:   time.Since(began),
 			StartedAt: segment,
 			Caps:      capsOf(policy, maxRounds(out, in.rounds)),
-			// A PHASE A PERSON STOPPED DID NOT FAIL. It carries the stop as
-			// its error, so the card says why it ended, and is not marked
-			// failed — a turn is listed as failed when any of its rows is,
-			// and a turn somebody deliberately ended is not one that broke.
+			// A PHASE A PERSON STOPPED DID NOT FAIL: it carries the stop as its error but
+			// is not marked failed, since a turn is listed failed when any row is.
 			Failed: !turn.Stopped(err), Err: err,
 		})
 		return ctx, phaseResult{}, err
@@ -1498,15 +1234,12 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (_ context.Context, 
 	if err != nil {
 		return fail(err)
 	}
-	// A chain even for one member. The wrapper is a pass-through there, and
-	// uniform behaviour is worth more than the allocation: a one-member seat
-	// and a three-member one then fail, log and report identically.
+	// A chain even for one member: the wrapper is a pass-through there, and
+	// uniform behaviour (failing, logging, reporting) is worth the allocation.
 	//
-	// OnFallback is wired HERE rather than inside the chain because this is
-	// the innermost frame that knows which turn and which iteration the
-	// hand-off belongs to. The callback fires synchronously from inside the
-	// chain's own loop, before the next member is tried, so `ctx` and
-	// `iteration` are the ones the failing call ran under.
+	// OnFallback is wired HERE as the innermost frame that knows the turn and
+	// iteration; it fires synchronously inside the chain's loop before the next
+	// member is tried, so `ctx` and `iteration` are the failing call's.
 	provider, err := chain.New(members, chain.Options{
 		OnFallback: func(f chain.Fallback) { emit.fallback(ctx, ph, iteration, f) },
 	})
@@ -1514,13 +1247,12 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (_ context.Context, 
 		return fail(fmt.Errorf("runner: %s: %w", ph, err))
 	}
 
-	// Published BEFORE the first provider call, so a seat that is thinking
-	// says which phase it is thinking in. The completed event is the durable
-	// record and may be minutes away.
+	// Published BEFORE the first provider call, so a thinking seat says which phase
+	// it is in; the completed event is the durable record and may be minutes away.
 	//
-	// THE SURFACE TRAVELS WITH THE TEXT because the prompt is both: every
-	// request carries the tool definitions, which the harness lists from the
-	// phase's session and hands its model, and the vendor bills as input.
+	// THE SURFACE TRAVELS WITH THE TEXT: every request carries the tool
+	// definitions, which the harness lists from the phase's session and the vendor
+	// bills as input.
 	emit.started(ctx, ph, iteration, system, user, surface,
 		capsOf(policy, out.Rounds+in.rounds))
 
@@ -1528,45 +1260,36 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (_ context.Context, 
 		{Role: llm.RoleSystem, Content: system.Text},
 		{Role: llm.RoleUser, Content: user.Text},
 	}
-	// EVERY NOTE THE TURN HAS ALREADY READ, after the opening and in the
-	// order it was read, so a new phase starts from the turn as the person
-	// corrected it. See [Runner.steered].
+	// EVERY NOTE THE TURN HAS ALREADY READ, after the opening, in read order, so a
+	// new phase starts from the turn as corrected ([Runner.steered]).
 	for _, note := range r.carriedSteers() {
 		messages = append(messages, llm.Message{Role: llm.RoleUser, Content: note})
 	}
 	budget := in.rounds
-	// The finishing correctives the run of declines being CONTINUED has
-	// already had — nonzero only for an invocation that picks up a
-	// corrective the last one withheld. See toolloop.Config.CorrectivesSpent.
+	// The finishing correctives the run of declines being CONTINUED has already
+	// had: nonzero only for an invocation picking up a corrective the last one
+	// withheld (toolloop.Config.CorrectivesSpent).
 	correctivesSpent := 0
-	// Rounds this phase has run past an invocation's budget WITHOUT the
-	// judge, to read a withheld corrective. A phase's own allowance of
-	// finishing correctives, and never more: past it, a phase that keeps
-	// working and declining by turns would be extending itself round by
-	// round on nobody's decision.
+	// Rounds run past an invocation's budget WITHOUT the judge to read a withheld
+	// corrective: a phase's own allowance of finishing correctives and no more,
+	// else a phase working and declining by turns extends itself on nobody's
+	// decision.
 	unjudged := 0
 	for {
-		// What the phase holds BEFORE this invocation, captured by value:
-		// the loop calls OnProgress from inside Run, and `out` is written
-		// only after it returns.
+		// What the phase holds BEFORE this invocation, by value: the loop calls
+		// OnProgress from inside Run, and `out` is written only after it returns.
 		//
-		// The loop numbers its rounds per INVOCATION, from 1, and its Result
-		// carries only that invocation's own rounds. An extended phase runs
-		// it again, so every publish has to be folded onto what came before
-		// — and BOTH halves of that fold had their own symptom. Without the
-		// offset the second invocation restarts at 1 and every consumer that
-		// orders on the round number sees the phase run backwards: the live
-		// projection's stale-round guard dropped the whole extension, and
-		// the ledger merged extension round 1 into original round 1. Without
-		// the prefix the live view — which rebuilds a call from each frame
-		// rather than merging — collapsed a twenty-round ledger to a single
-		// round the instant the extension's first frame landed, moving
-		// everything above the insertion point, which is the one property
-		// the round ledger exists to guarantee.
+		// The loop numbers rounds per INVOCATION from 1, so every publish is folded
+		// onto what came before, and BOTH halves of the fold matter. Without the
+		// offset the second invocation restarts at 1 and consumers ordering on the
+		// round number see the phase run backwards (the live projection's stale-round
+		// guard dropped the extension; the ledger merged extension round 1 into round
+		// 1). Without the prefix the live view, which rebuilds a call per frame,
+		// collapsed a twenty-round ledger to one round when the extension's first
+		// frame landed.
 		prior := out
-		// The rounds already behind this invocation, declared so a tool
-		// that asks which round it is in hears the PHASE's number — the
-		// same number the records below are renumbered onto.
+		// The rounds already behind this invocation, so a tool asking which round it is
+		// in hears the PHASE's number, as the records are renumbered onto.
 		loopCtx := toolloop.WithRoundOffset(ctx, prior.Rounds)
 		var steering toolloop.Steerer
 		if in.steerable && r.cfg.Steer != nil {
@@ -1575,24 +1298,19 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (_ context.Context, 
 		res, err := toolloop.Run(loopCtx, toolloop.Config{
 			Provider: provider, Messages: messages, Surface: surface,
 			Host: r.cfg.Sessions, ServerTitle: sessionTitle(r.cfg.Seat, ph),
-			// The chain's head, standing in until a completion names the
-			// member that actually served — see toolloop.Config.
+			// The chain's head, standing in until a completion names the serving member
+			// (toolloop.Config).
 			ProviderKey: members[0].Key,
 			MaxRounds:   budget, Budget: r.cfg.Budget,
 			Fence:            r.cfg.Fence,
 			CorrectivesSpent: correctivesSpent,
-			// A phase that has SUBMITTED is finished. Without this the
-			// loop asks again, the model submits again, and the phase
-			// spends its whole round budget re-deciding — measured at
-			// four identical submissions before the cap stopped it.
+			// A phase that has SUBMITTED is finished: without this the loop asks again and
+			// the phase spends its round budget re-deciding.
 			TerminateAfter: terminateAfter,
-			// Progress feeds the failure path above; OnProgress feeds the
-			// live view. Both, because they answer different questions:
-			// one is read after the loop returns nothing, the other while
-			// it is still running.
+			// Progress feeds the failure path; OnProgress the live view: one is read after
+			// the loop returns nothing, the other while it runs.
 			Progress: progress,
-			// The live view is the only reason to stream, so it is on
-			// exactly when something is listening.
+			// The live view is the only reason to stream.
 			StreamPartials: true,
 			// A person's notes, into the reviewer's rounds only.
 			Steer: steering,
@@ -1606,29 +1324,24 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (_ context.Context, 
 		}
 		out.Text = res.Text
 		out.Exhausted = res.ExhaustedRounds
-		// The same fold the live view got, so the record a phase publishes
-		// and the frames it published while running describe one phase.
+		// The same fold the live view got, so the record and the frames describe one
+		// phase.
 		out.Result = foldOnto(prior, *res)
 		out.Rounds = prior.Rounds + res.RoundsUsed
 		messages = res.Messages
 
-		// A CORRECTIVE THE LOOP WITHHELD IS SENT HERE, when the phase may
-		// run past this invocation's budget. Its last round ended without
-		// the submission and had no round after it to be asked in — the
-		// round a phase most naturally submits on, and the one the
-		// extension nudge tells it to submit on — so without this the
-		// outcome turned on WHICH round a decline landed on: the same
-		// fenced JSON on the round before the cap was re-asked and
-		// submitted, on the cap it was rescued as incomplete with the
-		// ceiling's rounds unspent.
+		// A CORRECTIVE THE LOOP WITHHELD IS SENT HERE, when the phase may run past
+		// this invocation's budget. Its last round ended without the submission and had
+		// no round left to be asked in (the round a phase most naturally submits on),
+		// so the outcome turned on WHICH round a decline landed on: the same fenced
+		// JSON was re-asked and submitted a round before the cap, but on the cap was
+		// rescued as incomplete with the ceiling's rounds unspent.
 		//
-		// No judge. Its question is whether a phase still working deserves
-		// more rounds, and this one has finished its work and is missing
-		// only the call that reports it. What bounds it instead is the
-		// allowance the loop would have spent had the rounds been inside
-		// the budget, shared with it rather than reset (CorrectivesSpent),
-		// and the phase's ceiling, which an operator who turned extensions
-		// off has set to the budget itself.
+		// No judge: its question is whether a phase still working deserves more
+		// rounds, and this one has finished and lacks only the reporting call. Bounded
+		// instead by the allowance the loop would have spent inside the budget, shared
+		// with it (CorrectivesSpent), and the phase's ceiling, which an operator who
+		// turned extensions off sets to the budget.
 		if res.Withheld != "" && policy.Enabled {
 			room := min(toolloop.MaxFinishingCorrectives-res.CorrectivesSpent,
 				toolloop.MaxFinishingCorrectives-unjudged, policy.Headroom(out.Rounds))
@@ -1643,9 +1356,8 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (_ context.Context, 
 		}
 
 		if !res.ExhaustedRounds {
-			// Read off the phase TOTALS, never off `res`: an extended
-			// phase ran the loop more than once and the last invocation
-			// knows only its own slice.
+			// Read off the phase TOTALS, never `res`: an extended phase ran the loop more
+			// than once.
 			span.SetAttributes(attribute.Int("crewlet.rounds", out.Rounds))
 			return done()
 		}
@@ -1666,18 +1378,17 @@ func (r *Runner) runPhase(ctx context.Context, in phaseRun) (_ context.Context, 
 			Role:    llm.RoleUser,
 			Content: extension.Nudge(fence, ph, granted, decision.Reason),
 		})
-		// An exhausted phase was still calling tools, so no run of
-		// declines is being continued.
+		// An exhausted phase was still calling tools: no run of declines is being
+		// continued.
 		budget, correctivesSpent = granted, 0
 	}
 }
 
 // offsetRounds renumbers one loop invocation's rounds onto the phase's own
-// scale, so an extension continues the count instead of restarting it.
+// scale, so an extension continues the count.
 //
 // Copies rather than mutates: the caller's Result is the loop's live snapshot,
-// published from another goroutine, and shifting it in place would renumber a
-// slice the loop is still appending to.
+// published from another goroutine.
 func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 	if prior <= 0 {
 		return res
@@ -1701,16 +1412,15 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 		timed[i] = r
 	}
 	res.Rounds = timed
-	// A note's round too, or a note read in extension round 1 is drawn
-	// beside the phase's first round.
+	// A note's round too, or one read in extension round 1 is drawn beside the
+	// phase's first.
 	steers := make([]toolloop.SteerMark, len(res.Steers))
 	for i, m := range res.Steers {
 		m.Round += prior
 		steers[i] = m
 	}
 	res.Steers = steers
-	// A harness run's rounds too, or an extension's first run names the phase's
-	// round 1 as its own: a run that made no request names none (zero),
+	// A harness run's rounds too; a run that made no request names none (zero),
 	// which stays zero.
 	invocations := make([]toolloop.Invocation, len(res.Invocations))
 	for i, inv := range res.Invocations {
@@ -1721,23 +1431,18 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 		invocations[i] = inv
 	}
 	res.Invocations = invocations
-	// The calls in flight are on the same scale, or a live row names a call
-	// in round 1 of a phase that is twenty rounds in.
+	// The calls in flight are on the same scale.
 	running := make([]toolloop.RunningCall, len(res.Running))
 	for i, c := range res.Running {
 		c.Round += prior
 		running[i] = c
 	}
 	res.Running = running
-	// The round IN FLIGHT is on the same scale as the rounds behind it, or it
-	// COLLIDES with one of them. A consumer keys the ledger on the round
-	// number — the dashboard's `rounds()` builds one block per number and the
-	// partial overwrites the block it lands on — so an unshifted partial from
-	// extension round 1 is written into the phase's committed round 1: that
-	// round's prose is replaced by text the model is writing
-	// twenty rounds later, sitting directly above round 1's own tool calls,
-	// while the round actually running gets no block at all. The abandoned
-	// attempts carry the same number and travel with it.
+	// The round IN FLIGHT is on the same scale, or it COLLIDES with a committed
+	// one: a consumer keys the ledger on the round number (the dashboard's
+	// `rounds()` builds one block per number), so an unshifted partial from
+	// extension round 1 would overwrite the phase's committed round 1 while the
+	// running round got no block. The abandoned attempts carry the same number.
 	if res.Partial != nil {
 		shifted := *res.Partial
 		shifted.Round += prior
@@ -1754,46 +1459,31 @@ func offsetRounds(res toolloop.Result, prior int) toolloop.Result {
 
 // consider asks the round-cap judge, and makes the call visible.
 //
-// The judge is a model call like any other and was the only one nothing
-// recorded: no phase event, no span, and no charge — it runs outside the tool
-// loop, which is where every other call is metered. So it is wrapped here
-// rather than inside [extension.Consider], which is policy plus a model and
-// has no business knowing about spans, meters or the event vocabulary.
+// The judge is a model call outside the tool loop, where every other call is
+// metered, so it is wrapped here, not in [extension.Consider] (policy plus a
+// model, knowing nothing of spans, meters or events).
 //
-// A CHARGE THAT REFUSES DOES NOT FAIL THE PHASE. The extension is a generosity
-// on a phase that has already run out of rounds, and a seat at its cap should
-// stop extending rather than have the phase break under it: an over-budget
-// judgement is logged, published and treated as "no extension", which is the
-// same outcome as the judge saying no. Its tokens are on the counter either
-// way: the judge has answered by the time it is charged, and a meter records a
-// call it refuses as it records one it admits ([toolloop.BudgetMeter]). What
-// the refusal does stop is every model call after it: the meter now holds it,
-// so the next phase's first call — the executor's launch after onboarding —
-// is refused before it is made, and the turn ends on the budget without
-// paying for a call certain to be thrown away.
-//
-// AND A JUDGE IS NOT CALLED AT ALL ON A REFUSAL ALREADY CERTAIN: it is a model
-// call like any other, billed and then refused. That happens when a refusal
-// lands inside the phase's last round without being the round's own — a
-// worker it delegated to, refused by the seat or the company.
+// A CHARGE THAT REFUSES DOES NOT FAIL THE PHASE: an extension is a generosity on
+// a phase already out of rounds, so an over-budget judgement is logged,
+// published and treated as "no extension". Its tokens are on the counter
+// anyway ([toolloop.BudgetMeter]), so the next phase's first call is refused
+// before it is made. AND NO JUDGE IS CALLED ON A REFUSAL ALREADY CERTAIN (a
+// delegated worker refused inside the last round): it would be billed then refused.
 func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRound int,
 	policy extension.Policy, req extension.Request,
 ) (int, extension.Decision) {
-	// The span the turn-engine doc has always promised: one per judge call,
-	// nested under the phase that fired it. It is the only place a reader
-	// can see what the judgement COST IN TIME, which no event records — and
-	// a judge on a slow cheap model is a stall in the middle of a phase that
-	// has already been running for minutes.
+	// One span per judge call, nested under the phase: the only place a reader sees
+	// what the judgement COST IN TIME, which no event records, and a judge on a
+	// slow cheap model is a stall mid-phase.
 	ctx, span := tracing.Start(ctx, "agent.runner", "agent.turn.judge",
 		attribute.String("crewlet.phase", string(ph)),
 		attribute.Int("crewlet.iteration", iteration),
 		attribute.Int("crewlet.rounds", req.RoundsUsed))
 	defer span.End()
 
-	// A REFUSAL ALREADY CERTAIN calls no judge — see above. Only where the
-	// judge WOULD be called: a policy that declines to ask, or a seat with
-	// no judge, costs nothing, and its own reason is the truer account of
-	// why the phase was not extended.
+	// A REFUSAL ALREADY CERTAIN calls no judge, only where the judge WOULD be
+	// called: a policy declining to ask, or a seat with no judge, costs nothing and
+	// its own reason is the truer account.
 	if asks, _ := policy.ShouldAsk(req.RoundsUsed); asks && r.cfg.Judge != nil {
 		if refused := toolloop.Refusal(ctx, r.cfg.Budget); refused != nil {
 			log.WarnContext(ctx, "extension_judge_over_budget", "phase", ph,
@@ -1804,19 +1494,15 @@ func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRo
 		}
 	}
 
-	// THE JUDGE'S OWN WALL CLOCK, bracketed here rather than inside
-	// [extension.Consider] for the same reason the span is: that function is
-	// policy plus a model and has no business knowing what is recorded about
-	// it. It is the one number that separates a judge stalling a phase from
-	// a judge that simply said no — the two are otherwise the same record
-	// with the same verdict.
+	// THE JUDGE'S OWN WALL CLOCK, bracketed here for the span's reason: it
+	// separates a judge stalling a phase from one that simply said no, otherwise
+	// the same record.
 	began := time.Now()
 	granted, decision := extension.Consider(ctx, r.cfg.Judge, policy, req)
 	judged := time.Since(began)
 	if !decision.Asked {
-		// The policy declined to ask, or there is no judge. Nothing was
-		// called, so there is nothing to report or to charge — and an event
-		// here would claim a model call that never happened.
+		// The policy declined to ask, or there is no judge: nothing was called to
+		// report or charge, and an event would claim a call that never happened.
 		span.SetAttributes(attribute.Bool("crewlet.judge_called", false))
 		return granted, decision
 	}
@@ -1836,13 +1522,11 @@ func (r *Runner) consider(ctx context.Context, ph phase.Phase, iteration, hostRo
 	return granted, decision
 }
 
-// charge meters a model call the tool loop did not make, once it has been
-// made: the meter records it whether or not it fits.
+// charge meters a model call the tool loop did not make, once made: the meter
+// records it whether or not it fits.
 //
-// An unreachable counter is NOT a refusal — the same three-valued rule the
-// loop's own charge follows — but here both answers end the same way, because
-// neither is worth failing a turn over: the caller declines to extend and
-// says why.
+// An unreachable counter is NOT a refusal (the loop's own three-valued rule),
+// but here both end the same way: the caller declines to extend and says why.
 func charge(ctx context.Context, meter toolloop.BudgetMeter, tokens int) error {
 	if meter == nil || tokens <= 0 {
 		return nil
@@ -1872,16 +1556,12 @@ func maxRounds(out phaseResult, base int) int {
 }
 
 // foldOnto merges one loop invocation's record onto the rounds already behind
-// it, producing the record of the PHASE rather than of the invocation.
+// it, producing the record of the PHASE.
 //
-// One function for all three publishers — the live frame, the completed
-// record and the failure record — because they were three places that had to
-// agree about what an extended phase is, and they did not: the live frame
-// carried the invocation alone, the completed record carried the invocation's
-// token counters, and the failure record carried the invocation raw. Anything
-// a loop invocation counts from zero has to be folded here; anything that
-// carries across (the conversation, and so `Text`) is taken from the
-// invocation as it stands.
+// One function for the live frame, the completed record and the failure record,
+// which must agree on what an extended phase is. Anything a loop invocation
+// counts from zero is folded here; anything that carries across (the
+// conversation, so `Text`) is taken from the invocation as it stands.
 func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
 	res := offsetRounds(live, done.Rounds)
 	res.Executions = append(
@@ -1896,22 +1576,18 @@ func foldOnto(done phaseResult, live toolloop.Result) toolloop.Result {
 	res.Invocations = append(
 		append([]toolloop.Invocation(nil), done.Result.Invocations...), res.Invocations...)
 	res.RoundsUsed = done.Rounds + live.RoundsUsed
-	// The cap the PHASE is under: every round already behind it plus what
-	// this invocation was granted — which is exactly how an extension
-	// moves it.
+	// The cap the PHASE is under: every round behind it plus what this invocation
+	// was granted.
 	res.MaxRounds = done.Rounds + live.MaxRounds
 	res.InputTokens += done.Result.InputTokens
 	res.OutputTokens += done.Result.OutputTokens
 	res.CacheRead += done.Result.CacheRead
 	res.CacheWrite += done.Result.CacheWrite
-	// Accumulated for the same reason the token counts are: an EXTENDED
-	// phase runs the loop again and the second invocation counts only its
-	// own rounds, so a phase that answered nothing twice under two
-	// invocations would report one.
+	// Accumulated like the token counts: an EXTENDED phase's second invocation
+	// counts only its own rounds.
 	res.EmptyAnswers += done.Result.EmptyAnswers
-	// The model that served the phase, not the model that served the round
-	// that died. An invocation which failed before its first completion
-	// names nobody, and a record with no model on it reads as a phase that
+	// The model that served the phase, not the round that died: an invocation
+	// failing before its first completion names nobody, reading as a phase that
 	// never reached a provider.
 	if res.Model == "" {
 		res.Model = done.Result.Model
@@ -1928,33 +1604,28 @@ type phaseResult struct {
 	Rounds    int
 	Exhausted bool
 
-	// Elapsed is the phase's own wall clock, measured around the whole
-	// extension loop rather than around one invocation of it: an extended
-	// phase is one phase that ran longer, exactly as its span is one span.
+	// Elapsed is the phase's own wall clock, around the whole extension loop, not
+	// one invocation: an extended phase is one phase that ran longer, as its span is.
 	//
-	// Measured here because this is the only frame that brackets the
-	// phase — the callers assemble the record AFTER decoding a payload,
-	// and a clock read there would fold the decode into the measurement
-	// differently on every path.
+	// Measured here because this is the only frame that brackets the phase;
+	// callers assemble the record AFTER decoding a payload, and a clock read there
+	// would fold the decode in differently on every path.
 	Elapsed time.Duration
 
-	// StartedAt is when this segment of the phase began, and Caps the round
-	// allowance it ended under — both stamped by the frame that brackets
-	// the phase, for the reason Elapsed is.
+	// StartedAt is when this segment of the phase began and Caps the round
+	// allowance it ended under, stamped by the bracketing frame as Elapsed is.
 	StartedAt time.Time
 	Caps      roundCaps
 
-	// Result is the loop's own outcome, kept whole so the phase can report
-	// what it spent and what it called. The fields above are the ones the
-	// loop's CALLER acts on; this is what its telemetry publishes, and
+	// Result is the loop's own outcome, kept whole so the phase reports what it
+	// spent and called. The fields above are what the loop's CALLER acts on;
 	// re-deriving one from the other is how the two come to disagree.
 	Result toolloop.Result
 
-	// RunSteers is what a collected executor read of the turn's notes —
-	// in its brief, and at boundaries of its harness's own loop — at the run's
-	// one round with each one's boundary. A run of the engine's loop reads
-	// its notes at its rounds, which its Result records; an executor's
-	// reads are on its record instead ([Runner.resumeAgentRun]).
+	// RunSteers is what a collected executor read of the turn's notes, in its brief
+	// and at its harness loop's boundaries, at the run's one round with each
+	// boundary. An engine-loop run's reads are at its rounds in its Result; an
+	// executor's are on its record ([Runner.resumeAgentRun]).
 	RunSteers []types.PhaseSteer
 
 	// RunElided is the calls a collected executor's run made that its
@@ -1965,28 +1636,24 @@ type phaseResult struct {
 }
 
 // surfaceWith builds a phase surface, registering the phase's submission tool
-// on a PRIVATE copy of the snapshot.
+// on a PRIVATE copy of the snapshot: the tool is per-phase state, and the shared
+// registry would show one phase's submission to the next.
 //
-// Private because the tool is per-phase state: two phases of one turn each get
-// their own, and registering into the shared registry would make one phase's
-// submission visible to the next.
-// The `extra` set is per-TURN rather than per-phase state: today it is the
-// sub-agent spawner, which is bound to one parent turn's grant and must reach
-// the surface a run is collected against as well as the one it was launched
-// with. Injected here because this is the single funnel every phase surface
-// goes through, so a phase that lost the tool mid-turn is not representable.
+// The `extra` set is per-TURN: today the sub-agent spawner, bound to one parent
+// turn's grant, which must reach the surface a run is collected against as well
+// as the one it launched with. Injected in this single funnel, so a phase losing
+// the tool mid-turn is not representable.
 //
-// m is where the surface's own calls are charged — the runner's own segment
-// for every surface but the executor's ([meter]).
+// m is where the surface's own calls are charged: the runner's own segment for
+// every surface but the executor's ([meter]).
 func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round int,
 	snapshot tools.Snapshot, submit tools.Callable, active []string, loaded ...string,
 ) (_ *tools.Surface, err error) {
 	defer origin.Stamp(&err)
-	// THE EXECUTOR'S OTHER WAY TO END: parking on a person's answer. Here,
-	// in the funnel the launch and the collection both take, so the surface
-	// a collection rebuilds holds the tool its run called. And the run's
-	// submission is held to it: a job that asked is parked, and takes none
-	// ([RunAsk]).
+	// THE EXECUTOR'S OTHER WAY TO END: parking on a person's answer. Here, in the
+	// funnel the launch and the collection both take, so a rebuilt surface holds
+	// the tool its run called. The run's submission is held to it: a job that
+	// asked is parked and takes none ([RunAsk]).
 	asks := ph == phase.Execute && r.cfg.Ask != nil
 	if asks && submit != nil {
 		submit = r.cfg.Ask.Gate(submit)
@@ -2007,8 +1674,8 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 		}
 		active = append(active, r.cfg.Ask.Name())
 	}
-	// AND ITS CHECKOUT, in the same funnel for the same reason: the surface
-	// a collection rebuilds holds the tool its run called.
+	// AND ITS CHECKOUT, in the same funnel: a collection's rebuilt surface holds
+	// the tool its run called.
 	if ph == phase.Execute && r.cfg.Checkout != nil {
 		var err error
 		snapshot, err = snapshot.With(tools.Entry{Tool: r.cfg.Checkout, Origin: tools.OriginBuiltin})
@@ -2018,18 +1685,15 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 		active = append(active, r.cfg.Checkout.Name())
 	}
 
-	// The discovery pair reaches its surface through a closure, because
-	// there is a real cycle here: activate must mutate the same Surface the
-	// loop reads its tool definitions from, so the tools cannot exist
-	// before the surface — and the surface cannot resolve them until they
-	// are in its snapshot. The closure is read at call time, by which point
-	// the surface exists.
+	// The discovery pair reaches its surface through a closure, a real cycle:
+	// activate must mutate the Surface the loop reads definitions from, so the
+	// tools cannot exist before it, and it cannot resolve them until they are in
+	// its snapshot. The closure is read at call time.
 	var surface *tools.Surface
 	if discovers(ph) {
-		// AS THE ENTRIES DiscoveryTools BUILDS, hints and all: rewrapped
-		// here, the pair would reach the surface unannotated, and every
-		// reader of the hints, a worker's guard among them, would refuse
-		// its discovery as a write it could not classify.
+		// AS THE ENTRIES DiscoveryTools BUILDS, hints and all: rewrapped, the pair
+		// would reach the surface unannotated and every reader of the hints (a
+		// worker's guard) would refuse discovery as an unclassifiable write.
 		for _, entry := range DiscoveryTools(func() *tools.Surface { return surface }) {
 			var err error
 			snapshot, err = snapshot.With(entry)
@@ -2040,25 +1704,18 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 		}
 	}
 
-	// The sub-agent spawner, on the same closure and for the same reason:
-	// the child inherits the parent's LIVE active list, which does not
-	// exist until this surface does.
-	//
-	// Built HERE rather than by each caller because this is the single
-	// funnel every phase surface goes through, so the launch and the
-	// collection get it from one place — and a collection that lost the
-	// tool mid-run is not representable.
+	// The sub-agent spawner, on the same closure: the child inherits the parent's
+	// LIVE active list, which does not exist until this surface does. Built HERE,
+	// the single funnel, so launch and collection get it from one place and a
+	// collection losing the tool mid-run is not representable.
 	if entry := r.spawnEntry(ctx, m, ph, round, snapshot,
 		func() *tools.Surface { return surface }); entry.Tool != nil {
 		next, err := snapshot.With(entry)
 		if err != nil {
-			// A collision here is an operator's MCP server publishing a
-			// first-party tool name. LOSING THE SPAWNER is the
-			// proportionate answer: failing the surface would kill every
-			// Execute phase on that seat for as long as that server is
-			// configured, which is a far larger outage than the missing
-			// capability. The subagent package makes the same choice for
-			// the same collision one level down.
+			// A collision here is an operator's MCP server publishing a first-party tool
+			// name. LOSING THE SPAWNER is the proportionate answer: failing the surface
+			// would kill every Execute phase on that seat while the server is configured.
+			// The subagent package makes the same choice one level down.
 			log.WarnContext(ctx, "spawn_tool_skipped", "phase", ph,
 				"tool", entry.Tool.Name(), "error", err.Error())
 		} else {
@@ -2066,10 +1723,9 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 			active = append(active, entry.Tool.Name())
 		}
 	}
-	// Bound to the turn, which is what lets a seat-scoped tool know who is
-	// calling it without the seat travelling through the model's arguments.
-	// Bound to the turn AS THIS PHASE, so a tool reporting what it did can
-	// say which leg of the turn did it — see [turnctx.Turn.InPhase].
+	// Bound to the turn, so a seat-scoped tool knows who is calling without the
+	// seat travelling through the model's arguments, AS THIS PHASE so a tool can
+	// say which leg did it ([turnctx.Turn.InPhase]).
 	surface = tools.NewSurface(ph.String(), snapshot, active).
 		ForTurn(m.turn.InPhase(types.Phase(ph)))
 	if hold := r.holderFor(ph); hold != nil {
@@ -2078,26 +1734,25 @@ func (r *Runner) surfaceWith(ctx context.Context, m meter, ph phase.Phase, round
 	if r.cfg.Metrics != nil {
 		surface = surface.WithCounter(r.cfg.Metrics)
 	}
-	// THE GUARD IS BUILT FROM THE FINISHED SURFACE, so what it enforces and
-	// what the catalogue showed cannot disagree: both match the skills
-	// against the surface's universe (catalogueSurface), and the catalogue's
-	// "required" marker is the promise this keeps.
+	// THE GUARD IS BUILT FROM THE FINISHED SURFACE, so what it enforces and what
+	// the catalogue showed cannot disagree: both match skills against the universe
+	// (catalogueSurface), and the catalogue's "required" marker is the promise this
+	// keeps.
 	guard := r.guardFor(ph, round, surface, loaded)
-	// RECORDED ONLY HERE, which is what keeps it the TURN's guard: this is
-	// the funnel every phase of the turn goes through, and a sub-agent's
-	// child surface is built elsewhere. Recording inside guardFor would let
-	// a child spawned mid-run overwrite the executor's own loaded set, so
-	// a park moments later would persist the worker's.
+	// RECORDED ONLY HERE, which keeps it the TURN's guard: a sub-agent's child
+	// surface is built elsewhere, and recording inside guardFor would let a child
+	// spawned mid-run overwrite the executor's loaded set, so a park would persist
+	// the worker's.
 	r.mu.Lock()
 	r.guard = guard.skills()
 	r.mu.Unlock()
 	return surface.WithGuard(guard.tools()), nil
 }
 
-// holderFor is what records a call to a tool at Needs approval on phase ph's
-// surface: the executor's alone, which has a run whose row the call parks on
-// (ADR-0077). Every other phase runs inside the turn on the engine host and
-// gets none, so its surface refuses such a call ([tools.Holder]).
+// holderFor is what records a call to a Needs-approval tool on ph's surface:
+// the executor's alone, whose run has a row the call parks on (ADR-0077). Every
+// other phase runs on the engine host and its surface refuses such a call
+// ([tools.Holder]).
 func (r *Runner) holderFor(ph phase.Phase) tools.Holder {
 	if ph != phase.Execute {
 		return nil
@@ -2108,31 +1763,23 @@ func (r *Runner) holderFor(ph phase.Phase) tools.Holder {
 // discovers reports whether a phase is offered the discovery pair,
 // list_mcp_server_tools and activate_tool.
 //
-// The onboarding pass is, because its prompt lists the tools it can still
-// discover — its knowledge-base tools among them — and tells the model how.
-// The executor is not: it holds every tool its seat does from its launch, each
-// MCP server's served under the server's own name, and its harness keeps them
-// out of the requests that do not need them by its own deferral — Claude
-// Code's tool search, OpenCode's Code Mode (internal/api/mcpbridge,
-// servers.go). The pair was the engine doing by hand, two rounds at a time,
-// what both executor harnesses do natively. The reviewer is not, and must not
-// be: it judges the round from the evidence in front of
-// it, and its prompt promises it no domain tools. activate_tool reaches every
-// tool in the registry snapshot, MCP writes included, so a reviewer offered
-// the pair could post to a thread or edit a ticket in the middle of grading
-// whether the executor should have. Until this gate, surfaceWith added the
-// pair to every phase, the reviewer's included.
+// Onboarding is: its prompt lists the tools it can still discover and tells the
+// model how. The executor is not: it holds every tool from launch, each MCP
+// server under its own name, and its harness defers them by its own mechanism
+// (Claude Code's tool search, OpenCode's Code Mode; internal/api/mcpbridge,
+// servers.go). The reviewer must not be: activate_tool reaches every tool in the
+// snapshot, MCP writes included, so a reviewer offered the pair could post to a
+// thread or edit a ticket while grading whether the executor should have.
 func discovers(ph phase.Phase) bool {
 	return ph == phase.Onboarding
 }
 
-// armedGuard is one built gate: the concrete guard for the runner's own
-// bookkeeping, and the interface value the surface installs.
+// armedGuard is one built gate: the concrete guard for the runner's
+// bookkeeping and the interface value the surface installs.
 //
-// Two views because A TYPED NIL WOULD NOT BE NIL. Returning the *skills.Guard
-// as a tools.Guard would give the surface a non-nil interface wrapping a nil
-// pointer, so its `guard != nil` check would pass and every tool call would
-// take the guard path to be told yes.
+// Two views because A TYPED NIL WOULD NOT BE NIL: a *skills.Guard returned as a
+// tools.Guard is a non-nil interface wrapping nil, so every tool call would take
+// the guard path to be told yes.
 type armedGuard struct {
 	guard *skills.Guard
 	wrap  tools.Guard
@@ -2143,23 +1790,19 @@ func (a armedGuard) tools() tools.Guard    { return a.wrap }
 
 // guardFor arms the required-skill gate for one phase session, or nil.
 //
-// PER SESSION, because "loaded" means "the body is in this model's context"
-// and the executor, the reviewer and each sub-agent are separate message
-// histories. A round-cap extension continues the same session AND the same
-// surface, so a load carries across it; a self_iterate launches a fresh run
-// and therefore a fresh guard, which is correct — its model's context started
+// PER SESSION: "loaded" means "the body is in this model's context", and the
+// executor, reviewer and each sub-agent are separate histories. A round-cap
+// extension continues the same session AND surface, so a load carries across; a
+// self_iterate launches a fresh run and so a fresh guard, as its context started
 // over too.
 //
-// The loaded keys are a PARKED RUN'S seed: what its guard held when it
-// launched, which every later segment's rebuild of the run's surface restores
-// before replaying what the run loaded over the bridge since
-// ([Runner.rebuiltSurface]). A guard rebuilt empty for a run that goes on
-// calling would refuse the calls that session had already unlocked. Empty for
-// every other phase.
+// The loaded keys are a PARKED RUN'S seed: what its guard held at launch, which
+// every later segment's rebuild restores before replaying what the run loaded
+// over the bridge since ([Runner.rebuiltSurface]); rebuilt empty, the guard
+// would refuse calls that session had unlocked. Empty for every other phase.
 func (r *Runner) guardFor(ph phase.Phase, iteration int, surface *tools.Surface, loaded []string) armedGuard {
-	// THE LOADER MUST BE ACTIVE, not merely in the universe the triggers are
-	// matched over: a guard is armed only where the session can satisfy it,
-	// and a loader the phase never activated is one its model may not reach.
+	// THE LOADER MUST BE ACTIVE, not merely in the universe the triggers match
+	// over: a guard is armed only where the session can satisfy it.
 	if r.cfg.Skills == nil || !slices.Contains(surface.Active(), toolname.LoadToolSkill) {
 		return armedGuard{}
 	}
@@ -2174,12 +1817,9 @@ func (r *Runner) guardFor(ph phase.Phase, iteration int, surface *tools.Surface,
 	}
 }
 
-// promptPhase maps a runner phase onto the prompt package's own.
-//
-// Two vocabularies because two packages own them, and the mapping is
-// explicit rather than a string cast: a phase this package adds and forgets
-// to map would silently become the zero value, which matches no skill and
-// arms no guard.
+// promptPhase maps a runner phase onto the prompt package's own: explicit, not a
+// string cast, since a phase added here and unmapped would become the zero
+// value, matching no skill and arming no guard.
 func promptPhase(ph phase.Phase) prompts.Phase {
 	switch ph {
 	case phase.Execute:
@@ -2189,57 +1829,50 @@ func promptPhase(ph phase.Phase) prompts.Phase {
 	case phase.Subagent:
 		return prompts.PhaseSubagent
 	default:
-		// Onboarding and anything later. Not a phase skills are scoped
-		// to, and the empty value matches none of them — which is the
-		// honest answer rather than a default that quietly picks one.
+		// Onboarding and anything later: not a phase skills are scoped to; the empty
+		// value matches none, the honest answer.
 		return ""
 	}
 }
 
-// catalogueSurface is the tool surface as the skill triggers see it: every
-// tool in the surface's UNIVERSE, what it holds and what it can discover, and
-// never its active list alone. A surface activates anything in its universe
-// by name, and an executor starts with no MCP tool active, so a guard armed
-// over the active list let an activated MCP tool through without the skill its
-// prompt had called required.
+// catalogueSurface is the tool surface as skill triggers see it: every tool in
+// the surface's UNIVERSE (held and discoverable), never its active list alone.
+// A surface activates anything in its universe by name and an executor starts
+// with no MCP tool active, so a guard armed over the active list let an
+// activated MCP tool through without its required skill.
 func catalogueSurface(surface *tools.Surface) prompts.Surface {
 	universe := surface.Universe()
 	return prompts.Surface{Tools: universe.Names(), MCPServers: universe.MCPServers()}
 }
 
 // seatSnapshot is the registry as THIS SEAT is offered it: every surface of the
-// turn is built from it rather than from the registry whole, so a tool the
-// seat is withheld ([Config.Withheld]) is on none of them — not offered, not
-// listed to discover, and not reachable by activating it.
+// turn is built from it, so a withheld tool ([Config.Withheld]) is on none: not
+// offered, not discoverable, not activatable.
 func (r *Runner) seatSnapshot() tools.Snapshot {
 	return r.cfg.Registry.Snapshot().Without(r.cfg.Withheld...)
 }
 
 // executorUniverse is the snapshot an executor's surface is built from: the
-// registry, less the phase-scoped tools this executor must never reach.
+// registry less the phase-scoped tools it must never reach.
 //
-// THE UNIVERSE, NOT ONLY THE ACTIVE LIST. A surface's universe is what its
-// skill triggers are matched over, what its worker's grant is cut from and
-// what the delivery check names tools from, so a tool kept off the active list
-// alone was still in front of the executor: mark_onboarded, the one tool
-// phaseScoped exists to keep away from it.
+// THE UNIVERSE, NOT ONLY THE ACTIVE LIST: it is what skill triggers match over,
+// a worker's grant is cut from and the delivery check names tools from, so a
+// tool off the active list alone was still in front of the executor
+// (mark_onboarded, which phaseScoped exists to keep away).
 func (r *Runner) executorUniverse(snapshot tools.Snapshot) tools.Snapshot {
 	return snapshot.Without(phaseScoped...)
 }
 
 // executorActive is what the executor is offered: every tool in its universe
-// ([Runner.executorUniverse]) — the first-party ones and every MCP server's the
-// seat holds — but the tools of a server that runs in its box (inBox,
-// [Runner.boxServers]), which its harness reaches there, under the same name,
-// rather than over the bridge.
+// ([Runner.executorUniverse]) but the tools of a server that runs in its box
+// (inBox, [Runner.boxServers]), which its harness reaches there under the same
+// name rather than over the bridge.
 //
-// THE WHOLE SURFACE, not a slice of it chosen in advance. Choosing in advance is
-// what the planner used to do — against a catalogue it was never shown — and
-// every wrong guess became a tool the actor did not have when it turned out to
-// need it. A seat's MCP tools were held back until the run discovered and
-// activated them, which kept a hundred vendor definitions out of each request;
-// its harness does that by itself now, a server at a time
-// (internal/api/mcpbridge, servers.go).
+// THE WHOLE SURFACE, not a slice chosen in advance: that was the planner's
+// choice, against a catalogue it never saw, and every wrong guess left the
+// actor without a tool. The harness now keeps a hundred vendor definitions out
+// of each request itself, a server at a time (internal/api/mcpbridge,
+// servers.go).
 func executorActive(universe tools.Snapshot, inBox []string) []string {
 	var out []string
 	for _, e := range universe.Entries() {
@@ -2262,28 +1895,21 @@ func (r *Runner) boxServers() []string {
 	return nil
 }
 
-// phaseScoped names the first-party tools that belong to ONE phase and must
-// not be offered by the others.
+// phaseScoped names the first-party tools that belong to ONE phase and must not
+// be offered by the others.
 //
-// mark_onboarded is the whole list, and it earns its place: onboarding is its
-// own pass, and a seat that could mark itself from inside the executor would
-// permanently skip orientation — the marker suppresses the pass for ever
-// after, so a single stray call means an agent that never reads its team's
-// conventions and never will. Measured: the surface offered it, and a model
-// that called it there produced a phase that never submitted at all.
+// mark_onboarded is the whole list: onboarding is its own pass, and a seat that
+// could mark itself from inside the executor would permanently skip
+// orientation, since the marker suppresses the pass for ever after.
 //
-// Everything else stays available on purpose. lookup_colleague, use_skill,
-// query_episodes and refresh_memory are recon, which the executor now does
-// itself; reflect_and_persist is deliberate too — an agent that learns
-// something mid-turn should be able to keep it.
+// Everything else stays available on purpose: lookup_colleague, use_skill,
+// query_episodes and refresh_memory are recon the executor does itself, and
+// reflect_and_persist lets an agent keep what it learns mid-turn.
 var phaseScoped = []string{toolname.MarkOnboarded}
 
-// taskFor prefixes the reviewer's correction to the ask.
-//
-// PREFIXED to the brief rather than appended to the task description itself:
-// the task text also feeds knowledge search and the episode record, both of
-// which want the requester's actual ask and not the engine's running
-// commentary on it.
+// taskFor prefixes the reviewer's correction to the ask: PREFIXED to the brief,
+// not the task description, which also feeds knowledge search and the episode
+// record, both wanting the requester's actual ask.
 func (r *Runner) taskFor(notes string) string {
 	if strings.TrimSpace(notes) == "" {
 		return r.cfg.Task
@@ -2309,9 +1935,8 @@ func reviewLog(w turn.Work, skip []string) string {
 // lateNotes ends each late call's line ([ledger.Call.Late]) with
 // [prompts.ReviewLateCall], BY ITS PLACE in calls, as [ledger.FormatOptions.Notes]
 // reads them, so a skipped name before it moves the words onto no other line;
-// nil where no call is late. Only the reviewer's reading tells the round's own
-// calls apart: the delivery checks and the submission's citations count a
-// late call as the turn's (see [ledger.Call.Late]).
+// nil where none is late. Only the reviewer's reading tells the round's own
+// calls apart: delivery checks and citations count a late call as the turn's.
 func lateNotes(calls []ledger.Call) [][]string {
 	var notes []string
 	for i, call := range calls {
@@ -2358,30 +1983,23 @@ func describe(s *tools.Surface) turn.Surface {
 		KnownReads:     u.KnownReads(),
 		KnownOpenWorld: u.KnownOpenWorld(),
 		PresumedWrites: u.PresumedWrites(),
-		// Every MCP-served tool, on a phase that reaches one only by
-		// discovering it — so a refusal can tell the tools a seat already
-		// holds from the ones it has to go and find. See
-		// [turn.Surface.Discoverable]. NONE on a phase with no way to discover
-		// one: the executor, which holds every tool it can reach.
+		// Every MCP-served tool, on a phase that reaches one only by discovering it, so
+		// a refusal can tell held tools from ones to find ([turn.Surface.Discoverable]).
+		// NONE where no discovery exists: the executor holds every tool it can reach.
 		Discoverable: discoverable(s),
 	}
 }
 
 // reviewArtifact is what the executor produced, handed to the reviewer.
 //
-// WHOLE, and that is a bug fix rather than a preference. [turn.Work.Text] is
-// the run's closing reply, and the draft is at its END. A 2000-rune cut this
-// used to carry kept the HEAD, which was the opening of the run's prose and
-// not the draft at all. The reviewer's verdict decides whether the turn ships
-// or loops, and it was being asked for that verdict on a prefix that
-// frequently did not contain the work.
+// WHOLE: [turn.Work.Text] is the run's closing reply with the draft at its END,
+// so a former 2000-rune cut kept the HEAD, the opening of the run's prose, and
+// the reviewer's ship-or-loop verdict was asked of a prefix that often lacked
+// the work. Bounded by what one reply of the run's model can write (its output
+// ceiling), the right place for a ceiling.
 //
-// Bounded by what one reply of the run's model can write — its own output
-// ceiling, which the harness holds it to — which is a real ceiling and the right
-// place for one.
-//
-// "(empty)" rather than "" for a pass with no text: an absent section reads as
-// a section the engine forgot to fill in.
+// "(empty)" for a pass with no text: an absent section reads as one the engine
+// forgot to fill in.
 func reviewArtifact(w turn.Work) string {
 	if w.Text == "" {
 		return "(empty)"
@@ -2401,9 +2019,8 @@ type phaseSteer struct {
 	ctx       context.Context
 	ph        phase.Phase
 	iteration int
-	// offset is the rounds this phase ran before the loop invocation
-	// draining, so the round a note is announced at is on the PHASE's
-	// scale — the scale every record of the phase uses.
+	// offset is the rounds this phase ran before this invocation, so a note is
+	// announced on the PHASE's scale.
 	offset int
 }
 
@@ -2463,11 +2080,11 @@ func (r *Runner) carriedSteers() []string {
 	return out
 }
 
-// steerBrief is the notes a launch's brief takes — none on a turn nobody
-// can steer — once the reads the turn carries are marked unanswered as the
-// record marks them now ([Runner.markUnanswered]), and the places the record
-// numbered this segment's reads at are known ([Runner.placed]), which every
-// brief the launch builds after it counts.
+// steerBrief is the notes a launch's brief takes (none on a turn nobody can
+// steer), once the carried reads are marked unanswered as the record marks them
+// now ([Runner.markUnanswered]) and the places the record numbered this
+// segment's reads at are known ([Runner.placed]), which every later brief of
+// the launch counts.
 func (r *Runner) steerBrief(ctx context.Context) []steer.Note {
 	if r.cfg.Steer == nil {
 		return nil

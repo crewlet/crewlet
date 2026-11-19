@@ -1566,14 +1566,17 @@ func (l *liveHeapMost) stop() uint64 {
 // takeOfPieces is a take's archive whose main thread holds a line of n bytes,
 // then lines, and whose `.json` member a string within n, each of bytes no
 // UTF-8 holds, and a text file of n bytes, built where nothing the read is
-// measured by keeps its pieces.
+// measured by keeps its pieces. Each piece ends in a key, so both readings
+// redact it, as the take of a session it has not seen unchanged does.
 func takeOfPieces(b *testing.B, n int, lines ...string) []byte {
 	thread, _ := claudeMainThread(ctSession)
 	bare := cntUser("", "u1", `""`)
+	key := " " + shapedKey
 	members := []struct{ name, body string }{
-		{thread, cntUser("", "u1", `"`+benchInvalid(n-len(bare)-1)+`"`) + "\n" + strings.Join(append(lines, ""), "\n")},
-		{"tasks/s/1.json", `{"text":"` + benchInvalid(n-64) + `"}`},
-		{"projects/p/s/tool-results/out.txt", strings.Repeat(keyLine+"\n", n/(len(keyLine)+1))},
+		{thread, cntUser("", "u1", `"`+benchInvalid(n-len(bare)-1-len(key))+key+`"`) + "\n" +
+			strings.Join(append(lines, ""), "\n")},
+		{"tasks/s/1.json", `{"text":"` + benchInvalid(n-64-len(key)) + key + `"}`},
+		{"projects/p/s/tool-results/out.txt", strings.Repeat(keyLine+"\n", n/(len(keyLine)+1)-1) + key[1:] + "\n"},
 	}
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)

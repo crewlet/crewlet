@@ -180,11 +180,12 @@ stated once in the
 and in [Tool calls on this host](../concepts/llm-backends.md#tool-calls-on-this-host).
 The Models screen says of each entry whether a helper can run on it.
 
-In the dashboard, the model is chosen on Ask Crewlet's own page (`#/ask`):
-the model named in the conversation's head is a picker for an administrator,
-with each entry a helper cannot run on drawn disabled beside the engine's
-reason. The change is checked by the engine before it is saved, as a
-configuration edit is.
+In the dashboard, the model is chosen in Settings › Models alone: as a
+model's use (*What this model does*, Ask Crewlet) or on By job's Ask Crewlet
+line, with each entry a helper cannot run on drawn disabled beside the
+engine's reason. The change is checked by the engine before it is saved, as
+a configuration edit is. Ask Crewlet's own page and drawer name no model;
+with none, they send an administrator to Settings › Models.
 
 `crewlet llm doctor <key>` proves it: for an entry a helper runs on, it probes
 the helper's run beside the entry's own, and reports a shell, a file read or a

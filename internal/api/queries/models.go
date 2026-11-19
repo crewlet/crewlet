@@ -274,13 +274,16 @@ type ModelUsage struct {
 }
 
 // ModelUse is one job the entry runs, or is a fallback for: a seat's, by
-// handle and job, or the assistant's chat. Position is the
+// handle and job, Ask Crewlet's chat, or the Advisor's findings. Position is the
 // entry's place in the resolved chain, 0 for the model that runs it.
 type ModelUse struct {
 	Seat      string `json:"seat,omitempty"`
 	Job       string `json:"job,omitempty"`
 	Assistant string `json:"assistant,omitempty"`
-	Position  int    `json:"position"`
+	// Advisor is "findings" where the Advisor explains its findings with the
+	// entry (`advisor.model`).
+	Advisor  string `json:"advisor,omitempty"`
+	Position int    `json:"position"`
 	// Written is whether the seat wrote the field that resolved the job;
 	// Source is the level that decided it (phase.Source). Absent for the
 	// assistant, whose fields are always written.
@@ -820,6 +823,9 @@ func usedBy(company *config.Company, key string) []ModelUse {
 	}
 	if company.Assistant.Model == key {
 		out = append(out, ModelUse{Assistant: "chat", Position: 0})
+	}
+	if company.Advisor.Model == key {
+		out = append(out, ModelUse{Advisor: "findings", Position: 0})
 	}
 	return out
 }

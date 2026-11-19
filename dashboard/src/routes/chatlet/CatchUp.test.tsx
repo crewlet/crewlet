@@ -57,7 +57,13 @@ const OFF = assistantUnavailableFor(
 )!;
 
 function control(unavailable: AssistantControl["unavailable"]): AssistantControl {
-  return { open: false, unavailable, toggle: () => undefined, ask: () => undefined };
+  return {
+    open: false,
+    unavailable,
+    toggle: () => undefined,
+    ask: () => undefined,
+    draft: () => undefined,
+  };
 }
 
 afterEach(() => {

@@ -1,6 +1,6 @@
 /**
  * What a model is for, in two questions: what it should do (every seat job,
- * one category of work, the Assistant, or none yet) and for which seats
+ * one category of work, Ask Crewlet, the Advisor, or none yet) and for which seats
  * (chips, with all of them a switch away). Each category is named for the
  * work it covers, with its glyph; the engine fields it sets are in its
  * tooltip, and choosing it writes every one of them in the same revision.
@@ -12,9 +12,14 @@
  * change of pairing is made in one place.
  *
  * EVERYTHING COMES FIRST, for a company that runs one model for all of it:
- * the seat's `llm` alone, every seat job resolving to it. The Assistant is not
- * a seat job, so Everything leaves it alone and it is a choice of its own,
- * company-wide, with no seats to pick.
+ * the seat's `llm` alone, every seat job resolving to it. Ask Crewlet and the
+ * Advisor are not seat jobs, so Everything leaves them alone and each is a
+ * choice of its own, company-wide, with no seats to pick.
+ *
+ * THE ADVISOR IS CHOSEN HERE ALONE, as Ask Crewlet is: as a model's one use,
+ * or beside its seat work from the per-seat switch, so a model the Advisor
+ * shares with seats keeps both. Unlike Ask Crewlet it may run with no model,
+ * so the switch also takes it off the model it runs on.
  *
  * AN EDIT KEEPS ITS SEATS. Choosing what a model does, in an edit, starts from
  * the seats it serves now, never every seat: an edit made for its sign-in
@@ -58,6 +63,7 @@ import type { ModelsData } from "../../data.ts";
 import { JobGlyph } from "../../JobGlyph.tsx";
 import { seatName } from "../../places.ts";
 import {
+  ADVISOR_USE,
   ASSISTANT_USE,
   CATEGORY_WORDS,
   EVERYTHING,
@@ -68,11 +74,12 @@ import {
 } from "../../words.ts";
 import { canExecute, factsOf, type Draft } from "../draft.ts";
 
-/** The choices, in the order offered: every seat job, each category, the Assistant, none yet. */
+/** The choices, in the order offered: every seat job, each category, Ask Crewlet, the Advisor, none yet. */
 const CHOICES: readonly Exclude<Intent, "custom">[] = [
   "all",
   ...CATEGORY_ORDER,
   "assistant",
+  "advisor",
   "none",
 ];
 
@@ -96,12 +103,12 @@ function currentFor(data: Pick<ModelsData, "models">, job: SeatJob): Map<string,
  * Every seat that changes model when `key`'s uses go from `was` to `next`, by
  * its name: a seat's category added to `key` says the model it runs on today
  * and that it moves to `key`; one taken off says it no longer runs on `key`.
- * The Assistant too. What Review lists before a write, so no move is a
- * surprise. Each line is a change from today; an edit that moves nothing has
- * none.
+ * Ask Crewlet and the Advisor too. What Review lists before a write, so no
+ * move is a surprise. Each line is a change from today; an edit that moves
+ * nothing has none.
  */
 export function seatChangesOf(
-  data: Pick<ModelsData, "models" | "seats" | "assistant">,
+  data: Pick<ModelsData, "models" | "seats" | "assistant" | "advisor">,
   key: string,
   was: Uses,
   next: Uses,
@@ -136,6 +143,13 @@ export function seatChangesOf(
     const today = data.assistant.key;
     lines.push(`Ask Crewlet: ${today && today !== key ? today : "no model"} → ${name}`);
   }
+  if (next.advisor && !was.advisor) {
+    const today = data.advisor.key;
+    lines.push(`Advisor: ${today && today !== key ? today : "no model"} → ${name}`);
+  }
+  if (!next.advisor && was.advisor) {
+    lines.push(`Advisor: no longer on ${name}, its checks run with no model`);
+  }
   return lines;
 }
 
@@ -147,7 +161,7 @@ function servedBy(uses: Uses): string[] {
 const jobsOf = (intent: Exclude<Intent, "custom">): readonly SeatJob[] =>
   intent === "all"
     ? SEAT_JOBS
-    : intent === "none" || intent === "assistant"
+    : intent === "none" || intent === "assistant" || intent === "advisor"
       ? []
       : CATEGORY_JOBS[intent];
 
@@ -171,11 +185,14 @@ export function sensibleSeats(
 
 /**
  * The plain-language account of a draft's uses, for the review: one sentence
- * per group of categories with the same seats, what each replaces, and the
- * Assistant on a line of its own. Seats by their names, never their handles
- * (design QA M8).
+ * per group of categories with the same seats, what each replaces, and Ask
+ * Crewlet and the Advisor each on a line of its own. Seats by their names,
+ * never their handles (design QA M8).
  */
-export function summaryOf(data: Pick<ModelsData, "models" | "seats" | "assistant">, draft: Draft) {
+export function summaryOf(
+  data: Pick<ModelsData, "models" | "seats" | "assistant" | "advisor">,
+  draft: Draft,
+) {
   const key = draft.key || "this model";
   const all = data.seats.map((s) => s.handle);
   const name = (h: string) => seatName(data.seats, h);
@@ -201,6 +218,7 @@ export function summaryOf(data: Pick<ModelsData, "models" | "seats" | "assistant
     }
   }
   if (draft.uses.assistant) lines.push(`Ask Crewlet will answer with ${key}.`);
+  if (draft.uses.advisor) lines.push(`The Advisor will explain its findings with ${key}.`);
   if (lines.length === 0)
     return [`No seat uses ${key} yet. Every seat stays on the model it has now.`];
   return lines;
@@ -228,7 +246,7 @@ export function UseItFor({
   onChange,
 }: {
   draft: Draft;
-  data: Pick<ModelsData, "models" | "seats" | "assistant">;
+  data: Pick<ModelsData, "models" | "seats" | "assistant" | "advisor">;
   /** In an edit, what the model is used for today: a choice starts from its seats. Null when adding. */
   served: Uses | null;
   /** The engine's refusal of a seat or the assistant this write names, in words. */
@@ -242,6 +260,11 @@ export function UseItFor({
   // until its model is removed on its own page, so it moves when another model
   // is chosen for it.
   const holdsAssistant = !!draft.key && was === draft.key;
+  // THE MODEL THE ADVISOR RUNS ON keeps it through another choice here, until
+  // its own switch takes it off.
+  const holdsAdvisor = !!draft.key && data.advisor.key === draft.key;
+  const noHelper = (who: string) =>
+    `${who} runs only on a harness the engine can leave with no tool of its own, which ${product(draft.harness)} is not.`;
   const intentSeats = useMemo(() => {
     if (draft.intent === "custom") return [];
     const job = jobsOf(draft.intent)[0];
@@ -275,10 +298,24 @@ export function UseItFor({
         // its web tools are turned off for Ask Crewlet's runs whatever the
         // entry says, so nothing about the entry has to change for it.
         ...(!factsOf(draft.harness).assistant
-          ? {
-              disabled: true,
-              disabledReason: `Ask Crewlet runs only on a harness the engine can leave with no tool of its own, which ${product(draft.harness)} is not.`,
-            }
+          ? { disabled: true, disabledReason: noHelper("Ask Crewlet") }
+          : {}),
+      };
+    }
+    if (intent === "advisor") {
+      return {
+        value: intent,
+        label: (
+          <Tooltip content={ADVISOR_USE.tip} placement="top">
+            <span>{ADVISOR_USE.label}</span>
+          </Tooltip>
+        ),
+        media: <JobGlyph job="advisor" />,
+        ...(holdsAdvisor ? { tag: "In use" } : {}),
+        detail: <Detail hint={`${ADVISOR_USE.hint} Company-wide, with no seats.`} />,
+        // THE SAME RULE AS ASK CREWLET'S: the engine runs both helpers with no tool of their own.
+        ...(!factsOf(draft.harness).assistant
+          ? { disabled: true, disabledReason: noHelper("The Advisor") }
           : {}),
       };
     }
@@ -323,13 +360,21 @@ export function UseItFor({
         // AN EDIT KEEPS THE SEATS IT SERVES; only an add starts from a sensible set.
         served ? servedBy(served) : sensibleSeats(data, intent),
         intent === "assistant" || holdsAssistant,
+        intent === "advisor" || (holdsAdvisor && draft.uses.advisor),
       ),
     });
   };
   const pickSeats = (seats: string[]) => {
-    if (draft.intent === "none" || draft.intent === "custom" || draft.intent === "assistant")
+    if (
+      draft.intent === "none" ||
+      draft.intent === "custom" ||
+      draft.intent === "assistant" ||
+      draft.intent === "advisor"
+    )
       return;
-    onChange({ uses: usesForIntent(draft.intent, seats, draft.uses.assistant) });
+    onChange({
+      uses: usesForIntent(draft.intent, seats, draft.uses.assistant, draft.uses.advisor),
+    });
   };
   /** One seat's category switched on or off: every job in it at once. */
   const setSeatCategory = (seat: string, category: JobCategory, on: boolean) => {
@@ -337,9 +382,13 @@ export function UseItFor({
     onChange({ uses, intent: intentOf(uses) });
   };
   const seatPicker =
-    draft.intent !== "none" && draft.intent !== "custom" && draft.intent !== "assistant";
-  // THE ASSISTANT BESIDE SEAT WORK is said under the choice, since the choice names one use.
+    draft.intent !== "none" &&
+    draft.intent !== "custom" &&
+    draft.intent !== "assistant" &&
+    draft.intent !== "advisor";
+  // A HELPER BESIDE ANOTHER USE is said under the choice, since the choice names one use.
   const assistantBeside = draft.uses.assistant && draft.intent !== "assistant";
+  const advisorBeside = draft.uses.advisor && draft.intent !== "advisor";
 
   return (
     <div className="models-stack models-who">
@@ -355,6 +404,11 @@ export function UseItFor({
         <Text as="p" variant="caption" tone="secondary">
           It also answers in Ask Crewlet
           {holdsAssistant ? ", until another model is chosen for it" : ""}.
+        </Text>
+      ) : null}
+      {advisorBeside ? (
+        <Text as="p" variant="caption" tone="secondary">
+          It also explains the Advisor&apos;s findings.
         </Text>
       ) : null}
       {error ? (
@@ -434,6 +488,28 @@ export function UseItFor({
                   ? "assistant"
                   : draft.intent === "assistant" && !on
                     ? "none"
+                    : draft.intent;
+              onChange({ uses, intent });
+            }}
+          />
+        ) : null}
+        {factsOf(draft.harness).assistant ? (
+          <Switch
+            label="Also explain the Advisor's findings"
+            description={
+              holdsAdvisor
+                ? "The Advisor explains its findings with this model. Turn this off to run its checks with no model."
+                : ADVISOR_USE.tip
+            }
+            checked={draft.uses.advisor}
+            onCheckedChange={(on) => {
+              const uses = { ...draft.uses, advisor: on };
+              // THE ADVISOR ALONE IS A CHOICE OF ITS OWN; beside another use it changes no choice.
+              const intent =
+                draft.intent === "none" && on
+                  ? "advisor"
+                  : draft.intent === "advisor" && !on
+                    ? intentOf(uses)
                     : draft.intent;
               onChange({ uses, intent });
             }}

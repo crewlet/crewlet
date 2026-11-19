@@ -7,17 +7,42 @@
  *   updated change, Apply the updated change or Keep it open;
  * - resolved: "No longer needed", with what shows it, and nothing sent;
  * - not applicable: why, and nothing sent;
- * - a permission the reader lacks: who can apply it, the finding left open.
+ * - a permission the reader lacks: who can apply it, the finding left open;
+ * - a finding no longer open (applied from another window, closed since the
+ *   page read it): where it now stands, and nothing sent.
  *
  * After a send, the finding reads "Applied, checking its effect until …".
+ *
+ * THE FIX'S CHOICES BELONG TO AN ANSWER THAT CAN SEND. A fix offering several
+ * changes (a grant to one of seven agents) is chosen from only once the
+ * engine answered that the condition holds: while it checks, after it answered
+ * that nothing is to be sent, and after a failure, there is nothing to choose,
+ * and a live choice would invite one. NONE IS CHOSEN FOR THE PERSON: which
+ * agent gets an access, or whether a schedule is slowed or removed, is theirs
+ * to pick, and the change is shown and sent only once they have.
+ *
+ * ON A PHONE IT IS A SHEET (`phoneSheet`): its facts, choices and change fill
+ * the screen and scroll between a still head and foot, where a centred card
+ * scrolled them in a box a few rows tall.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, Callout, ChoiceList, DiffList, Text, type DiffRow } from "@crewlethq/ui";
+import { Button, Callout, ChangeList, ChoiceList, Text, type ChangeListRow } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
-import { fmtDateTime } from "~/lib/format.ts";
+import { useClient } from "~/lib/store-hooks.ts";
+import { ago } from "~/lib/ago.ts";
+import { useNow } from "~/lib/clock.ts";
+import { fmtAt } from "~/lib/format.ts";
 import { marked } from "~/ui/Problems.tsx";
-import { applyFrom, failureWords, recheck, sendable, type ApplyState } from "./apply.ts";
+import {
+  applyFrom,
+  failureWords,
+  recheck,
+  sendable,
+  SentUntold,
+  type ApplyState,
+  type ReadFinding,
+} from "./apply.ts";
 import type {
   AdvisorKeptFinding,
   AdvisorMoved,
@@ -25,35 +50,41 @@ import type {
   AdvisorRecheck,
 } from "~/protocol/advisorFindings.ts";
 
-import { CLOSE_REASONS, factWords } from "./words.ts";
+import { CLOSE_REASONS, STATE_WORDS, factWords } from "./words.ts";
 
-/** What the change sets, field by field, as the kit's diff draws it. */
-export function previewRows(rows: readonly AdvisorPreviewRow[]): DiffRow[] {
-  return rows.map((row) => ({
-    kind: row.before === null ? "added" : row.after === null ? "removed" : "changed",
-    path: row.label,
-    ...(row.before === null ? {} : { from: row.before }),
-    ...(row.after === null ? {} : { to: row.after }),
-  }));
+/** What the change sets, field by field: the engine's label, the value now and the value it would hold. */
+export function previewRows(rows: readonly AdvisorPreviewRow[]): ChangeListRow[] {
+  return rows.map((row): ChangeListRow => {
+    if (row.before === null) return { kind: "added", label: row.label, to: row.after ?? "" };
+    if (row.after === null) return { kind: "removed", label: row.label, from: row.before };
+    return { kind: "changed", label: row.label, from: row.before, to: row.after };
+  });
 }
 
 /** What moved since the finding was made, was beside now. */
-export function movedRows(moved: readonly AdvisorMoved[]): DiffRow[] {
+export function movedRows(moved: readonly AdvisorMoved[]): ChangeListRow[] {
   return moved.map((m) => ({
     kind: "changed",
-    path: m.label,
+    label: m.label,
     from: String(m.was ?? "none"),
     to: String(m.now ?? "none"),
   }));
 }
 
-/** The dialog's title for each answer. */
-function titleOf(state: ApplyState, finding: AdvisorKeptFinding): string {
-  if (state.kind === "checking") return "Checking it still holds";
-  if (state.kind === "applied") return "Applied";
-  const check = state.check;
-  if (check === null) return finding.title;
-  switch (check.outcome) {
+/** The dialog's title for each answer: always where it stands, never the finding, which is its subtitle. */
+export function titleOf(state: ApplyState): string {
+  switch (state.kind) {
+    case "checking":
+      return "Checking it still holds";
+    case "applied":
+      return "Applied";
+    case "moved":
+      return state.finding.state === "applied" ? "Already applied" : "Already closed";
+    case "failed":
+      if (state.saved) return "The change was saved";
+      return state.check === null ? "Couldn't check it" : "The change wasn't applied";
+  }
+  switch (state.check.outcome) {
     case "holds":
       return "It still holds";
     case "changed":
@@ -75,11 +106,21 @@ export function ApplyDialog({
   /** The finding moved (applied, resolved, retired, revised): the page reads it again. */
   onSettled: () => void;
 }) {
+  const { socket } = useClient();
+  const read: ReadFinding = useCallback((id) => socket.query("advisor_finding", { id }), [socket]);
   const [state, setState] = useState<ApplyState>({ kind: "checking" });
   // WHICH OF THE FIX'S OPTIONS IS RE-CHECKED: the one the person picks, where
-  // the engine offers more than one, each re-checked as it is picked.
+  // the engine offers more than one, each re-checked as it is picked. Until
+  // they pick, the first re-check reads the condition alone (on the first
+  // option, as the engine builds one), and no change is shown or offered.
   const options = finding.fix.options;
-  const [option, setOption] = useState(0);
+  const choosing = options.length > 1;
+  const [picked, setPicked] = useState<number | null>(null);
+  const option = picked ?? 0;
+  const ready = !choosing || picked !== null;
+  // WHETHER AN ANSWER OFFERED A CHANGE TO SEND, after which the choices stay
+  // in view while a newly picked one is re-checked.
+  const [offered, setOffered] = useState(false);
   const live = useRef(new AbortController());
   const settled = useRef(false);
 
@@ -89,13 +130,16 @@ export function ApplyDialog({
   const run = useCallback(async (signal: AbortSignal, step: () => Promise<ApplyState>) => {
     try {
       const next = await step();
-      if (!signal.aborted) setState(next);
+      if (signal.aborted) return;
+      if (next.kind === "checked" && sendable(next.check)) setOffered(true);
+      setState(next);
     } catch (err) {
       if (!signal.aborted) {
         setState((was) => ({
           kind: "failed",
           message: failureWords(err),
           check: was.kind === "checked" || was.kind === "sending" ? was.check : null,
+          saved: err instanceof SentUntold,
         }));
       }
     }
@@ -107,18 +151,20 @@ export function ApplyDialog({
     const controller = new AbortController();
     live.current = controller;
     setState({ kind: "checking" });
-    void run(controller.signal, async () => ({
-      kind: "checked",
-      check: await recheck(finding.id, option, controller.signal),
-    }));
+    void run(controller.signal, async () => {
+      const answer = await recheck(finding.id, option, read, controller.signal);
+      return answer.kind === "moved" ? answer : { kind: "checked", check: answer.check };
+    });
     return () => controller.abort();
-  }, [finding.id, option, run]);
+  }, [finding.id, option, read, run]);
 
-  // ANY ANSWER BUT "HOLDS" MOVED THE FINDING (revised, closed): the page is
-  // told once, so its row says so when the dialog closes.
+  // ANY ANSWER BUT "HOLDS" MOVED THE FINDING (revised, closed, applied
+  // elsewhere): the page is told once, so its row says so when the dialog closes.
   useEffect(() => {
     const moved =
-      state.kind === "applied" || (state.kind === "checked" && state.check.outcome !== "holds");
+      state.kind === "applied" ||
+      state.kind === "moved" ||
+      (state.kind === "checked" && state.check.outcome !== "holds");
     if (moved && !settled.current) {
       settled.current = true;
       onSettled();
@@ -128,24 +174,33 @@ export function ApplyDialog({
   const apply = (check: AdvisorRecheck) => {
     setState({ kind: "sending", check });
     const { signal } = live.current;
-    void run(signal, async () => {
-      const answer = await applyFrom(finding.id, option, check, Date.now, signal);
-      return answer.kind === "applied"
-        ? { kind: "applied", finding: answer.finding }
-        : { kind: "checked", check: answer.check };
-    });
+    void run(signal, () => applyFrom(finding.id, option, check, Date.now, read, signal));
   };
 
   const check = state.kind === "checked" || state.kind === "sending" ? state.check : null;
   const busy = state.kind === "checking" || state.kind === "sending";
   const offer = check !== null && sendable(check);
+  const showChoices =
+    choosing && offered && (offer || state.kind === "checking" || state.kind === "sending");
 
   return (
     <Modal
       open
+      phoneSheet
       onClose={onClose}
-      title={titleOf(state, finding)}
-      subtitle={marked(finding.title)}
+      title={titleOf(state)}
+      // WHOM IT IS ABOUT, beside what: a class's sentence is one for every
+      // subject ("Agents that learn on their main model."), and the change
+      // the dialog sends is to one of them.
+      subtitle={
+        finding.subject.name ? (
+          <>
+            {finding.subject.name}: {marked(finding.title)}
+          </>
+        ) : (
+          marked(finding.title)
+        )
+      }
       closeDisabledReason={state.kind === "sending" ? "Sending the change" : undefined}
       footer={
         <>
@@ -159,7 +214,13 @@ export function ApplyDialog({
           {offer ? (
             <Button
               variant="primary"
-              disabledReason={state.kind === "sending" ? "Sending the change" : undefined}
+              disabledReason={
+                state.kind === "sending"
+                  ? "Sending the change"
+                  : ready
+                    ? undefined
+                    : "Pick the change to make first"
+              }
               onClick={() => apply(check)}
             >
               {check.outcome === "changed" ? "Apply the updated change" : "Apply change"}
@@ -169,42 +230,50 @@ export function ApplyDialog({
       }
     >
       <div className="col gap-3" aria-busy={busy}>
-        {options.length > 1 && state.kind !== "applied" ? (
-          <ChoiceList
-            label="Which change"
-            value={String(option)}
-            options={options.map((o, i) => ({ value: String(i), label: o.label }))}
-            disabled={state.kind === "sending"}
-            onChange={(value) => setOption(Number(value))}
-          />
-        ) : null}
-        {state.kind === "checking" ? (
+        {state.kind === "checking" && !showChoices ? (
           <Text as="p" tone="secondary">
             Reading the latest records and building the change again, so nothing is applied on what
             was true when it was found.
           </Text>
         ) : null}
         {state.kind === "applied" ? <Applied finding={state.finding} /> : null}
+        {state.kind === "moved" ? <Standing finding={state.finding} /> : null}
         {state.kind === "failed" ? (
-          <Callout variant="danger" title="Nothing was applied">
+          <Callout
+            variant={state.saved ? "warning" : "danger"}
+            title={state.saved ? "The Advisor was not told" : "Nothing was applied"}
+          >
             {state.message}
           </Callout>
         ) : null}
-        {check ? <Answer check={check} /> : null}
+        {check ? <Answer check={check} change={ready} /> : null}
+        {showChoices ? (
+          <ChoiceList
+            label="Which change"
+            value={picked === null ? null : String(picked)}
+            options={options.map((o, i) => ({ value: String(i), label: o.label }))}
+            disabled={state.kind === "sending"}
+            onChange={(value) => setPicked(Number(value))}
+          />
+        ) : null}
+        {check && offer && ready && check.preview ? (
+          <Change check={check} {...(options[option] ? { option: options[option].label } : {})} />
+        ) : null}
       </div>
     </Modal>
   );
 }
 
-/** What the engine answered, in the words of its outcome. */
-function Answer({ check }: { check: AdvisorRecheck }) {
+/** What the engine answered, in the words of its outcome, and the facts it read now. */
+function Answer({ check, change }: { check: AdvisorRecheck; change: boolean }) {
+  const now = useNow();
   const facts = check.finding.evidence.facts;
   return (
     <>
       {check.outcome === "holds" ? (
         <Text as="p">
-          Checked {fmtDateTime(check.checked_at)} against the latest records: the condition and its
-          change are the same as when it was found.
+          Checked {ago(check.checked_at, now)} against the latest records: the condition{" "}
+          {change ? "and its change are" : "is"} the same as when it was found.
         </Text>
       ) : null}
       {check.outcome === "changed" ? (
@@ -236,10 +305,10 @@ function Answer({ check }: { check: AdvisorRecheck }) {
       ) : null}
       {check.moved.length > 0 ? (
         <section aria-label="What moved since it was found" className="col gap-1">
-          <Text as="h3" variant="label">
-            {check.outcome === "changed" ? "What moved" : "What shows it"}
-          </Text>
-          <DiffList rows={movedRows(check.moved)} layout="auto" labels={{ to: "now" }} />
+          <ChangeList
+            heading={check.outcome === "changed" ? "What moved" : "What shows it"}
+            rows={movedRows(check.moved)}
+          />
         </section>
       ) : null}
       {(check.outcome === "holds" || check.outcome === "changed") && facts.length > 0 ? (
@@ -257,35 +326,72 @@ function Answer({ check }: { check: AdvisorRecheck }) {
           </ul>
         </section>
       ) : null}
-      {check.preview && (check.outcome === "holds" || check.outcome === "changed") ? (
-        <section aria-label="The change" className="col gap-1">
-          <Text as="h3" variant="label">
-            {check.outcome === "changed" ? "The updated change" : "The change"}
-          </Text>
-          <Text as="p">{marked(check.finding.fix.sentence)}</Text>
-          <DiffList
-            rows={previewRows(check.preview.rows)}
-            layout="auto"
-            emptyMessage="The change sets nothing that is not already so."
-          />
-          {check.preview.notes.map((note) => (
-            <Text as="p" key={note} tone="secondary">
-              {marked(note)}
-            </Text>
-          ))}
-        </section>
-      ) : null}
     </>
+  );
+}
+
+/**
+ * The change the person would send, in words: the option they picked (which
+ * names what it changes, "Let Agent SWE watch the engine's health") or the
+ * fix's own sentence, then each field the engine labelled, as it is and as it
+ * would be.
+ */
+function Change({ check, option }: { check: AdvisorRecheck; option?: string }) {
+  const preview = check.preview!;
+  return (
+    <section aria-label="The change" className="col gap-1">
+      <Text as="h3" variant="label">
+        {check.outcome === "changed" ? "The updated change" : "The change"}
+      </Text>
+      <Text as="p">{option ?? marked(check.finding.fix.sentence)}</Text>
+      {preview.rows.length > 0 ? (
+        <ChangeList rows={previewRows(preview.rows)} />
+      ) : (
+        <Text as="p" tone="secondary">
+          The change sets nothing that is not already so.
+        </Text>
+      )}
+      {preview.notes.map((note) => (
+        <Text as="p" key={note} tone="secondary">
+          {marked(note)}
+        </Text>
+      ))}
+    </section>
   );
 }
 
 /** A sent change, waiting on the engine's check of its effect. */
 function Applied({ finding }: { finding: AdvisorKeptFinding }) {
+  const now = useNow();
   return (
     <Callout variant="success" title="The change was applied">
       {finding.effect_due_at
-        ? `The Advisor checks its effect until ${fmtDateTime(finding.effect_due_at)}, and closes the finding once the condition clears.`
+        ? `The Advisor checks its effect until ${fmtAt(finding.effect_due_at, now)}, and closes the finding once the condition clears.`
         : "The Advisor checks its effect, and closes the finding once the condition clears."}
+    </Callout>
+  );
+}
+
+/** A finding that moved off the list since the page read it: where it stands, and that nothing was sent. */
+function Standing({ finding }: { finding: AdvisorKeptFinding }) {
+  const now = useNow();
+  if (finding.state === "applied") {
+    return (
+      <Callout variant="neutral" title="Nothing was sent from here">
+        {finding.effect_due_at
+          ? `It was applied from another window or by another person. The Advisor checks its effect until ${fmtAt(finding.effect_due_at, now)}.`
+          : "It was applied from another window or by another person. The Advisor checks its effect."}
+      </Callout>
+    );
+  }
+  const reason = finding.close_reason
+    ? CLOSE_REASONS[finding.close_reason]
+    : STATE_WORDS[finding.state];
+  return (
+    <Callout variant="neutral" title="Nothing was sent from here">
+      {finding.closed_at
+        ? `${reason}. It closed ${ago(finding.closed_at, now)} and moves to History.`
+        : `${reason}. It moves to History.`}
     </Callout>
   );
 }

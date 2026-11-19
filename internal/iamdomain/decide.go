@@ -20,15 +20,14 @@ import (
 )
 
 // THE DECIDES: what a caller asks this domain to do. Each takes ONE snapshot,
-// forms its expectation inside it and lets the broker arbitrate; this domain's
-// own rules all run inside that snapshot, since each decides state another
-// writer is changing concurrently.
+// forms its expectation inside it and lets the broker arbitrate; every rule
+// runs inside that snapshot, since another writer changes the state concurrently.
 
 // Unique is one of the three values the directory keeps to one holder: a
-// person's address, their login and the seat they are bound to.
+// person's address, their login and their seat.
 //
-// Its own type, not seal.go's [Field] (a SEALED value): a refusal naming who
-// holds a value is about uniqueness, never sealing.
+// Its own type, not seal.go's [Field]: a refusal naming a holder is about
+// uniqueness, never sealing.
 type Unique string
 
 // The three unique values.
@@ -40,24 +39,24 @@ const (
 
 // ErrTaken reports an address, a login or a seat somebody else holds.
 //
-// It NAMES THE HOLDER, so the refusal is one somebody can act on rather than
-// retry. A surface decides how much to show: an administrator is told who, an
+// It NAMES THE HOLDER, so the refusal is actionable rather than retried. A
+// surface decides how much to show: an administrator is told who, an
 // invitation link's holder only that it is taken.
 type ErrTaken struct {
 	// Field is which value is taken.
 	Field Unique
 
-	// Value is the login or the seat in the clear, or an address's BLIND: this
+	// Value is the login or seat in the clear, or an address's BLIND: this
 	// package never holds an address in the clear.
 	Value string
 
 	// Person is who holds it, or empty where an open invitation does.
 	Person string
 
-	// Invitation is the open invitation holding the value, or empty. An
-	// invitation holds an ADDRESS and a SEAT ([Field] says which) until it is
-	// redeemed, cancelled or ages out ([heldByInvitation]); a surface's remedy
-	// branches on the field: an address is the invitee's, a seat the chart's.
+	// Invitation is the open invitation holding the value, or empty. It holds an
+	// ADDRESS and a SEAT until redeemed, cancelled or aged out
+	// ([heldByInvitation]); the remedy branches on Field: an address is the
+	// invitee's, a seat the chart's.
 	Invitation string
 }
 
@@ -71,27 +70,23 @@ func (e *ErrTaken) Error() string {
 }
 
 // THE TWO ENROLMENTS: an administrator's create ([Writer.Create]) and an
-// invitation's redemption ([Writer.Redeem]). Both create somebody WHOLE (row,
-// first credential, login, address, seat) in ONE [OpEnrol] record formed by
-// one decide ([Writer.enrol]) that refuses any value somebody else holds
-// ([ErrTaken]), so a refusal publishes nothing and leaves nothing half-made.
-// Two verbs, because they differ in the seat rule, what holds a value against
-// them, the credential and the answer, and one verb let either caller fill in
-// the other's fields. Every person lands on a human seat (package doc, "Every
-// person holds a HUMAN seat"). A create confers only what its caller holds
-// ([Writer.MayConfer]), the Tier A token included; a redemption, whose writer
-// is the node's own and holds admin, only what its invitation carries
-// ([Writer.redeemable]).
+// invitation's redemption ([Writer.Redeem]). Both create somebody WHOLE in ONE
+// [OpEnrol] record formed by one decide ([Writer.enrol]) that refuses any value
+// somebody else holds ([ErrTaken]), so a refusal leaves nothing half-made. Two
+// verbs because they differ in seat rule, what holds a value against them, the
+// credential and the answer. Every person lands on a human seat (package doc).
+// A create confers only what its caller holds ([Writer.MayConfer]), the Tier A
+// token included; a redemption, whose writer holds admin, only what its
+// invitation carries ([Writer.redeemable]).
 
 // Create creates a person or a service account WHOLE in ONE directory record,
 // on an administrator's authority, and for a PERSON issues their first
-// password link in that record, shown once to the administrator, who holds
-// every grant it opens ([Writer.MayConfer]). The seat ([Creation.Seat]) is
-// refused where a person or an open invitation holds it ([heldByInvitation]).
-// The link is a `reset` credential ([MethodReset]) stamped with the
-// snapshot's counters and derived from the person under the company's key
-// ([Blinder.PasswordLinkID], [Blinder.PasswordLinkSecret]), not minted, so a
-// ledger-answered retry, which never reruns the decide, gets the link the
+// password link in it, shown once to the administrator, who holds every grant
+// it opens ([Writer.MayConfer]). The seat is refused where a person or an open
+// invitation holds it ([heldByInvitation]).
+// The link is a `reset` credential ([MethodReset]) stamped with the snapshot's
+// counters and derived from the person under the company's key, not minted, so
+// a ledger-answered retry, which never reruns the decide, gets the link the
 // first attempt issued ([Writer.firstLinkAs]). A service account gets none.
 // [Creation.PersonID] is [CreatedPersonID] of the operation key, so a create
 // reaching somebody who exists is [ErrOperationReused], never a rewrite.
@@ -106,9 +101,8 @@ func (w *Writer) Create(ctx context.Context, in Creation) (Created, error) {
 	if err := w.MayConfer(nil, in.Grants); err != nil {
 		return Created{}, err
 	}
-	// THE SEAT BEFORE THE BLIND: the blind may MINT the company's key (a fresh
-	// node's first address), and a create the running org refuses must refuse
-	// with the seat's own remedy, having minted nothing.
+	// THE SEAT BEFORE THE BLIND: the blind may MINT the company's key, and a
+	// refused create must refuse with the seat's remedy, having minted nothing.
 	var (
 		seat string
 		err  error
@@ -127,8 +121,8 @@ func (w *Writer) Create(ctx context.Context, in Creation) (Created, error) {
 		credentials []Credential
 	)
 	if in.Kind == iam.KindPerson {
-		// A person always has an address ([Creation.validate]), so the blinder
-		// that derived its blind derives the link.
+		// A person always has an address ([Creation.validate]), so its blinder
+		// derives the link.
 		if link, err = firstPasswordLink(blinder, in.PersonID,
 			in.LinkExpiresAt); err != nil {
 			return Created{}, err
@@ -173,15 +167,13 @@ func firstPasswordLink(blinder *Blinder, personID string,
 	return &PasswordLink{Credential: id, Secret: secret, ExpiresAt: expires}, nil
 }
 
-// firstLinkAs reads back the first password link a create issued after the
-// framework answered its retry from the ledger ([statelog.Result.Collapsed]):
-// the decide never ran, so whether the link still opens is asked of the rows
-// with the spend path's predicate ([ResetRow.Opens]). Three answers:
+// firstLinkAs reads back the first password link after the ledger answered a
+// create's retry ([statelog.Result.Collapsed]): the decide never ran, so the
+// rows are asked with the spend path's predicate ([ResetRow.Opens]):
 //
-//   - it opens: the link with its stored expiry (a later retry is not a later
-//     link);
-//   - it no longer does (spent, revoked, ended by a counter, aged out, person
-//     removed): [Created.LinkClosed], since the remedy is a reset link;
+//   - it opens: the link with its stored expiry;
+//   - it no longer does (spent, revoked, ended, aged out, person removed):
+//     [Created.LinkClosed], the remedy being a reset link;
 //   - this node has not applied the create: [NotReadBack]. Applied with no row
 //     is the removal arm, since only a removal deletes the row.
 func (w *Writer) firstLinkAs(ctx context.Context, result statelog.Result,
@@ -221,10 +213,9 @@ func (w *Writer) firstLinkAs(ctx context.Context, result statelog.Result,
 
 // Creation is what an administrator's create needs.
 type Creation struct {
-	// PersonID is [CreatedPersonID] of the create's operation key, minted by
-	// the caller, which holds the key, so a retry names the same person
-	// whether answered from the ledger or decided again. A uuid7: the first
-	// password link is derived at its instant ([Blinder.PasswordLinkID]).
+	// PersonID is [CreatedPersonID] of the operation key, so a retry names the
+	// same person. A uuid7: the first link is derived at its instant
+	// ([Blinder.PasswordLinkID]).
 	PersonID string
 
 	// Kind is a person or a machine — a service account.
@@ -234,14 +225,14 @@ type Creation struct {
 	// ([Creation.validate]).
 	Stage iam.Stage
 
-	// Name and Email are CLEARTEXT here and nowhere after: they are sealed
-	// before the record is formed. A person's address is REQUIRED (the
-	// interactive login key); a service account's is optional.
+	// Name and Email are CLEARTEXT here and nowhere after: sealed before the
+	// record is formed. A person's address is REQUIRED (the interactive login
+	// key); a service account's is optional.
 	Name  string
 	Email string
 
-	// Login is REQUIRED, in the holder's kind's grammar: a person's dotted, a
-	// machine's coloned ([validateEnrolment] says why a person needs one).
+	// Login is REQUIRED, in the kind's grammar: a person's dotted, a machine's
+	// coloned.
 	Login string
 
 	Grants []iam.Grant
@@ -252,14 +243,13 @@ type Creation struct {
 	Seat string
 
 	// LinkExpiresAt is when a person's first password link stops opening:
-	// REQUIRED and ahead of the writer's clock for a person (a zero read as
-	// `never` sets their password for the company's life), refused for a
-	// service account. The surface reads it off
+	// REQUIRED and ahead of the writer's clock for a person (a zero would mean
+	// `never`), refused for a service account. The surface reads it off
 	// [credential.EnrolmentLinkLifetime].
 	LinkExpiresAt time.Time
 
-	// OpID is the record's operation id in the state log's grammar (a create's
-	// key, a bare uuid7, already is); see [Redemption.OpID].
+	// OpID is the record's operation id in the state log's grammar; see
+	// [Redemption.OpID].
 	OpID   string
 	Reason string
 }
@@ -269,18 +259,17 @@ type Created struct {
 	statelog.Result
 
 	// Link is the created PERSON's first password link, on a landing or a
-	// ledger-answered retry while it still opens; nil otherwise. Shown once by
-	// the caller and kept nowhere: the estate holds only its verifier.
+	// ledger-answered retry while it still opens; nil otherwise. Shown once and
+	// kept nowhere: the estate holds only its verifier.
 	Link *PasswordLink
 
-	// LinkClosed says a retry found the person's first password link no longer
-	// opens ([Writer.firstLinkAs]): the caller hands on a reset link.
+	// LinkClosed says a retry found the link no longer opens
+	// ([Writer.firstLinkAs]): the caller hands on a reset link.
 	LinkClosed bool
 }
 
 // PasswordLink is a created person's first password link: the `reset`
-// credential's id and the secret that opens it, which a surface joins as
-// `<id>.<secret>` in the reset screen's fragment.
+// credential's id and its secret, which a surface joins as `<id>.<secret>`.
 type PasswordLink struct {
 	// Credential is the link's credential id ([Blinder.PasswordLinkID]).
 	Credential string
@@ -294,9 +283,8 @@ type PasswordLink struct {
 }
 
 // validate refuses a create that could not land, before anything is sealed,
-// blinded or read, at the writer's clock now. The seat and link come after
-// findability and the login grammar, whose refusals name the field typed
-// wrong.
+// blinded or read. The seat and link come after findability and the login
+// grammar, whose refusals name the field typed wrong.
 func (in Creation) validate(now time.Time) error {
 	if err := validateEnrolment(enrolment{
 		personID: in.PersonID, kind: in.Kind, stage: in.Stage,
@@ -311,10 +299,8 @@ func (in Creation) validate(now time.Time) error {
 			"on the human seat they will hold", ErrSeatRequired, in.Login)
 	case in.Kind == iam.KindPerson && in.Stage != iam.StageActive:
 		// ACTIVE FROM THE MOMENT IT LANDS: under a stage that may not act the
-		// link is a credential to nothing, and one the link cannot open
-		// ([ResetStages]) answers the retry with [Created.LinkClosed] where
-		// the first attempt got a link. Another stage is a stage change
-		// afterwards.
+		// link opens nothing, and one it cannot open ([ResetStages]) would
+		// answer a retry with [Created.LinkClosed] where the first got a link.
 		return fmt.Errorf("%w: a new person starts as %s, not %q. Add them, "+
 			"then change their stage", ErrInvalid, iam.StageActive,
 			in.Stage)
@@ -338,13 +324,12 @@ func (in Creation) validate(now time.Time) error {
 // names and spending its link, in ONE directory record.
 //
 // The invitation is the authority: its grants, seat and link secret are
-// checked in the record's own snapshot ([Writer.redeemable]), and the trail
-// names its issuer as deciding the grants. The seat must still be a human seat
-// of the running company; that refusal is the link's ([ErrRefused]), its
-// remedy a new invitation. In the snapshot only a PERSON holds the seat
-// against it: the invitation itself holds it, and an older open one on the
-// same seat must not deadlock both. A retry answered from the ledger is
-// refused as a link already used ([Writer.enrol]).
+// checked in the record's snapshot ([Writer.redeemable]), and the trail names
+// its issuer as deciding the grants. The seat must still be a human seat of the
+// running company; that refusal is the link's ([ErrRefused]), its remedy a new
+// invitation. Only a PERSON holds the seat against it: an older open
+// invitation on the same seat must not deadlock both. A retry answered from
+// the ledger is refused as a link already used ([Writer.enrol]).
 func (w *Writer) Redeem(ctx context.Context, in Redemption) (statelog.Result, error) {
 	if err := w.mayAdminister(OpEnrol); err != nil {
 		return statelog.Result{}, err
@@ -359,19 +344,17 @@ func (w *Writer) Redeem(ctx context.Context, in Redemption) (statelog.Result, er
 	seat, err := w.humanSeat(ctx, in.Seat)
 	switch {
 	case errors.Is(err, ErrNoCompany):
-		// The invitation's seat was checked against a company the fleet runs
-		// at its issue, so a node running none has not applied it yet and
-		// another node can redeem the link. Never the issue's "create a
-		// company first", which is advice to an administrator.
+		// The seat was checked against a company at issue, so a node running
+		// none has not applied it yet. Never "create a company first": that is
+		// advice to an administrator.
 		return statelog.Result{}, fmt.Errorf("%w: this invitation is for "+
 			"seat %q, and this node has no company yet. Try again shortly "+
 			"(%v)", statelog.ErrUnavailable, in.Seat, err)
 	case errors.Is(err, statelog.ErrUnavailable):
 		return statelog.Result{}, err
 	case err != nil:
-		// The link's refusal alone: the seat check's own error is an
-		// administrator's invalid value, and wrapped here would tell the
-		// invitee they sent a bad request.
+		// The link's refusal alone: wrapping the seat check's error would tell
+		// the invitee they sent a bad request.
 		return statelog.Result{}, forbidden("this invitation is for a "+
 			"seat that's no longer available").about("invitation %s: %v",
 			in.Invitation, err)
@@ -388,25 +371,24 @@ func (w *Writer) Redeem(ctx context.Context, in Redemption) (statelog.Result, er
 
 // Redemption is what redeeming an invitation needs.
 type Redemption struct {
-	// PersonID is minted per ATTEMPT by the caller, a uuid7: a refused attempt
-	// published nothing, and the link the record spends keeps it single-use.
+	// PersonID is minted per ATTEMPT, a uuid7: a refused attempt published
+	// nothing, and the spent link keeps it single-use.
 	PersonID string
 
 	Stage iam.Stage
 
-	// Name and Email are CLEARTEXT here and nowhere after. Email is the
-	// address the invitation was issued to, opened from its row; the record
-	// refuses any other (holding somebody's link is not holding their
-	// address).
+	// Name and Email are CLEARTEXT here and nowhere after. Email is the address
+	// the invitation was issued to; the record refuses any other (holding
+	// somebody's link is not holding their address).
 	Name  string
 	Email string
 
 	// Login is the one the invitee chose: dotted, a person's grammar.
 	Login string
 
-	// Password is the ONE credential a redemption carries: the invitee's
-	// chosen password as an argon2id verifier ([MethodPassword]). Nothing the
-	// invitee presented could vouch for any other.
+	// Password is the ONE credential a redemption carries: the chosen password
+	// as an argon2id verifier ([MethodPassword]). Nothing the invitee presented
+	// could vouch for any other.
 	Password Credential
 
 	// Grants and Seat are what the invitation carries; the record refuses
@@ -417,18 +399,16 @@ type Redemption struct {
 	// Invitation is the id of the invitation this redeems.
 	Invitation string
 
-	// InvitationSecret is the secret the invitation's link carries beside its
-	// id ([Blinder.InvitationSecret]), REQUIRED: the id is in every snapshot,
-	// backup and proxy log, and a record can be published by more than the
-	// route, so the record checks it against the invitation's verifier in its
-	// own snapshot.
+	// InvitationSecret is the secret the link carries beside its id
+	// ([Blinder.InvitationSecret]), REQUIRED: the id is in every snapshot,
+	// backup and proxy log, and more than the route can publish a record, so
+	// the record checks it against the verifier in its own snapshot.
 	InvitationSecret string
 
 	// OpID is the record's operation id, in the state log's grammar
 	// ([statelog.NewOpID], [statelog.DeriveOpID]): the ledger vouches for a
-	// retry by its instant, so an id outside it reads as minted at the epoch,
-	// and once the ledger loses a row of its kind every retry is answered
-	// `unknown` unpublished.
+	// retry by its instant, so an id outside it reads as minted at the epoch
+	// and, once the ledger loses a row, every retry answers `unknown`.
 	OpID   string
 	Reason string
 }
@@ -444,14 +424,12 @@ func (in Redemption) validate() error {
 		return fmt.Errorf("%w: redeeming an invitation enrols the address it "+
 			"was issued to, and this redemption names none", ErrNotFindable)
 	case in.InvitationSecret == "":
-		// Refused, not invalid: a link without its secret has every dead
-		// link's remedy, a new one.
+		// Refused, not invalid: the remedy is a new link, as for any dead one.
 		return forbidden("this invitation needs the full link, not just "+
 			"its id").about("invitation %s", in.Invitation)
 	case in.Seat == "":
-		// A caller's fault, never the invitee's: every invitation holds a seat
-		// ([Writer.Invite]), and [ErrSeatRequired] would ask the invitee for a
-		// field their form lacks.
+		// A caller's fault: every invitation holds a seat ([Writer.Invite]), and
+		// [ErrSeatRequired] would ask the invitee for a field they lack.
 		return fmt.Errorf("%w: redeeming an invitation binds the human seat "+
 			"it holds, and this redemption names none", ErrInvalid)
 	case in.Password.Method != MethodPassword || in.Password.ID == "" ||
@@ -467,9 +445,8 @@ func (in Redemption) validate() error {
 	})
 }
 
-// enrolment is one [OpEnrol] record's inputs, whichever verb asked. invitation
-// is empty for a create: the one field telling the decide's two authorities
-// apart.
+// enrolment is one [OpEnrol] record's inputs. invitation is empty for a create:
+// the one field telling the decide's two authorities apart.
 type enrolment struct {
 	personID         string
 	kind             iam.Kind
@@ -485,8 +462,8 @@ type enrolment struct {
 }
 
 // enrolmentBlind is the company's blinder and an address's blind, once this
-// writer holds what every enrolment needs: a keyring, and the blind-index key
-// wherever there is an address. No address is no blinder and no blind.
+// writer holds a keyring and, for an address, the blind-index key. No address
+// is no blinder and no blind.
 func (w *Writer) enrolmentBlind(ctx context.Context, email string) (
 	*Blinder, string, error) {
 
@@ -513,16 +490,15 @@ func (w *Writer) enrolmentBlind(ctx context.Context, email string) (
 // place an [OpEnrol] record is formed.
 //
 // Everything a snapshot decides is formed inside the decide, which may run
-// more than once, including the COUNTERS a carried credential is stamped with
-// ([stampIssued]): a first password link is ended by any move of its person's
-// epoch or the session generation after its issue ([Credential.EndedBy]), so
-// stamped zero it would be ended by the first company-wide invalidation (every
-// restore's last step). Sealing stays outside: it reads no snapshot and would
-// draw a fresh nonce on every run.
+// more than once, including the COUNTERS a credential is stamped with
+// ([stampIssued]): a first link is ended by any move of its person's epoch or
+// the session generation after its issue ([Credential.EndedBy]), so stamped
+// zero it would end at the first company-wide invalidation. Sealing stays
+// outside: it reads no snapshot and would draw a fresh nonce on every run.
 func (w *Writer) enrol(ctx context.Context, e enrolment) (statelog.Result, error) {
-	// SEALED ONCE, before the decide. An address is optional and a sealed name
-	// is not: a machine has no mailbox, but its name (`Release pipeline,
-	// raised by Dana`) can name a person, and a removal erases it.
+	// SEALED ONCE, before the decide. A machine has no mailbox, but its name
+	// (`Release pipeline, raised by Dana`) can name a person, and a removal
+	// erases it.
 	sealedName, err := w.sealer.Seal(e.personID, FieldName, e.name)
 	if err != nil {
 		return statelog.Result{}, err
@@ -535,8 +511,7 @@ func (w *Writer) enrol(ctx context.Context, e enrolment) (statelog.Result, error
 		}
 	}
 	// THE SCOPE: the new person's bucket, every leaver whose tombstone the
-	// seat's bind stamps, and for a redemption the address bucket its
-	// invitation row is filed under.
+	// seat's bind stamps, and for a redemption its invitation's address bucket.
 	scopeOf := func(ctx context.Context, tx *sql.Tx) (_ ScopeSet, err error) {
 		buckets := []Bucket{BucketOf(e.personID)}
 		var leavers []string
@@ -555,16 +530,15 @@ func (w *Writer) enrol(ctx context.Context, e enrolment) (statelog.Result, error
 	}
 	// WHO DECIDED WHAT IT CONFERS: this writer's party for a create, the
 	// invitation's issuer for a redemption ([Writer.redeemable]), never the
-	// redeemer, whom [Writer.For] names as the record's author.
+	// redeemer.
 	decidedBy, decidedVia := w.Actor, w.OperatorID
 	decide := func(tx *sql.Tx) (_ []byte, err error) {
 		if err = wholeDirectory(ctx, tx); err != nil {
 			return nil, err
 		}
 		if e.invitation != "" {
-			// The invitation, read where the grants land from: the one read of
-			// it that decides. Its issuer's credential is named by the issue's
-			// record; the redemption acted through none of theirs.
+			// The one read of the invitation that decides. The redemption
+			// acted through none of its issuer's credentials.
 			decidedVia = ""
 			decidedBy, err = w.redeemable(ctx, tx, e)
 		} else {
@@ -578,9 +552,8 @@ func (w *Writer) enrol(ctx context.Context, e enrolment) (statelog.Result, error
 			if err = taken(ctx, tx, UniqueEmail, e.blind, e.personID); err != nil {
 				return nil, err
 			}
-			// AN OPEN INVITATION HOLDS ITS ADDRESS against a create: two
-			// people would be on their way to one address. A redemption IS
-			// that invitation ([Writer.redeemable]).
+			// AN OPEN INVITATION HOLDS ITS ADDRESS against a create. A
+			// redemption IS that invitation ([Writer.redeemable]).
 			if e.invitation == "" {
 				if err = heldByInvitation(ctx, tx, UniqueEmail, e.blind, now); err != nil {
 					return nil, err
@@ -594,10 +567,8 @@ func (w *Writer) enrol(ctx context.Context, e enrolment) (statelog.Result, error
 			if err = taken(ctx, tx, UniqueSeat, e.seat, e.personID); err != nil {
 				return nil, err
 			}
-			// AND ITS SEAT. A redemption is held to persons alone: its
-			// invitation holds the seat already, and a second open one beside
-			// it is residue its cancellation clears; asked of both, each link
-			// would refuse the other.
+			// AND ITS SEAT. A redemption is held to persons alone: asked of
+			// both invitations, each link would refuse the other.
 			if e.invitation == "" {
 				if err = heldByInvitation(ctx, tx, UniqueSeat, e.seat, now); err != nil {
 					return nil, err
@@ -624,18 +595,16 @@ func (w *Writer) enrol(ctx context.Context, e enrolment) (statelog.Result, error
 	result, err := w.publishDirectory(ctx, OpEnrol, e.personID, e.opID,
 		e.reason, scopeOf, decide)
 	if err == nil && result.Collapsed && e.invitation != "" {
-		// A REDEMPTION COLLAPSED INTO A COPY THIS CALL CANNOT PROVE IS ITS OWN
-		// IS A LINK ALREADY USED: the ledger answers before the decide runs,
-		// so the decide's spent-link refusal is made here. Answered as landed,
-		// it would open a session for whoever holds the link, past any second
-		// factor enrolled since. This call's own ambiguous append is
-		// indistinguishable and refused too; there the refusal is true: the
+		// A REDEMPTION COLLAPSED INTO A COPY THIS CALL CANNOT PROVE ITS OWN IS
+		// A LINK ALREADY USED: the ledger answers before the decide, so its
+		// spent-link refusal is made here. Answered as landed, it would open a
+		// session for whoever holds the link, past any second factor enrolled
+		// since. This call's own ambiguous append is refused too, truly: the
 		// person is enrolled.
 		return statelog.Result{}, e.alreadyEnrolled()
 	}
 	// An enrolment conferring anything is a grant change from nothing,
-	// announced by whoever decided it: the first person, under the
-	// deployment's token, is the row an audit most needs.
+	// announced by whoever decided it.
 	if added, _ := grantDelta(nil, e.grants); len(added) > 0 {
 		w.announce(ctx, result, err, types.IAMGrantsChanged{
 			Person: e.personID, Added: added, By: decidedBy,
@@ -645,16 +614,15 @@ func (w *Writer) enrol(ctx context.Context, e enrolment) (statelog.Result, error
 	return result, err
 }
 
-// createsNobodyTwice refuses an administrator's create of a person who already
-// exists, read inside the record's own snapshot: the person is derived from
-// the operation key ([CreatedPersonID]), so reaching an existing one is a
-// second request under one key that would rewrite them ([ErrOperationReused]).
+// createsNobodyTwice refuses a create of a person who already exists: the
+// person derives from the operation key ([CreatedPersonID]), so reaching an
+// existing one is a second request under one key that would rewrite them
+// ([ErrOperationReused]).
 //
-// The create's own retry never gets here: the framework answers an operation
-// its ledger holds before any decide ([statelog.Snap.Held]), and where the
-// ledger lost the row it turns this refusal into `unknown`
-// ([statelog.Result.Unvouched]). A redemption needs no such guard: its person
-// is fresh per attempt and the link keeps it single-use ([Writer.redeemable]).
+// The create's own retry never gets here: the ledger answers before any decide
+// ([statelog.Snap.Held]), and where it lost the row this refusal becomes
+// `unknown` ([statelog.Result.Unvouched]). A redemption needs no guard: its
+// person is fresh per attempt and the link keeps it single-use.
 func (w *Writer) createsNobodyTwice(ctx context.Context, tx *sql.Tx,
 	e enrolment) error {
 
@@ -665,27 +633,20 @@ func (w *Writer) createsNobodyTwice(ctx context.Context, tx *sql.Tx,
 	return e.alreadyEnrolled()
 }
 
-// alreadyEnrolled is the refusal an enrolment meets when what it would create
-// already exists, in the terms of the authority it named.
-//
-//   - A REDEMPTION's link has been used: the person it created is enrolled.
-//   - AN ADMINISTRATOR'S key already names somebody, and a new person is a new
-//     operation under a new key.
+// alreadyEnrolled is the refusal when what an enrolment would create exists,
+// in the terms of its authority: a REDEMPTION's link has been used; an
+// ADMINISTRATOR's key already names somebody, and a new person takes a new key.
 func (e *enrolment) alreadyEnrolled() error {
 	if e.invitation != "" {
 		return forbidden("this invitation has already been used").
 			about("invitation %s", e.invitation)
 	}
-	// Neither person nor request by id: the person is the key's derivation
-	// ([CreatedPersonID]) and the key is the answer's op_id.
+	// Names neither person nor request: the person derives from the key.
 	return fmt.Errorf("%w: it already added somebody. Use a new key to add "+
 		"someone new", ErrOperationReused)
 }
 
-// isEnrolled reports whether a person row exists, read inside a decide's
-// snapshot.
-//
-// A seek of the person's own key ([enrolledStatement]).
+// isEnrolled reports whether a person row exists, in a decide's snapshot.
 func isEnrolled(ctx context.Context, tx *sql.Tx, personID string) (bool, error) {
 	var enrolled bool
 	if err := tx.QueryRowContext(ctx, enrolledStatement, personID).
@@ -708,9 +669,8 @@ const invitationStateStatement = `
 	  FROM iam_invites WHERE id = ?`
 
 // validateEnrolment is the validation a create and a redemption share: ids,
-// kind, stage, bounds, findability and the login grammar. [Writer.record]
-// still checks every record's reason; this names the field an enrolment is
-// refused for.
+// kind, stage, bounds, findability and the login grammar, naming the field an
+// enrolment is refused for. [Writer.record] still checks every reason.
 func validateEnrolment(e enrolment) error {
 	switch {
 	case e.personID == "":
@@ -721,9 +681,8 @@ func validateEnrolment(e enrolment) error {
 			"without a stable one a retry cannot tell whether it already landed")
 	case e.kind != iam.KindPerson && e.kind != iam.KindMachine:
 		// The directory holds people and machines only: a seat is the chart's
-		// and the engine the node, so a row of either would be a second answer
-		// to who they are, findable by address alone and acting as nothing the
-		// engine can name.
+		// and the engine the node, so a row of either would be a second
+		// answer to who they are.
 		return fmt.Errorf("%w: %q isn't a kind (use %s or %s)",
 			ErrNotEnrollable, e.kind, iam.KindPerson, iam.KindMachine)
 	case !e.stage.Valid():
@@ -742,31 +701,26 @@ func validateEnrolment(e enrolment) error {
 		return fmt.Errorf("%w: a person needs an email address to sign in",
 			ErrNotFindable)
 	case e.kind == iam.KindMachine && e.login == "":
-		// A machine needs no address (no login page, no mailbox: `svc:ci`
-		// proves itself with a token) but must be FINDABLE: an unnamed row is
+		// A machine needs no address but must be FINDABLE: an unnamed row is
 		// a credential holder nobody can list, revoke or audit.
 		return fmt.Errorf("%w: a %s needs a login", ErrNotFindable, e.kind)
 	case e.login == "":
-		// A PERSON NEEDS ONE TOO, as the name they sign in and are shown under
-		// on every directory row and trail change: without one they are
-		// recorded as `anonymous` and fail [iam.Principal.Validate]. An
-		// administrator types it or takes the one proposed from the address;
-		// an invitation's form proposes one.
+		// A PERSON NEEDS ONE TOO: without one they are recorded as
+		// `anonymous` and fail [iam.Principal.Validate].
 		return fmt.Errorf("%w: a person needs a login: lowercase words "+
 			"joined by dots, like jane.doe", ErrInvalidLogin)
 	}
 	return loginFits(e.kind, e.login)
 }
 
-// redeemable refuses an enrolment its invitation does not cover, read inside
-// the record's own snapshot: a grant it did not carry, an address it was not
-// issued to, a seat it did not bind, a link spent or aged out. It answers who
-// issued it, who decided what the redemption confers.
+// redeemable refuses an enrolment its invitation does not cover, in the
+// record's snapshot: a grant it did not carry, an address it was not issued to,
+// a seat it did not bind, a link spent or aged out. It answers who issued it,
+// who decided what the redemption confers.
 //
-// The writer's clock decides expiry, as [heldByInvitation]'s does, so the
-// check and the grants it bounds share one snapshot. A zero expiry is AGED
-// OUT, never open for ever: no writer forms one, and the address hold and the
-// listing read it as closed too. The retention sweep collects it.
+// The writer's clock decides expiry, as [heldByInvitation]'s does. A zero
+// expiry is AGED OUT, never open for ever: no writer forms one, and the address
+// hold and the listing read it as closed too.
 func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 	e enrolment) (string, error) {
 
@@ -790,10 +744,9 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 	}
 	switch {
 	case !invitationAdmits(invitation.Verifier, e.invitationSecret):
-		// The secret, asked where the grants land from: a record can be
-		// published by more than the route, and an invitation's id is in every
-		// snapshot and proxy log. An invitation with no verifier admits
-		// nobody.
+		// The secret is asked here because more than the route can publish a
+		// record, and the id is in every snapshot and proxy log. No verifier
+		// admits nobody.
 		return "", forbidden("that isn't this invitation's link").
 			about("invitation %s", e.invitation)
 	case held != e.blind:
@@ -806,9 +759,8 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 		return "", forbidden("this invitation has expired").
 			about("invitation %s", e.invitation)
 	}
-	// Offered, read through [iam.Expand]: admin offers every app, and a name
-	// this build does not know (a newer peer's) is kept and ignored rather
-	// than refusing the link.
+	// Read through [iam.Expand]: admin offers every app, and a newer peer's
+	// unknown name is kept and ignored rather than refusing the link.
 	offered := iam.Expand(invitation.Grants)
 	for _, g := range e.grants {
 		if !slices.Contains(offered, g) {
@@ -818,7 +770,7 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 		}
 	}
 	// Exactly the invitation's seat: another asks for more than was offered,
-	// and none would spend the link without the binding its issuer decided.
+	// none spends the link without the binding its issuer decided.
 	if e.seat != invitation.Seat {
 		return "", forbidden("this invitation is for seat %q, not %q",
 			invitation.Seat, e.seat).about("invitation %s", e.invitation)
@@ -826,11 +778,10 @@ func (w *Writer) redeemable(ctx context.Context, tx *sql.Tx,
 	return invitation.InvitedBy, nil
 }
 
-// loginFits refuses a login outside its holder's kind's grammar, never "either
-// one" ([iam.ValidLoginFor]): a person taking `token:ops` would make the
-// deployment's `ops` Tier A token act as their seat. Checked AS TYPED, so
-// `Sarah.Chen` is refused naming itself, not lowered into a login nobody
-// wrote.
+// loginFits refuses a login outside its kind's grammar, never "either one"
+// ([iam.ValidLoginFor]): a person taking `token:ops` would make the `ops` Tier
+// A token act as their seat. Checked AS TYPED, so `Sarah.Chen` is refused
+// naming itself, not lowered into a login nobody wrote.
 func loginFits(kind iam.Kind, login string) error {
 	if iam.ValidLoginFor(kind, login) {
 		return nil
@@ -844,14 +795,12 @@ func loginFits(kind iam.Kind, login string) error {
 		ErrInvalidLogin, login, kind, shape, iam.MaxLogin)
 }
 
-// ErrInvalidLogin reports a login outside its holder's kind's grammar: its own
-// sentinel so a surface answers 400, a value to fix rather than an engine
-// failure.
+// ErrInvalidLogin reports a login outside its kind's grammar: its own sentinel
+// so a surface answers 400.
 var ErrInvalidLogin = errors.New("invalid login")
 
 // ErrInvalid reports a value outside a bound this domain holds a record to: a
-// reason past [MaxReason], a stage that is not one. A caller's value, so a
-// surface answers 400 naming the field, never 500.
+// reason past [MaxReason], a stage that is not one. A surface answers 400.
 var ErrInvalid = errors.New("invalid value")
 
 // ErrSeatRequired reports a write that would leave a PERSON without a human
@@ -865,9 +814,8 @@ var ErrSeatRequired = fmt.Errorf("%w: every person needs a human seat",
 // ErrNoCompany reports a seat that cannot be checked because this node runs no
 // company yet, so holds no human seat.
 //
-// Not [statelog.ErrUnavailable] ("come back"): a fresh install answers it on
-// every node after every wait. What clears it is a company declaring a human
-// seat, the remedy a surface names (409 `no_active_revision`). It is the
+// Not [statelog.ErrUnavailable] ("come back"): waiting never clears it, a
+// company declaring a human seat does (409 `no_active_revision`). It is the
 // domain's reading of [session.ErrNoCompany].
 var ErrNoCompany = errors.New("this node has no company yet, so " +
 	"there are no seats")
@@ -878,9 +826,8 @@ var ErrNotEnrollable = errors.New("only people and service " +
 
 // ErrNotFindable reports an enrolment creating somebody nothing can look up: a
 // person without an address (the interactive login key), or a machine without
-// a login (it has no login page). A caller renders the two fixes differently;
-// one sentinel covers their shared consequence, a credential holder nobody can
-// list, revoke or audit.
+// a login. One sentinel covers their shared consequence, a credential holder
+// nobody can list, revoke or audit.
 var ErrNotFindable = errors.New("missing an email or login")
 
 // SetIdentity changes an enrolled person's LOGIN, their SEAT binding, or both,
@@ -889,12 +836,10 @@ var ErrNotFindable = errors.New("missing an email or login")
 //
 // A PERSON's seat is moved, never cleared ([ErrSeatRequired], ADR-0032),
 // judged on the kind the SNAPSHOT holds and before the no-op arm; a SERVICE
-// ACCOUNT may be unbound. In the record's own snapshot, a login outside its
-// kind's grammar ([loginFits]), a login or seat somebody else holds, and a
-// seat an open invitation holds ([heldByInvitation]) are refused naming the
-// holder ([ErrTaken]), publishing nothing; a change that changes nothing
-// publishes no record. Every seat it binds is a human seat of the running
-// organisation ([Writer.humanSeat]).
+// ACCOUNT may be unbound. A login outside its grammar ([loginFits]), or a login
+// or seat somebody or an open invitation holds ([heldByInvitation]) is refused
+// naming the holder ([ErrTaken]); a change that changes nothing publishes no
+// record. Every seat it binds is a human seat ([Writer.humanSeat]).
 func (w *Writer) SetIdentity(ctx context.Context, in IdentityEdit) (
 	statelog.Result, error) {
 
@@ -906,14 +851,13 @@ func (w *Writer) SetIdentity(ctx context.Context, in IdentityEdit) (
 		return statelog.Result{}, errors.New("iamdomain: an identity change " +
 			"needs the person and an operation id")
 	case in.Login != nil && *in.Login == "":
-		// A LOGIN IS NEVER CLEARED, only changed: a principal with none is
-		// recorded as nobody, and a machine enrolled as `token:<id>` would be
-		// unbound from its Tier A token.
+		// A LOGIN IS NEVER CLEARED: a principal with none is recorded as
+		// nobody, and a `token:<id>` machine would lose its Tier A token.
 		return statelog.Result{}, fmt.Errorf("%w: a login can be "+
 			"changed but not removed", ErrInvalidLogin)
 	}
-	// The seat is asked of the running organisation (in memory, not the
-	// estate) before the snapshot, and recorded by the handle it answers to.
+	// The seat is asked of the running organisation (in memory) before the
+	// snapshot, and recorded by its handle.
 	var seat *string
 	if in.Seat != nil {
 		handle := ""
@@ -947,8 +891,7 @@ func (w *Writer) SetIdentity(ctx context.Context, in IdentityEdit) (
 			return nil, err
 		}
 		if seat != nil && *seat == "" && kind == iam.KindPerson {
-			// On the kind this snapshot holds, before anything is formed: the
-			// rule is about what the row IS, not what the caller says.
+			// The rule is about what the row IS, not what the caller says.
 			return nil, fmt.Errorf("%w: they're a person, so their seat is "+
 				"moved to another human seat or freed by removing them, "+
 				"never cleared", ErrSeatRequired)
@@ -962,8 +905,7 @@ func (w *Writer) SetIdentity(ctx context.Context, in IdentityEdit) (
 			next.SeatID = *seat
 		}
 		if next.Login == held.Login && next.SeatID == held.SeatID {
-			// NOTHING TO MOVE, an answer rather than a refusal: the edit asked
-			// for what the person already holds.
+			// NOTHING TO MOVE: an answer, not a refusal.
 			return nil, errNothingToPublish
 		}
 		if next.Login != held.Login {
@@ -978,8 +920,8 @@ func (w *Writer) SetIdentity(ctx context.Context, in IdentityEdit) (
 			if err := taken(ctx, tx, UniqueSeat, next.SeatID, in.PersonID); err != nil {
 				return nil, err
 			}
-			// AN OPEN INVITATION HOLDS ITS SEAT as it holds its address:
-			// binding somebody else there would refuse its redemption.
+			// AN OPEN INVITATION HOLDS ITS SEAT: binding somebody else there
+			// would refuse its redemption.
 			if err := heldByInvitation(ctx, tx, UniqueSeat, next.SeatID,
 				w.Now()); err != nil {
 				return nil, err
@@ -1010,12 +952,10 @@ type IdentityEdit struct {
 
 // Revoke bumps a person's revocation epoch, ending every session they hold.
 //
-// NO GRANT IS REQUIRED: signing out everywhere is what a person does to
-// themselves when they fear somebody has their cookie, and the fastest
-// response to a compromise must not need an administrator. The new epoch is
-// read in the snapshot and STATED on the record, never incremented by the
-// applier: two nodes at one checkpoint may have seen the same set in different
-// orders.
+// NO GRANT IS REQUIRED: the fastest response to a stolen cookie must not need
+// an administrator. The new epoch is read in the snapshot and STATED on the
+// record, never incremented by the applier: two nodes at one checkpoint may
+// have seen the same set in different orders.
 func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 	statelog.Result, error) {
 
@@ -1023,9 +963,9 @@ func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 		return statelog.Result{}, errors.New("iamdomain: a revocation needs " +
 			"a person and an operation id")
 	}
-	// FORMED INSIDE THE DECIDE, which may run again against a fresh snapshot,
-	// so the encoded mutation must be the last run's: [Writer.request] takes
-	// the record by pointer for this.
+	// FORMED INSIDE THE DECIDE, which may rerun on a fresh snapshot, so the
+	// mutation must be the last run's: [Writer.request] takes the record by
+	// pointer.
 	rec, err := w.record(PersonSubject(personID), OpRevoke, personID,
 		PeopleScope(personID), nil, reason)
 	if err != nil {
@@ -1047,17 +987,16 @@ func (w *Writer) Revoke(ctx context.Context, personID, opID, reason string) (
 }
 
 // InvalidateAll ends every session in the company at once, and every machine
-// token. It is the last step of a restore: a restore rolls back any revocation
-// made after the copy, and only a fleet-wide generation bump ends those
-// sessions without knowing which they were (why a token is minted at the
-// generation, [Writer.MintToken]).
+// token. It is the last step of a restore, which rolls back revocations made
+// after the copy; only a fleet-wide generation bump ends those sessions without
+// knowing which they were (why a token is minted at the generation,
+// [Writer.MintToken]).
 //
-// Unlike [Writer.Revoke] it is ADMIN'S, a company-wide act with no
-// self-service reading, and never through a machine token
+// Unlike [Writer.Revoke] it is ADMIN'S and never through a machine token
 // ([Writer.mayAdminister]; internal/authz's row also asks a person present and
 // a recent proof). A Tier A token is no machine token, so the restore
-// runbook's CLI step runs when nobody can sign in. The new generation is
-// stated on the record for [Writer.Revoke]'s reason.
+// runbook's CLI step runs when nobody can sign in. The generation is stated on
+// the record for [Writer.Revoke]'s reason.
 func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
 	statelog.Result, error) {
 
@@ -1077,8 +1016,7 @@ func (w *Writer) InvalidateAll(ctx context.Context, opID, reason string) (
 	}
 	var generation uint64
 	decide := func(tx *sql.Tx) (err error) {
-		// NEVER BUMPED IS ZERO, so the first bump lands at 1 and ends
-		// exactly the cookies that predate it.
+		// NEVER BUMPED IS ZERO, so the first bump lands at 1.
 		current, err := generationOf(ctx, tx)
 		if err != nil {
 			return err
@@ -1139,10 +1077,10 @@ func (w *Writer) SetStage(ctx context.Context, personID string, stage iam.Stage,
 // subject: it frees a login, an address and a seat.
 //
 // It reads what it releases inside the snapshot, for the record to carry: the
-// tombstone outlives the row and answers "who held this address" afterwards
-// (as BLINDS, for the row's own reason). It takes nothing, so it skips
-// [wholeDirectory]: the framework's probe over its buckets refuses a retained
-// record about the same person, and [removedPersonIn] a second removal.
+// tombstone outlives the row and answers "who held this address" (as BLINDS).
+// It takes nothing, so it skips [wholeDirectory]: the framework's probe refuses
+// a retained record about the same person, and [removedPersonIn] a second
+// removal.
 func (w *Writer) Remove(ctx context.Context, personID, opID, reason string) (
 	statelog.Result, error) {
 
@@ -1153,9 +1091,8 @@ func (w *Writer) Remove(ctx context.Context, personID, opID, reason string) (
 		return statelog.Result{}, errors.New("iamdomain: a removal needs a " +
 			"person and an operation id")
 	}
-	// THE SCOPE: the person's bucket and their address's, whose rows the
-	// erasure clears ([eraseSealed]): an invitation and its issue's trail row
-	// are filed under the address.
+	// THE SCOPE: the person's bucket and their address's, whose rows the erasure
+	// clears ([eraseSealed]).
 	scopeOf := func(ctx context.Context, tx *sql.Tx) (ScopeSet, error) {
 		held, err := heldIdentifiers(ctx, tx, personID)
 		if err != nil {
@@ -1168,9 +1105,8 @@ func (w *Writer) Remove(ctx context.Context, personID, opID, reason string) (
 		return BucketScope(buckets...), nil
 	}
 	decide := func(tx *sql.Tx) ([]byte, error) {
-		// NO ROW STILL PUBLISHES: a person this snapshot does not hold is
-		// removed with an EMPTY released set ([heldIdentifiers]), the truth at
-		// the directory's anchor, and the tombstone holds the id against every
+		// NO ROW STILL PUBLISHES: a person this snapshot lacks is removed with
+		// an EMPTY released set, and the tombstone holds the id against every
 		// later record naming it.
 		held, err := heldIdentifiers(ctx, tx, personID)
 		if err != nil {
@@ -1209,11 +1145,9 @@ func heldIdentifiers(ctx context.Context, tx *sql.Tx, personID string) (
 // bearer minted for it has to carry.
 //
 // NO GRANT: signing in is how a person acquires authority. The epoch and the
-// generation are READ HERE, in the record's snapshot, never stated by the
-// caller: a bearer is over once either moves past what it carries, so a
-// session must open AT the current values, and a caller's value would be a
-// read from another transaction (a stale one makes every new session validate
-// as already ended).
+// generation are READ HERE, in the snapshot, never stated by the caller: a
+// bearer is over once either moves past what it carries, and a caller's value
+// from another transaction, if stale, makes every new session read as ended.
 func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 	SessionOpened, error) {
 
@@ -1226,8 +1160,7 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 	if err != nil {
 		return SessionOpened{}, err
 	}
-	// THE LAST RUN'S COUNTERS, which is what the landed record carries: a
-	// decide may run again against a fresh snapshot.
+	// THE LAST RUN'S COUNTERS, which the landed record carries.
 	var opened SessionOpened
 	decide := func(tx *sql.Tx) (err error) {
 		epoch, err := epochOf(ctx, tx, in.Person)
@@ -1250,16 +1183,15 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 		return err
 	}
 	req := w.request(ctx, &rec, in.OpID, statelog.PatternCreate, decide)
-	// The one write in this estate that does not wait for its own row: see
+	// The one write here that does not wait for its own row: see
 	// [SessionStart.NoWait].
 	req.NoWait = in.NoWait
 	result, err := w.publish(ctx, req)
 	if err == nil && result.Collapsed {
-		// The counters are the decide's, and a collapsed answer is a copy this
-		// call cannot prove its own, so they may describe a decision nothing
-		// published. The generation is on no row to read back, and a bearer
-		// carrying a wrong one survives a fleet-wide invalidation between the
-		// two. See [ErrCollapsed].
+		// A collapsed answer is a copy this call cannot prove its own, so the
+		// counters may describe a decision nothing published. The generation is
+		// on no row to read back, and a bearer carrying a wrong one survives a
+		// fleet-wide invalidation. See [ErrCollapsed].
 		return SessionOpened{Result: result}, ErrCollapsed
 	}
 	opened.Result = result
@@ -1267,9 +1199,8 @@ func (w *Writer) OpenSession(ctx context.Context, in SessionStart) (
 }
 
 // MaxSessionUserAgent is the most of a User-Agent header a session keeps, in
-// bytes: past the longest a browser sends (desktop Chrome's is about 130, a
-// phone's under 300), while a header anybody can make arbitrarily long does
-// not ride every session row every data node keeps.
+// bytes: past the longest a browser sends (under 300), while an arbitrarily
+// long header does not ride every session row on every data node.
 const MaxSessionUserAgent = 512
 
 // clipUserAgent is ua held to [MaxSessionUserAgent] bytes, cut at a rune
@@ -1289,22 +1220,20 @@ func clipUserAgent(ua string) string {
 // SessionOpened is what a bearer for a session that has just begun carries
 // beside its lineage.
 type SessionOpened struct {
-	// Result is the write's own answer. Its POSITION, which the bearer
-	// carries, lets a node below it tell "not seen yet" from "ended"; an
-	// UNKNOWN outcome has none, so no bearer is minted from it (position zero
-	// reads as ended on every node).
+	// Result is the write's own answer. Its POSITION, which the bearer carries,
+	// lets a node below it tell "not seen yet" from "ended"; an UNKNOWN outcome
+	// has none, so no bearer is minted from it (zero reads as ended everywhere).
 	Result statelog.Result
 
-	// Epoch is the person's revocation epoch and Generation the fleet's
-	// session generation, both as the snapshot the record was formed in
-	// held them. A bearer carrying anything below either is over.
+	// Epoch is the person's revocation epoch and Generation the fleet's session
+	// generation, as the record's snapshot held them. A bearer carrying
+	// anything below either is over.
 	Epoch      uint64
 	Generation uint64
 }
 
-// epochOf is one person's current revocation epoch, read inside a decide. No
-// row is zero, a real value: nobody revoked anything, and [Writer.Revoke]
-// increments from it.
+// epochOf is one person's revocation epoch, read inside a decide. No row is
+// zero, a real value: [Writer.Revoke] increments from it.
 func epochOf(ctx context.Context, tx *sql.Tx, personID string) (uint64, error) {
 	var epoch int64
 	err := tx.QueryRowContext(ctx,
@@ -1320,10 +1249,8 @@ func epochOf(ctx context.Context, tx *sql.Tx, personID string) (uint64, error) {
 	return uint64(epoch), nil
 }
 
-// generationOf is the fleet's session generation, read inside a decide.
-//
-// NEVER BUMPED IS ZERO, which is what a bearer minted before anybody ever
-// invalidated anything carries.
+// generationOf is the fleet's session generation, read inside a decide. NEVER
+// BUMPED IS ZERO, which a bearer minted before any invalidation carries.
 func generationOf(ctx context.Context, tx *sql.Tx) (uint64, error) {
 	var generation int64
 	err := tx.QueryRowContext(ctx,
@@ -1359,30 +1286,26 @@ type SessionStart struct {
 	AbsoluteExpiresAt time.Time
 	OpID              string
 
-	// ProvedAt is when the holder proved who they are to open it, or zero
-	// for a session opened on no proof of a person — see
-	// [Session.ProvedAt]. It is the WRITER's clock, authored at the proof,
-	// like the absolute deadline beside it.
+	// ProvedAt is when the holder proved who they are, or zero for a session
+	// opened on no proof ([Session.ProvedAt]). The WRITER's clock, like the
+	// absolute deadline beside it.
 	ProvedAt time.Time
 
 	// EnrolmentOnly opens a session that may do nothing but enrol a second
-	// factor — see [Session.EnrolmentOnly]. The SIGN-IN decides it, from
-	// what it proved and the sign-in policy in force.
+	// factor ([Session.EnrolmentOnly]); the SIGN-IN decides it.
 	EnrolmentOnly bool
 
-	// UserAgent and Remote are the browser that asked for the session and
-	// the address it asked from ([Session.UserAgent]), empty where nothing
-	// names them.
+	// UserAgent and Remote are the browser and address that asked
+	// ([Session.UserAgent]), empty where nothing names them.
 	UserAgent string
 	Remote    string
 
 	// NoWait asks for the answer the broker's acknowledgement establishes,
 	// rather than waiting for this node's applier. Correct for a SIGN-IN only
-	// (never a session replacing another, opened from a page listing them):
-	// its bearer carries the record's POSITION, and a node below it serves on
-	// the signature and epoch alone ([session.RowBehind]), so the awaited row
-	// is one nothing in the answer reads, and waiting costs 250-500 ms of a
-	// parked fetch against a 50 ms verify. Nowhere else: a directory write
+	// (never a session replacing another): its bearer carries the record's
+	// POSITION, and a node below it serves on the signature and epoch alone
+	// ([session.RowBehind]), so waiting costs 250-500 ms of a parked fetch for
+	// a row nothing in the answer reads. Nowhere else: a directory write
 	// answers once this node's rows carry it, since the next read comes here.
 	NoWait bool
 }
@@ -1390,10 +1313,9 @@ type SessionStart struct {
 // CloseSession ends one session, keeping its row until the sweep collects it.
 //
 // The caller names the session's PERSON: validation asks whether a deferral
-// covers the person's bucket, so the close is filed there (under the lineage,
-// a node that could not decode it kept serving the session). Both callers hold
-// a verified person (a bearer's signature, or the owner just read); the decide
-// confirms it against this node's row where there is one.
+// covers the person's bucket, so the close is filed there (under the lineage, a
+// node that could not decode it kept serving the session). The decide confirms
+// the person against this node's row where there is one.
 func (w *Writer) CloseSession(ctx context.Context, lineage, person, reason,
 	opID string) (statelog.Result, error) {
 
@@ -1432,8 +1354,7 @@ func (w *Writer) CloseSession(ctx context.Context, lineage, person, reason,
 	return result, err
 }
 
-// missingKeys names which of the two key-bearing seams this writer lacks, for
-// a refusal somebody can act on.
+// missingKeys names which key-bearing seam this writer lacks.
 func (w *Writer) missingKeys() string {
 	switch {
 	case w.blinds == nil && w.sealer == nil:
@@ -1446,9 +1367,9 @@ func (w *Writer) missingKeys() string {
 }
 
 // taken refuses a value somebody other than except holds, read INSIDE a
-// directory decide's snapshot, naming who holds it. The statement is picked by
-// a switch and spelled whole ([takenStatements]): nothing a caller passes
-// reaches the SQL, and the plan gate reads every statement it can pick.
+// directory decide's snapshot, naming the holder. The statement is picked from
+// [takenStatements], spelled whole: nothing a caller passes reaches the SQL,
+// and the plan gate reads every statement it can pick.
 func taken(ctx context.Context, tx *sql.Tx, field Unique, value,
 	except string) error {
 
@@ -1469,9 +1390,8 @@ func taken(ctx context.Context, tx *sql.Tx, field Unique, value,
 	return &ErrTaken{Field: field, Value: value, Person: holder}
 }
 
-// takenStatements is who other than one person holds each of the directory's
-// three values, one statement per value, each a seek of that value's own plain
-// index: a PARTIAL one over the non-empty rows cannot serve a bound value,
+// takenStatements is who else holds each unique value, each a seek of its own
+// plain index: a PARTIAL index over non-empty rows cannot serve a bound value,
 // which implies nothing about being non-empty.
 var takenStatements = map[Unique]string{
 	UniqueEmail: `SELECT id FROM iam_people WHERE email_blind = ? AND id <> ? LIMIT 1`,
@@ -1479,8 +1399,7 @@ var takenStatements = map[Unique]string{
 	UniqueSeat:  `SELECT id FROM iam_people WHERE seat_id = ? AND id <> ? LIMIT 1`,
 }
 
-// identityOfStatement is one person's kind and the three unique values their
-// row holds, by its key.
+// identityOfStatement is one person's kind and unique values, by key.
 const identityOfStatement = `
 	SELECT kind, email_blind, login, seat_id FROM iam_people WHERE id = ?`
 
@@ -1505,12 +1424,11 @@ func identityOf(ctx context.Context, tx *sql.Tx, personID string) (
 	return iam.Kind(kind), held, nil
 }
 
-// humanSeat is THE check every binding takes (a person's create, an
-// invitation, its redemption, a bind, a service account bound to a seat),
-// answering the handle the running organisation knows the seat by. Every
-// binding names a HUMAN seat: a principal on an agent seat writes as an agent,
-// and the request path refuses it ([session.ResolveSeat]); a Tier A token
-// bound through its `token:<id>` row acts as the seat too.
+// humanSeat is THE check every binding takes, answering the handle the running
+// organisation knows the seat by. Every binding names a HUMAN seat: a principal
+// on an agent seat writes as an agent, and the request path refuses it
+// ([session.ResolveSeat]); a Tier A token bound through its `token:<id>` row
+// acts as the seat too.
 //
 // ADVISORY: the organisation is the applied configuration, unordered with this
 // log, so a revision may remove the seat after this passes; the residue is a
@@ -1531,7 +1449,6 @@ func (w *Writer) humanSeat(ctx context.Context, handle string) (string, error) {
 		return "", fmt.Errorf("%w: this node couldn't read the org chart to "+
 			"check seat %q: %w", statelog.ErrUnavailable, handle, err)
 	case !found:
-		// ErrInvalid: a value the caller typed, not an engine failure.
 		return "", fmt.Errorf("%w: there's no seat %q in the org chart. If "+
 			"it was just added, try again in a moment", ErrInvalid, handle)
 	case seat.Kind != session.SeatKindHuman:
@@ -1542,16 +1459,14 @@ func (w *Writer) humanSeat(ctx context.Context, handle string) (string, error) {
 	return seat.Handle, nil
 }
 
-// heldPersonStatement is one person's document and the stage their row's
-// column holds, by its key.
+// heldPersonStatement is one person's document and stage column, by key.
 const heldPersonStatement = `SELECT document, stage FROM iam_people WHERE id = ?`
 
-// heldPerson is one person's document as a read-modify-write forms the next
-// one from, read inside the caller's snapshot, carrying the stage the ROW
-// holds: the status op moves the column without authoring a document, so the
-// column is the authority. Re-publishing the document's own stage could put
-// back `active`, letting a suspended person in when their grants are
-// corrected.
+// heldPerson is one person's document, read in the caller's snapshot for a
+// read-modify-write, carrying the stage the ROW holds: the status op moves the
+// column without authoring a document, so the column is the authority.
+// Re-publishing the document's own stage could put back `active`, letting a
+// suspended person in when their grants are corrected.
 func heldPerson(ctx context.Context, tx *sql.Tx, personID string) (
 	Person, error) {
 
@@ -1563,8 +1478,7 @@ func heldPerson(ctx context.Context, tx *sql.Tx, personID string) (
 		Scan(&document, &stage)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		// THE SAME WORDS AS [identityOf]'s: the person's id is the one the
-		// caller passed, and what it was building is the gesture they made.
+		// The same words as [identityOf]'s.
 		return Person{}, fmt.Errorf("%w on this node", ErrNotFound)
 	case err != nil:
 		return Person{}, fmt.Errorf("iamdomain: read person %q: %w", personID, err)
@@ -1577,14 +1491,13 @@ func heldPerson(ctx context.Context, tx *sql.Tx, personID string) (
 	return person, nil
 }
 
-// SetCredentials replaces a person's credential set, reading their own row
-// inside the snapshot to form the new whole: the document is authored whole,
-// and a set formed from a read in another transaction pairs an old decision
-// with a new expectation, which the broker accepts.
+// SetCredentials replaces a person's credential set, reading their row inside
+// the snapshot to form the new whole: a set formed from another transaction's
+// read pairs an old decision with a new expectation, which the broker accepts.
 //
 // No grant: changing your own second factor is the ordinary case. The SURFACE
-// bounds it: the route is guarded, step-up applies, and the person id comes
-// off the resolved principal, not a body.
+// bounds it: the route is guarded, step-up applies, and the person id comes off
+// the resolved principal, not a body.
 func (w *Writer) SetCredentials(ctx context.Context, in CredentialSet) (
 	statelog.Result, error) {
 
@@ -1641,14 +1554,12 @@ type CredentialSet struct {
 	// Apply forms the new set from the current one INSIDE the snapshot, a
 	// function rather than a list so expectation and decision share it. It may
 	// refuse, as [PersonUpdate.Apply] may, on a rule about the set the write
-	// LANDS on (an enrolment-only session enrolling over a second factor its
-	// person gained since); the refusal leaves the decide unwrapped,
-	// unpublished.
+	// LANDS on; the refusal leaves the decide unwrapped, unpublished.
 	//
-	// On a collapsed result ([statelog.Result.Collapsed]) what it formed is
-	// not what landed: it may never have run, or ran in an unpublished round.
-	// A caller shows what it formed (recovery codes, a seed) only on a result
-	// that is not collapsed, and otherwise retries under a fresh operation id.
+	// On a collapsed result ([statelog.Result.Collapsed]) what it formed is not
+	// what landed: it may never have run, or ran in an unpublished round. A
+	// caller shows what it formed (recovery codes, a seed) only on a result that
+	// is not collapsed, and otherwise retries under a fresh operation id.
 	Apply func([]Credential) ([]Credential, error)
 
 	OpID   string
@@ -1656,17 +1567,16 @@ type CredentialSet struct {
 }
 
 // MintToken adds a machine token (a personal access token, or a service
-// account's) to its owner's credentials, reading the OWNER in the snapshot it
-// is formed in: what a token may carry is a fact about its owner now, and on
-// the owner's subject a mint and a demotion contend. It refuses a grant the
-// owner lacks ([iam.Expand]; a token narrows; admin is mintable, kept off
-// presence gestures by internal/authz and [Writer.mayAdminister]) or the
-// minting party lacks ([Writer.MayConfer]), another person's mint or a service
-// account's without admin ([Writer.mayMintFor]), an owner who may not act or
-// binds a Tier A token, and an expiry missing, past or beyond
-// [credential.MaxTokenLifetime]. Stamped with the owner's epoch and the
-// company's generation, it ends when either moves; nil grants resolve here
-// ([Writer.tokenGrants]).
+// account's) to its owner's credentials, reading the OWNER in its own
+// snapshot: what a token may carry is a fact about its owner now, and on the
+// owner's subject a mint and a demotion contend. It refuses a grant the owner
+// lacks ([iam.Expand]; a token narrows; admin is mintable, kept off presence
+// gestures by internal/authz and [Writer.mayAdminister]) or the minting party
+// lacks ([Writer.MayConfer]), another person's mint or a service account's
+// without admin ([Writer.mayMintFor]), an owner who may not act or binds a Tier
+// A token, and an expiry missing, past or beyond [credential.MaxTokenLifetime].
+// Stamped with the owner's epoch and the company's generation, it ends when
+// either moves; nil grants resolve here ([Writer.tokenGrants]).
 func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, error) {
 	switch {
 	case in.PersonID == "" || in.ID == "" || in.OpID == "":
@@ -1700,7 +1610,7 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 	if err != nil {
 		return TokenMinted{}, err
 	}
-	// THE LAST RUN'S ANSWER, which is what the landed record carries.
+	// THE LAST RUN'S ANSWER, which the landed record carries.
 	var minted TokenMinted
 	decide := func(tx *sql.Tx) (err error) {
 		owner, err := heldPerson(ctx, tx, in.PersonID)
@@ -1714,8 +1624,8 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 		if err != nil {
 			return err
 		}
-		// That row is a Tier A token's place in the directory: a token minted
-		// on it would act under the config file's name.
+		// That row is a Tier A token's place: a token minted on it would act
+		// under the config file's name.
 		if owner.Kind == iam.KindMachine &&
 			strings.HasPrefix(login, iam.TokenLoginPrefix) {
 			return forbidden("%s belongs to an API token, not an "+
@@ -1741,16 +1651,15 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 		kept := make([]Credential, 0, len(owner.Credentials)+1)
 		for _, c := range owner.Credentials {
 			if c.ID == in.ID {
-				// THE SAME MINT, RETRIED: the ledger collapses it, and a
-				// second copy of one id would be two credentials a revocation
-				// names as one.
+				// THE SAME MINT, RETRIED: a second copy of one id would be two
+				// credentials a revocation names as one.
 				continue
 			}
 			kept = append(kept, c)
 		}
 		kept = append(kept, token)
 		// THE NEW TOKEN IS LIVE, so making room never drops it: only a
-		// credential that has already stopped verifying gives up its place.
+		// credential already not verifying gives up its place.
 		if owner.Credentials, err = fitHeld(kept, now, counters, ErrInvalidToken); err != nil {
 			return err
 		}
@@ -1762,10 +1671,9 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 	result, err := w.publish(ctx,
 		w.request(ctx, &rec, in.OpID, statelog.PatternArbitrated, decide))
 	if err == nil && result.Collapsed {
-		// What the token carries is the decide's, and a collapsed answer is a
-		// copy this call cannot prove its own, so these grants may describe
-		// nothing published; the copy that landed is a token nobody was shown,
-		// and it expires. See [ErrCollapsed].
+		// A collapsed answer is a copy this call cannot prove its own, so these
+		// grants may describe nothing published; the copy that landed is a token
+		// nobody was shown, and it expires. See [ErrCollapsed].
 		return TokenMinted{Result: result}, ErrCollapsed
 	}
 	minted.Result = result
@@ -1774,14 +1682,13 @@ func (w *Writer) MintToken(ctx context.Context, in TokenMint) (TokenMinted, erro
 
 // TokenMint is what minting a machine token needs.
 type TokenMint struct {
-	// PersonID is the owner: the person or machine the token acts as. Who
-	// mints is the writer's party ([Writer.Principal], derived by
-	// [Writer.As]), never a field a caller could fill with anybody
+	// PersonID is the owner: the person or machine the token acts as. Who mints
+	// is the writer's party ([Writer.Principal]), never a caller's field
 	// ([Writer.mayMintFor]).
 	PersonID string
 
-	// ID is the credential's own id, minted by the caller because it is
-	// inside the verifier and the value — both formed before this runs.
+	// ID is the credential's own id, minted by the caller because the verifier
+	// and the value, both formed before this runs, contain it.
 	ID string
 
 	// Verifier is [credential.TokenVerifier] over the id and the secret.
@@ -1804,10 +1711,9 @@ type TokenMint struct {
 
 // TokenMinted is what a mint landed carrying, and where.
 type TokenMinted struct {
-	// Result is the write's own answer. Its POSITION is where the record
-	// landed, which the token's value carries so a node below it answers
-	// "not yet" rather than "no such token" — and an UNKNOWN outcome has
-	// none, so no value may be formed from it.
+	// Result is the write's own answer. Its POSITION, which the token's value
+	// carries, makes a node below it answer "not yet" rather than "no such
+	// token"; an UNKNOWN outcome has none, so no value may be formed from it.
 	Result statelog.Result
 
 	Grants     []iam.Grant
@@ -1816,25 +1722,23 @@ type TokenMinted struct {
 	Generation uint64
 }
 
-// MaxTokenLabel is how long a token's label may be, in bytes: well above any
-// name a person gives a token ("Claude on my laptop"), and short enough to
-// stay readable on every row of a credential listing.
+// MaxTokenLabel is a token label's limit in bytes: well above any name a person
+// gives one, short enough to stay readable in a credential listing.
 const MaxTokenLabel = 128
 
-// ErrInvalidToken reports a mint whose request is malformed — a value the
-// caller typed, answered 400 rather than as an authority refusal.
+// ErrInvalidToken reports a malformed mint request, answered 400.
 var ErrInvalidToken = errors.New("invalid token request")
 
 // tokenGrants resolves what a token carries and refuses what it may not.
 //
 // OMITTED, it is every permission this build knows that the owner holds
-// ([iam.AdminServe]'s effective set over their row, admin included, in
-// [iam.AllGrants] order; the node a token is presented to applies its own
-// posture) less any the minting party does not hold, since whoever mints a
-// token is shown its value ([Writer.MayConfer]). So on a node whose
-// `api.auth.admin` is `refuse` a default mint carries the owner's apps rather
-// than being refused for admin. ASKED, every name must be one the owner holds
-// through [iam.Expand]; an unknown name is refused, never carried for a year.
+// ([iam.AdminServe]'s effective set, admin included, in [iam.AllGrants] order;
+// the node a token is presented to applies its own posture) less any the
+// minting party lacks, since whoever mints is shown the value
+// ([Writer.MayConfer]). So where `api.auth.admin` is `refuse` a default mint
+// carries the owner's apps rather than being refused for admin. ASKED, every
+// name must be one the owner holds through [iam.Expand]; an unknown name is
+// refused, never carried for a year.
 func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
 	grants := asked
 	if grants == nil {
@@ -1849,12 +1753,10 @@ func (w *Writer) tokenGrants(asked, owner []iam.Grant) ([]iam.Grant, error) {
 	for _, g := range grants {
 		switch {
 		case !g.Valid():
-			// A name this build does not know is no permission at all
-			// ([Writer.MayConfer]), not one the owner lacks.
+			// No permission at all ([Writer.MayConfer]), not one the owner lacks.
 			return nil, forbidden("%s", iam.NotAGrant(g))
 		case !slices.Contains(holds, g):
-			// Worded for either reader: the owner minting their own token, or
-			// an administrator minting a service account's.
+			// Worded for the owner and for an administrator minting for a service account.
 			return nil, forbidden("a token can only have what its owner "+
 				"has, and its owner doesn't have %s", g).
 				about("the owner holds %s", grantWords(owner))
@@ -1880,16 +1782,14 @@ func tokenOwnable(personID string, owner Person) error {
 }
 
 // mayMintFor refuses a mint the writer's party ([Writer.Principal], never a
-// call field: a CLI, duty or migration publishes too) may not make on this
-// owner's account, decided on the owner as the snapshot holds them. Whoever
-// mints sees the value and the token acts as its owner, so a PERSON's token is
-// minted by that person alone, compared by ID since a rename moves logins, and
-// admin is no exception; a SERVICE ACCOUNT's needs admin, since nobody can
-// mint as it, and only that refusal names a permission ([Refusal]). Nothing is
-// minted through a machine token ([ErrTokenRefused]: it would renew for ever
-// with nobody present) or the Dashboard Assistant ([ErrAssistRefused]); both
-// are composed as the owner, so each lock reads the operator id's CLASS, as
-// [Writer.mayAdminister] does.
+// call field) may not make on this owner's account, as the snapshot holds the
+// owner. Whoever mints sees the value and the token acts as its owner, so a
+// PERSON's token is minted by that person alone, compared by ID since a rename
+// moves logins, admin included; a SERVICE ACCOUNT's needs admin, and only that
+// refusal names a permission ([Refusal]). Nothing is minted through a machine
+// token ([ErrTokenRefused]: it would renew for ever with nobody present) or the
+// Dashboard Assistant ([ErrAssistRefused]); both are composed as the owner, so
+// each lock reads the operator id's CLASS, as [Writer.mayAdminister] does.
 func (w *Writer) mayMintFor(in TokenMint, owner Person) error {
 	if strings.HasPrefix(w.OperatorID, iam.MachineTokenPrefix) {
 		return forbidden("%w. A token can't create another, so sign in to "+
@@ -1931,22 +1831,20 @@ func loginOf(ctx context.Context, tx *sql.Tx, personID string) (string, error) {
 // a human seat nobody holds, as a DIRECTORY record: it holds an address and a
 // seat for somebody with no person yet, so it is refused where a person or an
 // open invitation holds either ([ErrTaken]), and races contend at the broker.
-// Until redeemed, cancelled or aged out it holds both ([heldByInvitation]), so
-// its invitee never finds the seat taken at the last step. The seat is first
-// checked advisorily ([Writer.humanSeat]). It publishes the VERIFIER of the
-// link's secret ([InvitationVerifier]); the caller shows the secret once. Its
-// id is [Blinder.InvitationID] of the operation key, so a retry names the
-// invitation its first attempt issued; a key that issued one on other terms,
-// or no longer open, is [ErrOperationReused].
+// Until redeemed, cancelled or aged out it holds both ([heldByInvitation]). The
+// seat is first checked advisorily ([Writer.humanSeat]). It publishes the
+// VERIFIER of the link's secret ([InvitationVerifier]); the caller shows the
+// secret once. Its id is [Blinder.InvitationID] of the operation key, so a
+// retry names the invitation its first attempt issued; a key that issued one
+// on other terms, or no longer open, is [ErrOperationReused].
 func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	InviteIssued, error) {
 
 	if err := w.mayAdminister(OpInvite); err != nil {
 		return InviteIssued{}, err
 	}
-	// WHAT IT CONFERS IS DECIDED HERE, ONCE, against the issuer (the
-	// redemption reads it back): a caller may not confer what they do not
-	// hold.
+	// WHAT IT CONFERS IS DECIDED HERE, ONCE, against the issuer; the
+	// redemption reads it back.
 	if err := w.MayConfer(nil, in.Grants); err != nil {
 		return InviteIssued{}, err
 	}
@@ -1955,7 +1853,6 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		return InviteIssued{}, errors.New("iamdomain: an invitation needs an " +
 			"operation key — its id is derived from it")
 	case iam.NormalizeEmail(in.Email) == "":
-		// Not findable, as an enrolment with no address is.
 		return InviteIssued{}, fmt.Errorf("%w: an invitation needs "+
 			"an email address",
 			ErrNotFindable)
@@ -1970,11 +1867,10 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		return InviteIssued{}, fmt.Errorf("%w: an invitation creates a person, "+
 			"so it names the human seat they will hold", ErrSeatRequired)
 	}
-	// THE SEAT FIRST, before anything is published or MINTED: the blinder
-	// mints the company's key on a fresh node's first address, and a typo, an
-	// agent's seat or a node with no company must refuse with the seat's own
-	// remedy and nothing left behind. Whether somebody holds it is asked again
-	// in the snapshot.
+	// THE SEAT FIRST, before anything is published or MINTED: the blinder mints
+	// the company's key on a fresh node's first address, and a bad seat must
+	// refuse with its own remedy and nothing left behind. Whether somebody holds
+	// it is asked again in the snapshot.
 	seat, err := w.humanSeat(ctx, in.Seat)
 	if err != nil {
 		return InviteIssued{}, err
@@ -1993,29 +1889,25 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		return InviteIssued{}, fmt.Errorf("iamdomain: blind an "+
 			"invitation's address: %w", err)
 	}
-	// THE ID IS THE OPERATION'S, and it is derived before anything is
-	// minted: a key that is not a uuid7 is refused here, with nothing left
-	// behind.
+	// THE ID IS THE OPERATION'S, derived before anything is minted: a key that
+	// is not a uuid7 is refused here, with nothing left behind.
 	id, err := blinder.InvitationID(in.OpID)
 	if err != nil {
 		return InviteIssued{}, err
 	}
-	// AND SO IS THE LINK'S SECRET, derived from the id, so a retry of this
-	// issue hands back the link its first attempt issued.
+	// AND SO IS THE LINK'S SECRET, derived from the id, so a retry hands back
+	// the first attempt's link.
 	secret, err := blinder.InvitationSecret(id)
 	if err != nil {
 		return InviteIssued{}, err
 	}
-	// SEALED AS THE INVITATION'S OWN, because there is no person yet: bound
-	// to the invitation's id, so it opens as nothing else
-	// ([Sealer.SealInvitation]).
+	// SEALED AS THE INVITATION'S OWN, there being no person yet: bound to its
+	// id, so it opens as nothing else ([Sealer.SealInvitation]).
 	sealed, err := w.sealer.SealInvitation(id, in.Email)
 	if err != nil {
 		return InviteIssued{}, fmt.Errorf("iamdomain: seal an "+
 			"invitation's address: %w", err)
 	}
-	// EVERY INVITATION STATES ITS CONDITIONS — the secret its redemption
-	// must present, and the seat it binds.
 	mutation, err := EncodeInvitation(Invitation{
 		V: DocumentVersion, ID: id, EmailBlind: blind, Sealed: sealed,
 		InvitedBy: w.Actor, Grants: in.Grants,
@@ -2025,16 +1917,15 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 	if err != nil {
 		return InviteIssued{}, err
 	}
-	// THE BUCKET IS THE ADDRESS'S OWN, matching the apply: an invitation
-	// has no person until it is redeemed, and a bucket derived from an
-	// empty id would put every outstanding invitation in one sweep.
+	// THE BUCKET IS THE ADDRESS'S OWN, matching the apply: a bucket derived from
+	// an empty person id would put every outstanding invitation in one sweep.
 	scopeOf := func(context.Context, *sql.Tx) (ScopeSet, error) {
 		return BucketScope(BucketOf(blind)), nil
 	}
-	// THIS OPERATION'S OWN INVITATION FIRST: a retry finds the one its first
-	// attempt issued holding this address, and is answered with it rather than
-	// refused by it. Then both tables for the seat and the address, either of
-	// which a person or an unredeemed invitation can hold.
+	// THIS OPERATION'S OWN INVITATION FIRST: a retry is answered with the one
+	// its first attempt issued rather than refused by it. Then both tables for
+	// the seat and the address, which a person or an unredeemed invitation can
+	// hold.
 	expires := in.ExpiresAt
 	decide := func(tx *sql.Tx) (_ []byte, err error) {
 		expires = in.ExpiresAt
@@ -2063,8 +1954,7 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		scopeOf, decide)
 	if err == nil && result.Collapsed {
 		// Answered from the ledger, so the decide never compared this call's
-		// terms or read the kept deadline: both are read back from the row
-		// now, by the decide's comparison.
+		// terms or read the kept deadline: read both back from the row.
 		if expires, err = w.issuedAs(ctx, id, blind, seat, in, result); err != nil {
 			return InviteIssued{Result: result}, err
 		}
@@ -2073,18 +1963,16 @@ func (w *Writer) Invite(ctx context.Context, in InviteMint) (
 		ExpiresAt: expires}, err
 }
 
-// issuedAs is the invitation an operation issued, read back after the
-// framework answered its retry from the ledger ([statelog.Result.Collapsed]):
-// the deadline it keeps, or [ErrOperationReused] where the key issued it on
-// other terms. With no row, whether THIS NODE applied the copy decides:
+// issuedAs is the invitation an operation issued, read back after the ledger
+// answered its retry ([statelog.Result.Collapsed]): the deadline it keeps, or
+// [ErrOperationReused] where the key issued it on other terms. With no row,
+// whether THIS NODE applied the copy decides:
 //
 //   - not applied: it landed but its terms cannot be read yet, so
-//     [NotReadBack], and the same key retried once applied is answered in
-//     full;
-//   - applied: the retention sweep collected it, which it does only to an
-//     invitation redeemed or aged out ([Writer.Sweep]), so the link admits
-//     nobody: [ErrOperationReused], never a retry that would meet the same
-//     absence.
+//     [NotReadBack]; the same key retried once applied is answered in full;
+//   - applied: the sweep collected it, which it does only to an invitation
+//     redeemed or aged out ([Writer.Sweep]), so the link admits nobody:
+//     [ErrOperationReused], never a retry that would meet the same absence.
 func (w *Writer) issuedAs(ctx context.Context, id, blind, seat string,
 	in InviteMint, result statelog.Result) (time.Time, error) {
 
@@ -2108,22 +1996,20 @@ func (w *Writer) issuedAs(ctx context.Context, id, blind, seat string,
 }
 
 // NotReadBack is a create of a person, or an invitation's issue, that LANDED
-// (durable, applied elsewhere or pending here) and whose answer this node
-// cannot read back yet: the first password link or the invitation's terms are
-// rows it has not applied. Only a retry under the SAME key hands them back.
+// and whose answer this node cannot read back yet: the first password link or
+// the invitation's terms are rows it has not applied. Only a retry under the
+// SAME key hands them back.
 //
-// A type of its own so no surface answers it as a mere condition ("couldn't do
-// this now"), telling an administrator a landed create did not land and
-// sending the retry under a fresh key, refused by the values the first attempt
-// holds and losing the link. It unwraps to [statelog.ErrUnavailable], since it
-// clears by waiting.
+// A type of its own so no surface answers it as a mere condition, telling an
+// administrator a landed create did not land and sending the retry under a
+// fresh key, refused by the first attempt's values and losing the link. It
+// unwraps to [statelog.ErrUnavailable], since it clears by waiting.
 type NotReadBack struct {
-	// Result is the write's own outcome where the caller has it, which is
-	// never unknown: the write landed.
+	// Result is the write's own outcome where the caller has it, never
+	// unknown: the write landed.
 	Result statelog.Result
 
-	// Invitation is an invitation's issue, whose terms were not read back;
-	// false for a person's create, whose first password link was not.
+	// Invitation is an invitation's issue; false for a person's create.
 	Invitation bool
 }
 
@@ -2143,18 +2029,16 @@ func (e *NotReadBack) Unwrap() error { return statelog.ErrUnavailable }
 // other than what this call asks for: an invitation for another address or on
 // other terms, one no longer open, or a create of a person who exists.
 //
-// A refusal, not a dedupe: a retry is the SAME request, so answering a
-// different one with the first attempt's object would hand it somebody else's
-// invitation or person.
+// A refusal, not a dedupe: a retry is the SAME request, so answering a different
+// one with the first attempt's object would hand over somebody else's.
 var ErrOperationReused = errors.New("that Idempotency-Key was already used " +
 	"for a different request")
 
 // issuedBefore answers whether the invitation an operation derives was already
-// issued, read inside the issue's own snapshot: nil where it was not,
-// [errNothingToPublish] where this is a retry that found its own, and
-// [ErrOperationReused] where the key already issued something this call is
-// not. The TERMS are compared (address, grants, seat by handle): the same
-// address on other terms came from a different request reusing the key.
+// issued, in the issue's snapshot: nil where not, [errNothingToPublish] where
+// this is a retry that found its own, and [ErrOperationReused] where the key
+// issued something this call is not. The TERMS are compared (address, grants,
+// seat): the same address on other terms is a different request reusing the key.
 func (w *Writer) issuedBefore(ctx context.Context, tx *sql.Tx, id, blind, seat string,
 	in InviteMint, expiresAt *time.Time) error {
 
@@ -2188,8 +2072,8 @@ func (w *Writer) issuedBefore(ctx context.Context, tx *sql.Tx, id, blind, seat s
 		return fmt.Errorf("%w: the invitation it sent has expired. Send a "+
 			"new one with a new key", ErrOperationReused)
 	}
-	// THE DEADLINE IT WAS ISSUED WITH, which is the one its link keeps: a
-	// retry an hour later is not a later invitation.
+	// THE DEADLINE IT WAS ISSUED WITH is the one its link keeps: a later retry
+	// is not a later invitation.
 	*expiresAt = time.UnixMilli(expires).UTC()
 	return errNothingToPublish
 }
@@ -2210,31 +2094,31 @@ func sameGrants(a, b []iam.Grant) bool {
 }
 
 // InviteIssued is what an issue answers: the write's outcome, the id the link
-// is built from — the one the OPERATION derives, whether this call published it
-// or found its own first attempt had — and the deadline the invitation keeps.
+// is built from (the one the OPERATION derives, published by this call or its
+// first attempt) and the deadline the invitation keeps.
 type InviteIssued struct {
 	statelog.Result
 	ID string
 
 	// Secret is the half of the link that is the credential
-	// ([Blinder.InvitationSecret]); the estate keeps only its verifier. Shown
-	// once, in the link, and kept nowhere; a retry derives it again.
+	// ([Blinder.InvitationSecret]); the estate keeps only its verifier. Kept
+	// nowhere; a retry derives it again.
 	Secret string
 
 	ExpiresAt time.Time
 }
 
 // heldByInvitation refuses a value an OPEN invitation holds (its address or
-// its seat), naming the invitation, read inside a directory decide's snapshot.
-// Every open invitation counts: a redemption never asks, being held to the
-// people's rows alone ([Writer.enrol]). Open is one predicate,
-// [openInvitation], which the listing and [InvitationRow.Spent] mirror. The
-// statement is picked by a switch ([invitedStatements]), never from a caller.
+// its seat), naming the invitation, in a directory decide's snapshot. A
+// redemption never asks, being held to the people's rows alone
+// ([Writer.enrol]). Open is one predicate, [openInvitation], which the listing
+// and [InvitationRow.Spent] mirror. The statement comes from
+// [invitedStatements], never a caller.
 //
-// The WRITER'S CLOCK decides expiry, the one place in this domain it may
-// (every stored instant is the broker's): a clock minutes out only issues or
-// refuses beside a link at its edge, never puts two people on one value, since
-// a redemption's decide refuses a value a person holds.
+// The WRITER'S CLOCK decides expiry, the one place in this domain it may (every
+// stored instant is the broker's): a clock minutes out only issues or refuses
+// beside a link at its edge, never puts two people on one value, since a
+// redemption's decide refuses a value a person holds.
 func heldByInvitation(ctx context.Context, tx *sql.Tx, field Unique, value string,
 	now time.Time) error {
 
@@ -2256,14 +2140,13 @@ func heldByInvitation(ctx context.Context, tx *sql.Tx, field Unique, value strin
 }
 
 // openInvitation is THE predicate an invitation is outstanding by, over
-// `iam_invites` and one bound instant: not redeemed, and not aged out — a zero
-// expiry included, which no writer forms. See [heldByInvitation].
+// `iam_invites` and one bound instant: not redeemed, not aged out (a zero
+// expiry included). See [heldByInvitation].
 const openInvitation = `redeemed_at = 0 AND expires_at > ?`
 
-// invitedStatements is the newest open invitation holding each of the two
-// values an invitation holds, one statement per value, each a seek of that
-// value's index (0041's address index, 0042's seat index), which is in the
-// order the statement takes the newest by.
+// invitedStatements is the newest open invitation holding each value, each a
+// seek of that value's index (0041's address, 0042's seat), in the order the
+// statement takes the newest by.
 var invitedStatements = map[Unique]string{
 	UniqueEmail: `SELECT id FROM iam_invites WHERE email_blind = ? AND ` +
 		openInvitation + ` ORDER BY created_at DESC LIMIT 1`,
@@ -2273,39 +2156,35 @@ var invitedStatements = map[Unique]string{
 
 // InviteMint is what issuing an invitation needs.
 type InviteMint struct {
-	// Email is the address it is for, in the clear. It is blinded for the
-	// subject and sealed for the row before anything is published.
+	// Email is the address it is for, in the clear; blinded for the subject and
+	// sealed for the row before anything is published.
 	Email string
 
-	// Grants are what redeeming it confers, decided ONCE by its issuer, never
-	// again by whoever processes the redemption, which so cannot ask for more
-	// than was offered.
+	// Grants are what redeeming it confers, decided ONCE by its issuer, so the
+	// redemption cannot ask for more than was offered.
 	Grants []iam.Grant
 
 	// Seat is the seat redeeming it BINDS the new person to, by its handle.
-	// REQUIRED ([ErrSeatRequired]): a human seat nobody holds and no other
-	// open invitation holds, which this one then holds until it is redeemed,
-	// cancelled or ages out. See [Writer.Invite].
+	// REQUIRED ([ErrSeatRequired]): a human seat nobody and no other open
+	// invitation holds. See [Writer.Invite].
 	Seat string
 
 	// ExpiresAt is when it stops being redeemable. REQUIRED.
 	ExpiresAt time.Time
 
 	// OpID is the operation KEY, a uuid7, from which the invitation's id is
-	// derived ([Blinder.InvitationID]), so a retry under it names the
-	// invitation its first attempt issued.
+	// derived ([Blinder.InvitationID]).
 	OpID   string
 	Reason string
 }
 
 // CancelInvitation withdraws an invitation nobody has redeemed (open, or aged
-// out and not yet collected), so its link opens nothing and the address AND
-// the seat it held are free the moment the record lands. It rides the
-// directory subject, where both are held, so a later issue is decided from
-// rows without it and a racing one contends at the broker; it takes nothing,
-// so it skips [wholeDirectory] for a removal's reason. In its snapshot an
+// out and not yet collected), so its link opens nothing and the address AND the
+// seat it held are free the moment the record lands. It rides the directory
+// subject, where both are held, so a racing issue contends at the broker; it
+// takes nothing, so it skips [wholeDirectory] for [Writer.Remove]'s reason. An
 // invitation it does not hold is [ErrNoInvitation] (never issued, cancelled or
-// collected, which a link cannot tell apart either), and a redeemed one is
+// collected, which a link cannot tell apart), a redeemed one
 // [InvitationRedeemed]: what undoes it is removing that person.
 func (w *Writer) CancelInvitation(ctx context.Context, id, opID, reason string) (
 	statelog.Result, error) {
@@ -2317,9 +2196,9 @@ func (w *Writer) CancelInvitation(ctx context.Context, id, opID, reason string) 
 		return statelog.Result{}, errors.New("iamdomain: cancelling an " +
 			"invitation needs its id and an operation id")
 	}
-	// THE BUCKET IS THE ADDRESS'S, as the issue's was and as the row's is,
-	// and an invitation this snapshot does not hold has none — the decide
-	// refuses it, so the id's own bucket is only a scope that encodes.
+	// THE BUCKET IS THE ADDRESS'S, as the issue's was; an invitation this
+	// snapshot lacks has none and the decide refuses it, so the id's bucket is
+	// only a scope that encodes.
 	scopeOf := func(ctx context.Context, tx *sql.Tx) (ScopeSet, error) {
 		held, found, err := invitationIn(ctx, tx, id)
 		if err != nil || !found {
@@ -2344,14 +2223,12 @@ func (w *Writer) CancelInvitation(ctx context.Context, id, opID, reason string) 
 	return w.publishDirectory(ctx, OpCancel, "", opID, reason, scopeOf, decide)
 }
 
-// invitationInStatement is one invitation's address blind and the person its
-// redemption created, by its key.
+// invitationInStatement is one invitation's address blind and redeemer, by key.
 const invitationInStatement = `
 	SELECT email_blind, person_id FROM iam_invites WHERE id = ?`
 
-// invitationIn is the address blind one invitation holds and the person a
-// redemption created, read inside a decide's snapshot — and false for an id it
-// does not hold.
+// invitationIn is the address blind and redeemer of one invitation, in a
+// decide's snapshot; false for an id it does not hold.
 func invitationIn(ctx context.Context, tx *sql.Tx, id string) (
 	InvitationRow, bool, error) {
 
@@ -2369,13 +2246,11 @@ func invitationIn(ctx context.Context, tx *sql.Tx, id string) (
 }
 
 // ErrNoInvitation reports an invitation this estate does not hold: never
-// issued, cancelled already, or collected by the sweep once it was redeemed or
-// aged out.
+// issued, cancelled, or collected by the sweep.
 var ErrNoInvitation = errors.New("no such invitation")
 
 // InvitationRedeemed refuses the cancellation of an invitation somebody
-// redeemed, naming the person it created — the link is spent, and what undoes
-// it is removing them.
+// redeemed, naming the person it created.
 type InvitationRedeemed struct {
 	ID     string
 	Person string
@@ -2389,15 +2264,14 @@ func (e *InvitationRedeemed) Error() string {
 
 // SetPassword replaces a person's password and moves their revocation epoch,
 // in ONE record ([OpPassword]): every session and machine token they hold ends
-// with the password it replaces. Its two callers, a person CHANGING their own
-// and one SPENDING a reset link, both set a password somebody else may have
-// had, and both revoke every reset link the person holds, so a link is never a
-// second way back in.
+// with the password it replaces. Both callers, a person CHANGING their own and
+// one SPENDING a reset link, set a password somebody else may have had, and
+// both revoke every reset link, so a link is never a second way back in.
 //
-// No grant: neither caller holds one. [PasswordSet.Check] bounds it, run in
-// the record's own snapshot, so a password changed by somebody else since the
-// proof, or a link spent by another tab, is refused with nothing published.
-// The new credential's id is minted once, before the decide that may rerun.
+// No grant: neither caller holds one. [PasswordSet.Check] bounds it, run in the
+// record's snapshot, so a password changed since the proof, or a link spent by
+// another tab, is refused with nothing published. The new credential's id is
+// minted once, before the decide that may rerun.
 func (w *Writer) SetPassword(ctx context.Context, in PasswordSet) (
 	statelog.Result, error) {
 
@@ -2437,9 +2311,8 @@ func (w *Writer) SetPassword(ctx context.Context, in PasswordSet) (
 		now := w.Now()
 		kept := make([]Credential, 0, len(person.Credentials)+1)
 		for _, c := range RevokeResetLinks(person.Credentials, now) {
-			// REPLACED, not revoked: a password has no listing of its
-			// own anybody reads afterwards, and a second one on the
-			// row is a second password that works.
+			// REPLACED, not revoked: a second password on the row would
+			// be a second password that works.
 			if c.Method == MethodPassword {
 				continue
 			}
@@ -2464,12 +2337,12 @@ func (w *Writer) SetPassword(ctx context.Context, in PasswordSet) (
 		w.request(ctx, &rec, in.OpID, statelog.PatternArbitrated, decide))
 }
 
-// RevokeResetLinks answers held with every reset link still outstanding in it
-// revoked at now, as a copy. Three records end a person's links through it: a
-// password set ([Writer.SetPassword]), a new link's issue (one per person),
-// and an edit ADDING a grant ([Writer.UpdatePerson]), since a link was judged
-// against its issuer's grants at its issue. Whatever ends sessions and tokens
-// ends links by moving a counter instead ([Credential.EndedBy]).
+// RevokeResetLinks answers a copy of held with every outstanding reset link
+// revoked at now. Three records end a person's links through it: a password
+// set ([Writer.SetPassword]), a new link's issue (one per person), and an edit
+// ADDING a grant ([Writer.UpdatePerson]), since a link was judged against its
+// issuer's grants at its issue. What ends sessions and tokens ends links by
+// moving a counter instead ([Credential.EndedBy]).
 func RevokeResetLinks(held []Credential, now time.Time) []Credential {
 	out := slices.Clone(held)
 	for i, c := range out {
@@ -2484,36 +2357,31 @@ func RevokeResetLinks(held []Credential, now time.Time) []Credential {
 type PasswordSet struct {
 	PersonID string
 
-	// Verifier is the new password's argon2id verifier — never the
-	// password, which no record carries.
+	// Verifier is the new password's argon2id verifier, never the password.
 	Verifier string
 
-	// Check is the caller's proof, judged in the record's own snapshot against
-	// the person and their [Counters], refusing with nothing published; a
-	// function for [CredentialSet.Apply]'s reason. It may refuse; it forms
-	// nothing.
+	// Check is the caller's proof, judged in the record's snapshot against the
+	// person and their [Counters], for [CredentialSet.Apply]'s reason. It may
+	// refuse; it forms nothing.
 	Check func(Person, Counters) error
 
 	// Spends is the reset link this password is set from, marked
-	// [Credential.Spent] beside the revocation every link takes; empty for
-	// a person changing their own.
+	// [Credential.Spent]; empty for a person changing their own.
 	Spends string
 
 	OpID   string
 	Reason string
 }
 
-// UpdatePerson rewrites one person's own document (their grants, their name),
-// forming the new whole INSIDE the snapshot, for [Writer.SetCredentials]'s
-// reason. It changes what a person holds, never their kind or stage
-// ([keepsStanding]).
+// UpdatePerson rewrites one person's document (grants, name), forming the new
+// whole INSIDE the snapshot, for [Writer.SetCredentials]'s reason. It changes
+// what a person holds, never their kind or stage ([keepsStanding]).
 //
-// The self-escalation rule is enforced HERE, the last frame every path (route,
-// CLI, duty, test) passes: nobody confers a grant they do not hold, on
-// anybody, themselves included ([Writer.MayConfer]). A grant gained
-// ([grantDelta]) revokes every outstanding reset link in the same record: a
-// link was judged against its issuer's grants at its issue, and its issuer can
-// spend it. Taking one away revokes nothing.
+// The self-escalation rule is enforced HERE, the last frame every path passes:
+// nobody confers a grant they do not hold, themselves included
+// ([Writer.MayConfer]). A grant gained ([grantDelta]) revokes every outstanding
+// reset link in the same record: a link was judged against its issuer's grants
+// at its issue, and its issuer can spend it. Taking one away revokes nothing.
 func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 	statelog.Result, error) {
 
@@ -2530,8 +2398,8 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 			"snapshot — a caller holding the current one read it in another " +
 			"transaction, which is the pairing the write authority forbids")
 	}
-	// THE NAME IS SEALED ONCE, BEFORE THE DECIDE: it reads no snapshot, and
-	// sealed in a decide that may rerun it would draw a fresh nonce per run.
+	// THE NAME IS SEALED ONCE, BEFORE THE DECIDE: a rerun would draw a fresh
+	// nonce.
 	sealedName := ""
 	if in.Name != nil && len(*in.Name) > MaxName {
 		return statelog.Result{}, fmt.Errorf("%w: the name is %d bytes, "+
@@ -2549,8 +2417,7 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 		}
 	}
 	var mutation []byte
-	// THE LAST RUN'S BEFORE AND AFTER, which is the pair the landed record
-	// actually carries: a decide may run again against a fresh snapshot.
+	// THE LAST RUN'S BEFORE AND AFTER, the pair the landed record carries.
 	var before, after []iam.Grant
 	decide := func(tx *sql.Tx) (err error) {
 		person, err := heldPerson(ctx, tx, in.PersonID)
@@ -2575,8 +2442,8 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 		if err != nil {
 			return err
 		}
-		// A RESET LINK THIS RECORD ISSUES ENDS WITH THE COUNTERS IT WAS
-		// ISSUED AT, as a token does.
+		// A RESET LINK THIS RECORD ISSUES IS STAMPED WITH THE COUNTERS, as a
+		// token is.
 		updated.Credentials = stampIssued(person.Credentials,
 			updated.Credentials, counters)
 		// A GRANT GAINED ENDS EVERY OUTSTANDING RESET LINK, in this record.
@@ -2604,9 +2471,8 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 		return nil
 	})
 	result, err := w.publish(ctx, req)
-	// ONE ROW PER PERSON WRITE THAT MOVED A GRANT, and none for a write
-	// that changed only a name: "who can do what to this deployment, and
-	// since when" is the question the row answers.
+	// ONE ROW PER WRITE THAT MOVED A GRANT, none for a name-only change: it
+	// answers "who can do what, and since when".
 	if added, removed := grantDelta(before, after); len(added)+len(removed) > 0 {
 		w.announce(ctx, result, err, types.IAMGrantsChanged{
 			Person: in.PersonID, Added: added, Removed: removed, By: w.Actor,
@@ -2617,12 +2483,12 @@ func (w *Writer) UpdatePerson(ctx context.Context, in PersonUpdate) (
 }
 
 // keepsStanding refuses a content record that would move what a person IS
-// rather than what they hold. A KIND never changes: the login grammar, the
-// address requirement and the seat rule were judged for the kind created, and
-// the applier writes whatever kind a document states; the remedy is a removal
-// and a new create. A STAGE moves only through [Writer.SetStage], the record
-// that ends what a stage that may not act holds ([StatusChange.Epoch]); moved
-// here, a suspension would end no session or token.
+// rather than what they hold. A KIND never changes: login grammar, address
+// requirement and seat rule were judged for the kind created, and the applier
+// writes whatever kind a document states; the remedy is a removal and a new
+// create. A STAGE moves only through [Writer.SetStage], which ends what a stage
+// that may not act holds ([StatusChange.Epoch]); moved here, a suspension would
+// end no session or token.
 func keepsStanding(held, updated Person) error {
 	switch {
 	case updated.Kind != held.Kind:
@@ -2639,14 +2505,13 @@ func keepsStanding(held, updated Person) error {
 // MayConfer refuses a change that ADDS a grant this writer's party does not
 // hold, compared through [iam.Expand]. Only additions are checked: nobody
 // escalates by narrowing, and whoever may edit a row must be able to withdraw
-// what a leaver held. An unknown name (a newer peer's) may be kept and
-// removed, never added, for [iam.Principal.Can]'s reason. A permission the
-// party lacks is named ([Refusal.Grants]), its remedy; an unknown name names
-// none.
+// what a leaver held. An unknown name (a newer peer's) may be kept and removed,
+// never added, for [iam.Principal.Can]'s reason. A permission the party lacks
+// is named ([Refusal.Grants]); an unknown name names none.
 //
 // Exported for the surface that asks it before an edit's first record, so an
-// edit moving a seat or a login first is refused with nothing moved; the
-// record's decide asks again in its own snapshot, and that is the authority.
+// edit moving a seat or login first is refused with nothing moved; the
+// record's decide asks again in its snapshot, the authority.
 func (w *Writer) MayConfer(before, after []iam.Grant) error {
 	held := iam.Expand(before)
 	for _, g := range after {
@@ -2666,10 +2531,9 @@ func (w *Writer) MayConfer(before, after []iam.Grant) error {
 type PersonUpdate struct {
 	PersonID string
 
-	// Name is a new name in the CLEAR, or nil to leave it: a pointer, since ""
-	// is a real setting. Not [PersonUpdate.Apply]'s to set: it is sealed once
-	// before the decide and placed on the document the apply is handed, which
-	// may still overwrite it.
+	// Name is a new name in the CLEAR, or nil to leave it ("" is a real
+	// setting). Sealed once before the decide and placed on the document
+	// [PersonUpdate.Apply] is handed, which may still overwrite it.
 	Name *string
 
 	// Apply forms the new document from the current one INSIDE the snapshot, a
