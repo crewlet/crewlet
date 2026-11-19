@@ -21,6 +21,10 @@ const UNREAD_WORDS: Readonly<Record<string, string>> = {
     "The atlas's sources couldn't be read, so one that stopped reading may be missing.",
   alarms:
     "The engine's alarms couldn't be read, as right after a start, so whether a backup is missing can't be said yet.",
+  fires:
+    "The week's schedule fires couldn't be read, so the patterns the engine finds in them are missing.",
+  holds: "The conversations the engine holds couldn't be read, so one it holds may be missing.",
+  findings: "The Advisor's findings couldn't be read, so a notice about one may be missing.",
 };
 
 /** What each unread source is called in a sentence that names it. */
@@ -35,6 +39,9 @@ const UNREAD_NAMES: Readonly<Record<string, string>> = {
   atlas: "the atlas",
   atlas_sources: "the atlas's sources",
   alarms: "the engine's alarms",
+  fires: "the week's schedule fires",
+  holds: "the conversations the engine holds",
+  findings: "the Advisor's findings",
 };
 
 /**
@@ -43,12 +50,15 @@ const UNREAD_NAMES: Readonly<Record<string, string>> = {
  * said nothing a reader could act on or check against what was missing.
  */
 export function unreadTitle(unread: readonly string[]): string {
+  return `The advisor couldn't read ${unreadNames(unread)}`;
+}
+
+/** What could not be read, named and joined: "the atlas and the agents' turns". */
+export function unreadNames(unread: readonly string[]): string {
   const names = unread.map((key) => UNREAD_NAMES[key] ?? key);
-  const said =
-    names.length <= 1
-      ? (names[0] ?? "everything")
-      : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-  return `The advisor couldn't read ${said}`;
+  return names.length <= 1
+    ? (names[0] ?? "everything")
+    : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
 /** One sentence per unread source, in the answer's order; a source with no words of its own is named. */
