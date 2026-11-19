@@ -666,8 +666,9 @@ func personReadOf(t *testing.T, c carrier, doc []byte, r personRead) string {
 // object and as a string past it, answers whose parts, joined or each, run past
 // it, blank parts past it, a failure's words past it, states written in order
 // and out of it, a key written twice, each member a result is read by written
-// twice around a value past it, a tool's name past it, an image's mime past
-// it, and credentials across the bound.
+// twice around a value past it and another member written twice beside one, a
+// tool's name past it, an image's mime past it, and credentials across the
+// bound.
 func personVariants() []string {
 	q := func(s string) string {
 		raw, err := json.Marshal(s)
@@ -726,6 +727,9 @@ func personVariants() []string {
 		step(tool(`{"status":"completed","content":[{"type":"text","text":` + q(w) + `,"text":"x"},` + part("on") + `]}`)),
 		step(tool(`{"status":"completed","content":[{"type":"text","text":"x","text":` + q(w) + `}]}`)),
 		step(tool(`{"status":"completed","content":[{"type":"text","text":` + q(w) + `,"type":"text"}]}`)),
+		step(tool(`{"status":"completed","content":[{"type":"text","id":"a","id":"b","text":` + q(w) + `}]}`)),
+		step(tool(`{"status":"error","error":{"id":"a","id":"b","message":` + q(w) + `}}`)),
+		step(tool(`{"status":"completed","title":"a","title":"b","content":[` + part(w) + `]}`)),
 		step(tool(`{"status":"running","content":[` + part(w) + `]}`)),
 		step(tool(`{"status":"completed","content":[{"type":"file","mime":` + q("image/"+w) + `}]}`)),
 		step(tool(`{"status":"completed","content":[` + part(strings.Repeat("y", 1020)+secret+" and more") + `]}`)),

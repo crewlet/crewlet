@@ -963,14 +963,18 @@ func resultPast(s openCodeState, state json.RawMessage, valueMax int) bool {
 // result is shown in, as OpenCode writes one: `status` before `error` and
 // `content`, each written once, `error` before `content`, the failure's `type`
 // and `message` once each, and each part of the answer its `type` before its
-// `text`, each of its members once.
+// `text`, its `type`, `text` and `mime` once each. ONLY THE MEMBERS THE
+// RESULT'S TEXT IS MADE OF COUNT: a walk never asks for another, so another
+// written twice never reaches it.
 func stateInOrder(state json.RawMessage) bool {
 	ok, seen := true, map[string]int{}
-	once := func(object json.RawMessage, first string) {
+	once := func(object json.RawMessage, members ...string) {
 		count := map[string]int{}
 		_ = eachKeyInPlace(object, func(name []byte, _ json.RawMessage) error {
-			count[string(name)]++
-			ok = ok && count[string(name)] < 2 && (first == "" || string(name) != "text" || count[first] == 1)
+			if key := string(name); slices.Contains(members, key) {
+				count[key]++
+				ok = ok && count[key] < 2 && (key != "text" || count["type"] == 1)
+			}
 			return nil
 		})
 	}
@@ -983,13 +987,13 @@ func stateInOrder(state json.RawMessage) bool {
 		case "error":
 			ok = ok && seen[key] == 1 && seen["status"] > 0 && seen["content"] == 0
 			if wireObject(value) {
-				once(value, "")
+				once(value, "type", "message")
 			}
 		case "content":
 			ok = ok && seen[key] == 1 && seen["status"] > 0
 			_ = eachElement(value, func(part json.RawMessage, _ int) error {
 				if wireObject(part) {
-					once(part, "type")
+					once(part, "type", "text", "mime")
 				}
 				return nil
 			})
