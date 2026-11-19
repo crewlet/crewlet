@@ -371,8 +371,8 @@
 // scrub, streaming each text through redact's stages, each holding its window,
 // 8.2 MiB (BenchmarkATakeAtItsBase: a main-thread line, a `.json` string and
 // a text file each at [scrubPieceBaseBytes], the line's and the string's of
-// bytes the decode triples, both readings, its meter beside it; 0.12 to 0.14 s,
-// its heap peaking at 15 to 16 MiB at the default GOGC). The meter, 3.3 MiB
+// bytes the decode triples, each ending in a key both readings redact, its
+// meter beside it; 0.11 s). The meter, 3.3 MiB
 // (BenchmarkAMeterAtItsBase: alone, on a line the scrub keeps as text,
 // verbatim, so a string decodes to three bytes a byte, its facts at the base
 // and the strings a charge covers decoded beside them; 2 MiB on a record line,
