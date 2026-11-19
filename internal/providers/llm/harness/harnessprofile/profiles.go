@@ -207,6 +207,16 @@ func (p Profile) Clone() Profile {
 				Seed: slices.Clone(dm.Seed)}
 		}
 	}
+	if p.WebSearch != nil {
+		search := *p.WebSearch
+		search.CompleteArgs = slices.Clone(search.CompleteArgs)
+		search.Args = make([][]string, len(p.WebSearch.Args))
+		for i, run := range p.WebSearch.Args {
+			search.Args[i] = slices.Clone(run)
+		}
+		search.Refuses = slices.Clone(search.Refuses)
+		out.WebSearch = &search
+	}
 	if p.ImageInput != nil {
 		image := *p.ImageInput
 		image.Args = slices.Clone(image.Args)
@@ -302,6 +312,9 @@ func Load(name string, overrides map[string]any) (Profile, error) {
 				"works: set web_denial.mcp to what that run uses with web denied")
 		}
 		merged = merged.withWebDenied()
+	}
+	if merged.EffectiveWebTools() == WebToolsSearch && merged.CanSearchWeb() {
+		merged = merged.withWebSearch()
 	}
 	bad = append(bad, merged.problems()...)
 	if err := profileError(name, append(bad, merged.strandedBy(&builtin)...)); err != nil {

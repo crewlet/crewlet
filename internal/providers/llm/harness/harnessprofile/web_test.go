@@ -122,7 +122,7 @@ func TestTheWebStanceIsHeldToItsShape(t *testing.T) {
 		overrides map[string]any
 		want      string
 	}{
-		"unknown stance": {map[string]any{"web_tools": "off"}, `web_tools "off" (want allowed or denied)`},
+		"unknown stance": {map[string]any{"web_tools": "off"}, `web_tools "off" (want allowed, denied or search)`},
 		"empty denial":   {map[string]any{"web_tools": "denied", "web_denial": map[string]any{}}, "web_denial sets neither"},
 	} {
 		t.Run(name, func(t *testing.T) {

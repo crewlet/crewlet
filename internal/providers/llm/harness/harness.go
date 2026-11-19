@@ -529,6 +529,16 @@ func (p *Provider) complete(ctx context.Context, req llm.Request) (*llm.Completi
 			req.Send(llm.Delta{Content: chunk})
 		}
 	}
+	if observe := lineObserverOf(ctx); observe != nil && in.lineStream {
+		// A SEARCH RUN READS ITS RESULTS off the same lines ([Provider.Search]).
+		streamed := in.onLine
+		in.onLine = func(line string) {
+			observe(line)
+			if streamed != nil {
+				streamed(line)
+			}
+		}
+	}
 	// THE CALL'S OWN SESSION, named so the usage command below can ask
 	// about it afterwards — see [harnessprofile.Profile.SessionArgs]. After the
 	// model arguments for the same reason they precede everything else: a
