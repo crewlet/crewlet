@@ -363,7 +363,11 @@ type Tool struct {
 func (t Tool) StepLabel(args map[string]any, o cards.Options) string {
 	if t.Label != nil {
 		if l := strings.TrimSpace(t.Label(args)); l != "" {
-			return withScope(l, t.ScopeOf(Args(args), o))
+			// A LABEL THAT ALREADY SAYS ITS SCOPE is not told it twice.
+			if scope := t.ScopeOf(Args(args), o); !strings.Contains(l, scope) {
+				return withScope(l, scope)
+			}
+			return l
 		}
 	}
 	switch t.Kind {

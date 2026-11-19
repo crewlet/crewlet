@@ -7,7 +7,7 @@
  *
  * The HEAD stands at the page bar's height so the two lines meet: the spark
  * mark, "Ask Crewlet", then New conversation, Conversations (a menu of recent
- * conversations, and Delete behind a confirmation), Open in full page (Ask
+ * conversations, Rename, and Delete behind a confirmation), Open in full page (Ask
  * Crewlet's page, on this conversation, with every other listed beside it)
  * and Close. No status tag and no help: what the assistant may do is said
  * once, on the home.
@@ -30,6 +30,7 @@ import { ProductMark } from "@crewlethq/icons/product-mark";
 import {
   Maximize2Glyph,
   MessageSquareGlyph,
+  PencilGlyph,
   RotateCcwClockGlyph,
   SquarePenGlyph,
   TrashGlyph,
@@ -50,6 +51,7 @@ import {
   AskDeleteConfirm,
   AskFoot,
   AskProvider,
+  AskRename,
   AskThread,
   useAskGestures,
 } from "./Conversation.tsx";
@@ -117,7 +119,7 @@ export function Drawer(props: DrawerProps) {
 
 function Panel({ unavailable, onClose, initialFocus, shape }: DrawerProps) {
   const canAssign = useViewer().assistantCanAssign;
-  const { askDelete, resetPage, view, deletable, composer } = useAskGestures();
+  const { askDelete, askRename, resetPage, view, deletable, composer } = useAskGestures();
   const [recents, setRecents] = useState<Recent[] | null>(null);
   // THE SHELL'S ONE CLOCK, as every relative time on screen reads it.
   const now = useNow();
@@ -145,7 +147,8 @@ function Panel({ unavailable, onClose, initialFocus, shape }: DrawerProps) {
     if (kept && conversation().id === null && conversation().turns.length === 0) {
       void openConversation(kept).catch(() => {
         // A conversation that is gone (deleted in another tab, purged) is
-        // simply not reopened: the drawer stays on its home.
+        // simply not reopened: the drawer goes back to its home.
+        if (conversation().opening?.state === "missing") newConversation();
       });
     }
   }, []);
@@ -159,13 +162,20 @@ function Panel({ unavailable, onClose, initialFocus, shape }: DrawerProps) {
     icon: <MessageSquareGlyph size="sm" />,
     hint: relTime(r.last_activity_at, now),
     checked: r.id === view.id,
-    onSelect: () => void openConversation(r.id),
+    // WHAT CAME OF IT is drawn from the store (`turn.ts`'s `Opening`).
+    onSelect: () => void openConversation(r.id).catch(() => {}),
   }));
   const menu: MenuEntry[] = [
     ...listed,
     ...(listed.length > 0 && deletable ? [{ kind: "separator" as const, key: "sep" }] : []),
     ...(deletable
       ? [
+          {
+            key: "rename",
+            label: "Rename this conversation",
+            icon: <PencilGlyph size="sm" />,
+            onSelect: () => askRename(),
+          },
           {
             key: "delete",
             label: "Delete this conversation",
@@ -178,6 +188,11 @@ function Panel({ unavailable, onClose, initialFocus, shape }: DrawerProps) {
   ];
 
   const offline = unavailable !== null;
+  const startNew = () => {
+    newConversation();
+    resetPage();
+    announce("New conversation");
+  };
 
   return (
     <>
@@ -202,11 +217,7 @@ function Panel({ unavailable, onClose, initialFocus, shape }: DrawerProps) {
               label="New conversation"
               title="New conversation"
               disabledReason={unavailable?.short}
-              onClick={() => {
-                newConversation();
-                resetPage();
-                announce("New conversation");
-              }}
+              onClick={startNew}
             />
             <Menu
               label="Conversations"
@@ -251,6 +262,7 @@ function Panel({ unavailable, onClose, initialFocus, shape }: DrawerProps) {
         }
       >
         <AskThread
+          onNew={startNew}
           offlineAction={
             // NO MODEL, AND A READER WHO MAY ASSIGN ONE: the step is Ask
             // Crewlet's page, where its model is chosen.
@@ -263,6 +275,7 @@ function Panel({ unavailable, onClose, initialFocus, shape }: DrawerProps) {
         />
       </SidePanel>
       <AskDeleteConfirm />
+      <AskRename />
     </>
   );
 }

@@ -2,7 +2,10 @@ package executor
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -197,4 +200,73 @@ func benchHeld(b *testing.B, file string, scrub func(io.Reader, func() (io.ReadC
 		b.Fatal(err)
 	}
 	return most - before.HeapAlloc
+}
+
+// BenchmarkASecondTakeOfAPDFSession takes a session whose main thread holds a
+// whole-PDF read at Claude Code's 20 MiB limit (its base64 twice, [benchPDF]
+// bytes each, of random bytes as a PDF's compressed streams read) beside
+// ordinary lines, scrubbed of three values, both readings of the tar from
+// memory: with no memo, as a process's first take of it, and as its second.
+// Each reports s/take and the memo's answers a take; the figures are in the
+// package doc's "A text a take found unchanged is not redacted again".
+//
+//	GOMAXPROCS=2 go test -run '^$' -bench '^BenchmarkASecondTakeOfAPDFSession$' -benchtime 3x -count 3
+func BenchmarkASecondTakeOfAPDFSession(b *testing.B) {
+	r := rand.New(rand.NewPCG(1170, 6))
+	raw := make([]byte, benchPDF/4*3)
+	for i := range raw {
+		raw[i] = byte(r.Uint32())
+	}
+	data := "JVBERi0xLjcK" + base64.StdEncoding.EncodeToString(raw)[:benchPDF-12]
+	var thread strings.Builder
+	for i := range 200 {
+		fmt.Fprintf(&thread, `{"type":"assistant","uuid":"a-%d","message":{"content":[{"type":"text","text":"reading the file %d"}]}}`+"\n", i, i)
+	}
+	thread.WriteString(benchPDFLine("a-199", "u-1", "toolu_01", "2026-11-19T10:00:00.000Z", data) + "\n")
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(zw)
+	if err := tw.WriteHeader(&tar.Header{Name: "projects/p/s.jsonl", Mode: 0o600, Size: int64(thread.Len()),
+		Typeflag: tar.TypeReg}); err != nil {
+		b.Fatal(err)
+	}
+	if _, err := io.WriteString(tw, thread.String()); err != nil {
+		b.Fatal(err)
+	}
+	if err := errors.Join(tw.Close(), zw.Close()); err != nil {
+		b.Fatal(err)
+	}
+	archive := buf.Bytes()
+	s := newScrubber([]string{"engine-value-one-0001", "engine-value-two-0002", "engine-value-three-03"})
+	take := func(b *testing.B, memo *scrubMemo) *memoUse {
+		use := &memoUse{memo: memo, scope: "agent"}
+		if err := scrubArchive(archiveTar, bytes.NewReader(archive), reopenOf(archive), io.Discard, s,
+			testBounds.remembering(use)); err != nil {
+			b.Fatalf("the take: %v", err)
+		}
+		return use
+	}
+	warmed := newScrubMemo()
+	for _, bc := range []struct {
+		name string
+		memo func() *scrubMemo
+	}{
+		{"memo_off", func() *scrubMemo { return nil }},
+		{"first", newScrubMemo},
+		{"second", func() *scrubMemo { return warmed }},
+	} {
+		b.Run(bc.name, func(b *testing.B) {
+			if bc.name == "second" && warmed.all.Len() == 0 {
+				take(b, warmed)
+			}
+			hits := 0
+			b.ResetTimer()
+			for range b.N {
+				hits += take(b, bc.memo()).n.hits
+			}
+			b.StopTimer()
+			b.ReportMetric(b.Elapsed().Seconds()/float64(b.N), "s/take")
+			b.ReportMetric(float64(hits)/float64(b.N), "hits/take")
+		})
+	}
 }

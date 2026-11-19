@@ -5,7 +5,7 @@
  */
 
 import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { AssistantCardEvent, AssistantProposalCard } from "~/contract/assistant.ts";
 import { Router } from "~/app/router.tsx";
 import {
@@ -20,9 +20,17 @@ import { TAINT_SOURCE_WORDS, cautionOf } from "./taint.ts";
 import type { ProposalLocal } from "./turn.ts";
 import { RestError } from "~/protocol/rest.ts";
 
+// THE CARDS' OWN MOMENT, before their wait ends at 10:41: the kit draws a card
+// past its wait as expired. Only the clock is held; timers run.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-24T09:42:00Z"));
+});
+
 afterEach(() => {
   cleanup();
   resetPageContextForTest();
+  vi.useRealTimers();
 });
 
 const on: CardHandlers = {

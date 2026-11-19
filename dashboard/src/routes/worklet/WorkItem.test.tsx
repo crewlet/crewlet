@@ -1382,9 +1382,11 @@ test("the live row appears only where the engine reads the item working", async 
     },
   });
   await settle();
-  const live = screen.getByRole("link", { name: /is on turn 3 of ENG-42/ });
-  expect(live.textContent).toContain("SWE is on turn 3");
-  expect(live.textContent).toContain("executing · round 7 of 25");
+  // NAMED BY WHAT IT SHOWS, in order (WCAG 2.5.3): no label that leaves out
+  // the words a voice-control reader would say.
+  const live = screen.getByRole("link", { name: /^SWE is on turn 3 executing · round 7 of 25/ });
+  expect(live.getAttribute("aria-label")).toBeNull();
+  expect(live.textContent).toContain("Watch live");
   // BOTH ARE WATCH LINKS — the turn's Transcript, its running phase open —
   // where a settled turn's "Trace" is the record, on the Timeline.
   expect(live.getAttribute("href")).toBe(href(["live", "turns", "run-9"], { tab: "transcript" }));
@@ -1427,7 +1429,7 @@ test("the live row counts rounds from one and names the phase running", async ()
       answers: { work_item: WORKED },
     });
     await settle();
-    return screen.getByRole("link", { name: /is on turn \d+ of ENG-42/ }).textContent ?? "";
+    return screen.getByRole("link", { name: /is on turn \d+ / }).textContent ?? "";
   };
   // The first round, in flight before any has come back.
   expect(await liveText({ phase: "execute", round_num: 0, rounds_used: 0 })).toContain(
@@ -1473,7 +1475,7 @@ test("the live row says a sub-minute turn's seconds, as the profile does", async
   act(() => {
     document.dispatchEvent(new Event("visibilitychange"));
   });
-  const live = screen.getByRole("link", { name: /is on turn \d+ of ENG-42/ }).textContent ?? "";
+  const live = screen.getByRole("link", { name: /is on turn \d+ / }).textContent ?? "";
   expect(live).toContain("for 30s");
   expect(live).not.toContain("0m");
 });

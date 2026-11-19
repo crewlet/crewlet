@@ -117,6 +117,7 @@ func TestTheDashboardBoundsTheAssistantAtTheEnginesLimits(t *testing.T) {
 		"ASSISTANT_PAGE_SCREEN_PATTERN":            wire.PageScreenPattern,
 		"ASSISTANT_PAGE_KEY_PATTERN":               wire.PageKeyPattern,
 		"ASSISTANT_PAGE_TITLE_MAX_RUNES":           strconv.Itoa(wire.PageTitleMaxRunes),
+		"ASSISTANT_TITLE_MAX_RUNES":                strconv.Itoa(wire.TitleMaxRunes),
 		"ASSISTANT_PAGE_VALUE_MAX_BYTES":           strconv.Itoa(wire.PageValueMaxBytes),
 		"ASSISTANT_PAGE_ID_MAX_BYTES":              strconv.Itoa(wire.PageIDMaxBytes),
 		"ASSISTANT_PAGE_MAP_MAX_KEYS":              strconv.Itoa(wire.PageMapMaxKeys),
