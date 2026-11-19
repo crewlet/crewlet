@@ -18,76 +18,16 @@ import (
 
 // The chat corpus's own keyword index, and why it is not the knowledge base's.
 //
-// # A different corpus, deliberately
+// Chat is in NEITHER half of the knowledge corpus (ADR-0071). Like [TaskSource],
+// which skips a work item's comment thread, a conversation ABOUT a thing would
+// let one busy item outrank concise ones. It has no semantic half by
+// arithmetic: a year of chat at the declared census needs several times the
+// whole supported vector corpus, against one shared embedding budget.
 //
-// Chat is in NEITHER half of the knowledge corpus (ADR-0071). The argument is
-// already in this package: [TaskSource] does not index a work item's comment
-// thread, because a thread is a conversation ABOUT the item rather than a
-// statement of it and indexing it would make one busy item outrank every
-// concise one on any word said in passing. A chat message is that shape at ten
-// times the volume.
-//
-// It has no semantic half either, and that is arithmetic rather than taste: a
-// year of chat at the declared census needs several times the entire supported
-// vector corpus, against an embedding duty whose whole budget is shared across
-// every corpus a company has. Admitting chat to one half and not the other is
-// the failure this tree has already recorded once, so it is admitted to
-// neither and is its own thing instead.
-//
-// # A different walk, necessarily
-//
-// [Indexer] LAPS its sources by id, a batch at a time, with the cursor in
-// memory and readiness meaning the first lap wrapped. That is right for a few
-// thousand mutable documents and wrong for several million mostly-immutable
-// ones: a lap over a year of chat is thousands of index-only scans, and a
-// restart re-walks from the beginning.
-//
-// This one walks FORWARD ONLY, over `chat_messages.version` — the packed log
-// position of the last record that changed a row. An edit and a tombstone both
-// move it, so the forward walk re-visits exactly what changed and re-reads
-// nothing else, and the watermark is durable so a restart resumes.
-//
-// # What a forward walk cannot see, and how each case is followed
-//
-// A row that VANISHED. Two things remove one and neither is silent:
-//
-//   - The retention prune, a committed record whose apply range-deletes a
-//     room's messages below a cutoff. The index follows it ROOM BY ROOM, in a
-//     rotation over the rooms it holds documents for, comparing the oldest
-//     document it holds with the oldest message the room's transcript still
-//     has: what lies below the second has no row any more, so the work is
-//     bounded by what was pruned rather than by the corpus.
-//   - The compliance erase, which deletes one row and leaves a marker stamped
-//     with the erase's own position. The index walks the markers FORWARD from
-//     a watermark of its own, exactly as it walks the messages, because they
-//     are never pruned and a pass over all of them would grow with the
-//     deployment's age.
-//
-// A corpus-wide orphan pass would cover both and is exactly the lap this walk
-// exists to avoid.
-//
-// And a whole estate that was REPLACED: an adoption puts a donor's file in
-// place, whose rows below the watermark this walk will never read again. The
-// rows cannot say so, but the FILE can: a join that installs a copy names it
-// with a freshly minted instance ([statelog.EstateInstance]) before it is in
-// place, the index records the instance it was built from, and every sweep
-// compares the two — so a replacement is seen whenever it happened, a restart
-// between the install and the next sweep included. The engine also says so the
-// moment it replaces the estate under a running node
-// ([ChatIndexer.RequestRebuild]), which only makes a search stop trusting the
-// index sooner. Either way the index starts over — dropped a batch at a time
-// from a durable mark, never in one transaction, for the reason
-// [ChatIndexer.Sweep] takes one batch per call.
-//
-// # Statistics per room, maintained
-//
-// A search is ranked by the statistics of the rooms it SEARCHES, never the
-// company's — [ChatIndexer.SearchMessages] says why — so the index keeps each
-// room's document and token counts (`chat_index_rooms`) and how many of its
-// documents carry each term (`chat_index_terms`), and moves them by the
-// DIFFERENCE every write makes. A count that is right on an insert and wrong on
-// an edit drifts on the first edit with nothing to say so, which is what
-// TestTheMaintainedStatisticsAreTheCountedOnes holds against a recount.
+// [Indexer] LAPS its sources by id: wrong for millions of mostly-immutable
+// documents. This walks FORWARD ONLY over `chat_messages.version`, the packed
+// log position of a row's last change, from a durable watermark. What it cannot
+// see is on [ChatIndexer].
 
 // ChatIndexBatch is how many messages one index transaction carries.
 //
@@ -111,6 +51,15 @@ const ChatIndexBatch = 250
 const ChatPruneFollowChannels = 64
 
 // ChatIndexer maintains the inverted list over a company's chat.
+//
+// A VANISHED row is never silent. The retention prune is followed ROOM BY ROOM,
+// comparing the oldest document held with the room's oldest message, so work is
+// bounded by what was pruned. A compliance erase leaves a marker, walked
+// FORWARD from its own watermark. A REPLACED estate is seen from the FILE: a
+// join names its copy with a fresh [statelog.EstateInstance], every sweep
+// compares it, and the index starts over a batch at a time. Per-room counts
+// (`chat_index_rooms`, `chat_index_terms`) move by each write's DIFFERENCE:
+// TestTheMaintainedStatisticsAreTheCountedOnes.
 type ChatIndexer struct {
 	// db is this node's own estate, where the index is kept, and estate the
 	// replicated estate whose messages it indexes — read only, because the
@@ -151,45 +100,27 @@ func NewChatIndexer(db *store.DB, estate store.ReplicatedReader) *ChatIndexer {
 // RequestRebuild asks the index to drop everything it holds and walk the
 // transcript again from its start.
 //
-// FOR AN ESTATE THAT WAS REPLACED, the one change a forward walk cannot see: an
-// adoption puts a donor's rows in place, and every row below the watermark is
-// one this walk will never read again — so a document indexed from a copy that
-// was WRONG would answer searches for as long as the deployment lived. Search
-// is partial from this call until the walk catches up again, and
-// [ChatIndexer.Ready] says so meanwhile.
+// FOR A REPLACED ESTATE, the one change a forward walk cannot see: an adoption
+// puts a donor's rows in place, and rows below the watermark are never read
+// again, so documents from a WRONG copy would answer searches indefinitely.
+// Search is partial until the walk catches up; [ChatIndexer.Ready] says so.
 //
-// THE NUDGE, NOT THE GUARANTEE. The request is held in memory, and a process
-// that stops before its next sweep loses it; what survives that is the estate's
-// own instance, which every sweep compares with the one the index was built
-// from ([ChatIndexer.Sweep]). This call is what makes the index stop answering
-// as caught up from the instant the engine knows, rather than from the next
-// sweep.
+// THE NUDGE, NOT THE GUARANTEE. The request is in memory and a stop loses it;
+// what survives is the estate's instance, which every sweep compares
+// ([ChatIndexer.Sweep]). This call only makes the index stop answering as
+// caught up from the instant the engine knows.
 func (x *ChatIndexer) RequestRebuild() { x.rebuild.Store(true) }
 
-// Ready reports whether this index holds everything the transcript beside it
-// does: whether a search is answered over every message this node holds,
-// rather than over the part of it the walk has reached.
+// Ready reports whether a search is answered over every message this node
+// holds, not just the part the walk has reached.
 //
-// MEASURED, NEVER REMEMBERED. It is the index's own durable watermarks against
-// the transcript, read now: no `chat_messages` row past the transcript walk's
-// (a post, an edit and a tombstone each move a row's version) and no
-// `chat_deletions` marker past the erase walk's, with no drop under way and the
-// index built from the copy of the estate beside it.
-// A flag set the first time the walk reached the end said nothing about the
-// messages posted after it — a node whose walk had once caught up answered
-// every later search as caught up, through any backlog, until a rebuild.
-//
-// A STANDING REQUEST IS NOT READY, from the instant it is made: the index it
-// would drop was built from the estate that was replaced, so a search answered
-// before the loop takes the request is answered over the wrong copy.
-//
-// WHAT IT DOES NOT MEASURE is the prune follower, which has no watermark: a
-// document whose message the retention prune took stays in the index for up
-// to one rotation, and costs only its weight in the statistics — a search
-// re-reads every hit from the transcript and skips one that is gone.
-//
-// THREE-VALUED: an error is "this node could not tell", which is neither
-// answer, and the caller decides what that makes a search.
+// MEASURED, NEVER REMEMBERED: the durable watermarks against the transcript,
+// read now. No `chat_messages` row past the walk's, no `chat_deletions` marker
+// past the erase walk's, no drop under way, the index built from this estate's
+// copy; a flag set once would call every later search caught up. A STANDING
+// REBUILD REQUEST IS NOT READY from the instant it is made. The prune follower
+// has no watermark and is not measured: a search skips a hit gone from the
+// transcript. THREE-VALUED: an error is "could not tell".
 func (x *ChatIndexer) Ready(ctx context.Context) (bool, error) {
 	if x == nil || x.rebuild.Load() {
 		return false, nil
@@ -247,22 +178,18 @@ type chatDoc struct {
 	deleted   bool
 }
 
-// Sweep advances the index by at most one batch of each walk and one step of
-// the prune follower's rotation — or, while a rebuild is dropping the index,
-// by one batch of that drop and nothing else — and reports how much it did:
-// the transcript rows it walked, the erase markers it followed, the documents
-// a prune took and the documents a rebuild dropped.
+// Sweep advances the index by at most one batch of each walk and one prune
+// rotation step (while a rebuild drops the index, one batch of that drop only)
+// and reports how much it did: rows walked, markers followed, documents a
+// prune took and documents a rebuild dropped.
 //
-// ONE BATCH PER CALL rather than a loop to exhaustion, so the caller owns the
-// cadence and a cold start cannot hold this node's only writer for the length
-// of a backfill — nor a rebuild for the length of a drop, which at a year of
-// chat is tens of millions of postings in one transaction. A zero with no
-// error means both forward walks are caught up, no drop is under way and the
-// rooms this step of the rotation visited had nothing pruned; the rotation
-// comes round the rest within [ChatPruneFollowChannels]'s bound. A followed
-// marker and a walked row count whatever they changed, because a backlog of
-// erasures, or a stretch of tombstones for messages the index never held, is
-// work the caller's loop must come straight back for, not an idle tick's.
+// ONE BATCH PER CALL, not a loop to exhaustion: the caller owns the cadence,
+// and neither a backfill nor a drop (tens of millions of postings at a year of
+// chat) holds this node's only writer. A zero with no error means both walks
+// are caught up, no drop is under way and this rotation step found nothing
+// pruned. A followed marker and a walked row count whatever they changed,
+// because a backlog of erasures or tombstones for messages never indexed is
+// work the caller must come straight back for, not an idle tick's.
 func (x *ChatIndexer) Sweep(ctx context.Context, now time.Time) (int, error) {
 	// WHICH COPY OF THE ESTATE THIS IS, read before anything is decided, so
 	// a rebuild begun below records the copy it will walk.
@@ -747,21 +674,17 @@ func corpusOf(docs, tokens int64) textindex.Corpus {
 }
 
 // followPrunes removes the documents of messages the retention prune took, in
-// the next step of a rotation over the rooms this index holds documents for,
-// and reports how many it removed.
+// the next step of a rotation over the rooms the index holds documents for, and
+// reports how many.
 //
-// DERIVED RATHER THAN SUBSCRIBED, because the prune is a committed record this
-// node has already applied by the time the index runs: the evidence is the gap
-// between the oldest document the index holds for a room and the oldest message
-// the room's transcript still has. Everything before the second has no row any
-// more, whichever record removed it, so the follower deletes exactly that and
-// needs no record of how far it has followed — which it would have to keep in
-// step with what it derives from.
+// DERIVED RATHER THAN SUBSCRIBED: the prune is already applied when the index
+// runs, and the gap between a room's oldest document and its transcript's
+// oldest message is everything with no row, whichever record removed it. So it
+// keeps no record of how far it has followed.
 //
-// A ROTATION rather than a pass over every room, so a sweep costs
-// [ChatPruneFollowChannels] rooms rather than the company's. The cursor moves
-// only once the step has committed, so a failed step is retried over the same
-// rooms rather than skipping them until the rotation comes round.
+// A ROTATION, so a sweep costs [ChatPruneFollowChannels] rooms, not the
+// company's. The cursor moves only once the step has committed, so a failed
+// step is retried over the same rooms.
 func (x *ChatIndexer) followPrunes(ctx context.Context) (int, error) {
 	rooms, err := x.nextRooms(ctx)
 	if err != nil {
@@ -924,24 +847,16 @@ func (x *ChatIndexer) rangeTerms(ctx context.Context, tx *sql.Tx, room string,
 }
 
 // followErasures removes the documents of messages a compliance erase
-// destroyed, and reports how many markers it followed.
+// destroyed, and reports how many markers it followed. A FORWARD WALK over the
+// markers' positions (replicated 0055) from a durable watermark of its own
+// (node 0056): markers are never pruned, so a join over all of them every sweep
+// would grow with the deployment's age; an idle node reads one empty range.
 //
-// A FORWARD WALK over the markers' positions (replicated 0055) from a durable
-// watermark of its own (node 0056) — the message walk's shape, for the message
-// walk's reason. The markers are never pruned, because a marker is what makes
-// a destruction permanent, so a join that read every one of them on every sweep
-// would take this node's one writer for all of them every two seconds once
-// anything had ever been erased: a cost that grew for the life of the
-// deployment. Walked forward, an idle node reads one empty index range and
-// writes nothing.
-//
-// A BATCH ENDS ON A WHOLE ERASE. Every marker one erase writes carries that
-// record's position, so a batch cut at a row count inside one record would
-// advance the watermark past the rest of it, and those messages would stay
-// indexed for good. The batch is the first [ChatIndexBatch] markers widened to
-// the end of the last record they reach — at most [ChatIndexBatch] plus
-// chatlet.MaxEraseMessages less one — read in one snapshot so the two halves
-// agree.
+// A BATCH ENDS ON A WHOLE ERASE. One erase's markers share its record's
+// position, so a batch cut inside one would advance the watermark past the
+// rest, leaving those messages indexed for good. It is the first
+// [ChatIndexBatch] markers widened to the last record's end (at most that plus
+// chatlet.MaxEraseMessages less one), in one snapshot.
 func (x *ChatIndexer) followErasures(ctx context.Context, now time.Time) (int, error) {
 	through, err := x.position(ctx, chatErasedThroughStatement, "the chat erasure watermark")
 	if err != nil {
@@ -1134,15 +1049,13 @@ func (x *ChatIndexer) followInstance(ctx context.Context, now time.Time,
 // lifts the mark so the next sweep starts the walk over, reporting that as one
 // unit of work so the caller's loop comes straight back for it.
 //
-// [ChatIndexBatch] DOCUMENTS A STEP, the walk's own unit, through the removal
-// every other deletion here takes ([ChatIndexer.removeDoc]), so every count
-// moves with its document: a search answered during the drop is ranked over
-// exactly what is still held, and the statistics shrink with the documents
-// rather than waiting at the end as one more delete the size of the index. A
-// step holds the writer about as long as a batch of the walk does — measured
-// on Turso at 80 000 messages, 160 ms on average and 250 ms at worst against
-// 135 ms a walk batch — and a whole drop costs roughly what the walk that
-// follows it does, which is the price of never holding the writer for more.
+// [ChatIndexBatch] DOCUMENTS A STEP, through the removal every other deletion
+// takes ([ChatIndexer.removeDoc]), so every count moves with its document: a
+// search during the drop is ranked over exactly what is held, and the
+// statistics never wait at the end as one delete the size of the index. A step
+// holds the writer about as long as a walk batch (160 ms on average, 250 ms
+// worst, against 135 ms, on Turso at 80 000 messages); a whole drop costs
+// roughly the walk after it, the price of never holding the writer longer.
 func (x *ChatIndexer) dropStep(ctx context.Context, now time.Time) (int, error) {
 	maxVariables := x.db.Caps().MaxVariables
 	dropped, done := 0, false
@@ -1370,21 +1283,14 @@ func anys(values []string) []any {
 
 // Run sweeps until the context ends.
 //
-// THE CADENCE IS THE SAME [indexIdle] THE KNOWLEDGE INDEXER USES, and a sweep
-// that did nothing is what earns the sleep: a cold start and a rebuild's drop
-// run flat out, and a steady state costs one read of the estate's instance,
-// three of the one state row — the whole row and the two watermarks — and one
-// step of the prune rotation per idle tick. Two loops rather than one over both
-// corpora because the walks are not alike — this one is forward over
-// `chat_messages.version` with a durable watermark, and the other is a lap by
-// id that repairs a drifted row — so a shared loop would have to pick one of
-// the two shapes for both.
+// THE CADENCE IS THE KNOWLEDGE INDEXER'S [indexIdle], and a sweep that did
+// nothing earns the sleep: a cold start and a rebuild's drop run flat out. Two
+// loops, not one over both corpora, because the walks differ (forward with a
+// durable watermark here, a lap by id that repairs drift there).
 //
-// A FAILED SWEEP IS LOGGED AND RETRIED rather than ending the loop. The index
-// is this node's own and is rebuilt from rows that are still there, so the
-// honest consequence of a bad step is that `search_messages` answers over
-// slightly older messages until the next one — never that a node stops
-// indexing for the life of the process.
+// A FAILED SWEEP IS LOGGED AND RETRIED, not fatal: the index is this node's own
+// and rebuilt from rows still there, so a bad step costs `search_messages`
+// slightly older answers until the next, never a node that stops indexing.
 func (x *ChatIndexer) Run(ctx context.Context) {
 	for {
 		worked, err := x.Sweep(ctx, time.Now())

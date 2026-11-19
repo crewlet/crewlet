@@ -13,27 +13,17 @@ import (
 	"github.com/crewlet/crewlet/internal/secrets"
 )
 
-// Writing a submission: the secret first, then the pointer, then the epoch.
+// Writing a submission: the secret, then the pointer, then the epoch; any
+// other order has a breaking window:
+//   - POINTER FIRST leaves the config naming a secret with nothing behind it:
+//     the route answers 503 to every delivery, looking exactly like an attack.
+//   - VALUE ONLY does nothing in a running process: a ${VAR} resolves from a
+//     snapshot taken when the epoch was applied, so a later value is invisible
+//     until something activates.
 //
-// # The order is the whole of it
-//
-// A secret and the config slot that points at it are two writes, and every
-// order but one has a window that breaks something:
-//
-//   - POINTER FIRST leaves the config naming a secret with nothing behind
-//     it. The route it guards answers 503 to every delivery for as long as
-//     the window lasts, which looks exactly like an attack.
-//   - VALUE ONLY, with no activation, does nothing at all in a running
-//     process. A ${VAR} is resolved from a snapshot taken when the epoch
-//     was applied, so a value written into the store after that is invisible
-//     until something activates. That is the failure the secret-store sink
-//     already warns about at the end of every provisioning run.
-//
-// So: value, then pointer, then publish. And when the pointer needed no
-// change (a rotation, where the config already names the right variable) the
-// publish still happens, as a reload of the unchanged document, because
-// otherwise the new value never reaches the seats — a reload of the revision
-// the submission read, which is the one whose slot names that variable.
+// So: value, pointer, publish. When the pointer needed no change (a rotation)
+// the publish still happens, as a reload of the revision the submission read,
+// or the new value never reaches the seats.
 
 // Secrets is the sealed store this package writes credentials into.
 //
