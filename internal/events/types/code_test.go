@@ -142,8 +142,8 @@ func TestAMirrorPushsAccountIsBoundedAndCountsThePush(t *testing.T) {
 		t.Errorf("the account of a push of %d refs encodes to %d bytes; want at most %d, two orders of "+
 			"magnitude under queue.MaxPayloadBytes", refs, len(raw), limit)
 	}
-	if got, want := ev.SummaryFor("web"), "1000 ref(s) set, 1000 deleted, 1000 waiting"; !strings.Contains(
+	if got, want := ev.PhraseFor("web").Text, "1000 ref(s) set, 1000 deleted, 1000 waiting"; !strings.Contains(
 		got, want) {
-		t.Errorf("SummaryFor = %q; want it to say %q", got, want)
+		t.Errorf("PhraseFor = %q; want it to say %q", got, want)
 	}
 }

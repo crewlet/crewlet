@@ -11,6 +11,7 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/named"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/routing"
@@ -328,13 +329,17 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		meta[notify.BodyAuthorField] = record.Actor
 		meta[notify.BodyAuthorKindField] = string(record.ActorKind)
 	}
+	// THE PAGE IS NAMED by its title (package named), so a line about the
+	// wake links to it.
+	subject := named.Words("").Name(named.PageRef(n.PageID, n.Title))
 	return notify.Inbound{
-		Source:    Source,
-		EventType: string(n.Kind),
-		Sender:    record.Actor,
-		Subject:   n.Title,
-		Body:      body,
-		Metadata:  meta,
+		Source:      Source,
+		EventType:   string(n.Kind),
+		Sender:      record.Actor,
+		Subject:     subject.Text,
+		SubjectRefs: subject.Refs,
+		Body:        body,
+		Metadata:    meta,
 		// AND WHO THE SENDER IS, by the record's own kind: a seat's handle
 		// and a credential's login are spelled alike, and only the kind
 		// tells a turn this wakes whether a colleague is asking

@@ -29,6 +29,7 @@ import type {
   EventRecord,
   LiveCall,
   LiveTurn,
+  NamedRef,
   PartialRound,
   PromptMessage,
   PromptSection,
@@ -386,6 +387,8 @@ export interface PhaseRecord {
     id?: string;
     type?: string;
     summary?: string;
+    /** What `summary` names (`named.Ref`), absent where it names nothing. */
+    refs?: NamedRef[];
     actor?: string;
     integration?: string;
     sender?: string;

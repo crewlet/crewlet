@@ -17,6 +17,7 @@ import (
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/named"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
@@ -601,5 +602,31 @@ func TestAViewedKeyRecordWakesNobodyUnread(t *testing.T) {
 	if _, relayed, err := gitlet.NewTranslator().Translate(t.Context(), record(gitlet.OpChangeClose)); err == nil {
 		t.Errorf("a close whose payload is no payload was acknowledged (relayed %v): a repository's record "+
 			"other than its viewed key is decoded", relayed)
+	}
+}
+
+// A CODE WAKE'S SUBJECT NAMES ITS CHANGE (package named), so the line its turn
+// is labelled with links to the change by the reference it is spelled with.
+//
+// Mutation: leave SubjectRefs off the inbound the wake is built from, and the
+// subject names nothing.
+func TestACodeWakesSubjectNamesItsChange(t *testing.T) {
+	t.Parallel()
+	n := newNode(t)
+	n.chart = testChart()
+	w, _ := writerOn(t, n, n.pub)
+	repo, change := discussed(t, n, "web")
+	said := saying(repo, change, dev, "", "@cto the retry loop")
+	said.Comment.Mentions = []string{"cto"}
+	_, _, routed := wakesOf(t, feedRecord(t, n, converse(t, w, said).Position))
+	if len(routed) == 0 {
+		t.Fatal("a comment naming cto woke nobody")
+	}
+	ref := routed[0].Metadata[gitlet.MetaChangeRef]
+	want := []named.Ref{{Kind: named.Change, ID: ref, Text: ref}}
+	if ref == "" || !strings.HasPrefix(routed[0].Subject, ref) ||
+		!reflect.DeepEqual(routed[0].SubjectRefs, want) {
+		t.Fatalf("the wake's subject %q names %+v, want it to open on %q and name %+v",
+			routed[0].Subject, routed[0].SubjectRefs, ref, want)
 	}
 }

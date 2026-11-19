@@ -617,7 +617,7 @@ describe("the sidebar's figures", () => {
     const sidebar = runningRows()
       .map((r) => turnOf(r.href))
       .filter(Boolean);
-    const home = [...document.querySelectorAll(".live-list .live-row")].map((row) =>
+    const home = [...document.querySelectorAll(".live-list .live-row__open")].map((row) =>
       turnOf(row.getAttribute("href") ?? ""),
     );
     expect(sidebar).toEqual(["t-a", "t-b", "t-c", "t-d"]);
@@ -637,7 +637,7 @@ describe("the sidebar's figures", () => {
     );
     const homeRows = () =>
       [...document.querySelectorAll(".live-list .live-row")].map((row) =>
-        turnOf(row.getAttribute("href") ?? ""),
+        turnOf(row.querySelector(".live-row__open")?.getAttribute("href") ?? ""),
       );
     expect(runningRows().map((r) => turnOf(r.href))).toEqual(["t-a", "t-b", ""]);
     expect(homeRows()).toEqual(["t-a", "t-b"]);
