@@ -1641,11 +1641,20 @@ waiting, and held once its start passes with the limit still on.
   it per seat. It is one SQL expression evaluated inside the statement each of
   those already runs, so no screen or tool derives its own, and none compares a
   start with its own clock.
-- **The live facts.** Which items a turn or run is on, and why a seat cannot
-  take a turn, come from the live projection's ranking of a seat's stop reasons.
-  An answer read on a node whose projection is not seeded says
+- **The live facts.** Which items a turn or run is on, which item a run waits
+  on a person over, and why a seat cannot take a turn come from the live
+  projection, in the ranking the seat's own row states (`paused`, then
+  `unplaced`, `budget`, `limit`), so an item and its seat never disagree. Only
+  a node serving the API (the `ingress` role, with an `api.port`) folds the
+  projection, and it reads these once the seat placement, the pause record, the
+  run record and a budget report have each been read. Every other answer says
   `flow_live: false`: its rows read no live fact, rather than reading every
-  stopped seat's work as moving.
+  stopped seat's work as moving. A model limit is learned from its park: a
+  node that started while a seat was parked reads it at the engine's next park
+  or probe, as the seat's row does.
+- **In the agents' tools.** `list_work_items`, `get_work_item` and `my_work`
+  carry each item's flow and the answer's `flow_live`, read by the data node
+  that answers the call, and their descriptions say what both mean.
 - **`departed` needs a chart.** An assignee is gone once the chart's seats have
   been applied to the tracker and do not name them; a tracker that has never
   been told the chart departs nobody.
