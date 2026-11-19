@@ -84,20 +84,20 @@ func TestTheAdvisorNamesASourceItCouldNotRead(t *testing.T) {
 		want      advisor.Evidence
 	}{
 		{"every source read", patternsWork{work: worklet.WorkPatterns{AgentComments: 3}}, read,
-			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, Work: worklet.WorkPatterns{AgentComments: 3},
+			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, Work: worklet.WorkPatterns{AgentComments: 3},
 				Ledger: turns, Backup: advisor.Backup{Standing: true}}},
 		{"the tracker failed", patternsWork{err: errors.New("no data node answered")}, read,
-			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, WorkUnread: true, Ledger: turns,
+			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, WorkUnread: true, Ledger: turns,
 				Backup: advisor.Backup{Standing: true}}},
 		{"the ledger failed", patternsWork{}, ledgerUsage{err: errors.New("no data node answered")},
-			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, LedgerUnread: true,
+			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, LedgerUnread: true,
 				Backup: advisor.Backup{Standing: true}}},
 		{"a node with no usage half", patternsWork{}, nil, func() bool { return true },
-			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, LedgerUnread: true, Backup: advisor.Backup{Standing: true}}},
+			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, LedgerUnread: true, Backup: advisor.Backup{Standing: true}}},
 		{"the alarms not yet evaluated", patternsWork{}, read, func() bool { return false },
-			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, Ledger: turns, AlarmsUnread: true}},
+			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, Ledger: turns, AlarmsUnread: true}},
 		{"a node with no alarm table", patternsWork{}, read, nil,
-			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, Ledger: turns, AlarmsUnread: true}},
+			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, Ledger: turns, AlarmsUnread: true}},
 	} {
 		s := Sources{Work: c.work, Usage: c.usage, AlarmsEvaluated: c.evaluated,
 			Alarms: func() []statelog.Alarm { return standing }}
@@ -205,6 +205,9 @@ func (noticeLog) PendingRequests(context.Context, statelog.Freshness) ([]advisor
 }
 func (noticeLog) LastRunOfClasses(context.Context, statelog.Freshness) (map[string]time.Time, error) {
 	return map[string]time.Time{}, nil
+}
+func (noticeLog) AlarmEpisodes(context.Context, time.Time, statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, error) {
+	return nil, nil
 }
 func (noticeLog) Reports(context.Context, string, int, statelog.Freshness) ([]advisordomain.ReportRow, string, error) {
 	return nil, "", nil
@@ -353,5 +356,35 @@ func TestTheAdvisorReadsTheSeatsTheEnginePausedForAFailure(t *testing.T) {
 	s.Pauses = pauseList{err: errors.New("no fleet store answered")}
 	if ev := s.advisorEvidence(t.Context(), c, time.Now()); !ev.PausesUnread {
 		t.Error("a pause store that failed was read as no pauses")
+	}
+}
+
+// episodeLog is an advisor log holding alarm episodes.
+type episodeLog struct {
+	noticeLog
+	rows  []advisordomain.AlarmEpisodeRow
+	since time.Time
+}
+
+func (l *episodeLog) AlarmEpisodes(_ context.Context, since time.Time, _ statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, error) {
+	l.since = since
+	return l.rows, nil
+}
+
+// THE ALARMS' HISTORY IS READ OVER THE WEEK the evidence covers, each episode
+// as the log keeps it. Mutation: read since now, and the week's are missed.
+func TestTheAlarmsHistoryIsReadOverTheWeek(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2030, 1, 9, 12, 0, 0, 0, time.UTC)
+	raised := now.Add(-time.Hour)
+	l := &episodeLog{rows: []advisordomain.AlarmEpisodeRow{{SeriesID: "s", Node: "data-1", Kind: "pool_starved",
+		Instance: "pool_starved", RaisedAt: raised}}}
+	got, err := Sources{Advisor: l}.alarmEpisodes(t.Context(), now)
+	if err != nil || !l.since.Equal(now.Add(-advisor.Window)) {
+		t.Fatalf("read since %s (%v), want the week before %s", l.since, err, now)
+	}
+	if want := []advisor.AlarmEpisode{{Node: "data-1", Kind: "pool_starved", Instance: "pool_starved",
+		RaisedAt: raised}}; !reflect.DeepEqual(got, want) {
+		t.Errorf("episodes %+v, want %+v", got, want)
 	}
 }

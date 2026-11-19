@@ -93,10 +93,12 @@ type Evidence struct {
 	// Waiting is each agent seat's wakes queued now, by handle, where its
 	// holder reported them.
 	Waiting map[string]int
+	// Episodes is every alarm episode on any node that stood in the window.
+	Episodes []AlarmEpisode
 	// The Unread flags say the caller could not read that source, so its
 	// classes raise nothing and the answer names it.
 	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread, RunsUnread, FiresUnread bool
-	StopsUnread, MergesUnread                                                     bool
+	StopsUnread, MergesUnread, EpisodesUnread                                     bool
 }
 
 // source is the record a detector reads.
@@ -119,6 +121,8 @@ const (
 	sourceStops
 	// sourceMerges is the access log's merge escalations, [Evidence.Merges].
 	sourceMerges
+	// sourceEpisodes is the advisor log's alarm history, [Evidence.Episodes].
+	sourceEpisodes
 )
 
 // unread reports whether ev could not read src.
@@ -140,6 +144,8 @@ func (ev Evidence) unread(src source) bool {
 		return ev.StopsUnread
 	case sourceMerges:
 		return ev.MergesUnread
+	case sourceEpisodes:
+		return ev.EpisodesUnread
 	}
 	panic(fmt.Sprintf("advisor: a detector reads source %d, which is none", src))
 }
@@ -186,6 +192,8 @@ var detectors = []detector{
 	{ClassWorkBottleneck, sourceWork, workBottleneck},
 	{ClassWorkHeldByPerson, sourceWork, workHeldByPerson},
 	{ClassMergeNoChecks, sourceMerges, mergeNoChecks},
+	{ClassPoolWaits, sourceEpisodes, poolWaits},
+	{ClassFalseAlarm, sourceEpisodes, falseAlarm},
 }
 
 // Thresholds, each the point where a pattern stops being a slip: routing on
@@ -322,6 +330,9 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 	if ev.MergesUnread {
 		answer.Unread = append(answer.Unread, UnreadMerges)
 	}
+	if ev.EpisodesUnread {
+		answer.Unread = append(answer.Unread, UnreadEpisodes)
+	}
 	return answer
 }
 
@@ -371,6 +382,9 @@ var engineWords = map[Class]said{
 	ClassRedeliveredSeen: {"Wakes repeated changes an agent had already read.",
 		"These agents were woken for changes a turn of theirs had already read, so the engine " +
 			"absorbed the wakes instead of starting turns."},
+	ClassFalseAlarm: {"An objective alarm fired and cleared within minutes, again and again.",
+		"Each of these cleared within ten minutes of its raise: the node recovered from a short " +
+			"burst by itself, so they were not outages, and nobody needs to act on the next one like them."},
 	ClassAuxiliaryShare: {"An agent spent a large share of its tokens on auxiliary calls.",
 		"More than 15% of the tokens these agents' turns spent went to auxiliary calls inside them " +
 			"rather than to the turns' own work."},
@@ -392,6 +406,7 @@ var reviewWords = map[string]said{
 
 // engineSentences is what each engine class's note says about the pattern.
 var engineSentences = map[Class]string{
+	ClassFalseAlarm:               "Nothing for you: the engine's objective judged bursts the node recovered from by itself.",
 	ClassAgentMentionsWithoutAsk:  "The engine wakes an agent only for words that ask it something.",
 	ClassPersonRequestsWithoutAsk: "A comment reaches a person's Inbox as a decision only when it asks them a question.",
 	ClassAskOvertaken:             "An answer helps most on the newest question an item carries.",

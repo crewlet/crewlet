@@ -1,6 +1,10 @@
 package worklet
 
-import "context"
+import (
+	"context"
+	"math"
+	"time"
+)
 
 // The claim names, for the cases that hold one as another node would; a test
 // spelling a name itself would be the second spelling one function per claim
@@ -46,4 +50,16 @@ func (w *Writer) RecordTurnReading(ctx context.Context, opID string, turn TurnRe
 	read func(context.Context, string) (string, error)) (WriteResult, error) {
 
 	return w.recordTurn(ctx, opID, turn, read)
+}
+
+// PastFlow is the backfill's reading of one item's past up to until, as if
+// the duty had read none of it: the changes the backfill would record.
+func (d *FlowDuty) PastFlow(ctx context.Context, id string, until time.Time) ([]FlowRecord, error) {
+	past, err := d.deps.Reader.readPast(ctx, id, flowHorizon{seq: math.MaxInt64, at: until},
+		until, d.wrote)
+	if err != nil || past == nil {
+		return nil, err
+	}
+	past.until = until
+	return d.deps.Reader.pastFlow(ctx, past, d.deps.Past, d.wrote)
 }

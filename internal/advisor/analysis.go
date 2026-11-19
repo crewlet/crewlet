@@ -54,11 +54,13 @@ type Pass struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	// Findings are the grounded ones, Listed how many, Dropped how many were not and why.
-	Findings []Finding    `json:"-"`
-	Listed   int          `json:"listed"`
-	Dropped  map[Drop]int `json:"dropped"`
-	Unread   []string     `json:"unread"`
-	Reason   string       `json:"reason,omitempty"`
+	Findings []Finding `json:"-"`
+	// Explained are the explanations the engine checked, for the duty to write.
+	Explained []Explained  `json:"-"`
+	Listed    int          `json:"listed"`
+	Dropped   map[Drop]int `json:"dropped"`
+	Unread    []string     `json:"unread"`
+	Reason    string       `json:"reason,omitempty"`
 }
 
 // Drop is why a submitted finding was not listed.

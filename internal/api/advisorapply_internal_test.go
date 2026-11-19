@@ -69,6 +69,9 @@ func (l *applyLog) PendingRequests(context.Context, statelog.Freshness) ([]advis
 func (l *applyLog) LastRunOfClasses(context.Context, statelog.Freshness) (map[string]time.Time, error) {
 	return map[string]time.Time{}, nil
 }
+func (l *applyLog) AlarmEpisodes(context.Context, time.Time, statelog.Freshness) ([]advisordomain.AlarmEpisodeRow, error) {
+	return nil, nil
+}
 func (l *applyLog) Reports(context.Context, string, int, statelog.Freshness) ([]advisordomain.ReportRow, string, error) {
 	return nil, "", nil
 }
@@ -77,6 +80,9 @@ func (l *applyLog) Report(context.Context, string, statelog.Freshness) (advisord
 }
 func (l *applyLog) Tally(context.Context, time.Time, time.Time, statelog.Freshness) (advisordomain.Tally, error) {
 	return advisordomain.Tally{}, nil
+}
+func (l *applyLog) Explain(context.Context, advisordomain.Call, string, advisordomain.Explanation) (statelog.Result, error) {
+	return statelog.Result{}, nil
 }
 func (l *applyLog) WriteReport(context.Context, advisordomain.Call, advisordomain.Report) (statelog.Result, error) {
 	return statelog.Result{}, nil
