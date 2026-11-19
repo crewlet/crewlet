@@ -48,7 +48,7 @@ func runDoctor(environ config.Source, args []string, stdout, stderr io.Writer) e
 	}
 	answer := reading.answer()
 	if *asJSON {
-		raw, err := json.Marshal(reading)
+		raw, err := json.Marshal(reading.sent)
 		if err != nil {
 			return err
 		}
@@ -96,10 +96,20 @@ func runDoctor(environ config.Source, args []string, stdout, stderr io.Writer) e
 }
 
 // doctorReading is what the doctor reads of the node: every open finding the
-// Advisor keeps, and its latest run.
+// Advisor keeps, and its latest run, as this build reads them for the exit,
+// and as the node sent them for -json.
 type doctorReading struct {
-	Findings []queries.AdvisorFinding   `json:"findings"`
-	LastRun  *queries.AdvisorRunSummary `json:"last_run"`
+	Findings []queries.AdvisorFinding
+	LastRun  *queries.AdvisorRunSummary
+	sent     doctorSent
+}
+
+// doctorSent is every page's findings and the latest run as the node sent
+// them: -json prints the node's answer, every field and number it carried,
+// not this build's reading of it.
+type doctorSent struct {
+	Findings []json.RawMessage `json:"findings"`
+	LastRun  json.RawMessage   `json:"last_run"`
 }
 
 // doctorPages bounds how many pages of findings the doctor reads: a company
@@ -108,19 +118,29 @@ const doctorPages = 100
 
 // readAdvisor reads every open finding, a page at a time, and the latest run.
 func readAdvisor(ctx context.Context, client *nodeClient) (doctorReading, error) {
-	out := doctorReading{Findings: []queries.AdvisorFinding{}}
+	out := doctorReading{Findings: []queries.AdvisorFinding{},
+		sent: doctorSent{Findings: []json.RawMessage{}, LastRun: json.RawMessage("null")}}
 	cursor := ""
 	for range doctorPages {
 		path := "/advisor/findings?state=open&limit=100"
 		if cursor != "" {
 			path += "&cursor=" + url.QueryEscape(cursor)
 		}
-		var page queries.AdvisorFindingList
-		if err := client.get(ctx, path, &page); err != nil {
+		var raw json.RawMessage
+		if err := client.get(ctx, path, &raw); err != nil {
 			return doctorReading{}, err
+		}
+		var page queries.AdvisorFindingList
+		var sent doctorSent
+		if err := errors.Join(json.Unmarshal(raw, &page), json.Unmarshal(raw, &sent)); err != nil {
+			return doctorReading{}, fmt.Errorf("the node's findings are not the shape this build reads: %w", err)
 		}
 		out.Findings = append(out.Findings, page.Findings...)
 		out.LastRun = page.LastRun
+		out.sent.Findings = append(out.sent.Findings, sent.Findings...)
+		if len(sent.LastRun) > 0 {
+			out.sent.LastRun = sent.LastRun
+		}
 		if page.NextCursor == nil {
 			return out, nil
 		}
