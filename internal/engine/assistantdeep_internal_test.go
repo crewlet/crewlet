@@ -49,7 +49,6 @@ func deepCompany(t *testing.T) *Company {
 	if err != nil {
 		t.Fatal(err)
 	}
-	on := true
 	return &Company{Models: models, Org: &org.Organization{Name: "Acme"},
 		Config: &config.Company{
 			Name: "Acme",
@@ -60,7 +59,7 @@ func deepCompany(t *testing.T) *Company {
 				}},
 				Sandbox: &config.SandboxProvider{E2B: &config.E2BSandbox{}},
 			},
-			Assistant: config.Assistant{Enabled: &on,
+			Assistant: config.Assistant{Model: "deep",
 				DeepWork: &config.AssistantDeepWork{LLM: "deep"}},
 		}}
 }

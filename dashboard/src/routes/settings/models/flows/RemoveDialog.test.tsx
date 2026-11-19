@@ -36,7 +36,7 @@ const REFS: ModelReference[] = [
     segments: ["roles", 1, "llm_review"],
     chain: ["default", "sonnet"],
   },
-  { at: { assistant: "chat" }, segments: ["assistant", "llm"], chain: ["sonnet"] },
+  { at: { assistant: "chat" }, segments: ["assistant", "model"], chain: ["sonnet"] },
 ];
 
 const refusal = {

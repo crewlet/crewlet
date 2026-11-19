@@ -168,14 +168,14 @@ export function narrowCard(card: AssistantCard): AssistantNarrowCard | null {
 /**
  * Why the Ask pill is drawn disabled, or null when the assistant is
  * available. A viewer answer with no `assistant` member is an engine that
- * does not serve it, which reads as disabled rather than as available.
+ * does not serve it, which reads as one with no model rather than as available.
  */
 export function assistantUnavailable(
   viewer: AssistantViewerAssistant | undefined,
 ): AssistantAccessReason | null {
-  if (viewer === undefined) return "disabled";
+  if (viewer === undefined) return "no_model";
   if (viewer.available || viewer.reason === "model_not_ready") return null;
-  return viewer.reason ?? "disabled";
+  return viewer.reason ?? "no_model";
 }
 
 /**
@@ -198,7 +198,7 @@ export function assistantModelNotice(
 ): AssistantModelNotice | null {
   if (viewer === undefined || viewer.available || viewer.reason !== "model_not_ready") return null;
   return (
-    viewer.model ?? {
+    viewer.notice ?? {
       code: "model_unavailable",
       message: "Ask Crewlet's model cannot answer right now.",
     }

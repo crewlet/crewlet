@@ -146,6 +146,8 @@ export interface ModelEntry {
   used_by: ModelUse[];
   device_sign_in: ModelDevice | null;
   limits: ModelLimit[];
+  /** Why no helper (Ask Crewlet, the Advisor) can run on it, in a person's words; null where one can. */
+  helper_problem: string | null;
 }
 
 /** One model in a member's reading: nothing that names a credential, an account or a vendor's sentence. */

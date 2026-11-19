@@ -148,33 +148,6 @@ func (e *Engine) AssistantWriter() *assistantdomain.Writer {
 	return nil
 }
 
-// assistantRetention is how long a conversation is kept after its last use,
-// asked at every reaper pass: `assistant.retention_days` of the fleet's
-// activated revision, read only on a node running it ([Engine.fleetCompany]),
-// so an apply reaches the next pass without a restart; or why this node
-// cannot know it.
-//
-// Never this node's own revision (ADR-0057): a node that refused the fleet's,
-// or booted on an offline import, may hold a term the company has since
-// lengthened, and a purge is permanent on every data node. There the term is
-// unknown and purges nothing ([trashreap.Termed]): late rather than wrong.
-func (e *Engine) assistantRetention(ctx context.Context) (time.Duration, error) {
-	company, err := e.servedFleetRevision(ctx)
-	if err != nil {
-		return 0, err
-	}
-	return assistantRetentionOf(company), nil
-}
-
-// assistantRetentionOf is the retention a company's document states
-// ([config.Assistant.Retention]); a company built in code takes the default.
-func assistantRetentionOf(c *Company) time.Duration {
-	if c.Config == nil {
-		return config.Assistant{}.Retention()
-	}
-	return c.Config.Assistant.Retention()
-}
-
 // ownerItem prefixes the reaper's id for a person's erasure, beside a
 // conversation's id, a uuid that never begins with it.
 const ownerItem = "owner:"
@@ -190,7 +163,6 @@ const ownerItem = "owner:"
 type assistantTrash struct {
 	reader assistantRows
 	writer assistantPurges
-	term   func(context.Context) (time.Duration, error)
 
 	// removed answers which of the ids the identity estate holds a removal
 	// tombstone for ([iamdomain.Reader.Removed]).
@@ -215,10 +187,10 @@ var _ trashreap.Termed = assistantTrash{}
 
 func (assistantTrash) Name() string { return assistantdomain.Domain{}.Name() }
 
-// Term is the conversation's retention, asked at every pass, or why this node
-// cannot know it.
-func (a assistantTrash) Term(ctx context.Context) (time.Duration, error) {
-	return a.term(ctx)
+// Term is a conversation's retention ([assistantdomain.Retention]), the same
+// on every node.
+func (assistantTrash) Term(context.Context) (time.Duration, error) {
+	return assistantdomain.Retention, nil
 }
 
 // TrashedBefore nominates first every removed person who still owns a
@@ -299,7 +271,7 @@ func (e *Engine) assistantSource() (assistantTrash, bool) {
 		return assistantTrash{}, false
 	}
 	return assistantTrash{reader: c.assistantReader, writer: c.assistantWriter,
-		term: e.assistantRetention, removed: c.iamReader.Removed}, true
+		removed: c.iamReader.Removed}, true
 }
 
 // nudgeAssistantErasure tells the erasure loop the identity applier removed

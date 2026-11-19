@@ -43,9 +43,11 @@ const READER: ViewerState = {
   failedRefusal: null,
   configWriter: false,
   configManagedBy: [],
-  assistant: "disabled",
+  assistant: "no_model",
   assistantModel: null,
   assistantReadsImages: false,
+  assistantAssigned: null,
+  assistantCanAssign: false,
   chatVendors: [],
 };
 

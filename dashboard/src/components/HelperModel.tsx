@@ -130,9 +130,14 @@ export function HelperModel({ helper, current, choices, canAssign, onApplied }: 
   );
 }
 
-/** Every model of the company as a helper's choice, with the engine's reason where it cannot run one. */
+/**
+ * Every model of the company as a helper's choice, with the engine's reason
+ * where it cannot run one: the administrator's reading, the only one that
+ * says it, and the only reader who chooses.
+ */
 export function helperChoices(answer: ModelEntriesAnswer | null): HelperChoice[] {
-  return (answer?.entries ?? []).map((entry) => ({
+  if (answer?.reading !== "admin") return [];
+  return answer.entries.map((entry) => ({
     key: entry.key,
     model: entry.model,
     problem: entry.helper_problem,

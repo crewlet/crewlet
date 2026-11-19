@@ -4,7 +4,7 @@ import "slices"
 
 // ProtocolVersion is the version of this vocabulary every frame and every
 // request carries. See the package doc for how it moves.
-const ProtocolVersion = 1
+const ProtocolVersion = 2
 
 // The bounds the dashboard holds a person to before anything is sent, so a
 // limit is met where somebody is typing rather than as a refusal after the
@@ -680,12 +680,11 @@ func (k BriefActionKind) Valid() bool { return slices.Contains(BriefActionKinds,
 type ViewerReason string
 
 const (
-	// ViewerDisabled is a company whose configuration leaves the assistant
-	// off.
-	ViewerDisabled ViewerReason = "disabled"
-	// ViewerNoModel is an enabled assistant whose model chain this node
-	// cannot build.
+	// ViewerNoModel is a company that assigns Ask Crewlet no model.
 	ViewerNoModel ViewerReason = "no_model"
+	// ViewerModelProblem is an assigned model no helper can run on
+	// (internal/config's HelperModelProblem).
+	ViewerModelProblem ViewerReason = "model_problem"
 	// ViewerNotAPerson is a caller that is not a person signed in through
 	// a session: a machine token, a Tier A token's session, a service
 	// account (D04).
@@ -693,10 +692,10 @@ const (
 	// ViewerNoPermission is a person the authority table refuses the
 	// assistant.
 	ViewerNoPermission ViewerReason = "no_permission"
-	// ViewerModelNotReady is a person who may ask, on a chain every model
-	// of which is known unusable right now (signed out, its plan spent, its
-	// harness unable to start), known without a call; the answer's
-	// [ViewerAssistant.Model] says which and what to do. Checked after
+	// ViewerModelNotReady is a person who may ask, on a model known
+	// unusable right now (signed out, its plan spent, its harness unable to
+	// start), known without a call; the answer's [ViewerAssistant.Notice]
+	// says which and what to do. Checked after
 	// every other reason, so only a person the assistant answers learns
 	// the state of its model.
 	ViewerModelNotReady ViewerReason = "model_not_ready"
@@ -704,7 +703,7 @@ const (
 
 // ViewerReasons are the five, in declaration order.
 var ViewerReasons = []ViewerReason{
-	ViewerDisabled, ViewerNoModel, ViewerNotAPerson, ViewerNoPermission, ViewerModelNotReady,
+	ViewerNoModel, ViewerModelProblem, ViewerNotAPerson, ViewerNoPermission, ViewerModelNotReady,
 }
 
 // Valid reports whether r is a reason this build knows.

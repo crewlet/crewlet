@@ -1,6 +1,15 @@
 package assistantdomain
 
-import "github.com/crewlet/crewlet/internal/assistant/wire"
+import (
+	"time"
+
+	"github.com/crewlet/crewlet/internal/assistant/wire"
+)
+
+// Retention is how long a person's conversation is kept after its last
+// activity: thirty days, as long as a turn's detail and the trash keep theirs,
+// since a transcript holds whatever the person's reads returned (ADR-0053).
+const Retention = 30 * 24 * time.Hour
 
 // THE BOUNDS ON WHAT IS STORED live here, where the writer refuses a value
 // before it is sealed, and internal/assistant reads them rather than stating

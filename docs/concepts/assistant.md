@@ -369,8 +369,8 @@ The structural limits are why a model that is misled still cannot act on it.
 ## Your conversations and privacy
 
 Your conversations belong to you. They are stored encrypted in the company's
-estate and are kept for **30 days** after you last used them, unless your
-company sets a different retention; then they are deleted. **Delete** deletes a
+estate and are kept for **30 days** after you last used them; then they are
+deleted. **Delete** deletes a
 conversation immediately. If your account is removed, all of your
 conversations are erased.
 
@@ -402,8 +402,9 @@ conversation they came from.
 Ask Crewlet uses tokens from your company's model budget, and your company
 may also set a budget per person, per day, week or month. When a budget is spent, Ask Crewlet
 says so and when it resets, and stops before using more. A turn takes at most
-a few tool steps and a couple of minutes; a question that needs more is best
-split in two.
+40 model rounds and 20 minutes, a change it proposes waits 15 minutes for your
+approval, and your conversations are kept 30 days after you last used them;
+none of these is a setting. A question that needs more is best split in two.
 
 ## When Ask Crewlet cannot answer
 
