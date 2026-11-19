@@ -14,6 +14,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -97,6 +99,11 @@ type ReadyItem struct {
 	// DeadWaits are the changes nothing moves that the item waits on, by
 	// reference: set on a dead wait ([types.PickupDeadWait]).
 	DeadWaits []DeadWait `json:"dead_waits,omitempty"`
+
+	// WaitReason is a due item's wait in the words WaitBy, their writer,
+	// set it ([types.PickupDue]); empty on every other item.
+	WaitReason string             `json:"wait_reason,omitempty" untrusted:"name"`
+	WaitBy     *provenance.Author `json:"wait_by,omitempty"`
 }
 
 // ReadyWork is one page of a seat's ready items in pickup order.
@@ -119,6 +126,9 @@ type ReadyWork struct {
 	Level      statelog.ReadLevel `json:"read_level"`
 	Complete   bool               `json:"complete"`
 	Incomplete *Incomplete        `json:"incomplete,omitempty"`
+
+	// FlowLive is [Answer.FlowLive] for every item here.
+	FlowLive bool `json:"flow_live"`
 }
 
 // ReadyWork answers one page of what a seat could start now, at `now`.
@@ -134,14 +144,16 @@ func (r *Reader) ReadyWork(ctx context.Context, q ReadyWorkQuery, now time.Time)
 	if q.Page < 0 {
 		return ReadyWork{}, fmt.Errorf("worklet: a ready-work page is %d; pages count from 0", q.Page)
 	}
-	out := ReadyWork{Handle: q.Handle, Items: []ReadyItem{}}
+	// The ready order reads `now` as the overdue mark's boundary too.
+	at := rowsAt{dayStart: now, flow: r.flowAt(now)}
+	out := ReadyWork{Handle: q.Handle, Items: []ReadyItem{}, FlowLive: at.flow.live()}
 	served, err := r.log.Read(ctx, statelog.Query{
 		Level: q.Level,
 		// THE DOMAIN, for my_work's reason: a seat's work is in every project.
 		Scope: statelog.ScopeSet{Paths: []string{pathDomain}}.Normalised(),
 		Set:   true,
 	}, func(tx *sql.Tx) error {
-		return readReady(ctx, tx, q, now, &out)
+		return readReady(ctx, tx, q, at, &out)
 	})
 	if err != nil {
 		return ReadyWork{}, err
@@ -207,14 +219,16 @@ func heldBlock(handle string, status Status, started, blockers string, now time.
 	}
 }
 
-func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
+func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, at rowsAt,
 	out *ReadyWork) error {
+
+	now := at.flow.now
 
 	var blocks [3][]TaskRow
 	for i, status := range readyStatuses {
 		block := readyBlock(q.Handle, status, now)
 		rows, more, err := readTasks(ctx, tx, tasksWhere(block.where, block.args),
-			block.terms, MaxReady, now)
+			block.terms, MaxReady, at)
 		if err != nil {
 			return fmt.Errorf("worklet: read %s's %s work: %w", q.Handle, status, err)
 		}
@@ -225,11 +239,15 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
 	if err != nil {
 		return err
 	}
-	waits, err := readyWaits(ctx, tx, q, now, &out.Capped)
+	waits, err := readyWaits(ctx, tx, q, at, &out.Capped)
 	if err != nil {
 		return err
 	}
-	dead, err := readyDead(ctx, tx, q.Handle, now, &out.Capped)
+	dead, err := readyDead(ctx, tx, q.Handle, at, &out.Capped)
+	if err != nil {
+		return err
+	}
+	due, err := readyDue(ctx, tx, q.Handle, blocks[0], now)
 	if err != nil {
 		return err
 	}
@@ -237,7 +255,7 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
 	if err != nil {
 		return err
 	}
-	all := orderReady(blocks[0], reviews, own, waits, dead, blocks[2], person.Priorities)
+	all := orderReady(blocks[0], due, reviews, own, waits, dead, blocks[2], person.Priorities)
 	out.Total = len(all)
 	out.Fingerprint = fingerprintOf(all)
 	from := min(q.Page*ReadyRows, len(all))
@@ -259,14 +277,85 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
 	return loadFor(ctx, tx, q.Handle, out.Items)
 }
 
+// readyDueArm is one started item past its start with nothing of its
+// assignee's on it since, the fact the flow's `due` reads, and the words of
+// the wait it waited out.
+const readyDueArm = `SELECT t.id, COALESCE(json_extract(t.document, '$.wait_reason'), '')
+	FROM tracker_tasks t WHERE t.id = ? AND ` + flowNothingSinceStart
+
+// dueWait is a due item's wait: its words and who set them, nil where no
+// row of its history names them.
+type dueWait struct {
+	reason string
+	by     *provenance.Author
+}
+
+// readyDue is which of handle's started items are due, each with its wait's
+// words and their writer ([readyWaitArm]). Only an item whose start passed is
+// asked about, so a seat with none runs no statement.
+func readyDue(ctx context.Context, tx *sql.Tx, handle string, started []TaskRow,
+	now time.Time) (map[string]dueWait, error) {
+
+	var args []any
+	for _, row := range started {
+		if row.Start != nil && !row.Start.After(now) {
+			args = append(args, row.ID)
+		}
+	}
+	if len(args) == 0 {
+		return nil, nil
+	}
+	rows, err := tx.QueryContext(ctx, arms(len(args), readyDueArm), args...)
+	if err != nil {
+		return nil, fmt.Errorf("worklet: read which of %s's started work is due: %w", handle, err)
+	}
+	due := map[string]dueWait{}
+	var said []any
+	for rows.Next() {
+		var id, reason string
+		if serr := rows.Scan(&id, &reason); serr != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("worklet: read which of %s's started work is due: %w", handle, serr)
+		}
+		due[id] = dueWait{reason: reason}
+		if reason != "" {
+			said = append(said, id)
+		}
+	}
+	if cerr := closeRows(rows); cerr != nil {
+		return nil, fmt.Errorf("worklet: read which of %s's started work is due: %w", handle, cerr)
+	}
+	if len(said) == 0 {
+		return due, nil
+	}
+	writers, err := tx.QueryContext(ctx, arms(len(said), readyWaitArm), said...)
+	if err != nil {
+		return nil, fmt.Errorf("worklet: read who set %s's due work aside: %w", handle, err)
+	}
+	for writers.Next() {
+		var id, actor, kind, reason string
+		if serr := writers.Scan(&id, &actor, &kind, &reason); serr != nil {
+			_ = writers.Close()
+			return nil, fmt.Errorf("worklet: read who set %s's due work aside: %w", handle, serr)
+		}
+		by := notify.FirstPartyAuthor(actor, iam.ActorKind(kind), nil)
+		due[id] = dueWait{reason: due[id].reason, by: &by}
+	}
+	if cerr := closeRows(writers); cerr != nil {
+		return nil, fmt.Errorf("worklet: read who set %s's due work aside: %w", handle, cerr)
+	}
+	return due, nil
+}
+
 // readyDead is the items handle holds whose every open blocker is a dead wait,
 // in queue order, started work first; one in review only where the seat moved
 // it there itself, since a reviewer holding it is moving it.
-func readyDead(ctx context.Context, tx *sql.Tx, handle string, now time.Time, capped *bool) ([]TaskRow, error) {
+func readyDead(ctx context.Context, tx *sql.Tx, handle string, at rowsAt, capped *bool) ([]TaskRow, error) {
+	now := at.flow.now
 	var blocks [3][]TaskRow
 	for i, status := range readyStatuses {
 		block := deadBlock(handle, status, now)
-		rows, more, err := readTasks(ctx, tx, tasksWhere(block.where, block.args), block.terms, MaxReady, now)
+		rows, more, err := readTasks(ctx, tx, tasksWhere(block.where, block.args), block.terms, MaxReady, at)
 		if err != nil {
 			return nil, fmt.Errorf("worklet: read %s's %s work on dead waits: %w", handle, status, err)
 		}
@@ -426,8 +515,10 @@ type waitRow struct {
 // readyWaits is the items q's seat holds that an agent set aside until a later
 // date with a reason naming a person ([PersonsNamed]) the agent has not asked
 // on the item, in queue order, each status's started work first.
-func readyWaits(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time,
+func readyWaits(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, at rowsAt,
 	capped *bool) ([]waitRow, error) {
+
+	now := at.flow.now
 
 	if len(q.People) == 0 {
 		return nil, nil
@@ -436,7 +527,7 @@ func readyWaits(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time
 	for _, status := range readyStatuses {
 		block := waitBlock(q.Handle, status, now)
 		rows, more, err := readTasks(ctx, tx, tasksWhere(block.where, block.args),
-			block.terms, MaxReady, now)
+			block.terms, MaxReady, at)
 		if err != nil {
 			return nil, fmt.Errorf("worklet: read %s's %s work set aside: %w", q.Handle, status, err)
 		}
@@ -516,29 +607,38 @@ func readyWaits(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, now time.Time
 	return out, nil
 }
 
-// orderReady is the pickup order over the blocks and the priority list:
-// urgent items first, then the rest (ADR-0159), each in the order of started
-// work in queue order, the reviews the seat holds, its own items in review
-// nobody reviews, the waits on a person nobody asked, the dead waits, the
-// waiting items the list names in its order, then the rest in queue order.
-func orderReady(started []TaskRow, reviews, own []reviewRow, onPerson []waitRow, dead []TaskRow,
-	waiting []TaskRow, priorities []string) []ReadyItem {
+// orderReady is the pickup order over the blocks and the priority list: urgent
+// items first (ADR-0159), then the due ones ([flowNothingSinceStart],
+// ADR-0162), then the rest, each in the order of started work in queue order,
+// the reviews the seat holds, its own items in review nobody reviews, the waits
+// on a person nobody asked, the dead waits, the waiting items the list names in
+// its order, then the rest in queue order.
+func orderReady(started []TaskRow, due map[string]dueWait, reviews, own []reviewRow,
+	onPerson []waitRow, dead []TaskRow, waiting []TaskRow, priorities []string) []ReadyItem {
 
 	out := orderBlocks(started, reviews, own, onPerson, dead, waiting, priorities)
 	urgent := make([]ReadyItem, 0, len(out))
+	late := make([]ReadyItem, 0, len(due))
 	rest := make([]ReadyItem, 0, len(out))
 	for _, item := range out {
-		if item.Priority != PriorityUrgent {
+		if w, ok := due[item.ID]; ok && item.Why == types.PickupInProgress {
+			// ITS WAIT ENDED, which the brief says whatever its urgency.
+			item.Why, item.WaitReason, item.WaitBy = types.PickupDue, w.reason, w.by
+		}
+		switch {
+		case item.Priority == PriorityUrgent:
+			// Not started: only its urgency puts it ahead of started work.
+			if item.Why == types.PickupPriorityList || item.Why == types.PickupQueue {
+				item.Why = types.PickupUrgent
+			}
+			urgent = append(urgent, item)
+		case item.Why == types.PickupDue:
+			late = append(late, item)
+		default:
 			rest = append(rest, item)
-			continue
 		}
-		// Not started: only its urgency puts it ahead of started work.
-		if item.Why == types.PickupPriorityList || item.Why == types.PickupQueue {
-			item.Why = types.PickupUrgent
-		}
-		urgent = append(urgent, item)
 	}
-	return append(urgent, rest...)
+	return append(append(urgent, late...), rest...)
 }
 
 // orderBlocks is [orderReady]'s order of the blocks, urgency aside.

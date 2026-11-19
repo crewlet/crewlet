@@ -14,81 +14,27 @@ import (
 // A tick's provider REQUESTS: how a corpus's stale sources become requests the
 // model accepts, and what becomes of one it refuses.
 //
-// # The duty forms every request itself
-//
-// The provider will pack a call into as many requests as the model's limits
-// need, but a call that fails fails whole, and a caller handed one error for a
-// hundred and twenty-eight inputs cannot tell the one the model will never
-// accept from the rest. So the duty plans each request through the provider's
-// own packing rule ([embeddings.Limits.Requests] — the one rule, never a second
-// idea of it) and sends each through a call of its own: every request it
-// forms is inside the model's input count and request total by construction,
-// and a request that is refused all the same is ONE request whose inputs it
-// knows.
-//
-// # A refused request is split until the input it refuses is alone
-//
-// A refusal ([embeddings.ErrRefused]) says the REQUEST is unacceptable and not
-// which part of it, and only a smaller request can tell: a request of n inputs
-// is split into halves, sent on the corpus's next turns before anything else it
-// holds, and so on down to the one input still refused alone — at most
-// 1 + 2·log₂n requests, fifteen for a full request of 128. Every half that is
-// accepted publishes its vectors as it goes, so a refused input costs its own
-// vector and never its neighbours'.
-//
-// AND THE ISOLATION OUTLIVES THE TICK IT STARTED IN. Fifteen requests fit the
-// sixteen each of two corpora is guaranteed, but not the ten of three, nor a
-// tick whose source ceiling a neighbour spends first — and an isolation cut
-// off at the end of a tick used to be thrown away with the tick, while the
-// input it was closing on stayed the oldest stale source and opened the next
-// tick's first request: the same 128, the same halves, the same end, every
-// tick. So the halves a tick did not reach are kept ([Refusals.suspend]) — the
-// one in flight when a failure that is not about an input ended the tick's
-// requests among them, since no answer cleared it ([corpusQueue.unanswered])
-// — and the corpus's next tick sends them first, where the last one stopped
-// ([corpusQueue.resume]): an isolation takes as many ticks as its requests
-// need and never starts again. Each corpus also holds its share of the tick's
-// SOURCES in reserve while it can work ([tickRequests.room]), so a neighbour
-// embedding full requests cannot spend the ceiling out from under it.
-//
-// A refusal that was really the request's size or a setting the server rejects
-// whatever the inputs are surfaces the same way and is told apart by the same
-// means: halves that succeed blame no input at all, and halves that all fail
-// end in a log line naming every input and, once a provider that has accepted
-// nothing refuses two different inputs sent alone, one line saying so
-// ([Embedder.Tick]).
-//
-// # And an input refused alone is held back, then offered again alone
-//
-// The selection is oldest first and an input nobody embeds keeps its place, so
-// without a memory a refused input would be at the front of every later tick,
-// isolated again at fifteen requests a tick for ever. [Refusals] remembers it,
-// by its source and the digest of the exact text refused, and the selection
-// PASSES OVER it ([Held]): it costs no request and no place in the selection,
-// whose limit counts only what a tick may send. What it still costs is the
-// scan stepping over its key each tick, one read of its row whenever it
-// changes without its text changing, and the coverage gauge, which counts it
-// stale for as long as it is refused — the one symptom it leaves.
-//
-// After [EmbedRefusalRetry] it is due, and offered again ALONE, in a request
-// of its own — at most [EmbedRetriesPerTick] of one corpus's a tick, the
-// longest refused first, so refusals falling due together take that many
-// requests a tick rather than the corpus's whole share. Each retry costs one
-// request and one log line naming it, the model, the bytes it was sent and the
-// per-input bound the model's limits assume, which is the bound a misdeclared
-// `max_input_tokens` would have got wrong. A changed text is a new digest and
-// is offered at once, with its neighbours. A provider CONFIGURED differently
-// starts with no memory, because a refusal is a fact about the provider as it
-// was configured; one built again for the same configuration — an apply that
-// changed something else, a rotated key — keeps it.
-//
-// A SOURCE WHOSE VECTOR CANNOT BE PUBLISHED is remembered the same way. The
-// provider accepted the request and answered this one text with a vector the
-// duty refuses ([pack]): a component that is not finite, or every component
-// zero. Its neighbours publish; it is held back as if refused alone, and
-// offered again alone once its retry is due. Left to the next selection, which
-// it was, it was the oldest stale source of every tick, sent and discarded once
-// a minute for as long as the provider answered it so.
+// The duty plans each request through [embeddings.Limits.Requests], the one
+// packing rule, and sends each in its own call, so a refused request is ONE
+// request whose inputs it knows. A refusal ([embeddings.ErrRefused]) does not
+// say which input: the request is split into halves, sent first on the corpus's
+// next turns, down to the input refused alone (1 + 2·log₂n requests at most).
+// The isolation outlives its tick: unreached halves are kept ([Refusals.suspend],
+// [corpusQueue.unanswered], [corpusQueue.resume]) and each corpus reserves its
+// share of the tick's sources ([tickRequests.room]). A refusal of the request's
+// size or a rejected setting ends in a log line naming every input ([Embedder.Tick]).
+
+// An input refused alone is held, not retried every tick: left in the
+// oldest-first selection it would be isolated again at fifteen requests a tick
+// for ever. [Refusals] keys it by source and the digest of the text refused and
+// the selection passes over it ([Held]), costing no request and no place. After
+// [EmbedRefusalRetry] it is offered again ALONE, at most [EmbedRetriesPerTick]
+// a corpus a tick, longest refused first; a changed text is a new digest and
+// goes at once. A provider configured differently starts with no memory (a
+// refusal is a fact about its configuration); one rebuilt for the same
+// configuration keeps it. A vector the duty will not publish ([pack]: not
+// finite, or all zero) is held the same way, else it would be the oldest stale
+// source of every tick.
 
 // pending is one source as a tick holds it: the document, the exact text that
 // would be sent for it — its prepared opening ([Document.text]) — and that
@@ -272,21 +218,16 @@ func (q *corpusQueue) next(limits embeddings.Limits, room int) (group []pending,
 }
 
 // unanswered puts back a request the provider gave NO ANSWER ABOUT ITS INPUTS
-// — a failure that is not about an input, or an answer that cannot be matched
-// to them — which ends the tick's requests ([Embedder.request]); isolating is
-// what [corpusQueue.next] said of it.
+// (a failure not about an input, or an answer that cannot be matched to them),
+// which ends the tick's requests ([Embedder.request]).
 //
-// A REQUEST FROM THE ISOLATION GOES BACK TO THE FRONT OF IT, because nothing
-// has cleared its sources: they are still the suspects of a refused request,
-// and the tick's end suspends them with the rest ([Refusals.suspend]). Dropped,
-// they went back among ordinary neighbours, and the input they hold was
-// refused inside a fresh request of 128 — so a gateway that answers a fixed
-// number of requests a minute cut every tick's isolation at the same depth,
-// and the input was never isolated at all.
+// A request from the isolation goes back to its FRONT: nothing cleared its
+// sources, so they stay suspects and the tick's end suspends them
+// ([Refusals.suspend]). Dropped, they rejoined neighbours in a fresh request of
+// 128, and a rate-limiting gateway cut every tick at the same depth.
 //
-// ONE FROM THE SELECTION NEEDS NOTHING: its sources are selected again next
-// tick, since the selection is derived from the rows, and a due retry offered
-// alone keeps its refusal, still due.
+// One from the selection needs nothing: its sources are selected again next
+// tick, and a due retry keeps its refusal, still due.
 func (q *corpusQueue) unanswered(group []pending, isolating bool) {
 	if isolating {
 		q.split = append([][]pending{group}, q.split...)
@@ -299,26 +240,17 @@ func halves(group []pending) ([]pending, []pending) {
 	return group[:mid], group[mid:]
 }
 
-// Refusals is what a provider has refused ALONE — or answered with a vector
-// the duty will not publish, which it remembers the same way — held across the
-// ticks of the duty that met it (see the section above [pending] for what it
-// buys), and the isolation each corpus's last tick did not finish
+// Refusals is what a provider has refused ALONE, or answered with a vector the
+// duty will not publish, held across the duty's ticks (see the section above
+// [pending]), and the isolation each corpus's last tick did not finish
 // ([Refusals.suspend]).
 //
-// ONE ENTRY A SOURCE, for the text it was refused as: a source has one text at
-// a time, so an entry for what it used to say is replaced, never kept beside
-// it. An entry is gone when its text is embedded (a retry accepted), when the
-// text moves (the selection returns the source under another digest), and when
-// a retry is offered and the selection no longer returns the source at all —
-// it was removed, or has a vector by now — so the memory holds at most one
-// entry per source the provider is still refusing, with no clock of its own
-// deciding what to forget.
+// One entry a source, for the text it was refused as; an entry goes when its
+// text is embedded, when the text moves, or when a retry is offered and the
+// selection no longer returns the source, so no clock decides what to forget.
 //
-// THIS NODE'S ALONE, and in memory: a cache of what one provider told one duty
-// holder, whose loss costs one more isolation of each input it held — fifteen
-// requests at most — on whichever node holds the duty next. Nothing about it is
-// a fact the fleet must agree on, so nothing about it is published.
-//
+// THIS NODE'S ALONE, in memory: losing it costs one more isolation (fifteen
+// requests at most) per input, and no fact in it needs the fleet's agreement.
 // Safe for concurrent use; the duty's ticks run one at a time anyway.
 type Refusals struct {
 	mu sync.Mutex
@@ -510,33 +442,18 @@ func (r *Refusals) Len() int {
 	return len(r.at)
 }
 
-// Held is what one corpus's selection passes over: the sources whose text the
+// Held is what one corpus's selection passes over: sources whose text the
 // provider refused alone and that this tick does not offer again, recognised
-// by their version and title BEFORE their bodies are read ([Corpus.Stale]).
+// by version and title BEFORE their bodies are read ([Corpus.Stale]).
 //
-// # Why a selection passes over them, and is not merely filtered after
+// It is passed over inside the selection, not filtered after its limit: held
+// sources keep the front of the oldest-first order, so filtering after would
+// let H of them take H slots a tick, and once H reached the limit nothing newer
+// was selected. Version and title, not the digest, because the digest needs
+// the body, the read the pass-over spares; a moved version or title is read and
+// the digest decides ([Refusals.restate]).
 //
-// The selection is oldest first and a refused source is never embedded, so it
-// keeps its place at the front of every selection after it. Filtered after the
-// selection's limit, every held source took a slot it would never use: with H
-// of them a corpus embedded at most [EmbedSourcesPerTick] − H sources a tick,
-// and once H reached the limit, nothing written to that corpus was selected
-// again at all. Passed over inside the selection, the limit counts only what
-// the tick may send.
-//
-// # Why by version and title, and not by the digest
-//
-// The digest is of the prepared opening, which needs the body — the read the
-// pass-over exists to spare a source that will not be sent. A source's version
-// moves whenever its body does ([Document.Version]), and its title is read with
-// the key, so the two together say the text cannot have changed since it was
-// refused; a source whose version or title moved is read, and its digest
-// decides — a new text is offered at once, and an unchanged one (a status, a
-// move) is held again under its new version ([Refusals.restate]), having cost
-// one read.
-//
-// THE ZERO VALUE PASSES OVER NOTHING, which is what a caller with no refusals
-// hands a corpus.
+// THE ZERO VALUE PASSES OVER NOTHING.
 type Held struct {
 	byID map[string]heldAs
 }

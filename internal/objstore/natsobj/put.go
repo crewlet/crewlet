@@ -24,15 +24,12 @@ import (
 // messages, two mebibytes.
 //
 // SIZED BY THROUGHPUT, the smallest window measured at the client library's
-// own: equal within the runs' spread at one replica, with and without an
-// fsync a message, where four lost up to a tenth and sixty-four gained
-// nothing. COUNTED FOR THE CONNECTION, so K puts at once share it rather than
-// holding K of it in the member's memory and its stream's pipeline — and it
-// costs them nothing measurable (the package doc's figures): eight 16 MiB
-// puts at once ran at 159–177 MB/s together on a member's own client against
-// 164–183 with sixteen each, and at three replicas, every message a quorum
-// append, at 50–62 against 47–63, where sixty-four shared ran at 42–65 and a
-// lone put at 48–69 against 59–68 with sixteen.
+// own: equal within the runs' spread at one replica, with and without an fsync
+// a message, where four lost up to a tenth and sixty-four gained nothing.
+// COUNTED FOR THE CONNECTION, so K puts at once share it rather than holding K
+// of it in the member's memory and its stream's pipeline, at no measurable
+// cost (the package doc's figures): eight 16 MiB puts at once ran at 159-177
+// MB/s together against 164-183 with sixteen each.
 const memberWindow = 16
 
 // newMemberWindow is the window a member's own client is given: [memberWindow]
@@ -70,67 +67,16 @@ const purgeWait = 5 * time.Second
 
 // Put implements [objstore.Backend].
 //
-// THE BACKEND'S OWN PUT, IN THE LIBRARY'S FORMAT — an object is its pieces on
-// `$O.<bucket>.C.<nuid>` and then one message on `$O.<bucket>.M.<name>`
-// naming them, with `Nats-Rollup: sub` — so `nats object get` reads what it
-// stored, and every get, stat and listing here reads it as it reads the
-// library's. Never the library's put, which gave each message's
-// acknowledgement five seconds from its PUBLISH: a message published behind
-// bytes the link has not yet carried is acknowledged only once they have
-// crossed, so a put across any link slower than its queued bytes in five
-// seconds failed while it was moving (measured: 2 MiB at 1.25× the floor
-// failed at 10.0 s, over TCP and through a leaf alike, and stored in 48.5 s
-// by this put), on a frozen TCP link it filled the socket until the
-// connection's write deadline took the node's whole connection down, and
-// through a frozen leaf it failed in five seconds on a metadata lookup a key
-// that is never reused does not need.
-//
-// # Paced by the broker's acknowledgements
-//
-// Pieces of [MessageBytes] are published IN ORDER from ONE buffer, refilled as
-// soon as each publish returns — nats.go copies a payload into its write
-// buffer at the publish, and only a RE-publish reads the message again — each
-// taking its share ([Backend.pieceTake]) from the [Backend]'s window first:
-// across a link the link's ONE window, which its downloads, walks and memory
-// replays share both ways, and on a member's own client [memberWindow]
-// messages the connection's puts share; and with NO PUBLISH RETRY, because
-// the library's retry of a piece answered "no responders" re-sends from its
-// one reused message over its one reused buffer, which by then holds a later
-// piece: a piece the stream did not take fails the put instead, which its
-// caller asks again whole. The metadata goes last, once every piece is acknowledged.
-//
-// A PUT ENDS ONLY WHEN THE BROKER HAS ACKNOWLEDGED NOTHING FOR [objstore.Stall]
-// WHILE PIECES ARE OUT ([objstore.ErrStalled]), so a put moving at any pace the
-// broker acknowledges is never ended, and one waiting on its caller's slow body
-// — nothing out — is not waiting on the broker; nor is one waiting its turn
-// in the window, which takes no stall of its own, since every take ahead of
-// it is bounded by its own. Across a metered link the stall runs only while
-// the link carries nothing at the floor ([Backend.held]): a put whose pieces
-// wait behind the link's other traffic is not stalled while it moves. No
-// message waits behind more than the window, so across a link at the floor
-// each one's bytes have crossed within four seconds of its publish
-// ([jsapi.LinkWindow]) behind the window's other takes, and its
-// acknowledgement follows a round trip later, behind whatever the link
-// carries back — a
-// leaf's compressed link, which delivers what it flushed as one block,
-// included: sixteen messages out through a leaf at the floor, two mebibytes,
-// the window a member's own client is given, were acknowledged in blocks up
-// to 26.4 s apart (3.1 s over TCP), under the minute.
-//
-// # A failed put leaves nothing a stat or a listing finds
-//
-// The caller's context ending reaches it as a failed read
-// ([objstore.ContextReader]), as every failure does, and the clean-up runs
-// under a context that does not end with the caller's: it waits up to
-// [purgeWait] for the acknowledgements still out — purged before them, a put
-// through a leaf had pieces land after the purge — and then purges the
-// METADATA FIRST where it was published, since one whose acknowledgement was
-// lost may have landed and would name pieces the next purge removes, and then
-// the pieces, each within [purgeWait]. A piece a very slow or a thawed link
-// delivers after even that is an unfinished upload, which the collector
-// abandons a day later ([Backend.Pending]). A piece the stream refuses because
-// the bucket holds its whole reservation fails the put at once, as any refused
-// piece does, and is answered as [objstore.ErrFull].
+// THE BACKEND'S OWN PUT, IN THE LIBRARY'S FORMAT: an object is its pieces on
+// `$O.<bucket>.C.<nuid>` then one message on `$O.<bucket>.M.<name>` naming
+// them, with `Nats-Rollup: sub`, so `nats object get` reads what it stored.
+// Never the library's put, which gave each message's acknowledgement five
+// seconds from its PUBLISH: one published behind bytes the link has not yet
+// carried is acknowledged only once they cross, so a put across a slow link
+// failed while moving (2 MiB at 1.25x the floor failed at 10.0 s, stored in
+// 48.5 s by this put), filled a frozen TCP socket until the write deadline
+// took the node's connection down, and failed through a frozen leaf on a
+// metadata lookup a never-reused key does not need. See [put].
 func (b *Backend) Put(ctx context.Context, name string, r io.Reader, m objstore.PutMeta) error {
 	p := &put{b: b, name: name, nuid: nuid.Next(), changed: make(chan struct{})}
 	putCtx, cancel := context.WithCancelCause(ctx)
@@ -168,7 +114,17 @@ func (b *Backend) Put(ctx context.Context, name string, r io.Reader, m objstore.
 	return nil
 }
 
-// put is one [Backend.Put] in flight.
+// put is one [Backend.Put] in flight, paced by the broker's acknowledgements:
+// pieces of [MessageBytes] are published IN ORDER from ONE buffer, refilled as
+// each publish returns (nats.go copies a payload at the publish; only a
+// RE-publish reads it again), each taking its share ([Backend.pieceTake]) of
+// the window first: across a link the link's ONE window, shared by downloads,
+// walks and memory replays both ways; on a member's own client [memberWindow]
+// messages the connection's puts share. NO PUBLISH RETRY: the library's retry
+// of a piece answered "no responders" re-sends from its one reused message
+// over its one reused buffer, which by then holds a later piece. A piece the
+// stream did not take fails the put, which its caller asks again whole. The
+// metadata goes last, once every piece is acknowledged.
 type put struct {
 	b    *Backend
 	name string
@@ -184,8 +140,17 @@ type put struct {
 	// acknowledged.
 	out int
 	// last is when the broker last acknowledged one of them, or when one
-	// went out into an empty window — the instant the stall is measured
-	// from.
+	// went out into an empty window: the instant the stall is measured from.
+	// A PUT ENDS ONLY WHEN THE BROKER HAS ACKNOWLEDGED NOTHING FOR
+	// [objstore.Stall] WHILE PIECES ARE OUT ([objstore.ErrStalled]): a put
+	// waiting on its caller's slow body, or its turn in the window (every take
+	// ahead is bounded by its own), is not waiting on the broker. Across a
+	// metered link the stall runs only while the link carries nothing at the
+	// floor ([Backend.held]). No message waits behind more than the window, so
+	// at the floor each one's bytes cross within four seconds of its publish
+	// ([jsapi.LinkWindow]) and its acknowledgement follows a round trip later;
+	// a leaf's compressed link acknowledged sixteen messages in blocks up to
+	// 26.4 s apart (3.1 s over TCP), under the minute.
 	last time.Time
 	// timer runs [put.check] while messages are out.
 	timer *time.Timer
@@ -383,11 +348,16 @@ func (p *put) wait(ctx context.Context, ready func() bool) error {
 	}
 }
 
-// clean takes back what a failed put stored, so no stat or listing finds it:
-// see [Backend.Put].
-//
-// ctx ends with nothing the put's caller does — the failure the clean-up
-// follows is often the caller giving up.
+// clean takes back what a failed put stored, so no stat or listing finds it.
+// ctx ends with nothing the put's caller does: the failure is often the
+// caller giving up. It waits up to [purgeWait] for acknowledgements still out
+// (purged before them, a put through a leaf had pieces land after the purge),
+// purges the METADATA FIRST where published, since one whose acknowledgement
+// was lost may have landed and would name pieces the next purge removes, then
+// the pieces, each within [purgeWait]. A piece a very slow or thawed link
+// delivers after that is an unfinished upload the collector abandons a day
+// later ([Backend.Pending]). A piece refused because the bucket holds its
+// whole reservation fails the put at once, answered as [objstore.ErrFull].
 func (p *put) clean(ctx context.Context) {
 	p.mu.Lock()
 	if p.timer != nil {

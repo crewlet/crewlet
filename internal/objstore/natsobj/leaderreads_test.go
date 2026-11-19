@@ -248,14 +248,11 @@ func TestTheSlowestListingBeginningMeasuredFitsItsBudget(t *testing.T) {
 // The leader sends a message read's reply whole, and the reader hears none of
 // it until its last byte is in: a piece of [natsobj.MessageBytes],
 // base64-encoded, takes five seconds to cross a leaf link at
-// [objstore.MiBPace]. Presumed lost at the read term, the read of what
-// follows on a get's pieces, of a ranged walk's and of an unfinished upload's
-// oldest piece was asked again while its reply was still crossing — another
-// whole piece on the link a node's lease renewals cross, for every second the
-// first took. A member's reply crosses a cluster route in milliseconds, so
-// there a piece read keeps the read term, and a dropped one is asked again at
-// two seconds rather than seven. A metadata read's reply is a few hundred
-// bytes, and keeps the read term everywhere.
+// [objstore.MiBPace]. Presumed lost at the read term, a piece read was asked
+// again while its reply was still crossing, another whole piece on the link
+// a node's lease renewals cross. A member's reply crosses a cluster route in
+// milliseconds, so there a piece read keeps the read term, and a metadata
+// read's few hundred bytes keep it everywhere.
 func TestAPieceReadIsGivenAPiecesCrossingAcrossALink(t *testing.T) {
 	t.Parallel()
 	crossing := time.Duration(float64(objstore.MiBPace) *
@@ -340,22 +337,16 @@ func TestTheStreamInfoAUsageAndASealReadIsAskedAgainWhenDropped(t *testing.T) {
 
 // A STREAM INFO NOBODY ANSWERS, FOR A CALLER WITH NO DEADLINE, ENDS AT ITS
 // CLIENT'S OWN DEFAULT — asked again inside it, and never stretched to the
-// lookup ceiling: the bound the one request had is the bound its callers were
-// sized against. The client here is given a default of 3.9 seconds — just
-// short of a third request, at four — so the read is asked twice inside it,
-// at none and two seconds, where a read held to the five seconds of a default
-// it did not take from its client is asked three times, and one held to the
-// thirty-second ceiling fifteen.
+// lookup ceiling: its callers were sized against the one request's bound. The
+// client's default here is 3.9 seconds, just short of a third request at
+// four, so the read is asked twice inside it; a five-second default would
+// ask three times, the thirty-second ceiling fifteen.
 //
-// THE READ RUNS IN A SYNCTEST BUBBLE, and the broker outside it: inside, every
-// timer of the read fires at exactly its instant, so it ends at exactly 3.9
-// seconds with exactly two requests sent. On the machine's clock the bound and
-// the third request were a tenth of a second apart, and a CI runner that
-// stalled across both sent the third — past the bound, which the hedge no
-// longer does ([jsprovision.ReadBoundedWith]) — so the verdict turned on how
-// late a loaded runner woke. The requests are counted at the broker behind a
-// fence on the read's own connection ([jsapitest.Held.Fence]): in the
-// bubble's few real milliseconds the broker may not yet have handed them over.
+// THE READ RUNS IN A SYNCTEST BUBBLE, and the broker outside it: every timer
+// fires at exactly its instant, so the read ends at exactly 3.9 seconds with
+// two requests sent; on the machine's clock a stalled runner sent the third,
+// past the bound. Requests are counted at the broker behind a fence on the
+// read's connection ([jsapitest.Held.Fence]), which may not yet have them.
 func TestAStreamInfoNobodyAnswersEndsAtTheClientsDefault(t *testing.T) {
 	t.Parallel()
 	const bound = 3900 * time.Millisecond

@@ -23,51 +23,15 @@ import (
 
 // THE INDEX MEETS THE FLOOR CURVE ON EVERY MEMBER OF THE FIXTURE FAMILY, IN
 // EVERY SHAPE A SEARCH IS ISSUED IN — at the probe count its own training
-// chose, on queries the training never saw.
-//
-// # What this holds, and why on queries the training did not choose on
-//
-// A training measures recall on held-out documents and installs the smallest
-// probe count that meets the floor with no head miss ([search.ChooseProbes]).
-// That is a claim about the index's recall on EVERY query, made from
-// twenty-five — so the gate measures the installed count on the fixture's own
-// gate queries, which the training never ranked a list for. A training that
-// chose its probes on the answers it was graded on would pass its own
-// measurement and fail here.
-//
-// # In every shape, against that shape's own exact answer
-//
-// Every search the engine issues is narrowed — to a source, and often to the
-// containers a knowledge scope names — and a narrowed search's true answer is
-// spread over lists an unfiltered probe never reads. So each gate query is
-// measured unfiltered, narrowed to the tenth of the corpus that is pages, to
-// the rest that is tasks, and to the container its nearest document is filed
-// in (a sixty-fourth of the corpus, clustered in the space as a company's
-// projects are), each against the EXACT top of the rows that shape searches
-// and the floor for that many rows — through the rule a search runs
-// ([search.ProbeCount]): more lists until it has seen enough of its own rows,
-// or the full scan.
-//
-// # Both members, because each one alone certifies the wrong thing
-//
-// The isotropic member has no structure a k-means can find, and meeting the
-// floor there takes about every list — the index is then not worth installing,
-// and the gate asserts that the training SAYS so rather than installing an
-// index that reads the whole table through a second structure. The topical
-// member is a company's corpus: meeting the floor there must take no more
-// than [search.IVFProbeCeiling] of the lists, or the index is bookkeeping for
-// nothing on exactly the corpora it exists for.
-//
-// Twenty thousand sources, the smaller gate size, because training is the
-// cost: the hundred-and-twenty-thousand arm is BenchmarkIVFRecallAtScale, for
-// the reason the half-million recall arm is a benchmark.
-//
-// THE MEMBERS RUN IN TURN, NOT AS PARALLEL SUBTESTS: a parallel subtest of a
-// parallel test waits for a slot behind every top-level test released before
-// it, so the two trainings — about half a minute each under the race detector
-// — started when the rest of the package was finishing and were its last
-// half-minute. In turn they start when this test does, each training on its
-// own share of the cores ([search.TrainIVF]).
+// chose, on queries the training never saw ([search.ChooseProbes] measured
+// twenty-five). Each runs unfiltered, narrowed to pages (a tenth), to tasks, and
+// to its nearest document's container (a sixty-fourth), against that shape's
+// EXACT top through [search.ProbeCount]. The isotropic member needs about every
+// list, so the gate asserts the training SAYS not to install; the topical one
+// must take no more than [search.IVFProbeCeiling] of them. Twenty thousand
+// sources, since training is the cost (BenchmarkIVFRecallAtScale is the larger
+// arm). THE MEMBERS RUN IN TURN, NOT AS PARALLEL SUBTESTS: parallel ones wait
+// behind every earlier top-level test and finish last.
 func TestIVFRecallMeetsTheFloorCurve(t *testing.T) {
 	t.Parallel()
 	for _, member := range []struct {
@@ -205,39 +169,17 @@ func TestANarrowedSearchReadsUntilItHasSeenEnoughOfItsRows(t *testing.T) {
 	}
 }
 
-// EVERY HOLDER BUILDS THE SAME INDEX: the same records give the same centroids,
-// every row the same list and the same per-list counts, whether a holder
-// applied the log as it was written or replayed what the compaction left of
-// it.
+// EVERY HOLDER BUILDS THE SAME INDEX: the same centroids, lists and per-list
+// counts, applying the log as written or replaying its compaction.
 //
-// # What the log is, and why each phase is in it
-//
-// Two hundred and sixty vectors, an index trained over them and its rollout;
-// then eighty forgotten, ten re-embedded and five new; then a SECOND training
-// over the smaller corpus, a measurement of it that changes its probe count,
-// and its rollout — whose batches sit on subjects of their own beside the
-// first rollout's, naming an index nothing has installed any more — and
-// finally sixty vectors written after the second index, which are filed as
-// they are written. A holder that replays the compacted log sees every one of
-// those shapes: an embed the compaction moved past the index, batches for a
-// replaced index, a forget with nothing left to forget.
-//
-// AT A TENTH OF THE SCALE IT WAS WRITTEN AT, the rollout's batch included —
-// a hundred ids rather than [search.IVFReassignBatch], so each source still
-// spans two batches — because every shape above is a shape of the log and
-// none is a size: the same records at ten times the rows were ten times the
-// applies on each of three holders.
-//
-// # And the properties the index rests on
-//
-// The training is a pure function of the codes and the seed — trained twice it
-// is the same bytes, and a different seed is different bytes, so the first
-// check is not vacuous. Every row is filed in the list whose centroid is
-// nearest its code in HAMMING distance, lowest list on a tie — checked here
-// against a popcount this test does itself, because an applier that filed by
-// a float distance would still agree with every other holder on this machine
-// and disagree with one on another architecture. And the per-list counts are
-// exactly a recount of the rows, on every holder.
+// The log: 260 vectors, an index and its rollout; eighty forgotten, ten
+// re-embedded, five new; a SECOND training with a changed probe count and its
+// rollout (naming an index nothing has installed any more); sixty more filed as
+// written. Replay sees every shape: an embed moved past the index, batches for
+// a replaced index, a forget of nothing. At a tenth of the original scale (a
+// hundred ids a batch, not [search.IVFReassignBatch]): shapes, not sizes, matter.
+// Rows are filed by HAMMING distance, checked against this test's own popcount:
+// a float filing would disagree on another architecture.
 func TestEveryHolderBuildsTheSameIndex(t *testing.T) {
 	t.Parallel()
 	const dim, model, batch = 32, "holder-embed", 100
@@ -391,22 +333,15 @@ func TestEveryHolderBuildsTheSameIndex(t *testing.T) {
 // A ROLLOUT PUBLISHED TWICE, THE SECOND TIME ONLY IN PART, STILL FILES EVERY
 // ROW ON A HOLDER THAT REPLAYS THE COMPACTED LOG.
 //
-// The rollout's ranges are the training's, carried in the centroids record,
-// and each batch has a subject of its own naming its index — so a
-// re-publication says exactly what the first publication of each batch said,
-// and whatever mix of the two the compaction keeps tiles the key space. Here
-// the index's rollout is published once in full, then — after a batch's worth
-// of new pages arrived and of new tasks, which a rollout cut afresh would have
-// shifted every boundary for — again for its first two batches only, as a
-// publisher that stopped partway would. A holder replaying what the
-// compaction kept must file every row, and a batch of an OLDER index published
-// after the new one's must change nothing.
-//
-// A HUNDRED IDS A BATCH rather than the duty's [search.IVFReassignBatch]: the
-// case is about which batches the compaction keeps, [search.RolloutRanges]
-// tiles the same way at any size, and at a tenth of the batch it needs a
-// tenth of the rows to have several. TestARolloutCoversEveryKey holds the
-// duty's own cut.
+// The ranges are the training's, carried in the centroids record, and each
+// batch has a subject of its own naming its index, so any mix of a first and a
+// re-publication the compaction keeps tiles the key space. The rollout is
+// published in full, then, after new pages and tasks (which a rollout cut
+// afresh would have shifted every boundary for), again for its first two
+// batches only. A replaying holder must file every row, and a batch of an OLDER
+// index after the new one's must change nothing. A HUNDRED IDS A BATCH, not
+// [search.IVFReassignBatch]: [search.RolloutRanges] tiles alike at any size;
+// TestARolloutCoversEveryKey holds the duty's own cut.
 func TestAPartialRepublicationStillFilesEveryRow(t *testing.T) {
 	t.Parallel()
 	const dim, model, batch = 32, "republish-embed", 100
@@ -704,24 +639,15 @@ func TestAnIndexFromALaterBuildIsJudgedByItsStructure(t *testing.T) {
 }
 
 // THE WIDEST CENTROIDS RECORD THIS BUILD WRITES FITS ITS LOG'S DECLARED
-// LARGEST RECORD.
-//
-// The vector log declares the transport's own ceiling as its largest record
-// ([search.VectorMaxRecordBytes]), and the publisher refuses a record past it
-// before it is sent. Every other vector record is one embedding wide, so the
-// centroids record is the one that grows: [search.IVFMaxLists] codes at the
-// widest width a provider may configure ([config.MaxEmbeddingWidth]), beside a
-// rollout tiling every listed source. Past the ceiling, the training of the
-// largest corpus an index serves would be refused at its publish on every
-// attempt, and the corpus would scan in full for ever with nothing but a
-// duty log line to say why. The rollout here tiles a corpus of 2^20 sources —
-// about twice what one node searches through an index at its probe ceiling —
-// so a later raise of either knob meets this case before it meets a fleet.
-// Measured at about 1.5 MB against the 8 MiB transport's ceiling, so the
-// headroom is a little over five times the widest centroids.
-//
-// Mutation: write the centroids at six times the widest width, or declare the
-// log's largest record below a fifth of the transport's, and this goes red.
+// LARGEST RECORD ([search.VectorMaxRecordBytes], the transport's ceiling).
+// The centroids record is the one that grows: [search.IVFMaxLists] codes at the
+// widest configurable width ([config.MaxEmbeddingWidth]), beside a rollout
+// tiling every source. Past the ceiling the largest corpus's training would be
+// refused at every publish and scan in full for ever, with only a duty log line
+// to say why. The rollout tiles 2^20 sources, about twice what a node searches
+// through an index, so a raised knob meets this case before a fleet: about
+// 1.5 MB against 8 MiB. Mutation: centroids at six times the widest width, or
+// the largest record below a fifth of the transport's.
 func TestTheWidestCentroidsRecordFitsItsLog(t *testing.T) {
 	t.Parallel()
 	const model, corpus = "widest-embed", 1 << 20
@@ -913,20 +839,14 @@ func TestTheIndexStepFollowsTheCorpus(t *testing.T) {
 
 // AN INDEX TRAINED OVER MANY IDENTICAL CODES COMES TO REST.
 //
-// Identical codes are nearest to the same centroid whatever the seed, so a
-// corpus with a template copied thousands of times files every copy in one
-// list and no training can split them. Judged against the mean alone, every
-// tick after the rollout decided to retrain it — a full training and a
-// rollout re-filing the corpus on every holder, every two ticks for ever.
-// Judged against what its own training achieved, the index trained here is
-// kept, over three seeds.
-//
-// Five hundred copies among five thousand documents, at sixty-four lists: the
-// eleventh of the corpus the measured case's two thousand of twenty-two
-// thousand were, at a sixteenth of the k-means work. Neither half depends on
-// the scale — identical codes share a nearest centroid at any list count, and
-// the rule that keeps the index is a ratio — and the measured case's own
-// numbers stand in TestTheIndexStepFollowsTheCorpus, where they cost nothing.
+// Identical codes share a nearest centroid whatever the seed, so a template
+// copied thousands of times files in one list no training can split. Judged
+// against the mean alone, every tick after the rollout retrained it, a full
+// training and re-filing on every holder, for ever. Judged against what its own
+// training achieved, the index is kept, over three seeds. Five hundred copies
+// among five thousand documents at sixty-four lists: neither half depends on
+// scale, and the measured case's numbers stand in
+// TestTheIndexStepFollowsTheCorpus.
 func TestAnIndexTrainedOverDuplicatesComesToRest(t *testing.T) {
 	t.Parallel()
 	const documents, copies = 5_000, 500

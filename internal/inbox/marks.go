@@ -99,17 +99,13 @@ func Sentence(err error) string {
 // Position is where a person's inbox has been read to on one domain's log.
 //
 // THE TRIPLE, not a bare sequence: a recreated stream restarts sequences at
-// one, so a stored number from before it compares as current and an inbox
-// reads "nothing unread" for ever.
+// one, so a number from before it compares as current and an inbox reads
+// "nothing unread" for ever.
 //
-// # The generation is stored, and omitted when it is zero
-//
-// A domain keeps it PACKED in its column, as every durable position is kept,
-// so a reanchor compares correctly: a position kept as the bare sequence would
-// read back as generation zero after one, and every notice in the new
-// generation would compare above it — an inbox that could never be read past
-// again. A zero generation is omitted from the JSON, which keeps a position in
-// a stream's first generation to its two meaningful keys.
+// A domain keeps the generation PACKED in its column, as every durable position
+// is kept: a bare sequence reads back as generation zero after a reanchor, and
+// every notice in the new generation would compare above it. A zero generation
+// is omitted from the JSON.
 type Position struct {
 	Stream     string `json:"stream"`
 	Generation uint32 `json:"generation,omitempty"`
@@ -139,20 +135,12 @@ type Entry struct {
 // read, the notices they marked out of order or put off, and which of that
 // domain's reasons are theirs to act on. R is the domain's reason.
 //
-// A MARK OVER THE FEED, NEVER THE FEED: an [Entry] carries a record id and a
-// position and no content at all. The notices are the domain's rows, which
-// its applier — which outlives every writer — wrote; these are what the
-// person did about them. That split is what makes an inbox survive a person
-// who never writes: somebody who has marked nothing still has an inbox.
-//
-// # The lists are overrides of the position, in opposite directions
-//
-// Everything at or below [Marks.SeenThrough] reads as read and everything
-// above it as unread, so a list entry is only ever an EXCEPTION: Read holds
-// notices above the position somebody marked read out of order, and Unread
-// notices at or below it somebody marked unread again. An entry on the side
-// the position already answers says nothing, and [Apply] drops it on every
-// write.
+// A MARK OVER THE FEED, NEVER THE FEED: an [Entry] holds a record id and a
+// position, no content; the notices are the domain's rows, so somebody who has
+// marked nothing still has an inbox. The lists are EXCEPTIONS to
+// [Marks.SeenThrough] (at or below it reads as read, above it unread): Read
+// holds notices above it marked read, Unread those at or below it marked
+// unread. An entry the position already answers is dropped by [Apply].
 type Marks[R ~string] struct {
 	// Generation is anchored to the stream's own identity, and it is the
 	// THIRD belt behind the identity refusal and the wrong-stream read
@@ -184,18 +172,11 @@ type Snooze struct {
 // Gesture is one move a person makes on their own inbox. R is the domain's
 // reason.
 //
-// # A GESTURE, never the lists
-//
-// An inbox used to be written by handing over all three lists and the
-// watermark, each REPLACING what was stored — so a screen marking one notice
-// read had to send everything it had last read, and anything it had not read
-// was cleared: one `read` from a tab opened before a snooze erased the
-// snooze, and a caller that sent only the notice it meant wiped every other
-// mark and the position with it. What a person can say about their inbox is
-// "this one is done", "put this one off", "I have read everything up to
-// here" — so that is what a gesture says, and a domain's writer resolves it
-// ([Apply]) against the record its DECIDE reads, which is the one snapshot the
-// broker arbitrates. Two screens marking two notices at once both land.
+// A GESTURE, never the lists: replacing the stored lists wholesale would let a
+// stale tab erase another's snooze. A gesture says what a person can say
+// ("this one is done", "put this one off", "read up to here"), and a domain's
+// writer resolves it ([Apply]) against the record its DECIDE reads, the one
+// snapshot the broker arbitrates, so two screens marking two notices both land.
 //
 // A record id appears in at most ONE of the four lists: a notice both read
 // and unread in one gesture is a contradiction nothing could order.
@@ -354,25 +335,16 @@ func CheckGesture[R ~string](g Gesture[R], stream string, reasons []R,
 
 // Apply moves a person's marks by one gesture.
 //
-// PURE OVER VALUES — the marks, the gesture, where each notice sits and the
-// instant — so the rule is exercised without a database, and a domain's
-// decide is its only caller. positions holds the PACKED position of every
-// notice the gesture names ([Gesture.Records]), which the domain reads from
-// the notice's own row in that decide: a mark has to carry the position its
-// notice sits at, because the lists are pruned against the seen-through
-// position, and a caller that supplied it could get it wrong in the one way
-// that loses the mark silently — a read mark at position zero is pruned on
-// the write that makes it.
+// PURE OVER VALUES, so a domain's decide is its only caller. positions holds
+// the PACKED position of every notice the gesture names ([Gesture.Records]),
+// read from the notice's own row in that decide, never supplied by a caller: a
+// mark at position zero is pruned on the write that makes it.
 //
-// Moving the position forward clears every `unread` exception, because "I
-// have read everything up to here" is the gesture that says so. The ORDER:
-// the position first, then the marks, so "read through here, but keep this
-// one unread" is one gesture that means what it says.
-//
-// A list the gesture would leave past [MaxEntries] is refused [ErrFull]
-// rather than trimmed. Every list is a FRESH slice, never the one m held, so
-// a caller comparing the marks before and after with reflect.DeepEqual
-// compares two values rather than one.
+// Moving the position forward clears every `unread` exception. The position
+// moves first, then the marks, so "read through here, but keep this one
+// unread" means what it says. A list left past [MaxEntries] is refused
+// [ErrFull], not trimmed. Every list is a FRESH slice, never the one m held,
+// so before and after compare as two values under reflect.DeepEqual.
 func Apply[R ~string](m *Marks[R], g Gesture[R], positions map[string]uint64,
 	at time.Time) error {
 

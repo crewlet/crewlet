@@ -295,7 +295,7 @@ func (e *Engine) startNative(ctx context.Context, boot *config.Bootstrap, c *Com
 			"read; the domain is in the register and its stream failed to come up")
 	}
 	if n.trackerFiles, err = worklet.NewReader(
-		sl.estate().Reader(), running.reader); err != nil {
+		sl.estate().Reader(), running.reader, nil); err != nil {
 		return fmt.Errorf("engine: the tracker's file rows: %w", err)
 	}
 	if runTracker {

@@ -14,6 +14,34 @@
 // onboarding marker hold the agent id derived from it. A handle is immutable
 // (ADR-0013): a document that changes one has created a new seat, with no
 // memory.
+//
+// # Memory follows the seat; a screen reads the holder's
+//
+// [memsync] carries every memory row between nodes and [memread] answers a
+// screen from the node holding the seat's lease, so a read here that a screen
+// shows RAISES where the turn's reads answer empty: "remembers nothing" and
+// "the store did not answer" are opposite facts there. A silent or still
+// hydrating holder is unavailable, never an empty memory. A skills listing's
+// order ([SkillOrders], wire field `skills_order`, the dashboard's
+// LEARNED_SKILL_ORDERS held to it by a clientsource test) is applied by the
+// holder before it cuts the page, or a page
+// sorted after the cut answers "the most used of the newest fifty". The
+// post-turn reflection wake (`reflection_due`) goes to the SEAT'S OWN subject,
+// attached by the holder after hydration and let go before the last flush: on a
+// fleet-wide group, all but one in N reflections would write memory where
+// nothing carries or reads it.
+//
+// # What a past turn's writers said stays fenced
+//
+// An episode keeps the [provenance.Label] its ask was read under
+// ([Episode.AskProvenance], `ask_provenance`, carried by memsync), and
+// [RenderPastTurn] is the one rendering of a past turn into a model's text: the
+// ask fenced under that label, the rest neutralised. A stranger's message
+// recalled a month on is not the seat's own memory, the voice it trusts most; a
+// label that does not decode is the zero label, fenced and vouched for by
+// nobody, never none. The post-turn workers (persist decider, profiler, skill
+// synthesizer and refiner) read inbound messages the same way, through one
+// rendering ([inboundBody]) and the turn's record of the ask.
 package learning
 
 import (
@@ -161,28 +189,16 @@ ON CONFLICT (agent_handle, work_key) DO NOTHING`
 
 // Append records one episode, at most once per (seat, work key).
 //
-// EXACTLY-ONCE ON THE WORK KEY, and it is a real unique index rather than a
-// read-then-write: two writers racing inside one process cannot both see "not
-// there" and both insert. A turn can legitimately be worked twice — a
-// redelivery, or an honest re-run after the completion ledger fails open — and
-// an episode keyed on nothing simply lands twice, then feeds every later
-// recall and skill synthesis, weighting the agent's behaviour with an event
-// that happened once.
+// Exactly-once rests on a unique index on the work key, not a read-then-write
+// that two racing writers would both pass. A turn can be worked twice
+// (redelivery, or a re-run after the completion ledger fails open), and a
+// duplicate would weight every later recall and skill synthesis.
 //
-// THE INDEX IS THIS NODE'S, like the table. That is the whole scope of the
-// guarantee and it is the right one: episodes are a seat's memory, read by the
-// node running that seat and never by a peer, so a duplicate written on two
-// DIFFERENT nodes is two rows in two databases neither of which the other
-// reads — no recall sees both. What is collapsed here is the duplicate one
-// reader would otherwise be shown twice.
+// The index is this node's, like the table: only the node running the seat
+// reads its episodes, so a duplicate on two nodes is never shown to one reader.
 //
-// An empty work key maps to SQL NULL, which the index treats as distinct from
-// every other NULL — so an unkeyed turn is never deduped against another. That
-// is the whole reason the column is nullable: ” would collide every unkeyed
-// turn a seat ever ran onto one row.
-//
-// Reports whether the row was WRITTEN. False means a duplicate was collapsed,
-// which is the guard working and not a failure.
+// An empty work key maps to SQL NULL, so an unkeyed turn is never deduped (”
+// would collapse them all). Reports whether the row was WRITTEN.
 func (e *Episodes) Append(ctx context.Context, ep Episode) (bool, error) {
 	if ep.ID == "" || ep.Handle == "" {
 		return false, fmt.Errorf("learning: an episode needs an id and a seat")
@@ -260,35 +276,18 @@ func decodeLabel(episode, column string) *provenance.Label {
 	return &l
 }
 
-// encodeEmbedding packs a vector, refusing one of the wrong width and
-// DEGRADING one that is not finite.
+// encodeEmbedding packs a vector, refusing a wrong width and DEGRADING one that
+// is not finite.
 //
-// The width is checked because the column is a plain BLOB: Turso does not
-// enforce a declared vector width (measured), so a mismatched vector stores
-// happily and then makes every distance query against it return nothing — a
-// seat whose recall silently stops working, with no error anywhere. That is a
-// configuration fault, and the write fails.
+// Turso does not enforce a declared vector width on a BLOB column (measured), so
+// a mismatch would store and silently break every distance query: a
+// configuration fault, so the write fails.
 //
-// A NaN or an infinity is a different thing and gets the opposite answer: the
-// row is written WITHOUT its embedding, exactly as if the provider had been
-// unreachable. Failing the write instead would cost the episode, and an
-// episode is the record of a turn that really happened — the one thing this
-// subsystem may not lose to a bad response from an embeddings API. Storing it
-// anyway is not an option either: [store.ErrVectorNotFinite] says why.
-//
-// SO IS A VECTOR OF ZEROS, which is finite and has no direction. Turso's
-// vector_distance_cos answers it 1, orthogonal to everything (measured), so
-// stored it is a row that has its vector and that no recall returns — counted
-// searchable by [Episodes.Unsearchable], and never offered to the holder's
-// fill again, since the fill looks only at rows without one. Written without
-// it, the row is one the fill tries again, whose pass holds back an answer
-// with no direction for the hour (embeddings.Pass) rather than storing it.
-//
-// THE MODEL TRAVELS WITH THE BYTES, both or neither. A vector that names no
-// model is in no known space and no recall could compare it with anything, so
-// it is DISCARDED like a non-finite one — the row lands, its vector does not —
-// rather than failing a write the subsystem may not lose; and a model with no
-// vector to describe is stored as nothing.
+// A NaN, an infinity, zeros, or a vector naming no model is DISCARDED: the row
+// lands without it, since an episode records a turn that happened
+// ([store.ErrVectorNotFinite]). Zeros have no direction (vector_distance_cos
+// answers 1, measured) and stored would never be retried by the fill, which
+// reads only rows without one; no model means no space to compare in.
 func (e *Episodes) encodeEmbedding(v []float32, model string) (blob, space any, err error) {
 	return encodeVectorColumns(e.db, v, model, "episode_embedding_discarded")
 }

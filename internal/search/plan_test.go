@@ -14,30 +14,15 @@ import (
 // EVERY INDEX ON THE VECTOR TABLES SERVES A QUERY THIS PACKAGE ISSUES, and the
 // two-stage search reaches `kb_vectors` by its PRIMARY KEY.
 //
-// # Why this is a gate rather than a comment
-//
-// Both halves of this were wrong when the tables were created, and both were
-// wrong SILENTLY — the answers were correct, the tests passed, and the search
-// took a hundred seconds instead of fifty milliseconds. An index is the one
-// piece of schema whose mistake looks exactly like a mistake nobody made.
-//
-// Measured at the pin, 20 000 sources at 3 072 dimensions, warm: the two-stage
-// search was 1 min 44 s with the two indexes the replicated estate's migration
-// 0003 created, 50 ms without them, against 259 ms for the exact scan they were
-// meant to beat. Two thousand times, from two indexes nobody would look at
-// twice.
-//
-// # What it walks
-//
-// Every statement this package issues against the vector tables — the
-// two-stage search in each shape its callers issue it, through the index and
-// through the full scan, built by the function [search.Semantic] calls, and the
-// reads the index's own duty and applier make — planned ([storetest.Plan])
-// on a corpus large enough that the planner has a real choice. Then the
-// inverse: every index the schema declares must appear in at least one of
-// those plans, or it is a copy of the row order nobody reads and a trap the
-// planner can still fall into. And no plan answers a per-row aggregate from
-// its whole child table ([refuseUnnested]).
+// A wrong index is SILENT: answers stay correct while the search takes a
+// hundred seconds, not fifty milliseconds. At the pin (20 000 sources, 3 072
+// dimensions, warm) the two-stage search took 1 min 44 s with migration 0003's
+// two indexes, 50 ms without, against 259 ms for the exact scan.
+// Every statement issued against the vector tables (the two-stage search in
+// each shape, built by [search.Semantic], plus the duty's and applier's reads)
+// is planned ([storetest.Plan]) on a corpus large enough for a real choice;
+// every declared index must appear in a plan; and no plan answers a per-row
+// aggregate from its whole child table ([refuseUnnested]).
 func TestEveryIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	const dim, model = 32, "plan-embed"
@@ -333,32 +318,15 @@ func refuseUnnested(t *testing.T, plans map[string][]string) {
 // EVERY INDEX ON THE LEXICAL TABLES SERVES A QUERY THIS PACKAGE ISSUES, and
 // the posting scan reaches kb_docs by its PRIMARY KEY.
 //
-// The vector gate above exists because two indexes nobody looked at twice cost
-// two thousand times the runtime. This is the same gate over the other estate,
-// and it is the estate the shard column arrived in most recently — a bucket
-// range is the one predicate a planner can serve from an index, which is
-// exactly how it would stop driving on the term.
-//
-// # The shape that must not change
-//
-// A term's posting list is the outer loop and kb_docs is reached per posting
-// by its primary key. Any plan that drives on kb_docs instead walks a bucket
-// range — one sixty-fourth of the corpus, which is far more documents than a
-// term appears in — and probes the postings per document. And no plan answers
-// a per-row aggregate from its whole child table ([refuseUnnested]).
-//
-// # The statements planned are the statements run
-//
-// Each is the indexer's own text (search.Lexical…Statement), and every
-// fragment of the module's source that reads kb_docs or kb_postings must be
-// one of them ([storetest.StatementLiterals]): the gate registered a copy of
-// each, and the copies had already drifted — the held-version read lost its
-// derivation column, the indexed count bound its source as a literal — so a
-// change to what the indexer issues left the gate planning what it used to.
-//
-// Mutation: drive the posting scan on kb_docs (`FROM kb_docs d JOIN
-// kb_postings p`) and the shape check names it; read kb_docs inline anywhere
-// in the module and the completeness check names the file.
+// The vector gate's twin: a posting list must be the outer loop with kb_docs
+// reached per posting by primary key; a plan driving on kb_docs walks a bucket
+// range (a sixty-fourth of the corpus) and probes postings per document. No
+// plan answers a per-row aggregate from its whole child table
+// ([refuseUnnested]). The statements planned are the statements run: each is
+// the indexer's own (search.Lexical…Statement) and every source fragment
+// reading kb_docs or kb_postings must be one ([storetest.StatementLiterals]).
+// Mutation: scan on kb_docs (`FROM kb_docs d JOIN kb_postings p`) and the shape
+// check names it; read kb_docs inline and the completeness check names the file.
 func TestEveryLexicalIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
 	db := openStore(t)

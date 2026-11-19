@@ -2,6 +2,7 @@ package toolargs
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -37,6 +38,22 @@ func Decode(raw []byte) (map[string]any, error) {
 		args = map[string]any{}
 	}
 	return args, nil
+}
+
+// Key is the SHA-256 of the text a run's log keeps of the arguments raw holds
+// (internal/tools.RecordArgs over [Decode]): the package doc says why two
+// spellings of one call's arguments key equal, and where they key apart. An
+// error is raw that does not decode.
+func Key(raw []byte) ([32]byte, error) {
+	args, err := Decode(raw)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	text, err := plainjson.Marshal(args, "")
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return sha256.Sum256(text), nil
 }
 
 // unreadableArgs is a call's arguments that did not decode, said in words

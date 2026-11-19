@@ -45,14 +45,21 @@
 // seat running, waiting, paused, parked or refused, the node neither shedding
 // nor draining, and all of it true on two passes in a row.
 //
-// # Urgent work
+// # Urgent and due work
 //
 // An urgent first item is handed without waiting for a turn or its executor's
-// run to end, for mail or for the settle ([UrgentMayJump], ADR-0159), on the
+// run to end, for mail or for the settle ([LaneMayJump], ADR-0159), on the
 // inbox's priority lane, so the seat's next turn takes it ahead of the
 // background wakes queued first. A seat whose turns run in an executor box is
 // held by a run nearly all the time it works, so a pass waiting for a gap
-// between runs would hand it nothing for as long as its backlog lasts.
+// between runs would hand it nothing for as long as its backlog lasts. A due
+// item, in progress past its start with nothing of the seat's on it since,
+// comes right after urgent work and is handed the same way (ADR-0162), its
+// brief naming the date it waited until and the wait's words.
+//
+// An engine pickup goes on the lane only while the lane is empty
+// ([Holder.LaneWaiting]): at most one waits there, so a person's message
+// waits behind at most one such turn.
 //
 // # The cooldown
 //
@@ -253,6 +260,11 @@ func Event(seat uuid.UUID, role string, item worklet.ReadyItem, key Key, ready i
 		// A RECHECK SAYS SO, and since when the item has been quiet.
 		quiet := item.Quiet.UTC()
 		payload.Quiet = &quiet
+	}
+	if item.Why == types.PickupDue && item.Start != nil {
+		// A DUE ITEM SAYS ITS WAIT ENDED: the date and the wait's words.
+		waited := item.Start.UTC()
+		payload.Waited, payload.WaitReason, payload.WaitBy = &waited, item.WaitReason, item.WaitBy
 	}
 	ev := events.New(payload, trace)
 	ev.ID = key.WakeID()

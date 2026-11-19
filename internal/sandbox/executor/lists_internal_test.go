@@ -70,6 +70,8 @@ func heldBy(read func() any) uint64 {
 	held := uint64(math.MaxUint64)
 	var before, after runtime.MemStats
 	for range 3 {
+		// Twice: a sync.Pool's victim cache outlives one, and freed after the read it offsets the read's hold.
+		runtime.GC()
 		runtime.GC()
 		runtime.ReadMemStats(&before)
 		answer := read()

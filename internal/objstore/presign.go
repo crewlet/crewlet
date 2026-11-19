@@ -115,21 +115,15 @@ func (s *Store) DirectUpload() (bool, string) {
 // PresignPut signs a put of the object k names, bound to r, for a client to
 // make itself.
 //
-// # The engine still mints the key
+// k is a key this store minted ([Store.Mint]) for a reserved upload: the
+// client never chooses a name, which keeps a key "named only by the write
+// that uploaded it" (ADR-0027). The URL must stop working before the key is
+// too old to be named ([RecordWithin]), so a longer term is refused, not
+// signed.
 //
-// k is a key this store minted ([Store.Mint]) for an upload the caller has
-// reserved: the client never chooses a name, which is what keeps a key
-// "named only by the write that uploaded it" (ADR-0027) when the write is not
-// the engine's. And the URL has to stop working before the key is too old to
-// be named: a put landing after [RecordWithin] stores bytes no row can name,
-// so a term reaching past it is refused here rather than signed.
-//
-// # And it still verifies the bytes
-//
-// What a presigned put stores is checked again before any row names it, by a
-// read through [Store.Open] against the declared digest: the provider's own
-// checksum check is what keeps a client from swapping the bytes after the
-// read, never a substitute for it.
+// The stored bytes are still verified before any row names them, by a read
+// through [Store.Open] against the declared digest; the provider's checksum
+// only stops a swap after that read, and is no substitute for it.
 func (s *Store) PresignPut(ctx context.Context, k Key, r PresignRequest) (Presigned, error) {
 	if err := s.checkPresign(k, r); err != nil {
 		return Presigned{}, err

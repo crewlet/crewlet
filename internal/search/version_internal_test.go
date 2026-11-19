@@ -8,19 +8,13 @@ import (
 // EVERY OPERATION AND EVERY SUBJECT KIND ABOVE THE BASE FORMAT HAS ITS ROW, AND
 // NOTHING ELSE DOES.
 //
-// A record is written at the lowest version its table says it needs
-// ([versionedFields]). That is a mechanism only while the table covers every
-// member: a kind added to [Sources] or an operation added to [Ops] with no row
-// would be written at version one — a version the builds before it READ — and
-// refused by every one of them as a writer fault, retried on every redelivery,
-// where the rolling upgrade's contract is that they defer it. So every member
-// outside the base format names a row by its value, and a member of the base
-// format names none: a row for an embed would hold every vector this build
-// computes back from every peer still on the version before it.
-//
-// The base format is every operation and kind this build writes, so the table
-// is empty today; the first one a later build adds joins neither list and
-// fails here until it has its row.
+// A record is written at the lowest version its table ([versionedFields]) says
+// it needs, so a kind or operation with no row would be written at version one,
+// which the builds before it READ, and refused by each as a writer fault and
+// retried on every redelivery, where the rolling upgrade's contract is that they
+// defer it. A base-format member names no row: one for an embed would hold every
+// vector back from every peer on the previous version. The table is empty today;
+// the first member a later build adds fails here until it has its row.
 func TestEveryKindAboveTheBaseFormatHasItsRow(t *testing.T) {
 	t.Parallel()
 	base := struct {

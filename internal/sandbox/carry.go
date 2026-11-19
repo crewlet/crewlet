@@ -280,10 +280,9 @@ type SessionTake struct {
 
 	// MaxBytes is the largest archive kept (executorkeep.SessionMaxBytes):
 	// one the box describes as larger is refused before a byte of it is read,
-	// and it bounds what the scrub reads out of the archive — the plaintext
-	// it expands to, and each piece of it the scrub holds whole — so an
-	// archive the box's own code wrote cannot cost the engine host more than
-	// that.
+	// and it bounds the plaintext the scrub reads out of the archive, and with
+	// it what the scrub holds, which holds no piece whole: an archive the
+	// box's own code wrote cannot cost the engine host more than that.
 	MaxBytes int64
 }
 
