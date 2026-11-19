@@ -209,7 +209,7 @@ var rowInventory = map[string]int{
 	"rendezvous":                             3077,
 	"routing":                                3942,
 	"runtoken":                               2267,
-	"sandbox":                                125104,
+	"sandbox":                                124622,
 	"scenario":                               1053,
 	"schedule":                               1596,
 	"search":                                 9077,
