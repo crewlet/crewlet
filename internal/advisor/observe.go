@@ -42,8 +42,11 @@ type Observation struct {
 }
 
 // Observe is f as observed over window, its fix built against the document at
-// revision.
+// revision. AN OBSERVATION NAMES NO ATLAS ENTRY: entries are names a read
+// fills for an asker who may read them (ADR-0141), so the store never keeps
+// one, and the finding counts them in its facts.
 func Observe(f Finding, window Span, revision string) Observation {
+	f.Entries = nil
 	basis := []Basis{}
 	if f.Fix.Kind == FixConfigChange && revision != "" {
 		basis = append(basis, Basis{Kind: BasisConfig, Revision: revision})

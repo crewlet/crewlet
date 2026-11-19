@@ -115,6 +115,9 @@ func (c *Company) HelperKeys() []string {
 	if c.Assistant.On() {
 		out = append(out, c.Assistant.Model)
 	}
+	if key := c.Advisor.Model; key != "" && !slices.Contains(out, key) {
+		out = append(out, key)
+	}
 	return out
 }
 

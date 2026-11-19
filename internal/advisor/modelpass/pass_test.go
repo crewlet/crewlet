@@ -1,4 +1,4 @@
-package analyst
+package modelpass
 
 import (
 	"encoding/json"
@@ -76,7 +76,7 @@ func finding(records []map[string]any, facts []map[string]any, fix map[string]an
 // THE ANALYST FINDS A PLANTED PROBLEM NO RULE NAMES, citing records and numbers from its own
 // reads, with a change that checks; one citing an unread record, a number its reads lack, or
 // nothing, is dropped and counted. Mutation: skip a check in advisor.Ground, and it is listed.
-func TestTheAnalystListsOnlyWhatItsOwnReadsShow(t *testing.T) {
+func TestTheModelPassListsOnlyWhatItsOwnReadsShow(t *testing.T) {
 	t.Parallel()
 	d := planted(t)
 	turn := []map[string]any{{"kind": "turn", "id": "turn-9"}}
@@ -105,8 +105,8 @@ func TestTheAnalystListsOnlyWhatItsOwnReadsShow(t *testing.T) {
 		DryRun: func(ch advisor.Change) error {
 			checked = append(checked, ch)
 			return advisor.CheckChange(d.Company, ch)
-		}}, d, config.DefaultAnalystMaxTokens)
-	if got.Status != advisor.StatusDone || len(got.Findings) != 1 {
+		}}, d, Ceiling)
+	if got.Status != advisor.PassDone || len(got.Findings) != 1 {
 		t.Fatalf("run = %+v, want one finding listed", got)
 	}
 	f := got.Findings[0]
@@ -143,7 +143,7 @@ func TestARunThatDeclinesOrRunsOutSaysSo(t *testing.T) {
 		{Text: "I would rather not."}, {Text: "I would rather not."}, {Text: "I would rather not."},
 		{Text: "I would rather not."}}}}}
 	if got := Run(t.Context(), Deps{Provider: declines, ProviderKey: "p", Host: host}, d,
-		config.DefaultAnalystMaxTokens); got.Status != advisor.StatusRefused || len(got.Findings) != 0 || got.Reason == "" {
+		Ceiling); got.Status != advisor.PassDeclined || len(got.Findings) != 0 || got.Reason == "" {
 		t.Errorf("a declining model's run = %+v, want refused, saying so", got)
 	}
 	reads := &llmtest.Script{Runs: []llmtest.Run{{Responses: []llmtest.Response{
@@ -152,7 +152,7 @@ func TestARunThatDeclinesOrRunsOutSaysSo(t *testing.T) {
 		{Text: "reading", Calls: []llmtest.Call{{Name: "decisions", Args: `{}`}}},
 	}}}}
 	if got := Run(t.Context(), Deps{Provider: reads, ProviderKey: "p", Host: host}, d,
-		150); got.Status != advisor.StatusCeiling || got.Reason == "" {
+		150); got.Status != advisor.PassCeiling || got.Reason == "" {
 		t.Errorf("a run past its ceiling = %+v, want the ceiling said", got)
 	}
 }

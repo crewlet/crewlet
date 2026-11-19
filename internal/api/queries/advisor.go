@@ -15,8 +15,10 @@ import (
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/api/configapi"
 	"github.com/crewlet/crewlet/internal/atlas"
+	"github.com/crewlet/crewlet/internal/atlas/gather"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
+	"github.com/crewlet/crewlet/internal/gitlet"
 	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/integration"
 	"github.com/crewlet/crewlet/internal/notice"
@@ -26,43 +28,37 @@ import (
 	"github.com/crewlet/crewlet/internal/usage"
 )
 
-// advisorAnswer is the advisor's findings with the platform notices they and
-// the fleet's alarms raise: what reaches the administrators' Inbox.
-type advisorAnswer struct {
-	advisor.Answer
-	Notices []notice.Notice `json:"notices"`
-}
-
-// advisor answers `advisor`: every finding about the fleet's company at the
-// revision it is, the revision each fix is sent under. One read of the fleet's
-// pointer gives both, and the document is redacted before anything is read
-// off it, so no change a fix carries can hold a value redaction hides.
-//
-// AN EMPTY LIST, not an error, when nothing is active: a deployment before
-// its first import has nothing to advise about, and its alarms are still noticed.
-func (s Sources) advisor(ctx context.Context, _ Params) (any, error) {
-	now := s.clock()
-	fleet, fleetKnown := s.fleetAlarms(ctx)
-	held, heldKnown := s.heldConversations(ctx)
-	answer, err := s.advisorRead(ctx, now)
-	if err != nil {
-		return nil, err
-	}
-	if answer, err = s.advisedOfAtlas(ctx, answer, now); err != nil {
-		return nil, err
-	}
-	return noticedWith(answer, fleet, fleetKnown, held, heldKnown, now), nil
-}
-
-// advisorRead is the advisor's findings at now, typed: what `advisor` answers
-// beside its notices, and what the insights sharer reads.
+// advisorRead is the rule detectors' findings at now, read off the redacted
+// document and the week's records: what the duty observes beside the atlas,
+// and what the insights sharer reads (ADR-0119). AN EMPTY LIST, not an error,
+// before the company's first import: there is nothing to advise about yet.
 func (s Sources) advisorRead(ctx context.Context, now time.Time) (advisor.Answer, error) {
+	answer, _, err := s.advisorReading(ctx, now)
+	return answer, err
+}
+
+// advisorReading is [Sources.advisorRead] and the document it was read off,
+// nil before the first import.
+func (s Sources) advisorReading(ctx context.Context, now time.Time) (advisor.Answer, *config.Company, error) {
+	in, ev, company, err := s.advisorInputs(ctx, now)
+	if err != nil || company == nil {
+		return advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, nil, err
+	}
+	return advisor.ReadWithEvidence(in, ev), company, nil
+}
+
+// advisorInputs is what the rule detectors read at now: the redacted document
+// at its revision, the integrations' last reconcile and the week's records,
+// beside the document as it runs; a nil company before the first import.
+func (s Sources) advisorInputs(ctx context.Context, now time.Time) (advisor.Inputs, advisor.Evidence,
+	*config.Company, error) {
+
 	company, revision, err := s.Config.FleetCompany(ctx)
 	if errors.Is(err, configapi.ErrNoActiveRevision) {
-		return advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, nil
+		return advisor.Inputs{}, advisor.Evidence{}, nil, nil
 	}
 	if err != nil {
-		return advisor.Answer{}, revisionRefusal("advisor", err)
+		return advisor.Inputs{}, advisor.Evidence{}, nil, revisionRefusal("advisor", err)
 	}
 	in := advisor.Inputs{Company: company.Redact(), Revision: revision}
 	// THE INTEGRATIONS' LAST RECONCILE, from the read the integrations answer
@@ -72,36 +68,67 @@ func (s Sources) advisorRead(ctx context.Context, now time.Time) (advisor.Answer
 			return cmp.Compare(a.Kind, b.Kind)
 		})
 	}
-	return advisor.ReadWithEvidence(in, s.advisorEvidence(ctx, company, now)), nil
+	return in, s.advisorEvidence(ctx, company, now), company, nil
 }
 
 // advisedOfAtlas is answer with what the company's atlas shows needs a
-// person, read as the question's asker reads the atlas. ONLY THIS QUESTION
-// ADDS IT: [Sources.advisorRead] is also what the insights sharer sends from,
-// and no entry of the atlas leaves the engine (ADR-0141). A node that serves
-// no atlas, or runs no company yet, has none to advise about.
-func (s Sources) advisedOfAtlas(ctx context.Context, answer advisor.Answer, now time.Time) (advisor.Answer, error) {
+// person, read as the engine reads the atlas: every entry, Gitlet's every
+// repository among them, since the duty keeps what is found for whoever reads
+// it later. Never the insights sharer's: no entry of the atlas leaves the
+// engine. A node that serves no atlas, or runs no company yet, has none.
+func (s Sources) advisedOfAtlas(ctx context.Context, answer advisor.Answer, now time.Time) advisor.Answer {
+	var reads gather.GitletReads
+	why := ""
+	if s.Code != nil {
+		var err error
+		if reads, err = s.Code.CodeReads(); err != nil {
+			reads, why = nil, "Gitlet could not be read on this node right now: "+err.Error()
+		}
+	}
+	// THE ENGINE READS GITLET AS AN UNBOUND CREDENTIAL does, every repository it declares.
+	return s.atlasFindings(ctx, answer, now, reads, why, gitlet.Principal{Kind: gitlet.PrincipalOperator},
+		atlas.Reader{Admin: true}, true)
+}
+
+// atlasEntriesFor is each atlas finding's entries by its key, as the asker ctx
+// carries reads the atlas: only what they may be named (ADR-0141), and a
+// repository only where they hold Gitlet (ADR-0110). Filled into a stored
+// finding at its read, which keeps none.
+func (s Sources) atlasEntriesFor(ctx context.Context, principal iam.Principal, now time.Time) map[string][]advisor.AtlasEntry {
+	reads, why := s.atlasGitlet(principal)
+	answer := s.atlasFindings(ctx, advisor.Answer{Findings: []advisor.Finding{}}, now, reads, why,
+		codeAsker(principal), atlas.Reader{Admin: principal.Can(iam.GrantAdmin)}, principal.Can(iam.GrantAtlas))
+	out := map[string][]advisor.AtlasEntry{}
+	for _, f := range answer.Findings {
+		if f.Source == advisor.SourceAtlas {
+			out[advisor.Key(f)] = append([]advisor.AtlasEntry{}, f.Entries...)
+		}
+	}
+	return out
+}
+
+// atlasFindings is answer with the atlas's findings, its view read through
+// reads as asker and folded for reader, named where names says so.
+func (s Sources) atlasFindings(ctx context.Context, answer advisor.Answer, now time.Time, reads gather.GitletReads,
+	why string, asker gitlet.Principal, reader atlas.Reader, names bool) advisor.Answer {
+
 	chart := s.organization()
 	if s.Atlas == nil || chart == nil {
-		return answer, nil
+		return answer
 	}
-	principal, err := caller(ctx, "advisor")
-	if err != nil {
-		return advisor.Answer{}, err
-	}
-	ev := advisor.AtlasEvidence{Until: now, Names: principal.Can(iam.GrantAtlas),
+	ev := advisor.AtlasEvidence{Until: now, Names: names,
 		Holds: func(owner atlas.Owner) bool {
 			if owner.Kind == atlas.ExternalUnit {
 				return chart.UnitByRef(owner.Name) != nil
 			}
 			return chart.Role(owner.Name) != nil
 		}}
-	view, _, err := s.atlasView(ctx, "advisor")
-	if err != nil {
-		log.WarnContext(ctx, "advisor_atlas_unread", "error", err.Error())
+	read, running := s.Atlas.AtlasRead(ctx, reads, why, asker, atlasFresh, now)
+	if running {
+		ev.View = atlas.For(read.View, reader)
+	} else {
 		ev.ViewUnread = true
 	}
-	ev.View = view
 	report, running, err := s.Atlas.AtlasSources(ctx, now)
 	switch {
 	case err != nil:
@@ -115,23 +142,7 @@ func (s Sources) advisedOfAtlas(ctx context.Context, answer advisor.Answer, now 
 		ev.Sources = append(ev.Sources, advisor.AtlasSource{Kind: string(source.Kind),
 			Name: advisor.SurfaceName(source.Kind), LastCompleteAt: source.LastCompleteAt})
 	}
-	return advisor.WithAtlas(answer, ev), nil
-}
-
-// noticedWith is the answer with the notices its findings, the fleet's alarms
-// and the held conversations raise. `alarms` is named unread once, whether this
-// node's evaluation or the fleet's marks could not be read; `holds` where the
-// held conversations could not be.
-func noticedWith(a advisor.Answer, fleet []notice.NodeAlarms, fleetKnown bool, held []notice.Notice,
-	heldKnown bool, now time.Time) advisorAnswer {
-
-	if !fleetKnown && !slices.Contains(a.Unread, advisor.UnreadAlarms) {
-		a.Unread = append(a.Unread, advisor.UnreadAlarms)
-	}
-	if !heldKnown {
-		a.Unread = append(a.Unread, advisor.UnreadHolds)
-	}
-	return advisorAnswer{Answer: a, Notices: notice.Read(a.Findings, fleet, held, now)}
+	return advisor.WithAtlas(answer, ev)
 }
 
 // heldConversations is a notice per conversation the engine holds, named by

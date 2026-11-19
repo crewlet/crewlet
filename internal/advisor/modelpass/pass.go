@@ -1,7 +1,9 @@
-// Package analyst runs the setup advisor's analyst (ADR-0157): one run on the company's own
-// models over tools.go's reads of [Data] (numbers, closed words and record ids, never anyone's
-// words), bounded by [ceilingMeter], whose findings [advisor.Ground] checks before any is listed.
-package analyst
+// Package modelpass runs the Advisor's model pass (ADR-0164): one run on the model the
+// company assigns the Advisor, over tools.go's reads of [Data] (numbers, closed words and
+// record ids, never anyone's words), bounded by [ceilingMeter], whose findings
+// [advisor.Ground] checks before any is kept, as ADR-0157 decided for the analyst it was.
+// The duty schedules it (internal/advisor/duty).
+package modelpass
 
 import (
 	"context"
@@ -19,7 +21,9 @@ import (
 
 // Data is what one run reads.
 type Data struct {
-	Company  *config.Company
+	Company *config.Company
+	// Revision is the document's revision, which a fix the pass builds is built against.
+	Revision string
 	Evidence advisor.Evidence
 	// Rules are the rule-based findings of the same week, which it never repeats.
 	Rules   []advisor.Finding
@@ -44,13 +48,19 @@ type Deps struct {
 // again, and the two submissions.
 const MaxRounds = 16
 
-// CeilingScope names the analyst's own ceiling in a budget refusal.
-const CeilingScope = "analyst"
+// CeilingScope names the pass's own ceiling in a budget refusal.
+const CeilingScope = "advisor"
 
-// Run is one run over d, as its record reads: its status, what it spent, and
-// the findings the engine grounded.
-func Run(ctx context.Context, deps Deps, d Data, ceiling int) advisor.Analysis {
-	out := advisor.Analysis{Status: advisor.StatusDone, Model: deps.ProviderKey, Ceiling: ceiling,
+// Ceiling is the most tokens one pass may spend, every round together: the
+// measured pass over a busy twelve-agent week reads about 60 to 80 thousand
+// tokens in one round, so this leaves room for a second reading and the
+// submission. Charged to the company's budget and no seat's.
+const Ceiling = 200_000
+
+// Run is one pass over d: its status, what it spent, and the findings the
+// engine grounded.
+func Run(ctx context.Context, deps Deps, d Data, ceiling int) advisor.Pass {
+	out := advisor.Pass{Status: advisor.PassDone, Model: deps.ProviderKey, Ceiling: ceiling,
 		Findings: []advisor.Finding{}, Dropped: map[advisor.Drop]int{}, Unread: append([]string{}, d.Unread...)}
 	surf := &surface{data: d, served: advisor.NewServed()}
 	meter := &ceilingMeter{inner: deps.Budget, ceiling: ceiling}
@@ -58,7 +68,7 @@ func Run(ctx context.Context, deps Deps, d Data, ceiling int) advisor.Analysis {
 		Provider: deps.Provider, ProviderKey: deps.ProviderKey, Surface: surf, Host: deps.Host,
 		ServerTitle: "advisor", Messages: opening(), MaxRounds: MaxRounds, OwnPrompt: true,
 		TerminateAfter: []string{SubmitTool}, Budget: meter, Now: deps.Now,
-		// NO SEAT TO FENCE: its tools read only this run's Data, and one run at a time is its claim.
+		// NO SEAT TO FENCE: its tools read only this pass's Data, and one pass at a time is the duty's lease.
 		Fence: nil,
 	})
 	if res != nil {
@@ -68,19 +78,19 @@ func Run(ctx context.Context, deps Deps, d Data, ceiling int) advisor.Analysis {
 	var budget *toolloop.BudgetError
 	switch {
 	case errors.As(err, &budget) && budget.Scope == CeilingScope:
-		out.Status = advisor.StatusCeiling
-		out.Reason = fmt.Sprintf("The run stopped at its ceiling of %d tokens, so this list may be short.", ceiling)
+		out.Status = advisor.PassCeiling
+		out.Reason = fmt.Sprintf("The pass stopped at its ceiling of %d tokens, so this list may be short.", ceiling)
 		if !accepted {
 			return out
 		}
 	case errors.As(err, &budget):
-		out.Status, out.Reason = advisor.StatusFailed, "The company's token budget is spent for now, so the run stopped."
+		out.Status, out.Reason = advisor.PassFailed, "The company's token budget is spent for now, so the pass stopped."
 		return out
 	case err != nil:
-		out.Status, out.Reason = advisor.StatusFailed, "The run's model did not answer: "+err.Error()
+		out.Status, out.Reason = advisor.PassFailed, "The Advisor's model did not answer: "+err.Error()
 		return out
 	case !accepted:
-		out.Status = advisor.StatusRefused
+		out.Status = advisor.PassDeclined
 		out.Reason = "The model declined, or did not submit findings the engine could read, so nothing it found is listed."
 		return out
 	}
@@ -90,6 +100,7 @@ func Run(ctx context.Context, deps Deps, d Data, ceiling int) advisor.Analysis {
 	}
 	out.Findings, out.Dropped = advisor.Ground(submitted, surf.served, advisor.Grounding{
 		Company: d.Company, Rules: d.Rules, DryRun: deps.DryRun, Answered: d.Answers.Holding(now())})
+	out.Listed = len(out.Findings)
 	return out
 }
 

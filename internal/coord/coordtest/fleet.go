@@ -61,7 +61,6 @@ func RunFleet(t *testing.T, newFleet func(t *testing.T) (node func() coord.Fleet
 		{"grant_requests", grantRequestCases},
 		{"access_reviews", accessReviewCases},
 		{"atlas_wakes", atlasWakeCases},
-		{"advisor_records", advisorRecordCases},
 		{"conversation_holds", conversationHoldCases},
 		{"seen_through", seenThroughCases},
 		{"box_readings", boxReadingCases},

@@ -3,14 +3,18 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"slices"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/advisor"
+	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/words"
 )
@@ -22,7 +26,7 @@ const doctorUsage = "usage: crewlet doctor [-json] [-words] [<config.yaml>] [-ap
 // source.
 const exitBlocked = 2
 
-// runDoctor prints the setup advisor's findings: classes, subjects by kind and
+// runDoctor prints the Advisor's open findings: classes, subjects by kind and
 // ordinal, and counts by default, so its output can be pasted anywhere; the
 // subjects' handles, titles and reasons only with -words.
 func runDoctor(environ config.Source, args []string, stdout, stderr io.Writer) error {
@@ -38,20 +42,22 @@ func runDoctor(environ config.Source, args []string, stdout, stderr io.Writer) e
 	if err != nil {
 		return err
 	}
-	var raw json.RawMessage
-	if err := client.get(context.Background(), "/advisor", &raw); err != nil {
+	reading, err := readAdvisor(context.Background(), client)
+	if err != nil {
 		return err
 	}
-	var answer advisor.Answer
-	if err := json.Unmarshal(raw, &answer); err != nil {
-		return fmt.Errorf("the node's advisor answer is not the shape this build reads: %w", err)
-	}
+	answer := reading.answer()
 	if *asJSON {
+		raw, err := json.Marshal(reading)
+		if err != nil {
+			return err
+		}
 		if err := printAnswer(stdout, raw); err != nil {
 			return err
 		}
 	} else {
 		renderFindings(stdout, answer, *withWords)
+		renderRun(stdout, reading.LastRun)
 	}
 	var blocking []string
 	count := 0
@@ -70,22 +76,98 @@ func runDoctor(environ config.Source, args []string, stdout, stderr io.Writer) e
 		return &exitError{code: exitBlocked, err: fmt.Errorf("%s the company cannot work as configured: %s",
 			words.Count(count, "finding says", "findings say"), words.And(blocking))}
 	}
-	// A SOURCE THE NODE COULD NOT READ FAILS CLOSED, as a failure to ask: a
-	// block it holds is missing from the list, so no gate may pass on it.
-	if len(answer.Unread) > 0 {
+	// A SOURCE THE ADVISOR COULD NOT READ FAILS CLOSED, as a failure to ask: a
+	// block it holds is missing from the list, so no gate may pass on it. So
+	// does an Advisor that has not run yet.
+	switch {
+	case reading.LastRun == nil:
 		if *asJSON {
 			return errSilent
 		}
-		return fmt.Errorf("the node could not read %s, so a finding that blocks may be missing",
+		return errors.New("the Advisor has not run yet, so a finding that blocks may be missing")
+	case len(answer.Unread) > 0:
+		if *asJSON {
+			return errSilent
+		}
+		return fmt.Errorf("the Advisor could not read %s, so a finding that blocks may be missing",
 			words.And(answer.Unread))
 	}
 	return nil
 }
 
+// doctorReading is what the doctor reads of the node: every open finding the
+// Advisor keeps, and its latest run.
+type doctorReading struct {
+	Findings []queries.AdvisorFinding   `json:"findings"`
+	LastRun  *queries.AdvisorRunSummary `json:"last_run"`
+}
+
+// doctorPages bounds how many pages of findings the doctor reads: a company
+// with ten thousand open findings has a problem the list says already.
+const doctorPages = 100
+
+// readAdvisor reads every open finding, a page at a time, and the latest run.
+func readAdvisor(ctx context.Context, client *nodeClient) (doctorReading, error) {
+	out := doctorReading{Findings: []queries.AdvisorFinding{}}
+	cursor := ""
+	for range doctorPages {
+		path := "/advisor/findings?state=open&limit=100"
+		if cursor != "" {
+			path += "&cursor=" + url.QueryEscape(cursor)
+		}
+		var page queries.AdvisorFindingList
+		if err := client.get(ctx, path, &page); err != nil {
+			return doctorReading{}, err
+		}
+		out.Findings = append(out.Findings, page.Findings...)
+		out.LastRun = page.LastRun
+		if page.NextCursor == nil {
+			return out, nil
+		}
+		cursor = *page.NextCursor
+	}
+	return out, fmt.Errorf("the node answered more than %d pages of findings", doctorPages)
+}
+
+// answer is the open findings a person is to look at, neither snoozed nor
+// applied and waiting on their effect, and what the latest run could not read.
+func (r doctorReading) answer() advisor.Answer {
+	out := advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}
+	if r.LastRun != nil {
+		out.Unread = r.LastRun.Unread
+	}
+	for _, f := range r.Findings {
+		if f.State != advisor.StateOpen || f.SnoozedUntil != nil {
+			continue
+		}
+		g := advisor.Finding{Class: advisor.Class(f.Class), Severity: f.Severity, Actor: f.Actor, Area: f.Area,
+			Subject: advisor.Subject{Kind: f.Subject.Kind, Seat: f.Subject.Seat, Unit: f.Subject.Unit,
+				Schedule: f.Subject.Schedule, Name: f.Subject.Name},
+			Title: f.Title, Why: f.Why, Item: f.Item, Names: f.Names, Path: f.Path, Fix: f.Fix}
+		for _, fact := range f.Evidence.Facts {
+			g.Evidence = append(g.Evidence, advisor.Fact{Key: fact.Key, Value: fact.Value})
+		}
+		out.Findings = append(out.Findings, g)
+	}
+	return out
+}
+
+// renderRun says when the Advisor last checked, or that it has not.
+func renderRun(w io.Writer, run *queries.AdvisorRunSummary) {
+	switch {
+	case run == nil:
+		fmt.Fprintln(w, "The Advisor has not run yet.")
+	case run.EndedAt == nil:
+		fmt.Fprintf(w, "A run asked for at %s has not ended yet.\n", run.StartedAt.UTC().Format(time.RFC3339))
+	default:
+		fmt.Fprintf(w, "Last checked at %s.\n", run.EndedAt.UTC().Format(time.RFC3339))
+	}
+}
+
 // renderFindings prints one row per finding, the most costly first.
 func renderFindings(w io.Writer, a advisor.Answer, withWords bool) {
 	if len(a.Findings) == 0 {
-		fmt.Fprintf(w, "No findings at revision %s.\n", a.Revision)
+		fmt.Fprintln(w, "No open findings.")
 		renderUnread(w, a.Unread)
 		return
 	}
@@ -128,8 +210,8 @@ func renderFindings(w io.Writer, a advisor.Answer, withWords bool) {
 			}
 		}
 	}
-	fmt.Fprintf(w, "\nAt revision %s. An owner finding's fix is sent from the dashboard or with "+
-		"PUT /config; an engine finding is a pattern the engine is reducing.\n", a.Revision)
+	fmt.Fprintln(w, "\nAn owner finding's fix is applied from the Advisor page, which re-checks it first; "+
+		"an engine finding is a pattern the engine is reducing.")
 	renderUnread(w, a.Unread)
 }
 

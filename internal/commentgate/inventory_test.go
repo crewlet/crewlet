@@ -102,7 +102,7 @@ var rowInventory = map[string]int{
 	"a2a":                                   1164,
 	"accessreview":                          1294,
 	"adr":                                   549,
-	"advisor":                               2510,
+	"advisor":                               1279,
 	"agent/builtin":                         49697,
 	"agent/colleague":                       386,
 	"agent/execstate":                       4322,

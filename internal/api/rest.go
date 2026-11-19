@@ -89,14 +89,16 @@ var namedRoutes = []struct {
 	// THE OPERATING INSIGHTS: the consent, the catalogue and every record kept;
 	// the consent is the setting's own, `diagnostics.insights` under /config.
 	{method: "GET", pattern: "/diagnostics/insights", what: "diagnostics_insights"},
-	// WHAT THE COMPANY'S SETUP COSTS IT, each finding with its fix. The
-	// fixes are written through the /config entity routes, never here.
-	{method: "GET", pattern: "/advisor", what: "advisor"},
+	// THE ADVISOR'S FINDINGS as its duty keeps them (ADR-0164): a page of
+	// them, one with its history and earlier episodes, the latest run, and
+	// the platform notices its blocking findings and the alarms raise.
+	{method: "GET", pattern: "/advisor/findings", what: "advisor_findings"},
+	{method: "GET", pattern: "/advisor/findings/{id}", what: "advisor_finding", path: map[string]string{"id": "id"}},
+	{method: "GET", pattern: "/advisor/runs/latest", what: "advisor_run"},
+	{method: "GET", pattern: "/advisor/notices", what: "advisor_notices"},
 	// THE CHANGE AN ACCESS REQUEST WOULD MAKE, `seat=` and `access=`.
 	{method: "GET", pattern: "/advisor/access", what: "advisor_access"},
 	{method: "GET", pattern: "/advisor/review", what: "go_live_review"},
-	// THE ANALYST'S LAST RUN AND ITS FINDINGS (ADR-0157).
-	{method: "GET", pattern: "/advisor/analysis", what: "advisor_analysis"},
 	// WHAT DELEGATES DECIDED, the rules and limits they decide under, the
 	// day's digest and the week's spot-checks (ADR-0125).
 	{method: "GET", pattern: "/delegated-decisions", what: "delegated_decisions"},

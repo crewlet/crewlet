@@ -67,6 +67,24 @@ func CloseReasons() []CloseReason {
 // Valid reports whether r is a reason this build knows.
 func (r CloseReason) Valid() bool { return slices.Contains(CloseReasons(), r) }
 
+// HoldFor is how long a dismissal holds its key quiet: a fix nobody will make
+// for a quarter, one already known for a month, and one that was wrong for
+// good, so it is never raised again (forGood). A severity that rises raises
+// the key again early.
+func HoldFor(reason CloseReason) (span time.Duration, forGood bool) {
+	switch reason {
+	case ReasonDismissedWontFix:
+		return 90 * 24 * time.Hour, false
+	case ReasonDismissedKnown:
+		return 30 * 24 * time.Hour, false
+	}
+	return 0, reason == ReasonDismissedWrong
+}
+
+// SnoozeFor is how long a snoozed finding stays off the list before it is
+// shown again, if a run still observes it.
+const SnoozeFor = 7 * 24 * time.Hour
+
 // Group is a family of classes run together on one cadence, from one reading.
 type Group string
 
@@ -128,6 +146,13 @@ type Stored struct {
 	State       State
 	Revision    int
 	EffectDueAt time.Time
+	// AppliedFix is the option an applied finding's person sent, by its digest.
+	AppliedFix string
+	// Reason, ClosedAt and ClosedBy say how a closed episode ended, and who
+	// closed it where a person did.
+	Reason   CloseReason
+	ClosedAt time.Time
+	ClosedBy string
 	// Observation is what the episode's newest record observed.
 	Observation Observation
 	// Body is the observation as the store keeps it, compared byte for byte.

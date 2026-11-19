@@ -122,66 +122,12 @@
     "Advisor": {
       "additionalProperties": false,
       "properties": {
-        "analyst": {
-          "$ref": "#/$defs/AdvisorAnalyst",
-          "description": "The advisor's analyst: a run on the company's own models that reads the week's records and lists problems no rule names, each with the records and numbers it rests on. Absent = off."
-        }
-      },
-      "type": [
-        "object",
-        "null"
-      ]
-    },
-    "AdvisorAnalyst": {
-      "additionalProperties": false,
-      "properties": {
-        "cadence": {
-          "description": "How often it runs on its own: daily (the default), weekly (on Mondays) or off. Run now on Settings, Advisor runs it whatever this says.",
+        "model": {
+          "description": "The providers.llm entry the Advisor's model runs on: it explains findings and adds what no rule names, each checked against the engine's records before it is listed. Absent: the Advisor's rules still run, and its model does not.",
           "type": [
             "string",
             "number",
             "boolean",
-            "null"
-          ]
-        },
-        "hour": {
-          "description": "The hour of the company clock a scheduled run starts at, 0 to 23. Absent = 6.",
-          "maximum": 23,
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "llm": {
-          "anyOf": [
-            {
-              "type": [
-                "string",
-                "number",
-                "boolean",
-                "null"
-              ]
-            },
-            {
-              "items": {
-                "type": [
-                  "string",
-                  "number",
-                  "boolean",
-                  "null"
-                ]
-              },
-              "type": "array"
-            }
-          ],
-          "description": "The providers.llm entries the analyst runs on, the first first, each on a harness a helper can run with no tool of its own. Absent = the analyst is off."
-        },
-        "max_tokens": {
-          "description": "The most tokens one run may spend, every round together, charged to the company's budget and no seat's; a run that reaches it stops and lists what it grounded so far. Absent = 200000; at least 20000.",
-          "minimum": 20000,
-          "type": [
-            "integer",
             "null"
           ]
         }
@@ -6868,7 +6814,7 @@
     },
     "advisor": {
       "$ref": "#/$defs/Advisor",
-      "description": "The setup advisor's own settings: its analyst, which reads the week's records with a model and lists only what it can cite."
+      "description": "The Advisor: the model it runs on. Its rules run whatever this says."
     },
     "artifacts": {
       "$ref": "#/$defs/CompanyArtifacts"
