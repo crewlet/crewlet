@@ -34,30 +34,24 @@ describe("the kind counts", () => {
 });
 
 describe("the listing's question", () => {
-  const BOUNDS = ["2026-11-03T00:00:00Z", "2026-11-04T00:00:00Z"];
-
   // Mutation: send `sort=pushed` beside a deleted state, and the engine refuses the listing.
   test("is by last push, held to name for the deleted and the purging", () => {
-    expect(listingParams("", "", "", BOUNDS)).toEqual({
-      sort: "pushed",
-      repo_facts: true,
-      day_bounds: BOUNDS.join(","),
-    });
-    expect(listingParams("archived", "project", "name", BOUNDS)).toMatchObject({
+    expect(listingParams("", "", "")).toEqual({ sort: "pushed", repo_facts: true });
+    expect(listingParams("archived", "project", "name")).toMatchObject({
       status: "archived",
       kind: "project",
       sort: "name",
     });
     for (const status of ["deleted", "purging"]) {
       expect(sortHeld(status)).toBe(true);
-      expect(listingParams(status, "", "", BOUNDS).sort).toBe("name");
+      expect(listingParams(status, "", "").sort).toBe("name");
     }
     expect(sortHeld("archived")).toBe(false);
   });
 
   // Mutation: send a limit, or a kind the engine does not know, and a page is refused.
   test("sends no limit and no kind this build does not know", () => {
-    const params = listingParams("", "bogus", "bogus", BOUNDS);
+    const params = listingParams("", "bogus", "bogus");
     expect(params).not.toHaveProperty("limit");
     expect(params).not.toHaveProperty("kind");
     expect(params.sort).toBe("pushed");
@@ -67,7 +61,7 @@ describe("the listing's question", () => {
   test("sends no state this build does not know, asking for the live ones instead", () => {
     expect(listingStatus("bogus")).toBe("");
     expect(listingStatus("archived")).toBe("archived");
-    expect(listingParams("bogus", "", "name", BOUNDS)).not.toHaveProperty("status");
+    expect(listingParams("bogus", "", "name")).not.toHaveProperty("status");
   });
 });
 

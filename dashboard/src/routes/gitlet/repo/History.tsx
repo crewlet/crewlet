@@ -382,7 +382,9 @@ export function Commits({ repo }: { repo: CodeRepoDetail }) {
   const [when, setWhen] = useParam("when", "", "filter");
   const [q] = useParam("q", "", "filter");
   const nav = useNavigator();
-  // THE READER'S DAY, read again only when it turns, so the window's start holds all day.
+  // THE READER'S DAY, read again only when it turns, so the window's start holds all day; the
+  // window by its name, its start read at each ask, so the day turning is no new question
+  // (`lib/useCodeQuery.ts`).
   const today = useClock((t) => readerDay(t));
   const since = sinceOf(when, today);
   const params = useMemo(
@@ -391,18 +393,18 @@ export function Commits({ repo }: { repo: CodeRepoDetail }) {
       ...(rev ? { ref: rev } : {}),
       ...(path ? { path } : {}),
       ...(by ? { pushed_by: by } : {}),
-      ...(since ? { since } : {}),
       ...(q ? { grep: q } : {}),
     }),
-    [repo.name, rev, path, by, since, q],
+    [repo.name, rev, path, by, q],
   );
   const first = useCodeQuery("code_log", params, {
     enabled: Boolean(repo.head) || rev !== "",
+    window: { name: when, edges: { since } },
   });
   const paged = usePaged(
     first,
-    params,
-    (cursor) => codeRest.query("code_log", { ...params, cursor }),
+    { ...params, when },
+    (cursor, edges) => codeRest.query("code_log", { ...params, cursor }, undefined, edges),
     (a: CodeGitAnswer) => a.log?.commits ?? [],
     (c: CodeLogCommit) => c.oid,
     (a: CodeGitAnswer) => a.next ?? "",

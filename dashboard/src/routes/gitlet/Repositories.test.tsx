@@ -847,31 +847,37 @@ test("New repository and Import a repository are in the page bar, New the one pr
   );
 });
 
-// THE SPARK'S DAYS MOVE WHEN THE READER'S DAY TURNS, and not before: one clock, one new ask.
-// Mutation: key the listing on the minute or the hour, and it is asked again within the day.
-test("the spark's days move when the reader's day turns, and not before", async () => {
-  vi.useFakeTimers({ toFake: ["Date"] });
-  vi.setSystemTime(new Date("2026-11-16T12:00:00Z"));
+// THE SPARK'S DAYS MOVE WITH THE READER'S DAY, and the listing stays on screen as it turns: the
+// days are its window's edges, read again by the next poll, and each row's spark is drawn on the
+// days its answer was counted on until then (`lib/useCodeQuery.ts`). Mutations: put `day_bounds`
+// back in the question's key, and the rows give way to the placeholder at midnight; key it on the
+// minute or the hour, and it is asked again within the day; draw the reader's new days under the
+// old counts, and the spark's first bar moves a day early.
+test("the spark's days move when the reader's day turns, and the listing stays on screen", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+  vi.setSystemTime(new Date("2026-11-16T23:59:30Z"));
   pinZoneForTest("UTC");
   const asked = stubEngine();
   mount(<Repositories />);
-  await rowOf("web");
-  const days = () =>
-    [...new Set(firstPages(asked).map((u) => u.searchParams.get("day_bounds")))].length;
-  expect(days()).toBe(1);
-  const before = firstPages(asked).length;
-  act(() => {
-    vi.setSystemTime(new Date("2026-11-16T23:59:00Z"));
-    document.dispatchEvent(new Event("visibilitychange"));
-  });
-  await afterMicrotasks();
-  expect(days()).toBe(1);
-  expect(firstPages(asked).length).toBe(before);
-  act(() => {
-    vi.setSystemTime(new Date("2026-11-17T00:01:00Z"));
-    document.dispatchEvent(new Event("visibilitychange"));
-  });
-  await waitFor(() => expect(days()).toBe(2));
-  const last = firstPages(asked).at(-1)!.searchParams.get("day_bounds")!.split(",");
-  expect(last[14]).toBe("2026-11-18T00:00:00Z");
+  const web = await rowOf("web");
+  const days = () => firstPages(asked).map((u) => u.searchParams.get("day_bounds")!.split(",")[14]);
+  const firstBar = () => {
+    const bar = within(web).getByRole("figure").querySelector(".crewlet-histogram__bar")!;
+    return bar.getAttribute("title") ?? bar.getAttribute("aria-label");
+  };
+  expect(days()).toEqual(["2026-11-17T00:00:00Z"]);
+  expect(firstBar()).toMatch(/^Nov 03 · /);
+  // PAST THE READER'S MIDNIGHT: nothing asked, the row drawn as it was.
+  await act(
+    async () => void vi.advanceTimersByTime(Date.parse("2026-11-17T00:00:02Z") - Date.now()),
+  );
+  expect(web.isConnected).toBe(true);
+  expect(days()).toHaveLength(1);
+  expect(firstBar()).toMatch(/^Nov 03 · /);
+  // THE NEXT POLL, a minute after the listing asked, reads the moved days, and the spark moves.
+  await act(async () => void vi.advanceTimersByTime(60_000));
+  await settled(() => asked.length);
+  expect(web.isConnected).toBe(true);
+  expect(days()).toEqual(["2026-11-17T00:00:00Z", "2026-11-18T00:00:00Z"]);
+  expect(firstBar()).toMatch(/^Nov 04 · /);
 });

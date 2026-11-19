@@ -38,12 +38,14 @@ export function listingStatus(status: string): string {
   return (REPO_STATUSES as readonly string[]).includes(status) ? status : "";
 }
 
-/** The listing's question: every row's facts on the reader's days, the engine's page size. */
+/**
+ * The listing's question: every row's facts, the engine's page size. The reader's days the facts
+ * are counted on are its window's edges (`day_bounds`), never part of it (`lib/useCodeQuery.ts`).
+ */
 export function listingParams(
   status: string,
   kind: string,
   sort: string,
-  bounds: readonly string[],
 ): Record<string, string | boolean> {
   const k = listingKind(kind);
   const state = listingStatus(status);
@@ -52,7 +54,6 @@ export function listingParams(
     ...(k ? { kind: k } : {}),
     sort: listingSort(state, sort),
     repo_facts: true,
-    day_bounds: bounds.join(","),
   };
 }
 

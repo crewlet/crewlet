@@ -9396,6 +9396,21 @@ naming its tag, and a `304` is the answer the screen holds. The engine's reader 
 read a code question where it is asked, as they read every other:
 `useCodeQuery("…")`, and `codeRest.query("…")` for an older page.
 
+**A window the clock moves is one code question.** Checks' last 24 hours aligned
+to the hour, and the reader's days that Pushes, Repositories, the repository rail,
+Commits and Branches read, move with the clock; keyed on their instants, each move
+would be a new question, and the list would give way to its loading placeholder on
+the hour or at the reader's midnight. A code question names its window instead (`CodeWindow`:
+`7d`, a Branches view), and the window's edges (`since`, `day_bounds`) are sent at
+every ask and never keyed, so the rows stay on screen and the moved window is read
+within one cadence: the screen's next poll, or a quiet ask at a random moment within
+a minute (`WINDOW_SPREAD_MS`) on a screen that does not poll, since every open tab's
+window moves at once. An answer carries the edges it was asked at, and a pager
+moves all its pages to new edges in one step, so a day's count is always drawn
+under the day it counted. An edge is a `ClockEdge` (`lib/range.ts`), which a code
+question's parameters refuse by type, and a module that asks a code question
+formats no instant itself (`app/source.test.ts`).
+
 **Changes are listed outside Gitlet in Gitlet's own row.** My work's Reviews, a seat's
 Code section and a task's Changes tab each mount one fixed listing
 (`routes/gitlet/ChangeList.tsx`) drawn by `ChangeRows`, the row Gitlet › Changes draws,
