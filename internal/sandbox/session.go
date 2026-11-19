@@ -1371,7 +1371,7 @@ func (c *Coordinator) takeCapture(ctx context.Context, run PendingRun, box Sandb
 		return nil, refuse(calls, takeRefusal(ctx, err))
 	}
 	taken, err := taker.TakeSession(ctx, box, SessionTake{Pack: at.pack, Scrub: scrub,
-		MaxBytes: executorkeep.SessionMaxBytes})
+		MaxBytes: executorkeep.SessionMaxBytes, Scope: current.AgentID})
 	give()
 	if err != nil {
 		return nil, refuse(calls, takeRefusal(ctx, err))

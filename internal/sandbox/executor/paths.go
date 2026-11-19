@@ -384,10 +384,9 @@
 //
 // THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
 // holds 43 MiB at most, the chain at both bounds; a take, its meter beside it
-// under the same slot, 31 to 33 MiB over five runs
+// under the same slot, 32 to 34 MiB over five runs
 // (BenchmarkATakeAtItsLargeTier: as at its base, each piece of [threadLineMax]
-// bytes, 3.7 to 4.4 s on two cores, its heap peaking at 41 to 65 MiB at the
-// default GOGC, against the pass's 62 MiB). Shared with
+// bytes, 3.8 to 4.2 s on two cores). Shared with
 // [TranscriptReadsAtOnce]'s two, a collection's large pass waits behind two
 // transcript reads of up to about 22 s each and spends internal/sandbox's
 // MainThreadReadWait (27 s), so a person paging a transcript would decide how a
@@ -758,13 +757,8 @@
 // `oauth_provider`); an ID token's `id` is read only as a word of its own,
 // since `paid_tokens` spells it. The rule has ONE implementation,
 // [keyReading], handed a key's decoded text a piece at a time, cut anywhere,
-// a rune's bytes included; [credentialKey] is a keyReading handed the whole
-// key. Its state does not grow with the key, since a box's code can write a key
-// a gibibyte long: a rune's cut bytes, the key lowered while it is no longer
-// than the longest whole key, and windows over its last runes twice the most
-// a password's key spans and twice the longest name, each cut back to one
-// fewer than its span when it fills, so a key the window has not yet seen
-// whole is still in it.
+// its state never growing with the key; [credentialKey] is a keyReading handed
+// the whole key.
 //
 // # The scrub holds no value whole
 //
@@ -779,16 +773,12 @@
 // its stages' windows ([textScrub]); and a transcript's line is never held to
 // learn what it is ([measureLines]).
 //
-// A [valueStream] writes, put together, what strings.Replacer writes of the
-// whole text ([scrubber.apply]), however the text is cut: a place at a time
-// from the text's start, the longest value that begins at a place taken out
-// and the reading going on after it, else the place's byte kept, so a value
-// is taken out leftmost, and longest where values begin at the same place, as
-// the replacer takes the first of its pairs, which [newScrubber] orders
-// longest first. It HOLDS FEWER BYTES THAN THE LONGEST VALUE from one piece
-// to the next: a place is decided once the longest value's length of text
-// from it is read, or the text has ended, and a value taken out lies whole
-// within the bytes its place is decided on, so nothing else is carried.
+// A [valueStream] writes what strings.Replacer writes of the whole text
+// ([scrubber.apply]), however it is cut: a value taken out leftmost, and
+// longest first at one place, as [newScrubber] orders the replacer's pairs.
+// It HOLDS FEWER BYTES THAN THE LONGEST VALUE between pieces: a place is
+// decided once that many bytes past it are read, or the text has ended, and a
+// value taken out lies within them.
 //
 // TWO READINGS. What a line, or a `.json` file, is, JSON or text, is known only
 // at its end, and what a transcript's line loses of its loaded tool
@@ -798,45 +788,55 @@
 // keeps a PLAN; the second writes what the first counted. Every rewrite here
 // is a pure function of what it reads, so the second reading writes what the
 // first counted, and a member that comes out another length is a member that
-// changed between the two, which fails the take. A `.json` file's two ways
-// are read ON THE SCRUB'S OWN GOROUTINE ([measureFile]): the document's
-// rewrite reads through a reader that hands every byte to the text's scrub as
-// well ([teeRead]), as a transcript's line is read ([lineReader]), so every
-// byte is rewritten and redacted where the take's containment of a panic sees
-// it. A goroutine for each way, fed through pipes, would put the rewrite and
-// the redaction of every `.json` file a box wrote outside that containment, so
-// a panic there would end the engine, and a panic in the copy beside them
-// would leave both blocked on their pipes for good.
+// changed between the two, which fails the take. Both ways run on the scrub's
+// own goroutine, where the take contains a panic ([measureFile]).
 //
-// THE PLAN ([tarPlan]) is three streams of bits, each written by the first
+// THE PLAN ([tarPlan]) is four streams of bits, each written by the first
 // reading in the order it decides them and read back by the second in that
-// order, and nothing else, whatever the tar holds: for each member its kind,
-// and for a regular file its size as rewritten, whether it is kept as text,
-// and how many line bits its transcript took; for each line of two bytes or
-// more, whether it is kept as text (a shorter line is one byte or none, which
-// no pass changes, so both readings write it as text); and for each line that
-// loses a definition, how far it lies from the cut before it, which list it
-// loses them from, how many elements that list holds and a bit each, set for
-// one cut. So the plan is AT MOST A SIXTEENTH OF THE PLAINTEXT, a bit for
-// every two of its bytes, beside a block of each stream being filled: a
-// member's header is 512 bytes against a few dozen bits, a line with a bit is
-// two bytes or more, and a list's element, a byte and its comma, takes one bit,
-// its cut a few dozen more, which the record it is cut out of, some seventy
-// bytes, pays for. A list or a record of its own for each member, line or cut
-// would cost a block or some dozen bytes a line, and let a box's archive of a
-// mebibyte, a transcript of short lines each losing a definition, hold the
-// engine host to gibibytes between the two readings.
+// order, whatever the tar holds: for each member its kind, and for a regular
+// file its size as rewritten, whether it is kept as text, and how many line
+// bits its transcript took; for each line of two bytes or more, whether it is
+// kept as text (a shorter line no pass changes); for each line that loses a
+// definition, how far it lies from the cut before it, which list it loses them
+// from, how many elements that list holds and a bit each, set for one cut; and
+// each text the redaction left unchanged (below). So it is AT MOST A SIXTEENTH
+// OF THE PLAINTEXT, and the texts' digests a 2,048th: a member's header is 512
+// bytes against a few dozen bits, a line with a bit two bytes or more, a
+// list's element, a byte and its comma, one bit, and its cut a few dozen more,
+// which the record it is cut out of pays for. A record of its own for each
+// member, line or cut would let a box's archive of a mebibyte hold the engine
+// host to gibibytes between the two readings.
 //
-// AN EXPORT IS READ TWICE TOO, THE FIRST READING DRY ([scrubDocument]),
-// because a reading refuses a document only once it has read it: one that is
-// no one JSON value, one past the plaintext a reading reads, or text the
-// redaction could not redact. Read once, the bytes rewritten before the
-// refusal would reach the take's pipe, its uploader, its checksum and its
-// context meter before the pipe ended in the error, a published key among
-// them where the redaction is what refused. The second reading writes what the
-// first read; one that comes out another length, or that the scanner refuses
-// where the first read one value whole, is an export that changed between the
-// two, and one refused for another reason says that reason.
+// AN EXPORT IS READ TWICE TOO, THE FIRST READING DRY ([scrubDocument]): a
+// reading refuses a document only once it has read it, and read once, what it
+// rewrote before a refusal, a published key among it where the redaction
+// refused, would reach the take's pipe, uploader, checksum and meter. A second
+// reading that comes out another length, or that the scanner refuses, is an
+// export that changed between the two.
+//
+// A TEXT A TAKE FOUND UNCHANGED IS NOT REDACTED AGAIN. The redaction is the
+// scrub's cost, and every turn's take scrubs the whole session: a whole-PDF
+// read, its text redacted three times, cost 10 s a take. So the first
+// reading plans each text of [scrubPieceBaseBytes] or more (a line read as
+// text, a name or string, a file) it finds the redaction leaves unchanged, by
+// its place and the SHA-256 digest of each chunk of that length
+// ([firstPieces]); the second writes such a text a chunk at a time, each once
+// it matches its digest, and redacts every other ([secondPieces]). And the
+// process remembers what its own full scrubs found unchanged ([scrubMemo]): a
+// text's length and the digest of its digests, under its first chunk's digest
+// and the take's agent, never the text. A first reading writes a text whose
+// first chunk the memo knows as it is, and checks the whole at its end; one
+// the memo does not know whole reads the archive again without that chunk's
+// answer ([firstReadings]). Every digest is of the by-value pass's output under
+// the take's own values. SOUND because the redaction's answer for a text is
+// the text's alone (redact.Stream; its rules are the build's): each text has a
+// redaction of its own, a key's credential is judged on its raw name, and a
+// credential's value never reaches it. In memory alone: a restart, a deploy or
+// a seat's move to another node costs one take at most what it costs without.
+// On two cores of the build machine, three runs each
+// (BenchmarkASecondTakeOfAPDFSession), that read's take came to 7.4 to 7.7 s
+// with no memo, 5.7 to 5.9 s as a process's first and 0.81 to 0.84 s as its
+// second, from 10.0 to 10.2 s.
 //
 // # The scrub's bounds, and what it holds
 //
@@ -861,26 +861,27 @@
 // AT MOST [scrubHeldBytes] IS HELD, derived from the code's own figures: two
 // text scrubs at once (a line's or a `.json` file's two readings side by side,
 // each redacting one text), each its redaction's stages (redact.Stream's own
-// figure) beside a [valueStream] and a string's encoder; two JSON rewrites,
-// each its scanner, its read buffer and a frame a container open; the readers
-// and writers of the archive's gzip and tar; and the plan, a sixteenth of the
-// plaintext at most. About 115 MiB at the archive's bound, 16 MiB of it the
-// plan, which a real session leaves nearly empty. A test holds the figure at a
+// figure) beside its stage's chunk, a [valueStream] and a string's encoder;
+// two JSON rewrites, each its scanner, its read buffer and a frame a container
+// open; the readers and writers of the archive's gzip and tar; and the plan, a
+// sixteenth of the plaintext at most and a 512th for its texts' digests. About
+// 116 MiB at the archive's bound, 16.5 MiB of it the plan, which a real
+// session leaves nearly empty. A test holds the figure at a
 // smaller bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the
 // real one, 256 MiB of plaintext, both readings of the tar from a file on disk.
 // On two cores of the build machine, two runs:
 //
-//	one string to the bound:   39.6 to 39.8 s a scrub, held 32.6 MiB (256 MiB from 28 MiB)
-//	a million short lines:     40.6 to 41.2 s a scrub, held 1.6 MiB (160 MiB from 19 MiB)
-//	tiny definitions:          31.1 to 31.2 s a scrub, held 32.4 MiB (256 MiB from 0.5 MiB)
+//	one string to the bound:   29.1 to 29.2 s a scrub, held 33.2 MiB (256 MiB from 28 MiB)
+//	a million short lines:     40.8 to 41.4 s a scrub, held 1.6 MiB (160 MiB from 19 MiB)
+//	tiny definitions:          33.1 to 33.3 s a scrub, held 32.7 MiB (256 MiB from 0.5 MiB)
 //
 // Against SessionScrubWait, two minutes for the whole take's scrub with the
 // archive's two readings out of a box at its floor pace of a mebibyte a second
 // among it (64 s for an archive at its 32 MiB bound read twice, so 56 s left
 // for the scrub's own work where the two do not overlap), each arm fits, the
-// short lines the closest; the string redacts each byte three times, twice in
-// its first reading (as JSON and as text, side by side), holding two streams'
-// windows whole.
+// short lines the closest; the string redacts each byte twice, in its first
+// reading (as JSON and as text, side by side), holding two streams' windows
+// whole, and its second copies it as checked.
 //
 // # A definition the scrub renamed is cut out of its line
 //

@@ -284,6 +284,12 @@ type SessionTake struct {
 	// it what the scrub holds, which holds no piece whole: an archive the
 	// box's own code wrote cannot cost the engine host more than that.
 	MaxBytes int64
+
+	// Scope is whose sessions the take's scrub shares what it learned
+	// between: the run's agent (PendingRun.AgentID), which the engine
+	// writes, so a box timing its takes learns nothing of another agent's
+	// texts. "" shares with every other take that names none.
+	Scope string
 }
 
 // TakenSession is a session archive on its way out of its box: described, and

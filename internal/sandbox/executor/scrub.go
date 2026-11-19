@@ -90,6 +90,9 @@ type scrubBounds struct {
 	// [scrubPieceBaseBytes] ([scrubBounds.gatedBy]); its hold is nil
 	// where no slot gates the scrub's pieces.
 	gate pieceGate
+	// memo is the take's way into the process's memo
+	// ([scrubBounds.remembering]); nil looks nothing up.
+	memo *memoUse
 }
 
 // boundsFor is the scrub of an archive of at most archiveMax bytes.
@@ -102,6 +105,13 @@ func boundsFor(archiveMax int64) scrubBounds {
 // with its meter (the package doc's "A collection's read of a thread").
 func (b scrubBounds) gatedBy(ctx context.Context, large *passBudget) scrubBounds {
 	b.gate = large.gate(ctx)
+	return b
+}
+
+// remembering is b looking its texts up in use's memo, and keeping there what
+// it found unchanged.
+func (b scrubBounds) remembering(use *memoUse) scrubBounds {
+	b.memo = use
 	return b
 }
 
@@ -208,33 +218,83 @@ const (
 	// and writer and the buffers of the readers and writers above them.
 	archiveHeldBytes = 2 << 20
 	// planBlockBytes is the room of the [bitList] blocks being filled beyond
-	// their bits: each of the plan's three streams, the three lists a line's
+	// their bits: each of the plan's four streams, the three lists a line's
 	// cut reads at once, and the block a list's bits move into while the
 	// list's last one goes ([bitList.moveTo]) each round up to one.
-	planBlockBytes = 7 * bitBlockWords * 8
+	planBlockBytes = 8 * bitBlockWords * 8
+	// pieceHeldBytes is a reading's stage of one text ([firstPiece],
+	// [checkedPiece]): the chunk it holds, and under a KiB of SHA-256
+	// states and the memo's answers beside it.
+	pieceHeldBytes = scrubPieceBaseBytes + 1<<10
 )
 
 // scrubHeldBytes is the most the scrub of a reading of at most plain bytes
 // holds, longest the longest value it takes out ([scrubber]): two text scrubs
-// at once, each a redaction's stream, a [valueStream] (fewer bytes than the
-// longest value held, and twice that read beside them) and a string's encoder
-// (a rune's bytes and the most of a text the cut reads); two JSON rewrites;
-// the archive's readers and writers; and the plan, a bit for every two bytes
-// of plaintext at most ([tarPlan]), so a sixteenth of it.
+// at once, each a redaction's stream, its stage, a [valueStream] (fewer bytes
+// than the longest value held, and twice that read beside them) and a
+// string's encoder (a rune's bytes and the most of a text the cut reads); two
+// JSON rewrites; the archive's readers and writers; and the plan, a sixteenth
+// of the plaintext ([tarPlan]), with a 512th for the texts' digests: 32 bytes
+// a chunk, planned and pending on both ways of a line.
 //
 // TWO OF EACH, because the first reading reads a line, or a `.json` file,
 // both ways at once ([measureLines], [measureFile]); the second reads one.
 func scrubHeldBytes(plain int64, longest int) int64 {
-	text := int64(streamHeldBytes + 3*longest + utf8.UTFMax + providerToolNameMax + 1)
-	return 2*text + 2*rewriteHeldBytes + archiveHeldBytes + plain/16 + planBlockBytes
+	text := int64(streamHeldBytes + pieceHeldBytes + 3*longest + utf8.UTFMax + providerToolNameMax + 1)
+	return 2*text + 2*rewriteHeldBytes + archiveHeldBytes + plain/16 + plain/512 + planBlockBytes
 }
 
 // scrubber takes the engine's own values out of text: a whole text through
 // strings.Replacer ([scrubber.apply]), and a text that arrives in pieces
 // through a [valueStream] of the same values ([scrubber.stream]).
+//
+// Its first and second, one set at most, stage each text a reading of a take
+// scrubs before its shape pass ([scrubber.firstReading],
+// [scrubber.secondReading]); neither, the shape pass alone.
 type scrubber struct {
 	r      *strings.Replacer
 	values *valueTable
+	first  *firstWay
+	second *secondPieces
+}
+
+// firstReading is s staging its texts for plan's first reading through
+// pieces, on its text way first ([scrubber.way]).
+func (s scrubber) firstReading(pieces *firstPieces, plan *tarPlan) scrubber {
+	s.first, s.second = &pieces.begin(plan).ways[textWay], nil
+	return s
+}
+
+// secondReading is s staging its texts for plan's second reading, counting
+// them on counts where it is set.
+func (s scrubber) secondReading(plan *tarPlan, counts *pieceCounts) scrubber {
+	s.first, s.second = nil, &secondPieces{plan: plan, counts: counts}
+	return s
+}
+
+// way is s on way of its first reading, and s itself in any other.
+func (s scrubber) way(way int) scrubber {
+	if s.first != nil {
+		s.first = &s.first.r.ways[way]
+	}
+	return s
+}
+
+// unitBegins begins the reading's next unit: a regular member, or a line.
+func (s scrubber) unitBegins() {
+	switch {
+	case s.first != nil:
+		s.first.r.nextUnit()
+	case s.second != nil:
+		s.second.nextUnit()
+	}
+}
+
+// keepWay plans what way of the first reading found unchanged in the unit.
+func (s scrubber) keepWay(way int) {
+	if s.first != nil {
+		s.first.r.keep(way)
+	}
 }
 
 // newScrubber is the scrubber for values: each line of each value at least
@@ -491,9 +551,10 @@ var keyReadingReach = func() (r struct{ whole, name, password int }) {
 //
 // ITS STATE DOES NOT GROW WITH THE KEY, since a box's code can write a key a
 // gibibyte long: a rune's cut bytes, the key lowered while it is short, and two
-// windows over its last runes, each cut back to one fewer than its span when it
-// fills (the package doc's "A kept session leaves its box scrubbed"). A byte
-// that begins no rune is U+FFFD wherever the key is cut ([utf8.FullRune]).
+// windows over its last runes, twice the most a password's key spans and twice
+// the longest name, each cut back to one fewer than its span when it fills, so
+// a key not yet seen whole is still in it. A byte that begins no rune is U+FFFD
+// wherever the key is cut ([utf8.FullRune]).
 type keyReading struct {
 	// cut is the bytes of a rune the last piece ended inside.
 	cut  [utf8.UTFMax - 1]byte
@@ -751,8 +812,17 @@ func scrubArchive(layout archiveLayout, first io.Reader, reopen func() (io.ReadC
 func scrubDocument(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writer, s scrubber,
 	b scrubBounds) error {
 
-	dry := &counted{}
-	if err := rewriteExport(first, dry, s, b); err != nil {
+	var dry *counted
+	plan, err := firstReadings(first, reopen, s, b, func(src io.Reader, s scrubber, plan *tarPlan) error {
+		dry = &counted{}
+		if err := rewriteExport(src, dry, s.way(jsonWay), b); err != nil {
+			return err
+		}
+		s.keepWay(jsonWay)
+		return plan.holdPast()
+	})
+	defer plan.letGo()
+	if err != nil {
 		return fmt.Errorf("executor: scrubbing the session's export: %w", err)
 	}
 	again, err := reopen()
@@ -761,10 +831,10 @@ func scrubDocument(first io.Reader, reopen func() (io.ReadCloser, error), dst io
 	}
 	zw := gzip.NewWriter(dst)
 	written := &counted{w: zw}
-	err = rewriteExport(again, written, s, b)
+	err = rewriteExport(again, written, s.secondReading(plan, b.memo.counts()), b)
 	var fault *jsonscan.Error
 	switch {
-	case errors.As(err, &fault) || err == nil && written.n != dry.n:
+	case errors.As(err, &fault) || errors.Is(err, errLinesChanged) || err == nil && written.n != dry.n:
 		return errors.New("executor: the session's export changed while it was read")
 	case err != nil:
 		return fmt.Errorf("executor: scrubbing the session's export: %w", err)
@@ -794,23 +864,25 @@ func rewriteExport(src io.Reader, dst io.Writer, s scrubber, b scrubBounds) erro
 func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writer, s scrubber,
 	b scrubBounds) error {
 
-	plan := &tarPlan{gate: b.gate}
-	defer plan.letGo()
-	err := eachMember(first, b, func(h *tar.Header, body io.Reader) error {
-		plan.members.putByte(h.Typeflag)
-		if h.Typeflag != tar.TypeReg {
+	plan, err := firstReadings(first, reopen, s, b, func(src io.Reader, s scrubber, plan *tarPlan) error {
+		return eachMember(src, b, func(h *tar.Header, body io.Reader) error {
+			plan.members.putByte(h.Typeflag)
+			if h.Typeflag != tar.TypeReg {
+				return plan.holdPast()
+			}
+			s.unitBegins()
+			from := plan.lines.count()
+			size, text, err := measureFile(h.Name, body, s, plan)
+			if err != nil {
+				return err
+			}
+			plan.members.putNumber(uint64(size))
+			plan.members.put(text)
+			plan.members.putNumber(uint64(plan.lines.count() - from))
 			return plan.holdPast()
-		}
-		from := plan.lines.count()
-		size, text, err := measureFile(h.Name, body, s, plan)
-		if err != nil {
-			return err
-		}
-		plan.members.putNumber(uint64(size))
-		plan.members.put(text)
-		plan.members.putNumber(uint64(plan.lines.count() - from))
-		return plan.holdPast()
+		})
 	})
+	defer plan.letGo()
 	if err != nil {
 		return err
 	}
@@ -820,6 +892,7 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 	}
 	zw := gzip.NewWriter(dst)
 	tw := tar.NewWriter(zw)
+	s = s.secondReading(plan, b.memo.counts())
 	err = eachMember(again, b, func(h *tar.Header, body io.Reader) error {
 		kind, ok := plan.members.takeByte()
 		if !ok {
@@ -848,6 +921,7 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 			return headerErr
 		}
 		w := &counted{w: tw}
+		s.unitBegins()
 		from := plan.lines.read
 		end := from + int(lines)
 		if memberErr := rewriteMember(h.Name, text, plan, end, w, body, s); memberErr != nil {
@@ -878,6 +952,34 @@ func scrubTar(first io.Reader, reopen func() (io.ReadCloser, error), dst io.Writ
 func errMemberChanged(name string) error {
 	return fmt.Errorf("executor: the session's archive changed its member %s while it was read",
 		memberNamed(name))
+}
+
+// firstReadings runs read, a first reading of an archive, on first, planning
+// on a plan it answers, which holds the large slot until its letGo: again,
+// reopened, where the memo's answer for a text diverged ([errMemoDiverged]):
+// once with that text's first chunk looked up no more, so the take's other
+// texts keep their answers, and again with no lookups where that diverged
+// too, so at most three readings.
+func firstReadings(first io.Reader, reopen func() (io.ReadCloser, error), s scrubber, b scrubBounds,
+	read func(io.Reader, scrubber, *tarPlan) error) (*tarPlan, error) {
+
+	pieces := newFirstPieces(b.memo)
+	for src, again := first, 0; ; again++ {
+		if again == 2 {
+			pieces.lookups = false
+		}
+		plan := &tarPlan{gate: b.gate}
+		err := read(src, s.firstReading(pieces, plan), plan)
+		if !errors.Is(err, errMemoDiverged) {
+			return plan, err
+		}
+		plan.letGo()
+		next, openErr := reopen()
+		if openErr != nil {
+			return &tarPlan{}, fmt.Errorf("executor: opening the session's archive again to read it: %w", openErr)
+		}
+		src = next
+	}
 }
 
 // memberNamed is an archive member's name as a failure quotes it: its first
@@ -977,7 +1079,9 @@ func measureFile(name string, body io.Reader, s scrubber, plan *tarPlan) (size i
 	case ".json":
 	default:
 		n := &counted{}
-		err = rewriteText(n, body, s, plan.gate)
+		if err = rewriteText(n, body, s, plan.gate); err == nil {
+			s.keepWay(textWay)
+		}
 		return n.n, false, err
 	}
 	// ONE PIECE, THE WHOLE FILE: its text is redacted as one, so the
@@ -985,10 +1089,10 @@ func measureFile(name string, body io.Reader, s scrubber, plan *tarPlan) (size i
 	body, done := plan.gate.pieces(body, false)
 	defer done()
 	asText := &counted{}
-	textual := s.text(asText)
+	textual := s.way(textWay).text(asText)
 	tee := &teeRead{r: body, w: textual}
 	asDocument := &counted{}
-	documentErr := rewriteDocument(asDocument, tee, s, pieceGate{})
+	documentErr := rewriteDocument(asDocument, tee, s.way(jsonWay), pieceGate{})
 	// THE REST IS THE TEXT'S ALONE: a document the rewrite stopped reading
 	// is read on to its end, for its text.
 	if _, err = io.Copy(io.Discard, tee); err == nil {
@@ -1005,13 +1109,18 @@ func measureFile(name string, body io.Reader, s scrubber, plan *tarPlan) (size i
 	// more than one value, nested past the scanner's depth, or holding text
 	// its redaction could not redact; kept as text only where its text's own
 	// redaction did not fail. The archive's own failure is neither's, and
-	// refuses the session above.
+	// refuses the session above; so is a memo's answer that diverged, read
+	// again rather than kept as text, which loses a credential key's value.
 	switch {
+	case errors.Is(documentErr, errMemoDiverged):
+		return 0, false, documentErr
 	case documentErr == nil:
+		s.keepWay(jsonWay)
 		return asDocument.n, false, nil
 	case textErr != nil:
 		return 0, false, textErr
 	}
+	s.keepWay(textWay)
 	return asText.n, true, nil
 }
 
@@ -1063,20 +1172,23 @@ func rewriteFile(name string, plan *tarPlan, end int, dst io.Writer, src io.Read
 	return rewriteText(dst, src, s, plan.gate)
 }
 
-// tarPlan is how the first reading of a tar decided to write it, which the
-// second reads back as it writes: three streams of bits ([planBits]), each
-// written by the first reading in the order it decides them and read by the
-// second in that same order, and nothing else, whatever the tar holds:
-// members (each one's kind, and a file's size as rewritten, whether it is kept
-// as text and how many line bits it took), lines (for each of two bytes or
-// more, whether it is kept as text) and cuts (for each line that loses a loaded
-// tool definition, where it lies, which list and which elements).
+// tarPlan is how the first reading of a tar, or of an export, decided to
+// write it, which the second reads back as it writes: four streams of bits
+// ([planBits]), each written by the first reading in the order it decides
+// them and read by the second in that order: members (each one's kind, and a
+// file's size as rewritten, whether it is kept as text and how many line bits
+// it took), lines (for each of two bytes or more, whether it is kept as text),
+// cuts (for each line that loses a loaded tool definition, where it lies,
+// which list and which elements) and verbatim (each text the redaction left
+// unchanged, [secondPieces]).
 //
-// SO IT IS AT MOST A SIXTEENTH OF THE PLAINTEXT, where a record for each
-// member, line or cut would let a box's small archive hold the host to
-// gibibytes (the package doc's "The scrub holds no value whole").
+// SO IT IS AT MOST A SIXTEENTH OF THE PLAINTEXT, and the texts' digests a
+// 2,048th (the package doc's "The scrub holds no value whole").
 type tarPlan struct {
-	members, lines, cuts planBits
+	members, lines, cuts, verbatim planBits
+	// verbatimUnit is the unit of the last text verbatim plans, which the
+	// next one's counts from.
+	verbatimUnit int64
 	// planned is the line after the last one the first reading cut, as
 	// lines' bits count them, where the next cut's distance counts from;
 	// reached is the same for the second reading.
@@ -1098,7 +1210,7 @@ type tarPlan struct {
 // ACROSS PIECES, which only a box's archive of millions of short lines or
 // members brings there.
 func (p *tarPlan) holdPast() error {
-	bits := p.members.count() + p.lines.count() + p.cuts.count()
+	bits := p.members.count() + p.lines.count() + p.cuts.count() + p.verbatim.count()
 	if p.held || p.gate.hold == nil || bits/8 <= scrubPieceBaseBytes {
 		return nil
 	}
@@ -1107,6 +1219,20 @@ func (p *tarPlan) holdPast() error {
 	}
 	p.held = true
 	return nil
+}
+
+// addVerbatim plans v: how many units past the last one planned it lies, its
+// offset, how many chunks past its first it has, and each one's digest.
+func (p *tarPlan) addVerbatim(v verbatimText) {
+	p.verbatim.putNumber(uint64(v.at.unit - p.verbatimUnit))
+	p.verbatimUnit = v.at.unit
+	p.verbatim.putNumber(uint64(v.at.offset))
+	p.verbatim.putNumber(uint64(len(v.digests) - 1))
+	for _, d := range v.digests {
+		for _, c := range d {
+			p.verbatim.putByte(c)
+		}
+	}
 }
 
 // letGo drops the slot the plan holds, once the take is done with it.
@@ -1287,13 +1413,14 @@ func (l *lineReader) rest() error {
 func measureLines(src io.Reader, s scrubber, plan *tarPlan) (int64, error) {
 	src, done := plan.gate.pieces(src, true)
 	defer done()
-	l := newLineReader(src, s)
+	l := newLineReader(src, s.way(jsonWay))
 	defs := &definitionsReading{}
 	var asJSON rewriteOut
 	var size int64
 	for {
+		s.unitBegins()
 		asText := &counted{}
-		text := s.text(asText)
+		text := s.way(textWay).text(asText)
 		short, more, err := l.next(text)
 		if err != nil || !more {
 			return size, err
@@ -1317,7 +1444,9 @@ func measureLines(src io.Reader, s scrubber, plan *tarPlan) (int64, error) {
 		case keptAsText:
 			plan.lines.put(true)
 			size += asText.n
+			s.keepWay(textWay)
 		default:
+			s.keepWay(jsonWay)
 			index := plan.lines.count()
 			plan.lines.put(false)
 			n := asJSON.n
@@ -1368,6 +1497,7 @@ func writeLines(dst io.Writer, src io.Reader, s scrubber, plan *tarPlan, end int
 	w := bufio.NewWriterSize(dst, 64<<10)
 	var out rewriteOut
 	for {
+		s.unitBegins()
 		short, more, err := l.next(nil)
 		if err != nil {
 			return err

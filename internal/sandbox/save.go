@@ -544,7 +544,7 @@ func (c *Coordinator) takeSave(ctx context.Context, job saveJob, point string, i
 		return end(saveFailed, err.Error())
 	}
 	taken, err := in.saver.TakeSession(take, in.box, SessionTake{Save: in.archive.Path, Scrub: scrub,
-		MaxBytes: executorkeep.SessionMaxBytes})
+		MaxBytes: executorkeep.SessionMaxBytes, Scope: row.AgentID})
 	switch {
 	case err != nil:
 		out.unplaced = "take"

@@ -583,8 +583,8 @@ func TestACapturesPlaceOnlyGrowsOnTheRow(t *testing.T) {
 // after the take is [TestACollectionsKeepStartsOnceItsTakeIsSpooled]'s.
 //
 // Mutation: take after the pause (the fake reads no paused box), pack on
-// demand for a job that packed its own, drop the handed secrets from the
-// scrub, stamp before the record lands, leave its fields off
+// demand for a job that packed its own, drop the handed secrets or the agent's
+// scope from the scrub, stamp before the record lands, leave its fields off
 // `executor_collected`, or leave the spool behind, and a check goes red.
 func TestACollectionTakesTheSessionBeforeThePauseAndKeepsItOffTheRead(t *testing.T) {
 	t.Parallel()
@@ -603,6 +603,9 @@ func TestACollectionTakesTheSessionBeforeThePauseAndKeepsItOffTheRead(t *testing
 		if !slices.Contains(takes[0].Scrub, handedToken) || takes[0].MaxBytes != executorkeep.SessionMaxBytes {
 			t.Errorf("the take scrubs %v within %d bytes, want what the launch handed the box within the "+
 				"session's bound", takes[0].Scrub, takes[0].MaxBytes)
+		}
+		if agent := rig.get("t1").AgentID; agent == "" || takes[0].Scope != agent {
+			t.Errorf("the take's scrub is scoped %q, want the run's agent %q", takes[0].Scope, agent)
 		}
 		if !rig.provider.Box(rig.get("t1").SandboxID).Paused() {
 			t.Error("the collection did not pause the box after taking its session")
