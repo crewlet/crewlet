@@ -174,6 +174,12 @@ type TaskDetail struct {
 	Comments []Comment      `json:"comments,omitempty"`
 	History  []HistoryEntry `json:"history,omitempty"`
 
+	// FlowHistory is the item's recorded flow (ADR-0162), NEWEST FIRST and
+	// capped as History is, read with it: each change of its flow state and
+	// each notice of one. Working time is the turns' own record
+	// (`work_item_turns`), and a view merges the three by log position.
+	FlowHistory []FlowEntry `json:"flow_history,omitempty"`
+
 	// Keys names the tasks this answer's HISTORY points at, id to item key:
 	// the map [ActivityAnswer.Keys] carries, resolved by the same walk so
 	// the two reads name one delta alike. A delta names a relation's other
@@ -471,6 +477,9 @@ func (r *Reader) Task(ctx context.Context, idOrKey string, want DetailWants,
 				limit = DetailHistoryDefault
 			}
 			if out.History, err = readHistory(ctx, tx, id, limit); err != nil {
+				return err
+			}
+			if out.FlowHistory, err = readFlowHistory(ctx, tx, id, limit); err != nil {
 				return err
 			}
 			// In the same transaction as the rows it labels, so no
@@ -941,6 +950,59 @@ func readHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]H
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// FlowEntry is one recorded change of an item's flow, or one notice of it: the
+// record as written, with the instant the broker recorded it and its log
+// position, which orders it among the item's history.
+type FlowEntry struct {
+	FlowRecord
+
+	At     time.Time `json:"at"`
+	LogSeq uint64    `json:"log_seq"`
+}
+
+// taskFlowStatement is [readFlowHistory]'s one statement, through
+// tracker_flow_task_idx.
+const taskFlowStatement = `
+		SELECT id, task_id, state, cause, since, until, seat, notice, told, backfilled,
+		       recorded_at, log_seq
+		FROM tracker_flow
+		WHERE task_id = ?
+		ORDER BY log_seq DESC
+		LIMIT ?`
+
+// readFlowHistory is an item's recorded flow, NEWEST FIRST and capped.
+func readFlowHistory(ctx context.Context, tx *sql.Tx, taskID string, limit int) ([]FlowEntry, error) {
+	rows, err := tx.QueryContext(ctx, taskFlowStatement, taskID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("worklet: read the flow of %s: %w", taskID, err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := make([]FlowEntry, 0)
+	for rows.Next() {
+		var e FlowEntry
+		var since, until sql.NullInt64
+		var backfilled int
+		var at, seq int64
+		if err := rows.Scan(&e.ID, &e.Task, &e.State, &e.Cause, &since, &until, &e.Seat,
+			&e.Notice, &e.Told, &backfilled, &at, &seq); err != nil {
+			return nil, err
+		}
+		e.Since, e.Until = nullInstantOf(since), nullInstantOf(until)
+		e.Backfilled = backfilled == 1
+		e.At, e.LogSeq = store.DecodeTime(at), uint64(seq)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// nullInstantOf reads an optional instant column.
+func nullInstantOf(v sql.NullInt64) *time.Time {
+	if !v.Valid {
+		return nil
+	}
+	return decodedInstant(&v.Int64)
 }
 
 // linksStatement is one half of [readLinks], named for the plan test: the

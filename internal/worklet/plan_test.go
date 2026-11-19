@@ -976,6 +976,12 @@ func taskCensuses() map[string]plannedRead {
 	out["every open wait"] = plannedRead{statement, append(args, MaxOpenRows+1)}
 	statement, args = openQuestionsStatement()
 	out["every open question on open work"] = plannedRead{statement, append(args, MaxOpenRows+1)}
+	// AND THE FLOW DUTY'S PAGE of the items in progress, through the partial
+	// index over them, each item's flow and its recorded flow read inside it
+	// (ADR-0162).
+	statement, args = flowPageStatement(planFlow)
+	out["the flow duty's page of the items in progress"] = plannedRead{statement,
+		append(args, "", flowDutyPage)}
 	// AND THE SEARCH PACKAGE'S: the lexical index's count of the live
 	// tasks, and the window report's read of every live task's text.
 	statement, args = search.TaskCountRead()
@@ -1268,9 +1274,9 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 			task, kind, at(9_000)),
 		"a hand-off count written": seek(historyKey, writeHandOffStatement, 1, record),
 		"a purge reads whose inbox it empties": seek(subject, forgottenNoticesStatement,
-			purged, kind, record),
+			purged, kind, record, purged),
 		"a purge empties those inboxes": seek(subject, forgetNoticesStatement,
-			purged, kind, record),
+			purged, kind, record, purged),
 		"a purge reads what the census keeps": seek(subject, censusRowsStatement,
 			purged, kind, record),
 		"a purge deletes what the census does not walk": seek(subject, forgetHistoryStatement,

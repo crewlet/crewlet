@@ -368,6 +368,8 @@ func everyRoutingField(kind worklet.ChangeKind) *worklet.Notify {
 			RemovedWatchers:    []string{"unwatched"},
 			ProjectLead:        "project-lead",
 			RoutingUnitLead:    "unit-lead",
+			Flow: &worklet.FlowNotice{ID: "f", Told: "flow-told",
+				Role: worklet.FlowToldLead, State: worklet.FlowStuck},
 		},
 	}
 }
@@ -465,6 +467,13 @@ func reasonAlone(reason worklet.Reason) *worklet.Notify {
 	case worklet.ReasonLeadFallback:
 		n := base(worklet.ChangeCreated)
 		n.Snapshot.ProjectLead = "lf"
+		return n
+	case worklet.ReasonFlow:
+		// THE FLOW DUTY'S OWN SHAPE ([worklet.Writer.RecordFlow]): one person
+		// told, whom no other arm names.
+		n := base(worklet.ChangeFlow)
+		n.Snapshot.Flow = &worklet.FlowNotice{ID: "fl", Told: "fl",
+			Role: worklet.FlowToldLead, State: worklet.FlowDue}
 		return n
 	}
 	return nil

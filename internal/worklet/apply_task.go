@@ -1213,20 +1213,25 @@ func purgeDeletes(id string) []purgeStatement {
 }
 
 // The statements a purge runs over the task's history, named for the plan
-// test: the notices its rows routed, which [forgottenNotices] reads first by
-// the same predicate, both finding the rows by the subject; and the skeleton
-// each row the census walks keeps, written to that row by its own id.
+// test: the notices its rows and its flow notices routed, which
+// [forgottenNotices] reads first by the same predicate, both finding the rows
+// by the subject and the item; and the skeleton each row the census walks
+// keeps, written to that row by its own id.
 const (
 	forgottenNoticesStatement = `
 		SELECT record_id, recipient, reason FROM tracker_notifications
 		WHERE record_id IN (
 			SELECT id FROM tracker_history
-			WHERE subject_id = ? AND subject_kind = ? AND id <> ?)
+			WHERE subject_id = ? AND subject_kind = ? AND id <> ?
+			UNION ALL
+			SELECT id FROM tracker_flow WHERE task_id = ? AND notice <> '')
 		ORDER BY record_id, recipient`
 	forgetNoticesStatement = `
 		DELETE FROM tracker_notifications WHERE record_id IN (
 			SELECT id FROM tracker_history
-			WHERE subject_id = ? AND subject_kind = ? AND id <> ?)`
+			WHERE subject_id = ? AND subject_kind = ? AND id <> ?
+			UNION ALL
+			SELECT id FROM tracker_flow WHERE task_id = ? AND notice <> '')`
 	forgetSkeletonStatement = `
 		UPDATE tracker_history
 		SET excerpt = '', comment_id = '', document = ?, fields_json = ?
@@ -1251,7 +1256,8 @@ var (
 )
 
 // forgetRecords destroys the content a purged task's own records wrote: its
-// inbox notices and turn records go, and of its history only a SKELETON stays.
+// inbox notices, turn records and flow go, and of its history only a SKELETON
+// stays.
 // The purge's own row (keep) and its notices stay whole: the lead's `purged`
 // wake reads them.
 //
@@ -1292,7 +1298,7 @@ func (a *Applier) forgetRecords(ctx context.Context, tx *sql.Tx, c applyContext,
 			Removed: true,
 		})
 	}
-	if err = exec(forgetNoticesStatement, id, kind, keep); err != nil {
+	if err = exec(forgetNoticesStatement, id, kind, keep, id); err != nil {
 		return 0, err
 	}
 	skeleton, err := censusRows(ctx, tx, id, keep)
@@ -1310,6 +1316,9 @@ func (a *Applier) forgetRecords(ctx context.Context, tx *sql.Tx, c applyContext,
 	if err := exec(`DELETE FROM tracker_turns WHERE task_id = ?`, id); err != nil {
 		return 0, err
 	}
+	if err := exec(`DELETE FROM tracker_flow WHERE task_id = ?`, id); err != nil {
+		return 0, err
+	}
 	return written, nil
 }
 
@@ -1323,7 +1332,7 @@ type forgottenNotice struct {
 // forgottenNotices reads the notices [Applier.forgetRecords] deletes, by the
 // same predicate it deletes them with, ordered so every node notes them alike.
 func forgottenNotices(ctx context.Context, tx *sql.Tx, id, keep string) ([]forgottenNotice, error) {
-	rows, err := tx.QueryContext(ctx, forgottenNoticesStatement, id, string(KindTask), keep)
+	rows, err := tx.QueryContext(ctx, forgottenNoticesStatement, id, string(KindTask), keep, id)
 	if err != nil {
 		return nil, fmt.Errorf("worklet: read whose inbox a purge of %s empties: %w", id, err)
 	}

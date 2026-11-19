@@ -15,8 +15,8 @@ import (
 // publishes and is delivered, but wakes nobody and writes nothing.
 func TestTheKindsAreAClosedEnumeratedSet(t *testing.T) {
 	t.Parallel()
-	if len(worklet.ObjectKinds) != 16 {
-		t.Fatalf("%d kinds are enumerated; the log carries sixteen",
+	if len(worklet.ObjectKinds) != 17 {
+		t.Fatalf("%d kinds are enumerated; the log carries seventeen",
 			len(worklet.ObjectKinds))
 	}
 	seen := map[worklet.ObjectKind]bool{}
@@ -34,14 +34,15 @@ func TestTheKindsAreAClosedEnumeratedSet(t *testing.T) {
 	}
 }
 
-// THREE KINDS ARE NOT ARBITRATED, AND THEY ARE THE THREE THAT MUST NOT BE.
+// FOUR KINDS ARE NOT ARBITRATED, AND THEY ARE THE FOUR THAT MUST NOT BE.
 //
-// A turn is additive spend and races nobody. The barrier is ONE company-wide
+// A turn is additive spend and races nobody; a flow record is one duty's,
+// landed once by its derived key (ADR-0162). The barrier is ONE company-wide
 // subject, so an expectation would serialise every linearizable read and write
 // an anchor row per read under this store's only writer. The trimmed record
 // removes anchors, identical ones each meant to land, and an anchor of its own
 // is the row it exists not to leave (ADR-0080).
-func TestOnlyTheTurnTheBarrierAndTheTrimmedRecordAreUnarbitrated(t *testing.T) {
+func TestOnlyTheTurnTheFlowTheBarrierAndTheTrimmedRecordAreUnarbitrated(t *testing.T) {
 	t.Parallel()
 	var unarbitrated []worklet.ObjectKind
 	for _, k := range worklet.ObjectKinds {
@@ -49,12 +50,13 @@ func TestOnlyTheTurnTheBarrierAndTheTrimmedRecordAreUnarbitrated(t *testing.T) {
 			unarbitrated = append(unarbitrated, k)
 		}
 	}
-	if len(unarbitrated) != 3 ||
+	if len(unarbitrated) != 4 ||
 		!contains(unarbitrated, worklet.KindTurn) ||
+		!contains(unarbitrated, worklet.KindFlow) ||
 		!contains(unarbitrated, worklet.KindBarrier) ||
 		!contains(unarbitrated, worklet.KindTrimmed) {
 		t.Fatalf("the unarbitrated kinds are %v, want exactly the turn, the "+
-			"barrier and the trimmed record", unarbitrated)
+			"flow, the barrier and the trimmed record", unarbitrated)
 	}
 }
 

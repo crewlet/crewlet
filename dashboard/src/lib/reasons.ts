@@ -1,7 +1,7 @@
 /**
- * The eighteen wake reasons, as English, written once.
+ * The nineteen wake reasons, as English, written once.
  *
- * The applier records, per change and per recipient, the ONE reason of eighteen
+ * The applier records, per change and per recipient, the ONE reason of nineteen
  * under which that person heard about it (`internal/worklet/recipients.go`),
  * in the precedence order that decided it. Nothing has ever drawn it, and it
  * is the fact no commercial tracker records: Linear, Jira and ClickUp can all
