@@ -12,13 +12,14 @@ import (
 // or bytes, as a [Stream]'s stage reads its window in place ([feed.window]),
 // one generic body serving both. Bytes rather than an unsafe.String view of
 // the same buffers: measured interleaved on two shared cores, this streams 3.2
-// to 6.4 percent slower than the view and makes Secrets 5.4 percent slower than
-// before, where either streams 24 to 51 percent faster than before; but a view
-// kept past a slide of its buffer redacts or publishes the wrong bytes, and no
-// test caught that (a mutant dropping a Clone survived its poison test). The
-// helpers below are the strings package's, for either, each dispatching on the
-// type once: the box it switches on stays on the stack, and a literal compared
-// or looked for is never converted to bytes.
+// to 6.4 percent slower than the view, where either streams 24 to 51 percent
+// faster than before, and Secrets runs as fast as before (BenchmarkSecrets, 187
+// to 192 MB/s against 185); but a view kept past a slide of its buffer redacts
+// or publishes the wrong bytes, and no test caught that (a mutant dropping a
+// Clone survived its poison test). The helpers below are the strings
+// package's, for either, each dispatching on the type once: the box it
+// switches on stays on the stack, as does each literal [tIndex] converts to
+// bytes, none longer than the 32 bytes the compiler converts there.
 type textual interface{ string | []byte }
 
 func tIndex[T textual](s T, sep string) int {
