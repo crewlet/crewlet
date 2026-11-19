@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
@@ -24,8 +25,8 @@ func referenceSources(t *testing.T) (*queries.Registry, *[]string) {
 	var asked []string
 	answer := func(what string, body func(p queries.Params) (any, error)) queries.Answer {
 		return func(ctx context.Context, p queries.Params) (any, error) {
-			who, _ := iam.From(ctx)
-			asked = append(asked, fmt.Sprintf("%s %v as %s", what, p.Values(), who.Seat))
+			who, how := iam.From(ctx)
+			asked = append(asked, fmt.Sprintf("%s %v as %s %s", what, p.Values(), how, who.Seat))
 			return body(p)
 		}
 	}
@@ -97,11 +98,11 @@ func TestAPagesReferencesAreResolvedAsTheCallerInOneAsk(t *testing.T) {
 	}
 	schedules := 0
 	for _, a := range *asked {
-		if a == "schedules map[] as ana" {
+		if a == "schedules map[] as resolved ana" {
 			schedules++
 		}
-		if a[len(a)-len(" as ana"):] != " as ana" {
-			t.Errorf("%q was not asked as the caller", a)
+		if !strings.HasSuffix(a, " as resolved ana") {
+			t.Errorf("%q was not asked as the resolved caller", a)
 		}
 	}
 	if schedules != 1 {
