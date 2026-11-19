@@ -6590,7 +6590,8 @@ it is.
 
 `/static/dashboard/THIRD_PARTY_NOTICES.txt` (served as `text/plain`) is the
 license text of every npm package the bundle contains, the design system's
-three among them, written by Vite's `build.license`, followed by the SIL Open
+four among them, written by Vite's `build.license`, then the NOTICE file any of
+them ships (the design system's Apache-2.0 packages do), followed by the SIL Open
 Font License of the embedded Geist and Geist Mono faces and the ISC License of
 the Lucide drawings every glyph is one of (with Feather's MIT text for the
 glyphs Lucide derives from it). The release archives and the container image

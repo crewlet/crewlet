@@ -30,7 +30,8 @@
  * # Every item has its own address
  *
  * `#/inbox/<kind>/<id>` (`inboxItemPath`), and every row links to it. Opening one pushes, so Back
- * steps between items; the screen's own moves replace. A notice no loaded page holds is read by
+ * steps between items; the screen's own moves replace, the row `#/inbox` opens beside the list
+ * among them. A notice no loaded page holds is read by
  * its id (`inbox{record}`), and an address nobody holds says so rather than opening another.
  *
  * # Whatever runs the tracker
@@ -448,6 +449,12 @@ export function Inbox() {
   useEffect(() => {
     if (selected) held.current = selected;
   }, [selected]);
+  // THE ROW OPENED FOR THE READER TAKES ITS ADDRESS in place of `#/inbox`, once every read has
+  // answered, so it has a link and Back still leaves the inbox in one step.
+  const chosen = !open && legacy === null && everyRead ? (selected?.key ?? "") : "";
+  useEffect(() => {
+    if (chosen) nav.replace(inboxItemPath(chosen));
+  }, [chosen, nav]);
   // THE OPEN ROW IS IN VIEW in the list, however it opened: a link, Back, or `j` and `k`.
   useEffect(() => {
     document
