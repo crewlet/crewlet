@@ -812,20 +812,20 @@ func statedSize(recorded, whole int) int {
 // statedSizeGrain is what the size of a text a read redacted only the opening
 // of is rounded up to ([statedSize]).
 //
-// A KIBIBYTE: such a text runs past the entry's bound plus twice the longest
-// credential (a private key's block, up to 64 KiB), so a reader's "first 8 KiB
-// of 2.1 MiB" moves under one percent, and a redacted value moves the size
-// only where it carries the text across a kibibyte, never by its own length.
+// A KIBIBYTE: such a text runs past the entry's bound plus twice the
+// redaction's look-back ([redactContext]), so a reader's "first 8 KiB of 2.1
+// MiB" moves under one percent, and a redacted value moves the size only where
+// it carries the text across a kibibyte, never by its own length.
 const statedSizeGrain = 1 << 10
 
 // redactedWithin is text redacted and then cut to at most bound bytes, whether
 // it was cut, and the size of the whole text's redaction where the read made
 // it, else -1: always an OPENING OF WHAT THE WHOLE TEXT REDACTS TO.
 //
-// A credential beginning inside the bound ends within [redactContext] past it
-// (a private key's block is the longest), so only that head is redacted, inside
-// a window [redactContext] longer still, where any credential begun in the head
-// ends: the window's redaction of the head is the whole text's. The rest, up to
+// What decides the text inside the bound lies within [redactContext] past it
+// (a read crossing a line break reaches no further ahead than back), so only
+// that head is redacted, inside a window [redactContext] longer still: the
+// window's redaction of the head is the whole text's. The rest, up to
 // [maxLineBytes], is never scanned. ONLY WHAT THE HEAD REDACTS TO IS HANDED
 // OUT, never the window's end, where a credential may be cut and so missed: as
 // much of the window's redaction as the head's own agrees with, so a credential
@@ -834,7 +834,7 @@ func redactedWithin(text string, bound int) (string, bool, int) {
 	head := textcut.Bytes(text, bound+redactContext)
 	// AT LEAST redactContext PAST THE HEAD: a cut walks back to a rune's
 	// start, at most utf8.UTFMax-1 bytes, and the window is never shorter
-	// than the head and the longest credential after it.
+	// than the head and [redactContext] after it.
 	window := textcut.Bytes(text, len(head)+redactContext+utf8.UTFMax-1)
 	out := redact.Secrets(window)
 	if len(window) == len(text) {

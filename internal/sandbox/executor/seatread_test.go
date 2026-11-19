@@ -410,12 +410,14 @@ func TestTwoRecordsThatRedactAlikeAreReadAlike(t *testing.T) {
 			openCodeUser("deploy hunter2 hunter345"))
 		return gzipped(t, openCodeDoc(messages...))
 	}
-	// LONGER THAN A SEAT'S READ REDACTS, the password in its opening: both
+	// LONGER THAN A SEAT'S READ REDACTS, its bound and twice the redaction's
+	// look-back, the password in its opening: the filler is whole KiB, so both
 	// records' sizes as recorded lie inside one KiB.
 	opening := "connect with password: hunter2 then run the migration "
+	filler := strings.Repeat("and wait ",
+		((executor.SeatTranscriptEntryMaxBytes+2*executor.RedactContext)/(9<<10)+2)<<10)
 	longer := func(password string) []byte {
-		return gzipped(t, openCodeDoc(openCodeUser(strings.Replace(opening, "hunter2", password, 1)+
-			strings.Repeat("and wait ", 20<<10))))
+		return gzipped(t, openCodeDoc(openCodeUser(strings.Replace(opening, "hunter2", password, 1)+filler)))
 	}
 	page := make([]int, executor.SeatTranscriptMaxEntries)
 	for i := range page {
@@ -458,7 +460,7 @@ func TestTwoRecordsThatRedactAlikeAreReadAlike(t *testing.T) {
 		}
 	}
 	read := seatRead(t, longer("hunter2"), 0, executor.TranscriptFilter{})
-	recorded := len(opening) + len(strings.Repeat("and wait ", 20<<10))
+	recorded := len(opening) + len(filler)
 	if e := read.Entries[0]; !e.Cut || e.Bytes%executor.StatedSizeGrain != 0 || e.Bytes < recorded ||
 		e.Bytes >= recorded+executor.StatedSizeGrain {
 		t.Errorf("the opening of a text of %d bytes states %d, cut %v; want its size rounded up to a KiB",

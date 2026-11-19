@@ -37,7 +37,8 @@ func Clocked(r *Runner, now func() time.Time) *Runner {
 const PackReleaseFloor = packReleaseFloor
 
 // RedactContext is how much more than it keeps a read from the error stream's
-// end takes, so a credential that began before what is kept is still redacted.
+// end takes, never shown, so what decides how the end it keeps redacts is read
+// with it.
 const RedactContext = redactContext
 
 // StatedSizeGrain is what the size an entry states of a text a read redacted

@@ -188,15 +188,14 @@ func (t *transcriptLines) take() []string {
 }
 
 // redactContext is how much a reading that begins inside a stream reads
-// BEFORE what it shows, never shown ([settledEnd]), so a credential that began
-// earlier is still redacted.
+// BEFORE what it shows, never shown ([settledEnd]), so what decides how its
+// first lines redact is read with them.
 //
-// Every credential shape fits on one line but a private key, whose block runs
-// at most [redact.MaxKeyBlockBytes] past BEGIN; a window opening inside one
-// would show its body with no BEGIN to anchor on (package redact's doc). It is
-// the redaction's own bound, so such a key is read whole and the two cannot
-// drift.
-const redactContext = redact.MaxKeyBlockBytes
+// THE REDACTION'S OWN LOOK-BACK ([redact.LookBack]): a key's block and a
+// password's value below its key are decided by text further back than one
+// line, and the redaction states how far, so the two cannot drift. Its doc
+// names the password's reads that reach further than any look-back.
+const redactContext = redact.LookBack
 
 // streamEnd is the end of a stream a person or model can be shown: at most
 // keep bytes of WHOLE lines ([sandbox.KeepEnd]) from tail's end, redacted
@@ -205,10 +204,9 @@ const redactContext = redact.MaxKeyBlockBytes
 //
 // SHOWN ONLY WHERE THE CONTEXT SETTLES IT ([settledEnd]): bounded by redacted
 // bytes alone, the end could reach back into the context when redaction shrank
-// what followed, and show a key whose BEGIN came before the read. A read
-// opened inside a line running to the end has no whole line to show, so that
-// line's end past the context is kept on a character, marked, rather than
-// showing nothing.
+// what followed, and be redacted without what decides it. A read opened inside
+// a line running to the end has no whole line to show, so that line's end past
+// the context is kept on a character, marked, rather than showing nothing.
 func streamEnd(tail sandbox.FileTail, keep int) (string, int64) {
 	ctx := 0
 	if tail.Before() > 0 {

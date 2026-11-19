@@ -21,8 +21,8 @@ import (
 // [liveWindow]; its ORIGIN names that place and the account, so two owners
 // derive the same text, and beginning again (the stream outran [liveBacklog]
 // or shrank, or the transcript spoke) names another. The error stream reads
-// redaction context before that place ([rawStream.leads]); an event is one
-// line, a credential in it whole, so the event stream needs none.
+// redaction context before that place ([rawStream.leads]); the event stream's
+// reading begins on an event's line and reads nothing before it.
 
 // liveWindow is how much of a stream's END a reading begins from. An event's
 // size is dominated by what it echoes (a tool's output, twice on Claude Code's
@@ -163,8 +163,8 @@ func (p *pendingText) add(s string) {
 }
 
 // lead adds context: what the stream holds before the text, which comes
-// before any text is added. Only its last [redactContext] bytes are kept,
-// which is as far back as a key reaching into the text can have begun.
+// before any text is added. Only its last [redactContext] bytes are kept, the
+// redaction's look-back.
 func (p *pendingText) lead(s string) {
 	if s == "" {
 		return

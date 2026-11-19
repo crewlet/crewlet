@@ -76,7 +76,7 @@ func TestAKeyThatBeganBeforeTheWindowIsStillRedacted(t *testing.T) {
 // its end on a character, marked.
 func TestTheEndOfAStreamIsWholeLines(t *testing.T) {
 	t.Parallel()
-	const keep = 1 << 10
+	const keep = 1000
 	const line = "a line the process wrote\n"
 	stream := strings.Repeat(line, (keep+redactContext)/len(line)+100)
 	read := keep + redactContext
@@ -128,7 +128,7 @@ func TestAKeyThatBeganBeforeTheReadIsNeverShown(t *testing.T) {
 	s.WriteString(strings.Repeat("retrying the upload in two seconds\n", 3))
 	s.WriteString(strings.Repeat(body+"\n", 5) + end)
 	// Keys enough to fill the context, each a 22-byte marker once redacted.
-	for range 45 {
+	for range redactContext/(25*len(other)) + 8 {
 		s.WriteString(begin + strings.Repeat(other+"\n", 25) + end)
 	}
 	s.WriteString("done\n")
@@ -146,6 +146,35 @@ func TestAKeyThatBeganBeforeTheReadIsNeverShown(t *testing.T) {
 	if !strings.HasSuffix(got, "done\n") || unread <= int64(len(stream)-len(data)) {
 		t.Errorf("shown = …%q with %d unread; want the stream's end, and its start and the context counted",
 			got[max(0, len(got)-40):], unread)
+	}
+}
+
+// A STREAM'S END IS SHOWN ONLY PAST ALL ITS CONTEXT, however much redaction
+// shrinks what it keeps: only the context's end settles what is shown, which
+// is the end of the whole stream's redaction.
+//
+// Mutation: settle a key block's reach (redact.MaxKeyBlockBytes) into the read
+// rather than [redactContext], and the case goes red.
+func TestAStreamsEndIsShownOnlyPastAllItsContext(t *testing.T) {
+	t.Parallel()
+	filler := strings.Repeat("compiling a package of the build\n", 2*redactContext/33+1)
+	label := "**" + strings.Repeat("a", 6000) + " password:**\n" + strings.Repeat("\n", 60000)
+	// The read begins ten bytes into the label, after its opening markup.
+	read := len(filler) + 10
+	head := filler + label + "hunter2x9\n"
+	head += strings.Repeat("x\n", (read+redactContext-len(head))/2)
+	head += strings.Repeat("\n", read+redactContext-len(head))
+	end := strings.Repeat("sk-"+strings.Repeat("B", 50000)+"\n", 8) + strings.Repeat("ok\n", 100)
+	stream := head + end
+	whole := redact.Secrets(stream)
+	if strings.Contains(whole, "hunter2x9") {
+		t.Fatal("the whole redaction keeps the value; the case needs one that takes it out")
+	}
+	got, unread := streamEnd(sandbox.FileTail{Data: []byte(stream[read:]), Size: int64(len(stream))}, len(end))
+	if !strings.HasSuffix(whole, got) || strings.Contains(got, "hunter2x9") || !strings.HasSuffix(got, "ok\n") ||
+		unread < int64(len(head)) {
+		t.Errorf("shown = %d bytes opening %.40q, %d unread; want the end of the whole redaction from past the "+
+			"context, and the context counted", len(got), got, unread)
 	}
 }
 

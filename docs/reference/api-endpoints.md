@@ -11342,7 +11342,7 @@ entries and `bounds.bytes` (1 MiB) of their text; an entry's text is at most
 `cut: true`. Every entry's `bytes` is the size of what its whole text redacts to —
 the text it would show whole — wherever the read redacted all of it, which is
 every text short enough to fit what the read redacts of one (the entry's bound
-and twice the longest credential the redaction knows, 64 KiB, past it); of a
+and twice the redaction's look-back, 386.5 KiB, past it); of a
 longer one, whose redaction past its opening the read never made, it is the
 size the harness recorded, rounded up to a whole KiB. **Never the size as
 recorded to the byte**, which beside a text shown whole said how long each

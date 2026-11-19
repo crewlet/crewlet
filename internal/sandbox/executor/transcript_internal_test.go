@@ -165,7 +165,7 @@ func logLines(text string, n int) string {
 
 // AN ENTRY'S TEXT IS AN OPENING OF WHAT ITS WHOLE TEXT REDACTS TO, wherever
 // the bound falls: never a byte the whole text's redaction would not hand out,
-// and cut, marked, within the bound. The cases:
+// and cut, marked, within the bound, each text read in a window. The cases:
 //
 //   - key blocks that redact to markers, shrinking the window, ahead of a
 //     GitHub token it cuts, whose first twenty characters match no rule;
@@ -185,25 +185,30 @@ func TestAnEntryIsAnOpeningOfWhatItsWholeTextRedactsTo(t *testing.T) {
 		bound int
 	}
 	cases := map[string]entry{}
+	past := func(bound int) int { return bound + 2*redactContext + 64<<10 }
 
-	keys := strings.Repeat(key, 21)
+	keys := strings.Repeat(key, redactContext/len(key)+2)
 	at := TranscriptEntryMaxBytes + redactContext - 20
 	before := logLines(keys, at-len("a line of the build's log\n"))
 	before += strings.Repeat(" ", at-len(before))
 	cases["key blocks ahead of a token the window cuts"] = entry{
-		logLines(before+token+"\n", 160<<10), TranscriptEntryMaxBytes}
+		logLines(before+token+"\n", past(TranscriptEntryMaxBytes)), TranscriptEntryMaxBytes}
 
 	for offset := 64 - len(token) + 1; offset < 64; offset += 3 {
 		cases[fmt.Sprintf("a token across the bound at %d", offset)] = entry{
-			logLines(strings.Repeat("x", offset)+token+"\n", 200<<10), 64}
+			logLines(strings.Repeat("x", offset)+token+"\n", past(64)), 64}
 	}
 
 	cases["a key whose body is read back from its END past the bound"] = entry{
 		logLines("-----BEGIN RSA PRIVATE KEY-----\nsee below\n"+strings.Repeat(keyLine+"\n", 200)+
-			"-----END RSA PRIVATE KEY-----\n", 200<<10), 1 << 10}
+			"-----END RSA PRIVATE KEY-----\n", past(1<<10)), 1 << 10}
 
 	for name, c := range cases {
-		got, cut, _ := redactedWithin(c.text, c.bound)
+		got, cut, size := redactedWithin(c.text, c.bound)
+		if size >= 0 {
+			t.Fatalf("%s: the text of %d bytes was redacted whole; the case needs one read in a window",
+				name, len(c.text))
+		}
 		kept := strings.TrimSuffix(got, "…")
 		if whole := redact.Secrets(c.text); !strings.HasPrefix(whole, kept) {
 			t.Errorf("%s: the entry hands out %q, which the whole text does not redact to", name,
