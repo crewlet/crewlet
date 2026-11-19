@@ -13,6 +13,7 @@ import react from "@vitejs/plugin-react";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { withPackageNotices } from "./notices.ts";
 
 // The notices for everything the built dashboard redistributes, served beside it
 // at /static/dashboard/THIRD_PARTY_NOTICES.txt and shipped in every release
@@ -352,6 +353,7 @@ export default defineConfig({
     fontLicence(),
     brandAssets(),
     bootScreen(),
+    withPackageNotices(NOTICES),
     sourceNotices(),
   ],
   // The engine serves this tree from /static/dashboard/ and answers the shell
