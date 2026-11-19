@@ -12,29 +12,16 @@ import (
 
 // ---- the brand stylesheet ------------------------------------------------- //
 //
-// THE ONE GENERATOR of the stylesheet an adopted brand serves, run once at the
-// adoption and stored as an object: never at serve time, because a generator a
-// later build changes would change the bytes behind a hash a published version
-// pins.
-//
-// IT DEFINES INPUTS AND NOTHING ELSE: `--brand-*` custom properties on `:root`,
-// the slots the artifact kit's brand layer reads (`@crewlethq/artifact-kit`
-// 0.47.0 onward, its README's "A company's brand"), and an `@font-face` rule
-// per file of an uploaded family. No selector but `:root`, no property a page
-// paints with, so the sheet restyles only what the kit chooses to read from
-// it, and a page on an earlier kit is untouched. The kit derives every mode's
-// accent family, the label on the accent and the faces from these inputs, and
-// keeps its own value wherever an input is absent, which is why an absent role
-// writes no declaration at all.
-//
-// NO VALUE IS WRITTEN THAT DID NOT PASS ITS GRAMMAR HERE, AGAIN. A brand is
-// read before an adoption generates its sheet, and the generator still checks
-// every value it writes (a colour against [ColorPattern], a hash as 64 hex
-// digits, an extension in [ServedExts], a family against its grammar, a ratio
-// as a finite positive number, a weight and a style against their sets) and
-// omits anything else, so no caller that skipped the read can make a value
-// leave its declaration. Every URL it writes is `/_crewlet/brand/<sha256>.<ext>`,
-// built from a hash and an extension alone.
+// THE ONE GENERATOR of the adopted brand's stylesheet, run once at adoption and
+// stored as an object, never at serve time: a later build's change would alter
+// the bytes behind a hash a published version pins. IT DEFINES INPUTS AND
+// NOTHING ELSE: `--brand-*` properties on `:root` (the slots
+// `@crewlethq/artifact-kit` 0.47.0+ reads) and an `@font-face` per uploaded
+// file, so a page on an earlier kit is untouched; an absent role writes no
+// declaration, so the kit keeps its value. NO VALUE IS WRITTEN THAT DID NOT PASS
+// ITS GRAMMAR HERE, AGAIN (colour, hash, [ServedExts], family, ratio, weight,
+// style), so a caller that skipped the read cannot inject into a declaration.
+// Every URL is `/_crewlet/brand/<sha256>.<ext>`, from a hash and extension alone.
 
 // ServedFile is one file an adoption serves, as the stylesheet names it: its
 // hash (the public route's path), its essence (its extension) and, for a logo,

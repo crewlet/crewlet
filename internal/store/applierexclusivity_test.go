@@ -628,6 +628,14 @@ var allowedReplicatedWriter = []allowance{
 			"the broker instants the rows hold, never a node's clock.",
 	},
 	{
+		Prefix: "internal/advisordomain/apply", Kind: mechanism,
+		Why: "The advisor domain's applier: a finding's episode opened, revised, " +
+			"refreshed, moved, explained or released, a run, a report, an alarm episode " +
+			"and a day's expiry are each a pure function of a committed record and " +
+			"same-log rows; it judges no text, holds every record to the rows again, " +
+			"and deletes by the instants the rows and the record hold, never a node's clock.",
+	},
+	{
 		Prefix: "internal/atlasdomain/apply", Kind: mechanism,
 		Why: "The atlas domain's applier: a person's claim, a purge and its " +
 			"marker, a return the marker blocked, and an hour's expiry are each a " +

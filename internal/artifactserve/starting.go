@@ -8,21 +8,15 @@ import (
 )
 
 // Starting is what the artifact listener (api.artifacts) answers while its node
-// starts: bound before the boot, beside api.port, and handed the origin's own
-// [Handler] once the node serves (internal/api's boot surface says why a
-// listener is bound that early).
+// starts: bound before the boot and handed the origin's own [Handler] once the
+// node serves (internal/api's boot surface says why it is bound that early).
 //
 // EVERY ANSWER IS THE ORIGIN'S OWN REFUSAL, empty and inert under the same
-// headers, for the reason [Handler.refuse] gives: the origin serves bytes and
-// nothing else, so a starting node's JSON would be a document an artifact page
-// could read. A request for one of [Routes] is told to come back, `503` with
-// the Retry-After retry answers at the moment it is asked (a starting node's,
-// or a drain's once a stop has begun). A method or a path the origin never
-// serves meets the `405` or the `404` it meets once the node serves, so the
-// socket says no more while the node starts than it does afterwards.
-//
-// Nothing here reads a credential, a cookie or a ticket: nothing is served
-// that one could unlock.
+// headers, for the reason [Handler.refuse] gives: a starting node's JSON would
+// be a document an artifact page could read. A request for one of [Routes] gets
+// `503` with the Retry-After retry answers when asked (a start's, or a drain's
+// once a stop has begun); any other method or path meets the `405` or `404` it
+// meets once the node serves. Nothing here reads a credential, cookie or ticket.
 func Starting(origins Origins, retry func() time.Duration) (http.Handler, error) {
 	if retry == nil {
 		return nil, errors.New("artifactserve: a starting origin needs the Retry-After it answers")

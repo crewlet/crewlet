@@ -13,16 +13,11 @@ import (
 // THE TURN THIS WHOLE RULE EXISTS FOR: a seat that could not finish without a
 // person, asked them where they had asked IT, and ended there.
 //
-// `blocked` + `done` is how that is spelled — the EXECUTOR's word for what
-// happened beside the REVIEWER's for whether it was good enough — and the loop
-// has to let it end. It used to end `self_iterate`, and the next round asked
-// the same question again: a CEO seat put a clarifying question to its founder,
-// was sent back, re-posted it two minutes later, and terminated on the
-// max-iterations guard.
-//
-// Nothing in the loop needed changing for this, which is the point — the
-// contradiction was in the prompt. This is what says so, and what would catch
-// a guard added later that quietly took the case back.
+// `blocked` + `done` is how that is spelled (the EXECUTOR's word for what
+// happened beside the REVIEWER's for whether it was good enough) and the loop
+// has to let it end: ending `self_iterate` re-asks the same question each
+// round until the max-iterations guard terminates the turn. This catches a
+// guard added later that quietly took the case back.
 func TestATurnBlockedOnSomebodyAlreadyAskedEndsDone(t *testing.T) {
 	t.Parallel()
 	f := &fake{

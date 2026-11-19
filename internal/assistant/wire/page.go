@@ -22,14 +22,12 @@ import (
 //
 // A HINT TO THE MODEL AND NEVER AUTHORITY. Every fact the model uses about a
 // record comes from a tool call made as the person, so a page can neither
-// leak a row the person could not read nor forge one; nothing here grants,
-// and no grant is sent (the server derives the person from the request). The
-// draft is the one exception to "ids only", because an unsaved draft exists
-// nowhere a tool could read it: it is what the person typed, sent by their
-// own page, and the model reads it as that. Sent with each question, or null
-// when the person removed the page chip, and fenced as text a colleague may
-// have written when it reaches the prompt, because titles on screen and a
-// draft opened from someone else's version are.
+// leak a row they could not read nor forge one; nothing here grants, and no
+// grant is sent (the server derives the person from the request). The draft is
+// the one exception to "ids only": an unsaved draft exists nowhere a tool
+// could read it. Sent with each question, or null when the person removed the
+// page chip, and fenced as text a colleague may have written (on-screen titles
+// and a draft opened from someone else's version are).
 type PageContext struct {
 	// Screen is the dashboard's screen name (its route table's union).
 	Screen string `json:"screen"`

@@ -24,30 +24,18 @@ import (
 	"github.com/crewlet/crewlet/internal/redact"
 )
 
-// THE ASSISTANT'S OWN SURFACE: the tools one turn offers its model, and what a
-// call to one does. Never the agent runtime's tools.Surface, which acts as a
-// seat: every call here is the person's own request through the API's one
-// handler chain, decided by the route it asks (ADR-0050).
-//
-// # What a call can do
-//
-//   - A READ is checked and built by its catalogue tool ([catalog.Tool.Request]:
-//     its schema, the identity arguments no tool takes, and a route it
-//     declares), sent through the turn's read grant, and shaped by
-//     [catalog.Shape] into the cards the person sees and the text the model
-//     reads. Shape is the ONE place an answer is redacted, fenced and cut for
-//     the model; this surface hands the model what Shape returns and nothing
-//     else.
-//   - A WRITE or PAGE ACTION is never sent: its tool's own preview reads the
-//     object as the person, [proposal.New] binds the change to its digest and
-//     revision, the proposal is recorded and carded, and the loop suspends with
-//     the call unanswered until the person decides (ADR-0051).
-//   - A DOCS call answers from the engine's own API reference and the route
-//     table, and sends nothing: the routes the person may use, or one route's
-//     documentation, the model's text with every fence marker defused.
-//   - A NAVIGATION builds an open in app link, whose `permitted` is asked by
-//     sending the record's own read through the grant, or by the person's
-//     grants for a screen that names no record.
+// THE ASSISTANT'S OWN SURFACE: the tools one turn offers. Never the agent
+// runtime's tools.Surface (a seat's): every call is the person's own request
+// through the API's one handler chain (ADR-0050).
+//   - A READ is sent through the turn's read grant and shaped by [catalog.Shape]
+//     into cards and model text: the ONE place an answer is redacted, fenced
+//     and cut; the model is handed what it returns and nothing else.
+//   - A WRITE or PAGE ACTION is never sent: its preview reads the object as the
+//     person, [proposal.New] binds the change to its digest and revision, and
+//     the loop suspends, the call unanswered, until the person decides (ADR-0051).
+//   - A DOCS call sends nothing: the API reference, fence markers defused.
+//   - A NAVIGATION builds an in-app link, its `permitted` asked by the record's
+//     own read through the grant, or by the person's grants for a bare screen.
 
 // errGrantEnded ends a turn whose read grant the guard no longer accepts: a
 // 401 answered to the turn's own grant is the session ending, a sign-out or a

@@ -10,6 +10,20 @@
 // fleet: the target woke on whichever node owned ITS seat and found the queue
 // empty. There was also no reply path at all — the prompt named a tool that
 // was never registered.
+//
+// # Two capabilities
+//
+// The [Service] addresses (it refuses to be built without a [Directory]); the
+// [Sweeper] addresses nobody and closes an idle channel only once the engine
+// says its answer is no longer [Owed]. An idle timeout alone refused the answer
+// of an executor that holds the ask, and left the asker, whose turn ended when
+// it asked, never woken. Both share one store, publisher and clock ([keeper]).
+//
+// # Who the turn works for
+//
+// An ask and an answer carry who the handing turn works for ([Ask].WorkingFor,
+// [Answer].WorkingFor, copied onto the wake). The caller composes it; this
+// package never derives it.
 package a2a
 
 import (

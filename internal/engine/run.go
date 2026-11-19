@@ -83,6 +83,7 @@ import (
 	"github.com/crewlet/crewlet/internal/toolsession"
 	"github.com/crewlet/crewlet/internal/tracing"
 	"github.com/crewlet/crewlet/internal/version"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // Engine is one process running a company.
@@ -204,6 +205,11 @@ type Engine struct {
 	// grantSaver saves a chosen request's grant ([Engine.UseGrantSaver]); atomic, as
 	// the API installs it while requests read it.
 	grantSaver atomic.Pointer[GrantSaver]
+
+	// postures are the seats' live facts an item's flow reads
+	// ([Engine.UsePostures]); atomic, as the API installs them while reads
+	// run.
+	postures atomic.Pointer[worklet.Postures]
 
 	// seatAccessPending is why the migration onto per-seat access left each
 	// integration unmigrated on its last attempt here, by integration.Kind,

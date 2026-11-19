@@ -7,30 +7,24 @@ import (
 
 // # A refusal, worded for a person (ADR-0060)
 //
-// A call that is REFUSED answers a model with a sentence written where the
-// refusal is decided, naming the argument to change and the tool to call next:
-// that sentence is the tool's `Output`, and it stays exactly as it is. A
-// person reading the same refusal on a screen is helped by none of it. So a
-// refusal a person may be shown carries a second phrasing, a [Refusal],
-// written in this package beside every other sentence a person is shown, and
-// the act route answers that phrasing and never the model's.
-//
+// A REFUSED call answers a model with a sentence naming the argument to change
+// and the tool to call next: the tool's `Output`, kept exactly as is. It helps
+// a person on a screen not at all, so a refusal a person may be shown carries
+// a second phrasing, a [Refusal], written here; the act route answers that,
+// never the model's.
+
 // # The floor: no phrasing is not a model's phrasing
 //
-// A refusal is answered whether or not a person phrasing was written for it,
-// because its CODE already says what happened: `stale_version`, `forbidden`,
-// `invalid`. A refusal with no [Refusal] is answered with its code's own
-// sentence (httpjson's per-code `message`, written for people) and no
-// `detail`. A site without a phrasing tells a person less, and never tells
-// them a model's words.
-//
+// A refusal with no [Refusal] is answered with its CODE's own sentence
+// (`stale_version`, `forbidden`; httpjson's per-code `message`) and no
+// `detail`: less for a person, never a model's words.
+
 // # Constructed here, or rebuilt from a peer at one boundary
 //
-// A Refusal's field is unexported and it does not decode from JSON, so it is
-// made by this package's refusal catalog, or rebuilt from a peer's by the
-// estate router alone ([SaidFromPeer]): the walk over the catalog is a walk
-// over every refusal sentence this build can show a person, the same
-// guarantee [Caveat] makes.
+// A Refusal's field is unexported and does not decode from JSON, so only this
+// package's catalog makes one, or the estate router rebuilds a peer's
+// ([SaidFromPeer]): a walk over the catalog covers every refusal sentence this
+// build can show a person, the guarantee [Caveat] makes.
 
 // Refusal is a refused call's words for a person: what was refused and, where
 // something is theirs to do, what, in the words of the controls they see; and,

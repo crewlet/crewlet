@@ -183,13 +183,12 @@ func (h *Handler) asset(w http.ResponseWriter, r *http.Request, claims artifacts
 // (path empty) is never that page, so a design's ticket loads none as a
 // document.
 //
-// WHY A DESIGN'S TICKET OPENS ONE PAGE. Its viewer holds a frame per artboard
-// on screen, each minted for its board; a board that loaded another as a page
-// would be a frame the dashboard never minted, outside the visibility budget
-// and showing a board the viewer did not open there. The page, its scripts and
-// its grant would be the same, so this is not a widening the check prevents:
-// it keeps "the documents a viewer runs" equal to "the tickets the dashboard
-// minted", which is what the budget and the ready report count.
+// WHY A DESIGN'S TICKET OPENS ONE PAGE. Its viewer holds a frame per artboard,
+// each minted for its board; a board loading another as a page would be a frame
+// the dashboard never minted, outside the visibility budget. Not a widening
+// (the page, scripts and grant are the same): it keeps "the documents a viewer
+// runs" equal to "the tickets the dashboard minted", which the budget and the
+// ready report count.
 func opens(got verdict, claims artifacts.TicketClaims, path string) bool {
 	if got.documents != artifacts.DocumentsEach {
 		return true
@@ -207,20 +206,15 @@ func (h *Handler) ticketRefused(w http.ResponseWriter, ref *refusal) {
 
 // serveDocument answers a document: its stored bytes with a fresh nonce
 // substituted for the placeholder the linter wrote into every script element,
-// under the document policy built for that nonce, an HTML page of a version
-// pinning a runtime contract with that runtime placed first, and an HTML page
-// of a version pinning the adopted brand with its stylesheet linked.
+// under the policy built for that nonce; a page pinning a runtime contract gets
+// that runtime placed first, one pinning the adopted brand its stylesheet.
 //
 // THE NONCE IS SUBSTITUTED ONLY WHERE THE LINTER PUT THE PLACEHOLDER: a page
 // whose script facts say every script element carries it ([nonceTemplate]).
-// Every other document (an SVG or XML file of a version, any asset, a page
-// the linter recorded nothing for) is served byte for byte as stored, so a
-// placeholder its author wrote into it (the constant is public) is inert text
-// and never the nonce the policy admits, and none of its script runs.
-//
-// NO PARSE, NO ETAG, NO RANGE. The substitution is a byte replacement on a
-// template read and checked once per node; the body differs per response, so
-// no validator could name it, and the response is never stored anywhere.
+// Every other document (SVG, XML, any asset, a page the linter recorded nothing
+// for) is served byte for byte, so a placeholder its author wrote (the constant
+// is public) is inert text, never the nonce the policy admits. NO PARSE, NO
+// ETAG, NO RANGE: the body differs per response, so no validator could name it.
 func (h *Handler) serveDocument(w http.ResponseWriter, r *http.Request, c artifacts.TicketClaims,
 	obj objstore.Object, contentType string, script *artifacts.ScriptPolicy, contract, brand string) {
 
@@ -309,32 +303,17 @@ func (h *Handler) template(ctx context.Context, obj objstore.Object, contract, b
 }
 
 // withRuntime is a page with the script element that installs `window.crewlet`
-// placed before everything the page runs: an author never includes the runtime
-// (the page contract says so), so the origin places the one the version pins,
-// under the same nonce placeholder every other script element of the page
-// carries, so it runs under the response's nonce and before any script of the
-// page's own. A contract that is not an exact version places nothing: the
-// publish resolved every pin to one, and a value of any other shape would be
-// markup written into a page by whatever wrote the version.
+// placed before everything the page runs, under the nonce placeholder. A
+// contract that is not an exact version places nothing (any other shape would
+// be markup written into a page), as does one with no runtime in this binary.
 //
-// A BOUNDED SCAN OF THE PAGE'S OPENING, never a parse: past a byte order mark,
-// whitespace and comments, and past a doctype where the page opens with one,
-// since an element before the doctype would put the page in quirks mode. An
-// element there, before the html start tag, is one the parser places in the
-// head it implies, which is where a script that must run first belongs.
-//
-// THE CAPABILITIES RIDE THE ELEMENT (`data-capabilities`), so the runtime
-// answers `crewlet.capabilities.has` correctly from the first script of the
-// page rather than only once the host's handshake lands: a page, and every kit
-// release up to 0.32.0, that asked before then was told the version declared
-// nothing, and a sheet said so for good. They are the frame's own grant, the
-// same list the host declares at the handshake, which stays the authority.
-//
-// THE ELEMENT NAMES THE RUNTIME BY ITS BYTES ([RuntimeAddress]), the one name
-// served immutable: a fix to the runtime ships under the same contract, and a
-// page naming the contract's path ran whatever runtime its browser had kept.
-// A contract this binary holds no runtime for places nothing, as one of
-// another shape does: the element would name a file that is not there.
+// A BOUNDED SCAN OF THE PAGE'S OPENING, never a parse: past a BOM, whitespace,
+// comments and a doctype if present (an element before it forces quirks mode).
+// THE CAPABILITIES RIDE THE ELEMENT (`data-capabilities`), so
+// `crewlet.capabilities.has` is right from the first script; the host's
+// handshake stays the authority. THE ELEMENT NAMES THE RUNTIME BY ITS BYTES
+// ([RuntimeAddress]), the one name served immutable: a fix ships under the same
+// contract, and a path by contract would run a kept old runtime.
 func (h *Handler) withRuntime(page []byte, contract, declared string) []byte {
 	if !versionPattern().MatchString(contract) {
 		log.Warn("artifacts_serve_contract_unreadable", "contract", contract)
@@ -525,18 +504,14 @@ func (h *Handler) subresourceCache(c artifacts.TicketClaims) string {
 // reader, at the object store's pace, gzipped as it goes where gz is set.
 //
 // THE STATUS WAITS FOR THE FIRST BYTES, so a store that cannot answer is a 503
-// rather than a 200 with nothing after it. After that the only honest signal
-// left for a failure is a body shorter than promised, so a failure cuts the
-// connection: the checking reader holds back the byte that would complete a
-// file whose content it could not verify, so a damaged object always reads
-// short of its length rather than whole.
+// rather than a 200 with nothing after it. After that a failure's only honest
+// signal is a body shorter than promised, so it cuts the connection: the
+// checking reader holds back the last byte of an unverified file.
 //
 // A RANGE IS CHECKED FOR ITS LENGTH, and for the whole digest only where it
-// reaches the end of the object: the bytes before it are read and discarded
-// rather than fetched as a range, which keeps every response's memory
-// constant (a video's open-ended range from many viewers would otherwise be a
-// whole file per viewer in memory) at the cost of reading at most the file's
-// size from the store, and every file is at most sixteen mebibytes.
+// reaches the object's end: earlier bytes are read and discarded, not fetched,
+// keeping memory constant per response (open-ended video ranges would hold a
+// file per viewer) at the cost of reading at most 16 MiB.
 func (h *Handler) stream(w http.ResponseWriter, r *http.Request, c artifacts.TicketClaims,
 	obj objstore.Object, start, length int64, status int, gz bool) {
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/atlasdomain"
@@ -409,6 +410,10 @@ type Backend struct {
 	// ([AtlasHalf]).
 	Atlas AtlasHalf
 
+	// Advisor is the advisor log, which every data node runs from boot
+	// ([AdvisorHalf]).
+	Advisor AdvisorHalf
+
 	// Reached waits until this node's applier of the floor's log has reached
 	// a position, every request's floor the node's own included: every
 	// row-writing record through it committed and every barrier decoded
@@ -525,7 +530,7 @@ const SeatCopy = ""
 // on unless it is floorless ([op.floorless]). The floor is on its OWN domain's
 // log and no other ([ready]).
 //
-// ELEVEN of the estate's thirteen domains: a fleet duty writes the vectors and
+// TWELVE of the estate's fourteen domains: a fleet duty writes the vectors and
 // the searches read them as an index, never at a position, and the Dashboard
 // Assistant's conversations are read and written only on the data node the API
 // runs on. The executor and access logs are here though no surface writes
@@ -543,6 +548,7 @@ var (
 	executorDomain     = executordomain.Domain{}.Name()
 	accessDomain       = accessdomain.Domain{}.Name()
 	atlasDomain        = atlasdomain.Domain{}.Name()
+	advisorDomain      = advisordomain.Domain{}.Name()
 
 	floorStreams = map[string]string{
 		trackerDomain:      worklet.Domain{}.Stream().Name,
@@ -556,6 +562,7 @@ var (
 		executorDomain:     executordomain.Domain{}.Stream().Name,
 		accessDomain:       accessdomain.Domain{}.Stream().Name,
 		atlasDomain:        atlasdomain.Domain{}.Stream().Name,
+		advisorDomain:      advisordomain.Domain{}.Stream().Name,
 	}
 )
 

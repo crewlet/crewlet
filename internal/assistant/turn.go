@@ -396,14 +396,11 @@ type reply struct {
 // round's prose is recorded as its own message the moment it commits.
 //
 // ONE RULE FOR EVERY CHANGE ([llm.Reconcile]), per message: the text a round's
-// message should hold is computed whole from the snapshot (its committed
-// prose, or while it is written as much as is settled, [settledView]), and the
-// frame sent is the tail that takes the drawn text there, or a restart
-// carrying the whole of it where the drawn text is no prefix of it. A round's
-// partial grows by tails; a provider failover or a backend's retraction
-// empties it, and the screen is redrawn rather than left holding text the
-// answer does not contain; a round that ends with no prose withdraws what it
-// drew.
+// message should hold is computed whole from the snapshot (committed prose, or
+// while written what is settled, [settledView]), and the frame sent is the tail
+// taking the drawn text there, or a restart carrying the whole where the drawn
+// text is no prefix. A failover or retraction empties a partial and the screen
+// is redrawn; a round ending with no prose withdraws what it drew.
 func (t *turn) onProgress(res toolloop.Result) {
 	t.mu.Lock()
 	if t.brief.on {

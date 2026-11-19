@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/crewlet/crewlet/internal/events"
+	"github.com/crewlet/crewlet/internal/named"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/toolname"
 )
@@ -32,7 +33,7 @@ type TaskAssigned struct {
 	// TaskID is the fire's run id — scope, schedule, instant and runner —
 	// kept for telemetry and the feed's detail. It names one FIRE and no
 	// tracker item, so nothing a seat reads leads with it ([Brief],
-	// [SummaryFor]).
+	// [TaskAssigned.PhraseFor]).
 	TaskID   string `json:"task_id"`
 	Agent    string `json:"agent_id"`
 	RoleName string `json:"role"`
@@ -46,8 +47,8 @@ type TaskAssigned struct {
 	Description string `json:"description,omitempty"`
 	// Schedule names the schedule that fired this. It is what tells a seat
 	// a recurring duty came round, which changes how it reads "do this
-	// again", and it is what the fire's label names ([SummaryFor]), so two
-	// fires of one schedule read alike.
+	// again", and it is what the fire's label names
+	// ([TaskAssigned.PhraseFor]), so two fires of one schedule read alike.
 	Schedule string `json:"schedule,omitempty"`
 	// ScopeType and ScopeID are the scope that owns [TaskAssigned.Schedule]:
 	// with the name, the schedule's identity as the dispatch ledger keys a
@@ -336,7 +337,7 @@ func (e TaskAssigned) missedLine() string {
 		"each missed fire."
 }
 
-// SummaryFor names the SCHEDULE a fire came from, never the fire's id.
+// PhraseFor names the SCHEDULE a fire came from, never the fire's id.
 //
 // The summary is not only a feed line: it is the trigger's label
 // ([Trigger.Summary]), so it becomes the turn's task_summary and the recalled
@@ -347,11 +348,12 @@ func (e TaskAssigned) missedLine() string {
 // a tracker key and names no item, and every fire of one schedule was unalike
 // to a similarity search by the one part that differs on every fire. The id
 // stays on the payload, where telemetry and the feed's detail read it.
-func (e TaskAssigned) SummaryFor(actor string) string {
+func (e TaskAssigned) PhraseFor(actor string) named.Line {
 	if e.Schedule != "" {
-		return lead(actor, "was assigned scheduled work "+e.Schedule)
+		schedule := named.ScheduleRef(string(e.ScopeType), e.ScopeID, e.Schedule, e.Schedule)
+		return leadLine(actor, named.Words("was assigned scheduled work ").Name(schedule))
 	}
-	return lead(actor, "was assigned a task")
+	return leadLine(actor, named.Words("was assigned a task"))
 }
 
 // PickupReason is the origin reason a pickup's turn is started under, beside
@@ -382,12 +384,14 @@ func (p WorkPickup) TriggerOrigin() TriggerOrigin {
 	return TriggerOrigin{Kind: OriginWorkItem, ID: p.Key, Reason: PickupReason}
 }
 
-// SummaryFor names the item handed over.
-func (p WorkPickup) SummaryFor(actor string) string {
+// PhraseFor names the item handed over.
+func (p WorkPickup) PhraseFor(actor string) named.Line {
+	item := named.Item(p.Item, p.Key)
 	if p.Why == PickupDeadWait {
-		return lead(actor, "was handed back "+p.Key+", whose wait on a pull request nothing moves")
+		return leadLine(actor, named.Words("was handed back ").Name(item).
+			Words(", whose wait on a pull request nothing moves"))
 	}
-	return lead(actor, "was handed its next ready work item "+p.Key)
+	return leadLine(actor, named.Words("was handed its next ready work item ").Name(item))
 }
 
 // Brief is the pickup's ask: which item, why, and the five typed answers, each

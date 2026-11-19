@@ -200,6 +200,15 @@ func noticeOf(t *testing.T, reg *notify.Registry, parser notify.Parser, prompt n
 	payload []byte, recipient string) *events.Event {
 
 	t.Helper()
+	return noticeAt(t, reg, parser, prompt, payload, recipient, "")
+}
+
+// noticeAt is [noticeOf] for a record its feed relays as committed at trigger
+// (a position token), as the engine's own change feeds do.
+func noticeAt(t *testing.T, reg *notify.Registry, parser notify.Parser, prompt notify.Prompt,
+	payload []byte, recipient, trigger string) *events.Event {
+
+	t.Helper()
 	party, ok := reg.ByHandle(recipient)
 	if !ok {
 		t.Fatalf("the chart holds no seat %q", recipient)
@@ -226,7 +235,7 @@ func noticeOf(t *testing.T, reg *notify.Registry, parser notify.Parser, prompt n
 	if err := json.Unmarshal(payload, &body); err != nil {
 		t.Fatalf("decode the relayed record: %v", err)
 	}
-	delivery := events.New(types.RawWebhook{Body: body}, events.NewTrace())
+	delivery := events.New(types.RawWebhook{Body: body, Trigger: trigger}, events.NewTrace())
 	delivery.Source = parser.Source()
 	svc.Handle(t.Context(), delivery)
 	mail := q.Backlog(topic, group)

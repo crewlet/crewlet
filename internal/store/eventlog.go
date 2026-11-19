@@ -13,6 +13,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events"
 	"github.com/crewlet/crewlet/internal/events/types"
+	"github.com/crewlet/crewlet/internal/named"
 
 	"github.com/crewlet/crewlet/internal/tokens"
 )
@@ -87,16 +88,19 @@ type EventRecord struct {
 	//
 	// The names match livestate.FeedRow field for field: the same screens show
 	// a live row from the projection and a historical one from here.
-	ID           string    `json:"id"`
-	Type         string    `json:"type"`
-	Source       string    `json:"source"`
-	Time         time.Time `json:"timestamp"`
-	Category     string    `json:"category"`
-	Summary      string    `json:"summary"`
-	Actor        string    `json:"actor"`
-	TraceID      string    `json:"trace_id"`
-	SpanID       string    `json:"span_id"`
-	ParentSpanID string    `json:"parent_span_id"`
+	ID       string    `json:"id"`
+	Type     string    `json:"type"`
+	Source   string    `json:"source"`
+	Time     time.Time `json:"timestamp"`
+	Category string    `json:"category"`
+	Summary  string    `json:"summary"`
+	// Refs is what Summary names (internal/named), off the row's refs
+	// column (node/0069); absent where it names nothing.
+	Refs         []named.Ref `json:"refs,omitempty"`
+	Actor        string      `json:"actor"`
+	TraceID      string      `json:"trace_id"`
+	SpanID       string      `json:"span_id"`
+	ParentSpanID string      `json:"parent_span_id"`
 
 	// Tags are the filterable dimensions the writer extracted. The
 	// promoted columns (agent_id, agent_role, task_id, channel_id, sender,
@@ -422,7 +426,7 @@ INSERT INTO crewlet_events (
 	event_time, event_id, event_type, source, category,
 	trace_id, span_id, parent_span_id,
 	agent_id, agent_role, task_id, channel_id, sender,
-	summary, actor, tags, payload,
+	summary, refs, actor, tags, payload,
 	phase, host_phase, worker, model, turn_id, work_key, iteration,
 	input_tokens, output_tokens, total_tokens,
 	cache_read_tokens, cache_write_tokens, provider_key, work_item,
@@ -430,7 +434,7 @@ INSERT INTO crewlet_events (
 	read_repo_id, read_principal_kind, read_principal, read_via, read_seat, read_bytes, read_reads
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 	?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-	?, ?, ?, ?, ?, ?, ?, ?, ?)
+	?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (event_time, event_id) DO NOTHING`
 
 // ErrIncompleteRecord reports a record missing part of its identity.
@@ -464,6 +468,8 @@ type eventRow struct {
 	rec     EventRecord
 	tags    map[string]string
 	tagJSON string
+	// refs is the record's Refs as the column holds them: JSON, or "" for none.
+	refs    string
 	payload string
 	spend   Spend
 	read    repoRead
@@ -544,7 +550,7 @@ func prepareEvent(rec EventRecord, seats SeatResolver) (eventRow, error) {
 	if spend.WorkKey == "" {
 		spend.WorkKey = tags["work_key"]
 	}
-	return eventRow{rec: rec, tags: tags, tagJSON: string(tagJSON),
+	return eventRow{rec: rec, tags: tags, tagJSON: string(tagJSON), refs: refsColumn(rec.Refs),
 		payload: string(payload), spend: spend, read: repoReadFor(rec.Type, payload),
 		parties: partiesOf(tags, seats),
 		origins: TurnOrigins(rec.Type, payload)}, nil
@@ -594,7 +600,7 @@ func (r eventRow) insert(ctx context.Context, tx *sql.Tx) error {
 		rec.TraceID, rec.SpanID, rec.ParentSpanID,
 		tags["agent_id"], tags["agent_role"], tags["task_id"],
 		tags["channel_id"], tags["sender"],
-		rec.Summary, rec.Actor, r.tagJSON, r.payload,
+		rec.Summary, r.refs, rec.Actor, r.tagJSON, r.payload,
 		spend.Phase, spend.HostPhase, spend.Worker, spend.Model,
 		spend.TurnID, spend.WorkKey, spend.Iteration,
 		spend.InputTokens, spend.OutputTokens, spend.TotalTokens,
@@ -727,7 +733,7 @@ func partiesOf(tags map[string]string, seats SeatResolver) []string {
 // listColumns is every column a listing reads. `payload` is absent
 // deliberately — see EventRecord.Payload.
 const listColumns = `event_time, event_id, event_type, source, category,
-	summary, actor, trace_id, span_id, parent_span_id, tags, work_key, node, total_tokens, calls`
+	summary, refs, actor, trace_id, span_id, parent_span_id, tags, work_key, node, total_tokens, calls`
 
 // qualifiedListColumns names the same columns on the log's own table.
 //
@@ -1405,9 +1411,9 @@ func (s EventSnapshot) scan(ctx context.Context, withPayload bool, query string,
 	for rows.Next() {
 		var rec EventRecord
 		var micros int64
-		var tagJSON, payload string
+		var tagJSON, refs, payload string
 		dest := []any{&micros, &rec.ID, &rec.Type, &rec.Source,
-			&rec.Category, &rec.Summary, &rec.Actor, &rec.TraceID,
+			&rec.Category, &rec.Summary, &refs, &rec.Actor, &rec.TraceID,
 			&rec.SpanID, &rec.ParentSpanID, &tagJSON, &rec.WorkKey, &rec.Node, &rec.Tokens, &rec.Calls}
 		if withPayload {
 			dest = append(dest, &payload)
@@ -1416,6 +1422,7 @@ func (s EventSnapshot) scan(ctx context.Context, withPayload bool, query string,
 			return nil, fmt.Errorf("store: scan event: %w", err)
 		}
 		finishRecord(&rec, micros, tagJSON)
+		rec.Refs = refsOf(refs)
 		if withPayload {
 			rec.Payload = json.RawMessage(payload)
 		}
@@ -1441,6 +1448,32 @@ func finishRecord(rec *EventRecord, micros int64, tagJSON string) {
 	rec.Tags = tags
 	rec.AgentID = tags["agent_id"]
 	rec.Failed = types.Failed(rec.Type, false, tags["failed"] == "true")
+}
+
+// refsColumn is what the refs column holds for refs: their JSON, or "" for
+// none, so a row that names nothing costs the column nothing.
+func refsColumn(refs []named.Ref) string {
+	if len(refs) == 0 {
+		return ""
+	}
+	out, err := json.Marshal(refs)
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+// refsOf reads the refs column back. A blob that will not decode costs the
+// row its references, never the row: it still says what happened in words.
+func refsOf(column string) []named.Ref {
+	if column == "" {
+		return nil
+	}
+	var refs []named.Ref
+	if err := json.Unmarshal([]byte(column), &refs); err != nil {
+		return nil
+	}
+	return refs
 }
 
 // seatTagKeys are the tag keys that name a SEAT of this company by a handle

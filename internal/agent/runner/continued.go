@@ -65,7 +65,7 @@ import (
 //     submission among them told as none of the round's, every call a brief
 //     tells having been made before the relaunch it opens;
 //   - every call the log took after its job was replaced, whatever its number
-//     ([BridgedCall.Late]), which no brief of the round had told when the log
+//     ([ledger.Call.Late]), which no brief of the round had told when the log
 //     took it and the session of the job that made it may not hold ([heldAt]),
 //     and every call nobody waited for by the time it returned
 //     ([BridgedCall.Abandoned]) — given up on by its harness, or outliving its
@@ -137,9 +137,9 @@ import (
 // reads its newest brief left out, each told by the next brief with room for
 // it. A brief that tells the round from its start, a fresh run's or a copy cut
 // off's, starts the account afresh. It ends with the round: a send-back opens a
-// new round, whose log restarts, and a closed round's reads past the cap are
-// counted under the ledger's rule for them, as every fresh brief's prior work
-// counts them.
+// new round, whose log restarts but for the calls its collection did not read,
+// carried late, and a closed round's reads past the cap are counted under the
+// ledger's rule for them, as every fresh brief's prior work counts them.
 //
 // AND A SESSION ITS HARNESS MAY HAND ITS MODEL AS A SUMMARY IS TOLD AS A CUT-OFF
 // ONE (firstrequest.go). Claude Code compacts a session before a request, a
@@ -369,7 +369,7 @@ func (r *Runner) keptSession(ctx context.Context, basis SessionBasis, round roun
 // tells. The notes follow it ([Runner.inPlaceNotes]).
 //
 // WHERE THE HARNESS ENDED ITS OWN RUN, ONLY THE CALLS THE LOG TOOK LATE
-// ([BridgedCall.Late]), THE ONES NOBODY WAITED FOR ([BridgedCall.Abandoned])
+// ([ledger.Call.Late]), THE ONES NOBODY WAITED FOR ([BridgedCall.Abandoned])
 // AND THE ONES STILL IN FLIGHT AS THE ROUND WAS READ ([Resume.Unfinished]),
 // whose outcomes that copy is not known to hold ([heldAt] at a nil save point,
 // and no point holds a call in flight), AND THE READS ITS JOB'S BRIEF COUNTED
@@ -807,7 +807,7 @@ func (r *Runner) checkoutName() string {
 // in the order the bridge admitted them — the ones it took after that read,
 // with how many more it took after the read and dropped from its middle and
 // the round's tally of every call it dropped ([droppedAfterSave]); and, apart,
-// the ones it took late ([BridgedCall.Late]), the ones nobody waited for
+// the ones it took late ([ledger.Call.Late]), the ones nobody waited for
 // ([BridgedCall.Abandoned]) and the ones it still held in flight as the round
 // was read (round.unfinished, [Resume.Unfinished]), with how many such it
 // dropped from its middle ([prompts.AfterSave.LateDropped]), never one in
@@ -1860,7 +1860,7 @@ func heldByTelling(call BridgedCall, point *int, owed []int, tellings []Telling)
 // mid-upgrade, is held at no save point a capture states: told again, never not
 // at all. The job's own copy in its box, where its harness ended its own run,
 // holds it as it holds every call but a late one, and is not told it. NOR IS A
-// LATE ONE HELD, whatever its number ([BridgedCall.Late]): the log took it
+// LATE ONE HELD, whatever its number ([ledger.Call.Late]): the log took it
 // after its job was replaced, so after the brief of the job carrying the round
 // on was built, which never told it; and the session of the job that made it
 // may not hold its outcome, its harness having died, given up on the call or

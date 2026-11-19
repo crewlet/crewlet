@@ -9,6 +9,27 @@
 // Three files, three concerns: this one is the boundary and the loop,
 // workflow.go is the task graph, result.go is how a worker answers.
 //
+// # Graph, host and call log
+//
+// One call is a graph: `after` makes a task wait for others and receive
+// their submitted fields. Waves run under one barrier each, because a wave
+// boundary is checkable where a per-task readiness queue's deadlocks are
+// not. A task's output is held to the template's load-time rule
+// (config.ValidateWorkerOutput) before anything runs.
+//
+// A worker's model is a harness running its own loop over the worker's
+// slice of tools, served by the same tool-session host as any phase; a
+// config without one is refused before any task runs. A worker's model call
+// on its parent's entry may use the parent run's slot when the entry has
+// none free, rather than wait for a slot only that run could free.
+//
+// `delegate` is a tools.SeatCallable: workers fork their call logs from the
+// turn the surface admitted the call under (Tool.CallForTurn), absorbed into
+// the run's log on return and handed on with the result for a bridged run's
+// record (toolloop.ToolResult.Absorbed). Forked from the run's own log, a
+// bridged call's workers would be counted by the run and kept by no record
+// a resumed segment seeds from.
+//
 // Five properties are load-bearing. Each is enforced in code, never in the
 // prompt, because a prompt is a request and these are boundaries:
 //
@@ -275,16 +296,13 @@ type Config struct {
 	// Discovery builds the child's own discovery meta-tools, bound to the
 	// child's surface through a getter.
 	//
-	// A getter because there is a real cycle: activate must mutate the same
-	// Surface the loop reads its definitions from, so the tools cannot
-	// exist before the surface, and the surface cannot resolve them until
-	// they are in its snapshot. Nil leaves the child frozen to what it was
-	// granted, which is the right shape for a caller that does not want a
-	// worker widening itself at all.
+	// A getter because of a cycle: activate must mutate the same Surface the
+	// loop reads its definitions from, so the tools cannot exist before the
+	// surface, and the surface cannot resolve them until they are in its
+	// snapshot. Nil leaves the child frozen to what it was granted.
 	//
-	// ENTRIES, so the meta-tools arrive carrying their own hints and are
-	// added to the child's universe as they come: a bare tool wrapped here
-	// would reach the surface unannotated, read by every classifier as a
+	// Entries, so the meta-tools carry their own hints: a bare tool wrapped
+	// here would reach the surface unannotated, read by every classifier as a
 	// tool nobody can prove read-only.
 	Discovery func(surface func() *tools.Surface) []tools.Entry
 
@@ -443,23 +461,16 @@ type Grant struct {
 
 // Permit resolves a child's grant.
 //
-// Exported because it is the security boundary, and a boundary a test cannot
-// interrogate directly is one that gets asserted through six layers of loop
-// and eventually not at all.
+// Exported because it is the security boundary, which a test must interrogate
+// directly. Three filters, in the order that makes the rejection honest:
 //
-// Three filters, in the order that makes the rejection message honest:
+//  1. on the engine-control denylist: the parent may hold it, the child never;
+//  2. not something the PARENT can call: a child must not reach past its spawner;
+//  3. annotated as a write to a shared surface: it would write under the
+//     parent's identity, onto a transcript a human reads.
 //
-//  1. on the engine-control denylist — the parent may hold it, the child
-//     never does;
-//  2. not something the PARENT can call — a child must not reach past its
-//     spawner, and the parent's own surface is already the resolved
-//     availability for this turn;
-//  3. annotated as a write to a shared surface — a sub-agent posting to a
-//     channel or commenting on an issue writes under the parent's identity,
-//     onto a transcript a human reads.
-//
-// The same three filters build the discovery universe, so a child cannot walk
-// around the grant by discovering what it was denied.
+// The same filters build the discovery universe, so a child cannot walk around
+// the grant by discovering what it was denied.
 func Permit(universe tools.Snapshot, parent, requested []string) Grant {
 	parentSet := make(map[string]bool, len(parent))
 	for _, name := range parent {
@@ -601,19 +612,12 @@ func Run(ctx context.Context, cfg Config, req Request) ([]Result, error) {
 					Error: err.Error(),
 				}
 			}
-			// THE CLOCK STARTS WHERE THE CAP DOES, and the two
-			// were a function call apart.
-			//
-			// [Result.Elapsed] was measured from inside run, which
-			// begins strictly AFTER the deadline below is created —
-			// so a worker that ran its whole cap reported LESS than
-			// the cap by however long the call took to get there.
-			// That is the one measurement an operator opens a
-			// fan-out to read, and on the timed-out path it was
-			// guaranteed wrong in the direction that hides the
-			// timeout. Stamping it here makes `Elapsed >=
-			// TaskTimeout` true of a timed-out worker by
-			// construction rather than by luck.
+			// The clock starts where the cap does: [Result.Elapsed] measured
+			// from inside run, which begins AFTER the deadline below is
+			// created, so a worker that ran its whole cap reported less than
+			// the cap, hiding the timeout. Stamping here makes
+			// `Elapsed >= TaskTimeout` true of a timed-out worker by
+			// construction.
 			began := time.Now()
 			childCtx, cancel := context.WithTimeoutCause(taskCtx, cfg.Limits.TaskTimeout, errTaskDeadline)
 			defer cancel()
@@ -959,30 +963,18 @@ func newSliceMeter(inner toolloop.BudgetMeter, cap int) *sliceMeter {
 	return &sliceMeter{inner: inner, cap: cap}
 }
 
-// Spend records a round on the slice and on the parent's counter, and judges
-// it against both.
+// Spend records a round on the slice and the parent's counter, and judges both.
+// The round is recorded whatever the verdict, on both, because the tokens were
+// already spent ([toolloop.BudgetMeter]): a slice that refused before the
+// parent was asked kept the round off its counter, and one that handed a
+// refused reservation back left siblings its room. A refusal decides only that
+// the round runs no tools and no further round starts.
 //
-// THE ROUND IS RECORDED WHATEVER THE VERDICT, on both, because a meter is
-// handed tokens a model call has already spent ([toolloop.BudgetMeter]): the
-// vendor billed the round before anything here could judge it. A slice that
-// refused before the parent's counter was asked kept the round off that
-// counter entirely — the seat and the company paid for it and neither heard —
-// and a slice that handed a refused reservation back left its siblings the
-// room the refused round had used, so a smaller round after it was admitted.
-// What a refusal decides is that the worker's round runs no tools and no
-// further round starts.
-//
-// The slice's verdict and its record are ONE step, under the lock, because the
-// parent's charge after it can block: two children of one batch would
-// otherwise both test against the same `used` snapshot, both pass, and both be
-// admitted — overshooting the slice by a whole child. That is the rule the
-// shared counter itself follows.
-//
-// THE PARENT'S REFUSAL OUTRANKS THE SLICE'S. Where both refuse, the answer
-// names the company or the seat: a slice is a share of the seat's room, and an
-// operator told the worker's slice ran out would go looking for a delegation
-// limit while the company is out of tokens — the same outermost-first rule the
-// counter follows between the company and the seat.
+// Verdict and record are ONE step, under the lock, because the parent's charge
+// can block: two children would otherwise test the same `used`, both pass, and
+// overshoot the slice by a whole child. The parent's refusal outranks the
+// slice's, or an operator would hunt a delegation limit while the company is
+// out of tokens.
 func (m *sliceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutcome, error) {
 	m.mu.Lock()
 	fits := m.used+tokens <= m.cap
@@ -1011,19 +1003,13 @@ func (m *sliceMeter) Spend(ctx context.Context, tokens int) (toolloop.SpendOutco
 // once it has no room left for a single token. See
 // [toolloop.BudgetMeter.Refused].
 //
-// THE SLICE IS FINAL. It only grows — every round is recorded on it, refused
-// or not — and its cap is fixed for the call, so once it is spent every worker
-// that starts later, in a later wave or behind max_parallel, would make one
-// full first call (its prompt, its tools, its dependencies' answers) that the
-// vendor bills and the slice refuses. Asked before that call, the worker ends
-// on the slice with no call made. And the parent's outranks the slice's for
-// the reason it does in [sliceMeter.Spend].
-//
-// The parent's refusal is asked on the caller's context, because the parent's
-// meter records a refusal it answers: a worker stopped by the company's full
-// day is the gate turning a call away as surely as its round being refused
-// would be. The slice's own refusal records nothing — no shared counter holds
-// a slice, so there is nowhere a record would be read.
+// The slice is final: it only grows and its cap is fixed for the call, so once
+// spent every later worker would make one full first call that the vendor
+// bills and the slice refuses. Asked before that call, the worker ends on the
+// slice with none made. The parent's outranks the slice's, as in
+// [sliceMeter.Spend]. It is asked on the caller's context, because the
+// parent's meter records a refusal it answers; the slice's records nothing, as
+// no shared counter holds a slice.
 func (m *sliceMeter) Refused(ctx context.Context) (toolloop.SpendOutcome, bool) {
 	if outcome, refused := m.inner.Refused(ctx); refused {
 		return outcome, true

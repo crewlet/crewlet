@@ -37,6 +37,11 @@
 // each stream snapshot are taken one after another, and work continues
 // throughout — so the pieces are separated by however long the copy took.
 //
+// The store copy is one moment ([store.DB.Backup]): it holds every commit that
+// returned before it began and is VERIFIED before it counts. The hold below
+// pins the log at the position the node stood at just before the copies, so a
+// copy older than that would leave the records between pinned by nothing.
+//
 // THE STORE IS COPIED FIRST, and the order is now MANDATORY rather than
 // preferable. The reason it used to have — "nothing in the store decides
 // whether work runs again" — died the moment the store became the durable home
@@ -181,18 +186,12 @@ const streamDirName = "streams"
 // ErrBadDestination marks every refusal that is about the destination the
 // CALLER named rather than about this node.
 //
-// One sentinel over the whole class, because its consumers ask exactly one
-// question — "is this the operator's mistake or ours?" — and answering it by
-// listing every specific refusal is how a new refusal silently starts
-// reporting as an engine failure.
-//
-// AND IT IS RETURNED ONLY BEFORE A BYTE IS COPIED. A refusal wearing it wrote
-// nothing into the directory (at most created it, empty), which is what lets
-// POST /backup leave it out of the audit: a request refused before the copy
-// began is not a backup that failed. A refusal that arrives once an estate is
-// already in the directory is NOT one — the directory holds a partial copy
-// somebody has to clear — so [Service.Take] returns it bare, and it is
-// audited as the failed backup it is.
+// One sentinel over the class, because its consumers ask "the operator's
+// mistake or ours?", and listing refusals lets a new one report as an engine
+// failure. IT IS RETURNED ONLY BEFORE A BYTE IS COPIED: POST /backup leaves
+// such a refusal out of the audit. One arriving once an estate is in the
+// directory is NOT wrapped (a partial copy is left to clear): [Service.Take]
+// returns it bare, audited as the failed backup it is.
 var ErrBadDestination = errors.New("backup: unusable destination")
 
 // ErrNotEmpty reports a destination that already holds something.
@@ -268,21 +267,15 @@ type Manifest struct {
 	// Domains is where each state-log domain's applier stood IN THE COPY,
 	// keyed by domain stream.
 	//
-	// EVERY LOG THE BUILD REGISTERS ([Options.Logs]), and nothing else. A
-	// log the copy holds no checkpoint on is named at the zero position:
-	// its applier has applied nothing, so a restore replays it from its
-	// first record. Left out, the backup covered it nowhere, and that log's
-	// trim and backup alarm waited for a backup that could never name it.
+	// EVERY LOG THE BUILD REGISTERS ([Options.Logs]), and nothing else. A log
+	// with no checkpoint in the copy is named at the zero position (a restore
+	// replays it from its first record); left out, no backup would cover it and
+	// its trim and alarm would wait for one that could never name it.
 	//
-	// READ FROM THE VERIFIED COPY, never from the live database. The
-	// checkpoint commits in the same transaction as the rows, so the
-	// position inside a file is the only position that describes that file
-	// — and the copy is taken while the applier is running, so the live
-	// cursor names where the node was when the copy STARTED.
-	//
-	// What a restore does with it is the whole reason it is here: it is the
-	// sequence the log has to replay from, and the number the assertion
-	// below compares the log's own first sequence against.
+	// READ FROM THE VERIFIED COPY, never the live database: the checkpoint
+	// commits with the rows, so the position inside a file is the only one
+	// describing it, and the live cursor names where the node was when the copy
+	// STARTED. A restore replays the log from it.
 	Domains map[string]statelog.Position `json:"domains,omitempty"`
 }
 
@@ -330,13 +323,11 @@ type Options struct {
 	// be open. Required: the zero value is refused.
 	//
 	// WHY NOT WHAT IS OPEN: a replicated estate an adoption holds closed
-	// between its rename and its reopen, or one whose reopen failed, is
-	// still one the node holds, with rows no other artefact of this backup
-	// carries — and read off what is open it simply was not there, so the
-	// backup left it out and wrote a manifest claiming to be complete.
-	// Asked of the holding, it is an estate that must be copied and cannot
-	// be right now, which is a refusal ([store.ErrNoEstate]) rather than a
-	// smaller backup.
+	// between rename and reopen, or whose reopen failed, is still held, with
+	// rows no other artefact carries; read off what is open, the backup left it
+	// out and claimed to be complete. Asked of the holding, it must be copied
+	// and cannot be right now: a refusal ([store.ErrNoEstate]), not a smaller
+	// backup.
 	Estate EstateHolding
 
 	// Conn is the broker connection the streams are snapshotted over.
@@ -395,13 +386,11 @@ type Options struct {
 	// estate, and refused at [New] when it cannot verify a record.
 	//
 	// WHAT THE WINDOW IS READ THROUGH: every record a restore replays past
-	// the copy — on its log, and among the records the copy deferred — is a
-	// signed frame, and the domain's reader of one record decodes the body
-	// inside it. So each frame is opened and its signature checked first,
-	// exactly as the applier a restore replays it through does, and a record
-	// this node cannot verify refuses the backup rather than being guessed
-	// at (see [objectPass.noteRecord]). A node holding no replicated estate
-	// reads no log and needs none.
+	// the copy, on its log or among those the copy deferred, is a signed
+	// frame. Each is opened and its signature checked first, as the applier
+	// does, and a record this node cannot verify refuses the backup rather than
+	// being guessed at (see [objectPass.noteRecord]). A node holding no
+	// replicated estate reads no log and needs none.
 	Keyring recordseal.Keyring
 
 	// Logs is the stream of every state-log domain this build registers
@@ -899,30 +888,18 @@ func (s *Service) estates() (held, error) {
 	return held{node: s.store, replicated: replicated}, nil
 }
 
-// room refuses a backup a database's own volume has no room for: the
-// write-ahead log its copy will hold back there.
+// room refuses a backup a database's volume has no room for the log its copy
+// holds back.
 //
 // A copy holds its file's log for its whole run (store.DB.Copies), so the log
-// grows by what the node writes while the copy runs, on the volume the node
-// commits to — and once that volume is full the node stops committing for the
-// rest of the copy, since nothing ends the hold before the copy does. So each
-// file's own volume must have room for what the last copy of it measured a copy
-// holding back, scaled to the file as it stands ([store.DB.CopyHoldsBack]), and
-// the backup is refused before a byte is pinned or copied otherwise. The copies
-// run one after another, each holding its own file's log alone, so each file
-// is weighed on its own.
-//
-// THE COPIES THEMSELVES ARE NOT COUNTED HERE. They land in the directory the
-// operator named, and a copy that fills it fails there and removes what it
-// wrote, while the log it held grows on the live volume until the copy ends
-// whichever volume the copy lands on. Counted on every live volume, since
-// nothing tells two volumes of one pool apart for certain, the copies would
-// refuse every backup to a disk of its own from a node short of a second
-// copy's room beside its store, which such a backup does not need.
-//
-// The figure is the last copy's: a node that has copied nothing since it
-// started has no measure, and a write burst past the rate the last copy saw is
-// not foreseen. `wal_large` and `volume_low` name both while they happen.
+// grows on the node's volume until the copy ends, and once full the node stops
+// committing. Each file's own volume must have room for what the last copy
+// measured ([store.DB.CopyHoldsBack], scaled to the file), or the backup is
+// refused before a byte is pinned; each file is weighed alone. THE COPIES THEMSELVES ARE NOT COUNTED: they land in the operator's
+// directory, and counting them on every live volume (two of one pool cannot be
+// told apart) would refuse every backup to a disk of its own. A node that has
+// copied nothing has no measure, and a burst past the last rate is not
+// foreseen; `wal_large` and `volume_low` name both.
 func (s *Service) room(files held) error {
 	for _, db := range files.all() {
 		info, err := os.Stat(db.Path())
@@ -1161,19 +1138,13 @@ func copyOf(m Manifest, estate store.Estate) string {
 // assertReplayable refuses a backup whose store copy names a position the
 // captured log can no longer reach.
 //
-// # Why this is an inequality and not a warning
-//
-// A restore replays from the store's position to the log's head. That is only
-// possible while the log still holds `position + 1`; below that the records
-// are gone, and applying what remains writes state derived from a prefix that
-// has a hole in it — silently, because every remaining record applies cleanly.
-// There is nothing a restore could do about it afterwards, so the check is at
-// the only moment anything can still be done: before the manifest is written.
-//
-// It needs NO NEW READ. The stream snapshot already captured the server's own
-// state verbatim, and its first sequence is the bound — asked through
-// [statelog.Replayable], the predicate every reader of that boundary shares,
-// so a backup and the node that restores it cannot disagree about it by one.
+// A restore replays from the store's position to the log's head, possible only
+// while the log still holds `position + 1`; below that, applying what remains
+// writes state from a prefix with a hole in it, silently. A restore cannot fix
+// that afterwards, so this refuses before the manifest is written, from the
+// stream snapshot's first sequence, through [statelog.Replayable], the
+// predicate every reader of that boundary shares, so a backup and the node
+// restoring it cannot disagree by one.
 func assertReplayable(m Manifest) error {
 	if len(m.Domains) == 0 {
 		return nil
@@ -1235,16 +1206,14 @@ func (s *Service) previousObjects(ctx context.Context, dir string) string {
 //
 // # Why a failure here does not fail the backup
 //
-// The artefact on disk is complete and restorable the moment its manifest is
-// written; this call is what lets the log be trimmed against it. Those are
-// different goods, and failing the backup because the announcement did not
-// land would throw away the first to report the second — while an operator's
-// cron reports a failed backup that in fact succeeded.
+// The artefact on disk is complete and restorable once its manifest is
+// written; this call only lets the log be trimmed against it. Failing the
+// backup over a lost announcement would throw away the first good to report
+// the second, and an operator's cron would report a failure that succeeded.
 //
-// The cost of a lost announcement is bounded and self-correcting: the trim's
-// backup term goes on refusing, the log keeps a longer window than it needed
-// to, and the next backup announces again. That is the safe direction, and it
-// is why this is a WARN rather than an error.
+// A lost announcement is bounded and self-correcting: the trim's backup term
+// goes on refusing, the log keeps a longer window than needed, and the next
+// backup announces again. That safe direction is why this is a WARN.
 func (s *Service) announce(ctx context.Context, dir string, manifest Manifest) {
 	if len(manifest.Domains) == 0 {
 		// NO DOMAINS IS NOT AN EMPTY ANNOUNCEMENT. A node holding no

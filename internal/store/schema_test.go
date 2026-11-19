@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/accessdomain"
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/assistantdomain"
@@ -47,6 +48,7 @@ func TestTheShippedSchemaAcceptsTheFrameworksOwnStatements(t *testing.T) {
 		gitlet.Domain{},
 		accessdomain.Domain{},
 		atlasdomain.Domain{},
+		advisordomain.Domain{},
 	} {
 		t.Run(domain.Name(), func(t *testing.T) {
 			t.Parallel()
@@ -104,6 +106,7 @@ func TestEachDomainDeclaresExactlyTheTablesItShips(t *testing.T) {
 		{"code_", gitlet.Domain{}},
 		{"access_", accessdomain.Domain{}},
 		{"atlas_", atlasdomain.Domain{}},
+		{"advisor_", advisordomain.Domain{}},
 	} {
 		t.Run(tc.domain.Name(), func(t *testing.T) {
 			t.Parallel()

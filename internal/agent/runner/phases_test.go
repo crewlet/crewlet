@@ -346,6 +346,9 @@ type buildOpts struct {
 	// answer is the engine's read of a pickup's answer
 	// (runner.Config.PickupAnswer).
 	answer func(context.Context) (types.PickupAnswer, error)
+
+	// skip is the meta-tools no record renders (runner.Config.SkipNames).
+	skip []string
 }
 
 func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Runner, *tools.Registry) {
@@ -440,6 +443,7 @@ func buildWith(t *testing.T, entries []phase.Entry, opts buildOpts) (*runner.Run
 		Compact:           opts.compact,
 		Sessions:          sessions,
 		Withheld:          opts.withheld,
+		SkipNames:         opts.skip,
 	})
 	if err != nil {
 		t.Fatalf("runner.New: %v", err)
@@ -689,6 +693,48 @@ func TestAReviewerIsToldWhatTheRunsRecordDropped(t *testing.T) {
 		"6 to tools the record did not keep either"} {
 		if !strings.Contains(system, want) {
 			t.Errorf("the reviewer's log does not say %q:\n%s", want, system)
+		}
+	}
+}
+
+// THE REVIEWER READS A LATE CALL AS AN EARLIER RUN'S. The round's record
+// marks a call its log took after the job that made it was replaced
+// (ledger.Call.Late), and the reviewer's log ends that call's line with
+// prompts.ReviewLateCall: read as the reviewed run's own, the run is judged on
+// a call it never made. The words go by the call's place, so the skipped name
+// before the late posts moves them onto no other line.
+//
+// Mutation: pass reviewLog no notes, and no late line says so; put the notes
+// at each call's shown position, and the first late post's words are lost
+// while the second's land on the run's own post.
+func TestTheReviewerReadsALateCallAsAnEarlierRunsCall(t *testing.T) {
+	t.Parallel()
+	prov := &scriptedProvider{
+		review: []llmtest.Response{submitCall(t, runner.SubmitReviewTool, `{"decision":"done"}`)},
+	}
+	r, _ := buildWith(t, []phase.Entry{{Key: "default", Provider: prov}}, buildOpts{skip: []string{"activate_tool"}})
+	post := func(text string, late bool) ledger.Call {
+		return ledger.Call{Name: "slack_post", Args: map[string]any{"text": text}, Result: "posted", Late: late}
+	}
+	w := turn.Work{
+		Outcome: turn.OutcomeDelivered, Summary: "post it", Text: "posted",
+		Calls: []ledger.Call{{Name: "activate_tool", Result: "activated"},
+			post("the earlier run's first", true), post("the run's own", false), post("the earlier run's second", true)},
+	}
+	if _, err := r.Review(context.Background(), 1, w, nil); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	system := prov.requestsFor("review")[0].Messages[0].Content
+	for text, late := range map[string]bool{
+		"the earlier run's first": true, "the run's own": false, "the earlier run's second": true,
+	} {
+		line := `- slack_post({"text":"` + text + `"}) → success`
+		if !strings.Contains(system, line) {
+			t.Fatalf("the reviewer's log has no line %q:\n%s", line, system)
+		}
+		marked := strings.Contains(system, line+" "+prompts.ReviewLateCall)
+		if marked != late {
+			t.Errorf("the line of %q says an earlier run made it: %v, want %v:\n%s", text, marked, late, system)
 		}
 	}
 }

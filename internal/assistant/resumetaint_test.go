@@ -16,13 +16,12 @@ import (
 
 // A RESUMED SEGMENT IS TAINTED BY WHAT ITS MODEL HOLDS (D25). A proposal names
 // the outside source its turn read before it. A turn that proposes parks, and
-// the segment its approval resumes continues the same loop, every answer the
-// first segment read still in it, and is handed the decision: the route's
-// answer to the write, which for an answer to an executor carries the run's
-// question, a harness's words, read at an outside party's trust. So the
-// taint rides the park, and the decision taints the turn as a read does: a
-// proposal the resumed segment makes after either names the source, and one
-// after only the company's own records names none.
+// the segment its approval resumes continues the same loop, every earlier
+// answer still in it, and is handed the decision: the route's answer to the
+// write, which for an executor's answer carries the run's question, a
+// harness's words, read at an outside party's trust. So the taint rides the
+// park, and the decision taints the turn as a read does: a proposal after
+// either names the source, and one after only the company's records names none.
 //
 // Mutation: resume without the parked taint, or park without it, and the
 // first case's second proposal is clean; hand the decision over without

@@ -15,13 +15,21 @@
  * mutually impossible figures for it.
  */
 
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 
 import { TurnCard } from "./TurnCard.tsx";
 import { Router } from "~/app/router.tsx";
 import { groupTurns, type PhaseRecord } from "~/lib/phases.ts";
 import type { TurnRow } from "~/protocol/index.ts";
+import {
+  drawnRef,
+  expectNamedLinks,
+  namedClient,
+  NAMED_LINE,
+  NAMED_REFS,
+  WithClient,
+} from "~/test/namedRefs.tsx";
 
 afterEach(cleanup);
 
@@ -123,6 +131,20 @@ function turn(over: Partial<PhaseRecord> = {}) {
 }
 
 const draw = (node: React.ReactElement) => render(<Router>{node}</Router>);
+
+// WHAT WOKE A TURN, ON A SEAT'S TURNS: what its trigger names is a marked link
+// to its page the reader may open, and what is gone is its marked words.
+test("a turn's card links what its trigger names", async () => {
+  const { client } = namedClient();
+  const trigger = { type: "work_pickup", summary: `SRE was ${NAMED_LINE}`, refs: NAMED_REFS };
+  const { container } = draw(
+    <WithClient client={client}>
+      <TurnCard group={turn({ trigger })} />
+    </WithClient>,
+  );
+  await waitFor(() => expect(drawnRef(container, "ENG-287").tagName).toBe("A"));
+  expectNamedLinks(container);
+});
 
 test("a turn's length spans its first phase, not the gap between landings", () => {
   draw(<TurnCard group={turn()} />);

@@ -781,6 +781,12 @@ func taskReads() map[string]indexedRead {
 			statement, open := holdingWaitersStatement()
 			return seek(blockers, statement, append([]any{task}, open...)...)
 		}(),
+		// A REMOVED SEAT'S OPEN WORK, which its retirement re-homes: a seek
+		// of the queue by the seat and the open groups (ADR-0162).
+		"a departed seat's open work": func() indexedRead {
+			statement, args := departedWorkStatement(planNow, person)
+			return seek(queue, statement, args...)
+		}(),
 	} {
 		reads[name] = read
 	}
@@ -885,9 +891,13 @@ func taskCensuses() map[string]plannedRead {
 		statement, args := workloadStatement(units, store.EncodeTime(planNow), planFlow)
 		out["the workload of "+scope] = plannedRead{statement, args}
 	}
+	// AND THE HOLDERS OF OPEN WORK THE CHART NO LONGER PLACES, which a
+	// retirement knowing a seat by its id alone reads (ADR-0162).
+	statement, args := departedHoldersStatement()
+	out["the departed holders of open work"] = plannedRead{statement, args}
 	// AND THE ADVISOR'S READ OF THE OPEN WORK: who holds it, every open
 	// wait, and every open question on an open item.
-	statement, args := openHoldersStatement()
+	statement, args = openHoldersStatement()
 	out["the open work by holder"] = plannedRead{statement, append(args, MaxOpenRows+1)}
 	statement, args = openEdgesStatement()
 	out["every open wait"] = plannedRead{statement, append(args, MaxOpenRows+1)}
@@ -1193,6 +1203,9 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 	// a seek of the item's own history ([flowExpr]).
 	flow, flowArgs := detailFlowStatementFor(task)
 	reads["an item's flow"] = seek(subject, flow, flowArgs...)
+	// AND A REMOVED SEAT'S OPEN WORK, which asks the same of each item.
+	departed, departedArgs := departedWorkStatement(planNow, "h-7")
+	reads["a departed seat's open work"] = seek(subject, departed, departedArgs...)
 	for name, read := range companyWideReads() {
 		// AN UNBOUNDED PAGE WALKS the index newest first and stops after
 		// it; a bounded one seeks its range.

@@ -865,7 +865,7 @@
 // figure) beside a [valueStream] and a string's encoder; two JSON rewrites,
 // each its scanner, its read buffer and a frame a container open; the readers
 // and writers of the archive's gzip and tar; and the plan, a sixteenth of the
-// plaintext at most. About 111 MiB at the archive's bound, 16 MiB of it the
+// plaintext at most. About 115 MiB at the archive's bound, 16 MiB of it the
 // plan, which a real session leaves nearly empty. A test holds the figure at a
 // smaller bound, and BenchmarkTheScrubAtThePlaintextBound measures it at the
 // real one, 256 MiB of plaintext, both readings of the tar from a file on disk.
