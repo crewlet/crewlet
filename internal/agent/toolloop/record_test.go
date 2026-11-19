@@ -74,21 +74,16 @@ func (c *clock) advance(d time.Duration) {
 }
 
 // EVERY ROUND RECORDS ITS OWN SPAN AND TOKENS: one round per model request,
-// numbered one-based, started in UTC within the run, timed for the MODEL's half
-// only — exactly the model's own time, never its calls on top — and costed as
-// its own request, cache included as a breakdown of input and never on top of
-// it. A chain can move a phase between models, so each round names the one
-// that served IT.
+// numbered one-based, started in UTC, timed for the MODEL's half only (never
+// its calls on top), costed as its own request with cache a breakdown of input,
+// never on top of it, and naming the model that served IT.
 //
 // DECIDED ON A CLOCK THE CASE MOVES, never the wall clock: the model writes for
 // exactly delay and each call runs for exactly callTook, so a round that kept
-// to its model's half took exactly delay, and round 2 carrying round 1's two
-// calls would have taken 75ms. A bound on the wall clock read a loaded
-// runner's scheduling of the harness and its socket as the calls' time, and
-// failed a healthy build (#1138). The clock starts an hour east of UTC, so a
-// start the loop failed to record in UTC is told by its zone, and decades
-// before any wall clock reads, so a stamp the loop read off the wall clock
-// instead is told by its year.
+// to its model's half took exactly delay (round 2 carrying round 1's two calls
+// would take 75ms). The clock starts an hour east of UTC, so a start not
+// recorded in UTC is told by its zone, and decades before any wall clock, so a
+// stamp read off the wall clock is told by its year.
 func TestEveryRoundRecordsItsOwnSpanAndTokens(t *testing.T) {
 	t.Parallel()
 	const delay, callTook = 15 * time.Millisecond, 30 * time.Millisecond
@@ -168,19 +163,13 @@ func TestEveryRoundRecordsItsOwnSpanAndTokens(t *testing.T) {
 }
 
 // A REQUEST TOLD AT THE END IS DATED BY ITS RECORD. A harness whose record
-// closes a request only when the run ends tells the host of its last request
-// after everything the run's end waited for (a helper of the harness still
-// running, the grace a held stream is given). Dated by when the host heard of
-// it, the round would count that wait as the model's time; dated by when the
-// record showed it ([llm.Turn.Seen]), it ends where the model did.
-//
-// The record's instant is the backend's clock and the round's span the
-// loop's, so it is held between the model's start and the moment the host
-// was told: a record clock ahead of the loop's dates the answer no later than
-// it was heard of, and one behind dates it no earlier than the model began.
-//
-// On a clock the case moves: the model writes for exactly delay, and the host
-// is told four seconds after the record showed the response.
+// closes a request only when the run ends tells the host after everything the
+// end waited for. Dated by when the host heard, the round would count that
+// wait as the model's time; dated by when the record showed it
+// ([llm.Turn.Seen]), it ends where the model did. The record's instant is the
+// backend's clock and the span the loop's, so it is held between the model's
+// start and the moment the host was told. The clock is the case's: the model
+// writes for exactly delay, the host is told four seconds after the record.
 //
 // Mutation: make Observe ignore Seen and the first case's round takes four
 // seconds more than its model; drop either bound and the clock that disagrees

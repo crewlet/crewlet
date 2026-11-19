@@ -193,16 +193,14 @@ func HandedIn(role *config.Role, kind integration.Kind) string {
 // apply rewrites one position in its seat, or its unit, and reports whether
 // it changed it.
 //
-// AN `mcp_env` KEY IS DROPPED where the engine now binds the seat's own
-// credential to that server itself (D15), and pointed at the engine's name for
-// it where it does not, so the tool keeps reading the seat's own credential
-// either way. A SEAT BLOCK FIELD is pointed at the engine's name. Neither ever
-// keeps naming a variable a company block shares.
+// An `mcp_env` key is dropped where the engine now binds the seat's own
+// credential to that server (D15), and pointed at the engine's name for it
+// where it does not. A seat block field is pointed at the engine's name.
+// Neither keeps naming a variable a company block shares.
 //
-// A KEY THE SEAT INHERITS FROM ITS UNIT is dropped from the unit's block where
-// the engine binds the server, since it binds each member's own credential;
-// where it does not, the seat names its own credential over it, which wins key
-// by key, and the unit's block is left to its other members.
+// A key the seat inherits from its unit is dropped from the unit's block where
+// the engine binds the server; where it does not, the seat names its own
+// credential over it (key by key) and the unit's block is left to the others.
 func (p position) apply(seat, unit map[string]any) bool {
 	to := seataccess.SinkName(p.kind, p.field, p.handle)
 	pointer := "${" + to + "}"

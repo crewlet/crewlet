@@ -17,19 +17,14 @@ var log = logging.Get("agent.skills")
 
 // # What a tool skill is, and what it is not
 //
-// It is NOT a memory, a plan or a procedure the agent wrote. It is
-// documentation an OPERATOR wrote about a tool the company deployed: how the
-// mention markup works on their chat backend, which field their tracker
-// calls a story point, what their branch naming convention is. The engine
-// cannot know any of it, and a model guessing at it produces work that looks
-// right and is wrong in the details.
+// It is not a memory, plan or procedure the agent wrote, but documentation an
+// OPERATOR wrote about a tool the company deployed (mention markup, which
+// tracker field is a story point, branch naming), which the engine cannot know
+// and a model would guess wrong in the details.
 //
-// # The catalogue is a menu, and that is the whole design
-//
-// Bodies are never inlined. Every phase whose surface matches sees a
-// one-line summary and can load the body on demand — because a company with
-// twenty MCP servers has twenty skills, and inlining them would spend the
-// prompt on documentation for tools this turn will not touch.
+// The catalogue is a menu: bodies are never inlined. Every phase whose surface
+// matches sees a one-line summary and loads the body on demand, because twenty
+// MCP servers mean twenty skills the prompt would pay for on every turn.
 
 const (
 	// MaxBodyBytes caps a rendered body.

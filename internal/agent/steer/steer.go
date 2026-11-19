@@ -47,6 +47,30 @@
 // that record by the write that hands the note over, so the record's read notes
 // are the turn's carried notes ([Read]), which open every later phase.
 //
+// The launch hands the box's notes over in the write that creates the record
+// ([Box.HandOver]): they ride it waiting, ahead of any note filed there
+// directly. A launch that fails before the write gives them back
+// ([Box.Reopen]); one that fails after it leaves them to the record's ending.
+// A read the record marks unanswered or restarted ([Reading].Unanswered,
+// Restarted) is carried as read all the same, and no continuation of that job
+// holds it.
+//
+// # Who may steer
+//
+// Decided on the turn's SEAT: its lead, or admin. A turn whose run is out names
+// the seat on its record under a sealed anchor, which the asking node reads
+// itself, with no scatter. Before that the asking node cannot know the seat:
+// admin is admitted at once, a caller who leads nobody is refused at once, and
+// anybody else's call first sends a [Request.Probe], which offers nothing (one
+// nobody answers is `unavailable`), then is decided again on the seat it names
+// before the note is offered.
+//
+// The reviewer and every phase of the engine's own loop read notes; a worker,
+// the onboarding pass and the judge do not. A read note is carried into every
+// later phase, or the reviewer would grade against the task the person
+// corrected. So the source a runner reads ([runner.SteerSource]) is a box or the
+// record, never both: two sources would read one note twice.
+//
 // # What this package is
 //
 // The [Box] one segment holds, the wire a note crosses to reach it, and the
@@ -65,7 +89,11 @@
 // of a note already taken is answered [StatusAccepted] and adds nothing: the
 // note's id is the person's request id, so a retry after an answer that was lost
 // in transit is the same note, and a turn that read the same instruction twice
-// would act on it twice.
+// would act on it twice. A note's id is the request's Idempotency-Key as
+// internal/api/opkey scoped it to its principal, so an MCP call, which names
+// none, is a new note every time. The node running the turn remembers the last
+// 256 turns it ended, so a note that raced an end is answered closed rather than
+// by silence, which the asker reads as `unknown`.
 //
 // # What counts as unread
 //
@@ -291,15 +319,12 @@ type Reading struct {
 // every note the turn has read whose read its record marks unanswered as the
 // brief read them, by id (sandbox.NoteRead.Unanswered).
 //
-// THE MARKS BESIDE THE NOTES, read off the same record: a mark is made off the
-// path of the take it settles, and can land after the segment that launches
-// read the record it resumed from — so a launch counts the record's marks as
-// they stand when it briefs, never only as its segment found them.
-//
-// Orders is the place among the record's reads (Reading.Order) of every note
-// the segment's source handed it from the record, and of every note of Notes
-// whose place the record holds already, by id; nil from a source that keeps no
-// record ("Where a brief tells a note").
+// The marks are read off the same record: a mark can land after the segment
+// read the record it resumed from, so a launch counts them as they stand when
+// it briefs. Orders is the place (Reading.Order) of every note the segment's
+// source handed it from the record, and of every note of Notes whose place the
+// record already holds, by id; nil from a source that keeps no record ("Where
+// a brief tells a note").
 type Briefing struct {
 	Notes      []Note
 	Unanswered []string

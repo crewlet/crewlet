@@ -141,13 +141,11 @@ func TestEndingEverySessionInTheCompanyIsAdmins(t *testing.T) {
 // ENDING SOMEBODY ELSE'S SESSIONS ASKS FOR THE ADMINISTRATOR'S PROOF, AND
 // ENDING YOUR OWN ASKS FOR NONE.
 //
-// One verb, two arms: a person who finds an intruder in their account signs
-// out everywhere at once, whatever their proof's age, and an administrator
-// ending a colleague's sessions — and every machine token the colleague holds
-// — is asked `step_up`, as every other directory write is. A proof two hours
-// old is outside it; the controls are the same administrator a minute
-// after proving, and the colleague ending their own on a week-old cookie.
-//
+// One verb, two arms: a person who finds an intruder signs out everywhere
+// whatever their proof's age, while an administrator ending a colleague's
+// sessions (and machine tokens) is asked `step_up` like every directory
+// write. A proof two hours old is outside it; the controls are the same
+// administrator a minute after proving, and the colleague on a week-old cookie.
 // Mutation: read the row's one window for both arms and the week-old cookie
 // is refused; ask the self window of both and the stale administrator is
 // admitted.
@@ -187,29 +185,15 @@ func TestEndingSomebodyElsesSessionsAsksForTheAdministratorsProof(t *testing.T) 
 }
 
 // NO TOOL A SEAT MAY TAKE ASKS FOR A PROOF, NOR DOES ANY VERB A TOOL ASKS FROM
-// INSIDE ITSELF.
-//
-// A verb a seat's tools are served under carries the tool's own name, with no
-// dot, and a tool that must read a row before it knows what it is about asks
-// the same gate a dotted verb next — archiving a project, renaming a page,
-// re-routing a task ([toolVerbs]). A seat has no keyboard to prove anything
-// at, and the operator's MCP surface — the same tools, for a person's
-// assistant — is not a step-up surface: either kind of row asking for a proof
-// would refuse every seat that holds the grant, with a sentence telling a
-// model to sign in again. A self arm's own window ([proofAsked]) counts too:
-// it is the one a seat meets on its own record.
-//
-// A HUMAN-ONLY tool may ask one (code_purge_unreachable, a purge as the work,
-// page and artifact purges are): the table refuses every seat it before the
-// window is read, every credential that reaches the operator's MCP surface
-// with nobody at a keyboard is fresh by construction, so no model is ever told
-// to sign in, and the one caller the window does stop is a person's dashboard
-// session, whose press answers step_up_required and runs the step-up ceremony.
-//
+// INSIDE ITSELF. A tool's verb carries the tool's own name, with no dot, and a tool reading a
+// row first asks the same gate a dotted verb next ([toolVerbs]). A seat has no
+// keyboard and the operator's MCP surface is no step-up surface: a proof
+// asked (a self arm's window too, [proofAsked]) would tell a model to sign in.
+// A HUMAN-ONLY tool may ask one (code_purge_unreachable, the purges): seats
+// are refused before the window is read and MCP credentials are fresh.
 // Mutation: give `work.project.archive` a step-up, or `set_priorities`'s self
 // arm one, or drop humanOnly from code_purge_unreachable's row, and this goes
-// red naming the tool or internal/agent/builtin, where
-// the archive tool asks it.
+// red naming the tool or internal/agent/builtin.
 func TestNoToolAsksForAProof(t *testing.T) {
 	t.Parallel()
 	for _, v := range toolVerbs(t) {

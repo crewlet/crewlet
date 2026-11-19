@@ -237,13 +237,11 @@ func (j *LLMJudge) Decide(ctx context.Context, req Request) (Decision, error) {
 // judgeSystemPrompt is the whole of the judge's instructions.
 //
 // It states the answer format first and the question second, because the
-// format is the part a smaller model drops; the user message ends on a
-// `Verdict:` cue that prompts the answer in it. The examples are two lines
-// rather than prose for the same reason.
+// format is what a smaller model drops; the user message ends on a `Verdict:`
+// cue, and the examples are two lines rather than prose for the same reason.
 //
-// Repetition keeps its threshold: one unchanged retry of a failure is how a
-// transient one (a timeout, a 503) is ridden out, and a phase otherwise
-// converging must not be rescued for it — only a failure met the same way
+// Repetition keeps its threshold: one unchanged retry is how a transient
+// failure (a timeout, a 503) is ridden out, so only a failure met the same way
 // more than twice reads as a loop.
 //
 // It does not repeat the most the judge may grant: the user message states

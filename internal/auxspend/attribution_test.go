@@ -18,20 +18,15 @@ import (
 
 // EVERY AUXILIARY CALL STATES WHAT IT IS FOR, IN THE SOURCE.
 //
-// The seam refuses an attribution with no valid purpose at run time, which
-// stops a record filed under nothing — and turns a forgotten purpose into a
-// model call that never happens, on a path a test may never drive. So the
-// rule is held where it is written: every call of the seam's method, anywhere
-// in the tree, hands it an attribution whose PURPOSE is a constant a reader
-// can find — `types.Aux…`, or `types.AuxCondense(…)` for a compaction — written
-// at the call, through `.For(…)` or a learning turn's `.Reflecting(…)`, or as
-// the `Purpose` of a `Use` literal.
+// The seam refuses an attribution with no valid purpose at run time, turning a
+// forgotten purpose into a call that never happens, on a path a test may never
+// drive. So the source holds the rule: every call of the seam's method hands it
+// a PURPOSE constant written at the call (`types.Aux…`, `types.AuxCondense(…)`),
+// through `.For(…)`, `.Reflecting(…)`, or the `Purpose` of a `Use` literal.
 //
-// Two shapes pass a purpose through rather than writing one, and each is held
-// to the same rule one frame further out: a seam that FORWARDS the use it was
-// handed (a method named Auxiliary passing its own parameter on), and a helper
-// named in [purposeForwarders], whose every caller must pass a constant in the
-// purpose's position.
+// Two shapes pass a purpose through, each held one frame further out: a seam
+// that FORWARDS the use it was handed (a method named Auxiliary), and a helper
+// in [purposeForwarders], whose every caller passes a constant in its position.
 func TestEveryAuxiliaryCallStatesItsPurpose(t *testing.T) {
 	t.Parallel()
 	files := seamFiles(t)

@@ -40,22 +40,16 @@ const (
 )
 
 // refusalDetail is the machine-readable half of a refusal the authority table
-// made: the reason and the grants, under the keys every surface answers them
-// with.
+// made: the reason and the grants, under the keys every surface uses.
 //
-// VALUES, NOT A SENTENCE. "This needs admin" written at the call site is a
-// second statement of the rule, and it is the one that goes stale the day the
-// rule's permission moves; the grants here are what the deciding rule actually
-// consulted. The sentence a person reads is the envelope's `message`, which
-// belongs to the code and is chosen by the reason this carries.
+// VALUES, NOT A SENTENCE: "This needs admin" at a call site is a second
+// statement of the rule that goes stale when its permission moves. The
+// sentence a person reads is the envelope's `message`, chosen by the reason.
 //
 // UNEXPORTED, with [stepUpDetail], so the only way to the fields is
-// [RefusalFields], which picks the CODE in the same breath. Exported, each half
-// was a way to write a refusal's fields beside a code spelled at the call site
-// — and every surface that did so answered `unauthorized`, whatever the
-// mapping would have said: a question's REST answer, the socket's frames, the
-// overview's mirrors, the sign-in surface's step-up. Every refusal reaches a
-// surface as a [Decision] now, so a call site has nothing to hand a pair to.
+// [RefusalFields], which picks the CODE in the same breath: fields written
+// beside a code spelled at the call site answered `unauthorized` whatever the
+// mapping said. Every refusal reaches a surface as a [Decision].
 func refusalDetail(reason Reason, grants []iam.Grant) httpjson.Detail {
 	names := make([]string, 0, len(grants))
 	for _, g := range grants {
@@ -82,37 +76,17 @@ func stepUpDetail(d Decision) httpjson.Detail {
 	return detail
 }
 
-// RefusalFields is how one refusal the authority table made is answered: its
-// status, its code and the machine-readable fields that say why.
+// RefusalFields answers one refusal the authority table made, as status, code
+// and fields: a STALE PROOF is `step_up_required` with its window
+// ([stepUpDetail]), the whole remedy; a MACHINE TOKEN on a person-present
+// verb is `token_refused` (no permission on it would admit it); a ROLE below the verb's is `unauthorized` naming the role
+// ([DetailRole]); every other refusal is `unauthorized` with the reason and
+// grants ([refusalDetail]); NO RELATION to an artifact ([Decision.NotFound])
+// is `404 not_found` with no detail, byte for byte an unknown id's.
 //
-//   - A STALE PROOF is `step_up_required`, carrying the window it needs
-//     ([stepUpDetail]): the rule admitted the caller, and confirming who they
-//     are and replaying the request is the whole remedy.
-//   - A MACHINE TOKEN on a verb that needs a person present is
-//     `token_refused`: no permission on the token would admit it.
-//   - A caller whose ROLE on an artifact is below the verb's is
-//     `unauthorized` naming the role it needs ([DetailRole]) beside the
-//     reason and the grants.
-//   - Every other refusal is `unauthorized`, carrying the rule's reason and
-//     the grants that would have admitted the caller ([refusalDetail]).
-//   - Except a caller with NO RELATION to an artifact ([Decision.NotFound]),
-//     which is `404 not_found` with no detail at all: byte for byte the
-//     answer for an id nothing holds, so it cannot say whether the artifact
-//     exists, and a surface adds nothing to it.
-//
-// ONE MAPPING FOR EVERY SURFACE, [EnvelopeRefusal] included, and the reason it
-// is a function of its own: a surface that answers a refusal with fields of its
-// own beside the rule's — the parts of a write it refused, the sentence a
-// tool's gate worded — used to spell the code itself, and the copies drifted:
-// the operator surface answered a token's refusal `unauthorized`, whose
-// sentence sends a caller to ask for a permission no token could carry. Such a
-// surface takes the three values here and adds its fields to the detail. A
-// walk in internal/api refuses any of the three codes handed to a call
-// anywhere under it, so a surface cannot spell one beside this.
-//
-// FOR A REFUSAL, never an unknown: a decision this node could not reach is not
-// a 403 at all, and every caller answers [Decision.Unknown] first — see
-// [EnvelopeRefusal].
+// ONE MAPPING FOR EVERY SURFACE, [EnvelopeRefusal] included: a walk in
+// internal/api refuses any of these codes handed to a call. FOR A REFUSAL,
+// never an unknown: callers answer [Decision.Unknown] first.
 func RefusalFields(d Decision) (status int, code httpjson.Code, detail httpjson.Detail) {
 	if d.NotFound() {
 		return http.StatusNotFound, httpjson.CodeNotFound, nil

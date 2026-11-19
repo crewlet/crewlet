@@ -53,20 +53,16 @@ func sentArgs(t *testing.T, p proposal.Preview) map[string]any {
 
 // A ROOM'S MEMBERSHIP CHANGE REMOVES ONLY WHAT IT NAMES (ADR-0055).
 //
-// A membership is stated whole, so the card shows it as the change it makes to
-// the room as it is now: who is added and who is removed, each a row, the
-// removals said again at the top of the card, which is destructive, and who
-// reads the room after, by name, since only its members read a private room
-// (D09). A member given by handle alone keeps how they follow the room,
-// written into the request; a member the call leaves out without naming them
-// in removes refuses the step, naming them, and so does a removal named for a
-// member who stays or for somebody not in the room. A member who stays may be
-// a seat the chart no longer lists, and one who joins may not. A change that
-// moves nobody, a unit's own room and a direct conversation are refused before
-// any card. Mutation: drop removalsNamed or the summary, send removes to the
-// tool, drop the membership the card read from the request's expectation,
-// let a bare handle reset how a member follows, or add a handle no seat
-// holds, and a case here fails.
+// A membership is stated whole, so the card shows who is added and removed,
+// each a row, the removals repeated atop the destructive card, and who reads
+// the room after, by name (D09). A bare handle keeps how the member follows;
+// a member left out without being named in removes refuses the step, as does a
+// removal named for one who stays or is not in the room. A staying member may
+// be a seat the chart no longer lists; a joining one may not. A no-op, a
+// unit's room and a direct conversation are refused before any card.
+// Mutation: drop removalsNamed or the summary, send removes to the tool, drop
+// the membership read from the request's expectation, let a bare handle reset
+// how a member follows, or add a handle no seat holds, and a case here fails.
 func TestARoomMembershipChangeRemovesOnlyWhatItNames(t *testing.T) {
 	t.Parallel()
 	read := reader(assistanttest.World())
@@ -238,16 +234,15 @@ func TestEveryFaultOfAMembershipIsOneRefusal(t *testing.T) {
 // A CHAT CHANGE IS BOUND TO THE ROOM OR THE MESSAGE IT WAS SHOWN AGAINST
 // (ADR-0051).
 //
-// A change of a room binds the room as its card shows it, its settings and
-// its whole membership, and an edit or a delete binds the message's position.
-// Each re-reads as itself until somebody changes what the card showed, and
-// then as another, so the approval is refused as stale; a room or a message
-// gone since is gone. A message said in the room meanwhile moves the room's
-// own revision and changes nothing the card showed, so it leaves the change
-// standing: bound to that revision, every change to a room anybody talks in
-// would go stale before it was approved. Mutation: bind the room's
-// `revision`, bind no revision, or bind an edit to the room rather than the
-// message, and a case here fails.
+// A change of a room binds the room as its card shows it, settings and whole
+// membership; an edit or a delete binds the message's position. Each re-reads
+// as itself until something the card showed changes, then as another, so the
+// approval is refused as stale; a room or message gone since is gone. A
+// message said meanwhile moves the room's own revision but nothing the card
+// showed, so the change stands: bound to that revision, every change to a
+// room anybody talks in would go stale. Mutation: bind the room's `revision`,
+// bind no revision, or bind an edit to the room rather than the message, and
+// a case here fails.
 func TestAChatChangeIsBoundToWhatItWasShownAgainst(t *testing.T) {
 	t.Parallel()
 	read := reader(assistanttest.World())
@@ -334,19 +329,16 @@ func TestAChatChangeIsBoundToWhatItWasShownAgainst(t *testing.T) {
 
 // A CHAT CARD NAMES THE ROOM AND WHO READS IT (D09).
 //
-// A post names the room as people do and who will read it, the members of a
-// private room by name and the whole company for a public one; a room closed
-// to new messages refuses a post before any card. A room the call names as
-// people write it ("#launch") is read by that name, and the write is sent to
-// the id the read answered. A reply quotes the message it answers, a direct
-// message names everyone it reaches, an edit shows the old words beside the
-// new, a delete the words it takes down, redacted, and a leave the person
-// going, each of those two destructive and saying what goes above the rows. A
-// message already taken back refuses an edit and a delete, and somebody else's
-// message refuses an edit. Mutation: name the room by its id, send the name
-// the call gave in place of the room's id, show the call's own words in place
-// of the stored ones, or draw a delete or a leave as an ordinary change, and a
-// case here fails.
+// A post names the room and who will read it (a private room's members by
+// name, the company for a public one); a closed room refuses a post before
+// any card. A room named "#launch" is read by that name and written by the
+// id the read answered. A reply quotes its message, a direct message names
+// everyone it reaches, an edit shows old beside new words, a delete the
+// redacted words it takes down, a leave the person going; delete and leave
+// are destructive. A message already taken back refuses an edit and a delete,
+// and somebody else's refuses an edit. Mutation: name the room by its id,
+// send the call's name for the room's id, show the call's words for the
+// stored ones, or draw a delete or leave as ordinary, and a case here fails.
 func TestAChatCardNamesTheRoomAndWhoReadsIt(t *testing.T) {
 	t.Parallel()
 	preview := func(name string, world map[string]any, args map[string]any) (proposal.Preview, error) {
@@ -491,20 +483,16 @@ func TestAChatCardNamesTheRoomAndWhoReadsIt(t *testing.T) {
 
 // A CHAT READ SAYS THE ROOM AS PEOPLE WRITE IT.
 //
-// A read about one room takes it by its name ("#launch") as by its id, sent
-// as the room's questions read it, and its step and its card's title say
-// where the read is: "#launch" where the call did, and where the call named it
-// by its id, the room as the turn reads it, a direct conversation by the
-// people in it beside the reader, never the id; with nothing to read it by,
-// "the room". So two direct conversations, which only an id names, are two
-// titles and two reads to the drawer. Its card opens the chat screen at the
-// room the answer carries, labelled by what it opens; a room is drawn with the
-// "#" every screen draws and is keyed by it, so the answer's "#launch" is its
-// chip, and the room's card heads a direct conversation, which has no name and
-// so no key, by its people, as the rail draws one. Mutation: say the call's id
-// in the step, title two conversations alike, open the screen by anything but
-// the answer's room, draw or key a room without its "#", key a conversation,
-// or head one by its id or by what it is alone, and a case here fails.
+// A read about one room takes its name or id, and its step and card title say
+// where it is: "#launch" where the call did; for an id, the room as the turn
+// reads it, a direct conversation by its people beside the reader, never the
+// id; with nothing to read it by, "the room". So two direct conversations,
+// which only an id names, are two titles and two reads to the drawer. Its card
+// opens the screen at the answer's room; a room is drawn and keyed with "#"
+// (its chip), a direct conversation, having no name, headed by its people.
+// Mutation: say the call's id in the step, title two conversations alike, open
+// the screen by anything but the answer's room, draw or key a room without
+// "#", key a conversation, or head one by its id, and a case here fails.
 func TestAChatReadSaysTheRoomAsPeopleWriteIt(t *testing.T) {
 	t.Parallel()
 	room := assistanttest.RecordID

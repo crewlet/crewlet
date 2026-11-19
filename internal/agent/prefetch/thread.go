@@ -15,65 +15,33 @@ import (
 
 // The thread so far: what was already said where this turn was woken.
 //
-// # Why it is handed over rather than fetched
-//
-// A chat thread reply is usually thin — "yes", "+1", "what about the other
-// one" — and the thread is the context. The engine used to say so in the
-// prompt and tell the agent to go and read it with its chat tools. On a
-// company whose chat tools come from a per-role MCP server that costs three
-// rounds before a word is read: list the server's tools, activate one, and
-// only then call it, with the schema arriving on the NEXT message. An agent
-// that skipped the trip answered the eleven words of trigger text with no
-// idea what the thread was about and reported the work delivered. Everything
-// needed to just hand it over was already on the node — the channel and the
-// thread root are on the trigger's own metadata, and each seat's
-// authenticated client is held by its transport.
-//
-// # It is fenced
-//
-// Every message in it is somebody else's words, frozen into the system prompt
-// of every round, so the messages sit inside one [provenance.Fence] carrying
-// the turn's token and the speakers as its authors: a message that spells a
-// closing marker, or an instruction to the seat, stays a line somebody said.
-// The preamble and the engine's own notices stay outside it, because they are
-// the engine telling the seat how to read the thread.
-//
-// # It does not turn the trigger thick
-//
-// [Request.RequiresRecon] still gates the three relevance filters on a chat
-// thread reply, and deliberately: that flag describes the trigger BODY, which
-// this block does not change, and the filters judge relevance against the
-// trigger TEXT rather than against the thread. See [notify.ChatPrompt] for
-// the other half of the argument, which is that the flag is stored on every
-// historical event.
+// Handed over, not fetched: a thread reply is thin ("yes", "+1") and the
+// thread is the context. Telling the agent to read it with its chat tools
+// costs three rounds on a per-role MCP server, and an agent that skipped the
+// trip answered with no idea what the thread was about. The channel and
+// thread root are on the trigger's metadata and each seat's client is held by
+// its transport, so the node can read it.
+
+// Fenced: every message is somebody else's words, frozen into the system
+// prompt of every round, so they sit in one [provenance.Fence] carrying the
+// turn's token and the speakers as authors. The preamble and the engine's own
+// notices stay outside it: they are the engine telling the seat how to read.
+// It does not turn the trigger thick: [Request.RequiresRecon] still gates the
+// relevance filters, because it describes the trigger BODY, which this block
+// does not change. See [notify.ChatPrompt].
 
 const (
-	// threadMaxChars is the bound, in bytes, on the block as a whole:
-	// past it the root and the newest WHOLE messages fill three quarters
-	// and the messages between them are condensed into the last quarter —
-	// never a cut inside a message, and never a message simply left out
-	// while a rewrite can be had.
+	// threadMaxChars is the only bound, in bytes, on the block: past it the
+	// root and the newest WHOLE messages fill three quarters and the middle
+	// is condensed into the last quarter, never cut inside a message. A
+	// message count would bound nothing the bytes do not.
 	//
-	// THE ONLY BOUND. There was a second, thirty messages, which dropped
-	// everything older whatever its size; with the middle condensed rather
-	// than dropped, a count bounds nothing the bytes do not, and on a
-	// thread of short replies it threw away messages that would have fit.
+	// 8000 is roughly 2k tokens, about thirty ordinary chat messages, and a
+	// third of internal/agent/prompts' EndingsMaxBytes (24 000): both ride
+	// every request of the executor's session, and the thread must not crowd
+	// out the account of what the conversation's turns already did.
 	//
-	// ITS OWN MEASURE: roughly 2k tokens — about thirty ordinary chat
-	// messages, the count the bound above replaced — so the ceiling bites on
-	// a thread longer than that or one whose messages are documents rather
-	// than replies, and what it bites is condensed rather than dropped. And
-	// a third of the bound on how the conversation's earlier turns ended
-	// (internal/agent/prompts' EndingsMaxBytes, 24 000): both are handed to
-	// the executor when it launches — the thread with its context, the
-	// endings in its brief — and ride every request of its session after,
-	// and the thread a turn was woken in must not crowd out the account of
-	// what the conversation's turns already did.
-	//
-	// NOT A CONFIG FIELD. A render bound exposed as a knob was validated,
-	// defaulted and documented for a truncation that never happened,
-	// because nothing threaded it to a caller; a bound belongs where the
-	// render is.
+	// Not a config field: a bound belongs where the render is.
 	threadMaxChars = 8000
 
 	// threadEarlierShare is the part of threadMaxChars the condensed
@@ -82,32 +50,17 @@ const (
 	// quarters of the room.
 	threadEarlierShare = 4
 
-	// ThreadTimeout bounds the read.
+	// ThreadTimeout bounds the read. Not [AuxTimeout]: the prefetch's wall
+	// clock is its slowest block, which a person sits through.
 	//
-	// ITS OWN, and deliberately NOT [AuxTimeout]: thirty seconds is
-	// justified for an LLM round trip and is nowhere near justified here.
-	// The prefetch's wall clock is its SLOWEST block, which is latency a
-	// person is sitting through, so five seconds is decided against what
-	// each backend's read can cost:
-	//
-	//   - A VENDOR read is one HTTP call, and five seconds is under the
-	//     self-hosted client's own 10s retry budget, so that client's
-	//     automatic 429 retry cannot turn a prefetch into a ten-second
-	//     stall at the start of every chat turn.
-	//   - The ENGINE'S OWN chat is a linearizable estate read, routed to a
-	//     data node where this one holds none. The serving node may wait a
-	//     statelog.ReadBudget (2s) for the floor and another for the level,
-	//     then runs one indexed query — so a holder that is answering at
-	//     all answers inside four seconds, and the second that remains is
-	//     the query and the round trip. A test holds the two together.
-	//     What it does NOT cover is a FAILOVER: the router gives one node
-	//     ten seconds (estate.ReadAttempt) before asking the next, so a
-	//     first holder that is gone renders the unreadable hint — which
-	//     sends the seat to read the thread with its own tools — rather
-	//     than holding the turn a person is waiting on for the ten-plus
-	//     seconds a failover takes. Every other read the turn makes goes
-	//     through the same router with its own budget, so the thread is
-	//     still one tool call away.
+	//   - A vendor read is one HTTP call; 5s is under the self-hosted
+	//     client's 10s retry budget, so its 429 retry cannot stall every turn.
+	//   - The engine's own chat is a linearizable estate read: the serving node
+	//     may wait statelog.ReadBudget (2s) for the floor and again for the
+	//     level, then runs one query, so a live holder answers inside four
+	//     seconds (a test holds the two together). A failover
+	//     (estate.ReadAttempt, ten seconds) is not covered: the unreadable hint
+	//     renders and the seat reads the thread itself.
 	ThreadTimeout = 5 * time.Second
 )
 
@@ -119,37 +72,28 @@ const EmptyThreadHint = "(this thread has no earlier messages — the message " 
 // UnreadableThreadHint is what the block says when the thread could not be
 // read from this node.
 //
-// A DIFFERENT SENTENCE from [EmptyThreadHint], for the reason
-// [BuildingKnowledgeHint] differs from [EmptyKnowledgeHint]: the difference
-// is what it tells the seat to do. "There is nothing earlier" says answer the
-// trigger as it stands; this says the trigger is a fragment of a conversation
-// nobody handed you, so go and read it before concluding anything — which is
-// the one case where the old "go and look" instruction was right.
+// A different sentence from [EmptyThreadHint], as [BuildingKnowledgeHint]
+// differs from [EmptyKnowledgeHint]: it tells the seat the trigger is a
+// fragment of a conversation, so go and read it before concluding anything.
 //
-// It covers more than a failed request. A node in maintenance mode starts no
-// chat transport, a self-hosted instance unreachable at boot leaves the
-// company running without its chat surface, and a seat whose token was
-// refused has no client at all. Every one of those renders this rather than
-// nothing, because a seat handed no thread AND no instruction to find one is
-// strictly worse off than it was before this block existed.
+// It covers more than a failed request: maintenance mode starts no chat
+// transport, a self-hosted instance unreachable at boot leaves no chat
+// surface, and a refused token leaves no client. Each renders this rather
+// than nothing, because a seat handed no thread and no instruction to find
+// one is worse off.
 const UnreadableThreadHint = "(the thread this message is part of could not be " +
 	"read from this node — you have only the triggering message, so read the " +
 	"thread with your chat tools before answering anything that depends on it)"
 
 // UnrenderableRootLine stands in for a thread root there is nothing to render.
 //
-// THE ROOT KEEPS ITS SLOT, and this is what sits in it. A root with no
-// readable body is ordinary — an alert bot posts its payload in attachments
-// or blocks and no text at all, a file share carries no comment, a system
-// line is bookkeeping, and on the self-hosted backend a deleted root is not
-// returned at all — and a thread rooted on one of those is exactly the thread
-// people reply in. Dropping it silently promoted the oldest surviving REPLY
-// into the root's place: kept by every bound, rendered first, and described to
-// the model as what the thread is about.
-//
-// So the absence is SAID. A seat told the opening could not be shown knows to
-// go and look at it if it matters; a seat shown a reply labelled as the
-// opening has no way to find out.
+// The root keeps its slot, and this sits in it. A root with no readable body
+// is ordinary (an alert bot's attachments, a file share, a system line, a
+// deleted root on the self-hosted backend) and people reply in such threads.
+// Dropping it would promote the oldest surviving reply into the root's place,
+// kept by every bound and described to the model as what the thread is about.
+// So the absence is said: a seat shown a reply labelled as the opening could
+// not find out.
 const UnrenderableRootLine = "- _(the first message in this thread could not be " +
 	"shown here — it carries no readable text. Read the thread itself with your " +
 	"chat tools if what it opened with matters.)_"
@@ -168,17 +112,12 @@ const threadPreamble = "The chat thread this turn was woken in, oldest first, " 
 // threadStoppedShortPreamble replaces it when the backend could not reach the
 // end of the thread.
 //
-// THE ORDINARY PREAMBLE IS A LIE ON THIS PATH, and the worst available one:
-// it tells the model the newest messages are what woke it, and a read that
-// stopped short is missing precisely the newest — the triggering message
-// included, because a chat backend pages a thread from the OLDEST end (see
-// [notify.Transcript.StoppedShort]). A seat told otherwise answers the last
-// message it happens to have and reports the work delivered, which is the
-// exact failure this whole block exists to stop.
-//
-// So it keeps the two facts that are still true — which thread this is, and
-// what the **you** lines are — drops the one that is not, and spends the
-// difference on the instruction that IS right here: go and read the rest.
+// The ordinary preamble is false on this path: it says the newest messages
+// woke the turn, and a read that stopped short is missing precisely the
+// newest, the trigger included, because a backend pages a thread from the
+// OLDEST end (see [notify.Transcript.StoppedShort]). A seat told otherwise
+// answers the last message it has. So this keeps the two true facts (which
+// thread, what the **you** lines are) and instead says to read the rest.
 const threadStoppedShortPreamble = "Part of the chat thread this turn was " +
 	"woken in, oldest first. IT STOPS SHORT: this thread is longer than " +
 	"could be read from here, so the newest messages — including the one " +
@@ -239,37 +178,15 @@ func (f *Fetcher) threadContext(ctx context.Context, r Request) threadBlock {
 
 // renderThread bounds and renders what came back.
 //
-// WHOLE MESSAGES, never a cut inside one, which would leave half of what
-// somebody said reading as the whole of it. Past the bound the messages
-// between the root and the newest that fit are CONDENSED by the seat's
-// auxiliary model into one account marked as a rewrite, and only where no
-// rewrite can be had are they left out — and counted. Two survivors are exempt
-// from every bound: the ROOT, because it is what the thread is about and a
-// thread rendered without it reads as a conversation starting mid-sentence,
-// and the NEWEST, because it is the message that woke the turn.
-//
-// THE ROOT IS THE FIRST MESSAGE, never "the first line that rendered". Which
-// message is the root is [notify.ThreadReader]'s answer, not this renderer's —
-// it holds the thread address and this does not — so the identity is read off
-// the position the seam guarantees and then held explicitly, and a root with
-// nothing renderable keeps its slot as [UnrenderableRootLine]. Filtering
-// first and calling lines[0] the root is what the two bounds below, the
-// preamble and the drop notice all silently did instead, so a root an alert
-// bot posted as attachments alone promoted the oldest surviving reply into
-// its place and described it to the model as what the thread was about.
-//
-// Whole items, the newest kept and the rest accounted for, is also how a turn
-// is told its conversation's earlier endings (internal/agent/prompts); this is
-// the block whose items are somebody else's prose.
-//
-// AND IT SAYS WHICH WAITING MESSAGES IT SHOWED ([Blocks.ThreadContextAnswered])
-// — the waking message's writer's, written for whom the turn works for, after
-// this seat's own last reply and before the message that woke the turn
-// ([waitingMessages]) — kept in step with the
-// lines through every bound. Only a
-// message rendered VERBATIM counts: one left out was never seen, and one
-// condensed into the middle's account was seen as a model's paraphrase, and a
-// message recorded as answered is one a later delivery of it is dropped for.
+// Whole messages, never a cut inside one. Past the bound the middle is
+// condensed by the auxiliary model into one account marked as a rewrite, or
+// left out and counted where none can be had. The ROOT and the NEWEST are
+// exempt from every bound. The root is the first message, never "the first
+// line that rendered" ([notify.ThreadReader]'s answer): one with nothing
+// renderable keeps its slot as [UnrenderableRootLine], else the oldest reply
+// would be promoted. It records which waiting messages it showed
+// ([Blocks.ThreadContextAnswered]), only those rendered VERBATIM: a condensed
+// one was seen as a paraphrase, and a recorded one has later deliveries dropped.
 func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Transcript, backend string) threadBlock {
 	lines := make([]string, 0, len(read.Messages))
 	// waiting runs beside lines: the message a line rendered, by its id and
@@ -429,37 +346,18 @@ func (f *Fetcher) renderThread(ctx context.Context, r Request, read notify.Trans
 	}
 }
 
-// waitingMessages marks, by position in the read, the messages that were
-// waiting for the turn trigger woke: the trigger's own writer's, written for
-// whom the turn works for (workingFor), after this seat's own last reply,
-// before the trigger itself. Each is named by its id and the version it was
-// read at ([notify.Message.Version]), so its mark drops the wake of the edit
-// the turn was shown and never a later one.
+// waitingMessages marks, by position, the messages waiting for the turn the
+// trigger woke: the trigger writer's, written for whom the turn works for
+// (workingFor), after this seat's last reply and before the trigger. Each is
+// named by id and version read ([notify.Message.Version]), so its mark drops
+// the wake of the edit shown, never a later one.
 //
-// NOTHING, unless the read reached the trigger: a read that stopped short is
-// missing the newest messages — the trigger among them — and a trigger the
-// read does not contain says nothing about which messages came before it.
-// Every message up to the seat's own last reply is excluded because that
-// reply is where the seat last answered the thread: what came before it is
-// not waiting for anybody.
-//
-// ONLY THE TRIGGER'S WRITER'S, by the backend's sender id in this same read,
-// both known: one turn works for one writer (ADR-0109), and a message another
-// writer sent is owed a turn of its own, worked for them and held to their
-// apps. Recorded as worked here, it would be dropped when it came back behind
-// this turn, answered only inside a turn that worked for somebody else. The
-// price, accepted: when another writer's turn failed and its message comes
-// back behind this one, that turn answers it even where this turn already
-// spoke to it.
-//
-// AND ONLY THOSE WRITTEN FOR WHOM THIS TURN WORKS FOR, as the partition keys a
-// carrier ([notify.WorkingForKey]): one agent's message written for another
-// requester is that requester's work, owed a turn of its own held to their
-// apps, as another writer's message is. Compared with the turn's own carrier,
-// never the trigger message's document, which keeps its post's carrier across
-// an edit made for somebody else. NOTHING where the read could not say whom
-// its messages were written for ([notify.Transcript.WorkingForUnread]): it then
-// cannot tell one requester's message from another's.
+// Nothing unless the read reached the trigger. Only the trigger writer's
+// (ADR-0109): another's is owed a turn of its own and would be dropped when it
+// came back. Only those for this turn's carrier ([notify.WorkingForKey]), never
+// the trigger document's, which keeps its post's carrier across an edit made
+// for somebody else; nothing if the read could not say
+// ([notify.Transcript.WorkingForUnread]).
 func waitingMessages(read notify.Transcript, trigger string, workingFor *types.WorkingFor) map[int]Answered {
 	if trigger == "" || read.StoppedShort || read.WorkingForUnread {
 		return nil

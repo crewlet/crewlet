@@ -5,17 +5,15 @@ import "testing"
 // THE MODELS SCREEN OFFERS A WRITE ONLY TO AN ADMIN, because every route it
 // writes through is decided by the admin grant alone. The dashboard knows a
 // reader's grants, never the engine's actions, so Settings › Models gates each
-// write control on `admin` (dashboard/src/routes/settings/models/data.ts). That
-// stays true only while each of these actions is [ClassAdmin], which
-// [Decide] grants on the admin grant and nothing else: one moved to another
-// class would leave a reader the engine admits without the control, or offer
-// one the engine refuses. This is where such a move is noticed.
+// write control on `admin` (dashboard/src/routes/settings/models/data.ts).
+// That holds only while each of these actions is [ClassAdmin]: one moved to
+// another class would leave a control missing for a reader the engine admits,
+// or offer one it refuses. This is where such a move is noticed.
 //
-// `PUT /config` is decided as [ActionOrgWrite] for each place in the chart it
-// reaches, and a setting it changes (`providers.llm`, `assistant`) is asked
-// of [ActionConfigWrite]. A change to seats alone may be admitted to a lead of
-// those seats; the screen offers it to an admin only, which withholds a write
-// the engine would admit but never offers one it refuses.
+// `PUT /config` is decided as [ActionOrgWrite] per place it reaches, and a
+// setting it changes (`providers.llm`, `assistant`) as [ActionConfigWrite]. A
+// seats-only change may be admitted to a lead; the screen offers admin only,
+// withholding a write the engine would admit, never offering one it refuses.
 func TestTheModelsScreensWritesAreAnAdminsAlone(t *testing.T) {
 	t.Parallel()
 	for _, a := range []Action{

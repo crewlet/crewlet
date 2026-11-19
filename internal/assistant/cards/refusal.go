@@ -16,53 +16,25 @@ import (
 //
 // The route's `detail` and `hint`, and every error the assistant's own checks
 // raise about a call, are written for whoever corrects the request: they name
-// tools ("write_page refused that"), fields and config keys in backticks
-// (`knowledge.root_space`), routes ("PUT /config/units/{id}") and the values
-// to send instead. That is exactly what the model needs, and it reads all of
-// it ([wire.Refusal.ForModel]). A person reading the same words in the drawer
-// learns nothing they can act on, and is shown the engine's internals. So the
-// sentence a person reads is decided here, once, from the refusal's code and
-// the status it came with, and every place a refusal leaves the engine for a
-// person (a step's line, a read's error card, a failed proposal's strip) goes
-// through [PersonRefusal]. What to do next is the assistant's to say in plain
-// words, from the detail it was handed, which the prompt asks of it.
-//
-// A REFUSAL ON AUTHORITY SAYS ITS RULE. The authority table answers most of
-// its refusals `403 unauthorized`, and few of them are a missing permission: a
-// verb the assistant never takes, a change it can only propose, a role on an
-// artifact below the verb's, a verb only an agent makes. Worded by their code
-// and status, every one of them read "You do not have the access this
-// needs.", an administrator's among them. So a refusal carrying the table's
-// reason says the sentence the envelope says for that rule
-// ([httpjson.RefusalMessage]), the words every reader of the API is told, and
-// only the rest are worded here by their code and status.
-//
-// THE RULE AND THE GRANTS STAY: closed-set words a client decides by, the
-// reason that refused and the permissions it names. The grants alone cannot
-// say whether a permission is the way past (a stale proof's are the ones that
-// admitted the person), and the reason can.
-//
-// A PERSON'S OWN WORDS ARE READ AS THEY ARE, where the route wrote them for a
-// person: a route answering a tool's refusal to a person answers it in the
-// words the refusal carries for a person, and in no `detail` where it carries
-// none (internal/api/operator's Fail, ADR-0060), as an artifact in the trash
-// says to restore it first. The route marks that `detail` as a person's by
-// telling the tool's own sentence beside it in process, never on the answer
-// ([wire.Refusal.Said]). No sentence chosen by a code can say who changes a
-// state, so those words are the person's, redacted and held to the rule every
-// sentence here keeps ([ForAPerson]); an unmarked detail is the model's.
-//
-// A RACE IS ONLY A RACE. A 409 is a write that lost to somebody else's, a name
-// something else holds, or the state of what the write is about (in the
-// trash, past the company's storage quota, a full inbox), and answered by its
-// status every one of them read "Another change landed at the same moment.",
-// which sent a person to try again at what trying again never changes. So a
-// 409 or a 412 is said by its code ([codeSentences]), and one whose code this
-// build has no sentence for says only that it was not accepted.
+// tools, fields, config keys, routes and the values to send instead. The model
+// needs all of it ([wire.Refusal.ForModel]); a person learns nothing from it.
+// So the sentence a person reads is decided here, once, from the refusal's
+// code and status, and every place a refusal leaves the engine for a person (a
+// step's line, a read's error card, a failed proposal's strip) goes through
+// [PersonRefusal]. What to do next is the assistant's to say, from the detail
+// it was handed.
 
 // The sentences a person reads, by kind of refusal. Each is whole on its own,
 // says nothing about what changed (a failed proposal's card adds "Nothing
 // changed." itself), and names no tool, field, route or value.
+//
+// A REFUSAL ON AUTHORITY SAYS ITS RULE: the authority table answers most
+// refusals `403 unauthorized`, few of them a missing permission, so by status
+// all would read refusedAccess. One carrying the table's reason says the
+// envelope's sentence for it ([httpjson.RefusalMessage]). The rule and the
+// grants stay as closed-set words a client decides by: the grants alone cannot
+// say whether a permission is the way past (a stale proof's admitted the
+// person), the reason can.
 const (
 	refusedAccess    = "You do not have the access this needs."
 	refusedSignedOut = "Your session has ended. Sign in again, then ask once more."
@@ -122,7 +94,10 @@ func RefusalHint(code string) string {
 
 // codeSentences are the sentences for the codes that say more than their
 // status: above all a 409's or a 412's, which is a race, a collision or the
-// state of what the write is about, each a different thing for a person to do.
+// state of what the write is about (in the trash, past the storage quota, a
+// full inbox), each a different thing for a person to do. By status all would
+// read refusedRace, sending a person to retry what retrying never changes. A
+// 409 or 412 whose code has no sentence here says only that it was not accepted.
 var codeSentences = map[string]string{
 	// THE RACES: somebody else's change landed first, and asking again
 	// against what is there now is the whole of it.
@@ -187,6 +162,13 @@ func PersonRefusal(r wire.Refusal, status int) wire.Refusal {
 // route wrote them for a person ([wire.Refusal.Said]) and they keep the rule
 // every sentence here keeps; else its code's ([codeSentences]); else its
 // status's class.
+//
+// A person's own words are read as they are: a route answering a tool's
+// refusal answers in the words the refusal carries for a person, and in no
+// `detail` where it carries none (internal/api/operator's Fail, ADR-0060). The
+// route marks that `detail` as a person's by telling the tool's sentence beside
+// it in process, never on the answer. Such words are redacted and held to
+// [ForAPerson]; an unmarked detail is the model's.
 func personSentence(r wire.Refusal, status int) string {
 	if r.Reason != "" {
 		if said := httpjson.RefusalMessage(httpjson.Code(r.Code), r.Reason, r.Grants); said != "" {

@@ -20,8 +20,9 @@
 // rule and the fix, every finding of the kit in one pass.
 //
 // THE STORED FORM. A logo or a face is stored as [Sanitize] writes it: an SVG
-// re-serialised by internal/artifacts/svgsafe, a PNG without the ancillary
-// chunks that carry metadata, a WebP without its EXIF and XMP, a WOFF2 as it
+// re-serialised by internal/artifacts/svgsafe, a PNG read chunk by chunk, its stream
+// inflated row by row to exactly the rows its header promises (so a bomb is
+// refused before it grows), without the ancillary chunks that carry metadata, a WebP without its EXIF and XMP, a WOFF2 as it
 // came once its header is inside the bounds. Nothing else is ever stripped. The
 // publish pipeline stores that form, and an adoption sanitizes every file it
 // copies again, so what the public brand route serves is always this build's
@@ -47,7 +48,7 @@
 //   - `colors.primary`, `secondary`, `text`, `light_ground`, `dark_ground`
 //     and `primary_on_dark` are colour roles, an absent optional role taking
 //     the kit's Crewlet fallback. Each is `#rrggbb`, lowercase hex
-//     ([ColorPattern]). Contrast is judged on the effective values (fallbacks
+//     ([ColorPattern]). Contrast is WCAG 2's, judged on the effective values (fallbacks
 //     filled): `text` on `light_ground` below [MinTextContrast] refuses an
 //     ADOPTION (never a publish: a draft may be unfinished); every other pair
 //     ([ContrastPairs]) warns. An absent role is measured as the kit paints
@@ -77,7 +78,8 @@
 // holds every field an adoption requires: the canonical index it snapshots
 // ([Canonical], read back with [Decode]), the one stylesheet generated from it
 // ([CSS]: `--brand-*` inputs on `:root` and `@font-face` rules, every value
-// re-checked as it is written), the extensions the public route serves its
+// re-checked as it is written, every URL `/_crewlet/brand/<sha256>.<ext>`, and
+// nothing else emitted: the injection corpus fuzzes that), the extensions the public route serves its
 // files under ([Ext], [ServedExts], [ContentType]), and the slide theme a deck
 // begun in the brand copies ([SlideTheme]).
 //

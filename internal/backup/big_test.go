@@ -13,18 +13,14 @@ import (
 )
 
 // A snapshot larger than the server's in-flight window has to be CREDITED to
-// keep flowing: the server hands out a fixed number of slots (its window
-// divided by the chunk size — 64 at the sizes this package asks for) and
-// refills one per chunk answered. A receiver that never answers gets exactly
-// that many chunks and then stalls until the server's ack timeout aborts the
-// transfer.
+// keep flowing: the server hands out a fixed number of slots (window divided
+// by chunk size, 64 here) and refills one per chunk answered. A receiver that
+// never answers gets that many chunks, then stalls until the ack timeout aborts.
 //
-// That is why this test is deliberately big enough to cross the window: every
-// smaller stream in this package's tests passes whether or not the credit is
-// sent, so without this one the rule would be enforced by a comment. The data
-// is random per message because a JetStream snapshot is compressed — ten
-// megabytes of zeroes, or of one repeated block, snapshots to a few kilobytes
-// and never reaches a second chunk.
+// So this test is deliberately big enough to cross the window: every smaller
+// stream here passes whether or not credit is sent. The data is random per
+// message because a JetStream snapshot is compressed: megabytes of zeroes
+// snapshot to a few kilobytes and never reach a second chunk.
 func TestASnapshotPastTheInFlightWindowStillCompletes(t *testing.T) {
 	t.Parallel()
 	nc := embeddedNATS(t)

@@ -19,18 +19,15 @@ import (
 // THE TWO INSTRUCTION CHANNELS. A replay hands a peer a person's frames and a
 // Stop ends a person's turn, each on the asking node's word that the person
 // asked, so both are signed (internal/signedask) in request and reply domains
-// of their own, bound by an id and a deadline the reply names. The SERVING
-// node checks the owner the request names against the turn it holds, and a
-// turn that is somebody else's is answered [AnswerNotYours], never served.
+// of their own, bound by an id and a deadline. The SERVING node checks the
+// owner the request names against the turn it holds; somebody else's turn is
+// answered [AnswerNotYours], never served.
 //
-// Scattered to every node and answered only by the node the request names
-// ([ReplayRequest.Node]): the turn's row says where it runs, and only that
-// node can say it is NOT running it, which is how a follower tells a runner
-// that restarted from one that is slow. One request names no node: a PROBE
-// ([ReplayRequest.Probe]) asks every node the newest seq it numbered for a
-// turn, so a node opening the turn's next segment numbers it after all of
-// them, and a client that drew frames from one node never meets a number it
-// has already seen from another.
+// Scattered to every node, answered only by the node the request names
+// ([ReplayRequest.Node]): only the node the turn's row names can say it is NOT
+// running it, telling a restarted runner from a slow one. A PROBE
+// ([ReplayRequest.Probe]) names no node and asks every node its newest seq, so
+// a next segment is numbered after all of them.
 
 // Answer is what a serving node answered a replay or a Stop.
 type Answer string

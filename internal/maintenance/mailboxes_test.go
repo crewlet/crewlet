@@ -1234,8 +1234,7 @@ func TestARetirementReHomesTheSeatsWorkBeforeItDeletesItsMailbox(t *testing.T) {
 			"want neither", n, h.work.recorded())
 	}
 
-	marked := base.Add(grace + time.Minute)
-	if n := h.mustTick(marked); n != 1 {
+	if n := h.mustTick(base.Add(grace + time.Minute)); n != 1 {
 		t.Fatalf("the sweep after the grace period retired %d mailboxes, want 1", n)
 	}
 	calls := h.work.recorded()
@@ -1254,9 +1253,13 @@ func TestARetirementReHomesTheSeatsWorkBeforeItDeletesItsMailbox(t *testing.T) {
 		t.Errorf("the work was re-homed after %d run retirements, want before the seat's runs are ended "+
 			"while they are still facts", call.runsEnded)
 	}
-	if got := call.retiring; got.Before(marked) || got.Sub(marked) > time.Minute {
-		t.Errorf("the work was re-homed under %s, want the instant the retirement was marked at, %s",
-			got, marked)
+	// THE MARK'S OWN INSTANT, which the session removal is handed too: the
+	// one instant this attempt's operations are derived from.
+	if sessions := h.sessions.recorded(); len(sessions) != 1 ||
+		!call.retiring.Equal(sessions[0].retiring) || call.retiring.Equal(base) {
+		t.Errorf("the work was re-homed under %s, want the instant the retirement was marked at, "+
+			"the one its sessions were removed under (%+v), never the absence's %s",
+			call.retiring, sessions, base)
 	}
 	if h.inboxExists("swe") {
 		t.Error("the retired seat's inbox is still there after its work was re-homed")
@@ -1294,8 +1297,12 @@ func TestARetirementThatCannotReHomeTheSeatsWorkIsRetried(t *testing.T) {
 	if n := h.mustTick(base.Add(grace + time.Hour)); n != 1 {
 		t.Fatalf("the retry retired %d mailboxes, want 1", n)
 	}
-	if calls := h.work.recorded(); len(calls) != 2 || !calls[1].retiring.After(calls[0].retiring) {
-		t.Errorf("the work was re-homed under %+v, want the retry under a later instant", calls)
+	// A RETRY IS MARKED ANEW, and re-homes under its own mark.
+	calls, sessions := h.work.recorded(), h.sessions.recorded()
+	if len(calls) != 2 || len(sessions) != 1 || calls[1].retiring.Equal(calls[0].retiring) ||
+		!calls[1].retiring.Equal(sessions[0].retiring) {
+		t.Errorf("the work was re-homed under %+v and the sessions removed under %+v, want the "+
+			"retry under its own mark", calls, sessions)
 	}
 }
 

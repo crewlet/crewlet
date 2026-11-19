@@ -14,19 +14,13 @@ import (
 // SPIKE S5: `old_str`/`new_str` edits, through the shipped edit application
 // ([edits.Normalize], [edits.Apply]) at the publish's own limits.
 //
-// testdata/s5/cases.json is a set of republishes in the shapes a model's edits
-// take: a unique quote of the page it read, several edits in one publish, a
-// quote widened until it is unique, a quote too short to be unique, a quote
-// made from memory (indentation, quotes, entities or wording drifted), and an
-// edit quoting text an earlier edit of the same publish already replaced.
-// Each records what the application must answer. The spike reports how many
-// apply, why the rest are refused, and the bytes an edit carries against
-// republishing the whole file.
-//
-// The SHARE THAT APPLIES here is the committed mix's, not a model's. The rate
-// a real agent achieves is measured by replaying captured republishes through
-// this same harness: the procedure is S5 in docs/reference/artifact-capacity.md,
-// and a capture is a cases file of the same shape.
+// testdata/s5/cases.json holds republishes in the shapes a model's edits take
+// (unique quote, several edits, widened, too short, made from memory, quoting
+// already replaced text), each with the answer the application must give. The
+// spike reports how many apply, why the rest are refused, and the bytes an
+// edit carries against republishing the file. The share that applies is the
+// committed mix's, not a model's: S5 in docs/reference/artifact-capacity.md
+// replays captured republishes (a cases file of the same shape).
 //
 // Run: go test -run '^$' -bench S5 -benchtime 1x ./internal/artifactspike
 
