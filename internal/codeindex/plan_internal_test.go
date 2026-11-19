@@ -170,23 +170,16 @@ func asciiLower(b []byte) []byte {
 
 // A PLAN NEVER REJECTS A BLOB GO'S REGEXP FINDS A MATCH IN.
 //
-// The plan's whole promise: a blob holding a match is a candidate, so a
-// search through the index answers what reading every file with the same
-// expression would. Held first on the cases each half of the index's
-// comparison exists for — a non-ASCII letter (?i) folds that only a Unicode
-// lowering meets, and the long s no lowering sees through, which the escape
-// flag admits — and then over patterns GENERATED from the vocabulary above
-// and blobs holding matches GENERATED from each pattern's own syntax tree
-// (regexlittest), each blob a segment's, every one Go's regexp matches
-// required among the plan's candidates, and every blob's lines confirmed
-// exactly as regexp finds them line by line. Each eighth pattern's blobs are
-// also split across two segments and merged, and the merge must answer what
-// the whole did.
-//
-// A FIXED SEED, so a failure reproduces exactly; its breadth is the count,
-// and the counts it reports say the property was met where it can fail: a
-// match only a Unicode lowering finds, and one only the escape flag admits —
-// the two an ASCII-only lowering and a dropped flag would lose.
+// The plan's whole promise: a blob holding a match is a candidate, so an index
+// search answers what reading every file would. Held first on the cases each
+// half of the index's comparison exists for (a non-ASCII (?i) letter only a
+// Unicode lowering meets, the long s only the escape flag admits), then over
+// patterns GENERATED from the vocabulary above and blobs GENERATED from each
+// pattern's syntax tree (regexlittest): every match Go's regexp finds is among
+// the candidates, and every blob's lines confirm as regexp finds them. Each
+// eighth pattern's blobs are split across two segments and merged, and the
+// merge must answer what the whole did. A FIXED SEED reproduces a failure; the
+// counts say a Unicode-only and an escape-only match were met.
 func TestAPlanNeverRejectsAMatchGoRegexpFinds(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ pattern, blob string }{

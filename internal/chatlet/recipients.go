@@ -8,29 +8,13 @@ import (
 // WHO A MESSAGE CONCERNS, and why the answer is THREE functions rather than
 // one.
 //
-// [Resolve] is the WRITE side: it turns the rows a room actually has (its
-// membership, who has spoken in the thread, who follows it, who answers for
-// the room) into the recipient set that rides the record. It is the only half
-// that can see those rows, because it runs inside the decide's own snapshot.
-//
-// [Candidates] is PURE OVER THE RECORD: no clock, no store, no roster. That is
-// what lets the wake parser run it on another node minutes later and reach the
-// same answer the writer did, from the snapshot the record carried instead of
-// from rows it may not have applied yet.
-//
-// [Route] is the post-filter both of them end with, and it needs two facts no
-// record can carry: who the company employs RIGHT NOW, and who made the
-// change. Splitting it out is what lets the write path route against the
-// roster it has and the parser route again against the roster it has, through
-// ONE arithmetic — so the two can never disagree about who a message was for.
-//
-// # The one rule the whole file is
-//
-// A HANDLE APPEARS ONCE, UNDER THE FIRST REASON THAT NAMES IT. Somebody who
-// is mentioned in a thread they follow in a room they follow in full is told
-// they were MENTIONED, which is the strongest fact and the one they will act
-// on. The order is [Reasons] — the vocabulary's, not this file's — and nothing
-// here computes a precedence.
+// [Resolve] is the WRITE side: room rows into the recipient set that rides the
+// record, inside the decide's snapshot. [Candidates] is PURE OVER THE RECORD
+// (no clock, store or roster), so the wake parser on another node reaches the
+// writer's answer. [Route] is the post-filter both end with, needing who the
+// company employs RIGHT NOW and who made the change; one arithmetic keeps them
+// agreeing. A HANDLE APPEARS ONCE, UNDER THE FIRST REASON THAT NAMES IT, in
+// [Reasons]'s order; nothing here computes a precedence.
 
 // Candidate is one handle a message concerns, and why.
 //
@@ -184,19 +168,14 @@ func resolve(r Routing) ([]Candidate, bool) {
 // ResolveMentions is the MENTION ARM ALONE, which is the whole of what an EDIT
 // may honestly wake.
 //
-// An edit is not a second message. Raising the room's standing arms again
-// would page a thread, a room's followers and a direct conversation's other
-// side every time somebody fixed a typo — while a colleague the edit NOW NAMES
-// has been addressed by it and has heard nothing about it at all. So the
-// caller passes the handles the edit added and this raises exactly those,
-// under the same privacy rule and the same cap the mention arm has when a
-// message is first posted.
+// An edit is not a second message: re-raising the standing arms would page a
+// thread, followers and a direct conversation's other side for every typo fix,
+// while a colleague the edit NOW NAMES heard nothing. The caller passes the
+// handles the edit added; the privacy rule and cap are the mention arm's.
 //
-// A SEPARATE ENTRY POINT rather than a [Routing] with its other fields left
-// empty, because two of the arms cannot be silenced that way: a direct
-// conversation's arm is keyed on the room's KIND, and the follow-all arm on a
-// flag the membership carries — and a caller that zeroed either to suppress
-// them would be lying about the room in order to get the routing it wanted.
+// A SEPARATE ENTRY POINT, not a [Routing] with fields emptied: a direct
+// conversation's arm is keyed on the room's KIND and follow-all on a membership
+// flag, and zeroing either would lie about the room to get the routing.
 func ResolveMentions(r Routing) ([]Candidate, bool) {
 	r.loud = false
 	c := &collector{}
@@ -207,20 +186,13 @@ func ResolveMentions(r Routing) ([]Candidate, bool) {
 // Candidates is every handle a record says its message concerned, in
 // precedence order.
 //
-// PURE OVER THE RECORD, and it returns nothing for a nil notification — which
-// is the single rule that keeps the two surfaces in step: a quiet record (a
-// system line, a reaction, a prune) carries no [Notify], so the parser routes
-// nobody for exactly the records the writer meant to wake nobody with.
+// PURE OVER THE RECORD; a nil notification returns nothing, so a quiet record
+// (system line, reaction, prune) routes nobody, as the writer meant.
 //
-// # Why it re-applies the caps and the precedence to a set that already has them
-//
-// Because the record may have been written by a NEWER BUILD. The write path's
-// own set is already deduplicated and capped, so every branch below is a no-op
-// for anything this build wrote — and for a record a newer peer wrote, a wake
-// set is SPENT rather than kept like a row: applying what the fleet accepted
-// is the rule for rows, and launching an executor in a box for each of two
-// hundred seats a record named is not something an older build has to agree
-// to.
+// It re-applies the caps and precedence to an already-capped set because the
+// record may come from a NEWER BUILD: a wake set is SPENT, not kept like a row,
+// and launching an executor per seat for two hundred named seats is not
+// something an older build must agree to.
 func Candidates(n *Notify) []Candidate {
 	if n == nil {
 		return nil
@@ -262,29 +234,12 @@ func Candidates(n *Notify) []Candidate {
 
 // Route is the post-filter: who is actually WOKEN.
 //
-// Four steps, in this order, and each one is a different question:
-//
-//  1. Drop handles the roster no longer knows. A seat that was removed from
-//     the org chart is a wake nothing can run.
-//  2. Drop PEOPLE. A human seat is ADDRESSABLE and never woken: a wake runs a
-//     TURN, and routing one to a person would spend a model call answering on
-//     their behalf. This is stated HERE rather than left to the notification
-//     spine to refuse downstream, because the record carries the routed set —
-//     so a person left in it is a wake this package asked for and a later
-//     layer happens to decline.
-//  3. Drop the actor. Telling somebody what they just said is a round a model
-//     spends on nothing, and there is no reason here that wakes its own author
-//     — a chat message has no equivalent of the tracker's unblocked notice,
-//     which is about somebody else's task.
-//  4. If no ordinary candidate survived, keep the answerer and only the
-//     answerer. The other two conditions on it (a named room, and a person
-//     speaking) are facts about the RECORD, so they are applied where the
-//     candidate is offered rather than here.
-//
-// A NIL PREDICATE ROUTES NOBODY. It cannot tell a seat this company still has
-// from one it does not, nor a person from an agent, and both answers are
-// required — so the honest response to having neither is the empty set rather
-// than waking everybody the record named.
+// In order: drop handles the roster no longer knows; drop PEOPLE (a human seat
+// is addressable, never woken, since a wake runs a TURN; stated here because
+// the record carries the routed set); drop the actor; if no ordinary candidate
+// survived, keep only the answerer (its other conditions are facts about the
+// RECORD, applied where it is offered). A NIL PREDICATE ROUTES NOBODY: without
+// the roster's answers, the empty set beats waking everybody the record named.
 func Route(candidates []Candidate, known func(handle string) (exists, human bool),
 	actor string) []Candidate {
 
@@ -458,21 +413,14 @@ func (r Routing) mentioned() []string {
 // answerable reports a message a room owes an answer to when nobody else was
 // reached: a PERSON speaking in a NAMED room.
 //
-// ONE PREDICATE, read by the write path to decide whether to resolve an
-// answerer at all and by [answererOf] on both halves of this file, so the
-// writer never snapshots an answerer the routing would refuse and the parser
-// never routes one the writer would not have resolved.
-//
-// A NAMED ROOM ([Kind.Named]): public, private or a unit's. A direct
-// conversation needs no answerer, because every participant in it is already
-// woken under [ReasonDM], and an unknown kind a newer build wrote is not a
-// room this build can say anything about.
-//
-// A PERSON SPEAKING ([AuthorHuman]). That is what stops a company talking to
-// itself: an agent's post that reached nobody has reached exactly who it
-// should, while a person who posted in a room and was answered by silence is
-// somebody talking to an empty screen. A credential acting as itself speaks in
-// no room at all ([Actor.speaks]).
+// ONE PREDICATE, read by the write path and by [answererOf], so writer and
+// parser never disagree on an answerer. A NAMED ROOM ([Kind.Named]): a direct
+// conversation's participants are already woken under [ReasonDM], and an
+// unknown kind is not one this build can judge.
+// A PERSON SPEAKING ([AuthorHuman]) stops a company talking to itself: an
+// agent's post that reached nobody reached who it should, a person answered by
+// silence is talking to an empty screen. A credential acting as itself speaks
+// in no room ([Actor.speaks]).
 func answerable(kind Kind, author AuthorKind) bool {
 	return kind.Named() && author == AuthorHuman
 }
@@ -481,23 +429,13 @@ func answerable(kind Kind, author AuthorKind) bool {
 // its author: a mention the mention arm resolved ([Routing.mentioned]), of a
 // person or an agent alike.
 //
-// SUCH A MESSAGE HAS BEEN ADDRESSED, AND HAS NO ANSWERER. The answerer exists
-// for a person talking to an empty room, and "@sara can you review?" is aimed
-// at Sara: an agent obliged to answer it as well is noise, even though Sara,
-// a person, is never woken and so nobody is routed at all. It holds in a
-// unit's room exactly as in any other.
-//
-// THE MENTION ARM'S OWN ANSWER, so a private room's rule carries over: a
-// non-member named there was not reached (the room is unreadable to them), so
-// the message still owes the room an answer. And a handle the company does
-// not have reached nobody, so it addresses nobody either.
-//
-// READ BY THE WRITE PATH ALONE, when it resolves the answerer, because it
-// needs the roster and the people a message named, and the record carries
-// neither in a form the parser could re-read: its recipients are the routed
-// set, which holds no person. The writer therefore decides it and carries the
-// outcome, an answerer or none ([Notify.Answerer]), which both halves then
-// route identically.
+// SUCH A MESSAGE HAS BEEN ADDRESSED, AND HAS NO ANSWERER: "@sara can you
+// review?" is aimed at Sara, and an agent obliged to answer too is noise even
+// though a person is never woken. It uses the mention arm's own answer, so a
+// private room's rule carries over and an unknown handle addresses nobody.
+// READ BY THE WRITE PATH ALONE: it needs the roster and the people named, which
+// the record cannot carry (its recipients hold no person). The writer carries
+// the outcome ([Notify.Answerer]) and both halves route it identically.
 func (r Routing) namesASeat(known func(handle string) (exists, human bool),
 	author string) bool {
 

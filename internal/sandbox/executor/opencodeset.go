@@ -19,8 +19,9 @@ var openCodeCountReleases = []string{"2.0.32", "2.1.4", "2.2.7", "2.3.0"}
 // with the blanks around it trimmed. A SET, NEVER A RANGE: any release may
 // move a rule the count rests on, and nothing here can tell which one did;
 // and the writer and the box are one release, since no probe has continued a
-// pair's sessions. The package doc ("The OpenCode releases the count reads")
-// says how a release is added.
+// pair's sessions. It is the set a save beside a running server is made on
+// too ([OpenCode.PackSave]). The package doc ("The OpenCode releases the count
+// reads") says how a release is added, its saves' probes included.
 func openCodeCountRead(release string) bool {
 	return slices.Contains(openCodeCountReleases, strings.TrimSpace(release))
 }

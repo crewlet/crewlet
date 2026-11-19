@@ -22,14 +22,17 @@
 // asked once more of the NEXT node of its order, in a second round: an indexed
 // repository's runner-up is the second holder, which keeps an index too. No
 // third round: a repository two nodes could not answer is named in the
-// coverage, never chased across the fleet while its asker waits.
+// coverage, never chased across the fleet while its asker waits: a search waits
+// two [RoundBudget]s at most.
 //
 // # Each node searches as the asker, so the request is signed
 //
 // A serving node carries the request out AS THE ASKER IT NAMES: each
 // repository is read through internal/gitlet/query, which syncs the copy and
 // JUDGES THE ASKER'S GRANT from that node's own chart, as every read by object
-// id is judged. So the request is an instruction, and the scatter is a
+// id is judged, each repository's one second look at the log's head synced to
+// the head the asker's linearizable listing read (Request.Head) rather than a
+// barrier a repository. So the request is an instruction, and the scatter is a
 // signedask.Channel ([Channel]): an unsigned one would let any client of the
 // broker read any repository as any seat or person in the company. A request
 // carries an id and a deadline inside its signed body, a node takes an id
@@ -85,7 +88,9 @@
 // node's chart refuses (NotPermitted), a ref the repository does not hold
 // (NoRef), every line of it past the answer's limit (PastLimit) — beside the
 // grep repositories an unfiltered search leaves out
-// (GrepNotNamed) and the indexed ones read with git grep (NotIndexed). A
+// (GrepNotNamed) and the indexed ones read with git grep (NotIndexed). Each
+// repository is in exactly one set, by what the LAST node asked for it
+// answered, so a silent runner-up is NotAnswering. A
 // search that could not reach part of the company never reads as one that
 // found nothing there.
 //
@@ -101,5 +106,17 @@
 // node's searches together read at most [ScatterReads] of its repositories at
 // once — all but one unit of its seat git-work share, which each read's git
 // takes, so a seat's ordinary read always finds one a search cannot hold —
-// each under the search's own budget (gitlet.SearchBudget).
+// each under the search's own budget (gitlet.SearchBudget). The answer slots
+// (64 a request, 64 requests a node) are no bound for it: an unfiltered search
+// would queue 64 waiters on every node's share and push every seat's reads past
+// gitlet.GitShareWait. A read past its answer's due while waiting for a slot is
+// gitlet.UnreadyShare, and its runner-up is asked. The coverage's text shares
+// ONE budget, [MaxCoverageText], whole counts and cut names, since a cap a set
+// was three quarters of an answer at real name lengths.
+//
+// A search refused over ONE repository — a repo: naming one nobody declared or
+// the asker may not read — is a [RepoRefusal] naming it, so a surface answering
+// it says which. A request asking context lines or a per-file bound is stamped
+// [ContextProtocol], one asking neither 1, so an older answerer answers every
+// search it can answer whole.
 package codesearch

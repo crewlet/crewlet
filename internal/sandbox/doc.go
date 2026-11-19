@@ -351,8 +351,8 @@
 // calls the run's log had taken when it was read once the job was over, for a
 // job whose harness ended its own run ([SessionCapture.Through]; every call the
 // log takes is numbered as it is appended, [BridgeCall.Appended]), or, for
-// the take of a job still working or one cut off, the newest its launch is
-// known to hold (savepoint.go) — and the last note read the record says it
+// the take of a job still working or one cut off, zero, raised once its take
+// is counted (savepoint.go) — and the last note read the record says it
 // holds, none for a session cut off and none from a take the record marks
 // unanswered on ([SessionCapture.NoteCursor]): what a launch that continues the
 // session would need to know of what came after it.
@@ -715,8 +715,8 @@
 // save of the turn was left begun by a gone taker or unanswered, and held to
 // the license's pre-check; the fleet's policy, the seat's allowance, what the
 // box was handed and the taker lease; and only then the pack. The place, the
-// save point and the cursor all come from that one read, made before the
-// pack, for "The place order is the content order".
+// cursor and what raises the save point all come from that one read, made
+// before the pack, for "The place order is the content order".
 //
 // THE BOX PHASE IS THE DUTY'S, nothing after it: the attach, the stream's read
 // and the pack end with the stint of duty the offer came under (an E2B duty
@@ -740,11 +740,66 @@
 // superseded one within its grace and two of its passes, and the entry's end is
 // read on another node's clock, so twice the engine's assumed skew.
 //
-// A SAVE CONTINUES NOTHING ([savePlaces.continued] nil): a run's row records no
-// capture its launch continued, the saver is often not the launching process,
-// and the launch's request names what it ASKED for, which a failed restore
-// replaced with a fresh session. So a save is placed at its launch's newest
-// landed save's point, or zero, which tells more, never less.
+// # A capture no read places is reserved at zero, and raised after its take
+//
+// Kept by savepoint.go. A save, the take of a job still working and a capture
+// cut off may lack calls their harness had answered and never written, so no
+// read of the log places them. Each is RESERVED AT ZERO
+// ([SessionCapture.placeAtZero]), stating no read left out but every late call
+// its launch's brief counted ([LaunchRecord.LateOmittedCalls]) whatever its
+// place, since a continuation credits a telling of a late call by the note
+// cursor, never the save point (internal/agent/runner's heldByTelling), and a
+// session whose brief only counted the call is credited none: the ledger's
+// compare-and-swap, then the stamp, then its instant last, then the
+// reservation, with nothing that waits between the instant and the reservation;
+// then the spool, the check against what the ledger counted, and the spool's
+// whole read, which stamps the take's count and then RAISES the point
+// ([SessionCapture.placeAtNewest]), pure computation on that count and the one
+// row read; then the keep, whose outcome stamp, at the same instant, carries
+// the raised point. A take of a job still working or cut off follows the same
+// order. A standby's takeover reserves the next place after its own take, so at
+// the point that take raised: the one reservation above zero. A log's settle
+// that lands a begun capture lands it as the store holds it, at zero, which
+// loses the raise and tells more, never less.
+//
+// THE RAISE: once the take's count names the session's newest compaction (its
+// identity, [ResumedCount.Restart]), the point rises to the newest a held
+// capture states whose own newest compaction is that one, both identities read
+// and equal ([sameRestart], never [RestartedSince], which reads an unknown
+// basis as no restart): the launch's own landed capture ([launchKept]), and the
+// capture it continued ([LaunchRecord.Continued]), read only where its launch
+// is the job before's, the box took that session up ([SessionStartContinued])
+// and [LaunchRecord.BasisRestart], written from the same capture, is that
+// compaction. Omitted becomes the places of the launch's
+// [LaunchRecord.OmittedCalls] at or below the point, a read the brief left out
+// past it being told as a call after the point anyway, and LateOmitted stays
+// whole; BridgeSeq and BridgeOpen stay zero and nil, so an older build that
+// reads them is told every call. A raise the stamp's bounds refuse is dropped,
+// never the capture.
+//
+// WHY IT IS SOUND. The continued capture C1 states p1; the save's take names
+// C1's newest compaction, so the job made none after C1. Where C1's own job
+// made none after its brief, the session only grows between two captures with
+// one newest compaction, so the save's archive holds C1's prefix through p1.
+// Where it did, C1 holds some calls at or below p1 only in a summary, and the
+// launcher that continued it told it as one, every call from the round's start
+// (internal/agent/runner's keptRestarted), so the save holds those calls as
+// that brief told them; only a build whose runner judges the harness writes
+// [LaunchRecord.Continued]. Chains follow by induction: a raised save is a C1
+// for the next launch. A relaunch then tells, and asks a reading of, only the
+// calls past the point, so the identity check stands in for a reading of the
+// calls at or below it.
+//
+// THE SESSION ONLY GROWS is the premise, so a raise is gated where it is read.
+// An OpenCode count names its compaction only on a release whose count is read
+// (internal/sandbox/executor's openCodeCountRead), and a Claude Code capture is
+// raised only where its archive's release is one whose resume this build read
+// ([TakenSession.ResumeRead], internal/sandbox/executor's claudeResumeRead):
+// Claude Code rewrites its transcript in place to withdraw a message, and on
+// 2.1.112, 2.1.310 and 2.1.322, read in their shipped code, a withdrawal
+// reaches only the request attempt in flight, whose calls lie past the point,
+// while a trim follows a compaction, which moves the identity. Outside the set
+// the capture stays at zero.
 //
 // # A save is offered by the poll, from memory
 //
@@ -767,17 +822,18 @@
 // DUE-NESS IS COUNTED ON THIS NODE'S CLOCK ALONE: the interval
 // ([SessionKeep.SaveInterval], this node's revision) after the last attempt,
 // doubled for each failure in a row up to the larger of the interval and an
-// hour, and never before the seat's allowance paces it. What was not there
-// (the box, the license, the taker, the place) moves the clock without
-// doubling; a landing resets it and remembers how far the job's stream had
-// run, so a job that has not moved since is not saved again. AT FIRST SIGHT
-// (a node that restarted, or took an E2B duty over) the last save is taken
-// to be the later of the launch's start and this launch's newest capture,
-// instants other machines stamped, clamped to within one interval of now: as
-// in "A capture's life is counted on one clock", an age read across machines
-// decides only a wait one interval bounds, so the first save comes within an
-// interval of first sight whatever any clock says, and a paced seat takes no
-// unpaced save then. A memory no offer came for in an hour is forgotten.
+// hour, and never before the seat's allowance paces it. What was not there (the
+// box, the license, the taker, the place, the box's room to pack) moves the
+// clock without doubling; a landing resets it and remembers how far the job's
+// stream had run, so a job that has not moved since is not saved again.
+// AT FIRST SIGHT (a node that restarted, or took an E2B duty over) the last
+// save is taken to be the later of the launch's start and this launch's newest
+// capture, instants other machines stamped, clamped to within one interval of
+// now: as in "A capture's life is counted on one clock", an age read across
+// machines decides only a wait one interval bounds, so the first save comes
+// within an interval of first sight whatever any clock says, and a paced seat
+// takes no unpaced save then. A memory no offer came for in an hour is
+// forgotten.
 //
 // # A save as its node drains
 //
@@ -795,6 +851,35 @@
 // made, never that context's parent, whose deadline would end the take before
 // it began. A take cut before its place stamps nothing, one cut after it is
 // stamped refused, and the run keeps its newest periodic save.
+//
+// # A pack in a node's own memory, one at a time
+//
+// Kept by [Coordinator.packSlot] and [ErrSaveNoRoom]. A box that shares the
+// node's memory ([Placement.OwnsMemory] false: a direct box) charges every
+// pack made in it against the engine's own, and an OpenCode export holds up
+// to about ten times its session at its peak (internal/sandbox/executor's
+// package doc has the measured table). NEITHER BOUND HOLDS ALONE: a room read
+// alone passes several packs that read one room at once, each filling what
+// the other read as free, and a slot alone lets one export take a container
+// past its limit. So EVERY PACK IN SUCH A BOX TAKES THE NODE'S ONE PACK SLOT
+// ([Coordinator.sharedPack]), a save's around its runner's PackSave, under its
+// duty, and a take's around its TakeSession, where a job still working or one
+// that left no archive is packed on demand, under the take's context: a wait
+// the duty ends is stood down, one the take's context ends refuses the take.
+// A box that owns its memory takes none. The slot costs a drain one pack after
+// another, 0.4 to 5.2 s an OpenCode export of a session to 64 MiB.
+//
+// AND AN OPENCODE SAVE CHECKS ITS BOX'S ROOM before its export, in every cell:
+// the room crewlet_memory's held= and avail_kb= lines state (the limit less
+// what the kernel cannot reclaim, capped by what the machine has available),
+// against twelve times the box's OpenCode database and WAL plus 128 MiB, every
+// session in it counted (the export is not known before it is made). Short of
+// it the pack refuses with [ErrSaveNoRoom], and the save waits one interval,
+// never doubled, since the room is the box's now, not the save's ("room",
+// logged at warning the first time a launch meets it). A room no file states
+// refuses nothing, and the slot still serializes. A FINAL PACK CHECKS NO ROOM:
+// refused, it would lose the job's newest state on an estimate that counts
+// every session in the box's database; it takes the slot all the same.
 //
 // # A turn's session is continued in whichever box its next launch gets
 //
@@ -841,10 +926,11 @@
 // ([Coordinator.continueKept]). And only one whose stamp states its SAVE
 // POINT ([SessionCapture.Through]), a count of the round's calls the session is
 // known to hold — the run's log as the capture read it once its job was over,
-// where its harness ended its own run, and else the newest point its launch
-// was known to hold (savepoint.go) — which is what the continuation is told the
-// calls after by: one an older build stamped states only the places it read
-// the log at, which cannot say which calls came after it.
+// where its harness ended its own run, and else zero raised after its take to
+// a point its launch's session holds (savepoint.go) — which is what the
+// continuation is told the calls after by: one an older build stamped states
+// only the places it read the log at, which cannot say which calls came after
+// it.
 //
 // AND NEVER OVER A COPY THAT WENT ON PAST IT ([copyWentPast]): a capture taken
 // while its job still worked is a point the job's session passed through, so
@@ -1753,8 +1839,8 @@
 //	the turn's read of its
 //	  conversation .................. ConversationBaseMaxBytes   24,576  (24 KiB)
 //	what a later build adds ......... ExtraRowBytes             262,144  (256 KiB)
-//	every other field, measured ..... measuredOtherFields     2,219,286
-//	to spare, measured .............. measuredSpare             376,622
+//	every other field, measured ..... measuredOtherFields     2,219,372
+//	to spare, measured .............. measuredSpare             376,536
 //
 // Every other field is the identity, status and time fields, the run its turn's
 // leads are kept for and how many leads that part has taken
