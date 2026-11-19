@@ -122,7 +122,7 @@ const (
 // [ohSession].
 func benchMeasured(b *testing.B, w io.Writer) []sandbox.LoggedCall {
 	b.Helper()
-	f := ohFixtures(b, "2.2.7")["O4"]
+	f := ohFixtures(b, "2.2.7")["truncation"]
 	zr, err := gzip.NewReader(bytes.NewReader(f.archive))
 	if err != nil {
 		b.Fatal(err)
