@@ -236,11 +236,6 @@ func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, n
 	return ev
 }
 
-// flowReads is the tracker's read of how long work stood in each flow state.
-type flowReads interface {
-	FlowHours(ctx context.Context, q worklet.FlowHoursQuery) ([]worklet.FlowHours, error)
-}
-
 // flowHours is how long each seat's items in progress stood in each flow state
 // over the window before now (ADR-0162). A company whose tracker is a vendor's
 // keeps no flow record: its staffing is not judged, and nothing is unread.
@@ -251,11 +246,7 @@ func (s Sources) flowHours(ctx context.Context, now time.Time) ([]worklet.FlowHo
 	case !kept:
 		return nil, nil
 	}
-	reads, ok := s.Work.(flowReads)
-	if !ok {
-		return nil, errors.New("queries: this node reads no flow record")
-	}
-	return reads.FlowHours(ctx, worklet.FlowHoursQuery{Since: now.Add(-advisor.Window), Until: now,
+	return s.Work.FlowHours(ctx, worklet.FlowHoursQuery{Since: now.Add(-advisor.Window), Until: now,
 		Level: statelog.ReadStale})
 }
 

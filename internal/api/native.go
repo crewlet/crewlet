@@ -161,6 +161,10 @@ func awaitsRestart(e *engine.Engine, half string) bool {
 // liveWork is the tracker's read side, resolved per question.
 type liveWork struct{ engine *engine.Engine }
 
+// A NODE'S WORK READER IS THE WHOLE CONTRACT the questions read through: a read
+// it left out would fail to compile here rather than degrade on a real node.
+var _ queries.WorkReader = liveWork{}
+
 func (l liveWork) reader() (estate.Work, error) {
 	started := l.engine.NativeStarted()
 	if r, ok := engine.OperatorWork(l.engine); ok {
@@ -389,6 +393,22 @@ func (l liveWork) EntryWork(ctx context.Context, q worklet.EntryWorkQuery, now t
 		return worklet.EntryWork{}, err
 	}
 	return r.EntryWork(ctx, q, now)
+}
+
+func (l liveWork) FlowHours(ctx context.Context, q worklet.FlowHoursQuery) ([]worklet.FlowHours, error) {
+	r, err := l.reader()
+	if err != nil {
+		return nil, err
+	}
+	return r.FlowHours(ctx, q)
+}
+
+func (l liveWork) FlowItems(ctx context.Context, q worklet.FlowHoursQuery) (map[string]int, error) {
+	r, err := l.reader()
+	if err != nil {
+		return nil, err
+	}
+	return r.FlowItems(ctx, q)
 }
 
 func (l liveWork) TurnsMoved(ctx context.Context, q worklet.TurnsMovedQuery) (map[string]bool, error) {

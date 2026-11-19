@@ -52,6 +52,15 @@ func (p patternsWork) WorkPatterns(context.Context, worklet.PatternsQuery) (work
 	return p.work, p.err
 }
 
+// FlowHours and FlowItems answer that this reader keeps no flow record.
+func (patternsWork) FlowHours(context.Context, worklet.FlowHoursQuery) ([]worklet.FlowHours, error) {
+	return nil, errors.New("this reader keeps no flow record")
+}
+
+func (patternsWork) FlowItems(context.Context, worklet.FlowHoursQuery) (map[string]int, error) {
+	return nil, errors.New("this reader keeps no flow record")
+}
+
 // ledgerUsage answers the turn ledger read and nothing else, keeping the range asked.
 type ledgerUsage struct {
 	UsageReads
