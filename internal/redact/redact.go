@@ -98,6 +98,8 @@
 // alone, and how the text is cut into writes changes nothing. Secrets itself
 // reads its text whole at any length: its caller holds the text already, and
 // read by the stages, a text that needs none of their windows paid for them.
+// What a stream writes is split into its own words and its markers as it
+// arrives by [OwnWordsWriter], as [OwnWords] splits a redacted text it holds.
 //
 // A stage decides with the whole-text code over its window ([rule.decide],
 // [keyReading]) and trusts a decision only where the window holds all it read.
