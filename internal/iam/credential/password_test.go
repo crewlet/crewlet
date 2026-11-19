@@ -12,16 +12,13 @@ import (
 // THE COST PARAMETERS ARE PINNED BY VALUE, AND EACH ASSERTION NAMES WHAT THE
 // VALUE BUYS.
 //
-// A cost that drifts DOWN is the one change in this package that is completely
-// invisible: every test still passes, every login still works, and the only
-// thing that moved is how long an offline attack against a stolen database
-// takes. Nothing else would notice, so this does.
+// A cost that drifts DOWN is invisible: every test and login still works, and
+// only an offline attack on a stolen database gets faster. Nothing else would
+// notice, so this does.
 //
-// Changing them here is changing them for the next build, and a change may
-// only RAISE a parameter: a verifier is rewritten only at a cost that lowers
-// none of its own ([TestAVerifierIsRewrittenOnlyUpNeverDown]), so a new cost
-// that trades one parameter down for another up reaches nobody enrolled before
-// it.
+// A change may only RAISE a parameter: a verifier is rewritten only at a cost
+// lowering none of its own ([TestAVerifierIsRewrittenOnlyUpNeverDown]), so a
+// cost trading one parameter down for another up reaches nobody enrolled.
 func TestTheCostParametersAreTheOnesThatShip(t *testing.T) {
 	t.Parallel()
 	if credential.Memory != 64*1024 {
@@ -148,20 +145,16 @@ func TestRaisingTheCostAsksForARehashOnTheNextLogin(t *testing.T) {
 
 // A VERIFIER IS REWRITTEN ONLY UP, NEVER DOWN.
 //
-// The cost moves only with a build, so it moves during a ROLLING UPGRADE: two
-// builds share one identity estate, and a person signs in on whichever node
-// the balancer picks. Reported stale whenever its parameters merely DIFFERED,
-// a verifier the newer build had written at its raised cost was read as stale
-// by a node still on the older build, which rewrote it at its own weaker cost
-// — and an upgraded node then rewrote it back up, so every person's verifier
-// flapped for the whole rollout and spent part of it at the cost being
-// retired. Nothing else would ever notice: every sign-in still works.
+// The cost moves during a ROLLING UPGRADE, two builds sharing one estate. Stale
+// on any DIFFERENCE, a verifier the newer build wrote at its raised cost would
+// be rewritten weaker by a node on the older build and back up by an upgraded
+// one, flapping for the whole rollout, unnoticed because every sign-in works.
 //
-// So stale is WEAKER — below this hasher's cost in some parameter an attacker
-// pays for and above it in none — and every other verifier verifies and is
-// left alone. Parallelism is not such a parameter. The weaker rows are the
-// controls: they are what a cost raise must still reach. Mutation: compare the
-// parameters with `!=` again and every row that is higher somewhere goes red.
+// So stale is WEAKER (below this hasher's cost in some parameter an attacker
+// pays for and above it in none); every other verifier is left alone.
+// Parallelism is not such a parameter. The weaker rows are the controls a cost
+// raise must still reach. Mutation: compare with `!=` again and every row
+// higher somewhere goes red.
 func TestAVerifierIsRewrittenOnlyUpNeverDown(t *testing.T) {
 	t.Parallel()
 	// A COST WITH ROOM BELOW IT IN EVERY PARAMETER, and cheap enough to

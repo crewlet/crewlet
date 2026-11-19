@@ -9,61 +9,42 @@ import (
 
 // MaxPathGlobBytes is the longest path glob [ParsePathGlob] reads: 128 bytes.
 //
-// PAST ANY GLOB A PERSON WRITES for a part of a tree: what one owns below a
-// directory is the directory's **, however deep the tree runs beneath it, so a
-// glob is a few components — services/payments/**/*_test.go is thirty bytes —
-// and one past a hundred is a list of files written as one path. A glob's
-// parts read into a pattern's byte offsets, which hold it.
+// PAST ANY GLOB A PERSON WRITES: what one owns below a directory is its **, so
+// a glob is a few components (services/payments/**/*_test.go is thirty bytes)
+// and one past a hundred is a list of files written as one path. Its parts
+// read into a pattern's byte offsets, which hold it.
 //
-// IT IS A GLOB'S BOUND, NOT A LIST'S: a repository names up to 2 048 globs
-// (internal/gitlet's MaxPathOwners owners of MaxPathOwnerPaths each), and JSON
-// may spell each byte of a glob as six (`<`, `>` and `&` are a path's like any
-// other's), so at this bound alone they would weigh about 1.6 MB — past the
-// one record of the code domain every change of a repository's settings
-// carries them in. What a repository's path owners weigh is bounded as a whole,
-// as the record carries them (config's CodeMaxPathOwnersBytes).
+// A GLOB'S BOUND, NOT A LIST'S: a repository names up to 2 048 globs
+// (internal/gitlet's MaxPathOwners × MaxPathOwnerPaths) and JSON may spell
+// each byte as six (`<`, `>`, `&`), so this bound alone would let them weigh
+// about 1.6 MB, past the code-domain record carrying them. Their total is
+// bounded there (config's CodeMaxPathOwnersBytes).
 const MaxPathGlobBytes = 128
 
 // MaxPathGlobComponents is the most components a path glob holding a '*' may
-// have: eight, [MaxPatternComponents]' value, bounding the same cost. A glob is
-// matched by the same walk a pattern is, so the one cost it can make large is
-// the same — a run of parts BETWEEN two **s, searched for along the path — and
-// eight bounds that run at SEVEN parts: six components between a leading **
-// and a trailing one, and the * a trailing ** is read as before its own **
-// (one component or more, [readGlob]). A pattern's run is two shorter, refs and
-// its namespace being two of its eight. Eight is deeper than any ownership a
-// glob states: what one owns below a directory is the directory's **, however
-// deep the tree runs under it. A literal glob is one comparison of the whole
-// path, so it is bounded only by its bytes.
+// have: eight, [MaxPatternComponents]' value, bounding the same cost: a run of
+// parts BETWEEN two **s searched for along the path, here SEVEN parts (six
+// between a leading ** and a trailing one, plus the * a trailing ** is read as,
+// [readGlob]), two more than a pattern's. Eight is deeper than any ownership.
 //
-// IT BOUNDS A GLOB'S COST A BYTE OF PATH, NOT A MATCH'S: a ref's 255 bytes hold
-// a pattern's costliest rule to 13 µs, and a path has no bound, so the search
-// grows with it. The costliest glob found within eight costs 3.2 ms on a path
-// of 48 KiB — every byte a revision's touched paths may take (internal/gitlet's
-// MaxTouchedBytes) — about 65 ns a byte, where a directory's ** costs 20 ns on
-// any path (the package doc's Measured section). So the repository's home,
-// matching its path owners' globs against a revision's paths (internal/gitlet's
-// MatchOwners), pays at most about 6.5 s of a core a revision at
-// MaxPathOwners × MaxPathOwnerPaths globs every one of that shape, and about
-// 42 ms at as many directories' ** asked about MaxTouchedPaths paths. Fewer
-// components would shorten the run, and so the constant, and leave the cost
-// linear in the path's bytes, which the touched list's bound holds.
+// IT BOUNDS COST A BYTE OF PATH, NOT A MATCH'S: a path has no bound. The
+// costliest glob costs 3.2 ms on 48 KiB, what a revision's touched paths may
+// take (internal/gitlet's MaxTouchedBytes): about 65 ns a byte, a directory's
+// ** 20 ns (the package doc's Measured section). So the home, in MatchOwners,
+// pays at most about 6.5 s of a core a revision at MaxPathOwners ×
+// MaxPathOwnerPaths such globs, and about 42 ms for directories' **.
 const MaxPathGlobComponents = MaxPatternComponents
 
 // PathGlob is a glob over a repository's TREE PATHS, checked and read once by
-// [ParsePathGlob]: the rule a path owner names its part of the tree by, and a
-// check names the paths it runs for. It is [Pattern]'s rule over a path rather
-// than a ref — '/'-separated components, * within one component, ** whole
-// components — read by the same reading of a glob ([readGlob]) and held, by the
-// tests, to the same rule written out plainly and to git's own glob pathspec,
-// which is how git itself reads `:(glob)` against the paths of a tree.
+// [ParsePathGlob]: how a path owner or a check names tree paths. It is
+// [Pattern]'s rule over a path rather than a ref, read by the same [readGlob]
+// and held, by the tests, to the same rule written out plainly and to git's
+// `:(glob)` pathspec.
 //
-// A path is what git's tree names a file by: its components below the
-// repository's root, '/'-separated, with no leading or trailing '/' — what
-// `git diff-tree -r --name-only` prints. Unlike a ref, a path has no bound but
-// the tree's: [PathGlob.Match] answers one of any length.
-//
-// The zero PathGlob matches no path: a glob nobody parsed owns nothing.
+// A path is what git's tree names a file by: components below the root,
+// '/'-separated, no leading or trailing '/' (`git diff-tree -r --name-only`).
+// Unlike a ref, it has no bound but the tree's: [PathGlob.Match] takes any
+// length. The zero PathGlob matches no path: a glob nobody parsed owns nothing.
 type PathGlob struct {
 	// literal is a glob holding no '*', which matches only the identical path
 	// — one comparison. Empty for a glob of wildcards and for the zero
@@ -75,36 +56,16 @@ type PathGlob struct {
 }
 
 // ParsePathGlob checks glob as a path glob and reads it once, answering why it
-// is not one otherwise — a sentence that follows "<glob> is not a path glob: ",
-// which is how every caller reports it.
+// is not one: a sentence following "<glob> is not a path glob: ".
 //
-// A path glob is relative to the repository's ROOT: one or more '/'-separated
-// components, at most [MaxPathGlobBytes] of valid UTF-8 in all, no leading or
-// trailing '/' and no empty component, where every component is either exactly
-// ** — whole components: zero or more, and one or more as the glob's LAST
-// component, so docs/** is every path inside docs and never a file named docs —
-// or a component in which * stands for any run of bytes but '/'. A glob holding
-// a * has at most [MaxPathGlobComponents] components. A glob holding none
-// matches ONLY the identical path. So *.go is the Go files at the root alone,
-// and **/*.go every Go file of the tree.
-//
-// What it refuses beside that, each because the glob would read as something it
-// does not do:
-//
-//   - a component . or .., which no tree path holds (git refuses both);
-//   - ** beside other text in one component (a**b), which git's wildmatch reads
-//     as a single * — a glob that looks as if it reaches across components and
-//     does not owns less than its author meant;
-//   - ?, [ and \, the other metacharacters of every glob dialect a reader
-//     knows (fnmatch's, gitignore's, a CODEOWNERS file's), which this grammar
-//     would read as themselves: * is its one metacharacter, and a file whose
-//     name holds one of them is named through *;
-//   - a leading !, which gitignore reads as a negation and this grammar has
-//     none of: a path owner lists what it owns;
-//   - a control character, which a glob written in a document holds only by
-//     mistake.
-//
-// It allocates the glob's parts once, and nothing for a literal.
+// Relative to the repository's ROOT: '/'-separated components, at most
+// [MaxPathGlobBytes] of valid UTF-8, none empty, each exactly ** (zero or more
+// whole components, one or more as the LAST: docs/** is never a file named
+// docs) or one where * is any run of bytes but '/'. A glob with a * has at most
+// [MaxPathGlobComponents] components; one without matches ONLY the identical
+// path. Refused, as reading as something it does not do: . or ..; ** beside
+// text (a**b), which git's wildmatch reads as one *; ?, [ and \ (read as
+// themselves; name such a file through *); a leading !; a control character.
 func ParsePathGlob(glob string) (PathGlob, error) {
 	switch {
 	case glob == "":
@@ -170,27 +131,18 @@ func pathGlobComponentFault(c string) string {
 	return ""
 }
 
-// Match reports whether path matches the glob: every glob component but **
-// matches exactly one path component, * in it standing for any run of bytes,
-// and ** matches whole components — zero or more of them, except as the LAST
-// component of the glob, where it matches one or more. That is
-// [Pattern.Match]'s rule, component for component, and a literal glob matches
-// only the identical path, as a literal pattern does.
+// Match reports whether path matches the glob: every component but ** matches
+// exactly one path component, * standing for any run of bytes; ** matches zero
+// or more whole components, except as the glob's LAST, where it matches one or
+// more. That is [Pattern.Match]'s rule; a literal glob matches only the
+// identical path.
 //
-// THE PATH HAS NO BOUND, where a ref's is 255 bytes, so the walk is not a
-// pattern's: what lies between the glob's first ** and its last is not cut
-// onto the stack once, as a ref's is — a path past what that cut holds is one
-// a tree may have — but read a component at a time as the walk reaches it,
-// each one's end found where it begins. What can absorb no component is
-// compared once, as for a pattern: the parts before the first ** at the
-// path's start and after the last at its end, so a glob with at most one **
-// costs one comparison a part however deep the path, and only a run of parts
-// between two **s is searched for along it — a run [MaxPathGlobComponents]
-// bounds. It allocates nothing.
-//
-// Match does not check path: it is for a caller holding a tree's path. Its
-// answer for anything else — an empty component, a leading '/' — means
-// nothing, but it is an answer and never a panic.
+// THE PATH HAS NO BOUND, so what lies between the first ** and the last is
+// read a component at a time, not cut onto the stack. Parts before the first
+// ** and after the last are compared once at the path's ends; only a run
+// between two **s is searched for along it, a run [MaxPathGlobComponents]
+// bounds. It allocates nothing and does not check path: an empty component or
+// leading '/' gets a meaningless answer, never a panic.
 func (g PathGlob) Match(path string) bool {
 	if g.parts == nil {
 		return g.literal != "" && path == g.literal
@@ -243,17 +195,15 @@ func (g PathGlob) Match(path string) bool {
 
 // walkPath reports whether the components of between match parts, which begin
 // and end with ** — the glob between its first ** and its last, the path
-// between what its head and its tail took. end is one past where between's
-// last component ends, len(between)+1, or 0 where it holds no component at
-// all: the walk's offsets name where a component BEGINS, and the one past the
-// last is where none does.
+// between what its head and tail took. end is len(between)+1, or 0 where it
+// holds no component: offsets name where a component BEGINS, and the one past
+// the last is where none does.
 //
-// [walk]'s walk, over offsets rather than a cut: the classic wildcard walk over
-// components, with ONE backtrack point, the last ** seen — every other part
-// takes exactly one component, so a run placed at its earliest match leaves the
-// longest remainder for the runs after it. It takes at most (the components
-// between) × (the longest run) comparisons, each finding its component's end
-// as it reads it.
+// [walk]'s walk over offsets rather than a cut: the classic wildcard walk with
+// ONE backtrack point, the last ** seen, since every other part takes exactly
+// one component and a run placed at its earliest match leaves the longest
+// remainder for the runs after it. At most (the components between) × (the
+// longest run) comparisons.
 func walkPath(parts []part, between string, end int) bool {
 	i, j := 1, 0       // parts[0] is **, which takes as few components as it can
 	star, mark := 1, 0 // after the last ** seen: the part after it, and where the component it took up to begins

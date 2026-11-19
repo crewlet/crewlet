@@ -23,19 +23,14 @@ import (
 
 // AN ANSWER BY TURN IS SPENT ONCE, AND SAID ONCE, WHATEVER ITS RUN DID NEXT.
 //
-// The node that took the answer can stop before it acknowledges the delivery —
-// mid-turn, its turn's reply perhaps already sent — and the original comes
-// round to the seat's next holder. By then the run was revived and resumed by
-// that holder, reaped with the answer a turn took, or resumed and relaunched.
-// The coordinator spends the answer's delivery at each of those moments
-// ([sandbox.CoordinatorOptions.Spent]); the dispatcher recorded nothing for it,
-// because an answer by turn is not a type its ledger keeps for turns, and the
-// answer-by-turn route never read the ledger. So the redelivery reached the
-// coordinator, found nothing on the run that recognised it, and was announced
-// `gone` or `not_awaiting` after it had resumed the run. Every case here
-// delivers the answer on the seat's control topic, where it is settled, with
-// the ledger read wired as the engine wires it
-// ([sandbox.CoordinatorOptions.WasSpent]).
+// The node that took the answer can stop before it acknowledges the delivery,
+// and the original comes round to the seat's next holder, by when the run was
+// revived and resumed, reaped with the answer, or relaunched. The coordinator
+// spends the delivery at each moment ([sandbox.CoordinatorOptions.Spent]); the
+// dispatcher's ledger keeps no such type for turns, so a redelivery otherwise
+// finds nothing recognising it and is announced `gone` or `not_awaiting` after
+// it resumed the run. Every case delivers on the seat's control topic with the
+// ledger read wired as the engine wires it ([sandbox.CoordinatorOptions.WasSpent]).
 
 // answerBoard records every executor_answered a coordinator announces, and
 // every copy of an answer by turn it hands back to the seat's control topic.

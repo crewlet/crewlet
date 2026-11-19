@@ -397,15 +397,11 @@ func TestTheOperatorsSandboxEnvWinsOverTheResolvedCredential(t *testing.T) {
 // EVERY PLACEMENT THE CONFIG ACCEPTS IS ONE THIS ENGINE CAN BUILD.
 //
 // `config.Placements` is the closed set a `run_in:` is checked against, and
-// `buildSandboxProvider` is what turns one into a running backend. Nothing
-// connects them, and when they last disagreed the config's DEFAULT was the
-// offender: `providers.sandbox: {}` validated, reported a configured sandbox
-// on every operator surface, and failed at the first launch with an error
-// naming a backend nobody had written.
-//
-// It fails in the direction that is hardest to see — the config says yes and
-// the runtime says no — and only for a company that actually runs code, so a
-// boot proves nothing. Hence a test that walks the set.
+// `buildSandboxProvider` turns one into a running backend. Nothing connects
+// them, so a placement the config accepts (its default included) could name a
+// backend nobody wrote: the config says yes and the runtime says no, only for
+// a company that actually runs code, so a boot proves nothing. Hence a test
+// that walks the set.
 //
 // NOT PARALLEL: it puts a stub container runtime first on PATH, and t.Setenv
 // refuses a parallel test.
@@ -1275,22 +1271,17 @@ func presentOnBuild(ctx context.Context, t *testing.T, backend coord.Backend, no
 }
 
 // THE ENGINE'S COORDINATOR HOLDS THIS PROCESS'S TAKER LEASE IN THE NODE'S LEASE
-// STORE, AND GIVES IT BACK ONLY AS THE SANDBOX STOPS. Every capture the
-// coordinator begins names the lease it holds, and a wait for a capture another
-// process began reads that process's in the same store, so the engine hands
-// its coordinator its own incarnation — the one its seats and presence are held
-// under — its lease store, and the seat lease TTL in force; the coordinator
-// claims the lease as it is built, for that TTL, and releases it once its last
-// keep has ended, which the engine's stop reaches after the drain. With no
-// lease store, no taker at all, and no incarnation either: the two come
-// together.
+// STORE, AND GIVES IT BACK ONLY AS THE SANDBOX STOPS. Every capture names the
+// lease the coordinator holds, and a wait for another process's capture reads
+// that lease in the same store, so the engine hands its coordinator its
+// incarnation, its lease store and the seat lease TTL in force. The lease is
+// claimed as the coordinator is built and released after its last keep, which
+// the engine's stop reaches after the drain. No lease store: no taker at all.
+// The store's clock is held still, so the deadline is exactly the TTL past the
+// claim.
 //
-// THE STORE'S CLOCK HELD STILL, so the lease's deadline is exactly the TTL it
-// was claimed for past it, whatever renewal came between.
-//
-// Mutation: leave the incarnation, the store or the TTL off the coordinator's
-// options, build the coordinator's lease on any TTL but the one it was handed,
-// or keep the coordinator's stop off the engine's, and a check below goes red.
+// Mutation: leave the incarnation, store or TTL off the coordinator's options,
+// build its lease on another TTL, or keep its stop off the engine's: red.
 func TestTheEnginesCoordinatorHoldsThisProcesssTakerLease(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
