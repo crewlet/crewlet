@@ -17,48 +17,31 @@ import (
 	"github.com/crewlet/crewlet/internal/words"
 )
 
-// schemaFS carries the consolidated schema into the binary, so a deployment is
-// one file with no data directory to keep in step with it.
-//
-// ONE SEQUENCE PER ESTATE, in a directory named for it. `all:` is what carries
-// a directory whose sequence is still empty: an estate's directory must be in
-// the binary before its first migration is, so a name that does not resolve is
-// a read error at Open rather than a sequence that silently applies nothing.
+// schemaFS carries the schema into the binary: one file, no data directory.
+// ONE SEQUENCE PER ESTATE, in a directory named for it. `all:` carries a
+// directory whose sequence is still empty, so a name that does not resolve is a
+// read error at Open rather than a sequence that silently applies nothing.
 //
 // A NODE MIGRATION NEVER DROPS A COLUMN IN PLACE. The driver's
-// `ALTER TABLE … DROP COLUMN` re-parses every trigger in the file, and node
-// 0041's memory change-sequence triggers name `NEW.rowid`, which that re-parse
-// refuses ("no such column: rowid") whatever table the column is dropped
-// from. So a column leaves the node estate the way node 0045 takes one: copy
-// the table without it, drop the old one, rename the copy.
+// `ALTER TABLE … DROP COLUMN` re-parses every trigger, and node 0041's triggers
+// name `NEW.rowid`, which it refuses ("no such column: rowid") whatever table.
+// So copy the table without the column, drop the old one, rename the copy, as
+// node 0045 does.
 //
 //go:embed all:schema
 var schemaFS embed.FS
 
 // Estate names one of a node's two databases.
 //
-// # Why there are two
+// Two files because a SNAPSHOT copies the replicated estate, and from one file
+// that is `VACUUM INTO` then a DELETE of the local tables: Turso has no in-place
+// VACUUM, so the free pages (the audit log is the largest) cost transfer,
+// checksum and integrity check. The IDENTITY CLAIM a peer verifies is a
+// checksum over the replicated tables alone, and the applier's commits would
+// share a WAL and fsync queue with every audit insert.
 //
-// A node's own estate and the estate its appliers replicate are different
-// things under every reading, and the boundary was already drawn in prose
-// before it was drawn in the filesystem:
-//
-//   - A SNAPSHOT is a copy of the replicated estate. Taken from one file it
-//     is `VACUUM INTO` of everything followed by a DELETE of every local
-//     table on the copy — and Turso has no in-place VACUUM, so the copy keeps
-//     the deleted pages as free pages and the transfer, the checksum and the
-//     integrity check all pay for them. The largest of those tables is the
-//     audit event log, with every phase's prompt in its payload.
-//   - The IDENTITY CLAIM a peer verifies a snapshot against is a checksum
-//     over the replicated tables, and nothing else may be in the way of it.
-//   - The APPLIER's write cadence is its own: in one file every audit insert
-//     shares a WAL, a checkpoint and an fsync queue with the applier's
-//     commits, whatever the driver's conflict granularity turns out to be.
-//
-// NO TRANSACTION SPANS THE TWO and no read joins across them. A transaction
-// is one file, which is also why the tables an applier writes for its own
-// bookkeeping live with the rows it writes beside them rather than with the
-// node's other local state.
+// NO TRANSACTION SPANS THE TWO and no read joins across them, so an applier's
+// bookkeeping tables live with the rows it writes beside them.
 type Estate string
 
 const (
@@ -80,33 +63,15 @@ func (e Estate) Valid() bool { return e == EstateNode || e == EstateReplicated }
 // migrate applies every embedded schema file that has not been applied yet, in
 // filename order, and returns the versions it applied.
 //
-// Forward-only, one transaction per file, with the schema_migrations row
-// written inside that transaction — so a file is either fully applied and
-// recorded, or neither. Turso makes DDL transactional, which is what
-// lets a whole file go in as one statement batch: the Postgres migrator split
-// files on ';' and then had to validate its own naive splitter (dollar-quoted
-// bodies would be cut in half). Nothing here needs that.
+// Forward-only, one transaction per file with the schema_migrations row written
+// inside it, so a file is fully applied and recorded or neither. Turso's DDL is
+// transactional, so a file goes in as one batch with no ';' splitting.
 //
-// # One run per FILE at a time, and the lock is the file's
-//
-// This replaces a Postgres advisory lock, and the replacement is smaller than
-// the original because the problem is: three OS processes could race the DDL
-// there (`crewlet run`, `crewlet run api`, `crewlet config import`), and the
-// lock had to be a database object for that reason. Here one process owns the
-// file — Turso does not support any other arrangement — so the only race left
-// is two handles on ONE PATH inside this binary: one would read a ledger the
-// other has not finished writing, apply a file the other already has, and fail
-// at its CREATE TABLE. A per-file transaction does not close it, because every
-// one of them begins after the ledger was read.
-//
-// So the lock is the path's: it lives on this process's claim on the file
-// ([fileLock]), which every handle open on that path shares, exactly as the
-// write queue does. It used to be one mutex for the whole process, on the
-// premise that migrations run once at Open and so contend with nothing. That
-// holds for one boot and for nothing else: a process that opens many stores —
-// an in-process fleet, any test binary — ran every migration of every file one
-// after another, and a test package spent most of its wall clock queued behind
-// other files' DDL that could never have raced its own.
+// One run per FILE at a time: the only race is two handles on ONE PATH in this
+// binary, one reading a ledger the other has not finished writing and failing
+// at CREATE TABLE; a per-file transaction does not close it. So the lock is the
+// path's, on this process's claim ([fileLock]). A process-wide mutex would queue
+// every store's migrations behind other files' DDL that cannot race its own.
 func (d *DB) migrate(ctx context.Context) ([]string, error) {
 	running := d.lock.migrations()
 	running.Lock()
@@ -383,47 +348,13 @@ func SchemaVersions(estate Estate) []string {
 // its own file at path, and its replicated estate where [ReplicatedPath] puts
 // it for opts — WITHOUT applying them.
 //
-// # Why this is not an open followed by a comparison
-//
-// Opening migrates. That is the right default — every process that touches the
-// store gets a current schema without an operator remembering a step — but
-// it makes "what would this apply" unanswerable through it: by the time you
-// could ask, the answer is none.
-//
-// So this opens the pool and reads, and creates nothing at all. A database
-// with no schema_migrations table has applied nothing, which is what a fresh
-// deployment looks like rather than an error: reporting a missing table
-// would send an operator to investigate the state every new install starts
-// in.
-//
-// # It takes the lock, and gives it back
-//
-// Reading is still a second process on a file this engine owns exclusively,
-// and the answer to that is [ErrLocked] naming the holder — not an opaque
-// driver error, and not a silent read of a file somebody is writing. It held
-// no lock at all until this was fixed, so `crewlet migrate` reported the
-// schema of a live engine's database and only refused at the point it tried
-// to change it: the check that runs first was the one with no guard.
-//
-// The lock is released before returning, and NOT because an open would
-// otherwise be refused — it would not. The claim is refcounted per process
-// (see lock.go), so `crewlet migrate` calling Pending and then opening shares
-// one claim either way, and a Pending that never released would look
-// perfectly fine from inside that command.
-//
-// It is released because a claim this process no longer needs is a claim it
-// must not keep: the lock lives as long as the process, so a leak here would
-// leave the file excluded from every OTHER process for the rest of this one's
-// life, with nothing to point at. That is why the test asserts the refcount
-// rather than a following open — an open that succeeds proves nothing.
-//
-// # Both files, always both
-//
-// A node is two databases with two independent sequences, and a report that
-// named one of them would be a deploy gate that passes while the other is
-// behind. Its caller refuses a scratch store — the one kind of node that holds
-// no replicated estate — before it asks, so every node this reports on holds
-// both.
+// Opening would migrate, so this opens the pool and reads, creating nothing. No
+// schema_migrations table means nothing applied (a fresh deployment), not an
+// error. It takes the lock, [ErrLocked] naming the holder, and releases it
+// before returning: the claim lives as long as the process, so a leak would
+// exclude every OTHER process, and the test asserts the refcount (a following
+// open proves nothing). Both files, always, or a deploy gate passes while the
+// other is behind; its caller refuses a scratch store.
 func Pending(ctx context.Context, path string, opts Options) ([]Schema, error) {
 	out := make([]Schema, 0, len(Estates))
 	for _, estate := range Estates {

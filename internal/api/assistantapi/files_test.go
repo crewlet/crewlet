@@ -367,7 +367,7 @@ func TestEveryDownloadCarriesEverySecurityHeader(t *testing.T) {
 	svg := files.keep(grace.ID, s.rig.Conversation, "logo.svg", "image/svg+xml",
 		[]byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`))
 	rec = s.do(grace, http.MethodGet, svg.Download, nil, nil)
-	wantFileHeaders(t, rec.Header(), "image/svg+xml", `attachment; filename="logo.svg"`)
+	wantFileHeaders(t, rec.Header(), "application/octet-stream", `attachment; filename="logo.svg"`)
 
 	ada := evals.Person("ada", "ada", iam.GrantWorklet)
 	for name, path := range map[string]string{

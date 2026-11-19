@@ -25,33 +25,25 @@ import (
 // The engine satisfies them (internal/engine/assistant.go), and a test writes
 // each down without standing up a store, a broker or a model.
 
-// Models resolves the assistant's chain off the company the node runs now, for
-// one turn. Every completion made through it is RECORDED on the
+// Models resolves the assistant's model off the company the node runs now, for
+// one turn: the entry `assistant.model` names, run as a helper's run with no
+// tool of its own. Every completion made through it is RECORDED on the
 // auxiliary-spend ledger under use (the operator stage, a person's spend) and
 // charged nowhere: the turn's own [Budget] meter charges, so a round is
-// counted once. An error names why there is no chain (the assistant off, a
-// chain the rules refuse, no model configured).
+// counted once. An error names why there is no model (none assigned, or one
+// no helper can run on).
 //
 // Unready is the failure a turn's first round would meet as far as the node
-// knows WITHOUT CALLING A MODEL, or nil when any member may answer: every
-// member's plan spent, its harness signed out or unable to start
-// (chain.Unready over the members). It is what `/viewer` tells a person
-// before they ask and what refuses a question before any round.
+// knows WITHOUT CALLING A MODEL, or nil when it may answer: its plan spent,
+// its harness signed out or unable to start. It is what `/viewer` tells a
+// person before they ask and what refuses a question before any round.
 type Models interface {
-	Chain(ctx context.Context, person iam.Principal, use auxspend.Use, strength Strength) (llm.Provider, string, error)
-	Unready(ctx context.Context, strength Strength) error
+	Model(ctx context.Context, person iam.Principal, use auxspend.Use) (llm.Provider, string, error)
+	Unready(ctx context.Context) error
+	// ReadsImages is whether the model's run takes images beside its
+	// prompt, false where no model resolves.
+	ReadsImages() bool
 }
-
-// Strength is which of Ask Crewlet's chains a call runs on: `assistant.llm`,
-// or the stronger `assistant.deliberate.llm` a person asks for with Think harder.
-type Strength string
-
-const (
-	// Quick is `assistant.llm`, every question's chain.
-	Quick Strength = "quick"
-	// Deliberate is `assistant.deliberate.llm`.
-	Deliberate Strength = "deliberate"
-)
 
 // Budget is the meter a turn charges its rounds through: the company's
 // windows, and the person's own where a company caps one. Nil with a nil
@@ -74,7 +66,7 @@ type Catalogue interface {
 // on the owner but the expiry backstop's nomination: *assistantdomain.Reader as
 // written.
 type Transcripts interface {
-	Conversations(ctx context.Context, owner uuid.UUID, cursor string, limit int) (wire.ConversationList, error)
+	Conversations(ctx context.Context, owner uuid.UUID, cursor string, limit int, q string) (wire.ConversationList, error)
 	Conversation(ctx context.Context, owner, id uuid.UUID) (assistantdomain.Conversation, error)
 	Transcript(ctx context.Context, owner, id uuid.UUID) (assistantdomain.Transcript, error)
 	Turn(ctx context.Context, owner, id uuid.UUID) (assistantdomain.Turn, error)
@@ -93,7 +85,7 @@ type Transcripts interface {
 // outcome is unknown answers [ErrOutcomeUnknown].
 type Records interface {
 	CreateConversation(ctx context.Context, w Write, id uuid.UUID, title string) error
-	TitleConversation(ctx context.Context, w Write, id uuid.UUID, title string) error
+	TitleConversation(ctx context.Context, w Write, id uuid.UUID, title string, by wire.TitleSource) error
 	SummarizeConversation(ctx context.Context, w Write, id uuid.UUID, summary string, through int) error
 	ClearConversation(ctx context.Context, w Write, id uuid.UUID) (Written, error)
 	// OpenTurn answers [assistantdomain.ErrTurnOpen] for a turn already

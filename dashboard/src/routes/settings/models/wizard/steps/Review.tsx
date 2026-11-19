@@ -124,9 +124,9 @@ export function changesOf(
       if (r) out.push(r);
     }
   }
-  const assistantLlm = (doc: CompanyDocument) =>
-    show(isRecord(doc.assistant) ? doc.assistant.llm : undefined);
-  const assistantRow = row("assistant.llm", assistantLlm(before), assistantLlm(after));
+  const assistantModel = (doc: CompanyDocument) =>
+    show(isRecord(doc.assistant) ? doc.assistant.model : undefined);
+  const assistantRow = row("assistant.model", assistantModel(before), assistantModel(after));
   if (assistantRow) out.push(assistantRow);
   // A SECRET'S VALUE IS NEVER DRAWN, before or after: a new one is added,
   // and one replaced reads as changed by an old line that says so.

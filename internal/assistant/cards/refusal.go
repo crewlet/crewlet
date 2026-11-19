@@ -49,7 +49,6 @@ const (
 	refusedUnsent    = "Ask Crewlet asked for it in a form the engine does not accept, " +
 		"so it was not sent."
 	refusedUnread  = "What this would change could not be read."
-	refusedDeep    = "Deep work is not available right now."
 	refusedGeneric = "The engine did not accept it."
 )
 
@@ -63,8 +62,6 @@ const (
 	// CodePreviewUnreadable is a change whose preview could not read the
 	// object it changes.
 	CodePreviewUnreadable = "preview_unreadable"
-	// CodeDeepUnavailable is a deep run that could not start.
-	CodeDeepUnavailable = "deep_work_unavailable"
 )
 
 // RefusalResumes is the hint a failed proposal's card carries: the turn is
@@ -144,7 +141,6 @@ var codeSentences = map[string]string{
 	"step_up_required":    refusedStepUp,
 	"body_too_large":      refusedTooLarge,
 	CodePreviewUnreadable: refusedUnread,
-	CodeDeepUnavailable:   refusedDeep,
 }
 
 // PersonRefusal is r as a person reads it: its code, its rule's reason and its

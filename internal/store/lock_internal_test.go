@@ -44,16 +44,13 @@ func TestADiscardHoldsItsFileAlone(t *testing.T) {
 
 // AND [discard] TAKES THAT CLAIM, holding it until the file is gone.
 //
-// The case above holds [claimStore] to its rule, which says nothing about
-// whether discard asks for it: discard looking for a handle here and then
-// taking an ordinary shared claim passes every assertion there, and leaves
-// open the window it was written to close. So this one holds a discard part
-// way through — its claim taken, its file not yet removed — and opens the path
-// the way any caller does. That open must be refused, and once the discard
-// has finished the path must be free for the scratch open that follows it.
+// The case above holds [claimStore] to its rule but not whether discard asks
+// for it: look-then-share passes every assertion there and leaves the window
+// open. So this holds a discard part way through, claim taken and file not yet
+// removed, and opens the path: it must be refused, and free once discard ends.
 //
 // NO WALL CLOCK: the discard is held inside its own remove, and the case waits
-// for that or for the discard returning, whichever comes first.
+// for that or for the discard returning.
 //
 // Mutation: put back the look-then-share body, or let discard take the claim
 // [lockStore] takes, and the open lands on the file being removed.

@@ -958,41 +958,54 @@ func advisedSources(t *testing.T) queries.Sources {
 	return s
 }
 
-// THE ADVISOR NAMES AN ATLAS ENTRY ONLY TO A HOLDER OF THE ATLAS APP, read as
-// the asker reads the atlas. A holder is named the service nobody owns and
-// the server whose owning unit the chart does not hold, each with the call
-// that fixes it; whoever asks without the app is told how many and sent no
-// name, no id and no call.
+// THE ADVISOR NAMES AN ATLAS ENTRY ONLY TO A HOLDER OF THE ATLAS APP: the duty
+// stores what it found with no entry, and each read names the entries as its
+// asker reads the atlas. A holder is named the service nobody owns and the
+// server whose owning unit the chart does not hold, each with the call that
+// fixes it; whoever asks without the app is told how many and sent no name,
+// no id and no call.
 //
-// Mutation: read Names as true whoever asks, and the reader without the app
-// is sent checkout-api.
+// Mutation: fill the entries whoever asks, and the reader without the app is
+// sent checkout-api.
 func TestTheAdvisorNamesAnAtlasEntryOnlyToAHolderOfTheAtlasApp(t *testing.T) {
 	t.Parallel()
 	s := advisedSources(t)
-	read := func(ctx context.Context) (map[advisor.Class]advisor.Finding, string) {
+	observed := s.AdvisedOfAtlas(t.Context(), advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, atlasNow)
+	read := func(ctx context.Context) (map[advisor.Class]queries.AdvisorFinding, string) {
 		t.Helper()
-		answer, err := s.AdvisedOfAtlas(ctx, advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, atlasNow)
-		if err != nil {
-			t.Fatal(err)
+		out := map[advisor.Class]queries.AdvisorFinding{}
+		var raws []string
+		for _, f := range observed.Findings {
+			got, err := s.AsRead(ctx, f, atlasNow)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(got)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out[f.Class], raws = got, append(raws, string(raw))
 		}
-		raw, err := json.Marshal(answer)
-		if err != nil {
-			t.Fatal(err)
-		}
-		out := map[advisor.Class]advisor.Finding{}
-		for _, f := range answer.Findings {
-			out[f.Class] = f
-		}
-		return out, string(raw)
+		return out, strings.Join(raws, "\n")
 	}
-	holder, _ := read(asAtlasReader(t))
+	holder, _ := read(asAtlasReader(t, iam.GrantGitlet))
 	unowned, gone := holder[advisor.ClassAtlasUnowned], holder[advisor.ClassAtlasOwnerGone]
 	if len(unowned.Entries) != 1 || unowned.Entries[0].ID != atlasCheckout.ID() ||
 		unowned.Fix.Kind != advisor.FixAtlasAct || unowned.Fix.Act.Tool != builtin.AtlasSetOwnerTool {
 		t.Errorf("a holder's unowned finding = %+v, want checkout-api with the owner write", unowned)
 	}
-	if len(gone.Entries) != 1 || gone.Entries[0].ID != atlasWeb.ID() || gone.Entries[0].Owner.Name != "platform" {
-		t.Errorf("a holder's owner finding = %+v, want web-1 and the unit the chart no longer holds", gone)
+	if len(gone.Entries) != 2 || gone.Entries[0].ID != atlasWeb.ID() || gone.Entries[0].Owner.Name != "platform" {
+		t.Errorf("a holder's owner finding = %+v, want web-1 and the unit the chart no longer holds, "+
+			"and the repository", gone)
+	}
+	// A REPOSITORY IS NAMED ONLY TO A HOLDER OF GITLET (ADR-0110): an atlas
+	// holder without it is named the host alone, as the atlas reads to them.
+	noGitlet, raw := read(asAtlasReader(t))
+	if f := noGitlet[advisor.ClassAtlasOwnerGone]; len(f.Entries) != 1 || f.Entries[0].ID != atlasWeb.ID() {
+		t.Errorf("an atlas holder without Gitlet is sent %+v, want web-1 alone", f.Entries)
+	}
+	if strings.Contains(raw, "gitlet/api") {
+		t.Error("an atlas holder without Gitlet is sent the repository")
 	}
 
 	nobody := iam.WithPrincipal(t.Context(), iam.Principal{ID: uuid.New(), Login: "bo", Kind: iam.KindPerson,
@@ -1002,7 +1015,7 @@ func TestTheAdvisorNamesAnAtlasEntryOnlyToAHolderOfTheAtlasApp(t *testing.T) {
 		t.Fatalf("a reader without the app is raised %d findings, a holder %d", len(blind), len(holder))
 	}
 	for class, f := range blind {
-		if len(f.Entries) != 0 || f.Fix.Act != nil || f.Fix.Kind != advisor.FixNone || f.Title != holder[class].Title {
+		if f.Entries != nil || f.Fix.Act != nil || f.Fix.Kind != advisor.FixNone || f.Title != holder[class].Title {
 			t.Errorf("%s for a reader without the app = %+v, want the count and nothing named", class, f)
 		}
 	}
@@ -1037,10 +1050,7 @@ func TestTheAdvisorListsASourceThatStoppedReading(t *testing.T) {
 	deps := *s.Atlas.(*builtin.AtlasDeps)
 	deps.Sources = staleDesk{}
 	s.Atlas = &deps
-	answer, err := s.AdvisedOfAtlas(asAtlasReader(t), advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, atlasNow)
-	if err != nil {
-		t.Fatal(err)
-	}
+	answer := s.AdvisedOfAtlas(asAtlasReader(t), advisor.Answer{Findings: []advisor.Finding{}, Unread: []string{}}, atlasNow)
 	var got []string
 	for _, f := range answer.Findings {
 		if f.Class == advisor.ClassAtlasSourceStale {

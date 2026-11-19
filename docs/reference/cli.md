@@ -38,7 +38,7 @@ subcommand below is served by it.
 | `crewlet fleet broker credential [config] -o FILE` | Write the operator key a clustered member's broker admits on its loopback client listener — derived from this host's `secrets.keys`, to a file created `0600` and never to the terminal — and print the `nats` invocation that reaches the broker with it, from this host only. The token takes `admin` |
 | `crewlet feeds dead-letters [config] [-json]` | The wake feeds' dead letters — records no node could read in the hour each was handed back — read from a running node: one row per entry, by the id `discard` names, with its feed, why no node read it, where its record was delivered from, and how long ago it was kept and how long it has left. A feed the node could not list is named with its error and **exits non-zero**. The token takes `admin` |
 | `crewlet feeds discard <id> -confirm <id>` | Give one dead letter's wake up for good — for an entry no build will ever read, such as a record sealed under a key retired from every node. No node will derive it. The token takes `admin` |
-| `crewlet doctor [config] [-json] [-words]` | The [setup advisor](../guides/advisor.md)'s findings, read from a running node: one row per class of finding with its severity, who acts on it, its class, every subject as a kind and an ordinal (`seat#1`), and each one's evidence as counts. The subjects' handles and each finding's title and reason, which are the company's own names, only with `-words`. **Exits 2** while a finding blocks the company, 1 when it could not ask or the node could not read a source. The token takes `admin` |
+| `crewlet doctor [config] [-json] [-words]` | The [Advisor](../guides/advisor.md)'s open findings, read from a running node: one row per class of finding with its severity, who acts on it, its class, every subject as a kind and an ordinal (`seat#1`), and each one's evidence as counts. The subjects' handles and each finding's title and reason, which are the company's own names, only with `-words`. **Exits 2** while a finding blocks the company, 1 when it could not ask, the latest run could not read a source or the Advisor has not run yet. The token takes `admin` |
 | `crewlet seats pause <handle> [-stop] [-reason TEXT] [-op-id ID]` | Pause an agent seat: it starts no new turn, its mail waits in order and its scheduled runs are skipped. `-stop` also ends its running work: the turn it is on at its next round, and its executor in its box at once. Taken by the seat's holder, whoever leads it, or an administrator, and recorded under the caller's own name, kind and credential |
 | `crewlet seats resume <handle> [-op-id ID]` | Lift the pause; what waited is delivered first, in order. The same authority as `pause` |
 | `crewlet artifacts list\|get\|versions\|assets\|usage` | Read the company's artifacts through a running node, as the token's principal: the listing it may see (`-scope`, `-kind`, `-q`, `-status`, `-work-item`), one artifact's head (its runtime contract and capabilities among it) and audience, its versions, each with its contract and capabilities, its assets, and the company's usage against its quota (an administrator's). See [`crewlet artifacts`](#crewlet-artifacts) |
@@ -1097,7 +1097,7 @@ Prints one decrypted value to stdout, with no trailing newline so it can be pipe
 crewlet secrets rekey [-dry-run] [-config PATH] [-api URL]
 ```
 
-Re-encrypts every stored secret not already sealed under `secrets.active_key_id`, and prints the names it moved (and the engine's own key with them, which it **counts** rather than names). **Through a running node it also re-seals every person's values in the identity estate**: the rows are derived from the identity log, so the node publishes one record per person still under an old key, and prints how many values of how many people it moved (every running node holds the identity estate from boot, company or none). **With the engine stopped** it re-seals every row of the fleet's store (your names and the engine's own `iam/` keys) but not the identity estate's personal values, which only the engine holding the estate re-seals, through its own log: the command says so, and is run again through a running node for those. The per-record counterpart of [`crewlet config rekey`](#crewlet-config-rekey): run **both** before dropping a retired key from `secrets.keys`, or records still sealed under it become unreadable; for the engine's key and the identity estate that would be the blind-index key and every person's name and address at once. An **outstanding invitation**'s address is not re-sealed (only a re-issue could carry it again), so a run through a running node says how many are still under another key: keep that key on the ring until each is redeemed or expires, at most a week after it was issued. **Ask Crewlet's conversations** are not re-sealed either, since each value leaves with its conversation, so a run through a running node says how many values are still under another key: keep that key on the ring until none is left, which happens once each conversation started before the flip is untouched for `assistant.retention_days` or cleared by its owner. **The seats' executor sessions** are left the same way and counted the same way: each session leaves with its row, when a later turn of its conversation ends, when its seat's `turn_engine.conversation_session.max_bytes_per_seat` releases it, or once it is untouched for `turn_engine.conversation_session.retention_days`, and one whose key is dropped sooner reads as no session, so its conversation's next turn starts fresh. Each envelope names its sealing key, so mixed-key states decrypt correctly throughout. `-dry-run` lists what would re-encrypt without decrypting anything, reading the key id off each envelope instead, and counts the engine's key and, through a running node, the identity estate's values, Ask Crewlet's and the executor sessions', still under another key beside your names.
+Re-encrypts every stored secret not already sealed under `secrets.active_key_id`, and prints the names it moved (and the engine's own key with them, which it **counts** rather than names). **Through a running node it also re-seals every person's values in the identity estate**: the rows are derived from the identity log, so the node publishes one record per person still under an old key, and prints how many values of how many people it moved (every running node holds the identity estate from boot, company or none). **With the engine stopped** it re-seals every row of the fleet's store (your names and the engine's own `iam/` keys) but not the identity estate's personal values, which only the engine holding the estate re-seals, through its own log: the command says so, and is run again through a running node for those. The per-record counterpart of [`crewlet config rekey`](#crewlet-config-rekey): run **both** before dropping a retired key from `secrets.keys`, or records still sealed under it become unreadable; for the engine's key and the identity estate that would be the blind-index key and every person's name and address at once. An **outstanding invitation**'s address is not re-sealed (only a re-issue could carry it again), so a run through a running node says how many are still under another key: keep that key on the ring until each is redeemed or expires, at most a week after it was issued. **Ask Crewlet's conversations** are not re-sealed either, since each value leaves with its conversation, so a run through a running node says how many values are still under another key: keep that key on the ring until none is left, which happens once each conversation started before the flip is untouched for 30 days or cleared by its owner. **The seats' executor sessions** are left the same way and counted the same way: each session leaves with its row, when a later turn of its conversation ends, when its seat's `turn_engine.conversation_session.max_bytes_per_seat` releases it, or once it is untouched for `turn_engine.conversation_session.retention_days`, and one whose key is dropped sooner reads as no session, so its conversation's next turn starts fresh. Each envelope names its sealing key, so mixed-key states decrypt correctly throughout. `-dry-run` lists what would re-encrypt without decrypting anything, reading the key id off each envelope instead, and counts the engine's key and, through a running node, the identity estate's values, Ask Crewlet's and the executor sessions', still under another key beside your names.
 
 The store is shared, so this is run **once for the fleet**, not once per node. A run through a node's API sends the key id it expects — `-config`'s `secrets.active_key_id`, the one `-dry-run` judges the rows against too, which is why a rekey needs the Tier A file even through `-api` — and is **refused with a 409** if that node seals under a different `active_key_id` — a silent success there would report a rotation the fleet did not make. It aborts rather than half-completing if any record cannot be opened with the keyring in hand, because retiring the old key on the strength of a partial pass is what makes a secret unreadable for ever. And it never undoes a write that lands while it runs: each record is re-sealed only at the version it read, so a record somebody rotated meanwhile is judged again on what it holds now, and a record that was deleted stays deleted rather than coming back as the value the pass read before it went. A person whose re-seal nobody could confirm fails the run with what did move; running it again moves only what is still under an old key.
 
@@ -2372,14 +2372,14 @@ run it again. A discard the node did not answer may have been made;
 crewlet doctor [-json] [-words] [<config.yaml>] [-api URL]
 ```
 
-The [setup advisor](../guides/advisor.md)'s findings about the running node's
+The [Advisor](../guides/advisor.md)'s open findings about the running node's
 company, the most costly first: what its document costs it, what its
 integrations' last check reported, and the patterns the engine read in its last
-7 days of work. It is a client of
-[`GET /advisor`](api-endpoints.md), and the token in `CREWLET_API_TOKEN` takes
-`admin`.
+7 days of work, as its latest run left them, neither snoozed nor applied. It is
+a client of [`GET /advisor/findings`](api-endpoints.md), and the token in
+`CREWLET_API_TOKEN` takes `admin`.
 
-Each row is a class of finding, as Settings › Advisor folds them: its number,
+Each row is a class of finding: its number,
 its **severity** (`blocks`, `costs`, `note`), its **actor** (`owner` for a change
 you send, `engine` for a pattern the engine is reducing), its **class**, every
 **subject** it is raised for, and each subject's **evidence** as counts,
@@ -2397,9 +2397,9 @@ answer as JSON for a script, its keys sorted, with every name in it.
 
 The command **exits 2** while any finding is `blocks`, so a script can hold a
 go-live or a configuration change on it, and **1** when it could not ask (no
-node, a refused token, an answer it cannot read) or the node could not read a
-source (`Not read:`), since a finding that blocks may be missing from the list;
-a listed block still exits 2. `costs` and `note` findings exit zero. It sends nothing: a fix is previewed and sent from the dashboard, or
+node, a refused token, an answer it cannot read), the latest run could not read
+a source (`Not read:`) or the Advisor has not run yet, since a finding that
+blocks may be missing from the list; a listed block still exits 2. `costs` and `note` findings exit zero. It sends nothing: a fix is previewed and sent from the dashboard, or
 with `PUT /config` as the advisor's guide shows.
 
 ## `crewlet seats`
@@ -3512,9 +3512,10 @@ that `providers.llm` entry of the company at `-company`, through its CLI,
 exactly as a turn would run on it. That calls a paid model once per round of
 every trial, so `-model` without `-paid` is refused before anything is read,
 and the run says on stderr which model it is asking. That is how a model is measured before
-`assistant.llm` is switched to it ([Running Ask Crewlet](../guides/assistant.md#choosing-the-model)).
-The entry must satisfy Ask Crewlet's rules (no tool of its own beside the
-engine's, no shell, web tools denied); `crewlet llm doctor KEY` proves one first. The entry's own `${VAR}`
+it is assigned as `assistant.model` ([Running Ask Crewlet](../guides/assistant.md#choosing-the-model)).
+It runs the entry as Ask Crewlet would, the harness's own web tools turned off and
+no tool of its own beside the engine's, and refuses an entry on a harness that
+cannot be run that way; `crewlet llm doctor KEY` probes that run first. The entry's own `${VAR}`
 references, and nothing else of the company's, resolve as `crewlet llm`
 resolves them: through the store `-config` names or the node `-api` names, the
 environment behind it (see

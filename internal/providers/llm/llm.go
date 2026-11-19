@@ -199,6 +199,21 @@ type Completion struct {
 // TotalTokens is the figure a budget is charged.
 func (c Completion) TotalTokens() int { return c.InputTokens + c.OutputTokens }
 
+// Image is one picture a request hands the model: its bytes and the media
+// type they were sniffed as (image/png, image/jpeg, image/webp, image/gif).
+type Image struct {
+	MediaType string
+	Data      []byte
+}
+
+// ImageReader is a provider that can say whether its calls take images.
+type ImageReader interface {
+	ReadsImages() bool
+}
+
+// ErrNoImages is a request carrying images to a backend that takes none.
+var ErrNoImages = errors.New("llm: this model's harness takes no image")
+
 // Request is one call's inputs. A struct rather than a parameter list because
 // it grows, and every feature added over time would otherwise become another
 // positional argument at forty call sites.
@@ -221,6 +236,12 @@ type Request struct {
 	// (internal/agent/toolloop) — which works whatever the model does with a
 	// request to call something.
 	Tools ToolHost
+
+	// Images are pictures handed to the model beside the prompt, in order:
+	// what a person attached to a question. A backend whose harness takes no
+	// image refuses a request carrying one ([ErrNoImages]) rather than drop
+	// it, so a caller asks [ImageReader] first.
+	Images []Image
 
 	// Agent marks a call made by a seat at work (a round of one phase of its
 	// turn) rather than a text function the engine runs on its behalf (a

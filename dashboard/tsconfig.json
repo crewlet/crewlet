@@ -26,6 +26,7 @@
   },
   "include": [
     "src",
+    "notices.ts",
     "vite.config.ts",
     "vite.protocol.config.ts",
     "vitest.config.ts",

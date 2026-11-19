@@ -65,7 +65,7 @@ vi.mock("./pageActions.ts", async (importOriginal) => ({
   takeAction: vi.fn(async () => true),
 }));
 
-const { approve, clearRefusal, decisionFailure, send, sendRefusalOf, resetSessionForTest } =
+const { approve, deleteRefusal, decisionFailure, send, sendRefusalOf, resetSessionForTest } =
   await import("./session.ts");
 const { RestError } = await import("~/protocol/rest.ts");
 
@@ -263,11 +263,11 @@ test("a decision a condition of the node refused is said in the engine's words f
   ).toBe(true);
 });
 
-test("a Clear a condition of the node refused is said in the engine's words for it", () => {
+test("a Delete a condition of the node refused is said in the engine's words for it", () => {
   const full =
     "There's no room left to save this kind of change. An administrator needs to make room for it.";
   expect(
-    clearRefusal(
+    deleteRefusal(
       new RestError(
         503,
         {
@@ -279,9 +279,9 @@ test("a Clear a condition of the node refused is said in the engine's words for 
         true,
       ),
     ),
-  ).toBe(`The conversation could not be cleared. ${full}`);
-  expect(clearRefusal(new Error("offline"))).toBe(
-    "The conversation could not be cleared. Try again from Conversations.",
+  ).toBe(`The conversation could not be deleted. ${full}`);
+  expect(deleteRefusal(new Error("offline"))).toBe(
+    "The conversation could not be deleted. Try again from Conversations.",
   );
 });
 

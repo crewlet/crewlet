@@ -93,11 +93,11 @@ func BuiltinNames() []string {
 	return names
 }
 
-// AssistantEligible lists the built-in profiles the Dashboard Assistant can
-// run on, sorted: those whose web-denied run is left with no tool of its own
-// by construction ([Profile.ToolsOffProblem]). Derived from the table, as
-// [WebDeniable] is, of which it is a subset.
-func AssistantEligible() []string {
+// HelperEligible lists the built-in profiles a helper (Ask Crewlet, the
+// Advisor) can run on, sorted: those whose web-denied run is left with no tool
+// of its own by construction ([Profile.ToolsOffProblem]). Derived from the
+// table, as [WebDeniable] is, of which it is a subset.
+func HelperEligible() []string {
 	var out []string
 	for _, name := range WebDeniable() {
 		p, err := Load(name, map[string]any{"web_tools": string(WebToolsDenied)})
@@ -206,6 +206,11 @@ func (p Profile) Clone() Profile {
 			out.WebDenial.MCP = &WebDenialMCP{CompleteArgs: slices.Clone(dm.CompleteArgs),
 				Seed: slices.Clone(dm.Seed)}
 		}
+	}
+	if p.ImageInput != nil {
+		image := *p.ImageInput
+		image.Args = slices.Clone(image.Args)
+		out.ImageInput = &image
 	}
 	if p.ToolsOff != nil {
 		args := make([][]string, len(p.ToolsOff.Args))

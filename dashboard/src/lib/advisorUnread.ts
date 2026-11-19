@@ -1,6 +1,6 @@
 /**
  * What each source the advisor could not read leaves out (`unread` on `GET /advisor`),
- * in the words Settings › Advisor and the attention queue both use.
+ * in the words the attention queue uses.
  */
 
 const UNREAD_WORDS: Readonly<Record<string, string>> = {

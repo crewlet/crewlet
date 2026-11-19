@@ -324,21 +324,14 @@ func TestACopyTakenUnderWritesAndCheckpointsIsOneMoment(t *testing.T) {
 // pool either file can be configured with, and two at once on the smallest the
 // replicated estate keeps.
 //
-// The read transaction that keeps a copy one moment is a second connection,
-// opened OUTSIDE the pool (DB.vacuumInto). Drawn from the pool instead — the
-// obvious simplification — one copy needs two of its readers at once: a node
-// file opened with `store.max_open_conns: 1` keeps one, so its copy would wait
-// for ever on its own hold, and two copies at once on the replicated estate's
-// floor of two would each draw one and wait for the other. The wait is for
-// ever in earnest, since the hold begins under context.WithoutCancel, so no
-// deadline ends it and a fleet backup stuck in it keeps its running flag and
-// its trim hold for the life of the process. Every other case copies through a
-// pool of two or more readers, one copy at a time, and passes either way.
-//
-// So all three copies are stood at the same point before any is let through:
-// each has drawn its connection, holds its view and waits at its VACUUM INTO.
-// A copy short of a connection never reaches that point, and the case says so
-// within a bound rather than hanging the binary.
+// The read transaction keeping a copy one moment is a second connection opened
+// OUTSIDE the pool (DB.vacuumInto). Drawn from it, one copy needs two readers:
+// with `store.max_open_conns: 1` it waits for ever on its own hold, and two
+// copies at the estate's floor of two each draw one and wait for the other.
+// The hold begins under context.WithoutCancel, so no deadline ends it.
+// So all three copies stand at their VACUUM INTO before any is let through; a
+// copy short of a connection never arrives, and the case says so within a
+// bound rather than hanging the binary.
 func TestACopyTakesOneConnectionFromItsPool(t *testing.T) {
 	t.Parallel()
 	hold := storetest.NewCopyHold()

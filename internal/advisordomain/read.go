@@ -686,6 +686,38 @@ func (r *Reader) Report(ctx context.Context, week string, fresh statelog.Freshne
 	return out, found, nil
 }
 
+// Tally is how many episodes a period opened, resolved, had a fix applied
+// to, and dismissed: what a week's report counts.
+type Tally struct {
+	Opened, Resolved, Applied, Dismissed int
+}
+
+// Tally counts the episodes of [from, to): opened in it, closed resolved or
+// dismissed in it, and applied in it. An episode closed since it was applied
+// counts as applied all the same, so a fix that worked is not taken back.
+func (r *Reader) Tally(ctx context.Context, from, to time.Time, fresh statelog.Freshness) (Tally, error) {
+	if from.IsZero() || !to.After(from) {
+		return Tally{}, invalid("a tally names the period it counts, from before to")
+	}
+	lo, hi := store.EncodeTime(from), store.EncodeTime(to)
+	var out Tally
+	_, err := r.log.Read(ctx, fresh.Query(DomainScope(), true), func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `
+			SELECT
+				COALESCE(SUM(CASE WHEN opened_at >= ? AND opened_at < ? THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN state = ? AND closed_at >= ? AND closed_at < ? THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN applied_at >= ? AND applied_at < ? THEN 1 ELSE 0 END), 0),
+				COALESCE(SUM(CASE WHEN state = ? AND closed_at >= ? AND closed_at < ? THEN 1 ELSE 0 END), 0)
+			FROM advisor_findings`,
+			lo, hi, string(StateResolved), lo, hi, lo, hi, string(StateDismissed), lo, hi).
+			Scan(&out.Opened, &out.Resolved, &out.Applied, &out.Dismissed)
+	})
+	if err != nil {
+		return Tally{}, fmt.Errorf("advisordomain: count the findings of %s to %s: %w", from, to, err)
+	}
+	return out, nil
+}
+
 // ---- alarm episodes ----------------------------------------------------- //
 
 // AlarmEpisodeRow is one episode of an alarm series: raised, and cleared or

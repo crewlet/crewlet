@@ -23,7 +23,7 @@ import { indexOrg, type Seat } from "~/lib/seats.ts";
 import { useAgents, useEngineHealth, useOrg } from "~/lib/store-hooks.ts";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useViewer } from "~/lib/viewer.ts";
-import { keysOf, usesOf, type Uses } from "~/lib/modelUses.ts";
+import { usesOf, type Uses } from "~/lib/modelUses.ts";
 import type { AgentRow, CompanyDocument, LogRefusal, QueryRefusal } from "~/protocol/types.ts";
 import type {
   MemberModelEntry,
@@ -83,12 +83,8 @@ export interface ModelsData {
   nodes: ModelNode[];
   /** The node that answered. */
   node: string;
-  /**
-   * Whether the Dashboard Assistant is on, the model it answers with first,
-   * and the fallbacks behind it in their order: its whole chain, which a
-   * change of its model keeps.
-   */
-  assistant: { enabled: boolean; key: string | null; fallbacks: string[] };
+  /** The model Ask Crewlet runs on, or null where none is assigned and Ask Crewlet is off. */
+  assistant: { key: string | null };
   loading: boolean;
   error: string | null;
   /**
@@ -106,32 +102,21 @@ export interface ModelsData {
 }
 
 /**
- * The assistant's chain, from the document an admin reads or, for a member who
- * reads none, the places the engine reports its chat at (`used_by`), in order.
+ * Ask Crewlet's model, from the document an admin reads or, for a member who
+ * reads none, the place the engine reports its chat at (`used_by`).
  */
 export function assistantOf(
   doc: CompanyDocument | null,
   models: readonly Pick<ModelView, "key" | "entry">[],
 ): ModelsData["assistant"] {
-  const assistant =
-    doc && isRecord((doc as Record<string, unknown>).assistant)
+  if (doc) {
+    const assistant = isRecord((doc as Record<string, unknown>).assistant)
       ? ((doc as Record<string, unknown>).assistant as Record<string, unknown>)
       : null;
-  const fromUses = models
-    .flatMap((m) =>
-      m.entry.used_by
-        .filter((u) => u.assistant === "chat")
-        .map((u) => ({ key: m.key, position: u.position })),
-    )
-    .sort((a, b) => a.position - b.position)
-    .map((u) => u.key);
-  const written = assistant ? keysOf(assistant.llm) : [];
-  const chain = written.length > 0 ? written : fromUses;
-  return {
-    enabled: assistant ? assistant.enabled === true : fromUses.length > 0,
-    key: chain[0] ?? null,
-    fallbacks: chain.slice(1),
-  };
+    return { key: typeof assistant?.model === "string" ? assistant.model : null };
+  }
+  const reported = models.find((m) => m.entry.used_by.some((u) => u.assistant === "chat"));
+  return { key: reported?.key ?? null };
 }
 
 /** The models, joined: the engine's reading in its order, each with its document entry. */

@@ -1258,8 +1258,12 @@
 //     nothing else is written to a deleted repository, so the
 //     code-retention duty's pass ([Retention]) publishes its steps: every
 //     purge already begun first, whatever the retention, then the deleted
-//     oldest first. It publishes RECORDS and never touches a row, so the
-//     applier is still the estate's only writer, and it PACES them,
+//     oldest first. The engine runs the pass only on a node serving the
+//     revision the fleet's activation pointer names: it purges by its own
+//     node's code.deleted_retention_days, and a holder that failed to apply a
+//     revision lengthening it would purge by the retention the company
+//     replaced, with no undo. It publishes RECORDS and never touches a row, so
+//     the applier is still the estate's only writer, and it PACES them,
 //     because every data node applies every one on its single write lane:
 //     a pass waits twice a step's duration after each
 //     ([RetentionLaneShare], a third of the lane) and takes steps for

@@ -24,7 +24,6 @@ export const JOB_WORDS: Record<ModelJob, string> = {
   subagent: "delegations",
   auxiliary: "routines",
   assistant: "Ask Crewlet's chat",
-  deep_work: "Ask Crewlet's deep work",
 };
 
 /** A seat's display name, or its handle where the chart does not hold it. */
@@ -36,13 +35,12 @@ export function seatName(seats: readonly Seat[], handle: string): string {
 export interface PlaceAt {
   seat?: string | undefined;
   job?: ModelJob | undefined;
-  assistant?: "chat" | "deep_work" | undefined;
+  assistant?: "chat" | undefined;
 }
 
 /** "Backend Engineer, coding", or "The Dashboard Assistant's chat". */
 export function placeWords(seats: readonly Seat[], at: PlaceAt): string {
   if (at.assistant === "chat") return "Ask Crewlet's chat";
-  if (at.assistant === "deep_work") return "Ask Crewlet's deep work";
   const job = at.job ? JOB_WORDS[at.job] : "";
   const seat = at.seat ? seatName(seats, at.seat) : "";
   return [seat, job].filter(Boolean).join(", ");

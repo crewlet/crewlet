@@ -28,8 +28,6 @@ type Card struct {
 	Error     *ErrorCard     `json:"error,omitempty"`
 	Notice    *NoticeCard    `json:"notice,omitempty"`
 	Oversize  *OversizeCard  `json:"oversize,omitempty"`
-	// --- deep work (im-deep) ---
-	File *FileCard `json:"file,omitempty"`
 	// Brief is a brief turn's answer ([TurnBrief]).
 	Brief *BriefCard `json:"brief,omitempty"`
 }
@@ -362,7 +360,6 @@ func (c Card) bodies() map[CardKind]bool {
 		CardError:     c.Error != nil,
 		CardNotice:    c.Notice != nil,
 		CardOversize:  c.Oversize != nil,
-		CardFile:      c.File != nil,
 		CardBrief:     c.Brief != nil,
 	}
 }
@@ -422,8 +419,6 @@ func (c Card) Validate() error {
 			return fmt.Errorf("%w: an open in app card is permitted exactly when it names "+
 				"no reason", ErrInvalid)
 		}
-	case CardFile:
-		return c.File.validate()
 	case CardBrief:
 		return c.Brief.Validate()
 	case CardOversize:

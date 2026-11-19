@@ -47,10 +47,8 @@ type Draft struct {
 	// (D25), shown on the card.
 	Taint provenance.Source
 
-	// Now is the instant the proposal is made, and TTL how long it waits
-	// (zero is [DefaultTTL]).
+	// Now is the instant the proposal is made; it waits [TTL] from it.
 	Now time.Time
-	TTL time.Duration
 }
 
 // ErrTooLarge reports a change too large to show on one card: nothing can be
@@ -98,10 +96,6 @@ func New(d Draft) (assistantdomain.NewProposal, error) {
 	if err != nil {
 		return assistantdomain.NewProposal{}, fmt.Errorf("proposal: mint an operation key: %w", err)
 	}
-	ttl := d.TTL
-	if ttl <= 0 {
-		ttl = DefaultTTL
-	}
 	request, err := RequestDigest(p.Request)
 	if err != nil {
 		return assistantdomain.NewProposal{}, err
@@ -112,7 +106,7 @@ func New(d Draft) (assistantdomain.NewProposal, error) {
 		SourceRevision: p.SourceRevision, StepUp: p.StepUp,
 		// AT THE SECOND, which is what the digest binds, so the instant
 		// the card shows is the instant that is hashed.
-		ExpiresAt: d.Now.Add(ttl).UTC().Truncate(time.Second),
+		ExpiresAt: d.Now.Add(TTL).UTC().Truncate(time.Second),
 	}
 	digest, err := Digest(fields)
 	if err != nil {

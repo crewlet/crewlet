@@ -145,13 +145,11 @@ func histBytes(t *testing.T, h usage.Hist) string {
 // A HISTOGRAM JOINS ON WHAT IS AT OR ABOVE EVERY BIN, never bin by bin.
 //
 // A turn whose end states no tally is measured over the segments its node
-// holds, so a later segment moves it UP a bin and the bin it left loses a
-// count: the earlier histogram is not below the later one bin by bin, though
-// it is an earlier measurement of the same turns. Joined bin by bin, the turn
-// would be counted twice — once where it was and once where it is — and the
-// day would grow a turn nobody ran. What only grows is the count at or above
-// every bin, so that is what the join keeps; where the fleet's histogram holds
-// MORE there, the join holds that much.
+// holds, so a later segment moves it UP a bin and the old bin loses a count:
+// the earlier histogram is not below the later one bin by bin. Joined bin by
+// bin, the turn would be counted twice and the day grow a turn nobody ran.
+// What only grows is the count at or above every bin, so the join keeps that,
+// holding the fleet's where it is MORE.
 //
 // Mutation: join bin by bin (the larger count at every bin), and the turn that
 // moved is counted twice; or take the larger total alone, and the fleet's long

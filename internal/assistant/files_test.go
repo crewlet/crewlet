@@ -3,6 +3,7 @@ package assistant
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/crewlet/crewlet/internal/assistant/wire"
@@ -19,17 +20,13 @@ func TestAFilesTypeIsReadFromItsBytes(t *testing.T) {
 		allowed       []string
 		want          string
 	}{
-		"a png named anything":    {"logo.txt", string(png), wire.FileMediaTypes, "image/png"},
-		"an svg":                  {"logo.svg", `<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"/>`, wire.FileMediaTypes, "image/svg+xml"},
-		"a csv":                   {"palette.csv", "name,hex\nink,#090019\n", wire.FileMediaTypes, "text/csv"},
-		"markdown":                {"report.md", "# Teams\n", wire.FileMediaTypes, "text/markdown"},
-		"json":                    {"plan.json", `{"teams":[]}`, wire.FileMediaTypes, "application/json"},
-		"html called svg":         {"logo.svg", "<!DOCTYPE html><html><script>x()</script></html>", wire.FileMediaTypes, ""},
-		"html called text":        {"notes.txt", "<html><body>hi</body></html>", wire.FileMediaTypes, ""},
-		"invalid json":            {"plan.json", "{nope", wire.FileMediaTypes, ""},
+		"a png named anything":    {"logo.txt", string(png), wire.AttachmentMediaTypes, "image/png"},
+		"a gif":                   {"spin.gif", "GIF89a" + string(bytes.Repeat([]byte{0}, 32)), wire.AttachmentMediaTypes, "image/gif"},
 		"an svg as an attachment": {"logo.svg", "<svg/>", wire.AttachmentMediaTypes, ""},
-		"a script":                {"run.sh", "#!/bin/sh\nrm -rf /\n", wire.FileMediaTypes, ""},
-		"a header-breaking name":  {"a\";x=.png", string(png), wire.FileMediaTypes, ""},
+		"html called png":         {"logo.png", "<!DOCTYPE html><html><script>x()</script></html>", wire.AttachmentMediaTypes, ""},
+		"text":                    {"notes.txt", "hello", wire.AttachmentMediaTypes, ""},
+		"a script":                {"run.sh", "#!/bin/sh\nrm -rf /\n", wire.AttachmentMediaTypes, ""},
+		"a header-breaking name":  {"a\";x=.png", string(png), wire.AttachmentMediaTypes, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -45,11 +42,11 @@ func TestAFilesTypeIsReadFromItsBytes(t *testing.T) {
 			}
 		})
 	}
-	if _, _, err := SniffFile("big.txt", bytes.Repeat([]byte("a"), wire.FileMaxBytes+1),
-		wire.FileMediaTypes); !errors.Is(err, ErrFileRefused) {
+	big := append(slices.Clone(png), bytes.Repeat([]byte{0}, wire.FileMaxBytes)...)
+	if _, _, err := SniffFile("big.png", big, wire.AttachmentMediaTypes); !errors.Is(err, ErrFileRefused) {
 		t.Fatalf("a file past the cap was kept: %v", err)
 	}
-	if _, kept, _ := SniffFile("../../etc/report.md", []byte("# x"), wire.FileMediaTypes); kept != "report.md" {
+	if _, kept, _ := SniffFile("../../etc/logo.png", png, wire.AttachmentMediaTypes); kept != "logo.png" {
 		t.Fatalf("a path was kept as %q, want its last element", kept)
 	}
 }

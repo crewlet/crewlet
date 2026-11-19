@@ -89,24 +89,17 @@ func everyKind() []string {
 	return kinds
 }
 
-// A BRIDGED CALL IS HELD TO ITS SHARE OF THE LOG, AT ITS WORST. Every field of a
-// call kept by the log, each at the widest the log's encoder writes it — a name
-// past its bound in markup, arguments and an output of a megabyte of markup,
-// both its marks, every kind of change it can commit and the id its harness
-// gave it at its bound — weighs no more than [MaxBridgeCallBytes] less the room
-// left for what a later build adds to a call; the newest successful submission
-// no more than [MaxSubmissionCallBytes] less the same. And the parts are each
-// within the figure rowbytes.go states for them, and those figures with the
-// room close at the share, so the arithmetic there is this test's. A call
-// handed an id past its bound, in markup, is kept with none, so the share holds
-// whatever a writer hands the log.
-//
-// Mutation: keep the arguments or the output whole, or measure a cut by the
-// payload's own length rather than escaped, and the call overruns its share;
-// leave the name uncut, and the name does; keep a call without the kinds it
-// committed, or without its id, and the case is no longer at its worst; keep
-// an id whatever it is (log-keeps-any-id), and the call handed one past its
-// bound keeps it.
+// A BRIDGED CALL IS HELD TO ITS SHARE OF THE LOG, AT ITS WORST. A call kept by
+// the log, every field at its widest as the encoder writes it (markup name past
+// its bound, megabyte arguments and output, both marks, every kind of change,
+// id at its bound), weighs no more than [MaxBridgeCallBytes] less the room left
+// for a later build; the newest submission no more than [MaxSubmissionCallBytes]
+// less the same. The parts stay within rowbytes.go's figures, which close at the
+// share. An id past its bound is kept as none.
+// Mutation: keep the arguments or output whole, or measure a cut unescaped, and
+// the call overruns; leave the name uncut, and the name does; drop the kinds or
+// the id, and the case is no longer at its worst; keep an id whatever it is
+// (log-keeps-any-id), and one past its bound is kept.
 func TestABridgedCallIsHeldToItsShare(t *testing.T) {
 	t.Parallel()
 	const (
@@ -263,23 +256,17 @@ func worstEntry(t *testing.T, seq int) BridgeCall {
 }
 
 // A CALL IN FLIGHT IS HELD TO ITS SHARE. An entry written ahead of a call keeps
-// its identity and the id its harness gave it ([keptEntry]): at its widest —
-// its name and its runner past their bounds in markup the encoder escapes
-// six-fold, every instant at its longest, its id at its bound — it weighs no
-// more than [MaxCallInFlightBytes], whatever the caller handed it, arguments,
-// output and an id past its bound included; and that id it keeps as none,
-// never cut, as a finished call keeps one. And the log's split closes as its
-// table states it: its calls, its calls in flight and the rest of it
-// ([BridgeLogBytes], [InFlightBytes], [LogRestBytes]) are [RowBytes] together,
-// so a share moved without the table fails here.
-//
-// Mutation: keep a caller's runner, or its arguments, as handed
+// its identity and its harness's id ([keptEntry]); at its widest (name and
+// runner past their bounds in six-fold-escaped markup, every instant longest,
+// id at its bound) it weighs no more than [MaxCallInFlightBytes], whatever the
+// caller handed it. An id past its bound is kept as none, never cut. The log's
+// split closes as its table states: [BridgeLogBytes], [InFlightBytes] and
+// [LogRestBytes] are [RowBytes] together.
+// Mutation: keep a caller's runner or arguments as handed
 // (entry-keeps-its-runner-whole), or its id whatever it is (log-keeps-any-id),
-// and an entry overruns its share; cut an entry's id to its bound rather than
-// keep it as none (entry-cuts-its-id), and the entry handed one past it keeps a
-// cut id; hold more calls in flight than the table states
-// (more-calls-in-flight-than-the-table-says), and the log's split no longer
-// closes.
+// and an entry overruns; cut an id to its bound (entry-cuts-its-id), and one
+// past it keeps a cut id; hold more calls in flight than the table states
+// (more-calls-in-flight-than-the-table-says), and the split no longer closes.
 func TestACallInFlightIsHeldToItsShare(t *testing.T) {
 	t.Parallel()
 	entry := worstEntry(t, 0)
@@ -566,26 +553,18 @@ func admitsPanel(n int) bool {
 	})
 }
 
-// worstRow is a run's row with every field at its bound, each built in the
-// bytes that escape the most and, where a field is sealed or cut by code of
-// this package's, by that code: the parked state at its share, a recorded
-// answer and the copies of a let-go one each at theirs, a held call carrying
-// its sealed arguments at their share, its result sealed at its widest, the
-// call a person approved, which a reset owes the log too, the decision the
-// call carries out and the delegates it was put to first; the turn's read of
-// its conversation at its bound; who the turn works for and the answers that
-// woke it; and what its job may do on Gitlet: the most holds a turn may take,
-// the most repositories a job is given, each at the widest its grammar admits,
-// and its floors.
-//
-// A FIELD ADDED TO THE ROW IS SET HERE AT ITS BOUND, in the change that adds it,
-// so the arithmetic stays this test's: a field of the row comes out of the
-// rest's share (rowbytes.go's RestBytes, through ExtraRowBytes), and one of the
-// parked state out of the state's, which the park holds it to whatever it
-// carries. TestTheWorstRowSetsEveryField holds this to that, failing on any
-// field of the row left zero here that [zeroInTheWorstRow] does not name, and
-// TestTheWholeRowFitsItsBudget on figures rowbytes.go's table no longer states.
-// A field of the log beside it is set in [worstLog].
+// worstRow is a run's row with every field at its bound, in the bytes that
+// escape the most and, where this package seals or cuts a field, by that code:
+// parked state, recorded answer and let-go copies, held call with sealed
+// arguments and result, the approved call, its decision and delegates, the
+// turn's conversation read, who it works for, the answers that woke it, and the
+// job's Gitlet holds, repositories and floors.
+// A FIELD ADDED TO THE ROW IS SET HERE AT ITS BOUND, in the change that adds it:
+// a row field comes out of the rest's share (rowbytes.go's RestBytes, through
+// ExtraRowBytes), a parked-state one out of the state's.
+// TestTheWorstRowSetsEveryField fails on a field left zero here that
+// [zeroInTheWorstRow] does not name, TestTheWholeRowFitsItsBudget on figures
+// rowbytes.go's table no longer states. A log field is set in [worstLog].
 func worstRow(t *testing.T) PendingRun {
 	t.Helper()
 	markup := func(n int) string { return strings.Repeat("<", n) }
@@ -1012,29 +991,18 @@ func worstRow(t *testing.T) PendingRun {
 	return run
 }
 
-// worstLog is a run's bridged call log with every field at its bound, each
-// built in the bytes that escape the most and through the code that writes it
-// ([BridgeLog.appendCall]): two hundred of the worst calls kept and a hundred
-// dropped, by names that escape the most, so the tally of their identities
-// folds to its last step; each call's own work tallied the same way, so the
-// identities it made fold too; the most tool names the turn's earlier rounds
-// fold to ([MaxPriorCalls]); the log's identifiers — its job, its round, the
-// answer it was cut for — at their widest; its count of the late calls it
-// dropped ([BridgeLog.LateElided]) at the most it can be, every call it drops a
-// late one, as every call but the newest submission is; every kind of change
-// a call can commit, on every call and so, through the append, in the log's
-// union of what its calls committed ([BridgeLog.Committed]); and the most
-// calls in flight it holds ([MaxCallsInFlight]), each entry at its widest
-// ([worstEntry]). EACH CALL HANDED WHAT NO FINISHED CALL KEEPS besides, a
-// runner and a bound, and its own work tallied with its failures, so a field
-// the log leaves zero is one the append leaves out, never one the model did
-// not hand it ([zeroInTheWorstLog] names each).
-//
-// A FIELD ADDED TO THE LOG IS SET HERE AT ITS BOUND, in the change that adds it:
-// one of the calls' comes out of [BridgeLogBytes], and any other out of the
-// room [RowBytes] leaves above it. TestTheWorstLogSetsEveryField holds this to
-// that, failing on any field of the log left zero here that
-// [zeroInTheWorstLog] does not name.
+// worstLog is a run's bridged call log with every field at its bound, in the
+// bytes that escape the most and through [BridgeLog.appendCall]: 200 worst
+// calls kept and 100 dropped, so the identity tallies fold to their last step,
+// the calls' own work too; [MaxPriorCalls] prior names; the log's identifiers;
+// [BridgeLog.LateElided] at its most (every dropped call late, as all but the
+// newest submission are); every kind of change on every call, so the union in
+// [BridgeLog.Committed] is full; and [MaxCallsInFlight] entries ([worstEntry]).
+// EACH CALL IS HANDED WHAT NO FINISHED CALL KEEPS (a runner, a bound, failed
+// work), so a field the log leaves zero is one the append drops
+// ([zeroInTheWorstLog]). A FIELD ADDED TO THE LOG IS SET HERE AT ITS BOUND:
+// a call's comes out of [BridgeLogBytes], any other out of [RowBytes]'s room.
+// TestTheWorstLogSetsEveryField fails on one left zero and unnamed.
 func worstLog(t *testing.T) BridgeLog {
 	t.Helper()
 	bridged := BridgeLog{Launch: uuid.NewString(), Round: uuid.NewString(), CutFor: uuid.NewString(),
@@ -1070,17 +1038,13 @@ const elidedWorst = 100
 
 // A RUN'S VALUES ARE BUDGETED TO WHAT ONE KEY OF THE STORE HOLDS.
 //
-// Every share in rowbytes.go is a share of what one value of a run may weigh,
-// and the coordination store refuses a value past what one of its keys holds
-// (coord.MaxValueBytes) — the largest whose leader's read crosses a leaf's
-// link, about a quarter under the transport's eight mebibytes. Closed at the
-// transport instead, the shares passed a row of seven megabytes, and every
-// write of its run — its lease, its status, each call its log appended — was
-// refused in the store; the budget tests below hold a row and a log to these
-// shares, so they hold them to the store.
-//
-// Mutation: budget a value to the transport's ceiling rather than to what one
-// key holds, and it is past the store's bound.
+// Every share in rowbytes.go is a share of one run value, which the store
+// refuses past coord.MaxValueBytes, about a quarter under the transport's eight
+// mebibytes (the largest a leader's read carries across a leaf's link). Closed
+// at the transport, a seven-megabyte row would pass and every write of its run
+// be refused. The budget tests hold a row and a log to these shares, so to the
+// store.
+// Mutation: budget to the transport's ceiling, and it is past the store's bound.
 func TestARunsValuesAreBudgetedToWhatOneKeyOfTheStoreHolds(t *testing.T) {
 	t.Parallel()
 	if RowBytes > coord.MaxValueBytes {
@@ -1220,27 +1184,17 @@ var zeroInTheWorstRow = func() map[string]string {
 }()
 
 // THE WORST ROW SETS EVERY FIELD THE ROW CARRIES. TestTheWholeRowFitsItsBudget
-// fails only on a row past its shares, and a field [worstRow] leaves out makes
-// the row it measures smaller, so the rule the model states, that a field the
-// row gains is set there at its bound in the change that adds it, was held by
-// nothing: the decision a held call carries out and the delegates it was put
-// to, who the turn works for, the credential and the answers that woke it, and
-// the ending's error kind each joined the row and none of them the model. So
-// every field the row's encoder writes is set in the worst row
-// ([zeroOnTheWire]), but those [zeroInTheWorstRow] names, each with why the
-// row never carries it beside the rest at their worst; and each it names is
-// zero there, so a reason that stops holding is struck rather than left to
-// hide a field.
-//
+// fails only on a row past its shares; a field [worstRow] leaves out only
+// shrinks the measured row. So every field the row's encoder writes is set in
+// the worst row ([zeroOnTheWire]) except those [zeroInTheWorstRow] names, each
+// with why the row never carries it at its worst; each is zero there, so a
+// stale reason is struck, not left to hide a field.
 // Mutation: leave the job's record without how its harness ended, a note
-// without the job it was served to, the held call without the delegates it was
-// put to, or the refusal's address with a second key and no value, and the
-// row has a field nothing names; name a field the worst row sets, and the
-// list gives a reason that does not hold; let approvedCall keep the held mark
-// or the output's size of the call it is handed, or keptCall a finished
-// call's runner, and a reason the list names no longer holds; widen the panel
-// a held call's contract admits (panel-widened), or put the worst held call to
-// a narrower one (panel-of-one), and the model is not at its worst.
+// without its job, the held call without its delegates, or the refusal's
+// address with a key and no value, and a field is unnamed; name a field the
+// worst row sets, and the reason fails; let approvedCall keep the held mark or
+// output size, or keptCall a runner, and a named reason fails; widen the panel
+// (panel-widened) or narrow it (panel-of-one), and it is not at its worst.
 func TestTheWorstRowSetsEveryField(t *testing.T) {
 	t.Parallel()
 	everyFieldSet(t, "row", worstRow(t), zeroInTheWorstRow)
@@ -1256,22 +1210,17 @@ func worstLeadsPart(t *testing.T) leadsPart {
 }
 
 // THE WHOLE LEADS PART FITS ITS BUDGET: the turn's leads are a value of their
-// own beside the row ([coord.RunLeads]), held to [RowBytes] as the row and the
-// log are. At their worst the leads weigh exactly their share
-// ([MaxKeptLeadBytes]), no more than [MaxKeptLeads] of them, and the whole
-// part, its own fields at their widest, no more than [RowBytes]: what is left
-// is the room a later build adds keys to the part in.
+// own beside the row ([coord.RunLeads]), held to [RowBytes]. At their worst they
+// weigh exactly [MaxKeptLeadBytes], at most [MaxKeptLeads] of them, and the
+// whole part no more than [RowBytes]; the rest is room for a later build's keys.
+// AND THE TABLE'S FIGURES (leads.go) ARE THE PART'S: its own fields
+// ([measuredLeadsFields]) and the spare ([measuredLeadsSpare]) are compared
+// exactly, as the row's are (TestTheWholeRowFitsItsBudget), since the worst
+// part weighs the same every run (new ids, fixed width).
 //
-// AND THE FIGURES ITS TABLE STATES ARE THE ONES THE PART WEIGHS (leads.go): its
-// own fields ([measuredLeadsFields]) and what [RowBytes] leaves to spare beside
-// them and the leads ([measuredLeadsSpare]), compared exactly, as the row's are
-// (TestTheWholeRowFitsItsBudget), since the worst part weighs the same on every
-// run: its ids are new on every run, each of a fixed width.
-//
-// Mutation: raise MaxKeptLeadBytes past what RowBytes leaves beside the part's
-// fields, and the part overruns its value; write a key of the part a byte
-// longer, and its fields no longer weigh the figure the table states; move
-// RowBytes, and the part no longer leaves the spare the table states.
+// Mutation: raise MaxKeptLeadBytes past what RowBytes leaves, and the part
+// overruns; write a key a byte longer, and its fields miss the table's figure;
+// move RowBytes, and the spare does.
 func TestTheWholeLeadsPartFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	part := worstLeadsPart(t)
@@ -1315,22 +1264,17 @@ func TestTheWorstLeadsPartSetsEveryField(t *testing.T) {
 }
 
 // THE WHOLE LOG FITS ITS BUDGET: the log is a value of its own beside the row,
-// held to [RowBytes] as the row is, and its calls to their share of it. Two
-// hundred of the worst calls beside both tallies at their shares weigh no more
-// than [BridgeLogBytes], and the whole log, with the most tool names the turn's
-// earlier rounds fold to and its identifiers at their widest, no more than
-// [RowBytes] — what is left above it being the room a later build adds keys to
-// the log in. Its calls carry every kind of change a call can commit, and its
-// union of them holds every kind. AND [MaxCallsInFlight] ENTRIES IN FLIGHT, each
-// at its widest, weigh no more than their line [InFlightBytes], inside the
-// whole: the bound a call's write ahead of it is held to measured where it
-// counts, beside every other field of the log at its worst.
-//
+// held to [RowBytes] as the row is, its calls to their share of it. 200 worst
+// calls with both tallies at their shares weigh no more than [BridgeLogBytes],
+// and the whole log, with the most prior names and widest identifiers, no more
+// than [RowBytes]; the rest is room for a later build's keys. Its calls carry
+// every kind of change, and its union holds every kind. AND [MaxCallsInFlight]
+// ENTRIES IN FLIGHT at their widest weigh no more than [InFlightBytes], inside
+// the whole: a call's write-ahead bound measured beside every other field.
 // Mutation: keep a call's output whole, or raise MaxBridgeCalls, and the calls
-// overrun their share; raise MaxPriorCalls far enough, and the log overruns
-// its value; stop the append folding a call's kinds into the log's union, and
-// the log is not measured at its worst; keep an entry's runner whole
-// (entry-keeps-its-runner-whole), and the entries overrun their line.
+// overrun; raise MaxPriorCalls far enough, and the log does; stop the append
+// folding kinds into the union, and the log is not at its worst; keep an
+// entry's runner whole (entry-keeps-its-runner-whole), and the entries overrun.
 func TestTheWholeLogFitsItsBudget(t *testing.T) {
 	t.Parallel()
 	bridged := worstLog(t)

@@ -261,10 +261,8 @@ func (e *Engine) namedEntries(c *Company) map[string]bool {
 			}
 		}
 	}
-	if keys, err := c.Config.AssistantChain(); err == nil {
-		for _, key := range keys {
-			out[key] = true
-		}
+	if key, err := c.Config.AssistantModel(); err == nil {
+		out[key] = true
 	}
 	return out
 }

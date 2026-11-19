@@ -112,7 +112,7 @@ func (a *Applier) writeHistory(ctx context.Context, tx *sql.Tx, c applyContext,
 	if err != nil {
 		return 0, err
 	}
-	noticed, err := a.writeInbox(ctx, tx, c, keys.Key)
+	noticed, err := a.writeInbox(ctx, tx, c, historyID(c), keys.Key)
 	if err != nil {
 		return 0, err
 	}
@@ -261,9 +261,9 @@ func inboxSubjectKey(fromRow string, notify *Notify) string {
 // row for the actor is a notice in their own inbox about what they just did.
 //
 // The retention horizon is applied around [Candidates], keeping it free of a
-// clock.
+// clock. Rows are keyed on record, a history id or a flow notice's own key.
 func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
-	subjectKey string) (int, error) {
+	record, subjectKey string) (int, error) {
 
 	notify := c.record.Notify
 	if notify == nil {
@@ -303,7 +303,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 				 created_at, log_seq, log_stream, log_generation, asks, starts_turn)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT (record_id, recipient) DO NOTHING`,
-			historyID(c), candidate.Handle, c.subject().ID,
+			record, candidate.Handle, c.subject().ID,
 			inboxSubjectKey(subjectKey, notify), task,
 			string(notify.Kind), string(candidate.Reason),
 			boolInt(candidate.Addressed), boolInt(candidate.FallbackOnly),
@@ -322,7 +322,7 @@ func (a *Applier) writeInbox(ctx context.Context, tx *sql.Tx, c applyContext,
 			// Only a row this transaction wrote: a redelivery moved
 			// nobody's inbox ([inbox.Movement]).
 			a.inboxed.Note(inbox.Note{
-				Record: historyID(c), Handle: candidate.Handle,
+				Record: record, Handle: candidate.Handle,
 				Subject: c.subject().ID, Reason: string(candidate.Reason),
 				Position: c.packed, At: c.brokerAt,
 			})

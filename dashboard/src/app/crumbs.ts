@@ -283,6 +283,12 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
     case "brand-setup":
       // ITS SETUP ADDS A CRUMB, and Brand becomes the way back.
       return [root(row, true), { label: "Set up" }];
+    case "ask":
+      // A CONVERSATION'S TITLE is the page's to publish; until it arrives,
+      // and for one with none yet, the trail says "Conversation".
+      return where.conversation
+        ? [root(row, true), { label: labels[where.conversation] || "Conversation" }]
+        : [root(row, false)];
     case "home":
     case "inbox":
     case "budgets":
@@ -292,6 +298,11 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
       return [root(row, false)];
     case "me":
       return sectionPage(where.section);
+    case "advisor":
+      return sectionPage(`advisor-${where.section}`);
+    case "advisor-finding":
+      // A FINDING'S TITLE is its page's to publish; until then, "Finding".
+      return inside("advisor-findings", { label: labels[where.id] || "Finding" });
     case "worklet-projects":
       // WORKLET'S LANDING: All projects' first lens, where a link back to
       // Worklet would lead to the page it is on.
@@ -540,14 +551,12 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
     case "spend":
     case "spend-tasks":
     case "limits":
-    case "ask-crewlet":
     case "people":
     case "service-accounts":
     case "tokens":
     case "sign-in":
     case "storage":
     case "diagnostics":
-    case "advisor":
     case "delegated-decisions":
       return sectionPage(where.screen);
     case "code-settings":

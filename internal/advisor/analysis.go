@@ -20,45 +20,42 @@ import (
 // record and number it cites is one the run's own tools answered and the engine
 // has built its fix. No model and no I/O here; internal/advisor/analyst runs it.
 
-// SourceAnalyst is a finding the analyst submitted and the engine grounded.
-const SourceAnalyst Source = "analyst"
+// SourceModel is a finding the Advisor's model submitted and the engine grounded.
+const SourceModel Source = "model"
 
-// ClassAnalyst is every analyst finding's class: what it is about is its words.
-const ClassAnalyst Class = "analyst.finding"
+// ClassModel is every model finding's class: what it is about is its words,
+// and its identity its [Fingerprint].
+const ClassModel Class = "model.finding"
 
-// Status is how an analyst run ended.
-type Status string
+// PassStatus is how a model pass ended.
+type PassStatus string
 
-// The ways a run ends, and the one it is in while it runs.
+// The ways a pass ends.
 const (
-	StatusRunning Status = "running"
-	// StatusDone read every tool it asked for and submitted, its findings checked.
-	StatusDone Status = "done"
-	// StatusCeiling stopped at its token ceiling: what it grounded so far is listed as partial.
-	StatusCeiling Status = "ceiling"
-	// StatusRefused is a model that declined, or answered outside the schema twice.
-	StatusRefused Status = "refused"
-	// StatusFailed could not run: no model answered, or the company's budget was spent.
-	StatusFailed Status = "failed"
+	// PassOff is a company that assigns the Advisor no model.
+	PassOff PassStatus = "off"
+	// PassDone read every tool it asked for and submitted, its findings checked.
+	PassDone PassStatus = "done"
+	// PassCeiling stopped at its token ceiling: what it grounded so far is listed.
+	PassCeiling PassStatus = "ceiling"
+	// PassDeclined is a model that declined, or answered outside the schema twice.
+	PassDeclined PassStatus = "declined"
+	// PassFailed could not run: no model answered, or the company's budget was spent.
+	PassFailed PassStatus = "failed"
 )
 
-// Analysis is one run of the analyst, as the fleet keeps the last one.
-type Analysis struct {
-	ID      string    `json:"id"`
-	Status  Status    `json:"status"`
-	Started time.Time `json:"started"`
-	Ended   time.Time `json:"ended,omitzero"`
-	// Trigger is "schedule" or "person", and By the person who pressed Run now.
-	Trigger string `json:"trigger"`
-	By      string `json:"by,omitempty"`
-	// Model is the providers.llm entry the run started on, and Ceiling its token ceiling.
-	Model   string `json:"model"`
-	Ceiling int    `json:"ceiling"`
+// Pass is how one model pass ended, as its run records it.
+type Pass struct {
+	Status PassStatus `json:"status"`
+	// Model is the providers.llm entry the pass ran on, and Ceiling its token ceiling.
+	Model   string `json:"model,omitempty"`
+	Ceiling int    `json:"ceiling,omitempty"`
 	// InputTokens and OutputTokens are what every round together spent.
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
-	// Findings are the grounded ones, Dropped how many were not and why.
-	Findings []Finding    `json:"findings,omitempty"`
+	// Findings are the grounded ones, Listed how many, Dropped how many were not and why.
+	Findings []Finding    `json:"-"`
+	Listed   int          `json:"listed"`
 	Dropped  map[Drop]int `json:"dropped"`
 	Unread   []string     `json:"unread"`
 	Reason   string       `json:"reason,omitempty"`
@@ -268,9 +265,10 @@ func ground(s Submitted, served *Served, g Grounding) (Finding, Drop) {
 	if !ok {
 		return Finding{}, DropFix
 	}
-	f := Finding{Class: ClassAnalyst, Severity: s.Severity, Actor: ActorOwner, Source: SourceAnalyst,
+	f := Finding{Class: ClassModel, Severity: s.Severity, Actor: ActorOwner, Source: SourceModel,
 		Area: AreaWork, Subject: subject, Title: s.Title, Why: s.Why, Item: s.Item,
 		Evidence: facts, Records: records, Fix: fix}
+	f.Focus = Fingerprint(f)
 	if repeats(f, g.Rules) {
 		return Finding{}, DropRepeat
 	}
@@ -410,30 +408,17 @@ func Fingerprint(f Finding) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// Verdict is how a person answered an analyst finding.
+// Verdict is why a person dismissed a model finding, as its next pass is told.
 type Verdict string
 
-// The three answers.
+// The two verdicts a pass is told: a finding that was wrong, and one already known.
 const (
-	VerdictUseful Verdict = "useful"
-	VerdictWrong  Verdict = "wrong"
-	VerdictKnown  Verdict = "known"
+	VerdictWrong Verdict = "wrong"
+	VerdictKnown Verdict = "known"
 )
 
-// Verdicts is every answer.
-func Verdicts() []Verdict { return []Verdict{VerdictUseful, VerdictWrong, VerdictKnown} }
-
-// Valid reports whether v is an answer.
-func (v Verdict) Valid() bool { return slices.Contains(Verdicts(), v) }
-
-// KnownFor is how long an already-known finding stays off the list.
-const KnownFor = 30 * 24 * time.Hour
-
-// MaxAnswers bounds the answers kept, the oldest dropped first.
-const MaxAnswers = 200
-
-// AnswerState is one person's answer to one analyst finding, by fingerprint,
-// with what it said so the next run can be told.
+// AnswerState is one person's dismissal of one model finding, by fingerprint,
+// with what it said so the next pass can be told.
 type AnswerState struct {
 	Fingerprint string    `json:"fingerprint"`
 	Verdict     Verdict   `json:"verdict"`
@@ -443,38 +428,21 @@ type AnswerState struct {
 	Subject     Subject   `json:"subject"`
 }
 
-// Answers is every answer kept, the newest last.
+// Answers is every dismissal a pass is told of.
 type Answers []AnswerState
 
-// With is a with answer a in place of an earlier one for the same finding,
-// bounded to [MaxAnswers].
-func (a Answers) With(answer AnswerState) Answers {
-	out := slices.DeleteFunc(slices.Clone(a), func(x AnswerState) bool { return x.Fingerprint == answer.Fingerprint })
-	out = append(out, answer)
-	if len(out) > MaxAnswers {
-		out = out[len(out)-MaxAnswers:]
-	}
-	return out
-}
-
-// Holding is the fingerprints at now a run leaves off: every wrong one, and an
-// already-known one for [KnownFor].
+// Holding is the fingerprints a pass leaves off: every one dismissed as wrong
+// or known, whose key [HoldFor] still holds.
 func (a Answers) Holding(now time.Time) map[string]bool {
 	out := map[string]bool{}
 	for _, x := range a {
-		if x.Verdict == VerdictWrong || (x.Verdict == VerdictKnown && now.Sub(x.At) < KnownFor) {
+		reason := ReasonDismissedKnown
+		if x.Verdict == VerdictWrong {
+			reason = ReasonDismissedWrong
+		}
+		if span, forGood := HoldFor(reason); forGood || now.Sub(x.At) < span {
 			out[x.Fingerprint] = true
 		}
 	}
 	return out
-}
-
-// Stale reports whether a run that started at started is past two of its
-// cadence's periods at now, so its findings are no longer this week's.
-func Stale(started, now time.Time, every config.AnalystCadence) bool {
-	period := 24 * time.Hour
-	if every == config.AnalystWeekly {
-		period = 7 * 24 * time.Hour
-	}
-	return now.Sub(started) > 2*period
 }

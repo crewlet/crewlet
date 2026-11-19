@@ -149,13 +149,12 @@ const (
 //
 // ONE PRINCIPAL KIND PER STATEMENT, each found by a seek of the reader index's
 // head ([repoReaderKindStatement]), so a page that resumes SEEKS the principal
-// it resumes at — `principal >= ?` under the index — and reads, past the keyset
-// that holds the rest of that principal's readers, only its own rows: a
-// statement over the whole repository with the keyset as a filter read every
-// reader before the page's first again on every page. A reader's rows are its
-// days on every node, summed in the statement, which streams in the index's
-// order with no sort, so a statement stopped at a page's end has read that
-// page's readers and nothing past them.
+// it resumes at (`principal >= ?` under the index) and reads, past the keyset,
+// only its own rows: a statement over the whole repository with the keyset as a
+// filter re-read every reader before the page's first on every page. A reader's
+// rows are its days on every node, summed in the statement, which streams in
+// the index's order with no sort, so one stopped at a page's end has read
+// nothing past that page's readers.
 func RepoReadsPage(ctx context.Context, estate Estate, q RepoReadsQuery, after Group,
 	budget int) (Page[RepoReader], error) {
 
