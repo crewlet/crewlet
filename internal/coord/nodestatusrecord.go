@@ -16,51 +16,18 @@ import (
 	"github.com/crewlet/crewlet/internal/textcut"
 )
 
-// WHAT A NODE SAYS OF ITS MCP SERVERS, ITS MODELS, ITS RUNNERS AND WHAT IT RUNS
-// ON, read by the whole fleet: its STATUS RECORD.
+// A node's STATUS RECORD: what it says of its MCP servers, models, runners and
+// infra, read by the whole fleet (company-wide, current value only: a model's
+// sit-out on one node decides another node's retry).
 //
-// # Who has to agree on it
+// Not on the presence lease, which is rewritten every beat and must stay a few
+// hundred bytes (crewlet#1035); these rows grow with the configuration. A loop
+// of its own writes them on change and at least every [ReconcileInterval].
 //
-// The whole company, current value only. A model's sit-out on one node is a
-// decision another node's retry makes (a node that retried a model its peer
-// was told to sit out would meet the same limit again); the Models page, a
-// server's status and the atlas on any node draw every node's rows.
-//
-// # Why not on the presence lease
-//
-// The presence is rewritten on EVERY beat and is what placement and liveness
-// read, so what it carries is a few hundred bytes whose size does not grow with
-// a company's configuration: it is what a node's lease renewals pay on its link
-// (crewlet#1035). These rows grow with that configuration —
-// a row per configured MCP server and per model entry, a runner cell's
-// detail and fix, and an infra summary of up to twenty-two texts of 255 bytes
-// — and none of them is read by placement or by liveness: they are rows a
-// person reads, and decisions about another node's calls. So they are a record
-// of their own, written by a loop of their own (internal/engine's
-// nodestatusrecord.go) when they change, and at least every
-// [ReconcileInterval], rather than re-sent on every beat whether or not they
-// moved.
-//
-// # Aged, so a dead node's record goes on its own
-//
-// The record lives in a bucket whose age is [StatusFreshness], the apply
-// status's own: the writer rewrites it at least every [ReconcileInterval],
-// four times inside the age, so a live node's record never ages out, and a
-// node that died leaves nothing behind once its last write is a minute old.
-// No sweep, and no index of what to sweep: the reason a summary of a node's
-// infra once rode the presence ("a record of its own would need a sweep for
-// the nodes that died", ADR-0142) is answered by the age.
-//
-// # Joined to the presence by its epoch
-//
-// A record carries the presence epoch of the node that wrote it, and a reader
-// counts it only while that node holds its presence AT THAT EPOCH
-// ([LiveNodeStatuses]), the rule MCP listings already follow
-// ([LiveMCPListings]). A node that died stops counting the moment its presence
-// lapses, before its record ages out; a node that restarted, or lapsed and
-// claimed its presence again, is a new incarnation whose record is not counted
-// until it writes it, which it does as the presence is claimed. A reader never
-// draws a row a node's earlier incarnation said.
+// The bucket's age is [StatusFreshness], four reconciles, so a dead node's
+// record ages out with no sweep (ADR-0142). It counts only while its writer
+// holds its presence at the record's epoch ([LiveNodeStatuses], like
+// [LiveMCPListings]), so an earlier incarnation is never drawn.
 
 // NodeStatusRecord is one node's status record: the rows it reports of itself
 // beside its presence, under the presence epoch it wrote them at.
@@ -591,19 +558,14 @@ type MCPServerStatus struct {
 	// where the instances of one template disagree.
 	Tools int
 
-	// Error is ONE failed instance's reason, and ErrorSeat the seat it
-	// belonged to, by its AGENT ID (uuid.Nil for a shared server). One
-	// rather than all, for the size argument above: the one DownSince dates,
-	// the instance down longest (ties, and failures nothing dated, to the
-	// lower agent id), so the reason, its seat, its class and the outage's
-	// start are one instance's facts, and two records with the same failures
-	// publish the same row.
+	// Error is ONE failed instance's reason, and ErrorSeat its seat's agent
+	// id (uuid.Nil for a shared server). One, for the size argument above:
+	// the instance DownSince dates, the longest down (ties to the lower agent
+	// id), so reason, seat, class and outage start are one instance's facts
+	// and equal failures publish the same row.
 	//
-	// THE ID RATHER THAN THE HANDLE, because this row is published on a
-	// record every peer reads, and a peer reads it against its OWN org: the
-	// id names the seat the instance was launched for — the agent id
-	// derived from its handle (ADR-0013) — and the reader resolves it to
-	// that handle.
+	// The id, not the handle: a peer reads this row against its OWN org and
+	// resolves the id (derived from the handle, ADR-0013) itself.
 	Error     string
 	ErrorSeat uuid.UUID
 
@@ -698,20 +660,14 @@ const MaxMCPToolNameBytes = 128
 // MaxMCPErrorBytes bounds [MCPServerStatus.Error] and [MCPServerStatus.Wait]
 // on the wire.
 //
-// Two kinds of text arrive here. A start failure's is a handshake error or a
-// child's last stderr line, whose useful part — "command not found", "401",
-// "connection refused" — is at its head. The engine's own sentence for a
-// server it held back, for a value that resolves to nothing, is the other,
-// and its useful part is all of it: the variable, then each remedy, the last
-// naming the key to declare optional where a server can run without a host's
-// setting. At 240 bytes that last remedy never arrived: the tools guide's own
-// `NPM_CONFIG_REGISTRY` case is about 300 bytes, and a per-role child missing
-// a setting while its seat's token is being minted about 380. 512 carries
-// both under names of ordinary length. A row carries text only while
-// an instance has failed or waits, so the bound costs a healthy server's row
-// nothing on the record it is rewritten with; the full text is in the node's
-// own log line either way (`mcp_server_failed`,
-// `mcp_server_credential_missing`), which is where a person fixing it reads.
+// A start failure's text is a handshake error or a child's last stderr line,
+// useful at its head ("command not found", "401"). The engine's own sentence
+// for a held-back server is useful whole: the variable, then each remedy, the
+// last naming the key to declare optional. Those run about 300 bytes (the
+// tools guide's `NPM_CONFIG_REGISTRY` case) to 380 (a per-role child awaiting
+// its token), which 240 cut short; 512 carries both. Only a failed or
+// waiting row has text, so a healthy row pays nothing; the full text is in the
+// node's log (`mcp_server_failed`, `mcp_server_credential_missing`).
 const MaxMCPErrorBytes = 512
 
 // meta is one MCP row on the wire. Every optional part is OMITTED when

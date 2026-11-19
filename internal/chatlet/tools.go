@@ -6,38 +6,18 @@ import (
 	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// Chatlet's tool names.
+// Chatlet's tool names, BARE rather than prefixed on
+// [github.com/crewlet/crewlet/internal/worklet]'s reasoning: a prefix costs
+// tokens on every catalogue line for every seat.
 //
-// BARE, not prefixed, on [github.com/crewlet/crewlet/internal/worklet]'s
-// reasoning: a first-party tool may be named in a prompt — this build
-// registers it under a name this build chose — and a prefix would cost tokens
-// on every catalogue line for every seat to disambiguate from nothing.
+// These are the most generic names in the tree, and the registry REFUSES a
+// duplicate ([github.com/crewlet/crewlet/internal/tools.ErrDuplicate]), so
+// Chatlet beside a server publishing `post_message` fails at registration
+// naming both sides: two tools with one name are two rooms with one address.
+// Re-check a new spelling against `grep -rh 'Tool\s*=\s*"' internal/`.
 //
-// # These are the most generic names in the tree, and that is the risk
-//
-// `post_message`, `read_channel` and `list_channels` are what a chat MCP
-// server would plausibly call its own tools, and the registry REFUSES a
-// duplicate rather than overwriting one
-// ([github.com/crewlet/crewlet/internal/tools.ErrDuplicate]) — so a company
-// running both Chatlet and a vendor server that publishes one of these
-// names gets a refusal at registration, naming both sides, instead of a seat
-// silently calling whichever won. That is the outcome to want: two tools with
-// one name are two rooms with one address, and a message would land in
-// whichever the registration order picked.
-//
-// None of the nine, nor the seven only a person is given below, collides with
-// a first-party name this build ships. The shipped set is the tracker's, the
-// wiki's, the learning tools and the meta-tools, and it is worth re-checking
-// against `grep -rh 'Tool\s*=\s*"' internal/` before any of these is
-// respelled.
-//
-// # Why they live in the DOMAIN rather than beside the implementations
-//
-// Two packages need them and neither may import the other: the builtin
-// surface implements the tools, and this package's own notification prompt
-// NAMES them — it tells a woken seat which tool to reach for, and a prompt
-// that named a tool this build does not register is a seat instructed to call
-// something that is not there. The domain owns its vocabulary.
+// They live in the DOMAIN because the builtin surface implements them and this
+// package's notification prompt names them; neither may import the other.
 const (
 	// PostMessageTool starts a new top-level message in a room.
 	PostMessageTool = "post_message"
@@ -173,19 +153,13 @@ func OperatorOnlyTools() []string {
 //
 // # There is no follow_thread and no unfollow_thread
 //
-// Stated here rather than left as an absence, because a reader who knows the
-// design's table will come looking for them. `chat_follows` is DERIVED by the
-// APPLIER from the thread's own mentions — being named subscribes you, and the
-// name taken back unsubscribes you — and this build's record alphabet has no
-// op that subscribes or unsubscribes anybody; [Store] says so in as many
-// words, and so does the applier. Registering the two names against a domain
-// that cannot express the gesture would be two tools that fail at every call,
-// which is how a model learns to distrust the whole catalogue.
-//
-// Adding them is a change to the value layer — an op, a payload, an applier
-// arm and a decision about what an unfollow means for a row the next mention
-// writes back, and what a follow means once the last name that gave it is
-// gone — and it belongs in the domain rather than at this seam.
+// `chat_follows` is DERIVED by the APPLIER from the thread's own mentions
+// (being named subscribes you, the name taken back unsubscribes you), and the
+// record alphabet has no op that subscribes anybody ([Store] says so). Tools
+// the domain cannot express would fail at every call, which teaches a model to
+// distrust the catalogue. Adding them is a value-layer change (an op, a
+// payload, an applier arm, and what an unfollow means for a row the next
+// mention writes back), not one at this seam.
 func Tools() []string {
 	return []string{
 		PostMessageTool, ReplyInThreadTool, SendDMTool,
@@ -196,20 +170,11 @@ func Tools() []string {
 
 // WriteTools are the three that count as a DELIVERY.
 //
-// A turn woken because somebody spoke to it answers by SAYING SOMETHING — in
-// the thread, in the room, or privately — and the delivery gate has to know
-// that, or such a turn is corrected and looped for having "done nothing".
-//
-// THE OTHER WRITES ARE NOT HERE, and each is left out for its own reason
-// rather than by oversight:
-//
-//   - a REACTION reaches nobody: it wakes no seat and obliges nothing, so a
-//     turn that answered a direct question with an emoji has not answered it.
-//   - JOINING or LEAVING a room changes only where this seat listens. The
-//     person waiting for an answer is no closer to having one.
-//
-// Reading is not delivering either, which is why the three reads are not
-// here: a turn that only read is exactly the turn the gate exists to catch.
+// A turn woken because somebody spoke to it answers by SAYING SOMETHING, or the
+// delivery gate corrects and loops it for having "done nothing". The other
+// writes are left out on purpose: a REACTION wakes no seat and obliges nothing,
+// and JOINING or LEAVING changes only where this seat listens. Reading is not
+// delivering: a turn that only read is the one the gate exists to catch.
 func WriteTools() []string {
 	return []string{PostMessageTool, ReplyInThreadTool, SendDMTool}
 }
@@ -218,15 +183,12 @@ func WriteTools() []string {
 // in opposite directions: joining and leaving move the caller's own place in
 // it, and [SetChannelMembersTool] states the whole of it.
 //
-// DECLARED AS A SET because that is what a turn derives their operations by
-// ([CallFamily]). A count of earlier calls kept per tool cannot see the other
-// half: a seat that joined, left and joined again made its second join after
-// no call of its own tool that asked anything different, so it derived the
-// first join's key, and was answered with the first join's success while it
-// stayed outside the room. A membership set that took the caller out between two
-// joins is that leave by another name, so it is in the family too — although
-// no seat holds it today, a family is drawn by what a tool WRITES, and a tool
-// that undoes another and is left out is the hole this closes.
+// DECLARED AS A SET because a turn derives their operations by it
+// ([CallFamily]). A count kept per tool cannot see the other half: join, leave,
+// join derives the second join as the first's key and answers it with the
+// first's success while the seat stays outside. A membership set that takes the
+// caller out between two joins is that leave by another name, so it is in the
+// family though no seat holds it today: a family is drawn by what a tool WRITES.
 func MembershipTools() []string {
 	return []string{JoinChannelTool, LeaveChannelTool, SetChannelMembersTool,
 		AddChannelMembersTool}
@@ -236,21 +198,12 @@ func MembershipTools() []string {
 // its key ([Actor.OpKey]) — the repeat count a turn's call carries — or nil,
 // which counts the tool alone.
 //
-// # Which tools share one
-//
-// Tools that write one piece of state in OPPOSITE directions, and only those:
-// [MembershipTools] is the one such pair here. A reaction is one tool with a
-// `remove` flag, so taking one back and putting it on again are calls to one
-// tool and are already counted together. The three posting tools are not a
-// family: a post adds a remark and takes none back, so nothing one of them
-// says can undo another,
-// and the tool is part of every key a turn derives, so they never derive one
-// another's ids.
-//
-// A NEW TOOL THAT UNDOES ANOTHER JOINS ITS FAMILY HERE, in the same change —
-// one left out is the hole this closes, back for that pair. Drawing a family
-// too wide only raises counts, which makes a repeat separated by a call to
-// the other tool a fresh operation rather than the first one's retry.
+// A family is tools that write one piece of state in OPPOSITE directions, and
+// only those: [MembershipTools]. A reaction is one tool with a `remove` flag.
+// The posting tools are not one: nothing one says can undo another, and the
+// tool is part of every key. A NEW TOOL THAT UNDOES ANOTHER JOINS ITS FAMILY
+// HERE, in the same change; too wide a family only turns a repeat separated by
+// the other tool's call into a fresh operation rather than a retry.
 func CallFamily(tool string) []string {
 	if slices.Contains(MembershipTools(), tool) {
 		return MembershipTools()

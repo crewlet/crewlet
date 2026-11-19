@@ -376,27 +376,14 @@ func (w *testWaiter) Voided(uint32, uint64) (statelog.Reason, bool) { return "",
 // testWaiter is this node's own applier as the publisher and the reader see
 // it.
 //
-// # It applies while a write waits, because a running node's applier does
-//
-// A write appends its record and then waits — out to the publisher's
-// [statelog.Deps.ResolveBudget] — for this node to apply it, which is what
-// lets the operation ledger answer `applied`. A node's applier consumes the log
-// the whole time, so that wait ends in milliseconds; a harness whose applier
-// ran only when a case called [roundTrip.drain] could only let it expire, and
-// every write here sat out the full two seconds and answered `pending`. That
-// was most of this package's time and none of what it asserts, and it took
-// every write down the arm production almost never takes. So the wait runs
-// [roundTrip.drain], on the writing goroutine — the publisher holds no
-// transaction while it waits, its decision's snapshot already closed — and a
-// case's own drain afterwards finds nothing left.
-//
-// # And a node that is behind says so, at once
-//
-// [roundTrip.holdApplier] takes the applier out of the wait: a write then
-// resolves `pending` and a floored read refuses `behind`, which is a node whose
-// applier has not reached the position. The wait answers what an expired budget
-// answers, without spending it — nothing can move the position while the
-// caller blocks here, so waiting would only arrive at the same answer later.
+// It applies while a write waits, as a running node's applier does: a write
+// waits (up to [statelog.Deps.ResolveBudget]) for this node to apply it so
+// the ledger can answer `applied`. An applier run only by [roundTrip.drain]
+// would let every wait expire as `pending`, an arm production rarely takes. So
+// the wait runs [roundTrip.drain] on the writing goroutine (no transaction is
+// held then). [roundTrip.holdApplier] takes the applier out of the wait: a
+// write resolves `pending` and a floored read refuses `behind`, at once, as
+// nothing can move the position while the caller blocks.
 type testWaiter struct {
 	mu sync.Mutex
 	at statelog.Position
