@@ -121,7 +121,7 @@ func (rc rechecker) recheck(ctx context.Context, id string, option int, by iam.A
 	}
 	out.Outcome = outcome
 	if step != nil {
-		if err := duty.RecordFor(ctx, rc.log, rc.log, by, *step, now); err != nil {
+		if err = duty.RecordFor(ctx, rc.log, rc.log, by, *step, now); err != nil {
 			return AdvisorRecheck{}, movedOr(err)
 		}
 		out.Moved = append(out.Moved, step.Moved...)
@@ -135,7 +135,7 @@ func (rc rechecker) recheck(ctx context.Context, id string, option int, by iam.A
 		revision++
 	}
 	if outcome == advisor.RecheckHolds || outcome == advisor.RecheckChanged {
-		if err := rc.build(ctx, &out, id, revision, f, option, by, s, now); err != nil {
+		if err = rc.build(ctx, &out, id, revision, f, option, by, s, now); err != nil {
 			return AdvisorRecheck{}, err
 		}
 	}
@@ -319,7 +319,8 @@ func (rc rechecker) applied(ctx context.Context, id, digest string, by iam.Actor
 	if err != nil {
 		return err
 	}
-	if holds, err := advisor.Holds(entity, option.Change); err != nil || !holds {
+	holds, err := advisor.Holds(entity, option.Change)
+	if err != nil || !holds {
 		return errors.Join(errRecheckAgain, err)
 	}
 	_, err = rc.log.Move(ctx, advisordomain.Call{By: by, OpID: statelog.NewOpID(now, "advisor_applied")}, row.Key,
@@ -367,7 +368,7 @@ func (a *App) serveAdvisorRecheck(w http.ResponseWriter, r *http.Request) {
 		Option int `json:"option"`
 	}
 	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &body); err != nil {
+		if err = json.Unmarshal(raw, &body); err != nil {
 			httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
 				"detail": "send {} or the option to re-check, {\"option\": 0}"})
 			return
@@ -398,13 +399,13 @@ func (a *App) serveAdvisorApplied(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Digest string `json:"digest"`
 	}
-	if err := json.Unmarshal(raw, &body); err != nil || body.Digest == "" {
+	if err = json.Unmarshal(raw, &body); err != nil || body.Digest == "" {
 		httpjson.FailWith(w, http.StatusBadRequest, httpjson.CodeInvalidBody, map[string]string{
 			"detail": "send the digest the re-check answered, {\"digest\": \"...\"}"})
 		return
 	}
 	id := strings.TrimSpace(r.PathValue("id"))
-	if err := a.rechecker().applied(r.Context(), id, body.Digest, iam.ActorFor(principal)); err != nil {
+	if err = a.rechecker().applied(r.Context(), id, body.Digest, iam.ActorFor(principal)); err != nil {
 		refuseApply(w, r, err)
 		return
 	}
