@@ -654,7 +654,7 @@ describe("the resolver", () => {
 
   // THE ADVISOR IS A PAGE OF ITS OWN with two tabs and a page per finding;
   // its settings page is gone.
-  test("the Advisor's page is its tabs and a finding by its id", () => {
+  test("the Advisor's page is its tabs, a finding by its id and a report by its week", () => {
     const id = "1f2e3d4c-5b6a-4978-8877-665544332211";
     expect(resolve(["advisor"])).toMatchObject({ screen: "advisor", section: "findings" });
     expect(resolve(["advisor", "history"])).toMatchObject({
@@ -665,6 +665,18 @@ describe("the resolver", () => {
     expect(resolve(["advisor", "findings", "x"]).resolved).toBe(false);
     expect(resolve(["advisor", "findings"]).resolved).toBe(false);
     expect(resolve(["settings", "advisor"]).resolved).toBe(false);
+    expect(resolve(["advisor", "reports"])).toMatchObject({
+      screen: "advisor",
+      section: "reports",
+    });
+    expect(resolve(["advisor", "reports", "2026-W47"])).toMatchObject({
+      screen: "advisor-report",
+      week: "2026-W47",
+    });
+    // A REPORT IS NAMED BY ITS ISO WEEK, and nothing else.
+    for (const bad of ["2026-W00", "2026-W54", "2026-47", "w47", id]) {
+      expect(resolve(["advisor", "reports", bad]).resolved).toBe(false);
+    }
   });
 
   // THE SIGN-IN SCREENS take exactly the tail their address has. An

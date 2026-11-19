@@ -303,6 +303,8 @@ function ownCrumbs(path: string[], labels: Labels): Crumb[] {
     case "advisor-finding":
       // A FINDING'S TITLE is its page's to publish; until then, "Finding".
       return inside("advisor-findings", { label: labels[where.id] || "Finding" });
+    case "advisor-report":
+      return inside("advisor-reports", { label: labels[where.week] || "Report" });
     case "worklet-projects":
       // WORKLET'S LANDING: All projects' first lens, where a link back to
       // Worklet would lead to the page it is on.

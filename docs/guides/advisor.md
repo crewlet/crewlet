@@ -12,7 +12,7 @@ flowchart LR
 
 ## Where you see it
 
-**Advisor** in the sidebar (`g v`, administrators) is its page: when its checks last ran, **Run now**, and the model it explains findings with, which an administrator chooses there. It has two tabs, Findings and History.
+**Advisor** in the sidebar (`g v`, administrators) is its page: when its checks last ran, **Run now**, and the model it explains findings with, which an administrator chooses there. It has three tabs, Findings, Reports and History.
 
 **Findings** lists what is worth changing now, the most costly first (what blocks the company, what costs it, what is worth knowing; within each, the largest measured cost, then the newest), with what the engine is handling listed apart so it never reads as yours to do. Each row says when the finding was found and when its check last confirmed it; one whose check has not run for a while says it was not re-checked since then, so an old observation never reads as the engine's view now. Each row offers its fix and a menu: **Snooze for 7 days**, **Dismiss** with a reason (won't fix, already known, or wrong), and **Ask Crewlet about this**. A finding's title opens its page: why it was raised, the facts it rests on and the window they were measured over, the records it cites, its fix, and everything that happened to it.
 
@@ -208,6 +208,8 @@ Every Monday the Advisor writes one report of the week before, Monday to Monday 
 - **The week's numbers**, each beside the week before's where that week has a report: turns started, turns that committed nothing, tokens, alarm turns that changed nothing and their tokens, turns refused on a budget, and runs ended on their round cap. A source that could not be read is named in the report's `unread` and its numbers are left out, never counted as nothing.
 - **What became of the findings**: how many the week opened, resolved, had a fix applied to, and dismissed.
 - **The open findings that cost the most** when it was written, five at most, the most severe first and then the longest open.
+
+**Reports**, the Advisor page's second tab, lists them, the newest first, each with what its week moved; a week's page sets each number beside the week before's, names any source it left out, and links each finding it names to that finding's page, where you see what became of it since. A report the model summarized opens with that summary.
 
 A server that was down on Monday writes the report when the Advisor next runs that week. `GET /advisor/reports` lists the reports, the newest first, and `GET /advisor/reports/{week}` reads one, by its ISO week (`2026-W47`).
 

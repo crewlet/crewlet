@@ -118,3 +118,38 @@ export function ranked(findings: readonly AdvisorKeptFinding[]): AdvisorKeptFind
       Date.parse(b.opened_at) - Date.parse(a.opened_at),
   );
 }
+
+/**
+ * Who a report's finding is about, as the report names it: a seat's or a
+ * unit's name as it is, and a subject that is the only one of its kind (the
+ * company, the atlas), which the engine names by its kind, in words.
+ */
+export function reportSubject(subject: string): string {
+  return SINGLETON_SUBJECTS[subject] ?? subject;
+}
+
+const SINGLETON_SUBJECTS: Readonly<Record<string, string>> = {
+  company: "The company",
+  atlas: "The atlas",
+};
+
+/** A report's week in words: `2026-W47` is "Week 47 of 2026"; anything else as it is. */
+export function weekWords(week: string): string {
+  const match = /^(\d{4})-W(\d{2})$/.exec(week);
+  return match ? `Week ${Number(match[2])} of ${match[1]}` : week;
+}
+
+/** What a week moved, in one line: "3 opened · 1 resolved · 0 applied · 0 dismissed". */
+export function weekMoved(r: {
+  opened: number;
+  resolved: number;
+  applied: number;
+  dismissed: number;
+}): string {
+  return [
+    `${fmtCount(r.opened)} opened`,
+    `${fmtCount(r.resolved)} resolved`,
+    `${fmtCount(r.applied)} applied`,
+    `${fmtCount(r.dismissed)} dismissed`,
+  ].join(" · ");
+}

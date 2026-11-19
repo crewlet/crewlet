@@ -574,6 +574,13 @@ export const WORKSPACES: WorkspaceRow[] = [
         hint: "What is worth changing now, most costly first",
       },
       {
+        key: "advisor-reports",
+        label: "Reports",
+        icon: "file-text",
+        path: ["advisor", "reports"],
+        hint: "Each week's numbers against the week before",
+      },
+      {
         key: "advisor-history",
         label: "History",
         icon: "rotate-ccw-clock",
