@@ -81,9 +81,9 @@ import (
 // line in one pass into every fact the layer's readers read
 // ([threadReader.Next]), the next request's estimate among them, beside the
 // scrub's rewrite, gzip and checksum (BenchmarkTheMeterAtItsBounds measures
-// both, on a dedicated two-core slot): at a 32 MiB archive's plaintext the
-// meter took 1.64 to 1.66 s, the scrub 11.8 to 12.0 s; of results of text
-// blocks, 2.17 to 2.23 s and 39.9 to 41.2 s.
+// both, one case a process on a dedicated two-core slot, three runs): at a
+// 32 MiB archive's plaintext the meter took 1.64 to 1.70 s, the scrub 10.4 to
+// 10.7 s; of results of text blocks, 2.02 to 2.16 s and 26.7 to 28.1 s.
 
 // contextMeter reads an archive written to it and keeps the whole input of the
 // last request its transcript records, what its harness counts it at, with

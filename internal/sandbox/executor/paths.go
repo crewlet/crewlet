@@ -483,9 +483,9 @@
 // to 21.6 s against 18.3 to 19.7. The same machine read the holdings' slowest,
 // which never estimates, in 23.5 to 25.3 s against the 21.4 to 22.6 above, so
 // it ran about a tenth slower than when those were taken. The take's meter,
-// which estimates, stays under the scrub (BenchmarkTheMeterAtItsBounds): 1.64
-// to 1.66 s against 11.8 to 12.0 s on ordinary lines, 2.17 to 2.23 s against
-// 39.9 to 41.2 s on results of text blocks.
+// which estimates, stays under the scrub (BenchmarkTheMeterAtItsBounds,
+// likewise): 1.64 to 1.70 s against 10.4 to 10.7 s on ordinary lines, 2.02 to
+// 2.16 s against 26.7 to 28.1 s on results of text blocks.
 //
 // # A run's harness session, carried between boxes
 //
