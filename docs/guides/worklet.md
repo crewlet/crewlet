@@ -1690,7 +1690,8 @@ Every minute it reads every item in progress, a page at a time, and:
   subject. It never touches the item's row, version, history or `updated_at`,
   so recording a state does not change the state it records or wake anybody.
   The item's detail carries what was recorded as `flow_history`, newest first,
-  and a blocked item reads blocked since its change was recorded;
+  its [past before the duty](#the-flow-before-the-duty) among it, and a
+  blocked item reads blocked since its change was recorded;
 - **tells a person** when the state has lasted its threshold, as a notice under
   the reason `flow` in their [inbox](#a-persons-own-state):
 
@@ -1730,6 +1731,37 @@ moving. So it is held by a node that serves the API and holds the tracker's
 data, whatever its roles: such a node asks for the duty's lease only while its
 projection is live and gives it back the moment it stops being, so a fleet whose
 API and workers run on different nodes still records and tells items' flow.
+
+### The flow before the duty
+
+An item that was in progress before the flow duty first ran has a past the
+duty never read. The **backfill** records it, once, as the duty would have:
+after each tick the duty walks a page of items in id order, and for each one
+that was in progress before the duty's first recorded change (and still within
+the 30 days before it, the event store's history), it evaluates the same flow
+expression at every instant the item's past could change: each write to it,
+each turn on it starting or ending, its start passing, its stuck window
+running out, a blocker finishing, a question opening or closing, and its
+seat's pauses and model limits beginning or ending. Each change is recorded
+under the key the duty derives, marked `backfilled`, never `working` and never
+a notice, up to the moment the duty first read the item.
+
+- **Dated by its past.** A backfilled change's `at` is the instant its past
+  gives (the write, the start, the stop), not when the backfill ran, so the
+  durations read off the recorded flow hold for an item older than the duty.
+- **It says which facts it had.** The item's history and turn segments are
+  kept for good. The seats' pauses and model limits come from the events the
+  fleet's event stores retain, read from every live data node; a change
+  whose instant those events do not cover, or read while a data node did not
+  answer, says `past.seats: false`, and a seat stopped then reads as free.
+  No chart is read for the past (a roster keeps no history), so nobody is
+  `departed` there.
+- **Once.** The backfill's cursor is the highest item it recorded, so a
+  restart or a hand-over of the duty resumes there, and a change already
+  recorded is not published again; once the walk reaches the last item it
+  costs nothing. The duty's own reads never take a backfilled change for an
+  item's latest, so nothing it already recorded or told is recorded or told
+  again.
 
 ## How the work has moved
 

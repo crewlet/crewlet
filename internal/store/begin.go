@@ -9,63 +9,28 @@ import (
 	"sync/atomic"
 )
 
-// THE WRITE LOCK IS TAKEN AT BEGIN, NOT AT THE FIRST WRITE, and this file is
-// the whole of how.
+// THE WRITE LOCK IS TAKEN AT BEGIN, NOT AT THE FIRST WRITE; this file is how.
 //
-// # What the driver does on its own
+// Turso here is single-writer with a database-level write lock and no MVCC.
+// Its BeginTx DISCARDS driver.TxOptions and execs a DEFERRED "BEGIN" (tursogo
+// v0.8.1, driver_db.go:197-202), so the lock is taken by the first write and
+// excludes writes to EVERY table. A READ-THEN-WRITE transaction (every
+// state-log applier) is then ABORTED by any commit anywhere in the file
+// ("database snapshot is stale"), and [retryTransient] REPLAYED a four-thousand-
+// row batch per foreign commit; a WRITE-ONLY one waits for the lock inside an
+// opened transaction, costing the busy timeout AND a replay. BEGIN IMMEDIATE
+// fixes both: a loser has done nothing, so its retry is a wait.
+
+// beginModeDriver is a driver wrapper, not hand-driven BEGIN/COMMIT on a
+// *sql.Conn: database/sql rolls back on context cancel and hand-driven
+// statements lose that (ROLLBACK on the cancelled context returns "context
+// canceled" WITHOUT EXECUTING, and the next BEGIN fails "cannot start a
+// transaction within a transaction", leaving a PINNED [Writer] applying
+// nothing for the life of the process).
 //
-// Turso as this package configures it is a SINGLE-WRITER database with a
-// database-level write lock and no MVCC — the DSN [openPool] hands the
-// connector is a bare path with no `experimental=` list, so BEGIN CONCURRENT
-// is unreachable. And its BeginTx DISCARDS its driver.TxOptions and execs the
-// literal string "BEGIN", which is DEFERRED and takes no lock at all
-// (tursogo v0.8.1, driver_db.go:197-202). The lock is acquired by the
-// transaction's FIRST WRITE STATEMENT, and it then excludes a write to EVERY
-// TABLE IN THE FILE rather than to the tables this transaction touches.
-//
-// Two failures follow from that, and both were being paid for silently:
-//
-//   - A READ-THEN-WRITE transaction is ABORTED by any commit that lands
-//     anywhere in the file between its read and its first write, with
-//     "database snapshot is stale, rollback and retry the transaction" —
-//     measured three times out of three against a commit into a table the
-//     transaction never names. That is the shape of every state-log applier
-//     (internal/statelog's read of the rows below the batch, then the decide,
-//     then the write), so [retryTransient] was absorbing a real conflict by
-//     REPLAYING a four-thousand-row batch, once per foreign commit. A write
-//     statement's own internal read does NOT pin the snapshot — an upsert
-//     landing on an existing row is clean — so only an explicit query is
-//     exposed, which is why this looked like an occasional slow test rather
-//     than a rule.
-//   - A WRITE-ONLY transaction is never aborted, but it waits for the lock
-//     INSIDE a transaction it has already opened, so losing the race costs
-//     the full busy timeout AND a replay of everything the body did.
-//
-// BEGIN IMMEDIATE answers both at the root rather than absorbing either. A
-// transaction that reaches its body cannot be aborted by anybody else's
-// commit, and one that loses the race loses it HAVING DONE NOTHING, so its
-// retry is a wait rather than a replay.
-//
-// # Why a driver wrapper and not hand-driven statements
-//
-// The obvious alternative is to stop using *sql.Tx and exec BEGIN IMMEDIATE /
-// COMMIT / ROLLBACK on a *sql.Conn. It is wrong here, and measurably:
-// database/sql rolls a transaction back when its context is cancelled, and
-// hand-driven statements lose that. After a cancel, ROLLBACK on that same
-// context returns "context canceled" WITHOUT EXECUTING, and the next BEGIN on
-// the connection answers "cannot start a transaction within a transaction" —
-// on a PINNED connection ([Writer]) that is the domain applying nothing for
-// the life of the process. Wrapping the connection keeps every database/sql
-// guarantee and changes only the word the driver was going to emit.
-//
-// # Why it is installed BELOW Options.WrapDriver
-//
-// [openPool] installs this FIRST and lets WrapDriver wrap it, so
-// internal/store/storetest's commit faults still wrap the real driver.Tx this
-// returns. Installed the other way round, the fault's BeginTx would hand back
-// a transaction this file never sees and every commit fault would silently
-// stop firing — a fault injector that no longer injects reads exactly like a
-// store that no longer fails.
+// It is installed BELOW Options.WrapDriver ([openPool] does it first), so
+// storetest's commit faults wrap the real driver.Tx; the other way round their
+// BeginTx hands back a transaction this file never sees and they stop firing.
 type beginModeDriver struct{ inner driver.Driver }
 
 func (d *beginModeDriver) Open(name string) (driver.Conn, error) {
@@ -111,38 +76,18 @@ type beginModeConn struct {
 	queryOnly bool
 }
 
-// queryOnlyFor brings this connection's `query_only` to what its next
-// statement needs — ON for a read transaction's BEGIN, OFF for a write's and
-// for any statement outside a transaction — when the two differ.
+// queryOnlyFor sets this connection's `query_only` to what its next statement
+// needs (ON for a read transaction's BEGIN, OFF otherwise) when it differs.
 //
-// # Why a read is ENFORCED rather than promised
+// A read is ENFORCED, not promised: [DB.Read]'s deferred begin lets any
+// statement through, yet [ReplicatedReader] is handed out on the strength of
+// being unable to write (measured: an INSERT through Read committed).
 //
-// [DB.Read]'s deferred begin takes no lock and lets any statement through, so
-// "a read cannot write" was the caller's discipline and a doc comment, while
-// the replicated estate's read handle ([ReplicatedReader]) is handed to every
-// reader in the tree ON THE STRENGTH OF being unable to write. Measured: an
-// INSERT through a reader's Read committed. `query_only` is the engine
-// refusing it instead — "Cannot execute write statement in query_only mode",
-// and VACUUM likewise — so a reader that writes fails where it is written
-// rather than diverging this node's copy of the estate from its peers.
-//
-// # Why only on a change, and always outside a transaction
-//
-// A connection carries the pragma from one use to the next, and pools hand
-// the same connections to reads and writes alike, so every statement that is
-// not a read transaction's has to find it OFF — a VACUUM INTO or a migration
-// on a connection a read left ON would be refused. Setting it on each change
-// rather than around every read costs a statement only where a connection
-// moves between the two, which on a reader's connection is rarely. Never
-// inside a transaction: a read's statements run under the ON its BEGIN set,
-// and a write's under the OFF.
-//
-// `= 1` and `= 0`, because Turso REFUSES `ON` and `OFF` for this pragma as a
-// parse error (measured), where SQLite takes both.
-//
-// A FAILED CHANGE RETIRES THE CONNECTION: its mode is then unknown, and one
-// left ON would refuse every write drawn onto it afterwards, while one left
-// OFF would let a read write.
+// Only on a change, and never inside a transaction: pools hand connections to
+// reads and writes alike, so a VACUUM INTO or migration on one a read left ON
+// would be refused. `= 1` and `= 0`, because Turso REFUSES `ON`/`OFF` here.
+// A FAILED CHANGE RETIRES THE CONNECTION: left ON it refuses every later
+// write, left OFF it lets a read write.
 func (c *beginModeConn) queryOnlyFor(ctx context.Context, on bool) error {
 	if c.inTx || c.queryOnly == on {
 		return nil
@@ -170,29 +115,17 @@ func (c *beginModeConn) queryOnlyFor(ctx context.Context, on bool) error {
 func (c *beginModeConn) RetireSwitch() func() { return func() { c.unfit.Store(true) } }
 
 // IsValid is how a retired connection is DISCARDED rather than pooled: it is
-// [driver.Validator], which database/sql consults on every hand-back
-// (validateConnection, from putConn) and closes the connection on.
+// [driver.Validator], which database/sql consults on every hand-back and
+// closes the connection on.
 //
-// # Why the answer is a flag here rather than sql.Conn.Raw at the hand-back
-//
-// Raw answering [driver.ErrBadConn] is database/sql's documented door for
-// "this connection must not be reused", and calling it where the hand-back
-// happens is RACY — against database/sql closing that same *sql.Conn, which
-// is exactly what it does when a transaction's context is cancelled, because
-// the rollback its awaitDone goroutine then issues discards the connection.
-// Conn.Raw reads c.done BEFORE taking c.closemu, so a close landing in that
-// window leaves it dereferencing a nil driverConn. Measured, and not a
-// theoretical window: a SIGSEGV in the retention loop's read during an
-// ordinary engine drain, which takes the whole process with it. The
-// cancellation that opens the window is the ordinary shape of a shutdown,
-// and awaitDone's rollback is still in flight when tx.Rollback has already
-// answered ErrTxDone to the caller — so "the transaction has ended" is not
-// the same fact as "nothing is closing this connection".
-//
-// A flag the driver's connection carries has no window at all: database/sql
-// ASKS it, on its own terms, at a point it has already serialised.
-// [DB.retireSwitch] is how the store reaches it, and reaches it while the
-// connection is provably still its own.
+// A flag, not sql.Conn.Raw answering [driver.ErrBadConn] at the hand-back:
+// Raw reads c.done BEFORE taking c.closemu, so racing database/sql closing the
+// same *sql.Conn (which it does when a transaction's context is cancelled, via
+// the rollback in awaitDone, still in flight after tx.Rollback answered
+// ErrTxDone) dereferences a nil driverConn. Measured: a SIGSEGV in the
+// retention loop during an ordinary drain. A flag database/sql ASKS, at a point
+// it has already serialised, has no window; [DB.retireSwitch] reaches it while
+// the connection is provably still the store's own.
 func (c *beginModeConn) IsValid() bool { return !c.unfit.Load() }
 
 // BeginTx issues the begin this package actually wants.

@@ -520,7 +520,9 @@ sequenceDiagram
   reach only its own origin for data, images and media. Plugins, base URLs,
   form posts and nested frames are refused. The frame never gets
   `allow-popups`: an external link goes through the host, which names the
-  destination before it opens it.
+  destination before it opens it. The frame holds only the artifact's pages: a
+  file of its own that is not one is never framed, and the runtime opens a
+  link to it in its file viewer over the page.
 - **No third party at view time.** Script and stylesheet files a page
   references on the allowed CDNs, as a script or link element, a module import
   or an import map entry, are copied into the version when it is published,

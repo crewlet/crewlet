@@ -21,6 +21,10 @@ import (
 // saves through, so a write the assistant prepared and a write the person
 // clicked are one code path.
 
+// CreateTaskTool files a task, which is also how a task too big for one turn
+// reaches an agent seat that can do it.
+const CreateTaskTool = "create_task"
+
 // DeriveTier is a write's risk from the authority table and the act tool's own
 // hint: R3 (consequential) for a verb only a person takes, a verb that asks a
 // recent proof, or a tool that destroys or replaces what is there; R2
@@ -80,7 +84,7 @@ func appsOf(a authz.Action) []iam.Grant {
 // writeTools are the write tools, in the order a model meets them.
 func writeTools() []Tool {
 	out := []Tool{
-		write("create_task", authz.ActionWorkCreate, false, "file tasks",
+		write(CreateTaskTool, authz.ActionWorkCreate, false, "file tasks",
 			"Propose filing a task, or a question a colleague owes an answer to (ask). Search "+
 				"first. The person approves before anything is filed.",
 			object([]string{"title"}, map[string]*schema{

@@ -84,25 +84,17 @@ func headMoved(e types.CodeQueueEjected) types.CodeQueueEjected {
 	return e
 }
 
-// A FAILED CHECK COUNTS ON ITS OWNER'S DAY: four checks that failed the heads
-// of dev's changes — one of them reported by a person's CI, whose row is of no
-// purpose — count four on dev's day — once each by their attempt, so
-// an ending announced twice is still one, and an attempt errored past the
-// home's requeue that a slow runner's exit then corrects to a pass STAYS
-// counted, since a day's figures only grow (the CodeCheckFinished type's doc)
-// — and a passing check and a failure of a person's change count on nobody; a
-// failure outside the window counts on another day. A failed check landing
-// moves the day's fingerprint, which is what makes the publisher derive the
-// day again — and an ending that names no seat on its promoted column moves
-// neither the count nor the fingerprint.
+// A FAILED CHECK COUNTS ON ITS OWNER'S DAY: four failed checks of dev's
+// changes' heads (one from a person's CI, of no purpose) count four on dev's
+// day, once each by attempt, so a repeated ending is one, and an attempt
+// corrected to a pass after the requeue STAYS counted, since a day's figures
+// only grow (the CodeCheckFinished doc). A pass, a person's change and another
+// day count nowhere. A failure moves the day's fingerprint; an ending naming
+// no seat on its promoted column moves neither count nor fingerprint.
 //
-// Mutation: count the records rather than the attempts (key the item by the
-// event's id) — dev failed four, red; leave code_check_finished out of
-// usageRecords — the fingerprint does not move, red; drop the check's
-// predicate from usageRecords — the passes move the fingerprint, red; decide
-// on the payload's agent rather than the column — the unnamed ending counts,
-// red; count a head check's ending alone (its purpose head) — the CI's
-// failure is not counted, red.
+// Mutation, each red: key the item by the event's id; leave code_check_finished
+// out of usageRecords; drop the check's predicate from usageRecords; decide on
+// the payload's agent rather than the column; count a head check's ending alone.
 func TestAFailedCheckCountsOnItsOwnersDay(t *testing.T) {
 	t.Parallel()
 	db := open(t)

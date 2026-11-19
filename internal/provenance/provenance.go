@@ -112,10 +112,6 @@ const (
 	// about itself: its title, filters and selection, whose labels are names
 	// other people chose.
 	SourcePageContext Source = "page_context"
-	// SourceDeepWork is a Dashboard Assistant deep-work run's account of
-	// what it did: a harness's own words, written after it read web pages
-	// and files nobody in the company wrote (ADR-0054).
-	SourceDeepWork Source = "deep_work"
 
 	// SourceChatRoom is what a chat room says about itself — its topic and
 	// its purpose — as against what was said in it, which is
@@ -209,7 +205,7 @@ var Sources = []Source{
 	SourceProjectFile, SourceChatThread, SourceChatRoom, SourceArtifactFile,
 	SourceArtifactRow, SourceArtifactComment, SourceChangeNote, SourceAlert, SourceNotification,
 	SourceA2AMessage, SourceExecutor, SourceExecutorSession, SourceBrandVoice, SourceAPIAnswer,
-	SourcePageContext, SourceDeepWork,
+	SourcePageContext,
 	SourceRepoFile, SourceRepoPatch, SourceRepoCommit,
 	SourceChangeDescription, SourceChangeReview, SourceChangeComment, SourceCheckLog,
 	SourceTurnEnding, SourceServerOutput, SourceDelegatedRequest, SourceAtlas, SourceWebPage,

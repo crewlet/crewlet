@@ -82,30 +82,15 @@ const (
 // BenchmarkLogApplyDrain measures the applier's drain in rows per second,
 // across the three statement shapes it could be written in.
 //
-// # Why this benchmark exists
+// The drain rate sets a fleet's read latency: every data node applies the same
+// records serially, so a bulk edit occupies each applier for rows ÷ drain
+// seconds, during which a linearizable read is behind.
 //
-// The drain rate is not a curiosity: it is the number a fleet's read latency
-// is derived from. Every data node applies the same records serially, so a bulk
-// edit occupies every peer's applier for rows ÷ drain seconds — and during
-// that window a linearizable read is behind and a write is pending. Halve
-// this number and that window halves with it.
-//
-// # The three arms
-//
-//   - unprepared: one ExecContext per row, which is what the projection
-//     writer this replaces does. The driver is handed SQL text per row and
-//     parses and plans it before writing anything.
-//   - prepared: the same statements prepared once on the pinned connection
-//     and bound per row. The parse happens once for the whole batch — and
-//     MEASURED, it buys nothing: this driver implements ExecerContext, so the
-//     unprepared arm is already one round trip with its arguments and the
-//     parse is not where the time goes. The arm stays because that result is
-//     the reason the engine ships no statement cache.
-//   - prepared+multirow: the same, with the child rows written as multi-row
-//     INSERTs chunked to the probed bind-variable limit.
-//
-// Run it and read the rows/s: `go test ./internal/store -run xxx -bench
-// LogApplyDrain -benchtime 3x`.
+// Arms: unprepared (ExecContext per row), prepared (prepared once, bound per
+// row) and prepared+multirow (child rows chunked to the bind-variable limit).
+// Prepared buys nothing (the driver implements ExecerContext); the arm stays as
+// the reason the engine ships no statement cache.
+// Run: `go test ./internal/store -run xxx -bench LogApplyDrain -benchtime 3x`.
 func BenchmarkLogApplyDrain(b *testing.B) {
 	for _, arm := range []struct {
 		name string
@@ -140,48 +125,16 @@ func BenchmarkLogApplyDrain(b *testing.B) {
 }
 
 // BenchmarkApplyTxUnderForeignCommits prices what a long write transaction
-// and the commits beside it cost each other — the throughput half of the
-// applier's occupancy model — when those commits land in the applier's own
-// file and when they land in the other estate.
+// and the commits beside it cost each other, when those commits land in the
+// applier's own file and when they land in the other estate.
 //
-// # What it was written to ask, and what it measures now
-//
-// It was written to ask whether those commits ABORT the applier, back when a
-// write transaction began DEFERRED and a commit landing anywhere in the file
-// between its read and its write refused the write as a stale snapshot. That
-// question is closed by construction: a write transaction takes the file's
-// write lock at BEGIN IMMEDIATE (begin.go) and is served in the order it asked
-// (writequeue.go), so no commit lands inside one. The correctness half is held
-// by tests rather than read off this — [TestAReadThenWriteCannotLoseARace] for
-// the read-then-write, and [TestAForeignCommitDoesNotAbortAnApplierTransaction]
-// for this benchmark's own shape.
-//
-// What is left is WRITE-LOCK CONTENTION, which is a throughput fact rather
-// than a correctness one. Two of the metrics should read zero, and a nonzero
-// one is the finding: aborts/tx, the apply body run beyond its first attempt —
-// now only after a lock wait that outlasted the busy timeout, or on a
-// connection retired dirty — and foreign-refused/s, a foreign writer that gave
-// up waiting. The other two are the price: rows/s for the applier, and
-// foreign-commits/s for the writer beside it.
-//
-// # The two arms, and what they are for
-//
-//   - same-file: the foreign commits land in a table in the applier's OWN
-//     database, which the applier never reads or writes, and so queue for
-//     the one write lock behind it.
-//   - other-estate: the foreign commits land in the NODE estate, which is
-//     where the audit log actually is. This is the shipped arrangement, and
-//     the arm exists to price it against the one above.
-//
-// Measured (tursogo v0.8.1, a shared 4 vCPU, -benchtime 20x, twice): zero
-// aborts and zero refusals in both arms, the applier at 17 900–21 200 rows/s
-// in each, and the foreign writer committing 4.9–5.3 times a second beside it
-// in the same file against 1 322–1 903 in the other estate — some three
-// hundred times fewer, let in between applier transactions and never inside
-// one. That is what the two-file split buys, and why the split is
-// unconditional rather than a response to this number. (Under the DEFERRED
-// begin, on tursogo v0.8.0-pre.8, it read zero aborts too — this body writes
-// without reading first — and 0.56 commits a second against 1 676.)
+// Writes take the lock at BEGIN IMMEDIATE (begin.go), served in order
+// (writequeue.go), so correctness is held by [TestAReadThenWriteCannotLoseARace]
+// and [TestAForeignCommitDoesNotAbortAnApplierTransaction]. This measures lock
+// contention: aborts/tx and foreign-refused/s should read zero, a nonzero one
+// is the finding. Arms: same-file and other-estate (the NODE estate, as
+// shipped). On tursogo v0.8.1 the foreign writer got 5 commits/s same-file
+// against 1 300–1 900 other-estate: why the two-file split is unconditional.
 func BenchmarkApplyTxUnderForeignCommits(b *testing.B) {
 	for _, arm := range []struct {
 		name string
@@ -278,30 +231,12 @@ func BenchmarkApplyTxUnderForeignCommits(b *testing.B) {
 // A FOREIGN COMMIT NEVER ABORTS AN APPLIER TRANSACTION, which is the fact the
 // applier's whole occupancy model rests on.
 //
-// # What makes it true, and what it used to rest on
-//
-// It is true BY CONSTRUCTION now, and it was not when this test was written.
-// The driver's own BeginTx discards its options and issues a plain, DEFERRED
-// begin, under which a read-then-write is aborted by any commit landing
-// anywhere in the file between the read and the write — and the applier reads
-// its rows, decides, then writes. So this assertion was a hope, and it failed
-// twice in CI on the two slowest runners the suite has seen, reporting
-// "attempts != 1" with no way to say which of three causes had fired.
-//
-// internal/store/begin.go is what changed: a write transaction takes the lock
-// at BEGIN, so nobody else's commit can land in that window at all. An
-// applier that loses the race now loses it HAVING DONE NOTHING and waits,
-// rather than discovering the loss at its first write and replaying four
-// thousand rows.
-//
-// SLOWING IS NOT ABORTING, and the two are still what this separates. A
-// writer sharing the applier's file commits far more slowly than the same
-// writer against the other estate, which the benchmark above prices. The
-// slowdown is what the two-file split removes; a RETRY is what would break
-// the design, and the begin mode is why it does not happen.
-//
-// It remains a test as well as a benchmark: a driver that gained MVCC, or a
-// begin mode that stopped being applied, would show up here first.
+// It holds by construction: begin.go takes the write lock at BEGIN (the
+// driver's own BeginTx issues a DEFERRED begin, under which a read-then-write
+// aborts on any commit in the file), so a losing applier waits having done
+// nothing. SLOWING IS NOT ABORTING: the two-file split removes the slowdown
+// (priced above); a RETRY would break the design. A driver that gained MVCC, or
+// a begin mode no longer applied, shows up here first.
 func TestAForeignCommitDoesNotAbortAnApplierTransaction(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs a 4 000-row apply against a concurrent writer")
@@ -374,68 +309,17 @@ func TestAForeignCommitDoesNotAbortAnApplierTransaction(t *testing.T) {
 		"transaction was open; %d attempt(s)", foreign.Load(), during, attempts)
 }
 
-// AN APPLIER IS NOT STARVED BY A WRITER COMMITTING BACK TO BACK, which is the
-// other half of what the applier's occupancy model rests on: a foreign commit
-// cannot abort it, and a foreign WRITER cannot keep it from ever starting.
-//
-// The driver's lock has no queue. A waiter polls on SQLite's schedule and
-// wins only when a poll lands between one commit's release and the next one's
-// acquire — and on darwin every commit is an F_FULLFSYNC that holds the lock
-// for about 4 ms against a gap of microseconds, so the applier's busy timeout
-// expired with the writer beside it having committed some 1 300 times, and it
-// retried until the budget ran out. With fullfsync off on the same host each
-// commit holds it for about 0.25 ms and the waiter wins within a few polls,
-// which is why the Linux job never showed it. writequeue.go is what serves
-// the two in order.
-//
-// # What it holds: the ORDER, as a count
-//
-// The applier asks while a foreign transaction holds the lock, so a store
-// that serves writers in order starts the applier's body after THAT
-// transaction and no other. What is asserted is how many foreign commits land
-// between the applier's ask and its body — at most [maxCommitsAhead] — and
-// never how long anything took. It is the starvation itself, counted: without
-// the queue the applier polls, the writer beside it re-begins the moment it
-// commits, and the applier waits out commit after commit until a poll happens
-// to land in a gap.
-//
-// # Staged at darwin's odds, on every platform
-//
-// The count alone is not enough on a fast disk, and it was measured not to be.
-// With the queue REMOVED on linux/amd64, and each foreign commit a bare insert
-// holding the lock for about a quarter of a millisecond, the applier started
-// behind 5 398, 100, 72, 19, 5, 3, 2 and 1 commits across eight runs: the
-// unqueued population reaches the queued value whenever the applier's first
-// poll happens to land in a gap, and a threshold of two caught seven runs of
-// nine. The hazard is not the platform's, though — only the odds are. On
-// darwin `PRAGMA fullfsync` makes each commit an F_FULLFSYNC holding the lock
-// for about 4 ms against a gap of microseconds, the lucky poll stops
-// happening, and the applier's busy timeout expired with the writer beside it
-// having committed some 1 300 times. So each foreign commit here holds the lock
-// for [foreignHold], darwin's commit, and the case meets the odds the hazard
-// was found at wherever it runs.
-//
-// And the ask is timed. It was made whenever the settle loop returned, which
-// wakes on the writer's commit counter — and that moves in exactly the gap a
-// polling waiter gets in through, so the lucky case was the staged one. It is
-// made now inside a transaction the writer holds for [askHold] and says it is
-// holding. Measured over thirty runs with the queue removed, the applier
-// started behind 103 to 4 355 foreign commits; with it, behind one on every
-// run.
-//
-// # And what it still is not
-//
-// Not the queue's own guarantee: that is held by construction, with each
-// writer observed IN LINE before the next is started, in
-// TestWritersBeginInTheOrderTheyAsked, which goes red under a LIFO release, a
-// release without handoff, a queue per handle and a pinned writer that skips
-// the queue. This is the SCENARIO, end to end, against a real back-to-back
-// writer: the apply's body runs once, it starts behind the one transaction it
-// asked behind, and the writer beside it commits again afterwards — because a
-// queue that simply stopped the writer would satisfy the rest. That the writer
-// beside the apply is never refused is asserted too, and is not the order: a
-// one-minute busy timeout ([scenarioBusyTimeout]) keeps a refusal from being a
-// slow machine, and an unqueued writer polls inside it just as long.
+// AN APPLIER IS NOT STARVED BY A WRITER COMMITTING BACK TO BACK. The driver's
+// lock has no queue, so a poller wins only when a poll lands between commits;
+// on darwin (F_FULLFSYNC, ~4 ms) it starved. writequeue.go serves in order.
+// It asserts the ORDER as a count, at most [maxCommitsAhead] foreign commits
+// between the ask and the body, never a duration. Staged at darwin's odds: each
+// foreign commit holds the lock for [foreignHold], and the ask is made inside a
+// transaction held for [askHold], since a settle-loop wake-up lands in the gap
+// a poller gets through. Unqueued the applier started behind 103 to 4 355
+// commits; queued, one. The queue's own guarantee is
+// TestWritersBeginInTheOrderTheyAsked's; the writer must commit again
+// afterwards (a queue that stopped it would pass) and is never refused.
 func TestAnApplierIsNotStarvedByAWriterCommittingBackToBack(t *testing.T) {
 	if testing.Short() {
 		t.Skip("runs a 4 000-row apply against a concurrent writer")
@@ -631,41 +515,13 @@ func settleAfter(t *testing.T, foreign *atomic.Int64, mark int64) {
 }
 
 // THE SHIPPED SHAPE COSTS ceil(rows/chunk) STATEMENTS AND NOT ONE PER ROW, and
-// the statement COUNT is the assertion.
-//
-// # Why this is not a wall-clock comparison any more
-//
-// It was one. It timed the three arms in sequence and required the multi-row
-// arm to come in at least 1.5× under the others — a margin calibrated against
-// a 4× figure measured unloaded and without the race detector. That assertion
-// failed in CI on 2026-09-15 by 3.7 %, having passed on the same branch
-// thirty-eight minutes earlier, and the run's own numbers say why: the two arms
-// this file documents as equivalent BY DESIGN differed by 19 % in that run, so
-// the measurement's noise floor was five times the margin it missed by.
-//
-// The reason is staging, not hardware. internal/store is in the SHARED
-// partition, this package has over a hundred parallel tests, and one of them —
-// [TestAForeignCommitDoesNotAbortAnApplierTransaction], in this very file —
-// deliberately saturates the same database with an unthrottled writer for as
-// long as its own apply takes. Three arms measured one after another therefore
-// see three different machines, and no fixed margin survives that: raising 1.5
-// to 2 only moves the threshold the next loaded runner crosses.
-//
-// So the invariant is asserted where it is exact. What the chunker controls is
-// how many statements a collection becomes, and that number is arithmetic —
-// identical on a laptop, on a loaded CI box, and under the detector. An 8 000-row
-// apply is 8 statements through [store.InsertRows] against 8 000 one per row:
-// a thousand-fold difference that no amount of contention can blur into parity.
-// A test that goes red when the chunker stops chunking is what the old margin
-// was reaching for; this one cannot be fooled by a busy afternoon.
-//
-// # The magnitudes are still measured, just not asserted
-//
-// The three arms are still timed and the rates still LOGGED, because the drain
-// rate is the number every read-latency bound in the design is derived from and
-// [internal/skipgate] now lets that line reach a green CI log. What it must not
-// do is fail a build: a magnitude belongs to whoever runs BenchmarkLogApplyDrain
-// on the hardware they are sizing.
+// the statement COUNT is the assertion, not a wall-clock comparison: arms timed
+// in sequence see different machines (parallel tests, one saturating the same
+// database), so no margin survives. The count is arithmetic, identical under
+// load and the detector: 8 000 rows are 8 statements through [store.InsertRows].
+// The arms are still timed and the rates LOGGED, since the drain rate is what
+// every read-latency bound derives from, but never asserted: a magnitude
+// belongs to whoever runs BenchmarkLogApplyDrain on the hardware they size.
 func TestTheMultiRowApplyIssuesOneStatementPerChunk(t *testing.T) {
 	if testing.Short() {
 		t.Skip("times three apply transactions of 4 000 rows each")
@@ -910,20 +766,13 @@ func benchNodeT(t *testing.T) (*store.DB, *store.Writer) {
 // scenarioBusyTimeout is the lock wait the back-to-back scenario runs under,
 // and it is deliberately NOT the production default.
 //
-// That case holds ORDER: a writer queued behind the apply waits for it rather
-// than failing. What bounds the wait — the busy timeout, and the one retry the
-// store gives a writer after it — is a separate contract, certified by the
-// queue's own tests (writequeue_internal_test.go). At the 5 s default it turned
-// the case into a wall-clock assertion in disguise: the writer beside the
-// apply was refused whenever the 4 000-row apply outlasted two 5 s waits, which
-// it did at 12.1 s under the race detector on a runner shared with the rest of
-// the suite, against about 2 s alone. A minute is five times that loaded
-// measurement, so a refusal here is the queue failing to hand the lock on
-// rather than a slow machine. It is not what catches a store that stopped
-// queueing: an unqueued applier polls inside this minute until one of its polls
-// lands in a gap — measured at between 103 and 4 355 foreign commits across
-// thirty runs, inside the minute every time — and it is the COUNT of those
-// commits, [maxCommitsAhead], that reports it.
+// The case holds ORDER; what bounds a wait (the busy timeout and the store's one
+// retry) is certified by writequeue_internal_test.go. At the 5 s default the
+// writer was refused whenever the 4 000-row apply outlasted two waits (12.1 s
+// under the race detector on a shared runner), a wall-clock assertion in
+// disguise. A minute is five times that, so a refusal here is the queue failing
+// to hand over the lock. It does not catch a store that stopped queueing: that
+// is the COUNT, [maxCommitsAhead].
 const scenarioBusyTimeout = time.Minute
 
 // benchNodeQueued is benchNodeT under scenarioBusyTimeout.

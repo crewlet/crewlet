@@ -329,9 +329,8 @@ export async function cancelDeviceSignIn(
 
 /** What removing a model does with each place that names it. */
 export interface Removal {
+  /** Every reference's next model; Ask Crewlet's pointed at none turns it off. */
   repoint: ModelRepoint[];
-  /** Turn the assistant off when the removal leaves its chat with no model. */
-  assistantOff: boolean;
 }
 
 /** What a removal came to, and every place that names the model where the engine listed them. */
@@ -373,7 +372,7 @@ export async function removeModel(
 ): Promise<RemovalAnswer> {
   const answer = await answerOf(
     rest.request("DELETE", `/config/llm-providers/${pathSegment(key)}`, {
-      body: { repoint: removal.repoint, assistant_off: removal.assistantOff },
+      body: { repoint: removal.repoint },
       headers: {
         "If-Match": options.etag,
         ...(options.dryRun ? {} : { "X-Summary": options.summary }),

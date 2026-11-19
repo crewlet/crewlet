@@ -82,8 +82,9 @@ type Service interface {
 	Eligible(p iam.Principal) (bool, wire.ViewerReason)
 	ModelNotice(ctx context.Context, p iam.Principal) *wire.ModelNotice
 	ReadsImages() bool
-	Deliberates() bool
-	Conversations(ctx context.Context, p iam.Principal, cursor string, limit int) (wire.ConversationList, error)
+	AssignedModel() *wire.ViewerModel
+	Conversations(ctx context.Context, p iam.Principal, cursor string, limit int, q string) (wire.ConversationList, error)
+	Rename(ctx context.Context, p iam.Principal, id uuid.UUID, title, key string) (wire.ConversationSummary, error)
 	Create(ctx context.Context, p iam.Principal, key string) (wire.ConversationSummary, error)
 	Transcript(ctx context.Context, p iam.Principal, id uuid.UUID) (wire.Transcript, error)
 	Clear(ctx context.Context, p iam.Principal, id uuid.UUID, key string) (wire.PurgeAnswer, error)
@@ -176,6 +177,7 @@ func (s *Surface) Routes(mux authz.Mux) error {
 	mount("POST /assistant/conversations", converse, s.create)
 	mount("GET /assistant/conversations/{id}", read, s.transcript)
 	mount("DELETE /assistant/conversations/{id}", converse, s.clear)
+	mount("PATCH /assistant/conversations/{id}", converse, s.rename)
 	mount("POST /assistant/conversations/{id}/turns", converse, s.ask)
 	mount("GET /assistant/conversations/{id}/stream", read, s.stream)
 	mount("POST /assistant/turns/{id}/stop", converse, s.stop)
@@ -194,27 +196,44 @@ func (s *Surface) Routes(mux authz.Mux) error {
 }
 
 // Viewer is the `assistant` member of `/viewer`: whether the Ask pill is lit
-// for p, and the first reason not, in the order the reasons are checked: the
-// company has not turned it on, it has no usable chain, p is not a person in
-// their own browser, the authority table refuses them the verb, or every model
-// in the chain is known unusable now. The last is read from what the node
-// already holds and never by calling a model, and only for a person the
-// assistant would answer: anybody else learns nothing of its model.
+// for p, its model, whether p may assign it one, and the first reason it is
+// not lit, in the order the reasons are checked: no model is assigned, the
+// model is one no helper can run on, p is not a person in their own browser,
+// the authority table refuses them the verb, or the model is known unusable
+// now. The last is read from what the node already holds and never by calling
+// a model, and only for a person the assistant would answer: anybody else
+// learns nothing of its model's state.
 func (s *Surface) Viewer(ctx context.Context, p iam.Principal) wire.ViewerAssistant {
+	out := wire.ViewerAssistant{Model: s.svc.AssignedModel(), CanAssign: s.holds(ctx, p,
+		authz.ActionConfigWrite)}
 	if ok, reason := s.svc.Eligible(p); !ok {
-		return wire.ViewerAssistant{Reason: reason}
+		out.Reason = reason
+		return out
 	}
-	if d := authz.Decide(ctx, p, authz.ActionAssistantConverse, authz.Object{}, s.chart,
-		s.now()); !d.Allowed || d.Err != nil {
-		return wire.ViewerAssistant{Reason: wire.ViewerNoPermission}
+	if !s.allowed(ctx, p, authz.ActionAssistantConverse) {
+		out.Reason = wire.ViewerNoPermission
+		return out
 	}
 	if notice := s.svc.ModelNotice(ctx, p); notice != nil {
-		// The stronger chain may answer while the quick one cannot.
-		return wire.ViewerAssistant{Reason: wire.ViewerModelNotReady, Model: notice,
-			Deliberate: s.svc.Deliberates()}
+		out.Reason, out.Notice = wire.ViewerModelNotReady, notice
+		return out
 	}
-	return wire.ViewerAssistant{Available: true, ReadsImages: s.svc.ReadsImages(),
-		Deliberate: s.svc.Deliberates()}
+	out.Available, out.ReadsImages = true, s.svc.ReadsImages()
+	return out
+}
+
+// allowed is whether the authority table grants p the act now; a table that
+// cannot decide grants nothing.
+func (s *Surface) allowed(ctx context.Context, p iam.Principal, act authz.Action) bool {
+	d := authz.Decide(ctx, p, act, authz.Object{}, s.chart, s.now())
+	return d.Allowed && d.Err == nil
+}
+
+// holds is whether p holds the act, perhaps after confirming who they are: a
+// step-up is the one refusal a person clears on the way, as the write asks.
+func (s *Surface) holds(ctx context.Context, p iam.Principal, act authz.Action) bool {
+	d := authz.Decide(ctx, p, act, authz.Object{}, s.chart, s.now())
+	return d.Err == nil && (d.Allowed || d.Reason == authz.ReasonStepUp)
 }
 
 // maxBody bounds a request body: a question (4000 characters, at most

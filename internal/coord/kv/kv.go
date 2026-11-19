@@ -1494,6 +1494,18 @@ func (s *Store) ListLive(ctx context.Context, class coord.Class) ([]coord.Lease,
 	return s.listLive(ctx, []*lane{s.laneOf(class)}, scan, func(entry) bool { return true })
 }
 
+// Now reads the clock of [Store.laneOf]'s bucket for class, its stream
+// leader's timestamp ([Store.storeNow]): the clock each record's created, and
+// so its ExpiresAt, is stamped on. Its own round trip, never one a listing
+// makes: a seat or presence listing reads no clock (liveWhilePresent), and only
+// a reader saying how long a lease has left asks for it.
+func (s *Store) Now(ctx context.Context, class coord.Class) (time.Time, error) {
+	if err := checkClass(class); err != nil {
+		return time.Time{}, err
+	}
+	return s.storeNow(ctx, s.laneOf(class))
+}
+
 // listLive reads the live leases keep accepts across lanes, which hold
 // disjoint classes ([Store.laneFor]), so nothing is listed twice. scan is the
 // caller's: a class listing narrows at the broker, an owner listing cannot.

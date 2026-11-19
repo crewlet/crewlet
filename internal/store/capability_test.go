@@ -12,51 +12,18 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// The capability matrix, re-measured against whatever driver version this
-// build pins.
-//
-// It exists because the documentation and the code disagree: Turso ships
-// F32_BLOB columns and the vector distance functions,
-// but its ANN vector index and its full-text index are announced surface not
-// yet reachable from Go. Pinning a driver and asserting a matrix in prose is
-// how that goes stale silently; asserting it in a test is how a pin bump
-// reports what it changed.
-//
-// ONE DRIVER, AND THE MATRIX IS WHY IT SURVIVED. Dropping mainline SQLite
-// took away the comparison this table used to draw, and it
-// would have been easy to delete the whole file with it. What is left is the
-// more useful half: a tripwire on the one driver the engine ships.
-//
-// Each entry has three outcomes, and the middle one is the point:
-//
+// The capability matrix, re-measured against the driver version this build
+// pins: a tripwire on the one driver the engine ships (Turso's ANN and
+// full-text indexes are announced, not reachable from Go). Each entry:
 //   - present and expected     -> the test EXERCISES the feature.
 //   - absent and known-missing -> the test SKIPS, naming what would unlock it.
-//     A driver upgrade that lands the feature turns this into a run, so a
-//     newly-passing test is the notification.
-//   - anything else            -> FAIL. A capability that vanished is a
-//     regression; one that appeared without the matrix knowing is a matrix
-//     that has stopped describing the build.
+//   - anything else            -> FAIL: a vanished capability is a regression,
+//     an unrecorded one a stale matrix.
 //
-// A FOURTH OUTCOME IS THE GATE, and it is why `gated` is in the matrix beside
-// the booleans. Turso refuses `USING <method>` and `WITHOUT ROWID` as
-// experimental BEFORE it resolves the module or builds the table, so an
-// unflagged connection cannot tell a feature that exists behind the gate from
-// one that was never written — all three read false and only one of them is
-// actually missing. [store.Capabilities.Gated] carries what the probe found
-// behind the gate, so a feature landing in a gated build is recorded here
-// rather than discovered the day somebody tries to use it.
-//
-// turso.tech/database/tursogo, measured both ways at v0.8.0-pre.8 and unchanged
-// at the v0.8.0-pre.14 this build pins:
-//
-//   - the vector functions ship, unflagged.
-//   - fts5 is not a registered module, and behind `experimental=index_method`
-//     `USING fts`, `USING vector` and `USING diskann` all answer `unknown
-//     module name` — so the full-text and ANN indexes are genuinely ABSENT
-//     rather than gated.
-//   - WITHOUT ROWID is PRESENT AND GATED: refused on the pool as an
-//     experimental feature, accepted on a connection carrying
-//     `experimental=without_rowid`.
+// `gated` is a FOURTH OUTCOME: Turso refuses `USING <method>` and `WITHOUT
+// ROWID` as experimental BEFORE resolving the module, so an unflagged
+// connection cannot tell a gated feature from a missing one
+// ([store.Capabilities.Gated] records what the probe found behind the gate).
 var capabilityMatrix = struct {
 	vectorFunctions bool
 	vectorIndex     bool
@@ -64,6 +31,12 @@ var capabilityMatrix = struct {
 	withoutRowid    bool
 	gated           []string
 }{
+	// Measured at v0.8.0-pre.8, unchanged at the pinned v0.8.0-pre.14: vector
+	// functions ship unflagged; fts5 is no module and `USING fts`, `vector`
+	// and `diskann` answer `unknown module name` even behind
+	// `experimental=index_method`, so those indexes are ABSENT, not gated;
+	// WITHOUT ROWID is refused on the pool, accepted under
+	// `experimental=without_rowid`.
 	vectorFunctions: true, vectorIndex: false,
 	fullTextSearch: false, withoutRowid: false,
 	gated: []string{"without_rowid"},

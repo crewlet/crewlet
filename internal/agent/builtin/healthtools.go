@@ -51,9 +51,11 @@ const (
 func HealthToolNames() []string { return []string{FleetHealthTool, CodeStatusTool} }
 
 // LeaseLister is the coordination store's live leases (internal/coord's
-// ListLive), which fleet_health reads the nodes' presence from.
+// ListLive), which fleet_health reads the nodes' presence from, and its clock
+// (Now), which it reads how long each has left on ([coord.TimeLeft]).
 type LeaseLister interface {
 	ListLive(ctx context.Context, class coord.Class) ([]coord.Lease, error)
+	Now(ctx context.Context, class coord.Class) (time.Time, error)
 }
 
 // StatusAsker is the fleet's Gitlet nodes and what Gitlet on each says of
@@ -110,10 +112,6 @@ type HealthDeps struct {
 
 	// Self is this node's id, which fleet_health's answer marks.
 	Self string
-
-	// Now is the clock a lease's lifetime is read against. Nil is the wall
-	// clock.
-	Now func() time.Time
 
 	// Status asks the Gitlet nodes' status. Nil omits code_status, as do Code
 	// deps that serve no code tool ([CodeDeps.serves]).
@@ -300,9 +298,11 @@ type nodeHealth struct {
 	Roles  []string          `json:"roles"`
 	Broker string            `json:"broker"`
 	Labels map[string]string `json:"labels,omitempty"`
-	// ExpiresIn is the seconds its presence lease has left: a node that
-	// stopped renewing reads as running out.
-	ExpiresIn int `json:"expires_in"`
+	// ExpiresIn is the seconds its presence lease has left on the store's
+	// clock ([coord.TimeLeft]), never this node's: a node that stopped
+	// renewing reads as running out. Absent where the store's clock could not
+	// be read: not saying, never running out.
+	ExpiresIn *int `json:"expires_in,omitempty"`
 	// Seats is how many seats it says it holds, as of its last renewal.
 	Seats int `json:"seats"`
 	// Status is what its heartbeat carried, absent where it carried none:
@@ -360,9 +360,11 @@ func (t *fleetHealth) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 			"presence from the coordination store just now, so it says nothing rather than show a "+
 			"fleet with nodes missing. Try again shortly."), nil
 	}
-	now := time.Now()
-	if t.deps.Now != nil {
-		now = t.deps.Now()
+	// DEGRADES: an unreadable store clock costs the rows their countdown,
+	// never the rows, whose presence the listing already established.
+	left, err := coord.TimeLeft(ctx, t.deps.Leases, coord.ClassNode)
+	if err != nil {
+		log.WarnContext(ctx, "fleet_health_store_clock_unavailable", "error", err)
 	}
 	nodes := make([]nodeHealth, 0, len(leases))
 	for _, lease := range leases {
@@ -370,7 +372,7 @@ func (t *fleetHealth) CallForTurn(ctx context.Context, turn *turnctx.Turn,
 		if !ok {
 			continue
 		}
-		nodes = append(nodes, nodeHealthOf(profile, lease, now))
+		nodes = append(nodes, nodeHealthOf(profile, lease, left))
 	}
 	slices.SortFunc(nodes, func(a, b nodeHealth) int { return cmp.Compare(a.ID, b.ID) })
 	answer := fleetHealthAnswer{ThisNode: t.deps.Self}
@@ -537,14 +539,19 @@ func companyCeilingRefused(tool string, kind authz.CeilingKind, done string) str
 		"and %s only for somebody who may.", tool, done)
 }
 
-// nodeHealthOf is one presence lease as fleet_health reports it.
-func nodeHealthOf(profile placement.NodeProfile, lease coord.Lease, now time.Time) nodeHealth {
+// nodeHealthOf is one presence lease as fleet_health reports it, its time left
+// read by left, the store's clock ([coord.TimeLeft]), or unsaid where left is
+// nil.
+func nodeHealthOf(profile placement.NodeProfile, lease coord.Lease,
+	left func(coord.Lease) time.Duration) nodeHealth {
+
 	n := nodeHealth{
 		ID: profile.ID, Roles: profile.Roles.Names(), Broker: profile.Broker.String(),
 		Labels: profile.Labels, Seats: profile.Held,
 	}
-	if !lease.ExpiresAt.IsZero() {
-		n.ExpiresIn = max(int(lease.ExpiresAt.Sub(now)/time.Second), 0)
+	if left != nil {
+		seconds := int(left(lease) / time.Second)
+		n.ExpiresIn = &seconds
 	}
 	live, ok := coord.StatusFromMeta(lease.Meta)
 	if !ok {

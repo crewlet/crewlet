@@ -13,28 +13,16 @@ import (
 
 // THE PURE QUANTIZER AGREES WITH THE DRIVER, BIT FOR BIT AND ORDER FOR ORDER.
 //
-// # Why this test is the seam it is
+// The semantic first stage orders a column the DRIVER filled with `vector1bit`
+// by the driver's `vector_distance_cos`, while everything judging the ranking
+// is pure Go. The halves may be separate only if they agree, measured here:
 //
-// The engine's semantic first stage scans a column the DRIVER filled, with
-// `vector1bit`, and orders it by a function the DRIVER computes,
-// `vector_distance_cos`. Everything that reasons about whether that ranking is
-// any good — the recall floor, the miss-rank distribution, the operator's own
-// evaluation — is pure Go over slices, because a ranking that can only be
-// exercised through a database is a ranking nobody re-measures.
-//
-// Those two halves are only allowed to be separate if they agree. This is
-// where that is established, and it is a MEASUREMENT of the driver rather
-// than a restatement of a convention:
-//
-//   - vector_distance_cos over two 1-bit vectors IS the raw Hamming distance.
-//     That identity is what lets the SQL order by a cosine function while the
-//     pure side counts bits; without it the two are ranking by different
-//     quantities and neither would say so.
-//   - An exact zero takes the NEGATIVE bit. Not a corner case: a truncated or
-//     padded embedding carries exact zeros in whole dimensions, and mapping
-//     them the other way flips every one of them against what was stored.
-//   - The encoded width is 387 bytes at 3 072 and 195 at 1 536, which is what
-//     the narrow table's own size arithmetic is written against.
+//   - vector_distance_cos over two 1-bit vectors IS the raw Hamming distance,
+//     or SQL and the pure side would rank by different quantities.
+//   - An exact zero takes the NEGATIVE bit: truncated or padded embeddings
+//     carry exact zeros in whole dimensions, and the other mapping flips all.
+//   - The encoded width is 387 bytes at 3 072 and 195 at 1 536, which the
+//     narrow table's size arithmetic is written against.
 func TestQuantizationMatchesTheDriver(t *testing.T) {
 	t.Parallel()
 	db := open(t)

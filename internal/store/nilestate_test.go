@@ -15,44 +15,15 @@ import (
 
 // A HANDLE THAT IS NOT OPEN ANSWERS. It does not take the process with it.
 //
-// # The contract, and why it needed a gate
+// [store.ErrNoEstate] is a state, not a caller bug: a node without `data`, an
+// adoption between rename and reopen, and DB.Close all answer it, so a
+// goroutine in flight (a tick racing a shutdown) reaches it legitimately and
+// must not reach a nil dereference. A guard in [DB.txOpts] is too deep:
+// `pooled(d.busy)` in [DB.Read] and [DB.Tx] is an ARGUMENT, evaluated first.
 //
-// [store.ErrNoEstate]'s own doc states it: "IT IS A STATE, NOT A BUG IN THE
-// CALLER. DB.ReplicatedDB answers it on a node without `data`, which holds no
-// replicated estate; while an adoption holds the file closed between its
-// rename and its reopen; and after DB.Close — all documented and deliberate —
-// so a goroutine that was already in flight when one of those happened reaches
-// here legitimately. What it must NOT reach is a nil dereference: a
-// maintenance tick racing a shutdown panicked the engine."
-//
-// It reached one anyway, a second time, and the stack is worth keeping because
-// every layer above it was already correct:
-//
-//	panic: runtime error: invalid memory address or nil pointer dereference
-//	[signal SIGSEGV: segmentation violation code=0x1 addr=0x0]
-//	store.(*DB).Read(0x0, …)                      store/pinned.go:167
-//	worklet.Evictions(…, 0x0, …)                  worklet/evictions.go:66
-//	engine.(*retention).tombstones(…)             engine/retention.go:591
-//	engine.(*retention).tick(…)                   engine/retention.go:267
-//	created by engine.(*Engine).startRetention
-//
-// `internal/engine`'s caller already switched on [store.ErrNoEstate] with a
-// comment explaining that a tick in flight reaches a closing estate;
-// `internal/worklet`'s already documented that it goes through the store
-// handle rather than a `*sql.DB` precisely so it would get that error. Both
-// were right. The guard was in [DB.txOpts] — one frame too deep — and
-// `pooled(d.busy)` in [DB.Read] and [DB.Tx] is an ARGUMENT, evaluated before
-// the call it guards. So the nil was dereferenced on the way in and the guard
-// never ran. Ten of this type's eighteen exported methods behaved that way.
-//
-// # Why the roster is reflected rather than listed
-//
-// A hand-written table certifies the methods somebody remembered, and the next
-// method added to this type is unguarded and silent — which is how the first
-// fix came to cover `txOpts` and miss the two callers that reach it. So the
-// table below is checked AGAINST the type's own method set, and a method
-// nobody classified fails the build. The same shape `internal/solo`'s roster
-// guard and `internal/skipgate`'s allowlist take, for the same reason.
+// The roster is reflected, not listed: a hand-written table certifies only the
+// methods somebody remembered. It is checked AGAINST the type's own method set,
+// as `internal/solo`'s roster guard is.
 func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 	t.Parallel()
 
@@ -248,21 +219,14 @@ func TestAHandleThatIsNotOpenAnswersRatherThanPanics(t *testing.T) {
 
 		// ---- the sub-handles: BUILDING one must not panic -----------------
 		//
-		// Their own methods reach `x.db.sql` directly and would panic on a nil
-		// db — and that is not a gap here, because every one of them is built
-		// from the NODE's own file, and only the replicated estate is ever not
-		// open while the node is.
-		// `engine/backends.go` takes `db.Events()`, `engine/reconcile.go` and
-		// `configapi` take `opts.Store.Configs()`, `maintenance/jobs.go` takes
-		// both: the node handle, which is open for as long as the process is.
-		// What IS asserted is that a caller holding a closed handle can ask
-		// for one without dying, since the accessor costs nothing and the
-		// refusal belongs at the statement.
+		// Their own methods reach `x.db.sql` and would panic on a nil db, which
+		// is no gap: each is built from the NODE's own file, open as long as
+		// the process is. What IS asserted is that a caller holding a closed
+		// handle can ask for one without dying; the refusal belongs at the
+		// statement.
 		//
-		// What is not open is the REPLICATED ESTATE, and it is reached through
-		// a [store.ReplicatedHandle] — whose own roster is the next test — at
-		// every site across internal/search, internal/worklet and
-		// internal/engine that once took a nil peer and segfaulted.
+		// The REPLICATED ESTATE is the one not open, and it is reached through
+		// a [store.ReplicatedHandle], whose own roster is the next test.
 		"Configs": func(t *testing.T) { _ = d.Configs() },
 		"Events":  func(t *testing.T) { _ = d.Events() },
 	}

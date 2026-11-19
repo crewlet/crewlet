@@ -498,6 +498,20 @@ func (b *Backend) ListLive(ctx context.Context, class coord.Class) ([]coord.Leas
 	})
 }
 
+// Now is the store's clock, which every expiry here is judged on: one clock for
+// every class, as the twin keeps one table.
+func (b *Backend) Now(ctx context.Context, class coord.Class) (time.Time, error) {
+	if err := checkClass(class); err != nil {
+		return time.Time{}, err
+	}
+	if err := unavailable(ctx); err != nil {
+		return time.Time{}, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.now(), nil
+}
+
 // checkClass refuses a class that cannot address a key, so the twin and the
 // real backend refuse the same arguments — a twin that answered where the
 // broker-backed store refused would certify a contract nothing keeps.

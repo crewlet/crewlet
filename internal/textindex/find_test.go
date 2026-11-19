@@ -202,16 +202,14 @@ func TestFindInReadsATextsPiecesAsTheText(t *testing.T) {
 // backslash, `u` and its four hex digits.
 func escaped(unit rune) string { return fmt.Sprintf(`\u%04x`, unit) }
 
-// A JSON TEXT'S WORDS ARE READ THROUGH ITS ESCAPES. Read as JSON, a string's
-// escaped line break, tab, quote or backslash is the character it escapes,
-// never a letter glued to the word after it; `\u` and four hex digits is the
-// character it names, a surrogate pair's two halves the one they name
-// together, a letter of a word where it is one and a lone half none; and a
-// backslash that opens no escape is itself. A word's offset is where it begins
-// as the text is written. Read as written, the word that opens a line, or one
-// with a named letter, is in no whole word of the same text, and the escape's
-// letter glued to the word after it is one. A reading nobody chose finds
-// nothing.
+// A JSON TEXT'S WORDS ARE READ THROUGH ITS ESCAPES. Read as JSON, an escaped
+// line break, tab, quote or backslash is the character it escapes, never a
+// letter glued to the next word; `\u` and four hex digits is the character it
+// names, a surrogate pair's halves the one they name together, a lone half
+// none; a backslash opening no escape is itself. A word's offset is where it
+// begins as written. Read as written, the word opening a line, or one with a
+// named letter, is in no whole word of the text, and an escape's letter glued
+// to the next word is one.
 //
 // Mutation: read a JSON text as written, decode its line breaks and not its
 // named characters, or read an escaped backslash as opening an escape, and a

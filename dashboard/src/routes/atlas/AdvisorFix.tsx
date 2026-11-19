@@ -20,7 +20,14 @@ import { useSeatBadgeOf } from "~/lib/seats.ts";
 import { useAct } from "~/lib/useAct.ts";
 import { useSeated } from "./access.tsx";
 import { useQuery } from "~/lib/useQuery.ts";
-import type { AdvisorAtlasEntry, AdvisorFinding } from "~/protocol/advisor.ts";
+import type { AdvisorAtlasEntry } from "~/protocol/advisor.ts";
+import type { AdvisorKeptFinding } from "~/protocol/advisorFindings.ts";
+
+/** What the dialog reads of a finding the Advisor keeps. */
+export type AtlasFinding = Pick<
+  AdvisorKeptFinding,
+  "class" | "title" | "why" | "fix" | "entries" | "evidence"
+>;
 import { ClaimList, DecisionButtons } from "./Decisions.tsx";
 import { entryPath } from "./entry.tsx";
 import { EntryPicker, OwnerField, type OwnerChoice } from "./pickers.tsx";
@@ -35,7 +42,7 @@ const MONITOR_KINDS: readonly AtlasKind[] = ["monitor", "vendor_account"];
 const REVIEW_ROWS = 500;
 
 /** Where a finding's own screen of the atlas is, and what its link is called. */
-export function atlasPlace(finding: Pick<AdvisorFinding, "class">): {
+export function atlasPlace(finding: Pick<AtlasFinding, "class">): {
   path: string[];
   label: string;
 } {
@@ -50,8 +57,8 @@ export function atlasPlace(finding: Pick<AdvisorFinding, "class">): {
 }
 
 /** How many entries a finding is about, whatever it names. */
-function counted(finding: AdvisorFinding): number {
-  return finding.evidence.find((fact) => fact.key === "entries")?.value ?? 0;
+function counted(finding: AtlasFinding): number {
+  return finding.evidence.facts.find((fact) => fact.key === "entries")?.value ?? 0;
 }
 
 /** The fix of one atlas finding: its entries, and the control each needs. */
@@ -59,7 +66,7 @@ export function AdvisorAtlasFix({
   finding,
   onClose,
 }: {
-  finding: AdvisorFinding;
+  finding: AtlasFinding;
   onClose: () => void;
 }) {
   const entries = finding.entries ?? [];

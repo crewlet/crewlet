@@ -21,65 +21,27 @@ import (
 // EVERY CODE INDEX SERVES A REGISTERED QUERY, AND EVERY REGISTERED QUERY SEEKS
 // THE KEY IT IS WRITTEN FOR.
 //
-// A trailing comment naming an index's reader is a CLAIM; the planner is the
-// only thing that knows whether the statement reaches the index. So this runs
-// EXPLAIN QUERY PLAN over every statement the package issues against its
-// tables — the guards, the applier's reads and writes (the tombstones a push
-// sweeps and the ref drops it forgets past their grace, each oldest first,
-// among them, and the fences it reads: an eviction's, the activation's), the
-// lifecycle store's decides, the push decide's reads, a change's lifecycle's
-// decide, apply and answer, the live changes a push record moves and the
-// authors its pushers already are of them, every walk a listing of changes
-// takes and one change's reads, the reader's pages in
-// their first and keyset forms — a snapshot's retired phase and its layers
-// phase among them — and its bounded counts, the purge's bounded count, its
-// parts and its statements over a repository's changes and its published
-// chain, a sweep's decide, apply and listing over the retired packs, a
-// compaction's decide, apply and answer, a publication's reads of the chain
-// and the live packs and its replacement of the chain's top, the compactor's
-// and the publisher's due listings, the trim's listing of who was evicted from
-// the log, and every statement the object store builds over code_packs,
-// code_packs_retired and code_layer_parts, at every width its callers build
-// it at ([planShapes]) — and holds each to the EXACT seek it names: the index
-// and every column of it the statement bounds. Seeking an index is not
-// enough — a lookup of one ref that sought repo_id alone read every ref its
-// repository holds (planner.go). The statements are the package's own
-// constants: there is no copy here to drift from what runs, and
-// TestEveryCodeReadSeeksANamedIndex holds the set to the package's source and
-// refuses a plan that reads any table by a scan, so this holds only what that
-// one cannot — which index, which columns, in which order. An index no
-// statement reads yet is held to the read its migration claims for it
-// ([claimedReads]), until a statement does.
-//
-// NO ANALYZE, because no deployment runs one: statistics choose differently,
-// and a fixture that gathered them certified plans no node ever ran.
-//
-// The reads bounded by what a push row WEIGHS are held to a COVERING seek:
-// they read the widths code_pushes_repo_idx carries, so weighing a wide row
-// never reads its overflow pages — and the purge's reads count a change's
-// body from its key's index alone, a covering seek too, weighing it by the
-// change's own narrow row. And every statement reads in the order of the
-// index it seeks — a plan that sorts what it found reads all of it before its
-// LIMIT takes a row — but those [sortingStatements] names, over a set
-// something else bounds.
-//
-// Mutation: drop `INDEXED BY` from liveRefSQL and the head seeks
-// code_refs_changed_idx on repo_id alone; test `ref IN (SELECT value FROM
-// json_each(?))` in refsNamedSQL and it seeks repo_id alone; drop `position >=
-// ?` from refsDeltaAfterSQL and the page seeks repo_id alone; drop row_bytes
-// from code_pushes_repo_idx and the purge's and the horizon's reads stop
-// covering; order the push listing by `at` again, which replicated 0084 moved
-// out of code_pushes_repo_idx's key, and it sorts every push of the
-// repository; order the purge's walk of a repository's changes by `c.number,
-// r.n` and it sorts every revision the repository holds; write a claim's live
-// states in another order and it seeks code_changes_state_idx; lead
-// code_ref_drops' key with the position again (replicated 0089 moved the
-// instant ahead of it) and the drops' expiry and a purge part sort what they
-// seek rather than read it in order; key code_changes_work_idx by the item
-// alone again (replicated 0097 ordered it) and a work item's listing sorts
-// every change the item ever carried.
+// A trailing comment naming an index's reader is a CLAIM; only the planner
+// knows whether the statement reaches the index. So this runs EXPLAIN QUERY
+// PLAN over every statement the package issues against its tables, at every
+// width its callers build it at ([planShapes]), and holds each to the EXACT
+// seek it names: the index and every column of it the statement bounds. A ref
+// lookup that sought repo_id alone read every ref its repository holds
+// (planner.go). TestEveryCodeReadSeeksANamedIndex refuses a scan; this holds
+// which index, columns and order. An unread index is held to its migration's
+// claim ([claimedReads]).
 func TestEveryCodeIndexServesARegisteredQuery(t *testing.T) {
 	t.Parallel()
+	// NO ANALYZE, because no deployment runs one: statistics choose
+	// differently. Reads bounded by what a push row WEIGHS are held to a
+	// COVERING seek (code_pushes_repo_idx carries the widths), and every
+	// statement reads in its index's order, since a sorting plan reads all
+	// before LIMIT, except [sortingStatements]. Mutations that must go red:
+	// drop `INDEXED BY` from liveRefSQL, `position >= ?` from
+	// refsDeltaAfterSQL or row_bytes from code_pushes_repo_idx; order the push
+	// listing by `at`; lead code_ref_drops' key with the position; key
+	// code_changes_work_idx by the item alone; test `ref IN (SELECT ...)` in
+	// refsNamedSQL; order the purge's change walk by `c.number, r.n`.
 	db := seededPlanEstate(t)
 	// EVERY TABLE A RECORD REPRODUCES, from the inventory rather than a
 	// list of this test's own, so an index on a table a later change adds
@@ -204,20 +166,15 @@ func TestTheCommitMarksStatementsReadNoUnnestedAggregate(t *testing.T) {
 // THE RANGES A ROUND ASKS ABOUT ARE READ OVER THE LIVE REFS ALONE.
 //
 // The push decide asks, under every create, whether a live ref lies in a
-// range of code_refs' key ([gapsHoldingSQL], then [firstLiveInSQL] for a range
-// that holds one) — and a range under a create holds the tombstones under it
-// too. Read over the key, the seek stepped over each tombstone, a lookup of its
-// row apiece, before it reached a live ref or the range's end, and a tombstone
-// was stepped over once for every create above it: one push of the 118 nested
-// creates of the deepest chain over a repository's [MaxTombstonesPerRepo]
-// tombstones held its round 7.7–9.9 s (BenchmarkDecideABatch's buried arm).
-// So each statement reads code_refs through [liveRefsKey] and through nothing
-// else, and that index is PARTIAL on the live refs — the half the plan cannot
-// show, since a rebuild of the index without its predicate would plan the
-// same seek and step over every tombstone again.
-//
-// Mutation: name [refsKey] in either statement, or declare the index without
-// its predicate on the empty target, and this fails.
+// range of code_refs' key ([gapsHoldingSQL], then [firstLiveInSQL]), and a
+// range holds the tombstones under it too. Read over the key, the seek stepped
+// over each tombstone once per create above it: 118 nested creates over
+// [MaxTombstonesPerRepo] tombstones held a round 7.7-9.9 s
+// (BenchmarkDecideABatch's buried arm). So each statement reads code_refs
+// through [liveRefsKey] only, an index PARTIAL on the live refs: the half the
+// plan cannot show, since the index rebuilt without its predicate plans the
+// same seek. Mutation: name [refsKey] in either statement, or declare the
+// index without its predicate on the empty target.
 func TestTheRefConflictProbesStepOverNoTombstone(t *testing.T) {
 	t.Parallel()
 	db := seededPlanEstate(t)
@@ -963,29 +920,15 @@ func registeredStatements() map[string]statement {
 		"gate heads": {gateHeadsSQL, []any{`[["repo-1-change-000001",3],["repo-1-change-000002",1]]`},
 			[]string{"SCAN json_each AS j", factsKey + " (change_id=? AND n=?)"}},
 		"gate match digests": {matchDigestsOfSQL, []any{`["repo-1","repo-2"]`}, []string{repoKey + " (id=?)"}},
-		// THE MERGE QUEUE (queue.go, apply_queue.go, queueread.go): one entry
-		// by its key; the live entries of a list of changes, driven from the
-		// list, one seek of code_queue_change_idx a change, and which of a
-		// list are queued, the push apply's; a target's waiting entries and
-		// the live ones before an entry, counted over code_queue_live_idx, and
-		// its live entries up to a seq, read there in its order — a page's
-		// places, a walk a target; an entry ended by its key, a change's live one by
-		// code_queue_change_idx, and a list's, driven from the list; a
-		// target's live entries after a seq, a repository's from the top and
-		// after a place, and every repository's the same way, each in its
-		// index's order; the active repositories holding one, grouped on the
-		// index's leading column; the merge rate's enqueues of a target, one
-		// seek of code_queue_enqueued_idx answered from the index; a repository's
-		// ejections and a target's, each by the index partial on ejections
-		// that leads with what it names, and counted by the same indexes,
-		// covering; every repository's ejections counted and read newest
-		// first by the index partial on them that leads with the ending; the
-		// queue part's counts of live entries, a repository's and every
-		// repository's, covering seeks of code_queue_live_idx; a target's
-		// trains by code_candidates_train_idx; its landings above a place and
-		// its green row by their keys, and a repository's green rows; and a
-		// purge part's bounded deletes and the purge's whole ones, each by
-		// its table's key.
+		// THE MERGE QUEUE (queue.go, apply_queue.go, queueread.go): entries by
+		// key, driven from a list of changes by one seek of
+		// code_queue_change_idx a change, counted and read in order over
+		// code_queue_live_idx; ejections by the index partial on ejections
+		// that leads with what the read names, counted by the same indexes,
+		// covering; the merge rate's enqueues by code_queue_enqueued_idx; a
+		// target's trains by code_candidates_train_idx; landings and green
+		// rows by their keys; the purge part's deletes by their table's key.
+		// Each read runs in its index's order.
 		"queue entry": {entrySQL, []any{"repo-1", "entry-1"},
 			[]string{"sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
 		"live entries of changes": {liveEntriesSQL, []any{`["repo-1-change-000001","repo-1-change-000002"]`},
@@ -1087,22 +1030,15 @@ func registeredStatements() map[string]statement {
 		"purge all tip work": {purgeAllTipsDueSQL, []any{"repo-1"},
 			[]string{"sqlite_autoindex_code_tips_due_1 (repo_id=?)"}},
 		// THE QUEUE'S OWN RECORDS (queuerecords.go, decide_queue.go,
-		// apply_queuerecords.go, queue_sweep.go): a list of entries by their
-		// key, and a list of their changes by theirs, each driven from the
-		// list — the entries a record puts in a candidate, ejects and lands
-		// are written back as upserts on their key, which have no plan; a
-		// target's train abandoned — its testing entries
-		// over code_queue_live_idx, its candidates over
-		// code_candidates_train_idx — a train's landed candidates and its
-		// candidates at a record's position over the same; a train's pack's
-		// counters by the repository's key; a landing record's tip, a landing
-		// by its key, broken by it, and the landings between a green row and
-		// a landing counted and marked over the key's range; and the queue's
-		// history — ended entries walked in its key's order and weighed from
-		// code_queue_ended_idx alone, and removed over its key's range up to
-		// the last one walked, a target's landings below its green read and
-		// removed over the key's range — and the sweep's listing, a walk of
-		// the repositories by their key, two seeks each.
+		// apply_queuerecords.go, queue_sweep.go): lists of entries and of their
+		// changes by key, each driven from the list (upserts on a key have no
+		// plan); an abandoned train over code_queue_live_idx and
+		// code_candidates_train_idx; a train's pack counters by the
+		// repository's key; landings by their key, and those between a green
+		// row and a landing counted and marked over the key's range; the
+		// queue's history, ended entries walked in key order and weighed from
+		// code_queue_ended_idx alone, removed over the key's range up to the
+		// last one walked; and the sweep's listing, two seeks a repository.
 		"entries named": {entriesNamedSQL, []any{`["entry-1","entry-2"]`, "repo-1"},
 			[]string{"SCAN json_each AS j", "sqlite_autoindex_code_queue_1 (repo_id=? AND entry_id=?)"}},
 		// THE ENTRIES A PUSH EJECTED, which its committer announces
@@ -1656,30 +1592,17 @@ func registeredStatements() map[string]statement {
 		"purge all check logs": {purgeAllCheckLogsSQL, []any{"repo-1"}, []string{checkLogsKey + " (repo_id=?)"}},
 		"purge all checks":     {purgeAllChecksSQL, []any{"repo-1"}, []string{checksKey + " (repo_id=?)"}},
 		"checks due":           {checksDueSQL, []any{1000, -1, -1, "", 100}, []string{"COVERING INDEX code_checks_recent_idx (finished_at>=? AND finished_at<?)"}},
-		// A REPOSITORY'S CHECKS, READ (checksread.go): one attempt by the
-		// key, as a listing reads it, whole, and its log by the logs' key;
-		// the latest attempt of one check of one commit for one target, the
-		// key's prefix read backwards; a commit's attempts for every target
-		// after a (target, name, attempt) on the key, and for one target —
-		// a change's — after a (name, attempt) on the key, and the same two
-		// keeping each check's latest attempt, each row tested by one seek of
-		// its check's later attempts on the key; a
-		// repository's newest ended first, from the top or after a place, on
-		// code_checks_finished_idx; the window's between its start and its
-		// end, or a cursor's place, on code_checks_recent_idx; the places of
-		// a narrowed listing, each a covering seek of the index leading with
-		// its narrowing — a repository's in one state, and of one check in
-		// one state, at its first page's place above every ending; the
-		// window's in one ending, and of one check in one ending, from its
-		// end; a standing listing's places of the window's attempts not yet
-		// ended, a covering seek of the index partial on them; and, driven
-		// from a page's lists, its places' facts and rows by the key, a later
-		// attempt by the key's prefix, the live changes at its heads, and its
-		// entries and tips by their keys, an entry's later entry by
-		// code_queue_change_idx; and the home's
-		// due work — the due
-		// listing's statements, a head tested by its dispatch's key and its
-		// target's, and a target's reading by its key.
+		// A REPOSITORY'S CHECKS, READ (checksread.go): an attempt and its log
+		// by their keys; the latest attempt of a check read backwards over the
+		// key's prefix; a commit's attempts after a place on the key, keeping
+		// each check's latest by one seek of its later attempts; a
+		// repository's newest ended first on code_checks_finished_idx; the
+		// window on code_checks_recent_idx; a narrowed listing's places, each
+		// a covering seek of the index leading with its narrowing (state, or
+		// check and state); a standing listing's unended places, a covering
+		// seek of the partial index; the facts, rows, later attempts, live
+		// changes, entries and tips a page's lists drive, by their keys; and
+		// the home's due work, a head tested by its dispatch's and target's keys.
 		"check listed":       {checkRowSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
 		"check whole":        {checkWholeSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checksKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
 		"check log":          {checkLogSQL, []any{"repo-1", oid("c"), "refs/heads/main", "unit", 1}, []string{checkLogsKey + " (repo_id=? AND commit_oid=? AND target_ref=? AND name=? AND attempt=?)"}},
@@ -1860,13 +1783,10 @@ var referenceTables = map[string]objstore.ReferenceTable{
 // batch narrows it to. The read gate holds the list to [referenceBuilders]
 // both ways.
 //
-// EACH WIDTH IS A STATEMENT TEXT OF ITS OWN — n placeholders, a LIMIT of n —
-// which the driver plans on its own, so a shape planned at a width no caller
-// builds certifies a statement nothing runs. Between a list's two ends the
-// plan is a seek of the key's index a key apiece, a cost that grows with the
-// list while a scan's does not, so the widest is where a planner would first
-// trade the seeks for a scan of the table; and one key is the form the
-// planner may read as a plain equality.
+// EACH WIDTH IS A STATEMENT TEXT OF ITS OWN (n placeholders, a LIMIT of n),
+// planned on its own, so a width no caller builds certifies nothing. The
+// widest is where a planner would first trade the seeks, whose cost grows
+// with the list, for a scan; one key is the form it may read as an equality.
 var referenceWidths = map[string][]int{
 	// The collector's question of a batch of the keys a listing named
 	// (collect's Referenced): a full batch, and the short last one.
@@ -1955,24 +1875,16 @@ func planShapes() map[string]shape {
 
 // claimedReads is every index on a covered table that no statement this
 // package issues reads YET, by name, with the read its migration's `-- <reader>`
-// comment claims for it — planned here, so the claim is the planner's from the
-// migration that declares the index rather than from whichever change first
-// issues the read. A change's indexes land with its tables (replicated 0086),
-// one migration for the rows rather than one an index, and their reads — the
-// lifecycle's, the listings', a commit's page — are each a change's of its own,
-// and are registered now (changeread.go, commitread.go): what stays a claim is
-// an index of a later reader.
+// comment claims for it, planned here so the claim is the planner's from the
+// migration that declares the index, not from whichever change first issues
+// the read.
 //
 // TWO-SIDED, as every allowance here is: a claim whose index a registered
-// statement reaches fails, because the change that issues the read registers
-// its own statement and a claim beside it would be a second copy of what runs;
-// and an index that neither a statement nor a claim reaches fails as it always
-// has. Each read is written in the claim's own terms — the live states as
-// [liveChanges] spells them, a listing newest first by the order its index
-// keeps — and is held to the exact seek and no sort, like any registered
-// statement, and judged by the read gate as the statement that will issue it
-// will be: no table read by a scan. The gate's match against the source never
-// sees a claim, which no code issues yet.
+// statement reaches fails (a second copy of what runs), and so does an index
+// neither reaches. Each read is written in the claim's own terms ([liveChanges]
+// for the live states, newest first by the index's order), held to the exact
+// seek and no sort, and judged by the read gate for scans. The gate's source
+// match never sees a claim, which no code issues yet.
 func claimedReads() map[string]statement {
 	return map[string]statement{
 		// THE SEARCH MODE'S INDEX ITS LATER READERS SEEK (replicated 0107):

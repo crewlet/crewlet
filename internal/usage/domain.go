@@ -45,35 +45,23 @@ const (
 	// the cadence the live budget meters are pushed on: a spend figure that
 	// trailed the meter above it by more than one of the meter's own
 	// refreshes would read as two different numbers. A tick that finds
-	// nothing moved costs one read of the re-derive marks, two reads of the
-	// recorded day cuts (usage_day_windows: the cut now falls in, and
-	// yesterday's), and, for each of the two days it looks at, two counts:
-	// one seeks the day's window per event type and probes the in-flight
-	// custody identities' key once per row it counts, the other seeks the
-	// dispatch ledger's window. A day that moved adds its derivation, and
-	// each object whose derivation changed one read of what the fleet holds
-	// of it ([Applied]) beside its publish.
+	// nothing moved costs a read of the re-derive marks, two of the day cuts
+	// (usage_day_windows) and two counts per day; a moved day adds its
+	// derivation and one [Applied] read per changed object.
 	FlushInterval = 15 * time.Second
 
 	// ReadsPerSeatDay is how many (page, via) entries one seat-day record
 	// carries.
 	//
-	// TWO HUNDRED AND FIFTY-SIX, and what it bounds is ONE RECORD. An
-	// entry is a few hundred bytes encoded plus its query, which is at
-	// most the 400 bytes a search accepts ([knowledge.MaxQueryBytes]), so
-	// a seat-day at the cap is under 200 KiB with a full-length query in
-	// every entry and under 1 MiB even where JSON escapes every byte of
-	// every one — far under the largest record this log takes
-	// ([LogMaxRecordBytes], the transport's own ceiling less what a signed
-	// append carries beside it), as TestAFullSeatDayRecordFitsOneMessage
-	// measures — and it is past what any person reads about one seat on one
-	// day. The most-read entries survive, and what was dropped is counted on
-	// the record rather than lost silently.
+	// TWO HUNDRED AND FIFTY-SIX, and what it bounds is ONE RECORD: an entry is
+	// a few hundred bytes plus its query (at most [knowledge.MaxQueryBytes]), so
+	// a seat-day at the cap is under 1 MiB even escaped, far under
+	// [LogMaxRecordBytes], as TestAFullSeatDayRecordFitsOneMessage measures. The
+	// most-read survive; what was dropped is counted on the record.
 	//
-	// It does NOT bound the stream: [LogMaxBytes] is sized from busy
-	// seat-days, and a fleet whose every seat reached this cap every day
-	// would outgrow that default, which the log's headroom alarm reports
-	// before an append is refused and `stream.usage_log_max_bytes` raises.
+	// It does NOT bound the stream: [LogMaxBytes] is sized from busy seat-days,
+	// and a fleet whose every seat reached this cap would outgrow it, which the
+	// headroom alarm reports and `stream.usage_log_max_bytes` raises.
 	ReadsPerSeatDay = 256
 
 	// ReadersPerRepoDay is how many readers one repo_read record carries —
@@ -81,30 +69,24 @@ const (
 	//
 	// A THOUSAND AND TWENTY-FOUR, and what it bounds is ONE RECORD. An entry
 	// is a principal of at most 255 bytes, a seat handle of at most 64, two
-	// words and three figures, so under 2 KiB even where JSON escapes every
-	// byte of the principal, and a record at the cap under 2 MiB — a quarter
-	// of the transport's 8 MiB message and far under the largest record this
-	// log takes ([LogMaxRecordBytes]), as TestAFullRepoReadRecordFitsOneMessage
-	// measures. And it is past the readers any unit's repository has: the
-	// seats of its subtree and its leads, the company's persons through
-	// their credentials, and its tokens. The most-read survive, and what was
-	// dropped is counted on the record, so an answer that lost readers says
-	// so.
+	// words and three figures: under 2 KiB even escaped, a record at the cap
+	// under 2 MiB, far under [LogMaxRecordBytes], as
+	// TestAFullRepoReadRecordFitsOneMessage measures. It is past the readers
+	// any unit's repository has (its subtree's seats and leads, persons
+	// through their credentials, its tokens). The most-read survive, and what
+	// was dropped is counted on the record, so an answer says it lost readers.
 	ReadersPerRepoDay = 1_024
 
 	// ToolsPerSeatDay is how many (server, tool) entries one seat-day record
 	// carries.
 	//
 	// FIVE HUNDRED AND TWELVE, and like [ReadsPerSeatDay] what it bounds is
-	// ONE RECORD. An entry is two names and six figures: a server name is at
-	// most 32 characters and a tool name at most the 64 a harness accepts,
-	// both tokens JSON never escapes, so an entry is under 300 bytes and a
-	// seat-day at the cap under 150 KiB beside its reads, as
-	// TestAFullSeatDayRecordFitsOneMessage measures. It is four times the
-	// 128 tools OpenAI's API takes in one request, so a seat would have to
-	// call that many distinct tools four times over in one day to reach it.
-	// The most-called entries survive, and what was dropped is counted on
-	// the record.
+	// ONE RECORD. An entry is two names (a server at most 32 characters, a tool
+	// at most the 64 a harness accepts, never escaped) and six figures: under
+	// 300 bytes, a seat-day at the cap under 150 KiB beside its reads, as
+	// TestAFullSeatDayRecordFitsOneMessage measures. It is four times the 128
+	// tools OpenAI's API takes in one request. The most-called survive, and
+	// what was dropped is counted on the record.
 	ToolsPerSeatDay = 512
 
 	// LedgerPerSeatDay is how many (wake, outcome) rows one seat-day record
@@ -124,33 +106,26 @@ const (
 	// Tier A (`stream.usage_log_max_bytes`) instead.
 	//
 	// ONE GIBIBYTE: the stream holds one message per (node, day, object)
-	// for [History], so its size is a census rather than a rate. A
-	// three-node fleet of forty seats and twenty schedules, every seat
-	// working every day, is 60 subjects × 3 nodes × 181 days ≈ 32 600
-	// messages; at a busy seat-day's ≈ 9.5 KiB (6.5 KiB of spend, turns and
-	// reads, and about 150 bytes for each of twenty MCP tools it called)
-	// that is about 320 MB. A unit repository read on a day adds one
-	// message for each node that served it, under two hundred bytes a
-	// reader beside its envelope: ten unit repositories read every day on
-	// three nodes by a dozen readers each are 10 × 3 × 181 ≈ 5 400 messages
-	// of about 2.3 KiB, some 13 MB over the history. A gibibyte is three
-	// times the two together. Crossing it REFUSES an append and raises the
-	// log's headroom alarm rather than dropping the oldest day.
+	// for [History], so its size is a census rather than a rate. Three nodes,
+	// forty seats and twenty schedules, every seat working every day, is
+	// 60 × 3 × 181 ≈ 32 600 messages; at a busy seat-day's ≈ 9.5 KiB that is
+	// about 320 MB. Ten unit repositories read daily on three nodes by a dozen
+	// readers each add ≈ 5 400 messages of about 2.3 KiB, some 13 MB. A
+	// gibibyte is three times the two together. Crossing it REFUSES an append
+	// and raises the log's headroom alarm rather than dropping the oldest day.
 	LogMaxBytes = 1 << 30
 
 	// LogMaxRecordBytes is the largest record this domain publishes
 	// ([statelog.StreamSpec.MaxRecordBytes]).
 	//
 	// THE LARGEST THE TRANSPORT CARRIES ([statelog.MaxTransportRecordBytes]),
-	// on the vector domain's precedent and for its reason: this log claims
-	// no identity and keeps no gate reserve, so the declaration sizes
-	// nothing and only says where the publisher and the broker refuse. A
-	// record is bounded far below it by its own caps — a seat-day's reads
-	// at [ReadsPerSeatDay], a schedule-day's fires at one per cron minute,
-	// 1 440 fires of about 150 bytes, and a repository-day's readers at
-	// [ReadersPerRepoDay], under 2 MiB — so a record that does meet the
-	// refusal is one no retry places, and the publisher says so once rather
-	// than every tick ([Publisher]).
+	// as for the vector domain: this log claims no identity and keeps no gate
+	// reserve, so the declaration only says where the publisher and the broker
+	// refuse. Records are bounded far below it by their own caps
+	// ([ReadsPerSeatDay]; a schedule-day's 1 440 fires of about 150 bytes, one
+	// per cron minute; [ReadersPerRepoDay], under 2 MiB), so a record that does
+	// meet the refusal is one no retry places, and the publisher says so once
+	// rather than every tick ([Publisher]).
 	LogMaxRecordBytes = statelog.MaxTransportRecordBytes
 
 	// LogDuplicates is the window the broker collapses a repeated op id in.

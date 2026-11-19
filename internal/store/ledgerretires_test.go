@@ -7,15 +7,12 @@ import (
 )
 
 // THE CONVERSATION LEDGER'S TABLE LEAVES A NODE FILE THAT HELD IT, its entries
-// and its indexes with it (node migration 0060). A conversation's next turn
-// continues its last turn's session and is told how the conversation's earlier
-// turns ended from the executor log, and a table of rendered accounts kept
-// beside that would be a second history of one conversation for a reader to
-// take as authoritative.
+// and its indexes with it (node migration 0060). The executor log already tells
+// a conversation's next turn how earlier turns ended, so a leftover table would
+// be a second history to take as authoritative.
 //
-// The file is built as a node that ran every migration before 0060 left it —
-// the table holding an entry, under one of its indexes — by recording 0060 as
-// not yet applied and putting the table back; reopening the file runs it.
+// The file is built as a node left before 0060: 0060 recorded as unapplied and
+// the table put back with an entry and an index; reopening runs it.
 //
 // Mutation: empty 0060, or have it delete the table's rows and keep the table,
 // and the table or its index is still in the file.

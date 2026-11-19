@@ -13,25 +13,17 @@ import (
 )
 
 // BenchmarkUsageForDay is what deriving one company day costs a node, and what
-// the reads of unit repositories add to it: the same busy day of every other
-// usage type — forty seats' thousand turns, three phases each, their two
-// thousand knowledge reads and two hundred auxiliary records — with no
-// repository read, and with fifty thousand records of them, a company whose
-// CI and seats read its unit repositories all day: a thousand principals over
-// twenty repositories, both ways, spread across the day, each record one
-// reader's reads of a flush (internal/gitlet/readaudit), one to four of them.
+// the reads of unit repositories add to it: a busy day of every other usage
+// type (forty seats' thousand turns, two thousand knowledge reads, two hundred
+// auxiliary records) with no repository read and with fifty thousand records of
+// them (a thousand principals over twenty repositories, one to four reads each).
 //
-// THE DELTA DECIDED A SHAPE (M3-decisions M3-O22). The publisher derives
-// today and yesterday every fifteen seconds the day moves, so whatever the
-// reads add is paid on every such tick, and a derived day may add 150 ms — 1 %
-// of the tick. Grouped by fields read out of each row's payload the reads
-// added 272 ms (334 ms against 62 ms), so the fields the statement groups and
-// sums on are columns of their own (node/0061, and node/0062 each record's
-// count of reads), on which the records add 116 ms (193 ms against 77 ms,
-// beside another session's builds; 86 ms, 151 against 65, when each row was
-// one read and counted). Every figure was taken with `-benchtime 5x -count 1`
-// on two cores of an Intel Core Ultra 7 265U; the migrations and the
-// derivation's doc (store.DB.usageRepoReads) state them.
+// THE DELTA DECIDED A SHAPE (M3-decisions M3-O22). The publisher derives today
+// and yesterday every fifteen seconds, so whatever the reads add is paid every
+// tick, and a derived day may add 150 ms (1 % of the tick). Grouped by payload
+// fields the reads added 272 ms (334 against 62), so the statement groups and
+// sums on columns (node/0061, node/0062), adding 116 ms (193 against 77).
+// Figures: `-benchtime 5x -count 1`, two cores of an Intel Core Ultra 7 265U.
 func BenchmarkUsageForDay(b *testing.B) {
 	day := time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC)
 	w := usageDayOf(day, day.Add(24*time.Hour))

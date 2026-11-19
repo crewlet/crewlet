@@ -52,10 +52,11 @@ type ConversationCreated struct {
 	TitleSealed string `json:"title_sealed,omitempty"`
 }
 
-// ConversationTitled sets a conversation's title.
+// ConversationTitled sets a conversation's title, written by By.
 type ConversationTitled struct {
-	V           int    `json:"v"`
-	TitleSealed string `json:"title_sealed"`
+	V           int              `json:"v"`
+	TitleSealed string           `json:"title_sealed"`
+	By          wire.TitleSource `json:"by"`
 }
 
 // ConversationSummarized is a conversation's summary of its first Through

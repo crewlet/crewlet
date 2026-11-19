@@ -159,12 +159,12 @@ export function categoryTip(category: JobCategory): string {
   return `Sets ${listed(categoryFields(category))}`;
 }
 
-/** The Dashboard Assistant as a use of a model: company-wide, one field, no seats. */
+/** Ask Crewlet as a use of a model: company-wide, one key, no seats. */
 export const ASSISTANT_USE = {
   label: "Ask Crewlet",
   hint: "Answers you in the dashboard.",
-  tip: "Sets assistant.llm. Ask Crewlet is the company's, so no seats are picked.",
-  rule: "Ask Crewlet runs only on a model that denies the harness's web tools, so a page it reads cannot send what it read anywhere.",
+  tip: "Sets assistant.model. Ask Crewlet is the company's, so no seats are picked.",
+  rule: "Ask Crewlet runs the model with no tools of its own, whatever its entry allows; a model whose tool cannot be run that way is not offered.",
 } as const;
 
 /** Every seat job at once. */
