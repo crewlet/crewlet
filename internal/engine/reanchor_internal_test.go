@@ -16,6 +16,7 @@ import (
 	"github.com/nats-io/nats.go"
 	natsjs "github.com/nats-io/nats.go/jetstream"
 
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/chatlet"
 	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/coord"
@@ -1466,6 +1467,12 @@ func notReanchored(t *testing.T, e *Engine, domain string, before cursorRow, dur
 		env, err := running.domain.Envelope(payload)
 		if err != nil {
 			t.Errorf("%s's record %d on %s does not decode: %v", domain, seq, subject, err)
+			continue
+		}
+		// THE ALARMS' HISTORY is written by every node as its alarms move, and a
+		// recreated log raises one: an alarm episode on the advisor log is the
+		// node's own record of that, not a write the reanchor made.
+		if domain == (advisordomain.Domain{}).Name() && env.Kind == string(advisordomain.KindAlarm) {
 			continue
 		}
 		if !slices.Equal(env.Scope.Paths, []string{statelog.FrameworkScope}) {
