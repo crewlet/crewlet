@@ -71,6 +71,26 @@ type FlowRecord struct {
 	// Backfilled says the record was derived from the item's past rather
 	// than read as it happened.
 	Backfilled bool `json:"backfilled"`
+
+	// Past is what a backfilled record's past gave it, and nil on one the
+	// duty read as it happened ([FlowDuty.Backfill]).
+	Past *FlowPast `json:"past,omitempty"`
+}
+
+// FlowPast is what the backfill read an item's past from, on a record it
+// derived: the instant the past gives for the change, and which facts it had
+// there (ADR-0162, "says which facts it had").
+type FlowPast struct {
+	// At is the instant the item entered the state as its past gives it:
+	// the row's `recorded_at`, so one column dates every change, where a
+	// change the duty read is dated by the broker's instant at its tick.
+	At time.Time `json:"at"`
+
+	// Seats says the seats' retained events covered At, so the assignee's
+	// pauses and model limits were read; false where they were gone or
+	// unread, so only the item's own history and its turns were, and a
+	// seat that could not take a turn reads as one that could.
+	Seats bool `json:"seats"`
 }
 
 // FlowNotice is what a flow notice's routing snapshot carries
@@ -146,6 +166,15 @@ func (f FlowRecord) check() error {
 	case (f.Notice == "") != (f.Told == ""):
 		return invalid("a flow record of item %s names role %q and person %q: "+
 			"a notice names both and a change of state neither", f.Task, f.Notice, f.Told)
+	case f.Backfilled != (f.Past != nil):
+		return invalid("a flow record of item %s says backfilled %t and carries "+
+			"no past, or a past and not backfilled: a backfilled record is dated by "+
+			"its past and one read as it happened by its broker", f.Task, f.Backfilled)
+	case f.Past != nil && f.Past.At.IsZero():
+		return invalid("a backfilled flow record of item %s gives no instant", f.Task)
+	case f.Backfilled && f.Notice != "":
+		// The past is told to nobody: a person reads it on the item.
+		return invalid("a backfilled flow record of item %s tells %q", f.Task, f.Told)
 	}
 	return nil
 }

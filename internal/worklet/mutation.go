@@ -26,7 +26,7 @@ import (
 // It moves ONLY with [versionedFields], whose rows name each version's fields,
 // to that table's highest version: statelogtest refuses a build reading a
 // version no field introduced, which would drop the field it was minted for.
-const RecordVersion = 20
+const RecordVersion = 21
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -94,11 +94,18 @@ var versionedFields = statelog.RecordFields{
 	{Name: "Subject.Kind flow", Since: FlowRecordVersion, Path: []string{"subject", "kind"},
 		Equals: string(KindFlow)},
 	{Name: "Snapshot.Flow", Since: FlowRecordVersion, Path: []string{"notify", "snapshot", "flow"}},
+	{Name: "FlowRecord.Past", Since: FlowPastVersion, Op: string(OpFlow),
+		Path: []string{"mutation", "past"}},
 }
 
 // FlowRecordVersion is the version from which a record carries an item's flow
 // (ADR-0162): the `flow` kind, and the notice of it a [Snapshot] names.
 const FlowRecordVersion = 20
+
+// FlowPastVersion is the version from which a flow record derived from an
+// item's past carries what it read and the instant its past gives
+// ([FlowRecord.Past]), which the applier dates the row by.
+const FlowPastVersion = 21
 
 // VersionedFields is the table, for the conformance suite and for an operator
 // surface that names why a record was held back.

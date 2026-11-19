@@ -333,12 +333,17 @@ func carryingSuiteRecord(field statelog.VersionedField) ([]byte, error) {
 			return nil, err
 		}
 		record.Mutation = project
-	case "Subject.Kind flow", "Snapshot.Flow":
+	case "Subject.Kind flow", "Snapshot.Flow", "FlowRecord.Past":
 		// AN ITEM'S FLOW RECORDED, and a notice of it to its lead, which a
 		// build that knows no flow would file under no table.
 		at := at
 		flow := worklet.FlowRecord{ID: "carrying-flow", Task: "carrying",
 			State: worklet.FlowStuck, Since: &at, Seat: "ada"}
+		if field.Name == "FlowRecord.Past" {
+			// AND ONE DERIVED FROM THE ITEM'S PAST, dated by it, which a
+			// build that knows no past would date by its broker.
+			flow.Backfilled, flow.Past = true, &worklet.FlowPast{At: at, Seats: true}
+		}
 		if field.Name == "Snapshot.Flow" {
 			flow.Notice, flow.Told = worklet.FlowToldLead, "lead"
 			record.Notify = &worklet.Notify{Kind: worklet.ChangeFlow,
