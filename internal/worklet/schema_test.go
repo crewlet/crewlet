@@ -203,9 +203,10 @@ func TestTrackerTasksIndexCount(t *testing.T) {
 	// re-spread's, and the abandoned merge's, abandoned move's and move
 	// stragglers' (the last three on a flag a healthy company holds on no
 	// row). Each of the seven is the size of the rows it is about, so no
-	// ordinary commit writes one. Every one is reached by a plan
+	// ordinary commit writes one. And one partial on the items in progress,
+	// the flow duty's pages (ADR-0162). Every one is reached by a plan
 	// (TestEveryIndexServesARegisteredQuery).
-	const want = 20
+	const want = 21
 	if count != want {
 		t.Fatalf("tracker_tasks carries %d indexes and the enumeration is %d — "+
 			"every one of them is a write cost on every commit, so the two have "+

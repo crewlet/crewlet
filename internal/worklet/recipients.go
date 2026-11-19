@@ -22,7 +22,7 @@ import (
 // Reason is why one handle hears about a change.
 type Reason string
 
-// The eighteen reasons, as they are written onto the log and into
+// The nineteen reasons, as they are written onto the log and into
 // `tracker_notifications`.
 //
 // This order is NOT the precedence; [Reasons] is. Do not re-sort these to
@@ -46,9 +46,12 @@ const (
 	ReasonUnwatched      Reason = "unwatched"
 	ReasonPurged         Reason = "purged"
 	ReasonLeadFallback   Reason = "lead_fallback"
+	// ReasonFlow is a notice that an item is not moving, to the one person
+	// the flow duty tells (ADR-0162).
+	ReasonFlow Reason = "flow"
 )
 
-// Reasons are the eighteen, IN PRECEDENCE ORDER: a handle hears under the
+// Reasons are the nineteen, IN PRECEDENCE ORDER: a handle hears under the
 // first reason that names it, and later ones are dropped (mentioned AND
 // watching is told "mentioned"). `blocking`, `asked` and `answered` precede
 // `assignee` because each says what THIS COMMIT did to the recipient, and the
@@ -58,7 +61,7 @@ const (
 var Reasons = []Reason{
 	ReasonMention, ReasonPrioritised, ReasonBlocking, ReasonAsked,
 	ReasonAnswered, ReasonAssignee, ReasonUnassigned, ReasonReporter,
-	ReasonThread, ReasonUnblocked, ReasonRoutedTo, ReasonParentAssignee,
+	ReasonThread, ReasonFlow, ReasonUnblocked, ReasonRoutedTo, ReasonParentAssignee,
 	ReasonChecklist, ReasonCollaborator,
 	ReasonWatcher, ReasonUnwatched, ReasonPurged, ReasonLeadFallback,
 }
@@ -94,10 +97,11 @@ func (r Reason) Held() bool { return slices.Contains(heldReasons, r) }
 
 // absorbableReasons are the reasons whose STATE NOTICE ([StateNotice]) asks
 // its seat for nothing but the item it is about: the work the pickup owns, so
-// a completed turn on the item discharges it (ADR-0162). Its own question,
-// distinct from [Reason.Addressed], which keeps its meaning for prompts and
-// the working indicator: may a turn that read past the notice absorb it.
-var absorbableReasons = []Reason{ReasonAssignee, ReasonBlocking, ReasonUnblocked}
+// a completed turn on the item discharges it (ADR-0162), and `flow`, whose
+// lead a turn on the item answers. Its own question, distinct from
+// [Reason.Addressed], which keeps its meaning for prompts and the working
+// indicator: may a turn that read past the notice absorb it.
+var absorbableReasons = []Reason{ReasonAssignee, ReasonBlocking, ReasonUnblocked, ReasonFlow}
 
 // Absorbable reports whether a state notice under this reason is absorbed
 // past its seat's seen-through mark for the item ([absorbableReasons]).
@@ -106,13 +110,14 @@ func (r Reason) Absorbable() bool { return slices.Contains(absorbableReasons, r)
 // turnReasons are the reasons whose notice starts a turn whatever the change
 // was: each puts something to this seat (`mention`, `prioritised`, `asked`),
 // replies to its ask (`answered`), moves work it owns (`unblocked`,
-// `routed_to`, `parent_assignee`, `checklist`, `blocking`), or takes work out
-// of the lead's project (`purged`). A third question, distinct from
+// `routed_to`, `parent_assignee`, `checklist`, `blocking`), says nobody is
+// moving an item (`flow`), or takes work out of the lead's project
+// (`purged`). A third question, distinct from
 // [Reason.Addressed] and [DefaultPrimaryReasons]: is it worth a turn at all.
 var turnReasons = []Reason{
 	ReasonMention, ReasonPrioritised, ReasonAsked, ReasonAnswered,
 	ReasonUnblocked, ReasonRoutedTo, ReasonParentAssignee,
-	ReasonChecklist, ReasonBlocking, ReasonPurged,
+	ReasonChecklist, ReasonBlocking, ReasonPurged, ReasonFlow,
 }
 
 // ownerReasons start a turn exactly when the change asks something of the
@@ -215,6 +220,12 @@ func Candidates(n *Notify) []routing.Candidate[Reason] {
 					ReasonThread.StartsTurn(n.threadAsked(handle)))
 			}
 		}
+	}
+	// A flow notice tells the one person its duty chose and nobody else
+	// ([RecordFlow]): it is no task commit and offers no fallback. Told,
+	// never obliged: it asks the lead to look, not to answer.
+	if n.Kind == ChangeFlow && n.Snapshot.Flow != nil {
+		add(n.Snapshot.Flow.Told, ReasonFlow, false)
 	}
 	// [Writer.TellUnblocked], the only writer of `Snapshot.Unblocked`,
 	// publishes a record on the DEPENDENT naming only its assignee, so no

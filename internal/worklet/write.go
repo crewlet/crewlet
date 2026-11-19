@@ -1774,7 +1774,9 @@ func (w *Writer) recordTurnIn(ctx context.Context, opID, project string,
 		OpID:    opID,
 		Pattern: statelog.PatternAdditive,
 		Decide: func(tx *sql.Tx, stamp statelog.Stamp) (statelog.Decision, error) {
-			if err := chargeable(ctx, tx, turn.Task, project); err != nil {
+			if err := chargeable(ctx, tx, turn.Task, project, "a turn cannot be "+
+				"charged to rows that no longer exist; the spend is still on the "+
+				"seat's own counters"); err != nil {
 				return statelog.Decision{}, err
 			}
 			return w.decide(ctx, tx, stamp, subject, OpTurn, "", scope, opID, turn, nil, at)
@@ -1782,17 +1784,17 @@ func (w *Writer) recordTurnIn(ctx context.Context, opID, project string,
 	})
 }
 
-// chargeable is the decide's own read of the task a turn is charged to: a
-// task with no row is refused through [missingTask], which says whether that
-// is a purge — final — or a create this node has not applied yet.
-func chargeable(ctx context.Context, tx *sql.Tx, id, project string) error {
+// chargeable is the decide's own read of the task a turn or a flow record is
+// filed under: a task with no row is refused through [missingTask] with
+// refused, which says whether that is a purge (final) or a create this node
+// has not applied yet.
+func chargeable(ctx context.Context, tx *sql.Tx, id, project, refused string) error {
 	var home string
 	switch err := tx.QueryRowContext(ctx, taskProjectStatement, id).Scan(&home); {
 	case errors.Is(err, sql.ErrNoRows):
-		return missingTask(ctx, tx, id, "a turn cannot be charged to rows that "+
-			"no longer exist — the spend is still on the seat's own counters")
+		return missingTask(ctx, tx, id, refused)
 	case err != nil:
-		return fmt.Errorf("worklet: read task %s to charge a turn: %w", id, err)
+		return fmt.Errorf("worklet: read task %s for the record filed under it: %w", id, err)
 	case home != project:
 		return fmt.Errorf("%w: task %s is in %s and the record was scoped to %s",
 			errTurnTaskMoved, id, home, project)
@@ -1841,10 +1843,17 @@ func checkChangeKind(subject Subject, op OpKind, kind ChangeKind, notify *Notify
 				"an apply of it writes no history row for that kind to "+
 				"describe — see ObjectKind.RecordsHistory", subject.Kind, kind)
 		}
-		if notify != nil {
+		switch {
+		case notify == nil:
+		case !subject.Kind.NoticesItself():
 			return invalid("a %s record carries a notification, "+
 				"and an apply of it writes no history row a wake could be "+
 				"derived from", subject.Kind)
+		case notify.Kind != ChangeFlow:
+			// A flow record's notice is the flow's own, and its apply writes
+			// the inbox row the history row would have.
+			return invalid("a %s record carries a %q notification; it tells "+
+				"only of its item's flow", subject.Kind, notify.Kind)
 		}
 		return nil
 	case kind == "":

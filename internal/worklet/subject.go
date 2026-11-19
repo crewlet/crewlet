@@ -347,6 +347,13 @@ const (
 	// `tracker_seat_places`. Machinery: no audience and no history row.
 	KindRoster ObjectKind = "roster"
 
+	// KindFlow is an item's flow state recorded when it changes, and a
+	// notice of it to a person (ADR-0162), on a subject per item
+	// ([FlowSubject]) so recording a state never moves the item's own
+	// version or `updated_at`. ADDITIVE like a turn: one writer, the flow
+	// duty, and a derived key ([FlowRecord.ID]) that lands each once.
+	KindFlow ObjectKind = "flow"
+
 	// KindTrimmed is the trim's record that removes the arbitration anchors
 	// below what the log no longer holds ([statelog.TrimmedKind], ADR-0080), on
 	// one subject per floor, which the subject's id names. The framework
@@ -367,7 +374,7 @@ var ObjectKinds = []ObjectKind{
 	KindTask, KindProject, KindCounter, KindTags,
 	KindCatalogue, KindView, KindPerson, KindAlias,
 	KindTurn, KindGeneration, KindEviction, KindRankOrder, KindBarrier,
-	KindFile, KindTrimmed, KindRoster,
+	KindFile, KindTrimmed, KindRoster, KindFlow,
 }
 
 // Valid reports whether a kind off the wire is one this build knows.
@@ -376,7 +383,7 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // Arbitrated reports whether writes on this kind carry a per-subject
 // expectation.
 //
-// All but three do. A turn is additive and races nobody. Every barrier
+// All but four do. A turn and a flow are additive and race nobody. Every barrier
 // shares one subject, so an expectation would serialise the company's
 // linearizable reads and write an anchor row per read under the store's
 // only writer. A trimmed record removes anchors and identical ones must each
@@ -384,7 +391,7 @@ func (k ObjectKind) Valid() bool { return slices.Contains(ObjectKinds, k) }
 // anchor would be the row it exists not to leave.
 func (k ObjectKind) Arbitrated() bool {
 	switch k {
-	case KindTurn, KindBarrier, KindTrimmed:
+	case KindTurn, KindFlow, KindBarrier, KindTrimmed:
 		return false
 	}
 	return k.Valid()
@@ -476,6 +483,11 @@ func RosterSubject() Subject { return Subject{Kind: KindRoster, ID: "seats"} }
 func EvictionSubject(nodeID string) Subject {
 	return Subject{Kind: KindEviction, ID: nodeID}
 }
+
+// FlowSubject names an item's flow records by the item's id, so they fall
+// under its deletion marker ([markedTask]) as its turns do, and never contend
+// with a write to the item itself.
+func FlowSubject(task string) Subject { return Subject{Kind: KindFlow, ID: task} }
 
 // TurnSubject names a turn's spend by the task it was spent on, never by
 // the turn's own id (the payload carries that), so it falls under the
@@ -606,14 +618,14 @@ func ParseSubject(wire string) (Subject, bool) {
 //
 // A scope path is a containment hierarchy, which is what makes a
 // project-wide deferral cover its tasks. Other kinds derive their container
-// from their own subject; these three cannot. A task's project is a mutable
-// column and a turn's subject is its task, so only the writer holds the
-// container; a view's container is a choice, a project or the company's
-// top. A task and a turn must have one: an empty container there is a
-// writer that forgot, not a workspace-homed object.
+// from their own subject; these four cannot. A task's project is a mutable
+// column and a turn's or a flow's subject is its task, so only the writer
+// holds the container; a view's container is a choice, a project or the
+// company's top. A task, a turn and a flow must have one: an empty container
+// there is a writer that forgot, not a workspace-homed object.
 func (k ObjectKind) HomedInAProject() bool {
 	switch k {
-	case KindTask, KindTurn, KindView:
+	case KindTask, KindTurn, KindFlow, KindView:
 		return true
 	}
 	return false
@@ -621,16 +633,17 @@ func (k ObjectKind) HomedInAProject() bool {
 
 // Routable reports an object kind whose records can wake somebody.
 //
-// A task, and a person, whose wake is about the person rather than a row
+// A task; a person, whose wake is about the person rather than a row
 // (somebody else wrote their priority list), which no task's routing
-// reaches. Every other kind is machinery or read from its own surface, and a
+// reaches; and a flow, whose notice tells one person an item is not moving
+// (ADR-0162). Every other kind is machinery or read from its own surface, and a
 // wake per catalogue edit would page the company for a renamed dropdown. A
 // closed set, so a later kind is silently unroutable rather than silently
 // routed: a missed wake costs one person, an unintended one wakes every seat
 // for a bookkeeping append.
 func (k ObjectKind) Routable() bool {
 	switch k {
-	case KindTask, KindPerson:
+	case KindTask, KindPerson, KindFlow:
 		return true
 	}
 	return false
@@ -656,19 +669,24 @@ func (k ObjectKind) RecordsHistory() bool {
 
 // RequiresAProject reports a kind that cannot live at the top of the company.
 func (k ObjectKind) RequiresAProject() bool {
-	return k == KindTask || k == KindTurn || k == KindFile
+	return k == KindTask || k == KindTurn || k == KindFlow || k == KindFile
 }
 
 // GatedByPurge reports a kind whose subject id is a task id, so a purge of
-// that task's marker gates every record of it: the task's own and the
-// turns charged to it.
+// that task's marker gates every record of it: the task's own, the turns
+// charged to it and its flow.
 //
 // One predicate for both statements of the deletion gate ([Applier.Gated]
 // and [Gates.GatedAt]): a kind added to one alone would drop a record on
 // every node while its writer was told it applied.
 func (k ObjectKind) GatedByPurge() bool {
-	return k == KindTask || k == KindTurn
+	return k == KindTask || k == KindTurn || k == KindFlow
 }
+
+// NoticesItself reports a kind that writes no history row and tells people
+// all the same: a flow notice, whose apply writes its own inbox row keyed on
+// its own key ([Applier.applyFlow]).
+func (k ObjectKind) NoticesItself() bool { return k == KindFlow }
 
 // ProjectKey normalises what somebody typed into what the column stores.
 //
