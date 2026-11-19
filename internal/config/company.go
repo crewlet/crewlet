@@ -1163,8 +1163,7 @@ func (c *Company) VectorsEnabled() bool {
 // Applied to EVERY seat at any depth and every field each writes
 // ([Company.ProviderReferences]'s), reported where typed; the RESOLVED chain
 // would hide a typo in `llm.review` under a role also setting `llm_review`,
-// which wins. NOT THE HELPERS' ([Company.validateAssistant],
-// [Company.validateAdvisor]), each held to its own rule. Skipped when
+// which wins. Not the helpers', each held to its own rule. Skipped when
 // providers.llm is empty, a documented authoring state that runs.
 func (c *Company) validateProviderKeys() error {
 	var p problems

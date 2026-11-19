@@ -12,7 +12,7 @@ flowchart LR
 
 ## Where you see it
 
-**Advisor** in the sidebar (`g v`, administrators) is its page: when its checks last ran, **Run now**, and the model it explains findings with, which an administrator chooses there. It has three tabs, Findings, Reports and History.
+**Advisor** in the sidebar (`g v`, administrators) is its page: when its checks last ran, **Run now**, and the model it explains findings with, which an administrator chooses in Settings › Models: as a model's use (*What this model does*, Advisor) or on By job's Advisor line. With no model its checks still run, with no explanations. It has three tabs, Findings, Reports and History.
 
 **Findings** lists what is worth changing now, the most costly first (what blocks the company, what costs it, what is worth knowing; within each, the largest measured cost, then the newest), with what the engine is handling listed apart so it never reads as yours to do. Each row says when the finding was found and when its check last confirmed it; one whose check has not run for a while says it was not re-checked since then, so an old observation never reads as the engine's view now. Each row offers its fix and a menu: **Snooze for 7 days**, **Dismiss** with a reason (won't fix, already known, or wrong), and **Ask Crewlet about this**. A finding's title opens its page: why it was raised, the facts it rests on and the window they were measured over, the records it cites, its fix, and everything that happened to it.
 
