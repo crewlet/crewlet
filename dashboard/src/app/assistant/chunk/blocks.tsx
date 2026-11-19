@@ -223,14 +223,21 @@ export function runChipOf(
       return { state, title: "Applying", meta: stepMeta(taken) };
     case "awaiting_approval":
       return { state, title: "Waiting for your approval", meta: stepMeta(taken) };
-    case "completed":
+    case "completed": {
       // A TURN READ BACK FROM ITS TRANSCRIPT carries no duration; the time
       // since it was asked is not how long it ran, so it says Done alone.
-      return {
-        state,
-        title: turn.done ? `Done in ${fmtDuration(turn.done.duration_ms)}` : "Done",
-        meta: stepMeta(taken),
-      };
+      const done = turn.done ? `Done in ${fmtDuration(turn.done.duration_ms)}` : "Done";
+      // A REFUSED STEP IS SAID ON THE CHIP, never only behind it.
+      const refused = turn.steps.filter((s) => s.state === "refused").length;
+      if (refused > 0) {
+        return {
+          state: RUN_STATE.refused,
+          title: `${done}, ${refused === 1 ? "1 step" : `${refused} steps`} refused`,
+          meta: stepMeta(taken),
+        };
+      }
+      return { state, title: done, meta: stepMeta(taken) };
+    }
     case "stopped":
     case "expired": {
       const done = turn.steps.filter((s) => s.state === "done").length;
@@ -306,7 +313,7 @@ export function stepsOf(turn: TurnView, technical: boolean): StepListStep[] {
 
 /**
  * Steps as `StepList` draws them: the engine's sentence for each, its time,
- * and what its line says under it ([stepDetail]).
+ * why it failed or was refused as prose ([stepNote]), and the request under it.
  */
 export function stepListOf(
   steps: readonly AssistantStepEvent[],
@@ -314,35 +321,35 @@ export function stepListOf(
 ): StepListStep[] {
   return steps.map((step) => {
     const duration = stepDuration(step.duration_ms);
+    const note = stepNote(step);
     const detail = stepDetail(step, technical);
     return {
       id: step.step_id,
       label: step.label,
       state: STEP_STATE[step.state],
       ...(duration === undefined ? {} : { duration }),
+      ...(note === "" ? {} : { note }),
       ...(detail === "" ? {} : { detail }),
     };
   });
 }
 
-/**
- * What a step's line says under its sentence: for a step that failed or was
- * refused, why, in the engine's sentence for a person.
- *
- * NO TOOL NAME, EVER, AND THE REQUEST ONLY FOR AN ADMINISTRATOR. A step's
- * sentence ("Listing tasks") is what it did; "list_tasks · GET /worklet" is
- * how the engine spells it, which a person does not read. The request, in
- * mono, is the administrator's: the same technical detail a proposal keeps
- * behind its disclosure.
- */
-export function stepDetail(step: TurnView["steps"][number], technical: boolean): string {
-  const request = technical && step.request ? `${step.request.method} ${step.request.route}` : "";
-  if (step.state !== "failed" && step.state !== "refused") return request;
-  const why = step.refusal
+/** Why a step failed or was refused, in the engine's sentence for a person; empty for any other. */
+export function stepNote(step: TurnView["steps"][number]): string {
+  if (step.state !== "failed" && step.state !== "refused") return "";
+  return step.refusal
     ? [step.refusal.message, step.refusal.hint].filter(Boolean).join(" ")
     : (step.summary ?? "");
-  if (why === "") return request;
-  return request === "" ? why : `${why} (${request})`;
+}
+
+/**
+ * The request a step made, in mono under its sentence, for an administrator.
+ *
+ * NO TOOL NAME, EVER: "Listing tasks" is what it did; "list_tasks · GET
+ * /worklet" is how the engine spells it, which a person does not read.
+ */
+export function stepDetail(step: TurnView["steps"][number], technical: boolean): string {
+  return technical && step.request ? `${step.request.method} ${step.request.route}` : "";
 }
 
 /**
