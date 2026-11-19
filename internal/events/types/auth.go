@@ -10,47 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 )
 
-// Authentication: who signed in and how, what ended a session, what somebody
-// was refused, what changed about what a person may do, and whether a record
-// on a fleet log was written by the fleet at all.
+// Authentication: who signed in and how, what ended a session, what changed
+// about what a person may do, and whether a fleet-log record was written by the
+// fleet at all. The LIVE FEED beside `iam_history` (the fleet-wide trail the
+// identity applier writes on every node; a per-node row is no audit trail).
 //
-// # The live half of a trail that has a durable half elsewhere
-//
-// Every one of these is published on the ordinary event path, so it reaches
-// the PUBLISHING node's store row, the activity feed and any OTLP sink the way
-// every other event does. That row is written inline on the node that
-// published it, with no consumer group — so a sign-in served by one ingress
-// node is a row on that node alone, and a per-node trail is not an audit
-// trail. The fleet-wide answer is `iam_history`, which the identity applier
-// writes identically on every node from the records themselves; these are the
-// LIVE FEED beside it and the export an operator's collector reads.
-//
-// # Nothing here carries what somebody presented
-//
-// Not a password, not a login somebody typed and got wrong, not a token value,
-// and not an unsalted hash of any of them — a hash of a typed login is
-// reversible against the company's own roster in one pass, and a password
-// typed into the login box is exactly what a failed sign-in would otherwise
-// carry into every backup. A failure is COUNTED per source (see
-// [IAMLoginFailures]), and an identity appears only on a fact a verified
-// credential or the engine itself authored.
-//
-// # Who authors the rate, type by type
-//
-// internal/events files each of these with its [events.RateAuthor], and the
-// split is the design: a failed attempt is authored by whoever can reach the
-// listener, so it is never a type at all — it is a metrics counter plus the
-// one row per node per minute, counted per source, the engine's own loop
-// publishes.
-// Everything else here follows a credential this engine verified, or the
-// engine's own loop deciding once per key, and says so in its category entry.
-//
-// # What is deliberately NOT here
-//
-// `iam_token_rejected` is absent for the admission rule's own reason: a
-// rejected bearer is authored by whoever holds the wrong value, so it is a
-// failed attempt of method `bearer` inside [IAMLoginFailures] and never a row
-// of its own.
+// Nothing here carries what somebody presented: no password, mistyped login,
+// token or unsalted hash (reversible against the roster, and a typed password
+// would reach every backup). A failure is COUNTED per source ([IAMLoginFailures])
+// and never a type, since whoever can reach the listener authors its rate, so
+// `iam_token_rejected` is absent too (a failed attempt of method `bearer`).
+// Everything else follows a verified credential or the engine's own loop, per
+// its [events.RateAuthor] in internal/events.
 
 func init() {
 	events.Register[IAMSessionStarted]()
@@ -322,26 +293,16 @@ func (e IAMSessionEnded) Summary() string {
 }
 
 // IAMLoginFailures is every failed attempt one node refused inside one minute,
-// counted per source.
+// counted per source: ONE ROW PER NODE PER MINUTE, published by the engine's
+// own loop.
 //
-// # ONE ROW PER NODE PER MINUTE, published by the engine's own loop
-//
-// A failed sign-in is authored by whoever can reach the listener. A row per
-// attempt hands the size of the node estate — and of every backup, snapshot
-// and integrity check taken from it — to them: the design this replaced wrote
-// one synchronous row per attempt, which was 6.9 million rows a day from one
-// host. So each attempt is a counter on the metrics recorder, and what becomes
-// a row is this, paced by a ticker rather than by the caller, and only for a
-// minute that had a failure in it.
-//
-// # What it carries, and what it never carries
-//
-// A count per source, and the count from sources past the cap. Never what was
-// presented — not a login somebody mistyped, not a password typed into the
-// login box, not a bearer — and not a hash of any of them, which would reverse
-// against the company's own roster in one pass; and not who the engine
-// resolved a failure to, which would make a row a list of who was being
-// guessed at.
+// A failed sign-in is authored by whoever can reach the listener, and a row per
+// attempt hands them the size of the node estate and of every backup. So each
+// attempt is a metrics counter, and a row is this, paced by a ticker rather
+// than the caller, only for a minute that had a failure. It carries a count per
+// source and the count past the cap. Never what was presented (a login, a
+// password, a bearer), nor a hash of any (reversible against the roster in one
+// pass), nor who a failure resolved to (a list of who was being guessed at).
 type IAMLoginFailures struct {
 	// Minute is the start of the minute these attempts fell in, UTC.
 	Minute time.Time `json:"minute"`
@@ -403,24 +364,14 @@ func (e IAMLoginFailures) Summary() string {
 // is what the surfaces that change what a company IS ask for.
 //
 // It opens a FRESH session carrying the new proof, keeping the absolute
-// deadline of the one it replaces; Replaces is
-// that one, ENDED before the new one opened, so a reader can join the two. No
-// separate session-ended row is written for it: this row is the record of
-// why it ended.
+// deadline of the one it replaces; Replaces is that one, ENDED before the new
+// one opened, so a reader can join the two. No session-ended row is written:
+// this row records why it ended.
 //
-// # No surface, because nothing a node can check says which one
-//
-// The identity design names a `surface` here — which privileged surface the
-// confirmation was for — and this build carries none, deliberately. A step-up
-// proves the SESSION, not a gesture: the replacement's proof instant makes
-// every route fresh until its `reauth_at`, so there is no one surface it is
-// for. And the request that asked for it is a different request, refused
-// before the person confirmed, which `POST /auth/step-up` never sees; the only
-// place a surface could come from is the client's own word. A field in this
-// trail that no node checked would read exactly like the ones it did check,
-// and the one an investigation leaned on would be the one a client wrote.
-// What a confirmation was used for is the row that gesture writes, under the
-// same person, after this one.
+// No `surface`, though the identity design names one: a step-up proves the
+// SESSION, not a gesture (every route is fresh until `reauth_at`), and the
+// refused request that prompted it never reaches `POST /auth/step-up`, so a
+// surface could only be the client's word. The gesture writes its own row.
 type IAMStepUpCompleted struct {
 	Person       string       `json:"person"`
 	Login        string       `json:"login"`
@@ -782,28 +733,16 @@ func (e IAMSessionGenerationBumped) Summary() string {
 }
 
 // RecordUnverifiable is a record on a state log signed under a key this node's
-// keyring does not hold. It is RETAINED and reprocessed once the key arrives —
-// expected briefly during a keyring rotation, and an operator error if it
-// persists. (A record that installs an apply gate is the exception: that one
-// stops the domain's applier, because a gate this node cannot authenticate
-// would license every record above it.)
+// keyring does not hold. It is RETAINED and reprocessed once the key arrives
+// (brief during a rotation, an operator error if it persists), except a record
+// installing an apply gate, which stops the domain's applier: an unauthenticated
+// gate would license every record above it.
 //
-// # Named for the framework, not for identity
-//
-// The design called this `iam_record_gated`. The verdict is the state-log
-// framework's and every domain's log is signed and verified by the same code,
-// so a record the tracker's applier cannot authenticate is the same fact as
-// one on the identity log — and a name scoped to one domain would either be
-// published for the other four under a wrong name or leave them unrecorded.
-// "Gated" is also already taken: the framework counts records an APPLY GATE
-// dropped (a removal, an eviction) as `records_gated`, and "unverifiable" is
-// what the same framework calls a record retained for its key. The domain is a
-// field.
-//
-// ONCE PER DOMAIN AND KEY ID PER NODE PROCESS, and at most
-// statelog.MaxWitnessedKeys distinct ids per domain: a key id is whatever the
-// frame says, and whoever can reach a cluster port can write frames. The cap
-// is what keeps this type's rate the engine's rather than that writer's.
+// Named for the framework, not identity: every domain's log is verified by the
+// same code, so the domain is a field. ONCE PER DOMAIN AND KEY ID PER NODE
+// PROCESS, at most statelog.MaxWitnessedKeys ids per domain: a key id is
+// whatever a frame says, and whoever can reach a cluster port can write
+// frames. The cap keeps this type's rate the engine's.
 type RecordUnverifiable struct {
 	Domain string `json:"domain"`
 	KeyID  string `json:"key_id"`

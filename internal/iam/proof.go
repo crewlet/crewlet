@@ -2,23 +2,18 @@ package iam
 
 import "slices"
 
-// WHAT A PRINCIPAL HAS TO PROVE, as VALUES — the two settings a deployment's
-// own configuration states about proof, held here rather than beside the
-// arithmetic that enforces them.
+// WHAT A PRINCIPAL HAS TO PROVE, as VALUES: the settings a deployment states
+// about proof, held here rather than beside the arithmetic that enforces them.
 //
-// internal/iam/credential is where a password is hashed and a TOTP code is
-// checked, and it is the natural home for both of these until you notice who
-// reads them: internal/config, which has to be able to say "this deployment
-// requires a second factor" and "a password here is at least twelve
-// characters" in order to validate `api.auth`. This package's whole
-// premise is that naming an identity concept must not pull in a password
-// hasher — so the two numbers config reads live in the leaf, and credential
-// imports them rather than declaring a second copy nothing compares.
+// internal/config must say "this deployment requires a second factor" and "a
+// password is at least twelve characters" to validate `api.auth`, and naming an
+// identity concept must not pull in a password hasher, so the values live in
+// the leaf and internal/iam/credential imports them rather than declaring a
+// copy nothing compares.
 //
-// [Recency] is here for the same premise one layer over: internal/authz states
-// on every rule how recently a principal must have proved who they are, and a
-// rule table naming a step-up window must not pull in the sessions that
-// measure one.
+// [Recency] is here for the same reason: internal/authz states on every rule
+// how recently a principal must have proved who they are, and a rule table
+// must not pull in the sessions that measure it.
 
 // SecondFactor is whether a company REQUIRES a second factor or merely offers
 // one.
@@ -63,41 +58,27 @@ func (s SecondFactor) Valid() bool { return slices.Contains(SecondFactors, s) }
 // MinPasswordChars is the shortest password this engine accepts, and the floor
 // under the company's `sign_in.min_password_length`.
 //
-// TWELVE, AND NO COMPOSITION RULES — no required digit, no required symbol, no
-// forbidden repeat. That is the current guidance and it is guidance because
-// composition rules are measurably counter-productive: they shrink the space
-// people actually choose from (everybody appends `1!`), they are enumerable by
-// an attacker who knows the rule, and they push people to write the result
-// down. LENGTH is the only property that buys entropy from a human without
-// costing them anything.
+// TWELVE, AND NO COMPOSITION RULES (no required digit, symbol or forbidden
+// repeat): they shrink the space people choose from (everybody appends `1!`),
+// are enumerable by an attacker who knows the rule, and push people to write
+// the password down. LENGTH is the one property that buys human entropy free.
 //
-// Measured in CHARACTERS rather than bytes, for the reason
-// [secrets.MinSharedTokenChars] gives: a byte count quietly passes a 12-byte
-// value that is four characters of UTF-8.
+// Measured in CHARACTERS, for [secrets.MinSharedTokenChars]'s reason: a byte
+// count passes a 12-byte value that is four characters of UTF-8.
 const MinPasswordChars = 12
 
 // Recency is how recently a gesture needs whoever makes it to have PROVED who
-// they are — the step-up requirement, as a value a rule states.
+// they are: the step-up requirement, as a value a rule states.
 //
-// ONE WINDOW, and it is the company's: `step_up` is `sign_in.step_up_seconds`
-// (an hour by default), so the setting an administrator tunes and the word a
-// refusal names are one word.
-// Every gesture that asks for a recent proof asks this one — revealing a
-// secret, changing somebody's authority or how they prove who they are,
-// ending every session in the company, writing the configuration — for the
-// reason internal/config gives at the setting: a second, shorter window beside
-// it sent people to re-prove inside the hour they had already proved in, and
-// what keeps a machine token — fresh by construction — off the gestures that
-// need a person present was never a proof's age: it is internal/authz's
-// `presence` on the row, which refuses any request a token presented there,
-// and internal/iamdomain's refusal of an administrative identity record
-// written through one.
+// ONE WINDOW, the company's: `step_up` is `sign_in.step_up_seconds` (an hour by
+// default), for the reason internal/config gives at the setting. What keeps a
+// machine token, fresh by construction, off gestures needing a person is never
+// a proof's age: it is internal/authz's `presence` on the row and
+// internal/iamdomain's refusal of an administrative record written through one.
 //
-// A NAMED STRING WHOSE ZERO VALUE IS INVALID, and the zero is the one that
-// would be dangerous: read as "no proof needed", a rule somebody wrote without
+// THE ZERO IS INVALID: read as "no proof needed", a rule written without
 // deciding would ship a step-up gesture open to a session proved last week.
-// So every rule in internal/authz states one of the two, and a walk there
-// refuses the zero.
+// Every rule in internal/authz states one of the two; a walk refuses the zero.
 type Recency string
 
 const (

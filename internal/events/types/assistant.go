@@ -7,20 +7,15 @@ import (
 )
 
 // The Dashboard Assistant's runtime audit: what a person's assistant did for
-// them, beside what they did themselves ([OperatorActed]).
-//
-// # Every call, never its content
-//
-// A turn's reads are the person's own requests, each decided by the route it
-// asked exactly as their click would be, so none of them writes a record of
-// its own; what the audit log needs is that the assistant asked them, and in
-// which order. So a turn's record names every step's tool, the route pattern
-// it sent, what became of it and how many bytes came back, and NEVER an
-// argument, a query value, an answer or the person's question: those are the
-// company's content, already behind the routes that serve it, and a person's
-// question is theirs (ADR-0053). A write the assistant proposed is recorded
-// where it executes, by the act route's own [OperatorActed] under the
-// assistant transport, once the person approved it.
+// them, beside what they did themselves ([OperatorActed]). Every call, never
+// its content: a turn's reads are the person's own requests, decided by the route as their
+// click would be, so none writes a record; the audit needs that the assistant
+// asked, in which order. A turn's record names every step's tool,
+// route pattern, outcome and returned bytes, and NEVER an argument, query
+// value, answer or the person's question: those are the company's content
+// behind the routes, and the question is theirs (ADR-0053). A proposed write is
+// recorded where it executes, by the act route's [OperatorActed] under the
+// assistant transport, once approved.
 
 func init() {
 	events.Register[AssistantTurnCompleted]()

@@ -12,72 +12,30 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// THE SCATTER'S WIRE, and why it is its own encoding rather than an event.
-//
-// A history read is not an event: nothing subscribes to it, nothing replays
-// it, no node needs to know it happened, and it must leave no trace — see
-// [queue.EventQueue.Ask]. So it carries its own small JSON document on the
+// THE SCATTER'S WIRE is its own encoding rather than an event: a history read
+// is not replayed, no node needs to know it happened, and it must leave no
+// trace ([queue.EventQueue.Ask]), so it is a small JSON document on the
 // ephemeral verbs.
 //
-// ONE VERSION ON THE WIRE. Every request carries the protocol version its asker
-// speaks ([Protocol]) and a node answers only a request in its own: a peer on
-// any other version refuses by version, in its own words, and the asker names
-// it in the coverage rather than reading an answer it cannot vouch for. A field
-// a peer does not know is never answered around — a FILTER it dropped would
-// answer a wider question than was asked, rows merged in as though they
-// matched, and an ANSWER field a merge sums would read as zero from a peer that
-// never sends it — because no peer that does not know it is ever asked. Adding
-// a question, a filter or a field a merge reads is moving [Protocol].
+// ONE VERSION ON THE WIRE. A node answers only a request in its own protocol
+// version ([Protocol]); a peer on another refuses by version and the asker names
+// it in the coverage. A field a peer does not know is never answered around: a
+// dropped FILTER would answer a wider question than was asked, and an ANSWER
+// field a merge sums would read as zero. Adding a question, a filter or a field
+// a merge reads moves [Protocol].
 
-// Protocol is the scatter version this build speaks, asks in and answers; it moves
-// by the rule above. What the current format carries, and why each piece is so:
+// Protocol is the scatter version this build speaks, asks in and answers; it
+// moves by the rule above. The format's load-bearing parts:
 //
-//   - A listing filters on `channel_id`, `agent_id`, `suspended` and
-//     `failed` — the last the event log's "Failures only", narrowing the rows
-//     a tab is sent rather than the rows it had paged in — and every
-//     histogram bar and total carries the `failed` split.
-//   - A listing and its axis take `feed_only`, the rows the activity feed
-//     carries ([store.ListQuery.FeedOnly]): every node leaves the types the
-//     feed keeps out of its own page and its own bars.
-//   - EVERY SEAT IS NARROWED BY `agent_id` ALONE — the company's phases, one
-//     seat's phases, a page of turns and a spend window alike — the id every
-//     node derives from the seat's immutable handle (ADR-0013), and never by a
-//     role name, which two seats may share: read by name, one seat's history
-//     listed every namesake's. No question carries a `role`.
-//   - A page of turns takes `since` and `until` as the asker's two instants on
-//     the turn's start rather than whole days back from each peer's clock,
-//     and `before_id` as the cursor's second term beside its start
-//     ([store.TurnCursor]); the second scatter of `turns` answers `listed`,
-//     which of the named turns the node's page lists, so the asker pages each
-//     turn where a page lists it ([Fleet.Turns]).
-//   - Every question carries the asker's instant, `at` — the instant every
-//     node floors the history at (see [store.EventLog]), so no node answers
-//     as of its own clock — and a node refuses one that carries none.
-//   - Beside every count are the rows it NAMES rather than counts — a
-//     custody batch the node has written and not settled (see the package
-//     doc) — and `kept` is the second question that resolves them: which of
-//     the named rows each node keeps, so a row two data nodes hold is counted
-//     once.
-//   - A phase-token read takes `before`, the record a page resumes below, so
-//     the live spend window's seed is read in pages no one node's reply has
-//     to carry whole ([Fleet.PhaseTokens]).
-//   - `notification_outcomes` asks what became of the notifications each
-//     third-party app delivered over a window the asker names, rather than
-//     over the span of the newest page of notification events.
-//   - A turn's part answers `nodes`, the nodes that PUBLISHED the rows it
-//     holds ([store.EventLog.TurnNodes]), which the asker unions into where
-//     the turn ran: the node holding a turn's rows is a custody keeper for a
-//     turn that ran on a node without `data`, so which nodes answered no
-//     longer says it.
-//   - A page of turns filters on `server` and `tool`, the MCP server and the
-//     tool whose calls the turn's ending tally names
-//     ([store.TurnQuery.Server]).
-//   - `tool_calls` asks for one MCP server's newest calls, out of the phase
-//     records that made them ([store.EventLog.ToolCalls]), each node's
-//     newest `limit` in the listing's one order, which the asker merges and
-//     cuts again.
-//   - A turn's part ranks its summary and work item by instant ([store.TurnPartial]),
-//     so the merge's maximum is the turn's newest completion, not its greatest text.
+//   - EVERY SEAT IS NARROWED BY `agent_id` ALONE, the id derived from the
+//     seat's immutable handle (ADR-0013), never by a role name two seats may
+//     share. No question carries a `role`.
+//   - Every question carries the asker's instant `at`, the floor of every
+//     node's history ([store.EventLog]); a node refuses one without it.
+//   - Each count names its unsettled rows; `kept` resolves them so a row two
+//     data nodes hold counts once.
+//   - A turn's part answers `nodes`, those that PUBLISHED its rows
+//     ([store.EventLog.TurnNodes]); a custody keeper holds rows of a turn run elsewhere.
 const Protocol = 9
 
 // Subject is where a history question is scattered: ONE subject for the whole

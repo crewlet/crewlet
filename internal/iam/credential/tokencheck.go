@@ -12,17 +12,14 @@ import (
 //
 // The guard's third credential arm reads ONE snapshot of this node's own rows
 // and hands them here; nothing below reads anything, so every cell is a case a
-// suite can state without a database — the same division internal/iam/session
-// draws for a cookie, for its reason: a rule exercised only through a store is
-// a rule nobody re-reads.
+// suite can state without a database (as internal/iam/session does).
 //
 // # Three answers, and the third is the point
 //
-// A token is VALID, REFUSED (401 — this node knows it is no good) or UNKNOWN
-// (503 — this node cannot tell). The third is never folded into the second: a
-// node behind the identity log that answered 401 to a token it had not yet
-// seen minted would teach every pipeline in the company that its credential
-// is broken, and one past the stall grace would do it for every token at once.
+// VALID, REFUSED (401: known no good) or UNKNOWN (503: this node cannot tell).
+// UNKNOWN is never folded into REFUSED: a node behind the identity log
+// answering 401 to a token it had not yet seen minted would teach every
+// pipeline its credential is broken.
 
 // TokenAnswer is one of the three.
 type TokenAnswer string
@@ -242,22 +239,16 @@ func ending(row TokenRow, now time.Time) TokenCheck {
 
 // EffectiveGrants is what a valid token carries on this request: in
 // [iam.AllGrants] order, every permission the mint named that its owner STILL
-// holds, both sides read through [iam.Expand].
+// holds, both sides read through [iam.Expand] (a token minted [admin] keeps
+// every app its owner keeps once admin is taken away).
 //
 // RE-EVALUATED PER REQUEST, never frozen at the mint, so taking a permission
-// away from a person takes it away from every token they made. Through
-// [iam.Expand] on both sides, because a token minted [admin] carries every app
-// its owner keeps when admin is taken away from them, and a token minted
-// [worklet] by an administrator who never ticked the app separately still
-// carries it. A name this build does not know grants nothing, here as
-// everywhere. The node's admin posture is the caller's to apply on top, as it
-// is for every credential.
+// from a person takes it from every token they made. An unknown name grants
+// nothing; the node's admin posture is the caller's to apply on top.
 //
-// ADMIN IS CARRIED LIKE ANY OTHER PERMISSION. What keeps a token off the
-// gestures that need a person present is not a permission it cannot hold: it
-// is internal/authz's `presence` on the row, which refuses any request a token
-// presented there, and internal/iamdomain's refusal of an administrative
-// identity record written through one.
+// ADMIN IS CARRIED LIKE ANY OTHER PERMISSION. What keeps a token off gestures
+// needing a person present is internal/authz's `presence` on the row and
+// internal/iamdomain's refusal of an administrative record written through one.
 func (row TokenRow) EffectiveGrants() []iam.Grant {
 	minted, owner := iam.Expand(row.Grants), iam.Expand(row.Owner.Grants)
 	out := make([]iam.Grant, 0, len(iam.AllGrants))

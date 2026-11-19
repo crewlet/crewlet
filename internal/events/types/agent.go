@@ -71,33 +71,18 @@ type PromptMessage struct {
 	Sections []PromptSection `json:"sections,omitempty"`
 }
 
-// PromptSection is one part of a prompt, as the frame that assembled the
-// prompt recorded it: a stable snake_case `key`, the `title` a reader shows it
-// under (its heading text without the #'s, or a name the builder chose for a
-// part with no heading), its length in `bytes` of UTF-8, and `headed: true`
-// when the part begins with its own heading line, whose text is `title`.
+// PromptSection is one part of a prompt, as the frame that assembled it
+// recorded it: a stable snake_case `key`, the `title` a reader shows, its
+// length in UTF-8 `bytes`, and `headed: true` (absent, never `false`) when the
+// part begins with its own heading line, whose text is `title`. An unheaded
+// part may still BEGIN with a heading (a persona, task prompt or trigger body
+// is somebody else's markdown): that heading is the content's, not the part's.
 //
-// `headed` is absent, never `false`, on a part with no heading of its own,
-// and absent means exactly that. A part that is not headed may still BEGIN
-// with a heading: a worker's persona, a task prompt the executor wrote and a
-// trigger's body are somebody else's markdown, and often open with one ("##
-// Goal"). That heading is the content's, nested under the part's title, not
-// the part's own — a reader that took it for the part's own drew the
-// builder's title in its place and lost the heading's words.
-//
-// It exists because the only outline a reader can otherwise derive is the
-// prompt's own `##` lines, and a heading INSIDE embedded content — a chat
-// trigger's "## Triage", a pull request's "# Title", a model's "## Summary"
-// quoted back as evidence — escapes its section or swallows the rest of the
-// prompt. Only the builder knows where its parts begin and end.
-//
-// A prompt's sections TILE it exactly and in order: their bytes sum to the
-// prompt's length, every boundary falls on a rune boundary, every section is
-// at least one byte, and no key repeats. A prompt whose text is not valid
-// UTF-8 carries no map at all, since JSON delivers such text with each bad
-// byte rewritten to three. A reader that finds a map breaking
-// any of that must fall back to the prompt's own headings rather than slice by
-// it — the map is a broken producer's, and the text is still the text.
+// Only the builder knows where parts begin and end; a `##` line INSIDE embedded
+// content escapes its section or swallows the rest of the prompt. Sections TILE
+// the prompt exactly: bytes sum to its length, boundaries fall on runes, each
+// is at least one byte, no key repeats; non-UTF-8 text carries no map. A reader
+// that finds a map breaking this falls back to the prompt's own headings.
 type PromptSection struct {
 	Key    string `json:"key"`
 	Title  string `json:"title"`
@@ -106,83 +91,31 @@ type PromptSection struct {
 }
 
 // ToolExecution records one tool call a phase made: name, arguments (a JSON
-// string), result and success, the round that asked for it, `call_id` — the
-// call's own id, which tells two calls of one response apart and is what a
-// [RunningCall] is matched to once the call has answered, absent where nothing
-// named the call — and, where the call was timed, `started_at` (RFC 3339,
-// UTC), `duration_ms`, and `origin` (`builtin` or `mcp:<server>`) with
-// `server` (the bare MCP server name) for the tool that answered — measured by
-// the engine's tool loop, or for an executor run's call by the bridge it was
-// made over. The last four are ABSENT on a row nothing timed — a call whose
-// arguments did not parse — and `origin`/`server` are absent on a call no tool
-// answered (an unknown name, one not offered, one a guard refused): absent
-// means "not recorded", never "instant" or "the engine's own".
-//
-// `source` is whose tool the call NAMED, in the origin grammar, on every call
-// whose name resolved to a registered tool, the ones refused before any tool
-// ran included (which `origin` leaves out), so a refused call is still filed
-// under the server it was for; absent on a name nothing registered. And
-// `refusal` is the class of a failed call the engine classified (mcp.Refusal:
-// `forbidden` for a call refused where it was made, `unavailable` for an MCP
-// server that was not running), absent on a success and on a third-party
-// server's own failure.
-//
-// `held` marks an executor run's call held for a person's approval — recorded
-// failed, `success: false`, since nothing it asked for happened, and no
-// failure: the run's question for a person — and `approved` the call they let
-// be made. Both WITHHOLD their arguments, which ride the run's record sealed
-// and are never on a record in the clear: `arguments` on either is `{}`, and a
-// reader says they are sealed rather than that the call sent none. Absent on
-// every other call.
-//
-// `arguments_unknown` says why no record holds what a call was made with
-// (toolloop.ArgsUnknown): `unread`, a call made with arguments in text that
-// could not be read (what the model wrote did not parse, and the call was
-// answered unrun, or an executor run's record of it does not read back), or
-// `unkept`, an executor run's call still in flight as its round was read,
-// whose entry kept its identity alone. `arguments` on such a row is not what
-// the call sent (`{}`, or an object a harness made of text that was not one),
-// and a reader says the arguments are not known rather than drawing it, since
-// `{}` reads as the tool called with none, a different call. A value a reader
-// does not know is still arguments not known. Absent on every other call, and
-// on a row a build before it wrote.
-//
-// `images` lists each image a call's answer handed its model as
-// `{"mime_type", "bytes"}`, never the picture; absent when it carried none.
-//
-// Deliberately an open map rather than a struct, and the one place in this
-// catalogue that stays loose. Its consumers pass it through verbatim, precisely
-// because a hand-maintained field list is how a failed tool call got deleted on
-// its way to a screen: a producer that starts recording one more thing must not
-// need every reader recompiled before that thing can be seen.
+// string), result, success, `round`, and `call_id` (matches a [RunningCall]).
+// `started_at`, `duration_ms`, `origin` (`builtin` or `mcp:<server>`) and
+// `server` are absent where nothing timed or answered the call: absent means
+// "not recorded", never "instant". `source` is whose tool the name resolved to,
+// refused calls included; `refusal` is mcp.Refusal's class (`forbidden`,
+// `unavailable`). `held` and `approved` mark an executor call held for a
+// person; both WITHHOLD arguments (sealed in the run's record, `{}` here).
+// `arguments_unknown` (toolloop.ArgsUnknown: `unread`, `unkept`) says they are
+// not what the call sent. `images` lists `{"mime_type","bytes"}`. Deliberately
+// an open map: consumers pass it through verbatim, since a hand-kept field list
+// once dropped a failed call on its way to a screen.
 type ToolExecution = map[string]any
 
-// RoundNarration records one round's model turn: `round` and `content` —
-// and `declined: true` on a round that answered with prose and NO
-// tool call in a phase that had to end in one (its loop declares a submission
-// tool that finishes it — `submit_work`, `submit_review`, `mark_onboarded`, a
-// worker's `submit_result`). Absent otherwise, never `false`. Whether the
-// engine asked again needs no second key: a later round exists exactly when it
-// did, and a declined round that is the phase's last is one the corrective's
-// bound or the round budget left unanswered — the phase ended without its
-// submission, which the executor's and the reviewer's `rescue_fired` then says
-// (a worker has no such flag: its status is `no_result`, and onboarding simply
-// ends unmarked).
+// RoundNarration records one round's model turn: `round` and `content`, and
+// `declined: true` (absent otherwise, never `false`) on a round that answered
+// with prose and NO tool call in a phase that had to end in one (its loop
+// declares a finishing submission tool: `submit_work`, `submit_review`,
+// `mark_onboarded`, a worker's `submit_result`). Whether the engine asked again
+// needs no key: a later round exists exactly when it did.
 //
-// It exists because `response` is the JOIN of the rounds' turns — every round
-// but a corrective's repeats, which this list keeps and `response` leaves out
-// (see toolloop's assistantText) — and a join cannot be undone: the parts are
-// separated by a blank line and prose contains blank lines, so a consumer
-// handed only the blob cannot say which round said what.
-//
-// Both are published rather than one replacing the other: `response` is what
-// every existing consumer and every already-stored event reads, and this
-// envelope evolves ADDITIVE-ONLY because a rolling upgrade puts two builds on
-// one stream. The duplicated text is small beside the prompts these same
-// events already carry.
-//
-// An open map for the same reason [ToolExecution] is one — a producer that
-// starts recording one more thing must not need every reader recompiled.
+// It exists because `response` is the JOIN of the rounds' turns (a corrective's
+// repeats left out, see toolloop's assistantText) and a join cannot be undone:
+// prose contains blank lines too. Both are published because `response` is what
+// stored events and consumers read and the envelope evolves ADDITIVE-ONLY.
+// An open map for the reason [ToolExecution] is one.
 type RoundNarration = map[string]any
 
 // PhaseRound is one provider call of a phase's tool loop — the MODEL's half of
@@ -253,17 +186,15 @@ type RunningCall struct {
 // PhaseInvocation is one harness run of a phase: one process driving its own loop
 // over the phase's tools, from launch to exit.
 //
-// The unit the engine observes for EVERY HARNESS. A [PhaseRound] is one model
-// request, which a harness's own record shows for most harnesses and not for all; a run
-// is what the engine starts and ends itself.
+// The unit the engine observes for EVERY HARNESS: a [PhaseRound] is one model
+// request, which not every harness's record shows.
 //
 // A RUN NAMES ITS ROUNDS (FirstRound, LastRound) rather than leaving a reader
-// to place them by time. A round no record showed — an unobserved run's one
-// round — has no instant at all, and an observed round's instant is when the
-// engine saw its model begin, which is not a statement about which process
-// was running. The round number is the key `rounds[]`, `tool_executions[]`
-// and `round_narration[]` already join on, and a phase's runs are
-// sequential, so a run's rounds are one contiguous stretch of that scale.
+// to place them by time: an unobserved round has no instant, and an observed
+// one's is when the engine saw its model begin, not which process was running.
+// The round number is the key `rounds[]`, `tool_executions[]` and
+// `round_narration[]` join on, and a phase's runs are sequential, so a run's
+// rounds are one contiguous stretch of it.
 type PhaseInvocation struct {
 	StartedAt  time.Time `json:"started_at"`
 	DurationMS int       `json:"duration_ms"`
@@ -313,17 +244,13 @@ type PhaseSteer struct {
 // is resumed — before its context is assembled and before its first phase.
 //
 // THE ONE EVENT THAT SAYS A TURN EXISTS WHILE IT IS STILL GATHERING CONTEXT.
-// Every other turn event is published from inside a phase or after the last
-// one, so until a phase opened nothing said a turn was running — a seat whose
-// prefetch was reading a long thread showed as idle for as long as that took —
-// and a turn's start was only ever inferred from the first event it happened
-// to publish. It carries the work item the turn is charged to, resolved at
-// dispatch, so a live screen can say "working on ENG-412" from the first
-// instant rather than from the first completed phase.
+// Every other turn event comes from inside a phase or after the last, so a
+// seat prefetching a long thread would show idle. It carries the work item the
+// turn is charged to, resolved at dispatch, so a live screen can say "working
+// on ENG-412" from the first instant.
 //
 // Its delegation depth is the ENVELOPE's `delegation_depth`, not a field here:
-// the envelope owns that key, and a payload field under it would be dropped
-// on the way out.
+// the envelope owns that key, and a payload field under it would be dropped.
 type AgentTurnStarted struct {
 	Agent       string `json:"agent_id"`
 	AgentHandle string `json:"agent_handle"`
@@ -639,17 +566,14 @@ type TurnCompleted struct {
 // record that ENDS it states it — the figures the usage domain's turn
 // statistics are read off (internal/store's usage day).
 //
-// ON THE ENDING RECORD rather than summed from the turn's records, because a
-// turn's records are not all on one node: a node without `data` hands its
-// events to the data nodes in custody batches a second apart, each kept by
-// whichever node won its claim, and a turn resumed on another node leaves the
-// segment before the park in the first node's log. Summed per node from what
-// each node held, the node holding the end counted the turn's reviews, its
-// send-backs and its duration short, and the node holding the rest counted
-// them nowhere. The turn itself knows them: each segment counts what it ran,
-// and a segment that parks hands its count on with the parked turn's state
-// (internal/agent/execstate), so the segment that ends the turn states it
-// whole.
+// ON THE ENDING RECORD rather than summed from the turn's records, which are
+// not all on one node: a node without `data` hands events to data nodes in
+// custody batches, each kept by whichever node won its claim, and a turn
+// resumed elsewhere leaves its earlier segment in the first node's log. Summed
+// per node, the node holding the end would count reviews, send-backs and
+// duration short and the rest nowhere. Each segment counts what it ran and a
+// parking segment hands its count on in the parked state (internal/agent/execstate),
+// so the ending segment states the turn whole.
 type TurnTally struct {
 	// DurationMS is every segment's own span summed — each from its start
 	// to its end, the time it held a seat — and so not the wall clock from
@@ -691,17 +615,15 @@ type TurnTally struct {
 // ToolTally is one MCP tool's calls in one turn: how many the turn made and
 // what became of them.
 //
-// FOUR OUTCOMES, EACH CALL IN EXACTLY ONE, so Calls is their sum and nothing
-// is counted twice: a call the server answered well; one it answered with a
-// failure (Failed); one it never saw because the server was not running, or
-// its session ended under the call (Unavailable, the engine's `unavailable`
-// refusal); and one the engine REFUSED before any tool ran (Refused), because
-// the tool was not offered where it was called or a guard held it. An unknown
-// name is none of them: nothing registered it, so it was no server's tool.
+// FOUR OUTCOMES, EACH CALL IN EXACTLY ONE, so Calls is their sum: answered
+// well; answered with a failure (Failed); never seen because the server was not
+// running or its session ended (Unavailable, the `unavailable` refusal); and
+// REFUSED by the engine before any tool ran (Refused), the tool not offered
+// there or a guard holding it. An unknown name is none: it was no server's tool.
 //
 // NO ARGUMENT AND NO RESULT, ever: a call's words can hold a credential or a
-// customer's data, and a count needs neither. The calls themselves are the
-// phase records' (`tool_executions`), read where they were written.
+// customer's data, and a count needs neither. The calls are the phase records'
+// (`tool_executions`).
 type ToolTally struct {
 	// Server is the bare MCP server name, and Tool the name the call
 	// used: the tool as its seat was offered it, prefix included.
@@ -969,24 +891,14 @@ type AgentPhaseCompleted struct {
 	// measured by the process that published it.
 	//
 	// ON THE RECORD rather than reconstructed from the matching
-	// AgentPhaseStarted, which is what every consumer used to do. That
-	// reconstruction needs BOTH events in one reader's hands, and three
-	// readers never have both: a dashboard deep-linked into a turn while it
-	// runs asked its query before the phase started and only buffers
-	// completed envelopes afterwards; a nested phase — a worker, a judge —
-	// publishes no start at all, so no worker of a delegate fan-out had a
-	// duration anywhere; and a phase started on one node and completed on
-	// another subtracts two clocks nothing reconciles. One record that
-	// carries its own measurement answers all three, and the arithmetic is
-	// done where the clock is.
+	// AgentPhaseStarted, which needs BOTH events in one reader's hands: a
+	// dashboard deep-linked into a running turn missed the start; a nested
+	// phase (a worker, a judge) publishes no start; and a phase started on one
+	// node and completed on another subtracts two unreconciled clocks.
 	//
-	// On a collected execute phase it is the phase's two SEGMENTS — the
-	// launch and the collection — and not the run between them: the
-	// executor's turns happen inside its harness's own loop, in its box, and
-	// the segment that collects the run replays what that run already did.
-	// Each launch's own wall clock is on its [ExecutorCollected] record and
-	// on executor_launched / executor_finished, which is where a reader
-	// asking how long the CODING took should look.
+	// On a collected execute phase it is the phase's two SEGMENTS (launch and
+	// collection), not the run between them: that is on each launch's
+	// [ExecutorCollected] record and on executor_launched / executor_finished.
 	DurationMS int `json:"duration_ms"`
 	// EmptyAnswerRounds counts the rounds in which the model produced
 	// neither prose nor a tool call — it spent its output budget on hidden
@@ -1041,14 +953,13 @@ type AgentPhaseCompleted struct {
 	// other — a phase that ran on this host, and an executor whose launch
 	// never opened a box.
 	//
-	// NO FIELD SAYS WHERE A PHASE RAN, because the phase already does: every
-	// executor runs in a box and no other phase ever does. A `backend` field
-	// once restated it, and was one more value for a publisher to get wrong.
+	// NO FIELD SAYS WHERE A PHASE RAN: every executor runs in a box and no
+	// other phase does, so a `backend` field would only be one more value to
+	// get wrong.
 	//
-	// NOR WHAT THE RUN COST, OR WHAT IT DID IN ITS BOX: each launch's tokens,
-	// its harness's price, its turns and its activity transcript are on that
-	// launch's own [ExecutorCollected] record, which a launch that parked on
-	// a question also gets — the resumed executor's record never had one.
+	// NOR WHAT THE RUN COST, OR DID IN ITS BOX: each launch's tokens, price,
+	// turns and activity transcript are on its own [ExecutorCollected] record,
+	// which a launch that parked on a question also gets.
 	Harness   string `json:"harness"`
 	SandboxID string `json:"sandbox_id"`
 	// DeliveredRefs are the branches and pull requests the collected run
@@ -1073,19 +984,15 @@ type AgentPhaseCompleted struct {
 	// in its round's tool_calls. Absent on a record that lists every call.
 	CallsElided int           `json:"calls_elided,omitempty"`
 	ElidedCalls []ElidedCalls `json:"elided_calls,omitempty"`
-	// PushedRefs are the refs the collected run moved on Gitlet, as its
-	// push record says — Gitlet's rows written
-	// under the run's launch, read when the launch was collected, one entry
-	// per ref with the old value of its first push and the new value of its
-	// last — on the execute record that collected the run, as DeliveredRefs
-	// are, and on the launch's own [ExecutorCollected] record. The engine's
-	// account where DeliveredRefs are the run's own: a box writes its report
-	// as it likes, and nothing in the box writes these. PushedRefsElided is
-	// how many more the record names than are listed, held with the run's
-	// own refs to one bound; PushedRefsUnread is why the record could not be
-	// read, which makes an empty PushedRefs unknown rather than "nothing
-	// pushed". All three absent on a run given no repository it could push
-	// to.
+	// PushedRefs are the refs the collected run moved on Gitlet: Gitlet's rows
+	// under the run's launch, one entry per ref with the old value of its first
+	// push and the new value of its last. They are on the execute record that
+	// collected the run, as DeliveredRefs are, and on the launch's
+	// [ExecutorCollected] record. The engine's account, where DeliveredRefs are
+	// the box's own report. PushedRefsElided is how many more are named than
+	// listed (one bound with the run's own refs); PushedRefsUnread is why the
+	// record could not be read, making an empty list unknown, not "nothing
+	// pushed". All absent on a run given no repository to push to.
 	PushedRefs       []PushedRefRecord `json:"pushed_refs,omitempty"`
 	PushedRefsElided int               `json:"pushed_refs_elided,omitempty"`
 	PushedRefsUnread string            `json:"pushed_refs_unread,omitempty"`

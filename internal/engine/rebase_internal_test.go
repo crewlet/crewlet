@@ -125,17 +125,14 @@ func keyed(began time.Time) builtin.Actor {
 // ATTEMPT'S END, AND ASKS NOBODY; PAST THAT IT REBASES ONTO ITSELF AND RECORDS
 // IT.
 //
-// Every data node's operation ledger deletes the rows it applied thirty days
-// ago and records how far back it deleted, and an operation minted before that
-// point whose row is gone is answered `unknown` and never published, on every
-// data node.
-// Short of the horizon the start is kept, because a write an earlier attempt
-// made and this one repeats — the retry an `unknown` asks for — collapses onto
-// the first copy only under the same id: a rule that always rebased is red
-// there. Past it every write would be lost: a rule that never rebased is red
-// there. Inside the retention's last day it rebases too, since the attempt goes
-// on deciding writes while a sweep moves past its start: a horizon at the bare
-// retention is red on that row.
+// The operation ledger deletes rows it applied thirty days ago and records how
+// far back; an operation minted before that whose row is gone is answered
+// `unknown` and never published. Short of the horizon the start is kept: a
+// repeated write (the retry an `unknown` asks for) collapses onto the first copy
+// only under the same id, so an always-rebasing rule is red there. Past it every
+// write would be lost, so a never-rebasing rule is red there. Inside the
+// retention's last day it rebases too, since a sweep moves past the start while
+// the attempt still decides writes: a horizon at the bare retention is red.
 func TestAnAttemptRebasesOntoItselfOnlyPastTheHorizon(t *testing.T) {
 	t.Parallel()
 	began := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)

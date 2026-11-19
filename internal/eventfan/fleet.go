@@ -18,17 +18,14 @@ import (
 
 // FleetReadBudget is how long a history read waits for the other nodes.
 //
-// TWO SECONDS, and it is a judgement rather than a measurement: no fleet with
-// thirty days of history has been measured answering these. What bounds it
-// from above is the reader — a dashboard read that takes longer than this is
-// one a person has already given up on, and the API's own unavailable-retry is
-// five seconds, which a read has to finish well inside or the retry and the
-// read overlap. What bounds it from below is the work: each node's part is one
-// indexed read of its own store, milliseconds on an idle node, so a node that
-// has not answered in two seconds is one worth naming rather than waiting for.
-// It is what a caller was promised, so the `history_partial` alarm borrows it
-// rather than holding a second opinion (ADR-0015): a node that did not answer
-// inside it is what makes an answer partial.
+// TWO SECONDS, a judgement, not a measurement: no fleet with thirty days of
+// history has been measured. Above, the reader bounds it: a longer dashboard
+// read is one a person gave up on, and the API's unavailable-retry is five
+// seconds, which a read must finish well inside or the two overlap. Below, the
+// work: each node's part is one indexed read of its own store, milliseconds
+// idle, so a node silent for two seconds is worth naming rather than waiting
+// for. The `history_partial` alarm borrows it rather than holding a second
+// opinion (ADR-0015).
 const FleetReadBudget = 2 * time.Second
 
 // Fleet answers history questions for the whole fleet.
@@ -388,23 +385,17 @@ func (g gathered[T]) parts() []T {
 }
 
 // settle is the second question an answer that COUNTS needs when some node
-// named a row rather than counting it: every node's part, from the first
-// scatter, beside which of the named rows each node keeps, and the coverage of
-// both scatters. `named` reads a part's named rows.
+// named a row rather than counting it: every node's part beside which named
+// rows each keeps, and both scatters' coverage. `named` reads a part's rows.
 //
-// TWO SCATTERS WHEN A ROW IS IN FLIGHT, and one otherwise. Each node counts the
-// rows it KEEPS and names the ones it holds of a custody batch it has not
-// settled — a row a second data node may hold too, kept or not. When any node
-// named one, every node is asked which of them it keeps ([QuestionKept]), and
-// the merge counts each once ([once]). Nothing is named on a fleet with no
-// stateless node, nor between batches on one that has them, which is nearly
-// always, so the second question is the exception; and a node alone needs
-// none, since a row only it holds is counted once by naming it.
+// TWO SCATTERS WHEN A ROW IS IN FLIGHT, one otherwise. Each node counts the
+// rows it KEEPS and names those it holds of an unsettled custody batch, which a
+// second data node may hold too. When any node named one, every node is asked
+// which it keeps ([QuestionKept]) and the merge counts each once ([once]); a
+// node alone needs none.
 //
-// A NODE THAT ANSWERED ONLY THE SECOND counted nothing the merge holds — the
-// coverage names it for the first — so what it keeps is not read: taken as
-// evidence that a row was counted, a row it keeps and nobody counted would be
-// in no count at all.
+// A NODE THAT ANSWERED ONLY THE SECOND counted nothing the merge holds, so what
+// it keeps is not read: a row it keeps and nobody counted would be in no count.
 func settle[T any](ctx context.Context, f *Fleet, first gathered[T],
 	named func(T) []store.UnsettledRow,
 ) ([]Counted[T], Coverage, error) {
@@ -659,46 +650,18 @@ func (f *Fleet) SeatPhases(ctx context.Context, agentID string, before *store.Cu
 	return Listing{Rows: rows, More: more, At: at}, g.coverage, nil
 }
 
-// Turns answers a page of turns, one row per turn however many nodes it ran
-// on.
+// Turns answers a page of turns, one row per turn however many nodes it ran on.
 //
-// TWO SCATTERS, because the node a turn is SELECTED on is not always the only
-// node that holds it. The first asks every data node for its page — each
-// node's share of the turns it would list — and the second asks every data
-// node for its share of exactly the turns any of them listed, so a turn
-// resumed on another node after a restart is folded from both halves rather
-// than listed as two half-turns or as whichever half was nearer.
+// TWO SCATTERS: the node a turn is SELECTED on is not the only one holding it.
+// The first asks every data node for its page, the second for its share of
+// exactly the turns any listed, so a resumed turn folds from both halves.
 //
-// A page by START is exact down to the newest point any full page stopped at,
-// for [MergeListing]'s reason, and the cursor resumes from there. A point is a
-// start AND a turn id ([store.TurnCursor]), the order every node's page and
-// this merge share, because two turns can start at one microsecond: a point
-// that was a start alone put the second of two such turns, past a page's cut,
-// behind the cursor and on no page. A page by
-// TOKENS ranks each node's top candidates by their MERGED totals — which is
-// exact for every turn one data node holds whole, and can miss a turn split
-// across data nodes — resumed on another node, or run on one node without
-// `data` whose custody batches two keepers took — when every half fell below
-// every node's cut. That is stated rather
-// than hidden: the coverage is honest about nodes, and a ranking has no cursor
-// to be honest about.
-//
-// A TURN IS PAGED BY WHERE IT IS LISTED, which is not always where it began.
-// The cursor is a position on each node's own page, so a turn can be resumed
-// from only at a start some node's page reaches — the earliest start among the
-// nodes that LIST it, which every node says of its own share on the second
-// scatter ([store.EventLog.ListedTurns]). The fold of every share says where
-// the turn began, and that is the start shown; the two differ for a turn whose
-// earliest half its own node does not list — the clean half of a turn that
-// failed later, under a page of failures. Paged by the start shown, such a turn
-// sat below a position no page reached: a full node's page or the page's size
-// cut it, and the cursor moved on past the half that did list it, so no page
-// of the walk held it.
-//
-// `q.At` IS THE CALLER'S INSTANT, the one its answer is labelled with, read
-// here once only when it pinned none: the window is cut from it and every node
-// — this one included — floors that window against it, so the page and its
-// label are one evaluation of the clock.
+// A page by START is exact down to the newest point any full page stopped at
+// ([MergeListing]'s reason); a point is a start AND a turn id
+// ([store.TurnCursor]), as two turns can start at one microsecond. A page by
+// TOKENS ranks each node's top candidates by MERGED totals: it can miss a turn
+// split across nodes when every half fell below every cut, which is stated, not
+// hidden, as a ranking has no cursor to be honest about.
 func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverage, error) {
 	started := time.Now()
 	if !q.Sort.Valid() {
@@ -711,13 +674,12 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 	}
 	q.Limit = turnPage(q.Limit)
 	q.IDs = nil
-	// THE WINDOW IS PINNED to the caller's instant before anybody is asked,
-	// for [Fleet.PhaseTokens]' reason — and because the whole turn has to be
-	// held against it: a node's half of a resumed turn can start inside the
-	// window while the turn began outside it on another node. The INSTANT
-	// travels with it, so every node floors the window and its shares at the
-	// asker's history horizon rather than at its own — see
-	// [store.TurnQuery.At].
+	// THE WINDOW IS PINNED to the caller's instant (`q.At`, read here once
+	// only when it pinned none) before anybody is asked, for
+	// [Fleet.PhaseTokens]' reason and because a node's half of a resumed turn
+	// can start inside the window while the turn began outside it elsewhere.
+	// The instant travels with it, so every node floors the window and its
+	// shares at the asker's horizon, not its own ([store.TurnQuery.At]).
 	q.At = f.askedAt(q.At)
 	q.Since, q.Until = q.Window(q.At)
 	q.SinceDays = 0
@@ -752,6 +714,14 @@ func (f *Fleet) Turns(ctx context.Context, q store.TurnQuery) (TurnPage, Coverag
 			turns = append(turns, pagedTurn{TurnPartial: p, listedAt: p.StartedAt})
 		}
 	} else {
+		// A TURN IS PAGED BY WHERE IT IS LISTED, not where it began. The
+		// cursor is a position on each node's own page, so a turn resumes
+		// only at the earliest start among the nodes that LIST it (each says
+		// so on the second scatter, [store.EventLog.ListedTurns]); the fold
+		// says where it began and that start is shown. They differ for a
+		// turn whose earliest half its node does not list, like the clean
+		// half of a turn that failed later, under a page of failures: paged
+		// by the shown start, it sat below a position no page reached.
 		lists := make([][]store.TurnPartial, 0, 1+len(first.peers))
 		listed := listings{}
 		for _, part := range first.parts() {
@@ -879,45 +849,26 @@ func (l listings) at(id string, start time.Time) {
 // PhaseTokenPage is how many spend records one node sends in one reply of a
 // paged phase-token read ([Fleet.PhaseTokens]).
 //
-// SIZED FROM THE TRANSPORT. A reply is at most [queue.MaxPayloadBytes] (8 MiB),
-// and a spend record encodes to about 590 bytes of JSON with realistic values
-// — an agent id, a role name, a model id, a turn id and a work key — so 4 096
-// records are about 2.4 MiB: under a third of the ceiling, which leaves room
-// for role names and model ids three times the measured ones before a reply
-// has to be cut. A cut is not a loss here, since the next page resumes from
-// where the cut one stopped, but it is fifteen encodes of a reply past the
-// ceiling inside the fleet read budget, which a page sized under it never
-// pays. A larger page buys fewer round trips only for a fleet holding more
-// than this in its window; a smaller one pages a quiet company.
+// SIZED FROM THE TRANSPORT. A reply is at most [queue.MaxPayloadBytes] (8 MiB)
+// and a spend record encodes to about 590 bytes of JSON, so 4 096 records are
+// about 2.4 MiB, under a third of the ceiling: room for names three times the
+// measured ones. A cut reply loses nothing (the next page resumes) but costs
+// fifteen encodes past the ceiling inside the read budget. A larger page saves
+// round trips only for a fleet holding more than this in its window.
 const PhaseTokenPage = 4096
 
 // PhaseTokens answers the per-phase spend records of a window from every data
-// node, newest first, cut to the query's limit — what the live projection's
-// spend rollup is seeded from.
+// node, newest first, cut to the query's limit: the live spend rollup's seed.
 //
-// THE WINDOW IS PINNED to the caller's instant ([store.PhaseTokenQuery.At],
-// read here once only when it pinned none) before anybody is asked, for
-// [Fleet.Histogram]'s reason — a peer counting "a day back" from its own clock
-// would answer a window its neighbours did not — and for the store's: it is the
-// instant the caller labels its answer with and every node floors the window
-// at, so a second reading of the clock would make the rows and the label two
-// windows.
+// THE WINDOW IS PINNED to the caller's instant ([store.PhaseTokenQuery.At], read
+// once only when unpinned) before anybody is asked, for [Fleet.Histogram]'s
+// reason: a second clock reading makes the rows and the label two windows.
 //
-// # In pages
-//
-// READ IN PAGES OF [PhaseTokenPage], each resuming below the last record the
-// one before kept, until the limit or the window runs out — never in one
-// reply per node. The seed asks for a whole company-day, which on a busy
-// node is more than one reply carries: asked whole, that node's reply was cut
-// to fit the transport, and the merge — which cannot place a record older
-// than the last one a cut node sent — cut EVERY node's records at that
-// node's horizon, so the restarted node's live window started hours short of
-// its day. Each page is exact for [MergeSpend]'s reason, and the pages are
-// disjoint because each resumes strictly below the last.
-//
-// A page this node could not finish — its own read failing, or the read's
-// context ending — stops the walk with the records read so far, which are the
-// window's newest, and the coverage says the answer is short.
+// READ IN PAGES OF [PhaseTokenPage], each resuming strictly below the last
+// record kept, never one reply per node: a busy node's company-day exceeds one
+// reply, and the merge, which cannot place a record older than a cut node's
+// last, cut EVERY node at that horizon. A page this node could not finish stops
+// the walk with the newest records, and the coverage says it is short.
 func (f *Fleet) PhaseTokens(ctx context.Context, q store.PhaseTokenQuery) ([]tokens.Record, Coverage, error) {
 	return f.phaseTokens(ctx, q, PhaseTokenPage)
 }
@@ -981,18 +932,15 @@ func (f *Fleet) phaseTokens(ctx context.Context, q store.PhaseTokenQuery, size i
 // NotificationOutcomes answers how many notifications each third-party app had
 // dropped and merged over `[q.Since, q.At)`, summed across every node.
 //
-// A COUNT OVER A NAMED WINDOW, never a page of the events it counts: the
-// integrations answer states one window for the deliveries and what became of
-// them, and the newest page of outcome events spans whatever it spans.
+// A COUNT OVER A NAMED WINDOW, never a page of events: the integrations answer
+// states one window, which a newest page doesn't.
 //
-// THE INSTANT IS THE ASKER'S, read once when the caller pinned none — and a
-// caller that names a window beside another read passes that read's instant
-// ([Listing.At]), so both halves of one answer share an edge. It is the
-// window's top and the floor's anchor on every node at once.
-//
-// Each node counts the rows it KEEPS and names the ones it holds of a custody
-// batch it has not settled ([store.NotificationOutcomes.Unsettled]), and the
-// asker counts each named row once ([settle], [MergeOutcomes]).
+// THE INSTANT IS THE ASKER'S, read once when unpinned; a caller naming a window
+// beside another read passes that read's instant ([Listing.At]) so both share
+// an edge: the window's top and every node's floor anchor. Nodes count rows
+// they KEEP and name unsettled custody rows
+// ([store.NotificationOutcomes.Unsettled]); the asker counts each once
+// ([settle], [MergeOutcomes]).
 func (f *Fleet) NotificationOutcomes(ctx context.Context, q store.OutcomeQuery) (store.NotificationOutcomes, Coverage, error) {
 	started := time.Now()
 	q.At = f.askedAt(q.At)
