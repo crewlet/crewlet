@@ -333,26 +333,36 @@ func TestAnUnreadableRosterFallsBackToTheLocalScan(t *testing.T) {
 }
 
 // A PEER'S DEADLINE DOES NOT BECOME THE SEARCH'S.
+//
+// The peer answers only once its call's context ends, and the case's own
+// context outlives the search, so the search returning at all says the budget
+// released it, and the peer's context ending at a deadline says which. No
+// clock is read. Mutation: scatter on the search's context without the
+// budget's deadline, and this case never ends.
 func TestASlowPeerCostsItsBucketsAndNotTheAnswer(t *testing.T) {
 	t.Parallel()
+	// Written before the reply is sent down the coordinator's channel, and
+	// read after the search has received it.
+	var ended error
 	fan := &search.FanOut{
 		Self:  "n1",
 		Local: fixed{search.Slice{Node: "n1", Lexical: []search.Scored{{Key: "page:A", Score: 1}}}},
 		Peers: peersFunc(func(ctx context.Context, _ search.FanQuery, _ []search.Assigned) ([]search.Slice, error) {
 			<-ctx.Done()
-			return nil, ctx.Err()
+			ended = ctx.Err()
+			return nil, ended
 		}),
 		Roster: func(context.Context) ([]string, error) { return []string{"n1", "n2"}, nil },
 		Corpus: func(context.Context) (int, error) { return search.FanOutFloor * 10, nil },
 		Budget: 200 * time.Millisecond,
 	}
-	started := time.Now()
 	answer, err := fan.Search(t.Context(), search.FanQuery{Limit: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if elapsed := time.Since(started); elapsed > 5*time.Second {
-		t.Fatalf("a peer that never answered held the search for %s", elapsed)
+	if !errors.Is(ended, context.DeadlineExceeded) {
+		t.Fatalf("the peer that never answered was released by %v, not by its budget's "+
+			"deadline", ended)
 	}
 	if !answer.Partial() || !slices.Equal(answer.Absent, []string{"n2"}) {
 		t.Fatalf("a peer that timed out is reported as %v with %d buckets missing",
@@ -576,23 +586,31 @@ func TestTheSemanticScoreKeepsDistancesTheScanCouldTellApart(t *testing.T) {
 // THE LOCAL SCAN AND THE SCATTER RUN INSIDE ONE WINDOW.
 //
 // If the peers were asked after the local scan finished, a fan-out would cost
-// the local scan PLUS the round trip and every peer's scan in turn — which is
-// slower than not fanning out at all, while every ranking assertion in this
-// file still passed. The whole point of dividing the buckets is that the
-// participants run at the same time.
+// the local scan PLUS the round trip and every peer's scan in turn, slower than
+// not fanning out at all, while every ranking assertion here still passed.
+// HELD BY A RENDEZVOUS, not a stopwatch: the local scan answers only once the
+// peers are asked, and the peers only once the local scan has begun, each
+// waiting on the case's context, so a coordinator running them one after the
+// other never ends and fails at the test's timeout, whatever the runner's
+// load. Mutation: scan locally before starting the scatter, or wait on the
+// scatter before scanning, and this case never ends.
 func TestTheLocalScanRunsWhileThePeersAreAnswering(t *testing.T) {
 	t.Parallel()
-	const each = 700 * time.Millisecond
+	caseCtx := t.Context()
+	scanning, asked := make(chan struct{}), make(chan struct{})
 	fan := &search.FanOut{
 		Self: "n1",
-		Local: slowScan{after: each, slice: search.Slice{
+		Local: meetingScan{began: scanning, meet: asked, slice: search.Slice{
 			Node: "n1", Lexical: []search.Scored{{Key: "page:A", Score: 1}},
 		}},
-		Peers: peersFunc(func(ctx context.Context, _ search.FanQuery, table []search.Assigned) ([]search.Slice, error) {
+		// ON THE CASE'S CONTEXT, not the scatter's: its budget is a deadline,
+		// which would make the local scan's start a race against the clock.
+		Peers: peersFunc(func(_ context.Context, _ search.FanQuery, table []search.Assigned) ([]search.Slice, error) {
+			close(asked)
 			select {
-			case <-time.After(each):
-			case <-ctx.Done():
-				return nil, ctx.Err()
+			case <-scanning:
+			case <-caseCtx.Done():
+				return nil, caseCtx.Err()
 			}
 			out := make([]search.Slice, 0, len(table))
 			for _, a := range table {
@@ -605,11 +623,9 @@ func TestTheLocalScanRunsWhileThePeersAreAnswering(t *testing.T) {
 		}),
 		Roster: func(context.Context) ([]string, error) { return []string{"n1", "n2"}, nil },
 		Corpus: func(context.Context) (int, error) { return search.FanOutFloor * 10, nil },
-		Budget: 10 * time.Second,
 	}
 
-	started := time.Now()
-	answer, err := fan.Search(t.Context(), search.FanQuery{Limit: 10})
+	answer, err := fan.Search(caseCtx, search.FanQuery{Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -617,25 +633,22 @@ func TestTheLocalScanRunsWhileThePeersAreAnswering(t *testing.T) {
 		t.Fatalf("both halves answered and %d buckets are missing",
 			answer.BucketsMissing)
 	}
-	// GENEROUS, because this is wall clock on a shared machine — but the
-	// two shapes are 700 ms and 1400 ms apart, so anything under 1100 ms
-	// can only be the concurrent one.
-	if elapsed := time.Since(started); elapsed > each+400*time.Millisecond {
-		t.Fatalf("a local scan of %s beside a scatter of %s took %s — the two "+
-			"ran one after the other, so a fan-out costs the sum of its "+
-			"participants rather than the slowest of them", each, each, elapsed)
+	if !slices.Contains(answer.Hits, "page:A") || !slices.Contains(answer.Hits, "page:n2") {
+		t.Fatalf("the answer is %v, want both the local and the peer's hit", answer.Hits)
 	}
 }
 
-// slowScan answers after a delay, so a serial coordinator is measurable.
-type slowScan struct {
-	after time.Duration
-	slice search.Slice
+// meetingScan closes began as its scan starts and answers once meet is
+// closed, or fails when its context ends first.
+type meetingScan struct {
+	began, meet chan struct{}
+	slice       search.Slice
 }
 
-func (s slowScan) Scan(ctx context.Context, _ search.FanQuery, _ search.Assignment) (search.Slice, error) {
+func (s meetingScan) Scan(ctx context.Context, _ search.FanQuery, _ search.Assignment) (search.Slice, error) {
+	close(s.began)
 	select {
-	case <-time.After(s.after):
+	case <-s.meet:
 		return s.slice, nil
 	case <-ctx.Done():
 		return search.Slice{}, ctx.Err()

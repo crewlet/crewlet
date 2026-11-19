@@ -32,9 +32,9 @@ const (
 	// under the race detector; the webhooks pages once parsed at init were
 	// 315 KB, about 2 ms of every push.
 	hookInitPackageBytes = 256 << 10
-	// 1.5 MiB for the module: the race build last measured 1.44 MB. A second
+	// 1.5 MiB for the module: the race build last measured 1.39 MB. A second
 	// webhooks-sized global fails it, a toolchain's change to what a compiled
-	// pattern allocates does not; growth past the 130 KB left is built at first
+	// pattern allocates does not; growth past the 180 KB left is built at first
 	// use, not bought with a larger bound. internal/logging's
 	// TestNoPackageLevelLoggerIsBoundToTheBootDefault refuses a package-level
 	// logger, which would compile every redaction rule at init.
