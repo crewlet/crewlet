@@ -9838,8 +9838,8 @@ one. It is a turn like any other (admitted, metered, recorded and streamed the
 same way, the first answer of a conversation the person goes on asking in),
 with these differences:
 
-- It only reads: the model is offered the person's read tools and its answer
-  tool, no write, page action or link. Its reads draw no card and
+- It only reads: the model is offered `read_api`, `describe_api` and its
+  answer tool, no write, page action or link. Its reads draw no card and
   its prose is never drawn; its steps are shown as any turn's.
 - The card is `{"type": "brief", "brief": {scope, summary, needs, recommended?,
   follow_ups, as_of}}`. `scope` is `{screen, title, record?}`, `record` the

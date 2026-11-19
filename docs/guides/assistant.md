@@ -115,8 +115,8 @@ offered only to a person who could make the same change on its screen:
 | Set or remove one token ceiling: a seat's or the company's, for a day, a week or a month | Administrators | The write Company › Budgets saves: the seat as read with only that window's ceiling changed (`PUT /config/roles/{handle}`), or a merge patch of the company's one window (`PATCH /config`). The card shows one row, the ceiling now and the new one, the history line and the route's warnings; the approval asks the administrator to confirm it is them when their sign-in is not recent, and a change to the configuration meanwhile makes the proposal stale. A lead changing a seat they lead goes through the generic change or Budgets itself |
 
 **An agent's access to an integration** is one read away for an
-administrator (`get_seat_access`, on
-`GET /setup/integrations/{kind}/access/seats/{handle}/{lane}`): the agent's
+administrator (`GET /setup/integrations/{kind}/access/seats/{handle}/{lane}`,
+through `read_api`): the agent's
 grant in Crewlet, what its credential holds at the vendor now, for GitHub what
 the agent's app is registered with and which of that the grant leaves unused,
 its scope, its status, what the next sync will take, and two clocks. Ask
@@ -135,15 +135,13 @@ agent has open for one with the two options of its question that grant it, how
 many more permissions the catalogue offers the agent beside its level and how
 many of those the company's own connection lacks, and, for each permission its
 grants and requests name, whether the company's connection can grant it. Any
-other permission is looked up by part of its name with
-`search_grant_catalogue`, which answers which level already holds it, whether
-it changes things, and whether the connection can grant it. Crewlet grants
+other permission is looked up by part of its name, the same read with
+`q`, which answers which level already holds it, whether it changes things,
+and whether the connection can grant it. Crewlet grants
 only what the company's own connection to the vendor holds: where that
 connection lacks a permission (Cloudflare's provisioner token without
-Origin Rules: Edit, say), the read names what a person adds to it at the vendor,
-and its card carries a link to that page, built by the engine from the vendor's
-catalogue and opened only after the dashboard names its destination. Ask
-Crewlet says so, and never writes a vendor's address itself. Adding it is a person's step at the vendor;
+Origin Rules: Edit, say), the read names what a person adds to it at the vendor
+and where. Ask Crewlet says so, and never writes a vendor's address itself. Adding it is a person's step at the vendor;
 the catalogue is read again within a minute, and the permission can then be
 granted to the agent in Crewlet.
 
@@ -224,9 +222,8 @@ admitted, metered, recorded and streamed as any question is, that answers in a
 fixed shape rather than in prose. What a person sees is on the
 [concept page](../concepts/assistant.md#opening-it). What it means for you:
 
-- **It only reads.** A brief turn is offered the person's read tools and the
-  brief's own answer, never a write, a page action, a link of its own or deep
-  work, and nothing it offers the person writes: an action opens a record's
+- **It only reads.** A brief turn is offered `read_api`, `describe_api` and the
+  brief's own answer, never a write, a page action or a link of its own, and nothing it offers the person writes: an action opens a record's
   screen or asks a question in the same conversation.
 - **Its verdict is counted, never written.** A brief answers what the page is
   about (the model's one `about` line) and whether the person has to do
