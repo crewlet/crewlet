@@ -12886,7 +12886,7 @@ own `alarm_raised` log line.
       "config_boot_revision_id": "3f1c0f0e-8a52-4d3b-9d7e-2b6f3f0c9a41",
       "config_reported_at": "2026-09-23T08:14:02.118Z",
       "in_flight": 1, "draining": false, "started_at": "2026-09-23T08:01:57Z",
-      "posture": "serve", "appliers_ready": 13, "appliers_total": 13,
+      "posture": "serve", "appliers_ready": 14, "appliers_total": 14,
       "admin": "serve",
       "alarms": [{"kind": "backup_age", "since": "2026-09-23T08:10:02Z",
                   "title": "No recent backup", "person": "…"}]
