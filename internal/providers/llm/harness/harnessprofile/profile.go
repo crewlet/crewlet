@@ -1200,6 +1200,10 @@ type Profile struct {
 	// has no measured way to. See [WebDenial].
 	WebDenial *WebDenial `yaml:"web_denial,omitempty"`
 
+	// ImageInput is how a call hands the model images beside its prompt, or
+	// nil where the harness has no way to. See [ImageInput].
+	ImageInput *ImageInput `yaml:"image_input,omitempty"`
+
 	// KeySeedFiles are settings files written into a seat's KEY home alone (the
 	// home its calls use when they sign in with a key: api-key, or inherit-env)
 	// after seed_files, each over a seed_files entry at the same path.
@@ -1283,6 +1287,11 @@ func (p *Profile) ToolsOffProblem() string {
 	}
 	if problem := p.ToolsOff.problemIn(complete); problem != "" {
 		return problem
+	}
+	if in := p.ImageInput; in != nil {
+		if problem := p.ToolsOff.problemIn(append(slices.Clone(complete), in.Args...)); problem != "" {
+			return "with images: " + problem
+		}
 	}
 	return p.mcpAllowProblem()
 }
@@ -1885,6 +1894,7 @@ func (p *Profile) problems() []string {
 	}
 	p.validateWebStance(add)
 	p.validateToolsOff(add)
+	p.validateImageInput(add)
 	for i, f := range p.SeedFiles {
 		if strings.TrimSpace(f.Path) == "" {
 			add("seed_files[%d].path is empty", i)
@@ -2005,6 +2015,50 @@ func (p *Profile) validateWebStance(add func(string, ...any)) {
 		for _, problem := range denied.problems() {
 			add("with web_tools denied, %s", problem)
 		}
+	}
+}
+
+// ImageInput is how a harness takes images beside its prompt: Args switch its
+// headless run to structured input on stdin, written in Format, whose one user
+// message carries the prompt and then each image. Args are judged with the
+// rest of the argv by [Profile.ToolsOffProblem], so they can bring no tool back.
+type ImageInput struct {
+	Args   []string    `yaml:"args"`
+	Format ImageFormat `yaml:"format"`
+	// Note says what the input is and where it is documented.
+	Note string `yaml:"note,omitempty"`
+}
+
+// ImageFormat is the structured input a harness reads its images in.
+type ImageFormat string
+
+// ImageClaudeStreamJSON is Claude Code's headless stream-json input: one JSON
+// line per message, a user message's content a list of a text block and
+// base64 image blocks.
+const ImageClaudeStreamJSON ImageFormat = "claude-stream-json"
+
+// Valid reports whether f is a format this build writes.
+func (f ImageFormat) Valid() bool { return f == ImageClaudeStreamJSON }
+
+// validateImageInput holds an image_input block to its shape: arguments, a
+// format this build writes, a note, and a prompt on stdin, where the
+// structured message goes.
+func (p *Profile) validateImageInput(add func(string, ...any)) {
+	in := p.ImageInput
+	if in == nil {
+		return
+	}
+	if len(in.Args) == 0 {
+		add("image_input.args is empty: name the arguments that switch the harness to its structured input")
+	}
+	if !in.Format.Valid() {
+		add("image_input.format %q (want %s)", in.Format, ImageClaudeStreamJSON)
+	}
+	if strings.TrimSpace(in.Note) == "" {
+		add("image_input.note is empty: say what the input is and where it is documented")
+	}
+	if p.EffectivePromptMode() != PromptStdin {
+		add("image_input needs prompt_mode stdin: the message carrying the images is written there")
 	}
 }
 

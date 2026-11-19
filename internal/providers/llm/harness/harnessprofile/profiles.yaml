@@ -151,6 +151,15 @@ claude-code:
     args: [["--tools", ""], ["--strict-mcp-config"]]
     refuses: ["--mcp-config", "--allowedTools", "--allowed-tools", "--plugin-dir"]
     note: "--tools \"\" left the init event's built-in tool list empty and --strict-mcp-config loaded no server but the engine's crewlet server; measured on Claude Code 2.1.310"
+  # IMAGES BESIDE THE PROMPT, which Ask Crewlet hands a question's attachments
+  # in: the headless run reads its prompt as one stream-json user message on
+  # stdin, whose content is the transcript's text block and then a base64
+  # image block per picture. No tool is added: tools_off is judged with these
+  # arguments on the argv too.
+  image_input:
+    args: ["--input-format", "stream-json"]
+    format: claude-stream-json
+    note: "Claude Code's headless --input-format stream-json, a user message whose content holds a text block and base64 image blocks"
   model_args: ["--model", "{model}"]
   # Read from the 2.1.312 binary: an unknown level is dropped with a warning,
   # the models below run without effort, and max or xhigh where a model lacks
