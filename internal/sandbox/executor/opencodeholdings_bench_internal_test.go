@@ -24,7 +24,7 @@ import (
 // runs kept, 256 MiB of ordinary steps, one message at the walk's bound
 // holding one answer the reading decodes, one of minimal items, and 200
 // classes over 4,096 parts. `_pair` cases run the reading and a person's read
-// at once, the worst the slots allow. Run one case at a time, reading
+// at once. Run one case at a time, reading
 // GODEBUG=gctrace=1 between its stderr lines: held at most is the largest
 // live heap at GOGC=10.
 //

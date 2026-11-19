@@ -2210,8 +2210,8 @@ measured for an OpenCode export at its 32 MiB message, whether a person reads
 it or a relaunch reads it for the calls it holds), and a node answers every
 dashboard tab open on it and every REST caller, each with a read of its own. A
 relaunch's reading takes the seats' one slot of the two, so two never run at
-once, and the worst the two slots hold, a reading beside a person's read of
-the same OpenCode export, measured 193 MiB. So each node decodes at most two transcripts at once
+once, and the most a reading and a person's read hold together, of the same
+OpenCode export, measured 193 MiB. So each node decodes at most two transcripts at once
 (`TranscriptReadsAtOnce`), about 200 MiB at their worst, whichever socket or
 route asks. A read past them waits for a slot before the session's object is
 opened — an opened object would hold its store's connection while it waited —

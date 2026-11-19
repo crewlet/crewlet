@@ -391,10 +391,10 @@ var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
 // ONE, INSIDE THE PROCESS'S TWO, never a pool beside them, which would double
 // what reads hold at their worst: one slot is always a person's while a seat
 // reads. A relaunch's [Runner.ReadHoldings] takes it too, inside its own wait,
-// so two holdings readings never run at once; the worst pair, an OpenCode
-// reading beside a person's read of its export, held 193 MiB live. Measured
-// on two cores: an ordinary archive reads in about 70 ms (Claude Code) and 54
-// ms (OpenCode), 255 MiB of ordinary records in 2.7 s and 7.9 s.
+// so two holdings readings never run at once; a reading and a person's read of
+// one OpenCode export held 193 MiB live together. Measured on two cores: an
+// ordinary archive reads in about 70 ms (Claude Code) and 54 ms (OpenCode),
+// 255 MiB of ordinary records in 2.7 s and 7.9 s.
 const SeatTranscriptReadsAtOnce = 1
 
 // seatTranscriptReads holds a slot for each transcript a seat is reading, at

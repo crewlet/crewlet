@@ -4647,8 +4647,8 @@ no reading, every call told. Measured on two cores
 (`BenchmarkAnOpenCodeReadingAtItsBounds`): a message at that bound holding one
 answer the reading decodes holds 97 MiB live, as a person's read of it does,
 the walk's buffer and one decoded text with no member copied out; the two at
-once, the worst the slots allow (two readings never run at once), 161 to 193
-MiB; 255 MiB of ordinary steps read in 7.9 s, inside the 15 s wait.
+once (two readings never run at once), 161 to 193 MiB; 255 MiB of ordinary
+steps read in 7.9 s, inside the 15 s wait.
 
 **The releases.** A session is read only where OpenCode 2.0.32, 2.1.4 or
 2.2.7 wrote it (`openCodeHoldingsReleases`, a set and never a range, compared

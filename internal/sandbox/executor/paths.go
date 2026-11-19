@@ -177,13 +177,13 @@
 // Calls+1 step numbers; never a message, an item or a text past its visit.
 // MEASURED (BenchmarkAnOpenCodeReadingAtItsBounds, two cores, GOGC=10): a
 // message at the bound holding one answer the reading decodes holds 97 MiB
-// live in 0.3 s, a person's read of it 97 MiB, the two at once (the worst the
-// slots allow, two readings never running at once) 161 to 193 MiB; a step of
-// minimal items at the bound 96 MiB in 1.9 s; 255 MiB of ordinary steps 2 MiB
-// in 7.9 s. What one read holds is the walk's buffer, which grows by doubling
-// to about twice the message it holds, and one decoded text: no member of a
-// message is copied out of it, and an answer of one part is its text, never
-// built again ([toolAnswer]).
+// live in 0.3 s, a person's read of it 97 MiB, the two at once (two readings
+// never running at once) 161 to 193 MiB; a step of minimal items at the bound
+// 96 MiB in 1.9 s; 255 MiB of ordinary steps 2 MiB in 7.9 s. What one read
+// holds is the walk's buffer, which grows by doubling to about twice the
+// message it holds, and one decoded text: no member of a message is copied
+// out of it, and an answer of one part is its text, never built again
+// ([toolAnswer]).
 //
 // TO ADD A RELEASE to [openCodeHoldingsReleases], it must first be one the
 // count reads ([openCodeCountReleases]); then drive the engine's own bridge
