@@ -1132,6 +1132,15 @@ func Register(r *Registry, s Sources) {
 		// board is.
 		r.Register("work_search", Requires(iam.GrantWorklet), s.workSearch)
 	}
+	// WHAT THE ADVISOR FOUND, AND THE NOTICES IT RAISES, read off its own
+	// log wherever this node reaches it: the administrator's, as the
+	// document it advises on is.
+	if s.Advisor != nil {
+		r.Register("advisor_findings", Requires(iam.GrantAdmin), s.advisorFindings)
+		r.Register("advisor_finding", Requires(iam.GrantAdmin), s.advisorFinding)
+		r.Register("advisor_run", Requires(iam.GrantAdmin), s.advisorRun)
+		r.Register("advisor_notices", Requires(iam.GrantAdmin), s.advisorNotices)
+	}
 	if s.Config != nil {
 		// ADMIN'S, all four. Reading the config document exposes the
 		// whole company — which integrations are wired, and every ${VAR}
@@ -1140,14 +1149,6 @@ func Register(r *Registry, s Sources) {
 		r.Register("config_audit", Requires(iam.GrantAdmin), s.configAudit)
 		r.Register("config_diff", Requires(iam.GrantAdmin), s.configDiff)
 		r.Register("config_entities", Requires(iam.GrantAdmin), s.configEntities)
-		// WHAT THE ADVISOR FOUND, AND THE NOTICES IT RAISES, read off the
-		// same document, so the administrator's as the document is.
-		if s.Advisor != nil {
-			r.Register("advisor_findings", Requires(iam.GrantAdmin), s.advisorFindings)
-			r.Register("advisor_finding", Requires(iam.GrantAdmin), s.advisorFinding)
-			r.Register("advisor_run", Requires(iam.GrantAdmin), s.advisorRun)
-			r.Register("advisor_notices", Requires(iam.GrantAdmin), s.advisorNotices)
-		}
 		// WHAT EACH AGENT MAY DO AND WHERE IT RUNS, as its next turn is told:
 		// the go-live check's review. Admin's, as the advisor is.
 		if s.AgentAccess != nil {

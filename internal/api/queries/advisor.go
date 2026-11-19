@@ -49,10 +49,14 @@ func (s Sources) advisorReading(ctx context.Context, now time.Time) (advisor.Ans
 
 // advisorInputs is what the rule detectors read at now: the redacted document
 // at its revision, the integrations' last reconcile and the week's records,
-// beside the document as it runs; a nil company before the first import.
+// beside the document as it runs; a nil company before the first import, or on
+// a node that serves no configuration.
 func (s Sources) advisorInputs(ctx context.Context, now time.Time) (advisor.Inputs, advisor.Evidence,
 	*config.Company, error) {
 
+	if s.Config == nil {
+		return advisor.Inputs{}, advisor.Evidence{}, nil, nil
+	}
 	company, revision, err := s.Config.FleetCompany(ctx)
 	if errors.Is(err, configapi.ErrNoActiveRevision) {
 		return advisor.Inputs{}, advisor.Evidence{}, nil, nil
