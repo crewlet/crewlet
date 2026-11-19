@@ -832,7 +832,7 @@ var rules = sync.OnceValue(func() []rule {
 	for _, k := range awsSecretKeys {
 		table = append(table, awsSecret(k.key, k.what))
 	}
-	password := passwordRule.valued(passwordMarker, &valueFunc{passwordValue[string], passwordValue[[]byte]})
+	password := passwordRule().valued(passwordMarker, &valueFunc{passwordValue[string], passwordValue[[]byte]})
 	password.read = &readFunc{readValue[string], readValue[[]byte]}
 	return append(table, password)
 })
@@ -1273,17 +1273,23 @@ func keyName(b byte) bool {
 // and a second pass read a key across them that the first had read apart.
 //
 // Its separator begins within [MaxReach] of the key ([separatorWithin]).
-var passwordRule = separated(keyedOn(passwordKeys, passwordClose+`\s*`+passwordSeparator+passwordTrail))
+var passwordRule = sync.OnceValue(func() *keyed {
+	return separated(keyedOn(passwordKeys, passwordClose+`\s*`+passwordSeparator+passwordTrail))
+})
 
 // pendingKey is a password key at the very END of a text with nothing but
 // what closes it and whitespace after it: a [passwordRule] match whose
 // separator may still be written, across the line break (`Enter password`
 // and then `= swordfish`), within [MaxReach] of the key ([awaiting]).
-var pendingKey = awaiting(keyedOn(passwordKeys, passwordClose+`\s*\z`))
+var pendingKey = sync.OnceValue(func() *keyed {
+	return awaiting(keyedOn(passwordKeys, passwordClose+`\s*\z`))
+})
 
 // passwordPrompt is a password key and its separator at the very end of a line
 // ([promptAt]), a key exactly where [passwordRule] reads one.
-var passwordPrompt = separated(keyedOn(passwordKeys, passwordClose+`\s*`+passwordSeparator+`\s*\z`))
+var passwordPrompt = sync.OnceValue(func() *keyed {
+	return separated(keyedOn(passwordKeys, passwordClose+`\s*`+passwordSeparator+`\s*\z`))
+})
 
 // passwordValue is where the value a [passwordRule] match names begins and
 // ends, the match beginning at start and ending at end and prior being every
@@ -1725,7 +1731,7 @@ func (r *valueRead[T]) keyOnRest(pos int) bool {
 	if i := tIndexByte(rest, ' '); i >= 0 {
 		word = rest[:i]
 	}
-	return len(rest) != 0 && !isValue(word) && keyedIndex(passwordRule, rest) >= 0
+	return len(rest) != 0 && !isValue(word) && keyedIndex(passwordRule(), rest) >= 0
 }
 
 // escapedOnly reports whether the line break ending a line at lineEnd, the
@@ -1749,7 +1755,7 @@ func (r *valueRead[T]) lines(pos int, escaped bool) aValue {
 		lineEnd, next := lineAt(r.text, pos)
 		line := r.text[pos:lineEnd]
 		trimmed := trimLine(line)
-		key := keyedIndex(passwordRule, line)
+		key := keyedIndex(passwordRule(), line)
 		suffixed := len(r.suffix) != 0
 		if suffixed && r.markupOnly && len(trimmed) != 0 {
 			// A row a pass has replaced a value on closes as the key's
@@ -2226,7 +2232,7 @@ func valueSpace(c byte) bool {
 // the next key.
 func lineEndUnnamed[T textual](text T, from int) (int, bool) {
 	for i := from; ; {
-		k := keyedBegins(passwordRule, text, i)
+		k := keyedBegins(passwordRule(), text, i)
 		limit := len(text)
 		if k >= 0 {
 			limit = k
@@ -2237,7 +2243,7 @@ func lineEndUnnamed[T textual](text T, from int) (int, bool) {
 		switch {
 		case k < 0:
 			return len(text), false
-		case keyedMatchesAt(passwordRule, text, k):
+		case keyedMatchesAt(passwordRule(), text, k):
 			return k, true
 		}
 		i = beyond(text, k)
@@ -2485,7 +2491,7 @@ func keyAfterBreak[T textual](text T, i int) bool {
 		end = limit
 	}
 	line := text[i:end]
-	key := keyedIndex(passwordRule, line)
+	key := keyedIndex(passwordRule(), line)
 	if key < 0 {
 		return false
 	}
@@ -2571,7 +2577,7 @@ func valueHolds(text string, read *int) []valueHold {
 	var holds []valueHold
 	var prior [][2]int
 	for from := 0; ; {
-		start, end, ok := passwordRule.next(text, from)
+		start, end, ok := passwordRule().next(text, from)
 		if !ok {
 			break
 		}
@@ -2585,7 +2591,7 @@ func valueHolds(text string, read *int) []valueHold {
 			from = v.to
 		}
 	}
-	if k := pendingKey.indexAtEnd(text); k >= 0 {
+	if k := pendingKey().indexAtEnd(text); k >= 0 {
 		holds = append(holds, valueHold{start: k, decided: len(text)})
 	}
 	return holds
@@ -2614,7 +2620,7 @@ type valueHold struct {
 func passwordInput(text string, spans [][2]int) written {
 	w := written{text: text}.replace(spans, keyMarker)
 	for _, r := range rules() {
-		if r.keyed == passwordRule {
+		if r.keyed == passwordRule() {
 			break
 		}
 		if r.keyed == nil && !r.pattern.MatchString(w.text) {
@@ -2720,8 +2726,9 @@ type keyed struct {
 // after is compiled on its own first, so one that is not a whole expression —
 // an unbalanced `)|other(` that would close the words' group and let a match
 // begin outside it — panics here rather than compiling into a pattern the
-// scan does not describe. Like [regexp.MustCompile], it runs at package
-// initialisation, so a bad word or a bad after is a binary that does not start.
+// scan does not describe. Each pattern is built at its first use, as the
+// rules are ([rules]), and this package's tests build every one, so a bad word
+// or a bad after fails them.
 func keyedOn(words []string, after string) *keyed {
 	regexp.MustCompile(after)
 	quoted := make([]string, len(words))
@@ -2913,8 +2920,12 @@ func sameFold(r, w rune) bool {
 // with one checksum line after the body, and it matched neither pattern, so
 // its whole body was published.
 var (
-	keyBegin = regexp.MustCompile(`-----BEGIN (?:(?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----`)
-	keyEnd   = regexp.MustCompile(`-----END (?:(?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----`)
+	keyBegin = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`-----BEGIN (?:(?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----`)
+	})
+	keyEnd = sync.OnceValue(func() *regexp.Regexp {
+		return regexp.MustCompile(`-----END (?:(?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY|PGP PRIVATE KEY BLOCK)-----`)
+	})
 )
 
 // pemArmour is any PEM armour line — a private key's, or a certificate's, a
@@ -3405,12 +3416,12 @@ func readKeys(text string) ([][2]int, int, *claims) {
 	}
 	c := &claims{text: text}
 	k := keyReading{open: -1}
-	begins := keyBegin.FindAllStringIndex(text, -1)
+	begins := keyBegin().FindAllStringIndex(text, -1)
 	for _, b := range begins {
 		k.begin(text, b, c)
 	}
 	c.take(k.forward)
-	spans := append(slices.Clone(k.forward), k.ends(text, c, begins, keyEnd.FindAllStringIndex(text, -1), 0, len(text))...)
+	spans := append(slices.Clone(k.forward), k.ends(text, c, begins, keyEnd().FindAllStringIndex(text, -1), 0, len(text))...)
 	return mergeSpans(c.shortOfNames(spans)), k.open, c
 }
 
@@ -3647,7 +3658,7 @@ func oneLineKey(text string, b, armour []int, c *claims) keyBlock {
 	switch {
 	case !body:
 		return keyBlock{}
-	case lastBase64(between[h+end:]) < 0 && keyEnd.MatchString(text[armour[0]:armour[1]]):
+	case lastBase64(between[h+end:]) < 0 && keyEnd().MatchString(text[armour[0]:armour[1]]):
 		return keyBlock{end: armour[1], closed: true, endArmour: armour[0]}
 	}
 	return keyBlock{end: b[1] + h + end}
@@ -3875,7 +3886,7 @@ func (r *keyReader) read(pos int) keyBlock {
 		}
 		line := r.text[pos:lineEnd]
 		if strings.Contains(line, "-----") {
-			if e := keyEnd.FindStringIndex(line); e != nil {
+			if e := keyEnd().FindStringIndex(line); e != nil {
 				// An END line holding a marker, before its armour or
 				// after it, closes nothing, as one is read back from
 				// nothing ([linesBack]).
@@ -5316,17 +5327,17 @@ func (c *claims) keyRun(start, end int) bool {
 // the rules before the password's leave it ([passwordInput]), as [claimed]
 // reads the passwords.
 func promptAt(line string) int {
-	at := passwordPrompt.indexAtEnd(line)
+	at := passwordPrompt().indexAtEnd(line)
 	if at < 0 {
 		return -1
 	}
 	w := passwordInput(line, nil)
 	if len(w.edits) > 0 {
-		at = passwordPrompt.indexAtEnd(w.text)
+		at = passwordPrompt().indexAtEnd(w.text)
 	}
 	var prior [][2]int
 	for from := 0; at > 0; {
-		start, end, ok := passwordRule.next(w.text, from)
+		start, end, ok := passwordRule().next(w.text, from)
 		if !ok || start >= at {
 			break
 		}
@@ -5385,7 +5396,7 @@ func claimed(text string) (tokens [][2]int, passwords [][7]int) {
 	}
 	tokens = mergeSpans(tokens)
 	for _, r := range rules() {
-		if r.keyed == passwordRule {
+		if r.keyed == passwordRule() {
 			break
 		}
 		if r.value == nil {
@@ -5605,7 +5616,9 @@ func shapeAt[T textual](p T, i int) (byte, int) {
 // OpenSSL writes: `4,ENCRYPTED`, and a cipher with an IV of its block size,
 // eight bytes or sixteen, in hex — which is what ends a DEK-Info glued to the
 // body with no break at all.
-var oneLineHeader = regexp.MustCompile(`^[^A-Za-z0-9+/=]*(?:Proc-Type:\s*4,ENCRYPTED|DEK-Info:\s*[A-Za-z0-9-]+,(?:[0-9A-Fa-f]{32}|[0-9A-Fa-f]{16}))`)
+var oneLineHeader = sync.OnceValue(func() *regexp.Regexp {
+	return regexp.MustCompile(`^[^A-Za-z0-9+/=]*(?:Proc-Type:\s*4,ENCRYPTED|DEK-Info:\s*[A-Za-z0-9-]+,(?:[0-9A-Fa-f]{32}|[0-9A-Fa-f]{16}))`)
+})
 
 // skipHeaders is how much of s, a key's body written on one line, is its RFC
 // 1421 headers: the one-line reader ([runChunk]) would take a header's first
@@ -5613,7 +5626,7 @@ var oneLineHeader = regexp.MustCompile(`^[^A-Za-z0-9+/=]*(?:Proc-Type:\s*4,ENCRY
 func skipHeaders(s string) int {
 	at := 0
 	for {
-		loc := oneLineHeader.FindStringIndex(s[at:])
+		loc := oneLineHeader().FindStringIndex(s[at:])
 		if loc == nil {
 			return at
 		}
