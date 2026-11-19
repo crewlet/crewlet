@@ -943,7 +943,7 @@ func (s *LiveState) recordEvent(env *Envelope) {
 	}
 	row := FeedRow{
 		ID: env.ID, Type: env.Type, Timestamp: env.Timestamp,
-		Source: env.Source, Actor: env.Actor, Summary: env.Summary,
+		Source: env.Source, Actor: env.Actor, Summary: env.Summary, Refs: env.Refs,
 		Category: env.Category, TraceID: env.TraceID, SpanID: env.SpanID,
 		ParentSpanID: env.ParentSpanID, Topic: env.Topic,
 		// Read off the envelope Apply just stamped, rather than derived a

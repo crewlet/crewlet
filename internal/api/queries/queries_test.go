@@ -258,7 +258,10 @@ func TestEveryQuestionDeclaresAPosture(t *testing.T) {
 		"agent": "everybody", "live_call": "everybody", "tokens": "everybody",
 		"token_series": "everybody", "seat_activity": "everybody", "turn_outcomes": "everybody",
 		"viewer": "everybody", "schedule_runs": "everybody",
-		"budgets": "everybody", "schedules": "everybody",
+		// WHAT A PAGE'S LINES NAME: each reference is decided by the
+		// question its own page asks, so the ask itself grants nothing.
+		"references": "everybody",
+		"budgets":    "everybody", "schedules": "everybody",
 		"knowledge": "everybody", "colleague": "everybody",
 		// Hosts alone, so a reader can link a reference; never the repositories.
 		"link_hosts": "everybody",

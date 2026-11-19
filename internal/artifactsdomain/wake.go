@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/logging"
+	"github.com/crewlet/crewlet/internal/named"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/routing"
@@ -182,13 +183,17 @@ func inboundOf(record MutationRecord, payload any, n CommentNotify, recordID str
 		meta[notify.BodyAuthorField] = record.Actor
 		meta[notify.BodyAuthorKindField] = string(record.ActorKind)
 	}
+	// THE ARTIFACT IS NAMED by its title (package named), so a line about
+	// the wake links to it.
+	line := named.Words("").Name(named.ArtifactRef(artifact, subject))
 	return notify.Inbound{
-		Source:    Source,
-		EventType: string(record.Op),
-		Sender:    record.Actor,
-		Subject:   subject,
-		Body:      body,
-		Metadata:  meta,
+		Source:      Source,
+		EventType:   string(record.Op),
+		Sender:      record.Actor,
+		Subject:     line.Text,
+		SubjectRefs: line.Refs,
+		Body:        body,
+		Metadata:    meta,
 		// WHO WROTE THE RECORD, by its own kind, and whom an agent wrote it
 		// for, which the turn this wakes works for (ADR-0109).
 		Writer: notify.FirstPartyWriter(record.ActorKind, record.Actor, nil, n.WorkingFor),

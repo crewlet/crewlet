@@ -207,3 +207,19 @@ func TestADetailWithoutEntriesCountsThemAndKeepsEveryOtherEdge(t *testing.T) {
 		t.Error("the answer it was made from lost its entries")
 	}
 }
+
+// AN ANSWER THAT WITHHELD NO ENTRY SAYS 0: a reader told nothing counts the
+// entry links it holds as withheld, and an answer that left none out holds
+// them all.
+func TestADetailStatesThatItWithheldNoEntry(t *testing.T) {
+	t.Parallel()
+	detail := worklet.TaskDetail{Task: worklet.Task{ID: "t-a"},
+		Links: []worklet.DetailLink{{Kind: worklet.RelationEntry, Other: entryDB}}}
+	encoded, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"entries_withheld":0`) {
+		t.Errorf("the answer reads %s, want entries_withheld stated as 0", encoded)
+	}
+}
