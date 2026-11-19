@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"errors"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -582,6 +583,51 @@ func TestABlockWhoseFirstLineOpensAsTheKeysRowStaysOneMarker(t *testing.T) {
 	if strings.Count(once, keyMarker) != 1 || strings.Contains(once, gutterValue) {
 		t.Errorf("want one key's marker and the value redacted:\n text %q\n once %q", text, once)
 	}
+}
+
+// A KEY WHOSE BLANKS RUN TO THE TEXT'S END NAMES NO VALUE, as the whole text
+// reads it: under a BEGIN no END closes, a password's key on the base64's
+// line, then blanks to the end, at the byte that takes the text through the
+// stages and past a window. The keys' stage places such a word one past its
+// window ([keyStage.claimsIn]), however the text is cut: the stream writes
+// Secrets of it or refuses, and never panics.
+//
+// Mutation: read the line where such a value starts ([claims.readsAValue]),
+// and Close slices past the window's end.
+func TestAKeyWhoseBlanksRunToTheEndNamesNoValue(t *testing.T) {
+	t.Parallel()
+	head := testBegin + "\n" + testKeyLine + testKeyLine + testKeyLine[:32] + "\tPassword:\n"
+	for _, size := range []int{wholeBytes + 1, 1 << 20} {
+		text := head + strings.Repeat(" ", size-len(head))
+		want := Secrets(text)
+		for _, cut := range []int{7 << 10, 64 << 10, size} {
+			got, panicked, err := streamedOrPanic(text, cut)
+			switch {
+			case panicked != nil:
+				t.Errorf("%d bytes in writes of %d: the stream panicked: %v", size, cut, panicked)
+			case err != nil && !errors.Is(err, ErrDecidedEarly):
+				t.Errorf("%d bytes in writes of %d: Close answered %v", size, cut, err)
+			case err == nil && got != want:
+				t.Errorf("%d bytes in writes of %d: the stream wrote other than Secrets %s", size, cut, parted(got, want))
+			}
+		}
+	}
+}
+
+// streamedOrPanic is what a [Stream] writes for text in writes of cut bytes,
+// what it panicked with, if it did, and what Close answered.
+func streamedOrPanic(text string, cut int) (out string, panicked any, err error) {
+	var b strings.Builder
+	defer func() {
+		if panicked = recover(); panicked == nil {
+			out = b.String()
+		}
+	}()
+	s := NewStream(&b)
+	for at := 0; at < len(text); at += cut {
+		_, _ = s.Write([]byte(text[at:min(len(text), at+cut)]))
+	}
+	return "", nil, s.Close()
 }
 
 // A STRING'S LINES ARE READ AS THE LINES THEY STAND FOR: each text below,

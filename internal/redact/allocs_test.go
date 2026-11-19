@@ -55,8 +55,8 @@ func TestCleanTextSkipsEveryReplacement(t *testing.T) {
 // reads a text of any length whole, so a clean one several times a stage's
 // window ([wholeBytes]) still costs a scan per rule and no copy, against the
 // same unguarded loop as [TestCleanTextSkipsEveryReplacement] at 10 KB. Read
-// by the stages a [Stream] redacts by, it paid a joined window and a written
-// output a step for every stage, about 75 bytes allocated a byte of it.
+// by the stages a [Stream] redacts by, it would allocate every stage's buffer
+// and the slices each step's scan makes.
 //
 // Mutation: redact a text longer than a stage's window by the stages, and
 // Secrets over it allocates more than the unguarded loop.

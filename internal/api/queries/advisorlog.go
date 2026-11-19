@@ -15,6 +15,7 @@ import (
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
 )
 
@@ -399,10 +400,13 @@ type AdvisorHistoryEntry struct {
 	Moved []advisor.Moved `json:"moved"`
 }
 
-// AdvisorActor is who moved a finding: the engine, or a person by handle.
+// AdvisorActor is who moved a finding: the engine, or a person by handle and
+// by the name the company gives their seat, which is what a person reads (the
+// handle where the chart no longer holds the seat).
 type AdvisorActor struct {
 	Kind   string `json:"kind"`
 	Handle string `json:"handle"`
+	Name   string `json:"name"`
 }
 
 // AdvisorEpisode is an earlier episode of the same key.
@@ -440,11 +444,12 @@ func (s Sources) advisorFinding(ctx context.Context, p Params) (any, error) {
 		return nil, err
 	}
 	out := AdvisorFindingDetail{AdvisorFinding: f, History: []AdvisorHistoryEntry{}, Episodes: []AdvisorEpisode{}}
+	organization := s.organization()
 	for _, h := range history {
 		entry := AdvisorHistoryEntry{At: h.At, Event: string(h.Event), By: AdvisorActor{Kind: "engine"},
 			Moved: []advisor.Moved{}}
 		if h.ByKind == iam.ActorHuman {
-			entry.By = AdvisorActor{Kind: "person", Handle: h.ByName}
+			entry.By = AdvisorActor{Kind: "person", Handle: h.ByName, Name: personName(organization, h.ByName)}
 		}
 		if len(h.Moved) > 0 {
 			if err = json.Unmarshal(h.Moved, &entry.Moved); err != nil {
@@ -478,4 +483,15 @@ func (s Sources) AdvisorFindingOf(ctx context.Context, id string) (AdvisorFindin
 		return AdvisorFinding{}, err
 	}
 	return v.finding(row)
+}
+
+// personName is the name the company gives the seat handle names, or the
+// handle where no seat of the chart answers to it.
+func personName(organization *org.Organization, handle string) string {
+	if organization != nil {
+		if role := organization.Role(handle); role != nil && role.Name != "" {
+			return role.Name
+		}
+	}
+	return handle
 }

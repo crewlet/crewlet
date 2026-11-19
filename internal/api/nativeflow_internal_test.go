@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
 	"github.com/crewlet/crewlet/internal/worklet"
@@ -22,6 +23,7 @@ func TestTheNativeSourcesAnswerEveryReadTheAdvisorMakes(t *testing.T) {
 	flows, ok := s.Work.(interface {
 		FlowHours(ctx context.Context, q worklet.FlowHoursQuery) ([]worklet.FlowHours, error)
 		FlowItems(ctx context.Context, q worklet.FlowHoursQuery) (map[string]int, error)
+		FlowPickups(ctx context.Context, q worklet.FlowHoursQuery) ([]time.Duration, error)
 	})
 	if !ok || flows == nil {
 		t.Fatalf("the native work reader %T answers neither the flow hours nor the flow items read", s.Work)

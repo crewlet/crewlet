@@ -55,6 +55,7 @@ type TrackerReader interface {
 	WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (worklet.WorkPatterns, error)
 	FlowHours(ctx context.Context, q worklet.FlowHoursQuery) ([]worklet.FlowHours, error)
 	FlowItems(ctx context.Context, q worklet.FlowHoursQuery) (map[string]int, error)
+	FlowPickups(ctx context.Context, q worklet.FlowHoursQuery) ([]time.Duration, error)
 	TurnsMoved(ctx context.Context, q worklet.TurnsMovedQuery) (map[string]bool, error)
 	Activity(ctx context.Context, q worklet.ActivityQuery, now time.Time) (
 		worklet.ActivityAnswer, error)
@@ -762,6 +763,14 @@ var opFlowHours = define("tracker.flow_hours", opRead, trackerDomain, false,
 			return nil, errNoHalf
 		}
 		return b.Tracker.FlowHours(ctx, q)
+	})
+
+var opFlowPickups = define("tracker.flow_pickups", opRead, trackerDomain, false,
+	func(ctx context.Context, b Backend, _ *Actor, q worklet.FlowHoursQuery) ([]time.Duration, error) {
+		if b.Tracker == nil {
+			return nil, errNoHalf
+		}
+		return b.Tracker.FlowPickups(ctx, q)
 	})
 
 var opFlowItems = define("tracker.flow_items", opRead, trackerDomain, false,
