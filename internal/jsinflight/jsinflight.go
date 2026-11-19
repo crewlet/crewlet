@@ -29,6 +29,13 @@
 // compare-and-set rounds on refusals no other writer had caused and reported
 // the store unavailable.
 //
+// # Decide waits it out
+//
+// [Decide] retries the identical publish while the answer is in flight, within
+// the budget its caller hands it ([Sends]), and a publish still undecided at the
+// end is [Undecided], which wraps the context error and never the refusal, so no
+// caller reads it as a race somebody else won.
+//
 // # Why one package
 //
 // Two writers publish conditionally to replicated streams — [internal/coord/kv]
@@ -37,6 +44,9 @@
 // twice it would drift the way [internal/jsprovision]'s rule did before it was
 // a package. It imports the JetStream client and the engine's backoff leaf and
 // nothing else, so either side can take it without taking the other.
+// [internal/statelog]'s appender reaches the log through the second and reads
+// 10071 alone as a refusal, so 10164 is a compare-and-set answer nowhere else in
+// the tree.
 package jsinflight
 
 import (
@@ -54,26 +64,13 @@ import (
 // ahead of it.
 //
 // FirstWait is a millisecond, under the one raft commit an idle loopback
-// cluster takes (about 1.5 ms), because the commonest case is no commit at
-// all: the write ahead was acknowledged already and only the leader's own
-// bookkeeping is behind, which clears in microseconds. Each wait doubles to
-// MaxWait, a few commits on a cluster under load — long enough that a leader
-// working through a backlog is not asked sixteen times a commit, short enough
-// that a write that has landed is retried within a fraction of the time it
-// took. Jitter spreads the racers one write refused, so they do not all return
-// on the same instant.
-//
-// The whole wait is held to the publish's own budget ([Sends]) — the caller's
-// deadline, or where it set none what the publish alone would have waited for
-// its acknowledgement: the request term and, across a link, its bytes'
-// crossing for each of the sends a write may make (internal/jsapi's Budget
-// and WriteSends), since an attempt after an in-flight answer sends the whole
-// message again — because waiting for the write ahead to settle is waiting for
-// THAT write's acknowledgement, and no publish here is promised more patience
-// than its own. That budget's end is fixed when the publish starts: an
-// attempt past its sends, and a wait between two attempts, moves it nowhere,
-// so a publish met by an in-flight answer on every attempt ends [Undecided]
-// at it however fast each answer comes back.
+// cluster takes (about 1.5 ms): the commonest case is the write ahead already
+// acknowledged. Each wait doubles to MaxWait, a few commits on a loaded
+// cluster: long enough that a backlogged leader is not asked sixteen times a
+// commit, short enough that a landed write is retried promptly. Jitter spreads
+// the racers. The wait is held to the publish's own budget ([Sends]), fixed at
+// the start, so a publish met by in-flight answers on every attempt ends
+// [Undecided] at it however fast they return.
 const (
 	FirstWait = time.Millisecond
 	MaxWait   = 64 * time.Millisecond

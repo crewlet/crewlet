@@ -18,19 +18,12 @@ import (
 
 // A DRAIN WAITS FOR THE SEATS IT CUT TO BE GIVEN BACK, within its own bound.
 //
-// The drain cuts a seat still being taken rather than waiting on the seat's
-// lock for a hook with no total, and the cut seat leaves the held set at once,
-// so the drain's release of the seats it holds never reaches it: the claim that
-// was taking it gives it back once its hook returns. A drain that returned
-// there would report done while that give-back — the seat's teardown and its
-// lease — still ran, beside everything the stop tears down after the drain.
-//
-// The hook here honours its cut and is then held unwinding until the drain has
-// returned, so the give-back cannot finish inside the drain: the drain must
-// spend its whole bound waiting for it, and return only once that bound has
-// ended. The bound is the caller's to set, as it is for the wait for turns, and
-// its length decides nothing here: a drain that does not wait returns long
-// before it, however long it is.
+// A cut seat leaves the held set at once, so the drain's release never reaches
+// it: the claim taking it gives it back once its hook returns, and a drain
+// returning earlier would report done while that teardown and lease give-back
+// still ran. The hook honours its cut and is held unwinding until the drain
+// returns, so the drain must spend its whole bound waiting; the bound's length
+// decides nothing, since a drain that does not wait returns long before it.
 //
 // Mutation: drop the drain's wait for the seats it cut ([seat.Host.AwaitCut]),
 // and the drain returns with its bound still running.

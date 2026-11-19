@@ -59,13 +59,12 @@ func (s Subject) Valid() bool {
 // Either half stands alone when the other is missing, and "" means nobody.
 //
 // ONE RENDERING, because these prompts talk to each other through what they
-// store. The post-turn classifier attributes a fact to its requester as its
-// Requester line names them ("Sam (slack:U1) prefers terse replies"), and the
-// memory filter keeps a per-person memory only for the person its "Current
-// sender:" line names; the profiler and the profile block name the same
-// person again. Two renderings — a bare "Sam" on one side, the platform id
-// on the other — left the filter matching a fact against a name it was
-// written without, and a name is the half that changes.
+// store. The post-turn classifier attributes a fact as its Requester line
+// names the person ("Sam (slack:U1) prefers terse replies"), and the memory
+// filter keeps a per-person memory only for the person its "Current sender:"
+// line names; the profiler and profile block name them again. Two renderings
+// would leave the filter matching a fact against a name it was written
+// without, and a name is the half that changes.
 func (s Subject) Label() string {
 	name := strings.TrimSpace(s.Name)
 	id := strings.TrimSpace(s.Handle)
@@ -261,22 +260,15 @@ func (c *Counterparties) Record(ctx context.Context, o Observation) (bool, error
 // Purge drops profiles nobody has interacted with since cutoff, reporting how
 // many went.
 //
-// A RETENTION AT ALL, which this table had none of: one row per distinct
-// human or seat a seat has ever messaged, republished to every peer for every
-// held seat on each memory-sync cycle, growing for the life of the
-// deployment. Every other table with a documented horizon ships a sweep; this
-// one was `wholeEachCycle` in memsync with no cap, no TTL and no maintenance
-// entry.
+// The table needs a retention: a row per human or seat ever messaged,
+// republished to every peer each memory-sync cycle (`wholeEachCycle`), would
+// grow for the life of the deployment.
 //
-// Keyed on last_updated_at rather than last_corroborated_at: this drops a
-// profile nobody has INTERACTED with, and last_updated_at moves on every
-// upsert including the no-ops, so it is the true last-contact stamp.
-// Corroboration measures trait CHANGE, which a long steady relationship can
-// go a year without.
-//
-// Losing one is cheap and self-healing: the next interaction re-creates the
-// row and the seat re-learns from what it observes. What it costs is the
-// interaction count, which is a cadence signal rather than a fact.
+// Keyed on last_updated_at, not last_corroborated_at: it moves on every upsert
+// including no-ops, so it is the true last-contact stamp, while corroboration
+// measures trait CHANGE, which a steady relationship can go a year without.
+// Losing a row is self-healing: the next interaction re-creates it, costing
+// only the interaction count, a cadence signal, not a fact.
 func (c *Counterparties) Purge(ctx context.Context, cutoff time.Time) (int64, error) {
 	res, err := c.db.SQL().ExecContext(ctx,
 		`DELETE FROM counterparty_profiles WHERE last_updated_at < ?`,
@@ -306,29 +298,16 @@ func (c *Counterparties) Get(ctx context.Context, observer string, subject Subje
 
 // List returns every profile one observer holds, most recently updated first.
 //
-// THE ONLY MEMORY OBJECT THAT IS ABOUT SOMEBODY ELSE. A diary is what a seat
-// thought, an episode is what it did, a skill is what it learnt to do — and a
-// counterparty profile is what it learnt about a person it works with. It was
-// written by the learning loop, read by the Plan-phase prefetch one subject at
-// a time through [Counterparties.Get], and there was no way to ask what a seat
-// had accumulated: the memory surface seeded the field with an empty slice
-// because nothing could fill it.
+// ORDERED BY LAST UPDATE, not interaction count: the question is "who is this
+// seat working with", not whom it spoke to a hundred times last quarter.
 //
-// ORDERED BY LAST UPDATE rather than by interaction count, because the
-// question a reader has is "who is this seat working with", and a colleague it
-// spoke to a hundred times last quarter is not the answer.
+// CEILINGED BY A CONSTANT: counterparties are bounded by the company, not by
+// time, and a seat past [MaxProfilesListed] has a report, not a panel.
 //
-// CEILINGED BY A CONSTANT: a seat's counterparties are the people it has met,
-// which is bounded by the company and its correspondents rather than by
-// anything that grows with time. A seat with more than [MaxProfilesListed] is
-// one whose profile list is a report rather than a panel, and the ceiling is
-// what keeps the panel from becoming one silently.
-//
-// AND PAGED BELOW IT, in the statement: limit is how many the caller will
-// draw, and an absent one (or one past the ceiling) is served the ceiling.
-// Every row carries the profile's whole trait bag, the one column here with no
-// bound, so a caller that read the ceiling and kept the first row — the seat
-// profile's memory card, on a poll — read two hundred bags to draw one name.
+// AND PAGED BELOW IT, in the statement: limit is how many the caller will draw,
+// absent or past the ceiling meaning the ceiling. Every row carries the whole
+// trait bag, the one unbounded column, so a caller keeping the first row of a
+// ceiling's worth read two hundred bags to draw one name.
 func (c *Counterparties) List(ctx context.Context, observer string, limit int) ([]Profile, error) {
 	if c == nil || c.db == nil || observer == "" {
 		return nil, nil

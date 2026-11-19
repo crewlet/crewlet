@@ -10,19 +10,16 @@ import (
 
 // THE ARMS PARTITION THE ORDER, NEAREST FIRST, ON BOTH SIDES OF EVERY ROW.
 //
-// For an order and a row in it, the rows After's arms hold — each arm's rows in
-// the order, the arms one after another — are exactly the rows after it, in
-// the order; and the rows Before's arms hold, each arm's rows in the order
-// reversed, are exactly the rows before it, nearest first. That is the whole of
-// what a later page and a neighbour read rest on: a row in two arms is read
-// twice, a row in none is skipped, and arms out of order put a page's rows out
-// of order — each silently, and only for a caller who paged.
+// For an order and a row in it, the rows After's arms hold (each arm's rows in
+// the order, the arms one after another) are exactly the rows after it; those
+// Before's arms hold, each arm reversed, are exactly the rows before it,
+// nearest first. A row in two arms is read twice, one in none is skipped, arms
+// out of order misorder a page, each silently and only for a caller who paged.
 //
-// Checked over every shape that matters rather than a few hand-picked rows:
-// orders of one to three columns before the id that ends every order, each
-// column ascending or descending, NULL-able or not, over values drawn from a
-// range small enough that ties are the common case and NULLs sit at every
-// depth — with every row of the set as the pivot.
+// Checked over orders of one to three columns before the id that ends every
+// order, each ascending or descending, NULL-able or not, over values from a
+// range small enough that ties are common and NULLs sit at every depth, with
+// every row as the pivot.
 func TestTheArmsPartitionTheOrderNearestFirst(t *testing.T) {
 	t.Parallel()
 	random := rand.New(rand.NewPCG(7, 11))
