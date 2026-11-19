@@ -6,7 +6,7 @@
 
 **Run an AI agent company.**
 
-Crewlet is an open-source Go engine for orchestrating hierarchically organized
+Crewlet is a source-available Go engine for orchestrating hierarchically organized
 AI agent companies. You describe a company in YAML — mission, org chart, roles,
 policies, integrations — and Crewlet runs it: one persistent agent per seat,
 planning and executing real work in chat, your issue tracker, and your code host,
@@ -14,7 +14,7 @@ learning from what it did, and escalating to the humans in the org chart when st
 
 [![Release](https://img.shields.io/github/v/release/crewlet/crewlet?style=flat-square&color=7c56ff&label=release)](https://github.com/crewlet/crewlet/releases)
 [![CI](https://github.com/crewlet/crewlet/actions/workflows/ci.yml/badge.svg)](https://github.com/crewlet/crewlet/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-7c56ff?style=flat-square)](LICENSE)
+[![License: Elastic License 2.0](https://img.shields.io/badge/license-Elastic%20License%202.0-7c56ff?style=flat-square)](LICENSE)
 [![Go 1.27+](https://img.shields.io/badge/go-1.27%2B-7c56ff?style=flat-square)](go.mod)
 [![Docs](https://img.shields.io/badge/docs-read-7c56ff?style=flat-square)](docs/index.md)
 
@@ -399,7 +399,11 @@ Security issues: please report them privately — see [SECURITY.md](SECURITY.md)
 
 ## License
 
-[MIT](LICENSE)
+Crewlet is source-available under the [Elastic License 2.0](LICENSE) (ELv2):
+you may use, modify, redistribute and self-host it, in production and inside
+your organization, but you may not provide it to others as a hosted or managed
+service. Its copyright notice is in [NOTICE](NOTICE), which a redistribution
+keeps along with the license.
 
 The dashboard's glyphs are [Lucide](https://lucide.dev) (ISC, Feather-derived)
 via `@crewlethq/icons`, and its typefaces are Geist and Geist Mono (OFL) via

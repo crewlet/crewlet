@@ -356,11 +356,11 @@ func render(w io.Writer, toolchain component, modules []component) error {
 		"The crewlet binary is built with the Go toolchain and links the Go modules\n"+
 		"listed below. Each section reproduces that component's own license and\n"+
 		"notice files, unmodified, including those kept beside the packages the\n"+
-		"binary links from it. Crewlet itself is licensed under the MIT License\n"+
-		"in LICENSE. The dashboard the binary embeds lists its own bundled\n"+
-		"dependencies, fonts and icons in dashboard/THIRD_PARTY_NOTICES.txt beside\n"+
-		"this file, and a running engine serves the same file at\n"+
-		"/static/dashboard/THIRD_PARTY_NOTICES.txt.\n")
+		"binary links from it. Crewlet itself is licensed under the Elastic License\n"+
+		"2.0 in LICENSE, with its copyright notice in NOTICE. The dashboard the\n"+
+		"binary embeds lists its own bundled dependencies, fonts and icons in\n"+
+		"dashboard/THIRD_PARTY_NOTICES.txt beside this file, and a running engine\n"+
+		"serves the same file at /static/dashboard/THIRD_PARTY_NOTICES.txt.\n")
 	for _, c := range append([]component{toolchain}, modules...) {
 		notices, err := noticesOf(c)
 		if err != nil {

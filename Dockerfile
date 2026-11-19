@@ -170,12 +170,12 @@ WORKDIR /home/crewlet
 ARG TARGETPLATFORM
 COPY ${TARGETPLATFORM}/crewlet /usr/local/bin/crewlet
 
-# The license and third-party notices, where Debian keeps a package's: the
-# image redistributes the binary and everything it links, so it owes the same
-# notices the release archives carry. goreleaser stages these three files from
-# the checkout (dockers_v2 extra_files in .goreleaser.yaml), and
-# `make image-context` stages the same three.
-COPY LICENSE build/notices/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/
+# The license, its notice and the third-party notices, where Debian keeps a
+# package's: the image redistributes the binary and everything it links, so it
+# owes the same notices the release archives carry. goreleaser stages these
+# four files from the checkout (dockers_v2 extra_files in .goreleaser.yaml),
+# and `make image-context` stages the same four.
+COPY LICENSE NOTICE build/notices/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/
 COPY static/dashboard/THIRD_PARTY_NOTICES.txt /usr/share/doc/crewlet/dashboard/
 
 # The node's HTTP port, bound whenever Tier A's `api.port` is set — the
