@@ -1652,6 +1652,9 @@ waiting, and held once its start passes with the limit still on.
   stopped seat's work as moving. A model limit is learned from its park: a
   node that started while a seat was parked reads it at the engine's next park
   or probe, as the seat's row does.
+- **In the agents' tools.** `list_work_items`, `get_work_item` and `my_work`
+  carry each item's flow and the answer's `flow_live`, read by the data node
+  that answers the call, and their descriptions say what both mean.
 - **`departed` needs a chart.** An assignee is gone once the chart's seats have
   been applied to the tracker and do not name them; a tracker that has never
   been told the chart departs nobody.
