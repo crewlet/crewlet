@@ -27,7 +27,6 @@
 
 import { useMemo } from "react";
 import {
-  Button,
   Callout,
   CheckGrid,
   ChoiceList,
@@ -45,7 +44,6 @@ import {
   CATEGORY_JOBS,
   CATEGORY_ORDER,
   SEAT_JOBS,
-  assistantChain,
   categoryState,
   intentOf,
   usesForIntent,
@@ -135,16 +133,8 @@ export function seatChangesOf(
     }
   }
   if (next.assistant && !was.assistant) {
-    const today = data.assistant.enabled ? data.assistant.key : null;
-    // THE FALLBACKS STAY, and are named, so a change of the model it answers
-    // with first never reads as a change of its whole chain.
-    const chain = data.assistant.key ? [data.assistant.key, ...data.assistant.fallbacks] : [];
-    const kept = assistantChain(chain, key).slice(1);
-    lines.push(
-      `Ask Crewlet: ${today && today !== key ? today : "no model"} → ${name}${
-        kept.length > 0 ? `, still falling back to ${listed(kept)}` : ""
-      }`,
-    );
+    const today = data.assistant.key;
+    lines.push(`Ask Crewlet: ${today && today !== key ? today : "no model"} → ${name}`);
   }
   return lines;
 }
@@ -247,10 +237,10 @@ export function UseItFor({
 }) {
   const all = data.seats.map((s) => s.handle);
   const executor = canExecute(draft);
-  const assistantOn = data.assistant.enabled;
-  const was = assistantOn ? data.assistant.key : null;
-  // A MODEL THE ASSISTANT RUNS ON keeps it here: the assistant must run on
-  // something, so it moves when another model is chosen for it.
+  const was = data.assistant.key;
+  // A MODEL ASK CREWLET RUNS ON keeps it here: Ask Crewlet runs on something
+  // until its model is removed on its own page, so it moves when another model
+  // is chosen for it.
   const holdsAssistant = !!draft.key && was === draft.key;
   const intentSeats = useMemo(() => {
     if (draft.intent === "custom") return [];
@@ -259,19 +249,6 @@ export function UseItFor({
   }, [draft.uses, draft.intent]);
   const noCoding = `${product(draft.harness)} cannot run a seat's executor. Choose Claude Code or OpenCode to code.`;
   const slow = draft.model.trim() !== "" && !isFastModel(draft.model);
-  const denyWeb = (
-    <Button size="small" variant="secondary" onClick={() => onChange({ webDenied: true })}>
-      Deny web tools for this model
-    </Button>
-  );
-  const webRule = (
-    <Callout variant="warning" title="Ask Crewlet needs web tools denied">
-      <span className="models-stack">
-        <span>{ASSISTANT_USE.rule}</span>
-        <span>{denyWeb}</span>
-      </span>
-    </Callout>
-  );
 
   const options: ChoiceListOption[] = CHOICES.map((intent) => {
     if (intent === "none") {
@@ -294,19 +271,15 @@ export function UseItFor({
         media: <JobGlyph job="assistant" />,
         ...(holdsAssistant ? { tag: "In use" } : {}),
         detail: <Detail hint={`${ASSISTANT_USE.hint} Company-wide, with no seats.`} />,
-        ...(draft.intent === "assistant" && !draft.webDenied ? { panel: webRule } : {}),
-        ...(!assistantOn
+        // ANY ENTRY OF A HARNESS THE ENGINE CAN RUN WITH NO TOOL OF ITS OWN:
+        // its web tools are turned off for Ask Crewlet's runs whatever the
+        // entry says, so nothing about the entry has to change for it.
+        ...(!factsOf(draft.harness).assistant
           ? {
               disabled: true,
-              disabledReason:
-                "Ask Crewlet is off. Turn it on with assistant.enabled in Settings, Configuration first.",
+              disabledReason: `Ask Crewlet runs only on a harness the engine can leave with no tool of its own, which ${product(draft.harness)} is not.`,
             }
-          : !factsOf(draft.harness).assistant
-            ? {
-                disabled: true,
-                disabledReason: `Ask Crewlet runs only on a harness the engine can leave with no tool of its own, which ${product(draft.harness)} is not.`,
-              }
-            : {}),
+          : {}),
       };
     }
     if (intent === "all") {
@@ -319,17 +292,6 @@ export function UseItFor({
         ),
         media: <JobGlyph job="everything" />,
         detail: <Detail hint={EVERYTHING.hint} />,
-        // EVERYTHING IS NOT THE ASSISTANT (design QA Minor 28): a model that
-        // allows web tools is said, so the reader does not expect it there.
-        ...(draft.intent === "all" && !draft.webDenied && assistantOn
-          ? {
-              panel: (
-                <Text as="p" variant="caption" tone="secondary">
-                  Ask Crewlet can't use this model while web tools are allowed.
-                </Text>
-              ),
-            }
-          : {}),
         ...(!executor ? { disabled: true, disabledReason: noCoding } : {}),
       };
     }
@@ -395,7 +357,6 @@ export function UseItFor({
           {holdsAssistant ? ", until another model is chosen for it" : ""}.
         </Text>
       ) : null}
-      {assistantBeside && !draft.webDenied ? webRule : null}
       {error ? (
         <Callout variant="danger" title="The engine refuses this">
           {error}
@@ -455,7 +416,7 @@ export function UseItFor({
           stateOf={(seat, c) => GRID_STATE[categoryState(draft.uses, seat, c as JobCategory)]}
           onChange={(seat, c, on) => setSeatCategory(seat, c as JobCategory, on)}
         />
-        {assistantOn ? (
+        {factsOf(draft.harness).assistant ? (
           <Switch
             label="Also answer in Ask Crewlet"
             description={

@@ -119,13 +119,15 @@ function engine(
   return sent;
 }
 
-function mount(address: string, reading: AskReading = READY) {
+function mount(address: string, reading: AskReading = READY, viewer: unknown = {}) {
   vi.mocked(useAskReading).mockReturnValue(reading);
   window.location.hash = address;
   const store = new Store();
   store.applyOrg(withDerived({ name: "Nimbus", roles: [] }));
   const socket = new LiveSocket(store);
-  (socket as unknown as { query: () => Promise<unknown> }).query = () => Promise.resolve({});
+  // THE VIEWER, where a case says who reads the page; every other question answers nothing.
+  (socket as unknown as { query: (name: string) => Promise<unknown> }).query = (name) =>
+    Promise.resolve(name === "viewer" ? viewer : {});
   // THE PAGE AS THE APP DRAWS IT: on the conversation the address names.
   function Routed() {
     const where = resolve(useRoute().path);
@@ -325,4 +327,60 @@ test("where the reader may not ask, the page says why and offers no composer", a
   });
   await screen.findByText("Ask Crewlet is not part of your access");
   expect(screen.queryByRole("textbox", { name: "Ask Crewlet" })).toBeNull();
+});
+
+const NO_MODEL: AskReading = {
+  ...READY,
+  unavailable: {
+    reason: "no_model",
+    short: "No model is assigned to Ask Crewlet yet.",
+    title: "Ask Crewlet has no model for Nimbus yet",
+    body: "An admin has not chosen the model Ask Crewlet runs on.",
+  },
+};
+const assistantViewer = (assistant: Record<string, unknown>) => ({
+  login: "ada",
+  grants: ["admin"],
+  assistant: {
+    available: false,
+    reason: "no_model",
+    model: null,
+    notice: null,
+    can_assign: false,
+    reads_images: true,
+    ...assistant,
+  },
+});
+
+// CHOOSING A MODEL IS WHAT TURNS ASK CREWLET ON, so a reader who may assign
+// one is offered the picker where the conversation would be.
+test("with no model, a reader who may assign one is offered the picker in place of the conversation", async () => {
+  engine([]);
+  mount("#/ask", NO_MODEL, assistantViewer({ can_assign: true }));
+  await screen.findByText("Choose the model Ask Crewlet runs on");
+  expect(screen.getAllByRole("combobox", { name: "Ask Crewlet's model" }).length).toBeGreaterThan(
+    0,
+  );
+  expect(screen.queryByRole("textbox", { name: "Ask Crewlet" })).toBeNull();
+});
+
+test("with no model, anybody else is told an administrator has not chosen one, with no picker", async () => {
+  engine([]);
+  mount("#/ask", NO_MODEL, assistantViewer({ can_assign: false }));
+  await screen.findByText("Ask Crewlet has no model for Nimbus yet");
+  expect(screen.queryByRole("combobox", { name: "Ask Crewlet's model" })).toBeNull();
+});
+
+test("the conversation's head names the model Ask Crewlet runs on", async () => {
+  engine([]);
+  mount(
+    "#/ask",
+    READY,
+    assistantViewer({
+      available: true,
+      reason: undefined,
+      model: { key: "sonnet", label: "Claude Sonnet" },
+    }),
+  );
+  await screen.findByText("Runs on sonnet");
 });

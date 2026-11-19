@@ -440,7 +440,14 @@ export function AskProvider({ place, children }: { place: AskPlace; children: Re
 }
 
 /** The conversation: the home until a question is asked, then its turns; or why the reader may not ask. */
-export function AskThread({ label = "Conversation" }: { label?: string }) {
+export function AskThread({
+  label = "Conversation",
+  offlineAction,
+}: {
+  label?: string;
+  /** The one step offered beside why the reader may not ask, where there is one they can take. */
+  offlineAction?: ReactNode;
+}) {
   const a = useAsk();
   const { unavailable, admin, name } = a.place;
   if (unavailable !== null) {
@@ -449,6 +456,7 @@ export function AskThread({ label = "Conversation" }: { label?: string }) {
         icon={<LockGlyph size="lg" />}
         title={unavailable.title}
         description={unavailable.body}
+        action={offlineAction}
       />
     );
   }

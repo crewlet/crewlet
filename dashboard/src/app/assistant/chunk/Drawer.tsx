@@ -25,7 +25,7 @@
  */
 
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
-import { IconButton, Menu, SidePanel, announce, type MenuEntry } from "@crewlethq/ui";
+import { Button, IconButton, Menu, SidePanel, announce, type MenuEntry } from "@crewlethq/ui";
 import { ProductMark } from "@crewlethq/icons/product-mark";
 import {
   Maximize2Glyph,
@@ -36,6 +36,7 @@ import {
 } from "@crewlethq/icons/glyphs";
 import { relTime } from "~/lib/format.ts";
 import { useNow } from "~/lib/clock.ts";
+import { useViewer } from "~/lib/viewer.ts";
 import { matchesRow } from "../../keymap.ts";
 import { emit } from "../bus.ts";
 import type { AssistantFocus } from "../control.ts";
@@ -115,6 +116,7 @@ export function Drawer(props: DrawerProps) {
 }
 
 function Panel({ unavailable, onClose, initialFocus, shape }: DrawerProps) {
+  const canAssign = useViewer().assistantCanAssign;
   const { askDelete, resetPage, view, deletable, composer } = useAskGestures();
   const [recents, setRecents] = useState<Recent[] | null>(null);
   // THE SHELL'S ONE CLOCK, as every relative time on screen reads it.
@@ -248,7 +250,17 @@ function Panel({ unavailable, onClose, initialFocus, shape }: DrawerProps) {
           )
         }
       >
-        <AskThread />
+        <AskThread
+          offlineAction={
+            // NO MODEL, AND A READER WHO MAY ASSIGN ONE: the step is Ask
+            // Crewlet's page, where its model is chosen.
+            unavailable?.reason === "no_model" && canAssign ? (
+              <Button size="small" variant="secondary" onClick={() => openPage(null)}>
+                Choose its model
+              </Button>
+            ) : undefined
+          }
+        />
       </SidePanel>
       <AskDeleteConfirm />
     </>
