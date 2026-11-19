@@ -188,11 +188,16 @@ beforeEach(() => {
   resetSessionForTest();
   resetPageContextForTest();
   sessionStorage.clear();
+  // A FIXED MIDDAY: the list groups conversations by the reader's calendar
+  // day, so one last used ten minutes ago fell under Yesterday near midnight
+  // when the fixtures read the real clock.
+  vi.useFakeTimers({ now: Date.parse("2026-06-10T12:00:00Z"), toFake: ["Date"] });
 });
 
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   window.location.hash = "";
 });
 
