@@ -10638,19 +10638,21 @@ a.live-row:hover {
 }
 
 /* The open conversation's head: its title and its actions, on a hairline,
-   at the height of a chat room's. */
+   at the height of a chat room's. Where the title and the model's picker do
+   not both fit, the actions wrap under the title rather than cut it. */
 .ask-page__head {
   display: flex;
   flex: none;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--spacing-2);
+  gap: var(--spacing-1) var(--spacing-2);
   min-height: calc(var(--size-control-md) + var(--spacing-2) * 2);
   padding: 0 var(--spacing-3) 0 var(--ask-page-pad-x);
   border-bottom: 1px solid var(--color-border-default);
 }
 
 .ask-page__title {
-  flex: 1;
+  flex: 1 1 12rem;
   min-width: 0;
   margin: 0;
   overflow: hidden;

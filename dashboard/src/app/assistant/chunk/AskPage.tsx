@@ -50,7 +50,6 @@ import {
   Skeleton,
   Tag,
   announce,
-  useMediaMatch,
   useScreenBelow,
 } from "@crewlethq/ui";
 import {
@@ -83,11 +82,11 @@ import { isOpen, openTurn, type ConversationView } from "./turn.ts";
 
 export function AskPage({ conversation }: { conversation?: string | undefined }) {
   const reading = useAskReading();
-  // THE LIST AND THE CONVERSATION EACH SCROLL ON THEIR OWN, so the screen
-  // takes the window's height, flush to the sheet's edges as a conversation
-  // runs, above a phone, where the page scrolls as any other.
-  const phone = useMediaMatch(`(width < ${PHONE_BREAKPOINT}px)`);
-  useFillScreen(!phone, { flush: true });
+  // THE CONVERSATION SCROLLS INSIDE ITSELF ABOVE A COMPOSER THAT STAYS, at
+  // every width, as a chat room does (`app/fill.tsx`): on a phone too, where a
+  // page that grew with the thread left the composer under a short one and
+  // the window's foot empty. Flush to the sheet's edges, as a conversation runs.
+  useFillScreen(true, { flush: true });
   const [deleted, setDeleted] = useState("");
   return (
     <AskProvider place={{ ...reading, withPage: false, onDeleted: setDeleted }}>

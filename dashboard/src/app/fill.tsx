@@ -1,7 +1,7 @@
 /**
  * How a screen asks the shell to stop scrolling and hand it the height.
  *
- * EIGHT SCREENS NEED THIS, five of them for part of their life. Two are
+ * NINE SCREENS NEED THIS, five of them for part of their life. Two are
  * canvases (Structure's visualization and the org chart), and a canvas fills
  * the box its screen gives it rather than growing the page: a wheel turned
  * over a page that scrolls lands in a canvas half off screen. Three are two
@@ -16,19 +16,21 @@
  * panel stays in view however far the artifact is read, and the create pages,
  * whose body is a kind's own canvas, editor or composer.
  *
- * Chatlet asks for the whole of its life too, and for the same reason one level
- * worse: a transcript that scrolls inside a page that also scrolls is two
- * scrollers under one wheel, and the one that moves is whichever the pointer
- * is over — so a reader loses their place in a conversation by looking at it.
+ * Chatlet asks for the whole of its life too, and so does Ask Crewlet's page,
+ * for the same reason one level worse: a transcript that scrolls inside a
+ * page that also scrolls is two scrollers under one wheel, and the one that
+ * moves is whichever the pointer is over — so a reader loses their place in a
+ * conversation by looking at it.
  * A narrow screen is no exception, a phone's or one the assistant's column
  * has narrowed: there the rail stacks above the room and each takes its share
  * of the window, rather than the page growing past the composer.
  *
- * AND CHATLET ASKS FOR THE EDGES. A conversation runs edge to edge under the
- * page bar, its top bar and its panes flush with the sheet, so it asks for the
- * height FLUSH ([FillShape]): the kit's content column then drops its inset,
- * its measure and its gap, and anchors a layer the screen hosts. A screen that
- * asks for the height alone keeps the page's inset, as every other one does.
+ * AND CHATLET ASKS FOR THE EDGES, as Ask Crewlet's page does. A conversation
+ * runs edge to edge under the page bar, its top bar and its panes flush with
+ * the sheet, so it asks for the height FLUSH ([FillShape]): the kit's content
+ * column then drops its inset, its measure and its gap, and anchors a layer
+ * the screen hosts. A screen that asks for the height alone keeps the page's
+ * inset, as every other one does.
  *
  * WHY A REQUEST RATHER THAN A STYLESHEET. This used to be a rule the shell's
  * own sheet carried, matching a class deep inside the screen
