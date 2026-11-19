@@ -237,9 +237,8 @@ func testTellingsAreOnePerCallAndBounded(t *testing.T, s sandbox.PendingStore) {
 		if len(tellingsOf(t, s, turn)) != 1 {
 			t.Fatal("the premise: the first job's confirmation recorded no telling")
 		}
-		told := 0
 		walked := run(turn)
-		walked.Continues, walked.BriefRead = true, &told
+		walked.Continues, walked.BriefRead = true, &sandbox.LogRead{Launch: next}
 		third := mustLaunched(t, s, walked)
 		items := lateItems(t, s, turn)
 		if len(items) != 1 || items[0].For != third {

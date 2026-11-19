@@ -188,18 +188,19 @@ type ResumeRequest struct {
 	// off it.
 	Bridged BridgeLog
 
-	// BridgedRead is how many calls the round's log had taken at the read
-	// Bridged was made from ([BridgeLog.Appends]), before the call a person
-	// approved that it is still owed was added to it: every call of the round
-	// a brief built from Bridged can tell. A relaunch that carries the round
-	// on hands it to its launch ([Continuation.BriefRead]), whose opening
-	// marks every call of the round the log took after it late
-	// ([BridgeCall.Late]): one of the replaced job's, landing while the
-	// relaunch was readied, which none of its briefs told. Counted BEFORE the
-	// held call is added, which the log takes for good only at its own append
-	// or the opening, numbered after any call that landed in between — so a
-	// count that included it would leave the first of those unmarked.
-	BridgedRead int
+	// BridgedRead is the read Bridged was made from ([BridgeLog.Read]),
+	// before the call a person approved that it is still owed was added to
+	// it: every call of the round a brief built from Bridged can tell. Every
+	// relaunch hands it to its launch ([LaunchRequest.BriefRead]), whose
+	// opening marks late every call of the round the log took after it, or
+	// carries it late into a new round ([PendingRun.BriefRead]): one still
+	// running as the relaunch was readied, which none of its briefs told.
+	// Taken BEFORE the held call is added, which the log takes for good only
+	// at its own append or the opening, numbered after any call that landed
+	// in between — so a count that included it would leave the first of those
+	// unmarked. For a log on another job the read is the empty one the store
+	// answers under the row's job ([PendingStore.BridgeLog]), never applied.
+	BridgedRead LogRead
 
 	// Leads is the turn's leads kept beside the run's row
 	// ([PendingStore.Leads]), read by the coordinator beside the log inside
@@ -4278,9 +4279,9 @@ func (c *Coordinator) resumeAndSettle(adm admitted, run PendingRun,
 	c.frameBegins(run.TurnID)
 	calls, err := c.pending.BridgeLog(ctx, run)
 	if err == nil {
-		// HOW MANY CALLS THE READ SAW, before the held call is added: what
-		// a relaunch built from it can tell ([ResumeRequest.BridgedRead]).
-		read := calls.Appends()
+		// WHAT THE READ SAW, before the held call is added: what a relaunch
+		// built from it can tell ([ResumeRequest.BridgedRead]).
+		read := calls.Read()
 		calls = calls.withHeld(run)
 		// AND THE TURN'S LEADS beside the row, in the same frame: what a
 		// relaunch continuing a session that may lack its brief tells again
