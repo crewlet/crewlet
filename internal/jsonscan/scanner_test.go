@@ -745,12 +745,12 @@ func TestDepthAndOffsetSayWhereEachTokenSits(t *testing.T) {
 // READ, SKIP AND CAPTURE SAY SO WHERE THERE IS NOTHING FOR THEM TO TAKE, and change nothing: Read at a token
 // with no text, Skip and Capture before any token or at a container's end, Capture at a name and once a Read
 // has taken part of a value's text. A text read to its end answers io.EOF, and a read of nothing answers
-// nothing. A read too short for the next character takes nothing, so Capture still answers the whole value,
-// wherever the buffer's edge falls (here right after the string's opening quote, so the read's fill slides
-// the buffer).
+// nothing. A read too short for the next character takes nothing, so Tee still writes the whole value and
+// Capture still answers it, wherever the buffer's edge falls (here right after the string's opening quote,
+// so the read's fill slides the buffer).
 //
-// Mutation: let Capture answer a string a Read has begun, Read a literal, refuse Capture after a read that
-// took nothing, or let that read's fill drop the string's opening quote, and this fails.
+// Mutation: let Capture answer a string a Read has begun, Read a literal, refuse Tee or Capture after a read
+// that took nothing, or let that read's fill drop the string's opening quote, and this fails.
 func TestReadSkipAndCaptureSayWhereThereIsNothingToTake(t *testing.T) {
 	t.Parallel()
 	s := jsonscan.New(strings.NewReader(`{"name":"value","n":[true]}`))
@@ -821,9 +821,16 @@ func TestReadSkipAndCaptureSayWhereThereIsNothingToTake(t *testing.T) {
 		if n, err := s.Read(p[:1]); n != 0 || !errors.Is(err, io.ErrShortBuffer) {
 			t.Fatalf("a one-byte read of %q answers %d and %v, want io.ErrShortBuffer", text, n, err)
 		}
+		var teed bytes.Buffer
+		if err := s.Tee(&teed); err != nil {
+			t.Fatalf("after a read that took nothing, %d blanks in, Tee answers %v", blanks, err)
+		}
 		if raw, whole, err := s.Capture(64); string(raw) != text[blanks:] || !whole || err != nil {
 			t.Fatalf("after a read that took nothing, %d blanks in, Capture answers %q (whole %v, %v)", blanks,
 				raw, whole, err)
+		}
+		if teed.String() != text[blanks:] {
+			t.Fatalf("after a read that took nothing, %d blanks in, Tee writes %q", blanks, teed.String())
 		}
 		if _, err := s.Next(); !errors.Is(err, io.EOF) {
 			t.Fatalf("after the capture, Next answers %v", err)
