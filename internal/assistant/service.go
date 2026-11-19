@@ -207,13 +207,12 @@ func (s *Service) offeredTools(person iam.Principal, acts []string, briefing boo
 	return tools
 }
 
-// withWeb is tools with the web reads where the company lists research hosts.
+// withWeb is tools with the web reads: a page by its address always, and a
+// search where the model's harness has a search-only run.
 func (s *Service) withWeb(tools []catalog.Tool) []catalog.Tool {
-	if c, _ := s.company(); c != nil && len(c.Assistant.ResearchHosts()) > 0 {
-		tools = append(slices.Clone(tools), catalog.FetchWebPageTool())
-		if c.Assistant.Research.Search != nil {
-			tools = append(tools, catalog.SearchWebTool())
-		}
+	tools = append(slices.Clone(tools), catalog.FetchWebPageTool())
+	if s.models.Searches() {
+		tools = append(tools, catalog.SearchWebTool())
 	}
 	return tools
 }
@@ -495,6 +494,7 @@ func (s *Service) start(ctx context.Context, ts TurnStart) (wire.TurnAccepted, e
 	}
 	t := s.newTurn(ts.Person, ts.Conversation, id, ts.Key, ts.Read, ts.Page, acts)
 	t.subjects = subjectsOf(ts.Input, ts.Page)
+	t.seePerson(history.Messages, input, ts.Page)
 	t.brief.on = briefing
 	var chip *wire.PageChip
 	if ts.Page != nil {

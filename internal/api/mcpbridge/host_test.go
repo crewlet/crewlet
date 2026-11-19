@@ -13,15 +13,12 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
-	"github.com/crewlet/crewlet/internal/iam"
 	"github.com/crewlet/crewlet/internal/runtoken"
-	"github.com/crewlet/crewlet/internal/sandbox"
 )
 
-// THE HOST A CALL MAY NAME: any, on a token that resolves, except for a session
-// held to loopback, which admits only a loopback name or a container runtime's
-// name for the engine host. Every case runs over a real listener on 127.0.0.1,
-// so a call arrives on loopback as one through a proxy on the engine host does.
+// THE HOST A CALL MAY NAME: any, on a token that resolves. Every case runs over
+// a real listener on 127.0.0.1, so a call arrives on loopback as one through a
+// proxy on the engine host does.
 
 // namingHost delivers every request under host, as a reverse proxy or tunnel
 // that passes the public name on delivers a box's call to the node.
@@ -93,9 +90,9 @@ func portOf(t *testing.T, raw string) string {
 // the run's own is served whatever host it names, and one another keyring
 // signed is refused 401 under the same names, its tool never run.
 //
-// Mutation: judge every session's Host as a held one's (call loopbackRefusal
-// for every opening), and the public names are refused; admit a token that
-// does not verify, and the forged call is served.
+// Mutation: refuse a call whose Host is not a loopback name, and the public
+// names are refused; admit a token that does not verify, and the forged call
+// is served.
 func TestASeatsCallIsServedUnderTheHostAProxyPassesOn(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t)
@@ -140,104 +137,5 @@ func TestASeatsCallIsServedUnderTheHostAProxyPassesOn(t *testing.T) {
 	if ran := len(f.byName["read_page"].seen()); ran != len(hosts) {
 		t.Errorf("the seat's tool ran %d times, want once for each of the %d hosts its run's "+
 			"token was presented under and never for the forged one", ran, len(hosts))
-	}
-}
-
-// A SESSION HELD TO LOOPBACK ADMITS A LOOPBACK NAME OR A RUNTIME'S NAME FOR THE
-// ENGINE HOST, AND NO OTHER. Its token is worth nothing off this host's
-// loopback ([mcpbridge.Session.Loopback]), and a browser page under a name its
-// author points at 127.0.0.1 reaches that loopback (DNS rebinding), so the Host
-// is held too. The runtime's names are admitted because Docker Desktop and
-// Podman's machine on macOS and Windows deliver a container box's call to the
-// host's loopback under them. A refusal is the route's 401, telling no more
-// than any refused token's, and the run's tool never runs.
-//
-// Mutation: drop the Host from the hold, and every rebound name is served;
-// drop the runtime's names, and a held container run on Docker Desktop has
-// none of its tools.
-func TestALoopbackSessionAdmitsOnlyLoopbackAndTheRuntimesNames(t *testing.T) {
-	t.Parallel()
-	s := serve(t)
-	endpoint := s.bridge.Open(t.Context(), &mcpbridge.Session{RunID: "deep-1", Launch: "job-1",
-		Surface: s.surface, Caller: nobody{bound: true}, Loopback: true})
-	if endpoint == "" {
-		t.Fatal("the bridge opened no session")
-	}
-	port := portOf(t, s.server.URL)
-	admitted := 0
-	for host, want := range map[string]bool{
-		"127.0.0.1:" + port:                                true,
-		"localhost:" + port:                                true,
-		"engine.localhost:" + port:                         true,
-		"[::1]:" + port:                                    true,
-		"host.docker.internal:" + port:                     true,
-		"host.containers.internal:" + port:                 true,
-		"Host.Docker.Internal:" + port:                     true,
-		"host.docker.internal":                             true,
-		"crewlet.example.com":                              false,
-		"rebound.example.com:" + port:                      false,
-		"host.docker.internal.rebound.example.com:" + port: false,
-		"docker.internal:" + port:                          false,
-	} {
-		if !want {
-			if got := postAs(t, s.server, endpoint, host); got != http.StatusUnauthorized {
-				t.Errorf("Host %s on loopback: a held session's call answered %d, want 401", host, got)
-			}
-			continue
-		}
-		sess, err := connectAs(t, s.server, endpoint, host)
-		if err != nil {
-			t.Errorf("Host %s on loopback: a held session's call was refused: %v", host, err)
-			continue
-		}
-		if got := text(callTool(t, sess, "probe", nil)); got != string(iam.Unknown) {
-			t.Errorf("Host %s: the call was decided as %q, want the caller's %q", host, got, iam.Unknown)
-		}
-		_ = sess.Close()
-		admitted++
-	}
-	if ran := int(s.surface.calls.Load()); ran != admitted {
-		t.Errorf("the held run's tool ran %d times, want %d: once for each admitted host and "+
-			"never for a refused one", ran, admitted)
-	}
-}
-
-// aliasedBox is a box on a network not the engine host's, as a container's
-// is: [sandbox.EngineAddress] asks it only the host's name inside it.
-type aliasedBox struct{ sandbox.Sandbox }
-
-func (aliasedBox) EngineHost() string { return "host.docker.internal" }
-
-// A BASE THE REHOSTING MOVES IS A BASE THE HOLD COVERS. A container box gets
-// the runtime's name for the engine host in place of a loopback base
-// ([sandbox.EngineAddress]), and a run on such a base is held to loopback
-// ([mcpbridge.Bridge.LoopbackBase]) so the name widens nothing. The two must
-// read "loopback" alike, or a run on a base such as
-// http://engine.localhost:8000 is rehosted and held to nothing.
-//
-// Mutation: read a base as loopback only for `localhost` or an address, and
-// the `.localhost` name and the upper-cased one go red.
-func TestABaseTheRehostingMovesIsABaseTheHoldCovers(t *testing.T) {
-	t.Parallel()
-	for base, loopback := range map[string]bool{
-		"http://127.0.0.1:8000":             true,
-		"http://127.0.0.2:8000":             true,
-		"http://localhost:8000":             true,
-		"http://LOCALHOST:8000":             true,
-		"http://engine.localhost:8000":      true,
-		"http://[::1]:8000":                 true,
-		"https://engine.example.com":        false,
-		"http://localhost.example.com:8000": false,
-		"http://10.0.0.5:8000":              false,
-		"http://host.docker.internal:8000":  false,
-	} {
-		b := bridgeFor(t, mcpbridge.Options{Material: runtoken.OneKey("k", "test-key"), BaseURL: base})
-		if got := b.LoopbackBase(); got != loopback {
-			t.Errorf("%s: LoopbackBase = %v, want %v", base, got, loopback)
-		}
-		if moved := sandbox.EngineAddress(aliasedBox{}, base) != base; moved != loopback {
-			t.Errorf("%s: a container box is handed it moved=%v, want %v — the rehosting and "+
-				"the hold disagree about what loopback is", base, moved, loopback)
-		}
 	}
 }

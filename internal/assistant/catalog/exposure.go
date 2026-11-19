@@ -5,21 +5,15 @@ import (
 	"slices"
 
 	"github.com/crewlet/crewlet/internal/authz"
-	"github.com/crewlet/crewlet/internal/toolname"
 )
 
-// The exposure table: which surface each CURATED tool is built on, one row per
-// question, operator tool or route a curated tool reads or proposes, held to
-// the engine's own metadata by the catalogue walks (internal/api/queries,
-// internal/agent/builtin and internal/api each walk what they own). A curated
-// tool is a better-shaped shortcut onto a surface; every other surface the
-// person's grant reaches is reached through the generic API tools and decided
-// by its own route (ADR-0052), so a surface needs a row only when a curated
-// tool is built on it.
-
-func asked(question, tool string) Exposure {
-	return Exposure{Question: question, As: AsReadTool, Name: tool}
-}
+// The exposure table: which surface each CURATED write is built on, one row per
+// question its preview reads, operator tool it executes as or route it
+// proposes on, held to the engine's own metadata by the catalogue walks
+// (internal/api/queries, internal/agent/builtin and internal/api each walk what
+// they own). Every read, and every change no curated write makes, goes through
+// the generic API tools and is decided by its own route (ADR-0052), so a
+// surface needs a row only when a curated write is built on it.
 
 // proposed is a curated write executing as verb's operator tool, which the
 // row names by the verb, as [write] does.
@@ -27,66 +21,39 @@ func proposed(verb authz.Action, name string) Exposure {
 	return Exposure{Tool: string(verb), As: AsWriteTool, Name: name}
 }
 
-func routed(route, tool string) Exposure {
-	return Exposure{Route: route, As: AsReadTool, Name: tool}
+// previewed is a question read only by the named write's preview.
+func previewed(question, tool string) Exposure {
+	return Exposure{Question: question, As: AsPreviewRead, Name: tool}
 }
 
 func routeProposed(route, tool string) Exposure {
 	return Exposure{Route: route, As: AsWriteTool, Name: tool}
 }
 
-// questionExposures are the registry questions a curated tool reads.
+// questionExposures are the registry questions a curated write's preview
+// reads: what it changes, read as it is now, so the card shows the change and
+// binds the revision it read (ADR-0051). Every other read is [ReadAPITool]'s,
+// decided by its own route.
 var questionExposures = []Exposure{
-	asked("agent", "get_agent"),
-	asked("tokens", "get_spend"),
-	asked("turns", "list_turns"),
-	asked("token_series", "get_spend_series"),
-	asked("seat_activity", "get_agent"),
-	asked("fleet", "get_fleet_health"),
-	asked("mcp_servers_status", "get_fleet_health"),
-	asked("backups", "get_fleet_health"),
-	asked("budgets", "list_budgets"),
-	asked("integrations", "list_integrations"),
-	asked("knowledge", searchKnowledgeTool),
-	asked("containers", "list_spaces"),
-	asked("executors", "list_executors"),
-	asked("work_items", "list_tasks"),
-	asked("work_item", "get_task"),
-	asked("work_comments", "get_task_thread"),
-	asked("work_item_turns", "get_task_cost"),
-	asked("work_projects", listProjectsTool),
-	asked("work_project", listProjectsTool),
-	asked("work_workload", "get_workload"),
-	asked("work_my_work", "get_my_work"),
-	asked("work_inbox", "get_my_work"),
-	asked("company_feed", "get_company_feed"),
-	asked("decisions", "list_decisions"),
-	asked("events", "list_audit_events"),
-	asked("page", GetPageTool),
-	asked("work_search", "search_work"),
-	asked("config_audit", "list_config_changes"),
-	asked("artifacts", listArtifactsTool),
-	asked("artifact", getArtifactTool),
-	asked("chat_channels", "list_chat_rooms"),
-	asked("chat_channel", "get_chat_room"),
-	asked("chat_messages", "read_chat_messages"),
-	asked("chat_thread", "get_chat_thread"),
-	asked("chat_activity", "list_chat_mentions"),
-	asked("chat_search", "search_chat"),
-	asked("atlas_entries", searchAtlasTool),
-	asked("atlas_entry", getAtlasEntryTool),
-	// THE TRACE QUESTION SHARES ITS NAME WITH THE AGENTS' TOOL, so it is
-	// read off the one constant that declares it.
-	asked(toolname.AtlasTrace, traceAtlasEntryTool),
-	// READ BY A PREVIEW ONLY: a priority change is bound to the person's
-	// record at the version its preview read. (The room and the thread every
-	// chat write's preview reads are read by get_chat_room and
-	// get_chat_thread above.)
-	{Question: "work_person", As: AsPreviewRead, Name: "set_my_priorities"},
-	// WHOM A POST OR A REPLY WOULD REACH, read by their previews alone: the
-	// post's own decision run dry, so the card says what the send will do.
-	{Question: "chat_reach", As: AsPreviewRead, Name: "post_chat_message"},
-	{Question: "chat_reach", As: AsPreviewRead, Name: "reply_in_chat_thread"},
+	previewed("work_item", "update_task"),
+	previewed("work_comments", "comment_on_task"),
+	previewed("decisions", "answer_decision"),
+	previewed("work_inbox", markInboxTool),
+	previewed("work_my_work", "set_my_priorities"),
+	// A priority change is bound to the person's record at the version its
+	// preview read.
+	previewed("work_person", "set_my_priorities"),
+	previewed("page", "edit_page"),
+	previewed("artifact", shareArtifactTool),
+	previewed("agent", "pause_agent"),
+	previewed("executors", AnswerExecutorTool),
+	previewed("atlas_entry", addAtlasEntryTool),
+	previewed("chat_channel", "post_chat_message"),
+	previewed("chat_thread", "reply_in_chat_thread"),
+	// WHOM A POST OR A REPLY WOULD REACH: the post's own decision run dry, so
+	// the card says what the send will do.
+	previewed("chat_reach", "post_chat_message"),
+	previewed("chat_reach", "reply_in_chat_thread"),
 }
 
 // toolExposures are the operator catalogue tools a curated write executes as.
@@ -128,24 +95,18 @@ var toolExposures = []Exposure{
 	proposed(authz.ActionChatLeave, "leave_chat_room"),
 }
 
-// routeExposures are the routes a curated tool reads or proposes on directly,
-// rather than through a registry question or the act route: the overview
-// reads the stream service serves, the org chart's people, the shares and the
-// principles.
+// routeExposures are the routes a curated write proposes on directly, rather
+// than through the act route: the shares, the principles, the ceilings and an
+// agent's access.
 var routeExposures = []Exposure{
-	routed("GET /agents", "list_agents"),
-	routed("GET /org", "get_org_chart"),
-	routed("GET /iam/seats", "get_org_chart"),
 	routeProposed(ShareRoute, shareArtifactTool),
 	routeProposed(UnshareRoute, unshareArtifactTool),
-	routed(PrinciplesRoute, "get_company_principles"),
 	routeProposed(PrinciplesWriteRoute, "update_company_principles"),
 	// A CEILING IS WRITTEN AS BUDGETS WRITES IT: a seat's through the seat,
 	// the company's as a merge patch of the document.
 	routeProposed(seatWriteRoute, "set_token_budget"),
 	routeProposed(companyWriteRoute, "set_token_budget"),
 	// AN AGENT'S ACCESS AT A VENDOR IS SAVED AS ITS AGENTS TAB SAVES IT.
-	routed(accessSeatRoute, seatAccessReadTool),
 	routeProposed(accessWriteRoute, "set_seat_access"),
 }
 

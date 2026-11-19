@@ -15,7 +15,8 @@
  * then what the engine is handling. Each row says how fresh it is and offers
  * its fix; Apply re-checks the finding before anything is sent (`apply.ts`).
  *
- * HISTORY, the second tab: what was found and closed, and why it closed.
+ * REPORTS, the second tab: each week's report, newest first, a page at a
+ * time. HISTORY, the third: what was found and closed, and why it closed.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -38,15 +39,19 @@ import { ago } from "~/lib/ago.ts";
 import { plural, relTime } from "~/lib/format.ts";
 import { GoLiveReview } from "./GoLiveReview.tsx";
 import { ApplyDialog } from "./ApplyDialog.tsx";
-import { decide, runNow, useFindings, useLatestRun } from "./api.ts";
+import { decide, runNow, useFindings, useLatestRun, useReports } from "./api.ts";
 import { AtlasFix, findingItem, type RowActions } from "./rows.tsx";
-import type { AdvisorKeptFinding, AdvisorRunSummary } from "~/protocol/advisorFindings.ts";
+import type {
+  AdvisorKeptFinding,
+  AdvisorReportSummary,
+  AdvisorRunSummary,
+} from "~/protocol/advisorFindings.ts";
 import type { AdvisorSeverity } from "~/protocol/advisor.ts";
-import { CLOSE_REASONS, SEVERITIES, STATE_WORDS, ranked } from "./words.ts";
+import { CLOSE_REASONS, SEVERITIES, STATE_WORDS, ranked, weekMoved, weekWords } from "./words.ts";
 import { AdvisorModel } from "./AdvisorModel.tsx";
 
 /** The Advisor page's tabs, as its address names them. */
-export type AdvisorSection = "findings" | "history";
+export type AdvisorSection = "findings" | "reports" | "history";
 
 export function AdvisorPage({ section }: { section: AdvisorSection }) {
   // A RUN THAT ENDED is read by the list under it: its key moves, so it reads again.
@@ -56,6 +61,7 @@ export function AdvisorPage({ section }: { section: AdvisorSection }) {
     <div className="col gap-4">
       <RunHead onEnded={ended} />
       {section === "findings" ? <Findings key={runs} /> : null}
+      {section === "reports" ? <Reports /> : null}
       {section === "history" ? <History /> : null}
     </div>
   );
@@ -263,12 +269,77 @@ function Findings() {
   );
 }
 
+/**
+ * The rows already shown, then a page's rows not among them. Until the next
+ * page answers, the question still holds the page before, whose rows are
+ * already held: drawn twice, they would repeat on screen and share a key.
+ */
+export function pagedOn<T>(
+  held: readonly T[],
+  page: readonly T[] | undefined,
+  key: (row: T) => string,
+): T[] {
+  const seen = new Set(held.map(key));
+  return [...held, ...(page ?? []).filter((row) => !seen.has(key(row)))];
+}
+
+/** The weekly reports, newest first: each opens its week's page. */
+function Reports() {
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [held, setHeld] = useState<AdvisorReportSummary[]>([]);
+  const reports = useReports(cursor);
+  const now = useNow();
+  const rows = pagedOn(held, reports.data?.reports, (r) => r.week);
+  return (
+    <QueryState
+      error={reports.error}
+      detail={reports.detail}
+      refusal={reports.refusal}
+      loading={reports.loading && reports.data === null && held.length === 0}
+    >
+      {rows.length === 0 && reports.data ? (
+        <EmptyState
+          size="compact"
+          title="No report yet"
+          description="The Advisor writes a report every Monday morning: the week's numbers against the week before, and what it found."
+        />
+      ) : (
+        <ul className="advisor-reports" aria-label="Weekly reports">
+          {rows.map((r) => (
+            <li key={r.week} className="advisor-history__row">
+              <Link href={href(["advisor", "reports", r.week])}>{weekWords(r.week)}</Link>
+              <Text as="span" variant="caption" tone="secondary">
+                {weekMoved(r)}, written {ago(r.written_at, now)}
+              </Text>
+            </li>
+          ))}
+        </ul>
+      )}
+      {reports.data?.next_cursor ? (
+        <Button
+          size="small"
+          variant="ghost"
+          onClick={() => {
+            setHeld(rows);
+            setCursor(reports.data!.next_cursor);
+          }}
+        >
+          Show older reports
+        </Button>
+      ) : null}
+      {reports.error && held.length > 0 ? (
+        <Callout variant="warning">Older reports could not be read. Try again in a moment.</Callout>
+      ) : null}
+    </QueryState>
+  );
+}
+
 function History() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [held, setHeld] = useState<AdvisorKeptFinding[]>([]);
   const closed = useFindings("closed", cursor);
   const now = useNow();
-  const rows = [...held, ...(closed.data?.findings ?? [])];
+  const rows = pagedOn(held, closed.data?.findings, (f) => f.id);
   return (
     <QueryState
       error={closed.error}

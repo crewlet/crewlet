@@ -134,24 +134,3 @@ func TestTheContainerIsStartedKnowingTheEngineHostsName(t *testing.T) {
 		})
 	}
 }
-
-// EVERY NAME A BOX IS HANDED FOR THE ENGINE HOST IS ONE THE ENGINE ADMITS. The
-// tool bridge admits a loopback-held session's call under a loopback name or an
-// [EngineHostName]; a runtime name it refused would leave every held run in
-// that runtime's containers without its tools. And no other name is one, not
-// even one merely containing theirs.
-func TestEveryRuntimesNameForTheEngineHostIsAdmitted(t *testing.T) {
-	t.Parallel()
-	for _, runtime := range []string{"docker", "podman"} {
-		alias := containerCLI{path: "/usr/bin/" + runtime}.hostAlias()
-		if !EngineHostName(alias) {
-			t.Errorf("%s hands a box %q for the engine host, which EngineHostName refuses", runtime, alias)
-		}
-	}
-	for _, name := range []string{"", "localhost", "docker.internal", "host.docker.internal.example.com",
-		"evil-host.docker.internal", "host.internal"} {
-		if EngineHostName(name) {
-			t.Errorf("EngineHostName(%q) = true, want only the runtimes' own names", name)
-		}
-	}
-}

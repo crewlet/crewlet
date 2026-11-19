@@ -9,6 +9,7 @@ import (
 	"github.com/crewlet/crewlet/internal/api/auth"
 	"github.com/crewlet/crewlet/internal/assistant/catalog"
 	"github.com/crewlet/crewlet/internal/authz"
+	"github.com/crewlet/crewlet/internal/iam"
 )
 
 // --- the Dashboard Assistant's route table (ADR-0052) ---
@@ -31,12 +32,14 @@ var assistantMethods = []string{http.MethodGet, http.MethodHead, http.MethodPost
 // assistant's own routes) is never offered. Every other unguarded route (the
 // probes, the dashboard's own files) is not an API a person calls.
 func (a *App) AssistantRoutes() []catalog.Route {
-	decidedInside := map[string]bool{"GET /query/{what}": true, catalog.ActRoute: true}
+	decidedInside := map[string]bool{catalog.QuestionRoute: true, catalog.ActRoute: true}
 	for _, r := range a.overviewRoutes() {
 		decidedInside[r.pattern] = true
 	}
+	named := map[string]string{}
 	for _, r := range namedRoutes {
 		decidedInside[r.method+" "+r.pattern] = true
+		named[r.method+" "+r.pattern] = r.what
 	}
 	patterns := slices.Concat(a.routes, slices.Collect(maps.Keys(a.policies)))
 	slices.Sort(patterns)
@@ -52,14 +55,37 @@ func (a *App) AssistantRoutes() []catalog.Route {
 				Absent: policy.Absent, Effect: policy.Effect, DryRun: policy.DryRun,
 				Summary: policy.Summary, Replaces: policy.Replaces})
 		} else if decidedInside[pattern] {
-			route := catalog.Route{Pattern: pattern}
-			if pattern == catalog.ActRoute {
+			route := catalog.Route{Pattern: pattern, Apps: a.questionApps(named[pattern])}
+			switch pattern {
+			case catalog.ActRoute:
 				// THE ONE POST MOUNTED OUTSIDE A ROUTER, so the table says
 				// what it does: it calls the tool its path names.
 				route.Effect = authz.EffectCalls
+			case catalog.QuestionRoute:
+				route.QuestionApps = map[string][]iam.Grant{}
+				for _, what := range a.queries.Names() {
+					route.QuestionApps[what] = a.questionApps(what)
+				}
 			}
 			out = append(out, route)
 		}
 	}
 	return out
+}
+
+// questionApps are the apps a registered question draws on, as its posture
+// declares them: the app or admin it requires, or the apps of the verb its
+// answer decides by. None for a question everybody asks or none registered.
+func (a *App) questionApps(what string) []iam.Grant {
+	if what == "" {
+		return nil
+	}
+	posture := a.queries.PostureOf(what)
+	if g := posture.Grant(); g != "" {
+		return []iam.Grant{g}
+	}
+	if verb := posture.Verb(); verb != "" {
+		return catalog.VerbApps(verb)
+	}
+	return nil
 }

@@ -43,9 +43,8 @@ func ServerURL(endpoint, server string) string {
 
 // Servers names the MCP servers an opening of surface serves under their own
 // names, sorted: the server of every tool a seat's surface offers that an MCP
-// server serves. A surface that is not a seat's — Ask Crewlet's deep work —
-// holds no MCP server's tools, and its opening serves every tool as the
-// engine's own.
+// server serves. A surface that is not a seat's own [*tools.Surface] names
+// none, and its opening serves every tool as the engine's own.
 //
 // ONE RULE FOR BOTH ENDS: the engine hands the run's harness a URL per server
 // from it ([ServerURL]) and an opening serves its servers from it, so the box

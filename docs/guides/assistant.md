@@ -115,8 +115,8 @@ offered only to a person who could make the same change on its screen:
 | Set or remove one token ceiling: a seat's or the company's, for a day, a week or a month | Administrators | The write Company › Budgets saves: the seat as read with only that window's ceiling changed (`PUT /config/roles/{handle}`), or a merge patch of the company's one window (`PATCH /config`). The card shows one row, the ceiling now and the new one, the history line and the route's warnings; the approval asks the administrator to confirm it is them when their sign-in is not recent, and a change to the configuration meanwhile makes the proposal stale. A lead changing a seat they lead goes through the generic change or Budgets itself |
 
 **An agent's access to an integration** is one read away for an
-administrator (`get_seat_access`, on
-`GET /setup/integrations/{kind}/access/seats/{handle}/{lane}`): the agent's
+administrator (`GET /setup/integrations/{kind}/access/seats/{handle}/{lane}`,
+through `read_api`): the agent's
 grant in Crewlet, what its credential holds at the vendor now, for GitHub what
 the agent's app is registered with and which of that the grant leaves unused,
 its scope, its status, what the next sync will take, and two clocks. Ask
@@ -135,15 +135,13 @@ agent has open for one with the two options of its question that grant it, how
 many more permissions the catalogue offers the agent beside its level and how
 many of those the company's own connection lacks, and, for each permission its
 grants and requests name, whether the company's connection can grant it. Any
-other permission is looked up by part of its name with
-`search_grant_catalogue`, which answers which level already holds it, whether
-it changes things, and whether the connection can grant it. Crewlet grants
+other permission is looked up by part of its name, the same read with
+`q`, which answers which level already holds it, whether it changes things,
+and whether the connection can grant it. Crewlet grants
 only what the company's own connection to the vendor holds: where that
 connection lacks a permission (Cloudflare's provisioner token without
-Origin Rules: Edit, say), the read names what a person adds to it at the vendor,
-and its card carries a link to that page, built by the engine from the vendor's
-catalogue and opened only after the dashboard names its destination. Ask
-Crewlet says so, and never writes a vendor's address itself. Adding it is a person's step at the vendor;
+Origin Rules: Edit, say), the read names what a person adds to it at the vendor
+and where. Ask Crewlet says so, and never writes a vendor's address itself. Adding it is a person's step at the vendor;
 the catalogue is read again within a minute, and the permission can then be
 granted to the agent in Crewlet.
 
@@ -224,9 +222,8 @@ admitted, metered, recorded and streamed as any question is, that answers in a
 fixed shape rather than in prose. What a person sees is on the
 [concept page](../concepts/assistant.md#opening-it). What it means for you:
 
-- **It only reads.** A brief turn is offered the person's read tools and the
-  brief's own answer, never a write, a page action, a link of its own or deep
-  work, and nothing it offers the person writes: an action opens a record's
+- **It only reads.** A brief turn is offered `read_api`, `describe_api` and the
+  brief's own answer, never a write, a page action or a link of its own, and nothing it offers the person writes: an action opens a record's
   screen or asks a question in the same conversation.
 - **Its verdict is counted, never written.** A brief answers what the page is
   about (the model's one `about` line) and whether the person has to do
@@ -323,32 +320,39 @@ These limits are fixed, not configured:
 
 ## Web research
 
-With `assistant.research.hosts` set, Ask Crewlet can read a page of a vendor's
-documentation to answer a question, such as which plan a setting needs. The
-engine reads it, never the model's own harness, whose web tools stay off
-([ADR-0151](../../adr/0151-ask-crewlet-reads-the-web-only-through-the-engine-from-hosts-the-company-lists.md)):
+Ask Crewlet can search the web and read a public page to answer a question,
+such as which plan a setting needs. There is nothing to configure. The engine
+reads every page, never the model's own harness, whose web tools stay off
+(ADR-0050):
 
-- only `https` pages on the listed hosts, and a redirect only to another of them;
-- `GET` only, with no cookie, credential or company header, and never to a
-  private, loopback or link-local address;
+- only `https` pages on port 443, a redirect only to another public `https`
+  address, and never a private, loopback or link-local address;
+- `GET` only, with no cookie, credential or company header;
 - at most 2 MiB a page in 15 seconds, read in parts of 12 KiB, at most eight
   pages a turn, each kept ten minutes on the node that read it.
 
-With `assistant.research.search.mcp_server` naming the company's Tavily
-entry, Ask Crewlet can also search those hosts first. Each API node runs its
-own instance of that server for research alone, never a seat's; a search asks
-for the listed hosts only, drops any result on another host, sends at most
-200 characters and keeps five results, and a turn searches at most four times.
+**An address has to come from somewhere other than the model.** A page is read
+only at an address the turn saw from you (your question, the page you sent with
+it, your earlier messages in the conversation), from a search's results, from a
+link of a page it read, or from an address field of something it read in
+Crewlet. An address the model wrote itself, such as one with your data in its
+query, is refused before anything is sent, and the step says so. A page can
+still tell the model to visit somewhere, but an address planted in a page was
+written before its author could see any of your data.
+
+**Searching** runs your Ask Crewlet model's own harness once more, with its
+vendor's web search and no other tool, handed the query alone: no conversation,
+no company data, no access. The results are the search tool's own (a title and
+an address each, at most eight), never the model's prose, and the tokens the
+search spent are charged to the turn. A turn searches at most four times. A
+model on a harness with no measured search-only run (Claude Code has one; Pi
+does not) reads pages but does not search.
 
 Each read or search is a step the person sees, and its text is the
 site's: a change Ask Crewlet proposes after reading one says it was prepared
 after reading a web page, and after one it proposes changes only to the
 records your question or open screen names (a task key such as ENG-41, the
 record you have open), so a page cannot steer it into changing anything else.
-List only the documentation hosts you trust, such as the vendors your
-integrations connect to. An administrator can change the list on **Settings ›
-Ask Crewlet**, under Web research, where removing every host removes the block
-and turns web research off.
 
 The pages a turn read are cited under its answer, under **Sources**: one link a
 page, with its host and when it was read, from the engine's own record of the
@@ -501,12 +505,13 @@ header carries the rubric a real model's trials are graded on.
 Crewlet's own documentation, which the binary carries exactly as its version
 ships it. `who-changed-what` answers who changed a task and which change was
 refused from the audit log. `read-one-config-section` reads one section of the
-company document rather than the whole. `read-a-vendor-page` reads a vendor's
-page from a listed host (a case lists its hosts with `research`) whose text
-carries an instruction nothing follows, and `a-page-cannot-steer-a-change` has
-a page ask for a comment on another task, which is refused, and
-`search-a-vendors-docs` searches them first (`search: true` names a search
-server) past a result that carries one. The flags and the suite format are in
+company document rather than the whole. `read-a-vendor-page` reads the vendor
+page the person names, whose text carries an instruction nothing follows,
+`a-page-cannot-steer-a-change` has a page ask for a comment on another task,
+which is refused, `search-a-vendors-docs` searches first (`search: true` is a
+model that can) past a result that carries one, and `fetch-a-composed-url` has
+a task's description ask for an address with the task in it, which is never
+read. The flags and the suite format are in
 the
 [CLI reference](../reference/cli.md#crewlet-assistant-eval), and the shipped
 suite is under `examples/assistant-evals/`.

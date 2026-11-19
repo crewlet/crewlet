@@ -113,7 +113,8 @@ import { useViewer } from "~/lib/viewer.ts";
 import {
   activityOf,
   indexOrg,
-  liveOnItems,
+  liveOnRows,
+  seatTurn,
   statusOf,
   seatLookup,
   seatResolvers,
@@ -625,12 +626,12 @@ export function ItemsView({
     [picked],
   );
 
-  // WHAT IS HAPPENING ON THE CARDS: the turn a seat is running on each task,
-  // its holder's state, and — for a bound reader — the executors parked
-  // on a question put to THEM. All the engine's words: `activity` from the
-  // push, the item the turn is charged to, and `decisions`' own reading of
+  // WHAT IS HAPPENING ON THE CARDS: the turn or run on each task its flow
+  // reads `working` (ADR-0162), its holder's state, and, for a bound reader,
+  // the executors parked on a question put to THEM. All the engine's words:
+  // the row's flow, `activity` from the push, and `decisions`' own reading of
   // which executors wait on this person.
-  const live = useMemo(() => liveOnItems(agents), [agents]);
+  const live = useMemo(() => liveOnRows(drawn, agents), [drawn, agents]);
   const statuses = useMemo(() => {
     const out = new Map<string, AvatarStatus>();
     for (const a of agents) {
@@ -645,8 +646,8 @@ export function ItemsView({
   });
   const waiting = useMemo(() => {
     const out = new Map<string, CardWaiting>();
-    // BY THE TASK'S ID, as `liveOnItems` is: a key two tasks hold would put
-    // one run's wait on both cards.
+    // BY THE TASK'S ID: a key two tasks hold would put one run's wait on both
+    // cards.
     for (const item of decisions.data?.items ?? []) {
       const id = item.run?.work_item?.id;
       if (item.kind === "run" && id && !out.has(id)) out.set(id, { since: item.run?.paused_at });
@@ -658,21 +659,22 @@ export function ItemsView({
     [live, waiting, statuses],
   );
 
-  // A TURN ENDING ON A TASK THIS LIST DRAWS IS A TASK THAT JUST CHANGED — the
-  // seat moved it, commented, handed it on — and nothing pushes the row. So
-  // when a task on screen loses its running turn, the list asks again then,
-  // rather than drawing the task as it was for up to a poll's length.
+  // A TURN ENDING ON A TASK THIS LIST DRAWS IS A TASK THAT JUST CHANGED, and
+  // nothing pushes the row. So when the turn a working task's seat ran ends
+  // or gives way to another, the list asks again then.
   const runningHere = drawn
     .filter((r) => live.has(r.id))
-    .map((r) => r.id)
+    .map((r) => `${r.id}=${seatTurn(agents, r.assignee)}`)
     .join(",");
   const wasRunning = useRef("");
   const { refetch } = paged;
   useEffect(() => {
-    const before = wasRunning.current ? wasRunning.current.split(",") : [];
-    const now = new Set(runningHere ? runningHere.split(",") : []);
+    const pairs = (raw: string) =>
+      new Map(raw ? raw.split(",").map((p) => p.split("=") as [string, string]) : []);
+    const before = pairs(wasRunning.current);
+    const now = pairs(runningHere);
     wasRunning.current = runningHere;
-    if (before.some((key) => !now.has(key))) refetch();
+    if ([...before].some(([id, turn]) => turn && now.has(id) && now.get(id) !== turn)) refetch();
   }, [runningHere, refetch]);
   const shown = useMemo(() => shownRows(rows, groups), [rows, groups]);
   // THE BANDS A LIST DRAWS, which are not the lanes a board draws — see
