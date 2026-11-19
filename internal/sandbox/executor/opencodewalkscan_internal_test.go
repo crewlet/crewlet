@@ -566,11 +566,12 @@ func TestATextsDigestIsItsWholeTextsWhereverItsPiecesEnd(t *testing.T) {
 // THE EXPORT WALK MOVES TWO OF A READING'S ANSWERS, toward telling a call and
 // toward reading one: a step's `completed` written as a number literal past
 // the capture's bound is no reading, where the decode walk parsed it; and a
-// message past the decode walk's value bound (here lowered to 4 KiB) is read,
-// where that walk read none.
+// value past the decode walk's value bound (here lowered to 4 KiB), a message
+// or any member of the document (`info`'s title, a key the import passes), is
+// read, where that walk read none.
 //
-// Mutation: parse a `completed` past its capture, or bound a message, and a
-// case goes red.
+// Mutation: parse a `completed` past its capture, or bound a message or a
+// member the reading passes, and a case goes red.
 func TestTheExportWalkMovesAReadingsAnswersOnlyAsListed(t *testing.T) {
 	t.Parallel()
 	c := ohCall(1, "echo", `{"t":1}`, "done")
@@ -584,6 +585,21 @@ func TestTheExportWalkMovesAReadingsAnswersOnlyAsListed(t *testing.T) {
 	if h, err := readOpenCodeHoldings(t.Context(), strings.NewReader(past), ohSession, ohBegan, ask); err == nil ||
 		h.Read {
 		t.Errorf("a completed past the capture's bound: a reading = %+v; want none", h)
+	}
+	doc, value := ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, "done"))), strings.Repeat("v", exportValueMaxBytes+1)
+	for name, member := range map[string][2]string{
+		"info's title":                   {`"title":"a run"`, `"title":"` + value + `"`},
+		"another member of the document": {`"messages":[`, `"later":"` + value + `","messages":[`},
+	} {
+		edited := strings.Replace(doc, member[0], member[1], 1)
+		if _, err := readOpenCodeHoldingsWhole(t.Context(), strings.NewReader(edited), 4<<10, ohSession, ohBegan,
+			ask); err == nil {
+			t.Fatalf("the decode walk read %s past its bound; the case moves nothing", name)
+		}
+		h, err := readOpenCodeHoldings(t.Context(), strings.NewReader(edited), ohSession, ohBegan, ask)
+		if got := ohHeld(t, h, err, c); !slices.Equal(got, []int{1}) {
+			t.Errorf("%s past the decode walk's bound: held %v; want its call", name, got)
+		}
 	}
 	long := ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, strings.Repeat("l", 8<<10))))
 	long8 := ohCall(1, "echo", `{"t":1}`, strings.Repeat("l", 8<<10))
