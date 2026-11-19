@@ -282,14 +282,18 @@ Select **Stop** (or press `Esc`) while an answer is running to stop it.
 Stopping changes nothing: a proposal it had prepared is declined.
 
 The head of the panel has **New conversation**, **Conversations** (your
-recent conversations, with **Delete** to delete the open one for good after you
-confirm), **Open in full page** and **Close**. Ask Crewlet's page lists every
-conversation, each with **Delete**. One answer runs at a time in a
-conversation.
+recent conversations, with **Rename** and with **Delete** to delete the open
+one for good after you confirm), **Open in full page** and **Close**. Ask
+Crewlet's page lists every conversation, each with **Rename** and **Delete**.
+One answer runs at a time in a conversation.
 
 A conversation is named from its first question. You can search your
-conversations by title and rename one; a name you give it is kept, and
-Ask Crewlet never writes over it.
+conversations by title and rename one (one line, up to 60 characters); a name
+you give it is kept, and Ask Crewlet never writes over it.
+
+Two tabs of the same browser follow each other: a question asked or answered
+in one appears in the other, and a conversation deleted in one says so in the
+other. If an answer fails, **Try again** asks the same question again.
 
 ## What it cannot do
 

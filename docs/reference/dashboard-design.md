@@ -1475,7 +1475,7 @@ a screen, and every workspace and section the code declares is below.
 | `#/me/asked-of-me` · `#/me/unblocked` · `#/me/holding-up` · `#/me/collaborating` · `#/me/watching` · `#/me/checklist` | **My work** — Asked of me (answered in place) · Unblocked · Holding up (their open work that other work waits on, the most waited on first) · Collaborating · Watching · Checklist, each with the engine's own total on its tab | `handle=` |
 | `#/me/asked-by-me` | **My work › Asked by me** — the work this person asked a question on that is still waiting for its answer: the work list, held to the asker | `handle=` · `shape=` and the filter grammar, with the asker LOCKED |
 | `#/me/reviews` | **My work › Reviews**: Gitlet's claims on this person: the changes asking their review, then their own changes waiting on their fix, each Gitlet › Changes' grid over the engine's own listing, with no count on the tab *(needs Gitlet access; not offered where the company hosts no code)* | `handle=` |
-| `#/ask` · `#/ask/{id}` | **Ask Crewlet**, every signed-in person's: their own conversations beside the one open (`#/ask` opens the one this tab was on, or a new one, and a new one's first question writes its id into the address), newest first under Today, Yesterday, Previous 7 days and Older, found by their title and read a page at a time, each row with when it was last used, a mark while a turn in it answers or waits on the reader, and Delete behind a confirmation. The conversation is the drawer's, drawn by the same parts from the same store, and attaches no page to a question. The drawer's **Open in full page** opens it on the drawer's conversation; no drawer is drawn over it, and the Ask button and `Mod+.` go to its composer. On a phone's width the list and the conversation are one pane each, the conversation first, with Back to the list. Where the reader may not ask, the page says why in the Ask button's words | |
+| `#/ask` · `#/ask/{id}` | **Ask Crewlet**, every signed-in person's: their own conversations beside the one open (`#/ask` opens the one this tab was on, or a new one, and a new one's first question writes its id into the address), newest first under Today, Yesterday, Previous 7 days and Older, found by their title and read a page at a time, each row with when it was last used, a mark while a turn in it answers or waits on the reader, Rename and Delete behind a confirmation; the list column keeps at least 19rem so a title stays readable beside its time at a tablet's width, and its head wraps rather than cut New conversation. The conversation is the drawer's, drawn by the same parts from the same store, and attaches no page to a question; its head names it, with Rename and Delete. While a conversation the address names is read, the head carries its title from the history row and the thread is a skeleton with the composer held; one the engine has no record of for the reader (404) says it is not in their history, and any other failed read says it could not be read, in the engine's words, with Try again. The drawer's **Open in full page** opens it on the drawer's conversation; no drawer is drawn over it, and the Ask button and `Mod+.` go to its composer. On a phone's width the list and the conversation are one pane each, the conversation first, with Back to the list. Where the reader may not ask, the page says why in the Ask button's words | |
 | `#/advisor` · `#/advisor/reports` · `#/advisor/history` | **Advisor**, Admin's, with three tabs. Its head says when the checks last ran, offers **Run now** (followed until it ends) and names the model its explanations run on, a picker for an administrator (`components/HelperModel.tsx`: the company's models, one the engine says cannot run a helper listed disabled beside its reason, and None). **Findings**: while anything blocks the company, the go-live check (three steps counted off the open findings) and the agents' access review; then what the owner can change, most costly first (Blocks, Costs, Worth knowing; within each the largest measured cost, then the newest), then what the engine is handling. Each row is its subject, its title linking to its page, a quiet line with its measured cost, when it was found, when it was last checked or "not re-checked since" for a stale one, an applied change's effect-check date, a change that did not clear it and how often it was seen before, its fix's one press by kind (Apply where the engine builds a change), and a menu (Snooze for 7 days, Dismiss with a reason, Ask Crewlet about this). An atlas finding's fix is **Review the fix** on the entries the engine names to a holder of the atlas app, and a link to the atlas for anybody else. **Reports**: each week's report, the newest first, its week in words with what the week opened, resolved, applied and dismissed, a page at a time (rows already shown are kept, and never drawn twice while the next page is read). **History**: closed findings, each with why it closed, a page at a time. Every engine sentence is drawn as engine sentences are (`marked`) | |
 | `#/advisor/findings/{id}` | **A finding**: its severity and state, title, freshness, why it closed where it did, why it was raised and the model's explanation for these numbers, the facts it rests on with their window and the records they cite as links, the fix in words with Apply and the menu (Reopen for a dismissed one), what happened to it as a timeline, and its earlier episodes. **Apply** opens a dialog that re-checks the finding against the latest records first ("Checking it still holds") and answers: it still holds (the facts as checked now and the change, field by field, from the engine's preview: Apply change), it changed (what moved, was beside now, and the updated change: Apply the updated change or Keep it open), no longer needed or no longer applies (closed, nothing sent), or who can apply it. The change is sent from the reader's session after its dry run under the revision the re-check read; a target that moved since, or an answer older than ten minutes that the engine no longer answers the same, is re-checked and shown again rather than sent. Once sent: "Applied", with the date its effect is checked until | |
 | `#/advisor/reports/{week}` | **A weekly report**, by its ISO week (`2026-W47`, "Week 47 of 2026"): the span it covers and when it was written, which sources it could not read and so leaves out ("Some numbers are left out"), the model's summary where one was written, each measure beside the week before's ("Not measured" where that week has none), what the week opened, resolved, applied and dismissed, and the open findings that cost the most as written, each opening its finding's page | |
@@ -5057,8 +5057,8 @@ is live only where the dashboard built it, from parts it checked, to a place
 that is the company's: a key's, a room's and a handle's routes, a reference
 on the configured code host, and an address on a configured host rebuilt from
 what it names, with no query or fragment. Any other address there is drawn
-inert, as written and with the host it names, readable and copyable and never
-a control, because `https://evil.example/?q=<what it read>` is how an
+inert, as written with its mark, in the text's own ink whether it stood bare
+or under a label, readable and copyable and never a control, because `https://evil.example/?q=<what it read>` is how an
 injected instruction would carry words away. An address an ask cites as
 evidence is the same: a button only when it is rebuilt on the company's host,
 labelled by the dashboard with the reference it is and its app's mark, and
@@ -5501,6 +5501,22 @@ The stream is server-sent events over `fetch` (`protocol/assistant.ts`):
 `Last-Event-ID` on every resume, a stall after two missed keepalives dialled
 again, a refusal or another protocol version stopping it for good.
 
+**A conversation is renamed by its owner**, from its history row, its head on
+Ask Crewlet's page and the drawer's Conversations menu: a dialog of one line, 1
+to 60 characters (`ASSISTANT_TITLE_MAX_RUNES`, the engine's bound), where Enter
+saves, Escape cancels and a title the engine refuses is said in its words under
+the field (`PATCH /assistant/conversations/{id}`).
+
+**Tabs of one browser follow each other** (`chunk/session.ts`). A tab tells the
+others, over a `BroadcastChannel` carrying a conversation's id and one word,
+when a conversation moved (made, asked in, a turn ended, a decision, a title)
+or was deleted; every list of conversations is read again, a tab showing the
+one that moved reads it again from the engine and follows its running turn,
+and one showing a deleted one says so and takes no more questions. A question
+sent into a conversation deleted where no tab heard of it (another device) is
+told it was not sent because the conversation was deleted, never the engine's
+sentence for a missing record.
+
 **What it draws is the design system's** (`app/assistant/chunk/blocks.tsx`
 maps every wire state to exactly one component state): the question in a
 `MessageBubble` with the page it carried, a `RunChip` that opens on the
@@ -5533,13 +5549,21 @@ in the question's `attachments`. One the engine would refuse is refused above
 the composer in a sentence that says what to do, and Send waits while an
 image is still uploading. A sent question shows its images as chips under its
 bubble.
-**A model's words are drawn inert**: a link is its label and the host it
-names, never an anchor; a picture is its alt text, never fetched
-(`ASSISTANT_WORDS` in `lib/markdown.ts`). Ask Crewlet moves the page only
+**A model's words are drawn inert**: a link is its label and the address it
+names, never an anchor, and an address is drawn one way, bare or under a
+label: its mark and the address in the text's own ink, never the link ink;
+a picture is its alt text, never fetched (`ASSISTANT_WORDS` in
+`lib/markdown.ts`). The answer's words read at the narrow measure (about 70
+characters a line), while a table or a code sample in it takes the thread's
+width. While the assistant works, its indicator says what it is doing and for
+how long ("Thinking, 4s", the running step, then "Answering, 40s"), and Stop
+is named Stop answering, with its key in its tooltip. A failed turn offers Try
+again, which asks the same question, held off for as long as Send is. Ask Crewlet moves the page only
 through an engine-built Open in app card, whose address the drawer checks is
 one of this dashboard's own framed routes before it follows it, or through a
 page action the screen itself declared. There is no
-answer rating, and the one toast is "Conversation cleared". The toast stack
+answer rating, and the toasts are "Conversation deleted" and "Conversation
+renamed". The toast stack
 keeps clear of the panel (`app/toastInset.tsx`): beside it while it is a
 column or over the page, above its composer while it is the whole window on a
 phone. On a screen with a bar of its own, Chatlet's, it stands under that bar
