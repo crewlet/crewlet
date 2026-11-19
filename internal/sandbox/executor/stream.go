@@ -189,16 +189,19 @@ type transcriptStream interface {
 	Close() error
 }
 
+// add adds entry in its own words, trimmed. One with NO WORDS IS NONE: it
+// leaves an open run of skipped lines open, as a line that adds no entry does.
 func (t *transcriptLines) add(entry string) {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return
+	}
 	t.flushSkipped()
 	t.push(entry)
 }
 
 func (t *transcriptLines) push(entry string) {
-	entry = strings.TrimSpace(entry)
 	switch {
-	case entry == "":
-		return
 	case t.stream != nil:
 		t.feed(entry)
 		return

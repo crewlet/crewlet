@@ -239,3 +239,23 @@ func (r *recorder) Line(l []byte)              { r.line(l) }
 func (r *recorder) Skipped(n int64, bound int) { r.skip(n, bound) }
 func (r *recorder) Result() sandbox.Result     { return sandbox.Result{} }
 func (r *recorder) Entries(bool) []string      { return nil }
+
+// AN ENTRY WITH NO WORDS IS NONE: added, it says nothing, and a run of skipped
+// lines open before it stays open until an entry with words, or the end, says
+// it.
+//
+// Mutation: add an empty entry as written, or flush the open run before
+// dropping it, and a take before the end hands an entry over.
+func TestAnEntryWithNoWordsIsNone(t *testing.T) {
+	t.Parallel()
+	var tl transcriptLines
+	tl.add(" \t\r\n ")
+	tl.skip(9, 8)
+	tl.add("   ")
+	if got := tl.take(false); len(got) != 0 {
+		t.Fatalf("before the end, entries without words handed over %q; want none", got)
+	}
+	if got := tl.take(true); len(got) != 1 || !strings.Contains(got[0], "1 line(s) of output") {
+		t.Fatalf("at the end, handed over %q; want the skipped line's note alone", got)
+	}
+}
