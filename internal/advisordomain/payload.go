@@ -38,8 +38,10 @@ type Opening struct {
 	Actor       Actor    `json:"actor"`
 	Area        string   `json:"area"`
 	Severity    Severity `json:"severity"`
-	SubjectKind string   `json:"subject_kind"`
-	SubjectID   string   `json:"subject_id"`
+	SubjectKind string `json:"subject_kind"`
+	// SubjectID is the subject's id within its kind, empty for a subject
+	// that is the only one of its kind (the company, its atlas).
+	SubjectID string `json:"subject_id"`
 
 	// Revision is 1: an episode opens at its first revision.
 	Revision int `json:"revision"`

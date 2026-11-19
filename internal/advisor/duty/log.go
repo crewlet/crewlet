@@ -151,7 +151,7 @@ func (l advisorLog) record(ctx context.Context, t advisor.Transition, now time.T
 			return err
 		}
 		f := o.Finding
-		_, err = l.writes.Open(ctx, l.call("advisor.open"), advisordomain.Opening{
+		_, err = l.writes.Open(ctx, l.call("advisor_open"), advisordomain.Opening{
 			Episode: advisordomain.EpisodeID(o.Key(), now), Key: o.Key(), Class: string(f.Class),
 			Source: sourceOf(f), Actor: advisordomain.Actor(f.Actor), Area: string(f.Area),
 			Severity: advisordomain.Severity(f.Severity), SubjectKind: string(f.Subject.Kind),
@@ -165,7 +165,7 @@ func (l advisorLog) record(ctx context.Context, t advisor.Transition, now time.T
 		if err != nil {
 			return err
 		}
-		_, err = l.writes.Revise(ctx, l.call("advisor.revise"), o.Key(), advisordomain.Revision{
+		_, err = l.writes.Revise(ctx, l.call("advisor_revise"), o.Key(), advisordomain.Revision{
 			Episode: s.ID, Revision: s.Revision + 1, Severity: advisordomain.Severity(o.Finding.Severity),
 			VerdictDigest: advisor.VerdictDigest(o.Finding), FixDigest: advisor.FixDigest(o.Finding.Fix),
 			Body: body, Moved: moved,
@@ -177,7 +177,7 @@ func (l advisorLog) record(ctx context.Context, t advisor.Transition, now time.T
 		if err != nil {
 			return err
 		}
-		_, err = l.writes.Refresh(ctx, l.call("advisor.refresh"), o.Key(), advisordomain.Refresh{
+		_, err = l.writes.Refresh(ctx, l.call("advisor_refresh"), o.Key(), advisordomain.Refresh{
 			Episode: s.ID, Revision: s.Revision, Body: body}, s.Version)
 		return err
 	case advisor.StepClose:
@@ -186,7 +186,7 @@ func (l advisorLog) record(ctx context.Context, t advisor.Transition, now time.T
 		if err != nil {
 			return err
 		}
-		_, err = l.writes.Move(ctx, l.call("advisor.close"), s.Observation.Key(), advisordomain.Move{
+		_, err = l.writes.Move(ctx, l.call("advisor_close"), s.Observation.Key(), advisordomain.Move{
 			Episode: s.ID, Event: advisordomain.EventClosed, State: advisordomain.State(t.State),
 			Reason: advisordomain.CloseReason(t.Reason), Moved: moved}, s.Version)
 		return err
@@ -196,7 +196,7 @@ func (l advisorLog) record(ctx context.Context, t advisor.Transition, now time.T
 		if err != nil {
 			return err
 		}
-		_, err = l.writes.Move(ctx, l.call("advisor.ineffective"), s.Observation.Key(), advisordomain.Move{
+		_, err = l.writes.Move(ctx, l.call("advisor_ineffective"), s.Observation.Key(), advisordomain.Move{
 			Episode: s.ID, Event: advisordomain.EventIneffective, State: advisordomain.StateOpen,
 			FixDigest: s.AppliedFix, Moved: moved}, s.Version)
 		return err
@@ -260,7 +260,7 @@ func (l advisorLog) RecordRun(ctx context.Context, r Run) error {
 	if r.Status == RunFailed {
 		status = advisordomain.RunFailed
 	}
-	_, err = l.writes.RecordRun(ctx, l.call("advisor.run"), advisordomain.RunRecord{
+	_, err = l.writes.RecordRun(ctx, l.call("advisor_run"), advisordomain.RunRecord{
 		Run: r.ID, Trigger: advisordomain.Trigger(r.Trigger), By: r.By, StartedAt: r.StartedAt,
 		EndedAt: r.EndedAt, Status: status, Classes: classes, Model: model})
 	return err
@@ -269,7 +269,7 @@ func (l advisorLog) RecordRun(ctx context.Context, r Run) error {
 // Expire publishes the day's retention once; a day already expired is done.
 func (l advisorLog) Expire(ctx context.Context, now time.Time) error {
 	day, e := advisordomain.ExpiryFor(now)
-	_, err := l.writes.Expire(ctx, l.call("advisor.expire"), day, e)
+	_, err := l.writes.Expire(ctx, l.call("advisor_expire"), day, e)
 	if errors.Is(err, advisordomain.ErrExists) {
 		return nil
 	}
