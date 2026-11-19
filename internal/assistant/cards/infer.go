@@ -12,7 +12,7 @@ import (
 )
 
 // INFERRED CARDS: the card drawn from an answer no spec was written for (a
-// generic read of any route, catalog's api_request), shaped by its own JSON:
+// generic read of any route, catalog's read_api), shaped by its own JSON:
 //   - a LIST is a table, a column per plain field the first rows carry, known
 //     fields first; a list of plain values is a list card;
 //   - a record that WRAPS ONE LIST (beside plain values such as a cursor or

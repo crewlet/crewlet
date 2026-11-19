@@ -169,8 +169,8 @@ type ExecutorCollected struct {
 	// ActivityTranscript is the launch's own account of what it did — what
 	// it said, its tool calls and what they ran, or its stderr where the harness
 	// streams nothing better. Secret-redacted, and held to the record's
-	// bound: a long one keeps its first 64 KiB and its last 192 KiB in whole
-	// lines, with a note line where its middle was. It is the whole
+	// bound: a long one keeps its first 64 KiB and its last 191 KiB in whole
+	// lines, with a note line where its middle was, all within 256 KiB. It is the whole
 	// observability surface of an agent that emits no telemetry of its own.
 	ActivityTranscript string `json:"activity_transcript,omitempty"`
 	// ActivityTranscriptElidedLines and ActivityTranscriptElidedBytes count

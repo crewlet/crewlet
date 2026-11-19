@@ -50,7 +50,7 @@ func closedSets() map[string][]string {
 		"AssistantTitleSource":     strs(wire.TitleSources),
 		// A proposal's taint is the surface its outside text came from.
 		"AssistantTaintSource": strs(provenance.Sources),
-		// --- deep work (im-deep) ---
+		// --- a question's attachments ---
 		"AssistantAttachmentMediaType": wire.AttachmentMediaTypes,
 	}
 }
@@ -98,8 +98,6 @@ func TestTheDashboardBoundsTheAssistantAtTheEnginesLimits(t *testing.T) {
 	for name, want := range map[string]string{
 		"ASSISTANT_PROTOCOL_VERSION":           strconv.Itoa(wire.ProtocolVersion),
 		"ASSISTANT_INPUT_MAX_RUNES":            strconv.Itoa(wire.InputMaxRunes),
-		"ASSISTANT_TITLE_MAX_RUNES":            strconv.Itoa(wire.TitleMaxRunes),
-		"ASSISTANT_SEARCH_MAX_RUNES":           strconv.Itoa(wire.SearchMaxRunes),
 		"ASSISTANT_PAGE_CONTEXT_MAX_BYTES":     strconv.Itoa(wire.PageContextMaxBytes),
 		"ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES": strconv.Itoa(wire.PageContextMaxResources),
 		"ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS":   strconv.Itoa(wire.PageContextMaxAccepts),
@@ -217,7 +215,7 @@ func shapes() map[string]reflect.Type {
 		"AssistantViewerModel":         reflect.TypeFor[wire.ViewerModel](),
 		"AssistantConversationRename":  reflect.TypeFor[wire.ConversationRename](),
 		"AssistantModelNotice":         reflect.TypeFor[wire.ModelNotice](),
-		// --- deep work (im-deep) ---
+		// --- a question's attachments ---
 		"AssistantFileRef":    reflect.TypeFor[wire.FileRef](),
 		"AssistantFileStored": reflect.TypeFor[wire.FileStored](),
 	}

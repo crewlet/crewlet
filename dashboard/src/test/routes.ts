@@ -51,6 +51,8 @@ export const FILL: Record<string, string> = {
   // change (`change <repo>!<n> opened: …#/gitlet/repos/<repo>/changes/<n>`).
   "<repo>": "web",
   "<n>": "42",
+  // AN ADVISOR REPORT'S ISO WEEK (`#/advisor/reports/{week}`).
+  "{week}": "2026-W47",
   // A COMMIT'S WHOLE ID (`#/gitlet/repos/{name}/commits/{sha}`).
   "{sha}": "0123456789abcdef0123456789abcdef01234567",
 };

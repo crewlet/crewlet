@@ -180,10 +180,9 @@ func (b *Bridge) SteerHandler() http.Handler { return b.routed(b.serveSteer) }
 
 // serveSteer answers one call of the notes route on the opening that holds it.
 //
-// NO ADMISSION OF ITS OWN: the token, and for a session held to loopback the
-// address and the Host ([loopbackRefusal]), are judged by the routing it
-// shares with the MCP endpoint ([Bridge.routed]) before it is reached, and a
-// relayed call for a held session never reaches it ([Bridge.admitRelayed]).
+// NO ADMISSION OF ITS OWN: the token is judged by the routing it shares with
+// the MCP endpoint ([Bridge.routed]) before it is reached, or by the relay's
+// admission for a relayed call ([Bridge.admitRelayed]).
 //
 // A CALL THAT REACHES ITS OPENING AS IT ENDS IS TURNED AWAY TO ASK AGAIN, a
 // 503 with a Retry-After, as a poll the opening can no longer hold is
@@ -192,8 +191,7 @@ func (b *Bridge) SteerHandler() http.Handler { return b.routed(b.serveSteer) }
 // asking for the rest of its run (package doc, "A note inbox").
 func (b *Bridge) serveSteer(w http.ResponseWriter, r *http.Request, opened *binding) {
 	if opened.session.Steer == nil {
-		// A SESSION WITH NO INBOX (a run with nothing to steer, the
-		// assistant's deep work) has no notes route at all.
+		// A SESSION WITH NO INBOX has no notes route at all.
 		httpjson.Fail(w, http.StatusNotFound, httpjson.CodeNotFound)
 		return
 	}

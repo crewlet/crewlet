@@ -14,6 +14,7 @@ import (
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/advisor/duty"
 	"github.com/crewlet/crewlet/internal/advisor/modelpass"
+	"github.com/crewlet/crewlet/internal/coord"
 )
 
 // THE ADVISOR'S DUTY OVER THIS NODE'S SOURCES (ADR-0164): what a run reads is
@@ -82,8 +83,8 @@ func (o advisorObserver) Signature(ctx context.Context) (string, error) {
 	sig := setupSignature{Revision: revision, Integrations: map[string]string{}, Paused: []string{}}
 	if states, known := o.s.reconcileStates(ctx); known {
 		for kind, state := range states {
-			raw, err := json.Marshal(state.Findings)
-			if err != nil {
+			var raw []byte
+			if raw, err = json.Marshal(state.Findings); err != nil {
 				return "", err
 			}
 			sum := sha256.Sum256(raw)
@@ -91,8 +92,8 @@ func (o advisorObserver) Signature(ctx context.Context) (string, error) {
 		}
 	}
 	if o.s.Pauses != nil {
-		pauses, err := o.s.Pauses.ListSeatPauses(ctx)
-		if err != nil {
+		var pauses []coord.SeatPause
+		if pauses, err = o.s.Pauses.ListSeatPauses(ctx); err != nil {
 			return "", err
 		}
 		for _, p := range pauses {

@@ -996,7 +996,8 @@ describe("every class the dashboard names", () => {
 // share, `chatlet-frame.css`, Chatlet's frame (its grid, top bar and Rooms
 // panel), `chatlet-room.css`, a Chatlet room's transcript and composer,
 // `chatlet-panes.css`, Chatlet's panes, dialogs and views, `atlas.css`,
-// Company › Atlas's (its map's box, lists, hops and claims), `gitlet.css`,
+// Company › Atlas's (its map's box, lists, hops and claims), `advisor.css`,
+// the Advisor's (its page's head, rows, reports and a week's measures), `gitlet.css`,
 // the Gitlet workspace's (a repository's code, history and settings, a
 // change's conversation and files, the listings), which every module drawing
 // a `code-` class imports — Home's changes waiting on a person and Settings ›
@@ -1057,6 +1058,10 @@ const LAZY_SHEETS: Readonly<Record<string, { importer: string; owns: RegExp }>> 
   "atlas.css": {
     importer: "routes/atlas/parts.tsx",
     owns: /\.atlas-[a-z_-]+\b/,
+  },
+  "advisor.css": {
+    importer: "routes/advisor/index.ts",
+    owns: /\.advisor-[a-z_-]+\b/,
   },
   "gitlet.css": {
     importer: "routes/gitlet/ui.tsx",

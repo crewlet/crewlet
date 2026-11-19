@@ -115,7 +115,7 @@ import { KeyGlyph, UserGlyph } from "@crewlethq/icons/glyphs";
 import { useQuery } from "~/lib/useQuery.ts";
 import { useOrg } from "~/lib/store-hooks.ts";
 import { indexOrg, leadsInLine, seatResolvers, type OrgIndex, type Seat } from "~/lib/seats.ts";
-import { plural } from "~/lib/format.ts";
+import { openWords } from "~/lib/flow.ts";
 import { useViewer, type ViewerState } from "~/lib/viewer.ts";
 import { HoldWrites } from "~/lib/useWriteAccess.ts";
 import { useNow } from "~/lib/clock.ts";
@@ -867,7 +867,8 @@ function OrderStamp({
  *
  * A picker over people is chosen from by asking "who is loaded" — which is the
  * one fact that makes the control worth opening and the one it did not carry.
- * `work_workload` answers every handle's open work in one read.
+ * `work_workload` answers every handle's open work and load in one read: the
+ * items in progress that want them now (ADR-0162).
  *
  * ORDERED BY NAME INSIDE EACH GROUP, NEVER BY THE COUNT. A row ordered by a
  * live figure re-orders itself on the next poll, so the row a reader is
@@ -896,12 +897,9 @@ export function whoseDayOptions(
 ): SelectOption[] {
   // THE COUNTS ARE A FACT OR THEY ARE NOTHING — see the head.
   const known = !!load && load.complete !== false && !load.truncated;
-  const open = new Map((load?.rows ?? []).map((r) => [r.handle, r.open]));
-  const describe = (handle: string) => {
-    if (!known) return handle;
-    const held = open.get(handle) ?? 0;
-    return `${handle} · ${held === 0 ? "nothing open" : plural(held, "open item")}`;
-  };
+  const rows = new Map((load?.rows ?? []).map((r) => [r.handle, r]));
+  const describe = (handle: string) =>
+    known ? `${handle} · ${openWords(rows.get(handle))}` : handle;
 
   const byName = (a: Seat, b: Seat) => a.name.localeCompare(b.name);
   const row = (seat: Seat, group: string): SelectOption => ({

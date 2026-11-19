@@ -86,6 +86,9 @@ func (m assistantModels) ReadsImages() bool {
 	return ok && r.ReadsImages()
 }
 
+// Searches reports whether `assistant.model` has a search run on this node.
+func (m assistantModels) Searches() bool { return m.e.CanResearchSearch() }
+
 // entry resolves `assistant.model` to the helper's run of it this node built.
 func (m assistantModels) entry() (*Company, string, llm.Provider, error) {
 	c := m.e.Company()

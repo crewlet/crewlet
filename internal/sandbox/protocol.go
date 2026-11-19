@@ -629,15 +629,17 @@ type Result struct {
 	// called and the first line of what it ran — rebuilt from its own
 	// output, or its stderr where the harness streams nothing better. It is the
 	// observability surface for an agent that emits no telemetry of its
-	// own. A runner returns it WHOLE and redacted; the coordinator holds it
-	// to the record's bound ([Coordinator.fitResult]) and redacts it again
-	// at publish.
+	// own. A runner returns it redacted, whole up to the most the engine
+	// reads one text whole and past it as the record keeps it; the
+	// coordinator holds it to the record's bound ([Coordinator.fitResult])
+	// and redacts it again at publish.
 	Transcript string
 
 	// TranscriptElidedLines and TranscriptElidedBytes are how much of the
 	// transcript's middle the record's bound left out: whole lines, and
-	// every byte not kept. Zero for a transcript kept whole. Set by the
-	// coordinator, never by a runner.
+	// every byte not kept. Zero for a transcript kept whole. Set by a runner
+	// that bounded the transcript as it read it, and added to by the
+	// coordinator ([boundBox]).
 	TranscriptElidedLines int
 	TranscriptElidedBytes int
 
@@ -1152,9 +1154,8 @@ type RunRequest struct {
 	// Steer is how the run's harness reaches a person's notes to its turn while
 	// it works — see [SteerWiring]. The zero value takes no note inside the
 	// run: its notes wait for whatever reads the turn next, which is what a
-	// run with no tool bridge — the assistant's deep work — has. NEVER
-	// PERSISTED: it names the job's own endpoint, and a resumed turn's next
-	// launch is handed its own.
+	// run with no tool bridge has. NEVER PERSISTED: it names the job's own
+	// endpoint, and a resumed turn's next launch is handed its own.
 	Steer SteerWiring
 
 	// ReportedRepos are the repositories on Gitlet this
@@ -1187,8 +1188,8 @@ type RunRequest struct {
 	// harness starts, so the token the harness dials IS the box's word on which
 	// session it started, one the run's model can neither forge nor take back.
 	// Nil where Resume is empty (a runner refuses a run that sets it) and where
-	// the run has no bridge to tell (the assistant's deep work). NEVER
-	// PERSISTED, for the reason Steer is not.
+	// the run has no bridge to tell. NEVER PERSISTED, for the reason Steer is
+	// not.
 	FreshWiring *Wiring
 
 	// Attribution is the credit every commit the run authors as itself
@@ -1313,9 +1314,8 @@ type CommitAttribution struct {
 	// WorkItem the item its turn is charged to (nil for none, which the
 	// commit says as "none" rather than leaving out, since a rewritten
 	// commit's trailer is replaced, never kept). Empty for a run that is no
-	// seat's — deep work for a person — which names neither; a WorkItem
-	// without a Seat, or one with no backend, is the engine's own bug and is
-	// refused.
+	// seat's, which names neither; a WorkItem without a Seat, or one with no
+	// backend, is the engine's own bug and is refused.
 	Seat     string
 	WorkItem *types.WorkItem
 }

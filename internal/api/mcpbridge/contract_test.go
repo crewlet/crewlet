@@ -14,7 +14,6 @@ import (
 	"github.com/crewlet/crewlet/internal/agent/toolloop"
 	"github.com/crewlet/crewlet/internal/agent/turnctx"
 	"github.com/crewlet/crewlet/internal/api/mcpbridge"
-	"github.com/crewlet/crewlet/internal/iam"
 	crewletmcp "github.com/crewlet/crewlet/internal/mcp"
 	"github.com/crewlet/crewlet/internal/providers/llm"
 	"github.com/crewlet/crewlet/internal/runtoken"
@@ -24,9 +23,9 @@ import (
 
 // THE BRIDGE'S DISPATCHER HOLDS THE GATES EVERY DISPATCHER HOLDS, the contract
 // internal/agent/toolloop runs too. Each case is a detached run's session on a
-// live listener, reached over its minted URL as a box's harness does. The
-// session names its caller (the seat) because its surface parks ([parking])
-// rather than being the seat's own; gates_test holds a seat's own session.
+// live listener, reached over its minted URL as a box's harness does. Its
+// surface is the seat's own wrapped to park ([parking]); gates_test holds a
+// seat's own session.
 func TestTheBridgeKeepsTheToolSessionContract(t *testing.T) {
 	t.Parallel()
 	toolsessiontest.Run(t, func(t *testing.T, spec toolsessiontest.Spec) *toolsessiontest.Served {
@@ -41,8 +40,7 @@ func TestTheBridgeKeepsTheToolSessionContract(t *testing.T) {
 		surface := contractSurface(t, spec)
 		session := &mcpbridge.Session{
 			RunID: "run-1", Launch: "job-1", Handle: "dev", Role: "Engineer",
-			Surface: surface, Caller: actingSeat{surface.Surface},
-			Ledger: calls, Fence: spec.Fence,
+			Surface: surface, Ledger: calls, Fence: spec.Fence,
 		}
 		url := bridge.Open(spec.Context, session)
 		if url == "" {
@@ -163,16 +161,6 @@ func (p parking) Admit(name string, args map[string]any) toolloop.Admitted {
 		res.Suspend = true
 		return res, err
 	}
-}
-
-// actingSeat decides a call as the seat the suite's surface is bound to: a
-// surface that is not the seat's own [*tools.Surface] names its caller.
-type actingSeat struct{ surface *tools.Surface }
-
-func (c actingSeat) Bound() bool { return c.surface.Turn().Handle() != "" }
-
-func (c actingSeat) Acting(ctx context.Context) context.Context {
-	return iam.WithPrincipal(ctx, turnctx.Principal(c.surface.Turn()))
 }
 
 // suiteTool is one of the suite's tools as a seat tool.

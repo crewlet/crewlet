@@ -75,12 +75,12 @@ answers:
           steps:
             - {op: level, verb: permissions, text: "Give the agent's tokens Workflows (Read and write)", by: crewlet}
 script:
-  - call: get_seat_access
-    args: {handle: Site Reliability Engineer, integration: github}
+  - call: read_api
+    args: {route: "GET /setup/integrations/{kind}/access/seats/{handle}/{lane}", path: {kind: github, handle: sre, lane: github}}
   - call: set_seat_access
     args: {handle: sre, integration: github, permissions: {workflows: write}}
 expect:
-  calls: [get_seat_access, set_seat_access]
+  calls: [read_api, set_seat_access]
   proposals: 1
   state: waiting_for_approval
-  shows: [Grant leaves unused, Workflows Read and write]
+  shows: [App holds, Workflows Read and write]

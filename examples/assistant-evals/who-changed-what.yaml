@@ -20,14 +20,15 @@ answers:
       next: {before_time: "2026-11-14T09:00:00Z", before_id: e1}
       exhausted: false
 script:
-  - call: list_audit_events
+  - call: read_api
+    args: {route: GET /events, query: {source: operator}}
   - say: >-
       This morning the founder changed ENG-41 and commented on it, and both
       applied. The Agent CTO's change at 09:40 was refused because the task had
       moved on since it read it.
 expect:
-  calls: [list_audit_events]
+  calls: [read_api]
   never: [update_task, comment_on_task]
-  shows: [Audit log, "refused, the version moved"]
+  shows: [Events, "refused, the version moved"]
   proposals: 0
   state: completed

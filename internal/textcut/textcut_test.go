@@ -205,3 +205,33 @@ func TestTailKeepsTheEndOnARuneBoundary(t *testing.T) {
 		}
 	}
 }
+
+// A CUT READS AT MOST ONE BYTE PAST ITS BOUND: Within, Bytes and Ellipsis of
+// a text answer what they answer of its first bound+1 bytes, multibyte runes
+// at the cut included, so a caller may hand them an opening that long
+// (redact.Prefix's) in place of the whole.
+//
+// Mutation: let Bytes walk back from s[max+1], and an opening is cut
+// otherwise than the whole.
+func TestACutReadsAtMostOneBytePastItsBound(t *testing.T) {
+	t.Parallel()
+	texts := []string{
+		strings.Repeat("a", 64),
+		strings.Repeat("日", 30),
+		strings.Repeat("aé", 30),
+		strings.Repeat("😀b", 20),
+		"ab" + strings.Repeat("日", 25),
+	}
+	for _, s := range texts {
+		for n := 0; n < len(s); n++ {
+			opening := s[:n+1]
+			for name, cut := range map[string]func(string, int) string{
+				"Within": textcut.Within, "Bytes": textcut.Bytes, "Ellipsis": textcut.Ellipsis,
+			} {
+				if got, want := cut(opening, n), cut(s, n); got != want {
+					t.Errorf("%s(%q, %d) = %q, but of its first %d bytes %q", name, s, n, want, n+1, got)
+				}
+			}
+		}
+	}
+}

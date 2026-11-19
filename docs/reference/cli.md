@@ -3568,8 +3568,7 @@ page:                             # optional: the page chip, as the dashboard se
   title: Spend
   source_revision: spend@1
 question: Who spent the most tokens this week?
-research: [docs.example.com]      # optional: hosts listed for web research (fetch_web_page)
-search: true                      # optional: a search server too (search_web); needs research
+search: true                      # optional: the model can search the web (search_web)
 mode: ask                         # ask (default) or brief, which needs the page
 answers:                          # what each request Ask Crewlet sends answers
   - route: GET /tokens/breakdown  # a route pattern, {name} matching one segment

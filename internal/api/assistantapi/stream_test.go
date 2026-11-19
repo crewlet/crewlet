@@ -20,7 +20,7 @@ import (
 func parkedSite(t *testing.T) (*site, wire.TurnAccepted, []wire.Frame) {
 	t.Helper()
 	s := newSite(t, evals.RigOptions{
-		Tools: []catalog.Tool{assistanttest.Tool(t, "get_task"),
+		Tools: []catalog.Tool{assistanttest.ReadAPI(t, "GET /worklet/{id}"),
 			assistanttest.Tool(t, "create_task")},
 		Acts: []string{"create_work_item"},
 		Handler: assistanttest.Routes(map[string]exec.Response{
@@ -28,7 +28,7 @@ func parkedSite(t *testing.T) (*site, wire.TurnAccepted, []wire.Frame) {
 				"Rotate the signing keys before Friday."),
 		}),
 		Rounds: []evals.Round{
-			evals.Call("c1", "get_task", map[string]any{"item": "ENG-7"}),
+			evals.Call("c1", catalog.ReadAPITool, taskRead("ENG-7")),
 			evals.Call("c2", "create_task", map[string]any{"title": "Rotate keys"}),
 			evals.Say("I prepared the task.")}})
 	accepted := s.ask(t, "File a task to rotate the keys")
@@ -125,15 +125,15 @@ const pastRetention = live.EndedRetention + time.Second
 func TestTheStatusStepCountOnlyGrows(t *testing.T) {
 	t.Parallel()
 	s := newSite(t, evals.RigOptions{
-		Tools: []catalog.Tool{assistanttest.Tool(t, "get_task")},
+		Tools: []catalog.Tool{assistanttest.ReadAPI(t, "GET /worklet/{id}")},
 		Handler: assistanttest.Routes(map[string]exec.Response{
 			"GET /worklet/ENG-7": assistanttest.Task("ENG-7", "Rotate keys", "Before Friday."),
 			"GET /worklet/ENG-8": assistanttest.Task("ENG-8", "Audit access", "This week."),
 		}),
 		Rounds: []evals.Round{
 			{Calls: []llm.ToolCall{
-				{ID: "c1", Name: "get_task", Arguments: map[string]any{"item": "ENG-7"}},
-				{ID: "c2", Name: "get_task", Arguments: map[string]any{"item": "ENG-8"}},
+				{ID: "c1", Name: catalog.ReadAPITool, Arguments: taskRead("ENG-7")},
+				{ID: "c2", Name: catalog.ReadAPITool, Arguments: taskRead("ENG-8")},
 			}, Input: 100, Output: 10},
 			evals.Say("Both are due this week.")}})
 	accepted := s.ask(t, "What is due?")

@@ -24,14 +24,15 @@ func TestAReportCoversTheLastWholeWeekOnTheCompanysClock(t *testing.T) {
 	for _, c := range []struct {
 		at   time.Time
 		week string
+		to   time.Time
 	}{
-		{monday.Add(3 * time.Hour), "2030-W02"},
-		{monday.AddDate(0, 0, 2).Add(10 * time.Hour), "2030-W02"},
-		{monday.Add(-time.Minute), "2030-W01"},
+		{monday.Add(3 * time.Hour), "2030-W02", monday},
+		{monday.AddDate(0, 0, 2).Add(10 * time.Hour), "2030-W02", monday},
+		{monday.Add(-time.Minute), "2030-W01", monday.AddDate(0, 0, -7)},
 	} {
 		week, from, to, due := advisor.ReportWeek(c.at.UTC(), zone)
-		if week != c.week || to.After(c.at) || to.Weekday() != time.Monday || to.Hour() != 0 ||
-			!from.Equal(to.AddDate(0, 0, -7)) || !due.Equal(to.Add(advisor.ReportHour*time.Hour)) {
+		if week != c.week || !to.Equal(c.to) || !from.Equal(to.AddDate(0, 0, -7)) ||
+			!due.Equal(to.Add(advisor.ReportHour*time.Hour)) {
 			t.Errorf("at %s: %s from %s to %s due %s", c.at, week, from, to, due)
 		}
 	}

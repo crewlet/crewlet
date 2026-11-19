@@ -757,6 +757,43 @@ func TestAPlacementRefusalIsWaitedOut(t *testing.T) {
 	}
 }
 
+// A CONSUMER STILL CLOSING IS WAITED OUT, then made. A create meeting a
+// consumer of its name the broker is still deleting is answered "consumer does
+// not exist"; read back as a peer's race, it asked after a consumer nobody was
+// making for the whole [ReadBack], so a change feed reopening after its
+// consumer was deleted stayed shut five seconds. It names no peer awaited, and
+// once the budget runs out it is a refusal, not a read-back.
+//
+// Mutation: leave [ConsumerClosing] out of [Timing.Place]'s retry, and the
+// create is tried once; out of [Refused], and a spent budget reads back.
+func TestAConsumerStillClosingIsCreatedOnceItsDeleteEnds(t *testing.T) {
+	t.Parallel()
+
+	calls, announced := 0, 0
+	err := fast.Place(t.Context(), func(context.Context) error {
+		calls++
+		if calls < 3 {
+			return jetstream.ErrConsumerDoesNotExist
+		}
+		return nil
+	}, func() { announced++ })
+	if err != nil || calls != 3 {
+		t.Errorf("a create made on its third attempt reported %v after %d attempts, want nil after 3",
+			err, calls)
+	}
+	if announced != 0 {
+		t.Errorf("said it was awaiting peers %d times for a consumer closing, want none", announced)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	err = fast.Place(ctx, func(context.Context) error { return jetstream.ErrConsumerDoesNotExist }, nil)
+	if !errors.Is(err, jetstream.ErrConsumerDoesNotExist) || !Refused(err) {
+		t.Errorf("a budget spent on a consumer still closing reported %v (refused %v), want the "+
+			"broker's answer, refused with no read-back", err, Refused(err))
+	}
+}
+
 // SILENCE IS NOT AN ANSWER, and telling it from one is what stops a slow
 // metadata group failing a boot.
 //
@@ -821,33 +858,37 @@ func TestTheProvisioningPredicatesAreDisjoint(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
-		want [3]bool // Unplaceable, NotYetVisible, Unanswered
+		want [4]bool // Unplaceable, NotYetVisible, Unanswered, ConsumerClosing
 	}{
 		{"placement refusal", &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400},
-			[3]bool{true, false, false}},
+			[4]bool{true, false, false, false}},
 		// A STORAGE CLAUSE INSIDE THE SAME CODE IS STILL PLACEMENT —
 		// see [TestAPlacementRefusalIsWaitedOutWhateverItsReason] for
 		// why the prose does not reclassify it.
 		{"placement refusal naming storage", &jetstream.APIError{ErrorCode: errCodeNoPeers, Code: 400,
 			Description: "no suitable peers for placement, insufficient storage"},
-			[3]bool{true, false, false}},
+			[4]bool{true, false, false, false}},
 		// AND A RESERVATION THE BROKER REFUSED IS NONE OF THE THREE: it
 		// is terminal, and [OutOfCapacity] is the predicate for it.
 		{"refused reservation", &jetstream.APIError{ErrorCode: errCodeOutOfStore, Code: 500,
 			Description: "insufficient storage resources available"},
-			[3]bool{false, false, false}},
-		{"stream not found", jetstream.ErrStreamNotFound, [3]bool{false, true, false}},
-		{"bucket not found", jetstream.ErrBucketNotFound, [3]bool{false, true, false}},
-		{"consumer not found", jetstream.ErrConsumerNotFound, [3]bool{false, true, false}},
-		{"deadline", context.DeadlineExceeded, [3]bool{false, false, true}},
-		{"nats timeout", nats.ErrTimeout, [3]bool{false, false, true}},
-		{"no responders", nats.ErrNoResponders, [3]bool{false, false, true}},
+			[4]bool{false, false, false, false}},
+		{"stream not found", jetstream.ErrStreamNotFound, [4]bool{false, true, false, false}},
+		{"bucket not found", jetstream.ErrBucketNotFound, [4]bool{false, true, false, false}},
+		{"consumer not found", jetstream.ErrConsumerNotFound, [4]bool{false, true, false, false}},
+		{"deadline", context.DeadlineExceeded, [4]bool{false, false, true, false}},
+		{"nats timeout", nats.ErrTimeout, [4]bool{false, false, true, false}},
+		{"no responders", nats.ErrNoResponders, [4]bool{false, false, true, false}},
+		// A CREATE MEETING A CONSUMER OF ITS NAME STILL CLOSING, which only
+		// the create's own retry ends: no peer's create explains it.
+		{"consumer closing", jetstream.ErrConsumerDoesNotExist, [4]bool{false, false, false, true}},
 		{"a real refusal", errors.New("nats: authorization violation"),
-			[3]bool{false, false, false}},
+			[4]bool{false, false, false, false}},
 	} {
-		got := [3]bool{Unplaceable(tc.err), NotYetVisible(tc.err), Unanswered(context.Background(), tc.err)}
+		got := [4]bool{Unplaceable(tc.err), NotYetVisible(tc.err), Unanswered(context.Background(), tc.err),
+			ConsumerClosing(tc.err)}
 		if got != tc.want {
-			t.Errorf("%s: Unplaceable/NotYetVisible/Unanswered = %v, want %v",
+			t.Errorf("%s: Unplaceable/NotYetVisible/Unanswered/ConsumerClosing = %v, want %v",
 				tc.name, got, tc.want)
 		}
 	}

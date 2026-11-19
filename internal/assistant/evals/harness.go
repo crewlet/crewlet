@@ -59,35 +59,11 @@ assistant:
 roles:
 %s`
 
-// assistantOn is the line that assigns Ask Crewlet its model in every document here.
-const assistantOn = "assistant:\n  model: assistant\n"
-
 // Company is the company a case's people work for: Ask Crewlet on when on
 // is set, and each of seats a human seat of that handle.
 func Company(on bool, seats ...string) (assistant.Company, error) {
 	return company(companyDoc, on, seats)
 }
-
-// ResearchCompany is [Company] with web research on, from the hosts named,
-// and searched through a Tavily server where search is set.
-func ResearchCompany(hosts []string, search bool, seats ...string) (assistant.Company, error) {
-	research := "  research:\n    hosts: [" + strings.Join(hosts, ", ") + "]\n"
-	doc := companyDoc
-	if search {
-		research += "    search: {mcp_server: search}\n"
-		doc = strings.Replace(doc, assistantOn, searchServer+assistantOn, 1)
-	}
-	doc = strings.Replace(doc, assistantOn, assistantOn+research, 1)
-	return company(doc, true, seats)
-}
-
-// searchServer is the curated Tavily entry a research search runs.
-const searchServer = `mcp_servers:
-  - name: search
-    command: npm
-    args: [exec, --yes, --, tavily-mcp@0.2.22]
-    env: {TAVILY_API_KEY: '${TAVILY_API_KEY}'}
-`
 
 func company(doc string, on bool, seats []string) (assistant.Company, error) {
 	var roles string
