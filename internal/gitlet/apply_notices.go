@@ -182,7 +182,7 @@ func (a *Applier) removeNotices(ctx context.Context, tx *sql.Tx, at applyContext
 	if err != nil {
 		return 0, err
 	}
-	n, err := a.removed(ctx, tx, at, removeNoticesSQL, list)
+	n, err := a.noted(ctx, tx, at, inbox.Note{Removed: true}, removeNoticesSQL, list)
 	if err != nil {
 		return 0, fmt.Errorf("gitlet: remove the notices of the changes a purge removes: %w", err)
 	}
@@ -195,30 +195,42 @@ func (a *Applier) removeNotices(ctx context.Context, tx *sql.Tx, at applyContext
 // node fewer than the count says.
 func (a *Applier) removeCutNotices(ctx context.Context, tx *sql.Tx, at applyContext, changeID string,
 	limit int) (int, error) {
-	n, err := a.removed(ctx, tx, at, removeCutNoticesSQL, changeID, limit)
+	n, err := a.noted(ctx, tx, at, inbox.Note{Removed: true}, removeCutNoticesSQL, changeID, limit)
 	if err != nil {
 		return 0, fmt.Errorf("gitlet: remove the notices of change %s a purge cuts: %w", changeID, err)
 	}
 	return n, nil
 }
 
-// removed runs one of the purge's notice deletes and notes each row its
-// RETURNING answers as removed from its recipient's inbox, by its [NoticeID],
-// at the purge's broker instant: one pass, never a read and a second seek of
-// the same index to delete.
-func (a *Applier) removed(ctx context.Context, tx *sql.Tx, at applyContext, stmt string, args ...any) (int, error) {
+// unquoteNotices clears the excerpt of every notice a deleted comment's record
+// wrote, found by its change and its record's position, noting each changed.
+func (a *Applier) unquoteNotices(ctx context.Context, tx *sql.Tx, at applyContext, changeID string,
+	position int64) (int, error) {
+
+	n, err := a.noted(ctx, tx, at, inbox.Note{Changed: true}, unquoteNoticesSQL, changeID, position)
+	if err != nil {
+		return 0, fmt.Errorf("gitlet: clear the notices quoting a comment of change %s: %w", changeID, err)
+	}
+	return n, nil
+}
+
+// noted runs one notice statement and notes each row its RETURNING answers as
+// like says (removed or changed), by its [NoticeID], at the record's broker
+// instant: one pass, never a read and a second seek of the same index.
+func (a *Applier) noted(ctx context.Context, tx *sql.Tx, at applyContext, like inbox.Note, stmt string,
+	args ...any) (int, error) {
 	rows, err := tx.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return 0, err
 	}
 	n := 0
 	for rows.Next() {
-		var note inbox.Note
+		note := like
 		if err := rows.Scan(&note.Record, &note.Handle, &note.Subject, &note.Reason, &note.Position); err != nil {
 			_ = rows.Close()
 			return 0, err
 		}
-		note.Record, note.Removed, note.At = NoticeID(note.Record, note.Subject), true, at.brokerAt
+		note.Record, note.At = NoticeID(note.Record, note.Subject), at.brokerAt
 		a.inboxed.Note(note)
 		n++
 	}
@@ -251,8 +263,9 @@ func changesOf(ctx context.Context, tx *sql.Tx, repoID string) ([]string, error)
 // The applier's notice statements, each with a WHERE registered in
 // plan_test.go: the write, in three parts for [store.InsertRowsReturning], a
 // conflict on the key skipped; the deletes by code_notifications_change_idx,
-// one seek a list element or a range of one change, oldest first; and the
-// final purge's read by code_changes_number_idx. The sweep's is noticesweep.go's.
+// one seek a list element or a range of one change, oldest first; a deleted
+// comment's excerpts cleared by the same key; and the final purge's read by
+// code_changes_number_idx. The sweep's is noticesweep.go's.
 const (
 	addNoticesSQL = `INSERT INTO code_notifications (record_id, recipient, recipient_kind, repo_id, change_id,
 			change_ref, reason, addressed, fallback_only, fallback_rank, excerpt, created_at, log_seq, log_stream,
@@ -267,6 +280,10 @@ const (
 	removeCutNoticesSQL = `DELETE FROM code_notifications WHERE rowid IN (SELECT rowid
 		FROM code_notifications INDEXED BY code_notifications_change_idx WHERE change_id = ?
 		ORDER BY log_seq LIMIT ?)
+		RETURNING record_id, recipient, change_id, reason, log_seq`
+	unquoteNoticesSQL = `UPDATE code_notifications SET excerpt = ''
+		WHERE rowid IN (SELECT rowid FROM code_notifications INDEXED BY code_notifications_change_idx
+			WHERE change_id = ? AND log_seq = ? AND excerpt != '')
 		RETURNING record_id, recipient, change_id, reason, log_seq`
 	purgedChangesSQL = `SELECT id FROM code_changes INDEXED BY code_changes_number_idx WHERE repo_id = ?`
 )

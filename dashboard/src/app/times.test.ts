@@ -54,6 +54,10 @@ const EXCEPTIONS: Record<string, { form: Form; why: string }> = {
     form: "words",
     why: "the Merges sentence's time, after its commit, in a time element of its own",
   },
+  "routes/gitlet/change/Conversation.tsx#QueueEntry": {
+    form: "words",
+    why: "a queue event's time after its verb, which is chosen by how the entry left",
+  },
   "routes/gitlet/change/Timeline.tsx#Said": {
     form: "words",
     why: "a byline whose face is on the timeline's rail: the verb arrives as a prop",

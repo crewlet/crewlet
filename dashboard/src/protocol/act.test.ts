@@ -511,6 +511,43 @@ describe("what a change came to", () => {
     expect(result).toMatchObject({ kind: "refused", code: "invalid", sentence: message });
   });
 
+  // AN INVALID REFUSAL THAT NAMES ITS FIELD says which in the dashboard's words (ADR-0060), never
+  // telling a person to check what they entered for a value the page sent.
+  // Mutation: keep the code's sentence, and both read "Check what was entered".
+  test("an invalid refusal naming its field says which value was refused", async () => {
+    const message =
+      "That change was refused, and nothing was written. Check what was entered, then try again.";
+    stub(async () =>
+      json({ error: "invalid", tool: "code_close_change", message, fields: ["close.reason"] }, 422),
+    );
+    const entered = await act("code_close_change", {}, { floors: new SessionFloors() });
+    expect(entered).toMatchObject({
+      kind: "refused",
+      code: "invalid",
+      fields: ["close.reason"],
+      sentence:
+        "That change was refused, and nothing was written: Gitlet did not accept the reason. Change it, then try again.",
+    });
+    stub(async () =>
+      json(
+        { error: "invalid", tool: "code_review_change", message, fields: ["review.findings[2]"] },
+        422,
+      ),
+    );
+    const finding = await act("code_review_change", {}, { floors: new SessionFloors() });
+    expect(finding).toMatchObject({
+      sentence: expect.stringContaining("did not accept its findings"),
+    });
+    stub(async () =>
+      json({ error: "invalid", tool: "code_rerun_checks", message, fields: ["limit"] }, 422),
+    );
+    const sent = await act("code_rerun_checks", {}, { floors: new SessionFloors() });
+    expect(sent).toMatchObject({
+      sentence:
+        "That change was refused, and nothing was written: Gitlet did not accept the value this page sent as limit.",
+    });
+  });
+
   // A STALE VERSION NOBODY WORDED FOR A PERSON carries no detail (ADR-0060),
   // and is shown in the dashboard's sentence for the code.
   test("a stale version is shown in the dashboard's words", async () => {

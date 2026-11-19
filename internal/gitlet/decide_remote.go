@@ -174,7 +174,7 @@ func (w remoteWrite) measure() (int, error) {
 	}
 	if n > EntryRoom {
 		op, _, _ := w.record()
-		return 0, fmt.Errorf("%w: %s: %d bytes, past the %d one proposal may take of its record",
+		return 0, refusedf("%w: %s: %d bytes, past the %d one proposal may take of its record",
 			ErrInvalidProposal, op, n, EntryRoom)
 	}
 	return n, nil
@@ -251,7 +251,7 @@ func (w remoteWrite) fitted() (int, error) {
 	n := max(past-1, 0)
 	if n == 0 && len(cmds) > 0 && len(packs) == 0 {
 		op, _, _ := w.record()
-		return 0, fmt.Errorf("%w: %s: its first command, %q, alone is past the %d bytes one proposal may take "+
+		return 0, refusedf("%w: %s: its first command, %q, alone is past the %d bytes one proposal may take "+
 			"of its record", ErrInvalidProposal, op, cmds[0].Ref, EntryRoom)
 	}
 	if _, err := w.first(n).measure(); err != nil {

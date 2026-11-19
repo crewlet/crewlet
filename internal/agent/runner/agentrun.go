@@ -432,8 +432,8 @@ type SummarizedTelling struct {
 // session showed, as a release the reading was read for resumes it, so such a
 // box holds none of them. Told as [SessionContinuation]'s briefs are, but the
 // notes from the first read at a hook's step on, as notes the session may
-// already show ([Runner.firstUnheld]). Built only where the capture's cursor
-// counts such a read.
+// already show ([Runner.firstUnheld]), and every late call a hook took, which
+// they credit no telling of ([Telling.Hook]). Built only where they differ.
 type UnheldTelling struct {
 	Brief, Replaced string
 
@@ -526,6 +526,12 @@ type SessionBasis struct {
 	// continues the session ([Runner.keptSession]). Nil where the brief left
 	// none out, or the capture states none, an older build's.
 	Owed []int
+
+	// LateOwed is the late calls that brief counted without listing them
+	// (sandbox.SessionCapture.LateOmitted), apart from Owed: every brief tells
+	// them again, and the session, holding only that count of each, is
+	// credited no telling of one ([heldByTelling]).
+	LateOwed []int
 
 	// Interrupted says the session was captured from a harness that was cut
 	// off, so its transcript may end mid-call, and may lack the brief its job
@@ -1124,8 +1130,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 	var countProvider string
 	if summed != nil {
 		summarized = summed.led(lead)
-		summarizedTold = sandbox.BriefTold{Omitted: summed.omitted, Own: own, Told: summed.told.refs,
-			ToldUnread: summed.told.unread}
+		summarizedTold = sandbox.BriefTold{Omitted: summed.omitted.reads, LateOmitted: summed.omitted.late,
+			Own: own, Told: summed.told.refs, ToldUnread: summed.told.unread}
 		count, countProvider = r.cfg.Resume.Count, r.cfg.Resume.CountProvider
 	}
 	// A FRESH RUN'S BRIEF is the round's own, the turn's answers that carried
@@ -1155,8 +1161,8 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// round's jobs did and what became of the last, and so leaves out
 			// what the reseed leaves out; and the turn's answers it tells
 			// after the task are told again with the task ([Runner.taskAgain]).
-			briefs.kept = r.baseSession(basis, reseed.Text, sandbox.BriefTold{Omitted: freshOmitted,
-				Own: append(taskLead(state.Round, history, ""), own...)})
+			briefs.kept = r.baseSession(basis, reseed.Text, sandbox.BriefTold{Omitted: freshOmitted.reads,
+				LateOmitted: freshOmitted.late, Own: append(taskLead(state.Round, history, ""), own...)})
 		}
 	} else {
 		// A ROUND LOST A SECOND TIME CONTINUES NOTHING, but the session its
@@ -1205,11 +1211,11 @@ func (r *Runner) continueAgentRun(ctx context.Context, history []ledger.Iteratio
 			// AND WHAT EACH OPENED WITH: its own leads, and the copy's the
 			// leads of its job's brief it told again, and those it was to and
 			// could not read.
-			Told: sandbox.BriefTold{Omitted: picked.omitted, Own: own, Told: picked.told.refs,
-				ToldUnread: picked.told.unread},
+			Told: sandbox.BriefTold{Omitted: picked.omitted.reads, LateOmitted: picked.omitted.late, Own: own,
+				Told: picked.told.refs, ToldUnread: picked.told.unread},
 			// The fresh one opens with the turn's task besides, which a session
 			// its run starts on it may lack once a compaction summarizes it.
-			Fresh: sandbox.BriefTold{Omitted: freshOmitted,
+			Fresh: sandbox.BriefTold{Omitted: freshOmitted.reads, LateOmitted: freshOmitted.late,
 				Own: append(freshLead(state.Round, history, ""), own...)},
 			// AND THE SAME COPY TOLD AS A SESSION THAT MAY BE A SUMMARY, with
 			// the count the launch judges the held brief by in its box.
@@ -1777,8 +1783,8 @@ const runRound = 1
 // was replaced, so after the cut was taken — its place, which its own job's
 // session gave it, can fall past the cut though it was made before the answer
 // — and after the brief of the job carrying the round on was built. That job
-// was never told it, and every later continuation of the round is told it as
-// no submission of the round ([prompts.AfterSave.LateSubmission]): the
+// was handed it only once under way, and whatever tells it tells it as no
+// submission of the round ([prompts.AfterSave.LateSubmission]): the
 // round's submission is the one a run carrying the round on makes. Replayed, a
 // late submission would stand for the carried-on run's work, or stand over it
 // where its place sorts after; read as the round's, a lost round would be

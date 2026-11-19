@@ -56,7 +56,7 @@ type TargetChecks struct {
 // validateCommitMarks is [ReadQuery.validate] for a `commit_marks` read: 1 to
 // MaxCommitMarks whole ids (the rows record whole ids), each once, and no page.
 func (q ReadQuery) validateCommitMarks() error {
-	refused := func(field, why string) error { return fmt.Errorf("%w: %s: %s", ErrInvalid, field, why) }
+	refused := func(field, why string) error { return refusedf("%w: %s: %s", ErrInvalid, field, why) }
 	switch {
 	case len(q.CommitMarks) == 0:
 		return refused("commit_marks", "a commit_marks read names the commits whose marks it reads")

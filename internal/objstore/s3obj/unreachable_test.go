@@ -12,6 +12,7 @@ import (
 
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
+	"github.com/crewlet/crewlet/internal/httpx/httpxtest"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj"
 	"github.com/crewlet/crewlet/internal/objstore/s3obj/s3fake"
 )
@@ -49,14 +50,9 @@ func TestADialNoAttemptCanCompleteIsNotAskedAgain(t *testing.T) {
 		}
 		return err
 	}
-	// A CLOSED PORT: one a listener held a moment ago, so a dial to it is
-	// refused as a server not up yet is.
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	closed := l.Addr().String()
-	l.Close()
+	// A PORT NOTHING LISTENS ON, so a dial to it is refused as a server not
+	// up yet is.
+	closed := httpxtest.Refusing(t)
 	expired, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
 	defer cancel()
 	_, timedOut := (&net.Dialer{}).DialContext(expired, "tcp", closed)

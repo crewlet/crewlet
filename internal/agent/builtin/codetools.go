@@ -224,7 +224,8 @@ func codeAnnotations(name string) (tools.Annotations, bool) {
 	if slices.Contains(CodeWrites(), name) {
 		destructive, idempotent := mcp.No, mcp.Yes
 		switch name {
-		case CodeDeleteBranchTool, CodeDeleteRepoTool, CodeResolveFindingTool, CodePurgeUnreachableTool:
+		case CodeDeleteBranchTool, CodeDeleteRepoTool, CodeDeleteCommentTool, CodeResolveFindingTool,
+			CodePurgeUnreachableTool:
 			destructive = mcp.Yes
 		case CodeReviewChangeTool, CodeCommentOnChangeTool:
 			idempotent = mcp.No
@@ -430,12 +431,12 @@ type codeRepoKey struct {
 func repoArg(tool string, args map[string]any) (string, *tools.Result) {
 	name := strings.TrimSpace(argString(args, "repo"))
 	if name == "" {
-		r := failed(fmt.Sprintf("%s needs a `repo`: a repository's name, as %s lists it.", tool,
+		r := failedArg("repo", fmt.Sprintf("%s needs a `repo`: a repository's name, as %s lists it.", tool,
 			CodeListReposTool))
 		return "", &r
 	}
 	if !gitlet.ValidName(name) {
-		r := failed(fmt.Sprintf("%s: %q is not a repository's name — a name is lowercase letters, "+
+		r := failedArg("repo", fmt.Sprintf("%s: %q is not a repository's name — a name is lowercase letters, "+
 			"digits and hyphens, as %s lists it.", tool, clip(name), CodeListReposTool))
 		return "", &r
 	}
@@ -634,9 +635,9 @@ func (d CodeDeps) refsOf(ctx context.Context, turn *turnctx.Turn, tool string, c
 	return answer, nil
 }
 
-// branch holds the refs a write names — its `branch`, a suggestions apply's
-// source branch, a change open's source and target — for turn BEFORE the
-// write is sent ([HoldRef]): THE ONE PLACE a write's branch is held, all at
+// branch holds the refs a write names (its `branch`, a suggestions apply's
+// source branch, a change open's source or target its read found missing) for
+// turn BEFORE the write is sent ([HoldRef]): THE ONE PLACE a write's branch is held, all at
 // once (one ref read, one Take, [takeRefHolds]). Held as a read is, because
 // only a write that MOVES the branch is ordered against its deletion by its
 // head compare; a refused, conflicting or no-op write appends nothing. So an
@@ -757,7 +758,7 @@ type resolvedRev struct {
 func revArg(tool, arg string, args map[string]any) (string, *tools.Result) {
 	rev := strings.TrimSpace(argString(args, arg))
 	if rev == "" {
-		r := failed(fmt.Sprintf("%s needs `%s`: a commit id — whole, or its first 7 or more hex digits — "+
+		r := failedArg(arg, fmt.Sprintf("%s needs `%s`: a commit id — whole, or its first 7 or more hex digits — "+
 			"or a branch, a tag, a whole ref, or %s for the default branch.", tool, arg, headRev))
 		return "", &r
 	}

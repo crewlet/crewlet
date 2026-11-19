@@ -158,6 +158,31 @@ test("a work item's listing names the item and no state, asks its cards and draw
   expect(ask.searchParams.get("cards")).toBe("true");
 });
 
+// A CHANGE THE QUEUE PUT OUT FOR CHECKS NO CHECKS FILE DEFINES is never said to have
+// failed them: nothing ran. Mutation: word checks_undefined as check_failed, red.
+test("a row put out of its queue for undefined checks says no checks file defines them", async () => {
+  const out = {
+    ...change("web", 13),
+    card: {
+      comments: 0,
+      reviews: 0,
+      changes_requested: 0,
+      ejected: { reason: "checks_undefined", at: "2026-10-28T09:40:00Z", checks: ["lint", "unit"] },
+    },
+  };
+  stubFetch((url) =>
+    url.pathname === "/query/code_changes"
+      ? { changes: [out], position: POSITION, level: "session" }
+      : undefined,
+  );
+  mount(<ChangeList params={{ repo: "web" }} omit={[]} empty={{ title: "None", hint: "" }} />);
+  const list = await screen.findByRole("list", { name: "Changes" });
+  const tag = within(list).getByText("Taken out of the queue").closest("[title]")!;
+  expect(tag.getAttribute("title")).toMatch(
+    /^Taken out of main's queue .*: lint and unit defined by no checks file on main$/,
+  );
+});
+
 // A REVIEW ROW NAMES THE CHANGE IT JUDGED AND OPENS ITS PAGE, the verdict in
 // words. Mutation: drop the change's reference, or link the row anywhere but
 // the change's page, and this fails.

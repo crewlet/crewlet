@@ -92,7 +92,7 @@ func pusherOf(via PushVia, kind PrincipalKind, seat string) (PusherKind, string,
 // validateDayBounds is [ReadQuery.validate] for the asker's day bounds.
 func (q ReadQuery) validateDayBounds() error {
 	b := q.DayBounds
-	refused := func(why string) error { return fmt.Errorf("%w: day_bounds: %s", ErrInvalid, why) }
+	refused := func(why string) error { return refusedf("%w: day_bounds: %s", ErrInvalid, why) }
 	switch {
 	case (q.Kind == ReadRepos || q.Kind == ReadRepo) && !q.RepoFacts:
 		return refused("a repository's pushes by day are among its facts: ask repo_facts with them")
@@ -122,7 +122,7 @@ func (q ReadQuery) validateDayBounds() error {
 		return refused(fmt.Sprintf("from %s to %s is past the %d days a listing of repositories counts",
 			instantText(first), instantText(last), MaxListingDaySpan/(24*time.Hour)))
 	case q.Kind == ReadRepos && q.Limit > MaxSparkReposPerPage:
-		return fmt.Errorf("%w: limit: a listing that counts pushes by day reads at most %d repositories a page",
+		return refusedf("%w: limit: a listing that counts pushes by day reads at most %d repositories a page",
 			ErrInvalid, MaxSparkReposPerPage)
 	}
 	return nil
@@ -134,7 +134,7 @@ func (q ReadQuery) daysKept(now time.Time) error {
 	if len(q.DayBounds) == 0 || !q.DayBounds[0].Before(now.Add(-PushDaysKept)) {
 		return nil
 	}
-	return fmt.Errorf("%w: day_bounds: %s is older than the push history keeps whole: %d days, less %d hours "+
+	return refusedf("%w: day_bounds: %s is older than the push history keeps whole: %d days, less %d hours "+
 		"for the clocks it is kept by", ErrInvalid, instantText(q.DayBounds[0]), PushHistory/(24*time.Hour),
 		(PushHistory-PushDaysKept)/time.Hour)
 }

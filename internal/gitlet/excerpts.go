@@ -82,11 +82,11 @@ func (q ExcerptsQuery) ContextOf() int {
 
 func (q ExcerptsQuery) validate() error {
 	if n := len(q.Anchors); n == 0 || n > MaxExcerptAnchors {
-		return fmt.Errorf("%w: excerpts.anchors: %d anchors; a read excerpts 1 to %d", ErrInvalid, n,
+		return refusedf("%w: excerpts.anchors: %d anchors; a read excerpts 1 to %d", ErrInvalid, n,
 			MaxExcerptAnchors)
 	}
 	if c := q.ContextOf(); c < 0 || c > MaxExcerptContext {
-		return fmt.Errorf("%w: excerpts.context: %d lines; an excerpt shows 0 to %d each side of its range",
+		return refusedf("%w: excerpts.context: %d lines; an excerpt shows 0 to %d each side of its range",
 			ErrInvalid, c, MaxExcerptContext)
 	}
 	ids := make(map[string]bool, len(q.Anchors))
@@ -105,7 +105,7 @@ func (q ExcerptsQuery) validate() error {
 			return fmt.Errorf("%w: %s.side: an anchor on the old side is read in the revision's base, which "+
 				"base names", ErrInvalid, field)
 		case a.Start < 1 || a.End < a.Start || a.End > MaxAnchorLine:
-			return fmt.Errorf("%w: %s: lines %d to %d are no range: lines count from 1, end is at or after "+
+			return refusedf("%w: %s: lines %d to %d are no range: lines count from 1, end is at or after "+
 				"start, and no file holds a line past %d", ErrInvalid, field, a.Start, a.End, MaxAnchorLine)
 		}
 		ids[a.ID] = true

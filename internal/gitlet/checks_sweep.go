@@ -36,7 +36,7 @@ import (
 // appends nothing: its checks went with its purge.
 func (s *Store) ChecksSweep(ctx context.Context, repoID string, now time.Time) (SweepResult, error) {
 	if now.IsZero() {
-		return SweepResult{}, fmt.Errorf("%w: now: a checks sweep judges the history by the duty holder's "+
+		return SweepResult{}, refusedf("%w: now: a checks sweep judges the history by the duty holder's "+
 			"clock, and none was given", ErrInvalid)
 	}
 	through := now.Add(-CheckHistory)

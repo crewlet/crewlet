@@ -161,7 +161,7 @@ func (s *Service) Create(ctx context.Context, c artifactsdomain.Call, req Create
 	start := s.now()
 	out, report, err := s.create(ctx, c, req)
 	s.observePublish(start, err)
-	s.judgePublish(start, err)
+	s.judgePublish(ctx, start, err)
 	return out, report, err
 }
 
@@ -245,7 +245,7 @@ func (s *Service) Publish(ctx context.Context, c artifactsdomain.Call, req Publi
 	start := s.now()
 	out, report, err := s.publish(ctx, c, req)
 	s.observePublish(start, err)
-	s.judgePublish(start, err)
+	s.judgePublish(ctx, start, err)
 	return out, report, err
 }
 
@@ -310,7 +310,7 @@ func (s *Service) publish(ctx context.Context, c artifactsdomain.Call, req Publi
 	decided := s.now()
 	published, err := s.writes.Publish(ctx, c, in)
 	if bytesFree(req) {
-		s.judgeApplied(decided, err)
+		s.judgeApplied(ctx, decided, err)
 	}
 	if err != nil {
 		return published, Report{}, r.fail(ctx, err)
@@ -378,7 +378,7 @@ func (s *Service) restore(ctx context.Context, c artifactsdomain.Call, req Publi
 func (s *Service) writeOnly(ctx context.Context, c artifactsdomain.Call, in artifactsdomain.PublishInput) (artifactsdomain.Published, Report, error) {
 	decided := s.now()
 	published, err := s.writes.Publish(ctx, c, in)
-	s.judgeApplied(decided, err)
+	s.judgeApplied(ctx, decided, err)
 	return published, Report{}, err
 }
 

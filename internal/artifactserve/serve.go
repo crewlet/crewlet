@@ -22,6 +22,7 @@ import (
 	"github.com/crewlet/crewlet/internal/artifacts/mediatype"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
 	"github.com/crewlet/crewlet/internal/artifactserve/ticket"
+	"github.com/crewlet/crewlet/internal/objectives"
 	"github.com/crewlet/crewlet/internal/objstore"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/statelog/metrics"
@@ -143,7 +144,7 @@ func (h *Handler) asset(w http.ResponseWriter, r *http.Request, claims artifacts
 		h.ticketRefused(w, refused())
 		return ""
 	case err != nil:
-		log.WarnContext(r.Context(), "artifacts_serve_rows_unavailable",
+		unanswered(r.Context(), "artifacts_serve_rows_unavailable",
 			"artifact", claims.Artifact.String(), "error", err)
 		h.ticketRefused(w, unavailable(err))
 		return ""
@@ -592,7 +593,8 @@ func (e *exactly) Read(p []byte) (int, error) {
 // DAMAGED IS NOT UNREACHABLE. An object whose bytes do not match the row, or
 // one a retained version names that the store no longer holds, is the
 // engine's own fault, which no retry clears: 500. One the store did not
-// answer for is a 503 with the hint a broker election takes.
+// answer for is a 503 with the hint a broker election takes, unless the
+// request's own cancellation ended the read ([unanswered]).
 func (h *Handler) contentFailed(w http.ResponseWriter, r *http.Request, c artifacts.TicketClaims,
 	obj objstore.Object, err error) {
 
@@ -602,10 +604,22 @@ func (h *Handler) contentFailed(w http.ResponseWriter, r *http.Request, c artifa
 			"artifact", c.Artifact.String(), "key", obj.Key.String(), "error", err)
 		h.refuse(w, http.StatusInternalServerError, 0)
 	default:
-		log.WarnContext(r.Context(), "artifacts_serve_content_unavailable",
+		unanswered(r.Context(), "artifacts_serve_content_unavailable",
 			"artifact", c.Artifact.String(), "key", obj.Key.String(), "error", err)
 		h.refuse(w, http.StatusServiceUnavailable, statelog.ElectionRetryHint)
 	}
+}
+
+// unanswered logs a read the request needed that did not answer, as event at
+// WARN, unless the request's client went away first ([objectives.Abandoned]):
+// then its own cancellation ended the read, which is no fault of the rows or
+// the store, and ServeHTTP counts the request abandoned, not as a 5xx.
+func unanswered(ctx context.Context, event string, args ...any) {
+	if objectives.Abandoned(ctx) {
+		log.DebugContext(ctx, "artifacts_serve_abandoned", append([]any{"read", event}, args...)...)
+		return
+	}
+	log.WarnContext(ctx, event, args...)
 }
 
 // entityTag is a file's strong entity tag: the first twenty bytes of its

@@ -1643,14 +1643,15 @@ pushes that move its branches: the repository's one
 [committer](#the-committer) decides them in order and the broker arbitrates
 them together, so a change is never both merged and closed.
 
-Four tables hold a change, on every data node:
+Five tables hold a change, on every data node:
 
 | Table | A row for | What it holds |
 |---|---|---|
-| `code_changes` | each change | Its number and title; its state; its source and target branches; the head of its latest revision; who opened it — a seat, or a person by the human seat they hold, with the credential they used; the work item it carries; when it was opened, closed and merged, and how; and how many bytes its description holds |
+| `code_changes` | each change | Its number and title; its state; its source and target branches; the head of its latest revision; who opened it — a seat, or a person by the human seat they hold, with the credential they used; the work item it carries; when it was opened, closed and merged, and how; who closed it, while it is closed; and how many bytes its description holds |
 | `code_change_bodies` | each change with a description | Its description, up to 32 KiB |
 | `code_change_authors` | each of its authors | Who wrote the change: whoever opened it, and everyone whose push moved its head, each from the revision they first wrote. An author's approval of their own change counts for nothing |
-| `code_revisions` | each time its head moved while it was live | The new head, who pushed it and the push that did. Revision 1 is the source branch's head when the change was opened — made by the push that opened it, for a change a push opened, and otherwise by whoever opened it, by no push — and a reopen's revision its head when the change was reopened, made by whoever reopened it |
+| `code_revisions` | each time its head moved while it was live | The new head, who pushed it and the push that did, and how that push moved the branch: its way (`git`, `engine`) and whether it rewrote the branch rather than moving it forward (`forced`: a force-push, or the engine's rebase of the change onto its target, the engine's one write that rewrites a branch). Revision 1 is the source branch's head when the change was opened — made by the push that opened it, for a change a push opened, and otherwise by whoever opened it, by no push — and a reopen's revision its head when the change was reopened, made by whoever reopened it |
+| `code_change_moves` | each move of its lifecycle | What the move did (`closed`, `reopened`, `drafted`, `readied`, `retitled`, `described`, `work_item` or `retargeted`), who made it, a close's reason, the branches a retarget moved its target between, the work item an edit set, and when: every edit, draft's state, retarget, close and reopen, and a close a push made by deleting its source, named for its pusher. Its timeline reads them beside its revisions and its conversation |
 
 - **A number is the repository's own**, counted from 1 in the order the code
   log applies the records that open changes, so two changes of a repository
@@ -1671,7 +1672,7 @@ Four tables hold a change, on every data node:
   the row still says how long it is, so a purge weighs it without reading it.
 - **A change has no horizon of its own.** It is kept as long as its
   repository, and the repository's [purge](#deletion-and-purge) removes it:
-  each change whole, its revisions, authors, description and
+  each change whole, its revisions, authors, moves, description and
   [conversation](#reviews-and-findings) before its row, in the same bounded
   steps as the rest of the repository's rows.
 
@@ -1689,7 +1690,7 @@ them. Six writes:
 | Edit | Sets its title (one line, at most 256 bytes), its description (at most 32 KiB) or the work item it carries | Its owner, a principal that maintains the repository, and any person |
 | Draft | Makes a live change a draft, or a draft ask to be merged | The same |
 | Retarget | Moves its target to another live branch | The same |
-| Close | Closes it without merging it, with a reason of at most 1 KiB | The same |
+| Close | Closes it without merging it, with a reason of at most 1 KiB, keeping who closed it (`closed_by`, a seat by its handle or a person by their human seat) until a reopen clears it | The same |
 | Reopen | Opens a closed change again, at its source branch's head now — a revision of its own, made by whoever reopened it, where the branch moved while the change was closed | The same |
 
 - **A number is the apply's.** The record that opens a change takes the
@@ -1738,7 +1739,7 @@ A write that is refused appends nothing, and says why in one sentence:
 | `change_not_found` | The repository holds no such change |
 | `not_permitted` | The asker may not make the write: an open by one who may not push the source branch, saying what the asker holds and what would admit it; any other write by one who neither owns the change nor maintains the repository, nor is a person |
 | `stale` | The change is at another version than the write was formed against |
-| `same_ref`, `no_source`, `no_target`, `no_difference` | The source and target are one branch; the source or the target is not a live branch; the source is at its target's commit |
+| `same_ref`, `no_source`, `no_target`, `no_difference` | The source and target are one branch; the source or the target is not a live branch; the source is at its target's commit, or (asked through `code_open_change`, which reads the branches' histories before it writes, since the committer reads rows alone) its target already holds every commit of it |
 | `change_exists` | The source branch already heads a live change, which the sentence names |
 | `change_closed`, `change_merged` | An edit, a draft's state or a retarget of a closed change, which is reopened first; any write but an open of a merged change, which stays merged |
 | `busy`, `not_applied`, `unavailable` | The committer did not reach the write in time, or the code log refused it or dropped it on every node: nothing was decided, and the write is sent again |
@@ -1822,7 +1823,8 @@ moves — and each push of a record sees what the ones before it did.
   read it — who is told nothing of it ([The home's change
   work](#the-homes-change-work)).
 - **Deleting the source branch closes the change**: `closed`, its reason
-  `source_deleted` — after the same push's merges, so a push that sets the
+  `source_deleted`, closed by whoever pushed the deletion (nobody, for a push
+  nobody made: an import's or a mirror's) — after the same push's merges, so a push that sets the
   target to the head and deletes the branch leaves the change merged.
   Reopening it needs the branch pushed again.
 - **Every change one record moves counts one version**, however many of its
@@ -1913,8 +1915,11 @@ answer that holds every record the code log had committed when it was asked.
   change here.
 - **What waits on you** is `needs=me`: the changes whose ask of your review
   stands, and then your own changes waiting on your fix — one listing, read as
-  those two one after the other, a change of both listed once. It names no
-  reviewer and no owner, since it is yours.
+  those two one after the other, a change of both listed once. A page that
+  reaches the end of the first goes on into the second, so one review asked and
+  three changes to fix are four rows on one page, and each row says which of
+  the two listed it (`waits_for`: `review` or `fix`). It names no reviewer and
+  no owner, since it is yours.
 - **What waits on a person** is `needs=person`: the live changes whose
   [readiness](#merge-readiness) waits on persons alone — an approval only a
   person was asked for, a blocker a person raised and an author answered —
@@ -2209,8 +2214,8 @@ behind their batches and contend with every push to the repository.
   next node answers: a reply to a comment the asker was shown is never refused
   because the writer has not seen the comment yet.
 - **A seat and a person's assistant write it through tools** —
-  `code_request_review`, `code_review_change`, `code_comment_on_change` and
-  `code_resolve_finding` ([The company's
+  `code_request_review`, `code_review_change`, `code_comment_on_change`,
+  `code_delete_comment` and `code_resolve_finding` ([The company's
   code](../guides/tools-and-mcp.md#the-companys-code)) — each one write, named
   by one operation and decided at or past the tool's own read of the change. A
   review is ONE record — its verdict, its summary, every finding it raises and
@@ -2240,7 +2245,7 @@ behind their batches and contend with every push to the repository.
 | `code_conversations` | each change that has been discussed | Its counters — its comments, its reviews, its open findings, its standing blockers and how many reviewers' standing verdict asks for changes — what its comments, reviews and findings weigh, the version and position of its last record, and the version of what its [readiness](#merge-readiness) reads: one more for each ask for review, review, answer to findings, revision's facts and settling of its asks — and how many of its asks wait and how many its end left, which its [home](#the-homes-change-work) finds a change to settle by |
 | `code_reviewers` | each reviewer it has asked | A seat, or a person by the human seat they hold; why — asked by name, or as a [path owner](#recorded-on-the-change) a revision's facts asked — whether the ask waits (`requested`), was answered by the reviewer's review (`reviewed`), was ended by the change's close or merge (`ended`) or was withdrawn (`withdrawn`) — each kept, so the change says who was once asked — who asked, nobody for a path owner, and the note they asked with, at most 1 KiB, or for a path owner the globs the ask is for, at most 32 and 1 KiB of them, with how many more |
 | `code_participants` | everybody who takes part in it | Each reviewer asked or reviewing and each author of a comment, by handle and kind, and a reviewer's **standing verdict**: the latest of their reviews that approves or asks for changes, and the revision it judged |
-| `code_comments` | each comment | Its thread, its parent or the finding it replies to, who said it — a seat, or a person with the credential they used — the line it points at, whether its thread is resolved and by whom, the turn that said it, and its body, at most 32 KiB |
+| `code_comments` | each comment | Its thread, its parent or the finding it replies to, who said it — a seat, or a person with the credential they used — the line it points at, whether its thread is resolved and by whom, the turn that said it, its body, at most 32 KiB, when its author last edited it, and when and by whom it was deleted |
 | `code_reviews` | each review | The revision it judged, who reviewed — a seat, or a person with the credential they used — its verdict, how many findings it raised, the turn and the model that reviewed, and its summary, at most 4 KiB |
 | `code_findings` | each finding | The review and the revision that raised it, its raiser, where it points — a file, a side of the revision's diff, its lines, the commit and the blob they were read in — its severity and category, its state, and its last answer: the note, who gave it, the commit it names |
 | `code_finding_texts` | each finding | Its title (one line, at most 200 bytes), its body (at most 4 KiB) and the lines it suggests in place of the ones it points at (at most 16 KiB) — a row of its own, so the finding's state is rewritten without its text |
@@ -2371,6 +2376,23 @@ credential bound to no seat says nothing: every comment names who said it.
   anybody else is refused `not_permitted` — and its first comment names who
   resolved it. A finding's thread is answered by the finding's own answer
   ([Findings](#findings)), never resolved as a comment's is.
+- **A comment is edited by its author alone**, any comment of theirs, the
+  first of a thread, a reply or a reply to a finding: its words are replaced
+  and the row keeps when, which a reader sees as edited. Anybody else is
+  refused `not_permitted`; words it holds already change nothing.
+- **A comment is deleted by its author, a principal that maintains the
+  repository or a person**, anybody else refused `not_permitted`. A deleted
+  comment is a tombstone, as a deleted branch's commits stay and a closed
+  change stays listed: its row keeps its place, its thread and its author,
+  its words cleared, with who deleted it and when, so a thread whose first
+  comment is deleted keeps every reply, anyone's, and still takes replies. A
+  deleted comment takes no edit (`comment_gone`, as does a comment the change
+  does not hold), and deleting it again changes nothing. The delete also
+  clears the excerpt every inbox notice of the comment quotes.
+- **An edit or a delete tells nobody**: no notice, no wake. The code log
+  keeps the comment's original record until the log's own retention trims it
+  ([Retention](../guides/retention.md)): a delete takes the words out of every
+  read of the change, not out of the log.
 
 ### Reviews
 
@@ -2821,8 +2843,10 @@ all its repositories, or past about 60 MiB of them — so:
   engine never runs reads beside the engine's own. A report records no queue —
   which is how the writer tells a CI's check from the engine's: a name the
   engine queued at that commit is refused `native_check`, one check being one
-  runner's or one CI's and never both — and an ending sent again is answered
-  from the row. A seat's report, a token bound to nobody's, and one through a
+  runner's or one CI's and never both — so it says itself whether the
+  branch's gate requires the check, as the writer read the gate, which a
+  queued attempt's queue says (`required`, from record version 8); and an
+  ending sent again is answered from the row. A seat's report, a token bound to nobody's, and one through a
   credential without the Gitlet permission are refused before it is asked
   ([External CI](../guides/gitlet.md#external-ci)).
 
@@ -7231,7 +7255,11 @@ it names no asker.
 
 The change's own read carries it (`mergeability` on a change's detail): of
 its head revision into its target where its home has merged that, and of an
-earlier revision or another branch while the home's next merge is owed. Its
+earlier revision or another branch while the home's next merge is owed. Beside
+it the detail carries the target's tip as the read found it (`target_tip`), so
+a merge measured at a tip the target has since moved past reads as such until
+its home merges it again, and a fast-forward is offered only where the head
+holds that tip. Its
 conflicted paths are weighed in the change's conversation's text, as its
 revisions' facts are, so a [purge](#deletion-and-purge) weighs them by that
 one narrow row. `crewlet.code.conversation.writes` counts the records under
@@ -7507,8 +7535,9 @@ change as whoever enqueued it.
 - An **eject** puts live entries of one branch out — `check_failed` (naming
   the checks, and for a bisected culprit the train they failed on: its
   candidate, the commit it was merged onto and the commit they ran on, kept on
-  the entry since the train's rows go with it), `conflict` (naming up to 100
-  paths), `gate_unmet`,
+  the entry since the train's rows go with it), `checks_undefined` (naming the
+  required checks the branch's checks file defines in no form that runs, so
+  nothing was tested), `conflict` (naming up to 100 paths), `gate_unmet`,
   `head_moved`, `not_fast_forward` or `repo_mirrored` (the repository is a
   [pull mirror](#mirrors-and-imports), which nothing merges into: its home
   ejects every live entry rather than build a train) — and abandons the train
@@ -7645,7 +7674,9 @@ holds.
   the check it is measured by — and an attempt its runner's infrastructure
   ended is queued again. Where the base's file defines a required check in no
   form that runs, no candidate can ever pass it, and every entry the train
-  tests is ejected `check_failed` naming it.
+  tests is ejected `checks_undefined` naming it, never `check_failed`, since
+  nothing ran: a gate requiring a check only a person's CI reports takes no
+  change through its queue until the branch's checks file defines it.
 - **Land.** The **longest green prefix** lands in ONE `land` record: every
   candidate up to the last whose tip passed every required check, with no
   candidate before it failed — a candidate's tip holds every change before
@@ -9056,7 +9087,11 @@ on — the seat's own `seats/<handle>/revert-<n>`, or `revert-<n>` for a person
    landing](#how-a-write-is-built), whose record opens the change "Revert
    <repo>!<n>" from it into the same target — the push's own change, as a
    person's `-o change` opens one ([A change a push
-   opens](#a-change-a-push-opens)) — and the write's answer names it.
+   opens](#a-change-a-push-opens)) — and the write's answer names it. The
+   push's record names the change it reverts (`code_changes.reverts`, record
+   version 9), so the reverted change's read answers its latest revert as
+   `reverted_by`, and a second revert, refused `exists` on the branch, names
+   that change.
 
 A revert never moves its target: it is a change, held to the target's gate
 like any other. Asked to, the tool merges it as a second write of the same

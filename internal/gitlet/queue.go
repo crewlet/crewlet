@@ -480,7 +480,7 @@ func (p QueueProposal) measure() (int, error) {
 		bytes += MaxRoutingBytes
 	}
 	if bytes > EntryRoom {
-		return 0, fmt.Errorf("%w: %s: %d bytes, past the %d one proposal may take of its record",
+		return 0, refusedf("%w: %s: %d bytes, past the %d one proposal may take of its record",
 			ErrInvalidProposal, op, bytes, EntryRoom)
 	}
 	return bytes, nil
@@ -508,7 +508,7 @@ func (p QueueProposal) validFields() error {
 	} else {
 		switch why := p.Asker.invalid(); {
 		case why != "":
-			return fmt.Errorf("%w: asker: %s", ErrInvalidProposal, why)
+			return refusedf("%w: asker: %s", ErrInvalidProposal, why)
 		case !p.Asker.Run.IsZero():
 			return badField("asker.run", "a queue's write names its asker alone, never a run")
 		}
