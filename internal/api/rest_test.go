@@ -310,6 +310,10 @@ func (stubWorkReader) FlowItems(context.Context, worklet.FlowHoursQuery) (map[st
 	return map[string]int{}, nil
 }
 
+func (stubWorkReader) FlowPickups(context.Context, worklet.FlowHoursQuery) ([]time.Duration, error) {
+	return []time.Duration{}, nil
+}
+
 func (stubWorkReader) Inbox(_ context.Context, q worklet.InboxQuery, _ time.Time) (
 	worklet.InboxAnswer, error) {
 	return worklet.InboxAnswer{Handle: q.Handle}, nil

@@ -61,6 +61,10 @@ func (patternsWork) FlowItems(context.Context, worklet.FlowHoursQuery) (map[stri
 	return nil, errors.New("this reader keeps no flow record")
 }
 
+func (patternsWork) FlowPickups(context.Context, worklet.FlowHoursQuery) ([]time.Duration, error) {
+	return nil, errors.New("this reader keeps no flow record")
+}
+
 // ledgerUsage answers the turn ledger read and nothing else, keeping the range asked.
 type ledgerUsage struct {
 	UsageReads

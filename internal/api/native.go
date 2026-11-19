@@ -411,6 +411,14 @@ func (l liveWork) FlowItems(ctx context.Context, q worklet.FlowHoursQuery) (map[
 	return r.FlowItems(ctx, q)
 }
 
+func (l liveWork) FlowPickups(ctx context.Context, q worklet.FlowHoursQuery) ([]time.Duration, error) {
+	r, err := l.reader()
+	if err != nil {
+		return nil, err
+	}
+	return r.FlowPickups(ctx, q)
+}
+
 func (l liveWork) TurnsMoved(ctx context.Context, q worklet.TurnsMovedQuery) (map[string]bool, error) {
 	r, err := l.reader()
 	if err != nil {

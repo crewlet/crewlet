@@ -233,7 +233,8 @@ func TestAChangedFixIsShownBeforeItCanBeSent(t *testing.T) {
 }
 
 // A RESOLVED FINDING IS NEVER APPLIED: a condition that ended closes the
-// finding with nothing to send, and a report of a send is refused after it.
+// finding with nothing to send, and a report of a send, or a re-check, after
+// it is refused as a finding no longer open, which is said in words.
 func TestAResolvedFindingIsNeverApplied(t *testing.T) {
 	t.Parallel()
 	log := newApplyLog(t, capFinding(60))
@@ -244,11 +245,11 @@ func TestAResolvedFindingIsNeverApplied(t *testing.T) {
 		t.Fatalf("re-check = %+v (%v), state %s, want resolved with nothing to send", out, err, log.row.State)
 	}
 	if err := rc.applied(t.Context(), "f-1", advisor.ApplyDigest("f-1", 1,
-		advisor.OptionDigest(capFinding(60).Fix.Options[0])), person); !errors.Is(err, errRecheckAgain) {
-		t.Errorf("a report on a resolved finding answered %v, want a re-check", err)
+		advisor.OptionDigest(capFinding(60).Fix.Options[0])), person); !errors.Is(err, errNotOpen) {
+		t.Errorf("a report on a resolved finding answered %v, want it said as no longer open", err)
 	}
-	if _, err := rc.recheck(t.Context(), "f-1", 0, person); !errors.Is(err, advisordomain.ErrIllegalMove) {
-		t.Errorf("a re-check of a closed finding answered %v", err)
+	if _, err := rc.recheck(t.Context(), "f-1", 0, person); !errors.Is(err, errNotOpen) {
+		t.Errorf("a re-check of a closed finding answered %v, want it said as no longer open", err)
 	}
 }
 

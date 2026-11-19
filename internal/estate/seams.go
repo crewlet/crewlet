@@ -112,6 +112,11 @@ func (w Work) FlowItems(ctx context.Context, q worklet.FlowHoursQuery) (map[stri
 	return call(ctx, w.r, opFlowItems, nil, q)
 }
 
+// FlowPickups answers how long each item picked up in a window had stood due.
+func (w Work) FlowPickups(ctx context.Context, q worklet.FlowHoursQuery) ([]time.Duration, error) {
+	return call(ctx, w.r, opFlowPickups, nil, q)
+}
+
 // WorkPatterns answers what the company's comments and answers did in a window.
 func (w Work) WorkPatterns(ctx context.Context, q worklet.PatternsQuery) (worklet.WorkPatterns, error) {
 	return call(ctx, w.r, opWorkPatterns, nil, q)

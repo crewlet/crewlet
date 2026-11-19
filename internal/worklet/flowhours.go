@@ -79,6 +79,38 @@ func (r *Reader) FlowItems(ctx context.Context, q FlowHoursQuery) (map[string]in
 	return out, nil
 }
 
+// FlowPickups is how long each item a seat picked up in the window had stood
+// due first, shortest first: a due change the item's next change ended by
+// moving, at an instant in [Since, Until). Due is a start passed with nothing
+// of the assignee's on the item since, so it moves only once the assignee
+// acted on it (the turn itself is the turns' record and never a flow change).
+// The Advisor's weekly report reads the median and 90th percentile as the
+// week's pickup wait.
+func (r *Reader) FlowPickups(ctx context.Context, q FlowHoursQuery) ([]time.Duration, error) {
+	spans, err := r.flowSpans(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	return pickupsOf(spans, q.Since, q.Until), nil
+}
+
+// pickupsOf is every pickup spans hold that ended in [since, until).
+func pickupsOf(spans []flowSpan, since, until time.Time) []time.Duration {
+	out := []time.Duration{}
+	for i, s := range spans {
+		if s.state != FlowDue || i+1 == len(spans) || spans[i+1].task != s.task {
+			continue
+		}
+		next := spans[i+1]
+		if next.state == FlowMoving && !next.start.Before(since) &&
+			next.start.Before(until) && next.start.After(s.start) {
+			out = append(out, next.start.Sub(s.start))
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 // flowSpans reads the window's flow changes, each item's oldest first.
 func (r *Reader) flowSpans(ctx context.Context, q FlowHoursQuery) ([]flowSpan, error) {
 	switch {
