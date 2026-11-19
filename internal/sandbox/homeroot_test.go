@@ -56,6 +56,17 @@ func outsideHolds(t *testing.T, dir string) []string {
 	return names
 }
 
+// readThrough is the failure of a stream's open, or else of reading it to its
+// end.
+func readThrough(r io.ReadCloser, _ int64, err error) error {
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	_, err = io.ReadAll(r)
+	return err
+}
+
 // links are the two ways a link leads out of a box: by an absolute path, and
 // by a relative one that climbs past the home.
 var links = map[string]func(t *testing.T, home, outside string) string{
@@ -130,13 +141,21 @@ func TestALocalBoxReachesItsFilesOnlyBeneathItsHome(t *testing.T) {
 				if strings.Contains(string(got), besideTheBox) {
 					t.Errorf("ReadFile answered the content beside the box, not the refusal: %q", got)
 				}
-				r, err := box.OpenFile(ctx, in("beside"))
-				if err == nil {
-					raw, _ := io.ReadAll(r)
-					_ = r.Close()
-					t.Errorf("OpenFile through the link was not refused, and read %q", raw)
+				for op, open := range map[string]func() (io.ReadCloser, error){
+					"OpenFile": func() (io.ReadCloser, error) { return box.OpenFile(ctx, in("beside")) },
+					"OpenRange": func() (io.ReadCloser, error) {
+						r, _, err := box.OpenRange(ctx, in("beside"), 0, 64)
+						return r, err
+					},
+				} {
+					r, err := open()
+					if err == nil {
+						raw, _ := io.ReadAll(r)
+						_ = r.Close()
+						t.Errorf("%s through the link was not refused, and read %q", op, raw)
+					}
+					refused(op, err)
 				}
-				refused("OpenFile", err)
 				tail, err := box.ReadTail(ctx, in("beside"), 64)
 				refused("ReadTail", err)
 				if strings.Contains(string(tail.Data), besideTheBox) {
@@ -411,6 +430,7 @@ func TestALocalBoxRefusesWhatIsNotADirectoryOnTheWayAtOnce(t *testing.T) {
 						}
 						return err
 					},
+					"OpenRange": func() error { return readThrough(box.OpenRange(ctx, path, 0, 64)) },
 				}
 				for read, fn := range reads {
 					err := within(t, read, fn)

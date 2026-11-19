@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"io"
+	"math"
 	"strings"
 	"testing"
 
@@ -13,9 +14,9 @@ import (
 )
 
 // Box drives the FILE CONTRACT every [sandbox.Sandbox] backend keeps: the three
-// reads a harness runner is built on, OpenTail, the seeding write, and the
-// streamed write ([sandbox.Sandbox.WriteStream]): whole, empty, past the read
-// cap, over a file, and from a source that fails part way.
+// reads a harness runner is built on, OpenTail, OpenRange, the seeding write,
+// and the streamed write ([sandbox.Sandbox.WriteStream]): whole, empty, past
+// the read cap, over a file, and from a source that fails part way.
 //
 // ONE SUITE FOR EVERY BACKEND, the in-memory twin included: a twin answering a
 // file past the cap whole lets a runner test certify a read no real box makes.
@@ -41,6 +42,8 @@ func Box(t *testing.T, readCap int, fresh func(t *testing.T) sandbox.Sandbox) {
 		{"AnEmptyFileIsEmptyToEveryRead", testAnEmptyFileIsEmptyToEveryRead},
 		{"ATailIsTheFilesEndAndNamesItsWholeSize", testATailIsTheFilesEndAndNamesItsWholeSize},
 		{"AStreamedTailIsTheFilesEndAndNamesItsWholeSize", testAStreamedTailIsTheFilesEndAndNamesItsWholeSize},
+		{"ARangeIsTheFilesBytesFromItsOffsetAndNamesItsWholeSize",
+			testARangeIsTheFilesBytesFromItsOffsetAndNamesItsWholeSize},
 		{"AFilePastTheCapIsRefusedWholeAndReadAsAStream", testAFilePastTheCapIsRefusedWholeAndReadAsAStream},
 		{"AFileAtTheCapIsReadWhole", testAFileAtTheCapIsReadWhole},
 		{"AStreamClosedEarlyIsReleased", testAStreamClosedEarlyIsReleased},
@@ -101,6 +104,28 @@ func readTailStream(t *testing.T, box sandbox.Sandbox, path string, n int64) ([]
 		t.Fatalf("reading the end of %s: %v", path, err)
 	}
 	return got, size
+}
+
+// readRange is the stream of at most n bytes of path from off, read to its
+// end, and the size the open named.
+func readRange(t *testing.T, box sandbox.Sandbox, path string, off, n int64) ([]byte, int64) {
+	t.Helper()
+	r, size, err := box.OpenRange(t.Context(), path, off, n)
+	if err != nil {
+		t.Fatalf("OpenRange %s from %d for %d: %v", path, off, n, err)
+	}
+	return readAllOf(t, r), size
+}
+
+// readAllOf is what r streams to its end; it closes r.
+func readAllOf(t *testing.T, r io.ReadCloser) []byte {
+	t.Helper()
+	defer func() { _ = r.Close() }()
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("reading a range: %v", err)
+	}
+	return got
 }
 
 func readStream(t *testing.T, box sandbox.Sandbox, path string) []byte {
@@ -220,6 +245,69 @@ func testATailIsTheFilesEndAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbo
 	}
 }
 
+// A RANGE IS THE FILE'S BYTES FROM ITS OFFSET, AND ITS WHOLE SIZE: what a
+// reading of a run's event stream reads on with from where it stopped. The
+// bytes are the file's own from off, never past n nor past the size the open
+// found; an offset at or past the end is nothing with the size, which is how a
+// reader whose file shrank finds out; a missing file is nothing and 0, and a
+// negative range is refused.
+func testARangeIsTheFilesBytesFromItsOffsetAndNamesItsWholeSize(t *testing.T, box sandbox.Sandbox, _ int) {
+	ctx := t.Context()
+	path := pathIn(box, "events.jsonl")
+	content := pattern(wholeReadBytes)
+	write(t, box, path, content)
+	size := int64(len(content))
+	for _, c := range []struct {
+		name   string
+		off, n int64
+		want   []byte
+	}{
+		{"from the start", 0, 1000, content[:1000]},
+		{"from the middle", 30_000, 1000, content[30_000:31_000]},
+		{"from the middle past the end", 60_000, 50_000, content[60_000:]},
+		{"to the end of any file", 1234, math.MaxInt64, content[1234:]},
+		{"of no bytes", 500, 0, nil},
+		{"at the size", size, 64, nil},
+		{"past the size, as a file that shrank is read", size + 4096, 64, nil},
+	} {
+		got, gotSize := readRange(t, box, path, c.off, c.n)
+		if !bytes.Equal(got, c.want) || gotSize != size {
+			t.Errorf("a range %s (%d for %d) is %d bytes of %d; want the file's %d from there, of %d",
+				c.name, c.off, c.n, len(got), gotSize, len(c.want), size)
+		}
+	}
+
+	for name, at := range map[string]string{"missing": pathIn(box, "absent"), "empty": pathIn(box, "empty")} {
+		if name == "empty" {
+			write(t, box, at, nil)
+		}
+		if got, gotSize := readRange(t, box, at, 0, 64); len(got) != 0 || gotSize != 0 {
+			t.Errorf("a range of a %s file streamed %d bytes of %d; want nothing of 0", name, len(got), gotSize)
+		}
+	}
+
+	for _, bad := range [][2]int64{{-1, 64}, {0, -1}} {
+		if r, _, err := box.OpenRange(ctx, path, bad[0], bad[1]); !errors.Is(err, sandbox.ErrRangeNegative) {
+			if err == nil {
+				_ = r.Close()
+			}
+			t.Errorf("a range %d for %d = %v; want ErrRangeNegative", bad[0], bad[1], err)
+		}
+	}
+
+	// The file is rewritten longer while the range is open: the range is the
+	// file as the open found it.
+	r, gotSize, err := box.OpenRange(ctx, path, 1000, math.MaxInt64)
+	if err != nil {
+		t.Fatalf("OpenRange before the file grew: %v", err)
+	}
+	write(t, box, path, pattern(2*wholeReadBytes))
+	if got := readAllOf(t, r); !bytes.Equal(got, content[1000:]) || gotSize != size {
+		t.Errorf("a range opened before the file grew is %d bytes of %d; want the %d from 1000 of %d it had",
+			len(got), gotSize, len(content)-1000, size)
+	}
+}
+
 // THE REFUSAL IS FOR A FILE MEANT TO BE READ WHOLE, and only for that. A
 // report past the cap is refused rather than clipped, because a clipped report
 // reads as a finished one; the same bytes read as a stream or from their end
@@ -286,24 +374,38 @@ func testAFileAtTheCapIsReadWhole(t *testing.T, box sandbox.Sandbox, readCap int
 	}
 }
 
-// A reader that stops early — a decoder that found what it needed — closes
-// the stream without draining it, and the close neither fails nor hangs.
+// A reader that stops early (a decoder that found what it needed) closes
+// the stream without draining it, and the close neither fails nor hangs, from
+// whichever open the stream came.
 func testAStreamClosedEarlyIsReleased(t *testing.T, box sandbox.Sandbox, _ int) {
 	path := pathIn(box, "stream.jsonl")
-	write(t, box, path, pattern(1<<20))
-	r, err := box.OpenFile(t.Context(), path)
-	if err != nil {
-		t.Fatalf("OpenFile: %v", err)
-	}
-	head := make([]byte, 10)
-	if _, err := io.ReadFull(r, head); err != nil {
-		t.Fatalf("reading the first bytes: %v", err)
-	}
-	if !bytes.Equal(head, pattern(10)) {
-		t.Errorf("the stream began %v; want the file's first bytes", head)
-	}
-	if err := r.Close(); err != nil {
-		t.Errorf("closing a stream early: %v", err)
+	content := pattern(1 << 20)
+	write(t, box, path, content)
+	for _, o := range []struct {
+		name string
+		from int
+		open func() (io.ReadCloser, error)
+	}{
+		{"OpenFile", 0, func() (io.ReadCloser, error) { return box.OpenFile(t.Context(), path) }},
+		{"OpenRange", 100, func() (io.ReadCloser, error) {
+			r, _, err := box.OpenRange(t.Context(), path, 100, 1<<19)
+			return r, err
+		}},
+	} {
+		r, err := o.open()
+		if err != nil {
+			t.Fatalf("%s: %v", o.name, err)
+		}
+		head := make([]byte, 10)
+		if _, err := io.ReadFull(r, head); err != nil {
+			t.Fatalf("%s: reading the first bytes: %v", o.name, err)
+		}
+		if !bytes.Equal(head, content[o.from:o.from+10]) {
+			t.Errorf("%s began %v; want the file's bytes from %d", o.name, head, o.from)
+		}
+		if err := r.Close(); err != nil {
+			t.Errorf("%s: closing a stream early: %v", o.name, err)
+		}
 	}
 }
 

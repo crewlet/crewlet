@@ -1,10 +1,16 @@
 package sandbox_test
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
+	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/sandbox/sandboxtest"
@@ -40,6 +46,103 @@ func TestAContainerBoxKeepsTheFileContract(t *testing.T) {
 	sandboxtest.Box(t, contractCap, func(t *testing.T) sandbox.Sandbox {
 		return sandbox.CapReads(containerBox(t), contractCap)
 	})
+}
+
+// A LOCAL BOX'S RANGE ENDS AT THE SIZE ITS OPEN ANSWERED, though the file grows
+// in place under it, as a run's event stream does while it is read: bytes past
+// that size are the next read's, which starts from the size this one counted.
+// Mutation: section the file for n rather than to the size, and the range
+// carries the appended bytes.
+func TestALocalBoxsRangeEndsAtTheSizeItsOpenAnswered(t *testing.T) {
+	t.Parallel()
+	for name, fresh := range map[string]func(*testing.T) (sandbox.Sandbox, string){
+		"direct": func(t *testing.T) (sandbox.Sandbox, string) {
+			box := directBox(t)
+			return box, box.Home()
+		},
+		"container": func(t *testing.T) (sandbox.Sandbox, string) {
+			return sandbox.NewContainerBoxAt(t.TempDir())
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			box, home := fresh(t)
+			content := bytes.Repeat([]byte("0123456789"), 100)
+			if err := box.WriteFile(t.Context(), box.Home()+"/.crewlet/events.jsonl", content); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+			r, size, err := box.OpenRange(t.Context(), box.Home()+"/.crewlet/events.jsonl", 100, math.MaxInt64)
+			if err != nil {
+				t.Fatalf("OpenRange: %v", err)
+			}
+			defer func() { _ = r.Close() }()
+			f, err := os.OpenFile(filepath.Join(home, ".crewlet", "events.jsonl"), os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				t.Fatalf("open the host file to append: %v", err)
+			}
+			_, err = f.WriteString("appended after the open\n")
+			if cerr := f.Close(); err == nil {
+				err = cerr
+			}
+			if err != nil {
+				t.Fatalf("append: %v", err)
+			}
+			got, err := io.ReadAll(r)
+			if err != nil || !bytes.Equal(got, content[100:]) || size != int64(len(content)) {
+				t.Errorf("the range = %d bytes of %d, %v; want the %d from 100 of the %d the open found",
+					len(got), size, err, len(content)-100, len(content))
+			}
+		})
+	}
+}
+
+// THE FAKE'S STREAMS HOOK WRAPS EVERY STREAM IT OPENS, and what it hands out,
+// not what it reads beneath, is what the box counts as delivered: a case that
+// fails a stream part way or slows it holds every open, not only the one it
+// thought of. The hook here hands out five bytes of its own before ten of the
+// file's.
+//
+// Mutation: count the file's bytes beneath the hook, and Delivered is 10 an
+// open rather than 15.
+func TestTheFakesStreamsHookWrapsEveryStreamItOpens(t *testing.T) {
+	t.Parallel()
+	box := sandbox.NewFakeSandbox("box-1")
+	const path = "/home/user/.crewlet/events.jsonl"
+	if err := box.WriteFile(t.Context(), path, bytes.Repeat([]byte("x"), 100)); err != nil {
+		t.Fatal(err)
+	}
+	cut := errors.New("the stream was cut")
+	var wrapped []string
+	box.Streams = func(p string, r io.Reader) io.Reader {
+		wrapped = append(wrapped, p)
+		return io.MultiReader(strings.NewReader("hook:"), io.LimitReader(r, 10), iotest.ErrReader(cut))
+	}
+	opens := map[string]func() (io.ReadCloser, error){
+		"OpenFile": func() (io.ReadCloser, error) { return box.OpenFile(t.Context(), path) },
+		"OpenTail": func() (io.ReadCloser, error) {
+			r, _, err := box.OpenTail(t.Context(), path, 50)
+			return r, err
+		},
+		"OpenRange": func() (io.ReadCloser, error) {
+			r, _, err := box.OpenRange(t.Context(), path, 20, 50)
+			return r, err
+		},
+	}
+	for name, open := range opens {
+		r, err := open()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		got, err := io.ReadAll(r)
+		_ = r.Close()
+		if len(got) != 15 || !errors.Is(err, cut) {
+			t.Errorf("%s through the hook read %d bytes, %v; want 15 and then the hook's failure", name, len(got), err)
+		}
+	}
+	if len(wrapped) != len(opens) || box.Delivered() != int64(15*len(opens)) {
+		t.Errorf("the hook wrapped %v and the box delivered %d; want each of the %d opens, 15 bytes each",
+			wrapped, box.Delivered(), len(opens))
+	}
 }
 
 // contractCap is the whole-read cap the in-process backends keep the file
@@ -82,6 +185,9 @@ func TestALocalBoxAnswersAFileItCannotReadAsAnError(t *testing.T) {
 			if err == nil {
 				t.Error("OpenFile read to its end without an error; want the read's failure")
 			}
+			if err := readThrough(box.OpenRange(ctx, unreadable, 0, 64)); err == nil {
+				t.Error("OpenRange read to its end without an error; want the read's failure")
+			}
 
 			marker := box.Home() + "/.crewlet/done"
 			if err := box.WriteFile(ctx, marker, []byte("0")); err != nil {
@@ -93,6 +199,17 @@ func TestALocalBoxAnswersAFileItCannotReadAsAnError(t *testing.T) {
 			}
 		})
 	}
+}
+
+// readThrough is the failure of a stream's open, or else of reading it to its
+// end.
+func readThrough(r io.ReadCloser, _ int64, err error) error {
+	if err != nil {
+		return err
+	}
+	defer func() { _ = r.Close() }()
+	_, err = io.ReadAll(r)
+	return err
 }
 
 func directBox(t *testing.T) sandbox.Sandbox {

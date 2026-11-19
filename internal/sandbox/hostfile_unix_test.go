@@ -24,9 +24,9 @@ import (
 // IS. A container box's side of the mount is the agent's, and a plain open of
 // a named pipe it made blocks uncancellably until a writer appears, wedging the
 // completion poll and every box's poll and keepalive behind it. Every read
-// (whole, streamed, from the end) answers at once with an error saying what
-// the path is, never with an empty file, which reads as a marker not written
-// yet.
+// (whole, streamed, from the end, from an offset) answers at once with an error
+// saying what the path is, never with an empty file, which reads as a marker
+// not written yet.
 //
 // Mutation: open with a plain os.Open, and every read here blocks for good.
 func TestALocalBoxRefusesWhatIsNotARegularFileAtOnce(t *testing.T) {
@@ -92,6 +92,7 @@ func TestALocalBoxRefusesWhatIsNotARegularFileAtOnce(t *testing.T) {
 						}
 						return err
 					},
+					"OpenRange": func() error { return readThrough(box.OpenRange(ctx, path, 0, 64)) },
 				}
 				for read, fn := range reads {
 					answered := make(chan error, 1)

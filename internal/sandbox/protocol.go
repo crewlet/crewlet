@@ -770,9 +770,10 @@ type Sandbox interface {
 	// Empty on missing: polling for an unwritten marker is not an error.
 	//
 	// NEVER FOR A MACHINE STREAM: a harness's event log and stderr grow with
-	// the run, so they use [Sandbox.OpenFile] or [Sandbox.ReadTail]. A
-	// non-regular file is refused with [ErrNotRegularFile] by a backend reading
-	// from the engine host, for all three reads: opening one could block.
+	// the run, so they use [Sandbox.OpenFile], [Sandbox.ReadTail],
+	// [Sandbox.OpenTail] or [Sandbox.OpenRange]. A non-regular file is refused
+	// with [ErrNotRegularFile] by a backend reading from the engine host, for
+	// every read: opening one could block.
 	ReadFile(ctx context.Context, path string) ([]byte, error)
 
 	// OpenFile streams a file front to back, for a MACHINE STREAM decoded
@@ -802,6 +803,18 @@ type Sandbox interface {
 	// file is a reader that yields nothing and a size of 0, as the others
 	// answer; the caller closes it.
 	OpenTail(ctx context.Context, path string, n int64) (io.ReadCloser, int64, error)
+
+	// OpenRange streams at most n bytes of a file from byte off, as the file stood
+	// when it was opened, with the file's whole size then: a MACHINE STREAM read on
+	// from where an earlier read of it stopped (a run's event stream, followed live
+	// from its start). Its cost is the bytes read, never the file before off: a
+	// remote box sends only the range, a box on the engine host seeks. An offset at
+	// or past the end streams nothing and answers the size, so a file that shrank
+	// says so; a missing file is nothing and a size of 0, as the others answer. It
+	// may stream fewer than n bytes where its server cannot serve a range; the
+	// caller reads on from where it ended. A negative off or n is refused
+	// ([ErrRangeNegative]). The caller closes it.
+	OpenRange(ctx context.Context, path string, off, n int64) (io.ReadCloser, int64, error)
 
 	// SetTimeout resets the box's wall-clock TTL to seconds from now.
 	//
@@ -872,6 +885,19 @@ func tailOf(content []byte, n int) FileTail {
 		return FileTail{Data: content, Size: int64(len(content))}
 	}
 	return FileTail{Data: content[len(content)-n:], Size: int64(len(content))}
+}
+
+// ErrRangeNegative is [Sandbox.OpenRange]'s refusal of a negative offset or
+// length, which names no bytes of any file.
+var ErrRangeNegative = errors.New("sandbox: a range's offset and length are never negative")
+
+// rangeRefused is [ErrRangeNegative] for a range of path that names no bytes,
+// and nil for one every backend reads.
+func rangeRefused(path string, off, n int64) error {
+	if off < 0 || n < 0 {
+		return fmt.Errorf("%w: %s from byte %d for %d bytes", ErrRangeNegative, path, off, n)
+	}
+	return nil
 }
 
 // ExecOptions are the per-command knobs both exec shapes take.
