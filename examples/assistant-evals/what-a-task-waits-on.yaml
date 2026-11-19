@@ -1,5 +1,6 @@
-# The founder asks what a task waits on; its card carries the task it is filed
-# under and both directions of its links with each end's status.
+# The founder asks what a task waits on; its read answers the task it is filed
+# under, and its card lists both directions of its links with each end's
+# status.
 person:
   apps: [worklet]
 page:
@@ -29,21 +30,20 @@ answers:
         - {kind: linked, other: 6c8d0e2f-3a4b-4c5d-9e7f-8091a2b3c4d5, key: ENG-35, title: Earlier edge rule, status: done}
         - {kind: waiting_on, other: 7d9e1f3a-4b5c-4d6e-8f80-91a2b3c4d5e6, key: ENG-44, title: Edge rule clean-up, status: todo, derived: true}
 script:
-  - call: get_task
-    args: {item: ENG-41}
+  - call: read_api
+    args: {route: "GET /worklet/{id}", path: {id: ENG-41}}
   - say: >-
       ENG-41 is part of ENG-30, Docs site 2.0, and waits on ENG-38, Release the
       backend, which is in review. It is linked to ENG-35, the earlier edge
       rule, which is done, and ENG-44, the edge rule clean-up, waits on it.
 expect:
-  calls: [get_task]
+  calls: [read_api]
   never: [update_task, comment_on_task]
   shows:
-    - Docs site 2.0
     - Release the backend
     - waiting_on
     - in_review
-    - the other end, so it reads from there to this task
+    - Edge rule clean-up
   says: [ENG-38, ENG-30]
   proposals: 0
   state: completed

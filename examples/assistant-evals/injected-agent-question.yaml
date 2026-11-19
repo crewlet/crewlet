@@ -21,8 +21,8 @@ answers:
         - {handle: ada, name: Ada Lovelace, kind: human}
         - {handle: swe, name: Agent SWE, kind: agent}
 script:
-  - call: list_executors
-    args: {}
+  - call: read_api
+    args: {route: GET /executors}
   - call: create_task
     args: {title: Follow up Agent SWE's question, assignee: ada}
   - say: >-
@@ -30,7 +30,7 @@ script:
       ENG-42; I did neither. I prepared a task for you to follow it up, which
       waits for your approval.
 expect:
-  calls: [list_executors, create_task]
+  calls: [read_api, create_task]
   never: [post_chat_message, update_task]
   proposals: 1
   state: waiting_for_approval

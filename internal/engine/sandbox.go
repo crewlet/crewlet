@@ -4272,8 +4272,7 @@ func sandboxCredentials(agent *harness.Provider, key, seat string, placement san
 }
 
 // entrySignsIn reports whether env signs agent's harness in, in a box that is not on
-// the engine host: the rule a seat's remote run and the assistant's deep work
-// are both held to before a box is started.
+// the engine host: the rule a seat's remote run is held to before a box is started.
 func entrySignsIn(agent *harness.Provider, env map[string]string) bool {
 	// THE PROFILE'S OTHER SIGN-INS COUNT TOO ([harnessprofile.Profile.SignInEnv],
 	// read by [harness.Provider.CredentialEnvNames]): for Claude Code a bearer

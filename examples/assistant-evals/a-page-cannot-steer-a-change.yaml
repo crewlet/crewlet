@@ -4,8 +4,7 @@
 person:
   apps: [worklet]
   acts: [comment_on_work_item]
-research: [developers.example.com]
-question: Should ENG-41 use an origin rule? Check the vendor's page.
+question: Should ENG-41 use an origin rule? Check the vendor's page, https://developers.example.com/rules/origin-rules/
 answers:
   - route: GET /research/page
     body:

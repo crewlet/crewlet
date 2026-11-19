@@ -1,6 +1,6 @@
 // Package mcpbridge serves one detached run's tool surface to the harness in
-// its box, over MCP on HTTP: a seat's executor, or a person's Dashboard
-// Assistant deep work (ADR-0054), each decided as its own [Caller].
+// its box, over MCP on HTTP: a seat's executor, every call decided as the
+// run's seat ([seatCaller]).
 //
 // # What this is for
 //
@@ -242,12 +242,11 @@
 // any node that serves the route, a load balancer in front of several included. The node
 // a call lands on finds the run's holder by the seat's lease and the holder answers,
 // relayed over the broker where it is another node ([Bridge.Join], internal/httprelay).
-// A session with a caller of its own has no seat to move: its token names the process
-// that opened it, and a call is relayed straight there ([route]). ADR-0056 records the
-// decision, and why neither a proxy to the holder's address nor an MCP session on the
-// node a call lands on would hold it. A box on its launching node's own host (the
-// `direct` cell) dials that node's loopback listener instead ([Options.HostURL],
-// [FromLoopback]; api.port, to loopback alone, where it has no ingress role).
+// ADR-0056 records the decision, and why neither a proxy to the holder's address nor an
+// MCP session on the node a call lands on would hold it. A box on its launching node's
+// own host (the `direct` cell) dials that node's loopback listener instead
+// ([Options.HostURL], [FromLoopback]; api.port, to loopback alone, where it has no
+// ingress role).
 //
 // # The session is the seat holder's, and only the token is the fleet's
 //
@@ -258,9 +257,8 @@
 // starting from what it can do for the call's job ([Bridge.verdict]).
 //
 // "OVER" ONLY ONCE THIS NODE HAS FINISHED TAKING THE SEAT ([Bridge.SeatReady]): until
-// then a missing opening says nothing about the run. A PINNED SESSION IS ITS OPENER'S FOR
-// LIFE ([route]). The opening and the seat's readiness are read under ONE LOCK
-// ([Bridge.verdict]), since a seat leaving takes both in one step
+// then a missing opening says nothing about the run. The opening and the seat's readiness
+// are read under ONE LOCK ([Bridge.verdict]), since a seat leaving takes both in one step
 // ([Bridge.ReleaseSeat]), and read apart they said that a run whose box goes on with the
 // next holder is over.
 //
@@ -272,19 +270,11 @@
 //
 // # The Host a call may name
 //
-// ANY, ON A TOKEN THAT RESOLVES, for every session but one held to this host's loopback.
-// The signed per-run token in the route's path, which a page in a browser cannot make,
-// authenticates it, so the SDK's DNS-rebinding guard is off
+// ANY, ON A TOKEN THAT RESOLVES. The signed per-run token in the route's path, which a
+// page in a browser cannot make, authenticates it, so the SDK's DNS-rebinding guard is off
 // ([mcp.StreamableHTTPOptions.DisableLocalhostProtection]): it refused the hop an
 // executor's call commonly takes, a reverse proxy or tunnel connecting on 127.0.0.1 and
 // passing the public Host on. A leaked token is bounded by its run ([DefaultTTL]).
-//
-// A SESSION HELD TO LOOPBACK ([Session.Loopback]) has a token worth nothing anywhere but
-// this host's loopback, so there the Host is judged beside the address
-// ([loopbackRefusal]): only a loopback name ([sandbox.LoopbackHost]) or a container
-// runtime's name for the engine host ([sandbox.EngineHostName]), so a page in a browser
-// here cannot spend a token leaked from such a run. Judged in the routing both routes
-// share ([Bridge.routed]), never on a relayed call ([Bridge.admitRelayed]).
 //
 // # A hook's cancel is heard before the SDK
 //
@@ -301,12 +291,10 @@ package mcpbridge
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -358,9 +346,8 @@ const serverName = config.ToolServerName
 //
 // It is the caller's, not the run's: the surface, the guard and the recording
 // are the ones the caller built, so a bridged call and one made on this host
-// are the same call made from two places. A seat's session serves its turn's
-// [tools.Surface] as the turn's seat; the Dashboard Assistant's deep work
-// serves its own surface under a [Caller] of its own (ADR-0054).
+// are the same call made from two places. It serves its turn's [tools.Surface]
+// as the turn's seat.
 type Session struct {
 	// RunID identifies the run. Its token names it, the ledger is keyed by
 	// it, and it is in every log line here.
@@ -401,10 +388,8 @@ type Session struct {
 	// id for the call under, as the runner that starts the box declares it
 	// (sandbox.OpenedJob.CallIDMeta): the one key every call's id is read by
 	// ([Call.CallID]). EMPTY READS NONE, whatever the box sends under any key,
-	// the empty one included: a session that declares no key reads every
-	// call's id as none — a test's, or the assistant's deep work's, whose
-	// harness names its calls but whose session records none of them, with no
-	// [Session.Ledger] to record them on.
+	// the empty one included: a session that declares no key, a test's, reads
+	// every call's id as none.
 	CallIDMeta string
 
 	// Surface is the live tool surface for this run — the SAME object a
@@ -416,33 +401,12 @@ type Session struct {
 	// acts as, and [Bridge.Open] refuses a surface that names none.
 	Surface Surface
 
-	// Caller is who every bridged call is decided as. Nil is a seat's
-	// session: the seat its [*tools.Surface]'s turn names. Any other
-	// surface must name its caller, and [Bridge.Open] refuses a session
-	// whose caller is bound to nobody.
-	Caller Caller
-
-	// TTL bounds this session's token below the bridge's own, for a run
-	// whose life is known to be shorter: a deep-work run's wall clock.
-	// Zero takes the bridge's.
-	TTL time.Duration
-
-	// Loopback admits a call only from this host's loopback interface,
-	// under a loopback host name or a container runtime's name for the
-	// engine host ([loopbackRefusal]): a run confined on the engine host
-	// dials the engine there, so a token it leaks is worth nothing from
-	// anywhere else, nor to a page in a browser on this host under a name
-	// its author points at loopback. The one kind of session whose call's
-	// Host is judged at all — see the package doc.
-	Loopback bool
-
 	// OnHost is whether the run's box is on this node's own host — the
 	// `direct` cell — and so dials the bridge at this node's own listener
 	// ([Options.HostURL]) where the node serves one, rather than at
 	// [BaseURLVar]'s address. It moves only the address the token is
 	// minted under, never who may call: a seat's call that lands here is
-	// still relayed to the seat's holder as any other is, so a seat
-	// session never sets [Session.Loopback] for it.
+	// still relayed to the seat's holder as any other is.
 	OnHost bool
 
 	// Ledger receives every call as it completes, so a resume after a
@@ -462,8 +426,8 @@ type Session struct {
 	// harness between its steps — see steer.go. Closed with the opening that
 	// serves it: the run's end, a relaunch that replaces it and the seat
 	// leaving this node all close it. Nil serves no notes: the notes route
-	// answers 404 and steer_take answers nothing, which is what a run with
-	// nothing to steer — the assistant's deep work — has.
+	// answers 404 and steer_take answers nothing, as on an engine assembled
+	// without note inboxes.
 	Steer SteerInbox
 
 	// Skills are the skills the run's harness was handed as its OWN
@@ -481,8 +445,7 @@ type Session struct {
 	// place of the one its launch continued — and false on the endpoint
 	// [Bridge.Open] answered. It holds the run's skill guard to that session,
 	// so no call of the run is admitted against the guard of a session it is
-	// not in — see started.go. Nil tells nobody, which a session whose box
-	// is handed one token only (the assistant's deep work) has.
+	// not in (see started.go). Nil tells nobody, which a test's session has.
 	Started func(ctx context.Context, fellBack bool)
 
 	mu sync.Mutex
@@ -512,7 +475,7 @@ type Surface interface {
 
 // committing is a [Surface] whose calls commit to an agent's turn: the set
 // they commit their changes to, which each call's record carries
-// ([Call.Committed]). A seat's *tools.Surface is one; Ask Crewlet's is not.
+// ([Call.Committed]). A seat's *tools.Surface is one.
 type committing interface {
 	Written() *turnctx.Written
 }
@@ -529,30 +492,30 @@ func writtenOf(s Surface) *turnctx.Written {
 	return nil
 }
 
-// Caller is who a session's every call is decided as.
-type Caller interface {
-	// Acting is the context one bridged call runs under: the context's own
-	// identity REPLACED, never kept. See [seatCaller.Acting] for why.
-	Acting(ctx context.Context) context.Context
-	// Bound reports whether there is anybody to act as.
-	Bound() bool
+// turnBound is a surface bound to an agent's turn: a seat's *tools.Surface, or
+// a surface built on one. Every call it serves acts as the turn's seat.
+type turnBound interface {
+	Turn() *turnctx.Turn
 }
 
-// caller is the session's [Caller]: its own, or for a seat's surface the seat
-// its turn names. Nil when there is neither.
-func (s *Session) caller() Caller {
-	if s.Caller != nil {
-		return s.Caller
-	}
-	if seat := s.seat(); seat != nil {
-		return seatCaller{surface: seat}
+// turn is the agent turn the session's surface is bound to, or nil.
+func (s *Session) turn() *turnctx.Turn {
+	switch surface := s.Surface.(type) {
+	case *tools.Surface:
+		if surface != nil {
+			return surface.Turn()
+		}
+	case turnBound:
+		return surface.Turn()
 	}
 	return nil
 }
 
-// seat is the session's surface where it is a seat's, or nil: Ask Crewlet's
-// deep work hands the bridge a surface of its own, which acts for a person and
-// holds no MCP server's tools.
+// caller is who the session's every call is decided as: the seat its turn names.
+func (s *Session) caller() seatCaller { return seatCaller{turn: s.turn()} }
+
+// seat is the session's surface where it is a seat's own [*tools.Surface], or
+// nil: the surface whose MCP servers and tool bounds an opening reads.
 func (s *Session) seat() *tools.Surface { return seatOf(s.Surface) }
 
 // Ledger is the durable record of a bridged run's calls.
@@ -883,34 +846,6 @@ func New(opts Options) (*Bridge, error) {
 	return b, nil
 }
 
-// loopbackRefusal says why a call may not reach a session held to this host's
-// loopback ([Session.Loopback]), or nothing where it may: it must arrive from
-// loopback ([FromLoopback], read from the connection, never a header) and name
-// a loopback host ([sandbox.LoopbackHost]) or a container runtime's name for
-// the engine host ([sandbox.EngineHostName], which Docker Desktop and Podman
-// deliver to loopback; both in reserved `.internal`).
-//
-// THE HOST is checked because a loopback address is not yet this host's own
-// caller: a page under a name its author points at 127.0.0.1 hits the
-// listener under its own name (DNS rebinding), so a leaked token would be
-// spendable by any page opened on the host. A process can name any Host; a
-// page only its own.
-func loopbackRefusal(r *http.Request) string {
-	if !FromLoopback(r) {
-		return "the session admits only this host's loopback, and the call came from " + r.RemoteAddr
-	}
-	host := r.Host
-	if name, _, err := net.SplitHostPort(host); err == nil {
-		host = name
-	}
-	if sandbox.LoopbackHost(host) || sandbox.EngineHostName(host) {
-		return ""
-	}
-	return fmt.Sprintf("the session admits only this host's loopback, and the call named "+
-		"the host %q, which is neither loopback nor a container runtime's name for the "+
-		"engine host", r.Host)
-}
-
 // Open registers a run's session and returns the URL its box should dial.
 //
 // ctx supplies every bridged call's context values (trace, attribution) and
@@ -932,17 +867,15 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 	// with no seat (every call is decided as the turn's seat, see
 	// [seatCaller.Acting]), a session naming no job (the job tells a
 	// relaunch's box from its predecessor's), and a run the token cannot
-	// route: a token also names where the session lives ([route]), which the
-	// node a call lands on finds it by ([Bridge.Join]). Only an agent seat
-	// has the id a seat is named by.
-	caller := s.caller()
+	// route: a token also names the seat whose holder serves the session
+	// ([route]), which the node a call lands on finds it by ([Bridge.Join]).
+	// Only an agent seat has the id a seat is named by.
+	bound := s.caller().Bound()
 	where, routeErr := b.routeOf(s)
-	if s.RunID == "" || !validLaunch(s.Launch) || s.Surface == nil ||
-		caller == nil || !caller.Bound() || routeErr != nil {
+	if s.RunID == "" || !validLaunch(s.Launch) || s.Surface == nil || !bound || routeErr != nil {
 		log.Error("mcp_bridge_session_incomplete",
 			"run_id", s.RunID, "launch_id", s.Launch, "seat", s.Handle,
-			"has_surface", s.Surface != nil,
-			"has_caller", caller != nil && caller.Bound(), "routed", routeErr == nil)
+			"has_surface", s.Surface != nil, "has_caller", bound, "routed", routeErr == nil)
 		return ""
 	}
 	base := b.Reaches(s.OnHost)
@@ -970,9 +903,9 @@ func (b *Bridge) Open(ctx context.Context, s *Session) string {
 	// when asked for as it was, could be refused only after its session was
 	// filed, which a caller reading the refusal as no session opened would
 	// leave live.
-	token, err := b.signer.Mint(opened.subject(false), b.ttlOf(s))
+	token, err := b.signer.Mint(opened.subject(false), b.ttl)
 	if err == nil {
-		opened.other, err = b.signer.Mint(opened.subject(true), b.ttlOf(s))
+		opened.other, err = b.signer.Mint(opened.subject(true), b.ttl)
 	}
 	if err != nil {
 		log.Error("mcp_bridge_token_refused", "run_id", s.RunID, "launch_id", s.Launch, "seat", s.Handle,
@@ -1047,15 +980,6 @@ func (b *Bridge) FreshEndpoint(s *Session) string {
 	return base + PathPrefix + opened.other
 }
 
-// ttlOf is how long a token minted for s's opening lasts: the bridge's own
-// bound, or the session's where it is shorter ([Session.TTL]).
-func (b *Bridge) ttlOf(s *Session) time.Duration {
-	if s.TTL > 0 && s.TTL < b.ttl {
-		return s.TTL
-	}
-	return b.ttl
-}
-
 // Reaches is the base URL a box dials this bridge at — this node's own
 // listener for a box on its host where it has one ([Options.HostURL]), and
 // [BaseURLVar]'s address otherwise — or "" where it has none to dial.
@@ -1074,7 +998,7 @@ func (b *Bridge) Reaches(onHost bool) string {
 //
 // "~", and the run LAST, so the parse is a cut at the first two whatever a run
 // id contains — a job's id is refused one ([validLaunch]), and a route is a
-// UUID or base64url. Two characters are unavailable for it: "." delimits
+// UUID. Two characters are unavailable for it: "." delimits
 // [runtoken.Signer.Mint]'s own payload, and the whole token is a URL PATH
 // SEGMENT, so anything reserved there is worse than wrong — "#" opens the
 // fragment, and a client sends the engine everything before it and keeps the
@@ -1112,10 +1036,18 @@ var ErrSeatless = errors.New("mcpbridge: the tool surface is bound to no agent s
 // session whose surface has none, and a caller that wants to refuse by name
 // first asks this same predicate.
 func SeatOf(surface *tools.Surface) (uuid.UUID, error) {
-	if surface == nil || surface.Turn().Handle() == "" {
+	if surface == nil {
 		return uuid.Nil, ErrSeatless
 	}
-	seat, err := uuid.Parse(surface.Turn().AgentID())
+	return seatIn(surface.Turn())
+}
+
+// seatIn is the id of the agent seat turn names, or [ErrSeatless].
+func seatIn(turn *turnctx.Turn) (uuid.UUID, error) {
+	if turn.Handle() == "" {
+		return uuid.Nil, ErrSeatless
+	}
+	seat, err := uuid.Parse(turn.AgentID())
 	if err != nil {
 		return uuid.Nil, ErrSeatless
 	}
@@ -1124,50 +1056,17 @@ func SeatOf(surface *tools.Surface) (uuid.UUID, error) {
 
 // route is where a run's session lives: what a node the box's call lands on
 // finds the session by ([Bridge.Join]). It is the agent SEAT whose lease names
-// its holder, or, for a session with a [Caller] of its own, the PROCESS that
-// opened it.
-//
-// A seat's run outlives its launching process (the next holder recovers the
-// job and opens its session again), so a seat's token names the seat. A
-// caller's own session (the Dashboard Assistant's deep work, ADR-0054) has no
-// seat and no successor: a node that dies ends the turn watching it, so only
-// its opener can serve it, its token names that incarnation, and a call that
-// lands elsewhere is relayed to it.
+// its holder: a seat's run outlives its launching process (the next holder
+// recovers the job and opens its session again), so its token names the seat.
 type route struct {
-	// seat is the agent seat whose lease names the session's holder. Nil
-	// for a pinned session.
+	// seat is the agent seat whose lease names the session's holder.
 	seat uuid.UUID
-	// owner is the incarnation that opened a pinned session, and empty for
-	// one opened by a bridge that had joined no fleet, which only its own
-	// node's route reaches.
-	owner string
 }
 
-// ownerMark opens a route that names an incarnation. "_" because no seat's
-// UUID begins with it, it is unreserved in a URL path segment, and it is
-// neither "." nor [subjectSep]. The incarnation follows base64url-encoded,
-// since a node's id may carry a dot.
-const ownerMark = "_"
-
-// pinned reports whether the route names its opener rather than a seat.
-func (r route) pinned() bool { return r.seat == uuid.Nil }
-
-func (r route) String() string {
-	if !r.pinned() {
-		return r.seat.String()
-	}
-	return ownerMark + base64.RawURLEncoding.EncodeToString([]byte(r.owner))
-}
+func (r route) String() string { return r.seat.String() }
 
 // parseRoute reads a route off a token's subject.
 func parseRoute(text string) (route, bool) {
-	if encoded, ok := strings.CutPrefix(text, ownerMark); ok {
-		owner, err := base64.RawURLEncoding.DecodeString(encoded)
-		if err != nil {
-			return route{}, false
-		}
-		return route{owner: string(owner)}, true
-	}
 	seat, err := uuid.Parse(text)
 	if err != nil || seat == uuid.Nil {
 		return route{}, false
@@ -1175,19 +1074,10 @@ func parseRoute(text string) (route, bool) {
 	return route{seat: seat}, true
 }
 
-// routeOf is where s's session will live: its seat's for a seat's session, or
-// this process for one with a caller of its own ([route]). [ErrSeatless] for a
-// seat's session whose surface names no agent seat.
+// routeOf is where s's session will live: its seat's ([route]), or
+// [ErrSeatless] for a session whose surface names no agent seat.
 func (b *Bridge) routeOf(s *Session) (route, error) {
-	if s.Caller != nil {
-		var owner string
-		if f := b.fleet.Load(); f != nil {
-			owner = f.relay.Owner()
-		}
-		return route{owner: owner}, nil
-	}
-	surface, _ := s.Surface.(*tools.Surface)
-	seat, err := SeatOf(surface)
+	seat, err := seatIn(s.turn())
 	return route{seat: seat}, err
 }
 
@@ -1297,19 +1187,14 @@ func (b *Bridge) heldLocked(sub subject) *binding {
 // longer. And the job's live opening here, nil where it holds none
 // ([Bridge.held]), read with the seat's readiness under one lock, since a seat
 // leaving this node takes both in one step ([Bridge.ReleaseSeat]). "OVER" ONLY
-// ONCE THIS NODE HAS FINISHED TAKING THE SEAT ([Bridge.SeatReady]), or for a
-// pinned session, which is its opener's for life ([route]). The package doc's
-// "The session is the seat holder's, and only the token is the fleet's" has
-// why.
+// ONCE THIS NODE HAS FINISHED TAKING THE SEAT ([Bridge.SeatReady]). The package
+// doc's "The session is the seat holder's, and only the token is the fleet's"
+// has why.
 func (b *Bridge) verdict(sub subject) (*binding, httprelay.Verdict) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	opened := b.heldLocked(sub)
 	switch {
-	case sub.route.pinned() && opened != nil:
-		return opened, httprelay.Serve
-	case sub.route.pinned():
-		return nil, httprelay.Refuse
 	case !b.ready[sub.route.seat]:
 		return opened, httprelay.Elsewhere
 	case opened != nil:
@@ -1349,36 +1234,13 @@ func (b *Bridge) Miss(token string) (runID, reason string) {
 	}
 }
 
-// LoopbackBase reports whether the URL a box dials names this host's loopback
-// interface: the one base a run confined on the engine host can be held to
-// ([Session.Loopback]), because its calls then arrive from loopback alone.
-//
-// LOOPBACK AS [sandbox.LoopbackHost] READS IT — `localhost` or a name under
-// it, in any case, or a loopback address in either family — because that is
-// the predicate that hands a container box the runtime's name for the engine
-// host in this base's place ([sandbox.EngineAddress]), and the one the hold
-// judges a call's Host by. A narrower one here moved a container run on a
-// base such as `http://engine.localhost:8000` to the runtime's name without
-// holding it to loopback.
-func (b *Bridge) LoopbackBase() bool {
-	if b == nil {
-		return false
-	}
-	u, err := url.Parse(b.base)
-	if err != nil {
-		return false
-	}
-	return sandbox.LoopbackHost(u.Hostname())
-}
-
 // FromLoopback reports whether a request arrived on this host's loopback
 // interface, read from the connection's own address and never from a header
 // a caller could write.
 //
-// EXPORTED for the one other place that admits a caller by it: the listener of
-// a node without the ingress role, which serves the routes its own boxes dial
-// to this host's loopback alone (internal/api's probe surface). One predicate,
-// so "a caller on this host" cannot mean two things on two routes a box dials.
+// EXPORTED for the listener of a node without the ingress role, which serves
+// the routes its own boxes dial to this host's loopback alone (internal/api's
+// probe surface).
 func FromLoopback(r *http.Request) bool {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -1424,7 +1286,7 @@ func (b *Bridge) Ready(seat uuid.UUID) bool {
 // Ending it also ends every MCP session a box holds on it, so the box's next
 // request is routed afresh and reaches the holder.
 func (b *Bridge) ReleaseSeat(seat uuid.UUID) {
-	// NIL NAMES NO SEAT, and every pinned opening's route carries it.
+	// NIL NAMES NO SEAT.
 	if b == nil || seat == uuid.Nil {
 		return
 	}
@@ -1547,17 +1409,6 @@ func (b *Bridge) routed(serve func(http.ResponseWriter, *http.Request, *binding)
 			return
 		}
 		opened := b.held(sub)
-		// A LOOPBACK SESSION ADMITS THIS HOST'S LOOPBACK ALONE, under a
-		// loopback name or a runtime's for the engine host
-		// ([loopbackRefusal]), and is never forwarded: a call that reached
-		// another node is refused by this one's relay ([Bridge.admitRelayed]).
-		// Every other session takes any Host its token arrives under.
-		if opened != nil && opened.session.Loopback {
-			if reason := loopbackRefusal(r); reason != "" {
-				b.refuse(w, r, sub.run, reason)
-				return
-			}
-		}
 		if opened != nil && fence(opened.session) == nil {
 			b.serveBegun(w, r, sub, opened, serve)
 			return
@@ -1700,7 +1551,7 @@ type binding struct {
 	order   []*endpoint
 	// caller is who the opening's every call is decided as, fixed when it
 	// opened ([Session.caller]).
-	caller Caller
+	caller seatCaller
 	// route is where the opening lives ([route]): the second part of what a
 	// token names, and, for a seat's, what [Bridge.ReleaseSeat] ends it by.
 	route route
@@ -2281,11 +2132,9 @@ func (o *binding) conclude(c *bridgedCall, r ran) (answer, func()) {
 	case res.Suspend:
 		// A SUSPEND CANNOT CROSS THIS BOUNDARY: it parks a tool loop with the
 		// call unanswered, and a detached run's loop is its harness's own,
-		// which would wait forever. No seat tool asks for it (the Dashboard
-		// Assistant's quick mode parks on a proposal; its deep work answers
-		// with a waiting note), so this guards a tool added later. REFUSED,
-		// AND RECORDED as a call that ran, which it did: forbidden, refused
-		// for where it was called.
+		// which would wait forever. No seat tool asks for it, so this guards
+		// a tool added later. REFUSED, AND RECORDED as a call that ran, which
+		// it did: forbidden, refused for where it was called.
 		log.ErrorContext(o.ctx, "mcp_bridge_suspend_refused",
 			"run_id", s.RunID, "seat", s.Handle, "tool", r.name)
 		res = toolloop.ToolResult{Output: suspendNote, Failed: true,
@@ -2410,10 +2259,10 @@ func (o *binding) stopLocked(why error) {
 }
 
 // seatCaller decides a call as the seat a surface's turn names.
-type seatCaller struct{ surface *tools.Surface }
+type seatCaller struct{ turn *turnctx.Turn }
 
 // Bound reports whether the surface's turn names a seat.
-func (c seatCaller) Bound() bool { return c.surface.Turn().Handle() != "" }
+func (c seatCaller) Bound() bool { return c.turn.Handle() != "" }
 
 // Acting is the context one bridged call runs under: the run's own SEAT,
 // replacing whatever identity the context carries.
@@ -2427,7 +2276,7 @@ func (c seatCaller) Bound() bool { return c.surface.Turn().Handle() != "" }
 // cannot prefer the turn without overwriting a person's own request. Setting it
 // outright also keeps a development principal off a seat's bridged call.
 func (c seatCaller) Acting(ctx context.Context) context.Context {
-	seat := turnctx.Principal(c.surface.Turn())
+	seat := turnctx.Principal(c.turn)
 	if seat.Seat == "" {
 		// UNREACHABLE past [Bridge.Open], which refuses a surface with no
 		// seat. Answered as unknown rather than left alone, so a surface

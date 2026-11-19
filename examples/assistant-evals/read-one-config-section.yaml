@@ -12,14 +12,14 @@ answers:
   - route: GET /config
     body: {model: sonnet}
 script:
-  - call: get_config_section
-    args: {section: assistant}
+  - call: read_api
+    args: {route: GET /config, query: {section: assistant}}
   - say: >-
       Ask Crewlet runs on the sonnet model. Nothing else about it is a
       setting.
 expect:
-  calls: [get_config_section]
+  calls: [read_api]
   never: [propose_page_change]
-  shows: ["Configuration › assistant", Model]
+  shows: [Company configuration, Model, sonnet]
   proposals: 0
   state: completed

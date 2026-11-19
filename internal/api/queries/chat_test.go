@@ -24,7 +24,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/crewlet/crewlet/internal/api/queries"
-	"github.com/crewlet/crewlet/internal/assistant/catalog"
+	"github.com/crewlet/crewlet/internal/assistant/assistanttest"
 	"github.com/crewlet/crewlet/internal/assistant/exec"
 	"github.com/crewlet/crewlet/internal/authz"
 	"github.com/crewlet/crewlet/internal/chatlet"
@@ -1554,17 +1554,15 @@ func (f fullRail) Channels(_ context.Context, viewer string, q chatlet.ChannelsQ
 }
 
 // THE ASSISTANT'S PAGE OF ROOMS IS READ WHOLE IN ONE STEP (ADR-0061): the rooms
-// list_chat_rooms asks for by default, from the largest rail there is (as many
-// rooms as it answers, every one at every field's cap) beside the person's
-// whole read state at its own caps, encode within what one step reads. The
-// rail answers every room whole, so the read asking for all of them was past
-// a step's bound for a person in about sixty rooms, cut, and answered nothing.
-// Mutation: let list_chat_rooms ask for the whole rail, or raise its page past
-// what fits, and this fails.
+// read_api asks GET /chatlet/channels for by default, from the largest rail
+// there is (as many rooms as it answers, every one at every field's cap) beside
+// the person's whole read state at its own caps, encode within what one step
+// reads. Mutation: drop the generic read's default page, or raise it past what
+// fits, and this fails.
 func TestTheAssistantsPageOfRoomsIsReadInOneStep(t *testing.T) {
 	t.Parallel()
-	rooms, _ := catalog.Lookup("list_chat_rooms")
-	req, err := rooms.Request(map[string]any{})
+	rooms := assistanttest.ReadAPI(t, "GET /chatlet/channels")
+	req, err := rooms.Request(map[string]any{"route": "GET /chatlet/channels"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1592,7 +1590,7 @@ func TestTheAssistantsPageOfRoomsIsReadInOneStep(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(raw) > exec.MaxResponseBytes {
-		t.Errorf("list_chat_rooms asks %s?%s, and the largest answer to it is %d bytes, past "+
+		t.Errorf("read_api asks %s?%s, and the largest answer to it is %d bytes, past "+
 			"the %d one step reads", req.Path, req.Query.Encode(), len(raw), exec.MaxResponseBytes)
 	}
 	t.Logf("the largest default page of rooms is %d bytes of %d", len(raw), exec.MaxResponseBytes)

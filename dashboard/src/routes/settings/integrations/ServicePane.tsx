@@ -8,9 +8,9 @@
  *  - WHO WORKS IN IT. Every agent seat holds Worklet and Doclet
  *    (`iam.Apps`), so the Agents tab lists every agent rather than a roster
  *    of who connected. What it adds per agent is what the engine counts:
- *    open, blocked and overdue work (`work_workload`), and the space an agent
- *    writes in and the pages it reads at onboarding (the company document and
- *    the derived chart).
+ *    open, blocked and overdue work and its load (`work_workload`), and the
+ *    space an agent writes in and the pages it reads at onboarding (the
+ *    company document and the derived chart).
  *  - THE COUNTS. Projects and their open tasks (`work_projects`), spaces and
  *    their pages (`containers`), and the newest change on each log
  *    (`work_activity`, `page_activity`), in the header. The projects and the
@@ -70,6 +70,7 @@ import { useServicesAsk } from "~/lib/services.ts";
 import { useNow } from "~/lib/clock.ts";
 import { CHATLET, DOCLET, GITLET, WORKLET, needsWords } from "~/lib/access.ts";
 import { fmtCount, plural, relTime } from "~/lib/format.ts";
+import { workloadWords } from "~/lib/flow.ts";
 import { SeatAvatar } from "~/ui/SeatAvatar.tsx";
 import type { CompanyDocument } from "~/protocol/types.ts";
 import { FeedRow, ServiceMark, ServiceState } from "./parts.tsx";
@@ -438,7 +439,8 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
     ? rows.reduce((n, p) => n + p.task_counts.todo + p.task_counts.active, 0)
     : null;
   const load = new Map((workload.data?.rows ?? []).map((r) => [r.handle, r]));
-  const busy = agents.filter((a) => (load.get(a.handle)?.open ?? 0) > 0).length;
+  // WORK THAT WANTS THE AGENT NOW (ADR-0162): waiting, blocked or held work is open and no load.
+  const busy = agents.filter((a) => (load.get(a.handle)?.load ?? 0) > 0).length;
   const records = feed.data?.records ?? [];
   const latest = records[0]?.at;
   const keys = feed.data?.keys ?? {};
@@ -489,7 +491,7 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
             value: open === null ? <EmptyValue label="Reading" /> : fmtCount(open),
           },
           {
-            label: "Agents with work",
+            label: "Agents with work now",
             value: workload.data ? `${busy} of ${agents.length}` : <EmptyValue label="Reading" />,
           },
           {
@@ -515,7 +517,13 @@ function WorkletPane({ service, head }: { service: BuiltInService; head: Head })
                 const home = homeOf(config.data, a.handle);
                 const detail = [
                   home.project ? `Files work in ${home.project}` : "",
-                  row ? `${row.blocked} blocked · ${row.overdue} overdue` : "",
+                  row
+                    ? [
+                        ...workloadWords(row),
+                        `${row.blocked} blocked`,
+                        `${row.overdue} overdue`,
+                      ].join(" · ")
+                    : "",
                 ]
                   .filter(Boolean)
                   .join(" · ");

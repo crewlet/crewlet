@@ -26,6 +26,7 @@ import (
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/tokens"
 	"github.com/crewlet/crewlet/internal/usage"
+	"github.com/crewlet/crewlet/internal/worklet"
 )
 
 // advisorRead is the rule detectors' findings at now, read off the redacted
@@ -214,7 +215,38 @@ func (s Sources) advisorEvidence(ctx context.Context, company *config.Company, n
 		log.WarnContext(ctx, "advisor_alarm_episodes_unreadable", "error", err.Error())
 		ev.EpisodesUnread = true
 	}
+	if ev.Flow, err = s.flowHours(ctx, now); err != nil {
+		log.WarnContext(ctx, "advisor_flow_unreadable", "error", err.Error())
+		ev.FlowUnread = true
+	}
+	if ev.Skips, err = s.scheduleSkips(ctx, now); err != nil {
+		log.WarnContext(ctx, "advisor_schedule_skips_unreadable", "error", err.Error())
+		ev.SkipsUnread = true
+	}
 	return ev
+}
+
+// flowReads is the tracker's read of how long work stood in each flow state.
+type flowReads interface {
+	FlowHours(ctx context.Context, q worklet.FlowHoursQuery) ([]worklet.FlowHours, error)
+}
+
+// flowHours is how long each seat's items in progress stood in each flow state
+// over the window before now (ADR-0162). A company whose tracker is a vendor's
+// keeps no flow record: its staffing is not judged, and nothing is unread.
+func (s Sources) flowHours(ctx context.Context, now time.Time) ([]worklet.FlowHours, error) {
+	switch kept, err := keptHere(s.Work); {
+	case err != nil:
+		return nil, err
+	case !kept:
+		return nil, nil
+	}
+	reads, ok := s.Work.(flowReads)
+	if !ok {
+		return nil, errors.New("queries: this node reads no flow record")
+	}
+	return reads.FlowHours(ctx, worklet.FlowHoursQuery{Since: now.Add(-advisor.Window), Until: now,
+		Level: statelog.ReadStale})
 }
 
 // alarmEpisodes is every alarm episode on any node that stood in the window

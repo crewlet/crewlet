@@ -23,8 +23,8 @@ func TestEveryTableCardCarriesItsDownloads(t *testing.T) {
 			map[string]any{"key": "ENG-7", "title": "Rotate keys", "status": "todo"}}}),
 	})
 	f := assistanttest.NewRig(t, evals.RigOptions{
-		Tools: []catalog.Tool{assistanttest.Tool(t, "list_tasks")}, Handler: list,
-		Rounds: []evals.Round{evals.Call("c1", "list_tasks", map[string]any{}),
+		Tools: []catalog.Tool{assistanttest.ReadAPI(t, "GET /worklet")}, Handler: list,
+		Rounds: []evals.Round{evals.Call("c1", catalog.ReadAPITool, map[string]any{"route": "GET /worklet"}),
 			evals.Say("One task is open.")}})
 	accepted, err := f.Ask("list", "What is open?", nil)
 	if err != nil {

@@ -73,9 +73,9 @@ var admin = iam.Principal{Kind: iam.KindPerson, Stage: iam.StageActive,
 // before anything is sent when the route is not the table's, is of the other
 // tool's kind, misses a value, names a value for no wildcard, holds a dot
 // segment, or names an act tool the person's acts do not list. A route whose
-// verb is on the human-only list is not in the table at all. A HEAD is its
-// GET's route. Mutation: build the path by concatenation, or keep a never
-// verb in the table, and a case here goes through.
+// verb is on the human-only list is not in the table at all, and a read is a
+// GET. Mutation: build the path by concatenation, or keep a never verb in the
+// table, and a case here goes through.
 func TestAGenericCallNamesARouteOfTheTable(t *testing.T) {
 	t.Parallel()
 	_, read, change := generic(t, admin, "merge_work_item")
@@ -90,8 +90,8 @@ func TestAGenericCallNamesARouteOfTheTable(t *testing.T) {
 		{read, map[string]any{"route": "GET /worklet/files/{project}/{path...}",
 			"path": map[string]any{"project": "ENG", "path": "notes/q 3.md"}},
 			"GET", "/worklet/files/ENG/notes/q%203.md", ""},
-		{read, map[string]any{"route": "HEAD /worklet/{id}",
-			"path": map[string]any{"id": "ENG-42"}}, "HEAD", "/worklet/ENG-42", ""},
+		{read, map[string]any{"route": "GET /query/{what}", "path": map[string]any{"what": "budgets"},
+			"cursor": "bmV4dA"}, "GET", "/query/budgets", "cursor=bmV4dA"},
 		{read, map[string]any{"route": "GET /query/{what}", "path": map[string]any{"what": "budgets"},
 			"query": map[string]any{"limit": "5", "kinds": []any{"a", "b"}}},
 			"GET", "/query/budgets", "kinds=a&kinds=b&limit=5"},
@@ -132,6 +132,12 @@ func TestAGenericCallNamesARouteOfTheTable(t *testing.T) {
 			"body": map[string]any{}}},
 		"a read with a body": {read, map[string]any{"route": "GET /config",
 			"body": map[string]any{"x": 1}}},
+		"a HEAD": {read, map[string]any{"route": "HEAD /worklet/{id}",
+			"path": map[string]any{"id": "ENG-42"}}},
+		"a change with a cursor": {change, map[string]any{"route": "PATCH /config",
+			"body": map[string]any{}, "cursor": "bmV4dA"}},
+		"a change selecting fields": {change, map[string]any{"route": "PATCH /config",
+			"body": map[string]any{}, catalog.SelectArgument: []any{"name"}}},
 	} {
 		if req, err := c.tool.Request(c.args); err == nil {
 			t.Errorf("%s was built: %s %s", name, req.Method, req.Path)
@@ -608,15 +614,19 @@ func TestDescribeAPIListsWhatThePersonMayUse(t *testing.T) {
 	tracker := iam.Principal{Kind: iam.KindPerson, Stage: iam.StageActive,
 		Grants: []iam.Grant{iam.GrantWorklet}}
 	docs, _, _ := generic(t, tracker)
-	listing, err := docs.Docs(catalog.Args{})
-	if err != nil || strings.Contains(listing, "GET /config (") ||
-		!strings.Contains(listing, "GET /worklet/projects/{key} (reads") {
-		t.Errorf("the tracker-only person is listed:\n%s (%v)", listing, err)
+	listing, err := docs.Docs(catalog.Args{"domain": "worklet"})
+	if err != nil || !strings.Contains(listing, "GET /worklet/projects/{key} (reads") {
+		t.Errorf("the tracker-only person's work is listed:\n%s (%v)", listing, err)
+	}
+	if config, _ := docs.Docs(catalog.Args{"domain": "config"}); strings.Contains(config,
+		"GET /config (") {
+		t.Errorf("the tracker-only person is listed the configuration:\n%s", config)
 	}
 	docs, _, _ = generic(t, admin)
-	listing, _ = docs.Docs(catalog.Args{})
+	listing, _ = docs.Docs(catalog.Args{"domain": "config"})
 	if !strings.Contains(listing, "PATCH /config (a change the person approves, decided by "+
-		"config.org.write, asks the person to confirm it is them)") {
+		"config.org.write, asks the person to confirm it is them)") ||
+		!strings.Contains(listing, "GET /config (reads") {
 		t.Errorf("the administrator is listed:\n%s", listing)
 	}
 	one, err := docs.Docs(catalog.Args{"route": "PATCH /config"})
@@ -627,8 +637,10 @@ func TestDescribeAPIListsWhatThePersonMayUse(t *testing.T) {
 		catalog.ErrInvalidArguments) {
 		t.Errorf("a route the table does not hold was documented: %v", err)
 	}
-	if listed := strings.Count(listing, "\n"); listed < 8 {
-		t.Errorf("the administrator's list holds %d lines", listed)
+	found, _ := docs.Docs(catalog.Args{"query": "projects"})
+	if !strings.Contains(found, "GET /worklet/projects/{key}") || strings.Contains(found,
+		"PATCH /config (") {
+		t.Errorf("a query for projects lists:\n%s", found)
 	}
 }
 
@@ -851,7 +863,6 @@ func TestAGenericListReadIsOnePage(t *testing.T) {
 		{map[string]any{"route": "GET /events", "query": map[string]any{"limit": "5"}}, "limit=5"},
 		{map[string]any{"route": "GET /config"}, ""},
 		{map[string]any{"route": "GET /agents/{id}", "path": map[string]any{"id": "qa"}}, "history=false"},
-		{map[string]any{"route": "HEAD /agents/{id}", "path": map[string]any{"id": "qa"}}, "history=false"},
 		{map[string]any{"route": "GET /agents/{id}", "path": map[string]any{"id": "qa"},
 			"query": map[string]any{"history": "true"}}, "history=true"},
 	} {

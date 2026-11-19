@@ -1,7 +1,7 @@
 /**
  * The work tracker's closed sets, as the dashboard's own copies: the shapes a
  * view is drawn in, the sort keys a header click sends, the change kinds a
- * history row names, and the axes a board is grouped on.
+ * history row names, the axes a board is grouped on, and an item's flow.
  *
  * Each is the ENGINE's — the query grammar refuses what it does not know, and
  * the applier writes what it writes — and each is held against it in both
@@ -309,3 +309,40 @@ export const ITEM_CONVERSATION_PREFIX = "work:task:";
  * occur.
  */
 export type InformSurface = "mattermost" | "slack" | "chat";
+
+/**
+ * Why an item in progress is or is not moving (ADR-0162): the engine's flow
+ * states, the word a badge says and its tone. `moving` is the ordinary case and
+ * draws no badge. Held to `worklet.FlowStates` by `client_gate_test.go`.
+ */
+export const FLOW_STATES = [
+  { state: "working", label: "Working", tone: "info" },
+  { state: "blocked", label: "Blocked", tone: "danger" },
+  { state: "waiting", label: "Waiting", tone: "neutral" },
+  { state: "held", label: "Held", tone: "warning" },
+  { state: "due", label: "Start passed", tone: "warning" },
+  { state: "stuck", label: "Stuck", tone: "warning" },
+  { state: "moving", label: "Moving", tone: "neutral" },
+] as const satisfies readonly { state: string; label: string; tone: string }[];
+
+/**
+ * The fact behind a working, waiting or held item, as the clause a sentence
+ * about the item ends with. Held to `worklet.FlowCauses` by the same gate.
+ */
+export const FLOW_CAUSES = [
+  { cause: "turn", phrase: "an agent turn is on it" },
+  { cause: "run", phrase: "an executor run is on it" },
+  { cause: "start", phrase: "it waits for its start" },
+  { cause: "question", phrase: "its assignee asked a question on it that nobody has answered" },
+  { cause: "parked", phrase: "its assignee's run on it waits for a person's answer" },
+  { cause: "paused", phrase: "its assignee is paused" },
+  { cause: "unplaced", phrase: "no node holds its assignee's seat" },
+  { cause: "budget", phrase: "its assignee is out of its token budget" },
+  { cause: "limit", phrase: "its assignee is out of its model limit" },
+  {
+    cause: "parked_elsewhere",
+    phrase: "its assignee's run on another item waits for a person's answer",
+  },
+  { cause: "departed", phrase: "its assignee has left the org chart" },
+  { cause: "nobody", phrase: "nobody is assigned" },
+] as const satisfies readonly { cause: string; phrase: string }[];

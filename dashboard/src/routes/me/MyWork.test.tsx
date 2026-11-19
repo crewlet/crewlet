@@ -1298,7 +1298,7 @@ test("a picker row says how much open work is on that desk", async () => {
       viewer: ada,
       work_my_work: emptyDay,
       work_items: noWork,
-      work_workload: { rows: [{ handle: "rui", open: 4 }], complete: true },
+      work_workload: { rows: [{ handle: "rui", open: 4, load: 2 }], complete: true },
     },
     ledOrg,
   );
@@ -1306,7 +1306,8 @@ test("a picker row says how much open work is on that desk", async () => {
   const rows = await pickerRows();
   const text = (name: string) =>
     rows.find((r) => (r.textContent ?? "").includes(name))?.textContent;
-  expect(text("Rui Santos")).toContain("4 open items");
+  // OPEN WORK AND LOAD APART (ADR-0162): two of the four want Rui now.
+  expect(text("Rui Santos")).toContain("4 open items · 2 to move now");
   // A HANDLE THE ANSWER DID NOT NAME HOLDS NOTHING, because the read returns a
   // row only for somebody with open work — a real zero rather than a gap.
   expect(text("Bo Nakamura")).toContain("nothing open");

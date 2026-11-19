@@ -88,12 +88,12 @@ answers:
               - {id: decline, label: Not now}
             recommended: grant-rabcde12345-t
 script:
-  - call: get_seat_access
-    args: {handle: Site Reliability Engineer, integration: cloudflare}
+  - call: read_api
+    args: {route: "GET /setup/integrations/{kind}/access/seats/{handle}/{lane}", path: {kind: cloudflare, handle: sre, lane: cloudflare}}
   - call: answer_decision
     args: {item: ENG-58, answers: c-ask, choice: grant-rabcde12345-t}
 expect:
-  calls: [get_seat_access, answer_decision]
+  calls: [read_api, answer_decision]
   never: [set_seat_access]
   proposals: 1
   step_up: true
