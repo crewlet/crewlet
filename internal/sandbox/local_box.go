@@ -14,10 +14,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/hostbox"
 	"github.com/crewlet/crewlet/internal/procgroup"
+	"github.com/crewlet/crewlet/internal/redact"
 )
 
 // hostCommand is one command to run on the engine host.
@@ -40,8 +40,9 @@ const captureLimit = 256 << 10
 
 // capture is a bounded io.Writer. Once full it keeps the HEAD, because a
 // command's first output is its error message and its last is progress noise.
-// What it drops is counted and said, cut at a whole line, so the note never
-// splits a line or a character (which a JSON encoder turns into U+FFFD).
+// What it keeps once it dropped anything is held to what its redaction settles
+// ([redact.Settled]), so a reader that redacts it later reads an opening of the
+// whole output's redaction; the rest is counted and said after a whole line.
 type capture struct {
 	buf     []byte
 	dropped int
@@ -58,32 +59,14 @@ func (c *capture) String() string {
 	if c.dropped == 0 {
 		return string(c.buf)
 	}
-	kept, dropped := c.buf, c.dropped
-	// Back to the last whole line, so the note follows a line rather than half
-	// of one; a buffer with no line break is held to a whole character.
-	if end := bytes.LastIndexByte(kept, '\n'); end >= 0 {
-		dropped += len(kept) - end - 1
-		kept = kept[:end+1]
-	} else {
-		whole := wholeRunes(kept)
-		dropped += len(kept) - len(whole)
-		kept = whole
+	kept := string(c.buf)
+	kept = kept[:redact.Settled(kept)]
+	note := fmt.Sprintf("(%d more bytes of output not kept: past the %d KiB a control command's output may hold)",
+		c.dropped+len(c.buf)-len(kept), captureLimit>>10)
+	if kept = strings.TrimRight(kept, "\n"); kept == "" {
+		return note
 	}
-	return fmt.Sprintf("%s\n(%d more bytes of output not kept: past the %d KiB a control "+
-		"command's output may hold)", strings.TrimRight(string(kept), "\n"), dropped, captureLimit>>10)
-}
-
-// wholeRunes is b without a character the limit split at its end.
-func wholeRunes(b []byte) []byte {
-	for i := len(b) - 1; i >= 0 && len(b)-i <= utf8.UTFMax; i-- {
-		if utf8.RuneStart(b[i]) {
-			if !utf8.FullRune(b[i:]) {
-				return b[:i]
-			}
-			return b
-		}
-	}
-	return b
+	return kept + "\n" + note
 }
 
 // containerCLI is the container runtime's CLI as this backend drives it: the
