@@ -117,9 +117,10 @@
 // ([sandbox.RunStart]) found once, the start message itself none of the run's;
 // at a compaction of any status ([openCodeRestart]) every part fact dropped;
 // an assistant step's names within its set and none twice, no `metadata`, its
-// `time` names within `created`, `streamed` and `completed`, once each, the
-// last a number a double reads above zero, as JSON.parse does (a settled step,
-// the only kind the export holds); each item an object of type text,
+// `time` names within `created`, `streamed`, `completed` and `firstToken`
+// (2.3.0's), once each, `completed` a number a double reads above zero, as
+// JSON.parse does (a settled step, the only kind the export holds), the rest
+// read for nothing; each item an object of type text,
 // reasoning or tool, the list whole.
 //
 // A PART COUNTS only where it is `crewlet_` and a name the bridge files a tool

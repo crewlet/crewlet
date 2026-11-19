@@ -4747,16 +4747,15 @@ the walk's buffer and one decoded text with no member copied out; the two at
 once (two readings never run at once), 161 to 193 MiB; 255 MiB of ordinary
 steps read in 7.9 s, inside the 15 s wait.
 
-**The releases.** A session is read only where OpenCode 2.0.32, 2.1.4 or
-2.2.7 wrote it (`openCodeHoldingsReleases`, a set and never a range, compared
-whole): each was driven, writer and box, through the engine's own bridge and
-render, and every part these rules count, on the export as the take keeps it,
-reached the continuation's first request exactly as the log recorded the call,
-on both of its model routes. 2.3.0 marks every step's time with a name the
-reading does not read, so none of its sessions is read. The brief told by a
-reading goes only to a box of the writer's release whose first request sends
-the session whole (the box's verdict, above), and no other MCP server may join
-to the engine's prefix (the run's script refuses one).
+**The releases.** A session is read only where OpenCode 2.0.32, 2.1.4, 2.2.7
+or 2.3.0 wrote it (`openCodeHoldingsReleases`, a set and never a range,
+compared whole): each was driven, writer and box, through the engine's own
+bridge and render, and every part these rules count, on the export as the take
+keeps it, reached the continuation's first request exactly as the log recorded
+the call, on both of its model routes. The brief told by a reading goes only
+to a box of the writer's release whose first request sends the session whole
+(the box's verdict, above), and no other MCP server may join to the engine's
+prefix (the run's script refuses one).
 
 **What a take's reading must read.** A take that places a cut-off capture by a
 reading reads the export as kept, the scrub's output, never the box's bytes:

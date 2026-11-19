@@ -187,7 +187,7 @@ func TestAnOpenCodeReadingReadsOnlyReleasesItWasMeasuredOn(t *testing.T) {
 		read             bool
 	}{
 		"a member":                        {"2.2.7", "2.2.7", true},
-		"a resumer outside the set":       {"2.3.0", "2.3.0", false},
+		"a resumer outside the set":       {"2.2.5", "2.2.5", false},
 		"a writer other than the resumer": {"2.1.4", "2.2.7", false},
 		"a member padded with blanks":     {" 2.2.7", " 2.2.7", false},
 		"a release only the count reads":  {"2.4.0", "2.4.0", false},
@@ -234,16 +234,15 @@ func ohGzip(t *testing.T, doc string) []byte {
 	return buf.Bytes()
 }
 
-// THE READING'S RELEASES ARE THE RELEASES MEASURED: 2.0.32, 2.1.4 and 2.2.7,
-// whose own exports of the engine's bridged calls read as every case
+// THE READING'S RELEASES ARE THE RELEASES MEASURED: 2.0.32, 2.1.4, 2.2.7 and
+// 2.3.0, whose own exports of the engine's bridged calls read as every case
 // predicted; never empty, each one the count reads and of readable numbers.
-// 2.3.0 is out: its steps carry `time.firstToken`.
 //
 // Mutation: empty the set, add a release, or add one the count does not
 // read, and this goes red.
 func TestTheReadingsReleasesAreTheReleasesMeasured(t *testing.T) {
 	t.Parallel()
-	if want := []string{"2.0.32", "2.1.4", "2.2.7"}; !slices.Equal(openCodeHoldingsReleases, want) {
+	if want := []string{"2.0.32", "2.1.4", "2.2.7", "2.3.0"}; !slices.Equal(openCodeHoldingsReleases, want) {
 		t.Errorf("the reading's releases are %q; want those measured, %q", openCodeHoldingsReleases, want)
 	}
 	for _, release := range openCodeHoldingsReleases {
@@ -702,13 +701,14 @@ func TestOnlyAPartOpenCodeHandsItsModelVerbatimCounts(t *testing.T) {
 }
 
 // A MARKED CHANGE ENDS THE READING: a fourth item type, an assistant step with
-// an unknown key or `metadata`, a step `time` name outside its set (2.3.0's
-// firstToken among them), an item no object, a list cut part way or no list,
-// a `completed` time null, 0, one a double reads as 0, a string or absent,
-// and no `info` are no reading.
+// an unknown key or `metadata`, a step `time` name outside its set (a release
+// adding one is a format no measurement read), an item no object, a list cut
+// part way or no list, a `completed` time null, 0, one a double reads as 0, a
+// string or absent, and no `info` are no reading.
 //
 // Mutation: drop the item faults as the person reader does, read `completed`
-// for its presence, or for a digit other than 0, and a case goes red.
+// for its presence, or for a digit other than 0, let a step's `time` hold any
+// name, and a case goes red.
 func TestAMarkedChangeEndsTheReading(t *testing.T) {
 	t.Parallel()
 	c := ohCall(1, "echo", `{"t":1}`, "done")
@@ -717,7 +717,7 @@ func TestAMarkedChangeEndsTheReading(t *testing.T) {
 		"a fourth item type":     ohDoc(ohUser, strings.Replace(step, `"content":[`, `"content":[{"type":"image"},`, 1)),
 		"an unknown step key":    ohDoc(ohUser, strings.Replace(step, `"cost":0`, `"cost":0,"later":1`, 1)),
 		"metadata":               ohDoc(ohUser, strings.Replace(step, `"cost":0`, `"cost":0,"metadata":{}`, 1)),
-		"firstToken":             ohDoc(ohUser, strings.Replace(step, `"streamed":3`, `"firstToken":3,"streamed":3`, 1)),
+		"an unknown time name":   ohDoc(ohUser, strings.Replace(step, `"streamed":3`, `"lastToken":3,"streamed":3`, 1)),
 		"an item no object":      ohDoc(ohUser, strings.Replace(step, `"content":[`, `"content":[7,`, 1)),
 		"a list that is no list": ohDoc(ohUser, strings.Replace(ohStep(), `"content":[]`, `"content":{}`, 1)),
 		"completed null":         ohDoc(ohUser, strings.Replace(step, `"completed":4`, `"completed":null`, 1)),
@@ -740,6 +740,31 @@ func TestAMarkedChangeEndsTheReading(t *testing.T) {
 			t.Errorf("%s: a reading = %+v; want none", name, h)
 		}
 	}
+}
+
+// A STEP'S FIRSTTOKEN IS READ FOR NOTHING: 2.3.0 stamps every step's `time`
+// with `firstToken`, and a step holding it, whatever its value, holds its
+// call as a step without it does; written twice, it is no reading.
+//
+// Mutation: drop `firstToken` from the step's set, or read it where
+// `completed` is read, and a case goes red.
+func TestAStepsFirstTokenIsReadForNothing(t *testing.T) {
+	t.Parallel()
+	c := ohCall(1, "echo", `{"t":1}`, "done")
+	step := ohStep(ohDone("echo", `{"t":1}`, "done"))
+	for _, value := range []string{`3`, `null`, `"3"`, `0`} {
+		stamped := strings.Replace(step, `"streamed":3`, `"firstToken":`+value+`,"streamed":3`, 1)
+		if stamped == step {
+			t.Fatal("the variant did not apply")
+		}
+		h, err := ohRead(t, ohDoc(ohUser, stamped), ohBegan, c)
+		if got := ohHeld(t, h, err, c); !slices.Equal(got, []int{1}) {
+			t.Errorf("a step's firstToken %s: held %v; want [1]", value, got)
+		}
+	}
+	twice := strings.Replace(step, `"streamed":3`, `"firstToken":3,"firstToken":3,"streamed":3`, 1)
+	h, err := ohRead(t, ohDoc(ohUser, twice), ohBegan, c)
+	ohNoneNamed(t, "firstToken twice", h, err)
 }
 
 // A KEY WRITTEN TWICE ENDS THE READING OR PASSES ITS PART: `messages` or

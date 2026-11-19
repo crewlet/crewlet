@@ -393,9 +393,11 @@ func openCodeKindRead(kind openCodeKind) bool {
 }
 
 // openCodeStepNames and openCodePartTimes are the names a step's and a part's
-// `time` may hold.
+// `time` may hold. `firstToken`, which 2.3.0 writes on every step, is a stamp
+// read for nothing, as `created` and `streamed` are; it comes after
+// `completed`, whose index [openCodeStepTimes] reads.
 var (
-	openCodeStepNames = openCodeNames("created", "streamed", "completed")
+	openCodeStepNames = openCodeNames("created", "streamed", "completed", "firstToken")
 	openCodePartTimes = openCodeNames("created", "ran", "completed")
 )
 

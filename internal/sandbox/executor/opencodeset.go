@@ -32,9 +32,8 @@ func openCodeCountRead(release string) bool {
 // every case of the reading's measurement predicts, writer and box alike. A
 // SET, NEVER A RANGE, compared whole, and a subset of [openCodeCountReleases],
 // since the launch hands a reading's brief only to a box whose count it reads.
-// 2.3.0 is out: every step it writes carries `time.firstToken`, a name the
-// reading does not read. The package doc says how a release is added.
-var openCodeHoldingsReleases = []string{"2.0.32", "2.1.4", "2.2.7"}
+// The package doc says how a release is added.
+var openCodeHoldingsReleases = []string{"2.0.32", "2.1.4", "2.2.7", "2.3.0"}
 
 // openCodeHoldingsRead reports whether release, the writer a session's row
 // records, is one of [openCodeHoldingsReleases], compared whole: never
