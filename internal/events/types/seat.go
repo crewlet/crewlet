@@ -7,22 +7,17 @@ import (
 	"github.com/crewlet/crewlet/internal/events"
 )
 
-// A person's control over a running seat: pausing it, resuming it, a turn a
-// pause stopped, and a note a person sent a running turn. A pause itself is a
-// coordination record (coord.SeatPause); these are the fleet's account of each
-// change, published once by the writer whose compare-and-set won, so two people
-// pausing one seat at once put one row in the log rather than two.
+// A person's control over a running seat: pausing, resuming, a turn a pause
+// stopped, and a note sent a running turn. A pause itself is a coordination
+// record (coord.SeatPause); these are the fleet's account, published once by
+// the writer whose compare-and-set won.
 //
 // # Who did it, in three halves
 //
-// Every `…_by` here is the author iam.ActorFor names — the seat for a person
-// the identity directory binds to one, the login for anybody else — beside its
-// `…_by_kind` (iam.ActorKind's vocabulary: agent, human, operator, system) and
-// the `operator_id` the gesture came through (`pat:<id>`, `session:<lineage>`,
-// or the login where the principal is its own credential). The same three
-// facts every tracker and page record carries, under the same names, so
-// a feed row about a pause and the history row of the work it held up cannot
-// name two different people.
+// Every `…_by` is the author iam.ActorFor names, beside its `…_by_kind`
+// (iam.ActorKind) and the `operator_id` the gesture came through (`pat:<id>`,
+// `session:<lineage>`, or the login). Tracker and page records carry the same
+// three under the same names, so feed and history rows cannot name two people.
 
 func init() {
 	events.Register[SeatPaused]()
@@ -244,26 +239,17 @@ var SteerBoundaries = []SteerBoundary{
 func (b SteerBoundary) Valid() bool { return slices.Contains(SteerBoundaries, b) }
 
 // AgentTurnSteered records what became of one person's note to a running turn
-// (internal/agent/steer): read at a boundary of the turn, expired unread
-// because the turn ended first, missed by the step that took it, or handed to
-// an executor that never confirmed reading it ([SteerOutcome]).
+// (internal/agent/steer): read at a boundary, expired unread, missed by the
+// step that took it, or never confirmed by an executor ([SteerOutcome]).
 //
-// PUBLISHED BY THE NODE WHOSE STEP READ THE NOTE — the runner's node for a round
-// or a brief, the run's bridge's node for OpenCode's confirmation, the node
-// collecting the job for its hook's read, at the serve's instant — or BY THE
-// NODE THAT FINISHED THE TURN'S ENDING, for every note no step reported reading: expired, missed or
-// unconfirmed, as the run's record knows it, or delivered where a launch's brief
-// told it again ([AgentTurnSteered.Retold]). Never by the node that took the
-// request, which answered `pending` and cannot see the turn. A note to a turn with no run
-// record yet travels on an ephemeral scatter that leaves no record, and one
-// waiting on a run's record is deleted with it, so this row is the only durable
-// account that the note existed at all; that is why it carries the note's text.
+// PUBLISHED BY THE NODE WHOSE STEP READ THE NOTE, or BY THE NODE THAT FINISHED
+// THE TURN'S ENDING for notes no step reported ([AgentTurnSteered.Retold]);
+// never by the node that took the request, which cannot see the turn. Its other
+// records die with the turn, so this row carries the note's text.
 //
-// ONE CONSTRUCTOR builds every one, internal/agent/steer's Record, so the
-// runner, the bridge's run inbox and an ending cannot publish three shapes of
-// the same fact. It lives with its publishers rather than here, because a
-// payload literal outside this package is what the engine's publisher gate
-// reads as one (internal/engine's TestEveryRegisteredEventTypeIsPublishedSomewhere).
+// ONE CONSTRUCTOR, internal/agent/steer's Record, builds every one; it lives
+// with its publishers because a payload literal outside this package reads as
+// one to internal/engine's TestEveryRegisteredEventTypeIsPublishedSomewhere.
 type AgentTurnSteered struct {
 	Agent       string `json:"agent_id"`
 	AgentHandle string `json:"agent_handle"`

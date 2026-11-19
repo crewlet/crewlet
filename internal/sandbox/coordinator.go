@@ -1110,6 +1110,17 @@ type Coordinator struct {
 	// saves is this node's part in saving its runs' sessions as they work
 	// (save.go).
 	saves saveState
+	// sharedPack is the node's ONE pack slot, taken by every pack made in a
+	// box that shares the node's memory ([Placement.OwnsMemory]), a save's
+	// and a take's on demand, while the pack runs ([Coordinator.packSlot]).
+	// Capacity 1, a knob: such a pack is charged against the engine's own
+	// memory (an OpenCode export holds up to about ten times its session),
+	// so a room two packs read at once each could pass for the other to
+	// fill. One at a time costs a drain one pack after another: 0.4 to
+	// 5.2 s an OpenCode export of a session to 64 MiB, 0.04 to 0.46 s a
+	// Claude Code pack of 1 to 20 MiB (package doc, "A pack in a node's own
+	// memory, one at a time").
+	sharedPack chan struct{}
 
 	// mainThreadWait bounds the read of a job's main thread at its collection
 	// ([MainThreadReadWait], [Coordinator.readMainThread]), a test's its own;
@@ -1379,6 +1390,7 @@ func NewCoordinator(opts CoordinatorOptions) (*Coordinator, error) {
 		restore:            opts.Restore,
 		saves: saveState{ledger: opts.Saves, slots: make(chan struct{}, maxConcurrentSaves),
 			memos: map[string]*saveMemo{}},
+		sharedPack:   make(chan struct{}, 1),
 		relaunchWait: relaunchCaptureWait,
 		holdingsWait: holdingsReadWait,
 		endWait:      JobEndWait,
@@ -1570,6 +1582,25 @@ func (c *Coordinator) mgr() *Manager {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.manager
+}
+
+// packSlot waits on ctx for the node's one pack slot ([Coordinator.sharedPack])
+// where run's box shares the node's memory, and returns what gives it back, to
+// be called as the pack returns; a box that owns its memory takes none.
+func (c *Coordinator) packSlot(ctx context.Context, run PendingRun) (give func(), err error) {
+	cell := Placement(run.Placement)
+	if manager := c.mgr(); manager != nil {
+		cell = manager.CellOf(run)
+	}
+	if cell.OwnsMemory() {
+		return func() {}, nil
+	}
+	select {
+	case c.sharedPack <- struct{}{}:
+		return func() { <-c.sharedPack }, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("waiting for the node's one pack in a box that shares its memory: %w", ctx.Err())
+	}
 }
 
 // SeatRuns is what this node knows about one seat's detached runs: whether one

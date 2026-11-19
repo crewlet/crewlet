@@ -795,6 +795,34 @@ func TestTheContinuationCheckSaysWhetherTheBoxsResumeWasRead(t *testing.T) {
 	}
 }
 
+// A TAKE SAYS WHETHER ITS ARCHIVE'S RESUME WAS READ, by the predicate the
+// continuation check reports a box's by: a Claude Code archive of a release
+// whose resume this build read (2.1.310, 2.1.322) and of no other, the only
+// Claude Code archive whose capture is raised (internal/sandbox's placeAtNewest).
+//
+// Mutation: report it whatever the release, or never, and a row goes red.
+func TestATakeSaysWhetherItsArchivesResumeWasRead(t *testing.T) {
+	t.Parallel()
+	for release, want := range map[string]bool{"2.1.310": true, "2.1.322": true, "2.1.316": false} {
+		t.Run(release, func(t *testing.T) {
+			t.Parallel()
+			runner, b := sessionBox(t, release)
+			runToEnd(t, runner, b, sandbox.RunRequest{Brief: "x"})
+			taken, err := runner.TakeSession(t.Context(), b, sandbox.SessionTake{MaxBytes: takeBound})
+			if err != nil || taken.Body == nil {
+				t.Fatalf("TakeSession = %+v, %v", taken, err)
+			}
+			if err := taken.Body.Close(); err != nil {
+				t.Errorf("closing the take: %v", err)
+			}
+			if taken.ResumeRead != want {
+				t.Errorf("the take of an archive %s wrote says its resume was read: %v, want %v",
+					release, taken.ResumeRead, want)
+			}
+		})
+	}
+}
+
 // WHAT THE RUN DID IS ITS SCRIPT'S RECORD: the session the harness ran (the
 // result's, else the record's), whether it continued the one asked, why not, and
 // the release `--version` printed; a capture the box holds is described for that

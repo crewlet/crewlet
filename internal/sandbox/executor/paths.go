@@ -500,13 +500,65 @@
 // that packs it alone ([Runner.PackCapture], [Paths.SessionPackHeld]), and a
 // SAVE, packed to a place of that save's own, named after its taker
 // ([Runner.PackSave], [Paths.SessionSave]), for the take that names it alone —
-// neither ever where the job's final archive is read. Only Claude Code's
-// runner makes a save ([saver], [Runner.Saves]), so an OpenCode run costs a
-// node's saves nothing; whether a job moved since its last save is how far
-// its harness's event stream ran ([Runner.Streamed]); and a save no take
-// will read is removed from its box ([Runner.ReleaseSave]). And a job that is over and left no archive is
+// neither ever where the job's final archive is read. Both runners make a
+// save ([saver], [Runner.Saves]), OpenCode's by its own export (below);
+// whether a job moved since its last save is how far its harness's event
+// stream ran ([Runner.Streamed]); and a save no take will read is removed
+// from its box ([Runner.ReleaseSave]). And a job that is over and left no archive is
 // packed on demand for its read alone too, by the run's own end's rule: the
 // capture is the job's own script's, which nothing else writes.
+//
+// # An OpenCode session saved beside its running server
+//
+// An OpenCode save is the pack on demand's own export ([openCodePackNow])
+// through a private server (`--standalone`), beside the run's own, which only
+// the run's script reaches. Every release opens its database in WAL mode with
+// a five-second busy timeout, and a standalone probe and export complete
+// beside a server live, stopped mid-step or killed (2.0.32 to 2.3.0), and
+// beside one answering its own small writes, 17 to 22 saves in 30 s with none
+// failed and the slowest at 2.6 s (2.1.4, 2.2.7, 2.3.0). A save holds the
+// session to its last settled message: the step in flight is absent, and its
+// calls are the job's own, told past any point the save states. Every
+// standalone call runs with the models fetch and the updater off and loopback
+// first in NO_PROXY ([openCodeStandalonePins]): 2.0.32 reaches its own
+// in-process server over HTTP on loopback, which a proxy that never answers
+// hangs, and no release measured opened a connection of its own.
+//
+// BOUNDED BY THE EXPORT'S BYTES: one empty or past [heldPlainMax], what a kept
+// session's scrub reads, is refused before gzip. The database bounds nothing,
+// since it holds every session in the box.
+//
+// ONE AT A TIME IN A NODE'S OWN MEMORY, AND WAITING FOR ROOM. An export peaks
+// at up to about ten times its session. Measured as the process's own VmHWM
+// beside a live server, less 90 MiB, over the database's bytes and its WAL's:
+//
+//	ASCII only (2.0.32, 2.3.0): 3.9 to 4.8; 64 MiB peaks at 347 to 404 MiB,
+//	  200 MiB at 881 to 890 MiB
+//	mixed non-ASCII text in every text part (2.3.0): 6.6 to 7.3; 79 MiB at
+//	  616 MiB
+//	a character past Latin-1 in every string, or a dash past ASCII in every
+//	  text part (2.0.32 to 2.3.0): 8.5 to 10.9, and between 16 and 64 MiB a
+//	  slope of 7.5 to 9.7 with intercepts of 93 to 138 MiB; 64 MiB at 701 to
+//	  731 MiB
+//
+// The export takes 0.4 to 5.2 s at 16 to 64 MiB, and 2.7 to 3.0 s at 200 MiB
+// of ASCII. So a save in a box that shares the node's memory takes the node's
+// one pack slot (internal/sandbox's Coordinator), and every save first reads
+// its box's room ([openCodeSaveRoom]): its memory domain's limit less what its
+// kernel cannot reclaim, capped by MemAvailable. A save whose need, twelve
+// times the database and its WAL plus 128 MiB ([openCodeSaveNeedFactor]),
+// exceeds a room read waits ([sandbox.ErrSaveNoRoom]); a room not read refuses
+// nothing. A take's pack on demand ([OpenCode.Pack]) is never held to the
+// room: refused, it would lose the job's newest state on an estimate that
+// counts every session in the box.
+//
+// SAVED ONLY ON A RELEASE MEASURED: saves make the pack on demand, once rare,
+// one every running job takes each interval, and releases differ in what a
+// standalone call writes (2.2.7 and 2.3.0 change the database file, 2.0.32
+// and 2.1.4 do not) and in what an export holds. So a record naming a release
+// outside [openCodeCountReleases] is refused before its pack
+// ([OpenCode.PackSave]), and a release added there is measured for its saves
+// too (below).
 //
 // # An OpenCode continuation's first request, judged in its box
 //
@@ -767,8 +819,16 @@
 // under and at the predicted point for a limit it defaults, a limit stated,
 // an integer buffer and a tool result after the reply, each of which must
 // split there; a first request refused in the overflow phrases; and read its
-// model.list and config.get answers as the launch reads them. Only then is it
-// added to [openCodeCountReleases].
+// model.list and config.get answers as the launch reads them. For its saves:
+// beside a server importing message-sized sessions into a 200 MiB database,
+// standalone probes and exports that all complete, the server's log holding
+// no busy or locked line; a standalone call that opens no connection beside a
+// proxy that never answers; the export's peak on a session with a character
+// past Latin-1 in every string, at 16 and 64 MiB, within the need
+// ([openCodeSaveNeedFactor]); and an export holding a compaction, imported,
+// its newest compaction's identity (internal/sandbox's ResumedCount.Restart)
+// compared before and after, since a release that changes it raises no
+// continued save's point. Only then is it added to [openCodeCountReleases].
 //
 // THE WRITER AND THE BOX ARE ONE RELEASE: a session one release wrote is
 // judged in a box of another only once a probe has continued that pair's

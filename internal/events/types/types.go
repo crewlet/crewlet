@@ -73,19 +73,14 @@ import (
 // failureEventTypes are the events that ARE a failure by their very type,
 // independent of any payload flag.
 //
-// Named here, beside the events themselves, because three layers need the same
-// answer — the live projection stamping its feed, the event store reading a row
-// back out of history, and the API serializing a push — and a second copy is
-// how the same turn ends up red on one surface and not on another.
+// Named here, beside the events, because three layers need the same answer
+// (the live projection, the event store reading history, the API serializing
+// a push); a second copy leaves one turn red on one surface and not another.
 //
-// UNEXPORTED, and that is the whole of the guarantee. It was exported under a
-// doc line asking callers to treat it as read-only, which is the one thing a Go
-// map cannot be: an exported map is writable by every importer that can name
-// it, so `delete(types.FailureEventTypes, "budget_exhausted")` compiled and
-// would have silently unfailed every turn refused at the budget gate, in every
-// layer at once. A comment is not an access modifier. [Failed] answers the
-// one-type question and [FailureEventNames] enumerates; between them nothing
-// outside this package needs the map itself.
+// UNEXPORTED, and that is the whole of the guarantee: an exported map is
+// writable by every importer, so a `delete` of "budget_exhausted" would
+// silently unfail every budget-refused turn in every layer at once. [Failed]
+// answers the one-type question and [FailureEventNames] enumerates.
 var failureEventTypes = map[string]struct{}{
 	"llm_unavailable":   {},
 	"budget_exhausted":  {},
@@ -114,19 +109,15 @@ func Failed(eventType string, payloadFailed, tagFailed bool) bool {
 // FailureEventNames is every type in the failure set, sorted, as a copy the
 // caller owns.
 //
-// [Failed] cannot serve a caller that has to ENUMERATE the set rather than test
-// one value against it — a SQL `IN (…)` clause needs the names and their bound
-// arguments, and it needs them in the same order twice, because the predicate
-// is spelled once and used for both a column and a filter. That is what sent
-// internal/store's turn aggregate reaching into the map the doc asked it not
-// to.
+// [Failed] cannot serve a caller that has to ENUMERATE the set, such as a SQL
+// `IN (…)` clause, which needs the names and their bound arguments in the same
+// order twice (the predicate is spelled once, used for a column and a filter).
 //
-// SORTED, so the statement a caller builds is byte-stable: Go randomises map
-// iteration, so ranging it produced a different SQL string on every process
-// start — one that works, and one no two runs of a test could compare.
+// SORTED, so the statement a caller builds is byte-stable: ranging the map
+// would give a different SQL string on every process start.
 //
-// A COPY, so a caller that sorts, appends to or trims what it is handed cannot
-// reach the catalogue through the slice header.
+// A COPY, so a caller that sorts, appends to or trims it cannot reach the
+// catalogue through the slice header.
 func FailureEventNames() []string {
 	return slices.Sorted(maps.Keys(failureEventTypes))
 }
@@ -399,17 +390,14 @@ func (t *Trigger) UnmarshalJSON(data []byte) error {
 // lead renders an actor-led summary line: "Engineer completed task T-42".
 //
 // Its first argument is normally the RESOLVED actor an ActorSummarizer is
-// handed, so the payload never has to know how the chain reached it. A few
-// lines lead with a party the payload names itself instead — an A2A channel's
-// requester, a message's own sender — and those pass that party.
+// handed; a few lines lead with a party the payload names itself (an A2A
+// channel's requester, a message's sender) and pass that instead.
 //
-// An empty actor opens the sentence with its verb rather than with a blank.
-// The envelope always resolves one (worst case, the engine itself), so that
-// branch is for a direct caller and for the payload-named parties, which can
-// genuinely be absent.
+// An empty actor opens the sentence with its verb, not a blank. The envelope
+// always resolves one, so that branch is for a direct caller and for
+// payload-named parties, which can be absent.
 //
-// The phrases are ASCII by construction, so this needs none of the locale
-// machinery a general title-caser would carry.
+// The phrases are ASCII by construction, so no locale-aware title-casing.
 func lead(actor, phrase string) string {
 	if actor == "" {
 		return upperFirst(phrase)

@@ -16,19 +16,15 @@ func init() {
 // CustodyBatch is a batch of the events a node without `data` published, on
 // their way into exactly one data node's event log.
 //
-// THE EVENTS WHOLE, envelope and all, rather than rendered rows: the data node
-// renders each one with the function its own publish listener uses, so a
-// stateless node's row is the row it would have written itself. An envelope
-// round-trips through the codec losslessly whatever its type, so an event a
-// newer stateless node published that the data node's build does not know
-// arrives intact and is rendered — or left out — by the build that has to read
-// it, exactly as one of its own would be.
+// THE EVENTS WHOLE, envelope and all, not rendered rows: the data node renders
+// each with the function its own publish listener uses, so the row is the one
+// the stateless node would have written. An envelope round-trips the codec
+// losslessly, so an event of a type this build does not know arrives intact and
+// is rendered, or left out, by the build that reads it.
 //
-// The batch's identity is the ENVELOPE's id. The publisher sends a batch it was
-// not told was stored again under the same id, which the broker collapses
-// within its duplicate window, and that id is what a data node claims custody
-// of — never the id of an event inside it, which is the identity of that
-// event's row.
+// The batch's identity is the ENVELOPE's id: an unconfirmed batch is resent
+// under it, which the broker collapses within its duplicate window, and a data
+// node claims custody of that id, never of an inner event's id (its row's).
 type CustodyBatch struct {
 	// Events is each event as published, in the order it was published.
 	Events []*events.Event `json:"events"`

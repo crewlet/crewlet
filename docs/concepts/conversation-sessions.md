@@ -8,8 +8,7 @@ no transcript can say: how the conversation's earlier turns ended, that a new
 turn begins here, and that its box is new.
 
 Every launch's harness session is kept: taken out of its box when the run
-ends, and saved as it works where its harness is Claude Code
-([saved as it works](code-sandbox.md#a-running-jobs-session-saved-as-it-works)),
+ends, and [saved as it works](code-sandbox.md#a-running-jobs-session-saved-as-it-works),
 sealed into the fleet's [object store](object-store.md) and named by the
 turn's row of the `executor` state log
 ([ADR-0073](https://github.com/crewlet/crewlet/blob/main/adr/0073-a-seats-executor-session-is-a-sealed-object-its-turns-row-names.md);
@@ -24,7 +23,7 @@ schedule that fired it.
 
 | Launch | Continues |
 |---|---|
-| A relaunch of a turn whose job before left a kept capture | That job's newest kept capture, in any box, and in that job's own box, where the relaunch carries the round on there, its own copy where it went on past that capture ([A relaunch continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session)); a Claude Code job is saved as it works and as its node drains, so the relaunch of one lost with its box continues its newest save ([saved as it works](code-sandbox.md#a-running-jobs-session-saved-as-it-works)) |
+| A relaunch of a turn whose job before left a kept capture | That job's newest kept capture, in any box, and in that job's own box, where the relaunch carries the round on there, its own copy where it went on past that capture ([A relaunch continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session)); a job is saved as it works and as its node drains, so the relaunch of one lost with its box continues its newest save ([saved as it works](code-sandbox.md#a-running-jobs-session-saved-as-it-works)) |
 | A turn's **first** launch | The session its conversation's last turn left: the conversation's **head**, the ended turn whose row still names a kept session and whose read of the conversation was the latest ([Read once, frozen, held](#read-once-frozen-held)), restored into a box of the launch's own — a session that turn **went on past** included: an earlier capture its row keeps where its last word was not kept (its final capture refused, a stop or a loss whose box was gone, a relaunch that kept nothing), which its run is told ends where it was kept |
 | A relaunch of a turn that has kept no session of its own — its first job lost with its box, its capture refused or unanswered — in a box of its own | The head its first launch was handed (the turn's **base**), never a second read of the conversation, handed after its lead the relaunch's reseed whole: what became of the run before it, and every call the round's runs made so far ([A relaunch continues the turn's session](code-sandbox.md#a-relaunch-continues-the-turns-session)) |
 | A schedule's **next fire** | The session the schedule's last fire left on the seat: a schedule is a conversation of each seat that runs it ([Schedules](#schedules)) |
@@ -399,7 +398,7 @@ turn_engine:
                                   #   may hold, and again its saves'
                                   #   allowance (33 MiB..64 GiB)
     save_interval_seconds: 600    # shortest time between saves of a running
-                                  #   Claude Code job's session (300..3600;
+                                  #   executor job's session (300..3600;
                                   #   0 takes 600), paced by size beyond it
 ```
 
@@ -450,7 +449,7 @@ quarter of it, so a company of twenty seats or more belongs on S3
 files included.
 
 **`save_interval_seconds`** is the shortest time between saves of a running
-Claude Code job's session, 600 s by default, 300 to 3600 taken and anything
+executor job's session, 600 s by default, 300 to 3600 taken and anything
 else refused, never clamped (0 takes the default). It bounds what a run lost
 with its box does again: about the interval and one save's take. A seat's saves
 are spaced by size beyond it, so its superseded saves stay within its
