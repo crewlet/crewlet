@@ -10,6 +10,7 @@ import (
 
 	"github.com/crewlet/crewlet/internal/advisor"
 	"github.com/crewlet/crewlet/internal/config"
+	"github.com/crewlet/crewlet/internal/coord"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/org"
 	"github.com/crewlet/crewlet/internal/statelog"
@@ -111,6 +112,10 @@ func (s Sources) advisorStaffing(ctx context.Context, company *config.Company, n
 	if err != nil {
 		return nil, err
 	}
+	unplaced, unplacedUnknown, err := s.seatPlacement(ctx, from, to, now)
+	if err != nil {
+		return nil, err
+	}
 	for role := range company.EachRole() {
 		if role.Kind == org.KindHuman {
 			continue
@@ -125,8 +130,10 @@ func (s Sources) advisorStaffing(ctx context.Context, company *config.Company, n
 		if !worked {
 			b.measured = true
 		}
-		stopped, whole := stoppedIn(stops[id], from, to)
-		out.Seats[handle] = advisor.SeatTime{Busy: b.busy, Stopped: stopped, Measured: b.measured && whole}
+		// NO NODE HOLDING THE SEAT IS STOPPED TIME, as a pause is.
+		stopped, whole := stoppedIn(append(stops[id], unplaced[id]...), from, to)
+		out.Seats[handle] = advisor.SeatTime{Busy: b.busy, Stopped: stopped,
+			Measured: b.measured && whole && !unplacedUnknown[id]}
 	}
 	return out, nil
 }
@@ -278,4 +285,99 @@ func stoppedIn(spans []span, from, to time.Time) (time.Duration, bool) {
 		total += cur.to.Sub(cur.from)
 	}
 	return total, whole
+}
+
+// seatPlacement is each seat's time no node held it over [from, to), by agent
+// id, from the placement events every node publishes as it takes and lets go of
+// a seat, and the seat's live lease; and the seats whose placement over the
+// window cannot be told: a node that stopped without letting its seat go
+// leaves a gap whose start nobody recorded, and a seat with no record before
+// the window says nothing of its start.
+func (s Sources) seatPlacement(ctx context.Context, from, to, now time.Time) (map[string][]span, map[string]bool, error) {
+	if s.Coord == nil {
+		return nil, nil, errors.New("queries: this node reads no lease table to place the seats by")
+	}
+	type mark struct {
+		at     time.Time
+		placed bool
+	}
+	marks := map[string][]mark{}
+	floor := now.Add(-store.EventHistory)
+	for _, kind := range []struct {
+		kind   string
+		placed bool
+	}{{types.SeatPlaced{}.EventType(), true}, {types.SeatReleased{}.EventType(), false}} {
+		rows, err := s.spanOf(ctx, floor, to, kind.kind, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, r := range rows {
+			marks[r.AgentID] = append(marks[r.AgentID], mark{at: r.Time.UTC(), placed: kind.placed})
+		}
+	}
+	// THE LIVE TENURE is a placement too, which a lost event cannot take away.
+	leases, err := s.Coord.ListLive(ctx, coord.ClassSeat)
+	if err != nil {
+		return nil, nil, fmt.Errorf("queries: list the seats' leases: %w", err)
+	}
+	held := map[string]time.Time{}
+	for _, l := range leases {
+		held[nameIn(coord.ClassSeat, l.Resource)] = l.AcquiredAt.UTC()
+	}
+	agents := map[string]bool{}
+	for agent := range marks {
+		agents[agent] = true
+	}
+	for agent := range held {
+		agents[agent] = true
+	}
+	unplaced, unknown := map[string][]span{}, map[string]bool{}
+	for agent := range agents {
+		ms := marks[agent]
+		if since, ok := held[agent]; ok {
+			// THE LIVE TENURE'S OWN PLACEMENT comes once it is established,
+			// after its lease began: it is this tenure, not another.
+			ms = slices.DeleteFunc(slices.Clone(ms), func(m mark) bool { return m.placed && !m.at.Before(since) })
+			ms = append(ms, mark{at: since, placed: true})
+		}
+		slices.SortStableFunc(ms, func(a, b mark) int { return a.at.Compare(b.at) })
+		// state: 0 nothing read yet, 1 held, 2 let go at last.
+		state, last := 0, time.Time{}
+		overlaps := func(a, b time.Time) bool { return b.After(from) && a.Before(to) }
+		for _, m := range ms {
+			switch {
+			case m.placed && state == 0:
+				// NOTHING BEFORE THE FIRST TENURE READ: unknown, where it
+				// is inside the window.
+				if m.at.After(from) {
+					unknown[agent] = true
+				}
+			case m.placed && state == 1:
+				// A TENURE BEGUN WITH NONE ENDED: the last holder stopped
+				// without letting the seat go, at an instant nobody kept.
+				if !m.at.Equal(last) && overlaps(last, m.at) {
+					unknown[agent] = true
+				}
+			case m.placed && state == 2:
+				unplaced[agent] = append(unplaced[agent], span{last, m.at})
+			}
+			if m.placed {
+				state, last = 1, m.at
+			} else {
+				state, last = 2, m.at
+			}
+		}
+		_, isHeld := held[agent]
+		switch {
+		case state == 2 && !isHeld:
+			unplaced[agent] = append(unplaced[agent], span{last, to})
+		case state == 1 && !isHeld && last.Before(to):
+			// A TENURE THAT ENDED UNSAID: no lease holds the seat now and
+			// nobody let it go, so when it stopped is not known.
+			unknown[agent] = true
+		case state == 0:
+			unknown[agent] = true
+		}
+	}
+	return unplaced, unknown, nil
 }
