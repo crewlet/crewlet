@@ -1495,7 +1495,10 @@ function EventList({ events, actor }: { events: EventRecord[]; actor: string }) 
                   }}
                 />
               )}
-              <EngineLine text={withoutActor(r.event.summary, actor) || r.event.type} refs={r.event.refs} />
+              <EngineLine
+                text={withoutActor(r.event.summary, actor) || r.event.type}
+                refs={r.event.refs}
+              />
               {/* AN ANSWER A DELEGATE GAVE says so, with its rule (ADR-0125). */}
               {delegatedRuleOf(r.event) !== null && (
                 <>

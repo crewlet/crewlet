@@ -43,11 +43,7 @@
 import { Children, createContext, useContext, useMemo, type ReactNode } from "react";
 import { ColorChip, Highlight, InlineCode, InlineRef, peelPunctuation } from "@crewlethq/ui";
 import { VendorMark } from "@crewlethq/icons";
-import {
-  GlobeGlyph,
-  MessageSquareGlyph,
-  type GlyphSize,
-} from "@crewlethq/icons/glyphs";
+import { GlobeGlyph, MessageSquareGlyph, type GlyphSize } from "@crewlethq/icons/glyphs";
 import { href } from "~/app/router.tsx";
 import { ArtifactLink, artifactAddress, artifactHref } from "./ArtifactLink.tsx";
 import { CutLine, NamedRef } from "./NamedRef.tsx";

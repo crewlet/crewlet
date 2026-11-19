@@ -28,7 +28,13 @@ import { PHASE_PAGE } from "./RecentPhases.tsx";
 import { healthFrame } from "~/test/health.ts";
 import { withDerived } from "~/test/org.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
-import { drawnRef, expectNamedLinks, namedAnswer, NAMED_LINE, NAMED_REFS } from "~/test/namedRefs.tsx";
+import {
+  drawnRef,
+  expectNamedLinks,
+  namedAnswer,
+  NAMED_LINE,
+  NAMED_REFS,
+} from "~/test/namedRefs.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -833,7 +839,11 @@ test("a running turn's row links what its trigger names, and still opens its tur
           turn_id: "t-free",
           phase: "execute",
           iteration: 1,
-          trigger: { type: "work_pickup", summary: `Search Engineer was ${NAMED_LINE}`, refs: NAMED_REFS },
+          trigger: {
+            type: "work_pickup",
+            summary: `Search Engineer was ${NAMED_LINE}`,
+            refs: NAMED_REFS,
+          },
           round_num: -1,
           rounds_used: 0,
           max_rounds: 24,
@@ -845,7 +855,9 @@ test("a running turn's row links what its trigger names, and still opens its tur
     ],
     answers: { references: namedAnswer },
   });
-  const link = await within(cardOf("Running turns")).findByRole("link", { name: /Search Engineer/ });
+  const link = await within(cardOf("Running turns")).findByRole("link", {
+    name: /Search Engineer/,
+  });
   const row = liveRowOf(link);
   await waitFor(() => expect(drawnRef(row, "ENG-287").tagName).toBe("A"));
   expectNamedLinks(row);

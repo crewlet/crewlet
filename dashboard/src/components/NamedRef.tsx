@@ -78,7 +78,12 @@ export const NAMED_DRAWINGS: Record<NamedKind, KindDrawing> = {
     code: true,
     path: (id) => itemPath({ id, key: id }),
   },
-  code_change: { mark: <GitPullRequestGlyph />, said: "Change", code: true, path: KINDS.change.pathOf },
+  code_change: {
+    mark: <GitPullRequestGlyph />,
+    said: "Change",
+    code: true,
+    path: KINDS.change.pathOf,
+  },
   commit: {
     mark: <GitCommitVerticalGlyph />,
     said: "Commit",
@@ -92,15 +97,32 @@ export const NAMED_DRAWINGS: Record<NamedKind, KindDrawing> = {
   page: { mark: <FileTextGlyph />, said: "Page", code: false, path: KINDS.page.pathOf },
   artifact: { mark: <LayersGlyph />, said: "Artifact", code: false, path: artifactPath },
   turn: { mark: <ActivityGlyph />, said: "Turn", code: true, path: KINDS.turn.pathOf },
-  schedule: { mark: <CalendarClockGlyph />, said: "Schedule", code: false, path: KINDS.schedule.pathOf },
-  a2a_channel: { mark: <MessagesSquareGlyph />, said: "Channel", code: true, path: KINDS.channel.pathOf },
+  schedule: {
+    mark: <CalendarClockGlyph />,
+    said: "Schedule",
+    code: false,
+    path: KINDS.schedule.pathOf,
+  },
+  a2a_channel: {
+    mark: <MessagesSquareGlyph />,
+    said: "Channel",
+    code: true,
+    path: KINDS.channel.pathOf,
+  },
   seat: { mark: <UserGlyph />, said: "Seat", code: false, path: KINDS.seat.pathOf },
-  chat_room: { mark: <MessageSquareGlyph />, said: "Room", code: false, path: (id) => ["chatlet", id] },
+  chat_room: {
+    mark: <MessageSquareGlyph />,
+    said: "Room",
+    code: false,
+    path: (id) => ["chatlet", id],
+  },
 };
 
 /** The drawing of a kind this build knows, or undefined for a newer engine's. */
 export function drawingOf(kind: string): KindDrawing | undefined {
-  return (NAMED_REF_KINDS as readonly string[]).includes(kind) ? NAMED_DRAWINGS[kind as NamedKind] : undefined;
+  return (NAMED_REF_KINDS as readonly string[]).includes(kind)
+    ? NAMED_DRAWINGS[kind as NamedKind]
+    : undefined;
 }
 
 /**

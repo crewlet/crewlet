@@ -32,7 +32,10 @@ test("a card's row is the time and one line: the actor, then what happened", () 
   expect(link.getAttribute("href")).toBe("#/live/events/e-1");
   expect(link.getAttribute("aria-label")).toBe("harness-0 Organization 'Nimbus' started");
   // TWO TRACKS: the clock, and the sentence with its actor inside it.
-  expect([...card.children].map((c) => c.className)).toEqual(["feed-row__open", "feed-what truncate"]);
+  expect([...card.children].map((c) => c.className)).toEqual([
+    "feed-row__open",
+    "feed-what truncate",
+  ]);
   expect(link.querySelector(".feed-time")).not.toBeNull();
   expect(card.querySelector(".feed-what")?.textContent).toBe(
     "harness-0 Organization 'Nimbus' started",

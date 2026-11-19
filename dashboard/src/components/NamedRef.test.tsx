@@ -66,7 +66,10 @@ describe("the parser", () => {
   test("a Gitlet change in prose is a guess, by the engine's grammar of a repository", () => {
     const kinds = (text: string) =>
       inlineTokens(text).map((t) => (t.kind === "named" ? `${t.ref.kind}:${t.ref.id}` : t.kind));
-    expect(kinds("opened web!42 and api.v2!7")).toEqual(["code_change:web!42", "code_change:api.v2!7"]);
+    expect(kinds("opened web!42 and api.v2!7")).toEqual([
+      "code_change:web!42",
+      "code_change:api.v2!7",
+    ]);
     // A two-segment path is a code host's merge request, never a Gitlet change.
     expect(kinds("see group/project!7")).toEqual(["reference"]);
     // No repository is named `Web` or `-x`, and no change is numbered 0.
@@ -94,11 +97,15 @@ describe("the renderer", () => {
       </WithClient>,
     );
     expect(container.querySelector("a")).toBeNull();
-    expect(drawnRef(container, "ENG-287").querySelector(".crewlet-inline-ref__mark")).not.toBeNull();
+    expect(
+      drawnRef(container, "ENG-287").querySelector(".crewlet-inline-ref__mark"),
+    ).not.toBeNull();
   });
 
   test("inside a row that is itself a link, a reference is never one", async () => {
-    const { container } = await drawn(<EngineLine text={NAMED_LINE} refs={NAMED_REFS} links="text" />);
+    const { container } = await drawn(
+      <EngineLine text={NAMED_LINE} refs={NAMED_REFS} links="text" />,
+    );
     expect(container.querySelector("a")).toBeNull();
     expect(drawnRef(container, "Runbook").getAttribute("title")).toBe("Deploy runbook");
   });
@@ -126,7 +133,11 @@ describe("the renderer", () => {
 
 describe("the batch", () => {
   test("every reference drawn in one tick is one ask, chunked at the engine's bound", async () => {
-    const refs = Array.from({ length: 150 }, (_, i) => ({ kind: "turn", id: `t-${i}`, text: `t-${i}` }));
+    const refs = Array.from({ length: 150 }, (_, i) => ({
+      kind: "turn",
+      id: `t-${i}`,
+      text: `t-${i}`,
+    }));
     const { asks } = await drawn(
       <>
         {refs.map((r) => (
@@ -167,7 +178,11 @@ describe("the batch", () => {
         <NamedRef named={page} />
       </WithClient>,
     );
-    await waitFor(() => expect(again.container.querySelector("a")?.getAttribute("href")).toBe("#/doclet/pages/page-1"));
+    await waitFor(() =>
+      expect(again.container.querySelector("a")?.getAttribute("href")).toBe(
+        "#/doclet/pages/page-1",
+      ),
+    );
     expect(asks).toHaveLength(2);
   });
 });
@@ -191,7 +206,9 @@ describe("every surface that shows an engine line", () => {
     await waitFor(() => expect(drawnRef(container, "ENG-287").tagName).toBe("A"));
     expectNamedLinks(container);
     // THE ROW STILL OPENS ITS EVENT, and no link is inside another.
-    expect(container.querySelector("a.feed-row__open")?.getAttribute("href")).toBe("#/live/events/e-1");
+    expect(container.querySelector("a.feed-row__open")?.getAttribute("href")).toBe(
+      "#/live/events/e-1",
+    );
     expect(container.querySelector("a a")).toBeNull();
   });
 

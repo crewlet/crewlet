@@ -16,7 +16,13 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
-import { drawnRef, expectNamedLinks, namedAnswer, NAMED_LINE, NAMED_REFS } from "~/test/namedRefs.tsx";
+import {
+  drawnRef,
+  expectNamedLinks,
+  namedAnswer,
+  NAMED_LINE,
+  NAMED_REFS,
+} from "~/test/namedRefs.tsx";
 import { installWindow } from "~/testing.tsx";
 
 class InertWebSocket {
@@ -48,9 +54,11 @@ async function mount(answer: Record<string, unknown>, viewer: unknown = ADMIN) {
   const store = new Store();
   const socket = new LiveSocket(store);
   const asked: string[] = [];
-  (socket as unknown as {
-    query: (what: string, p: Record<string, unknown>) => Promise<unknown>;
-  }).query = (what, p) => {
+  (
+    socket as unknown as {
+      query: (what: string, p: Record<string, unknown>) => Promise<unknown>;
+    }
+  ).query = (what, p) => {
     asked.push(what);
     if (what === "references") return Promise.resolve(namedAnswer(p));
     return Promise.resolve(what === "trace" ? answer : what === "viewer" ? viewer : {});

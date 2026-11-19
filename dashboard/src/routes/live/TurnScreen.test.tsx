@@ -24,7 +24,13 @@ import { LiveSocket, Store } from "~/protocol/index.ts";
 import type { EventRecord, TurnAnswer } from "~/protocol/index.ts";
 import { ZERO_VERSIONS } from "~/test/liveCall.ts";
 import { afterMicrotasks, settled } from "~/test/settle.ts";
-import { drawnRef, expectNamedLinks, namedAnswer, NAMED_LINE, NAMED_REFS } from "~/test/namedRefs.tsx";
+import {
+  drawnRef,
+  expectNamedLinks,
+  namedAnswer,
+  NAMED_LINE,
+  NAMED_REFS,
+} from "~/test/namedRefs.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -151,11 +157,15 @@ test("what woke a turn links what it names", async () => {
   onTab("context");
   const store = new Store();
   const socket = new LiveSocket(store);
-  const trigger = { id: "ev-1", type: "work_pickup", summary: `SRE was ${NAMED_LINE}`, refs: NAMED_REFS };
-  (socket as unknown as { query: (what: string, p: Record<string, unknown>) => Promise<unknown> }).query = (
-    what,
-    p,
-  ) =>
+  const trigger = {
+    id: "ev-1",
+    type: "work_pickup",
+    summary: `SRE was ${NAMED_LINE}`,
+    refs: NAMED_REFS,
+  };
+  (
+    socket as unknown as { query: (what: string, p: Record<string, unknown>) => Promise<unknown> }
+  ).query = (what, p) =>
     what === "turn"
       ? Promise.resolve({
           turn_id: TURN,

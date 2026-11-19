@@ -236,7 +236,8 @@ const REPO_NAME_PATTERN = new RegExp(REPO_NAME);
  * A Gitlet change (rule 6a): one name with nothing of a path, an address or
  * another reference before it, and a change's number, whole.
  */
-const CHANGE = /(?<![\p{L}\p{N}_./@#!~:-])([a-z0-9][a-z0-9.-]*)!([1-9]\d{0,15})(?![\p{L}\p{N}_!-])/gu;
+const CHANGE =
+  /(?<![\p{L}\p{N}_./@#!~:-])([a-z0-9][a-z0-9.-]*)!([1-9]\d{0,15})(?![\p{L}\p{N}_!-])/gu;
 
 /**
  * An address's own end: a trailing stop or an unbalanced closing bracket is
@@ -322,9 +323,10 @@ export function inlineTokens(
   const declared = locate(text, refs);
   const read = recognised(text, owners, scope, rooms);
   if (declared.length === 0) return read;
-  return [...declared, ...read.filter((t) => !declared.some((d) => t.at < d.end && d.at < t.end))].sort(
-    (a, b) => a.at - b.at,
-  );
+  return [
+    ...declared,
+    ...read.filter((t) => !declared.some((d) => t.at < d.end && d.at < t.end)),
+  ].sort((a, b) => a.at - b.at);
 }
 
 /** No refs: a run whose line says it names nothing. */

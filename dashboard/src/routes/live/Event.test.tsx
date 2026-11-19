@@ -12,7 +12,13 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
-import { drawnRef, expectNamedLinks, namedAnswer, NAMED_LINE, NAMED_REFS } from "~/test/namedRefs.tsx";
+import {
+  drawnRef,
+  expectNamedLinks,
+  namedAnswer,
+  NAMED_LINE,
+  NAMED_REFS,
+} from "~/test/namedRefs.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -58,17 +64,18 @@ test("an event's page links what its line names", async () => {
   location.hash = "#/live/events/ev-1";
   const store = new Store();
   const socket = new LiveSocket(store);
-  (socket as unknown as { query: (what: string, p: Record<string, unknown>) => Promise<unknown> }).query =
-    (what, p) =>
-      Promise.resolve(
-        what === "event"
-          ? { ...EVENT, summary: `${NAME} was ${NAMED_LINE}`, refs: NAMED_REFS }
-          : what === "references"
-            ? namedAnswer(p)
-            : what === "viewer"
-              ? { login: "founder", owner: "jane", grants: ["admin"] }
-              : {},
-      );
+  (
+    socket as unknown as { query: (what: string, p: Record<string, unknown>) => Promise<unknown> }
+  ).query = (what, p) =>
+    Promise.resolve(
+      what === "event"
+        ? { ...EVENT, summary: `${NAME} was ${NAMED_LINE}`, refs: NAMED_REFS }
+        : what === "references"
+          ? namedAnswer(p)
+          : what === "viewer"
+            ? { login: "founder", owner: "jane", grants: ["admin"] }
+            : {},
+    );
   render(
     <ClientContext.Provider value={{ store, socket }}>
       <ViewerProvider>
