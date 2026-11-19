@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/kept"
 	"github.com/crewlet/crewlet/internal/sandbox"
 	"github.com/crewlet/crewlet/internal/tools/toolargs"
@@ -269,6 +270,28 @@ func TestTheReadingsFloorIsItsOldestRelease(t *testing.T) {
 		openCodeHoldingsReleases = set
 		if got := (OpenCode{}).holdingsFloor(); got != want {
 			t.Errorf("the floor of %q is %q; want %q", set, got, want)
+		}
+	}
+}
+
+// THE ENGINE'S TOOLS ARE READ BY THE NAME OPENCODE GIVES THEM: the prefix
+// OpenCode's profile states is the server's name config reserves and `_`, a
+// part named so is the bridge's tool, and with no prefix no part is.
+//
+// Mutation: read another harness's profile, or drop the empty prefix's
+// refusal, and this goes red.
+func TestTheEnginesToolsAreReadByTheNameOpenCodeGivesThem(t *testing.T) {
+	t.Parallel()
+	if got, want := openCodeBridgedPrefix(), config.ToolServerName+"_"; got != want {
+		t.Fatalf("OpenCode's prefix for the engine's tools is %q; want %q", got, want)
+	}
+	raw := json.RawMessage(ohQuote(config.ToolServerName + "_echo"))
+	if tool, ok := bridgedToolName(raw, openCodeBridgedPrefix()); !ok || tool != "echo" {
+		t.Errorf("%s names %q, %t; want the bridge's echo", raw, tool, ok)
+	}
+	for _, raw := range []string{`"echo"`, ohQuote(config.ToolServerName + "_echo")} {
+		if tool, ok := bridgedToolName(json.RawMessage(raw), ""); ok {
+			t.Errorf("with no prefix, %s names the bridge's %q; want none", raw, tool)
 		}
 	}
 }

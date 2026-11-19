@@ -14,8 +14,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
-	"github.com/crewlet/crewlet/internal/config"
 	"github.com/crewlet/crewlet/internal/executorkeep"
 	"github.com/crewlet/crewlet/internal/providers/llm/harness/harnessprofile"
 	"github.com/crewlet/crewlet/internal/redact"
@@ -37,8 +37,18 @@ import (
 
 // openCodeBridgedPrefix opens the name OpenCode gives each tool of the
 // engine's own MCP server, offered directly ([openCodeMCP]): the server's
-// name and `_`.
-const openCodeBridgedPrefix = config.ToolServerName + "_"
+// name and `_`, as OpenCode's built-in profile states it
+// ([harnessprofile.Profile.ModelToolPrefix]), whose suite holds it to the
+// name config reserves. Never config's own constant: config's suite imports
+// this package. A profile stating none leaves it "", which [bridgedToolName]
+// reads as naming no tool of the engine's, so every call is told.
+var openCodeBridgedPrefix = sync.OnceValue(func() string {
+	p, ok := harnessprofile.Builtin(OpenCodeName)
+	if !ok {
+		return ""
+	}
+	return p.ModelToolPrefix()
+})
 
 // holdingsFloor is the oldest release of [openCodeHoldingsReleases] by its
 // numbers, computed from the set, never its first member: [checkHoldings]
@@ -471,7 +481,7 @@ func (w *openCodeHoldingsWalk) part(item openCodeItemWire) {
 	if item.Time != nil && !keysWithin(item.Time, openCodePartTimes) {
 		return
 	}
-	name, ok := bridgedToolName(item.Name)
+	name, ok := bridgedToolName(item.Name, openCodeBridgedPrefix())
 	if !ok {
 		return
 	}
@@ -506,19 +516,19 @@ func keysWithin(raw json.RawMessage, names map[string]int) bool {
 	return !keys.other && !keys.twice
 }
 
-// bridgedToolName is the engine's tool a part's `name` names, `crewlet_` and
-// a name the bridge files a tool by, its raw span held to that bound before
-// it is decoded.
-func bridgedToolName(raw json.RawMessage) (string, bool) {
-	most := len(openCodeBridgedPrefix) + harnessprofile.ToolNameMax()
-	if len(raw) < 2 || raw[0] != '"' || len(raw) > 6*most+2 {
+// bridgedToolName is the engine's tool a part's `name` names, prefix
+// (`crewlet_`) and a name the bridge files a tool by, its raw span held to
+// that bound before it is decoded; none where prefix is "".
+func bridgedToolName(raw json.RawMessage, prefix string) (string, bool) {
+	most := len(prefix) + harnessprofile.ToolNameMax()
+	if prefix == "" || len(raw) < 2 || raw[0] != '"' || len(raw) > 6*most+2 {
 		return "", false
 	}
 	var name string
 	if wireDecode(raw, &name) != nil {
 		return "", false
 	}
-	tool, ok := strings.CutPrefix(name, openCodeBridgedPrefix)
+	tool, ok := strings.CutPrefix(name, prefix)
 	if !ok || len(tool) > harnessprofile.ToolNameMax() || !harnessprofile.ToolNameChars(tool) {
 		return "", false
 	}
