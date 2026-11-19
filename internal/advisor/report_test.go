@@ -48,7 +48,7 @@ func TestAWeeksNumbersNameWhatCouldNotBeRead(t *testing.T) {
 	ev := advisor.Evidence{
 		Ledger: []usage.TurnLedgerRow{alarm, started("dev", "chat:message", "nothing", 2),
 			started("qa", "chat:message", "moved", 5), absorbed("qa", 9)},
-		Runs: []advisor.EndedRun{capped("dev", "t1", 1, 30), {Seat: "qa", Kind: types.ExecutorErrorOutOfMemory}},
+		Runs:  []advisor.EndedRun{capped("dev", "t1", 1, 30), {Seat: "qa", Kind: types.ExecutorErrorOutOfMemory}},
 		Stops: []advisor.BudgetStop{{Seat: "dev"}, {Seat: "qa"}}, StopsUnread: true,
 	}
 	metrics, unread := advisor.WeekMetrics(ev)
