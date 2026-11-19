@@ -532,9 +532,9 @@ func (c *Coordinator) condensed(ctx context.Context, run PendingRun, part RunPar
 	*spent = spent.Plus(cost)
 	var detail string
 	if err == nil {
-		// The whole redaction's size decides; only an opening one byte past
-		// budget is kept, all a refused rewrite needs ([redact.Prefix]).
-		redacted, whole := redact.Prefix(rewritten, budget+1)
+		// The whole redaction's size decides, and one within budget is all
+		// of its opening ([redact.Prefix]).
+		redacted, whole := redact.Prefix(rewritten, budget)
 		if whole <= budget {
 			return redacted, true
 		}

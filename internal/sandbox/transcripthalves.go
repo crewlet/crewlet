@@ -102,11 +102,8 @@ func (h *TranscriptHalves) Bounded() (text string, elidedLines, elidedBytes int)
 	const marker = "…"
 	var startOf, endOf string
 	if headLines == 0 {
-		first := h.head
-		if at := bytes.IndexByte(first, '\n'); at >= 0 {
-			first = first[:at]
-		}
-		startOf = textcut.Within(string(first), transcriptHeadBytes-1) + "\n"
+		// The head's half holds no line break: all of it is the first line's.
+		startOf = textcut.Within(string(h.head), transcriptHeadBytes-1) + "\n"
 	}
 	if keptFrom == len(end) {
 		endOf = textcut.Tail(string(end[len(end)-transcriptTailBytes:]), transcriptTailBytes-len(marker))
