@@ -2,17 +2,14 @@ package topics
 
 // The knowledge base's own log, and why its grammar sits beside the tracker's.
 //
-// The pages domain is the state-log framework's THIRD, and it is the second
-// whose subject is an arbitration unit rather than a routing label: two
-// writers saving one page contend at the broker and exactly one wins, where
-// two writers on different pages never contend at all.
+// The pages subject is an arbitration unit, not a routing label: two writers
+// saving one page contend at the broker and exactly one wins; writers on
+// different pages never contend.
 //
-// It lives here for the reason the tracker's does — the publisher builds the
-// subject, the wake feed's consumer filters on it, and the applier's kind
-// switch dispatches on the kind inside it, and none of the three can see the
-// others. Written by hand in each place, a kind added in one and missed in
-// another is not an error anywhere: the record publishes into a subject the
-// filter does not cover, nobody is woken, and the company simply looks quiet.
+// It lives here for the tracker's reason: the publisher, the wake feed's
+// consumer filter and the applier's kind switch each use the subject and none
+// sees the others. A kind added in one and missed in another is no error: the
+// record publishes into a subject the filter does not cover and nobody wakes.
 
 const (
 	// PagesLogStream is the knowledge base's mutation stream.

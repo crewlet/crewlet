@@ -56,15 +56,12 @@ func keptOn(t *testing.T, q *Queue, under, subject string, data []byte) {
 
 // A DEAD LETTER IS KEPT THOUGH ITS LOOP IS STOPPING.
 //
-// A stop cancels the consume loop's context, and the copy of a message whose
-// last delivery a stop met — a batch the loop handed back as the queue
-// stopped, or a return made just before — was kept under that context: its
-// write failed on the cancellation, with nothing wrong but the moment. A keep
-// that fails leaves its message for the next delivery to keep
+// A stop cancels the consume loop's context, so a copy kept under it fails on
+// the cancellation. A failed keep leaves its message for the next delivery
 // (TestAKeepThatFailsIsMadeAgainByTheNextDelivery), but a stopping node's
-// return of it may not reach the broker either, and the message then comes
-// back only at the end of its acknowledgement window, half an hour on; so the
-// stopping loop's keep is made, and lands.
+// return may not reach the broker, and the message then comes back only at the
+// end of its acknowledgement window, half an hour on; so the stopping loop's
+// keep is made, and lands.
 //
 // Mutation: keep the copy under the loop's own context, and a stopping loop's
 // hand-back keeps nothing and terminates nothing.
@@ -88,14 +85,12 @@ func TestADeadLetterIsKeptThoughItsLoopIsStopping(t *testing.T) {
 
 // A DRAIN WAITS FOR A RETURN'S DEAD LETTER, NOT ONLY FOR ITS HANDLER.
 //
-// A drain stops dispatching, waits for what is in flight and stops the queue
+// A drain waits for what is in flight, then stops the queue
 // ([queue.EventQueue.WaitForHandlers]). A delivery read as finished once its
-// handler returned left the settling of what it returned outside that wait —
-// for a return that spends the budget, a dead letter's keep, which crosses a
-// link at its bytes' pace — and the stop that followed closed the connection
-// under the keep. So a delivery is in flight until its return is settled: here
-// the keep has been made and the message is being terminated, and the queue
-// still counts it.
+// handler returned left a spending return's dead-letter keep outside that wait,
+// and the stop closed the connection under it. So a delivery is in flight until
+// its return is settled: here the keep is made, the message is being
+// terminated, and the queue still counts it.
 //
 // Mutation: end the delivery's flight once its handler returns (endHandler
 // before apply), and the queue counts nothing in flight while the spent
@@ -164,18 +159,12 @@ func keptCount(t *testing.T, q *Queue, under, subject string) uint64 {
 
 // A KEEP THAT FAILS IS MADE AGAIN BY THE MESSAGE'S NEXT DELIVERY.
 //
-// The consume loop retires a message at its budget's delivery by keeping its
-// copy and terminating it, and a keep can fail for nothing wrong with the
-// message: a stop that closes the connection under it, a node killed while it
-// crosses, a dead-letter stream electing its leader — here, one refusing what
-// it is sent. Terminated all the same, as it was, the message was gone with
-// no copy; and with the broker's backstop at the budget it could not have been
-// delivered again anyway. So the message goes back, the broker delivers it
-// past its budget, and the keep its next delivery makes lands.
-//
-// Real on both ends: a subscription whose budget is one delivery, its handler
-// passing every delivery, and the dead-letter stream refusing until the second
-// delivery is in the handler's hands.
+// A keep can fail for nothing wrong with the message (a stop, a killed node, a
+// dead-letter stream electing its leader, here one refusing). Terminated all
+// the same, the message was gone with no copy. So it goes back, the broker
+// delivers it past its budget, and its next delivery's keep lands. Real on
+// both ends: a budget of one, a handler passing every delivery, the stream
+// refusing until the second delivery.
 //
 // Mutation: terminate the message once its keep fails, or hold the broker's
 // MaxDeliver to the budget, and it is never delivered again.
@@ -325,19 +314,15 @@ func TestTheBrokersBackstopStandsPastTheBudget(t *testing.T) {
 // A BACKEND'S OWN HAND-BACK IS IN FLIGHT UNTIL IT IS SETTLED, AND IS KEPT WITH
 // THE UNHANDLED DELIVERIES.
 //
-// A delivery fetched for a consumer a hold met before its handler ran is handed
-// back by the backend itself, on the single path (dispatchOne) and of a drain
-// (handBackUndispatched). No handler runs, but the hand-back spends a delivery
-// as every return does, and the one that spends the budget keeps a dead letter
-// that crosses a link at its bytes' pace: outside the in-flight count, a drain
-// read the queue as idle and stopped it under the keep. And it is no failure,
-// so its copy is kept with the group's unhandled deliveries, where a reader
-// that can handle it finds it, never with the poison.
+// A delivery a hold met before its handler ran is handed back by the backend
+// (dispatchOne, a drain's handBackUndispatched). It spends a delivery like every
+// return, and the one spending the budget keeps a dead letter: outside the
+// in-flight count, a drain would stop the queue under the keep. It is no
+// failure, so its copy is kept with the unhandled deliveries, never the poison.
 //
-// Mutation: hand back outside the in-flight count, on either path, and the
-// queue counts nothing in flight while the spent message is settled; charge
-// the backend's own hand-back as a failure, and its copy is kept with the
-// poison.
+// Mutation: hand back outside the in-flight count, on either path, and nothing
+// counts in flight while the spent message is settled; charge the hand-back as
+// a failure, and its copy is kept with the poison.
 func TestABackendsOwnHandBackIsInFlightUntilSettled(t *testing.T) {
 	t.Parallel()
 	for name, handBack := range map[string]func(a *attachment, msg *answeredMsg){
@@ -401,17 +386,13 @@ func TestABackendsOwnHandBackIsInFlightUntilSettled(t *testing.T) {
 
 // A STOP WAITS FOR A DEAD LETTER BEING KEPT.
 //
-// A stop ends every consume loop, and a loop that meets the end holding a
-// delivery hands it back; the one that spends its budget keeps a dead letter,
-// a write that crosses a link at its bytes' pace. A stop that closed the
-// connection a quarter of a second after ending the loops cut the keep under
-// it. So the connection closes only once no keep is in flight: here a keep is
-// settling, held at its termination, while the queue stops.
+// A loop that meets a stop holding a delivery hands it back, and one spending
+// its budget keeps a dead letter; a stop closing the connection right after
+// ending the loops cut that keep. So the connection closes only once no keep is
+// in flight: here a keep is held at its termination while the queue stops.
 //
-// THE WITNESS IS THE STOP ITSELF, found waiting in awaitKeeps among the test
-// binary's goroutines: until then the case cannot tell a stop still on its way
-// there from one that went past it, and a fixed wait would decide that by the
-// clock.
+// The witness is the stop itself, found waiting in awaitKeeps among the test
+// binary's goroutines; a fixed wait would decide that by the clock.
 //
 // Mutation: close the connection without waiting for the keeps (awaitKeeps),
 // and the stop closes it while the keep is still being settled.

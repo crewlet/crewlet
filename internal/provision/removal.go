@@ -3,47 +3,17 @@ package provision
 import "slices"
 
 // WHAT A TEARDOWN REMOVED, so the credentials it stranded can go with it.
+// A teardown knows which seats it removed and, from each [Seat]'s `${VAR}`
+// names, which secrets are now dead; only the engine can write the sealed
+// store. Left sealed, a dead credential maps a reconnected seat to an account
+// that no longer exists.
 //
-// # A teardown knows, and used to have nowhere to say it
-//
-// Each vendor teardown walks its own [Plan] and deletes the accounts it
-// created, so it knows exactly which seats it removed and — because every
-// [Seat] carries the `${VAR}` names its credentials live in — exactly which
-// values in the company's secret store are now dead. That knowledge was
-// destroyed at an `error`-only return boundary before it reached the engine,
-// which is the one layer holding a write path onto the sealed store.
-//
-// The consequence was measured: disconnecting Atlassian with "remove accounts"
-// deleted every agent's service account, and left SRE_ATLASSIAN_TOKEN and
-// SRE_ATLASSIAN_EMAIL sealed and resolving. On reconnect the tracker mapped the
-// seat to the ACCOUNT THAT NO LONGER EXISTED — the identity cache is keyed on
-// the credential, and the credential had not changed — and reported a 401 as
-// the operator's problem, at a third-party app, for about thirty-five seconds.
-//
-// # The result is an END STATE, not a delta
-//
-// A teardown is retried on failure and every step is already "remove this if it
-// is there". If a [Removal] named only what THIS call did, a retry after a
-// failed secret deletion would find the accounts already gone, report nothing
-// removed, and let the block drop with the credentials still in the store —
-// the original defect, reached through the recovery path. So "already absent"
-// and "already deleted by an earlier attempt" both count as removed.
-//
-// # And only what is genuinely dead
-//
-// A seat is named here only where its credential cannot strand the company: an
-// account the vendor says is gone takes its credential with it. A merely
-// DISABLED account does not qualify — a token on one works again the moment
-// anybody re-enables it, so reporting it would delete the company's only
-// record of a live secret.
-//
-// "Gone at the vendor" is the usual way to be sure, not the only one. Slack's
-// teardown names seats whose apps it cannot delete at all — only a person
-// holding an app-configuration token can — because Slack shows a bot token and
-// a signing secret on the app's own settings page on every visit, so the
-// person who owns the app can read back anything deleted here. The test is
-// whether the value can be recovered, and a show-once credential like
-// Datadog's application key fails it where Slack's passes.
+// An END STATE, not a delta: a retry after a failed secret deletion finds the
+// accounts gone, so "already absent" counts as removed or the credentials stay.
+// Only what is genuinely dead is named: a DISABLED account's token works again
+// on re-enable. Slack's seats qualify though their apps cannot be deleted, as
+// the owner can read back anything deleted here; a show-once credential like
+// Datadog's key does not.
 
 // Removal is one seat whose account a teardown removed.
 type Removal struct {

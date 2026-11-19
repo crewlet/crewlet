@@ -4,19 +4,14 @@ import "strings"
 
 // Match reports whether a subject matches a subscription pattern.
 //
-// The wildcard grammar is NATS's, which Crewlet's subject names were already
-// written in: `*` matches exactly one segment, `>` matches one or more
-// trailing segments and may only appear last. A pattern with no wildcards is
-// an exact match.
+// The wildcard grammar is NATS's: `*` matches exactly one segment, `>` one or
+// more trailing segments and only last. A pattern with no wildcards is exact.
 //
-// This lives here, beside the subject grammar itself, because a backend that
-// implements matching privately is a backend that can disagree with another
-// one about which events a dashboard sees — and a subscriber that quietly
-// receives too few events looks exactly like a quiet company.
-//
-// A backend whose broker matches natively (JetStream) does not call this;
-// it exists so the in-memory twin and any future backend without native
-// matching agree with it rather than approximating it.
+// It lives beside the subject grammar because a backend matching privately can
+// disagree with another about which events a dashboard sees, and a subscriber
+// that receives too few events looks like a quiet company. A natively matching
+// broker (JetStream) does not call it; the in-memory twin and any backend
+// without native matching use it so they agree rather than approximate.
 func Match(pattern, subject string) bool {
 	if pattern == subject {
 		return true

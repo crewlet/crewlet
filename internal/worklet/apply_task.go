@@ -288,14 +288,24 @@ func readTask(ctx context.Context, tx *sql.Tx, id string) (Task, bool, error) {
 	case err != nil:
 		return Task{}, false, fmt.Errorf("worklet: read task %s: %w", id, err)
 	}
+	task, err := storedTask(document, version, scoped, rank)
+	if err != nil {
+		return Task{}, false, fmt.Errorf("worklet: task %s: %w", id, err)
+	}
+	return task, true, nil
+}
+
+// storedTask is a task row's document with the columns its row holds beside
+// it: the version and scope its commits stamped, and the rank its order wrote.
+func storedTask(document []byte, version, scoped int64, rank string) (Task, error) {
 	var task Task
 	if err := json.Unmarshal(document, &task); err != nil {
-		return Task{}, false, fmt.Errorf("worklet: decode the stored task %s: %w", id, err)
+		return Task{}, fmt.Errorf("worklet: decode a stored task: %w", err)
 	}
 	task.Version = uint64(version)
 	task.ScopedThrough = uint64(scoped)
 	task.Rank = Rank(rank)
-	return task, true, nil
+	return task, nil
 }
 
 // mergeTask produces the new state from the stored one and the record.

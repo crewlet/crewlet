@@ -19,105 +19,17 @@ import (
 	"github.com/crewlet/crewlet/internal/sourcetree/decltype"
 )
 
-// TestNoPackageOrdersByAHashOfItsOwn fails the build when any package but
-// this one ORDERS two values derived from a hash — a second rendezvous order,
-// or a hash ring, written privately beside the one this package is (ADR-0008).
-//
-// # Why ordering, and not "hashing a node", is the subject
-//
-// What the rule forbids is a second placement rule, and no static check can
-// see placement: nothing tells a node id from any other string, and a private
-// copy calls its candidates whatever it likes. What no rendezvous or
-// hash-ring implementation can avoid, whatever its candidates are called, is
-// RANKING values a hash produced — comparing two weights, or sorting, maxing
-// or searching a collection of them. internal/estate's router did exactly that
-// before this package existed (`weight(r.self, a) > weight(r.self, b)`), and
-// it was the copy with the bug: plain FNV-1a, which ranked nodes named alike
-// by their last character's low bits.
-//
-// # What it flags
-//
-// In every .go file under internal/ and cmd/, production and test alike — a
-// test that ranks by a hash of its own is a second implementation used as an
-// oracle — outside internal/rendezvous:
-//
-//   - <, >, <= and >= with BOTH operands derived from a hash;
-//   - cmp.Compare, cmp.Less, bytes.Compare and strings.Compare, and the min
-//     and max builtins, over two such values;
-//   - slices.Sort, SortFunc, SortStableFunc, IsSorted, IsSortedFunc, Max,
-//     MaxFunc, Min, MinFunc, BinarySearch and BinarySearchFunc, and sort.Ints,
-//     Float64s and Strings with their AreSorted and Search forms, Sort,
-//     Stable, Slice and SliceStable, over a collection of hash-derived values.
-//
-// "Derived from a hash" is an integer or a float — a WEIGHT — or the raw bytes
-// of a DIGEST, and an ordering of either is flagged alike. It starts at a call
-// into a hash package (the table below), at Sum64 or Sum32 on anything, and at
-// a constant a hand-rolled hash cannot be written without — FNV's offset bases
-// and primes, MurmurHash3's and SplitMix64's multipliers — spelled in the file
-// or exported by another package. It is followed, flow-insensitively, through
-// a function body and its closures; through a function, method, closure or
-// function variable that returns one, across files of a package and across
-// packages for an exported function; through a struct field one was stored
-// in, by a keyed or a positional literal or an assignment; and through
-// arithmetic — division included: a quotient SCALES a hash and keeps its
-// order, and weighted rendezvous ranks by -weight / ln(h / 2^64) — indexing,
-// slicing, conversions, append, a slice or map literal, encoding/binary's and
-// math/bits' integer reads, and package math's functions (a logarithm, a root,
-// a float's bits), bar Mod and Remainder.
-//
-// # What it never flags, and why the tree's own hashes stay out
-//
-// Taint ENDS where a hash is WRAPPED into a bucket — at % and &, and at
-// math.Mod and math.Remainder, whose remainder or low bits start again at zero
-// so that a bucket's order is not the hash's — at a comparison, which is a
-// bool, and at every other call: an encoded digest is a NAME, compared for a
-// hundred reasons none of which is placement. So search.ShardOf (FNV-1a % 64),
-// search.IVFSeed (a seed, never compared), notify's phrase pick (% the pool),
-// the embeddings fake (% the width), jetstream.PeerIDOf (% the alphabet),
-// consumer names, digests encoded into names and then sorted, and object
-// digests compared for equality are none of its business. Nor is a one-sided
-// threshold (`h.Sum64() < limit`, a sample).
-//
-// A canonical order of RAW digests is NOT spared, however the comparator
-// reaches them — its own parameters, the collection by index, a field of the
-// element: bytes.Compare over two SHA-256 sums is the same expression whether
-// it sorts a set of them or picks the node a key prefers (rendezvous over
-// SHA-256), and a sorted set of sums searched for a key's successor is a hash
-// ring. Encode them first, or see "No allowance list".
-//
-// # Coverage boundary, stated rather than assumed
-//
-// It does not see a hash reached through a hash.Hash handed in from elsewhere
-// and summed with Sum(nil), then read by a call it does not follow; a hash
-// library missing from the table (adding one to go.mod is the moment to add it
-// here); a dot-imported hash package; a magic constant written with digit
-// separators or in mixed-case hex, unless the file is judged for another
-// reason; a positional literal whose struct is declared in a file the
-// prefilter did not parse; a method or a field of ANOTHER package's type; a
-// hash masked with & to its HIGH bits, which keeps a coarse order but is taken
-// for a bucket (the coarse order is written with a shift or a division, both
-// followed); or a value that travels through an interface, reflection or a
-// type parameter. Those are the paths a deliberate evasion would take rather
-// than the ones a private copy is written in, and the controls in
-// TestTheHashOrderWalkJudgesAKnownTree prove the shapes rendezvous and ring
-// implementations do take — the router's own among them — are caught.
-//
-// # No allowance list
-//
-// If an ordering by hash is genuinely not a placement — a HyperLogLog
-// register, sampling between two hashes, a canonical order of hashes or raw
-// digests (a pack index's object ids computed here rather than read from git)
-// — change this gate in the same diff and say why there. It keeps no
-// allowance list on purpose: an entry is a place a second ring hides behind a
-// stale excuse. If the rule ever legitimately goes away, DELETE this guard
-// rather than weakening it.
-//
-// # Cost
-//
-// It reads every .go file under internal/ and cmd/ once, parses each one's
-// imports, and parses whole only the files that import a hash package, spell a
-// magic constant, or mention what one of those produces: 77 of some 2,500
-// files, in about 0.4 s, 1.9 s under the race detector.
+// TestNoPackageOrdersByAHashOfItsOwn fails when any package but this one
+// ORDERS two values derived from a hash: a second rendezvous order or hash
+// ring (ADR-0008). Ordering is the subject because placement is invisible to
+// a static check (a node id is just a string) but every ring must RANK
+// hash-produced values. It flags comparisons, Compare, min/max, sorts and
+// searches over them in every .go file under internal/ and cmd/, tests
+// included. "Derived" is a hash call's weight or raw digest, followed through
+// calls, fields and arithmetic (division keeps order); taint ends at %, &, Mod
+// and comparisons, so buckets and names pass. Evasions it misses are the
+// controls of TestTheHashOrderWalkJudgesAKnownTree. No allowance list: change
+// this gate in the diff that needs one, or DELETE it.
 func TestNoPackageOrdersByAHashOfItsOwn(t *testing.T) {
 	t.Parallel()
 	found := hashOrders(t, sourcetree.Root(t))

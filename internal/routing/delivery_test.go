@@ -10,20 +10,15 @@ import (
 // THE THREE EMPTY DELIVERIES ARE THREE ANSWERS, and this is the whole of the
 // rule.
 //
-// A record's `notified` flag does NOT mean somebody was woken — its applier
-// says so itself, because it deliberately does not hold the roster the routing
-// would need. So an announced change with no recipient rows is ambiguous
+// A record's `notified` flag does NOT mean somebody was woken: its applier
+// holds no roster. So an announced change with no recipient rows is ambiguous
 // between a routing that resolved to nobody, a set retention took, and not
-// knowing which. Each sends a reader somewhere different: at who has left, at
-// a retention horizon, and at neither.
+// knowing which, and each sends a reader somewhere different (who has left, a
+// retention horizon, neither). Collapsing them into one boolean is the failure
+// three-valued answers exist to prevent.
 //
-// The first draft of Worklet's routing reader collapsed all three into one
-// boolean called `swept`, which is the failure the whole engine's three-valued
-// answers exist to prevent, arriving at the one surface built to end it.
-//
-// OVER VALUES, because a rule exercised only through a database is a rule
-// nobody re-reads, and every one of these six cases would need a
-// differently-aged company to reach through one.
+// OVER VALUES, because each of these six cases would need a differently-aged
+// company to reach through a database.
 func TestTheThreeEmptyDeliveriesAreToldApart(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)

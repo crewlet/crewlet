@@ -1,25 +1,16 @@
 package topics
 
-// The identity estate's own log, and why its grammar is the strictest of the
-// state logs'.
+// The identity estate's own log, whose grammar carries its uniqueness rule:
+// every write that sets or frees a login, an address or a seat is a record on
+// ONE subject, the directory, whose decide reads the whole directory. No
+// uniqueness constraint exists in the estate: the replicated schema forbids a
+// UNIQUE index outside a primary key (a violation inside an apply transaction
+// stalls every node's log). A person's content and a session's life each
+// arbitrate on a subject of their own.
 //
-// The iam domain is the state-log framework's FOURTH, and its third strictly
-// ordered one. What is particular to it is that the subject grammar carries
-// its uniqueness rule: every write that sets or frees a login, an address or a
-// seat is a record on ONE subject, the directory, whose decide reads the whole
-// directory and contends with every other — there is no uniqueness constraint
-// anywhere in the estate, because the replicated schema forbids a UNIQUE index
-// outside a primary key (a constraint violation inside an apply transaction
-// stalls every node's log at once). A person's own content and a session's
-// life each arbitrate on a subject of their own.
-//
-// It lives here for the reason the other domains' grammar does — the
-// publisher builds the subject, the wake feed's consumer filters on it, and
-// the applier's kind switch dispatches on the kind inside it, and none of the
-// three can see the others. Written by hand in each place, a kind added in one
-// and missed in another is not an error anywhere: the record publishes into a
-// subject the filter does not cover, nobody is woken, and the company simply
-// looks quiet.
+// It lives here for the other domains' reason: the publisher, the wake feed's
+// filter and the applier's kind switch each use the subject and none sees the
+// others; a kind added in one and missed in another publishes unheard.
 
 const (
 	// IamLogStream is the identity estate's mutation stream.

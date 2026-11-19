@@ -41,6 +41,13 @@
 // A seat whose run waits on a still-running tool call is no failure: the
 // mailbox is kept and retried, and said at info ([SeatRunsWaiting]).
 //
+// The retirement is also where a removed seat's open work stops being its own
+// (ADR-0162): before its runs are ended it hands the seat to a
+// [SeatWorkRehomer], which returns each item it still holds or hands it to the
+// item's lead. At the retirement and not at the removal, because the grace
+// that keeps a removed seat's mail for an undo keeps its work for one too; and
+// before the record is deleted, because nothing retires the seat again after.
+//
 // A human seat's chat read state is judged the same way and for the same
 // reason ([ChatReadJobs], chatreads.go): it lives in a coordination bucket with
 // no age, so the record of a seat that left is forgotten only by a decision
