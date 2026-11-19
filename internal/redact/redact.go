@@ -258,12 +258,17 @@
 // reads on across the marker and redacts the value below: what the claims
 // take is punctuation, so nothing a claim names is shown, and a second pass,
 // the marker in both readings, reads the row as the first pass's rule did.
-// Only where the markup alone ends the key's line: before an escaped break,
-// an opening sends the read to a string's next piece with no suffix, which
-// takes a blank row's closing for the value where the claims, stopped inside
-// a key's text, read the row's closing as the suffix and the value below it,
-// so there the rule reads no opening across a marker ([pastMarkup]), as with
-// no key.
+//
+// A STRING'S LINES ARE READ AS THE LINES THEY STAND FOR. Markup that closes
+// the key's piece of a string, an escaped break after it, ends the key's line
+// as a real break does ([readValue]), so the pieces after it are read as
+// rows that end in that closing, a blank one passed over; read with no
+// suffix, a blank row's closing was taken for the value and the value below
+// it published. And a string's first piece is read from the quote that opens
+// the string ([stringOpening]), as every later piece is from the escaped
+// break before it, so its gutter is the string's and not what the real line
+// holds before the string: read from the line's start, a piece below spelled
+// none of it, and its opening punctuation was taken for the value.
 //
 // A BLOCK NO END CLOSES TAKES A PASSWORD'S KEY ONLY WITH ITS VALUE
 // ([claims.shortOfValues]). Ended by the lines it reads, a block read forward
@@ -314,12 +319,8 @@
 //   - a value on a line that opens with the punctuation the key's line has
 //     straight before its key, after words that line does not repeat — a
 //     list's dash after a logged message (`msg: - Password:` over
-//     `- hunter2x9`), the first line of a string
-//     (`{"text": "> Password:\n> hunter2x9"}`) — which is read as the value:
-//     the gutter is read from the line's start, and ends where the two lines'
-//     words part; and where the markup that closes the key ends its piece of
-//     a string (`{"text": "| Password: |\n| hunter2x9 |"}`), no value is read
-//     at all;
+//     `- hunter2x9`) — which is read as the value: the gutter is read from
+//     the line's start, and ends where the two lines' words part;
 //   - a value written over several lines — a YAML block scalar, a YAML
 //     sequence under the key, a heredoc — of which the first word at most is
 //     read, and a diff whose key is on a context line and whose value
@@ -338,22 +339,14 @@
 //     elsewhere;
 //   - the part of a value after an escaped break inside it when that part is
 //     punctuation alone (`pwd=abc\n!!`), which reads as the string's;
-//   - a key's piece below a key's line that spells none of the piece's
+//   - and a key's piece below a key's line that spells none of the piece's
 //     line, under a block whose first line opens with a run of base64 that
 //     the piece's line repeats before a key's END: written whole, the block
 //     leaves the key's line opening with that run, so the rule reads it as
 //     the wrapping's and the END as no value, while the claims, reading the
 //     key's line as written, take the run for the value and keep the keys
 //     from reading it back; a second pass reads it as a key's and redacts it,
-//     and there redacting twice is not redacting once;
-//   - and, in a string whose breaks are escaped, a value below a key on a
-//     table's row that holds a key's text before the key: an escaped break
-//     follows the row's closing, so the rule reads no opening across the
-//     key's marker ([pastMarkup]) and takes the closing for the value, while
-//     the claims, reading the key's text as words of the label, read the
-//     string's next piece; where that holds a key's piece before an END, a
-//     second pass reads it as a key's and redacts it, and there redacting
-//     twice is not redacting once.
+//     and there redacting twice is not redacting once.
 package redact
 
 import (
@@ -1352,8 +1345,9 @@ func readValue(whole string, start, end int, prior [][2]int) aValue {
 				return aValue{from: r.from, to: valueEnd(whole, r.from), decided: end, ran: true}
 			}
 			r.setSuffix(trimLine(text[r.from:lineEnd]))
-		case r.from > end && !strings.HasPrefix(text[r.from:], `\n`):
-			// The markup alone ends the key's line.
+		case r.from > end:
+			// The markup alone ends the key's line, or its piece of a
+			// string.
 			markup := strings.TrimRight(text[end:r.from], " \t")
 			r.setSuffix(outermost(trimLine(markup)))
 			r.markupOnly = true
@@ -1362,12 +1356,17 @@ func readValue(whole string, start, end int, prior [][2]int) aValue {
 	}
 	lineEnd, next := lineAt(text, sep)
 	escaped := escapedOnly(lineEnd, next)
-	if r.suffix == "" && escaped {
+	switch {
+	case escaped && r.suffix == "":
 		var named bool
 		if next, escaped, named = r.restOfLine(next); named {
 			// Another key on the rest of the line: a suffix holds none.
 			return aValue{from: r.from, to: valueEnd(whole, r.from), decided: end, ran: true}
 		}
+	case escaped && r.markupOnly && r.keyOnRest(next):
+		// The markup closes the key's piece of a string, and the rest of
+		// the line names its own value.
+		return aValue{from: r.from, to: valueEnd(whole, r.from), decided: end, ran: true}
 	}
 	return r.lines(next, escaped)
 }
@@ -1439,22 +1438,7 @@ func pastMarkup(text string, start, sep, end int, prior [][2]int) (int, [2]int) 
 	if len(prior) > 0 {
 		floor = max(floor, prior[len(prior)-1][1])
 	}
-	j := labelStart(text, floor, start, false)
-	from, opening := closeMarkup(text, start, sep, end, floor, j)
-	if k := labelStart(text, floor, start, true); from == end && k < j {
-		// Read across a key's marker, the opening counts only where the
-		// markup alone ends the key's line ([readValue]): before an
-		// escaped break it would send the rule to the read the claims
-		// make of a string's next piece, which is no better than none.
-		if f, o := closeMarkup(text, start, sep, end, floor, k); f > end && !strings.HasPrefix(text[f:], `\n`) {
-			return f, o
-		}
-	}
-	return from, opening
-}
-
-// closeMarkup is [pastMarkup] from j, where the key's label begins.
-func closeMarkup(text string, start, sep, end, floor, j int) (int, [2]int) {
+	j := labelStart(text, floor, start)
 	closed := strings.TrimRight(text[start:sep], " \t\r\n")
 	k := len(closed)
 	for k > 0 && strings.IndexByte("\"'`*_", closed[k-1]) >= 0 {
@@ -1504,14 +1488,14 @@ func closeMarkup(text string, start, sep, end, floor, j int) (int, [2]int) {
 // `_` inside a word — to floor at most. `**Root password:**` is one label, and
 // `db_password` one word, whose `_` opens nothing.
 //
-// Where across is set, A KEY'S MARKER is read back across as the words it
-// replaced (the package doc's "A key's block beside a password"). Every key
-// reads back no further than the punctuation before its label, and a key's
-// separator is punctuation, so a line of many keys is read back once.
-func labelStart(text string, floor, start int, across bool) int {
+// A KEY'S MARKER is read back across as the words it replaced (the package
+// doc's "A key's block beside a password"). Every key reads back no further
+// than the punctuation before its label, and a key's separator is
+// punctuation, so a line of many keys is read back once.
+func labelStart(text string, floor, start int) int {
 	j := start
 	for j > floor {
-		if across && text[j-1] == ']' && strings.HasSuffix(text[floor:j], keyMarker) {
+		if text[j-1] == ']' && strings.HasSuffix(text[floor:j], keyMarker) {
 			j -= len(keyMarker)
 			continue
 		}
@@ -1672,15 +1656,30 @@ func (r *valueRead) restOfLine(pos int) (int, bool, bool) {
 	if rest == "" || isValue(word) {
 		return pos, true, false
 	}
-	if passwordRule.index(rest) >= 0 {
+	if r.keyOnRest(pos) {
 		return pos, true, true
 	}
 	if next >= 0 && r.text[lineEnd] != '\n' {
 		// The string goes on to another escaped line: one of its lines.
 		return pos, true, false
 	}
+	if n, _ := gutterLen(rest, r.gutter(false)); n > 0 {
+		// It opens with the gutter of the key's piece of the string
+		// ([stringOpening]): the string's next line, and the last.
+		return pos, true, false
+	}
 	r.setSuffix(rest)
 	return next, false, false
+}
+
+// keyOnRest reports whether the rest of a real line an escaped break ended the
+// key's line on, starting at pos, opens with punctuation before a key of its
+// own ([valueRead.restOfLine]).
+func (r *valueRead) keyOnRest(pos int) bool {
+	lineEnd, _ := lineAt(r.text, pos)
+	rest := trimLine(r.text[pos:lineEnd])
+	word, _, _ := strings.Cut(rest, " ")
+	return rest != "" && !isValue(word) && passwordRule.index(rest) >= 0
 }
 
 // escapedOnly reports whether the line break ending a line at lineEnd, the
@@ -1956,16 +1955,20 @@ func leadingMarkers(content string) int {
 // the read stops at opens with: from the start of the key's real line where
 // the read has crossed a real line break to it, whose gutter is the
 // wrapping's, and from the start of the key's piece of its string, after the
-// last escaped break, where the read goes on in the same string. Read from the
-// piece alone, the key in `"user: bob\npassword:\n"` had nothing before it, so
-// on the next real line under a reader's line numbers the number was the
-// value, and under a concatenation's lines the `"` that opens the string. A
-// line or a piece that begins past [MaxReach] has none ([gutterFrom]).
+// last escaped break or the opening quote ([stringOpening]), where the read
+// goes on in the same string. Read from the piece alone, the key in
+// `"user: bob\npassword:\n"` had nothing before it, so on the next real line
+// under a reader's line numbers the number was the value, and under a
+// concatenation's lines the `"` that opens the string. A line or a piece that
+// begins past [MaxReach] has none ([gutterFrom]).
 func (r *valueRead) gutter(crossed bool) string {
 	k := gutterIndex(crossed)
 	if !r.read[k] {
 		lo := segmentStart(r.text, r.start)
 		found := lo == 0 || r.text[lo-1] == '\n' || lo >= 2 && r.text[lo-2:lo] == `\n`
+		if found {
+			lo = stringOpening(r.text, lo, r.start)
+		}
 		if crossed {
 			lo = lineStartAbove(r.text, r.start)
 			found = lo == 0 || r.text[lo-1] == '\n'
@@ -1975,6 +1978,19 @@ func (r *valueRead) gutter(crossed bool) string {
 		r.read[k] = true
 	}
 	return r.gutters[k]
+}
+
+// stringOpening is where the key at start's piece of the string it is written
+// in begins, its line or the piece after an escaped break beginning at lo:
+// past the last quote before the key that no backslash escapes, which opens
+// the string, or lo where there is none ([valueRead.gutter]).
+func stringOpening(text string, lo, start int) int {
+	for i := start - 1; i >= lo; i-- {
+		if text[i] == '"' && (i == lo || text[i-1] != '\\') {
+			return i + 1
+		}
+	}
+	return lo
 }
 
 // gutterFrom is what a key's line has before the key at start, lo being where
@@ -3065,8 +3081,8 @@ const maxKeyLine = 76 + 1
 // read and written beside a password's value as the rule reads that value
 // (the package doc's "A key's block beside a password"); and what a rule
 // leaves of a run of base64 it replaced some of, written straight onto its
-// marker, is read as the run it claimed ([claims.glued]). The exceptions are
-// the last two the package doc lists as still published.
+// marker, is read as the run it claimed ([claims.glued]). The exception is
+// the last the package doc lists as still published.
 //
 // THE TEXT IS READ WHOLE, the keys' blocks and then each rule over what the
 // one before it wrote, however long it is: its caller holds it whole already,
