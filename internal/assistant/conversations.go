@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -25,14 +27,14 @@ import (
 // conversation somebody else owns is one that does not exist (ADR-0053).
 
 // Conversations is one page of p's conversations, the most recently used
-// first.
+// first, only those whose title holds q where q is set.
 func (s *Service) Conversations(ctx context.Context, p iam.Principal, cursor string,
-	limit int) (wire.ConversationList, error) {
+	limit int, q string) (wire.ConversationList, error) {
 
 	if err := s.eligible(p); err != nil {
 		return wire.ConversationList{}, err
 	}
-	list, err := s.transcripts.Conversations(ctx, p.ID, cursor, limit)
+	list, err := s.transcripts.Conversations(ctx, p.ID, cursor, limit, q)
 	if err != nil {
 		return wire.ConversationList{}, s.readFailure(err)
 	}
@@ -40,6 +42,35 @@ func (s *Service) Conversations(ctx context.Context, p iam.Principal, cursor str
 		list.Conversations = []wire.ConversationSummary{}
 	}
 	return list, nil
+}
+
+// Rename gives p's conversation id the title they chose, under the operation
+// key, and answers it. The engine never writes over a title a person set.
+func (s *Service) Rename(ctx context.Context, p iam.Principal, id uuid.UUID, title,
+	key string) (wire.ConversationSummary, error) {
+
+	if err := s.eligible(p); err != nil {
+		return wire.ConversationSummary{}, err
+	}
+	title = strings.TrimSpace(title)
+	switch n := utf8.RuneCountInString(title); {
+	case n == 0:
+		return wire.ConversationSummary{}, invalid("title: a title needs words")
+	case n > wire.TitleMaxRunes:
+		return wire.ConversationSummary{}, invalid("title: at most %d characters, and this "+
+			"one is %d", wire.TitleMaxRunes, n)
+	case strings.IndexFunc(title, unicode.IsControl) >= 0:
+		return wire.ConversationSummary{}, invalid("title: one line of text, without control characters")
+	}
+	w := Write{Owner: p.ID, By: iam.ActorFor(p), Key: key, Steps: []string{"rename"}}
+	if err := s.records.TitleConversation(ctx, w, id, title, wire.TitleByPerson); err != nil {
+		return wire.ConversationSummary{}, s.writeFailure(err)
+	}
+	c, err := s.transcripts.Conversation(ctx, p.ID, id)
+	if err != nil {
+		return wire.ConversationSummary{}, s.readFailure(err)
+	}
+	return c.Summary(), nil
 }
 
 // conversationNamespace is the UUIDv5 namespace a conversation's id is derived
@@ -269,7 +300,7 @@ func (s *Service) nameConversation(ctx context.Context, t *turn, question, answe
 		return errors.New("the model answered no title")
 	}
 	return s.records.TitleConversation(ctx, Write{Owner: t.person.ID, By: t.by, Key: t.key,
-		Steps: []string{"title"}}, t.conversation, title)
+		Steps: []string{"title"}}, t.conversation, title, wire.TitleByModel)
 }
 
 // conversationTitle is text as a conversation's title, the ONE rule for both

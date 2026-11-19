@@ -162,7 +162,7 @@ const SEND_LABELS = { send: "Send", stop: "Stop answering" } as const;
  */
 interface Recent {
   id: string;
-  title: string;
+  title: string | null;
   last_activity_at: string;
 }
 

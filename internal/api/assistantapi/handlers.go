@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -33,11 +34,18 @@ func (s *Surface) list(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
+	q := r.URL.Query().Get("q")
+	if utf8.RuneCountInString(q) > wire.SearchMaxRunes {
+		httpjson.FailWithFields(w, http.StatusBadRequest, httpjson.CodeInvalidQuery,
+			httpjson.Detail{"detail": fmt.Sprintf("q takes at most %d characters",
+				wire.SearchMaxRunes)})
+		return
+	}
 	caller, ok := auth.Caller(w, r)
 	if !ok {
 		return
 	}
-	list, err := s.svc.Conversations(r.Context(), caller, r.URL.Query().Get("cursor"), limit)
+	list, err := s.svc.Conversations(r.Context(), caller, r.URL.Query().Get("cursor"), limit, q)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -84,6 +92,33 @@ func (s *Surface) transcript(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, t)
+}
+
+// rename serves PATCH /assistant/conversations/{id}: the title a person
+// gives their conversation, under the Idempotency-Key the dashboard mints.
+func (s *Surface) rename(w http.ResponseWriter, r *http.Request) {
+	id, ok := pathID(w, r)
+	if !ok {
+		return
+	}
+	var body wire.ConversationRename
+	if !decode(w, r, &body, func() int { return body.ProtocolVersion }) {
+		return
+	}
+	key, ok := opkey.Key(w, r, s.now())
+	if !ok {
+		return
+	}
+	caller, ok := auth.Caller(w, r)
+	if !ok {
+		return
+	}
+	renamed, err := s.svc.Rename(r.Context(), caller, id, body.Title, key)
+	if err != nil {
+		s.failWrite(w, r, key, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, renamed)
 }
 
 // clear serves DELETE /assistant/conversations/{id}: the Clear gesture.

@@ -47,6 +47,7 @@ func closedSets() map[string][]string {
 		"AssistantTurnMode":        strs(wire.TurnModes),
 		"AssistantBriefTone":       strs(wire.BriefTones),
 		"AssistantBriefActionKind": strs(wire.BriefActionKinds),
+		"AssistantTitleSource":     strs(wire.TitleSources),
 		// A proposal's taint is the surface its outside text came from.
 		"AssistantTaintSource": strs(provenance.Sources),
 		// --- deep work (im-deep) ---
@@ -97,6 +98,8 @@ func TestTheDashboardBoundsTheAssistantAtTheEnginesLimits(t *testing.T) {
 	for name, want := range map[string]string{
 		"ASSISTANT_PROTOCOL_VERSION":           strconv.Itoa(wire.ProtocolVersion),
 		"ASSISTANT_INPUT_MAX_RUNES":            strconv.Itoa(wire.InputMaxRunes),
+		"ASSISTANT_TITLE_MAX_RUNES":            strconv.Itoa(wire.TitleMaxRunes),
+		"ASSISTANT_SEARCH_MAX_RUNES":           strconv.Itoa(wire.SearchMaxRunes),
 		"ASSISTANT_PAGE_CONTEXT_MAX_BYTES":     strconv.Itoa(wire.PageContextMaxBytes),
 		"ASSISTANT_PAGE_CONTEXT_MAX_RESOURCES": strconv.Itoa(wire.PageContextMaxResources),
 		"ASSISTANT_PAGE_CONTEXT_MAX_ACCEPTS":   strconv.Itoa(wire.PageContextMaxAccepts),
@@ -212,6 +215,7 @@ func shapes() map[string]reflect.Type {
 		"AssistantTurnOutcome":         reflect.TypeFor[wire.TurnOutcome](),
 		"AssistantViewerAssistant":     reflect.TypeFor[wire.ViewerAssistant](),
 		"AssistantViewerModel":         reflect.TypeFor[wire.ViewerModel](),
+		"AssistantConversationRename":  reflect.TypeFor[wire.ConversationRename](),
 		"AssistantModelNotice":         reflect.TypeFor[wire.ModelNotice](),
 		// --- deep work (im-deep) ---
 		"AssistantFileRef":    reflect.TypeFor[wire.FileRef](),

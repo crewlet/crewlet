@@ -311,7 +311,7 @@ async function ensureConversation(): Promise<string> {
       dispatch({
         type: "created",
         id: created.conversation.id,
-        title: created.conversation.title,
+        title: created.conversation.title ?? "",
       });
       writeTab({ conversation: created.conversation.id });
     }

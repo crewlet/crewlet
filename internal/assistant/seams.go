@@ -66,7 +66,7 @@ type Catalogue interface {
 // on the owner but the expiry backstop's nomination: *assistantdomain.Reader as
 // written.
 type Transcripts interface {
-	Conversations(ctx context.Context, owner uuid.UUID, cursor string, limit int) (wire.ConversationList, error)
+	Conversations(ctx context.Context, owner uuid.UUID, cursor string, limit int, q string) (wire.ConversationList, error)
 	Conversation(ctx context.Context, owner, id uuid.UUID) (assistantdomain.Conversation, error)
 	Transcript(ctx context.Context, owner, id uuid.UUID) (assistantdomain.Transcript, error)
 	Turn(ctx context.Context, owner, id uuid.UUID) (assistantdomain.Turn, error)
@@ -85,7 +85,7 @@ type Transcripts interface {
 // outcome is unknown answers [ErrOutcomeUnknown].
 type Records interface {
 	CreateConversation(ctx context.Context, w Write, id uuid.UUID, title string) error
-	TitleConversation(ctx context.Context, w Write, id uuid.UUID, title string) error
+	TitleConversation(ctx context.Context, w Write, id uuid.UUID, title string, by wire.TitleSource) error
 	SummarizeConversation(ctx context.Context, w Write, id uuid.UUID, summary string, through int) error
 	ClearConversation(ctx context.Context, w Write, id uuid.UUID) (Written, error)
 	// OpenTurn answers [assistantdomain.ErrTurnOpen] for a turn already

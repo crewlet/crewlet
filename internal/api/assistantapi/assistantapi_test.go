@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -242,6 +243,8 @@ func TestEveryAssistantRouteAnswersNotFoundForAnotherPersonsConversation(t *test
 	}{
 		{http.MethodGet, conv, nil},
 		{http.MethodDelete, conv, nil},
+		{http.MethodPatch, conv, wire.ConversationRename{ProtocolVersion: wire.ProtocolVersion,
+			Title: "Mine now"}},
 		{http.MethodPost, conv + "/turns", wire.TurnRequest{ProtocolVersion: wire.ProtocolVersion,
 			Input: wire.TurnInput{Text: "Read hers"}}},
 		{http.MethodGet, accepted.StreamURL, nil},
@@ -520,4 +523,55 @@ func TestThePageActionTurnFixtureIsTheRoutesOwn(t *testing.T) {
 		t.Fatalf("the turn ended %+v, want completed without parking", done)
 	}
 	assistanttest.Golden(t, "testdata/page_action_turn.sse", fixture(t, body))
+}
+
+// A CONVERSATION IS RENAMED AND SEARCHED BY ITS OWNER: a rename answers the
+// conversation with the person's title, said to be theirs; the listing finds
+// it by a word of that title and not by one it no longer holds; and a blank
+// title, one past its bound, or a search past its bound is refused 400.
+func TestAConversationIsRenamedAndSearchedByItsOwner(t *testing.T) {
+	t.Parallel()
+	s := newSite(t, readTurn(t))
+	s.stream(t, s.ask(t, "Who works here?"), "")
+	conv := "/assistant/conversations/" + s.rig.Conversation.String()
+	rename := func(title, key string) *httptest.ResponseRecorder {
+		return s.do(s.rig.Person, http.MethodPatch, conv, wire.ConversationRename{
+			ProtocolVersion: wire.ProtocolVersion, Title: title},
+			map[string]string{"Idempotency-Key": key})
+	}
+	rec := rename("  Team roster  ", "0192f1a4-9b2d-7c03-a4e1-5f3b9d0c7a21")
+	var got wire.ConversationSummary
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &got) != nil ||
+		got.Title == nil || *got.Title != "Team roster" || got.TitleSetBy == nil ||
+		*got.TitleSetBy != wire.TitleByPerson {
+		t.Fatalf("rename = %d %s", rec.Code, rec.Body)
+	}
+	search := func(q string) (int, wire.ConversationList) {
+		rec := s.do(s.rig.Person, http.MethodGet, "/assistant/conversations?q="+url.QueryEscape(q),
+			nil, nil)
+		var list wire.ConversationList
+		_ = json.Unmarshal(rec.Body.Bytes(), &list)
+		return rec.Code, list
+	}
+	if code, list := search("ROSTER"); code != http.StatusOK || len(list.Conversations) != 1 ||
+		list.Conversations[0].ID != s.rig.Conversation {
+		t.Errorf("a search for its new title = %d %+v", code, list)
+	}
+	if code, list := search("works here"); code != http.StatusOK || len(list.Conversations) != 0 {
+		t.Errorf("a search for its old title = %d %+v", code, list)
+	}
+	for name, c := range map[string]struct {
+		rec *httptest.ResponseRecorder
+	}{
+		"a blank title": {rename("   ", "0192f1a4-9b2d-7c03-a4e1-5f3b9d0c7a22")},
+		"a long title": {rename(strings.Repeat("a", wire.TitleMaxRunes+1),
+			"0192f1a4-9b2d-7c03-a4e1-5f3b9d0c7a23")},
+		"a title on two lines": {rename("Plans\nfor May", "0192f1a4-9b2d-7c03-a4e1-5f3b9d0c7a24")},
+		"a long search": {s.do(s.rig.Person, http.MethodGet, "/assistant/conversations?q="+
+			strings.Repeat("x", wire.SearchMaxRunes+1), nil, nil)},
+	} {
+		if c.rec.Code != http.StatusBadRequest {
+			t.Errorf("%s = %d %s, want 400", name, c.rec.Code, c.rec.Body)
+		}
+	}
 }

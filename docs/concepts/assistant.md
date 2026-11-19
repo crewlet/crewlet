@@ -287,6 +287,10 @@ The head of the panel has **New conversation**, **Conversations** (your
 history, with **Clear** to delete a conversation for good after you confirm)
 and **Close**. One answer runs at a time in a conversation.
 
+A conversation is named from its first question. You can search your
+conversations by title and rename one; a name you give it is kept, and
+Ask Crewlet never writes over it.
+
 ## What it cannot do
 
 These limits are structural: they hold whatever the model is asked or reads.

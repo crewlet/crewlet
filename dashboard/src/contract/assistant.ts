@@ -22,6 +22,10 @@ import type { Remedy } from "./remedies.ts";
 
 /** The protocol version every frame and every request carries. */
 export const ASSISTANT_PROTOCOL_VERSION = 2;
+/** The longest title a person may give a conversation. */
+export const ASSISTANT_TITLE_MAX_RUNES = 60;
+/** The longest search a conversation listing takes. */
+export const ASSISTANT_SEARCH_MAX_RUNES = 100;
 /** The longest question a turn takes, in characters (Unicode code points). */
 export const ASSISTANT_INPUT_MAX_RUNES = 4000;
 /** The most a turn's page context may encode to, in bytes. */
@@ -852,7 +856,8 @@ export interface AssistantAuditReadRequest {
 /** The person's conversations, newest first. */
 export interface AssistantConversationList {
   conversations: AssistantConversationSummary[];
-  next_cursor?: string;
+  /** Continues the listing, null on its last page. */
+  next_cursor: string | null;
 }
 
 /** A conversation just created. */
@@ -861,14 +866,28 @@ export interface AssistantConversationCreated {
 }
 
 /** One conversation in a list. */
-interface AssistantConversationSummary {
+export interface AssistantConversationSummary {
   id: string;
-  title: string;
+  /** Null before the first question names it. */
+  title: string | null;
+  /** Who named it; a person's title is never replaced by the engine's. Null while untitled. */
+  title_set_by: AssistantTitleSource | null;
   created_at: string;
   updated_at: string;
   /** When it was last used: the moment the list is ordered by, and the one to show. */
   last_activity_at: string;
-  last_turn_state?: AssistantTurnState;
+  last_turn_state: AssistantTurnState | null;
+  /** The turn still running or parked, null for none. */
+  open_turn_id: string | null;
+}
+
+/** Who named a conversation. */
+export type AssistantTitleSource = "model" | "person";
+
+/** A person's title for their conversation: `PATCH /assistant/conversations/{id}`. */
+export interface AssistantConversationRename {
+  protocol_version: number;
+  title: string;
 }
 
 /** A conversation as its owner reads it after a reload. */

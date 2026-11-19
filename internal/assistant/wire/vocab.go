@@ -669,6 +669,30 @@ var BriefActionKinds = []BriefActionKind{BriefOpen, BriefAsk}
 // Valid reports whether k is a kind this build knows.
 func (k BriefActionKind) Valid() bool { return slices.Contains(BriefActionKinds, k) }
 
+// TitleSource is who named a conversation.
+type TitleSource string
+
+const (
+	// TitleByModel is a title the engine wrote: the first question's words,
+	// then the model's summary of them.
+	TitleByModel TitleSource = "model"
+	// TitleByPerson is a title the conversation's owner set.
+	TitleByPerson TitleSource = "person"
+)
+
+// TitleSources are the two, in declaration order.
+var TitleSources = []TitleSource{TitleByModel, TitleByPerson}
+
+// Valid reports whether t is a source this build knows.
+func (t TitleSource) Valid() bool { return slices.Contains(TitleSources, t) }
+
+// TitleMaxRunes is the longest title a person may give a conversation: as much
+// as a history row shows on one line.
+const TitleMaxRunes = 60
+
+// SearchMaxRunes is the longest search a conversation listing takes.
+const SearchMaxRunes = 100
+
 // ViewerReason is why the assistant is not available to the viewer, the
 // first failing condition, so the Ask pill is drawn disabled with a reason
 // rather than hidden.

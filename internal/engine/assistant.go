@@ -302,12 +302,12 @@ func (a assistantRecords) CreateConversation(ctx context.Context, w assistant.Wr
 }
 
 func (a assistantRecords) TitleConversation(ctx context.Context, w assistant.Write,
-	id uuid.UUID, title string) error {
+	id uuid.UUID, title string, by wire.TitleSource) error {
 	c, err := a.call(w)
 	if err != nil {
 		return err
 	}
-	return settled(a.w.TitleConversation(ctx, c, id, title))
+	return settled(a.w.TitleConversation(ctx, c, id, title, by))
 }
 
 func (a assistantRecords) SummarizeConversation(ctx context.Context, w assistant.Write,
