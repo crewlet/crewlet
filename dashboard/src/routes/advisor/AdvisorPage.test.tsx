@@ -285,7 +285,9 @@ test("the head says when the checks last ran, and Run now starts them", async ()
   };
   const { sent, answer } = engine([], run);
   mount(answer);
-  await screen.findByText("Checked 4 minutes ago. It found 2 new findings and closed 1 finding.");
+  await screen.findByText(
+    "All checks ran 4 minutes ago. It found 2 new findings and closed 1 finding.",
+  );
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "Run now" }));
   });
@@ -401,9 +403,9 @@ test("the run line says only what the run moved", () => {
     resolved,
     model: null,
   });
-  expect(runWords(run(1, 0), NOW)).toBe("Checked 6 minutes ago. It found 1 new finding.");
-  expect(runWords(run(0, 2), NOW)).toBe("Checked 6 minutes ago. It closed 2 findings.");
-  expect(runWords(run(0, 0), NOW)).toBe("Checked 6 minutes ago.");
+  expect(runWords(run(1, 0), NOW)).toBe("All checks ran 6 minutes ago. It found 1 new finding.");
+  expect(runWords(run(0, 2), NOW)).toBe("All checks ran 6 minutes ago. It closed 2 findings.");
+  expect(runWords(run(0, 0), NOW)).toBe("All checks ran 6 minutes ago.");
 });
 
 // THE HEAD'S PLACEMENT IS ON A BOX OF OUR OWN: on the kit's Text, our rule

@@ -5,7 +5,7 @@
  *
  * # Anatomy
  *
- * The HEAD says when the checks last ran ("Checked 4 minutes ago"), offers
+ * The HEAD says when every check last ran ("All checks ran 4 minutes ago"), offers
  * Run now, and names the model its explanations run on (an
  * administrator's is the picker, `components/HelperModel.tsx`).
  *
@@ -122,7 +122,15 @@ function RunHead({ onEnded }: { onEnded: () => void }) {
   );
 }
 
-/** The last run, in words. */
+/**
+ * The last run, in words.
+ *
+ * A RUN IS EVERY CHECK, and it is said so: "All checks ran 18 minutes ago".
+ * A row's own "checked just now" is that finding's, which an Apply's
+ * re-check confirms on its own between runs (the duty runs every check
+ * hourly, or when the company's setup changes). Said alike, "Checked 18
+ * minutes ago" over a row "checked just now" read as a list 18 minutes old.
+ */
 export function runWords(run: AdvisorRunSummary | null, now: number): string {
   if (run === null) return "The checks have not run yet.";
   if (run.status === "running") return `Checking now, started ${ago(run.started_at, now)}.`;
@@ -134,7 +142,7 @@ export function runWords(run: AdvisorRunSummary | null, now: number): string {
     run.resolved > 0 ? `closed ${plural(run.resolved, "finding")}` : "",
   ].filter(Boolean);
   const found = moved.length > 0 ? ` It ${moved.join(" and ")}.` : "";
-  return `Checked ${ago(run.ended_at ?? run.started_at, now)}.${found}`;
+  return `All checks ran ${ago(run.ended_at ?? run.started_at, now)}.${found}`;
 }
 
 /** The go-live check's own words for a step's state. */
