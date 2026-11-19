@@ -94,7 +94,7 @@ func found(k *keyed, text string) [][]int {
 	}
 	var matches [][]int
 	for i := 0; i < len(text); {
-		if loc := k.anchored.FindStringIndex(text[i:]); loc != nil && !k.refuses(text, i) {
+		if loc := k.anchored.FindStringIndex(text[i:]); loc != nil && !k.refuses.s(text, i) {
 			matches = append(matches, []int{i, i + loc[1]})
 			i += loc[1]
 			continue

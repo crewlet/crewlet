@@ -19,10 +19,6 @@ func lagBytes() int {
 	return len(rules()) * (stageStep + pieceBytes + longestMarker())
 }
 
-// keysBytes is what the keys' stage holds besides what it waits on: a piece,
-// four blocks' reach behind where it reads and a step past it ([streamBound]).
-const keysBytes = pieceBytes + 4*keyReach + stageAdvance + keyAhead
-
 // holdShape is a text built to hold a stream, built when asked for: a key's
 // armour beside a run, a collapsed text, or blanks that a reader decides a
 // claim past.
@@ -209,13 +205,15 @@ func earlyText(r *rand.Rand, size, runMax int) string {
 
 // reading is what a stream that holds h did with a text: what it wrote and
 // answered, the blocks its keys' stage wrote, the windows it decided early,
-// and the most its stages held between two writes.
+// and the most its stages held between two writes; of its keys' stage, both
+// the bytes and the buffer, whose capacity is its bound once it jumps there
+// ([keysBytes]), so that only the bytes show a hold growing with a run.
 type reading struct {
-	out             string
-	err             error
-	blocks          [][2]int
-	early, keysMost int
-	most            streamHeld
+	out                      string
+	err                      error
+	blocks                   [][2]int
+	early, keysMost, keysCap int
+	most                     streamHeld
 	// decidedAt is how much of the text the stages had been handed when
 	// each window was decided early.
 	decidedAt []int
@@ -246,6 +244,7 @@ func readHolding(text string, h int, r *rand.Rand, most int) reading {
 			h := s.p.held()
 			got.most = streamHeld{max(got.most.text, h.text), max(got.most.entries, h.entries), max(got.most.stageText, h.stageText), max(got.most.stageEdits, h.stageEdits)}
 			got.keysMost = max(got.keysMost, s.p.keys.in.held())
+			got.keysCap = max(got.keysCap, cap(s.p.keys.in.buf))
 		}
 	}
 	got.err = s.Close()
@@ -308,8 +307,8 @@ func TestNoTextHoldsAStreamPastItsWindowsAndItsHold(t *testing.T) {
 		t.Helper()
 		text := boundText - lagBytes() + hold
 		switch {
-		case got.keysMost > keysBytes+hold:
-			t.Errorf("%s at a hold of %d KiB: the keys' stage held %d KiB, past the %d KiB it holds besides its hold and the hold", name, hold>>10, got.keysMost>>10, (keysBytes+hold)>>10)
+		case got.keysCap > keysBytes+hold:
+			t.Errorf("%s at a hold of %d KiB: the keys' stage held a buffer of %d KiB (%d KiB of text), past the %d KiB it holds besides its hold and the hold", name, hold>>10, got.keysCap>>10, got.keysMost>>10, (keysBytes+hold)>>10)
 		case got.most.stageText > streamWindow:
 			t.Errorf("%s at a hold of %d KiB: a stage held %d bytes of its input, past the %d of its window", name, hold>>10, got.most.stageText, streamWindow)
 		case got.most.text > text || got.most.entries > boundEntries:
@@ -510,7 +509,7 @@ func TestALateChangeToWhatAnEarlyWindowReadIsAMiss(t *testing.T) {
 		}, 100 << 10},
 		{"a late word behind a block let go, the window before it let go once its claims are known", func(k *keyStage, src *claimSource) {
 			src.frontier = 301 << 10
-			k.take("")
+			k.take(nil)
 			k.arrived = 4 * h
 			src.word([3]int{110 << 10, 111 << 10, -1})
 		}, 110 << 10},
