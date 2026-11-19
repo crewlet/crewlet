@@ -612,3 +612,43 @@ func TestWriteProjectCarriesTheTargetDate(t *testing.T) {
 		t.Errorf("a truncated target answered %q, want the warning carried", got.Output)
 	}
 }
+
+// THE STUCK WINDOW TRAVELS AS SENT, AND NULL OR ZERO CLEARS IT. Presence
+// decides, as for the target date; the tracker refuses a whole number outside
+// its bounds, and anything that is not a whole number is refused here by name.
+func TestWriteProjectCarriesTheStuckWindow(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		args map[string]any
+		want *int
+	}{
+		"absent leaves it alone": {map[string]any{"default_assignee": ""}, nil},
+		"hours are carried":      {map[string]any{"stuck_after_hours": 24}, new(24)},
+		"null clears it":         {map[string]any{"stuck_after_hours": nil}, new(0)},
+		"zero clears it":         {map[string]any{"stuck_after_hours": 0}, new(0)},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			trk := newFakeTracker()
+			reg := projectRegistry(t, trk, chartLeads)
+			tc.args["project"] = "ENG"
+			if got := callWork(t, reg, worklet.WriteProjectTool, tc.args); got.Failed {
+				t.Fatalf("write_project failed: %q", got.Output)
+			}
+			if len(trk.projectEdits) != 1 {
+				t.Fatalf("%d policy writes, want one", len(trk.projectEdits))
+			}
+			got := trk.projectEdits[0].StuckAfterHours
+			if (got == nil) != (tc.want == nil) || (got != nil && *got != *tc.want) {
+				t.Fatalf("the window reached the writer as %v, want %v", got, tc.want)
+			}
+		})
+	}
+	trk := newFakeTracker()
+	reg := projectRegistry(t, trk, chartLeads)
+	if got := callWork(t, reg, worklet.WriteProjectTool, map[string]any{
+		"project": "ENG", "stuck_after_hours": "a day",
+	}); !got.Failed || !strings.Contains(got.Output, "stuck_after_hours") {
+		t.Errorf("words for a window answered %+v, want a failure naming the argument", got)
+	}
+}

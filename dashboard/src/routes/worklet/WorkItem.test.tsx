@@ -105,6 +105,8 @@ const task = (over: Partial<WorkItem> = {}): WorkItem => ({
 });
 
 const detail = (over: Partial<WorkItemDetail> = {}): WorkItemDetail => ({
+  flow: null,
+  flow_live: false,
   task: task(),
   reassignment_budget: 8,
   complete: true,
@@ -112,6 +114,8 @@ const detail = (over: Partial<WorkItemDetail> = {}): WorkItemDetail => ({
 });
 
 const project = (over: Partial<WorkProjectDetail> = {}): WorkProjectDetail => ({
+  stuck_after_hours: 8,
+  stuck_after_hours_set: false,
   key: "ENG",
   name: "Engineering",
   unit: { resolved: true },
@@ -963,6 +967,7 @@ test("a refused poll says so even when children were listed before", async () =>
     <Subtasks
       rows={[
         {
+          flow: null,
           id: "t-2",
           key: "ENG-43",
           project: "ENG",
@@ -995,6 +1000,7 @@ test("the sub-task card counts what is done", async () => {
     <Subtasks
       rows={[
         {
+          flow: null,
           id: "a",
           key: "ENG-413",
           project: "ENG",
@@ -1006,6 +1012,7 @@ test("the sub-task card counts what is done", async () => {
           version: 1,
         },
         {
+          flow: null,
           id: "b",
           key: "ENG-414",
           project: "ENG",
@@ -1016,6 +1023,7 @@ test("the sub-task card counts what is done", async () => {
           version: 1,
         },
         {
+          flow: null,
           id: "c",
           key: "ENG-416",
           project: "ENG",
