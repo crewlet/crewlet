@@ -477,7 +477,9 @@ test("a re-check that failed is titled by what happened, not by the finding twic
   mount();
   await screen.findByText("Couldn't check it");
   const dialog = screen.getByRole("dialog");
-  expect(within(dialog).getAllByText(FINDING.title)).toHaveLength(1);
+  expect(within(dialog).getAllByText(new RegExp(FINDING.title))).toHaveLength(1);
+  // WHOM IT IS ABOUT, beside what: the subtitle names the finding's subject.
+  expect(within(dialog).getByText(`${FINDING.subject.name}: ${FINDING.title}`)).toBeDefined();
 });
 
 // ANOTHER WINDOW APPLIED IT FIRST: the send is refused (412), the re-check

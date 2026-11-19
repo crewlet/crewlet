@@ -30,7 +30,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Callout, ChangeList, ChoiceList, Text, type ChangeListRow } from "@crewlethq/ui";
 import { Modal } from "~/components/Modal.tsx";
 import { useClient } from "~/lib/store-hooks.ts";
-import { fmtDateTime } from "~/lib/format.ts";
+import { ago } from "~/lib/ago.ts";
+import { useNow } from "~/lib/clock.ts";
+import { fmtAt } from "~/lib/format.ts";
 import { marked } from "~/ui/Problems.tsx";
 import {
   applyFrom,
@@ -187,7 +189,18 @@ export function ApplyDialog({
       phoneSheet
       onClose={onClose}
       title={titleOf(state)}
-      subtitle={marked(finding.title)}
+      // WHOM IT IS ABOUT, beside what: a class's sentence is one for every
+      // subject ("Agents that learn on their main model."), and the change
+      // the dialog sends is to one of them.
+      subtitle={
+        finding.subject.name ? (
+          <>
+            {finding.subject.name}: {marked(finding.title)}
+          </>
+        ) : (
+          marked(finding.title)
+        )
+      }
       closeDisabledReason={state.kind === "sending" ? "Sending the change" : undefined}
       footer={
         <>
@@ -253,12 +266,13 @@ export function ApplyDialog({
 
 /** What the engine answered, in the words of its outcome, and the facts it read now. */
 function Answer({ check, change }: { check: AdvisorRecheck; change: boolean }) {
+  const now = useNow();
   const facts = check.finding.evidence.facts;
   return (
     <>
       {check.outcome === "holds" ? (
         <Text as="p">
-          Checked {fmtDateTime(check.checked_at)} against the latest records: the condition{" "}
+          Checked {ago(check.checked_at, now)} against the latest records: the condition{" "}
           {change ? "and its change are" : "is"} the same as when it was found.
         </Text>
       ) : null}
@@ -348,10 +362,11 @@ function Change({ check, option }: { check: AdvisorRecheck; option?: string }) {
 
 /** A sent change, waiting on the engine's check of its effect. */
 function Applied({ finding }: { finding: AdvisorKeptFinding }) {
+  const now = useNow();
   return (
     <Callout variant="success" title="The change was applied">
       {finding.effect_due_at
-        ? `The Advisor checks its effect until ${fmtDateTime(finding.effect_due_at)}, and closes the finding once the condition clears.`
+        ? `The Advisor checks its effect until ${fmtAt(finding.effect_due_at, now)}, and closes the finding once the condition clears.`
         : "The Advisor checks its effect, and closes the finding once the condition clears."}
     </Callout>
   );
@@ -359,11 +374,12 @@ function Applied({ finding }: { finding: AdvisorKeptFinding }) {
 
 /** A finding that moved off the list since the page read it: where it stands, and that nothing was sent. */
 function Standing({ finding }: { finding: AdvisorKeptFinding }) {
+  const now = useNow();
   if (finding.state === "applied") {
     return (
       <Callout variant="neutral" title="Nothing was sent from here">
         {finding.effect_due_at
-          ? `It was applied from another window or by another person. The Advisor checks its effect until ${fmtDateTime(finding.effect_due_at)}.`
+          ? `It was applied from another window or by another person. The Advisor checks its effect until ${fmtAt(finding.effect_due_at, now)}.`
           : "It was applied from another window or by another person. The Advisor checks its effect."}
       </Callout>
     );
@@ -374,7 +390,7 @@ function Standing({ finding }: { finding: AdvisorKeptFinding }) {
   return (
     <Callout variant="neutral" title="Nothing was sent from here">
       {reason}
-      {finding.closed_at ? `, ${fmtDateTime(finding.closed_at)}.` : "."} It moves to History.
+      {finding.closed_at ? `, ${ago(finding.closed_at, now)}.` : "."} It moves to History.
     </Callout>
   );
 }
