@@ -10,31 +10,17 @@ import (
 )
 
 // A GENERIC REQUEST IS NAMED FOR THE RESOURCE IT REACHES, never for its route
-// pattern: "Seat · engineer", "Agents", "Company configuration", where the pattern
-// "GET /config/roles/{id}" is how the mux spells it and nothing a person
-// calls it. The card a read draws, the step it runs as and the step a change
-// is prepared in are all titled by [RequestTitle], so the three never name one
-// request two ways.
-//
-// FROM THE PATH, NOT FROM THE REFERENCE'S PROSE. The API reference documents
-// every route in a sentence ("Active revision, redacted (full JSON; ...)",
-// "One entity, redacted, with an ETag"), which is what the model reads, and a
-// sentence is not a name: cutting one down to a noun is a guess about English
-// that the next row of the table breaks. The path IS the API's own naming of
-// what it serves, a collection and the item of it a wildcard picks, so the
-// title is read off it by one rule:
-//
-//   - the noun is the last literal segment, in the singular when a wildcard
-//     follows it (`/config/roles/{id}` reads one role);
-//   - a route that reads a fixed resource two or more literals deep names the
-//     one above it too (`/tokens/breakdown` is "Tokens breakdown", where
-//     "Breakdown" alone says nothing);
-//   - the values the call filled in follow, so two reads of one route are
-//     told apart (`Seat · engineer`, `File · ENG › docs/plan.md`);
-//   - a route family whose path says it wrong is named as a person calls it
-//     ([resources]): a `/config/roles/{id}` is a seat;
-//   - a call on the act route is named for the tool it calls ("React to
-//     message"), which is what it reaches: the route only carries it.
+// pattern ("Seat · engineer"): the card, its step and a change's prepare step
+// are all titled by [RequestTitle]. It reads the PATH, not the reference's
+// prose, which cannot be cut to a noun without a guess the next row breaks:
+//   - the noun is the last literal segment, singular when a wildcard follows
+//     it (`/config/roles/{id}` reads one role);
+//   - a resource two or more literals deep names the one above too
+//     (`/tokens/breakdown` is "Tokens breakdown");
+//   - the call's filled values follow (`File · ENG › docs/plan.md`);
+//   - a family whose path misnames it is named as people call it
+//     ([resources]): a role is a seat;
+//   - an act-route call is named for its tool ("React to message").
 
 // titleValueBytes bounds one path value in a title: a handle, a key or a short
 // path reads whole, and a value the model wrote longer than a line is cut

@@ -13,20 +13,13 @@ import (
 )
 
 // RecordVersion is the record shape THIS BUILD can decode, never the version it
-// stamps on what it writes.
+// stamps on what it writes (the LOWEST version that reads the record, [Encode]
+// from [versionedFields]). A record above it is RETAINED, not skipped.
 //
-// A record above it is RETAINED rather than skipped (the framework's deferral
-// contract). What a writer stamps is the LOWEST version that reads the record,
-// computed by [Encode] from [versionedFields].
-//
-// # Why the version also pins the RULES
-//
-// The applier decides a write: its schema, field rules, guards and caps. Two
-// builds that judged one record by different rules would give it two verdicts
-// and their copies would part, so a change to how a record is judged (a new
-// column type, a new op, a new predicate) is a field a record carries, a row in
-// [versionedFields] and a version an older build defers rather than applies.
-// The rules this build applies are the rules of version 1.
+// The version also pins the RULES: two builds judging one record differently
+// would give it two verdicts and their copies would part, so a change to how
+// a record is judged (a new column type, op or predicate) is a field the record
+// carries, a row in [versionedFields] and a version an older build defers.
 //
 //   - 1: every shape this domain has.
 const RecordVersion = 1

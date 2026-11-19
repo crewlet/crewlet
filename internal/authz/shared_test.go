@@ -124,16 +124,14 @@ func TestASharedRowAdmitsTheRoleItNamesAndEveryRoleAbove(t *testing.T) {
 
 // A CALLER WITH NO RELATION IS TOLD THE ARTIFACT IS NOT FOUND.
 //
-// An artifact's id, title and existence are its owner's and its audience's to
-// disclose, so a caller with no relation at all is answered EXACTLY as for an
-// id nothing holds: [authz.Decision.NotFound], rendered `404 not_found` with
-// no reason and no grants, byte for byte the answer a surface gives for an
-// unknown id. Walked over every shared row and every kind of near miss: no
-// share at all, a share naming somebody else's seat, a unit they do not sit
-// in, an artifact of a person they lead, and every app held. The controls: a
-// relation below the row's role is refused 403 naming the role (it is not a
-// secret from somebody it was shared with), and an administrator is never
-// told an existing artifact is not found. Mutation: answer ReasonRole for no
+// An artifact's existence is its owner's and its audience's to disclose, so a
+// caller with no relation is answered EXACTLY as for an id nothing holds:
+// [authz.Decision.NotFound], `404 not_found` with no reason and no grants,
+// byte for byte a surface's answer for an unknown id. Walked over every shared
+// row and near miss: no share, somebody else's seat, a unit they do not sit in,
+// a led person's artifact, and every app held. Controls: a relation below the
+// row's role is refused 403 naming the role, and an administrator is never told
+// an existing artifact is not found. Mutation: answer ReasonRole for no
 // relation, or render a not-shared refusal through the 403 arm, and this goes
 // red.
 func TestACallerWithNoRelationIsToldTheArtifactIsNotFound(t *testing.T) {
@@ -357,14 +355,11 @@ func TestAnArtifactRowIsNeverShownByItsApp(t *testing.T) {
 // THE ADMIN PATH ADMITS EVERY SHARED ROW, AND IS MARKED WHERE IT ALONE DID.
 //
 // An administrator with no relation is admitted on the permission, at owner,
-// ELEVATED, which is what the surfaces record as an override of somebody's
-// private work. One whose share already reaches the row is admitted as a
-// sharer, AT THE SHARER'S ROLE, and is not marked: nothing records an override
-// that did not happen, and nothing beyond the share reaches them through a
-// role every surface would shape by. The same share short of the row is
-// marked, at owner. And no chart failure ever reaches an administrator's
-// answer, while it does reach a lead's: a share the chart could not settle
-// sends them through the admin path rather than leaving their role unsettled.
+// ELEVATED, which the surfaces record as an override. One whose share already
+// reaches the row is admitted AT THE SHARER'S ROLE and not marked. The same
+// share short of the row is marked, at owner. No chart failure reaches an
+// administrator's answer, while it does reach a lead's: a share the chart could
+// not settle sends them through the admin path.
 // Mutation: check the admin path before the relations and the sharer is
 // marked; stand the sharer at owner and the viewer's read goes red; after the
 // unknown arm and the administrator on a lagging node is told it cannot tell.

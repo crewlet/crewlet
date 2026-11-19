@@ -10,17 +10,12 @@ import (
 	"testing"
 )
 
-// THE LEDGER IMPORTS NOTHING BUT THE STANDARD LIBRARY AND ONE LEAF over it,
-// which is the property its package doc states: the turn loop, the runner and
-// the parked state all hold ledger values, so whatever the ledger imports, all
-// three drag behind them. internal/plainjson is admitted because
-// it is held to the standard library by a test of its own, so admitting it
-// admits nothing further. Every other engine package is the import that ends
-// the property — and everything would still compile, so the doc alone would
-// not notice.
-//
-// The package's own files, not its suite: what the holders drag is what the
-// build links into them.
+// The ledger imports only the standard library and one leaf, as its package doc
+// states: the turn loop, the runner and the parked state all hold ledger
+// values, so they drag in whatever it imports. internal/plainjson is admitted
+// because a test of its own holds it to the standard library. Any other engine
+// package ends the property yet still compiles, so only this notices. It reads
+// the package's own files, not its suite: that is what the build links.
 //
 // Mutation: add a blank import of internal/logging to doc.go and this fails
 // naming it.

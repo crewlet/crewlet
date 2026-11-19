@@ -48,7 +48,9 @@
 // (names.go). It never decides access: a directory the person cannot read
 // resolves nothing, and the route decides the value as written. The call is
 // held to its schema in the same pass ([Resolver.Prepare]), and every fault
-// of both, every name it cannot place included, is one refusal (ADR-0059).
+// of both, every name it cannot place included, is one refusal (ADR-0059). A
+// read keeps a key-shaped value it cannot place (a removed seat still has
+// turns) for the route to decide.
 //
 // # A write is previewed from the object as it is now
 //
@@ -57,6 +59,61 @@
 // binds and the exact request the approval sends, which is the one the tool
 // builds. [Revision] re-reads a recorded revision, so an approval refuses a
 // change prepared against a version the object has left.
+//
+// # A generic call names a route, never a URL
+//
+// A call names a route of the table the API binds once built ([API.Bind]):
+// each wildcard is one escaped segment, a dot segment is refused, a verb on
+// authz's human-only list is left out, and the request is held to the table
+// again before it is sent. The table is a filter; the route's own row and the
+// grant decide every call. [ProposeAPIChangeTool] is always a proposal.
+// [DescribeAPITool] answers from the API reference
+// the binary embeds, which internal/api's walk holds to the route table both
+// ways. A generic preview (apipreview.go) merges a PATCH onto the
+// representation the path serves (RFC 7396), shows only the fields that move
+// and binds the change to a strong entity tag or version field the approval
+// re-reads.
+//
+// # A change is named for what it does
+//
+// The title is read off the same diff the card shows, in the words a person
+// uses for the route family (actions.go), never the route pattern or an opaque
+// id. A generic request is titled from its path, not the reference's prose
+// ([RequestTitle]). A record is named by its name, read through the grant,
+// else by a key a person types. A POST is titled by what its route declares
+// (authz.Policy.Effect) and one that declares nothing is never a card. A
+// change a verb nothing undoes decides (authz.IrreversibleOf) is destructive
+// whatever its method and says what goes. The request and its redacted body
+// are technical details for an approver holding Admin, never rows. A call a
+// curated write makes is refused on the act route, naming that write, whose
+// preview reads what the tool changes. internal/api's walk previews every
+// write route with every id a UUID and refuses one in a card's words.
+//
+// # Curated tools: names, tiers and pages
+//
+// A curated write's act tool is named by its verb: the authority table names
+// a verb after the tool, and the tool's owner is a package the assistant may
+// not reach, so the verb is the one spelling the catalogue can read. A
+// tool's name is the assistant's own word, recorded on steps and proposals,
+// so the few that are also an engine tool's name are declared once in
+// toolnames.go, the file internal/toolname's walk exempts. A tier is derived
+// (R3 for a human-only, step-up or destructive verb) and a row may not lower
+// it. A read is ONE PAGE and takes no cursor: a second page would be a read
+// titled as the first, which the drawer keeps once. A read's [Tool.Scope]
+// is carried by its step and its card so two reads of one tool never look
+// like one. Every page action is held, before any card, to the arguments its
+// screen declares in the page context.
+//
+// # Chat rooms
+//
+// A room is keyed by its name with its "#", is a record a brief's row may cite
+// by id or name, and is read one at a time through its own read, never a
+// list, since a name reaches every room the person may read and the rail only
+// those they are in. A card binds the room as shown, never its revision,
+// which every message moves, or the message's position. A room's whole
+// membership is the members it adds and removes, and a removal the call does
+// not name in `removes` is refused. A card that takes something away leads
+// with what goes.
 package catalog
 
 import (

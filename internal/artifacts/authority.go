@@ -12,16 +12,12 @@ import (
 //
 // # Why the applier does not ask the authority table itself
 //
-// An applier runs on every data node at its own pace, and the identity
-// estate, the shares and the org chart are other logs and another epoch,
-// applied at independent paces. A role read at apply time would be read at a
-// different moment on every data node, and two nodes would give one record two
-// verdicts. So whatever needs IAM or the chart (the role, the actor's kind,
-// the limits in force) is decided once, where the write arrives, and carried;
-// what is deterministic from the log (the schema, the row's creator, a guard,
-// a counter) is decided by the applier. A share revoked between the decide and
-// the apply lets at most that one write through, the same window every
-// arbitrated write in the engine accepts.
+// The identity estate, shares and org chart are other logs applied at
+// independent paces, so a role read at apply time would be read at a different
+// moment on every node, giving one record two verdicts. Whatever needs IAM or
+// the chart (role, actor kind, limits) is decided once, where the write
+// arrives, and carried; what is deterministic from the log is the applier's. A
+// share revoked between decide and apply lets at most that one write through.
 type Authority struct {
 	// Actor is who wrote, as iam.ActorFor records them: a seat handle, never
 	// a display name, so attribution can be pseudonymised without rewriting

@@ -16,22 +16,14 @@ var log = logging.Get("agent.phase")
 
 // Registry is the configured providers.llm map, in CONFIG ORDER.
 //
-// The order is the point. The last resort of the fallback below is "the first
-// provider configured", which is a real answer over an ordered list and no
-// answer at all over a Go map — range order is randomised per iteration, so a
-// map-backed registry would hand two seats booted from one config two
-// different models, and hand the same seat a different one on restart. So the
-// order is a field rather than something the map is trusted to remember.
+// Order is a field because the fallback's last resort is "the first provider
+// configured", which a map's randomised range order cannot answer.
 //
-// A NIL *Registry IS THE COMPANY WITH NO MODELS, and every method answers for
-// it: no keys, no providers, and a Chain or Head that refuses with
-// [ErrNoProviders]. An empty providers.llm is a valid company (an org chart
-// written before its credentials exist), and the epoch spells it as no
-// registry at all rather than an empty one. Nil-safe rather than merely
-// documented, because several consumers hold the registry behind an
-// interface, where a nil pointer is not a nil interface: a guard written as
-// `models == nil` passes it through, and the first method call would have
-// been a panic deep inside a turn.
+// A nil *Registry is the company with no models (valid: an org chart written
+// before its credentials exist), and every method answers for it: no keys, no
+// providers, and a Chain or Head refusing with [ErrNoProviders]. It is nil-safe
+// because consumers hold it behind an interface, where a nil pointer is not a
+// nil interface, so `models == nil` passes it through and a call would panic.
 type Registry struct {
 	order []string
 	byKey map[string]llm.Provider
@@ -137,23 +129,16 @@ func (r *Registry) Has(key string) bool {
 
 // Chain resolves the ordered fallback chain a phase runs on.
 //
-// Four levels, in priority:
+// Four levels, in priority: the role's per-phase chain (llm_review, llm_judge,
+// …) if set, the role's llm chain, the "default" key, the first provider in
+// config order.
 //
-//  1. the role's per-phase chain (llm_review, llm_judge, …) if set,
-//  2. the role's llm chain,
-//  3. the "default" key,
-//  4. the first provider in config order.
+// Levels 3 and 4 serve the role that names nothing. A key the registry lacks
+// lands there too, a typo silently rerouting a seat: logged here, and rejected
+// by config validation, the place to catch it before a turn spends tokens.
 //
-// Levels 3 and 4 exist for the role that names nothing, which is the common
-// case: most seats do not care which model they run on. A role that names a
-// key the registry LACKS also lands there, and that is a typo silently
-// rerouting a seat to a model nobody chose — so it is logged loudly here and
-// rejected outright by config validation, which is the only place it can be
-// caught before a turn spends tokens on the wrong model.
-//
-// The returned slice is always non-empty; a nil error guarantees it. A
-// registry with nothing to resolve (nil, or a zero value built without
-// [NewRegistry]) refuses with [ErrNoProviders].
+// The slice is non-empty whenever the error is nil. A registry with nothing to
+// resolve (nil, or built without [NewRegistry]) refuses with [ErrNoProviders].
 func (r *Registry) Chain(role *org.Role, ph Phase) ([]chain.Member, error) {
 	if role == nil {
 		return nil, fmt.Errorf("phase: no role")

@@ -45,16 +45,13 @@ func TestARowStatesItsNatureAndTheListAloneSaysNever(t *testing.T) {
 
 // A PRESENCE ROW IS REFUSED TO A READ GRANT, AND ADMITTED ONLY TO AN EXEC GRANT.
 //
-// A verb that needs a person at the keyboard keeps a machine token out,
-// because a token proves nobody is there. An exec grant carries one request
-// the person approved, from their own browser, a moment ago: that approval is
-// the presence the row asks for (ADR-0051, ADR-0052). A read grant carries no
-// such gesture, so it is refused every presence row, the self arm of a row
-// that spares it for a machine token included, naming the scope (the remedy is
-// a proposal the person approves). A verb on the human-only list is refused
-// both, whatever its presence, and so is a row that states no assist class at
-// all. The controls are the same rows without a presence, and the same person
-// at their keyboard.
+// A token proves nobody is at the keyboard, so a presence verb refuses it. An
+// exec grant carries one request the person approved from their own browser a
+// moment ago: that is the presence the row asks for (ADR-0051, ADR-0052). A
+// read grant carries no such gesture, so every presence row refuses it, a
+// self arm sparing a machine token included, naming the scope. A human-only
+// verb is refused both, and so is a row stating no assist class. The controls
+// are the same rows without a presence, and the same person at their keyboard.
 //
 // Mutation: drop the presence arm from assistBar and the read grant takes a
 // presence row; refuse presence to every scope and the exec grant is refused.

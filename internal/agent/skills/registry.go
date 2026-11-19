@@ -13,25 +13,15 @@ import (
 
 // The registry: the live set of skills this company has published.
 //
-// Populated by the knowledge backend's sync (a complete walk of the skills
-// container, and a single page whenever one page changed), so editing a skill
-// is a wiki edit and nothing else: no restart, no deploy, no config push.
+// Populated by the knowledge backend's sync (a walk, or one changed page).
 //
-// # A page is the identity, and a key is only what a model asks for
-//
-// Everything that changes the registry names a PAGE: a walk returns pages, a
-// webhook names the page that moved, and a deletion names the page that went.
-// None of them can name a key, because a key is inside the page, and a page
-// whose key was edited no longer says what it used to hold. So the registry
-// keeps what each page holds, and the key-addressed set every reader sees is
-// DERIVED from that.
-//
-// Deriving it is also what makes a one-page update the same answer as a walk.
-// Two pages declaring one key are an authoring error, and a registry keyed by
-// key could keep only one of them: when the winner was edited to another key
-// the loser would be gone, and only the next walk would bring it back. Kept
-// by page, the loser is still there and takes the key the moment it is free,
-// so any sequence of page updates ends where a walk of the same pages would.
+// A page is the identity, a key only what a model asks for. A walk, a webhook
+// and a deletion all name a PAGE, because the key is inside the page and an
+// edited page no longer says what it held. So the registry keeps what each
+// page holds and DERIVES the key-addressed set readers see, which makes a
+// one-page update the same answer as a walk. Two pages declaring one key are
+// an authoring error; keyed by key, the loser would be lost when the winner
+// was edited to another key. Kept by page, it takes the key once it is free.
 
 // Registry is the in-memory store of tool skills.
 //
@@ -375,17 +365,14 @@ func entries(matching []Skill) []prompts.Skill {
 // Offer is the registry as ONE phase's prompts see it, recording what each
 // prompt it rendered was offered.
 //
-// Which skills a catalogue offered is a fact only the render knows: the phase
-// and the surface it is matched against are the prompt builder's, and the
-// registry is live, so asking it again afterwards is asking a second question
-// that can get a different answer. Recording inside the render is what makes
-// "this prompt carried these skills' summaries" a statement about the prompt
-// that was sent.
+// Which skills a catalogue offered is a fact only the render knows: the
+// registry is live, so asking it again afterwards can get a different answer.
+// Recording inside the render makes "this prompt carried these summaries" a
+// statement about the prompt that was sent.
 //
-// Each render is one OFFERING, kept apart from the others: a phase that builds
-// several prompts (a delegate call's workers, each with its own) offered each
-// of them, and a set merged across them would say one prompt carried what two
-// did.
+// Each render is one OFFERING, kept apart: a phase that builds several prompts
+// (a delegate call's workers) offered each, and a merged set would say one
+// prompt carried what two did.
 type Offer struct {
 	registry *Registry
 

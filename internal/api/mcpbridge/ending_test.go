@@ -211,21 +211,15 @@ func closedNow(ch <-chan struct{}) bool {
 }
 
 // EVERY ENDING OF AN OPENING RETURNS WHILE A CALL OF IT IS HELD. The SDK's close
-// of a session waits for every request in flight on it, and writes no answer
-// once it has begun: an ending that closed first waited out a call still
-// running, so the run's settle waited on it, a seat handed on kept its lease
-// for as long, and the call's answer was never written, its harness waiting
-// for the box's own wait to run out. So each ending — the run's close, a
-// relaunch's opening of its next job, the seat leaving this node, a recovery's
-// opening of the same job — answers the box's call while its tool is still
-// held, in the words of how it ended and not as a failure, and returns; and the
-// call's tool runs on, and is recorded once it returns — one update of the entry
-// written ahead of it — as one nobody waited for.
+// of a session waits for every request in flight and writes no answer once it
+// has begun, so an ending that closed first waited out a running call and never
+// wrote its answer. So each ending (the run's close, a relaunch's opening, the
+// seat leaving this node, a recovery's opening) answers the box's call while its
+// tool is held, in the words of how it ended and not as a failure, and returns;
+// the tool runs on and is recorded once it returns as one nobody waited for.
 //
-// Mutation: let an ending answer no call still running (`false &&` before its
-// cut), and the box is never answered while its call's tool is held; answer it
-// as failed, and the box is told its call failed; take a relaunch's opening for
-// a recovery's, and the box is told the other ending's words.
+// Mutation: answer no running call (`false &&` before its cut); answer it as
+// failed; take a relaunch's opening for a recovery's.
 func TestEveryEndingOfAnOpeningReturnsWhileACallIsHeld(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -514,22 +508,16 @@ func letGo(holds map[string]*answerHold) {
 }
 
 // AN OPENING HOLDS A CALL UNTIL ITS ANSWER IS OUT, WHATEVER IT ADMITS AFTER.
-// The opening lets go of a call it admitted only once the call's answer is
-// decided and out, which it reads as it admits the next: a box's parallel
-// batch admits a long call beside quick ones, and an end that found the long
-// one let go would answer it nothing and wait out its tool on the session's
-// close, while one that found a call whose own answer was still on its way let
-// go would close the session under that answer, which its box would then never
-// read. So, with a later call of the opening admitted and returned after it, a
-// call still running is answered by the end at once, the end returning; and a
-// call whose own answer is held short of the SDK's write is waited for, its
-// box reading that answer and not a failure.
+// The opening lets go of an admitted call only once its answer is decided and
+// out, read as it admits the next: an end finding a long call let go would
+// answer it nothing and wait out its tool, and one letting go a call whose
+// answer was still on its way would close the session under it, unread. So with
+// a later call admitted and returned, a running call is answered by the end at
+// once, and a call whose answer is held short of the SDK's write is waited for.
 //
 // Mutation: let go of every held call at each admission (`true ||` before the
-// opening's test of a held call's answer), and the end neither answers the
-// call still running nor waits for the answer on its way; let go of a call
-// whose answer is decided without asking whether it is out (`true ||` before
-// that question), and the end closes the session under the second.
+// test of a held call's answer); let go of a decided answer without asking
+// whether it is out (`true ||` before that question).
 func TestAnOpeningHoldsACallUntilItsAnswerIsOutWhateverItAdmitsAfter(t *testing.T) {
 	t.Parallel()
 	t.Run("a call still running", func(t *testing.T) {
@@ -612,15 +600,12 @@ func TestAnOpeningHoldsACallUntilItsAnswerIsOutWhateverItAdmitsAfter(t *testing.
 }
 
 // AN OPENING'S END WAITS FOR THE ANSWER OF A CALL IT REFUSED BEFORE IT CLOSES.
-// A call that reaches an opening after its end runs nothing and is told what
-// the end means (below), which its box reads only where that answer is
-// written before the opening's sessions close: the SDK writes no answer on a
-// session whose close has begun, and the box's call would fail on the closed
-// session instead. So the end holds every answer the opening gives without
-// running a call, as it holds a running call's: with the end waiting for its
-// answer to a call still running, a call that reaches the opening then is
-// refused, its refusal held short of the SDK's write, and the end does not
-// close the session until that answer too is out, which the box reads.
+// A call reaching an opening after its end runs nothing and is told what the
+// end means, which its box reads only if written before the sessions close (the
+// SDK writes no answer once a close has begun, and the call would fail on the
+// closed session). So the end holds every answer given without running a call,
+// as it holds a running call's: a call reaching the opening while the end waits
+// is refused, and the end does not close the session until that answer is out.
 //
 // Mutation: hold no refusal for the end to wait for (`false &&` before the
 // opening's hold of one), and the end closes the session under the refusal,
@@ -1393,22 +1378,16 @@ func TestABridgeAwaitsEveryCallItRunsUntilItIsRecorded(t *testing.T) {
 }
 
 // A CALL RETURNING AFTER ITS OPENING ENDED STOPS NOTHING. The fence after a
-// call closes an opening's tools where its seat moved while the call ran, and
-// says so: every later call is refused, and the run's harness told to end its
-// turn. A seat leaving this node leaves the node's grants before its release
-// ends the opening, and that release answers a call still running and lets it
-// run on, so such a call returns to a closed fence on an opening that has
-// ended — whose end already refuses every later call in its own words, and
-// tells a box that goes on to call again. So the call is recorded, as one
-// nobody waited for, and nothing is stopped or said of the run: no warning
-// that its harness is told to end its turn, which is false of a run that goes
-// on with the seat's next holder.
+// call closes an opening's tools where its seat moved while the call ran: later
+// calls are refused and the harness told to end its turn. A seat leaving this
+// node leaves the grants before its release ends the opening, so a running call
+// returns to a closed fence on an ended opening whose end already refuses later
+// calls. So it is recorded as one nobody waited for and nothing is said of the
+// run: the warning would be false of a run that goes on with the next holder.
 //
 // NOT PARALLEL: it installs the process's log sink, which only a case running
-// alone may do.
-//
-// Mutation: stop an opening whatever its end (`false &&` before the stop's
-// test of it), and the run is said to be stopped as its call returns.
+// alone may do. Mutation: stop an opening whatever its end (`false &&` before
+// the stop's test of it), and the run is said to be stopped.
 func TestACallReturningAfterItsOpeningEndedStopsNothing(t *testing.T) {
 	logs := &syncBuffer{}
 	logging.Configure(slog.LevelInfo, logging.FormatText, logs)
