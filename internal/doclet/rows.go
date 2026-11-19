@@ -22,20 +22,15 @@ func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows
 // pageGuards answers the two object-level facts a first write needs.
 //
 // THE DELETION MARKER IS PERMANENT WHERE A GUARDING ROW IS NOT: a page below
-// the trim floor has no record left on the log to prove it existed, and its own
-// row is what still says so — while a purge's marker outlives the row itself
-// and is what makes the removal irreversible.
+// the trim floor has no record left on the log to prove it existed, so its
+// row says so, while a purge's marker outlives the row and makes the removal
+// irreversible.
 //
-// TWO KINDS HAVE THEM, not one. A PAGE has both, on the tracker's terms. A
-// TITLE has a guarding row and no marker: the claim row is what still says an
-// address is taken once the create that took it has been trimmed away, which is
-// the whole reason a create publishes at an expectation of zero and the
-// guarding row is what protects the retry-at-zero branch. Releasing a title is
-// a rename, not a destruction, so there is nothing permanent to mark.
-//
-// Every other object here is created by its first record and removed by
-// nothing, so answering false for both is the correct answer rather than an
-// omission.
+// A PAGE has both, on the tracker's terms. A TITLE has a guarding row and no
+// marker: the claim row says an address is taken once the create that took it
+// is trimmed, which protects the retry-at-zero branch. Releasing a title is a
+// rename, so there is nothing permanent to mark. Every other object is
+// created by its first record and removed by nothing: false for both.
 func pageGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 	deleted, guard bool, err error) {
 
@@ -67,22 +62,16 @@ func pageGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 
 // ReadScope is the closure a SET read is about.
 //
-// It is the same alphabet a record's own scope resolves into, which is what
-// makes the coverage probe one comparison rather than a translation between two
-// vocabularies. A query with no container is the DOMAIN — not because it
-// touches everything, but because a read that cannot say what it is about is
-// one every deferred record concerns, and the honest answer to "is this
-// complete" is then "no".
+// It is the alphabet a record's own scope resolves into, so the coverage probe
+// is one comparison. No container means the DOMAIN: a read that cannot say what
+// it is about is one every deferred record concerns, so "complete" is "no".
 //
 // THE CONTAINER IS CANONICALISED HERE ([ContainerKey]), because a record's
-// scope is written under the canonical key and every read's SQL compares
-// against it too: handed `eng` as a caller typed it, the rows were ENG's while
-// the scope named a container no record is ever filed under, so a listing of
-// a space holding a record this node cannot decode claimed to be complete.
-// Canonical at the one place the scope is formed, no caller can pass it raw.
+// scope is filed under the canonical key: handed `eng`, the rows were ENG's
+// while the scope named a container no record is filed under, so a listing
+// holding an undecodable record claimed to be complete.
 //
-// A POINT read is not formed here: one page is filed under the space its rows
-// say, which the reference does not — see [pageReadScope].
+// A POINT read is formed in [pageReadScope]: the reference lacks the space.
 func ReadScope(container string) statelog.ScopeSet {
 	if container = ContainerKey(container); container != "" {
 		return statelog.ScopeSet{Paths: []string{
@@ -165,16 +154,14 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 // ClearForZero verifies, freshly, that publishing at an expectation of ZERO is
 // safe from this node.
 //
-// A READ THAT ANSWERS UNKNOWN MUST REFUSE, which is a deliberate departure from
-// the fail-open rule a delivery claim uses: failing open there is a duplicate
-// delivery, which is recoverable; failing open here is a lost update, which is
-// not.
+// A READ THAT ANSWERS UNKNOWN MUST REFUSE, unlike the fail-open rule a
+// delivery claim uses: failing open there is a recoverable duplicate delivery,
+// here a lost update.
 //
-// THE CHECK IS [statelog.ZeroFence], the one the tracker's fence runs too:
-// this supplies the four reads. Written out here it refused an evicted node
-// with [statelog.ErrConflict], which the page tools translate into "somebody
-// else is editing this page", and a node below the floor with prose rather
-// than a reason; every refusal is now an [*statelog.Unavailable] naming it.
+// THE CHECK IS [statelog.ZeroFence], which the tracker's fence runs too; this
+// supplies the four reads. Every refusal is an [*statelog.Unavailable] naming
+// its reason, never [statelog.ErrConflict], which the page tools would read
+// as "somebody else is editing this page".
 func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) error {
 	return statelog.ZeroFence{
 		Evicted: f.Evicted, Floor: f.Floor, Ends: f.Ends, Committed: f.Committed,
@@ -208,27 +195,16 @@ func (g *Gates) GatedAt(ctx context.Context, subj statelog.Subject,
 	}
 	var reason statelog.Reason
 	var gated bool
-	// ONE TRANSACTION FOR BOTH GATES, on ONE resolution of the estate,
-	// and through the HANDLE rather than a pool — see [Fence.Evicted] for
-	// why a closed pool is reachable here. The tracker's reader has the
-	// same shape, for the same reason.
-	//
-	// This used to say so and then make two calls, each its own read — so
-	// the two halves of one answer were read at two instants, and possibly
-	// from two FILES: every call resolves the estate afresh, and an
-	// adoption replaces its file (close, rename the donated file into
-	// place, reopen) while readers run. The
-	// applier also commits between any two reads, and the deletion gate is
-	// position-independent, so a purge of this page committing between
-	// the two calls made the first half describe the estate before it and
-	// the second half the estate after it. Whether such a pair still named
-	// the gate the rule names then rested on an argument
-	// about how each table can move between two instants — a marker only
-	// ever appears; an eviction window over an applied position is only
-	// ever rewritten by a re-eviction — that nothing here made and nothing
-	// enforced. One snapshot is one state the applier committed, so the
-	// answer is right whenever the rule is right for a single state, which
-	// is the only thing [Applier.Gated]'s own reasoning establishes.
+	// ONE TRANSACTION FOR BOTH GATES, on ONE resolution of the estate, through
+	// the HANDLE rather than a pool (see [Fence.Evicted] for why a closed pool
+	// is reachable here; the tracker's reader has the same shape). Two reads
+	// would see two instants, possibly two FILES (every call resolves the
+	// estate afresh, and an adoption swaps its file while readers run), and
+	// the applier commits between them: a purge landing between the calls
+	// makes one half describe the estate before it and one after. One
+	// snapshot is one state the applier committed, so the answer is right
+	// whenever the rule is right for a single state, which is all
+	// [Applier.Gated]'s reasoning establishes.
 	err := g.db.Read(ctx, func(tx *sql.Tx) error {
 		// THE DELETION GATE FIRST, by the rule [statelog.Gates] states: the
 		// marker holds the page for every writer for ever, where an

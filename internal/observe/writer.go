@@ -19,18 +19,14 @@ type EventSink interface {
 // Writer persists the events this node publishes.
 //
 // A PUBLISH LISTENER, not a subscriber, and the difference is the whole
-// design. It fires inline on the node that published — the node that certainly
-// has the event — so there is no broker round trip, no consumer group, and
-// therefore no way for two nodes of a fleet to write the same row, and no way
-// for a group's rebalance to lose one. Every event is published exactly once
-// by exactly one node, which makes "the publisher writes it" the only
-// exactly-once rule this needs.
-//
-// Wired at engine construction rather than beside the dashboard, because
-// persisting what this node did is the ENGINE's own observability: a
-// worker-only node with no API still keeps a record of its turns, and a
-// listener registered later would race the first turn a restarted node picks
-// up off its durable inbox.
+// design. It fires inline on the publishing node, which certainly has the
+// event, so there is no broker round trip or consumer group, no way for two
+// nodes to write the same row and none for a rebalance to lose one: every
+// event is published once by one node, so "the publisher writes it" is the
+// only exactly-once rule needed. Wired at engine construction, not beside the
+// dashboard: persisting is the ENGINE's own observability (a worker-only node
+// with no API still keeps its turns), and a later listener would race the first
+// turn a restarted node picks up off its durable inbox.
 type Writer struct{ events EventSink }
 
 // NewWriter builds a writer, or nil for a nil sink.

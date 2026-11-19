@@ -10,29 +10,20 @@ import (
 
 // THE KNOWLEDGE BASE'S HALF OF A REANCHOR, and it is one record.
 //
-// [statelog.Reanchor] owns the steps and their order; this domain's part is to
-// say, in its own record format, that its log was adopted at a new generation.
-// The applier already knows what that record is — [Applier] writes
-// `pages_log_generations` from it — and the record is what the audit row
-// derives from, so nothing here writes a row of its own.
-//
-// It had no such part until now. A reanchor of CREWLET_PAGES_LOG published the
-// TRACKER's generation record on the tracker's log, wrote the tracker's audit
-// row and moved every domain's checkpoint to the pages log's first sequence —
-// so the pages log's own history never said it had been adopted, and the
-// tracker's claimed a transition its log never went through.
-//
-// # And, like the tracker's, no version reset
-//
-// A page row's `version` is compared by the applier's guards and by a save's
-// `base_version` check, and both against positions in the NEW generation, which
-// are above every old version by construction; the arbitration anchor below
-// the current generation already reads as "no anchor here". The tracker's
-// package doc gives the rest of the reasoning, and what a reset would have
-// cost — here it would additionally have collapsed `pages_history`, whose
-// `version` is the order the activity feed and its cursors read.
+// [statelog.Reanchor] owns the steps and their order; this domain says, in its
+// own record format, that its log was adopted at a new generation. [Applier]
+// writes `pages_log_generations` from that record and the audit row derives from
+// it, so nothing here writes a row. Without this part, a reanchor of
+// CREWLET_PAGES_LOG published the TRACKER's generation record and audit row, so
+// the pages log never said it was adopted.
 
 // GenerationRecord is the knowledge base's [statelog.GenerationEncoder].
+//
+// Like the tracker's, it resets no version. A page row's `version` is compared
+// by the applier's guards and a save's `base_version` check against positions in
+// the NEW generation, above every old version by construction; a reset would
+// have collapsed `pages_history`, whose `version` orders the activity feed and
+// its cursors. The tracker's package doc has the rest.
 type GenerationRecord struct{}
 
 // GenerationSubject is the subject generation gen's record is published on —
@@ -107,18 +98,15 @@ func (GenerationRecord) GenerationRecord(f statelog.GenerationFacts) (statelog.G
 // generationActor is who a generation record names as its author.
 //
 // [statelog.GenerationFacts.Author]'s party, which every domain's generation
-// record names alike, in this package's words — the actor kinds, but for the
-// one it has no word for. It took the name alone and rendered it
-// `"operator:" + name` with no credential, so the one record that says who
-// moved this log named a party no other row in the audit feed calls by that
-// name, and never said through what.
+// record names alike, in this package's words. Rendering the bare name as
+// `"operator:" + name` with no credential named a party no other audit row
+// calls that, and never said through what.
 //
-// THE ENGINE IS AN OPERATOR HERE, because this domain has no word for the
-// system and the engine is a party acting on the company's behalf that is
-// neither a seat nor a person — recorded beside whatever credential the facts
-// name, which for the engine is none. And NOBODY NAMED IS THE NODE, recorded
-// under its own id as that kind of operator, rather than as an empty author
-// column.
+// THE ENGINE IS AN OPERATOR HERE: this domain has no word for the system, and
+// the engine acts on the company's behalf as neither seat nor person; it is
+// recorded beside the facts' credential, which for the engine is none. NOBODY
+// NAMED IS THE NODE, recorded under its own id as that kind of operator rather
+// than as an empty author column.
 func generationActor(f statelog.GenerationFacts) Actor {
 	party, named := f.Author()
 	if !named {

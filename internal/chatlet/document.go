@@ -10,48 +10,18 @@ import (
 	"github.com/crewlet/crewlet/internal/jsoncarry"
 )
 
-// THE DOCUMENTS: the blob a channel's row and a message's row each carry, and
-// what it is for beside the columns that already hold most of it.
+// THE DOCUMENTS: the blob a channel's row and a message's row each carry. THE
+// COLUMNS ARE WHAT A QUERY DRIVES ON; THE DOCUMENT IS WHAT THE OBJECT IS. It
+// holds the full encoded state INCLUDING fields this build has never heard of
+// ([Channel.Extra], [Message.Extra]), so a rolling upgrade hands a newer peer's
+// field back instead of dropping it. A field nothing filters on gets no
+// column; it gains one the day a predicate reads it.
 //
-// # Why a row carries a document at all
-//
-// THE COLUMNS ARE WHAT A QUERY DRIVES ON; THE DOCUMENT IS WHAT THE OBJECT IS.
-// Three things fall out of that split, and each one is a failure if the blob
-// is missing:
-//
-//   - A NEWER BUILD'S FIELDS SURVIVE A ROLLING UPGRADE. The document is the
-//     object's full encoded state INCLUDING what this build has never heard
-//     of ([Channel.Extra], [Message.Extra]), so a node that applies a record
-//     from a newer peer, and every node that reads the row afterwards, hands
-//     the field back rather than silently dropping it. A row made only of
-//     columns is a row whose width is this build's opinion.
-//   - A FIELD NOTHING FILTERS ON GETS NO COLUMN. Who edited or removed a
-//     message is read when it is rendered and by no predicate anywhere, and a
-//     column per such field is an index-less column on the largest table in
-//     the engine. A field gains one the day a predicate reads it, as whether
-//     a message addressed the whole room and whether a row is a room event
-//     did (the mention count and every conversational read).
-//   - ONE READ ANSWERS "WHAT IS THIS". A reader that had to assemble a room
-//     or a message from its own columns would be a second definition of the
-//     object, in SQL, that nothing holds against this one.
-//
-// # What the documents deliberately do NOT carry
-//
-// THE VALUES THE APPLIER MINTS FROM LOG ORDER: a message's `channel_seq`, a
-// room's `message_seq`, and the composed `version` on every row. They are the
-// applier's arithmetic rather than anything a record authored, the transcript
-// is ordered on the column, and a copy in the blob would be a second answer
-// that every edit would have to carry forward by hand. The room's counter is
-// the sharper case: it moves on EVERY message, so a copy in the document would
-// put a blob rewrite on the hot path the column exists to keep off it.
-//
-// A ROOM'S MEMBERSHIP, which is `chat_members` and not a field of the room. It
-// is this domain's largest collection ([MaxMembers]), it carries per-member
-// columns of its own — a role, whether the reconcile or a person added it,
-// the follow-all flag — and it has its own record ([MemberSet]). Duplicated in
-// the blob it would make every topic change rewrite a thousand handles, and it
-// would be a second answer to who may read a private room. A replay rebuilds
-// the table from the records, which is the only thing that has to be true.
+// NOT IN IT: the values the applier mints from log order (`channel_seq`,
+// `message_seq`, `version`: a copy would be a second answer every edit must
+// carry, and the room counter moves on every message), and membership
+// (`chat_members`, [MemberSet], [MaxMembers]: a blob copy would rewrite a
+// thousand handles per topic change and answer who may read a room twice).
 
 // DocumentVersion is the shape version every document and every typed payload
 // here carries.
@@ -218,22 +188,15 @@ type Message struct {
 
 	// WorkingFor is whom an AGENT'S post was written for (ADR-0109): the
 	// carrier its record rode ([MutationRecord.WorkingFor]), written by the
-	// applier from that record ([workingForOf]), and nil on every other
-	// message — a post that carries nobody, a record below
-	// [WorkingForVersion], a person's message and a room event. An edit
-	// keeps it, as it keeps the post's [Message.Reach]: it is a fact about
-	// the post.
+	// applier ([workingForOf]), nil on every other message (no carrier, a
+	// record below [WorkingForVersion], a person's message, a room event).
+	// An edit keeps it, as it keeps [Message.Reach].
 	//
-	// ON THE DOCUMENT FROM THE CARRIER'S FIRST BUILD ON, which the engine's
-	// turn-start thread read alone takes ([Reader.TurnThread]), so a turn
-	// works through only the waiting messages written for whom it works for:
-	// the applier writes a message's document once, at its post's
-	// position, so a field a later build began to fill would be missing from
-	// every post a node applied before that build and present on a node that
-	// applied the same post after it. NEVER HANDED TO A READER: every read
-	// and every write's answer takes the message without it
-	// ([Message.forReaders]); the turn-start read hands it to the engine
-	// beside the views, never inside them ([TurnThread]).
+	// ON THE DOCUMENT FROM THE CARRIER'S FIRST BUILD ON: the applier writes a
+	// message's document once, so a field a later build began to fill would
+	// differ between nodes that applied the post before and after it. Only the
+	// turn-start read takes it ([Reader.TurnThread]). NEVER HANDED TO A READER:
+	// every other read and write answer strips it ([Message.forReaders]).
 	WorkingFor *types.WorkingFor `json:"working_for,omitempty"`
 
 	// CreatedAt is the BROKER's own instant. A message's displayed time
@@ -408,25 +371,14 @@ func (k EventKind) Valid() bool { return slices.Contains(EventKinds(), k) }
 // RoomEvent is a room's own change, as the transcript row that records it
 // carries it.
 //
-// # Why a row of the transcript and not a table of its own
+// A ROW OF THE TRANSCRIPT, not a table: a person reads it WHERE IT HAPPENED, so
+// it takes the next number in the room's sequence and pages, cursors, live
+// contiguity, the prune and the erase carry it. The `event` column every
+// conversational read filters on keeps it from being CONVERSATION (never an
+// unread, mention, preview or search hit; no reply, reaction, edit or delete).
 //
-// Because a person reads it WHERE IT HAPPENED: "Ana added Ravi" belongs
-// between the message before it and the one after, and that place is the
-// room's own sequence. As a row of `chat_messages` it takes the next number
-// in that sequence like a post, so a page, a cursor, a live frame's
-// contiguity, the retention prune and the compliance erase all carry it with
-// no second table to merge in order. What keeps it from being CONVERSATION is
-// the `event` column every conversational read filters on: it is never an
-// unread or a mention, never a rail's preview and never a search hit, and the
-// write path refuses a reply, a reaction, an edit or a delete of one.
-//
-// # Why the applier writes it
-//
-// It is derived from the record that made the change, in that record's own
-// transaction: a membership set, a patch or a create. A writer that posted the
-// line as a second record could land one and lose the other, leaving a room
-// whose description changed with no line, or a line for a change the broker
-// refused.
+// THE APPLIER WRITES IT, derived from the record that made the change in that
+// record's own transaction: a second record could land one and lose the other.
 type RoomEvent struct {
 	Kind EventKind `json:"kind"`
 

@@ -16,42 +16,15 @@ import (
 // TestNoLoggerOutsideATestIsBuiltToDiscard fails the build when any non-test
 // file under internal/ or cmd/ builds a logger that writes nowhere.
 //
-// # Why this is a rule and not a review comment
+// A discarding logger has no symptom: a missing warning looks like a quiet
+// system. An absent logger is the package's own [logging.Get] logger instead;
+// a TEST may still discard, so _test.go files are not read.
 //
-// Nine constructors read an absent logger as `slog.New(slog.DiscardHandler)`
-// (six in internal/statelog, two in internal/worklet and one in
-// internal/search), and the engine handed a logger to fewer than half of the
-// ones it built. So the state log's applier, its write authority and its
-// re-anchor, and the tracker's housekeeping duty, logged into nothing on every
-// production node: `statelog_apply_faulted`, `statelog_record_gated`,
-// `statelog_write_gated`, `statelog_publish_unknown` and
-// `tracker_one_sided_repair_failed` among them. Nothing failed and nothing
-// looked wrong, because a missing warning is indistinguishable from a quiet
-// system — which is the one property that makes this worth a guard: the
-// omission it rules out has no other symptom.
-//
-// A package's absent logger is its own [logging.Get] logger instead, the
-// convention every other optional logger in the tree already follows. A TEST
-// may still discard, and does, which is why _test.go files are not read.
-//
-// # What it flags
-//
-//   - slog.DiscardHandler, named anywhere;
-//   - slog.NewTextHandler or slog.NewJSONHandler handed io.Discard as its
-//     writer, which is the same handler spelled the long way.
-//
-// Each is matched as a SELECTOR on the file's own import of log/slog or io,
-// never as text, so a comment naming slog.DiscardHandler — this one, and the
-// package docs that explain why it is gone — is not a hit, and a renamed
-// import is still covered.
-//
-// # Coverage boundary
-//
-// It does not see a handler whose level is set above every record, a writer
-// that discards by construction under another name, or a nil logger stored
-// and never defaulted — which panics on its first line rather than dropping
-// it, and so announces itself. What it closes is the shape the tree actually
-// had, written the way it was written.
+// It flags slog.DiscardHandler, and slog.NewTextHandler or slog.NewJSONHandler
+// handed io.Discard, matched as a SELECTOR on the file's own import of
+// log/slog or io, never as text, so a comment naming it is not a hit and a
+// renamed import is covered. It does not see a handler whose level is above
+// every record, or a nil logger (which panics, so announces itself).
 func TestNoLoggerOutsideATestIsBuiltToDiscard(t *testing.T) {
 	t.Parallel()
 
@@ -119,16 +92,13 @@ func walkForDiscardingLoggers(t *testing.T, root string) slogWalk {
 // that imports log/slog, and reports what uses finds in each: the walk this
 // file's guard and the boot-default guard share.
 //
-// THE PRODUCTION HALF ONLY, which is the opposite of the pool guard in
-// internal/httpx: there the test half carries the bug, and here the test half
-// is where discarding is the right call.
+// THE PRODUCTION HALF ONLY: unlike the pool guard in internal/httpx, the test
+// half is where discarding is the right call.
 //
-// THE IMPORTS ARE READ FIRST, as the pool guard reads them and for its
-// reason: every selector this judges is on the log/slog import, and an import
-// path is a string literal that escapes can spell unlike its bytes, so the
-// imports are parsed (parser.ImportsOnly) rather than searched for. Thirty-odd
-// files import log/slog; parsing all eleven hundred whole to find them was
-// five seconds under the race detector.
+// THE IMPORTS ARE READ FIRST: an import path is a string literal that escapes
+// can spell unlike its bytes, so imports are parsed (parser.ImportsOnly)
+// rather than searched for, and only the few files importing log/slog are
+// parsed whole (all of them was seconds under -race).
 func walkSlogImporters(t *testing.T, root string, uses func(*ast.File) []slogUse) slogWalk {
 	t.Helper()
 	fset := token.NewFileSet()

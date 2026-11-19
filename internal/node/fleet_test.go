@@ -341,21 +341,14 @@ func (f *fleet) nodesThatRan(handle string) []string {
 // eventually polls until cond holds or the deadline passes.
 //
 // The budget is a MULTIPLE OF THE LEASE TTL, not a wall-clock number: every
-// convergence this test waits on is counted in sweeps (TTL/8) and heartbeats
-// (TTL/4), so a fixed number silently stops meaning the same thing the moment
-// fleetTTL changes.
+// convergence waited on is counted in sweeps (TTL/8) and heartbeats (TTL/4), so
+// a fixed number stops meaning the same thing when fleetTTL changes.
 //
-// 30x is deliberately generous, and what it is generous against is now this
-// package's OWN load. It runs in the solo partition, alone on its runner, but
-// its cases run side by side — up to four at once, three-member clusters among
-// them, every one under the race detector — and a goroutine there can lose the
-// scheduler for whole seconds at a time. The multiple was set while this
-// package still shared a runner with the rest of the suite, where the old
-// fixed 20 s (10x) passed every run in isolation and failed under that load;
-// the solo partition took the suite's load away and running the cases side by
-// side brought some of it back, so the margin stays. It costs nothing on a
-// pass: a condition that holds returns on the next 20 ms poll, and only a
-// failure waits the budget out.
+// 30x is deliberately generous, against this package's OWN load: cases run side
+// by side (up to four, three-member clusters among them, all under the race
+// detector) and a goroutine can lose the scheduler for whole seconds. It costs
+// nothing on a pass: a holding condition returns on the next 20 ms poll, and
+// only a failure waits the budget out.
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(30 * fleetTTL)
@@ -400,23 +393,13 @@ func TestFleet(t *testing.T) {
 
 			// A SEAT NOBODY CAN CLAIM STILL KEEPS ITS MAIL.
 			//
-			// The quiet-loss case, and the one nothing covered because the
-			// harness created every mailbox by hand. A durable subscription
-			// IS the mailbox: publish to a topic no subscription covers and
-			// the broker DROPS the event, silently, with nothing anywhere
-			// reporting a loss. So a seat's mail existed only from the
-			// moment some node attached a consumer to it.
-			//
-			// A pinned seat makes that permanent and is a real
-			// configuration — a role pinned to a node that is down, or
-			// carrying a label nobody has. The sweep already reports it as
-			// unplaceable; what it could not do was keep the work. Every
-			// trigger aimed at such a seat vanished, and it vanished the
-			// same way during the seconds of a boot or a rollout when a
-			// live seat has not been claimed yet.
-			//
-			// Note the harness does NOT pre-create mailboxes here: the
-			// node's own start is what has to do it.
+			// A durable subscription IS the mailbox: a topic no subscription
+			// covers DROPS the event silently, so a seat's mail existed only once
+			// some node attached a consumer. A pinned seat (to a node that is
+			// down, or a label nobody has) makes that permanent, and boots and
+			// rollouts lose the same way. The sweep reports it unplaceable; it
+			// must also keep the work. The harness does NOT pre-create mailboxes:
+			// the node's own start has to.
 			t.Run("an_unplaceable_seat_still_retains_its_mail", func(t *testing.T) {
 				t.Parallel()
 				f := newFleet(t, sub, "ceo", "ghost")
@@ -640,33 +623,16 @@ func TestFleet(t *testing.T) {
 
 			t.Run("a_node_that_lost_its_lease_starts_no_turn", func(t *testing.T) {
 				t.Parallel()
-				// The situation this reproduces is a node PARTITIONED
-				// FROM THE STORE, not a peer robbing a live holder — a
-				// live holder cannot be robbed, because it renews. So
-				// node-a's renewals start failing while everything else
-				// keeps working: its lease lapses, node-b claims the
-				// seat, and node-a is left ATTACHED to a mailbox it no
-				// longer owns.
-				//
-				// That gap is the whole reason a turn is gated on
-				// ownership rather than on having a consumer. A renew
-				// ERROR deliberately keeps the seat (the store being
-				// unreachable is not proof of anything), so node-a's
-				// consumer stays up — and freshness, not the consumer,
-				// is what has to stop it working.
-				//
-				// TWO defences answer this: OnAdmission quiesces the
-				// mailbox so no delivery arrives, and MayStart refuses
-				// the turn if one does anyway. This case is timed to sit
-				// squarely in the window where the first is what has to
-				// hold — the work is published once node-a has stopped
-				// admitting but before its lease has lapsed — because
-				// that window can be entered deterministically, while
-				// the later one (attached, lease genuinely gone, drop
-				// not yet noticed) is a race between node-a's heartbeat
-				// and node-b's sweep that either can win. MayStart's own
-				// behaviour is pinned in the seat package, on a fake
-				// clock that can hold a window open exactly.
+				// A node PARTITIONED FROM THE STORE, not a peer robbing a live
+				// holder: node-a's renewals fail, its lease lapses, node-b claims
+				// the seat, and node-a stays ATTACHED to a mailbox it no longer
+				// owns. A renew ERROR keeps the seat (an unreachable store proves
+				// nothing), so ownership freshness, not the consumer, must stop it.
+				// TWO defences: OnAdmission quiesces the mailbox, MayStart refuses
+				// a turn that arrives anyway. This case sits in the window where
+				// the first must hold (published once node-a stopped admitting but
+				// before its lease lapsed), the only one enterable
+				// deterministically; MayStart is pinned in the seat package.
 				f := newFleet(t, sub, "ceo")
 				cut := &partitionable{Backend: f.backend}
 				f.backend = cut

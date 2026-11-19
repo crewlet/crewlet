@@ -13,22 +13,13 @@ import (
 // BenchmarkBackend measures the broker's object store through the suite every
 // backend runs, two ways.
 //
-// AT `stream.sync: always`, production's default, rather than at the
-// [js.Config] zero value the contract's cases start their member with — a
-// member that never fsyncs is one no operator runs, and on a put it is the
-// fsync per message the figure is made of.
-//
+// AT `stream.sync: always`, production's default, not the [js.Config] zero
+// value the contract's cases use: a put's figure is the fsync per message.
 // ON A MEMBER'S OWN CLIENT (`via=member`), as a data node reaches the bucket,
-// and THROUGH A LEAF (`via=leaf`), as a node without `data` does: its broker
-// runs no JetStream and every piece crosses the leaf link — opened across a
-// link, as the engine opens a leaf's, so its transfers share the one window
-// a link is given (jsapi.LinkWindow), a piece at a time either way.
-//
-// ONE MEMBER, never a cluster: standing a cluster up here would make this
-// package one of the solo half's (`go doc ./internal/solo`), and its whole
-// suite with it. The bucket at three replicas is measured by
-// internal/objstore/natsobj/replicated, a package of its own for exactly that
-// reason.
+// and THROUGH A LEAF (`via=leaf`), as a node without `data` does: pieces
+// share the one window a link is given (jsapi.LinkWindow).
+// ONE MEMBER, never a cluster, which would make this package one of the solo
+// half's (`go doc ./internal/solo`); natsobj/replicated measures three replicas.
 func BenchmarkBackend(b *testing.B) {
 	member := js.Config{SyncAlways: true}
 	for _, via := range []struct {

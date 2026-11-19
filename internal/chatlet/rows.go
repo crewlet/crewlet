@@ -21,27 +21,16 @@ func NewRows(db store.ReplicatedReader, spec statelog.StreamSpec) (statelog.Rows
 
 // chatGuards answers the two object-level facts a first write needs.
 //
-// TWO KINDS HAVE A GUARDING ROW, and they are exactly the two a create ever
-// takes a first-writer-wins append on ([statelog.PatternCreate]):
+// TWO KINDS HAVE A GUARDING ROW ([statelog.PatternCreate]'s first-writer-wins):
+// AN ADDRESS (`chat_channel_names` says a name is taken once its create is
+// trimmed, protecting the retry-at-zero branch below the trim floor), and A
+// DIRECT CONVERSATION'S ROOM, whose id is DERIVED from its participants
+// ([DirectChannelID]) so two nodes opening it publish the SAME subject.
 //
-//   - AN ADDRESS. `chat_channel_names` is what still says a name is taken once
-//     the create that took it has been trimmed off the log — which is the whole
-//     reason a create publishes at an expectation of zero and the row is what
-//     protects the retry-at-zero branch below the trim floor.
-//   - A DIRECT CONVERSATION'S OWN ROOM. Its id is DERIVED from its
-//     participants ([DirectChannelID]), so two sides opening it from two nodes
-//     publish the SAME subject, and the room's own row is what tells the loser
-//     that the conversation is already there.
-//
-// NOTHING HERE IS EVER DELETED, and that is a property of the domain rather
-// than an omission: a room is ARCHIVED — closed to new messages with every
-// word of it still readable — and the one destructive gesture,
-// [MessageErase], removes MESSAGE rows. Its marker in `chat_deletions` is
-// keyed on a message id, and a message is never a subject in this alphabet: a
-// message record is published on its ROOM. So there is no subject a deletion
-// marker could gate, which is why the applier does not install that gate
-// either ([Applier.Gated]) and why the erase marker is consulted inside the
-// apply instead ([messageErased]).
+// NOTHING HERE IS EVER DELETED: a room is ARCHIVED, and [MessageErase] removes
+// MESSAGE rows, marked in `chat_deletions` by message id. A message is never a
+// subject (its record is published on its ROOM), so no deletion gate exists
+// ([Applier.Gated]) and the apply consults the marker ([messageErased]).
 func chatGuards(ctx context.Context, tx *sql.Tx, subj statelog.Subject) (
 	deleted, guard bool, err error) {
 
@@ -167,18 +156,12 @@ func (f *Fence) Evicted(ctx context.Context) (bool, error) {
 // ClearForZero verifies, freshly, that publishing at an expectation of ZERO is
 // safe from this node.
 //
-// A READ THAT ANSWERS UNKNOWN MUST REFUSE, which is a deliberate departure
-// from the fail-open rule a delivery claim uses: failing open there is a
-// duplicate delivery, which is recoverable; failing open here is a second room
-// holding one address, which is not.
+// A READ THAT ANSWERS UNKNOWN MUST REFUSE, unlike a delivery claim's fail-open:
+// a duplicate delivery is recoverable, a second room holding one address is not.
 //
-// THE CHECK IS [statelog.ZeroFence], the one the tracker's and the knowledge
-// base's fences run too: this supplies the four reads. Written out here it
-// refused an evicted node with [statelog.ErrConflict], which [Store.publish]
-// translates into "the room kept changing", compared the floor with the cursor
-// alone — clearing a node whose checkpoint was past the log's end — and refused
-// a node below the floor with prose rather than a reason; every refusal is now
-// an [*statelog.Unavailable] naming it.
+// THE CHECK IS [statelog.ZeroFence], shared with the tracker's and the
+// knowledge base's fences; this supplies the four reads, and every refusal is
+// an [*statelog.Unavailable] naming its reason.
 func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) error {
 	return statelog.ZeroFence{
 		Evicted: f.Evicted, Floor: f.Floor, Ends: f.Ends, Committed: f.Committed,
@@ -187,19 +170,16 @@ func (f *Fence) ClearForZero(ctx context.Context, cursor statelog.Position) erro
 
 // Gates answers whether a durable record produced rows on NO node.
 //
-// ONE GATE, AND IT IS THE ONE [Applier.Gated] INSTALLS. The two must agree: a
-// resolution that looked for a gate the applier never installs would read
-// every unapplied record as "somebody else won", and one that missed a gate
-// the applier does install would re-decide and republish a record nothing
-// applies until the round budget ran out.
+// ONE GATE, THE ONE [Applier.Gated] INSTALLS, and the two must agree: a gate
+// looked for but never installed reads every unapplied record as "somebody else
+// won"; one installed but missed republishes a record nothing applies until the
+// round budget runs out.
 //
-// THE ERASE MARKER IS NOT ONE OF THEM, for the reason the applier states: a
-// message record's subject is its ROOM, so the ids a marker is keyed on live
-// in a payload — and a record about an erased message still APPLIES, writing
-// its ledger row and nothing else, so the publisher resolves it from the
-// ledger like any other. There is no deletion gate to report first, so this
-// reader keeps the half of the rule [statelog.Gates] states that a domain
-// without one has: the eviction window, half-open at both ends.
+// THE ERASE MARKER IS NOT A GATE, for the applier's reason: a record about an
+// erased message still APPLIES (writing its ledger row only), so the publisher
+// resolves it from the ledger. This reader keeps the half of [statelog.Gates]'
+// rule a domain without a deletion gate has: the eviction window, half-open at
+// both ends.
 type Gates struct{ db store.ReplicatedReader }
 
 // NewGates builds it.

@@ -9,13 +9,12 @@ import (
 )
 
 // A CREDENTIAL'S WRITE THAT WAKES SOMEBODY CARRIES THE APPS IT USED HERE, AND
-// NOTHING ELSE DOES (ADR-0109), on the knowledge base's store as on the
-// tracker's. A pipeline's token commenting on a page records, beside its login,
-// the apps the node that took the write resolved for it — a turn the comment's
-// notice wakes is bounded by them — at the version that carries them. Its
-// eviction of a node wakes nobody and is a gate every build there will ever be
-// must read, so it carries none and is not refused; a person's comment carries
-// none even when handed some, and both stay at the base version.
+// NOTHING ELSE DOES (ADR-0109), as on the tracker's store. A token commenting
+// on a page records, beside its login, the apps the node resolved for it (a
+// turn the notice wakes is bounded by them), at the version carrying them. Its
+// eviction of a node wakes nobody and is a gate every build must read, so it
+// carries none and is not refused; a person's comment carries none even when
+// handed some, and both stay at the base version.
 //
 // Mutation: leave the apps off the record the store builds — the token's
 // comment carries none; keep them on a record that wakes nobody — the token's

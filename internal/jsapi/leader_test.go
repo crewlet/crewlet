@@ -120,17 +120,15 @@ func TestALeaderReadAMemberDropsIsAskedAgain(t *testing.T) {
 // A LATE ANSWER TO A READ ALREADY ASKED AGAIN IS TAKEN.
 //
 // A request behind a backed-up API queue is answered late rather than never.
-// Thrown away at its term and replaced, a late reply is never heard — and the
-// replacement joins the same queue a term behind it, so once the leader's
-// queue answers slower than the term no read is taken at all. So every request
-// stays outstanding while the next is sent: here the first is dropped, the
-// second answered only after the third has been asked, and the third dropped
-// as well — the second's answer is the only one there is.
+// A request thrown away at its term would have its late reply unheard, and its
+// replacement joins the same queue a term behind, so a queue slower than the
+// term would take no read at all. So every request stays outstanding while the
+// next is sent: here the first is dropped, the second answered only after the
+// third has been asked, and the third dropped too.
 //
 // THE TAP IS THE PROOF that it was the second's: released, the broker hands
-// every request on the stream's subject to the tap as well as to the leader —
-// the second's, sent on, and any fourth the read sent before it was answered
-// — and the read must have returned on the second's alone.
+// every request on the stream's subject to the tap as well as to the leader,
+// and the read must have returned on the second's alone.
 func TestALateAnswerToALeaderReadAlreadyAskedAgainIsTaken(t *testing.T) {
 	t.Parallel()
 	srv, leader := leaderServer(t)
@@ -234,16 +232,14 @@ func TestALeaderReadNobodyAnswersEndsWithItsCaller(t *testing.T) {
 // a message read and every page of a listing alike — asked again inside it,
 // and never stretched to the lookup ceiling.
 //
-// Each was ONE request the client held for its DefaultTimeout where its
-// caller set none, and every such caller — a boot's steps, a duty's tick, a
-// heartbeat — was sized against that bound: a pod's startup window counts
-// each read at it. Hedged, a read asks again inside the bound, so a request a
-// member dropped is asked again where the new leader answers it, and a broker
-// that never answers costs no longer than it did. The client here is given a
-// default of 3.9 seconds — just short of a third request, at four — so each
-// read is asked at none and two, twice, the second with nearly two seconds to
-// spare, and a read held to the thirty-second ceiling instead is told apart
-// by far more than a late timer.
+// Every caller that sets no deadline (a boot's steps, a duty's tick, a
+// heartbeat) is sized against the client's DefaultTimeout, and a pod's startup
+// window counts each read at it. Hedged, a read asks again inside that bound,
+// so a request a member dropped is asked again where the new leader answers
+// it, and a broker that never answers costs no longer. The default here is 3.9
+// seconds, just short of a third request at four, so each read is asked at
+// none and two, and a read held to the thirty-second ceiling is told apart by
+// far more than a late timer.
 func TestALeaderReadWithNoDeadlineEndsAtItsClientsDefault(t *testing.T) {
 	t.Parallel()
 	const bound = 3900 * time.Millisecond
@@ -306,15 +302,12 @@ func TestALeaderReadWithNoDeadlineEndsAtItsClientsDefault(t *testing.T) {
 
 // A CARRYING READ WHOSE CALLER SET NO DEADLINE IS GIVEN ITS CROSSING.
 //
-// A read whose caller set no deadline is held to its client's own bound — the
-// bound its one request had, the time the broker takes to answer, with no
-// crossing in it. A reader carrying a large message's reply across a link
-// hears nothing until that reply has crossed, so held to the bound alone it
-// was cut at five seconds whatever its term said: a dead letter's frame read
-// by a feed's replay, which sets no deadline, failed at every start for an
-// entry whose reply took longer than that to cross. Here a read carrying a
-// piece at a pace that crosses it in ten seconds is answered at six, past the
-// client's five and inside its term: the read takes the answer.
+// The client's own bound is the time the broker takes to answer, with no
+// crossing in it. A reader carrying a large reply across a link hears nothing
+// until it has crossed, so held to the bound alone it is cut at five seconds
+// whatever its term says (a feed's replay of a dead letter's frame sets no
+// deadline). Here a piece at a pace that crosses in ten seconds is answered at
+// six, past the client's five and inside its term: the read takes the answer.
 //
 // Mutation: hold a carrying read whose caller set no deadline to the client's
 // bound alone, and it fails at five seconds.

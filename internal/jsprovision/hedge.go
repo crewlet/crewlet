@@ -10,57 +10,31 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// ReadWith asks one metadata READ — a stream's, a consumer's or a bucket's
-// info, a message by sequence or by subject — until something answers it, for
-// as long as ctx allows, at t's cadences: the request presumed lost after
-// t.ReadTerm and another sent t.ReAsk later, WITH EVERY REQUEST ALREADY SENT
-// STILL OUTSTANDING ([hedge]). The first answer from any of them is the
-// answer; [Unanswered] is the only condition that is not one.
+// ReadWith asks one metadata READ (a stream's, consumer's or bucket's info, a
+// message by sequence or subject) until something answers, for as long as ctx
+// allows: a request presumed lost after t.ReadTerm, another sent t.ReAsk later,
+// WITH EVERY REQUEST STILL OUTSTANDING ([hedge]). The first answer wins;
+// [Unanswered] is the only condition that is not one. again, when non-nil, is
+// called per request presumed lost with the number sent. When ctx ends first
+// the silence's error returns ([nats.ErrNoResponders] or [nats.ErrTimeout]), else ctx's.
 //
-// again, when non-nil, is called each time a request is presumed lost, with
-// the number of requests sent so far, so a caller can say which object is not
-// being answered. When ctx ends first, what is returned is what the silence
-// said — [nats.ErrNoResponders] or [nats.ErrTimeout] where any request heard
-// one, since each names why nobody replied — and otherwise ctx's own error.
-//
-// A WRITE IS NEVER ASKED THIS WAY when its reply is HELD or its repeat is a
-// second fact: a create's reply is held until the object it made has a leader
-// ([AskTerm]), and a second create sent while the first is held is a second
-// write, so it asks through [Timing.Ask]. A write with neither is asked as a
-// read is, and there is one kind: internal/learning/memsync's hydration
-// barriers, the one a hydration publishes before its first table and the end
-// barrier each table's replay publishes after it, each a publish the stream
-// answers once it has stored it, or never, to a subject the stream keeps one
-// message of, so a second copy replaces the first rather than adding a fact.
-//
-// # And never past t.Lookup, whatever its caller set
-//
-// The ceiling is the longest silence the server keeps ([LookupBudget]): past
-// it a group in any state answers a read — its leader, or a member of a group
-// with no leader with JSClusterNotAvailError — so a read still told nothing is
-// asking a broker it cannot reach, and asking on finds nothing out. A read for
-// a caller with no deadline of its own was asked for ever: the trim tick reads
-// every log's state on its node's lifetime, and its loop is the one that
-// evaluates the node's alarms, so a read nobody would ever answer held both. A
-// caller whose own deadline is longer gains nothing past the ceiling, for the
-// same reason; one whose deadline is shorter keeps it.
-//
-// ACROSS A LINK ITS TIMING FOLLOWS ([Timing.Following]) the ceiling runs only
-// while the link is still: a read whose reply may be among what a moving link
-// carries is held past it by the timing's Beyond at most, asking nothing more
-// past it and waiting for the requests already out ([Timing.Ceiling]). So
-// "never past t.Lookup" holds for a timing that follows no link, and "never
-// past t.Lookup and its Beyond" for one that does.
-//
-// The ceiling ending is SILENCE, never the caller's ending: [Unanswered] on
-// the caller's own context reads it as a read nobody answered.
-//
-// It is the bound of every read that was asked this way from the start. A
-// read that was ONE request until it was hedged keeps the bound that request
-// had instead ([ReadBoundedWith]).
+// A WRITE IS NEVER ASKED THIS WAY when its reply is held or its repeat is a
+// second fact: a create asks through [Timing.Ask] ([AskTerm]). The one write
+// asked as a read is internal/learning/memsync's hydration barriers, publishes
+// to a subject keeping one message, so a second copy replaces the first.
 func ReadWith[T any](ctx context.Context, t Timing, one func(context.Context) (T, error),
 	again func(asks int)) (T, error) {
 
+	// Never past t.Lookup, whatever the caller set: past it a group in any
+	// state answers a read (a leader, or JSClusterNotAvailError;
+	// [LookupBudget]), so a read still unanswered asks a broker it cannot
+	// reach. A deadline-less read would hold the trim tick's loop, the one that
+	// evaluates the node's alarms. A shorter caller deadline is kept. Across a
+	// link the timing follows ([Timing.Following]) the ceiling holds past it by
+	// Beyond at most, asking nothing more and waiting for requests out
+	// ([Timing.Ceiling]). Its ending is SILENCE, never the caller's ending.
+	// A read that was ONE request until hedged keeps that request's bound
+	// instead ([ReadBoundedWith]).
 	return ReadBoundedWith(ctx, t, t.Lookup, one, again)
 }
 
@@ -69,48 +43,26 @@ func Read[T any](ctx context.Context, one func(context.Context) (T, error), agai
 	return ReadWith(ctx, Clustered(false).Timing(), one, again)
 }
 
-// ReadBoundedWith is [ReadWith] for a read that was ONE request until it was
-// hedged: a caller that set no deadline of its own is held to bound — the
-// bound that one request had, its client's own DefaultTimeout
-// (jetstream.JetStreamOptions) — BEFORE the read begins, so the read is asked
-// again inside it rather than for the whole t.Lookup ceiling, and never past
-// it ([hedge]). A caller's own deadline is kept, under the ceiling every read
-// is held to.
-//
-// # Why such a read keeps its bound
-//
-// Because the bound is what every caller of it was sized against, and hedging
-// a read changes how it is asked, not how long its caller waits for a broker
-// that never answers. A deadline-less caller of one is a duty's tick, a boot
-// step or a heartbeat whose cost was counted at the client's five seconds — a
-// pod's startup window counts each such read at it — and held to the ceiling
-// instead, each would wait six times as long for nothing. Inside five seconds
-// a read is asked at none, two and four, so the request a member dropped
-// across an election is asked again at two seconds, where the new leader
-// answers it (measured on a fleet of three at 2.0 to 2.2 s): a dropped
-// request costs two seconds, not the bound. What the bound does not ride out
-// is an election longer than about four seconds, which failed such a read
-// before it was hedged as well.
-//
-// The bound ending is SILENCE, as the ceiling's is ([Unanswered]). A bound of
-// zero or less is refused by name, as a [Timing] field left unset is: it is a
-// deadline already past, which no caller chose.
-//
-// # Across a link its caller meters, both run only while the link is still
-//
-// A timing that follows a link ([Timing.Following]) holds the bound and the
-// ceiling past their spans while the link moves, by its Beyond at most
-// ([Timing.Ceiling]): a reply queued behind a message of megabytes on the link
-// is the broker having answered, and the link carrying bytes is the one sign
-// of it before the reply's last byte is in. NOTHING MORE IS ASKED past the
-// span, only waited for: past the ceiling a group in any state answers a read
-// ([LookupBudget]), so every request sent inside it is answered or was
-// dropped by a member past recovering, and one more request would only queue
-// another reply behind the bytes the first is waiting on. A timing that
-// follows no link is held to both on time alone, as every read was.
+// ReadBoundedWith is [ReadWith] for a read that was ONE request until hedged: a
+// caller with no deadline of its own is held to bound, that request's client
+// DefaultTimeout (jetstream.JetStreamOptions), before the read begins and never
+// past it ([hedge]); a caller's own deadline is kept, under the ceiling. Held
+// to the t.Lookup ceiling instead, a deadline-less duty tick, boot step or
+// heartbeat sized at five seconds would wait six times as long for nothing.
+// Inside five seconds a read is asked at 0, 2 and 4 s, so a request dropped
+// across an election is re-asked at 2 s, where the new leader answers (2.0 to
+// 2.2 s measured); an election past about 4 s is not ridden out. The bound
+// ending is SILENCE ([Unanswered]); a bound of zero or less, a deadline already
+// past, is refused by name.
 func ReadBoundedWith[T any](ctx context.Context, t Timing, bound time.Duration,
 	one func(context.Context) (T, error), again func(asks int)) (T, error) {
 
+	// Across a link the timing follows ([Timing.Following]), bound and ceiling
+	// hold past their spans by Beyond at most while the link moves: a reply
+	// queued behind megabytes is the broker having answered. NOTHING MORE IS
+	// ASKED past the span, only waited for: past the ceiling every request sent
+	// inside it is answered or was dropped past recovering, and another would
+	// queue behind the bytes the first waits on. No link: time alone.
 	if err := t.unset(); err != nil {
 		var zero T
 		return zero, err
@@ -140,79 +92,16 @@ func ReadBounded[T any](ctx context.Context, bound time.Duration, one func(conte
 	return ReadBoundedWith(ctx, Clustered(false).Timing(), bound, one, again)
 }
 
-// hedge asks one metadata read, or the one write asked as a read is
-// ([ReadWith]), until something answers it, keeping every request it has sent
-// OUTSTANDING while it sends the next.
-//
-// # Why a request is never abandoned
-//
-// Because a request nobody has answered yet is in one of two states this side
-// cannot tell apart, and only one of them is dead. The vendored server queues
-// every routed JetStream API request for a pool of workers
-// (server/jetstream_api.go, apiDispatch: jsAPIRoutedInfoReqs for an info
-// request, jsAPIRoutedReqs for the rest) and decides it only when a worker
-// takes it: a request put to a group with no leader yet is then DROPPED
-// without a reply, and one behind a backed-up queue is answered LATE — the
-// leader is only slow. Abandoned at [ReadTerm] and asked again, the dropped
-// one is replaced, which is what the term is for; but so is the late one, and
-// the server goes on processing it — and its replacement joins the same queue
-// a whole term behind it. Once the leader's queue answers slower than the
-// term, no read is ever taken at all: every log read on that node — the usage
-// reading every append and every barrier is admitted through, the
-// last-sequence read that discriminates every rejected write — fails at its
-// caller's budget at once, a cliff rather than a slowdown. Kept outstanding,
-// the late reply is taken when it comes, and a dropped one still costs only a
-// term and a [ReAsk] before its replacement is on its way.
-//
-// # What it asks of the server
-//
-// One request every t.ReadTerm + t.ReAsk for as long as nobody answers, each
-// processed when a worker takes it from the queue. For a read that was asked
-// this way from the start — the domain logs' leader reads and the
-// provisioning reads, which abandoned a request at its term and sent the next
-// — that is nothing more than abandoning asked: an abandoned request was
-// processed all the same, and what the hedge keeps beside each is a reply
-// this side still listens for. For a read that was ONE request until it was
-// hedged ([ReadBoundedWith]: coordination's, the object store's, a listing's
-// pages and the backup's) it is more: three requests inside a deadline-less
-// read's five seconds where it sent one, and up to fifteen under the ceiling
-// for a caller that waits that long. memsync's hydration reads are asked
-// through [ReadWith] to the ceiling, its arrival added to both: its identity
-// reads and a hydration's first barrier up to fifteen requests, and each
-// table's end barrier, a write, each request a publish the stream stores,
-// whose term carries the rest of its replay's pull, one about every ten
-// seconds in a member's own process and every 17.5 across a link. So while a leader's API queue answers
-// slower than t.ReadTerm + t.ReAsk — an election's aftermath, a stall — every
-// read waiting on it adds a request at that cadence, and the queue's offered
-// load grows with its own latency, bounded by each read's bound and the
-// ceiling rather than by the hedge. The first re-ask is what recovers a
-// request a member dropped across an election — answered by the new leader at
-// two seconds, measured on a fleet of three — and each later one recovers a
-// drop only across an election that much longer; to a leader that is merely
-// slow, every one of them is more work queued behind the first.
-//
-// And NOTHING PAST ctx's DEADLINE: a re-ask that comes due once it has passed
-// is not sent, though ctx cannot say so until the runtime runs the timer that
-// ends it ([overdue]). A stalled process runs that timer late, and a re-ask
-// taken first was a request past its caller's bound — one more on the queue
-// above, whose answer nobody would hear.
-//
-// AND NOTHING PAST asking, the span it is asked for, where that is above
-// zero: past it the requests already out are waited for under ctx and no
-// re-ask is sent — the span a moving link holds a read open beyond
-// ([ReadBoundedWith]). Zero asks for as long as ctx allows.
-//
-// Every request runs on one context, derived from ctx and cancelled as hedge
-// returns, which waits for each request to end and hears every reply: no
-// request outlives the call. one may therefore be running more than once at a
-// time, and returns its answer rather than writing it anywhere.
-//
-// AN ANSWER OUTRANKS THE CALLER'S ENDING. When ctx ends, every request still
-// out is cancelled and heard out, and one that the object answered — a
-// handle, a not-found, a refusal — is what comes back, ahead of the silence or
-// the deadline: a caller whose context was already over is still told what
-// the one request it made was answered, as it was when a request ran on the
-// caller's own goroutine.
+// hedge asks one metadata read ([ReadWith]) until something answers it,
+// keeping every request sent OUTSTANDING while it sends the next. A request is
+// never abandoned: an unanswered request is either dropped or answered LATE, and this side
+// cannot tell which. The vendored server queues routed API requests for
+// workers (server/jetstream_api.go, apiDispatch): a request to a group with no
+// leader is DROPPED, one behind a backed-up queue is merely slow. Abandoning at
+// [ReadTerm] replaces the dropped one but also queues a duplicate a term behind
+// the late one; once the queue answers slower than the term no read is ever
+// taken, a cliff rather than a slowdown. Kept outstanding, a late reply is
+// taken when it comes and a dropped one costs a term and a [ReAsk].
 func hedge[T any](ctx context.Context, t Timing, asking time.Duration,
 	one func(context.Context) (T, error), again func(asks int)) (T, error) {
 
@@ -221,7 +110,23 @@ func hedge[T any](ctx context.Context, t Timing, asking time.Duration,
 		v   T
 		err error
 	}
+	// One request every t.ReadTerm + t.ReAsk while nobody answers. While a
+	// leader's queue answers slower, each waiting read adds load at that
+	// cadence, bounded by its bound and the ceiling, not by the hedge. The
+	// first re-ask recovers a request dropped across an election (the new
+	// leader answers at ~2 s); later ones only recover longer elections and
+	// are more work for a merely slow leader. NOTHING PAST ctx's DEADLINE: a
+	// re-ask due after it is not sent, though ctx cannot say so until the
+	// runtime runs its timer ([overdue]), which a stalled process runs late.
+	// NOTHING PAST asking when above zero: requests out are waited for under
+	// ctx and no re-ask is sent. Zero means as long as ctx allows.
 	askedUntil := time.Now().Add(asking)
+	// Every request runs on one context cancelled as hedge returns, which waits
+	// for each and hears every reply: no request outlives the call, so one may
+	// run more than once at a time and returns its answer, never writing it.
+	// AN ANSWER OUTRANKS THE CALLER'S ENDING: when ctx ends, requests still out
+	// are cancelled and heard out, and an answer the object gave (handle,
+	// not-found, refusal) returns ahead of the silence or the deadline.
 	requests, stop := context.WithCancel(ctx)
 	defer stop()
 	var running sync.WaitGroup

@@ -11,59 +11,15 @@ import (
 // THE PRUNE'S SELECTION: which rooms a retention sweep covers, and at what
 // horizon each is covered.
 //
-// # The division of labour, stated here because it is the one place two
-// packages could each assume the other did it
-//
-// THIS FILE NAMES THE ROOMS AND THE HORIZON. It is PURE over values — a
-// company default, a room's own override — with no clock, no store and no
-// transaction in it, so the rule that decides how long a conversation is kept
-// can be exercised, and re-measured, without a database.
-//
-// THE INSTANT AND ANYTHING READ OUT OF THE ROWS ARE THE WRITER'S, formed
-// inside [Store.Prune]'s own decide, in the snapshot the record is built from.
-// That is not a tidiness preference:
-//
-//   - A CUTOFF IS A DECISION THAT ALREADY HAPPENED. The record carries an
-//     INSTANT rather than the day count it came from ([Prune.Cutoff]), because
-//     a node replaying it a month later must delete what the duty decided
-//     then, not what the same arithmetic would decide now. The instant
-//     therefore has to be taken where the record is formed and refused if it
-//     is in the future, which only the writer can do.
-//   - A COUNT TAKEN OUT HERE WOULD BOUND NOTHING. The apply's row budget
-//     ([statelog.ApplyTxRowBudget]) is checked at RECORD boundaries and a
-//     record is never split, so "how much is below this cutoff" is a question
-//     about the rows the record will actually be decided against. Asked in
-//     another transaction it is a number from another instant, and a selection
-//     that answered it would be promising something it cannot see.
-//
-// So a duty composes the two: it reads the company's rooms a page at a time,
-// asks [Eligible] which of each page have a horizon at all, and publishes one
-// prune per room through the write path — which forms the cutoff, checks it
-// against its own clock and decides inside its own snapshot.
-//
-// # Why every eligible room is named, with no cap on the sweep
-//
-// Because a cap needs an order, and the only order available here is the
-// rooms' own ids: a sweep that took the first N alphabetically would prune the
-// same rooms every tick and never reach the tail, which is a company whose
-// last rooms are kept for ever while a screen says they are not.
-//
-// AND THE SET IT NAMES FROM HAS NO BOUND. It is every room the company ever
-// made, for as long as the company exists: there is no room delete in this
-// vocabulary, so nothing leaves it. [MaxChannels] does not bound it — that
-// counts LIVE rooms, an archive releases a slot while the archived room keeps
-// its horizon, and it binds only a channel's create: a direct or group
-// conversation is opened without it ever refusing one, and there is one for
-// every distinct set of people who ever spoke. So this selection is asked a
-// PAGE at a time rather than of the whole set: the duty reads the rooms in
-// room-id pages, each its own snapshot, hands each page here and publishes for
-// it before reading the next — and a tick that runs out of its interval resumes
-// its lap where it stopped rather than at the first id, which would be the
-// capped sweep's starvation again. Per page, what keeps it cheap is the duty's
-// own read beside this selection: one index seek per room for its oldest
-// message, and a record only for a room with something below its cutoff. The
-// ORDER below is what makes a page's answer a slice of the whole one: sorted by
-// room id, the same order the pages are read in.
+// THIS FILE NAMES THE ROOMS AND THE HORIZON, PURE over values (a company
+// default, a room's override): no clock, no store, no transaction, so the rule
+// is testable without a database. THE INSTANT AND EVERYTHING READ FROM THE ROWS
+// ARE THE WRITER'S, formed inside [Store.Prune]'s decide, in the snapshot the
+// record is built from. A cutoff is a decision that already happened: the
+// record carries an INSTANT, not the day count ([Prune.Cutoff]), so a replay a
+// month later deletes what the duty decided then. A count taken here would
+// bound nothing: the apply's row budget ([statelog.ApplyTxRowBudget]) is
+// checked at record boundaries, against rows from the record's own snapshot.
 
 // RetentionSource says whose setting decided a room's horizon.
 //
@@ -153,20 +109,15 @@ func (t PruneTarget) Cutoff(now time.Time) time.Time {
 
 // HorizonFor is the ONE place a room's own retention beats the company's.
 //
-// The second return is "there is a horizon at all", and it exists for
-// [time.Duration]'s own blind spot: a zero duration is the one value that
-// cannot say "for ever", so a caller reading only the number would prune a
-// room that asked to be kept permanently the moment it forgot which way round
-// the zero meant. It is the same shape
-// [github.com/crewlet/crewlet/internal/config.ChatletConfig.MessageRetention]
-// answers with, and for the same reason.
+// The second return is "there is a horizon at all": a zero [time.Duration]
+// cannot say "for ever", so a caller reading only the number would prune a room
+// kept permanently. Same shape as
+// [github.com/crewlet/crewlet/internal/config.ChatletConfig.MessageRetention].
 //
-// A NEGATIVE HORIZON IS NOT ONE. Both write-path validations refuse a negative
-// override naming the field ([ChannelCreate.Validate], [ChannelPatch.Validate]),
-// so a negative reaching here is a row some other build wrote — and the one
-// reading it could have is a cutoff in the FUTURE, which deletes everything
-// the room ever said. There is no inverse for that, so it is read as "no
-// horizon" rather than acted on.
+// A NEGATIVE HORIZON IS NOT ONE. The write paths refuse it
+// ([ChannelCreate.Validate], [ChannelPatch.Validate]), so one here is a row
+// another build wrote, and its cutoff would lie in the FUTURE and delete
+// everything the room ever said, irreversibly. It reads as "no horizon".
 func HorizonFor(companyDays int, override *int) (Horizon, bool) {
 	days, source := companyDays, RetentionCompany
 	if override != nil {
@@ -199,24 +150,17 @@ func HorizonConfirmation(override *int) string {
 }
 
 // Eligible names every room a prune covers, and the horizon each is covered
-// at.
+// at. PURE (see the division at the top of this file).
 //
-// PURE, AND THAT IS WHAT IT IS FOR. Given the same company default and the
-// same rooms it answers the same thing, in the same order, for ever: there is
-// no clock in it, no store behind it and nothing read from the rows. What it
-// cannot know — whether a room has anything below its cutoff — is deliberately
-// not its question; see the division at the top of this file.
+// Every eligible room is named, with no cap: room id is the only order, so a
+// sweep of the first N would never reach the tail. The set is unbounded (no
+// room delete exists), so the duty asks a PAGE at a time and resumes a lap.
 //
-// THE ORDER IS BY ROOM ID and not by the input's, so two nodes that read the
-// company's rooms in different orders — a listing is not an ordering unless
-// somebody says so — publish the same sweep in the same sequence, and a log
-// read afterwards shows one duty's tick rather than an interleaving nobody can
-// follow.
+// THE ORDER IS BY ROOM ID, not the input's: nodes reading in different orders
+// publish the same sweep, and a page is a slice of the whole.
 //
-// A ROOM WITH NO ID IS NOT A ROOM. It is dropped rather than refused, because
-// this is a selection over rows somebody else read and the alternative is a
-// sweep that stops the first time a malformed row appears — which is the whole
-// company's retention held up by one row nothing else is bothered by.
+// A ROOM WITH NO ID IS DROPPED, not refused, so one malformed row cannot hold
+// up the company's retention.
 func Eligible(companyDays int, rooms []ChannelRetention) []PruneTarget {
 	out := make([]PruneTarget, 0, len(rooms))
 	for _, room := range rooms {

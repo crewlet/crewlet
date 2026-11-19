@@ -118,25 +118,16 @@ type Server struct {
 	Latency time.Duration
 
 	// ConnBytesPerSecond is the most bytes a second the bucket sends an
-	// object's bytes at — the body of every GetObject — once
-	// [Server.Latency] is waited out: a provider's ceiling on what one
-	// connection carries, about 80–90 MB/s from S3. Zero or less sends at
-	// loopback's rate. Set it before the first request.
-	//
-	// THE TERM [Server.Latency] DOES NOT MODEL: a round trip is paid once a
-	// request whatever its size, and a connection's ceiling by every byte
-	// of it — which is what decides whether a large read is faster in
-	// several ranges at once than in one stream, and a fake answering at
-	// loopback's rate could never show.
-	//
-	// AN OBJECT'S BYTES ONLY, never the few hundred bytes of XML another
-	// verb answers, which cross any real link in microseconds at any
-	// ceiling: paced at the slow rates a case sets to hold a range in
-	// flight, a multipart completion's answer took tens of milliseconds to
-	// arrive, and that is long enough for the SDK's early close of the
-	// request body to fail the transport's last read of it, which closes
-	// the connection under the answer — a race no provider a network round
-	// trip away leaves room for.
+	// object's bytes at (every GetObject body) once [Server.Latency] is waited
+	// out: a provider's per-connection ceiling, about 80-90 MB/s from S3. Zero
+	// or less sends at loopback's rate. Set it before the first request. It
+	// models what [Server.Latency] does not: a round trip is paid once per
+	// request, a ceiling by every byte, which decides whether a large read is
+	// faster in several ranges than in one stream. AN OBJECT'S BYTES ONLY, never
+	// the small XML other verbs answer: paced at the slow rates a case sets, a
+	// multipart completion's answer arrived late enough for the SDK's early close
+	// of the request body to fail the transport's last read and close the
+	// connection under it, a race no real provider leaves room for.
 	ConnBytesPerSecond int64
 
 	// GetHook, where set, is called with the key and the first byte of
@@ -796,18 +787,16 @@ func (s *Server) RefuseSessions(status int, code string) {
 }
 
 // Fill makes the bucket one with no room left: every request that would store
-// bytes — a PutObject, an UploadPart, a CompleteMultipartUpload — answers the
-// S3 error status and code, its body read first and nothing stored, while
-// every other request is answered as ever, as a provider refuses writes and
-// still serves reads, deletions and abandonments: MinIO at its drives'
-// free-space floor (`507 XMinioStorageFull`) or past a bucket's quota (`400
-// XMinioAdminBucketQuotaExceeded`), Ceph's gateway out of space (`507
-// InsufficientCapacity`) or past a quota (`403 QuotaExceeded`). A status of
-// zero makes room again.
+// bytes (PutObject, UploadPart, CompleteMultipartUpload) answers the S3 error
+// status and code, its body read first and nothing stored, while every other
+// request is answered as ever, as a provider refuses writes yet serves reads,
+// deletions and abandonments: MinIO at its free-space floor (`507
+// XMinioStorageFull`) or past a quota (`400 XMinioAdminBucketQuotaExceeded`),
+// Ceph out of space (`507 InsufficientCapacity`) or past a quota (`403
+// QuotaExceeded`). A status of zero makes room again.
 //
-// AN UPLOAD STARTS ON A FULL BUCKET, because its start stores nothing — so a
-// case that fills the bucket reaches the parts and the completion, and one
-// that refuses the start does so with [Server.FailNext].
+// AN UPLOAD STARTS ON A FULL BUCKET, because its start stores nothing; refuse
+// the start with [Server.FailNext].
 func (s *Server) Fill(status int, code string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
