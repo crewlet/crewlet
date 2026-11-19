@@ -482,7 +482,7 @@ test("a row's instants carry no seconds and no year", async () => {
 // ONE CONDITION ON MANY SEATS IS ONE ROW, each seat inside it with its own
 // fix: seven seats were seven rows of the same sentence.
 test("findings of one class are one row, each subject inside it with its own fix", async () => {
-  const fix = {
+  const fix: AdvisorKeptFinding["fix"] = {
     kind: "config_change",
     sentence: "Run learning on a smaller model.",
     options: [
