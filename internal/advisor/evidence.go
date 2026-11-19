@@ -98,10 +98,12 @@ type Evidence struct {
 	// Flow is how long each seat's items in progress stood in each flow
 	// state over the window (ADR-0162).
 	Flow []worklet.FlowHours
+	// Skips is every scheduled run the dispatch ledger skipped in the window.
+	Skips []ScheduleSkip
 	// The Unread flags say the caller could not read that source, so its
 	// classes raise nothing and the answer names it.
 	WorkUnread, LedgerUnread, AlarmsUnread, PausesUnread, RunsUnread, FiresUnread bool
-	StopsUnread, MergesUnread, EpisodesUnread, FlowUnread                         bool
+	StopsUnread, MergesUnread, EpisodesUnread, FlowUnread, SkipsUnread            bool
 }
 
 // source is the record a detector reads.
@@ -128,6 +130,8 @@ const (
 	sourceEpisodes
 	// sourceFlow is the tracker's flow record, [Evidence.Flow].
 	sourceFlow
+	// sourceSkips is the schedules' skipped runs, [Evidence.Skips].
+	sourceSkips
 )
 
 // unread reports whether ev could not read src.
@@ -153,6 +157,8 @@ func (ev Evidence) unread(src source) bool {
 		return ev.EpisodesUnread
 	case sourceFlow:
 		return ev.FlowUnread
+	case sourceSkips:
+		return ev.SkipsUnread
 	}
 	panic(fmt.Sprintf("advisor: a detector reads source %d, which is none", src))
 }
@@ -342,6 +348,9 @@ func ReadWithEvidence(in Inputs, ev Evidence) Answer {
 	}
 	if ev.FlowUnread {
 		answer.Unread = append(answer.Unread, UnreadFlow)
+	}
+	if ev.SkipsUnread {
+		answer.Unread = append(answer.Unread, UnreadSkips)
 	}
 	return answer
 }

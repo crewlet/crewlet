@@ -84,6 +84,7 @@ var documented = []documentedDetector{
 	{ClassWorkConcentrated, sourceWork, workConcentrated},
 	{ClassAlarmNoop, sourceLedger, alarmNoop},
 	{ClassModelHeld, sourceFlow, modelHeld},
+	{ClassScheduleOverdue, sourceSkips, scheduleOverdue},
 }
 
 // stallWords is each class's words, the same for every subject.

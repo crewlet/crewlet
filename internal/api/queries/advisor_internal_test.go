@@ -60,6 +60,11 @@ type ledgerUsage struct {
 	asked *usage.SpendQuery
 }
 
+// ScheduleRuns answers no run: a week whose schedules skipped nothing.
+func (ledgerUsage) ScheduleRuns(context.Context, usage.ScheduleRunsQuery) ([]usage.ScheduleRun, bool, error) {
+	return nil, false, nil
+}
+
 func (l ledgerUsage) TurnLedger(_ context.Context, q usage.SpendQuery) ([]usage.TurnLedgerRow, error) {
 	if l.asked != nil {
 		*l.asked = q
@@ -93,7 +98,7 @@ func TestTheAdvisorNamesASourceItCouldNotRead(t *testing.T) {
 			func() bool { return true }, advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, FlowUnread: true, LedgerUnread: true,
 				Backup: advisor.Backup{Standing: true}}},
 		{"a node with no usage half", patternsWork{}, nil, func() bool { return true },
-			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, FlowUnread: true, LedgerUnread: true, Backup: advisor.Backup{Standing: true}}},
+			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, FlowUnread: true, SkipsUnread: true, LedgerUnread: true, Backup: advisor.Backup{Standing: true}}},
 		{"the alarms not yet evaluated", patternsWork{}, read, func() bool { return false },
 			advisor.Evidence{Until: now, RunsUnread: true, FiresUnread: true, StopsUnread: true, EpisodesUnread: true, FlowUnread: true, Ledger: turns, AlarmsUnread: true}},
 		{"a node with no alarm table", patternsWork{}, read, nil,
