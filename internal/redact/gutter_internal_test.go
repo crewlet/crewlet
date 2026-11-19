@@ -497,8 +497,7 @@ func seamShapes() []gutterShape {
 //
 // Mutation: write a block whole across a value's line's ending, or cut one
 // that holds the value's line ([claims.endingApart]), stop a label at a key's
-// marker ([labelStart]) or read across one before an escaped break
-// ([pastMarkup]), or write a block whole across a row's opening
+// marker ([labelStart]), or write a block whole across a row's opening
 // ([claims.openingApart]), and a shape publishes its value.
 func TestNoValueIsPublishedWhereABlockRunsOnFromItsLineOrStandsInItsKeysRow(t *testing.T) {
 	t.Parallel()
@@ -582,5 +581,47 @@ func TestABlockWhoseFirstLineOpensAsTheKeysRowStaysOneMarker(t *testing.T) {
 	once := Secrets(text)
 	if strings.Count(once, keyMarker) != 1 || strings.Contains(once, gutterValue) {
 		t.Errorf("want one key's marker and the value redacted:\n text %q\n once %q", text, once)
+	}
+}
+
+// A STRING'S LINES ARE READ AS THE LINES THEY STAND FOR: each text below,
+// written with real line breaks and then as a JSON log's string, its breaks
+// escaped, shows gutterValue in neither ([gutterValues]'s values neither),
+// and Secrets of each answer is its answer: rows a markup closes, a blank row
+// among them, and a key's text in a row's label; a quote before the key,
+// escaped or on a later piece; and a key's piece no markup closes, which a
+// key's block joins to the string's first.
+//
+// Mutation: read no markup-only suffix before an escaped break ([readValue]),
+// or read a string's first piece from its real line's start, past an escaped
+// quote, a later piece past a quote on it, or a piece no markup closes
+// ([stringOpening]), and a string here publishes the value.
+func TestAStringsLinesAreReadAsTheLinesTheyStandFor(t *testing.T) {
+	t.Parallel()
+	pc := testKeyLine[:56]
+	v := gutterValue
+	var texts []string
+	for _, lines := range []string{
+		"| Password: |\n| " + v + " |\n",
+		"| x pwd= |\n|  |\n| " + v + " |\n",
+		"| **Password:** |\n|  |\n| " + v + " |\n",
+		"| " + testKeyLine + " " + testEnd + " pwd= |\n     7→" + v + "\ndone\n",
+		"| u1SU1Lf=" + testEnd + "\tPassword: |\n|  |\n| " + v + " |\n",
+		"| " + testKeyLine + " " + testEnd + "\tpwd= |\n|  |\n| " + pc + " " + testEnd + " |\n| Retype password: " + v + " |\n",
+	} {
+		texts = append(texts, lines, `{"log": "`+strings.ReplaceAll(lines, "\n", `\n`)+`"}`+"\n")
+	}
+	texts = append(texts, `{"log": "> \"| Password: |\n> `+v+` |\n"}`+"\n", `{"log": "a\necho "| Password: |\necho "`+v+` |\n"}`+"\n",
+		`{"log": "3f9a7c0e1b2d u1SU1Lf=\n`+testKeyLine+testEnd+`\" ; pwd:\n3f9a7c0e1b2d u1SU1Lf=\n3f9a7c0e1b2d Retype password:\n3f9a7c0e1b2d `+v+`\n"}`+"\n")
+	for _, text := range texts {
+		once := Secrets(text)
+		for _, value := range append(gutterValues(text), v) {
+			if strings.Count(text, value) == 1 && strings.Contains(once, value) {
+				t.Errorf("the value %q is published:\n text %q\n once %q", value, text, once)
+			}
+		}
+		if twice := Secrets(once); twice != once {
+			t.Errorf("a second pass changed\n%q\nto\n%q", once, twice)
+		}
 	}
 }
