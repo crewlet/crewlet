@@ -43,7 +43,7 @@ Every run re-derives every finding of the classes it ran, so the list says what 
 - **Resolved**: a run no longer finds it, so it closes on its own; one you applied a fix for closes as fixed by it.
 - **Retired**: what it was about is gone, a seat or a schedule the company no longer has.
 - **Stale**: a source its class reads could not be read for three of its runs in a row (a run says nothing about a finding whose source it could not read). It is shown as not re-checked since then, and expires a week later.
-- **Snoozed** for 7 days, and back if a run still finds it; **dismissed** as one you will not fix (held quiet 90 days), already known (30 days) or wrong (for good, and the model is told). A dismissed finding returns early only if it becomes more costly. **Reopen** lifts either.
+- **Snoozed** for 7 days, and back if a run still finds it; **dismissed** as one you will not fix (held quiet 90 days), already known (30 days) or wrong (for good, and the model is told). A dismissed finding returns early only if it becomes more costly. **Reopen** lifts either; a reopened dismissal asks for a run at once, so a condition that still stands is back on the list as a new finding within a minute.
 
 A condition that comes back after closing is a new finding that says how many times it was seen before. Closed findings are kept 90 days, runs 30 days and reports 26 weeks.
 
@@ -215,14 +215,14 @@ A fix that is not a change (opening a page or a setting, a step outside the engi
 
 Every Monday the Advisor writes one report of the week before, Monday to Monday on the company clock, and keeps it as written for 26 weeks, so it says what was true of that week however the list has moved since. A report holds:
 
-- **The week's numbers**, each beside the week before's where that week has a report: turns started, turns that committed nothing, tokens, alarm turns that changed nothing and their tokens, turns refused on a budget, and runs ended on their round cap. A source that could not be read is named in the report's `unread` and its numbers are left out, never counted as nothing.
+- **The week's numbers**, each beside the week before's where that week has a report: how long work waited to be picked up (the median and 90th percentile of how long each item a seat picked up had stood due), the hours work waited for a seat, the hours it was held, each cause it was held for an hour or more by its own line, and the hours it stood blocked, read from the flow record; then turns started, turns that committed nothing, tokens, alarm turns that changed nothing and their tokens, turns refused on a budget, and runs ended on their round cap. A source that could not be read is named in the report's `unread` and its numbers are left out, never counted as nothing. A week nothing was picked up in has no pickup wait, and a company whose tracker keeps no flow record has no flow numbers.
 - **What became of the findings**: how many the week opened, resolved, had a fix applied to, and dismissed.
-- **The open findings that cost the most** when it was written, five at most, the most severe first and then the longest open.
+- **The open findings that cost the most** when it was written, of those the week had opened: five at most, the most severe first and then the longest open. A note costs nothing and is not one.
 - **A summary** in at most five sentences, written by the Advisor's model from the report alone where `advisor.model` names one, and kept only when every number it says is one the report says. Without a model, or where the model's summary is not kept, `summary` is `null` and the report is written all the same.
 
 **Reports**, the Advisor page's second tab, lists them, the newest first, each with what its week moved; a week's page sets each number beside the week before's, names any source it left out, and links each finding it names to that finding's page, where you see what became of it since. A report the model summarized opens with that summary.
 
-A server that was down on Monday writes the report when the Advisor next runs that week. `GET /advisor/reports` lists the reports, the newest first, and `GET /advisor/reports/{week}` reads one, by its ISO week (`2026-W47`).
+A server that was down on Monday writes the report when the Advisor next runs that week. A week the company did not exist through all of, such as the one before its first start, has no report: its numbers would read as a measured week. `GET /advisor/reports` lists the reports, the newest first, and `GET /advisor/reports/{week}` reads one, by its ISO week (`2026-W47`).
 
 ## What never happens on its own
 
