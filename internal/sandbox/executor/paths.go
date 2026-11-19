@@ -252,23 +252,29 @@
 // THE BASE TIER'S COUNT: no token of this pool holds it, so it is every read in
 // flight at once: one per seat collecting on this node and up to the box
 // host's boxReadsHeld (64) reads for its peers, each about 5.3 MiB at its
-// worst, 341 MiB, and one per take. A take, whose scrub streams each text
-// through redact's stages, each holding its window, holds 12 to 13 MiB at its
-// base (BenchmarkATakeAtItsBase, one case a process on a dedicated two-core
-// slot: a main-thread line, a `.json` string and a text file each at
-// [scrubPieceBaseBytes], the line's and the string's of bytes the decode
-// triples, both readings, and the meter at its worst base on a line as the
-// scrub writes it, where no string decodes past its length, read as above; 9
-// to 10 MiB without the meter's line; 0.52 to 0.58 s, its heap peaking at 25
-// to 33 MiB at the default GOGC, 50 loaded), so every take holds one of
+// worst, 341 MiB, and one per take. A take at its base holds at most 13 MiB,
+// its scrub's base and its meter's at once, each measured apart (one case a
+// process on a dedicated two-core slot, read as above, the most of nine runs)
+// and summed, each with its benchmark's own heap, so the sum over-counts. The
+// scrub, streaming each text through redact's stages, each holding its window,
+// 9 to 10 MiB (BenchmarkATakeAtItsBase: a main-thread line, a `.json` string
+// and a text file each at [scrubPieceBaseBytes], the line's and the string's
+// of bytes the decode triples, both readings, its meter beside it; 0.23 s,
+// its heap peaking at 21 to 22 MiB at the default GOGC). The meter, 3 MiB
+// (BenchmarkAMeterAtItsBase: alone, on a line the scrub keeps as text,
+// verbatim, so a string decodes to three bytes a byte, its facts at the base
+// and the strings a charge covers decoded beside them; 2 MiB on a record line,
+// whose bytes no UTF-8 holds the scrub writes as U+FFFD). That line is past
+// the scrub's base, so the two never meet on one line, but the scrub may read
+// on at its base while the meter is still on it. So every take holds one of
 // [SessionTakesAtOnce] (26), a pool of its own sized so the takes at their
 // base hold 338 MiB at most, within those 341.
 //
 // THE LARGE TIER, ONE SLOT IN A POOL APART: a collection's pass past its base
 // holds 43 MiB at most, the chain at both bounds; a take, its meter beside it
 // under the same slot, 31 to 48 MiB over twelve runs, the most as the build
-// machine's load rose (BenchmarkATakeAtItsLargeTier: as at its base but for the
-// meter's line, each piece of [threadLineMax] bytes, 6.4 to 6.6 s on two cores,
+// machine's load rose (BenchmarkATakeAtItsLargeTier: as at its base, each piece
+// of [threadLineMax] bytes, 6.4 to 6.6 s on two cores,
 // 7.1 to 7.5 s loaded, its heap peaking at 65 to 87 MiB at the default GOGC,
 // 146 MiB loaded, against the pass's 62 MiB). Shared with
 // [TranscriptReadsAtOnce]'s two, a collection's large pass waits behind two

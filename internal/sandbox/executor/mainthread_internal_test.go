@@ -1406,34 +1406,69 @@ func BenchmarkATakeAtItsLargeTier(b *testing.B) {
 	benchmarkATake(b, takeOfPieces(b, threadLineMax))
 }
 
-// WHAT A TAKE HOLDS AT ITS BASE, the figure the package doc's "A collection's
-// read of a thread" counts each take at in the base tier: as
-// [BenchmarkATakeAtItsLargeTier], its line and its string at
-// [scrubPieceBaseBytes], beside a text file at it, and its meter at its worst
-// base ([meterAtItsBase]), whose line the scrub holds the slot for, so the
-// figure is both at their worst at once. Read off the GC trace as that is:
+// WHAT A TAKE'S SCRUB HOLDS AT ITS BASE: as [BenchmarkATakeAtItsLargeTier],
+// its line and its string at [scrubPieceBaseBytes], beside a text file at it.
+// The base tier counts a take at this and [BenchmarkAMeterAtItsBase] summed:
+// the meter's worst line is past the scrub's base, so the two never meet on
+// one line, but the scrub may read on at its base while the meter is still on
+// that line. Read off the GC trace as that is:
 //
 //	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkATakeAtItsBase$' -benchtime 1x -benchmem
 func BenchmarkATakeAtItsBase(b *testing.B) {
-	benchmarkATake(b, takeOfPieces(b, scrubPieceBaseBytes, meterAtItsBase(b)))
+	benchmarkATake(b, takeOfPieces(b, scrubPieceBaseBytes))
 }
 
-// meterAtItsBase is a main-thread line under u1 holding what the take's meter
-// holds at its base at most (the package doc's THE BASE), as the scrub writes
-// it, so no string decodes past its length: every scratch buffer grown
-// ([grownScratch]), results charging [collectionBaseLineCharge], then a head
-// whose type, subtype and agentId are each [threadValueMax] bytes, the strings
-// one charge covers, decoded before their charge passes the base. tb fails
-// where the scrub writes the line otherwise.
+// WHAT A TAKE'S METER HOLDS AT ITS BASE: the meter alone, fed what the scrub
+// keeps of a take whose main thread holds [meterAtItsBase]'s line, so the
+// figure is the meter's, not the scrub's hold of that line past its own base,
+// which the large tier counts. Read off the GC trace as that is:
+//
+//	GOGC=10 GODEBUG=gctrace=1 go test -run '^$' -bench '^BenchmarkAMeterAtItsBase$' -benchtime 1x -benchmem
+func BenchmarkAMeterAtItsBase(b *testing.B) {
+	archive := takeOfPieces(b, 1<<10, meterAtItsBase(b))
+	var kept bytes.Buffer
+	if err := scrubArchive(archiveTar, bytes.NewReader(archive), reopenOf(archive), &kept, newScrubber(nil),
+		testBounds); err != nil {
+		b.Fatalf("the take: %v", err)
+	}
+	takeWindow(b, func() {
+		meter := newContextMeter(b.Context(), archiveTar, ctSession, "2.1.322", new(passBudget))
+		_, _ = meter.Write(kept.Bytes())
+		meter.finish(nil)
+		meter.count()
+	})
+}
+
+// meterAtItsBase is a main-thread line under u1 holding what a take's meter
+// holds at its base at most (the package doc's THE BASE), as the scrub hands
+// it on: every scratch buffer grown and the type's text tripled
+// ([grownScratch]), results whose facts charge [collectionBaseLineCharge],
+// then a tool_use whose id and name are each [threadValueMax] bytes no UTF-8
+// holds, decoded at three bytes a byte before their charge passes the base,
+// then a byte past the value, so the scrub keeps the line as text, verbatim.
+// tb fails where the scrub keeps it otherwise or the meter charges otherwise.
 func meterAtItsBase(tb testing.TB) string {
-	x := strings.Repeat("x", threadValueMax-2)
-	head, block, result := grownScratch(`"u1"`, x)
-	strs := `"type":"` + x + `","subtype":"` + x + `","agentId":"` + x + `",`
-	line := resultsCharging(tb, `{`+head+`"message":{"role":"user","content":[`+block+`,`,
-		`]},`+result+strs+`"uuid":"u2"}`, collectionBaseLineCharge+3*len(x)+len("u1"))
-	scratchGrown(tb, line, len(x))
+	bad := benchInvalid(threadValueMax - 2)
+	head, block, result := grownScratch(`"u1"`, bad)
+	calls := 2 * 3 * len(bad)
+	// Read as a record, its head's three strings decode at three bytes a byte.
+	record := resultsCharging(tb, `{`+head+result+`"message":{"role":"user","content":[`+block+`,`,
+		`,{"type":"tool_use","id":"`+bad+`","name":"`+bad+`","input":{}}]},"type":"`+bad+`","subtype":"`+
+			bad+`","agentId":"`+bad+`","uuid":"u2"}`, collectionBaseLineCharge+calls+3*3*len(bad)+len("u1"))
+	scratchGrown(tb, record, 3*len(bad))
+	line := record + "x"
 	if rewriteLine(tb, line, newScrubber(nil)) != line {
-		tb.Fatal("the scrub writes the meter's line otherwise than it is built")
+		tb.Fatal("the scrub keeps the meter's line otherwise than it is built")
+	}
+	r := newThreadReader(strings.NewReader(line+"\n"), threadPlainMax)
+	var refused *threadLineError
+	if _, err := r.Next(tb.Context()); !errors.As(err, &refused) {
+		tb.Fatalf("the meter's line reads %v, want it refused as no record", err)
+	}
+	if facts := r.meterMax - r.dec.meter.left - calls; facts > collectionBaseLineCharge ||
+		facts < collectionBaseLineCharge-1<<10 {
+		tb.Fatalf("the meter's line charges %d bytes before its call, want the base, %d", facts,
+			collectionBaseLineCharge)
 	}
 	return line
 }
@@ -1441,13 +1476,8 @@ func meterAtItsBase(tb testing.TB) string {
 // benchmarkATake scrubs archive as [Runner.TakeSession] does, its meter fed
 // beside it under one budget.
 func benchmarkATake(b *testing.B, archive []byte) {
-	var before, after runtime.MemStats
-	runtime.GC()
-	runtime.ReadMemStats(&before)
-	fmt.Fprintf(os.Stderr, "take-bench: the take starts\n")
-	b.ResetTimer()
 	var kept countedWriter
-	for range b.N {
+	takeWindow(b, func() {
 		large := new(passBudget)
 		meter := newContextMeter(b.Context(), archiveTar, ctSession, "2.1.322", large)
 		err := scrubArchive(archiveTar, bytes.NewReader(archive), reopenOf(archive), io.MultiWriter(&kept, meter),
@@ -1457,12 +1487,26 @@ func benchmarkATake(b *testing.B, archive []byte) {
 		if err != nil {
 			b.Fatalf("the take: %v", err)
 		}
+	})
+	b.ReportMetric(float64(kept.n.Load())/float64(b.N)/(1<<20), "kept-MiB")
+}
+
+// takeWindow runs op b.N times between the markers a take's GC trace is read
+// between, reporting what it left live; b fails where it left a large slot
+// held.
+func takeWindow(b *testing.B, op func()) {
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	fmt.Fprintf(os.Stderr, "take-bench: the take starts\n")
+	b.ResetTimer()
+	for range b.N {
+		op()
 	}
 	b.StopTimer()
 	runtime.GC()
 	runtime.ReadMemStats(&after)
 	fmt.Fprintf(os.Stderr, "take-bench: the take ends\n")
-	b.ReportMetric(float64(kept.n.Load())/float64(b.N)/(1<<20), "kept-MiB")
 	b.ReportMetric(float64(int64(after.HeapAlloc)-int64(before.HeapAlloc))/(1<<20), "live-MiB")
 	if len(collectionLargeReads) != 0 {
 		b.Fatalf("the take ended holding %d large slots, want none", len(collectionLargeReads))
