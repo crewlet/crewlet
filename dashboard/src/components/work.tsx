@@ -42,7 +42,15 @@ import {
   typeName,
   readsBlocked,
 } from "~/lib/work.ts";
-import type { WorkIncomplete, WorkStatusDef, WorkSummary, WorkTypeDef } from "~/protocol/index.ts";
+import { badgedFlow, flowBadgeText, flowSentence, flowTone } from "~/lib/flow.ts";
+import type {
+  WorkFlow,
+  WorkFlowState,
+  WorkIncomplete,
+  WorkStatusDef,
+  WorkSummary,
+  WorkTypeDef,
+} from "~/protocol/index.ts";
 
 export interface RowChrome {
   /** What a handle is called. The chart's, so a row shows a person's name. */
@@ -349,6 +357,46 @@ export function AsksTag({ count }: { count?: number }) {
 }
 
 /**
+ * Why an item in progress is not moving, as the engine reads it (ADR-0162): its
+ * state, and when that ends or how long it has held. `moving` draws nothing, and
+ * `skip` leaves out a state the caller draws another way.
+ */
+export function FlowTag({
+  flow,
+  size,
+  skip,
+}: {
+  flow: WorkFlow | null | undefined;
+  size?: "xs" | "sm";
+  skip?: readonly WorkFlowState[];
+}) {
+  const shown = badgedFlow(flow);
+  const label = useClock((now) => (shown ? flowBadgeText(shown, now) : ""));
+  const sentence = useClock((now) => (shown ? flowSentence(shown, now) : ""));
+  if (!shown || skip?.includes(shown.state)) return null;
+  return (
+    <Tag
+      size={size}
+      variant={flowTone(shown.state)}
+      appearance="outline"
+      title={sentence}
+      data-flow={shown.state}
+    >
+      {label}
+    </Tag>
+  );
+}
+
+/** What a card draws another way: its band says working, its Blocked tag blocked. */
+const CARD_FLOW_SKIP: readonly WorkFlowState[] = ["working", "blocked"];
+
+/** Whether a card's flow badge draws: a state its band and Blocked tag do not say. */
+function cardFlow(row: WorkSummary): boolean {
+  const flow = badgedFlow(row.flow);
+  return Boolean(flow && !CARD_FLOW_SKIP.includes(flow.state));
+}
+
+/**
  * What a card's foot draws, and whether it has anything to draw at all.
  *
  * EVERY MARK DECIDES ITS OWN ABSENCE by rendering nothing, so a card on a task
@@ -366,6 +414,7 @@ function hasFootMarks(row: WorkSummary, omit: ReadonlySet<CardFact>): boolean {
   return Boolean(
     (!omit.has("priority") && row.priority && row.priority !== "none") ||
     readsBlocked(row) ||
+    cardFlow(row) ||
     (!omit.has("due") && row.due) ||
     (!omit.has("labels") && row.tags?.length) ||
     row.dependents_count ||
@@ -503,6 +552,7 @@ function CardFoot({
           Blocked
         </Tag>
       )}
+      <FlowTag flow={row.flow} size="xs" skip={CARD_FLOW_SKIP} />
       {tags.map((slug, i) => (
         <Tag
           key={slug}
@@ -714,6 +764,8 @@ export interface CoverageFacts {
   log_seq?: number;
   applied_through?: number;
   incomplete?: WorkIncomplete;
+  /** The rows' flow read the seats' live facts (ADR-0162). */
+  flow_live?: boolean;
 }
 
 /**
@@ -798,7 +850,8 @@ export function CoverageTags({ answer }: { answer?: CoverageFacts | null }) {
   const behind = appliedThrough(answer);
   const level = answer.read_level ?? "";
   const odd = oddLevel(level);
-  if (!odd && behind === null) return null;
+  const unlive = answer.flow_live === false;
+  if (!odd && behind === null && !unlive) return null;
   return (
     <span className="work-coverage">
       {odd && (
@@ -818,6 +871,17 @@ export function CoverageTags({ answer }: { answer?: CoverageFacts | null }) {
       {behind !== null && (
         <Tag appearance="outline" size="xs" title="This node holds records it has not applied yet">
           {behind}
+        </Tag>
+      )}
+      {/* NO ITEM READS WORKING OR HELD where the node has not read the seats yet. */}
+      {unlive && (
+        <Tag
+          variant="warning"
+          appearance="outline"
+          size="xs"
+          title="This node has not read the seats' live state yet, so no item reads working or held."
+        >
+          live state unread
         </Tag>
       )}
     </span>

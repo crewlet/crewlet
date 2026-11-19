@@ -1652,6 +1652,10 @@ waiting, and held once its start passes with the limit still on.
   stopped seat's work as moving. A model limit is learned from its park: a
   node that started while a seat was parked reads it at the engine's next park
   or probe, as the seat's row does.
+- **On the dashboard.** A card, a list row and the task's page draw the
+  state, cause and instants as sent: a badge for every state but `moving`, the
+  task's rail a **Flow** row, and a seat's Open work and the person picker its
+  load beside its open work.
 - **In the agents' tools.** `list_work_items`, `get_work_item` and `my_work`
   carry each item's flow and the answer's `flow_live`, read by the data node
   that answers the call, and their descriptions say what both mean.
