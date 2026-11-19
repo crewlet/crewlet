@@ -123,6 +123,8 @@ var contract = []Entry{
 	{"DECISION_MAX_OPTIONS", ReadScalar,
 		"internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"PROJECT_PAGE", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
+	{"ITEM_CONVERSATION_PREFIX", ReadScalar,
+		"internal/worklet.TestTheDashboardKnowsAnItemsConversationByTheEnginesKey"},
 	{"InformSurface", ReadUnion, "internal/worklet.TestTheDashboardNamesEveryInformSurface"},
 
 	// backups.ts

@@ -6,6 +6,7 @@
  * notices name each hold by its seat and its conversation, and say its cause.
  */
 
+import { ITEM_CONVERSATION_PREFIX } from "~/contract/work.ts";
 import type { AdvisorNotice } from "~/protocol/advisor.ts";
 
 /** The notice class of a held conversation. */
@@ -43,13 +44,15 @@ export function heldSetting(n: AdvisorNotice): string {
 
 /** The conversation key the engine gives a work item's own thread. */
 export function itemConversation(id: string): string {
-  return `task:${id}`;
+  return ITEM_CONVERSATION_PREFIX + id;
 }
 
 /** The work item a held conversation is about, where it is one. */
 export function heldItem(n: AdvisorNotice): string | undefined {
   const name = n.subject.name ?? "";
-  return name.startsWith("task:") ? name.slice("task:".length) : undefined;
+  return name.startsWith(ITEM_CONVERSATION_PREFIX)
+    ? name.slice(ITEM_CONVERSATION_PREFIX.length)
+    : undefined;
 }
 
 /** The engine's hold on item id's conversation, read off the advisor's notices. */
