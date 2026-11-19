@@ -14,7 +14,7 @@ import (
 
 // EVERY ROUTING REASON PRODUCES A PROMPT, AND EVERY PRIMARY ONE ASKS.
 //
-// A walk over the enum, not a list of cases: eighteen reasons share three
+// A walk over the enum, not a list of cases: nineteen reasons share three
 // frames, so a reason added later would silently take the weakest frame and
 // tell an assignee it is merely watching. Here a new reason must be classified
 // or the test names it.

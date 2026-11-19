@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/changefeed"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/named"
 	"github.com/crewlet/crewlet/internal/notify"
 )
 
@@ -349,6 +350,7 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	if n.WakesTruncated {
 		meta[MetaTruncated] = strconv.FormatBool(true)
 	}
+	room := roomLine(n)
 	return notify.Inbound{
 		Source: Source,
 		// THE RECORD'S OWN WORD for what happened — `post` or `edit` —
@@ -356,11 +358,12 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		// value the event store's source-event-type column carries, and
 		// a second spelling would make a dashboard filter over this
 		// domain's own log disagree with the log.
-		EventType: string(record.Op),
-		Sender:    n.Author,
-		Subject:   roomLabel(n),
-		Body:      wakeBody(record),
-		Metadata:  meta,
+		EventType:   string(record.Op),
+		Sender:      n.Author,
+		Subject:     room.Text,
+		SubjectRefs: room.Refs,
+		Body:        wakeBody(record),
+		Metadata:    meta,
 		// AND WHO WROTE IT, as the other first-party sources state theirs
 		// (notify.FirstPartyWriter): a message is said as a seat, an agent's
 		// or the human seat a person holds, so the writer is that seat (and
@@ -477,6 +480,12 @@ func canonicalKind(kind Kind) types.ChannelKind {
 		return types.ChannelPublic
 	}
 	return types.ChannelUnknown
+}
+
+// roomLine is [roomLabel] naming the room (package named), so a line about
+// the wake links to it.
+func roomLine(n *Notify) named.Line {
+	return named.Words("").Name(named.RoomRef(n.ChannelID, roomLabel(n)))
 }
 
 // roomLabel is how a room is named in a notification's subject line.

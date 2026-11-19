@@ -22,18 +22,13 @@ var log = logging.Get("a2a")
 // nowhere.
 //
 // The question is "does this seat exist and can it be woken", NOT "is it
-// running in this process". A colleague owned by another node is a perfectly
-// good target — the wake lands on its inbox and that node consumes it. Asking
-// a local pool instead made every cross-node ask fail as a typo, so the more
-// nodes a company ran, the fewer colleagues each agent appeared to have.
+// running in this process": a colleague owned by another node is a good
+// target, the wake lands on its inbox and that node consumes it.
 //
-// ONE CALL ANSWERS BOTH HALVES, deliberately. This used to be IsAgentSeat,
-// and the caller then built the wake's subject itself from the handle — so
-// "is this seat addressable" and "what address is it" were two derivations
-// that could disagree, which is exactly what they did the moment a seat's
-// durable address stopped being its handle. A human seat, an unknown handle
-// and a seat with no derivable id are one answer here, because a caller does
-// the same thing with all three.
+// One call answers both halves, so "is it addressable" and "what address" are
+// never two derivations that can disagree. A human seat, an unknown handle and
+// a seat with no derivable id are one answer, because a caller does the same
+// thing with all three.
 type Directory interface {
 	SeatInbox(handle string) (uuid.UUID, bool)
 }

@@ -13,68 +13,25 @@ import (
 	"github.com/crewlet/crewlet/internal/store"
 )
 
-// EVERY DAY AGAIN, after a reanchor of the usage log on any data node.
-//
-// # Why a reanchor owes the fleet every day
-//
-// Each data node re-anchors its own copy of this log (see reanchor.go), and a
-// RESTORED log is followed from its END: replayed into the new generation, the
-// copy's older records would outrank every row and roll each day back. So the
-// node that re-anchored never applies what was published after the restore
-// and before its reanchor. A day another data node republished in that tail —
-// yesterday's late turn, a custody settle of an older day — and has not moved
-// since stays at its pre-restore value on the re-anchoring node, because a
-// publisher sends a day only when it moves. It would stay so for the 181 days
-// the history holds it.
-//
-// So every data node publishes every day its own event log still holds again
-// — the floor below is the only limit — once any data node's generation of
-// this log rises past the generations it last answered. The move is seen in
-// the positions register, the one place each node's generation of each log is
-// published (internal/engine's heartbeat reads it, and hands it here as
-// [PublisherDeps.Generations]); the re-anchoring node's own entry is its
-// runner's, so its own reanchor is seen at once, and the applier that
-// reanchor relaunches wakes the publisher on its first drain — the
-// transition's last step, and the first moment it can publish
-// ([Publisher.Nudge]).
-//
-// # Under operation ids no earlier copy carries
-//
-// A record's operation id is its content's digest, which is what lets the
-// broker collapse a repeat — and here that is exactly the failure: a day a
-// node published a minute before the reanchor, sent again unchanged, would be
-// collapsed onto the copy the re-anchoring node skipped, and nothing would
-// land. So the id also covers the generations the publisher publishes under
-// ([Publisher.salt]): a pass answering a move carries ids no copy before the
-// move does, and every publish after it carries them too, so a repeat inside
-// one set of generations still collapses as it always did.
-//
-// # Answered once, across a restart
-//
-// The generations a pass answered are recorded once every day it derived has
-// settled ([store.DB.SetUsageRepublished]), and read before the first
-// observation — so a node down while a peer re-anchored, whose first beat
-// already reads the peer's new generation, still answers it, and a node that
-// answered it before a restart does not answer it again. A pass that has not
-// settled is not recorded, so a restart answers the same move again from the
-// watermark the pass lowered. A node that never answered any republishes once,
-// which on a fresh node is nothing.
-//
-// A RISE IS A REANCHOR, a mere change is not: a data node joining appears in
-// the register at whatever generation its donor's snapshot held, and nothing
-// it lacks is in a tail, so a node first seen is a move only above zero. A
-// change that moves nothing is recorded as answered without a pass.
-//
-// # What it cannot reach
-//
-// A day older than the event log is read back ([store.EventHistory]) is never
-// derived again (the floor in publish.go), so a day republished in the tail
-// and now past the floor keeps its pre-restore value on the re-anchoring node:
-// a reanchor run within the event log's history of the restore loses nothing,
-// and one run later loses those days to it.
+// EVERY DAY AGAIN, after a reanchor of the usage log on any data node. A
+// RESTORED log is followed from its END, so the node that re-anchored never
+// applies what was published after the restore and before its reanchor. A day
+// published in that tail and not moved since would stay at its pre-restore
+// value there for the 181 days the history holds it, since a publisher sends a
+// day only when it moves. So every data node publishes every day its event log
+// still holds again (the floor in publish.go is the only limit) once any node's
+// generation rises past those it last answered.
+// The positions register shows the rise (internal/engine's heartbeat hands it
+// in as [PublisherDeps.Generations]); the applier a reanchor relaunches wakes
+// the publisher on its first drain ([Publisher.Nudge]). A day past the floor
+// keeps its pre-restore value on the re-anchoring node.
 
 // Generations is the usage log's generation on each data node, keyed by node
-// id, as the positions register states it.
+// id, as the positions register states it. A RISE IS A REANCHOR, a mere change
+// is not: a node joining appears at whatever generation its donor's snapshot
+// held and lacks nothing a tail holds, so a node first seen is a move only
+// above zero. A change that moves nothing is recorded as answered without a
+// pass.
 type Generations map[string]uint32
 
 // String is the canonical spelling: `node@generation`, by node, comma-joined —
@@ -123,7 +80,10 @@ func (g Generations) Rises(than Generations) bool {
 
 // salt is what an operation id covers beside the content: the generations the
 // publisher publishes under — those of a pass in progress, or the last ones it
-// answered. See the file's header.
+// answered. An id that was the content's digest alone would let the broker
+// collapse a day sent unchanged after the reanchor onto the copy the
+// re-anchoring node skipped, and nothing would land; a repeat inside one set
+// of generations still collapses.
 func (p *Publisher) salt() string {
 	if p.republishing != nil {
 		return p.republishing.String()
@@ -137,7 +97,12 @@ func (p *Publisher) salt() string {
 // observeGenerations reads, once per process, the generations this publisher
 // last answered, and then holds what the engine last read of the register
 // against them: a rise starts a pass over every day ([Publisher.republishAll]),
-// a change that rises nothing is recorded as answered. The caller holds mu.
+// a change that rises nothing is recorded as answered. The answered set is
+// recorded once every day the pass derived has settled
+// ([store.DB.SetUsageRepublished]) and read before the first observation, so a
+// node down while a peer re-anchored still answers it, and one that answered
+// before a restart does not again; an unsettled pass is answered again from
+// the watermark it lowered. The caller holds mu.
 func (p *Publisher) observeGenerations(ctx context.Context, now time.Time,
 	loc *time.Location) error {
 

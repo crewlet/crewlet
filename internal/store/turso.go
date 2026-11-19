@@ -13,27 +13,14 @@ import (
 
 // Turso's native library, and why this file exists.
 //
-// The Turso driver is pure Go in the sense that matters — no cgo, no C
-// toolchain — but it is not self-contained: the engine it drives ships as a
-// native library EMBEDDED in the driver's own module, extracted on first use
-// into a per-user cache and loaded from there with purego. That extraction is
-// process-shared state populated lazily, and it is populated UNSAFELY:
-// upstream writes straight into the final path rather than to a temporary file
-// it renames. Two processes starting at once is all it takes — one creates the
-// file and begins copying twenty megabytes into it, the other sees a non-empty
-// file, hashes what is there so far, and gets a mismatch.
-//
-// That mismatch is not a degraded mode. `tursogo.InitLibrary` PANICS on it,
-// inside a sync.Once — which marks itself done even when the function it ran
-// panicked, so the failure is not retryable within the process either. The
-// engine dies on its first query, and the corrupt file it read stays on disk
-// making every later start fail the same way, until somebody deletes a cache
-// entry they have never heard of.
-//
-// So the preparation happens HERE, before anything opens a connection, where
-// it can be serialised across processes and where the underlying loader —
-// which is exported, and returns an error rather than panicking — can be
-// called directly.
+// The engine ships as a native library EMBEDDED in the driver's module,
+// extracted on first use into a per-user cache and loaded with purego.
+// Upstream extracts UNSAFELY, straight into the final path: a second process
+// sees a partial file and hashes a mismatch, and `tursogo.InitLibrary` PANICS
+// inside a sync.Once (done even after a panic, so not retryable) while the
+// corrupt file fails every later start. So preparation happens HERE, before
+// any connection, serialised across processes, through the exported loader,
+// which returns an error instead of panicking.
 
 // tursoCacheDirName is upstream's subdirectory under the user cache root. It
 // is not exported by the library, so it is mirrored here; getting it wrong
@@ -140,27 +127,13 @@ func loadOrHealTursoLibrary(dir string) error {
 // libcAdvice names the C library requirement, when there is evidence it is
 // the thing in the way.
 //
-// # Why this sentence exists
-//
-// Everything about this engine says "static binary" — one file, no runtime,
-// CGO_ENABLED=0 — and on linux that is FALSE, measured. The driver reaches its
-// database engine through purego, which declares its dlopen/dlsym imports with
-// //go:cgo_import_dynamic, so the linker emits a DYNAMIC executable even with
-// cgo off: interpreter /lib64/ld-linux-x86-64.so.2, NEEDED libc.so.6. The
-// linux binaries require glibc.
-//
-// On a plain musl system that fails at execve and nothing here ever runs, so
-// this is not the message that case gets — the kernel's is, and it is
-// "no such file or directory" about a file that exists. What this covers is
-// the case that DOES reach Go: a musl host with a glibc shim (gcompat and
-// friends), where the process starts and then the extracted shared object
-// will not load. That failure otherwise arrives dressed as "the cache will not
-// verify", about a cache that is perfect, and sends an operator to delete a
-// directory that is rebuilt identically.
-//
-// Appended rather than substituted, and phrased as "looks like": the evidence
-// is one glob (see runningOnMusl), a host can carry both C libraries, and the
-// underlying error is still the thing to read.
+// On linux the binary is NOT static despite CGO_ENABLED=0: purego's
+// //go:cgo_import_dynamic imports make a DYNAMIC executable needing glibc.
+// Plain musl fails at execve and never reaches here; this covers a musl host
+// with a glibc shim (gcompat), where the shared object will not load and the
+// error otherwise reads as "the cache will not verify". Appended, not
+// substituted, and phrased "looks like": the evidence is one glob
+// (runningOnMusl) and the underlying error is still the thing to read.
 func libcAdvice() string {
 	if !runningOnMusl() {
 		return ""
@@ -217,16 +190,12 @@ func clearTursoCache(dir string) {
 // acquireTursoLock takes a cross-process lock on the cache directory.
 //
 // A DIRECTORY, because mkdir is the one exclusive-create primitive every
-// filesystem and every operating system this engine ships for agrees on —
-// unlike flock, which needs a build-tagged Windows twin, and unlike an
-// O_EXCL file, which is the same idea with an extra step. It is held only
-// across an extraction.
+// filesystem and OS this engine ships for agrees on (flock needs a build-tagged
+// twin). Held only across an extraction.
 //
-// The second return says whether the lock is HELD, and a false there is not an
-// error: a wait that timed out, or a cache directory this process cannot write,
-// both end with the preparation running unguarded — which is exactly the
-// behaviour before this file existed, and strictly better than refusing to
-// start.
+// The second return says whether the lock is HELD; false is not an error: a
+// timed-out wait or an unwritable cache directory runs the preparation
+// unguarded, better than refusing to start.
 func acquireTursoLock(dir string, deadline time.Time) (release func(), held bool) {
 	lock := filepath.Join(dir, ".crewlet-extract.lock")
 	for {

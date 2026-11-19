@@ -516,20 +516,16 @@ func better(a, b []piece) bool {
 
 // unimplied is need without each clause another one implies: a clause whose
 // every substring, folded or not, is one of a second clause's is satisfied by
-// every text that satisfies it, so the conjunction admits the same texts with
-// the second dropped, and checking that one on every text a scan admits buys
-// nothing. Of two alike, the first stands, so the order [better] put them in
-// holds. Every clause dropped is implied by one kept: the relation is a
-// strict order over a finite list, so each dropped clause has a kept one
-// beneath it.
+// every text satisfying it, so dropping the second admits the same texts and
+// saves checking it. Of two alike, the first stands, keeping [better]'s order.
+// Each dropped clause has a kept one beneath it: a strict order over a finite
+// list.
 //
-// WHY IT IS NEEDED: syntax.Simplify writes a part repeated n times as n
-// copies of it, and [concat] keeps every child's clauses, so (foo.*){100} was
-// a hundred clauses of foo and foo.*(foo|bar) kept the wider second clause.
-// Two clauses that differ only in how they compare (foo, and (?i)foo) both
-// stay: the plain one implies the folded one, but pieces are compared as they
-// are, and an index that lowers both reads them as one (codeindex's own
-// unimplied).
+// WHY: syntax.Simplify writes a part repeated n times as n copies and [concat]
+// keeps every child's clauses, so (foo.*){100} was a hundred clauses of foo.
+// Clauses differing only in comparison (foo, and (?i)foo) both stay: pieces
+// are compared as they are, and an index that lowers both reads them as one
+// (codeindex's own unimplied).
 func unimplied(need [][]piece) [][]piece {
 	within := func(a, b []piece) bool {
 		for _, p := range a {
@@ -581,20 +577,14 @@ func dedupe(set []piece) []piece {
 // lowering of the text it is searched in, which is what [Prefilter.Admits]
 // compares a folded substring against.
 //
-// The regexp matches a folded rune r against every rune in r's case-folding
-// ORBIT (unicode.SimpleFold's cycle), so lowering is sound for r when every
-// member of the orbit lowers to one value. Two kinds of orbit do not:
-//
-//   - one holding an ASCII letter whose other members do not all lower to
-//     that letter's lowering. That is `s`, `S` and U+017F (ſ), which lowers
-//     to itself. Those members are the [escapes]: a text holding one is
-//     admitted whatever else it says, and r is looked for as the ASCII
+// The regexp matches r against its case-folding ORBIT (unicode.SimpleFold's
+// cycle), so lowering is sound when every member lowers to one value. Two
+// orbits do not, both derived from the regexp package's own tables:
+//   - one holding an ASCII letter whose other members do not all lower to its
+//     lowering (`s`, `S`, U+017F ſ). Those are the [escapes]: a text holding
+//     one is admitted whatever else it says, and r is looked for as the
 //     letter's lowering;
-//   - any other orbit whose members lower to different values — σ, ς and Σ,
-//     for one. Its runes are not comparable, and a literal is cut at them.
-//
-// Both are derived from the tables the regexp package folds with, so the rule
-// holds for whatever Unicode version this Go carries.
+//   - any other whose members lower differently (σ, ς, Σ): a literal is cut.
 func foldedRune(r rune) (rune, bool) {
 	lowered := unicode.ToLower(r)
 	consistent := true
@@ -622,18 +612,15 @@ func foldedRune(r rune) (rune, bool) {
 }
 
 // HasEscape reports whether body holds a rune no folded comparison can see
-// through: one the regexp folds together with an ASCII letter and that does
-// not lower to that letter's lowering — derived from the Unicode tables (see
-// [escapes]), U+017F (ſ) alone today. A (?i) literal can match such a text
-// at a place its lowering does not show, so [Prefilter.Admits] admits it
-// outright whenever a clause compares folded, and a caller making the
-// comparison itself from [Prefilter.Terms] cannot rule it out by any Folded
-// term.
+// through: one the regexp folds with an ASCII letter that does not lower to
+// that letter's lowering (see [escapes]), U+017F (ſ) alone today. A (?i)
+// literal can match such a text where its lowering does not show, so
+// [Prefilter.Admits] admits it outright whenever a clause compares folded, and
+// a caller using [Prefilter.Terms] cannot rule it out by any Folded term.
 //
-// internal/codeindex keeps this answer for every blob it indexes, in segment
-// files that outlive the build that wrote them and name only the Unicode
-// version it was taken with: a change to how the escapes are derived from
-// the tables is a change to that segment format, and moves its version.
+// internal/codeindex keeps this answer per blob in segment files that outlive
+// the build and name only the Unicode version: changing how escapes derive
+// from the tables changes that format and moves its version.
 func HasEscape(body []byte) bool {
 	return escapes().in(body)
 }

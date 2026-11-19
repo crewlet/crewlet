@@ -137,14 +137,13 @@ func (r Ref) EngineNamed() (Source, bool) {
 // integrations' status of an account, the tool servers' listings of a tool
 // server, and the fleet's presence of the engine, its nodes, its broker and
 // that broker's servers, and its object store. The other families (seat
-// access, connection tests, the access log, usage) state no fact at all: what
-// they say is joined to the view as health and use, never claimed.
+// access, connection tests, access log, usage) state no fact: they are joined
+// to the view as health and use, never claimed.
 //
-// THE ANSWER IS BY THE KEY ALONE, so it holds for a record that could not be
-// read: a write about an entry asks it to learn whether an unread family
-// could have held a fact of that entry. A family that starts stating facts of
-// more entries widens this in the same change, and the gather package's test
-// over every derived claim fails until it does.
+// THE ANSWER IS BY THE KEY ALONE, so it holds for an unread record: a write
+// about an entry asks whether an unread family could have held its facts. A
+// family that starts stating facts of more entries widens this in the same
+// change; the gather package's test over every derived claim fails until it does.
 func (r Record) Claims(ref Ref) bool {
 	switch r {
 	case RecordGitlet:

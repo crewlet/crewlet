@@ -12,16 +12,14 @@ import (
 // shippedKits is every artifact kit version this engine has embedded, oldest
 // first. APPEND ONLY.
 //
-// A page links the kit by an exact version (`/_crewlet/kit/0.18.0/kit.css`),
-// and a published version's files are immutable, so a page written against a
-// kit keeps asking for that kit for as long as the version exists. Dropping a
-// directory here would leave every such page unstyled, with nothing failing
-// until a reader opened one. The runtime build never removes a kit directory
-// it no longer writes (`dashboard/vite.runtime.config.ts`), and this ledger is
-// what holds that in review: removing a version means removing it here too.
-//
-// Moving the dashboard to a new @crewlethq/artifact-kit release adds its
-// version at the end, after `make dashboard` has written the directory.
+// A page links the kit by an exact version (`/_crewlet/kit/0.18.0/kit.css`)
+// and a published version's files are immutable, so a page keeps asking for
+// its kit as long as the version exists. Dropping a directory would leave
+// every such page unstyled, with nothing failing until a reader opened one.
+// The runtime build never removes a kit directory it no longer writes
+// (`dashboard/vite.runtime.config.ts`); this ledger holds that in review.
+// A new @crewlethq/artifact-kit release adds its version at the end, after
+// `make dashboard` has written the directory.
 var shippedKits = []string{
 	"0.18.0",
 	"0.20.0",
@@ -146,6 +144,7 @@ var shippedKits = []string{
 	"0.156.0",
 	"0.157.0",
 	"0.158.0",
+	"0.159.0",
 }
 
 // TestEveryShippedKitVersionStaysEmbedded: each version in the ledger is still

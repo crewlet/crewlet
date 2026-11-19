@@ -166,12 +166,10 @@ func TestAMessagePastTheReadLimitEndsOnlyWhatItIsFor(t *testing.T) {
 }
 
 // THE READER ROUTES A MESSAGE PAST THE READ LIMIT BY ITS START AND ITS END,
-// the envelopes it keeps of it: the id or the method among the members its
-// start holds whole, in any order, and its session from a member there or
-// from the last member of the object, which is where Chromium writes it —
-// never from a member nested in the parameters, nor from words inside a
-// string that look like one. (How the reader keeps the two envelopes as the
-// message streams past is TestAMessagePastTheReadLimitEndsOnlyWhatItIsFor's.)
+// the envelopes it keeps: the id or the method among the members its start
+// holds whole, in any order, and its session from a member there or from the
+// object's last member, where Chromium writes it, never from a member nested in
+// the parameters or words inside a string that look like one.
 //
 // Mutations: take the session from the last "sessionId" member the end holds,
 // wherever it sits, and the one nested in the parameters is read as the
@@ -497,32 +495,18 @@ func backlogs(c *Conn, s *Session) (conn, session int) {
 	return c.backlog, s.backlog
 }
 
-// A READER THE PAGE OUTRUNS ENDS ONLY ITS SESSION: the events a session's
-// listeners have not taken count against MaxBacklog, each once however many of
-// them hold it, and past it that session ends with ErrBacklog and lets go of
-// what its listeners held — they report the end at once, handing nothing over
-// — while a sibling session and the connection go on. The browser's own
-// session ends only with its connection, so a listener of its that does not
-// keep up ends the connection, while a second connection goes on. An event
-// nobody listens for counts nothing, and an event taken counts no more — so a
-// listener that keeps up passes any amount — nor does one a listener held when
-// it was closed, its session ended or not. An event of just under ReadLimit,
-// which two listeners of a page's session hold while another tab's listener
-// holds events of its own, ends nothing, and the page's next event ends the
-// page's session alone.
-//
-// Mutations: stop subtracting what a listener takes, and the listener that
-// keeps up ends its connection; stop subtracting what a closed listener held,
-// and the events a listener opened after it takes end the connection; let
-// Close do nothing once the listener's session has ended, and the ended
-// session's events stay counted; count an event once for each listener that
-// holds it, and the two listeners' events end their session; let go of an
-// event at the first of its holders to take it, and what the second still
-// holds counts nothing; count every session's events against one MaxBacklog,
-// and the event just under ReadLimit ends the connection; end the browser's
-// own session alone, and its listener's flood leaves the connection open; hand
-// a session's listener what it held after its backlog's end, and it reads the
-// events it was let go of — red.
+// A READER THE PAGE OUTRUNS ENDS ONLY ITS SESSION: events a session's
+// listeners have not taken count against MaxBacklog, once however many hold
+// them, and past it that session ends with ErrBacklog and lets go of what its
+// listeners held, while a sibling session and the connection go on. The
+// browser's session ends only with its connection, so its listener falling
+// behind ends the connection. Events nobody listens for, events taken and
+// events held by a closed listener count nothing. An event just under ReadLimit
+// held by two listeners ends nothing; the page's next ends its session alone.
+// Mutations (red): stop subtracting what a listener takes or a closed one held;
+// let Close do nothing once the session ended; count per holder; let go at the
+// first holder; share one MaxBacklog; end the browser's session alone; hand a
+// listener what it held after its backlog's end.
 func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 	t.Parallel()
 	const chunk = 1 << 20
@@ -844,18 +828,14 @@ func TestAReaderThePageOutrunsEndsOnlyItsSession(t *testing.T) {
 // THE CONNECTION'S BACKSTOP ENDS THE SESSION THAT HOLDS THE MOST: once the
 // events every session's listeners hold would pass MaxConnBacklog, the session
 // holding the most ends with ErrBacklog and lets go of them, and the event that
-// would have passed the backstop is delivered — its own session is never ended
-// for another's flood. A session that has ended already, its listener not yet
-// drained, lets go of what it holds the same way, its listener reporting the
-// session's own end with ErrBacklog beside it; and the browser's own session,
-// holding the most, ends the connection. Not parallel: each case holds nearly
-// MaxConnBacklog at once.
+// would have passed is delivered, its own session never ended for another's
+// flood. A session already ended, its listener undrained, lets go the same way;
+// the browser's session, holding the most, ends the connection. Not parallel:
+// each case holds nearly MaxConnBacklog at once.
 //
-// Mutations: end the event's own session at the backstop, and the small
-// session ends while the large ones go on — red; look for the most among the
-// sessions the connection still holds rather than every one whose listeners
-// hold events, and an open session ends in the detached one's place — red;
-// end the browser's own session alone, and the connection stays open — red.
+// Mutations (red): end the event's own session at the backstop; look for the
+// most among sessions still held rather than every one whose listeners hold
+// events; end the browser's own session alone.
 func TestTheConnectionsBackstopEndsTheSessionThatHoldsTheMost(t *testing.T) {
 	const chunk = 1 << 20
 	text := strings.Repeat("x", chunk)
@@ -1221,19 +1201,15 @@ func TestTheClientNeverLogsOrReportsParametersOrResults(t *testing.T) {
 }
 
 // A SESSION THE CONNECTION DOES NOT HOLD IS ONE THAT HAS ENDED: looked up after
-// its detach, a session is handed back ended — Done closed, Err a
-// *DetachedError naming it — and so is an id the connection never held, and
-// one announced naming no target, which a crash could never name; never a
-// session left open that nothing would end. A call on any of them fails at
-// once and sends nothing, the browser's next frame being a live call made
-// after them. On a connection that has ended, any id is a session that ended
-// with it.
+// its detach, or an id never held, or one announced naming no target (which a
+// crash could never name), it is handed back ended (Done closed, Err a
+// *DetachedError naming it), never left open with nothing to end it. A call on
+// it fails at once and sends nothing. On an ended connection any id is a
+// session that ended with it.
 //
-// Mutations: register an id the connection does not hold, and the session
-// looked up after its detach is open — red; register an announcement that
-// names no target, and that session is open — red; drop Session's case of an
-// ended connection, and a session looked up after the end reports a detach —
-// red.
+// Mutations (red): register an id the connection does not hold; register an
+// announcement naming no target; drop Session's ended-connection case, so a
+// session looked up after the end reports a detach.
 func TestASessionTheConnectionDoesNotHoldHasEnded(t *testing.T) {
 	t.Parallel()
 	ctx := bounded(t)

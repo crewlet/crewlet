@@ -8,22 +8,16 @@ import (
 
 // # Where a person changes the limit that refused them (ADR-0060)
 //
-// A refusal a CONFIGURABLE LIMIT caused (a token budget spent) says what
-// happened, and the person reading it then has to find the setting that
-// caused it. A [Remedy] names that setting as a value beside the refusal's
-// words: which [Setting] it is and, for one kept per seat, which seat. A
-// person's surface resolves it to the screen and the section that edit it,
-// and decides with its own write gate whether the reader may change it.
+// A [Remedy] names the setting behind a refusal a CONFIGURABLE LIMIT caused
+// (a token budget spent) as a value beside the refusal's words: which
+// [Setting] and, for one kept per seat, which seat. A person's surface
+// resolves it to the screen that edits it and decides with its own write gate
+// whether the reader may change it.
 //
-// A VALUE, NOT A SENTENCE OR AN ADDRESS. The words stay the refusal's, so a
-// remedy adds nothing a person reads that the catalog did not write; and the
-// engine names no dashboard address, because the dashboard's link table owns
-// where a screen lives (`dashboard/src/lib/remedy.ts`), and a screen that moves
-// moves there alone. Nor does a remedy name the grants that may change the
-// setting: the screen it resolves to draws its editor behind the dashboard's
-// own write gate (Admin, a lead inside their subtree, and the writers of a
-// managed document), and the remedy is drawn behind that same gate, so the
-// link and the editor it opens cannot disagree about who may change it.
+// A VALUE, NOT A SENTENCE OR AN ADDRESS. The words stay the refusal's; the
+// dashboard's link table owns where a screen lives
+// (`dashboard/src/lib/remedy.ts`). Nor does it name the grants that may change
+// the setting: the remedy is drawn behind the same write gate as its editor.
 
 // Setting is a configurable limit a remedy names: a named string type, so a
 // value off the wire this build does not know is a value rather than a panic.

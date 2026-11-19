@@ -52,7 +52,7 @@ func TestASpanHoldingTheToldRoundIsNoPartnerOfItsCalls(t *testing.T) {
 		return ledger.Iteration{Iteration: 1, Through: through, Elided: []ledger.Elided{{Name: "slack_post",
 			Calls: 3}}}
 	}
-	told := BridgedCall{Call: ledger.Call{Name: "slack_post", Args: map[string]any{"text": "hi"}}, Late: true}
+	told := BridgedCall{Call: ledger.Call{Name: "slack_post", Args: map[string]any{"text": "hi"}, Late: true}}
 	opts := ledger.Format(nil, nil)
 	r := &Runner{}
 	for name, tc := range map[string]struct {

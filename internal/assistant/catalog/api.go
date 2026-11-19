@@ -19,39 +19,17 @@ import (
 )
 
 // THE GENERIC API TOOLS: the person's whole API, through their assistant
-// (ADR-0052's parity). Beside the curated tools, which stay as better-shaped
-// shortcuts, three tools reach every route the API mounts that the person's
-// grant can reach:
+// (ADR-0052's parity). Beside the curated tools, three reach every route the
+// API mounts that the person's grant can reach: [DescribeAPITool] lists routes
+// and answers one's documentation from the API reference, so the model looks a
+// route up, not guesses; [APIRequestTool] reads (GET, HEAD), shaped and fenced
+// by [Shape]; [ProposeAPIChangeTool] writes (POST, PUT, PATCH, DELETE), always
+// a proposal previewed from the resource as it is, sent only from the person's
+// approval (ADR-0051).
 //
-//   - [DescribeAPITool] lists those routes and answers one route's
-//     documentation, read from the engine's own API reference, so the model
-//     looks a route up rather than guessing it;
-//   - [APIRequestTool] reads: a GET or a HEAD on any of them, its answer
-//     shaped and fenced by [Shape] as every read's is;
-//   - [ProposeAPIChangeTool] writes: a POST, PUT, PATCH or DELETE, which is
-//     always a proposal, previewed from the resource as it is now and sent
-//     only from the person's approval (ADR-0051).
-//
-// # A call names a route of the table, never a URL
-//
-// The arguments name a route exactly as [RouteTable] holds it ("PATCH
-// /config"), each wildcard's value apart, and the request is built from that:
-// every value one path segment, escaped ([at]), a trailing `{name...}`
-// escaped segment by segment, and a dot segment refused. So a call can only
-// ever be a request to a route this build mounts, and [Tool.Request] holds the
-// built request to the table again before anything is sent.
-//
-// # The table is a filter and never authority
-//
-// The API binds its route table here once it is built ([API.Bind]): the
-// guarded routes with the verb each is mounted with, the named reads, the
-// overview reads, the question route and the act route. A route whose verb the
-// authority table keeps from the assistant is left out of what the model is
-// offered, and every call is still decided by the API's own guard, as the
-// person, through the grant the turn holds (ADR-0050): the guard refuses a
-// write to a read grant, the authority table's assistant column refuses the
-// human-only verbs, and the request binding holds an exec grant to the one
-// request that was approved.
+// A call names a route as [RouteTable] holds it ("PATCH /config"), each
+// wildcard's value apart, every value one escaped segment ([at]), a dot
+// segment refused, so it is only a request to a mounted route. See [API.Bind].
 
 // GenericBodyBytes is the most a generic change's request body may hold:
 // sixty-four kibibytes. What the person approves is what the body moves, drawn
@@ -243,7 +221,15 @@ type API struct {
 	table atomic.Pointer[RouteTable]
 }
 
-// Bind hands the API's route table to the catalogue, once.
+// Bind hands the API's route table to the catalogue, once, as the guarded
+// routes with the verb each is mounted with, the named and overview reads, the
+// question route and the act route. THE TABLE IS A FILTER, NEVER AUTHORITY: a
+// route whose verb the authority table keeps from the assistant is left out of
+// what the model is offered, and every call is still decided by the API's own
+// guard, as the person, through the turn's grant (ADR-0050): the guard refuses
+// a write to a read grant, the authority table's assistant column the
+// human-only verbs, and the request binding holds an exec grant to the one
+// request that was approved.
 func (a *API) Bind(routes []Route) error {
 	table, err := NewRouteTable(routes)
 	if err != nil {

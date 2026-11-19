@@ -22,7 +22,7 @@
 // send (method, path, query and body, re-encoded by internal/api/opkey's one
 // canonical encoding), the object's source revision, and the field table the
 // preview read. Its digest ([Digest]) is a SHA-256 over all of it and the
-// owner, the conversation, the turn, the verb, whether its approval asks a
+// owner, the conversation, the turn, the scope, the tool, the verb, whether its approval asks a
 // step-up and the expiry; the card shows it, the approval
 // echoes it, the stored fields are re-hashed against it, and the exec grant
 // the approval derives is bound to the request digest of the one request it
@@ -35,7 +35,8 @@
 // from proposed to approved only through an arbitrated record (two approvals
 // on two nodes, one wins), from approved to executing (a server write) or
 // applying (a page change), and on to applied or failed; declined, expired and
-// stale end it ([Next], one table). Unknown is the act route's own third outcome, surfaced and
+// stale end it ([Next], one table). [StateNow] is the one reading every card
+// is rendered by: it decides expiry and unknown lazily, when read. Unknown is the act route's own third outcome, surfaced and
 // never retried automatically: a Retry sends the SAME operation again, so the
 // tracker still holds one record.
 package proposal

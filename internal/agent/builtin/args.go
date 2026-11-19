@@ -117,17 +117,14 @@ func argStringMap(args map[string]any, key string) map[string]string {
 // refused is a tool result the model can act on, carrying the class a reader
 // that is not a model acts on instead.
 //
-// Failed rather than an error: the turn is fine, this call is not, and the
-// difference is what lets the model try again with a better argument instead
-// of the loop tearing down.
+// Failed rather than an error: the turn is fine, this call is not, so the model
+// can retry with a better argument instead of the loop tearing down.
 //
-// THE CLASS IS AN ARGUMENT, never inferred from the sentence, because the
-// sentence is prompt text tuned against model behaviour and rewording it must
-// not move a person's surface to a different status. It is the result's
-// CAUSE ([tools.Refusal] is an error), which is the one place a reader asks
-// ([tools.RefusalOf]): a class beside the cause would be a second classifier
-// of one failure, free to tell the audit one story and the write surface
-// another.
+// THE CLASS IS AN ARGUMENT, never inferred from the sentence: the sentence is
+// prompt text, and rewording it must not move a person's surface to another
+// status. It is the result's CAUSE ([tools.Refusal] is an error), the one place
+// a reader asks ([tools.RefusalOf]); a class beside the cause would be a second
+// classifier of one failure.
 func refused(code tools.Refusal, msg string) tools.Result {
 	return tools.Result{Output: msg, Failed: true, Cause: code}
 }
@@ -153,23 +150,18 @@ func (a argRefused) Error() string { return "builtin: refused argument " + strin
 // RefusedField is the argument, as a surface outside the tools asks it of a cause's chain.
 func (a argRefused) RefusedField() string { return string(a) }
 
-// refusedBy is [refused] for a refusal something underneath decided — a read
-// that found nothing, a write the log refused — carrying that error BENEATH
-// the class ([tools.Classify]), so a caller branching on the domain's own
-// sentinel and a reader asking for the class read one value.
+// refusedBy is [refused] for a refusal something underneath decided, carrying
+// that error BENEATH the class ([tools.Classify]), so a caller branching on the
+// domain's sentinel and a reader asking for the class read one value.
 //
-// THE MESSAGE IS STILL THE WHOLE ANSWER to a model. What the cause buys is
-// that a caller answering in STATUS CODES can tell an item that does not exist
-// from a version somebody moved from a node that could not decide, without
-// parsing a sentence written for a model — and the class is the tool's
-// statement about THIS call, which is why it is an argument: an item that does
-// not exist is not-found when the call is about it and an invalid argument
-// when the call merely named it.
+// The message is still the whole answer to a model. The cause lets a caller
+// answering in STATUS CODES tell a missing item from a node that could not
+// decide. The class is an argument because it describes THIS call: a missing
+// item is not-found when the call is about it, invalid when it merely named it.
 //
-// AND THE PERSON'S WORDS ARE THE CAUSE'S (ADR-0060): a writer that refused
-// with a person's phrasing beside its error ([caveat.Saying]) has it lifted
-// onto the result here, the one place a refusal with a cause is made, so no
-// tool answering that error has to remember to carry it.
+// THE PERSON'S WORDS ARE THE CAUSE'S (ADR-0060): phrasing a writer put beside
+// its error ([caveat.Saying]) is lifted here, the one place a refusal with a
+// cause is made, so no tool has to remember to carry it.
 func refusedBy(class tools.Refusal, cause error, msg string) tools.Result {
 	return tools.Result{Output: msg, Failed: true, Cause: tools.Classify(class, cause),
 		PersonRefusal: caveat.RefusalOf(cause)}
@@ -184,115 +176,17 @@ func toPerson(r tools.Result, words caveat.Refusal) tools.Result {
 }
 
 // Condition says whether a failure no sentinel of the caller's claimed is a
-// CONDITION of this node — one WAITING can clear — and the words a caller may
-// be told it in; ok is false for a FAULT of the node, which waiting does not
-// clear and whose words are the log's ([faulted]).
+// CONDITION of this node, one WAITING can clear, and the clause a model may be
+// told it in; ok is false for a FAULT, which waiting does not clear and whose
+// words are the log's ([faulted]).
 //
-// # The conditions
-//
-// A refusal or an outcome the state log composed ([statelog.ErrUnavailable]:
-// a node behind its log, below its floor, holding a record it cannot decode, a
-// log that refused the append); a coordination store that did not answer
-// ([coord.ErrUnavailable]); the estate's router finding no data node to run
-// the call on ([estate.ErrUnserved]) — every node holding the company's
-// records answered that its copy is out of service or behind, or, for a read,
-// did not answer at all; the fleet's nodes running two builds mid-upgrade
-// ([estate.ErrUnknownKeys]), which a wait clears only once an operator
-// finishes the upgrade — no data node's build reads the call whole, which
-// wraps the estate nobody served, or this node's build cannot read whole the
-// answer a data node gave, which wraps nothing, since that node ran the call;
-// an estate held closed while a peer's snapshot is adopted
-// ([store.ErrNoEstate]); a store whose write lock the writers ahead of this one
-// held for longer than the write would wait ([store.ErrBusy]); an event queue
-// that is not live while this node starts or stops ([queue.ErrNotLive]); an
-// event broker this node could not reach — its connection reconnecting, or the
-// broker not answering in time ([queue.ErrUnavailable]); a note the node
-// running its turn could not verify because the two nodes do not hold the same
-// keys ([steer.ErrUnverified]), and an executor's record naming its seat under
-// a key this node does not hold ([steer.ErrSeatKeyUnknown]), neither of which a
-// wait clears; a coding sandbox that
-// failed for a reason its backend classed ([sandbox.WhyOf]: its provider not
-// answering, at a limit, refusing the company's key or wanting its account
-// paid, or a setup a person has to change), told by the class and never the
-// provider's own words, whose wait follows the class ([sandbox.Why.Waits]); the
-// node running an executor's box unable to answer about it for a reason of its own
-// ([sandbox.ErrTailUnanswered]); a wait that ran out of time or was abandoned. Everything else that reaches a
-// tool unmarked — a read
-// of this node's own store that broke, a database that refused a statement, a
-// path in its own code that went wrong — is a fault.
-//
-// EACH IS A SENTINEL ITS OWN PACKAGE MARKS, never a reading of an error's
-// words: the store marks only the lock it never took, because a "database is
-// locked" a statement met for any other reason is not a wait, and the queue
-// marks only what its broker did not answer, because "connection closed" from a
-// client closed for good is ErrNotLive and a broker's own refusal is neither.
-// A classifier matching text here would call a disk error with "locked" in its
-// path a condition.
-//
-// # Why the line is drawn here
-//
-// Because the two send a caller opposite ways. [tools.RefusalUnavailable] is
-// answered `503` with a `Retry-After`, and a model is told to try again —
-// right for a node behind its log, which catches up, and a lie about a store
-// that cannot be read, which a client polled every two seconds until somebody
-// fixed the node. So every classifier that called each unmarked failure
-// "unavailable" asks this first, and classes the rest
-// [tools.RefusalInternalError].
-//
-// A STATE-LOG REFUSAL STAYS A CONDITION EVEN WHERE WAITING CANNOT CLEAR IT —
-// an evicted node, a record this node cannot decode — because the refusal says
-// so itself: [statelog.RetryAfter] answers zero for those, and a surface
-// answers them `503` with no `Retry-After`. A fault is what NOTHING classified.
-//
-// AND AN ESTATE NOBODY SERVED IS A CONDITION OF THE FLEET, not a fault of this
-// node: every read and write a seat or a person makes of the tracker and the
-// knowledge base goes through the estate's router, which answers
-// [estate.ErrUnserved] once every data node it asked ran nothing — a copy out
-// of service, a node restarting, a peer that did not answer. None of that is
-// broken code, and all of it clears when a data node serves again. It wraps no
-// sentinel this rule already knew, so until it was named here every such call
-// was answered `500` and told the caller sending it again would not help.
-// What the router COULD NOT ACCOUNT FOR is a different answer, never this one:
-// a write it sent and never heard back about — from the one node a write with
-// no key of its caller's goes to, or from every node a repeatable write was
-// asked of ([estate.ErrOutcomeUnknown]) — may have landed, and is an unknown
-// outcome ([UnknownCause]), told in [Unanswered].
-//
-// # Two readers, and the words each is told
-//
-// A condition reaches a MODEL inside a tool's sentence ("Could not read your
-// notes (…). Try again shortly."), and a PERSON on a screen, through every
-// surface that tells one in a person's words: the identity directory, the
-// artifacts, the configuration, a read of the human write surface. So each
-// condition is told twice, from one classification ([condition]), and the two
-// can never cover different sets: [Condition] is the model's clause and
-// [ConditionSentence] the person's whole sentence, what happened and what to
-// do, in the short voice a screen is written in. The act route and a write of
-// the human write surface tell a person only words the refusal catalog wrote
-// (ADR-0060), and the catalog words no condition, so there one is told in its
-// code's own sentence, under the hint [RetryAfter] gives it.
-//
-// NEITHER IS EVER THE ERROR'S OWN TEXT. A state-log refusal is told in the
-// state log's own words for it ([statelog.ConditionWords]), one per code: its
-// error opens with the framework's name and its reason's spelling, and its
-// detail ([statelog.Unavailable.Detail], [statelog.Refused.Detail]) names
-// positions, settings and the broker's words, written for whoever runs the
-// node — so it goes to the node's log, where the surface answering it puts
-// it, and to nobody's prompt or screen. It used to be handed whole to both,
-// so a model read "statelog: unavailable (behind): …" and a person read the
-// same under "this node could not read what the decision is about". Every
-// other condition is told in fixed words: a coordination backend wraps its
-// transport's error, which names hosts and ports, a queue's names its broker,
-// and the router's names every node it asked and what each said — which it
-// logs where it concludes it.
-//
-// WHAT TO DO IS THE CONDITION'S TO SAY where waiting does not clear it
-// ([conditionNext]): a tool's sentence told a model to try again shortly
-// whatever the condition was, so a full log or an evicted node was retried for
-// as long as the turn lasted.
-//
-// EXPORTED for the human write surface, whose tool-less writers class their
-// writers' errors by this same rule (internal/api/operator's ClassifyWrite).
+// Each condition is a sentinel its own package marks, never a reading of an
+// error's words: a "database is locked" met for any other reason is not a wait.
+// See [condition] for the set and why the line is drawn here. It is told twice
+// from one classification: this is the model's clause, [ConditionSentence] the
+// person's whole sentence (the act route tells a person only the refusal
+// catalog's words, ADR-0060). EXPORTED for the human write surface, whose
+// tool-less writers class errors by this rule (internal/api/operator's ClassifyWrite).
 func Condition(err error) (words string, ok bool) {
 	said, ok := condition(err)
 	return said.clause, ok
@@ -373,14 +267,11 @@ func waitless() error { return errWaitless }
 var errWaits = errors.New("builtin: waiting can clear this")
 
 // waits is the cause of an unavailable refusal a wait can clear and no
-// condition names: a read that didn't answer, an index still being built, a
-// node that didn't answer in time. [RetryAfter] answers it with the hint, as
-// it answers any cause it doesn't know. It is a mark rather than nothing so
+// condition names: a read that didn't answer, an index still being built.
+// [RetryAfter] answers it with the hint. It is a mark rather than nothing so
 // every unavailable refusal says which it is, waits, [waitsUntil] or
-// [waitless]: a bare one said neither, and the walk that kept the waitless
-// ones marked guessed from their wording, which a sentence reworded in the
-// voice it judged ("isn't configured" for "is not configured") passed
-// straight through (TestEveryUnavailableRefusalSaysWhetherAWaitClearsIt).
+// [waitless], never guessed from wording
+// (TestEveryUnavailableRefusalSaysWhetherAWaitClearsIt).
 func waits() error { return errWaits }
 
 // RetryAfter is how long somebody told about err should wait before asking
@@ -391,13 +282,10 @@ func waits() error { return errWaits }
 // otherwise [statelog.RetryAfter]'s reading of err, with otherwise as this
 // node's hint where nothing derived one.
 //
-// THE ONE HINT every surface answering a refusal or a condition in status
-// codes takes, BESIDE [ConditionSentence], so the words and the Retry-After
-// come from one classification: read from the state log's rule alone, a full
-// file store was told "an administrator needs to make room" under a
-// Retry-After of two seconds on the operator's surface, and an object store
-// that did not answer was told an election's wait on one surface and none on
-// the next.
+// THE ONE HINT every surface answering in status codes takes, BESIDE
+// [ConditionSentence], so the words and the Retry-After come from one
+// classification: from the state log's rule alone, a full file store was told
+// to make room under a two-second Retry-After.
 func RetryAfter(err error, otherwise time.Duration) time.Duration {
 	if errors.Is(err, errWaitless) {
 		return 0
@@ -419,6 +307,16 @@ func RetryAfter(err error, otherwise time.Duration) time.Duration {
 
 // condition is the one classification [Condition] and [ConditionSentence]
 // read: the condition err is, or false for a fault.
+//
+// The line matters: [tools.RefusalUnavailable] answers `503` with a
+// `Retry-After` and tells a model to retry, a lie about an unreadable store, so
+// every classifier asks this first and classes the rest
+// [tools.RefusalInternalError]. A state-log refusal and an unserved estate
+// ([estate.ErrUnserved]) stay conditions; an outcome the router could not
+// account for ([estate.ErrOutcomeUnknown]) is [UnknownCause], never this.
+// Nobody is told the error's own text (hosts, ports, nodes): a state-log
+// refusal is told in [statelog.ConditionWords], the rest in fixed words, and a
+// condition no wait clears says so ([conditionNext]).
 func condition(err error) (conditionSaid, bool) {
 	var unknownKeys *estate.ErrUnknownKeys
 	switch {
@@ -546,29 +444,16 @@ func condition(err error) (conditionSaid, bool) {
 }
 
 // sandboxConditions is every class a coding sandbox's backend marks a failure
-// with ([sandbox.Why]), as each of a condition's two readers is told it: a
-// model by what failed, a person by what failed and who clears it.
-//
-// NO WAIT CLEARS A CLASS THE SANDBOX SAYS NO WAIT CLEARS ([sandbox.Why.Waits]):
-// a broken setup, a refused key and an unpaid account are each somebody's to
-// change, so each is stuck and none is offered a retry. A box read words its
-// own classes in its own sentences ([boxFailure]); this is every other
-// reader's — a tool that met one in a call of its own, and the query surface
-// answering a running run's output ([sandbox.TailReader]), which answers a
-// class through this classification and its hint.
+// with ([sandbox.Why]), told to a model and a person. A class no wait clears
+// ([sandbox.Why.Waits]) is stuck and offered no retry: its setup, key or
+// account is somebody's to change. A box read words its own ([boxFailure]);
+// this is every other reader's, the tail query ([sandbox.TailReader]) included.
 // TestEverySandboxClassIsACondition holds every class to an entry here.
 //
-// ONE CLASS CLEARS ON ITS OWN BUT NOT SOON: a provider's account limit, which
-// clears when a box ends or its window passes. It is told "in a few minutes"
-// with a hint of [sandboxLaterWait], the words a box read already uses for
-// it: told "in a moment" with the health tick's five seconds, a person
-// watching a rate-limited run was offered a wait the class itself doesn't
-// promise.
-//
-// A SETUP'S DOWNLOAD THAT FAILED FOR NOW clears soon, as a provider that
-// didn't answer does: its recipe exits 75 ([sandbox.WhySetupUnavailable])
-// only once its own retries are spent on a service still failing on its
-// side, so it is told "in a moment", with the hint its caller gives.
+// A provider's account limit clears on its own but not soon: "in a few
+// minutes", hint [sandboxLaterWait], not a moment's five seconds. A setup
+// download that failed for now ([sandbox.WhySetupUnavailable], exit 75 after
+// its own retries) clears soon: "in a moment", the caller's hint.
 var sandboxConditions = map[sandbox.Why]conditionSaid{
 	sandbox.WhyConfiguration: {clause: "the coding sandbox isn't set up for this",
 		person: "The coding sandbox isn't set up for this. An administrator needs " +
@@ -675,33 +560,25 @@ const faultSaid = "a fault in this node itself — not anything about this call,
 // name the fault with [faultSaid].
 //
 // THE ERROR GOES TO THE LOG, here and only here, with the tool's name and the
-// trace the call's context carries: a store's error is a driver's message, a
-// SQL fragment or a database path, and the sentence reaches a model's prompt,
-// an operator's assistant and a person's screen. None of them can act on it,
-// and the one reader who can — whoever runs the node — reads the log. It rides
-// beneath the class for errors.Is, never for display: a surface answering the
-// class says only that the engine broke ([tools.RefusalInternalError]).
+// call's trace: a store's error is a driver message, SQL or a database path,
+// and the sentence reaches a prompt and a screen, whose readers cannot act on
+// it; whoever runs the node reads the log. It rides beneath the class for
+// errors.Is, never for display ([tools.RefusalInternalError]).
 func faulted(ctx context.Context, tool string, err error, sentence string) tools.Result {
 	log.ErrorContext(ctx, "builtin_tool_fault", "tool", tool, "error", err.Error())
 	return refusedBy(tools.RefusalInternalError, err, sentence)
 }
 
 // toldOf is how a failed result's reason reads inside a sentence that names
-// what it stopped: [faultSaid] for a fault, whose error is the log's;
-// [Unanswered] for a write no data node answered, whose error names every node
-// it was sent to; a refusal a native domain or the framework decided, in the
-// deciding one's words ([WriterSentence]); a condition's words ([Condition]);
-// and otherwise the error's own.
+// what it stopped: [faultSaid] for a fault; [Unanswered] for a write no data
+// node answered; a refusal a domain or the framework decided, in its own words
+// ([WriterSentence]); a condition's words ([Condition]); else the error's own.
 //
-// THE UNANSWERED WRITE GOES BEFORE THE CONDITION, because one whose caller's
-// context ended while it waited carries that context's error too, and "it ran
-// out of time" read beside "did not finish" says the write did not land.
-//
-// AND THE DECIDED REFUSAL GOES BEFORE IT TOO: a write about what a deletion
-// keeps deleted is a refusal the framework states as one of its conditions, so
-// asked second it was told as the framework's whole text, the deleted object's
-// broker subject included, and the domain's own refusals as their Go error,
-// package name and all.
+// THE UNANSWERED WRITE GOES BEFORE THE CONDITION: one whose caller's context
+// ended carries that context's error too, and "it ran out of time" would say
+// the write did not land. THE DECIDED REFUSAL GOES BEFORE IT TOO: asked
+// second, it would be told as its whole Go text, package name and broker
+// subject included.
 func toldOf(failure tools.Result, err error) string {
 	if tools.RefusalOf(failure) == tools.RefusalInternalError {
 		return faultSaid
@@ -719,19 +596,16 @@ func toldOf(failure tools.Result, err error) string {
 }
 
 // nodeFailure is the failed result of a call this node could not serve for a
-// reason of its OWN — a store, the coordination plane, the queue — that no
-// domain sentinel claimed: stopped is the clause naming what could not be done
-// ("Could not read your notes"), and fact what is true either way ("Nothing
-// was changed."), or empty.
+// reason of its OWN that no domain sentinel claimed: stopped names what could
+// not be done ("Could not read your notes"), fact what is true either way
+// ("Nothing was changed."), or empty.
 //
-// THE ONE RULE [readFailure] AND [writeFailure] FOLLOW, for the tools that
-// have no domain of their own to classify by: a CONDITION ([Condition]) is
+// THE ONE RULE [readFailure] AND [writeFailure] FOLLOW: a CONDITION ([Condition]) is
 // [tools.RefusalUnavailable] in its own words and invites the retry that
 // clears it, and anything else is a FAULT ([faulted]) — its error in the log,
-// never in the sentence, and no retry invited. These tools used to answer
-// every failure `unavailable` carrying the error's own text, which put a
-// database path into a model's prompt and told a client to poll a store that
-// could not be read.
+// never in the sentence, and no retry invited: the error's own text would put
+// a database path into a prompt, and `unavailable` would tell a client to poll
+// a store that cannot be read.
 func nodeFailure(ctx context.Context, tool string, err error, stopped, fact string) tools.Result {
 	if why, ok := Condition(err); ok {
 		return refusedBy(tools.RefusalUnavailable, err,
@@ -757,15 +631,12 @@ func sentence(clauses ...string) string {
 // whether its write LANDED is unknown — see [unknownWrite] for why such a
 // write is a failed result at all rather than a receipt.
 //
-// THE TOOL CONTRACT'S OWN SENTINEL ([tools.ErrOutcomeUnknown]) rather than one
-// of this package's, because the readers that must tell an unknown from a
-// refusal — the audit, the loop's record, a person's write surface — sit
-// beside or below this package and ask [tools.UnknownOf], which is exactly
-// [errors.Is] against it. A sentinel of its own here was a third answer to "may
-// this have landed" that none of them could see. It is also
-// [tools.RefusalUnavailable] by [tools.RefusalOf]: the node cannot say what
-// became of the write, and nothing about the request was wrong.
-// [UnknownOutcome] is the value, and it matches this with [errors.Is].
+// THE TOOL CONTRACT'S OWN SENTINEL ([tools.ErrOutcomeUnknown]), not one of this
+// package's: the readers that must tell an unknown from a refusal (the audit,
+// the loop's record, a person's write surface) sit beside or below this package
+// and ask [tools.UnknownOf], exactly [errors.Is] against it. It is also
+// [tools.RefusalUnavailable] by [tools.RefusalOf]: nothing about the request was
+// wrong. [UnknownOutcome] is the value, and it matches this with [errors.Is].
 var ErrOutcomeUnknown = tools.ErrOutcomeUnknown
 
 // UnknownOutcome is [ErrOutcomeUnknown] with the facts a caller acts on.
@@ -827,29 +698,17 @@ func writeCause(actor Actor, err error) error {
 }
 
 // UnknownCause is the error a write's failed result carries beneath its class:
-// the error itself, or — for a write whose outcome is UNKNOWN — an
-// [UnknownOutcome] wrapping it, under the operation opID names. Two errors are
-// that:
+// the error itself, or, when the outcome is UNKNOWN, an [UnknownOutcome]
+// wrapping it under operation opID. Two errors are unknown:
 //
-//   - a walking gesture that stopped at a step whose outcome is unknown
-//     ([worklet.ErrStepUnresolved]): the steps before it landed and the step
-//     itself may have;
+//   - a walking gesture stopped at an unknown step ([worklet.ErrStepUnresolved]);
 //   - a write the estate's router SENT and never heard back about
-//     ([estate.ErrOutcomeUnknown]): a page write that names no operation of
-//     its own, which goes to one data node only, or a write carrying its
-//     caller's operation that no data node it was asked of answered — each
-//     node that went quiet may have run it.
+//     ([estate.ErrOutcomeUnknown]): each silent node may have run it.
 //
-// BECAUSE EACH IS AN UNKNOWN, not a refusal: a caller answering in status
-// codes owes it the answer it gives every unknown — read back before writing
-// again, or the same operation retried — and read as the error alone the first
-// was a refusal saying nothing had been written, the second a fault telling a
-// person that sending it again could not help. The error stays inside it, so
-// errors.Is still answers every question it did.
-//
-// EXPORTED for the human write surface, whose tool-less writers are read by
-// this one rule (internal/api/operator's ClassifyWrite) — a second list of
-// which writer errors may have landed is a list that misses one.
+// A caller answering in status codes owes an unknown its own answer (read back,
+// or retry the same operation), where the bare error read as a refusal or a
+// fault; the error stays inside for errors.Is. EXPORTED for the human write
+// surface (internal/api/operator's ClassifyWrite), so no second list misses one.
 func UnknownCause(opID string, err error) error {
 	switch {
 	case errors.Is(err, worklet.ErrStepUnresolved):
@@ -892,30 +751,16 @@ func sortedKeys(m map[string]string) []string {
 }
 
 // argIntValue and argFloatValue read a number, reporting whether they COULD.
+// Not [argInt] and [argFloat]: both answer a fallback for an unreadable value,
+// and every caller of these holds a value whose zero is a SETTING, not an
+// absence (zero minutes means UNESTIMATED, a `min` of 0 is a real floor). An
+// unreadable `estimate_minutes: "two hours"` would become `&0`, answer
+// `applied` and wipe the estimate. [argFloat]'s zero is right only where
+// "every caller of this one has a field whose zero IS its default".
 //
-// # Why not [argInt] and [argFloat]
-//
-// Because both answer a fallback for a value they cannot read, and every
-// caller of these two holds a value whose zero is a SETTING rather than an
-// absence: zero minutes and zero points both mean UNESTIMATED, a `min` of 0 is
-// a real floor, and a `precision` of 0 declares a field exact to whole
-// numbers. So an unreadable value became `&0` and the write succeeded —
-// `estimate_minutes: "two hours"` answered `applied` and wiped the estimate,
-// which is the exact failure the schedule reader's own header says it exists
-// to prevent, in the half of it that was not written to the rule. [argFloat]'s
-// doc states the condition under which its zero is right — "every caller of
-// this one has a field whose zero IS its default" — and these are the callers
-// that broke it.
-//
-// The parse is the WHOLE string rather than [fmt.Sscanf]'s prefix, which is
-// the other half of the same bug: `Sscanf("%d")` reads "2 days" as 2, so a
-// two-day estimate was stored as two MINUTES and nothing was refused.
-//
-// THEY LIVE HERE rather than beside the schedule, because the custom-field
-// declaration reads its `precision` and its `min`/`max` bounds by the same
-// rule and a second spelling of the json.Number / finiteness discipline is how
-// one of them stops matching the other — the objection [textcut] and [whsec]
-// each record for a grammar that was written twice.
+// The parse is the WHOLE string, not [fmt.Sscanf]'s prefix: "2 days" would
+// read as 2, a two-day estimate stored as two MINUTES. They live here because
+// custom-field `precision` and `min`/`max` read by the same rule.
 func argIntValue(raw any) (int, bool) { return argval.Whole(raw) }
 
 func argFloatValue(raw any) (float64, bool) { return argval.Number(raw) }

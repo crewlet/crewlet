@@ -12,20 +12,16 @@ import (
 )
 
 // Standing is what one principal holds on one artifact, as [ClassShared]
-// resolves it: the role every surface stamps into the record a write forms,
-// shows a reader as their own, and shapes what a reader is sent by.
+// resolves it: the role every surface stamps into a write's record, shows a
+// reader as their own, and shapes what a reader is sent by.
 //
 // TWO ROLES, because the admin path is not a relation. Role is what the caller
-// may do; Related is what their relations alone grant, which is what tells an
-// override from an ordinary admission ([Standing.Elevated]) and what the
-// caller would hold on a node that refuses admin.
+// may do; Related is what their relations alone grant, which tells an override
+// from an ordinary admission ([Standing.Elevated]).
 //
 // THE ADMIN PATH IS ALL OR NOTHING, PER DECISION. An administrator whose
-// relations reach the row is admitted as the sharer they are and stands at
-// exactly that role, so every surface shapes what they read, and stamps what
-// they write, by the relation, and nothing beyond it reaches them unrecorded.
-// Only a decision the admin path alone made stands at owner, and that decision
-// is [Decision.Elevated], which the surfaces record.
+// relations reach the row stands at exactly the sharer's role; only a decision
+// the admin path alone made stands at owner ([Decision.Elevated], recorded).
 type Standing struct {
 	// Role is the EFFECTIVE role: owner where the admin path alone admitted
 	// the caller, and otherwise [Standing.Related]. Empty for a caller with
@@ -46,23 +42,18 @@ type Standing struct {
 	unsettled error
 }
 
-// Err reports why [Standing.Role] may be lower than the role the caller
-// actually holds, wrapping [ErrUnsettled] and the chart's own error, and nil
-// when it is exact.
+// Err reports why [Standing.Role] may be lower than the caller's actual role,
+// wrapping [ErrUnsettled] and the chart's error, and nil when it is exact.
 //
 // AN ADMISSION AND A ROLE ARE TWO QUESTIONS. A viewer's seat share admits them
-// to read whether or not the chart can say they also sit in a unit the
-// artifact is shared with as editor, so the read is decided; the role is not,
-// and a surface that stamped it into a data write would have the applier
-// refuse a write the caller may make. So a surface that needs the role itself,
-// rather than the admission, asks this and answers unknown on an error, which
-// [StandingOn] does for it.
+// to read whether or not the chart can say they also sit in a unit shared as
+// editor; a role stamped into a data write then would have the applier refuse a
+// write the caller may make. A surface needing the role asks this and answers
+// unknown on an error, as [StandingOn] does.
 //
-// An administrator is never left unsettled: a relation the chart could not
-// settle sends them through the admin path, whose Role is exact (owner) and
-// recorded as an override; only their Related may then be a lower bound,
-// which reports an override where a share the chart could not read would have
-// made it ordinary. That is the direction an audit can live with.
+// An administrator is never unsettled: the admin path's Role is exact (owner)
+// and recorded; only Related may be a lower bound, so an override may be
+// reported where a share would have made it ordinary, which an audit can live with.
 func (s Standing) Err() error { return s.unsettled }
 
 // Elevated reports whether a verb needing need is reached ONLY through the
@@ -77,19 +68,14 @@ func (s Standing) Elevated(need artifacts.Role) bool {
 // ([ActionArtifactRead]): the EFFECTIVE-ROLE RESOLVER every surface that
 // stamps a write, shows a reader their role or shapes a push by role asks.
 //
-// THREE-VALUED: a zero Standing (Role empty) with a nil error is a caller the
-// artifact is not shared with, and admin's path is not open to them; an error
-// is a node that could not tell, either because the read itself could not be
-// decided or because the role is unsettled ([Standing.Err]).
+// THREE-VALUED: a zero Standing with a nil error is a caller the artifact is
+// not shared with; an error is a node that could not tell, because the read
+// could not be decided or the role is unsettled ([Standing.Err]).
 //
-// ONE RESOLVER, THE TABLE'S OWN: it is [Decide] over the read row, so a role a
-// surface stamps is exactly the role every row compares, and moving a rule
-// moves both.
-//
-// A VERB ONLY THE ADMIN PATH ADMITTED ([Decision.Elevated]) is acted on with
-// that decision's own standing (owner), not this one: an administrator whose
-// viewer share reaches the read row stands at viewer here, and publishing over
-// it is the override the publish decision recorded.
+// ONE RESOLVER, THE TABLE'S OWN: [Decide] over the read row, so a stamped role
+// is the role every row compares. A verb only the admin path admitted
+// ([Decision.Elevated]) is acted on with that decision's standing (owner), not
+// this one.
 func StandingOn(ctx context.Context, p iam.Principal, o Object, chart Chart,
 	now time.Time) (Standing, error) {
 
@@ -111,41 +97,17 @@ func StandingOn(ctx context.Context, p iam.Principal, o Object, chart Chart,
 //
 // # The order of the arms is the contract
 //
-// AN OBJECT NOBODY HAS READ is the admin path's, or "read it and decide
-// again" ([ErrUnresolved]): the shares are on the stored row, so a gate that
-// formed the object from a tool's arguments cannot know them, exactly as
-// [ClassTidy] cannot know a row's author. An object naming neither an owner
-// nor a share is a caller who forgot to read it, refused [ReasonUnnamed]
-// beside the admin path.
-//
-// THEN THE RELATIONS, ALL OF THEM ([relate]), for the role and not merely an
-// admission: the role is what a write is stamped with, so the best relation
-// decides it, not the first that clears the row.
-//
-// THEN THE ADMIN PATH, AFTER THE RELATIONS AND BEFORE ANY CHART FAILURE CAN
-// DECIDE. After, so an administrator who also holds a share that reaches the
-// row is admitted as a sharer, AT THE SHARER'S ROLE, and nothing records an
-// override that did not happen; an owner standing there instead would shape
-// every read and stamp every write past the relation with no record of it.
-// Before the failure, so a node behind its chart never tells an administrator
-// it cannot tell: an administrator whose relations admit the row but whose
-// role the chart could not settle takes the admin path, recorded, rather than
-// an unsettled role.
-//
-// THEN UNKNOWN, only where an arm the chart could not answer could have
-// admitted: a unit share of viewer that could not be read changes nothing
-// about a publish, and answering that 503 would send somebody back for the
-// same refusal.
-//
-// THEN THE REFUSALS. No relation at all is NOT FOUND ([Decision.NotFound]),
-// which says nothing about whether the artifact exists. An agent the company
-// keeps off somebody else's work, on a row above contributor, is refused as a
-// seat, naming nothing, because no share would change it. Anybody else is
-// refused naming the role they need ([ReasonRole]).
+// Unread object, then the relations, then the admin path, then unknown, then
+// the refusals; each arm's reason is written where it stands below.
 func decideShared(ctx context.Context, p iam.Principal, r rule, o Object,
 	chart Chart) Decision {
 
 	admin := p.Can(adminGrant)
+	// AN OBJECT NOBODY HAS READ is the admin path's, or "read it and decide
+	// again" ([ErrUnresolved]): the shares are on the stored row, so a gate that
+	// formed the object from a tool's arguments cannot know them. An object
+	// naming neither an owner nor a share is refused [ReasonUnnamed] beside the
+	// admin path.
 	if o.Unresolved {
 		if admin {
 			return overridden(relation{})
@@ -158,19 +120,32 @@ func decideShared(ctx context.Context, p iam.Principal, r rule, o Object,
 		}
 		return consulting(Decision{Reason: ReasonUnnamed}, adminGrant)
 	}
+	// ALL THE RELATIONS ([relate]) are weighed for the role, not merely an
+	// admission: the best relation decides what a write is stamped with.
 	rel := relate(ctx, p, o, chart)
 	switch {
 	case rel.role.Includes(r.minRole) && (!admin || rel.standing(false).Err() == nil):
 		return consulting(Decision{Allowed: true, Reason: rel.via,
 			Standing: rel.standing(false)}, adminGrant)
 	case admin:
+		// AFTER THE RELATIONS, so an administrator whose share reaches the row
+		// is admitted AT THE SHARER'S ROLE and no override is recorded that did
+		// not happen; BEFORE ANY CHART FAILURE, so a node behind its chart never
+		// tells an administrator it cannot tell.
 		return overridden(rel)
 	case rel.err != nil && rel.pending.Includes(r.minRole):
+		// UNKNOWN only where an arm the chart could not answer could have
+		// admitted: an unreadable unit share of viewer changes nothing about a
+		// publish, and a 503 would send somebody back for the same refusal.
 		return Decision{Reason: ReasonNotShared, Err: rel.err}
 	case rel.role == "":
+		// No relation is NOT FOUND ([Decision.NotFound]), saying nothing about
+		// whether the artifact exists.
 		return consulting(Decision{Reason: ReasonNotShared,
 			Standing: rel.standing(false)}, adminGrant)
 	case rel.capped && !artifacts.RoleContributor.Includes(r.minRole):
+		// An agent kept off somebody else's work is refused as a seat, naming
+		// nothing, as no share would change it.
 		return Decision{Reason: ReasonSeatRefused, Standing: rel.standing(false)}
 	}
 	return consulting(Decision{Reason: ReasonRole, Role: r.minRole,
@@ -214,36 +189,26 @@ func (rel relation) standing(admin bool) Standing {
 }
 
 // relate resolves every relation the caller holds to the artifact: the best
-// role among them, which arm granted it, and what an arm the chart could not
-// answer might have added.
-//
-// THE OWNER HOLDS EVERY ROLE, by the login they act under or the seat they
-// hold, exactly as every other relation class compares an owner.
+// role, which arm granted it, and what an arm the chart could not answer might
+// have added. The owner holds every role, by login or seat.
 //
 // THE ARMS THAT NEED NO CHART COME FIRST (a share naming the caller's seat, a
 // share with the whole company), then the arms that ask it (leading the agent
-// that owns the artifact, then each unit share from the highest role down),
-// and an arm is asked only where it could still RAISE the role: the chart is
-// a seam that can fail, and a question whose answer changes nothing is one
-// more way for a node behind its chart to answer unknown.
-//
-// THE LEAD ARM OPENS ONLY FOR AN AGENT OWNER ([Object.OwnerIsAgent]): a lead
-// holds owner-level on their agents' artifacts, and nothing on a person's.
-//
-// AN AGENT IS CAPPED AT CONTRIBUTOR on an artifact it does not own unless the
-// company lifts the cap ([Object.AgentsManageOthers]). The cap is applied to
-// every arm before it is asked, so a capped agent's chart questions stop as
-// soon as nothing could raise it further.
-//
-// A SHARE THIS BUILD CANNOT READ grants nothing: an audience kind a newer peer
-// wrote, or a role off the ladder, ranks zero and raises no role. The safe
-// direction, for the reason an unknown [iam.Grant] grants nothing.
+// that owns the artifact, only for an agent owner ([Object.OwnerIsAgent]), then
+// each unit share from the highest role down). An arm is asked only where it
+// could still RAISE the role: a question whose answer changes nothing is one
+// more way to answer unknown. A share this build cannot read (an audience kind
+// a newer peer wrote, a role off the ladder) grants nothing.
 func relate(ctx context.Context, p iam.Principal, o Object, chart Chart) relation {
 	if ownedBy(p, o) {
 		return relation{role: artifacts.RoleOwner, via: ReasonSelf}
 	}
 	var rel relation
 	ceiling := artifacts.RoleOwner
+	// AN AGENT IS CAPPED AT CONTRIBUTOR on an artifact it does not own unless
+	// the company lifts the cap ([Object.AgentsManageOthers]). The cap applies
+	// to every arm before it is asked, so a capped agent's chart questions stop
+	// early.
 	if p.Kind == iam.KindSeat && !o.AgentsManageOthers {
 		ceiling, rel.capped = artifacts.RoleContributor, true
 	}

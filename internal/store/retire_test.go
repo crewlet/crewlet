@@ -15,21 +15,13 @@ import (
 
 // A CONNECTION WHOSE TRANSACTION DID NOT END IS RETIRED, NOT HANDED ON.
 //
-// A rollback that fails leaves the transaction open on the connection it ran
-// on, and database/sql hands that connection back to the pool without knowing:
-// the driver reports the failure without answering ErrBadConn. The next caller
-// to draw it is refused its own BEGIN ("cannot start a transaction within a
-// transaction") for a transaction it never began. The retry that answered
-// that error assumed its next attempt would draw a DIFFERENT connection, and
-// database/sql reuses the connection it freed last, so the retry drew the same
-// dirty one eight times and gave up. On a pinned writer there is no other
-// connection at all: its domain stopped applying for good.
-//
-// Each case poisons one transaction's rollback and then asks for a clean one
-// through the same path. A pool of ONE connection makes the pooled cases as
-// deterministic as the pinned one, rather than dependent on which idle
-// connection database/sql prefers; the pinned case needs no such help, since
-// its writer only ever has the one.
+// A failed rollback leaves the transaction open on its connection, and
+// database/sql hands it back without knowing (no ErrBadConn). The next caller
+// is refused its own BEGIN. A retry assumed a DIFFERENT connection, but
+// database/sql reuses the one it freed last, so it drew the same dirty one
+// eight times; on a pinned writer there is no other. Each case poisons one
+// rollback, then asks for a clean transaction through the same path; a pool of
+// ONE makes the pooled cases deterministic.
 //
 // Mutation: hand the connection back after a failed rollback, and every case
 // here fails its second transaction.
@@ -299,29 +291,15 @@ func (t *rollbackFaultTx) Rollback() error {
 
 // A BODY THAT PANICS DOES NOT COST THE HANDLE ITS CONNECTION.
 //
-// Every transaction here draws a connection and hands it back when the attempt
-// is over. A panic does not end an attempt by returning: it unwinds through
-// the runtime, past anything written on the return path. What that costs
-// depends on which path it passed through, and both are fatal to the handle:
+// A panic unwinds past the return path, so a mishandled connection is fatal: a
+// POOLED one never handed back is lost to database/sql for good, and a PINNED
+// one is its writer's only one, which a panic may leave with an open
+// transaction. The pooled cases run on a pool of ONE under a deadline, so a
+// lost connection fails rather than hangs; the pinned case breaks the rollback.
 //
-//   - a POOLED connection never handed back is one database/sql has lost for
-//     the life of the process. Measured on the default pool of four, a fifth
-//     transaction after four panicking bodies waited in the pool for ever.
-//   - a PINNED connection is the only one its writer will ever have, and a
-//     panic reports nothing about whether its rollback happened, so keeping it
-//     is keeping a connection that may still carry an open transaction.
-//
-// Each case panics through one path and then asks that path for a connection
-// it can use. The pooled cases run on a pool of ONE, so a single lost
-// connection is the whole pool, and under a deadline, so a pool that has lost
-// it fails here rather than hanging. The pinned case breaks the rollback as
-// well, which is what makes its connection unusable rather than merely
-// suspect.
-//
-// Mutation: hand the connection back on the return path rather than on the way
-// out of the attempt, and the pooled cases fail with a deadline expired inside
-// database/sql and the pinned case with "cannot start a transaction within a
-// transaction".
+// Mutation: hand the connection back on the return path rather than out of the
+// attempt, and the pooled cases fail with an expired deadline and the pinned
+// case with "cannot start a transaction within a transaction".
 func TestABodyThatPanicsDoesNotCostTheHandleItsConnection(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -460,18 +438,12 @@ func panicValue(fn func()) (v any) {
 // A CLOSED WRITER RELEASES ITS PIN ONCE AND REFUSES EVERY LATER TRANSACTION,
 // EVEN WHEN IT HAD ALREADY LOST ITS CONNECTION.
 //
-// A nil connection was Close's own "already closed" marker, and it stopped
-// being one when a failed transaction began REPLACING the connection rather
-// than keeping it: a writer whose replacement could not be drawn is LIVE with
-// no connection. Under the old marker that writer's Close released nothing,
-// so its pin was held for the life of the process and the next Writer on the
-// handle was refused; and a Tx after Close was accepted and dereferenced a
-// nil.
-//
-// The state is staged rather than asserted about: a body panics with its
-// rollback broken, so the attempt reports its connection unfit, and the
-// driver is then refusing to open any more, so the replacement cannot be had.
-// That is exactly the state, reached the only way production reaches it.
+// A nil connection cannot mark "already closed": a failed transaction REPLACES
+// the connection, so a writer whose replacement could not be drawn is LIVE
+// with none. Under that marker its Close released nothing, the pin was held
+// for good, and a Tx after Close dereferenced a nil. Staged as production
+// reaches it: a body panics with its rollback broken, then the driver refuses
+// to open more connections.
 //
 // Mutation: guard Close on `w.conn == nil` again, and the pin is never
 // released (the second Writer is refused) and the Tx after Close is accepted.
@@ -572,32 +544,16 @@ func (d *openFaultDriver) Open(name string) (driver.Conn, error) {
 
 // A CANCELLED TRANSACTION DOES NOT TAKE THE PROCESS WITH IT.
 //
-// When a transaction's context is cancelled, database/sql rolls it back from
-// its own awaitDone goroutine and DISCARDS the connection — which closes the
-// *sql.Conn the store is holding, concurrently with the store's own
-// hand-back. That close is why the retirement is a flag on the driver's
-// connection rather than a [sql.Conn.Raw] callback at the hand-back:
-// Conn.Raw reads the conn's done flag BEFORE taking the lock that close
-// holds, so a close landing in that window leaves it dereferencing a nil
-// driverConn.
+// On cancellation database/sql's awaitDone goroutine rolls back and DISCARDS the
+// connection, closing the *sql.Conn the store holds concurrently with its own
+// hand-back. So retirement is a flag on the driver's connection, not a
+// [sql.Conn.Raw] callback at the hand-back: Raw reads the done flag BEFORE
+// taking the lock that close holds, and can dereference a nil driverConn.
 //
-// It is not a theoretical window. The engine's retention loop reads on a
-// context the drain cancels, and the panic took the whole process down in the
-// middle of an ordinary shutdown:
-//
-//	panic: runtime error: invalid memory address or nil pointer dereference
-//	database/sql.(*Conn).Raw(...)  sql.go:2087
-//	store.giveBack(...)            store.go:1298
-//	store.(*DB).Read.func1.1()     pinned.go:268
-//
-// tx.Rollback answering ErrTxDone is what makes it reachable: it means
-// awaitDone got there first, and awaitDone is STILL INSIDE its own rollback
-// and close when the caller is already unwinding. "The transaction has ended"
-// is not the same fact as "nothing is closing this connection".
-//
-// So the cancellation is forced from INSIDE the body, which is the ordering
-// that produced the crash, and repeated, because the window is narrow. Put
-// the Raw call back in giveBack and this panics rather than failing.
+// ErrTxDone from tx.Rollback means awaitDone is STILL closing the connection.
+// The cancellation is forced from INSIDE the body, the ordering that crashed,
+// and repeated because the window is narrow. Put the Raw call back in giveBack
+// and this panics.
 func TestACancelledTransactionDoesNotCrashTheHandBack(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -689,27 +645,17 @@ func TestAPinnedWriterReplacesAConnectionACancellationEnded(t *testing.T) {
 }
 
 // THE RETIRE SWITCH IS TAKEN OUT BEFORE ANY TRANSACTION EXISTS ON THE
-// CONNECTION, which is the whole of why the crash above cannot come back.
+// CONNECTION, which is why the crash above cannot come back.
 //
-// [sql.Conn.Raw] is the only way into a pooled connection from outside
-// database/sql, and it races a concurrent close of that same *sql.Conn. The
-// only thing that closes one underneath its holder is the awaitDone goroutine
-// of a transaction on it, so the window opens at this CHECKOUT's first
-// BeginTx — not before, where this goroutine is the connection's only
-// reference and there is no transaction to cancel. It is a fact about the
-// checkout rather than about the connection, which is reused; database/sql
-// resets a connection before handing it on, and that is where the fault
-// connection clears its record.
+// [sql.Conn.Raw] races a concurrent close of the same *sql.Conn, and only the
+// awaitDone goroutine of a transaction on it closes one underneath its holder,
+// so the window opens at this CHECKOUT's first BeginTx. The store takes the
+// switch out once, at the draw. The fault connection records begins and switch
+// takes and reports a switch taken after a begin.
 //
-// So the store reaches in once, at the draw, takes the switch out, and throws
-// it later without touching database/sql at all. This is that ordering,
-// asserted rather than described: the fault connection records when a
-// transaction is begun on it and when its switch is taken, and reports a
-// switch taken after a begin.
-//
-// Mutation: move the retireSwitch call from the draw to the hand-back — which
-// is where sql.Conn.Raw naturally wants to be, and where it crashed — and
-// every case here reports it.
+// Mutation: move the retireSwitch call from the draw to the hand-back (where
+// sql.Conn.Raw naturally wants to be, and where it crashed), and every case
+// here reports it.
 func TestTheRetireSwitchIsTakenBeforeAnyTransactionExists(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

@@ -7,52 +7,17 @@ import (
 	"sync"
 )
 
-// Holds is what a turn has named that Gitlet could delete from under it
-// on nobody's request — the scratch repositories it reached, by id, which
-// expire idle, and the seats' branches it read, wrote or launched on, each by
-// its gitlet.RefHoldKey — and where the turn's hold on each is kept. A key is
-// OPAQUE here: this package never decodes one, so every kind of hold a turn
-// takes rides the same set, row and reader.
+// Holds is what a turn has named that Gitlet could delete on nobody's request
+// (scratch repositories by id, seat branches by gitlet.RefHoldKey) and where
+// the hold on each is kept. Keys are OPAQUE: this package never decodes one.
 //
-// CONFIRMED ONCE A TURN AND PROCESS: beside the set, which keys THIS PROCESS
-// has confirmed for the turn ([Holds.Confirm]) — a seam took the hold here
-// having read what it holds, and found it ordered against every deletion in
-// flight at that Take — so a confirmed key's seam sends nothing more for the
-// rest of the turn. In memory only (see [Holds.Confirmed] for why).
-//
-// TAKEN BEFORE THE REQUEST: whatever takes a hold — the code tools' one seam,
-// which every request a turn makes about a repository passes — takes it here
-// BEFORE that request is sent, so no request reaches a repository the expiry
-// could already be deciding about unheld.
-//
-// ONE WRITE A CALL, NOT ONE A KEY: [Holds.Take] takes every key it is handed
-// in one write through the attached writer — a call that resolves several
-// seats' branches (a comparison's base and head, a change's source and
-// target) pays one compare-and-set on its run row, not one each. A launch
-// resolves no repository (ADR-0093: a run checks out what it needs through
-// `code_checkout` once its row exists), so a launch takes no key of its own:
-// it writes the set it reads onto the row it opens ([Holds.Seal]).
-//
-// KEPT WHERE THE TURN LIVES: in this value, in the memory of the process
-// running the turn, which that node answers for when an expiry asks it (the
-// engine's crewlet.code.holds); and, once the turn has a run row, ALSO on the
-// row (sandbox.PendingRun.CodeHolds), through the writer [Holds.Attach]
-// installs, because a detached run outlives this process. Memory is the right
-// home for a running turn's hold — the turn lives only in this process, and a
-// durable copy would need a rule to release the hold of a turn whose process
-// crashed — and the row the right home for a parked one, which nothing else
-// remembers.
-//
-// IT ONLY GROWS AND AUTHORIZES NOTHING, Turn's rule for what a Turn points at:
-// a hold keeps a repository from an expiry and decides no access. Nothing is
-// released before the turn ends: a run that ends deletes its row
-// (internal/sandbox), and a turn that returns leaves the engine's registry of
-// running turns, which is the whole release. Every Turn derived from a turn
-// shares its set, so a delegated worker's hold is its parent's.
-//
-// THE ZERO VALUE IS NOT USED: [NewHolds] builds one. A nil *Holds holds
-// nothing, and a Take on it is refused rather than dropped — a seam that took
-// a hold it could not keep would send a request the expiry does not know of.
+// Take runs BEFORE the request it covers, so none reaches a repository the
+// expiry could already be deciding about unheld; one call is one write through
+// the attached writer. A launch takes no key (ADR-0093); it seals the set it
+// reads onto the row it opens ([Holds.Seal]). Kept in memory and, once a run
+// row exists, on it (sandbox.PendingRun.CodeHolds) for a detached run. The set
+// only grows and authorizes nothing; the turn ending is the whole release.
+// Use [NewHolds]; a Take on a nil *Holds is refused, not dropped.
 type Holds struct {
 	// writing serializes the writes to the row, so the set and the row hold
 	// the same keys whatever order two calls of one turn take them in. Never
@@ -74,21 +39,15 @@ type Holds struct {
 	sealed chan struct{}
 }
 
-// MaxHolds bounds one turn's set — its scratch repositories' and its seat
-// branches' keys together: a Take past it is refused, naming the bound, and
-// never a hold dropped. It is above config.CodeScratchMaxPerSeatCeiling
-// (1 000), so a turn working through every scratch repository its seat may own
-// is never refused for their number alone; such a turn meets it past 24 seat
-// branches besides, and one naming no scratch repository past 1 024 seat
-// branches — a JUDGMENT CALL (M3-decisions M3-O61): a turn naming that many is
-// past anything a turn's work needs, and is refused naming the bound rather
-// than holding a row past what a run row should carry. On a run row a key is
-// at most 72 bytes (a ref's key, 69, quoted and with its comma; a
-// repository's id 39), so the set is at most about 72 KiB: the largest field
-// the row keeps, since its conversation and tool log are beside it rather
-// than on it (internal/sandbox). sandbox.MaxCodeHolds is
-// the same number (this package and that one import neither, and engine's
-// TestATurnHoldsWhatItsRowMay holds the two equal).
+// MaxHolds bounds one turn's set (scratch repositories and seat branches
+// together): a Take past it is refused, naming the bound, never a hold dropped.
+// It is above config.CodeScratchMaxPerSeatCeiling (1 000), so a turn using every
+// scratch repository its seat may own is not refused for their number alone. A
+// JUDGMENT CALL (M3-decisions M3-O61): a turn naming more is past anything its
+// work needs. A key is at most 72 bytes on the run row, so the set is about
+// 72 KiB, the largest field the row keeps. sandbox.MaxCodeHolds is the same
+// number (neither package imports the other; engine's
+// TestATurnHoldsWhatItsRowMay holds them equal).
 const MaxHolds = 1024
 
 // ErrHoldsFull is a Take past [MaxHolds]: the request is refused, naming the
@@ -309,19 +268,15 @@ func (h *Holds) IDs() []string {
 }
 
 // Confirmed reports whether THIS PROCESS has confirmed the turn's hold on key:
-// a seam (internal/agent/builtin's HoldRef and HoldRepo) took it here and
-// found, from a read of what it holds, the hold ordered against every deletion
-// in flight at that Take — no record needed, or the record applied. A
-// confirmed key's seam sends nothing more for the rest of the turn: every
-// later reader of the holds sees the key, since a set only grows, and every
-// earlier one was ordered by the confirmation (M3-decisions M3-O65).
+// a seam (internal/agent/builtin's HoldRef and HoldRepo) took it and found,
+// from a read, the hold ordered against every deletion in flight at that Take.
+// Its seam then sends nothing more for the turn: later readers see the key
+// (a set only grows) and earlier ones were ordered by the confirmation
+// (M3-decisions M3-O65).
 //
-// IN MEMORY ONLY: never on the run row, which carries keys taken unconfirmed
-// too — a hold with no read, a hold whose record failed after its Take — so it
-// could vouch for a confirmation only through a field every confirmation
-// writes, a coordination write per key to save one read per resumed turn.
-// So [NewHolds] confirms none of its seed, and a resumed turn, or the same
-// turn in any other process, confirms again.
+// IN MEMORY ONLY: the run row also carries keys taken unconfirmed, so vouching
+// from it would cost a coordination write per key to save one read per resumed
+// turn. [NewHolds] confirms none of its seed; a resumed turn confirms again.
 func (h *Holds) Confirmed(key string) bool {
 	if h == nil {
 		return false

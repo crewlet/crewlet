@@ -14,37 +14,14 @@ import (
 // /proc/<pid>/stat line: whether the process has exited, which process group
 // it belongs to, and when it started.
 //
-// Portable, although only the Linux build reads a real one, so the parse is
-// exercised on every platform the suite runs on rather than only in CI.
+// Portable, so the parse runs on every platform the suite runs on.
 //
-// The start time is field 22, `starttime`: clock ticks since boot, fixed at
-// fork and kept until the process is reaped. It is paired with the kernel's
-// boot id, because a tick count restarts at every boot and a box directory
-// outlives one: a service that starts at the same pid and tick on every boot
-// would otherwise match a job recorded before the reboot. Wall-clock forms
-// (btime plus ticks) are refused for the opposite reason: btime is derived
-// from the current clock, so a clock step would make a live job's own token
-// stop matching it.
-//
-// Field 2, the command, is parenthesised and may itself contain spaces and
-// parentheses, so the remaining fields are counted from the LAST closing
-// parenthesis. A process sets its own command name, so a name built to look
-// like the fields after it (") Z 1 7 7") is input, and counting from the first
-// parenthesis would let a process forge its state and its group. Field 5 is
-// `pgrp`, the process group id, which is how [procTable.groupLiving] tells the
-// members of a group apart from every other entry under /proc.
-//
-// Field 3 is the state, and it is the state of the process's MAIN THREAD, not
-// of the process. Z is an exited main thread awaiting a reap, X the instant of
-// release after one (spelled x by the kernels between 2.6.33 and 3.13). A
-// process whose main thread has called pthread_exit while its other threads
-// run on reads Z for as long as they do, and that process is not over: its
-// threads hold the job's work. Field 20, `num_threads`, tells the two apart.
-// The kernel counts a thread there until it is released, and every thread but
-// the main one is released the moment it exits, so a Z line counting one
-// thread is the main thread alone (a real zombie) and one counting more still
-// has a thread that has not exited. Reading every Z as a zombie would answer a
-// running job as finished, and the sandbox deletes a finished job's checkout.
+// The start time is field 22, `starttime`: ticks since boot, fixed at fork,
+// paired with the boot id because ticks restart at every boot and a box
+// directory outlives one. Wall-clock forms (btime plus ticks) are refused:
+// btime derives from the current clock, so a clock step would unmatch a live
+// job's token. Field 5, `pgrp`, is how [procTable.groupLiving] tells a
+// group's members from other entries.
 func parseProcStat(stat, boot string) (Process, error) {
 	const groupField, threadsField, startField = 5, 20, 22
 	fields, err := statFields(stat, startField)
@@ -63,6 +40,14 @@ func parseProcStat(stat, boot string) (Process, error) {
 	if err != nil {
 		return Process{}, fmt.Errorf("num_threads %q is not a thread count", fields[threadsField-stateField])
 	}
+	// Field 3 is the state of the MAIN THREAD, not of the process. Z is an
+	// exited main thread awaiting a reap, X the instant of release after one
+	// (x between kernels 2.6.33 and 3.13). A main thread that called
+	// pthread_exit while other threads run on reads Z as long as they do, and
+	// that job is not over. Field 20, num_threads, tells them apart: every
+	// thread but the main one is released as it exits, so a Z line counting one
+	// thread is a real zombie. Reading every Z as a zombie would answer a
+	// running job as finished, and the sandbox deletes a finished job's checkout.
 	var exited bool
 	switch fields[0] {
 	case "X", "x":
@@ -82,8 +67,13 @@ func parseProcStat(stat, boot string) (Process, error) {
 const stateField = 3
 
 // statFields is the fields of a /proc/<pid>/stat line after its command,
-// counted from the LAST closing parenthesis (see [parseProcStat] for why),
-// refusing a line too short to hold field last.
+// counted from the LAST closing parenthesis, refusing a line too short to
+// hold field last.
+//
+// Field 2, the command, is parenthesised and may hold spaces and parentheses.
+// A process sets its own command name, so one built to look like the fields
+// after it (") Z 1 7 7") is input, and counting from the first parenthesis
+// would let a process forge its state and its group.
 func statFields(stat string, last int) ([]string, error) {
 	paren := strings.LastIndexByte(stat, ')')
 	if paren < 0 {
@@ -99,17 +89,13 @@ func statFields(stat string, last int) ([]string, error) {
 // parseProcCPU reads the CPU a /proc/<pid>/stat line records, in clock ticks,
 // and the process group it belongs to (field 5, as [parseProcStat] reads it).
 //
-// The CPU is fields 14 to 17: utime and stime, the user and system time of the
-// process's own threads — an exited thread's included, since the kernel folds
-// a thread's time into its process as the thread goes — and cutime and
-// cstime, the same of every child it has waited for, which carry their own
-// reaped children's. So one record is the process and everything below it
-// that it has reaped, and a sum of records over a group counts each process
-// once: a child still running, or exited and not yet reaped, is in its own
-// record and not yet in its parent's; one reaped is in its parent's and has
-// no record of its own. cutime and cstime are printed signed (a long) and are
-// never negative, so a line that says otherwise is not the kernel's and is
-// refused.
+// The CPU is fields 14 to 17: utime and stime, the process's own threads
+// (an exited thread's folded in), and cutime and cstime, every child it has
+// waited for, which carry their own reaped children's. So a sum over a group
+// counts each process once: a child running, or exited and unreaped, is in
+// its own record and not yet its parent's; one reaped is in its parent's and
+// has no record. cutime and cstime print signed but are never negative, so a
+// line saying otherwise is not the kernel's and is refused.
 func parseProcCPU(stat string) (group int, ticks uint64, err error) {
 	const groupField, utimeField, cstimeField = 5, 14, 17
 	fields, err := statFields(stat, cstimeField)
@@ -188,30 +174,15 @@ func (t procTable) inspect(pid int) (Process, bool, error) {
 // groupLiving reports whether any member of process group pgid has not
 // exited, reading every process's stat record.
 //
-// Linux has no per-group listing, so the members are found by scanning: each
-// numeric entry under /proc is one process, read through [procTable.inspect]
-// so its group, state and parse are exactly the ones every other answer in
-// this package rests on. A member that has exited (see [parseProcStat]) does
-// not count. The listing names processes only, never their other threads
-// (those live under /proc/<pid>/task), so a thread cannot be counted as a
-// member of its own, and a process whose main thread alone has exited is
-// counted by its thread count rather than its state.
+// Linux has no per-group listing, so each numeric /proc entry is read through
+// [procTable.inspect]; an exited member (see [parseProcStat]) does not count.
 //
-// The scan races the processes it reads, and that race is not an error. An
-// entry that vanishes between the listing and its read is a process that has
-// been reaped, which is no member of anything. /proc itself not listing IS an
-// error, because false from here is definitive and an unread process table
-// proves nothing. So is a record that does not parse: it is the kernel's own
-// format, and a table this package cannot read is one it cannot vouch for.
-//
-// So is a record the kernel refuses to show, but only when it could change
-// the answer. Under a hidepid=1 mount another user's entries are listed and
-// unreadable, and any one of them may be a living member (a setuid helper
-// started inside the job, for instance). Once a living member has been found
-// they cannot matter; while none has, they are the difference between "over"
-// and "could not tell", and the caller is told which it got. hidepid=2 omits
-// those entries from the listing altogether, which is the kernel declaring
-// them no business of this user, and there is nothing further to ask.
+// An entry vanishing between listing and read is a reaped process, not an
+// error. An unlistable /proc, an unparsable record, and an unreadable one that
+// could change the answer ARE: false from here is definitive. Under hidepid=1
+// another user's entries are unreadable and may be a living member (a setuid
+// helper); once one is found they cannot matter, until then they separate
+// "over" from "could not tell". hidepid=2 omits them, so nothing is asked.
 func (t procTable) groupLiving(pgid int) (bool, error) {
 	names, err := t.list()
 	if err != nil {
@@ -244,22 +215,16 @@ func (t procTable) groupLiving(pgid int) (bool, error) {
 }
 
 // groupCPU is the CPU the members of process group pgid have spent so far,
-// summed over every process's stat record (see [parseProcCPU] for why a sum
-// counts each process once).
-//
-// The members are found as [procTable.groupLiving] finds them, by scanning,
-// and every member counts, an exited one awaiting its reap included: its time
-// is in its own record and in no parent's yet.
+// summed over every process's stat record (see [parseProcCPU]). Members are
+// found as [procTable.groupLiving] finds them, an exited one awaiting its reap
+// included: its time is in no parent's record yet.
 //
 // A FIGURE THAT IS SHORT, NEVER ONE THAT IS LONG. A record that cannot be
-// read or parsed is reported beside the sum of every one that could, rather
-// than ending the scan: its caller keeps the most any reading found, so a
-// floor is worth having and an error worth logging. The scan races the
-// processes it reads, as every scan of /proc does: a member reaped while it
-// runs takes its time into its reaper's record, which the scan may already
-// have read — one process's figure, missed by a reading taken in the instant
-// it changed hands. A table that cannot be listed, or a clock with no tick
-// rate, gives nothing.
+// read or parsed is reported beside the sum of every one that could, not
+// ending the scan: the caller keeps the most any reading found. A member
+// reaped mid-scan moves its time into its reaper's record, which may already
+// have been read, so one process's figure can be missed. A table that cannot
+// be listed, or a clock with no tick rate, gives nothing.
 func (t procTable) groupCPU(pgid int) (time.Duration, error) {
 	hz, err := t.hz()
 	if err != nil {

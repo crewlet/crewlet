@@ -319,13 +319,13 @@ func TestAnAnswerWakesTheAsker(t *testing.T) {
 	}
 }
 
-// THE EIGHTEEN REASONS, AND THE EIGHT THAT OBLIGE AN ANSWER, which are not
-// [worklet.DefaultPrimaryReasons] (what leads a PERSON's inbox): the two agree
-// on four and differ on four, deliberately.
-func TestTheReasonsAreAClosedSetAndTheTwoEightsAreNotTheSame(t *testing.T) {
+// THE NINETEEN REASONS, AND THE EIGHT THAT OBLIGE AN ANSWER, which are not
+// the nine of [worklet.DefaultPrimaryReasons] (what leads a PERSON's inbox):
+// the two agree on four and differ on the rest, deliberately.
+func TestTheReasonsAreAClosedSetAndTheTwoListsAreNotTheSame(t *testing.T) {
 	t.Parallel()
-	if len(worklet.Reasons) != 18 {
-		t.Fatalf("%d reasons are enumerated; there are eighteen", len(worklet.Reasons))
+	if len(worklet.Reasons) != 19 {
+		t.Fatalf("%d reasons are enumerated; there are nineteen", len(worklet.Reasons))
 	}
 	addressed := 0
 	for _, r := range worklet.Reasons {
@@ -337,16 +337,16 @@ func TestTheReasonsAreAClosedSetAndTheTwoEightsAreNotTheSame(t *testing.T) {
 		}
 	}
 	if addressed != 8 {
-		t.Fatalf("%d reasons oblige an answer; the split is eight and ten", addressed)
+		t.Fatalf("%d reasons oblige an answer; the split is eight and eleven", addressed)
 	}
 	if worklet.Reason("overridden").Valid() {
 		t.Error("a reason nothing writes is valid")
 	}
 
-	// Same length, not the same list: without this, folding one into the
-	// other passes every test in the tree.
-	if len(worklet.DefaultPrimaryReasons) != 8 {
-		t.Fatalf("%d reasons lead an inbox by default; there are eight",
+	// Not the same list: without this, folding one into the other passes
+	// every test in the tree.
+	if len(worklet.DefaultPrimaryReasons) != 9 {
+		t.Fatalf("%d reasons lead an inbox by default; there are nine",
 			len(worklet.DefaultPrimaryReasons))
 	}
 	differ := 0

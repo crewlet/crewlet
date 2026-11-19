@@ -16,26 +16,17 @@ import (
 	js "github.com/crewlet/crewlet/internal/queue/jetstream"
 )
 
-// SPIKE S7: the default object store under load.
+// SPIKE S7: the default object store under load. On the `nats` backend the
+// bucket is one more replicated stream on the members holding the write-ahead
+// log, so a large publish shares their disks, fsyncs and links with every
+// state-log append. Three benchmarks:
+//   - WAL: on three members with `sync: always`, probe-append latency and
+//     datastore-write round trip, before and while two 64 MiB publishes stream
+//     into the bucket through the transfer leg.
+//   - Ceiling: content a reservation holds before objstore.ErrFull.
+//   - Memory: the broker's heap per object held, whatever the bytes.
 //
-// On the `nats` backend the object bucket is one more replicated stream on the
-// members that hold the write-ahead log, so a large publish shares their
-// disks, their fsyncs and their replication links with every state-log append.
-// Three benchmarks:
-//
-//   - WAL: on a three-member fleet with `sync: always`, the append latency of
-//     a state log (a probe stream, appended to at a steady rate) and the
-//     round trip of datastore writes, before and while two 64 MiB publishes
-//     stream into the bucket through the transfer leg.
-//   - Ceiling: how much content a bucket reservation really holds before the
-//     broker refuses a put with objstore.ErrFull, for large and small files.
-//   - Memory: the broker's heap per object held, which is what a member pays
-//     for a bucket of many small files whatever their bytes.
-//
-// Member replacement at 10, 50 and 100 GiB of objects needs disks this
-// harness does not claim; docs/reference/artifact-capacity.md gives the
-// procedure.
-//
+// Member replacement at 10-100 GiB: docs/reference/artifact-capacity.md.
 // Run: go test -run '^$' -bench S7 -benchtime 1x ./internal/artifactspike
 
 const (

@@ -321,13 +321,10 @@ func TestAnUnreachableCollectorDoesNotFailTheBoot(t *testing.T) {
 
 // A CONFIGURE THAT FAILS MUST NOT HAVE INSTALLED ANYTHING.
 //
-// The failure below is the one an operator can actually reach: a metrics
-// endpoint with a protocol this build does not speak. The traces half never
-// looks at the protocol (it has no endpoint of its own here), so the refusal
-// comes from the metrics half — AFTER the TracerProvider has been built. Left
-// installed, that provider is published to every span site in the process
-// while the caller holds no flush for it; its batch processor and exporter run
-// on for the life of a boot that failed.
+// The failure below is reachable: a metrics endpoint with a protocol this
+// build does not speak. The refusal comes from the metrics half, AFTER the
+// TracerProvider is built. Left installed, that provider reaches every span
+// site with no flush held, its exporter running on for a failed boot.
 //
 // Mutation: install the provider where it is built (`otel.SetTracerProvider(tp)`
 // immediately after `sdktrace.NewTracerProvider`) and this goes red on the

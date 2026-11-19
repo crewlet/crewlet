@@ -14,24 +14,18 @@ import (
 	"github.com/crewlet/crewlet/internal/tabular"
 )
 
-// THE CSV EXPORT of one collection: a header row naming the document id, every
-// column (a schemaless collection's every top-level field, sorted) and the
-// row's attribution, then one row per live document the reader may see, in id
-// order. A PERSON READS IT: a declared column is headed by its label (its key
-// where it has none), option ids are written as their labels, a person cell as
-// the seat's name ([Names]), and a list as its elements joined by "; ". No
-// path reads an export back in, so nothing keys on the stored field names.
+// THE CSV EXPORT of one collection: a header row (document id, every column or
+// a schemaless collection's sorted top-level fields, attribution), then one row
+// per live document the reader may see, in id order. A PERSON READS IT: columns
+// are headed by label, option ids written as labels, a person cell as the
+// seat's name ([Names]), a list joined by "; ". Nothing reads an export back.
 //
-// A CELL A SPREADSHEET WOULD RUN AS A FORMULA is written with a leading
-// apostrophe: a value somebody typed as `=HYPERLINK(...)` into a shared sheet
-// must not execute on the machine of whoever opens the export (CSV injection).
-// That rule is internal/tabular's, which every download the engine writes
-// goes through, so this export and the Dashboard Assistant's table downloads
-// cannot disagree about it.
+// A CELL A SPREADSHEET WOULD RUN AS A FORMULA gets a leading apostrophe, so
+// `=HYPERLINK(...)` cannot execute for whoever opens the export (CSV
+// injection). The rule is internal/tabular's, shared by every download.
 //
-// The export is read a page at a time, each page at the reading's level, so a
-// store being written while it is exported is exported as each page found it;
-// what the first page read is named by the caller's own position.
+// The export is read a page at a time, each at the reading's level, so a store
+// written meanwhile is exported as each page found it.
 
 // exportPage is how many documents one read of an export takes.
 const exportPage = artifacts.MaxQueryLimit

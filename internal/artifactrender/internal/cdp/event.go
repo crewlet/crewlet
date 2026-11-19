@@ -83,22 +83,17 @@ type Listener struct {
 }
 
 // Listen opens a listener for events on s. Listen before you enable the
-// domain whose events you want: an event that arrives before Listen returns
-// is delivered to nobody.
+// domain whose events you want: an event arriving before Listen returns is
+// delivered to nobody.
 //
-// An Event that is not an entry of the inventory with the type it is
-// declared with there — the zero Event, the only one another package can
-// build, a nil one, and one this package built by any spelling but its
-// entry's — is refused, as Call refuses such a Method: the listener Listen
-// hands back listens for nothing, and its Next answers why.
+// An Event that is not an inventory entry with its declared type (zero, nil,
+// or built by any other spelling) is refused as Call refuses such a Method:
+// the listener listens for nothing and its Next answers why.
 //
-// Close every listener once its reader stops reading, or drain it to its end:
-// what it holds counts against its session's [MaxBacklog] and its
-// connection's [MaxConnBacklog] until it is taken or the listener is closed,
-// and that holds after its session has ended too, since what the listener
-// still holds is memory the connection still holds. A listener dropped holding
-// events keeps them counted until its connection lets go of them at its
-// backstop, or ends.
+// Close every listener once its reader stops, or drain it: what it holds
+// counts against [MaxBacklog] and [MaxConnBacklog], even after its session
+// ends, until taken or closed. A dropped listener's events stay counted until
+// the connection lets go at its backstop, or ends.
 func (s *Session) Listen(events ...Listenable) *Listener {
 	l := &Listener{s: s, events: make(map[string]bool, len(events)), wake: make(chan struct{}, 1)}
 	for _, e := range events {

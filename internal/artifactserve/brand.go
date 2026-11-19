@@ -18,22 +18,17 @@ import (
 )
 
 // THE ADOPTED BRAND ON THE ARTIFACT ORIGIN (ADR-0048): every file an adoption
-// serves, at `/_crewlet/brand/<sha256>.<ext>` on every artifact host, and the
-// one element the origin places in a framed page pinned to the brand.
+// serves, at `/_crewlet/brand/<sha256>.<ext>`, and the one element the origin
+// places in a framed page pinned to the brand.
 //
 // PUBLIC, AND ALLOWLISTED. The files are the company's public face, so no
-// ticket opens them: a page in any mode, and a font a stylesheet loads with
-// an opaque origin, reach them the way they reach the kit. But a hash is
-// served only while an adoption names it (artifactsdomain's brand files,
-// which the applier writes and prunes), never by looking the hash up in the
-// object store, which would let anybody who learnt a private file's digest
-// fetch it. An extension is served only as its own type, the one the adopted
-// file is.
-//
-// IMMUTABLE, AND PER COMPANY. A hash names the same bytes for ever, so the
-// answer is kept a year, as the kit is; unlike the kit, it is one company's,
-// so a shared cache keys it with the host, which docs/guides/artifacts-serving.md
-// tells a proxy and an edge to keep.
+// ticket opens them. But a hash is served only while an adoption names it
+// (artifactsdomain's brand files), never by looking it up in the object store,
+// which would let anybody who learnt a private file's digest fetch it. An
+// extension is served only as the adopted file's own type. IMMUTABLE, AND PER
+// COMPANY: a hash names the same bytes for ever, so the answer is kept a year;
+// unlike the kit it is one company's, so a shared cache keys it with the host
+// (docs/guides/artifacts-serving.md).
 
 // brandPrefix is the brand's route on the artifact listener.
 const brandPrefix = brandformat.BrandRoute

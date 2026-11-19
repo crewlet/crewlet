@@ -12,17 +12,15 @@ import (
 
 // AN OPEN STORE KEEPS NOTHING IN THE TEMPORARY DIRECTORY, because what an open
 // store keeps there is exactly what an exit that closes nothing leaves behind
-// for good: the watchdog's two exits, a crash, a kill. The driver's own
-// default put a temp database in a fresh directory under TMPDIR for every
-// connection that took a write transaction, removed only when that connection
-// closed, so every such exit left one `.tmpXXXXXX/tursodb-temp.db` per
-// connection — eight a node, measured on the child the broker-death test ends
-// — and nothing could sweep them, since a shared TMPDIR's entries are anyone's.
+// for good: the watchdog's two exits, a crash, a kill. The driver's default
+// put a `.tmpXXXXXX/tursodb-temp.db` under TMPDIR for every connection that
+// took a write transaction, removed only at that connection's close, and
+// nothing could sweep them, since a shared TMPDIR's entries are anyone's.
 //
 // THE CONTROL IS THE DRIVER ITSELF, on its own defaults, putting a directory
 // there at a BEGIN IMMEDIATE and taking it away at the close: it proves the
 // moved TMPDIR reaches the library, so the empty directory the store leaves is
-// the store's doing rather than a variable the library never read.
+// the store's doing.
 func TestAnOpenStoreKeepsNothingInTheTemporaryDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "crewlet.db")
 	tmp := t.TempDir()

@@ -131,6 +131,13 @@ func bridgedRigOn(t *testing.T, c *Company, turn *turnctx.Turn, offered ...tools
 // the bridge of the job it started, the way that job's harness would.
 func (b bridgedRun) launch(t *testing.T, cont *runner.Continuation) bridgedRun {
 	t.Helper()
+	return b.launchFrom(t, cont, nil)
+}
+
+// launchFrom is [bridgedRun.launch] handing the launch read, the read of the
+// round's log its briefs were built from (runner.AgentRunRequest.BriefRead).
+func (b bridgedRun) launchFrom(t *testing.T, cont *runner.Continuation, read *sandbox.LogRead) bridgedRun {
+	t.Helper()
 	before := len(b.jobs.Started())
 	if _, err := b.launcher.LaunchExecutor(t.Context(), runner.AgentRunRequest{
 		Brief: "fix the failing test", Round: 1,
@@ -139,6 +146,7 @@ func (b bridgedRun) launch(t *testing.T, cont *runner.Continuation) bridgedRun {
 		OnFallback: func(chain.Fallback) {},
 		Fence:      b.engine.seatFence(b.handle),
 		Continue:   cont,
+		BriefRead:  read,
 	}); err != nil {
 		t.Fatalf("LaunchExecutor: %v", err)
 	}
@@ -359,7 +367,8 @@ func TestACarriedOnRunsCallsAreNumberedAfterTheAskingRuns(t *testing.T) {
 // the run and the row holds the next job. A session learning its job from the
 // row would file the late call and its spend on the next job's record, whose
 // resume would pay for it; bound before its box existed, the session names its
-// own job, and the store refuses it.
+// own job and round, and the store lists the call late in the next round, with
+// no place, its spend nobody's.
 func TestABridgedSessionsFirstCallOutlivingItsJobIsNotTheNextJobs(t *testing.T) {
 	t.Parallel()
 	delegate := newHeldTool("delegate")
@@ -391,8 +400,9 @@ func TestABridgedSessionsFirstCallOutlivingItsJobIsNotTheNextJobs(t *testing.T) 
 	if row.LaunchID != next.LaunchID {
 		t.Fatalf("the row holds job %q, want the relaunch's %q", row.LaunchID, next.LaunchID)
 	}
-	if len(logged.Calls) != 0 || row.Launch.Bridged != (sandbox.EngineSpend{}) {
-		t.Fatalf("the next job took the last one's late call: calls %+v, spend %+v",
-			logged.Calls, row.Launch.Bridged)
+	if len(logged.Calls) != 1 || !logged.Calls[0].Late || logged.Calls[0].Seq != 0 ||
+		row.Launch.Bridged != (sandbox.EngineSpend{}) {
+		t.Fatalf("the next job took the last one's late call as its own: calls %+v, spend %+v; want it "+
+			"listed late with no place, its spend nobody's", logged.Calls, row.Launch.Bridged)
 	}
 }

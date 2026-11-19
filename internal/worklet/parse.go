@@ -12,6 +12,7 @@ import (
 	"github.com/crewlet/crewlet/internal/decision"
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/named"
 	"github.com/crewlet/crewlet/internal/notify"
 	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/routing"
@@ -84,7 +85,56 @@ const (
 	MetaChoice   = "choice"
 	MetaQuestion = "question"
 	MetaInform   = "inform"
+
+	// MetaDependents is the dependents a relations commit on a blocker names
+	// ([Snapshot.Dependents]), by id, comma-separated in the record's order:
+	// what a `blocking` wake is about beside its own item, so a wake whose
+	// every dependent ended starts no turn. Read through [WakeDependents].
+	MetaDependents = "dependents"
+
+	// MetaFlowState, MetaFlowCause, MetaFlowSince and MetaFlowUntil are the
+	// flow a flow notice tells of ([Snapshot.Flow]), the instants in RFC
+	// 3339 and empty where unknown, and MetaFlowRole the role it tells its
+	// seat in: what the prompt says, and what the moot rule compares the
+	// item with at dispatch ([WakeFlow]).
+	MetaFlowState = "flow_state"
+	MetaFlowCause = "flow_cause"
+	MetaFlowSince = "flow_since"
+	MetaFlowUntil = "flow_until"
+	MetaFlowRole  = "flow_role"
 )
+
+// WakeFlow is the state a flow notice's metadata tells of ([MetaFlowState]),
+// false for a wake that tells of none.
+func WakeFlow(metadata map[string]string) (FlowState, bool) {
+	state := FlowState(metadata[MetaFlowState])
+	return state, state != "" && state.Valid()
+}
+
+// WakeDependents is the dependents a wake's metadata names ([MetaDependents]),
+// none for a wake that names none.
+func WakeDependents(metadata map[string]string) []string {
+	if metadata[MetaDependents] == "" {
+		return nil
+	}
+	return strings.Split(metadata[MetaDependents], ",")
+}
+
+// StateNotice reports a Worklet wake that tells its seat a state rather than
+// words (ADR-0162), and the reason it was routed under: one under an
+// [Reason.Absorbable] reason whose change is no talk on the task and carries
+// no comment. Words are never one, whatever their reason.
+func StateNotice(n *types.ExternalNotification) (Reason, bool) {
+	if n == nil || n.NotificationSource != Source {
+		return "", false
+	}
+	reason := Reason(n.Metadata[MetaVia])
+	if !reason.Absorbable() || ChangeKind(n.SourceEventType).Conversation() ||
+		n.Metadata[MetaCommentID] != "" {
+		return "", false
+	}
+	return reason, true
+}
 
 // Parser turns a mutation record into the notifications it implies; it
 // implements [notify.Parser].
@@ -165,7 +215,7 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 			Origin: types.TriggerOrigin{Kind: types.OriginWorkItem, ID: record.Notify.Snapshot.Key,
 				Reason: string(c.Reason)}},
 			To: notify.Recipient{Handle: c.Handle}, Held: true,
-			WakeID: changefeed.WakeID(record.OpID, c.Handle), WakeAt: record.CreatedAt})
+			WakeID: changefeed.WakeID(wakeKey(record), c.Handle), WakeAt: record.CreatedAt})
 	}
 	for _, c := range routed {
 		inbound := base
@@ -185,13 +235,23 @@ func (p *Parser) Parse(ctx context.Context, w types.RawWebhook, reg *notify.Regi
 			// open (an unreachable coordination store must not stop
 			// notifications), and this catches what slips through, in the inbox
 			// and the completion ledger.
-			WakeID: changefeed.WakeID(record.OpID, c.Handle),
+			WakeID: changefeed.WakeID(wakeKey(record), c.Handle),
 			// AND STAMPED WITH THE RECORD'S OWN INSTANT, which every copy
 			// of this wake carries — see [notify.Routed.WakeAt].
 			WakeAt: record.CreatedAt,
 		})
 	}
 	return out, nil
+}
+
+// wakeKey is what a record's wakes are derived from: its operation id, or a
+// flow notice's own key ([FlowNotice.ID]), so a notice the duty published twice
+// under two ticks' operations is one wake, as it is one inbox row.
+func wakeKey(record MutationRecord) string {
+	if flow := record.Notify.Snapshot.Flow; flow != nil && flow.ID != "" {
+		return flow.ID
+	}
+	return record.OpID
 }
 
 // registryHas narrows the party registry to the one question routing asks.
@@ -255,6 +315,20 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 	if record.Notify.CommentID != "" {
 		metadata[MetaCommentID] = record.Notify.CommentID
 	}
+	if len(snapshot.Dependents) > 0 {
+		ids := make([]string, len(snapshot.Dependents))
+		for i, party := range snapshot.Dependents {
+			ids[i] = party.Task
+		}
+		metadata[MetaDependents] = strings.Join(ids, ",")
+	}
+	if flow := snapshot.Flow; flow != nil {
+		metadata[MetaFlowState] = string(flow.State)
+		metadata[MetaFlowCause] = string(flow.Cause)
+		metadata[MetaFlowSince] = instantText(flow.Since)
+		metadata[MetaFlowUntil] = instantText(flow.Until)
+		metadata[MetaFlowRole] = string(flow.Role)
+	}
 	if decision := askedDecision(record); decision != nil {
 		metadata[MetaDecision] = jsonText(decision)
 	}
@@ -289,13 +363,15 @@ func (p *Parser) inbound(record MutationRecord) notify.Inbound {
 		metadata[notify.BodyAuthorField] = record.Actor
 		metadata[notify.BodyAuthorKindField] = string(record.ActorKind)
 	}
+	subject := subjectLine(snapshot, record.Subject, record.Notify.Kind)
 	return notify.Inbound{
-		Source:    Source,
-		EventType: string(record.Notify.Kind),
-		Sender:    record.Actor,
-		Subject:   subjectLine(snapshot, record.Subject, record.Notify.Kind),
-		Body:      body,
-		Metadata:  metadata,
+		Source:      Source,
+		EventType:   string(record.Notify.Kind),
+		Sender:      record.Actor,
+		Subject:     subject.Text,
+		SubjectRefs: subject.Refs,
+		Body:        body,
+		Metadata:    metadata,
 		// WHO THE SENDER IS, by the record's own kind: the actor may be a seat's
 		// handle, a credential's login or a node's name, and only the kind tells
 		// the woken turn whether a colleague is asking or nobody is
@@ -410,16 +486,16 @@ func jsonText(value any) string {
 // false, and digests coalesce on the subject. AND THE TASK BY ITS ADDRESS
 // ([Snapshot.Address]), the id where another task claimed its key first: it
 // is the first reference a seat is shown, and a key there lands it on the
-// claimant.
-func subjectLine(snapshot Snapshot, subject Subject, kind ChangeKind) string {
-	key := snapshot.Address(subject)
-	if key == "" {
-		key = objectLabel(subject)
+// claimant. The task is named as one (package named), by its id.
+func subjectLine(snapshot Snapshot, subject Subject, kind ChangeKind) named.Line {
+	line := named.Words(objectLabel(subject))
+	if key := snapshot.Address(subject); key != "" {
+		line = named.Words("").Name(named.Item(snapshot.TaskID(subject), key))
 	}
 	if snapshot.Title == "" {
-		return fmt.Sprintf("%s: %s", key, kind)
+		return line.Words(fmt.Sprintf(": %s", kind))
 	}
-	return fmt.Sprintf("%s %s: %s", key, kind, snapshot.Title)
+	return line.Words(fmt.Sprintf(" %s: %s", kind, snapshot.Title))
 }
 
 // objectLabel is what a non-task subject is CALLED in one line.

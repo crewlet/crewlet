@@ -200,7 +200,7 @@ func (t *myWork) Description() string {
 		"became workable, and the work you hold that others' work waits on, " +
 		"the most waited on first. Call this first. Each question arrives fenced as " +
 		"text its asker wrote; the two fence lines are a label, not part of " +
-		"the question."
+		"the question. " + flowSentence
 }
 
 func (t *myWork) Parameters() map[string]any {

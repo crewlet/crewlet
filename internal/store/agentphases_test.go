@@ -64,14 +64,11 @@ func TestAgentPhasesStopAtTheSameFloorEveryOtherReadDoes(t *testing.T) {
 
 // TWO SEATS THAT SHARE A NAME HAVE TWO HISTORIES.
 //
-// A seat's phases are matched on its agent id and never on the role name
-// beside it — on its own page ([store.EventLog.AgentPhases]) and when the
-// company's phases are narrowed to it ([store.EventLog.Phases]). The read used
-// to take the name as well, OR'd with the id, so a seat's page and a
-// seat-filtered Model screen listed its namesake's calls among its own: a name
-// is prose, and two "Engineer"s is an ordinary company — two unit seats
-// stamped from one template share one as a matter of course, and the Live
-// screen's `seat=` handed over as a role listed the twin's rounds.
+// A seat's phases match on its agent id, never the role name beside it, in
+// [store.EventLog.AgentPhases] and when [store.EventLog.Phases] is narrowed to
+// a seat. A name is prose and two "Engineer"s is an ordinary company (seats
+// stamped from one template share one); matching it listed the namesake's
+// calls among the seat's own.
 //
 // Mutation: filter on `agent_role` again, in either read, and the twin's phase
 // is listed.

@@ -20,23 +20,16 @@ var ErrTrailing = errors.New("something follows the JSON value")
 
 // Unreadable is why a JSON document did not decode, as the person or the
 // model that sent it reads it: which field, and what it holds where it takes
-// something else — never encoding/json's own words, which name Go's types and
-// Go's struct fields ("json: cannot unmarshal string into Go struct field
-// patchBody.grants of type []iam.Grant"), nor the time package's layout
-// ("parsing time \"yesterday\" as \"2006-01-02T15:04:05Z07:00\": cannot parse
-// …").
+// something else. Never encoding/json's own words, which name Go's types and
+// struct fields ("json: cannot unmarshal string into Go struct field
+// patchBody.grants of type []iam.Grant"), nor the time package's layout.
 //
-// what names the document, as a SINGULAR noun phrase the sentence opens with
-// or names a field in: "the body", "the q parameter", "the arguments object".
-// The sentence is lowercase and has no full stop, so it composes like any Go
-// error and a surface makes it a line of its own at the boundary.
+// what is a SINGULAR noun phrase ("the body"); the sentence is lowercase with
+// no full stop, so it composes like any Go error.
 //
-// ONE PLACE FOR EVERY SURFACE THAT DECODES A CALLER'S JSON, the identity
-// directory's, the artifacts', the datastore's, the operator's act route,
-// setup's, a query's JSON parameter and a tool call's arguments alike: each
-// answered err.Error() and so each spoke a different dialect of Go's. A
-// failure this does not recognise — a type's own decoder refusing a value — is
-// said without its words, since whose words those are is not knowable here.
+// ONE PLACE FOR EVERY SURFACE THAT DECODES A CALLER'S JSON: each answering
+// err.Error() spoke a different dialect of Go's. A failure not recognised
+// (a type's own decoder refusing a value) is said without its words.
 func Unreadable(what string, err error) string {
 	var (
 		syntax    *json.SyntaxError

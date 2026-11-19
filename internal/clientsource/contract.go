@@ -123,6 +123,8 @@ var contract = []Entry{
 	{"DECISION_MAX_OPTIONS", ReadScalar,
 		"internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
 	{"PROJECT_PAGE", ReadScalar, "internal/worklet.TestTheDashboardBoundsWorkletTextAtTheEnginesCaps"},
+	{"ITEM_CONVERSATION_PREFIX", ReadScalar,
+		"internal/worklet.TestTheDashboardKnowsAnItemsConversationByTheEnginesKey"},
 	{"InformSurface", ReadUnion, "internal/worklet.TestTheDashboardNamesEveryInformSurface"},
 
 	// backups.ts
@@ -147,6 +149,10 @@ var contract = []Entry{
 	{"PENDING_REASK_MS", ReadScalar, "internal/chatlet.TestTheDashboardAsksAPendingPostAgainAfterTheApplierHadItsWait"},
 	{"CHAT_SEARCH_PAGE", ReadScalar, "internal/search.TestTheDashboardAsksForTheChatSearchPageTheEngineServes"},
 	{"MAX_READER_MARKS", ReadScalar, "internal/coord.TestTheDashboardsReaderMarkCapIsTheEngines"},
+
+	// named.ts
+	{"NAMED_REF_KINDS", ReadLiteral, "internal/api/queries.TestTheDashboardNamesWhatTheEngineNames"},
+	{"MAX_REFERENCES", ReadScalar, "internal/api/queries.TestTheDashboardNamesWhatTheEngineNames"},
 
 	// presence.ts
 	{"PRESENCE_ROOMS", ReadLiteral, "internal/presence.TestTheDashboardSpeaksThePresenceVocabulary"},

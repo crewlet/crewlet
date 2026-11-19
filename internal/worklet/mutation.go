@@ -26,7 +26,7 @@ import (
 // It moves ONLY with [versionedFields], whose rows name each version's fields,
 // to that table's highest version: statelogtest refuses a build reading a
 // version no field introduced, which would drop the field it was minted for.
-const RecordVersion = 18
+const RecordVersion = 20
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -90,7 +90,15 @@ var versionedFields = statelog.RecordFields{
 		Equals: string(RelationEntry)},
 	{Name: "View.DeletedAt", Since: 17, Op: string(OpPatch), Path: []string{"mutation", "deleted_at"}},
 	{Name: "Comment.Removed", Since: 18, Op: string(OpPatch), Path: []string{"mutation", "comment", "removed"}},
+	{Name: "Project.StuckAfterHours", Since: 19, Path: []string{"mutation", "stuck_after_hours"}},
+	{Name: "Subject.Kind flow", Since: FlowRecordVersion, Path: []string{"subject", "kind"},
+		Equals: string(KindFlow)},
+	{Name: "Snapshot.Flow", Since: FlowRecordVersion, Path: []string{"notify", "snapshot", "flow"}},
 }
+
+// FlowRecordVersion is the version from which a record carries an item's flow
+// (ADR-0162): the `flow` kind, and the notice of it a [Snapshot] names.
+const FlowRecordVersion = 20
 
 // VersionedFields is the table, for the conformance suite and for an operator
 // surface that names why a record was held back.
@@ -131,10 +139,14 @@ const (
 	// that INSTALLS A GATE.
 	OpPurge OpKind = "purge"
 
-	// OpTurn records a turn's spend. THE ONE ADDITIVE OP: no expectation,
-	// no version bump, and an apply whose running totals are gated on its
-	// own id insert affecting a row.
+	// OpTurn records a turn's spend. ADDITIVE: no expectation, no version
+	// bump, and an apply whose running totals are gated on its own id insert
+	// affecting a row.
 	OpTurn OpKind = "turn"
+
+	// OpFlow records an item's flow or a notice of it. ADDITIVE as a turn
+	// is, its apply gated on its derived key's insert ([Applier.applyFlow]).
+	OpFlow OpKind = "flow"
 
 	// OpGeneration is a reanchor's record.
 	OpGeneration OpKind = "generation"
@@ -150,10 +162,10 @@ const (
 	OpTrimmed OpKind = "trimmed"
 )
 
-// OpKinds are the ten, in the order they are documented.
+// OpKinds are the eleven, in the order they are documented.
 var OpKinds = []OpKind{
 	OpCreate, OpPatch, OpTombstone, OpRestore, OpPurge,
-	OpTurn, OpGeneration, OpEviction, OpBarrier, OpTrimmed,
+	OpTurn, OpFlow, OpGeneration, OpEviction, OpBarrier, OpTrimmed,
 }
 
 // Valid reports whether an op off the wire is one this build knows.
@@ -1030,6 +1042,11 @@ const (
 	// and ChangeDeadWaitEnded that something does again; both by the engine.
 	ChangeDeadWait      ChangeKind = "dead_wait"
 	ChangeDeadWaitEnded ChangeKind = "dead_wait_ended"
+
+	// ChangeFlow is a notice that an item in progress is not moving: due,
+	// stuck or held (ADR-0162). Written by the flow duty on the item's flow
+	// subject, never as history: recording a state moves nothing it reads.
+	ChangeFlow ChangeKind = "flow"
 )
 
 // ChangeKinds are every change kind this build writes.
@@ -1047,7 +1064,7 @@ var ChangeKinds = []ChangeKind{
 	ChangeRestored, ChangePurged, ChangeProjectCreated, ChangeProjectUpdated,
 	ChangePolicyChanged, ChangeViewSaved, ChangeViewDeleted, ChangeCatalogue,
 	ChangePrioritised, ChangePersonUpdated, ChangeFileWritten, ChangeFileRemoved,
-	ChangeLinkSettled, ChangeDeadWait, ChangeDeadWaitEnded,
+	ChangeLinkSettled, ChangeDeadWait, ChangeDeadWaitEnded, ChangeFlow,
 }
 
 // Valid reports whether a change kind off the wire is one this build knows.
@@ -1262,6 +1279,11 @@ type Snapshot struct {
 	// reached the top of their list. A task-subject wake leaves it empty and
 	// [Snapshot.TaskID] falls back to the subject, so the id has one carrier.
 	Task string `json:"task,omitempty"`
+
+	// Flow is what a flow notice tells ([ChangeFlow]): the one person it is
+	// for and the item's state as the duty read it, which the wake's moot
+	// rule compares the item with at dispatch. Nil on every other change.
+	Flow *FlowNotice `json:"flow,omitempty"`
 
 	// KeyCollision says [Snapshot.Key] opens ANOTHER task, one that claimed the
 	// key first, so this wake's task is reached only by its id

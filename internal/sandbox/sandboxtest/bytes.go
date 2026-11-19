@@ -379,9 +379,9 @@ func testTheNewestSubmissionIsKeptWholeForItsReplay(t *testing.T, s sandbox.Pend
 // the turn's earlier calls by name, which is what the run's own ending reads
 // to say whether the turn replied — a reply its log dropped from the middle
 // included, read off its identity, so the turn's record is not taken for
-// incomplete. The new round's log starts with neither tally: the identities of
-// the calls the last round dropped, and of the calls its calls' own work made,
-// are the last round's.
+// incomplete. Handed no read, the new round's log starts with neither tally:
+// the identities of the calls the last round dropped, and of the calls its
+// calls' own work made, are the last round's.
 //
 // Mutation: fold the kept calls alone, and the reply the log dropped is
 // missing from the turn's earlier calls; carry the tallies into the new

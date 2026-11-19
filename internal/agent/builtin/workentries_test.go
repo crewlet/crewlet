@@ -172,7 +172,7 @@ func TestLinkingAndReadingATasksEntriesTakesTheAtlas(t *testing.T) {
 	}
 	held := callEntries(personBoundTo("jane", iam.GrantWorklet, iam.GrantAtlas), t, reg, builtin.GetWorkItemTool,
 		map[string]any{"item": "ENG-1", "include": []any{"links"}})
-	if held.Failed || !strings.Contains(held.Output, entryDB) || strings.Contains(held.Output, "entries_withheld") {
+	if held.Failed || !strings.Contains(held.Output, entryDB) || !strings.Contains(held.Output, `"entries_withheld": 0`) {
 		t.Errorf("an atlas reader was answered %q", held.Output)
 	}
 

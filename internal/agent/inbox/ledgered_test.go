@@ -45,23 +45,15 @@ func TestTypesThatRunNoTurnAreNotLedgered(t *testing.T) {
 
 // TestNoLedgeredTypeIsANameNothingPublishes is the guard that earns its keep.
 //
-// A set like this collects defensive aliases: a fifth name, "notification",
-// that nothing in the engine ever emits, outliving whatever once produced it.
-// A dead name in this set is invisible: nothing refuses it,
-// nothing logs it, it simply never matches, and a reader comparing the set
-// against the system's behaviour finds a type that appears covered and is not.
+// A set like this collects defensive aliases, such as a "notification" nothing
+// emits; a dead name is invisible, never matching while the type appears
+// covered. Every ledgered name must be a REGISTERED PAYLOAD TYPE, with no
+// exemptions (a free-form bag let the ask travel under a key nothing read, so a
+// woken seat got "(a2a_request)" instead of the question).
 //
-// Every ledgered name must therefore be one the system can actually put on an
-// inbox: a REGISTERED PAYLOAD TYPE, with no exemptions. The two A2A wakes used
-// to be the exception — carried as free-form bags on the grounds that they had
-// no schema — and that exemption is exactly what let the ask travel under a key
-// nothing read, so a woken seat was handed "(a2a_request)" instead of the
-// colleague's question. They are registered now and the exemption is gone.
-//
-// It reads LedgeredTypes rather than a list of its own. An earlier version
-// iterated the four names it expected and asked whether each was ledgered,
-// which is a different question: adding "notification" back to the set left it
-// green, because the name it never asked about was the one that was wrong.
+// It reads LedgeredTypes rather than a list of its own: iterating expected
+// names asks whether each is ledgered, a different question, and leaves a wrong
+// name it never asked about green.
 func TestNoLedgeredTypeIsANameNothingPublishes(t *testing.T) {
 	t.Parallel()
 	registered := events.RegisteredTypes()

@@ -55,7 +55,7 @@ func TestNoGoFileButTheRendersClientNamesADevToolsMethod(t *testing.T) {
 		arm := t.Name()[strings.LastIndex(t.Name(), "/")+1:]
 		for _, h := range named(slices.Concat(read.own, read.deps), methods) {
 			t.Errorf("%s:%d names %s, which the %s pin's own protocol describes: no Go but the artifact "+
-				"render's client (%s) names a DevTools method (internal/browser's doc, ADR-0162)",
+				"render's client (%s) names a DevTools method (internal/browser's doc, ADR-0163)",
 				h.file, h.line, h.name, arm, clientDir)
 		}
 	})

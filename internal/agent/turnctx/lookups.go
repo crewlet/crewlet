@@ -2,56 +2,18 @@ package turnctx
 
 import "sync"
 
-// Lookups is what a turn has looked up by name once, so a later call in the
-// same turn reuses the answer instead of paying for the lookup again: the
-// code tools' repository, resolved at linearizable the first time the turn
-// names it, and read by its id on every call after (internal/agent/builtin's
-// CodeDeps.repo). One linearizable read is one barrier on its log, and a turn
-// that reads ten files of one repository would otherwise pay ten for the same
-// name.
+// Lookups is what a turn has looked up by name once: the code tools' repository
+// is resolved at linearizable once and read by id after (internal/agent/
+// builtin's CodeDeps.repo), not one barrier per read.
 //
-// # It decides nothing about access
-//
-// An entry is a fact the turn already established — this name named that
-// repository — and never a permission: the node that answers each later read
-// judges the asker again from its own chart. So a stale entry can make a read
-// ask about an object that moved, which the reader refuses in its own words,
-// and never one the asker may not read.
-//
-// # Keyed like a context
-//
-// A consumer keys its entries with a comparable type of its own, as
-// context.WithValue's keys are, so two packages' entries never collide and
-// neither can read the other's: this package holds the values without knowing
-// their types, because it may not import the domains whose answers they are.
-//
-// # What it holds, and for how long
-//
-// The turn's own lookups, in memory, for the turn's life: one Turn and every
-// Turn derived from it ([Turn.InPhase], [Turn.WithCalls], [Turn.WithAuxSpend])
-// share one, so a delegated worker reuses what its parent looked up and its
-// parent what it did. A resumed segment starts empty and looks up again, since
-// what a name named may have moved while it was parked. It is bounded by the
-// calls the turn makes: an entry is added only by a call that looked something
-// up.
-//
-// Beside what a name named, a consumer may keep a FACT its lookups established
-// that a later call builds on — the code tools keep how far the refs a turn
-// resolved on a repository had moved, which the turn's writes to it are
-// floored at — taken with [Lookups.LoadOrStore], so callers racing to be first
-// share one value, which the consumer then changes in place under a lock of
-// its own.
-//
-// A consumer that finds an entry no longer true — the name now names another
-// object, or the object it named is gone — FORGETS it, whichever of its reads
-// finds that out, so the next call looks up again; it never replaces it with
-// what another read said in passing, because an entry is what the ONE lookup
-// seam answered, and whatever that seam does beside its read must then be done
-// again for the object the name now names.
-//
-// NIL HOLDS NOTHING: every method is safe on a nil Lookups, which answers
-// every Load as a miss — a turn built without one, a tool exercised directly,
-// and the operator surface, which has no turn and looks up once a call.
+// An entry is a fact, never a permission: the node answering each later read
+// judges the asker again from its chart, so a stale entry can ask about an
+// object that moved, never one the asker may not read. Consumers key entries
+// with a comparable type of their own, as context.WithValue does. In memory for
+// the turn's life, shared by derived Turns; a resumed segment starts empty. A
+// consumer finding an entry untrue FORGETS it, never replaces it with what
+// another read said in passing: the ONE lookup seam does more than read.
+// Nil is safe: every Load misses.
 type Lookups struct {
 	mu   sync.Mutex
 	held map[any]any

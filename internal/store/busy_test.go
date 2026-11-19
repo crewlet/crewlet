@@ -13,16 +13,12 @@ import (
 
 // A WRITE THAT NEVER GOT THE LOCK IS BUSY, AND A WRITE THAT FAILED IS NOT.
 //
-// Staged the way production reaches it: one transaction holds the file's write
-// lock and does not let go, and a second asks for it on a store whose busy
-// timeout is short. The second waits its line out, waits it out again on its
-// one retry, and gives up — and that give-up is the one failure here a caller
-// clears by trying again a moment later, so it must carry [store.ErrBusy] for
-// a tool to answer it as a condition rather than as this node's fault. The
-// driver's own words stay beneath it for the log.
-//
-// The control is a statement that fails with the lock HELD — a table that does
-// not exist — which no wait changes and which must reach its caller unmarked.
+// One transaction holds the write lock and a second asks on a store with a
+// short busy timeout. It waits, retries once, and gives up, the one failure a
+// caller clears by retrying, so it must carry [store.ErrBusy] for a tool to
+// answer it as a condition, the driver's words beneath it for the log.
+// The control fails with the lock HELD (a missing table): no wait changes it,
+// and it must reach its caller unmarked.
 //
 // Mutation: return the give-up's error unwrapped from retryTransient, and the
 // first half fails; wrap every exhausted cause, or every failure, and the

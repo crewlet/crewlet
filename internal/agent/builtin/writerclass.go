@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 
+	"github.com/crewlet/crewlet/internal/advisordomain"
 	"github.com/crewlet/crewlet/internal/artifactdata"
 	"github.com/crewlet/crewlet/internal/artifacts"
 	"github.com/crewlet/crewlet/internal/artifactsdomain"
@@ -40,6 +41,10 @@ type nativeDomain struct {
 	// objects are the argument names that name one of the domain's objects,
 	// as the tools take them.
 	objects []string
+
+	// noTool says why no catalogue tool writes the domain, where none does:
+	// no failed call names one of its objects, so it declares none.
+	noTool string
 }
 
 // nativeDomains is every native domain these tools write, keyed by its
@@ -100,6 +105,12 @@ var nativeDomains = map[string]nativeDomain{
 		// artifacts' tools is a file. A purged value is never named: that
 		// would repeat what the purge erases.
 		objects: []string{"atlas_entry"},
+	},
+	advisordomain.Domain{}.Name(): {
+		class:    advisorClass,
+		sentence: advisordomain.Sentence,
+		noTool: "the Advisor's own routes and duty write it, and an agent writes nothing to it " +
+			"(a person decides a finding on the Advisor's page or approves Ask Crewlet's request)",
 	},
 	gitlet.Domain{}.Name(): {
 		class:    codeClass,
@@ -202,6 +213,26 @@ func ObjectArgs() []string {
 	}
 	slices.Sort(out)
 	return slices.Compact(out)
+}
+
+// advisorClass is the class of a refusal the advisor log decided: a finding
+// that moved since it was read is stale; a held key and a move the finding's
+// state does not admit are its state; a record of a newer build is no refusal.
+func advisorClass(err error) (tools.Refusal, bool) {
+	switch {
+	case errors.Is(err, advisordomain.ErrStaleVersion):
+		return tools.RefusalStaleVersion, true
+	case errors.Is(err, advisordomain.ErrNotFound):
+		return tools.RefusalNotFound, true
+	case errors.Is(err, advisordomain.ErrExists):
+		return tools.RefusalExists, true
+	case errors.Is(err, advisordomain.ErrConflict), errors.Is(err, advisordomain.ErrHeld),
+		errors.Is(err, advisordomain.ErrIllegalMove):
+		return tools.RefusalConflict, true
+	case errors.Is(err, advisordomain.ErrInvalid):
+		return tools.RefusalInvalid, true
+	}
+	return "", false
 }
 
 // trackerClass is the class of a refusal the tracker's writer decided, by the

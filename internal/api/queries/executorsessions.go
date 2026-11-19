@@ -24,162 +24,95 @@ import (
 
 // A SEAT'S EXECUTOR SESSIONS, read by a person (ADR-0073).
 //
-// Every turn whose executor captured its harness's session — and every turn
-// that read its conversation, from its first launch's `begin` on — leaves a
-// row in the executor log naming the sealed object that holds the session its
-// harness kept when its run ended — the whole record of what the run read,
-// called and wrote — and how the turn ended. Two questions read it: `executor_sessions`,
-// a seat's rows newest first, a page at a time, each with how its turn ended
-// and whether its session is still kept; and `executor_session`, one turn's
-// transcript, its object opened and read as the entries its harness recorded.
-//
-// # The seat's trail, decided as the run's live output is
-//
-// Both questions are decided per seat by [authz.ActionSeatTrailRead] — the
-// seat itself, whoever leads it, or an admin — through [Sources.trailSeat], the
-// one place every question about a seat's trail decides it: exactly who reads
-// the run's live output (`executor_tail`) and its turn's phases with their
-// prompts and responses. They reach nobody those do not.
-//
-// WHAT a transcript hands those readers is MORE than the live output did: the
-// live output shows a call's subject on one line and a failed result's first
-// line, and never a successful result's body; a transcript shows every call's
-// whole input and each result's text — the contents of the files the run read
-// and what its commands printed — to an entry's bound, and each subagent's
-// thread. The redaction at this read matches the credential shapes it knows,
-// not values: a secret of no recognisable shape that a run read is in its
-// transcript as it read it.
-//
-// # From any node, and never a 500 for an object that is gone
-//
-// The rows are read through the estate router ([ExecutorSessions]), so a node
-// without `data` answers as a data node does, and the object through the
-// fleet's one object store ([SessionObjects]), and a session is read by the
-// one reader every surface reads a kept session through (internal/executorread),
-// so what a person is told of it is what every reader is told. An object the
-// store no longer holds, one that does not open under this fleet's keyring, an
-// archive that is not one its format describes, and one this build does not
-// read are each an ANSWER saying so — the row is still the turn's account of
-// how it ended — never a failure: only a store that did not answer is
-// `unavailable`. What the answer says of an archive that is not what its format
-// describes is the engine's own sentence ([executor.MalformedArchiveError]),
-// never a decoder's, which would quote what a box's own agent packed.
-//
-// # Bounded, and redacted at this read
-//
-// A transcript is read a page at a time, held to the bounds the runner states
-// ([executor.TranscriptReadBounds]) — entries and bytes per page, each entry's
-// text, and the archive's bytes one read takes — and the answer says why its
-// page ends where it does. Every entry's text, the ask's excerpt and the
-// ending's prose are passed through [redact.Secrets] at this read, whatever the
-// capture did — the entries by the runner's reader, the row by its own
-// redaction ([executordomain.Session.Redacted]): a session is everything a run
-// read and printed.
-//
-// And a node decodes at most [executor.TranscriptReadsAtOnce] transcripts at
-// once, whichever socket or REST caller asks, since one read can hold on the
-// order of a hundred mebibytes: a read past them waits for a slot, its object
-// not yet opened, for as long as its caller waits, and ends with the caller's
-// own error where the caller leaves first.
-//
-// # A session in progress, and one its turn went past, said in the domain's words
-//
-// A live turn's row naming a session is IN PROGRESS (`in_progress`): the newest
-// session its runs have kept, which its run may have gone on past — never an
-// ended turn's. An ended row kept up to a session its turn went on past, or
-// whose turn was lost, is no account of all the turn did. Each is said in the
-// domain's one sentence of it, asked of the row's shown form, so a person is
-// told of a session exactly what the seat's own reads of it are told: the
-// first as the engine's words alone (`in_progress_note`,
-// [executordomain.Session.InProgressNote]), the second as words that quote what
-// refused a capture, declared so (`kept_note`,
-// [executordomain.Session.WentOnNote]). The screen draws each where it reads,
-// and words neither itself.
-//
-// # Whether a launch continues it, decided as that launch decides it
-//
+// Every turn whose executor captured its harness's session, or read its
+// conversation (from its first launch's `begin`), leaves a row in the executor
+// log naming the sealed object that holds that session and how the turn ended.
+// `executor_sessions` pages a seat's rows newest first; `executor_session` reads
+// one turn's transcript as the entries its harness recorded.
+// Both are decided per seat by [authz.ActionSeatTrailRead] through
+// [Sources.trailSeat], as are `executor_tail` and the turn's phases. A
+// transcript hands them MORE than live output (every call's whole input, each
+// result's text, each subagent's thread), and redaction matches credential
+// shapes, not values: a secret of no known shape is in it as the run read it.
+
+// Rows are read through the estate router ([ExecutorSessions]), so any node
+// answers; the object through the fleet's object store ([SessionObjects]), by
+// the one reader every surface uses (internal/executorread). A gone
+// object, one that does not open under the keyring, a malformed archive (the
+// engine's own sentence, [executor.MalformedArchiveError], never a decoder's,
+// which would quote what a box packed) and an unreadable format are each an
+// ANSWER, never a failure: only a store that did not answer is `unavailable`.
+// Pages are held to [executor.TranscriptReadBounds], and the answer says why one
+// ends. Entry text, the ask's excerpt and the ending's prose pass through
+// [redact.Secrets] at this read (the row by [executordomain.Session.Redacted]).
+// A node decodes at most [executor.TranscriptReadsAtOnce] at once (a read can
+// hold ~100 MiB); more wait for a slot, ending with their caller's own error.
+
+// A live turn's row naming a session is `in_progress`: the newest its runs kept,
+// which the run may have gone past. An ended row kept up to a session its turn
+// went on past, or whose turn was lost, is no account of all the turn did. Each
+// is said in the domain's one sentence, asked of the row's shown form, so a
+// person is told what the seat's own reads are: `in_progress_note`
+// ([executordomain.Session.InProgressNote], the engine's words alone) and
+// `kept_note` ([executordomain.Session.WentOnNote], quoting what refused a
+// capture, declared so). The screen words neither.
+
 // Each row says which launch would continue its session (`continued_by`: a
-// relaunch of its turn while the turn is live; its conversation's next turn
-// once the turn has ended or is ending — its schedule's next fire, for a turn
-// of a schedule's conversation, the same decision told in the schedule's words
-// ([nextLaunch]); none for a turn that served no conversation), whether it
-// would (`continuable`), where (`continues_in`: in
-// whichever box the launch gets, or — a relaunch's alone — only in the box the
-// turn's run parked in, while that box is held), and where it would not, why
-// (`not_continuable`): asked of [sandbox.ReadContinuityOf], THE decision that
-// launch takes — [sandbox.ContinuityOf] for a relaunch, with the launch's own
-// tests of a box it continues in beside it, and [sandbox.BaseContinuityOf] for
-// the next turn, as that turn's first launch asks it of the head its dispatch
-// reads — over what that launch reads. A LIVE ROW: the turn's row on the
-// executor log as a relaunch reads it, the turn's run record in the
-// coordination store ([SessionRuns]) and the job that record names as the one
-// a relaunch would follow, and — where the turn has kept no session of its own
-// — the session its first launch was handed, which a relaunch in a box of its
-// own continues instead. AN ENDED ROW: whether it is its conversation's HEAD,
-// of the conversation's ended turns whose rows still name a session the one
-// that read it last, which the read that answered the row names from the same
-// snapshot (executordomain.Page.Heads, SessionRead.Head) — only the head is
-// continued, and a row that is not names the head the next turn is handed; a
-// row that names no session says why, of four reasons. And for either, the
-// member the launch would be launched on now, the cell its run lands in and
-// that member's runner — as THE NODE HOLDING THE SEAT picks them
-// ([RelaunchTargets]): which members sit out a spent plan is that node's own,
-// and the launch is decided there, off the chain of the company revision it
-// runs on — a resumed segment of the turn running there relaunches on the
-// revision it was admitted under, and a conversation's next turn is admitted
-// under the revision live when it comes, which an ask of NO turn names
-// ([sandbox.TargetAsk]). Never a second copy of any part of it. As far as the
-// engine can know before a box is chosen: whether the box a launch gets runs a
-// harness release that takes the session up, whether it is a box of its own,
-// and whether the seat's budget can carry it, are the launch's to find out,
-// and no row says them.
-//
-// A ROW BEGINS AT ITS TURN'S FIRST LAUNCH where the turn read its
-// conversation, whose `begin` records that read and holds the session it was
-// handed (`base_turn`) — at its first capture otherwise — and IT GOES WITH THE
-// LATER TURN OF ITS CONVERSATION THAT WAS HANDED IT, once that turn, having
-// landed a capture of its own, ends: an end absorbs the turns its read handed
-// out, deleting their rows. It goes past the retention, and with its seat,
-// too. So a session read by its turn after its row went is `not_found`, said
-// as one that may have gone any of these ways.
-//
-// A PAGE READS THE COORDINATION STORE ONCE for every run it lists: one listing
-// of the seat's live runs ([SessionRuns.ListActiveForSeat]), which the fleet's
-// concurrent runs bound, none at all where every row on the page has ended,
-// which the log's row alone decides, and one turn's record alone for a live
-// row the listing does not hold — a record of a status this build does not
-// know, or one it could not decode — which a session read alone decides the
-// same way. It ASKS THE NODE HOLDING THE SEAT ONCE, for every row a member
-// decides at once — each live row whose run is neither over nor ending, and
-// each ended row that is its conversation's head — and not at all where no row
-// is either, which costs one read more of the coordination store, the seat's
-// lease, naming that node ([RelaunchTargets]), on every page that asks, the
-// holder's own included. And A LIVE ROW IS DECIDED ON THE LOG AS A RELAUNCH
-// READS IT: read again at the relaunch's level ([executordomain.RelaunchRead])
-// where the page was read below it and the row names another capture than the
-// record keeps, or it keeps none or not a newer one of the followed job
-// ([sandbox.RereadsRow]), since a copy behind the record would read a session
-// a relaunch continues as one the log no longer names; and nowhere else, since
-// a read at that level appends a barrier to the executor log, and a row naming
-// the kept capture beside nothing newer decides as one read there would. An
-// ended row is decided on the snapshot its page was read in (`read_level`).
-//
-// A TRANSCRIPT'S LATER PAGES DO NOT DECIDE IT AGAIN: its first page, read with
-// no cursor, says it beside the transcript's opening, and every later page —
-// read a page at a time, as a reader scrolls — leaves it null, saying so.
-//
-// AN UNKNOWN IS NEVER A NO: `continuable` is null, and `not_continuable` says
-// why, where the turn's run record or its row at the relaunch's level could not
-// be read, and where the launch would not decide now either — its job still
-// working or being collected, its capture still being kept or its record
-// awaiting the log's answer, which a relaunch asks again before it decides
-// ([sandbox.ReadContinuityOf]), what the launch is launched on not to be said now (every member of the seat's chain sitting out
-// its plan, no node holding the seat, the node holding it not answering), a
-// relaunch only the resume of its job's collection decides, and a turn whose
-// end is not on the log yet, which its conversation's head decides once it
-// is. A no would tell a person a session will start over that may well be
-// continued; and a store that does not answer never fails the page, whose rows
-// the log answered whole.
+// relaunch while the turn is live; its conversation's next turn once it has
+// ended or is ending, in the schedule's words for a schedule's conversation,
+// [nextLaunch]; none if it served no conversation), whether it would
+// (`continuable`), where (`continues_in`: any box, or for a relaunch only the
+// box the run parked in, while held) and if not why (`not_continuable`). All is
+// asked of [sandbox.ReadContinuityOf], THE decision that launch takes
+// ([sandbox.ContinuityOf] for a relaunch, [sandbox.BaseContinuityOf] for the
+// next turn), never a second copy of any part of it.
+
+// A LIVE ROW: the row as a relaunch reads it, the run record ([SessionRuns])
+// and the job it names as the one a relaunch follows, and, where the turn kept
+// no session, the one its first launch was handed. AN ENDED ROW: whether it is
+// its conversation's HEAD (the last-read of its ended turns still naming a
+// session; executordomain.Page.Heads, SessionRead.Head, same snapshot): only the
+// head is continued, others name the head the next turn is handed; a row naming
+// no session says why, of four reasons. For either, the member and cell the
+// launch would land on and its runner are picked as THE NODE HOLDING THE SEAT
+// picks them ([RelaunchTargets]), off the chain of the revision it runs on: a
+// resumed segment keeps its admitted revision, a conversation's next turn takes
+// the live one, which an ask of NO turn names ([sandbox.TargetAsk]). No row says
+// what the launch finds out once a box is chosen (release, own box, budget).
+
+// A ROW BEGINS AT ITS TURN'S FIRST LAUNCH where the turn read its conversation
+// (`begin` holds the handed session, `base_turn`), else at its first capture,
+// and GOES WITH THE LATER TURN THAT WAS HANDED IT once that turn lands a capture
+// of its own and ends (an end deletes the rows its read handed out). It also
+// goes past the retention and with its seat, so a session read after its row
+// went is `not_found`, said as one that may have gone any of these ways.
+
+// A PAGE READS THE COORDINATION STORE ONCE: one listing of the seat's live runs
+// ([SessionRuns.ListActiveForSeat], bounded by the fleet's concurrent runs),
+// none where every row has ended, and one turn's record for a live row the
+// listing lacks (a status this build does not know, or undecodable). It ASKS
+// THE NODE HOLDING THE SEAT ONCE for every row a member decides (live rows
+// neither over nor ending, ended heads), not at all if none, at the cost of one
+// lease read naming that node ([RelaunchTargets]).
+
+// A LIVE ROW IS DECIDED ON THE LOG AS A RELAUNCH READS IT: re-read at the
+// relaunch's level ([executordomain.RelaunchRead]) only where the page was read
+// below it and the row names another capture than the record keeps, or the
+// record keeps none or no newer one of the followed job ([sandbox.RereadsRow]),
+// since a copy behind the record would show continuable a session the log no
+// longer names; elsewhere not, since that read appends a barrier to the log. An
+// ended row decides on its page's snapshot (`read_level`). A transcript's first
+// page, read with no cursor, says it; later pages leave it null, saying so.
+
+// AN UNKNOWN IS NEVER A NO: `continuable` is null and `not_continuable` says why
+// where the run record or the row at the relaunch's level could not be read, or
+// the launch would not decide now: its job working or being collected, its
+// capture being kept or its record awaiting the log's answer (a relaunch asks
+// again, [sandbox.ReadContinuityOf]), every member of the seat's chain out of its
+// plan, no node holding the seat or not answering, a relaunch only its job's
+// collection resume decides, a turn whose end is not on the log yet. A no would
+// tell a person a session starts over that may be continued; an unanswering
+// store never fails the page, whose rows the log answered whole.
 
 // ExecutorSessions is the seats' executor sessions as this surface reads them:
 // the two reads of the domain's reader a person asks, answered through the
@@ -285,24 +218,17 @@ type SessionRow struct {
 	BaseTurn string `json:"base_turn,omitempty"`
 
 	// ContinuedBy is the launch the rest is about ([sandbox.ContinuedBy]): a
-	// relaunch of the turn while it is live, its conversation's next turn once
-	// it has ended or is ending — `next_fire`, its schedule's next fire, where
-	// the conversation is a schedule's — absent where no launch would ever
-	// continue the session (a turn that served no conversation), and where
-	// nothing was decided (a transcript's later page).
+	// relaunch while the turn is live, its conversation's next turn once it has
+	// ended or is ending (`next_fire` for a schedule's), absent where none would
+	// continue the session or nothing was decided (a transcript's later page).
 	//
-	// Continuable says whether that launch would continue this session, as far
-	// as the engine can know before a box is chosen, decided as that launch
-	// decides it ([sandbox.ReadContinuityOf]), and ContinuesIn where it would:
-	// in whichever box the launch gets, or — a relaunch's alone — only in the
-	// box the turn's run parked in, while that box is held. NotContinuable, in
-	// the engine's own words, redacted, is why it would not; or, where a
-	// relaunch would only in the box the run parked in, why no other box
-	// continues it. NULL where it cannot be decided now, which NotContinuable
-	// then says: an unknown is never sent as a no. See the file comment.
-	// NotContinuable can quote what refused a capture — an error a box or a
-	// store wrote — and so is declared as somebody else's words, as the
-	// unkept capture's reason it quotes is.
+	// Continuable is whether that launch would continue this session, decided as
+	// it decides ([sandbox.ReadContinuityOf]); ContinuesIn where. NotContinuable
+	// is, in the engine's words, redacted, why not (for a relaunch confined to
+	// its parked box, why no other box does). NULL where it cannot be decided
+	// now: an unknown is never sent as a no (see the file comment).
+	// NotContinuable can quote what refused a capture, an error a box or store
+	// wrote, so it is declared somebody else's words.
 	ContinuedBy    sandbox.ContinuedBy `json:"continued_by,omitempty"`
 	Continuable    *bool               `json:"continuable"`
 	ContinuesIn    sandbox.ContinuesIn `json:"continues_in,omitempty"`

@@ -10,16 +10,15 @@ import (
 // THE PER-TURN GUARDRAILS (an agent's turn segment): at most
 // [artifacts.TurnPublishes] publishes, [artifacts.TurnPublishesPerArtifact] of
 // them on one artifact, and [artifacts.TurnBytesWritten] bytes written, every
-// byte the pipeline stores counted (a transfer, an edit's result, a linted page,
-// a copied CDN file, inline content). Past a bound the call is refused
+// byte the pipeline stores counted. Past a bound the call is refused
 // ([*TurnQuota]) before any byte moves.
 //
-// A turn is named by its call's TurnID, and a call with none (a person, a
-// script, an operator's assistant between turns) is held to none of these: its
-// bounds are the reservation budget's. The tally is this node's: a turn segment
-// runs on the node that holds its seat, and every tool call it makes is a call
-// on that node. A publish is counted once per operation key, so a turn retrying
-// a call it lost the answer to is not charged twice.
+// A turn is named by its call's TurnID; a call with none (a person, a script,
+// an operator's assistant between turns) is held to none of these, only the
+// reservation budget. The tally is this node's: a turn segment runs on the node
+// holding its seat, and every tool call it makes is a call on that node. A
+// publish is counted once per operation key, so a retry of a call whose answer
+// was lost is not charged twice.
 
 // turnIdle is how long an untouched turn's tally is kept: a day, past any turn
 // segment, so a tally is forgotten only for a turn that has ended.

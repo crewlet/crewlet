@@ -11,35 +11,15 @@ import (
 // EVERY USAGE COUNT SEEKS ITS WINDOW, AND SEEKS THE IN-FLIGHT KEY FROM EACH ROW
 // IT COUNTS.
 //
-// The statements a usage day is derived from read a day of the busiest rows
-// the log holds, two of them on every fifteen-second tick, and each must leave
-// out a custody batch in flight ([keptRowSQL]). Two plans make that cheap, and
-// neither is the planner's default:
-//
-//   - THE LOG IS SOUGHT BY TYPE AND TIME. Over `event_type IN (…)` — which
-//     is what these statements were before the per-type branches — the
-//     planner seeks only the type and walks every row of it the log holds —
-//     thirty days of spend for one day's — so every step that reaches the log
-//     must carry both bounds of the window.
-//   - THE IN-FLIGHT IDENTITIES ARE SOUGHT, ONE PROBE PER ROW COUNTED. Read as
-//     a list (`NOT IN` over the batches' JSON, a `LIST SUBQUERY`), every row
-//     is checked against the whole list one entry at a time: a fingerprint of
-//     a five-thousand-row day took 2.4 s beside ten thousand identities in
-//     flight (measured). So every log step has its own probe of the custody
-//     key, by the row's `(event_time, event_id)`, and the custody tables are
-//     never scanned.
-//
-// Each statement must also still READ the custody key — one that lost the
-// predicate counts a batch two nodes hold twice — once per log step, so a
-// branch of a UNION that lost it fails too.
-//
-// The kept settle's own read is held here as well: driven from the batch's
-// identities, by the batch index, each a seek of the log.
-//
-// Mutation: drop [keptRowSQL] from any statement or any branch, write it as
-// `NOT IN`, put a statement back on `event_type IN (…)`, compare a turn id to
-// the bare JSON value in [usageLegacyTurnsSQL], or join the log first in
-// [markUsageRederiveSQL], and this names the statement.
+// Each statement leaves out a custody batch in flight ([keptRowSQL]) on two
+// non-default plans: THE LOG IS SOUGHT BY TYPE AND TIME (`event_type IN (…)`
+// walks every row of the type, thirty days of spend for one day's), and THE
+// IN-FLIGHT IDENTITIES ARE SOUGHT, ONE PROBE PER ROW by `(event_time,
+// event_id)` (`NOT IN` is checked whole per row: 2.4 s at five thousand rows).
+// It must still READ the custody key once per log step, UNION branches too.
+// Mutation: drop [keptRowSQL] from a statement or branch, write it `NOT IN`,
+// use `event_type IN (…)`, compare a turn id to the bare JSON value in
+// [usageLegacyTurnsSQL], or join the log first in [markUsageRederiveSQL].
 func TestEveryUsageCountSeeksItsWindow(t *testing.T) {
 	t.Parallel()
 	db, err := OpenNode(t.Context(), filepath.Join(t.TempDir(), "node.db"), Options{})

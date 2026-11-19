@@ -938,26 +938,16 @@ func TestAVerbWithNoRuleIsRefused(t *testing.T) {
 
 // A REFUSAL NAMES THE SMALLEST PERMISSIONS THAT WOULD HAVE ADMITTED THE CALLER.
 //
-// [authz.Decision.Grants] is what a surface puts in front of a person refused
-// ("this needs Worklet"), so it has to be the decision's own account of what
-// it consulted, never a guess made beside it. Held here against the decision
-// itself, over every verb, every kind of object and every permission: for each
-// refusal of a principal carrying nothing, the permissions it names are
-// precisely the MINIMAL ones that, carried alone, turn the same question into
-// an admit on the permission — every one that does, less any whose [iam.Expand]
-// already holds another that does (admin is never named beside an app it
-// includes). Both directions, because each fails differently: naming a
-// permission that would not have helped sends somebody to ask for authority
-// that changes nothing, leaving one out tells them there is no way in when
-// there is, and naming admin beside the app tells them to ask for running the
-// company when using one app would do.
-//
-// TWO OBJECTS PER KIND, because several rules refuse an object missing its
-// field BEFORE they consult any permission — no permission would change that
-// answer, so it names none — and an object with every field filled is the one
-// that reaches the relation and the admin path behind it. The chart answers
-// every relation with a firm no, so a lead relation never admits anybody and
-// never hides a permission.
+// [authz.Decision.Grants] is what a surface tells a refused person, so it
+// must be the decision's own account of what it consulted. Over every verb,
+// object kind and permission, for a refused principal carrying nothing, the
+// permissions named are precisely the MINIMAL ones that, carried alone, admit
+// (less any whose [iam.Expand] holds another that does: admin is never named
+// beside an app it includes). Both directions: a needless name sends somebody
+// after useless authority, a missing one says there is no way in.
+// TWO OBJECTS PER KIND: several rules refuse an object missing its field
+// BEFORE consulting any permission; a filled one reaches the relation and
+// admin path. The chart answers every relation no.
 func TestARefusalNamesExactlyTheGrantsThatWouldHaveAdmittedIt(t *testing.T) {
 	t.Parallel()
 	// BOUND AND UNBOUND, because a verb made as a seat refuses the second

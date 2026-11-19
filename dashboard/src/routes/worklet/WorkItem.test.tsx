@@ -105,13 +105,18 @@ const task = (over: Partial<WorkItem> = {}): WorkItem => ({
 });
 
 const detail = (over: Partial<WorkItemDetail> = {}): WorkItemDetail => ({
+  flow: null,
+  flow_live: false,
   task: task(),
   reassignment_budget: 8,
+  entries_withheld: 0,
   complete: true,
   ...over,
 });
 
 const project = (over: Partial<WorkProjectDetail> = {}): WorkProjectDetail => ({
+  stuck_after_hours: 8,
+  stuck_after_hours_set: false,
   key: "ENG",
   name: "Engineering",
   unit: { resolved: true },
@@ -835,6 +840,22 @@ test("a reader without Atlas reads only how many entries the task names, locked"
   expect(within(group).queryAllByRole("button")).toEqual([]);
 });
 
+// THE COUNT IS THE ENGINE'S, STATED: an answer that withheld no entry says 0,
+// and the rail draws no locked count, whatever entry links the answer holds,
+// rather than counting those links as withheld.
+test("a reader without Atlas whose answer withheld no entry is shown no locked count", async () => {
+  mount(<WorkItemPage id="ENG-42" />, {
+    viewer: NO_ATLAS,
+    answers: {
+      work_item: detail({ links: entryLinks(ORDERS_DB.id, WEB_1.id), entries_withheld: 0 }),
+      atlas_named: named,
+    },
+  });
+  await settle();
+  expect(screen.queryByRole("region", { name: "Atlas entries" })).toBeNull();
+  expect(document.body.textContent).not.toContain("atlas entries");
+});
+
 test("a task naming no entry draws no group for a reader without Atlas", async () => {
   mount(<WorkItemPage id="ENG-42" />, { viewer: NO_ATLAS });
   await settle();
@@ -963,6 +984,7 @@ test("a refused poll says so even when children were listed before", async () =>
     <Subtasks
       rows={[
         {
+          flow: null,
           id: "t-2",
           key: "ENG-43",
           project: "ENG",
@@ -995,6 +1017,7 @@ test("the sub-task card counts what is done", async () => {
     <Subtasks
       rows={[
         {
+          flow: null,
           id: "a",
           key: "ENG-413",
           project: "ENG",
@@ -1006,6 +1029,7 @@ test("the sub-task card counts what is done", async () => {
           version: 1,
         },
         {
+          flow: null,
           id: "b",
           key: "ENG-414",
           project: "ENG",
@@ -1016,6 +1040,7 @@ test("the sub-task card counts what is done", async () => {
           version: 1,
         },
         {
+          flow: null,
           id: "c",
           key: "ENG-416",
           project: "ENG",

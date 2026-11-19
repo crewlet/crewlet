@@ -15,16 +15,11 @@ import (
 // A FIRE ITS SEAT DID NOT RUN READS AS SKIPPED, NOT AS A DISPATCH WITH NO TURN,
 // wherever the seat ran and whenever it came back.
 //
-// The scheduler did send both fires, and its ledger says so. The seat's node
-// ran only the later one and recorded the earlier as superseded, under that
-// fire's own trace; a history that showed both as fired told a reader the
-// health check ran twice, which is the very thing that stopped happening.
-//
-// THE THREE PLACES THE TWO HALVES MEET. On one node; with the seat on another
-// data node than the scheduler, whose event log the scheduler's node cannot
-// read; and with the seat back three days after the fires, when the fires' own
-// day is no longer one the publisher derives. Read from the scheduler's node
-// alone, the last two showed the fire as fired for good.
+// The seat's node ran only the later fire and recorded the earlier as
+// superseded; showing both as fired would say the check ran twice. THE THREE
+// PLACES THE HALVES MEET: one node; the seat on another data node, whose event
+// log the scheduler's node cannot read; the seat back three days later, past
+// the day the publisher derives. The scheduler alone read the last two as fired.
 //
 // Mutation: drop the EXISTS from usage's fireOutcomeSQL, or derive the
 // supersede on the scheduler's node again, and a case names the fire that

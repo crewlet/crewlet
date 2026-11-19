@@ -3,7 +3,7 @@
 // certifies ([MinChromiumMajor]), the pinned Playwright release for a seat's
 // own browser and the Chromium build it expects ([PlaywrightMCPRelease],
 // [ExpectedChromiumVersion]), and that no Go but the artifact render's client
-// speaks DevTools (ADR-0162).
+// speaks DevTools (ADR-0163).
 //
 // # The floor
 //
@@ -49,7 +49,7 @@
 // runs, and Go's internal-package rule refuses every importer of it outside
 // internal/artifactrender at compile time. So that no second client grows
 // beside it, no Go file of the module names a DevTools method but those in
-// that client's own directory, none beneath it (ADR-0162).
+// that client's own directory, none beneath it (ADR-0163).
 //
 // TestNoGoFileButTheRendersClientNamesADevToolsMethod holds that. It reads
 // every comment and every string and rune literal of the module's Go files,

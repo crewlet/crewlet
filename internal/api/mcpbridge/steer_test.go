@@ -976,13 +976,12 @@ func TestShutdownLetsGoOfAPollItRelays(t *testing.T) {
 }
 
 // THE NOTES ROUTE JUDGES A CALL'S HOST AS THE MCP ENDPOINT DOES. A seat's poll
-// is answered its notes under whatever Host it arrives with — a reverse proxy
-// or tunnel on the engine host that passes the public name on included — on
-// the node holding the run's opening and on the holder a poll is relayed to
-// alike. A session held to this host's loopback admits a loopback name or a
-// container runtime's name for the engine host and refuses any other with the
-// route's own 401, as its MCP endpoint does: the two routes share the routing
-// that judges it, so they cannot come to disagree. Over real listeners on
+// is answered its notes under whatever Host it arrives with (a reverse proxy
+// or tunnel passing the public name on included), on the node holding the
+// opening and on the holder a poll is relayed to alike. A session held to
+// loopback admits a loopback name or a container runtime's name for the engine
+// host and refuses any other with the route's own 401, as its MCP endpoint
+// does: both share the routing that judges it. Over real listeners on
 // 127.0.0.1, so every poll arrives on loopback.
 //
 // Mutation: judge a seat's Host on the notes route (refuse a name that is not
@@ -1074,14 +1073,11 @@ func (b *syncBuffer) String() string {
 
 // A HOOK WHOSE AGENT THE HARNESS DID NOT FILL IN TAKES NOTHING, AND IS SAID ONCE.
 // Whose loop fired such a hook cannot be told, so it is answered as a
-// subagent's would be — the note waits for a boundary that can be told apart —
+// subagent's would be (the note waits for a boundary that can be told apart)
 // and the operator is told, once per session, with the run and the seat:
-// without that line, a run whose harness never substitutes the variable takes no
-// note between its steps and nothing says why. A subagent's own batch is the
-// ordinary case and says nothing.
-//
-// NOT PARALLEL: it installs the process's log sink, which only a case running
-// alone may do.
+// else a run whose harness never substitutes the variable takes no note
+// between its steps and nothing says why. A subagent's own batch says nothing.
+// NOT PARALLEL: it installs the process's log sink.
 //
 // Mutation: drop the unsubstituted case, or say it on every call, and this goes
 // red.

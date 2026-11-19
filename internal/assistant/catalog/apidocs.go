@@ -16,17 +16,15 @@ import (
 // THE API REFERENCE AS THE MODEL READS IT: docs/reference/api-endpoints.md,
 // embedded in the binary (the module root's APIReference), indexed by route.
 //
-// The reference names a route in the shapes a person writes it, and every one
-// is read: a row of a route table (`| GET | /path | what it does |`), a table
-// row or a list item that leads with it (`| POST /iam/people | admin |`,
-// `- POST /artifacts/{id}/tickets (…)`, several methods sharing one path as
-// `PUT`, `DELETE /path`), a heading that names it, whose section is the
-// route's long form, and a mention in a sentence, which documents a route
-// only where nothing above does. A walk holds the index to the route table
-// this build mounts in both directions (internal/api's
-// TestEveryAssistantRouteIsDocumented), so a route added without its
-// documentation, or documentation left behind by a removed route, is a red
-// build rather than a model reading a guess.
+// Every shape a person writes a route in is read: a route-table row
+// (`| GET | /path | what it does |`), a table row or list item leading with it
+// (`| POST /iam/people | admin |`, `- POST /artifacts/{id}/tickets (…)`,
+// several methods on one path as `PUT`, `DELETE /path`), a heading naming it
+// (its section is the long form), and a mention in a sentence, which documents
+// a route only where nothing above does. The index is held to the mounted
+// route table in both directions (internal/api's
+// TestEveryAssistantRouteIsDocumented), so an undocumented or orphaned route
+// is a red build, not a model reading a guess.
 
 // routeDoc is one route's documentation.
 type routeDoc struct {

@@ -2,18 +2,14 @@ package topics
 
 // Worklet's own log, and why its grammar lives here.
 //
-// The tracker's mutations are a state log: one ordered stream per domain,
-// every record published to the subject of the object it mutates, and the
-// broker arbitrating writes per subject. That makes the subject string
-// load-bearing in a way an inbox subject is not — it is the ARBITRATION UNIT.
-// Three separate things compare against it and none of them can see the
-// others: the publisher builds it, the wake feed's consumer filters on it, and
-// the applier's kind switch dispatches on the kind inside it. A fourth is the
-// table of kinds itself, which decides what `Tables()` must classify.
-//
-// Written by hand in each of those places, a kind added in one and missed in
-// another is not an error anywhere: the record publishes into a subject the
-// filter does not cover, nobody is woken, and the company simply looks quiet.
+// The tracker's mutations are a state log: every record is published to the
+// subject of the object it mutates, and the broker arbitrates writes per
+// subject, so the subject is the ARBITRATION UNIT. Three things use it and
+// none sees the others: the publisher builds it, the wake feed's consumer
+// filters on it, and the applier's kind switch dispatches on the kind inside
+// it. A fourth is the table of kinds, which decides what `Tables()` must
+// classify. A kind added in one place and missed in another is no error: the
+// record publishes into a subject the filter does not cover and nobody wakes.
 
 const (
 	// TrackerLogStream is the mutation domain's stream.

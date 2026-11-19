@@ -62,24 +62,14 @@ func embeddedBroker(t *testing.T) (*nats.Conn, jetstream.JetStream) {
 // A CONSUMER THAT ENDS UNDER A SNAPSHOT IS A RACE THE BACKUP TAKES AGAIN, held
 // to the server this build links by making it lose the race for real.
 //
-// The server copies a stream's consumers, from the list it took as the
-// snapshot started, before a single message, and abandons the snapshot with a
-// 500 when one has ended by the time it reads that consumer's state. A
-// working engine ends a consumer with every listing of a coordination bucket,
-// so a backup under load lost the race and answered 500 for a sound node
-// (measured: cmd/crewlet's TestANodeNamedByTheEnvironmentAnswersAsItself, 3 of
-// 160 runs with sixteen engines contending for four CPUs, every one on
-// KV_crewlet_statelog_positions). In the wild the race is an instant wide; to
-// lose it on purpose this case drives the snapshot protocol itself and holds
-// the server mid-copy: one chunk in flight and that chunk left unanswered
-// stops the server reading the copy, which stops the copy once its
-// compressor's buffers are full — before it reaches the last consumer, given
-// more consumer state than those buffers hold. That consumer is deleted, the
-// chunk answered, and the server finds its store closed.
-//
-// The first attempt is that lost race, received by the backup's own reader;
-// the second is the backup's own snapshot. The loop has to read the server's
-// sentence, find the consumer gone and take the stream again.
+// The server abandons a snapshot with a 500 when a consumer it listed at the
+// start has ended by the time it reads that consumer's state (see streams.go).
+// To lose the instant-wide race on purpose this case drives the protocol and
+// holds the server mid-copy: one chunk left unanswered stops the copy once the
+// compressor's buffers fill, before the last consumer (given more consumer
+// state than they hold). That consumer is deleted and the chunk answered. The
+// first attempt is that lost race; the second is the backup's own snapshot, so
+// the loop must read the server's sentence, find the consumer gone and retake.
 func TestAConsumerEndingUnderASnapshotIsTakenAgain(t *testing.T) {
 	t.Parallel()
 	nc, js := embeddedBroker(t)

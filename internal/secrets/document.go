@@ -31,26 +31,16 @@ var ErrUnsealedWithKey = errors.New("secrets: this document is stored unsealed, 
 	"authored")
 
 // ErrUnknownEnvelope reports a payload wrapped as a sealed document (a JSON
-// object whose one member is [EnvelopeKey]) whose seal is not in the form
-// this build reads: a token that does not begin with [EnvelopePrefix], or
-// that member holding something other than a token.
+// object whose one member is [EnvelopeKey]) whose seal is not in the form this
+// build reads: a token that does not begin with [EnvelopePrefix], or that member
+// holding something other than a token.
 //
-// NOT [ErrUnsealedWithKey], and the difference is what a caller may do next.
-// A payload with no seal at all is a document nothing vouches for, which a
-// write may replace having read nothing from it (internal/api/configapi's
-// whole-document replacement, the offline `crewlet config import`). One
-// wrapped as a sealed document is somebody's sealed document: most likely a
-// NEWER build's, since [EnvelopePrefix] carries the format's version and the
-// next format will carry the next one, so this build can neither read it nor
-// say it is plaintext. Called unsealed, it was replaced by a write that read
-// none of it, discarding every field and credential a newer peer had written,
-// with a refusal telling whoever met it that the body came from outside the
-// fleet. A build that meets one has to say so and leave it alone: the remedy
-// is the build that wrote it.
-//
-// A token in THIS build's form that does not parse (no key id, a payload that
-// is not base64) is not this: its format is known and it is damaged, which no
-// key opens, so it is [ErrDecrypt] exactly as a tampered ciphertext is.
+// NOT [ErrUnsealedWithKey]: a write may replace a payload with no seal at all,
+// having read nothing from it, but one wrapped as a sealed document is most
+// likely a NEWER build's ([EnvelopePrefix] carries the format's version), so
+// this build can neither read it nor call it plaintext; replacing it discards
+// what a newer peer wrote. Leave it; the remedy is the build that wrote it.
+// A token in THIS build's form that does not parse is damaged, so [ErrDecrypt].
 var ErrUnknownEnvelope = errors.New("secrets: this document is sealed in a " +
 	"form this build does not read")
 
@@ -159,23 +149,14 @@ func Seal(cipher Cipher, document []byte) ([]byte, error) {
 
 // Open unwraps a stored payload, returning the document.
 //
-// ONLY A SEALED PAYLOAD OPENS, and only under a keyring. A payload that is not
-// sealed is refused with [ErrUnsealedWithKey]: the seal is what authenticates
-// a document a peer published, and one without it could have been written by
-// anything that reaches the coordination store. It used to come back
-// verbatim, so a node holding a keyring applied a forged plaintext document as
-// readily as its own. A payload sealed in a form this build does not read is
-// refused with [ErrUnknownEnvelope], which is not the same answer: it is
-// somebody's sealed document, most likely a newer build's.
+// ONLY A SEALED PAYLOAD OPENS, and only under a keyring. An unsealed one is
+// refused ([ErrUnsealedWithKey]): the seal authenticates a document a peer
+// published, and anything that reaches the coordination store could write one
+// without it. A seal in a form this build does not read is [ErrUnknownEnvelope].
 //
-// A NIL CIPHER IS REFUSED ([ErrNoKeyring]) whatever the payload is. It used to
-// read a plaintext payload verbatim — the same forged document, for any caller
-// wired without the node's keyring — and to refuse a sealed one with an error
-// of its own; neither is a posture a node can be in, since every node holds a
-// keyring and the engine refuses to start without one. Refusing, rather than
-// answering an empty document, is what keeps a caller built that way from
-// booting onto an empty company, which reads on every surface as an operator
-// who has configured nothing.
+// A NIL CIPHER IS REFUSED ([ErrNoKeyring]) whatever the payload is: every node
+// holds a keyring. Answering an empty document instead would boot a caller onto
+// an empty company, which reads as an operator who has configured nothing.
 func Open(cipher Cipher, payload []byte) ([]byte, error) {
 	if cipher == nil {
 		return nil, fmt.Errorf("secrets: open document: %w", ErrNoKeyring)

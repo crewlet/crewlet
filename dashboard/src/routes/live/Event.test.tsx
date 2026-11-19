@@ -3,7 +3,7 @@
  * "Seat" button, with the seat's whole name in its tooltip and its name.
  */
 
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { EventScreen } from "./Event.tsx";
@@ -12,6 +12,13 @@ import { ClientContext } from "~/lib/store-hooks.ts";
 import { ViewerProvider } from "~/lib/viewer.ts";
 import { LiveSocket, Store } from "~/protocol/index.ts";
 import { afterMicrotasks } from "~/test/settle.ts";
+import {
+  drawnRef,
+  expectNamedLinks,
+  namedAnswer,
+  NAMED_LINE,
+  NAMED_REFS,
+} from "~/test/namedRefs.tsx";
 
 class InertWebSocket {
   static CONNECTING = 0;
@@ -50,6 +57,37 @@ const EVENT = {
   tags: { agent_id: "a-pm" },
   payload: {},
 };
+
+/* AN EVENT'S OWN PAGE IS HEADED BY ITS LINE, and what the line names is a
+   marked link to its page the reader may open; what is gone is its words. */
+test("an event's page links what its line names", async () => {
+  location.hash = "#/live/events/ev-1";
+  const store = new Store();
+  const socket = new LiveSocket(store);
+  (
+    socket as unknown as { query: (what: string, p: Record<string, unknown>) => Promise<unknown> }
+  ).query = (what, p) =>
+    Promise.resolve(
+      what === "event"
+        ? { ...EVENT, summary: `${NAME} was ${NAMED_LINE}`, refs: NAMED_REFS }
+        : what === "references"
+          ? namedAnswer(p)
+          : what === "viewer"
+            ? { login: "founder", owner: "jane", grants: ["admin"] }
+            : {},
+    );
+  render(
+    <ClientContext.Provider value={{ store, socket }}>
+      <ViewerProvider>
+        <Router>
+          <EventScreen eventId="ev-1" />
+        </Router>
+      </ViewerProvider>
+    </ClientContext.Provider>,
+  );
+  await waitFor(() => expect(drawnRef(document.body, "ENG-287").tagName).toBe("A"));
+  expectNamedLinks(document.body);
+});
 
 /* A seat's whole name in the bar cut the breadcrumb. Mutation: label it {data.actor} again. */
 test("the actor's button is a short noun, with the seat's name on hover and in its name", async () => {

@@ -97,7 +97,8 @@
 // that restarted inside a request's window has forgotten the ids it took, so a
 // replay there is refused only once the deadline and the allowance have
 // passed, and what keeps it harmless meanwhile is what the channel's receiver
-// makes of it.
+// makes of it. A [Guard] is one per serving node and channel, never shared: a
+// scatter hands one request to every node, and each must take it once.
 //
 // And a reply names the request it answers ([Reply]): an asker believes only a
 // reply that verifies AND is bound to the id it sent, so a reply to another

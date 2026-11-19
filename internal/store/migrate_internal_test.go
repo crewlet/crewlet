@@ -17,30 +17,16 @@ import (
 
 // TWO HANDLES ON ONE FILE MIGRATE IT ONCE, the second waiting for the first.
 //
-// Two handles share one claim on a path, and a migration run reads the ledger
-// once and then applies every file it did not find, so two runs that overlap
-// both apply what neither had found. Measured with the lock removed: a second
-// handle opened while the first was held after its ledger read ran the whole
-// sequence, and the first, let go, failed at 0001 with `table crewlet_events
-// already exists`. So a run holds its FILE's lock from before it reads the
-// ledger until its last file commits.
+// Two overlapping runs both apply what neither found in the ledger (the first
+// then fails with `table crewlet_events already exists`), so a run holds its
+// FILE's lock from before it reads the ledger until its last file commits.
 //
-// NO WALL CLOCK DECIDES IT, and neither does the race's outcome. The first
-// handle is held at the BEGIN of its first file, after it read an empty
-// ledger, and while it is there the lock the second handle's run would take is
-// asked whether it is free — which is the whole question, answered rather than
-// waited out. Two opens left to race prove nothing either way: without the
-// lock the second still usually arrives after the first has finished. Only
-// once the lock has answered is the second handle opened and the first let go,
-// and both must end with the sequence applied once.
+// NO WALL CLOCK DECIDES IT: the first handle is held at the BEGIN of its first
+// file and the lock the second run would take is asked whether it is free; two
+// opens left to race prove nothing. Only then is the second opened and the
+// first let go. The lock must be the claim's, shared per file.
 //
-// WHICH LOCK is part of the check: the claim's, because that is the lock two
-// handles on one file share. A process-wide lock would keep them apart too,
-// and fails here for holding the wrong lock rather than for letting them in —
-// the case below is the one that says what a process-wide lock costs.
-//
-// Mutation: drop the lock from [DB.migrate], or take one per handle rather
-// than the claim's, and the lock reads free while the first run is in it.
+// Mutation: drop [DB.migrate]'s lock, or take one per handle: it reads free.
 func TestTwoHandlesOnOneFileMigrateItOnce(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()
@@ -86,18 +72,10 @@ func TestTwoHandlesOnOneFileMigrateItOnce(t *testing.T) {
 // TWO FILES MIGRATE AT THE SAME TIME, because nothing about one file's ledger
 // can race another's.
 //
-// The lock is the FILE's. It was once the PROCESS's, on the premise that a
-// process migrates once, at boot — and every process that opens more than one
-// store ran every file's migrations one after another: an in-process fleet,
-// and every test binary, which spent most of its wall clock queued behind DDL
-// that could never have raced its own.
-//
-// The first file is held at the BEGIN of its first migration, and the second
-// must reach the BEGIN of ITS first migration while the first is still held.
-// The wait for that is BOUNDED, because the regression this catches is a lock
-// wider than one file — under which the second run never begins while the
-// first is held, and an unbounded wait would hang the package instead of
-// failing it.
+// The lock is the FILE's: a process-wide one would queue every store a process
+// opens behind DDL that cannot race its own. The first file is held at its first
+// BEGIN and the second must reach ITS first BEGIN meanwhile. The wait is
+// BOUNDED, or a lock wider than one file would hang the package, not fail it.
 //
 // Mutation: put the process-wide mutex back, and the second run never begins
 // inside the bound.
