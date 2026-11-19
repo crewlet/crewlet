@@ -357,15 +357,15 @@ func foldStream(ctx context.Context, r io.Reader, background bool) (e2bProcessRe
 				return out, nil
 			}
 		case frame.Event.Data != nil:
-			stdout.Write(frame.Event.Data.Stdout)
-			stderr.Write(frame.Event.Data.Stderr)
+			_, _ = stdout.Write(frame.Event.Data.Stdout)
+			_, _ = stderr.Write(frame.Event.Data.Stderr)
 		case frame.Event.End != nil:
 			end := frame.Event.End
 			out.Ended = true
 			out.ExitCode = end.ExitCode
 			if end.ExitCode >= 0 {
 				if end.Error != "" && stderr.empty() {
-					stderr.Write([]byte(end.Error))
+					_, _ = stderr.Write([]byte(end.Error))
 				}
 				continue
 			}
