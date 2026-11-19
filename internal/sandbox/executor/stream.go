@@ -50,7 +50,11 @@ type Decoder interface {
 	// needs, so it is read one way or the other, never both: a live reading
 	// asks once before its first line, so the decoder never holds for a
 	// Result, however much that line's read hands it.
-	Entries() []string
+	//
+	// With end (every line was fed and the run is done), a run of skipped
+	// lines still open is said too, as Result says it, so a reading ends on
+	// the note the record ends on.
+	Entries(end bool) []string
 }
 
 // maxLineBytes is the longest line of a run's output that is read; a longer
@@ -90,24 +94,47 @@ const lineChunkBytes = 64 << 10
 //
 // THE BUFFER IS THE CALLER'S, so a reader of many records (a transcript per
 // subagent) resets one. ONE IMPLEMENTATION for [eachLine] and a captured
-// session's transcript, so there is one answer to how long a line may be.
+// session's transcript, so there is one answer to how long a line may be: a
+// [streamLines] used for one whole read.
 func readLines(br *bufio.Reader, bound int, line func([]byte) error, skipped func(int64) error) error {
-	var (
-		held []byte
-		over int64 // the size of a line already past the bound
-	)
+	l := streamLines{bound: bound}
+	return l.read(br, true, line, skipped)
+}
+
+// streamLines is [readLines] with its place kept between reads that may end
+// anywhere, so a stream read in pieces is read as one read whole.
+type streamLines struct {
+	bound int
+	// held is the line so far while within bound, and over the size so far
+	// of one already past it.
+	held []byte
+	over int64
+	// taken is how many bytes of the stream the reads consumed: handed on,
+	// held or counted.
+	taken int64
+	// broken is whether the line last handed on, or counted as skipped, ended
+	// in a break rather than at the stream's end.
+	broken bool
+}
+
+// read hands line and skipped every line br completes, as [readLines] says.
+// At br's end with end set (the stream is whole), an unfinished last line is
+// handed on; without it, the line waits for the next read. br's own failure
+// returns with the place kept, and hands on nothing it cut short.
+func (l *streamLines) read(br *bufio.Reader, end bool, line func([]byte) error, skipped func(int64) error) error {
 	for {
 		chunk, err := br.ReadSlice('\n')
+		l.taken += int64(len(chunk))
 		switch {
-		case over > 0:
-			over += int64(len(chunk))
-		case len(held)+len(chunk) > bound:
-			over = int64(len(held) + len(chunk))
+		case l.over > 0:
+			l.over += int64(len(chunk))
+		case len(l.held)+len(chunk) > l.bound:
+			l.over = int64(len(l.held) + len(chunk))
 			// RELEASED, not truncated: the buffer has grown to the bound,
 			// and keeping it would hold that much for the rest of the read.
-			held = nil
+			l.held = nil
 		default:
-			held = append(held, chunk...)
+			l.held = append(l.held, chunk...)
 		}
 		if errors.Is(err, bufio.ErrBufferFull) {
 			continue
@@ -117,18 +144,30 @@ func readLines(br *bufio.Reader, bound int, line func([]byte) error, skipped fun
 		if err != nil && !errors.Is(err, io.EOF) {
 			return err
 		}
-		var stop error
-		if over > 0 {
-			stop = skipped(over)
-			over = 0
-		} else if len(held) > 0 {
-			stop = line(bytes.TrimRight(held, "\r\n"))
+		eof := errors.Is(err, io.EOF)
+		if eof && !end {
+			return nil
 		}
-		held = held[:0]
+		var stop error
+		if l.over > 0 {
+			l.broken = !eof
+			stop = skipped(l.over)
+			l.over = 0
+		} else if len(l.held) > 0 {
+			l.broken = !eof
+			stop = line(bytes.TrimRight(l.held, "\r\n"))
+		}
+		// A long line's buffer serves the next line only while a read with end
+		// ([readLines]' one read) goes on; otherwise it goes with its line, so
+		// a reader kept between reads holds only a line in transit.
+		if cap(l.held) > lineChunkBytes && (!end || stop != nil || eof) {
+			l.held = nil
+		}
+		l.held = l.held[:0]
 		switch {
 		case stop != nil:
 			return stop
-		case errors.Is(err, io.EOF):
+		case eof:
 			return nil
 		}
 	}
@@ -185,16 +224,19 @@ type transcriptStream interface {
 	Close() error
 }
 
+// add adds entry in its own words, trimmed. One with NO WORDS IS NONE: it
+// leaves an open run of skipped lines open, as a line that adds no entry does.
 func (t *transcriptLines) add(entry string) {
+	entry = strings.TrimSpace(entry)
+	if entry == "" {
+		return
+	}
 	t.flushSkipped()
 	t.push(entry)
 }
 
 func (t *transcriptLines) push(entry string) {
-	entry = strings.TrimSpace(entry)
 	switch {
-	case entry == "":
-		return
 	case t.stream != nil:
 		t.feed(entry)
 		return
@@ -271,10 +313,14 @@ func (t *transcriptLines) result() (text string, elidedLines, elidedBytes int) {
 // take hands over the entries added since the last take and forgets them,
 // and marks the reading live.
 //
-// A RUN OF SKIPPED LINES STILL OPEN IS NOT FLUSHED: the next entry says it,
-// so a reading in pieces names the same lines as one taken whole.
-func (t *transcriptLines) take() []string {
+// A RUN OF SKIPPED LINES STILL OPEN IS NOT FLUSHED until end ([Decoder.Entries]):
+// the next entry says it, so a reading in pieces names the same lines as one
+// taken whole, and at the stream's end nothing follows to say it.
+func (t *transcriptLines) take(end bool) []string {
 	t.live = true
+	if end {
+		t.flushSkipped()
+	}
 	lines := t.lines
 	t.lines, t.held = nil, 0
 	return lines

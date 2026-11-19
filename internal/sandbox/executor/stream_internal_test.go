@@ -1,8 +1,14 @@
 package executor
 
 import (
+	"bufio"
+	"errors"
+	"fmt"
+	"io"
+	"math/rand/v2"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"unicode/utf8"
 
 	"github.com/crewlet/crewlet/internal/redact"
@@ -230,6 +236,114 @@ func TestARunnerReadsToTheEnginesOwnBounds(t *testing.T) {
 	}
 }
 
+// A LINE READER KEEPS ITS PLACE ACROSS READS: a line split between reads is
+// handed on whole once its break arrives, a line past the bound is counted as
+// one across reads, a read that fails hands on nothing and keeps what it had,
+// and the unfinished last line waits until the stream is whole, then is handed
+// on even by a read that brings nothing. Every byte is counted as taken, and a
+// long line's buffer is not kept past the line.
+//
+// Mutation: begin each read with nothing held, or nothing counted past the
+// bound, and a split line is read as pieces; hand nothing on from a read with
+// end that took no byte, and the held line is lost; keep a long line's buffer,
+// and the reader holds it between reads.
+func TestALineReaderKeepsItsPlaceAcrossReads(t *testing.T) {
+	t.Parallel()
+	r := streamLines{bound: 8}
+	var got []string
+	feed := func(src io.Reader, end bool) error {
+		return r.read(bufio.NewReaderSize(src, 16), end,
+			func(l []byte) error { got = append(got, fmt.Sprintf("%q broken %v", l, r.broken)); return nil },
+			func(n int64) error { got = append(got, fmt.Sprintf("skipped %d", n)); return nil })
+	}
+	boom := errors.New("the store stopped answering")
+	for i, step := range []struct {
+		src  io.Reader
+		end  bool
+		want error
+	}{
+		{strings.NewReader("ab"), false, nil},
+		{strings.NewReader("c\nde"), false, nil},
+		{strings.NewReader("fghijkl"), false, nil},
+		{strings.NewReader("mn\nxy"), false, nil},
+		{io.MultiReader(strings.NewReader("z"), iotest.ErrReader(boom)), false, boom},
+		{strings.NewReader("\nlast"), true, nil},
+	} {
+		if err := feed(step.src, step.end); !errors.Is(err, step.want) {
+			t.Fatalf("read %d = %v, want %v", i, err, step.want)
+		}
+	}
+	want := []string{`"abc" broken true`, "skipped 12", `"xyz" broken true`, `"last" broken false`}
+	if strings.Join(got, "|") != strings.Join(want, "|") || r.taken != 24 {
+		t.Errorf("read %q, %d bytes taken; want %q, all 24", got, r.taken, want)
+	}
+	for _, tc := range []struct{ held, want string }{
+		{"ab", `"ab" broken false`},
+		{"0123456789", "skipped 10"},
+	} {
+		r, got = streamLines{bound: 8}, nil
+		if err := feed(strings.NewReader(tc.held), false); err != nil || len(got) != 0 {
+			t.Fatalf("a read without end of %q = %v, handing on %q; want nothing", tc.held, err, got)
+		}
+		if err := feed(strings.NewReader(""), true); err != nil || strings.Join(got, "|") != tc.want {
+			t.Errorf("an empty read with end after %q = %v, handing on %q; want %q", tc.held, err, got, tc.want)
+		}
+	}
+
+	long := streamLines{bound: 1 << 20}
+	var lines []int
+	err := long.read(bufio.NewReaderSize(strings.NewReader(strings.Repeat("x", 2*lineChunkBytes)+"\nsmall"),
+		lineChunkBytes), false, func(l []byte) error { lines = append(lines, len(l)); return nil }, nil)
+	if err != nil || len(lines) != 1 || lines[0] != 2*lineChunkBytes || string(long.held) != "small" {
+		t.Fatalf("read lines %v, holding %q, %v; want the long line, then the short one held", lines, long.held, err)
+	}
+	if cap(long.held) > lineChunkBytes {
+		t.Errorf("between reads the reader holds a buffer of %d bytes; want at most %d", cap(long.held),
+			lineChunkBytes)
+	}
+}
+
+// A STREAM READ IN PIECES IS READ AS ONE READ WHOLE: a [streamLines] fed a
+// stream cut anywhere hands on the lines and skipped sizes [readLines] does.
+// Seeded.
+func TestAStreamReadInPiecesIsReadAsOneWhole(t *testing.T) {
+	t.Parallel()
+	const bound = 40
+	record := func(log *[]string) (func([]byte) error, func(int64) error) {
+		return func(l []byte) error { *log = append(*log, string(l)); return nil },
+			func(n int64) error { *log = append(*log, fmt.Sprint("skipped ", n)); return nil }
+	}
+	rng := rand.New(rand.NewPCG(20261119, 15))
+	for trial := range 500 {
+		var b strings.Builder
+		for range 1 + rng.IntN(8) {
+			b.WriteString(strings.Repeat("ab", rng.IntN(bound)))
+			b.WriteString([]string{"\n", "\r\n", "\n\n"}[rng.IntN(3)])
+		}
+		b.WriteString(strings.Repeat("c", rng.IntN(bound)))
+		text := b.String()
+		var whole, pieces []string
+		line, skipped := record(&whole)
+		if err := readLines(bufio.NewReaderSize(strings.NewReader(text), 16), bound, line, skipped); err != nil {
+			t.Fatal(err)
+		}
+		r := streamLines{bound: bound}
+		line, skipped = record(&pieces)
+		for at := 0; at < len(text); {
+			next := min(len(text), at+1+rng.IntN(bound))
+			if err := r.read(bufio.NewReaderSize(strings.NewReader(text[at:next]), 16), next == len(text),
+				line, skipped); err != nil {
+				t.Fatal(err)
+			}
+			at = next
+		}
+		if strings.Join(pieces, "|") != strings.Join(whole, "|") || r.taken != int64(len(text)) {
+			t.Fatalf("trial %d, %q: in pieces %q, %d taken; want %q, all %d", trial, text, pieces, r.taken,
+				whole, len(text))
+		}
+	}
+}
+
 type recorder struct {
 	line func([]byte)
 	skip func(int64, int)
@@ -238,4 +352,24 @@ type recorder struct {
 func (r *recorder) Line(l []byte)              { r.line(l) }
 func (r *recorder) Skipped(n int64, bound int) { r.skip(n, bound) }
 func (r *recorder) Result() sandbox.Result     { return sandbox.Result{} }
-func (r *recorder) Entries() []string          { return nil }
+func (r *recorder) Entries(bool) []string      { return nil }
+
+// AN ENTRY WITH NO WORDS IS NONE: added, it says nothing, and a run of skipped
+// lines open before it stays open until an entry with words, or the end, says
+// it.
+//
+// Mutation: add an empty entry as written, or flush the open run before
+// dropping it, and a take before the end hands an entry over.
+func TestAnEntryWithNoWordsIsNone(t *testing.T) {
+	t.Parallel()
+	var tl transcriptLines
+	tl.add(" \t\r\n ")
+	tl.skip(9, 8)
+	tl.add("   ")
+	if got := tl.take(false); len(got) != 0 {
+		t.Fatalf("before the end, entries without words handed over %q; want none", got)
+	}
+	if got := tl.take(true); len(got) != 1 || !strings.Contains(got[0], "1 line(s) of output") {
+		t.Fatalf("at the end, handed over %q; want the skipped line's note alone", got)
+	}
+}
