@@ -90,6 +90,11 @@ rule, and warns on success about what is legal but likely wrong.
   from the artifact's own origin. Live data comes through the runtime.
 - Open a window or a popup. Use `crewlet.openLink(url)`: the dashboard shows
   the viewer where the link goes, then opens it.
+- Show a file that is not a page in its frame. A link to one of its own
+  pictures, videos, PDFs or assets opens in the runtime's file viewer over the
+  page instead, so link a thumbnail to its full-size picture and give the
+  thumbnail an `alt` text, which names the picture there too
+  ([Artifact runtime](../reference/artifact-runtime.md#links-to-the-pages-own-files)).
 - Submit a form anywhere. A form's `submit` event fires; handle it in script.
 - Redirect off its origin with `<meta http-equiv="refresh">` (refused at
   publish), embed another page in a frame, or use plugins.

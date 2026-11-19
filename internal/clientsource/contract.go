@@ -798,6 +798,7 @@ var contract = []Entry{
 	{"ARTIFACT_COMMENT_CROP_MAX_SIDE", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_COMMENT_ANCHOR_NAME", ReadScalar, "internal/api/artifactsapi.TestTheDashboardBoundsArtifactTextAtTheEnginesCaps"},
 	{"ARTIFACT_KIND_SPECS", ReadLiteral, "internal/api/artifactsapi.TestTheDashboardDrawsEachKindAsTheKindTableSays"},
+	{"ARTIFACT_PAGE_EXTENSIONS", ReadLiteral, "internal/artifactserve.TestTheRuntimeLeavesTheFrameExactlyThePages"},
 	{"SLIDE_ELEMENTS", ReadLiteral, "internal/api/artifactsapi.TestTheRendererDrawsTheSlideSubset"},
 	{"SLIDE_STYLE_PROPERTIES", ReadLiteral, "internal/api/artifactsapi.TestTheRendererDrawsTheSlideSubset"},
 	{"SLIDE_SVG_ELEMENTS", ReadLiteral, "internal/api/artifactsapi.TestTheRendererDrawsTheSlideSubset"},
