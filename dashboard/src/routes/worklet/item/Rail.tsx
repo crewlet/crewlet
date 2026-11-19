@@ -61,6 +61,7 @@ import { SeatChip } from "~/components/common.tsx";
 import { AssignButton } from "~/components/writes.tsx";
 import { FlowTag, PriorityMark, StatusMark, TypeIcon, type RowChrome } from "~/components/work.tsx";
 import { badgedFlow, flowBadgeText, flowWhy } from "~/lib/flow.ts";
+import { seatPath } from "~/lib/seats.ts";
 import { seatBadge } from "~/ui/SeatAvatar.tsx";
 import { andList } from "~/lib/words.ts";
 import { attribution, type ChangeField } from "~/lib/attribution.ts";
@@ -104,6 +105,7 @@ import type {
   WorkFieldDef,
   WorkFieldValue,
   WorkFlow,
+  WorkItem,
   WorkItemDetail,
   WorkLink,
   WorkProjectDetail,
@@ -214,7 +216,23 @@ function useItemFields(props: RailProps): Property[] {
       setBy: by("status"),
     },
     // WHY IT IS OR IS NOT MOVING, as the engine reads it (ADR-0162).
-    ...(detail.flow ? [{ label: "Flow", value: <FlowValue flow={detail.flow} now={now} /> }] : []),
+    ...(detail.flow
+      ? [
+          {
+            label: "Flow",
+            value: (
+              <FlowValue
+                flow={detail.flow}
+                now={now}
+                item={item}
+                address={address}
+                chrome={chrome}
+                stuckHours={project?.stuck_after_hours}
+              />
+            ),
+          },
+        ]
+      : []),
     {
       label: "Priority",
       // `none` IS A VALUE THE ENGINE MINTS, not an absence: a create
@@ -390,15 +408,88 @@ function waitLabel(flow: WorkFlow | null): string {
   return flow?.state === "due" ? "Waited for" : "Wait reason";
 }
 
-/** The rail's flow: its badge, or the ordinary case's words, and why it holds. */
-function FlowValue({ flow, now }: { flow: WorkFlow; now: number }) {
-  const why = flow.cause === "start" ? "" : flowWhy(flow);
+/**
+ * The rail's flow: its badge, or the ordinary case's words, why it holds, and
+ * where its cause is lifted.
+ */
+function FlowValue({
+  flow,
+  now,
+  item,
+  address,
+  chrome,
+  stuckHours,
+}: {
+  flow: WorkFlow;
+  now: number;
+  item: WorkItem;
+  address: string;
+  chrome: RowChrome;
+  stuckHours: number | undefined;
+}) {
+  const zone = useCompanyZone();
+  const words = {
+    zone,
+    assignee: item.assignee,
+    seatName: chrome.seatName,
+    seatKind: chrome.seatKind,
+    stuckHours,
+  };
+  const why = flow.cause === "start" ? "" : flowWhy(flow, words);
   return (
     <span className="task-flow">
-      {badgedFlow(flow) ? <FlowTag flow={flow} /> : <span>{flowBadgeText(flow, now)}</span>}
+      {badgedFlow(flow) ? (
+        <FlowTag flow={flow} assignee={item.assignee} chrome={chrome} stuckHours={stuckHours} />
+      ) : (
+        <span>{flowBadgeText(flow, now, zone)}</span>
+      )}
       {why && <span className="t-caption">{why}</span>}
+      <FlowRemedy flow={flow} item={item} address={address} chrome={chrome} />
     </span>
   );
+}
+
+/**
+ * Where a hold is lifted: the seat's own page for a stopped seat (its pause
+ * reason and Resume), the models for a model limit, and a hand-off for an
+ * item whose assignee left or that has none.
+ */
+function FlowRemedy({
+  flow,
+  item,
+  address,
+  chrome,
+}: {
+  flow: WorkFlow;
+  item: WorkItem;
+  address: string;
+  chrome: RowChrome;
+}) {
+  const handle = item.assignee ?? "";
+  const name = handle ? (chrome.seatName?.(handle) ?? handle) : "";
+  switch (flow.cause) {
+    case "paused":
+    case "unplaced":
+    case "budget":
+    case "parked_elsewhere":
+      return handle ? (
+        <a className="t-link" href={href(seatPath({ handle, name: "" }))}>
+          {`Open ${name}`}
+        </a>
+      ) : null;
+    case "limit":
+      return (
+        <a className="t-link" href={href(["settings", "models"])}>
+          Open the models
+        </a>
+      );
+    case "departed":
+    case "nobody":
+      return item.removed ? null : (
+        <AssignButton item={address} label={item.key} version={item.version} assignee={handle} />
+      );
+  }
+  return null;
 }
 
 /**

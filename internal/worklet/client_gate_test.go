@@ -250,6 +250,9 @@ func TestTheDashboardBoundsWorkletTextAtTheEnginesCaps(t *testing.T) {
 		"DECISION_MIN_OPTIONS":        decision.MinOptions,
 		"DECISION_MAX_OPTIONS":        decision.MaxOptions,
 		"PROJECT_PAGE":                worklet.MaxProjectsPerAnswer,
+		"STUCK_AFTER_HOURS_MIN":       worklet.MinStuckAfterHours,
+		"STUCK_AFTER_HOURS_MAX":       worklet.MaxStuckAfterHours,
+		"STUCK_AFTER_HOURS_DEFAULT":   worklet.DefaultStuckAfterHours,
 	} {
 		raw, err := clientsource.Scalar(clientsource.Tree(t), name)
 		if err != nil {

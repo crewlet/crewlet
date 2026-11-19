@@ -37,6 +37,7 @@ import {
   noticeFloor,
   noticeNote,
   noticeRows,
+  noticeText,
   noticeTitle,
   pairAnswered,
   readThrough,
@@ -217,6 +218,23 @@ describe("the rows", () => {
     expect(
       rows.needs[0]!.kind === "decision" && rows.needs[0]!.notices.map((n) => n.record_id),
     ).toEqual(["r-1"]);
+    expect(rows.updates.map((r) => r.key)).toEqual(["notice:r-2"]);
+  });
+
+  // AN ITEM OF THE READER'S NOBODY IS MOVING WAITS ON THEM (ADR-0162): its
+  // notice is listed in Needs you after the decisions, never in the closed
+  // Updates group, until it is read.
+  test("a notice that an item is not moving is in Needs you, not Updates", () => {
+    const rows = inboxRows({
+      subjects: [ASK],
+      conditions: [],
+      notices: [
+        composed(notice("r-flow", { reason: "flow", kind: "flow", primary: true })),
+        composed(notice("r-2")),
+      ],
+    });
+    expect(rows.needs.map((r) => r.key)).toEqual([rows.needs[0]!.key, "notice:r-flow"]);
+    expect(rows.needs[0]!.kind).toBe("decision");
     expect(rows.updates.map((r) => r.key)).toEqual(["notice:r-2"]);
   });
 
@@ -1305,4 +1323,24 @@ describe("the row an address names", () => {
     expect(legacyRowKey("run:turn-7")).toBe("run:turn-7");
     expect(legacyRowKey("change:c-5")).toBe("change:c-5");
   });
+});
+
+// A FLOW NOTICE NAMES THE ITEM'S SEAT AS THE COMPANY NAMES IT. The engine
+// writes the handle, which a woken lead can ask; a screen names a person.
+test("a notice that an item is not moving names its seat, not its handle", () => {
+  const index = indexOrg(
+    withDerived({
+      name: "Acme",
+      roles: [{ handle: "riley-ops", name: "Riley Ops", kind: "human" }],
+    }) as never,
+  );
+  const said = noticeText(
+    notice("r-1", {
+      kind: "flow",
+      reason: "flow",
+      excerpt: "Its start passed and riley-ops has not picked it up since.",
+    }),
+    index,
+  );
+  expect(said).toBe("Its start passed and Riley Ops has not picked it up since.");
 });
