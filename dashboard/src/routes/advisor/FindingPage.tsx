@@ -4,6 +4,16 @@
  * the window they were measured over, the records they cite, the fix in
  * words with its Apply, every transition it went through, and the earlier
  * episodes of the same condition.
+ *
+ * THE MODEL'S WORDS ARE SAID TO BE ITS OWN. The engine writes a rule
+ * finding's title, why and fix; the Advisor's model writes an explanation of
+ * one, and the whole of a finding its model pass found (`source: model`).
+ * Drawn alike, the model's sentences read as the engine's: the explanation
+ * is headed as the model's, and a model finding is marked so.
+ *
+ * WHERE IT STANDS IS ITS TAG: Open, Snoozed until a time (with End the
+ * snooze), Applied, or how it closed. A dismissed one offers Reopen, which
+ * lifts the dismissal's hold (`decisions.tsx` says what follows).
  */
 
 import { useCallback, useState } from "react";
@@ -16,18 +26,17 @@ import {
   Text,
   Timeline,
   TimelineItem,
-  useToast,
   type DescriptionListEntry,
 } from "@crewlethq/ui";
 import { QueryState } from "~/components/common.tsx";
-import { useAssistantControl } from "~/app/assistant/control.ts";
 import { usePageLabels } from "~/app/Shell.tsx";
 import { href } from "~/app/router.tsx";
 import { useNow } from "~/lib/clock.ts";
-import { fmtDateTime } from "~/lib/format.ts";
+import { fmtAt, fmtDateTime } from "~/lib/format.ts";
 import { marked } from "~/ui/Problems.tsx";
 import { ApplyDialog } from "./ApplyDialog.tsx";
-import { decide, useFinding } from "./api.ts";
+import { useFinding } from "./api.ts";
+import { useAskAbout, useDecisions } from "./decisions.tsx";
 import {
   AtlasFix,
   FindingMenu,
@@ -35,6 +44,7 @@ import {
   appliable,
   fixAction,
   freshness,
+  snoozed,
   type RowActions,
 } from "./rows.tsx";
 import type { AdvisorFindingDetail } from "~/protocol/advisorFindings.ts";
@@ -51,7 +61,9 @@ const EVENTS: Readonly<Record<string, string>> = {
   useful: "Marked useful",
   closed: "Closed",
   explained: "Explained",
-  released: "Back on the list",
+  // A DISMISSAL'S HOLD LIFTED: the episode stays closed, and the condition
+  // comes back as a new finding if it still holds.
+  released: "Dismissal lifted",
 };
 
 export function FindingPage({ id }: { id: string }) {
@@ -74,35 +86,25 @@ export function FindingPage({ id }: { id: string }) {
 
 function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload: () => void }) {
   const now = useNow();
-  const toast = useToast();
-  const assistant = useAssistantControl();
+  const askAbout = useAskAbout();
+  const decisions = useDecisions(reload);
   const [applying, setApplying] = useState(false);
   const [reviewing, setReviewing] = useState(false);
-  const answer = (press: () => Promise<unknown>, done: string) =>
-    void press().then(
-      () => {
-        toast.show({ variant: "success", title: done, message: f.title });
-        reload();
-      },
-      () =>
-        toast.show({
-          variant: "danger",
-          title: "Nothing was changed",
-          message: "The engine did not take that. Try again in a moment.",
-        }),
-    );
   const actions: RowActions = {
     apply: () => setApplying(true),
     review: () => setReviewing(true),
-    ask: assistant.unavailable ? null : (question) => assistant.ask(question),
-    snooze: () => answer(() => decide(f.id, { decision: "snooze" }), "Snoozed for 7 days"),
-    dismiss: (_, reason) =>
-      answer(() => decide(f.id, { decision: "dismiss", reason }), "Dismissed"),
+    ask: askAbout,
+    snooze: decisions.snooze,
+    wake: decisions.wake,
+    dismiss: decisions.dismiss,
   };
   const facts: DescriptionListEntry[] = f.evidence.facts.map((fact) => [
     fact.label,
     factWords(fact),
   ]);
+  const asleep = snoozed(f, now);
+  // A DISMISSAL ALREADY LIFTED is not offered again: its last move is the lift.
+  const lifted = f.history.at(-1)?.event === "released";
   return (
     <article className="col gap-4" aria-label={f.title}>
       <header className="col gap-2">
@@ -114,8 +116,13 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
             size="sm"
             variant={f.state === "open" || f.state === "applied" ? "neutral" : "success"}
           >
-            {STATE_WORDS[f.state]}
+            {asleep ? `Snoozed until ${fmtAt(f.snoozed_until, now)}` : STATE_WORDS[f.state]}
           </Tag>
+          {f.source === "model" ? (
+            <Tag size="sm" variant="neutral">
+              Found by the Advisor's model
+            </Tag>
+          ) : null}
           {f.subject.name ? (
             <Text as="span" variant="caption" tone="secondary">
               {f.subject.name}
@@ -132,14 +139,25 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
           <Callout variant="neutral">
             {CLOSE_REASONS[f.close_reason]}
             {f.closed_at ? `, ${fmtDateTime(f.closed_at)}.` : "."}
+            {f.state === "dismissed" && lifted
+              ? " Its dismissal was lifted: it comes back on the list at the Advisor's next check, if it still holds."
+              : ""}
           </Callout>
         ) : null}
       </header>
 
       <section className="col gap-1" aria-label="Why">
         <Text as="p">{marked(f.why)}</Text>
-        {f.explanation ? <Text as="p">{marked(f.explanation)}</Text> : null}
       </section>
+
+      {f.explanation ? (
+        <section className="col gap-1" aria-labelledby="advisor-explanation">
+          <Text as="h3" variant="label" id="advisor-explanation">
+            The Advisor's model explains
+          </Text>
+          <Text as="p">{marked(f.explanation)}</Text>
+        </section>
+      ) : null}
 
       {facts.length > 0 ? (
         <section className="col gap-1" aria-labelledby="advisor-facts">
@@ -158,25 +176,30 @@ function Finding({ finding: f, reload }: { finding: AdvisorFindingDetail; reload
         <Text as="h3" variant="label" id="advisor-fix">
           The fix
         </Text>
-        <Text as="p">{marked(f.fix.sentence)}</Text>
-        <div className="advisor-row-actions">
-          {appliable(f) ? (
-            <Button variant="primary" onClick={() => setApplying(true)}>
-              Apply
-            </Button>
-          ) : (
-            fixAction(f, actions)
-          )}
-          <FindingMenu f={f} actions={actions} />
-          {f.state === "dismissed" ? (
-            <Button
-              size="small"
-              variant="secondary"
-              onClick={() => answer(() => decide(f.id, { decision: "reopen" }), "Reopened")}
-            >
-              Reopen
-            </Button>
-          ) : null}
+        {/* THE FIX'S WORDS AND ITS PRESSES ON ONE LINE: a fix with no press
+            of its own left its menu alone on a line under the sentence. */}
+        <div className="advisor-fix-line">
+          <Text as="p">{marked(f.fix.sentence)}</Text>
+          <span className="advisor-row-actions">
+            {appliable(f) ? (
+              <Button variant="primary" onClick={() => setApplying(true)}>
+                Apply
+              </Button>
+            ) : (
+              fixAction(f, actions)
+            )}
+            {asleep ? (
+              <Button size="small" variant="secondary" onClick={() => decisions.wake(f)}>
+                End the snooze
+              </Button>
+            ) : null}
+            <FindingMenu f={f} actions={actions} now={now} />
+            {f.state === "dismissed" && !lifted ? (
+              <Button size="small" variant="secondary" onClick={() => decisions.reopen(f)}>
+                Reopen
+              </Button>
+            ) : null}
+          </span>
         </div>
       </section>
 
