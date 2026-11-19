@@ -466,8 +466,12 @@ whole page (a link's or a button's own pointer included, since a click there
 places a comment and presses nothing), reports the reader's click, the innermost anchor
 under it and that anchor's text, up to 1 KiB (`comments.pick`), and on the
 host's request it draws a picture of the region as the reader sees it, each
-scrolled element, fixed bar and sticky header where the scroll has it
-(`comments.crop`). None of these needs a capability. The host checks every
+scrolled element, fixed bar and sticky header where the scroll has it, and its
+images, canvases, video frames and fonts drawn in (`comments.crop`). It reads
+only what crosses the region's rows, draws each image's visible part once at the
+reader's screen density (800 pixels at most on the longer side), and reads a
+file the page may not draw out again from the page's own origin; one it still
+cannot read, or one not read within 2 seconds, is drawn as a placeholder. None of these needs a capability. The host checks every
 value, and writes the comment itself, as the reader, from its own composer; a
 page never sees a comment's words, never writes one and cannot open one.
 
