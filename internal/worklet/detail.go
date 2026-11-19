@@ -214,8 +214,8 @@ type TaskDetail struct {
 
 	// EntriesWithheld is how many atlas entries the task names that this
 	// answer left out, for a reader who may not read the atlas
-	// ([TaskDetail.WithoutEntries]).
-	EntriesWithheld int `json:"entries_withheld,omitempty"`
+	// ([TaskDetail.WithoutEntries]); 0, stated, where it left none out.
+	EntriesWithheld int `json:"entries_withheld"`
 
 	// Parent is the task this one is filed under, as a reader names it
 	// (key, title, status), so "Part of LEAD-12 · 2.4 release" needs no
