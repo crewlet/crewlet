@@ -70,6 +70,15 @@ const minScrubBytes = 8
 // two bounds make together, raised by raising this with the budget.
 const scrubExpansion = 8
 
+// scrubPieceBaseBytes is the longest piece the scrub reads before it holds the
+// large slot: 256 KiB, four times the census's p99 line (the package doc's "A
+// collection's read of a thread"), so an ordinary line, string or file never
+// waits. A piece is a text the scrub redacts as one, whose redaction may hold
+// up to its length ([pieceGate.pieces]), and the plan is held past it too
+// ([tarPlan.holdPast]); a walk's line costs only its facts
+// ([collectionBaseLineCharge]).
+const scrubPieceBaseBytes = 256 << 10
+
 // errScrubBound is a session past what its scrub reads: refused.
 var errScrubBound = errors.New("executor: the session is past the bounds a kept session is scrubbed within")
 
@@ -78,7 +87,7 @@ type scrubBounds struct {
 	// plain is the most plaintext one reading of the archive yields.
 	plain int64
 	// gate is what the scrub holds while it holds a piece past
-	// [collectionBaseLineBytes] ([scrubBounds.gatedBy]); its hold is nil
+	// [scrubPieceBaseBytes] ([scrubBounds.gatedBy]); its hold is nil
 	// where no slot gates the scrub's pieces.
 	gate pieceGate
 }
@@ -108,6 +117,69 @@ func (g pieceGate) pieces(src io.Reader, lines bool) (r io.Reader, done func()) 
 	}
 	run := &lineRun{r: src, gate: g, whole: !lines}
 	return run, run.done
+}
+
+// lineRun is a scrub's member reader that holds gate BEFORE it hands on a byte
+// of a line past [scrubPieceBaseBytes], counting the bytes since the last
+// break, and drops it at the next read once that line's break has passed:
+// beneath the scrub's line reader, that read comes only once the reader above
+// has read the line to its break and handed it on. Read-ahead may hold early,
+// never late, and nothing it hands on is copied. A hold's error is its own;
+// done drops what it still holds.
+type lineRun struct {
+	r    io.Reader
+	gate pieceGate
+	run  int
+	// held is whether it holds the gate; open, whether the line it holds for
+	// has not yet broken. whole says the piece is the whole reader, which no
+	// break ends: a text the scrub redacts as one ([pieceGate.pieces]).
+	held, open, whole bool
+}
+
+func (l *lineRun) Read(p []byte) (int, error) {
+	if l.held && !l.open && l.gate.drop != nil {
+		l.gate.drop()
+		l.held = false
+	}
+	n, err := l.r.Read(p)
+	if l.held && l.gate.drop == nil {
+		return n, err
+	}
+	for rest := p[:n]; ; {
+		brk := -1
+		if !l.whole {
+			brk = bytes.IndexByte(rest, '\n')
+		}
+		if brk < 0 {
+			l.run += len(rest)
+		} else {
+			l.run += brk
+		}
+		if l.run > scrubPieceBaseBytes {
+			if !l.held {
+				if holdErr := l.gate.hold(); holdErr != nil {
+					return 0, holdErr
+				}
+				l.held = true
+			}
+			l.open = true
+			if l.gate.drop == nil {
+				return n, err
+			}
+		}
+		if brk < 0 {
+			return n, err
+		}
+		l.open, l.run, rest = false, 0, rest[brk+1:]
+	}
+}
+
+// done drops the gate where the run still holds it and drops at all.
+func (l *lineRun) done() {
+	if l.held && l.gate.drop != nil {
+		l.gate.drop()
+		l.held = false
+	}
 }
 
 // The figures [scrubHeldBytes] adds up, each the most one part of the scrub
@@ -1020,13 +1092,13 @@ type tarPlan struct {
 	held bool
 }
 
-// holdPast holds the large slot once the plan is past [collectionBaseLineBytes]
+// holdPast holds the large slot once the plan is past [scrubPieceBaseBytes]
 // of bits, to the take's end ([tarPlan.letGo]): THE ONE THING THE SCRUB HOLDS
 // ACROSS PIECES, which only a box's archive of millions of short lines or
 // members brings there.
 func (p *tarPlan) holdPast() error {
 	bits := p.members.count() + p.lines.count() + p.cuts.count()
-	if p.held || p.gate.hold == nil || bits/8 <= collectionBaseLineBytes {
+	if p.held || p.gate.hold == nil || bits/8 <= scrubPieceBaseBytes {
 		return nil
 	}
 	if err := p.gate.hold(); err != nil {

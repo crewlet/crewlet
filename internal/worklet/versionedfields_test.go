@@ -36,6 +36,7 @@ func TestAClosedRecordVersionGainsNoField(t *testing.T) {
 		16: {"Relation.Kind atlas_entry"},
 		17: {"View.DeletedAt"},
 		18: {"Comment.Removed"},
+		19: {"Project.StuckAfterHours"},
 	}
 	got := map[int][]string{}
 	for _, field := range worklet.VersionedFields() {

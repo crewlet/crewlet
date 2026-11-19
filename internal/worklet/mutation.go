@@ -26,7 +26,7 @@ import (
 // It moves ONLY with [versionedFields], whose rows name each version's fields,
 // to that table's highest version: statelogtest refuses a build reading a
 // version no field introduced, which would drop the field it was minted for.
-const RecordVersion = 18
+const RecordVersion = 19
 
 // AppsKeptVersion is the version from which the applier keeps a record's
 // apps on its history row; every older record keeps an empty column.
@@ -90,6 +90,7 @@ var versionedFields = statelog.RecordFields{
 		Equals: string(RelationEntry)},
 	{Name: "View.DeletedAt", Since: 17, Op: string(OpPatch), Path: []string{"mutation", "deleted_at"}},
 	{Name: "Comment.Removed", Since: 18, Op: string(OpPatch), Path: []string{"mutation", "comment", "removed"}},
+	{Name: "Project.StuckAfterHours", Since: 19, Path: []string{"mutation", "stuck_after_hours"}},
 }
 
 // VersionedFields is the table, for the conformance suite and for an operator

@@ -228,9 +228,9 @@ func (r BoxRead) mayEnd(run PendingRun) bool {
 // under a mebibyte, thirty seconds a hop) and the reply's two at the broker's
 // ceiling (eight mebibytes, four minutes a hop): nine minutes in all, against
 // more than nineteen, the quarter of the shortest wait a read asks at its
-// budget — an uncapped collection's, about seventy-eight minutes. An absolute
+// budget — an uncapped collection's, about seventy-nine minutes. An absolute
 // margin for the crossings would shorten a dead host's wait by about ten
-// minutes of those seventy-eight, at the cost of a second rule beside the
+// minutes of those seventy-nine, at the cost of a second rule beside the
 // tail's for the same question, so the share stays the tail's.
 // A wait its asker's own context cuts far below its budget leaves a quarter no
 // share could fill at that pace; that is the cut's own defect, not the share's
