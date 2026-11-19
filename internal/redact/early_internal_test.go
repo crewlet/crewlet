@@ -351,7 +351,8 @@ func TestNoTextHoldsAStreamPastItsWindowsAndItsHold(t *testing.T) {
 // stage differing from the whole text's. Over random texts at a low hold, a
 // shape of every hold at 256 KiB (exactly those named refuse), and at the
 // stream's own hold, where a key with a Google token whose dots run past the
-// hold still writes Secrets. Mutation: step no claims stage at a marker
+// hold still writes Secrets, and each layout the package doc names refuses
+// beside a neighbour that does not. Mutation: step no claims stage at a marker
 // ([ruleStage.markerToStepAt]); check an end set late ([keyStage.ended]); read
 // a late end in an early window as no change; or write a span moved before its
 // start ([keyStage.readArmours]).
@@ -393,6 +394,28 @@ func TestAStreamThatDecidesEarlySaysSo(t *testing.T) {
 			t.Errorf("%s at the stream's own hold: Close answered %v, %d windows decided early", s.name, got.err, got.early)
 		}
 		checkReading(t, s.name+" at the stream's own hold", text, got)
+	}
+	// The layouts a key's BEGIN or a gutter makes, each with a run past
+	// the lag after it, and two neighbours that read the run in time.
+	run := "sk-" + testRun(r, testB64url, lagBytes()+256<<10) + "\n" + strings.Repeat("ok\n", stageStep/3+1)
+	begin, end := "-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----"
+	for _, c := range []struct {
+		name, head string
+		refuses    bool
+	}{
+		{"a password's key across an escaped break after a BEGIN", begin + `\n` + "password: \n", true},
+		{"a password's key on the line after a BEGIN", begin + "\npassword: \n", true},
+		{"a password's key across an escaped break before a BEGIN on its line", "password:\\n\t\"hunter2x9 " + begin + "\\n\t\"" + testKeyLine + "\\n\n", true},
+		{"a password's key, its value's line and an END under a gutter", "7\u2192pwd=\n7\u2192" + testKeyLine + "\n7\u2192" + end + "\n", true},
+		{"a closed armour, then a password's key", begin + "\n" + testKeyLine + "\n" + testKeyLine + "\n" + end + "\npassword: \n", false},
+		{"a password's key, its value and an END under no gutter", "password: hunter2x9\n" + end + "\n", false},
+	} {
+		text := c.head + run
+		got := readHolding(text, holdBytes(), nil, 0)
+		if (got.err != nil) != c.refuses {
+			t.Errorf("%s, a run past the lag after it: Close answered %v, %d windows decided early", c.name, got.err, got.early)
+		}
+		checkReading(t, c.name, text, got)
 	}
 	t.Logf("%d of 3 random texts refused", refused)
 }

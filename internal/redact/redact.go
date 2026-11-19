@@ -156,16 +156,15 @@
 // the claims, and a claim that then comes, or ends, otherwise over it stops
 // the stream: what it wrote is not Secrets of the text and may hold what
 // Secrets redacts, so its caller neither keeps nor shows it. A text gets that
-// only where a key's block is read beside such a claim: a password's key on a
-// line that ends in a key's END, with a run longer than the lag straight after
-// its value's line, which one such key is enough for; many password's keys
-// between an armour and a run longer than the lag; or armours among long
-// tokens each with a password's key after it. None is a credential's format.
-// Held below its own hold, a stream refuses more: a step that writes a key's
-// block waits on the claims too, so at a hold of 256 KiB it refuses some
-// texts that hold a value a few hundred KiB long beside a block; at its own
-// hold it refuses none of them. A window decided early that read no claim
-// otherwise decided what the whole text does.
+// only where a key's block is read beside such a claim, with a run longer
+// than the lag after it: a password's key on a line that ends in a key's END,
+// the run straight after its value's line; a password's key on a key's BEGIN
+// line or the line after it, the run as its value's line or a few lines
+// below; a password's key, its value's line and a key's END on three lines
+// under a gutter; many password's keys between an armour and the run; or
+// armours among long tokens each with a password's key after it. None is a
+// credential's format, and below its own hold a stream refuses more. A window
+// decided early that read no claim otherwise decided what the whole text does.
 //
 // # A key's block beside a password
 //
