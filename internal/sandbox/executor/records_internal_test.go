@@ -2,6 +2,7 @@ package executor
 
 import (
 	"encoding/json"
+	"encoding/json/jsontext"
 	"fmt"
 	"maps"
 	"strings"
@@ -65,7 +66,8 @@ func readClaudeRecord(t *testing.T, line string) string {
 func readOpenCodeMessage(t *testing.T, message string) string {
 	t.Helper()
 	b := listBuilder()
-	err := openCodeNext(t.Context(), json.NewDecoder(strings.NewReader(message)), openCodePerson{b})
+	err := openCodeNext(t.Context(), jsontext.NewDecoder(strings.NewReader(message), threadDecoding),
+		openCodePerson{b})
 	return fmt.Sprintf("transcript: %s; %v", recordsEntries(b), err)
 }
 

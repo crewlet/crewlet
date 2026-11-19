@@ -286,6 +286,31 @@ func TestAReadingIsLoggedWithWhatItHeldAndTold(t *testing.T) {
 	}
 }
 
+// THE READ LINE SAYS WHETHER THE SESSION COMPACTED after its run began, as
+// the reading found it: true where it did, false where not.
+//
+// NOT PARALLEL: it swaps the process-wide logger.
+//
+// Mutation: fix the field false, and this goes red.
+func TestTheReadLineSaysWhetherTheSessionCompacted(t *testing.T) {
+	logs := captureLogs(t)
+	k := newKeptLaunch(t, 40000, 0, 0)
+	for _, compacted := range []bool{true, false} {
+		k.jobs.Holdings = func(sandbox.SessionArchive, sandbox.HoldingsAsk) (sandbox.SessionHoldings, error) {
+			return sandbox.SessionHoldings{Read: true, Kind: sandbox.HoldingsByContent, Compacted: compacted}, nil
+		}
+		from := len(logs.records(t))
+		k.l.SessionHoldings(k.ctx, k.l.ProbeSession(k.ctx), readingAsk(sandbox.LoggedCall{ID: "1", Asked: true}))
+		read := readingLines(t, logs, from, "executor_session_holdings_read", k.l.turn.RunID)
+		if len(read) != 1 {
+			t.Fatalf("the reading said %d read lines, want 1", len(read))
+		}
+		if got, _ := read[0]["compacted"].(bool); got != compacted {
+			t.Errorf("the line says compacted=%v, want %t", read[0]["compacted"], compacted)
+		}
+	}
+}
+
 // A PROBED BASIS CARRIES THE RELEASE THAT WROTE THE SESSION, as the turn's row
 // on the executor log records it: what a reading of what the session holds is
 // read for, and so the release a brief told by it is handed to. Empty where the

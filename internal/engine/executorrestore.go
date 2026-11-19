@@ -273,7 +273,7 @@ func (l *agentLauncher) SessionHoldings(ctx context.Context, basis runner.Sessio
 	}
 	log.InfoContext(ctx, "executor_session_holdings_read", "seat", l.seat.Handle(), "turn_id", l.turn.RunID,
 		"asked", asked, "held", held, "told", asked-held, "unreported", len(unreported), "writer", ask.Resumer,
-		"outcome", readOutcome(held, len(unreported)))
+		"compacted", holdings.Compacted, "outcome", readOutcome(held, len(unreported)))
 	// ONE LINE PER SUBAGENT, never per call: its calls are told under one
 	// heading, and the line says why the session does not hold its report.
 	for _, agent := range unreported {

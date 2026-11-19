@@ -241,18 +241,32 @@ type ClassRecords struct {
 // of it, never [HoldingsOpeningBytes]: with no id to pair by, the text is the
 // pairing.
 func ClassOf(c LoggedCall) (CallClass, bool) {
-	if !c.Args.Whole || c.Held || c.OutputBytes < 0 {
+	if !c.Args.Whole || c.Held {
 		return CallClass{}, false
 	}
-	text := TextKey{Bytes: len(c.Output), Whole: true, Sum: sha256.Sum256([]byte(c.Output))}
-	if c.OutputBytes > 0 {
-		opening, ok := rowRecord.Opening(c.Output, c.OutputBytes)
-		if !ok {
-			return CallClass{}, false
-		}
-		text = TextKey{Bytes: c.OutputBytes, Opening: len(opening), Sum: sha256.Sum256([]byte(opening))}
+	text, ok := TextKeyOf(c.Output, c.OutputBytes)
+	if !ok {
+		return CallClass{}, false
 	}
 	return CallClass{Name: c.Name, Args: c.Args.Sum, Failed: c.Failed, Text: text}, true
+}
+
+// TextKeyOf is the text key of an output the log keeps as output, cut from a
+// whole of outputBytes where that is above 0 ([LoggedCall.OutputBytes]), and
+// false where it cannot be stated: a negative size, or a cut whose opening is
+// not read back exactly. A content reading keys a held call's answer by it.
+func TextKeyOf(output string, outputBytes int) (TextKey, bool) {
+	switch {
+	case outputBytes < 0:
+		return TextKey{}, false
+	case outputBytes == 0:
+		return TextKey{Bytes: len(output), Whole: true, Sum: sha256.Sum256([]byte(output))}, true
+	}
+	opening, ok := rowRecord.Opening(output, outputBytes)
+	if !ok {
+		return TextKey{}, false
+	}
+	return TextKey{Bytes: outputBytes, Opening: len(opening), Sum: sha256.Sum256([]byte(opening))}, true
 }
 
 // CallRecords is what a reading counted of the records naming one asked call.
@@ -394,12 +408,12 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 // FIFTEEN SECONDS, the frame's patience for one session-sized operation, as the
 // keep's is ([relaunchCaptureWait]): the relaunch's frame holds the seat and an
 // admission slot, so a kept session costs it thirty seconds, plus the one
-// bounded step a reader may overrun by ([HoldingsReader]) and the keep's settle
-// writes ([Coordinator.ContinuedCapture]). A reading past it is no reading.
-// BenchmarkAReadingAtItsBounds, two cores: an ordinary 1.6 MiB archive reads in
-// ~70 ms (a burst of 32 sharing the seats' one transcript slot, ~2.2 s), 255 MiB
-// of ordinary lines (the plaintext's bound) in 2.7 s, and the slowest lines
-// measured, extrapolated to that bound, ~11 s: inside the wait still.
+// bounded step a reader may overrun by. A reading past it is no reading.
+// Measured on two cores, Claude Code's (BenchmarkAReadingAtItsBounds): 70 ms
+// an ordinary archive, 2.7 s at the plaintext's bound, ~11 s the slowest lines
+// extrapolated there; OpenCode's (BenchmarkAnOpenCodeReadingAtItsBounds): 54
+// ms its largest measured export, 7.9 s at the bound, 1.9 s a step of minimal
+// items at the message bound. All inside the wait.
 const holdingsReadWait = 15 * time.Second
 
 // HoldingsOf is what the session a relaunch of turnID continues holds of the

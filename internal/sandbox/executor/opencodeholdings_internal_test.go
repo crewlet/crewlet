@@ -1,0 +1,1228 @@
+package executor
+
+import (
+	"bytes"
+	"cmp"
+	"compress/gzip"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"runtime"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/crewlet/crewlet/internal/kept"
+	"github.com/crewlet/crewlet/internal/sandbox"
+	"github.com/crewlet/crewlet/internal/tools/toolargs"
+)
+
+// These cases read an OpenCode session's kept export for which of a round's
+// calls it holds ([readOpenCodeHoldings], [openCodeVerdict]). Every arm that
+// can hold a call has a case where the session lacks the call, and holds none.
+
+// ohSession is the session every export here is of.
+const ohSession = "ses_0a1b2c3d4e5f60718293a4b5c6d7e8f9"
+
+// ohUser is the brief the run's session opens with.
+const ohUser = `{"id":"msg_user","type":"user","text":"the brief","time":{"created":1}}`
+
+// ohDoc is an export of ohSession holding messages.
+func ohDoc(messages ...string) string {
+	return `{"info":{"id":"` + ohSession + `","title":"a run"},"messages":[` + strings.Join(messages, ",") + `]}`
+}
+
+// ohStepOpen and ohStepClose are a settled assistant step around its items,
+// as OpenCode writes one ([ohStep]).
+const (
+	ohStepOpen = `{"id":"msg_step","type":"assistant","agent":"build","model":{"id":"m"},"time":{"created":2,` +
+		`"streamed":3,"completed":4},"content":[`
+	ohStepClose = `],"finish":"tool-calls","cost":0}`
+)
+
+// ohStep is a settled assistant step holding items.
+func ohStep(items ...string) string { return ohStepOpen + strings.Join(items, ",") + ohStepClose }
+
+// ohQuote is s as a JSON string.
+func ohQuote(s string) string {
+	raw, err := json.Marshal(s)
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+
+// ohDone is a completed part of the engine's tool name, called with input,
+// answered with text, as OpenCode writes it.
+func ohDone(name, input, text string) string {
+	return `{"type":"tool","id":"call_x","name":"crewlet_` + name + `","executed":false,"state":{"status":` +
+		`"completed","input":` + input + `,"content":[{"type":"text","text":` + ohQuote(text) + `}],` +
+		`"metadata":{"truncated":false}},"time":{"created":1,"ran":2,"completed":3}}`
+}
+
+// ohFailed is a failed part of the engine's tool name, its message message.
+func ohFailed(name, input, message string) string {
+	return `{"type":"tool","id":"call_x","name":"crewlet_` + name + `","executed":false,"state":{"status":` +
+		`"error","input":` + input + `,"error":{"type":"tool.execution","message":` + ohQuote(message) + `}},` +
+		`"time":{"created":1,"ran":2,"completed":3}}`
+}
+
+// ohCall is the call the round's log took appended'th, admitted at the same
+// place, of tool name with args, answered output, asked about.
+func ohCall(appended int, name, args, output string) sandbox.LoggedCall {
+	sum, err := toolargs.Key([]byte(args))
+	if err != nil {
+		panic(err)
+	}
+	return sandbox.LoggedCall{ID: strconv.Itoa(appended), Asked: true, Output: output, Appended: appended,
+		Seq: appended, Name: name, Args: sandbox.ArgsKey{Whole: true, Sum: sum}}
+}
+
+// ohCut is c with its output cut as the run's log cuts one past what it
+// keeps whole.
+func ohCut(c sandbox.LoggedCall) sandbox.LoggedCall {
+	c.Output, c.OutputBytes = kept.Record("the run's record").Text(c.Output, sandbox.MaxBridgeOutputBytes)
+	return c
+}
+
+// ohRead reads doc, from start, for calls.
+func ohRead(t *testing.T, doc string, start sandbox.RunStart, calls ...sandbox.LoggedCall) (sandbox.SessionHoldings,
+	error) {
+	t.Helper()
+	return readOpenCodeHoldings(t.Context(), strings.NewReader(doc), maxLineBytes, ohSession, start,
+		sandbox.HoldingsAsk{Calls: calls, Resumer: "2.2.7"})
+}
+
+// ohBegan is a run that began its session.
+var ohBegan = sandbox.RunStart{Began: true}
+
+// ohHeld is the places of the calls of calls h holds, failing the case where
+// it read nothing.
+func ohHeld(t *testing.T, h sandbox.SessionHoldings, err error, calls ...sandbox.LoggedCall) []int {
+	t.Helper()
+	if err != nil || !h.Read {
+		t.Fatalf("no reading: %v", err)
+	}
+	var held []int
+	for _, c := range calls {
+		if in, under := h.Holds(c); in {
+			held = append(held, c.Appended)
+		} else if under != "" {
+			t.Errorf("call %d told under %q; a content reading tells every call in the main list", c.Appended, under)
+		}
+	}
+	return held
+}
+
+// ohNone fails the case where err is no refusal: the reading read nothing.
+func ohNone(t *testing.T, h sandbox.SessionHoldings, err error) {
+	t.Helper()
+	if err == nil || h.Read {
+		t.Fatalf("a reading = %+v; want none", h)
+	}
+}
+
+// A MESSAGE IS DECODED ONCE, WITH ITS KEY FACTS: the one decode keeps each
+// member read in place, a name written twice by its last value (as JSON.parse
+// reads it), and says which of its names it met, whether one was met twice
+// and whether one was none of its own; a person's message reads none of them.
+//
+// Mutation: keep a name's first value, or drop the facts' twice or other, and
+// this goes red.
+func TestAMessageIsDecodedOnceWithItsKeyFacts(t *testing.T) {
+	t.Parallel()
+	raw := json.RawMessage(`{"type":"user","text":"first","later":1,"text":"second","metadata":{}}`)
+	w := decodeOpenCodeMessage(raw)
+	if got := w.message().Text; got != "second" {
+		t.Errorf("text written twice reads %q; want its last value", got)
+	}
+	if !w.keys.twice || !w.keys.other || !w.keys.has(msgMetadata) || w.keys.has(msgID) {
+		t.Errorf("facts = %+v; want twice, other and metadata met, id not", w.keys)
+	}
+	if &w.Text[0] != &raw[strings.LastIndex(string(raw), `"second"`)] {
+		t.Error("the text is a copy; want the sub-slice of the message it is")
+	}
+	plain := decodeOpenCodeMessage(json.RawMessage(`{"type":"user","text":"x"}`))
+	if plain.keys.twice || plain.keys.other || plain.keys.within(namesMask(msgType, msgText)) != true {
+		t.Errorf("facts of a plain message = %+v", plain.keys)
+	}
+}
+
+// AN OPENCODE READING READS ONLY THE RELEASES IT WAS MEASURED ON, each written
+// whole: a resumer outside the set, an archive written by another release
+// than the resumer, a member padded with blanks, and a release the count
+// reads but the reading was not measured on are no reading, nothing opened.
+// A member is read.
+//
+// Not parallel: it swaps the count's set.
+//
+// Mutation: drop the set check, read openCodeCountRead's set, trim the
+// release, or leave Version unchecked, and a case opens its archive.
+func TestAnOpenCodeReadingReadsOnlyReleasesItWasMeasuredOn(t *testing.T) {
+	saved := openCodeCountReleases
+	t.Cleanup(func() { openCodeCountReleases = saved })
+	openCodeCountReleases = append(slices.Clone(saved), "2.4.0")
+	call := ohCall(1, "echo", `{"tag":"a"}`, "done")
+	archive := ohGzip(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"tag":"a"}`, "done"))))
+	for name, tc := range map[string]struct {
+		version, resumer string
+		read             bool
+	}{
+		"a member":                        {"2.2.7", "2.2.7", true},
+		"a resumer outside the set":       {"2.3.0", "2.3.0", false},
+		"a writer other than the resumer": {"2.1.4", "2.2.7", false},
+		"a member padded with blanks":     {" 2.2.7", " 2.2.7", false},
+		"a release only the count reads":  {"2.4.0", "2.4.0", false},
+		"a resumer nobody recorded":       {"", "", false},
+	} {
+		opened := false
+		got, err := NewOpenCode().ReadHoldings(t.Context(), ohArchive(tc.version),
+			func(context.Context) (io.ReadCloser, error) {
+				opened = true
+				return io.NopCloser(bytes.NewReader(archive)), nil
+			}, sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{call}, Resumer: tc.resumer})
+		switch {
+		case tc.read && (err != nil || !got.Read):
+			t.Errorf("%s: a reading = %+v, %v; want it read", name, got, err)
+		case !tc.read && (got.Read || err == nil || opened):
+			t.Errorf("%s: a reading = %+v, %v, opened %t; want none, nothing opened", name, got, err, opened)
+		}
+	}
+	// THE READER'S OWN CHECK, apart from the shared one every reading passes.
+	padded := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{call}, Resumer: " 2.2.7"}
+	if err := (OpenCode{}).checkHoldings(ohArchive(" 2.2.7"), padded); err == nil {
+		t.Error("a member padded with blanks passes the reader's check; want it compared whole")
+	}
+}
+
+// ohArchive is the session's archive as its row describes it, written by
+// version, its run having begun the session.
+func ohArchive(version string) sandbox.SessionArchive {
+	return sandbox.SessionArchive{Harness: OpenCodeName, SessionID: ohSession, Format: openCodeArchiveFormat,
+		Version: version, RunStart: ohBegan}
+}
+
+// ohGzip is doc gzipped, as the take keeps an export.
+func ohGzip(t *testing.T, doc string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	if _, err := zw.Write([]byte(doc)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// THE READING'S RELEASES ARE THE RELEASES MEASURED: 2.0.32, 2.1.4 and 2.2.7,
+// whose own exports of the engine's bridged calls read as every case
+// predicted; never empty, each one the count reads and of readable numbers.
+// 2.3.0 is out: its steps carry `time.firstToken`.
+//
+// Mutation: empty the set, add a release, or add one the count does not
+// read, and this goes red.
+func TestTheReadingsReleasesAreTheReleasesMeasured(t *testing.T) {
+	t.Parallel()
+	if want := []string{"2.0.32", "2.1.4", "2.2.7"}; !slices.Equal(openCodeHoldingsReleases, want) {
+		t.Errorf("the reading's releases are %q; want those measured, %q", openCodeHoldingsReleases, want)
+	}
+	for _, release := range openCodeHoldingsReleases {
+		if _, ok := releaseNumbers(release); !ok || !openCodeCountRead(release) {
+			t.Errorf("%q is unreadable or no release the count reads", release)
+		}
+	}
+}
+
+// THE READING'S FLOOR IS ITS OLDEST RELEASE by its numbers, whatever the
+// set's order and however its numbers sort as text.
+//
+// Not parallel: it swaps the set.
+//
+// Mutation: answer a literal or the set's first member, or compare releases
+// as text, and this goes red.
+func TestTheReadingsFloorIsItsOldestRelease(t *testing.T) {
+	saved := openCodeHoldingsReleases
+	t.Cleanup(func() { openCodeHoldingsReleases = saved })
+	for want, set := range map[string][]string{
+		"2.0.32": {"2.2.7", "2.0.32", "2.1.4"},
+		"2.9.1":  {"2.10.0", "2.9.1"},
+	} {
+		openCodeHoldingsReleases = set
+		if got := (OpenCode{}).holdingsFloor(); got != want {
+			t.Errorf("the floor of %q is %q; want %q", set, got, want)
+		}
+	}
+}
+
+// AN ASK IS VALIDATED BY ITS READER BEFORE ANY READ: past 200 calls, none
+// asked, a call with no admission place, an asked call not keyed by its place
+// in decimal, with no place, held for a person, or keyed alike with another,
+// a run with no known start, or a session id of no OpenCode shape is no
+// reading, nothing opened. An unasked call with no place in the log is read.
+//
+// Mutation: skip the asked calls' checks, or refuse an unasked call for its
+// key, and a case goes red.
+func TestAnAskIsValidatedByItsReaderBeforeAnyRead(t *testing.T) {
+	t.Parallel()
+	good := ohCall(1, "echo", `{}`, "done")
+	unplaced := ohCall(2, "echo", `{}`, "other")
+	unplaced.Appended, unplaced.ID, unplaced.Asked = 0, "0", false
+	tooMany := make([]sandbox.LoggedCall, sandbox.MaxBridgeCalls+1)
+	for i := range tooMany {
+		tooMany[i] = ohCall(i+1, "echo", `{}`, "done")
+	}
+	with := func(edit func(*sandbox.LoggedCall)) []sandbox.LoggedCall {
+		c := good
+		edit(&c)
+		return []sandbox.LoggedCall{c}
+	}
+	for name, tc := range map[string]struct {
+		calls   []sandbox.LoggedCall
+		archive sandbox.SessionArchive
+		read    bool
+	}{
+		"an ask the log can make":             {[]sandbox.LoggedCall{good, unplaced}, ohArchive("2.2.7"), true},
+		"too many calls":                      {tooMany, ohArchive("2.2.7"), false},
+		"no call":                             {nil, ohArchive("2.2.7"), false},
+		"none asked":                          {with(func(c *sandbox.LoggedCall) { c.Asked = false }), ohArchive("2.2.7"), false},
+		"no admission place":                  {with(func(c *sandbox.LoggedCall) { c.Seq = 0 }), ohArchive("2.2.7"), false},
+		"keyed by another number":             {with(func(c *sandbox.LoggedCall) { c.ID = "7" }), ohArchive("2.2.7"), false},
+		"keyed as its id would be":            {with(func(c *sandbox.LoggedCall) { c.ID = "call_x" }), ohArchive("2.2.7"), false},
+		"no place in the log":                 {with(func(c *sandbox.LoggedCall) { c.Appended, c.ID = 0, "0" }), ohArchive("2.2.7"), false},
+		"held for a person":                   {with(func(c *sandbox.LoggedCall) { c.Held = true }), ohArchive("2.2.7"), false},
+		"a key two calls carry":               {[]sandbox.LoggedCall{good, func() sandbox.LoggedCall { c := good; c.Asked = false; return c }()}, ohArchive("2.2.7"), false},
+		"a run with no known start":           {[]sandbox.LoggedCall{good}, func() sandbox.SessionArchive { a := ohArchive("2.2.7"); a.RunStart = sandbox.RunStart{}; return a }(), false},
+		"a session id of no OpenCode's shape": {[]sandbox.LoggedCall{good}, func() sandbox.SessionArchive { a := ohArchive("2.2.7"); a.SessionID = "5e55100a-0000"; return a }(), false},
+	} {
+		err := (OpenCode{}).checkHoldings(tc.archive, sandbox.HoldingsAsk{Calls: tc.calls, Resumer: "2.2.7"})
+		if (err == nil) != tc.read {
+			t.Errorf("%s: checkHoldings = %v; want read %t", name, err, tc.read)
+		}
+	}
+}
+
+// AN ASK PAST THE LOG'S BOUNDS IS NEVER READ: 257 calls in flight, two counts
+// of dropped calls with no name, or dropped names and digests past the tally's
+// bound are no reading; 256 in flight, and dropped identities at the bound, are
+// read, counted apart.
+//
+// Mutation: leave Unlisted unbounded, or count in-flight and dropped calls
+// together, and a case goes red.
+func TestAnAskPastTheLogsBoundsIsNeverRead(t *testing.T) {
+	t.Parallel()
+	identities := func(n int, id sandbox.CallIdentity) []sandbox.CallIdentity {
+		out := make([]sandbox.CallIdentity, n)
+		for i := range out {
+			out[i] = id
+		}
+		return out
+	}
+	name := strings.Repeat("n", sandbox.MaxElidedIdentityBytes/4)
+	atBound := identities(4, sandbox.CallIdentity{Name: name})
+	for label, tc := range map[string]struct {
+		unlisted []sandbox.CallIdentity
+		read     bool
+	}{
+		"256 in flight":                 {identities(sandbox.MaxCallsInFlight, sandbox.CallIdentity{Name: "x", InFlight: true}), true},
+		"257 in flight":                 {identities(sandbox.MaxCallsInFlight+1, sandbox.CallIdentity{Name: "x", InFlight: true}), false},
+		"two unnamed counts":            {identities(2, sandbox.CallIdentity{}), false},
+		"dropped names at the bound":    {atBound, true},
+		"dropped names past the bound":  {append(slices.Clone(atBound), sandbox.CallIdentity{Name: "y"}), false},
+		"in flight beside dropped ones": {append(identities(sandbox.MaxCallsInFlight, sandbox.CallIdentity{Name: "x", InFlight: true}), atBound...), true},
+	} {
+		err := (OpenCode{}).checkHoldings(ohArchive("2.2.7"), sandbox.HoldingsAsk{Resumer: "2.2.7",
+			Calls: []sandbox.LoggedCall{ohCall(1, "echo", `{}`, "done")}, Unlisted: tc.unlisted})
+		if (err == nil) != tc.read {
+			t.Errorf("%s: checkHoldings = %v; want read %t", label, err, tc.read)
+		}
+	}
+}
+
+// ohClass is c's class, which the case states.
+func ohClass(t *testing.T, c sandbox.LoggedCall) sandbox.CallClass {
+	t.Helper()
+	class, ok := sandbox.ClassOf(c)
+	if !ok {
+		t.Fatalf("call %d states no class", c.Appended)
+	}
+	return class
+}
+
+// ohVerdict is the verdict on calls, unlisted beside them, where parts are each
+// class's counted parts' steps.
+func ohVerdict(t *testing.T, parts map[sandbox.CallClass][]int, unlisted []sandbox.CallIdentity,
+	calls ...sandbox.LoggedCall) []int {
+	t.Helper()
+	h, err := openCodeVerdict(sandbox.HoldingsAsk{Calls: calls, Unlisted: unlisted, Resumer: "2.2.7"}, parts, false)
+	return ohHeld(t, h, err, calls...)
+}
+
+// A CLASS IS HELD ONLY WHERE EVERY CALL OF IT HAS A PART: two calls and two
+// parts both held; two calls and one part neither; one call and two parts
+// told.
+//
+// Mutation: hold min(parts, calls), or where parts are at least calls, and
+// this goes red.
+func TestAClassIsHeldOnlyWhereEveryCallOfItHasAPart(t *testing.T) {
+	t.Parallel()
+	a, b := ohCall(1, "echo", `{"t":1}`, "same"), ohCall(2, "echo", `{"t":1}`, "same")
+	class := ohClass(t, a)
+	if got := ohVerdict(t, map[sandbox.CallClass][]int{class: {1, 1}}, nil, a, b); !slices.Equal(got, []int{1, 2}) {
+		t.Errorf("two calls, two parts: held %v; want both", got)
+	}
+	if got := ohVerdict(t, map[sandbox.CallClass][]int{class: {1, 2, 3}}, nil, a); got != nil {
+		t.Errorf("one call, more parts: held %v; want none", got)
+	}
+	h, err := openCodeVerdict(sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{a}, Resumer: "2.2.7"},
+		map[sandbox.CallClass][]int{class: {1, 2, 3}}, false)
+	if records := h.Classes[class]; err != nil || records.Held || records.Parts != 2 {
+		t.Errorf("one call, three parts: the class is %+v, %v; want two parts counted and not held", records, err)
+	}
+}
+
+// OF TWO IDENTICAL CALLS WITH ONE PART NEITHER IS HELD: which of the two the
+// part is is never decided.
+//
+// Mutation: pair the part with the first call, and this goes red.
+func TestOfTwoIdenticalCallsWithOnePartNeitherIsHeld(t *testing.T) {
+	t.Parallel()
+	a, b := ohCall(1, "echo", `{"t":1}`, "same"), ohCall(2, "echo", `{"t":1}`, "same")
+	if got := ohVerdict(t, map[sandbox.CallClass][]int{ohClass(t, a): {1}}, nil, a, b); got != nil {
+		t.Errorf("two calls, one part: held %v; want neither", got)
+	}
+}
+
+// A CALL THE LOG CANNOT STATE MAKES ITS CLASS WILD: one in flight, a dropped
+// one with its digest, one with none, a listed call with cut arguments, and a
+// late dropped one (the tally holds it) each tell the class of its tool; a
+// dropped one of another digest, where every call of the class has one, does
+// not, nor does one of another tool.
+//
+// Mutation: ignore the wildcards, or compare digests where the class's call
+// has none, and a case goes red.
+func TestACallTheLogCannotStateMakesItsClassWild(t *testing.T) {
+	t.Parallel()
+	c := ohCall(1, "echo", `{"t":1}`, "done")
+	c.Digest = "d1"
+	parts := map[sandbox.CallClass][]int{ohClass(t, c): {1}}
+	cutArgs := ohCall(2, "echo", `{"t":2}`, "other")
+	cutArgs.Args.Whole, cutArgs.Asked = false, false
+	for name, tc := range map[string]struct {
+		unlisted []sandbox.CallIdentity
+		listed   []sandbox.LoggedCall
+		held     bool
+	}{
+		"nothing unstated":        {nil, nil, true},
+		"in flight":               {[]sandbox.CallIdentity{{Name: "echo", Digest: "d1", InFlight: true}}, nil, false},
+		"dropped, its digest":     {[]sandbox.CallIdentity{{Name: "echo", Digest: "d1"}}, nil, false},
+		"dropped, no digest":      {[]sandbox.CallIdentity{{Name: "echo"}}, nil, false},
+		"a late one, dropped":     {[]sandbox.CallIdentity{{Name: "echo", Digest: "d1", OnlyFailed: true}}, nil, false},
+		"cut arguments, listed":   {nil, []sandbox.LoggedCall{cutArgs}, false},
+		"dropped, another digest": {[]sandbox.CallIdentity{{Name: "echo", Digest: "d2"}}, nil, true},
+		"dropped, another tool":   {[]sandbox.CallIdentity{{Name: "post"}}, nil, true},
+	} {
+		got := ohVerdict(t, parts, tc.unlisted, append([]sandbox.LoggedCall{c}, tc.listed...)...)
+		if held := slices.Contains(got, 1); held != tc.held {
+			t.Errorf("%s: held %v; want call 1 held %t", name, got, tc.held)
+		}
+	}
+	digestless := c
+	digestless.Digest = ""
+	got := ohVerdict(t, parts, []sandbox.CallIdentity{{Name: "echo", Digest: "d2"}}, digestless)
+	if got != nil {
+		t.Errorf("a class with a digestless call beside a dropped one of its tool: held %v; want told", got)
+	}
+}
+
+// A HELD CALL IS WILD ONLY FOR THE ANSWER IT WAS GIVEN: its part answers with
+// the held answer, so it tells the class of its tool, failure and text, and
+// leaves another class of its tool held.
+//
+// Mutation: make a held call wild by its tool alone, and this goes red.
+func TestAHeldCallIsWildOnlyForTheAnswerItWasGiven(t *testing.T) {
+	t.Parallel()
+	answered := ohCall(1, "post", `{"t":1}`, "Held for approval.")
+	answered.Failed = true
+	other := ohCall(2, "post", `{"t":2}`, "posted")
+	held := sandbox.LoggedCall{ID: "3", Appended: 3, Seq: 3, Name: "post", Held: true, Failed: true,
+		Output: "Held for approval."}
+	parts := map[sandbox.CallClass][]int{ohClass(t, answered): {1}, ohClass(t, other): {1}}
+	if got := ohVerdict(t, parts, nil, answered, other, held); !slices.Equal(got, []int{2}) {
+		t.Errorf("held %v; want the other class's call alone", got)
+	}
+}
+
+// AN UNNAMED COUNT OF FAILURES IS WILD ONLY FOR FAILURES: a count every call of
+// which failed tells a failed class and leaves a succeeded one held; a count
+// whose outcomes are mixed tells both.
+//
+// Mutation: ignore OnlyFailed, or read a count of no failure as one of
+// failures, and a case goes red.
+func TestAnUnnamedCountOfFailuresIsWildOnlyForFailures(t *testing.T) {
+	t.Parallel()
+	failed := ohCall(1, "post", `{"t":1}`, "refused")
+	failed.Failed = true
+	done := ohCall(2, "post", `{"t":2}`, "posted")
+	parts := map[sandbox.CallClass][]int{ohClass(t, failed): {1}, ohClass(t, done): {1}}
+	if got := ohVerdict(t, parts, []sandbox.CallIdentity{{OnlyFailed: true}}, failed, done); !slices.Equal(got, []int{2}) {
+		t.Errorf("a count of failures: held %v; want the succeeded call alone", got)
+	}
+	if got := ohVerdict(t, parts, []sandbox.CallIdentity{{}}, failed, done); got != nil {
+		t.Errorf("a count of mixed outcomes: held %v; want none", got)
+	}
+}
+
+// A CALL HELD AT THE SAVE POINT STAYS IN THE POOL: an unasked call identical
+// to an asked run call makes the class two calls, and one part tells both.
+//
+// Mutation: leave unasked calls out of the pool, and this goes red.
+func TestACallHeldAtTheSavePointStaysInThePool(t *testing.T) {
+	t.Parallel()
+	saved, run := ohCall(1, "echo", `{"t":1}`, "same"), ohCall(2, "echo", `{"t":1}`, "same")
+	saved.Asked = false
+	if got := ohVerdict(t, map[sandbox.CallClass][]int{ohClass(t, run): {1}}, nil, saved, run); got != nil {
+		t.Errorf("held %v; want the run's call told", got)
+	}
+}
+
+// ONLY A PART AFTER THE RUN'S START COUNTS FOR ITS ROUND: an identical part
+// before the message the run began after never counts; a run that began its
+// session counts from the first; a start not found, or found twice, is no
+// reading.
+//
+// Mutation: ignore the start, or take the first of two, and a case goes red.
+func TestOnlyAPartAfterTheRunsStartCountsForItsRound(t *testing.T) {
+	t.Parallel()
+	c := ohCall(1, "echo", `{"t":1}`, "done")
+	before := ohStep(ohDone("echo", `{"t":1}`, "done"))
+	start := `{"id":"msg_start","type":"user","text":"go on","time":{"created":5}}`
+	after := sandbox.RunStart{After: "msg_start"}
+	h, err := ohRead(t, ohDoc(ohUser, before, start), after, c)
+	if got := ohHeld(t, h, err, c); got != nil {
+		t.Errorf("a part before the start: held %v; want none", got)
+	}
+	h, err = ohRead(t, ohDoc(ohUser, before, start), ohBegan, c)
+	if got := ohHeld(t, h, err, c); !slices.Equal(got, []int{1}) {
+		t.Errorf("a run that began its session: held %v; want its part counted", got)
+	}
+	h, err = ohRead(t, ohDoc(ohUser, before), after, c)
+	ohNone(t, h, err)
+	h, err = ohRead(t, ohDoc(ohUser, start, before, start), after, c)
+	ohNone(t, h, err)
+}
+
+// THE MESSAGE A RUN BEGAN AFTER IS NO PART OF THE RUN: a step holding a part
+// identical to a run call's is the start, and does not count; a compaction as
+// the start leaves Compacted false.
+//
+// Mutation: read the start message as the run's, and this goes red.
+func TestTheMessageARunBeganAfterIsNoPartOfTheRun(t *testing.T) {
+	t.Parallel()
+	c := ohCall(1, "echo", `{"t":1}`, "done")
+	start := strings.Replace(ohStep(ohDone("echo", `{"t":1}`, "done")), "msg_step", "msg_start", 1)
+	h, err := ohRead(t, ohDoc(ohUser, start), sandbox.RunStart{After: "msg_start"}, c)
+	if got := ohHeld(t, h, err, c); got != nil {
+		t.Errorf("held %v; want the start's part not counted", got)
+	}
+	compaction := `{"id":"msg_start","type":"compaction","status":"completed","summary":"s","time":{"created":5}}`
+	h, err = ohRead(t, ohDoc(ohUser, compaction, ohStep(ohDone("echo", `{"t":1}`, "done"))),
+		sandbox.RunStart{After: "msg_start"}, c)
+	if got := ohHeld(t, h, err, c); !slices.Equal(got, []int{1}) || h.Compacted {
+		t.Errorf("a compaction as the start: held %v, compacted %t; want held, not compacted", got, h.Compacted)
+	}
+}
+
+// A PART BEFORE THE NEWEST COMPACTION NEVER COUNTS: a compaction after the
+// start, completed or failed, drops every part before it, and says so; the
+// newest one counts, not the first.
+//
+// Mutation: keep part facts across a compaction, drop them only at the
+// first, and a case goes red.
+func TestAPartBeforeTheNewestCompactionNeverCounts(t *testing.T) {
+	t.Parallel()
+	a, b := ohCall(1, "echo", `{"t":1}`, "a"), ohCall(2, "echo", `{"t":2}`, "b")
+	compaction := func(status string) string {
+		return `{"id":"msg_c","type":"compaction","status":"` + status + `","summary":"s","time":{"created":5}}`
+	}
+	// a's part lies before both compactions, one of b's between them and one
+	// after the newest: b alone has one live part, its call's.
+	for _, status := range []string{"completed", "failed", "running"} {
+		h, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, "a")), compaction(status),
+			ohStep(ohDone("echo", `{"t":2}`, "b")), compaction(status), ohStep(ohDone("echo", `{"t":2}`, "b"))),
+			ohBegan, a, b)
+		got := ohHeld(t, h, err, a, b)
+		if !slices.Equal(got, []int{2}) || !h.Compacted {
+			t.Errorf("a %s compaction: held %v, compacted %t; want b alone, compacted", status, got, h.Compacted)
+		}
+	}
+	h, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, "a")), ohStep(ohDone("echo", `{"t":2}`, "b"))),
+		ohBegan, a, b)
+	if got := ohHeld(t, h, err, a, b); !slices.Equal(got, []int{1, 2}) || h.Compacted {
+		t.Errorf("no compaction: held %v, compacted %t; want both, not compacted", got, h.Compacted)
+	}
+}
+
+// ONLY A PART OPENCODE HANDS ITS MODEL VERBATIM COUNTS: every variant of a
+// counted part a release could mark, cut, run elsewhere or hand otherwise is
+// passed, and its call told.
+//
+// Mutation: read truncated as anything but exactly false, ignore unknown
+// keys, or allow a provider's keys, and a case goes red.
+func TestOnlyAPartOpenCodeHandsItsModelVerbatimCounts(t *testing.T) {
+	t.Parallel()
+	c := ohCall(1, "echo", `{"t":1}`, "done")
+	part := ohDone("echo", `{"t":1}`, "done")
+	failedCall := ohCall(1, "echo", `{"t":1}`, "boom")
+	failedCall.Failed = true
+	failed := ohFailed("echo", `{"t":1}`, "boom")
+	for name, tc := range map[string]struct {
+		part string
+		call sandbox.LoggedCall
+	}{
+		"truncated":                {strings.Replace(part, `"truncated":false`, `"truncated":true`, 1), c},
+		"a second metadata member": {strings.Replace(part, `"truncated":false`, `"truncated":false,"outputPath":"x"`, 1), c},
+		"metadata absent":          {strings.Replace(part, `,"metadata":{"truncated":false}`, ``, 1), c},
+		"two text items":           {strings.Replace(part, `"content":[{"type":"text","text":"done"}]`, `"content":[{"type":"text","text":"done"},{"type":"text","text":""}]`, 1), c},
+		"a file item":              {strings.Replace(part, `{"type":"text","text":"done"}`, `{"type":"file","text":"done"}`, 1), c},
+		"an extra item key":        {strings.Replace(part, `{"type":"text","text":"done"}`, `{"type":"text","text":"done","x":1}`, 1), c},
+		"executed":                 {strings.Replace(part, `"executed":false`, `"executed":true`, 1), c},
+		"Code Mode's execute":      {strings.Replace(part, `"crewlet_echo"`, `"execute"`, 1), c},
+		"another server's":         {strings.Replace(part, `"crewlet_echo"`, `"seat_echo"`, 1), c},
+		"a name outside the rule":  {strings.Replace(part, `"crewlet_echo"`, `"crewlet_ec ho"`, 1), c},
+		"aborted":                  {strings.Replace(failed, `"tool.execution"`, `"aborted"`, 1), failedCall},
+		"an error with content":    {strings.Replace(failed, `"error":{`, `"content":[],"error":{`, 1), failedCall},
+		"an error with metadata":   {strings.Replace(failed, `"error":{`, `"metadata":{"truncated":false},"error":{`, 1), failedCall},
+		"an unknown state key":     {strings.Replace(part, `"metadata":`, `"compacted":1,"metadata":`, 1), c},
+		"an unknown part key":      {strings.Replace(part, `"executed":false`, `"executed":false,"cleared":true`, 1), c},
+		"a part with text":         {strings.Replace(part, `"executed":false`, `"executed":false,"text":"x"`, 1), c},
+		"native":                   {strings.Replace(part, `"executed":false`, `"executed":false,"native":{}`, 1), c},
+		"providerState":            {strings.Replace(part, `"executed":false`, `"executed":false,"providerState":{}`, 1), c},
+		"providerResultState":      {strings.Replace(part, `"executed":false`, `"executed":false,"providerResultState":{}`, 1), c},
+		"an unknown time key":      {strings.Replace(part, `"ran":2`, `"ran":2,"queued":1`, 1), c},
+		"an input of no object":    {strings.Replace(part, `"input":{"t":1}`, `"input":"{\"t\":1}"`, 1), c},
+		"running":                  {strings.Replace(part, `"status":"completed"`, `"status":"running"`, 1), c},
+	} {
+		if !strings.Contains(tc.part, "crewlet_") && !strings.Contains(tc.part, "execute") &&
+			!strings.Contains(tc.part, "seat_") {
+			t.Fatalf("%s: the variant did not apply", name)
+		}
+		if tc.part == part || tc.part == failed {
+			t.Fatalf("%s: the variant did not apply", name)
+		}
+		h, err := ohRead(t, ohDoc(ohUser, ohStep(tc.part)), ohBegan, tc.call)
+		if got := ohHeld(t, h, err, tc.call); got != nil {
+			t.Errorf("%s: held %v; want the part passed", name, got)
+		}
+	}
+	for name, tc := range map[string]struct {
+		part string
+		call sandbox.LoggedCall
+	}{"completed": {part, c}, "failed": {failed, failedCall}} {
+		h, err := ohRead(t, ohDoc(ohUser, ohStep(tc.part)), ohBegan, tc.call)
+		if got := ohHeld(t, h, err, tc.call); !slices.Equal(got, []int{1}) {
+			t.Errorf("the %s part as written: held %v; want it counted", name, got)
+		}
+	}
+}
+
+// A MARKED CHANGE ENDS THE READING: a fourth item type, an assistant step with
+// an unknown key or `metadata`, a step `time` name outside its set (2.3.0's
+// firstToken among them), an item no object, a list cut part way or no list,
+// a `completed` time null, 0, a string or absent, and no `info` are no
+// reading.
+//
+// Mutation: drop the item faults as the person reader does, or read
+// `completed` for its presence, and a case goes red.
+func TestAMarkedChangeEndsTheReading(t *testing.T) {
+	t.Parallel()
+	c := ohCall(1, "echo", `{"t":1}`, "done")
+	step := ohStep(ohDone("echo", `{"t":1}`, "done"))
+	for name, doc := range map[string]string{
+		"a fourth item type":     ohDoc(ohUser, strings.Replace(step, `"content":[`, `"content":[{"type":"image"},`, 1)),
+		"an unknown step key":    ohDoc(ohUser, strings.Replace(step, `"cost":0`, `"cost":0,"later":1`, 1)),
+		"metadata":               ohDoc(ohUser, strings.Replace(step, `"cost":0`, `"cost":0,"metadata":{}`, 1)),
+		"firstToken":             ohDoc(ohUser, strings.Replace(step, `"streamed":3`, `"firstToken":3,"streamed":3`, 1)),
+		"an item no object":      ohDoc(ohUser, strings.Replace(step, `"content":[`, `"content":[7,`, 1)),
+		"a list that is no list": ohDoc(ohUser, strings.Replace(ohStep(), `"content":[]`, `"content":{}`, 1)),
+		"completed null":         ohDoc(ohUser, strings.Replace(step, `"completed":4`, `"completed":null`, 1)),
+		"completed 0":            ohDoc(ohUser, strings.Replace(step, `"completed":4`, `"completed":0`, 1)),
+		"completed 0.0e5":        ohDoc(ohUser, strings.Replace(step, `"completed":4`, `"completed":0.0e5`, 1)),
+		"completed a string":     ohDoc(ohUser, strings.Replace(step, `"completed":4`, `"completed":"4"`, 1)),
+		"completed absent":       ohDoc(ohUser, strings.Replace(step, `,"completed":4`, ``, 1)),
+		"a step with no content": ohDoc(ohUser, strings.Replace(ohStep(), `"content":[],`, ``, 1)),
+		"no info":                strings.Replace(ohDoc(ohUser, step), `"info":{"id":"`+ohSession+`","title":"a run"},`, ``, 1),
+		"info of no object":      strings.Replace(ohDoc(ohUser, step), `{"id":"`+ohSession+`","title":"a run"}`, `"`+ohSession+`"`, 1),
+		"a message of no object": ohDoc(ohUser, `"words"`, step),
+		"a type of no string":    ohDoc(ohUser, `{"type":7}`, step),
+	} {
+		if !strings.Contains(doc, `"messages"`) || doc == ohDoc(ohUser, step) {
+			t.Fatalf("%s: the variant did not apply", name)
+		}
+		h, err := ohRead(t, doc, ohBegan, c)
+		if err == nil || h.Read {
+			t.Errorf("%s: a reading = %+v; want none", name, h)
+		}
+	}
+}
+
+// A KEY WRITTEN TWICE ENDS THE READING OR PASSES ITS PART: `messages` or
+// `info` twice, a name twice in an assistant step or its `time`, is no
+// reading; `state` twice in a part passes that part.
+//
+// Mutation: read the first value, or allow duplicates, and a case goes red.
+func TestAKeyWrittenTwiceEndsTheReadingOrPassesItsPart(t *testing.T) {
+	t.Parallel()
+	c := ohCall(1, "echo", `{"t":1}`, "done")
+	part := ohDone("echo", `{"t":1}`, "done")
+	step := ohStep(part)
+	doc := ohDoc(ohUser, step)
+	for name, twice := range map[string]string{
+		"messages":         strings.Replace(doc, `"messages":[`, `"messages":[],"messages":[`, 1),
+		"info":             strings.Replace(doc, `"messages":`, `"info":{"id":"`+ohSession+`"},"messages":`, 1),
+		"a step's content": ohDoc(ohUser, strings.Replace(step, `"content":[`, `"content":[],"content":[`, 1)),
+		"a step's time":    ohDoc(ohUser, strings.Replace(step, `"streamed":3`, `"streamed":3,"streamed":3`, 1)),
+	} {
+		h, err := ohRead(t, twice, ohBegan, c)
+		ohNoneNamed(t, name, h, err)
+	}
+	stateTwice := strings.Replace(part, `"state":{`, `"state":{"status":"error"},"state":{`, 1)
+	h, err := ohRead(t, ohDoc(ohUser, ohStep(stateTwice)), ohBegan, c)
+	if got := ohHeld(t, h, err, c); got != nil {
+		t.Errorf("state twice in a part: held %v; want the part passed", got)
+	}
+}
+
+// ohNoneNamed is [ohNone] for the case named.
+func ohNoneNamed(t *testing.T, name string, h sandbox.SessionHoldings, err error) {
+	t.Helper()
+	if err == nil || h.Read {
+		t.Errorf("%s: a reading = %+v; want none", name, h)
+	}
+}
+
+// A PART MATCHING TWO CLASSES COUNTS FOR NEITHER: two cut calls of one tool,
+// arguments and size, whose kept openings are 4,090 and 4,091 bytes of one
+// text, are two classes one part matches; it holds neither.
+//
+// Mutation: count the part for each class it matches, and this goes red.
+func TestAPartMatchingTwoClassesCountsForNeither(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("x", 9000)
+	short, long := ohCut(ohCall(1, "echo", `{"t":1}`, text)), ohCut(ohCall(2, "echo", `{"t":1}`, text))
+	opening, _ := kept.Record("the run's record").Opening(long.Output, long.OutputBytes)
+	trimmed, _ := kept.Record("the run's record").Opening(short.Output, short.OutputBytes)
+	if len(opening) != len(trimmed) {
+		t.Fatal("the log kept two openings of one text alike")
+	}
+	// The log keeps one opening for one text; a shorter one is a different
+	// cut of the same text, as a release's other budget would make.
+	short.Output = strings.Replace(short.Output, opening, opening[:len(opening)-1], 1)
+	if _, ok := sandbox.ClassOf(short); !ok {
+		t.Fatal("the shorter cut states no class")
+	}
+	h, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, text))), ohBegan, short, long)
+	if got := ohHeld(t, h, err, short, long); got != nil {
+		t.Errorf("held %v; want neither", got)
+	}
+	h, err = ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, text))), ohBegan, long)
+	if got := ohHeld(t, h, err, long); !slices.Equal(got, []int{2}) {
+		t.Errorf("one class: held %v; want it", got)
+	}
+}
+
+// A TEXT THAT CANNOT BE ITS CLASS'S SIZE IS NEVER DECODED: a part whose text
+// spans more than six times every candidate's size is passed with no copy of
+// it made, at least half the text less than a read that decodes it; one
+// escaped six bytes a character is read.
+//
+// Not parallel: it reads the process's allocation count.
+//
+// Mutation: drop the pre-check, or bound it at one times the size, and a
+// case goes red.
+func TestATextThatCannotBeItsClassesSizeIsNeverDecoded(t *testing.T) {
+	big := strings.Repeat("y", 4<<20)
+	doc := ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, big)))
+	passed := ohAllocated(t, doc, ohCall(1, "echo", `{"t":1}`, "small"))
+	decoded := ohAllocated(t, doc, ohCut(ohCall(1, "echo", `{"t":1}`, big+"!")))
+	if passed+uint64(len(big))/2 > decoded {
+		t.Errorf("a text no candidate can be allocated %d bytes, one decoded %d; want half the text less",
+			passed, decoded)
+	}
+	escaped := strings.Repeat(`\u0079`, 4<<10)
+	near := ohCut(ohCall(1, "echo", `{"t":1}`, strings.Repeat("y", 4<<10)))
+	doc = ohDoc(ohUser, ohStep(strings.Replace(ohDone("echo", `{"t":1}`, "PLACE"), "PLACE", escaped, 1)))
+	h, err := ohRead(t, doc, ohBegan, near)
+	if got := ohHeld(t, h, err, near); !slices.Equal(got, []int{1}) {
+		t.Errorf("a text escaped six bytes a character: held %v; want it read", got)
+	}
+}
+
+// ohAllocated is what reading doc for calls allocated, in bytes, read once
+// first so what the process builds once (the tool-name bound's profiles) is
+// none of it.
+func ohAllocated(t *testing.T, doc string, calls ...sandbox.LoggedCall) uint64 {
+	t.Helper()
+	if _, err := ohRead(t, doc, ohBegan, calls...); err != nil {
+		t.Fatalf("no reading: %v", err)
+	}
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	h, err := ohRead(t, doc, ohBegan, calls...)
+	runtime.ReadMemStats(&after)
+	if err != nil || !h.Read {
+		t.Fatalf("no reading: %v", err)
+	}
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// A STATE IS READ ONCE WHATEVER ITS KEY ORDER: a part whose `content` comes
+// before its `status` and `input` counts as the one written status first, and
+// its 4 MiB answer is decoded once and copied never: the read allocates at
+// most half the text more than one decode beyond a part it never reads.
+//
+// Not parallel: it reads the process's allocation count.
+//
+// Mutation: copy the content's span, or skip the pre-check where the content
+// comes first, and a case goes red.
+func TestAStateIsReadOnceWhateverItsKeyOrder(t *testing.T) {
+	text := strings.Repeat("z", 4<<20)
+	c := ohCut(ohCall(1, "echo", `{"t":1}`, text))
+	part := ohDone("echo", `{"t":1}`, text)
+	content := `"content":[{"type":"text","text":` + ohQuote(text) + `}],`
+	reordered := strings.Replace(strings.Replace(part, content, "", 1), `"state":{`, `"state":{`+content, 1)
+	if reordered == part {
+		t.Fatal("the content did not move")
+	}
+	doc := ohDoc(ohUser, ohStep(reordered))
+	h, err := ohRead(t, doc, ohBegan, c)
+	if got := ohHeld(t, h, err, c); !slices.Equal(got, []int{1}) {
+		t.Fatalf("content first: held %v; want it counted", got)
+	}
+	// Beside a part of another server's alike in size, whose state is never
+	// read, the answer read costs its one decode.
+	other := strings.Replace(doc, `"crewlet_echo"`, `"notcrew_echo"`, 1)
+	read, none := ohAllocated(t, doc, c), ohAllocated(t, other, c)
+	if read > none+uint64(len(text))*3/2 {
+		t.Errorf("the answer read allocated %d bytes, a part never read %d; want one decode more", read, none)
+	}
+}
+
+// AN ERROR PART COUNTS ONLY FOR A FAILURE HANDED UNTRIMMED: OpenCode hands a
+// failure's output trimmed, and an empty or blank one in words of its own,
+// so a padded, empty or blank failure is told; an exact one is held.
+//
+// Mutation: compare the message after trimming, and this goes red.
+func TestAnErrorPartCountsOnlyForAFailureHandedUntrimmed(t *testing.T) {
+	t.Parallel()
+	for output, held := range map[string]bool{"x": true, " x\n": false, "": false, " \n": false} {
+		c := ohCall(1, "echo", `{"t":1}`, output)
+		c.Failed = true
+		message := strings.TrimSpace(output)
+		if message == "" {
+			message = "MCP tool returned an error"
+		}
+		h, err := ohRead(t, ohDoc(ohUser, ohStep(ohFailed("echo", `{"t":1}`, message))), ohBegan, c)
+		if got := ohHeld(t, h, err, c); (got != nil) != held {
+			t.Errorf("a failure %q: held %v; want held %t", output, got, held)
+		}
+	}
+}
+
+// A BLANK OUTPUT IS HELD ONLY WHERE A REQUEST WAS MEASURED TO CARRY IT: an
+// empty answer reaches the model as "(no tool output)", and a blank one is
+// left told though it was carried verbatim, so neither is held.
+//
+// Mutation: count an empty or blank completed part, and this goes red.
+func TestABlankOutputIsHeldOnlyWhereARequestWasMeasuredToCarryIt(t *testing.T) {
+	t.Parallel()
+	for _, output := range []string{"", " \n\t "} {
+		c := ohCall(1, "echo", `{"t":1}`, output)
+		h, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, output))), ohBegan, c)
+		if got := ohHeld(t, h, err, c); got != nil {
+			t.Errorf("an output %q: held %v; want told", output, got)
+		}
+	}
+}
+
+// A SCRUBBED TEXT NEVER STANDS FOR A CUT OUTPUT: a part of a cut call's size
+// and kept opening whose text past the opening holds the scrub's marker is
+// told, since the scrub may have rewritten what the log did not keep.
+//
+// Mutation: leave the marker unchecked, and this goes red.
+func TestAScrubbedTextNeverStandsForACutOutput(t *testing.T) {
+	t.Parallel()
+	text := strings.Repeat("w", 8000) + "[REDACTED:engine-secret]" + strings.Repeat("w", 1000)
+	c := ohCut(ohCall(1, "echo", `{"t":1}`, text))
+	h, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, text))), ohBegan, c)
+	if got := ohHeld(t, h, err, c); got != nil {
+		t.Errorf("held %v; want told", got)
+	}
+	plain := strings.ReplaceAll(text, "[REDACTED:engine-secret]", strings.Repeat("w", 24))
+	c = ohCut(ohCall(1, "echo", `{"t":1}`, plain))
+	h, err = ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, plain))), ohBegan, c)
+	if got := ohHeld(t, h, err, c); !slices.Equal(got, []int{1}) {
+		t.Errorf("an unscrubbed text: held %v; want it", got)
+	}
+}
+
+// AN UNKEPT OUTPUT IS NEVER HELD: the log keeps a marker in place of an
+// output no record keeps, and the session's real answer never matches it.
+//
+// Mutation: match the marker as the text, and this goes red.
+func TestAnUnkeptOutputIsNeverHeld(t *testing.T) {
+	t.Parallel()
+	c := ohCall(1, "read_secret", `{"t":1}`, "[the output of this call is not kept]")
+	h, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("read_secret", `{"t":1}`, "the real answer"))), ohBegan, c)
+	if got := ohHeld(t, h, err, c); got != nil {
+		t.Errorf("held %v; want told", got)
+	}
+}
+
+// A PART'S ARGUMENTS ARE READ BY THE LOG'S OWN RULE: another key order and an
+// escaped character key alike and are held; a key a closed schema dropped
+// keys apart and is told; an input past 64 KiB is passed.
+//
+// Mutation: compare the raw text, or decode under other options, and a case
+// goes red.
+func TestAPartsArgumentsAreReadByTheLogsOwnRule(t *testing.T) {
+	t.Parallel()
+	c := ohCall(1, "echo", `{"a":"é","b":1.0}`, "done")
+	for input, held := range map[string]bool{
+		`{"b":1.0,"a":"é"}`:                                   true,
+		`{"a":"é","b":1.0,"extra":true}`:                      false,
+		`{"a":"é","b":1}`:                                     false,
+		`{"a":"` + strings.Repeat("p", 64<<10) + `","b":1.0}`: false,
+	} {
+		h, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", input, "done"))), ohBegan, c)
+		if got := ohHeld(t, h, err, c); (got != nil) != held {
+			t.Errorf("input %.40s: held %v; want held %t", input, got, held)
+		}
+	}
+}
+
+// CALLS IN AN ORDER THE EXPORT CONTRADICTS LEAVE THE SESSION UNREAD: calls of
+// K admitted 1 and 3 both in step 1 and a call of L admitted 2 in step 2 are no
+// order a run makes; L in step 1 is.
+//
+// Mutation: drop the order check, and this goes red.
+func TestCallsInAnOrderTheExportContradictsLeaveTheSessionUnread(t *testing.T) {
+	t.Parallel()
+	k1, l, k2 := ohCall(1, "echo", `{"t":"k"}`, "k"), ohCall(2, "echo", `{"t":"l"}`, "l"),
+		ohCall(3, "echo", `{"t":"k"}`, "k")
+	kPart, lPart := ohDone("echo", `{"t":"k"}`, "k"), ohDone("echo", `{"t":"l"}`, "l")
+	h, err := ohRead(t, ohDoc(ohUser, ohStep(kPart, kPart), ohStep(lPart)), ohBegan, k1, l, k2)
+	ohNone(t, h, err)
+	h, err = ohRead(t, ohDoc(ohUser, ohStep(kPart, lPart, kPart)), ohBegan, k1, l, k2)
+	if got := ohHeld(t, h, err, k1, l, k2); !slices.Equal(got, []int{1, 2, 3}) {
+		t.Errorf("one step: held %v; want all", got)
+	}
+}
+
+// PARALLEL CALLS OF ONE STEP ARE READ IN ANY ORDER: a step's parts in another
+// order than the calls were admitted in are a reading.
+//
+// Mutation: compare steps strictly, and this goes red.
+func TestParallelCallsOfOneStepAreReadInAnyOrder(t *testing.T) {
+	t.Parallel()
+	a, b := ohCall(1, "echo", `{"t":"a"}`, "a"), ohCall(2, "echo", `{"t":"b"}`, "b")
+	h, err := ohRead(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":"b"}`, "b"), ohDone("echo", `{"t":"a"}`, "a"))),
+		ohBegan, a, b)
+	if got := ohHeld(t, h, err, a, b); !slices.Equal(got, []int{1, 2}) {
+		t.Errorf("held %v; want both", got)
+	}
+}
+
+// A MESSAGE OF A KIND THIS BUILD DOES NOT READ LEAVES THE SESSION UNREAD: a
+// twelfth kind is a release this build was not written for.
+//
+// Mutation: pass unknown kinds, and this goes red.
+func TestAMessageOfAKindThisBuildDoesNotReadLeavesTheSessionUnread(t *testing.T) {
+	t.Parallel()
+	c := ohCall(1, "echo", `{"t":1}`, "done")
+	h, err := ohRead(t, ohDoc(ohUser, `{"type":"later-kind","time":{"created":2}}`,
+		ohStep(ohDone("echo", `{"t":1}`, "done"))), ohBegan, c)
+	ohNone(t, h, err)
+}
+
+// AN OPENCODE READING IS HELD TO ITS BOUNDS: plain past a lowered meter, a
+// message past a lowered value bound, another value after the document,
+// `info` naming another session, and a body failing after the document are
+// no reading.
+//
+// Mutation: drop a bound, the trailing check or the drain, and a case goes
+// red.
+func TestAnOpenCodeReadingIsHeldToItsBounds(t *testing.T) {
+	t.Parallel()
+	c := ohCall(1, "echo", `{"t":1}`, "done")
+	doc := ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, "done")))
+	ask := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.2.7"}
+	read := func(plain io.Reader, line int, session string) error {
+		h, err := readOpenCodeHoldings(t.Context(), plain, line, session, ohBegan, ask)
+		if err == nil && !h.Read {
+			t.Fatal("a reading of nothing with no error")
+		}
+		return err
+	}
+	if err := read(strings.NewReader(doc), maxLineBytes, ohSession); err != nil {
+		t.Fatalf("the export within every bound: %v", err)
+	}
+	for name, err := range map[string]error{
+		"plain past its meter":         read(boundedPlain(strings.NewReader(doc), int64(len(doc)-1)), maxLineBytes, ohSession),
+		"a message past its bound":     read(strings.NewReader(doc), 256, ohSession),
+		"a value after the document":   read(strings.NewReader(doc+` {}`), maxLineBytes, ohSession),
+		"another session's":            read(strings.NewReader(doc), maxLineBytes, "ses_other"),
+		"a body failing after the end": read(io.MultiReader(strings.NewReader(doc), ohFailing{}), maxLineBytes, ohSession),
+	} {
+		if err == nil {
+			t.Errorf("%s: read; want no reading", name)
+		}
+	}
+	archive := ohGzip(t, doc)
+	_, err := (OpenCode{}).readHoldings(t.Context(), io.MultiReader(bytes.NewReader(archive), ohFailing{}),
+		ohArchive("2.2.7"), ask, boundsFor(1<<20))
+	if err == nil {
+		t.Error("a store's stream failing past the archive: read; want no reading")
+	}
+}
+
+// ohFailing is a stream that fails, as a store's does past a fault.
+type ohFailing struct{}
+
+func (ohFailing) Read([]byte) (int, error) { return 0, errors.New("the store's stream failed") }
+
+// AN OPENCODE READING STOPS BETWEEN MESSAGES, AND BETWEEN PARTS, WHEN ITS
+// CONTEXT ENDS: a caller gone after a step's first part, or after the first
+// message, is no reading.
+//
+// Mutation: check the context per message alone, and the first case goes
+// red.
+func TestAnOpenCodeReadingStopsBetweenMessagesWhenItsContextEnds(t *testing.T) {
+	t.Parallel()
+	c := ohCall(1, "echo", `{"t":1}`, "done")
+	part := ohDone("echo", `{"t":1}`, "done")
+	for name, tc := range map[string]struct {
+		doc  string
+		asks int
+	}{
+		// The walk asks before each message, the visitor at each message and
+		// before each part: the fourth ask is the second part's.
+		"after a part":    {ohDoc(ohStep(part, part)), 4},
+		"after a message": {ohDoc(ohUser, ohStep(part)), 3},
+	} {
+		ctx := &ohCountdown{Context: t.Context(), left: tc.asks - 1}
+		_, err := readOpenCodeHoldings(ctx, strings.NewReader(tc.doc), maxLineBytes, ohSession, ohBegan,
+			sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.2.7"})
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("%s: %v; want the caller's end", name, err)
+		}
+	}
+}
+
+// ohCountdown is a context its caller leaves once it has been asked left
+// times whether it has.
+type ohCountdown struct {
+	context.Context
+	left int
+}
+
+func (c *ohCountdown) Err() error {
+	if c.left <= 0 {
+		return context.Canceled
+	}
+	c.left--
+	return nil
+}
+
+// THE READER TAKES NO SLOT OF ITS OWN: a reading under ReadHoldings, which
+// holds the seats' one slot, completes; a reader taking the slot again would
+// wait on itself until its caller left.
+//
+// Not parallel: the slots are the process's own.
+//
+// Mutation: take the slots in the reader, and this goes red.
+func TestTheReaderTakesNoSlotOfItsOwn(t *testing.T) {
+	c := ohCall(1, "echo", `{"t":1}`, "done")
+	archive := ohGzip(t, ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, "done"))))
+	got, err := NewOpenCode().ReadHoldings(t.Context(), ohArchive("2.2.7"), func(context.Context) (io.ReadCloser,
+		error) {
+		return io.NopCloser(bytes.NewReader(archive)), nil
+	}, sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.2.7"})
+	if err != nil || !got.Read || SeatTranscriptReadsHeld() != 0 {
+		t.Errorf("a reading = %+v, %v, seats' slot held after %d; want it read and the slot given back", got, err,
+			SeatTranscriptReadsHeld())
+	}
+}
+
+// A READING'S CAUSE QUOTES NOTHING OF THE EXPORT: refused inside a 4 MiB part,
+// its error holds none of the part's words; refused on a fault whose words
+// run a mebibyte, its error is within the detail's bound whatever the fault
+// says.
+//
+// Mutation: carry the cause whole in the reading's words, and this goes red.
+func TestAReadingsCauseQuotesNothingOfTheExport(t *testing.T) {
+	t.Parallel()
+	c := ohCall(1, "echo", `{"t":1}`, "done")
+	ask := sandbox.HoldingsAsk{Calls: []sandbox.LoggedCall{c}, Resumer: "2.2.7"}
+	secret := strings.Repeat("the secret words ", 1<<18)
+	for name, plain := range map[string]io.Reader{
+		"inside a part": strings.NewReader(ohDoc(ohUser, ohStep(`{"type":"text","text":"`+secret+"\x01\"}"))),
+		"on a long fault": io.MultiReader(strings.NewReader(`{"info":`),
+			ohFault{errors.New(secret)}),
+	} {
+		_, err := readOpenCodeHoldings(t.Context(), plain, maxLineBytes, ohSession, ohBegan, ask)
+		if err == nil {
+			t.Fatalf("%s: read", name)
+		}
+		if msg := err.Error(); len(msg) > transcriptDetailLimit+200 || strings.Contains(msg, "secret words") &&
+			name == "inside a part" {
+			t.Errorf("%s: the cause is %d bytes, or quotes the export", name, len(msg))
+		}
+	}
+}
+
+// ohFault is a stream that fails with err.
+type ohFault struct{ err error }
+
+func (f ohFault) Read([]byte) (int, error) { return 0, f.err }
+
+// A READING HOLDS ONE MESSAGE AT A TIME: a message at 8 MiB of one text part,
+// and one of minimal items, each allocates at most what the benchmark
+// measured a reading of it to allocate (the walk's buffer grown by doubling
+// to the message, and one decoded text) and half the message more, so one
+// more copy of either fails.
+//
+// Not parallel: it reads the process's allocation count.
+//
+// Mutation: decode the content into a copy, or read items through item(), and
+// a case goes red.
+func TestAReadingHoldsOneMessageAtATime(t *testing.T) {
+	const message = 8 << 20
+	text := strings.Repeat("v", message-512)
+	c := ohCut(ohCall(1, "echo", `{"t":1}`, text))
+	minimal := strings.TrimSuffix(strings.Repeat(`{"type":"reasoning","text":"r"},`, (message-512)/32), ",")
+	for name, tc := range map[string]struct {
+		doc      string
+		measured uint64
+	}{
+		"one text part": {ohDoc(ohUser, ohStep(ohDone("echo", `{"t":1}`, text))), ohMeasuredText},
+		"minimal items": {ohDoc(ohUser, ohStep(minimal)), ohMeasuredMinimal},
+	} {
+		allocated := ohAllocated(t, tc.doc, c)
+		t.Logf("%s: allocated %d bytes", name, allocated)
+		if allocated > tc.measured+message/2 {
+			t.Errorf("%s: allocated %d bytes; want at most %d", name, allocated, tc.measured+message/2)
+		}
+	}
+}
+
+// What a reading of [TestAReadingHoldsOneMessageAtATime]'s messages allocated
+// on the build host (Go 1.27.2) under the race detector, as the suite runs:
+// 24.0 MiB for the text part, the walk's buffer doubling to the 8 MiB message
+// and its one decode; 120.0 MiB for the minimal items (114.0 without the
+// detector), about 480 bytes of decoder state an item, none of it live.
+const (
+	ohMeasuredText    = 25 << 20
+	ohMeasuredMinimal = 121 << 20
+)
+
+// ohManifest is what a release's fixtures say of each case: the session, the
+// run's start, the round's logged calls, and the calls the reading holds.
+type ohManifest map[string]struct {
+	Session string `json:"session"`
+	Began   bool   `json:"began"`
+	Held    []int  `json:"held"`
+	Calls   []struct {
+		Appended, Seq              int
+		Name, Args, Digest, Output string
+		Failed, Held, Abandoned    bool
+		Server                     string
+	} `json:"calls"`
+}
+
+// ohFixture is one case of a release's own runs: its kept archive, the
+// session and the run's start, the round's logged calls as the log keeps
+// them, and the calls the rules hold.
+type ohFixture struct {
+	archive []byte
+	session string
+	began   bool
+	calls   []sandbox.LoggedCall
+	held    []int
+}
+
+// ohFixtures are release's cases (testdata/opencode/<release>/holdings), each
+// call's output cut as the log cuts it, every call but an abandoned one asked.
+func ohFixtures(tb testing.TB, release string) map[string]ohFixture {
+	tb.Helper()
+	dir := filepath.Join("testdata", "opencode", release, "holdings")
+	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json.gz"))
+	if err != nil {
+		tb.Fatal(err)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		tb.Fatal(err)
+	}
+	var manifest ohManifest
+	if err = json.NewDecoder(zr).Decode(&manifest); err != nil {
+		tb.Fatal(err)
+	}
+	out := map[string]ohFixture{}
+	for name, m := range manifest {
+		archive, err := os.ReadFile(filepath.Join(dir, name+".json.gz"))
+		if err != nil {
+			tb.Fatal(err)
+		}
+		f := ohFixture{archive: archive, session: m.Session, began: m.Began, held: m.Held}
+		for _, logged := range m.Calls {
+			c := ohCut(ohCall(logged.Appended, logged.Name, cmp.Or(logged.Args, "{}"), logged.Output))
+			c.Seq, c.Failed, c.Digest, c.Asked = logged.Seq, logged.Failed, logged.Digest, !logged.Abandoned
+			if logged.Args == "" && logged.Digest == "" {
+				c.Args.Whole = false
+			}
+			f.calls = append(f.calls, c)
+		}
+		out[name] = f
+	}
+	return out
+}
+
+// EACH RELEASE'S BRIDGED CALLS READ AS ITS OWN EXPORT HOLDS THEM: for each
+// release of the set, the captures its own runs kept of the engine's bridged
+// calls (outcomes on both of OpenCode's routes, arguments, parallel and
+// identical calls, truncation, an end and a kill mid-call, Code Mode, a child
+// session, a compaction), each kept as the take keeps it, are read through
+// ReadHoldings, and exactly the calls their rules hold are held. The log's
+// cut of each output is applied as the log applies it.
+//
+// Mutation: none of its own; the regression pin of the rules over real
+// exports.
+func TestEachReleasesBridgedCallsReadAsItsOwnExportHoldsThem(t *testing.T) {
+	t.Parallel()
+	if len(openCodeHoldingsReleases) == 0 {
+		t.Fatal("the reading reads no release")
+	}
+	for _, release := range openCodeHoldingsReleases {
+		for name, f := range ohFixtures(t, release) {
+			got, err := NewOpenCode().ReadHoldings(t.Context(), sandbox.SessionArchive{Harness: OpenCodeName,
+				SessionID: f.session, Format: openCodeArchiveFormat, Version: release,
+				RunStart: sandbox.RunStart{Began: f.began}},
+				func(context.Context) (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(f.archive)), nil },
+				sandbox.HoldingsAsk{Calls: f.calls, Resumer: release})
+			var held []int
+			if err == nil {
+				held = ohHeld(t, got, err, f.calls...)
+			}
+			if err != nil || !slices.Equal(held, f.held) {
+				t.Errorf("%s %s: held %v, %v; want %v", release, name, held, err, f.held)
+			}
+		}
+	}
+}
