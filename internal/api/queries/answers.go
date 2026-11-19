@@ -572,9 +572,9 @@ type Sources struct {
 	//
 	// The store is handed it where an answer labels what the store counts
 	// ([store.EventLog.PhaseTokens]), or heading and rows are two windows.
-	// What the store labels itself (a listing's read floor, which must
-	// agree with the retention sweep; `event_series`' axis) stays on its
-	// own clock.
+	// What the store labels itself stays on its own clock: a listing's read
+	// floor, which must agree with the retention sweep; `event_series`' axis;
+	// `fleet`'s lease countdowns, on the lease table's ([coord.TimeLeft]).
 	Now func() time.Time
 
 	// Models is the engine's half of the model questions (`llm_entries`):
