@@ -13,25 +13,16 @@ import (
 )
 
 // drain delivers from a subscription's mailbox while some attachment can take
-// it. It must be called with the broker lock NOT held, and never holds it
-// across a handler.
+// it. Call it with the broker lock NOT held; it never holds it across a handler.
 //
-// Only one pass runs at a time per subscription. A second caller — a publish
-// from inside a running handler, or a linger window expiring under an
-// in-progress drain — asks the running pass to go round again instead of
-// starting a nested one. Two passes over one mailbox would interleave, and
-// interleaving is exactly the conversation reordering the whole batch layer
-// exists to prevent.
+// One pass runs at a time per subscription; a second caller (a publish from a
+// handler, a linger expiring mid-drain) asks it to go round again, since two
+// passes would interleave and reorder the conversation.
 //
-// One liveness property callers should know, and the price of dispatching
-// inline: a handler that publishes into the subscription it is draining feeds
-// this loop. Doing so on EVERY invocation generates work faster than the loop
-// retires it, and the loop does not return until the mailbox empties — so the
-// publishing goroutine never gets control back. A real broker does not hang
-// there, it just never catches up, because its dispatch is asynchronous. There
-// is no cap here on purpose: a limit would be an invented constant that changes
-// delivery semantics for every well-behaved caller in order to bound one that
-// is asking for infinite work.
+// A handler publishing into its own subscription on EVERY invocation feeds
+// this loop faster than it retires work, and the publisher never regains
+// control (a real broker just never catches up). No cap on purpose: it would
+// be an invented constant changing delivery for every well-behaved caller.
 func (b *Broker) drain(ctx context.Context, sub *subscription) {
 	b.mu.Lock()
 	if sub.draining {
@@ -155,33 +146,17 @@ func deliverableMembersLocked(sub *subscription) []*consumer {
 }
 
 // deliverableLocked is the ONE predicate both the pre-drain gate and the
-// between-partition guard ask, and it enumerates every condition the contract
-// names — see [queue.DeliveriesLeft], whose "a deferral it just applied, a
-// hold, a pause, a detach" is this list, and jetstream's attachment.blocked(),
-// which is the same four on the backend that ships.
+// between-partition guard ask: every condition of [queue.DeliveriesLeft] and
+// jetstream's attachment.blocked(), plus a broker that went away
+// ([Broker.Fail], no decision of the node's, so the contract omits it).
 //
-// The mapping, because the two backends spell them differently and the
-// enumeration is the thing that rots:
-//
-//   - a detach (or a Stop, which drops this client's consumers the same way)
-//     -> m.detached
+//   - detach, or a Stop that drops the client's consumers -> m.detached
 //   - a stopped client                                     -> !c.running
-//   - a process-wide delivery pause (PauseDelivery)        -> c.paused
-//   - a per-subscription hold (PauseTopic)                 -> c.pauses[m.key]
-//   - a deferral just applied, or an explicit Quiesce      -> c.quiescing[m.key]
-//   - a broker that went away ([Broker.Fail])              -> c.broker.down
+//   - PauseDelivery, PauseTopic                            -> c.paused, c.pauses
+//   - a deferral just applied, or Quiesce                  -> c.quiescing[m.key]
 //
-// The last is the one the contract does not enumerate, because it is no
-// decision of the node's: a broker nobody can reach delivers to nobody, so an
-// Unquiesce that drains on this twin cannot hand out mail a consumer on the
-// real broker could not fetch.
-//
-// DETACH IS ASKED FIRST, and not for speed: it is the only one of the six
-// that a caller re-deriving the members from sub.members would never see, so
-// it is the one a reader has to find here. A consumer that has been dropped
-// is out of every other question's jurisdiction — its client may still be
-// running, unpaused and unheld — and answering those first reads as though
-// they could rule it in.
+// DETACH IS ASKED FIRST: a dropped consumer's client may still be running,
+// unpaused and unheld, so the other questions must not rule it in.
 func deliverableLocked(m *consumer) bool {
 	if m.detached {
 		return false
@@ -221,18 +196,14 @@ func blockedByLocked(m *consumer) string {
 
 // takeChunkLocked removes up to max_batch events from the head of the mailbox.
 //
-// Draining everything already waiting into ONE delivery per partition is the
-// property inbox batching exists for: events that queued while an agent was
-// busy must arrive as one turn, not N.
+// Draining everything waiting into ONE delivery per partition is what inbox
+// batching is for: events queued while an agent was busy arrive as one turn.
 //
 // ON A LANED TOPIC THE LANE IS TAKEN FIRST ([queue.HasLane]): every priority
-// event the mailbox holds, wherever it sits, in the order it holds them, and
-// the head of the rest after that. One slice models the broker's two
-// mailboxes because the two orders it has to keep, the lane's among itself
-// and the topic's among itself, are both the slice's order: a priority event
-// published behind a backlog is the broker's lane message that a drain
-// fetches before the topic, and a hand-back that returns either kind to the
-// front keeps it ahead of its own kind, as the broker's redelivery does.
+// event the mailbox holds, wherever it sits, then the head of the rest. One
+// slice models the broker's two mailboxes because the lane's order and the
+// topic's order are both the slice's order: a hand-back to the front keeps
+// either kind ahead of its own kind, as the broker's redelivery does.
 func takeChunkLocked(sub *subscription, m *consumer) []*events.Event {
 	n := min(m.options.EffectiveMaxBatch(), len(sub.mail))
 	if !queue.HasLane(sub.topic) {
@@ -338,42 +309,15 @@ func (b *Broker) deliverBatch(ctx context.Context, sub *subscription, m *consume
 		}
 		part := parts[i]
 		if !deliverableLocked(m) {
-			// BLOCKED — by an earlier partition in this very batch, or by
-			// something that landed between them. Stop dispatching and put
-			// the rest back for whoever attaches next. A real broker checks
-			// exactly here, and the twin not doing so was worse than a
-			// missing guard: after one partition deferred, the loop went on
-			// invoking the handler for partitions 2..N on a seat this node
-			// had just been told it does not own, and each deferral pushed
-			// its partition to the front — so the mailbox came back in
-			// REVERSE partition order, which is precisely the reordering a
-			// deferral exists to prevent.
-			//
-			// THE SAME PREDICATE THE PRE-DRAIN GATE USES, because they ask
-			// the same question a moment apart. This asked only about the
-			// quiesce flag, which is the one condition a deferral happens to
-			// set — so a PauseTopic hold, a PauseDelivery or a Detach taken
-			// mid-drain stopped the JetStream backend (which guards on
-			// attachment.blocked(), all four conditions) and did not stop
-			// the twin, and a test written against the twin certified a
-			// behaviour production does not have.
-			//
-			// SHARING THE PREDICATE WAS NOT THE SAME AS COVERING THE LIST,
-			// and this comment claimed the second while only the first had
-			// been done. A DETACH was still not answered: it is the one
-			// condition that lives on the MEMBERSHIP rather than on a flag,
-			// and this loop holds the *consumer, so a member leaving
-			// sub.members is invisible from here. The twin went on running
-			// and ACKING partitions 2..N on a seat this node had already
-			// released — the fenced release's whole point, inverted, on the
-			// backend internal/node's own tests run against. The condition
-			// is [consumer.detached] now and it is asked FIRST; the
-			// enumeration itself is written down at [deliverableLocked],
-			// where the next reader can check it against the contract
-			// rather than re-derive it.
-			//
-			// THE REST OF THE DRAIN IS CHARGED FOR THE HAND-BACK, exactly
-			// as the partition that stopped it was: see [Broker.restoreLocked].
+			// BLOCKED, by an earlier partition or by something that landed
+			// between them: put the rest back for whoever attaches next, as
+			// a real broker does. Carrying on would run the handler for
+			// partitions 2..N on a seat this node does not own, and each
+			// deferral to the front would reverse the partition order.
+			// The predicate is the pre-drain gate's, whole list at
+			// [deliverableLocked]; a detach lives on the MEMBERSHIP, so
+			// this loop's *consumer sees it only as [consumer.detached].
+			// The rest is CHARGED FOR THE HAND-BACK: [Broker.restoreLocked].
 			for _, rest := range parts[i:] {
 				undrainLocked(sub, rest.Items)
 			}
@@ -416,34 +360,17 @@ func undrainLocked(sub *subscription, evs []*events.Event) {
 }
 
 // restoreLocked puts the undispatched partitions back AFTER the partition that
-// deferred, never before it: applying the deferral has already pushed that
-// partition to the front, so restoring ahead of it would reverse the very order
-// this guard exists to keep.
+// deferred, never before it, which would reverse the order this guard keeps.
 //
-// EACH OF THEM PAYS A DELIVERY, through the same boundary every other hand-back
-// goes through — which is why this returns what it dead-lettered. These events
-// left the mailbox with the chunk, and on the only broker this engine ships
-// leaving the mailbox IS the delivery: JetStream's counter moves when the
-// message is FETCHED, so by the time the loop discovers it may not run the
-// rest of the drain the count is already spent, and it returns the remainder
-// through the identical budget check (see jetstream.dispatchBatch, which naks
-// the undispatched partitions). A twin that spliced them back untouched handed
-// the remainder of every blocked drain back on a counter that never moves —
-// the same divergence the deferral itself carried until the twin's Defer was
-// made to cost what the broker's does, left standing for every partition of
-// the drain but the one that stopped it.
-//
-// SETTLED UNDER THE LOCK IT IS TAKEN UNDER, its dead letters' keeps included,
-// so no drain ever reads it in flight: the contract counts a backend's own
-// hand-back in flight until it is settled ([queue.EventQueue.WaitForHandlers]),
-// which on the broker is a keep crossing a link and here is nothing to wait
-// for.
+// EACH PAYS A DELIVERY, so this returns what it dead-lettered: on JetStream the
+// counter moves when a message is FETCHED (jetstream.dispatchBatch naks the
+// rest through the same budget check). SETTLED UNDER THE LOCK, dead letters'
+// keeps included, so no drain reads it in flight
+// ([queue.EventQueue.WaitForHandlers]).
 //
 // The splice point is found by SCANNING the leading run of chunk events, not by
-// a length delta. A delta assumes the mailbox only grew at the front, and
-// publishing appends at the TAIL — a handler that publishes lets one land
-// mid-loop, and the splice point then lands inside the pre-existing tail and
-// reorders exactly what this is protecting.
+// a length delta: publishing appends at the TAIL, so a handler's publish can
+// land mid-loop and a delta would splice inside the pre-existing tail.
 func (b *Broker) restoreLocked(
 	sub *subscription,
 	remaining []queue.Partition[*events.Event],
@@ -477,49 +404,15 @@ func (b *Broker) restoreLocked(
 
 // invoke runs one delivery and applies the handler's outcome.
 //
-// Ack drops the events — they were removed from the mailbox before the call.
-// The returns put them back in DIFFERENT places, because that is what the
-// only broker this engine ships does and the contract now states it (see
-// queue.OutcomeNak, queue.OutcomePass and queue.OutcomeDefer):
-//
-//   - A NAK — a failure — goes BEHIND every event that was waiting when it
-//     failed. JetStream withholds a failed delivery for its redelivery backoff
-//     (NakWithDelay, a second doubling to thirty) and serves never-delivered
-//     mail meanwhile, so it comes back after them. This twin used to put it
-//     back at the HEAD, and declared that as a capability the shipped broker
-//     did not have: every engine and node test run here certified a seat that
-//     retried a failure before a newer message of the same conversation, which
-//     production never does — the order a parked executor's answer route
-//     and the ordinary turn's retry were both written against.
-//   - A PASS — a hand-back for a peer — goes BEHIND them too, and quiesces
-//     nothing: JetStream withholds it for the failure path's backoff, by its
-//     delivery count, while the attachment that passed it goes on taking
-//     mail.
-//   - A DEFER — a hand-back — goes back at the HEAD, which is where JetStream
-//     puts a plain Nak (it serves redeliveries before new mail): measured 100
-//     of 100, 60 of them under CPU pressure, in 76ad6f656.
-//
-// THE BACKOFF IS VIRTUAL, so dispatch stays inline and deterministic: no timer
-// holds a failure back. It is "elapsed" once the drain has served everything
-// that was queued when the failure happened — which is the order the broker
-// gives whenever its backoff outlasts the dispatch of what was waiting, the
-// case the engine has to be written for. What the twin does NOT reproduce is
-// mail PUBLISHED inside a backoff window landing ahead of the retry: here
-// anything published after the failure lands behind it. Nothing above the
-// queue may lean on either side of that — an event's timestamp is the only
-// order the contract gives across two handler calls (queue.OrderForDispatch).
-//
-// DEFER COSTS EXACTLY WHAT A NAK COSTS, and quiesces the attachment as well.
-// This twin used to return a deferred batch untouched, which modelled a broker
-// nobody runs: the only broker this engine ships has no "give this back
-// without counting it", so its deferral IS a Nak and spends one delivery —
-// which is why its budget was re-derived from 10 to 25 to absorb handoffs.
-// A twin that handed them back free certified the handoff bound production
-// does not have, and made the contract's own sentence ("every return that
-// puts a message back spends one") false on one of its two backends. What
-// every backend still owes is that a healthy event does not die from being
-// handed over, and both answer it the same way now: by sizing the budget so
-// handoffs cannot exhaust it.
+// Returns put events back where JetStream does (queue.OutcomeNak, OutcomePass,
+// OutcomeDefer): a NAK and a PASS go BEHIND every event waiting at the time
+// (retrying at the HEAD would certify a retry before a newer message of the
+// conversation), a PASS quiescing nothing; a DEFER goes at the HEAD, where a
+// plain Nak lands, and quiesces the attachment. The backoff is VIRTUAL, for inline deterministic
+// dispatch: mail published inside a backoff window lands behind the retry here,
+// ahead of it on the broker, so nothing above may lean on either
+// (queue.OrderForDispatch). A DEFER SPENDS ONE DELIVERY, like a Nak, as on
+// JetStream; the budget is sized so handoffs cannot kill a healthy event.
 func (b *Broker) invoke(
 	ctx context.Context,
 	sub *subscription,
@@ -606,20 +499,14 @@ func (b *Broker) invoke(
 	client.exitHandlerLocked()
 	b.mu.Unlock()
 
-	// Logging happens OUTSIDE the critical section. A log call is a write
-	// to a handler this package does not control: it can block on a full
-	// pipe, a slow file, or a contended CI stderr, and the broker mutex
-	// guards every subscription and every peer on this broker. Holding it
-	// across that write stops the whole company — a drain, every publish,
-	// every attachment change — for as long as one write takes. It is the
-	// oldest way to turn a slow logger into an outage, and the reason
-	// nothing here logs while holding the lock.
+	// Logging happens OUTSIDE the critical section: a log write goes to a
+	// handler this package does not control and can block on a full pipe or
+	// slow file, while the broker mutex guards every subscription and peer, so
+	// holding it would turn a slow logger into an outage.
 	//
 	// AND THROUGH THE CONTRACT'S OWN LINE ([queue.LogResult],
-	// [queue.LogBatchResult]), never one spelled here: the twin wrote its
-	// own, and logged a partition's deferral as a single delivery's,
-	// `delivery_deferred`, where the backend that ships says
-	// `batch_delivery_deferred`.
+	// [queue.LogBatchResult]), never one spelled here: a partition's deferral
+	// must log as `batch_delivery_deferred`, as the shipped backend does.
 	logResult(ctx, res)
 	b.logDeadLetters(ctx, sub, dead)
 	return res.Outcome
@@ -643,16 +530,13 @@ func (b *Broker) logDeadLetters(ctx context.Context, sub *subscription, dead []d
 // headroomLocked is how many further deliveries each of a partition's events
 // has before its budget is spent, in the contract's convention.
 //
-// An event on its FIRST delivery has spent no redeliveries, so its headroom is
-// the whole budget; one that has been redelivered budget times has none, and
-// the next hand-back dead-letters it — which is exactly where
-// [Broker.chargeLocked] draws the line, and the two must not be allowed
-// to disagree about the boundary they share.
+// An event on its FIRST delivery has the whole budget; one redelivered budget
+// times has none and the next hand-back dead-letters it, exactly where
+// [Broker.chargeLocked] draws the line: the two must agree on that boundary.
 //
-// PER EVENT AND NOTHING ELSE. This twin states what it can read off each
-// event's own counter and folds nothing: the partition's number is
-// [queue.WithHeadroom]'s, derived from this same list, because a twin folding
-// it its own way would certify a bound production does not have.
+// PER EVENT AND NOTHING ELSE: the partition's number is [queue.WithHeadroom]'s,
+// derived from this list, since folding it here would certify a bound
+// production does not have.
 func headroomLocked(sub *subscription, evs []*events.Event, budget int) []queue.Headroom {
 	perMessage := make([]queue.Headroom, 0, len(evs))
 	for _, ev := range evs {
@@ -732,22 +616,18 @@ func (b *Broker) retryLaterLocked(sub *subscription, evs []*events.Event, budget
 	return dead
 }
 
-// chargeLocked spends one delivery on each event and separates the ones that
-// survive it from the ones it just retired.
+// chargeLocked spends one delivery on each event, splitting survivors from the
+// retired.
 //
-// THE ONE PLACE A DELIVERY IS SPENT in this backend, for the reason
-// [attachment.returnMsg] is that place in the JetStream one: a hand-back costs
-// a delivery whatever put the message back — a nak, a deferral, or a drain
-// this consumer was told mid-flight it may not finish — so a second site
-// deciding the boundary is a second answer to where the dead-letter line is.
-// It does not touch the mailbox: where the survivors go back is the caller's,
-// and the two callers differ precisely there.
+// THE ONE PLACE A DELIVERY IS SPENT in this backend, as [attachment.returnMsg]
+// is in the JetStream one: a hand-back costs a delivery whatever put the
+// message back (nak, deferral, or a drain told mid-flight to stop), and a
+// second site would be a second answer to where the dead-letter line is. It
+// leaves the mailbox to the caller, where the callers differ.
 //
-// spent is the return being charged — a Nak, a Defer or a Pass — and reason
-// why, for the line; a retired event's copy is kept where the contract keeps
-// the copy of a message that did or did not fail as itself
-// ([queue.RetiredTo]), which [subscription.failed] remembers — the caller
-// records a failure of the message there before it charges one.
+// spent is the return charged (Nak, Defer or Pass), reason why, for the line.
+// A retired copy goes where [queue.RetiredTo] says, by [subscription.failed],
+// which the caller records before charging a failure.
 func (b *Broker) chargeLocked(sub *subscription, evs []*events.Event, budget int,
 	spent queue.Outcome, reason string) ([]*events.Event, []deadLetter) {
 

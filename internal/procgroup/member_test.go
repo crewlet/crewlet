@@ -87,13 +87,11 @@ func awaitFile(t *testing.T, path, what string) {
 }
 
 // A SIGNAL REACHES ONLY A LIVING MEMBER OF THE RECORDED GROUP. A run's script
-// tells its engine which pid to ask to end by writing it in its box, and a
-// direct box's job runs as the engine's own user beside that file — so the pid
-// is the job's word, and the group the engine recorded for the job when it
-// started it is what holds the word to the job. A member is signalled; a
-// process outside the group, a member that has exited, pid 1, and a member of
-// a group that is no longer the one recorded are refused, and none of them is
-// signalled.
+// names the pid to end by writing it in its box, and a direct box's job runs
+// as the engine's own user beside that file, so the pid is the job's word and
+// the group recorded at start holds the word to the job. A member is
+// signalled; a process outside the group, an exited member, pid 1, and a
+// member of a group no longer the recorded one are refused, none signalled.
 //
 // Mutation: drop the group check, and the outsider's trap writes its file;
 // drop the zombie check, and the exited member is "signalled" with no error;

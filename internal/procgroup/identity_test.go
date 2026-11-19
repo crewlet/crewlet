@@ -15,16 +15,14 @@ import (
 // startLeader starts argv as its own group leader and kills the group when the
 // test ends, so a failure never leaks a sleeper.
 //
-// ARGV RATHER THAN A SHELL SCRIPT, and deliberately no shell anywhere in the
-// group. `sh -c "sleep 300"` is not obliged to exec its command, and a shell
-// that forks instead puts a grandchild in the group that this file never
-// started and therefore never reaps: killpg kills it, the kernel reparents the
-// corpse to init, and init reaps it whenever it gets to it. Until then
-// Exists(pgid) still answers true, because a zombie is a member —
-// so TestAGroupWhoseOnlyMemberIsAZombieIsNotCurrent's closing assertion, that
-// the group is over once its last member is reaped, was a race against init
-// and lost about one run in three. Every process in the group is now one this
-// file started and waits for.
+// ARGV RATHER THAN A SHELL SCRIPT, with no shell anywhere in the group:
+// `sh -c "sleep 300"` need not exec its command, and a forking shell puts a
+// grandchild in the group that this file never reaps; init reaps the corpse
+// whenever it gets to it, and until then Exists(pgid) answers true because a
+// zombie is a member. That made
+// TestAGroupWhoseOnlyMemberIsAZombieIsNotCurrent's closing assertion a race
+// against init. Every process in the group is one this file started and
+// waits for.
 func startLeader(t *testing.T, argv ...string) *exec.Cmd {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), argv[0], argv[1:]...)

@@ -175,17 +175,14 @@ func (s *SecretStoreSink) NextStep() string {
 //
 // # It is created 0600 at OPEN, not at write
 //
-// A file that appears with default permissions and is tightened later has a
-// window, however short, in which every process on the host can read a live
-// credential. Creating it up front means the window never exists — and it
-// happens at open so a run that mints nothing still leaves a correctly-moded
-// file rather than one an operator has to remember to fix.
+// A file created with default permissions and tightened later has a window in
+// which every process on the host can read a live credential. Opening it so
+// also leaves a run that mints nothing a correctly-moded file.
 //
 // # Write-through, for the reason the interface states
 //
-// Each Record rewrites the file. That is more IO than batching, and it is
-// the difference between a crash mid-run leaving a recorded credential and
-// leaving a live one nobody knows about.
+// Each Record rewrites the file: more IO than batching, but a crash mid-run
+// then leaves a recorded credential, not a live one nobody knows about.
 type EnvFileSink struct {
 	path string
 
@@ -412,15 +409,14 @@ func (s *PrintSink) Record(_ context.Context, name, value string) error {
 //
 // # It emits `unset`, not a comment
 //
-// It cannot unprint, but this stream is meant to be SOURCED — that is the
-// whole reason it emits `export` lines — and a comment is a no-op to a shell.
-// An operator who piped the output into `source` and then hit a rollback
-// would keep a revoked token exported in their session, with the only warning
-// being a line the shell threw away. So the rollback is itself a statement:
-// sourcing the stream to its end leaves the environment as it started.
+// It cannot unprint, but this stream is meant to be SOURCED (hence its
+// `export` lines) and a comment is a no-op to a shell: an operator who piped
+// it into `source` and hit a rollback would keep a revoked token exported,
+// warned only by a line the shell threw away. So the rollback is itself a
+// statement, and sourcing the stream to its end restores the environment.
 //
-// The comment stays too, after the statements, because a person READING the
-// output needs the sentence and `unset` alone does not say why.
+// The comment stays, after the statements, because a person READING the
+// output needs the sentence; `unset` alone does not say why.
 func (s *PrintSink) Discard(_ context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
