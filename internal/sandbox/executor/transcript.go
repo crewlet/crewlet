@@ -373,8 +373,8 @@ func (f TranscriptFilter) keepsKind(kind EntryKind) bool {
 // about 100 MiB (97 MiB measured of an OpenCode export at its bound), so about
 // 200 MiB for two. Nothing else bounds it: a node serves every tab open on it.
 // One slot would queue every reader behind the longest archive. A seat's read
-// for words holds a third more, a relaunch's [Runner.ReadHoldings] no more
-// (102 MiB Claude Code's, 97 MiB OpenCode's), both in the seats' one slot
+// for words holds a third more, a relaunch's [Runner.ReadHoldings] no more (97
+// MiB OpenCode's, 43 MiB at most Claude Code's), both in the seats' one slot
 // ([SeatTranscriptReadsAtOnce]); a collection's pass in neither. A read past
 // them waits holding no decoder or opened object.
 const TranscriptReadsAtOnce = 2
@@ -391,10 +391,11 @@ var transcriptReads = make(chan struct{}, TranscriptReadsAtOnce)
 // ONE, INSIDE THE PROCESS'S TWO, never a pool beside them, which would double
 // what reads hold at their worst: one slot is always a person's while a seat
 // reads. A relaunch's [Runner.ReadHoldings] takes it too, inside its own wait,
-// so two holdings readings never run at once; a reading and a person's read of
-// one OpenCode export held 193 MiB live together. Measured on two cores: an
-// ordinary archive reads in about 70 ms (Claude Code) and 54 ms (OpenCode),
-// 255 MiB of ordinary records in 2.7 s and 7.9 s.
+// so two holdings readings never run at once (a reading and a person's read of
+// one OpenCode export held 193 MiB live together). On two dedicated cores an
+// ordinary archive reads in 72 to 88 ms (BenchmarkAReadingAtItsBounds), 255 MiB
+// of ordinary lines in 3.1 to 3.2 s, the slowest at its bounds 21.4 to 22.6 s;
+// OpenCode's, on two cores, in 54 ms and 7.9 s.
 const SeatTranscriptReadsAtOnce = 1
 
 // seatTranscriptReads holds a slot for each transcript a seat is reading, at

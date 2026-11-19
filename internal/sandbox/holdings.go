@@ -405,16 +405,16 @@ func (h SessionHoldings) heldByID(c LoggedCall) (bool, string) {
 // holdingsReadWait bounds a reading ([Coordinator.HoldingsOf]) from before the
 // run's record is read: the record, the row, the reader's slots, open and read.
 //
-// FIFTEEN SECONDS, the frame's patience for one session-sized operation, as the
-// keep's is ([relaunchCaptureWait]): the relaunch's frame holds the seat and an
-// admission slot, so a kept session costs it thirty seconds, plus the one
-// bounded step a reader may overrun by. A reading past it is no reading.
-// Measured on two cores, Claude Code's (BenchmarkAReadingAtItsBounds): 70 ms
-// an ordinary archive, 2.7 s at the plaintext's bound, ~11 s the slowest lines
-// extrapolated there; OpenCode's (BenchmarkAnOpenCodeReadingAtItsBounds): 54
-// ms its largest measured export, 7.9 s at the bound, 1.9 s a step of minimal
-// items at the message bound. All inside the wait.
-const holdingsReadWait = 15 * time.Second
+// THIRTY SECONDS, so a reading at its bounds is one: the slowest measured, a
+// subagent's lines of blocks of an empty kind to the plaintext's and the
+// lines' bounds, reads in 21.4 to 22.6 s on two dedicated cores
+// (BenchmarkAReadingAtItsBounds), about 25 s behind a burst of 32 ordinary ones
+// in the seats' one slot; an OpenCode export at its bound in 7.9 s on two cores
+// (BenchmarkAnOpenCodeReadingAtItsBounds). With the keep's
+// ([relaunchCaptureWait]) a kept session costs the relaunch's frame 45 s, plus
+// a reader's overrun step ([HoldingsReader]), an unread member's discard and
+// the keep's settle writes ([Coordinator.ContinuedCapture]). Past it is none.
+const holdingsReadWait = 30 * time.Second
 
 // HoldingsOf is what the session a relaunch of turnID continues holds of the
 // calls ask marks asked, read by reader off the capture (launchSeq,
