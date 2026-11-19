@@ -20,9 +20,19 @@ vi.mock("../api.ts", () => ({ removeModel }));
 // THE DOCUMENT'S TAG IS NOT THE ENTRY'S: a removal sent the document's and was
 // refused 412 for every model. Both are answered here, apart, so a case
 // reads which one the dialog sent.
+// THE COMPANY'S OWN WARNINGS are read by a dry run of no change: the ready
+// panel names only what the removal brings beside them.
+const companyAsItIs = vi.hoisted(() => ({ warnings: [] as unknown[] }));
 vi.mock("~/protocol/configWrite.ts", () => ({
   getConfig: () => Promise.resolve({ kind: "document", document: {}, etag: '"rev-1"' }),
   getEntity: () => Promise.resolve({ kind: "entity", entity: {}, etag: '"llm-providers-sonnet"' }),
+  dryRunPatch: () =>
+    Promise.resolve({
+      kind: "valid",
+      baseRevisionId: "rev-1",
+      warnings: companyAsItIs.warnings,
+      derived: null,
+    }),
 }));
 
 const REFS: ModelReference[] = [
@@ -56,6 +66,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  companyAsItIs.warnings = [];
   removeModel.mockReset();
   window.location.hash = "";
 });
@@ -107,7 +118,10 @@ test("each place is named in words, a backup said apart, and no handle or path i
   // ONE GROUP PER SEAT, under the seat's name on its own line, and each row
   // named by its job alone: a long seat name can no longer cut off the job
   // that tells two rows apart.
-  const groups = within(list).getAllByRole("group");
+  // A LIST OF ITEMS: each seat is a list item, never a group in a list's
+  // place, and its places are a list named by the seat.
+  const groups = [...list.querySelectorAll<HTMLElement>(":scope > li")];
+  expect(groups.some((g) => g.hasAttribute("role"))).toBe(false);
   expect(groups.map((g) => g.querySelector(".models-repoint__who")?.textContent)).toEqual([
     "Backend Engineer",
     "QA",
@@ -120,7 +134,7 @@ test("each place is named in words, a backup said apart, and no handle or path i
   expect(rowsOf(groups[0]!)).toEqual(["Coding"]);
   expect(rowsOf(groups[1]!)).toEqual(["Reviewing (backup)"]);
   expect(rowsOf(groups[2]!)).toEqual(["Chat"]);
-  expect(within(list).getByRole("group", { name: "QA" })).toBe(groups[1]);
+  expect(within(list).getByRole("list", { name: "QA" })).toBe(groups[1]!.querySelector("ul"));
   // The picker still says the whole place.
   expect(
     screen.getByRole("combobox", { name: "Where QA, reviewing (backup) moves" }),
@@ -329,4 +343,66 @@ test("a place's default is a model that answers, on the same harness where one d
   expect(defaultChoice({ ...ref, chain: ["sonnet", "c-codex"] }, "sonnet", data.models)).toEqual({
     to: "c-codex",
   });
+});
+
+// THE ADVISOR'S MODEL IS MOVED LIKE ASK CREWLET'S: a group of its own, every
+// model a helper can run on offered, and running with no model said as such.
+test("the Advisor's model is a place of its own, moved or run with no model", async () => {
+  removeModel.mockImplementation((_key, removal: { repoint: unknown[] }) =>
+    Promise.resolve(
+      removal.repoint.length === 0
+        ? {
+            ...refusal,
+            references: [
+              ...REFS,
+              { at: { advisor: "findings" }, segments: ["advisor", "model"], chain: ["sonnet"] },
+            ],
+          }
+        : valid,
+    ),
+  );
+  open(true);
+  const list = await screen.findByRole("list", { name: "Where sonnet is named" });
+  const advisor = within(list).getByRole("list", { name: "Advisor" });
+  expect(advisor.querySelector(".models-repoint__place")?.textContent).toBe("Findings");
+  // THE RULE AS IT STANDS: any model a helper can run on, its tools turned off.
+  expect(list.textContent).toContain("The Advisor runs the model with no tools of its own");
+  expect(list.textContent).toContain("Ask Crewlet runs the model with no tools of its own");
+  expect(list.textContent).not.toContain("deny the harness's web tools");
+  const picker = screen.getByRole("combobox", { name: "Where The Advisor's findings moves" });
+  fireEvent.click(picker);
+  expect(screen.getByRole("option", { name: /Run the Advisor with no model/ })).toBeDefined();
+  expect(screen.getByRole("option", { name: /Move to big/ })).toBeDefined();
+});
+
+// ONLY WHAT THE REMOVAL CHANGES is said ready: a warning the company had
+// before it (a direct box's reach, a missing health watcher) is not this
+// removal's to show.
+test("the ready panel names what the removal brings, never the company's own warnings", async () => {
+  const own = {
+    code: "direct_box",
+    path: "providers.llm.default.run_in",
+    message: "A direct box runs as the engine's own user.",
+  };
+  const brought = {
+    code: "resolution_moved",
+    path: "roles[1].llm_review",
+    message: "QA's reviewing now resolves to default.",
+  };
+  companyAsItIs.warnings = [own];
+  removeModel.mockImplementation((_key, removal: { repoint: unknown[] }) =>
+    Promise.resolve(
+      removal.repoint.length === 0
+        ? refusal
+        : { ...valid, outcome: { ...valid.outcome, warnings: [own, brought] } },
+    ),
+  );
+  open(true);
+  const ready = await screen.findByText("Ready to remove");
+  const panel = ready.closest<HTMLElement>("[role='status'], .crewlet-callout") ?? document.body;
+  await settle();
+  expect(panel.textContent).not.toContain("A direct box runs as the engine's own user");
+  expect(document.body.textContent).not.toContain("A direct box runs as the engine's own user");
+  // …while the one the removal brings is said.
+  expect(document.body.textContent).toContain("QA's reviewing now resolves to default");
 });
