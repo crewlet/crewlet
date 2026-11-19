@@ -1241,6 +1241,9 @@ func historyReads(t *testing.T, db store.ReplicatedHandle) map[string]indexedRea
 		"whether a seat answered an item typed": seek(subject, pickupTypedStatement,
 			task, "ana", int64(0)),
 		"who set a seat's work aside": seek(subject, arms(2, readyWaitArm), task, "t-0008"),
+		// EACH STARTED ITEM PAST ITS START by its key, and its assignee's
+		// writes and turn segments since, sought on the item.
+		"which of a seat's started work is due": seek(subject, arms(2, readyDueArm), task, "t-0008"),
 		"who filed a seat's ready work": seek(subject, arms(2, readyCreatedArm),
 			task, "ana", "t-0008", "ana"),
 		"who assigned a seat's ready work": seek(subject, arms(2, readyAssignedArm),

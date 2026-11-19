@@ -152,6 +152,8 @@ func (idleSeat) Conditions(context.Context, pickup.Seat) pickup.Conditions {
 	return pickup.Conditions{Owned: true, TurnEngineReady: true}
 }
 
+func (idleSeat) LaneWaiting(context.Context, pickup.Seat) (bool, error) { return false, nil }
+
 // handOut is one settled pickup decision for ceo at now: two passes, so the
 // idle settle is behind it.
 func handOut(e *Engine, f *pickupFleet, now time.Time) pickup.Outcome {
