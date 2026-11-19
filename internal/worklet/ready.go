@@ -14,6 +14,8 @@ import (
 
 	"github.com/crewlet/crewlet/internal/events/types"
 	"github.com/crewlet/crewlet/internal/iam"
+	"github.com/crewlet/crewlet/internal/notify"
+	"github.com/crewlet/crewlet/internal/provenance"
 	"github.com/crewlet/crewlet/internal/statelog"
 	"github.com/crewlet/crewlet/internal/store"
 )
@@ -102,6 +104,11 @@ type ReadyItem struct {
 	// DeadWaits are the changes nothing moves that the item waits on, by
 	// reference: set on a dead wait ([types.PickupDeadWait]).
 	DeadWaits []DeadWait `json:"dead_waits,omitempty"`
+
+	// WaitReason is a due item's wait in the words WaitBy, their writer,
+	// set it ([types.PickupDue]); empty on every other item.
+	WaitReason string             `json:"wait_reason,omitempty" untrusted:"name"`
+	WaitBy     *provenance.Author `json:"wait_by,omitempty"`
 }
 
 // ReadyWork is one page of a seat's ready items in pickup order.
@@ -245,11 +252,15 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, at rowsAt,
 	if err != nil {
 		return err
 	}
+	due, err := readyDue(ctx, tx, q.Handle, blocks[0], now)
+	if err != nil {
+		return err
+	}
 	person, _, err := readPerson(ctx, tx, q.Handle)
 	if err != nil {
 		return err
 	}
-	all := orderReady(blocks[0], reviews, own, waits, dead, blocks[2], person.Priorities)
+	all := orderReady(blocks[0], due, reviews, own, waits, dead, blocks[2], person.Priorities)
 	out.Total = len(all)
 	out.Fingerprint = fingerprintOf(all)
 	from := min(q.Page*ReadyRows, len(all))
@@ -269,6 +280,76 @@ func readReady(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, at rowsAt,
 		return err
 	}
 	return loadFor(ctx, tx, q.Handle, out.Items)
+}
+
+// readyDueArm is one started item past its start with nothing of its
+// assignee's on it since, the fact the flow's `due` reads, and the words of
+// the wait it waited out.
+const readyDueArm = `SELECT t.id, COALESCE(json_extract(t.document, '$.wait_reason'), '')
+	FROM tracker_tasks t WHERE t.id = ? AND ` + flowNothingSinceStart
+
+// dueWait is a due item's wait: its words and who set them, nil where no
+// row of its history names them.
+type dueWait struct {
+	reason string
+	by     *provenance.Author
+}
+
+// readyDue is which of handle's started items are due, each with its wait's
+// words and their writer ([readyWaitArm]). Only an item whose start passed is
+// asked about, so a seat with none runs no statement.
+func readyDue(ctx context.Context, tx *sql.Tx, handle string, started []TaskRow,
+	now time.Time) (map[string]dueWait, error) {
+
+	var args []any
+	for _, row := range started {
+		if row.Start != nil && !row.Start.After(now) {
+			args = append(args, row.ID)
+		}
+	}
+	if len(args) == 0 {
+		return nil, nil
+	}
+	rows, err := tx.QueryContext(ctx, arms(len(args), readyDueArm), args...)
+	if err != nil {
+		return nil, fmt.Errorf("worklet: read which of %s's started work is due: %w", handle, err)
+	}
+	due := map[string]dueWait{}
+	var said []any
+	for rows.Next() {
+		var id, reason string
+		if serr := rows.Scan(&id, &reason); serr != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("worklet: read which of %s's started work is due: %w", handle, serr)
+		}
+		due[id] = dueWait{reason: reason}
+		if reason != "" {
+			said = append(said, id)
+		}
+	}
+	if cerr := closeRows(rows); cerr != nil {
+		return nil, fmt.Errorf("worklet: read which of %s's started work is due: %w", handle, cerr)
+	}
+	if len(said) == 0 {
+		return due, nil
+	}
+	writers, err := tx.QueryContext(ctx, arms(len(said), readyWaitArm), said...)
+	if err != nil {
+		return nil, fmt.Errorf("worklet: read who set %s's due work aside: %w", handle, err)
+	}
+	for writers.Next() {
+		var id, actor, kind, reason string
+		if serr := writers.Scan(&id, &actor, &kind, &reason); serr != nil {
+			_ = writers.Close()
+			return nil, fmt.Errorf("worklet: read who set %s's due work aside: %w", handle, serr)
+		}
+		by := notify.FirstPartyAuthor(actor, iam.ActorKind(kind), nil)
+		due[id] = dueWait{reason: due[id].reason, by: &by}
+	}
+	if cerr := closeRows(writers); cerr != nil {
+		return nil, fmt.Errorf("worklet: read who set %s's due work aside: %w", handle, cerr)
+	}
+	return due, nil
 }
 
 // readyDead is the items handle holds whose every open blocker is a dead wait,
@@ -531,29 +612,38 @@ func readyWaits(ctx context.Context, tx *sql.Tx, q ReadyWorkQuery, at rowsAt,
 	return out, nil
 }
 
-// orderReady is the pickup order over the blocks and the priority list:
-// urgent items first, then the rest (ADR-0159), each in the order of started
-// work in queue order, the reviews the seat holds, its own items in review
-// nobody reviews, the waits on a person nobody asked, the dead waits, the
-// waiting items the list names in its order, then the rest in queue order.
-func orderReady(started []TaskRow, reviews, own []reviewRow, onPerson []waitRow, dead []TaskRow,
-	waiting []TaskRow, priorities []string) []ReadyItem {
+// orderReady is the pickup order over the blocks and the priority list: urgent
+// items first (ADR-0159), then the due ones ([flowNothingSinceStart],
+// ADR-0162), then the rest, each in the order of started work in queue order,
+// the reviews the seat holds, its own items in review nobody reviews, the waits
+// on a person nobody asked, the dead waits, the waiting items the list names in
+// its order, then the rest in queue order.
+func orderReady(started []TaskRow, due map[string]dueWait, reviews, own []reviewRow,
+	onPerson []waitRow, dead []TaskRow, waiting []TaskRow, priorities []string) []ReadyItem {
 
 	out := orderBlocks(started, reviews, own, onPerson, dead, waiting, priorities)
 	urgent := make([]ReadyItem, 0, len(out))
+	late := make([]ReadyItem, 0, len(due))
 	rest := make([]ReadyItem, 0, len(out))
 	for _, item := range out {
-		if item.Priority != PriorityUrgent {
+		if w, ok := due[item.ID]; ok && item.Why == types.PickupInProgress {
+			// ITS WAIT ENDED, which the brief says whatever its urgency.
+			item.Why, item.WaitReason, item.WaitBy = types.PickupDue, w.reason, w.by
+		}
+		switch {
+		case item.Priority == PriorityUrgent:
+			// Not started: only its urgency puts it ahead of started work.
+			if item.Why == types.PickupPriorityList || item.Why == types.PickupQueue {
+				item.Why = types.PickupUrgent
+			}
+			urgent = append(urgent, item)
+		case item.Why == types.PickupDue:
+			late = append(late, item)
+		default:
 			rest = append(rest, item)
-			continue
 		}
-		// Not started: only its urgency puts it ahead of started work.
-		if item.Why == types.PickupPriorityList || item.Why == types.PickupQueue {
-			item.Why = types.PickupUrgent
-		}
-		urgent = append(urgent, item)
 	}
-	return append(urgent, rest...)
+	return append(append(urgent, late...), rest...)
 }
 
 // orderBlocks is [orderReady]'s order of the blocks, urgency aside.
