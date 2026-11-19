@@ -43,6 +43,11 @@
 // while HTTP handlers and WebSocket sends read it, so every method takes the
 // mutex. The lock is not
 // a precaution, it is the thing that makes the projection safe to read at all.
+//
+// THE SEATS' POSTURE. The tracker reads an item in progress's flow against the
+// same facts (ADR-0162): what each seat's turn and runs are on and why it
+// cannot take a turn, by the one ranking its own state is read by. The engine
+// reads it on every tracker read of a node that serves the API (posture.go).
 package livestate
 
 import (
@@ -327,6 +332,11 @@ type LiveState struct {
 	// keyed by agent id, as the last read of the seat leases found it —
 	// nil until one lands. See [LiveState.SetPlacement].
 	placement map[string]bool
+
+	// pausesRead and runsRead say the pause record and the durable run
+	// record have each been read once: until both have, a paused seat or
+	// a run started before this process reads as absent. See posture.go.
+	pausesRead, runsRead bool
 
 	// budgetAt is when the held report was read, the guard against a
 	// delayed report from another node. Internal, never re-emitted.

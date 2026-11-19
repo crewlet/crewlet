@@ -83,7 +83,7 @@ func TestAResumeIsHandedTheApprovedCallOnce(t *testing.T) {
 // AND THE COORDINATOR HANDS IT SO. The first attempt at an allow-once answer
 // makes the call and records it on the row, stops before the log append lands,
 // and its relaunch is refused; the later attempt's resume holds the call once,
-// from the row. [ResumeRequest.BridgedRead] counts the log's calls only: the
+// from the row. [ResumeRequest.BridgedRead] reads the log's calls only: the
 // log takes the row's call at its own append or the opening, numbered after any
 // call landing in between, which the opening marks late by this count.
 //
@@ -170,7 +170,7 @@ func TestALaterAttemptAtAnAnswerIsHandedTheCallTheFirstMade(t *testing.T) {
 		t.Fatalf("the resume holds the approved call %d times in %+v, want once", held,
 			requests[0].Bridged.Calls)
 	}
-	if got := requests[0].BridgedRead; got != 1 {
+	if got := requests[0].BridgedRead.Took; got != 1 {
 		t.Errorf("the resume is handed a read of %d calls, want the 1 its log took: the call on the row alone "+
 			"is no call of the log's yet", got)
 	}

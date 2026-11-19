@@ -5149,10 +5149,10 @@
 //   - the APPEND that lists it ([CoordStore.AppendBridgeCall]): a late call
 //     for the job the log is open to, and a call of the log's own job its
 //     harness gave up on for that job, once its spend is written;
-//   - the OPENING of a job's log that carries its round on
-//     ([CoordStore.BeginLaunch]): every call it walks past the read the
-//     relaunch's briefs were built from, late already or not, for the job it
-//     opens, after the reset removed every item of the job before.
+//   - the OPENING of a job's log ([CoordStore.BeginLaunch]): every call it
+//     walks past the read the relaunch's briefs were built from, late already
+//     or not, of the round it carries on or carried into a new one, for the
+//     job it opens, after the reset removed every item of the job before.
 //
 // The log's job, never the caller's: the item is for whichever job the round
 // runs on, which the log's own compare-and-swap read. PINNED as a take is: the
@@ -5194,10 +5194,85 @@
 // write that appends its call or opens a job's log, for a job launching or
 // running, and a relaunch's briefs read the log only once the collection has
 // claimed the job before. So a call filed for that job was in the log those
-// briefs read, and the opening that carries the round on walks only the calls
-// past it. Were one call told to two jobs all the same, the telling keeps the
-// HIGHER place ([withTelling]): a session that took it only there holds it from
-// there alone, and the lower would credit a capture of it read between the two.
+// briefs read, and an opening walks only the calls past it. Were one call told
+// to two jobs all the same, the telling keeps the HIGHER place ([withTelling]):
+// a session that took it only there holds it from there alone, and the lower
+// would credit a capture of it read between the two.
+//
+// # A call that outlives its round's collection is a late call of the round after
+//
+// A collection drains its round's calls in flight only up to each call's
+// bound, the turn's cap or its process gone, so a call can still run as the
+// collection reads the log. Where a send-back's opening has moved the log on to
+// a new round by the time its record lands, the log takes it as a LATE CALL OF
+// THAT ROUND ([takeEarlier]): listed and numbered in the round's order of
+// appends ([BridgeCall.Appended]), marked late, what it committed and what its
+// own work called folded into the round's tallies ([BridgeLog.Committed],
+// [BridgeLog.AbsorbedCalls]), its spend nobody's, answered recorded beside
+// [ErrJobReplaced]. So the item, the continuations' telling and the round's
+// collection reach it as they reach any late call of the round. It counts
+// toward the round's delivery check, as a late call of the round does: its
+// effect happened in the turn, and no earlier collection counted it, which is
+// not what a new round's fresh start ([CoordStore.openLog]) guards against. A
+// begin or a withdrawal of an earlier round is taken for nothing: the call
+// never starts.
+//
+// WITH NO PLACE ([BridgeCall.Seq] zero). Its place was its own round's order.
+// Kept, it would enter [BridgeLog.LastSeq], by which this round numbers its
+// next opening, the answer's cut ([BridgeLog.AnsweredThrough]) and the call a
+// person approved: a cut could land past the round's own later calls and drop
+// a submission made after the answer, and the next calls would be numbered
+// after a foreign place. With none, no reader of the round's order sees it, and
+// none needs it: a late call is never the round's submission, a job's own, or
+// held by a save point. The cost is that it sorts first in admission order and
+// shows no place. It is found again by its instant, name and digest
+// ([BridgeLog.listsEarlier]), so a record asked again is listed once; one with
+// no instant, answered without running, is listed again, the safe direction.
+//
+// ANY EARLIER ROUND, not only the one just replaced: a second send-back can
+// open while the call still runs, the turn's log holds no other turn's calls,
+// and no append names a later round than the log's. A call of an earlier RUN
+// under the same turn id, whose row was made again, is the turn's too: its
+// kinds join the later run's outcome and its job is told.
+//
+// AND ONE THAT LANDS BEFORE THE NEXT OPENING IS CARRIED INTO IT. Between the
+// collection's read and the next round's opening the log is still the old
+// round's, and takes such a record as a call of that round, past the read. So
+// the read rides every relaunch's launch, a send-back's included
+// ([LaunchRequest.BriefRead]), naming the job the log was open to, how many
+// calls it had taken and what it had absorbed ([LogRead]); and a new round's
+// opening of the log still open to that job CARRIES ([BridgeLog.carried]) every
+// call the log took past the read, listed late with no place, its
+// [BridgeCall.Abandoned] kept, and hands each to the job it opens. Never the
+// call a person approved, appended to the old round by the opening itself,
+// which the collection read with the round ([BridgeLog.withHeld]). The new
+// round's absorbed tally starts with only what the old one absorbed past the
+// read: the collection seeded the read's part into the turn's call log, and
+// carrying it again would count it twice. An identity the bound folded after
+// the read keeps its whole count, an over-count, the safe direction.
+//
+// EVERY NEW ROUND STARTS WITH THE REPLACED ROUND'S [BridgeLog.Committed] WHOLE,
+// read or not: the next collection's fold of it into the turn's outcome is a
+// union, so the read's part costs nothing, and the whole also covers a call the
+// log dropped from its middle past the read and an opening that knows no read.
+// A READ IS APPLIED ONLY WHILE THE LOG IS OPEN TO THE JOB IT READ
+// ([logOpening.reads]): while no opening has moved it since. The store answers
+// a log on another job as empty under the row's job, so a relaunch after an
+// opening that never landed, a send-back's or one carrying the round on, would
+// hold a read of nothing, and carry, or mark, a whole round an earlier read
+// told as late. No engine path makes that relaunch (the launch ends the run);
+// the guard is the store's own.
+//
+// WHAT IT DOES NOT REACH. A call that outlives the turn's LAST collection is
+// in no outcome and told to nobody: its round's log goes with the run. One the
+// old log dropped from its middle past the read is carried by name
+// ([BridgeLog.PriorCalls]) and kinds alone, told to no job and its identity
+// seeded nowhere. A carried call's identity is seeded twice into the turn's
+// call log, once unfinished by the collection that read it in flight: an
+// over-count, the safe direction. So is a record that landed in its round
+// before the read and lost its answer, asked again after the next opening: the
+// read saw it, so no opening carries it, and the round after lists it again,
+// late, and tells it again.
 //
 // # Stopping a seat's running work
 //

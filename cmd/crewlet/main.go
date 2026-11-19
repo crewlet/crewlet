@@ -1883,6 +1883,10 @@ func seedPauses(ctx context.Context, e *engine.Engine, live *stream.Service) err
 	}
 	company := e.Company()
 	if company == nil || company.Org == nil {
+		// READ ALL THE SAME: a node holding no company yet has no seat a
+		// pause could be drawn on, and the projection learns the record
+		// was read (an item's flow waits on it; livestate's posture.go).
+		live.SeedPauses(nil)
 		return nil
 	}
 	seeds := make([]livestate.SeedPause, 0, len(pauses))
@@ -2632,6 +2636,10 @@ func serveAPI(ctx context.Context, boot *config.Bootstrap, e *engine.Engine,
 	// and collapsing the two would take a correctly-serving node out of rotation
 	// for being behind.
 	app.Start(ctx)
+	// AND EVERY TRACKER READ ON THIS NODE READS ITS ITEMS' FLOW from the
+	// projection this app folds (ADR-0162): a node serving no API folds none,
+	// and its answers say `flow_live: false`.
+	e.UsePostures(app.Postures())
 
 	// The other half of the observability pipeline. The engine already
 	// persists what THIS node publishes (see engine.Backends); this is what

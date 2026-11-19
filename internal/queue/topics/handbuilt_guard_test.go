@@ -52,7 +52,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.config", "dlq.", ".inbox", ".control", ".reflect", "agent-",
 		"crewlet.tracker.log", "crewlet.pages.log", "crewlet.iam.log",
 		"crewlet.chat.log", "crewlet.executor.log", "crewlet.code.log",
-		"crewlet.access.log", "crewlet.atlas.log", "crewlet.rooms",
+		"crewlet.access.log", "crewlet.atlas.log", "crewlet.advisor.log", "crewlet.rooms",
 	} {
 		if !markers[want] {
 			t.Errorf("marker %q was not derived from topics.go's constants; the "+
@@ -74,6 +74,7 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		"crewlet.executor.log.conversation.x", "crewlet.executor.log.%s.%s",
 		"crewlet.access.log.told.x", "crewlet.access.log.%s.%s",
 		"crewlet.atlas.log.entry.x", "crewlet.atlas.log.%s.%s",
+		"crewlet.advisor.log.finding.x", "crewlet.advisor.log.%s.%s",
 		"crewlet.rooms.artifact.0f3c", "crewlet.rooms.chat.0f3c", "crewlet.rooms.ask",
 		// A leaf suffix: the base of a concatenation, and the end of a
 		// format string a seat's subject would come from.
@@ -101,6 +102,8 @@ func TestNoPackageBuildsASubjectByHand(t *testing.T) {
 		topics.AccessLogWildcard,
 		topics.AtlasLogSubject("entry", "x"),
 		topics.AtlasLogWildcard,
+		topics.AdvisorLogSubject("finding", "x"),
+		topics.AdvisorLogWildcard,
 		topics.PresenceSubject("artifact", uuid.New()),
 		topics.PresenceSubject("chat", uuid.New()),
 		topics.PresenceAsk,
